@@ -91,11 +91,7 @@ test "differently worded typed cases retain the same code and edit rule" =
               [((1, 0, 1, 6), old, new, True)]
               (map editText (diagnosticEdits diagnostic)),
             expectEqual
-              ("bare unicode escape `"
-                ++ old
-                ++ "` is not valid; did you mean `"
-                ++ new
-                ++ "`?")
+              "bare unicode escape `\{old}` is not valid; did you mean `\{new}`?"
               (renderParseDiagnostic diagnostic),
           ],
         ))

@@ -136,16 +136,16 @@ test "foldMap over a list of lists keeps the element order" =
 -- # Filtering lists
 
 test "filter keeps the elements that satisfy the predicate" =
-  expectEqual [2, 4] (filter (x => x % 2 == 0) [1, 2, 3, 4])
+  expectEqual [2, 4] (filter (x => isEven x) [1, 2, 3, 4])
 
 test "filter keeps the order of the surviving elements" =
-  expectEqual [5, 3, 9] (filter (x => x > 2) [5, 1, 3, 0, 9])
+  expectEqual [5, 3, 9] (filter (> 2) [5, 1, 3, 0, 9])
 
 test "filter of an empty list is empty" =
-  expectEqual ([] : List Int) (filter (x => x > 0) ([] : List Int))
+  expectEqual ([] : List Int) (filter (> 0) ([] : List Int))
 
 test "filter drops every element when none satisfies the predicate" =
-  expectEqual ([] : List Int) (filter (x => x > 10) [1, 2])
+  expectEqual ([] : List Int) (filter (> 10) [1, 2])
 
 -- # Exclusive or
 
@@ -269,7 +269,7 @@ test "optionOrElse does not call the fallback for Some" =
 
 test "optionOrElse calls the fallback once for None" =
   let calls = Ref 0
-  let v = optionOrElse (u => setRef calls (!calls + 1) |> (x => 7)) None
+  let v = optionOrElse (u => (calls := !calls + 1) |> (x => 7)) None
   expectEqual (7, 1) (v, !calls)
 
 test "resultOrElse does not call the fallback for Ok" =
@@ -281,7 +281,7 @@ test "resultOrElse calls the fallback once with the error for Err" =
   let calls = Ref 0
   let v =
     resultOrElse
-      (e => setRef calls (!calls + 1) |> (x => stringLength e))
+      (e => (calls := !calls + 1) |> (x => stringLength e))
       (Err "boom")
   expectEqual (4, 1) (v, !calls)
 
@@ -290,8 +290,8 @@ test "orElseWith on Some does not call the fallback" =
 
 test "orElseWith on None calls the fallback once" =
   let calls = Ref 0
-  let v = orElseWith (None : Option Int) (u =>
-    setRef calls (!calls + 1) |> (x => Some 7))
+  let v =
+    orElseWith (None : Option Int) (u => (calls := !calls + 1) |> (x => Some 7))
   expectEqual (Some 7, 1) (v, !calls)
 
 test "orElseWith on List appends the fallback" =
@@ -352,7 +352,7 @@ test "find returns the first hit and stops there" =
     (map (n => countedFind n tenArray) probeTargets)
 
 test "find returns the first of several matches" =
-  expectEqual (Some 4) (find (x => x > 3) [1, 4, 9])
+  expectEqual (Some 4) (find (> 3) [1, 4, 9])
 
 test "elem on a list finds early, middle, late and misses" =
   let xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -370,10 +370,10 @@ test "any, all, elem and find on empty containers" =
   expectEqual
     (False, True, False, None)
     (
-      any (x => x > 0) ([] : List Int),
-      all (x => x > 0) ([||] : Array Int),
+      any (> 0) ([] : List Int),
+      all (> 0) ([||] : Array Int),
       elem 1 ([] : List Int),
-      find (x => x > 0) ([||] : Array Int),
+      find (> 0) ([||] : Array Int),
     )
 
 test "foldUntil on a list breaks with the payload and skips the rest" =
@@ -413,13 +413,13 @@ test "List andThen concatenates in order" =
     (
       andThen [1, 2, 3] (x => [x, x * 10]),
       andThen ([] : List Int) (x => [x]),
-      andThen [1, 2, 3, 4] (x => if x % 2 == 0 then [] else [x]),
+      andThen [1, 2, 3, 4] (x => if isEven x then [] else [x]),
       andThen [1, 2] (x => if x == 1 then [7, 8] else []),
     )
 
 test "List andThen calls f once per element, left to right" =
   let log : Ref (List Int) = Ref []
-  let out = andThen [1, 2, 3] (x => setRef log (x :: !log) |> (u => [x, x]))
+  let out = andThen [1, 2, 3] (x => (log := x :: !log) |> (u => [x, x]))
   expectEqual ([1, 1, 2, 2, 3, 3], [3, 2, 1]) (out, !log)
 
 test "ControlFlow compares, renders and hashes by constructor and payload" = expectAll

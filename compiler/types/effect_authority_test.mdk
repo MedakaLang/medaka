@@ -1870,7 +1870,7 @@ test "an interpolated binder is read through the prelude's display only" =
     [
       expectEqual
         []
-        (codes (ownDisplay ++ under ++ "under d x = load (d ++ \"/\" ++ x)\n")),
+        (codes "\{ownDisplay}\{under}under d x = load (d ++ \"/\" ++ x)\n"),
       expectEqual
         ["T-AUTHORITY"]
         (codes (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n")),

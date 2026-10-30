@@ -98,7 +98,7 @@ test "(a) backend tags, host ABI and label lookup" = expectAll
     expectEqual
       (Ok "llvm/C symbols")
       (map
-        (p => backendName (profileBackend p) ++ "/" ++ profileAbi p)
+        (p => "\{backendName (profileBackend p)}/\{profileAbi p}")
         (lookupProfile "native")),
     expectEqual
       (Ok "eval")
@@ -106,7 +106,7 @@ test "(a) backend tags, host ABI and label lookup" = expectAll
     expectEqual
       (Ok "wasmgc/WIT")
       (map
-        (p => backendName (profileBackend p) ++ "/" ++ profileAbi p)
+        (p => "\{backendName (profileBackend p)}/\{profileAbi p}")
         (lookupProfile "wasmgc/wasi-p2")),
     expectEqual
       (Ok True)

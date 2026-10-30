@@ -1209,6 +1209,9 @@ isSorted [] = True
 isSorted [_] = True
 isSorted (x :: y :: rest) = lte x y && isSorted (y :: rest)
 
+-- The double reverse is the property subject: `xs` in its place would make
+-- `eq xs xs` a tautology, so the prop keeps both reversals.
+-- lint-disable-next-line rule-double-reverse
 prop "reverse is an involution" (xs : List Int) = eq (reverse (reverse xs)) xs
 
 prop "take n ++ drop n recovers the list" (n : Int) (xs : List Int) =
@@ -1219,7 +1222,7 @@ prop "splitAt agrees with take/drop" (n : Int) (xs : List Int) =
   eq a (take n xs) && eq b (drop n xs)
 
 prop "span ++ recovers the list" (xs : List Int) =
-  let (a, b) = span (x => x < 5) xs
+  let (a, b) = span (< 5) xs
   eq (a ++ b) xs
 
 prop "sort is ascending and length-preserving" (xs : List Int) =
@@ -1246,20 +1249,20 @@ prop "sortBy agrees with a reference insertion sort on Int" (xs : List Int) =
   eq (sortBy compare xs) (refGo compare [] xs)
 
 prop "partition splits by the predicate" (xs : List Int) =
-  let (yes, no) = partition (x => x > 0) xs
-  all (x => x > 0) yes && all (x => x <= 0) no
+  let (yes, no) = partition (> 0) xs
+  all (> 0) yes && all (<= 0) no
 
 prop "somes length is at most the input length" (xs : List Int) =
-  let os = map (n => if n % 2 == 0 then Some n else None) xs
+  let os = map (n => if isEven n then Some n else None) xs
   length (somes os) <= length os
 
 prop "partitionResults sizes sum to the input length" (xs : List Int) =
-  let rs = map (n => if n % 2 == 0 then Ok n else Err n : Result Int Int) xs
+  let rs = map (n => if isEven n then Ok n else Err n : Result Int Int) xs
   let (es, os) = partitionResults rs
   length es + length os == length rs
 
 prop "oks/errs agree with partitionResults" (xs : List Int) =
-  let rs = map (n => if n % 2 == 0 then Ok n else Err n : Result Int Int) xs
+  let rs = map (n => if isEven n then Ok n else Err n : Result Int Int) xs
   let (es, os) = partitionResults rs
   eq es (errs rs) && eq os (oks rs)
 
@@ -1269,14 +1272,14 @@ prop "concat of group recovers the list" (xs : List Int) =
   eq (flat (group xs)) xs
 
 prop "span prefix all satisfies, and concatenates back" (xs : List Int) =
-  let (a, b) = span (x => x < 5) xs
-  all (x => x < 5) a && eq (a ++ b) xs
+  let (a, b) = span (< 5) xs
+  all (< 5) a && eq (a ++ b) xs
 
 prop "takeWhile ++ dropWhile recovers the list" (xs : List Int) =
-  eq (takeWhile (x => x < 5) xs ++ dropWhile (x => x < 5) xs) xs
+  eq (takeWhile (< 5) xs ++ dropWhile (< 5) xs) xs
 
 prop "break equals span of the negated predicate" (xs : List Int) =
-  let (a1, b1) = break (x => x > 5) xs
+  let (a1, b1) = break (> 5) xs
   let (a2, b2) = span (x => not (x > 5)) xs
   eq a1 a2 && eq b1 b2
 
@@ -1303,29 +1306,29 @@ prop "span agrees with a plain reference on all, none, mixed, [] and singletons"
   let none : List Int = []
   eq (span (x => True) xs) (spanRef (x => True) xs)
     && eq (span (x => False) xs) (spanRef (x => False) xs)
-    && eq (span (x => x < k) xs) (spanRef (x => x < k) xs)
-    && eq (span (x => x < k) none) (spanRef (x => x < k) none)
-    && eq (span (x => x < k) [k]) (spanRef (x => x < k) [k])
-    && eq (span (x => x < 3) [1, 2, 3, 1]) (spanRef (x => x < 3) [1, 2, 3, 1])
+    && eq (span (< k) xs) (spanRef (< k) xs)
+    && eq (span (< k) none) (spanRef (< k) none)
+    && eq (span (< k) [k]) (spanRef (< k) [k])
+    && eq (span (< 3) [1, 2, 3, 1]) (spanRef (< 3) [1, 2, 3, 1])
 
 prop "break agrees with a plain reference on all, none, mixed, [] and singletons" (k : Int) (xs : List Int) =
   let none : List Int = []
   eq (break (x => True) xs) (spanRef (x => False) xs)
     && eq (break (x => False) xs) (spanRef (x => True) xs)
-    && eq (break (x => x > k) xs) (spanRef (x => not (x > k)) xs)
-    && eq (break (x => x > k) none) (spanRef (x => not (x > k)) none)
-    && eq (break (x => x > k) [k]) (spanRef (x => not (x > k)) [k])
+    && eq (break (> k) xs) (spanRef (x => not (x > k)) xs)
+    && eq (break (> k) none) (spanRef (x => not (x > k)) none)
+    && eq (break (> k) [k]) (spanRef (x => not (x > k)) [k])
 
 prop "findIndices agrees with a plain reference on all, none, mixed, [] and singletons" (k : Int) (xs : List Int) =
   let none : List Int = []
   eq (findIndices (x => True) xs) (findIndicesRef (x => True) xs)
     && eq (findIndices (x => False) xs) (findIndicesRef (x => False) xs)
-    && eq (findIndices (x => x < k) xs) (findIndicesRef (x => x < k) xs)
-    && eq (findIndices (x => x < k) none) (findIndicesRef (x => x < k) none)
-    && eq (findIndices (x => x < k) [k]) (findIndicesRef (x => x < k) [k])
-    && eq (findIndices (x => x < 3) [1, 2, 3, 1]) [0, 1, 3]
+    && eq (findIndices (< k) xs) (findIndicesRef (< k) xs)
+    && eq (findIndices (< k) none) (findIndicesRef (< k) none)
+    && eq (findIndices (< k) [k]) (findIndicesRef (< k) [k])
+    && eq (findIndices (< 3) [1, 2, 3, 1]) [0, 1, 3]
 
 prop "elemIndices agrees with the plain findIndices reference on [] and singletons" (k : Int) (xs : List Int) =
-  eq (elemIndices k []) (findIndicesRef (x => x == k) [])
+  eq (elemIndices k []) (findIndicesRef (== k) [])
     && eq (elemIndices k [k]) [0]
-    && eq (elemIndices k xs) (findIndicesRef (x => x == k) xs)
+    && eq (elemIndices k xs) (findIndicesRef (== k) xs)
