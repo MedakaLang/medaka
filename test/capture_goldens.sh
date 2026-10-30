@@ -581,7 +581,7 @@ if [ -n "$FROZEN_TAG" ]; then
       done
 
       # ── test/ ───────────────────────────────────────────────────────────
-      for base in doc prop nodoc; do
+      for base in doc prop nodoc shebang; do
         f="$NCFIX/test/$base.mdk"
         [ -f "$f" ] || continue
         only_match "$base" || continue

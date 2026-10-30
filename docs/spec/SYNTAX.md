@@ -158,15 +158,37 @@ binder starts, so a byte literal cannot begin a line at column 0. Elsewhere `b'a
 a byte literal, and a binder spelled that way is a literal pattern, not a name:
 `(b'a' => 1) b'a'` is `1`.
 
+**Raw strings.** `r"…"` is one line and `r"""…"""` runs over several lines. Neither
+processes escapes or interpolation: the body is the source text between the delimiters,
+so `r"\{x}"` is the four characters `\{x}`. Neither can contain its own closing
+delimiter: a one-line body ends at the first `"` and may not cross a line break, and a
+triple-quoted body ends at the first `"""`. Indentation inside a triple-quoted body is
+kept as written. `r` opens a raw literal only when it does not continue an identifier and
+a `"` follows with no space, so `r "x"` applies a function `r` to `"x"`, and `xr"a"` is
+the identifier `xr` followed by the string `a`. An unterminated raw literal is a located
+error (`L-UNTERMINATED-STRING`) at its opening `r`. The hash-delimited forms `r#"…"#` are
+not part of the language.
+
+| Source | Reads as |
+|---|---|
+| `r"\d+"` | `\d+`, three characters |
+| `r"a\nb"` | `a\nb`, four characters: `a`, `\`, `n`, `b` |
+| `r"\{x}"` | `\{x}`, four characters, no interpolation |
+| `r"\"` | the single character `\` |
+| `r""` | the empty string |
+| `r"""a"b"""` | `a"b` |
+| `r "x"` | an application of `r` to `"x"` |
+| `xr"a"` | the identifier `xr`, then the string `a` |
+
 String escapes: `\n \t \r \0 \\ \"` and unicode `\u{48}` (char literals also take
 `\'`). `\{` is **not** a literal-brace escape — it is the interpolation opener (see
 `## String interpolation` below); a literal `{` needs no escaping at all
 (`"a{b}c"` prints `a{b}c`). There is **no `\v` or `\f`** — those escapes do not exist
 in Medaka.
 
-Any other backslash-letter (`\d`, `\q`, `\v`) is a lex error in every string form: plain,
-triple-quoted, and the text after an interpolation in either. It is never silently decoded to
-the bare letter.
+Any other backslash-letter (`\d`, `\q`, `\v`) is a lex error in plain and triple-quoted
+strings, including the text after an interpolation in either. Raw strings take no escapes,
+so they never reject one. It is never silently decoded to the bare letter.
 
 Every plain or triple-quoted string, including the final text segment after an
 interpolation, requires its matching closing quote delimiter. EOF before that
@@ -1535,6 +1557,15 @@ main =
 -- 2
 main = println "ok"
 ```
+
+### Shebang line
+
+A file whose first line starts with the two characters `#!` has that line
+skipped, from offset 0 up to (not including) its newline, so every later token
+keeps its real line and column. A `#!` anywhere else is a lex error. `medaka
+fmt` keeps the line verbatim as the first line. Use `#!/usr/bin/env -S medaka
+run` (plain `env` passes `medaka run` as one argument on Linux, which fails),
+then `chmod +x` the file.
 
 ## Layout notes
 

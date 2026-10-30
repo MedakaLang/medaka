@@ -70,6 +70,7 @@ readForeignLibs : String -> <IO> List (String, String)
 readModuleProgF : (String -> String -> Result ParseError (List Decl)) -> (String -> Option String) -> List (String, String) -> List String -> String -> String -> <IO> Result LoadError (String, String, List Decl)
 readSource : String -> <FileRead> Result String String
 readSourceE : String -> <FileRead> Result (Option String) String
+readStdinProgram : Unit -> <Stdin> Result String String
 relUnderRoots : List String -> String -> String
 resolveDepFile : List (String, String) -> String -> <IO> Option (String, String)
 retainParsed : Ref (Map String (List Decl)) -> List String -> Unit
@@ -87,6 +88,8 @@ sourceNotUtf8Message : String -> String
 splitDot : String -> List String
 splitGo : String -> String -> Int -> Int -> String -> List String
 splitOnChar : String -> String -> List String
+stdinEntry : String
+stdinReadOverride : String -> String -> Option String
 stdlibOwnedMods : String -> List String -> String -> List (String, List Decl) -> <IO> List String
 stdlibOwnership : String -> List String -> String -> List (String, List Decl) -> <IO> (Bool, List String)
 stripSuffixStr : String -> String -> String

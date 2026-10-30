@@ -1,5 +1,5 @@
 # META
-source_lines=384
+source_lines=394
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/probe_transcript.mdk — the sentinel-delimited stdout format
@@ -365,8 +365,18 @@ renameUserMain : String -> String
 renameUserMain src =
   let (toks, spans) = probeTokens src
   match mainHeadLines (lineStartsOf src) toks spans
+    [] => blankShebang src
+    heads => blankShebang (joinNl (renameHeads 1 heads (splitNl src)))
+
+-- A `#!` line is only valid at offset 0 of a file, and a probe puts its own
+-- lines in front of the target, so the line is emptied (its newline and every
+-- later line number kept).
+blankShebang : String -> String
+blankShebang src
+  | startsWith "#!" src = match splitNl src
+    _ :: rest => joinNl ("" :: rest)
     [] => src
-    heads => joinNl (renameHeads 1 heads (splitNl src))
+  | otherwise = src
 
 -- The 1-based lines, ascending, on which a `main` identifier token starts at
 -- column 0.
@@ -474,7 +484,9 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "userMainName" (TyCon "String"))
 (DFunDef false "userMainName" () (ELit (LString "__probe_user_main__")))
 (DTypeSig true "renameUserMain" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "renameUserMain" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "toks") (PVar "spans")) (EApp (EVar "probeTokens") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "mainHeadLines") (EApp (EVar "lineStartsOf") (EVar "src"))) (EVar "toks")) (EVar "spans")) (arm (PList) () (EVar "src")) (arm (PVar "heads") () (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "renameHeads") (ELit (LInt 1))) (EVar "heads")) (EApp (EVar "splitNl") (EVar "src")))))))))
+(DFunDef false "renameUserMain" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "toks") (PVar "spans")) (EApp (EVar "probeTokens") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "mainHeadLines") (EApp (EVar "lineStartsOf") (EVar "src"))) (EVar "toks")) (EVar "spans")) (arm (PList) () (EApp (EVar "blankShebang") (EVar "src"))) (arm (PVar "heads") () (EApp (EVar "blankShebang") (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "renameHeads") (ELit (LInt 1))) (EVar "heads")) (EApp (EVar "splitNl") (EVar "src"))))))))))
+(DTypeSig false "blankShebang" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "blankShebang" ((PVar "src")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "#!"))) (EVar "src")) (EMatch (EApp (EVar "splitNl") (EVar "src")) (arm (PCons PWild (PVar "rest")) () (EApp (EVar "joinNl") (EBinOp "::" (ELit (LString "")) (EVar "rest")))) (arm (PList) () (EVar "src"))) (EIf (EVar "otherwise") (EVar "src") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "mainHeadLines" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "mainHeadLines" ((PVar "starts") (PCons (PCon "TIdent" (PLit (LString "main"))) (PVar "toks")) (PCons (PTuple (PVar "off") PWild) (PVar "spans"))) (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "line") (PLit (LInt 0))) () (EBinOp "::" (EVar "line") (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))) (arm PWild () (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))))
 (DFunDef false "mainHeadLines" ((PVar "starts") (PCons PWild (PVar "toks")) (PCons PWild (PVar "spans"))) (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))
@@ -571,7 +583,9 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "userMainName" (TyCon "String"))
 (DFunDef false "userMainName" () (ELit (LString "__probe_user_main__")))
 (DTypeSig true "renameUserMain" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "renameUserMain" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "toks") (PVar "spans")) (EApp (EVar "probeTokens") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "mainHeadLines") (EApp (EVar "lineStartsOf") (EVar "src"))) (EVar "toks")) (EVar "spans")) (arm (PList) () (EVar "src")) (arm (PVar "heads") () (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "renameHeads") (ELit (LInt 1))) (EVar "heads")) (EApp (EVar "splitNl") (EVar "src")))))))))
+(DFunDef false "renameUserMain" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "toks") (PVar "spans")) (EApp (EVar "probeTokens") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "mainHeadLines") (EApp (EVar "lineStartsOf") (EVar "src"))) (EVar "toks")) (EVar "spans")) (arm (PList) () (EApp (EVar "blankShebang") (EVar "src"))) (arm (PVar "heads") () (EApp (EVar "blankShebang") (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "renameHeads") (ELit (LInt 1))) (EVar "heads")) (EApp (EVar "splitNl") (EVar "src"))))))))))
+(DTypeSig false "blankShebang" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "blankShebang" ((PVar "src")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "#!"))) (EVar "src")) (EMatch (EApp (EVar "splitNl") (EVar "src")) (arm (PCons PWild (PVar "rest")) () (EApp (EVar "joinNl") (EBinOp "::" (ELit (LString "")) (EVar "rest")))) (arm (PList) () (EVar "src"))) (EIf (EVar "otherwise") (EVar "src") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "mainHeadLines" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "mainHeadLines" ((PVar "starts") (PCons (PCon "TIdent" (PLit (LString "main"))) (PVar "toks")) (PCons (PTuple (PVar "off") PWild) (PVar "spans"))) (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "line") (PLit (LInt 0))) () (EBinOp "::" (EVar "line") (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))) (arm PWild () (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))))
 (DFunDef false "mainHeadLines" ((PVar "starts") (PCons PWild (PVar "toks")) (PCons PWild (PVar "spans"))) (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))

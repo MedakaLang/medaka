@@ -1,0 +1,4 @@
+error: <stdin>:4:16: type mismatch: Int vs String
+  |
+4 | main = println (x + "a")
+  |                 ^

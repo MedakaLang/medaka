@@ -1,0 +1,8 @@
+running doctests in test/native_cli_fixtures/test/shebang.mdk
+  ok   test/native_cli_fixtures/test/shebang.mdk:4: double 3
+
+test/native_cli_fixtures/test/shebang.mdk: 1/1 passed
+  running test/native_cli_fixtures/test/shebang.mdk:9: double is twice [native]
+  ok   test/native_cli_fixtures/test/shebang.mdk:9: double is twice [native]
+
+test/native_cli_fixtures/test/shebang.mdk: 1/1 passed

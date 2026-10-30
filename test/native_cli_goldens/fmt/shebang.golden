@@ -1,0 +1,3 @@
+#!/usr/bin/env -S medaka run
+-- keep me
+main = println "hi"

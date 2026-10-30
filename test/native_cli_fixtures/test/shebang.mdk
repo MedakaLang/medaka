@@ -1,0 +1,9 @@
+#!/usr/bin/env -S medaka run
+import test.{expectTrue}
+
+-- > double 3
+-- 6
+double : Int -> Int
+double x = x * 2
+
+test "double is twice" = double 4 == 8 |> expectTrue

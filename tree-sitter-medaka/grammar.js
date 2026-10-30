@@ -95,6 +95,7 @@ module.exports = grammar({
      * ═══════════════════════════════════════════════════ */
 
     source_file: $ => seq(
+      optional($.shebang),
       repeat($._newline),
       repeat($._declaration),
     ),
@@ -132,6 +133,14 @@ module.exports = grammar({
     int_lit:    $ => /[0-9]+/,
     /* \\[^{] matches any escape except \{ so interp_string wins for "...\{...}" */
     string_lit: $ => /"([^"\\]|\\[^{])*"/,
+    /* Raw literals take no escapes and no interpolation. `r` is the token's first
+     * character, so `xr"a"` lexes as ident `xr` then a string, and `r "x"` is an
+     * application (the `"` must follow the `r` directly). A one-line body stops at
+     * the first `"` and may not cross a line break; a triple body stops at `"""`. */
+    raw_string_lit: $ => token(choice(
+      /r"[^"\r\n]*"/,
+      /r"""([^"]|"[^"]|""[^"])*"""/,
+    )),
     char_lit:   $ => /'([^'\\]|\\.)'/,
     bool_lit:   $ => choice('True', 'False'),
 
@@ -143,12 +152,16 @@ module.exports = grammar({
     // now.  The VS Code TextMate grammar (syntaxes/medaka.tmLanguage.json)
     // already highlights nested block comments correctly, so editor
     // highlighting is unaffected.
+    /* A `#!` line is valid only as the very first thing in the file. */
+    shebang: $ => token(prec(1, /#![^\n]*/)),
+
     comment: $ => choice(/--[^\n]*/, /\{-[^]*?-\}/),
 
     literal: $ => choice(
       $.float_lit,
       $.int_lit,
       $.string_lit,
+      $.raw_string_lit,
       $.char_lit,
       $.bool_lit,
     ),

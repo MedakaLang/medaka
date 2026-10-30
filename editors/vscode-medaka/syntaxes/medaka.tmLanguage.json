@@ -4,7 +4,10 @@
   "scopeName": "source.medaka",
   "fileTypes": ["mdk"],
   "patterns": [
+    { "include": "#shebang" },
     { "include": "#comment" },
+    { "include": "#raw-string-triple" },
+    { "include": "#raw-string" },
     { "include": "#string" },
     { "include": "#char" },
     { "include": "#effect-annotation" },
@@ -27,6 +30,10 @@
     { "include": "#punctuation" }
   ],
   "repository": {
+    "shebang": {
+      "name": "comment.line.shebang.medaka",
+      "match": "\\A#!.*$"
+    },
     "comment": {
       "patterns": [
         {
@@ -46,6 +53,18 @@
       "begin": "\\{-",
       "end": "-\\}",
       "patterns": [{ "include": "#comment-block-nested" }]
+    },
+    "raw-string-triple": {
+      "comment": "Raw triple-quoted literal: multi-line, no escapes or interpolation, ends at the first triple quote. Listed before #string so the r is never read as an identifier.",
+      "name": "string.quoted.double.raw.medaka",
+      "begin": "(?<![A-Za-z0-9_'])r\"\"\"",
+      "end": "\"\"\""
+    },
+    "raw-string": {
+      "comment": "Raw one-line literal: no escapes or interpolation, ends at the first quote. Listed before #string so the r is never read as an identifier.",
+      "name": "string.quoted.double.raw.medaka",
+      "begin": "(?<![A-Za-z0-9_'])r\"",
+      "end": "\""
     },
     "string": {
       "name": "string.quoted.double.medaka",

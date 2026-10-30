@@ -52,8 +52,9 @@ pieces size pos (r :: rest) =
 comments : String -> List RawTok -> List Trivia
 comments _ [] = []
 comments src ((RComment s e) :: rest) =
+  let opener = stringSlice s (s + 2) src
   let kind =
-    if stringSlice s (s + 2) src == "--" then LineComment else BlockComment
+    if opener == "--" || opener == "#!" then LineComment else BlockComment
   Trivia kind (SourceSpan s e) :: comments src rest
 comments src (_ :: rest) = comments src rest
 
