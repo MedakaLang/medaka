@@ -228,6 +228,67 @@ greeting = "Hello, world!"
       (string_lit))))
 
 ==================
+Raw string literal
+==================
+
+pattern = r"\d+"
+
+---
+
+(source_file
+  (fun_def
+    name: (ident)
+    body: (literal
+      (raw_string_lit))))
+
+==================
+Raw triple-quoted string literal
+==================
+
+doc = r"""say "hi" \{x}
+  next"""
+
+---
+
+(source_file
+  (fun_def
+    name: (ident)
+    body: (literal
+      (raw_string_lit))))
+
+==================
+Raw string after a space is an application
+==================
+
+main = r "x"
+
+---
+
+(source_file
+  (fun_def
+    name: (ident)
+    body: (expr_app
+      function: (ident)
+      argument: (literal
+        (string_lit)))))
+
+==================
+Identifier ending in r before a string
+==================
+
+main = xr"a"
+
+---
+
+(source_file
+  (fun_def
+    name: (ident)
+    body: (expr_app
+      function: (ident)
+      argument: (literal
+        (string_lit)))))
+
+==================
 Float literal
 ==================
 

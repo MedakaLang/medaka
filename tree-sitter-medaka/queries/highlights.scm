@@ -32,6 +32,7 @@
 
 ; ── String / char literals ────────────────────────────────────────────
 (string_lit) @string
+(raw_string_lit) @string
 (char_lit)   @string.special.symbol
 
 ; ── Numeric literals ──────────────────────────────────────────────────
