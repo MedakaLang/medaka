@@ -374,6 +374,9 @@ test "arch_boundaries: declaration-visibility counts match visibility.golden" =
 test "arch_boundaries: frontend.ast closure matches its golden" =
   closurePin "frontend.ast"
 
+test "arch_boundaries: frontend.ast_walk closure matches its golden" =
+  closurePin "frontend.ast_walk"
+
 test "arch_boundaries: frontend.visibility closure matches its golden" =
   closurePin "frontend.visibility"
 

@@ -1,0 +1,406 @@
+-- compiler/frontend/ast_walk.mdk — exhaustive traversal of the raw (pre-desugar)
+-- AST: a node's kind, its immediate sub-expressions and their one-level rebuild,
+-- every expression body a declaration holds (named by its owner), and a node's
+-- span derived from its `ELoc` leaves.
+--
+-- Every constructor of `Expr`, `Decl`, `DoStmt`, `Arm`, `Guard`, `GuardArm`,
+-- `Section`, `InterpPart`, `LetBind`, `FunClause` and `FieldAssign` is named
+-- here, leaves included, and no function ends in a catch-all.  Exhaustiveness
+-- is only a warning, so `ast_walk_test.mdk` fails when `medaka check` of this
+-- module reports one: a constructor added to `frontend/ast.mdk` cannot be
+-- skipped silently.  There is no `Stmt` type; `DoStmt` is the statement form.
+
+import frontend.ast.{
+  Arm(..),
+  Decl(..),
+  DoStmt(..),
+  Expr(..),
+  FieldAssign(..),
+  FunClause(..),
+  Guard(..),
+  GuardArm(..),
+  IfaceMethod(..),
+  ImplMethod(..),
+  InterpPart(..),
+  LetBind(..),
+  Loc(..),
+  MethodDefault(..),
+  Pat,
+  PropParam,
+  Section(..),
+}
+
+-- One constructor per `Expr` constructor, for selecting nodes by kind.
+public export data ExprKind =
+  | KLit
+  | KVar
+  | KApp
+  | KLam
+  | KLet
+  | KMatch
+  | KIf
+  | KBinOp
+  | KUnOp
+  | KInfix
+  | KFieldAccess
+  | KTuple
+  | KListLit
+  | KArrayLit
+  | KRangeList
+  | KRangeArray
+  | KSlice
+  | KLetGroup
+  | KSection
+  | KIndex
+  | KAnnot
+  | KHeadAnnot
+  | KBlock
+  | KDo
+  | KStringInterp
+  | KGuards
+  | KRecordCreate
+  | KRecordUpdate
+  | KVariantUpdate
+  | KMapLit
+  | KSetLit
+  | KAsPat
+  | KOrPat
+  | KMethodRef
+  | KDictApp
+  | KVarAt
+  | KVarId
+  | KMethodAt
+  | KDictAt
+  | KLoc
+  | KDoOrigin
+  | KNumLit
+  | KWideLit
+  deriving (Eq, Debug)
+
+export
+exprKind : Expr -> ExprKind
+exprKind (ELit _) = KLit
+exprKind (EVar _) = KVar
+exprKind (EApp _ _) = KApp
+exprKind (ELam _ _) = KLam
+exprKind (ELet _ _ _ _ _) = KLet
+exprKind (EMatch _ _) = KMatch
+exprKind (EIf _ _ _) = KIf
+exprKind (EBinOp _ _ _ _) = KBinOp
+exprKind (EUnOp _ _ _) = KUnOp
+exprKind (EInfix _ _ _) = KInfix
+exprKind (EFieldAccess _ _ _) = KFieldAccess
+exprKind (ETuple _) = KTuple
+exprKind (EListLit _) = KListLit
+exprKind (EArrayLit _) = KArrayLit
+exprKind (ERangeList _ _ _) = KRangeList
+exprKind (ERangeArray _ _ _) = KRangeArray
+exprKind (ESlice _ _ _ _) = KSlice
+exprKind (ELetGroup _ _) = KLetGroup
+exprKind (ESection _) = KSection
+exprKind (EIndex _ _) = KIndex
+exprKind (EAnnot _ _) = KAnnot
+exprKind (EHeadAnnot _ _) = KHeadAnnot
+exprKind (EBlock _) = KBlock
+exprKind (EDo _ _) = KDo
+exprKind (EStringInterp _) = KStringInterp
+exprKind (EGuards _) = KGuards
+exprKind (ERecordCreate _ _) = KRecordCreate
+exprKind (ERecordUpdate _ _ _) = KRecordUpdate
+exprKind (EVariantUpdate _ _ _) = KVariantUpdate
+exprKind (EMapLit _ _) = KMapLit
+exprKind (ESetLit _ _) = KSetLit
+exprKind (EAsPat _ _) = KAsPat
+exprKind (EOrPat _) = KOrPat
+exprKind (EMethodRef _) = KMethodRef
+exprKind (EDictApp _) = KDictApp
+exprKind (EVarAt _ _) = KVarAt
+exprKind (EVarId _ _) = KVarId
+exprKind (EMethodAt _ _ _) = KMethodAt
+exprKind (EDictAt _ _) = KDictAt
+exprKind (ELoc _ _) = KLoc
+exprKind (EDoOrigin _ _) = KDoOrigin
+exprKind (ENumLit _ _ _) = KNumLit
+exprKind (EWideLit _ _ _ _) = KWideLit
+
+-- The immediate sub-expressions of a node, in source order.
+export
+childExprs : Expr -> List Expr
+childExprs (ELit _) = []
+childExprs (EVar _) = []
+childExprs (EApp f x) = [f, x]
+childExprs (ELam _ b) = [b]
+childExprs (ELet _ _ _ e1 e2) = [e1, e2]
+childExprs (EMatch s arms) = s :: flatMap armExprs arms
+childExprs (EIf c t el) = [c, t, el]
+childExprs (EBinOp _ a b _) = [a, b]
+childExprs (EUnOp _ a _) = [a]
+childExprs (EInfix _ a b) = [a, b]
+childExprs (EFieldAccess e _ _) = [e]
+childExprs (ETuple es) = es
+childExprs (EListLit es) = es
+childExprs (EArrayLit es) = es
+childExprs (ERangeList lo hi _) = [lo, hi]
+childExprs (ERangeArray lo hi _) = [lo, hi]
+childExprs (ESlice e lo hi _) = [e, lo, hi]
+childExprs (ELetGroup binds body) = flatMap letBindExprs binds ++ [body]
+childExprs (ESection s) = sectionExprs s
+childExprs (EIndex a i) = [a, i]
+childExprs (EAnnot e _) = [e]
+childExprs (EHeadAnnot e _) = [e]
+childExprs (EBlock stmts) = flatMap stmtExprs stmts
+childExprs (EDo _ stmts) = flatMap stmtExprs stmts
+childExprs (EStringInterp parts) = flatMap interpPartExprs parts
+childExprs (EGuards arms) = flatMap guardArmExprs arms
+childExprs (ERecordCreate _ fs) = map fieldAssignExpr fs
+childExprs (ERecordUpdate e fs _) = e :: map fieldAssignExpr fs
+childExprs (EVariantUpdate _ e fs) = e :: map fieldAssignExpr fs
+childExprs (EMapLit _ kvs) = flatMap kvExprs kvs
+childExprs (ESetLit _ es) = es
+childExprs (EAsPat _ e) = [e]
+childExprs (EOrPat es) = es
+childExprs (EMethodRef _) = []
+childExprs (EDictApp _) = []
+childExprs (EVarAt _ _) = []
+childExprs (EVarId _ _) = []
+childExprs (EMethodAt _ _ _) = []
+childExprs (EDictAt _ _) = []
+childExprs (ELoc _ e) = [e]
+childExprs (EDoOrigin _ e) = [e]
+childExprs (ENumLit _ _ _) = []
+childExprs (EWideLit _ _ _ _) = []
+
+armExprs : Arm -> List Expr
+armExprs (Arm _ gs body) = flatMap guardExprs gs ++ [body]
+
+guardExprs : Guard -> List Expr
+guardExprs (GBool e) = [e]
+guardExprs (GBind _ e) = [e]
+
+export
+stmtExprs : DoStmt -> List Expr
+stmtExprs (DoExpr e) = [e]
+stmtExprs (DoBind _ e) = [e]
+stmtExprs (DoLet _ _ _ e _) = [e]
+stmtExprs (DoAssign _ e) = [e]
+stmtExprs (DoFieldAssign _ _ e) = [e]
+
+letBindExprs : LetBind -> List Expr
+letBindExprs (LetBind _ clauses _ _) = map ((FunClause _ body) => body) clauses
+
+sectionExprs : Section -> List Expr
+sectionExprs (SecBare _) = []
+sectionExprs (SecRight _ e) = [e]
+sectionExprs (SecLeft e _) = [e]
+
+interpPartExprs : InterpPart -> List Expr
+interpPartExprs (InterpStr _) = []
+interpPartExprs (InterpExpr e) = [e]
+
+guardArmExprs : GuardArm -> List Expr
+guardArmExprs (GuardArm gs body) = flatMap guardExprs gs ++ [body]
+
+fieldAssignExpr : FieldAssign -> Expr
+fieldAssignExpr (FieldAssign _ e) = e
+
+kvExprs : (Expr, Expr) -> List Expr
+kvExprs (k, v) = [k, v]
+
+-- Rebuild a node with `g` applied to each immediate sub-expression, recursing
+-- no further; every other field, `ELoc` spans included, is kept.
+export
+mapChildExprs : (Expr -> Expr) -> Expr -> Expr
+mapChildExprs _ (ELit l) = ELit l
+mapChildExprs _ (EVar n) = EVar n
+mapChildExprs g (EApp a b) = EApp (g a) (g b)
+mapChildExprs g (ELam ps b) = ELam ps (g b)
+mapChildExprs g (ELet m r p e1 e2) = ELet m r p (g e1) (g e2)
+mapChildExprs g (EMatch e0 arms) = EMatch (g e0) (map (mapArm g) arms)
+mapChildExprs g (EIf c t el) = EIf (g c) (g t) (g el)
+mapChildExprs g (EBinOp op a b r) = EBinOp op (g a) (g b) r
+mapChildExprs g (EUnOp op a r) = EUnOp op (g a) r
+mapChildExprs g (EInfix op a b) = EInfix op (g a) (g b)
+mapChildExprs g (EFieldAccess e0 n r) = EFieldAccess (g e0) n r
+mapChildExprs g (ETuple es) = ETuple (map g es)
+mapChildExprs g (EListLit es) = EListLit (map g es)
+mapChildExprs g (EArrayLit es) = EArrayLit (map g es)
+mapChildExprs g (ERangeList lo hi incl) = ERangeList (g lo) (g hi) incl
+mapChildExprs g (ERangeArray lo hi incl) = ERangeArray (g lo) (g hi) incl
+mapChildExprs g (ESlice e0 lo hi incl) = ESlice (g e0) (g lo) (g hi) incl
+mapChildExprs g (ELetGroup bs e2) = ELetGroup (map (mapLetBind g) bs) (g e2)
+mapChildExprs g (ESection s) = ESection (mapSection g s)
+mapChildExprs g (EIndex e0 i) = EIndex (g e0) (g i)
+mapChildExprs g (EAnnot e0 t) = EAnnot (g e0) t
+mapChildExprs g (EHeadAnnot e0 t) = EHeadAnnot (g e0) t
+mapChildExprs g (EBlock stmts) = EBlock (map (mapDoStmt g) stmts)
+mapChildExprs g (EDo d stmts) = EDo d (map (mapDoStmt g) stmts)
+mapChildExprs g (EStringInterp parts) = EStringInterp (map (mapInterp g) parts)
+mapChildExprs g (EGuards arms) = EGuards (map (mapGuardArm g) arms)
+mapChildExprs g (ERecordCreate n fs) =
+  ERecordCreate n (map (mapFieldAssign g) fs)
+mapChildExprs g (ERecordUpdate e0 fs r) =
+  ERecordUpdate (g e0) (map (mapFieldAssign g) fs) r
+mapChildExprs g (EVariantUpdate c e0 fs) =
+  EVariantUpdate c (g e0) (map (mapFieldAssign g) fs)
+mapChildExprs g (EMapLit n kvs) =
+  EMapLit n (map (kv => (g (fst kv), g (snd kv))) kvs)
+mapChildExprs g (ESetLit n es) = ESetLit n (map g es)
+mapChildExprs g (EAsPat x e) = EAsPat x (g e)
+mapChildExprs g (EOrPat es) = EOrPat (map g es)
+mapChildExprs _ (EMethodRef n) = EMethodRef n
+mapChildExprs _ (EDictApp n) = EDictApp n
+mapChildExprs _ (EVarAt n a) = EVarAt n a
+mapChildExprs _ (EVarId n i) = EVarId n i
+mapChildExprs _ (EMethodAt n s ev) = EMethodAt n s ev
+mapChildExprs _ (EDictAt n ev) = EDictAt n ev
+mapChildExprs g (ELoc l e) = ELoc l (g e)
+mapChildExprs g (EDoOrigin l e) = EDoOrigin l (g e)
+mapChildExprs _ (ENumLit n ev lexeme) = ENumLit n ev lexeme
+mapChildExprs _ (EWideLit hi lo ev lexeme) = EWideLit hi lo ev lexeme
+
+mapArm : (Expr -> Expr) -> Arm -> Arm
+mapArm g (Arm p gs b) = Arm p (map (mapGuard g) gs) (g b)
+
+mapGuard : (Expr -> Expr) -> Guard -> Guard
+mapGuard g (GBool e) = GBool (g e)
+mapGuard g (GBind p e) = GBind p (g e)
+
+mapGuardArm : (Expr -> Expr) -> GuardArm -> GuardArm
+mapGuardArm g (GuardArm gs b) = GuardArm (map (mapGuard g) gs) (g b)
+
+mapLetBind : (Expr -> Expr) -> LetBind -> LetBind
+mapLetBind g (LetBind n clauses site bid) =
+  LetBind n (map (mapFunClause g) clauses) site bid
+
+mapFunClause : (Expr -> Expr) -> FunClause -> FunClause
+mapFunClause g (FunClause ps b) = FunClause ps (g b)
+
+mapSection : (Expr -> Expr) -> Section -> Section
+mapSection _ (SecBare op) = SecBare op
+mapSection g (SecRight op e) = SecRight op (g e)
+mapSection g (SecLeft e op) = SecLeft (g e) op
+
+mapFieldAssign : (Expr -> Expr) -> FieldAssign -> FieldAssign
+mapFieldAssign g (FieldAssign n v) = FieldAssign n (g v)
+
+mapDoStmt : (Expr -> Expr) -> DoStmt -> DoStmt
+mapDoStmt g (DoExpr e) = DoExpr (g e)
+mapDoStmt g (DoBind p e) = DoBind p (g e)
+mapDoStmt g (DoLet m r p e site) = DoLet m r p (g e) site
+mapDoStmt g (DoAssign x e) = DoAssign x (g e)
+mapDoStmt g (DoFieldAssign x fs e) = DoFieldAssign x fs (g e)
+
+mapInterp : (Expr -> Expr) -> InterpPart -> InterpPart
+mapInterp _ (InterpStr s) = InterpStr s
+mapInterp g (InterpExpr e) = InterpExpr (g e)
+
+-- Who owns an expression body: a function clause, an `impl` method or an
+-- interface default (interface name, method name), a `test` or `prop` (its
+-- description), or one clause of a top-level `let rec … with …` binding.
+public export data BodyOwner =
+  | OwnerClause String (List Pat)
+  | OwnerImplMethod String String (List Pat)
+  | OwnerIfaceDefault String String (List Pat)
+  | OwnerTest String
+  | OwnerProp String (List PropParam)
+  | OwnerLetGroup String (List Pat)
+
+public export data DeclBody = DeclBody BodyOwner Expr
+
+-- Every expression body directly held by one top-level declaration, in source
+-- order; an attributed declaration yields the bodies of the one it wraps.
+export
+declBodies : Decl -> List DeclBody
+declBodies (DTypeSig _ _ _ _) = []
+declBodies (DExtern _) = []
+declBodies (DFunDef _ name ps body _ _) = [DeclBody (OwnerClause name ps) body]
+declBodies (DData { dataName = _, ... }) = []
+declBodies (DUse _ _ _) = []
+declBodies (DEffect _ _ _ _ _ _) = []
+declBodies (DProp _ name params body) = [DeclBody (OwnerProp name params) body]
+declBodies (DTest _ name body) = [DeclBody (OwnerTest name) body]
+declBodies (DInterface { ifaceOrigin = _, name, methods, ... }) =
+  flatMap (ifaceDefaultBody name) methods
+declBodies (DImpl { implOrigin = _, iface, methods, ... }) =
+  map (implMethodBody iface) methods
+declBodies (DTypeAlias { tyAliasName = _, ... }) = []
+declBodies (DNewtype { newtypeName = _, ... }) = []
+declBodies (DLetGroup _ binds) = flatMap letGroupBodies binds
+declBodies (DAttrib _ d) = declBodies d
+
+ifaceDefaultBody : String -> IfaceMethod -> List DeclBody
+ifaceDefaultBody _ (IfaceMethod _ _ None _) = []
+ifaceDefaultBody iface (IfaceMethod m _ (Some (MethodDefault ps body)) _) =
+  [DeclBody (OwnerIfaceDefault iface m ps) body]
+
+implMethodBody : String -> ImplMethod -> DeclBody
+implMethodBody iface (ImplMethod m ps body) =
+  DeclBody (OwnerImplMethod iface m ps) body
+
+letGroupBodies : LetBind -> List DeclBody
+letGroupBodies (LetBind name clauses _ _) =
+  map ((FunClause ps body) => DeclBody (OwnerLetGroup name ps) body) clauses
+
+-- The span of a node's own `ELoc` wrapper, if it is one.
+nodeLoc : Expr -> Option Loc
+nodeLoc (ELit _) = None
+nodeLoc (EVar _) = None
+nodeLoc (EApp _ _) = None
+nodeLoc (ELam _ _) = None
+nodeLoc (ELet _ _ _ _ _) = None
+nodeLoc (EMatch _ _) = None
+nodeLoc (EIf _ _ _) = None
+nodeLoc (EBinOp _ _ _ _) = None
+nodeLoc (EUnOp _ _ _) = None
+nodeLoc (EInfix _ _ _) = None
+nodeLoc (EFieldAccess _ _ _) = None
+nodeLoc (ETuple _) = None
+nodeLoc (EListLit _) = None
+nodeLoc (EArrayLit _) = None
+nodeLoc (ERangeList _ _ _) = None
+nodeLoc (ERangeArray _ _ _) = None
+nodeLoc (ESlice _ _ _ _) = None
+nodeLoc (ELetGroup _ _) = None
+nodeLoc (ESection _) = None
+nodeLoc (EIndex _ _) = None
+nodeLoc (EAnnot _ _) = None
+nodeLoc (EHeadAnnot _ _) = None
+nodeLoc (EBlock _) = None
+nodeLoc (EDo _ _) = None
+nodeLoc (EStringInterp _) = None
+nodeLoc (EGuards _) = None
+nodeLoc (ERecordCreate _ _) = None
+nodeLoc (ERecordUpdate _ _ _) = None
+nodeLoc (EVariantUpdate _ _ _) = None
+nodeLoc (EMapLit _ _) = None
+nodeLoc (ESetLit _ _) = None
+nodeLoc (EAsPat _ _) = None
+nodeLoc (EOrPat _) = None
+nodeLoc (EMethodRef _) = None
+nodeLoc (EDictApp _) = None
+nodeLoc (EVarAt _ _) = None
+nodeLoc (EVarId _ _) = None
+nodeLoc (EMethodAt _ _ _) = None
+nodeLoc (EDictAt _ _) = None
+nodeLoc (ELoc l _) = Some l
+nodeLoc (EDoOrigin _ _) = None
+nodeLoc (ENumLit _ _ _) = None
+nodeLoc (EWideLit _ _ _ _) = None
+
+-- A node's source span: its own `ELoc` span, or else the span from the
+-- earliest start to the latest end among the `ELoc`s nearest its leaves.  The
+-- parser leaves application and operator nodes unwrapped, so this is how their
+-- extent is recovered.  `None` for a tree with no `ELoc` at all.
+export
+exprSpan : Expr -> Option Loc
+exprSpan e = match nodeLoc e
+  Some l => Some l
+  None => fold joinSpan None (map exprSpan (childExprs e))
+
+joinSpan : Option Loc -> Option Loc -> Option Loc
+joinSpan None b = b
+joinSpan a None = a
+joinSpan (Some (Loc f sl sc el ec)) (Some (Loc _ sl2 sc2 el2 ec2)) =
+  let (l1, c1) = min (sl, sc) (sl2, sc2)
+  let (l2, c2) = max (el, ec) (el2, ec2)
+  Some (Loc f l1 c1 l2 c2)

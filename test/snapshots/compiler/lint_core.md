@@ -1,13 +1,15 @@
 # META
-source_lines=334
+source_lines=381
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
 -- suppression `Directive`s, the per-file `FileFacts` cell set, the `Rule` and
--- `CrossFileRule` records, and the `StdlibIndex` value with its pure accessors.
+-- `CrossFileRule` records, the visitor `Ctx` and `Visitor` a walking rule
+-- registers, and the `StdlibIndex` value with its pure accessors.
 -- Leaf of the lint module family: it imports no rule, registry or runner module.
 
-import frontend.ast.{Loc(..), Ty(..), Decl(..)}
+import frontend.ast.{Loc(..), Ty(..), Decl(..), Expr, Pat}
+import frontend.ast_walk.{ExprKind}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..), Diag(..)}
 import support.util.{listLen, filterList, lookupAssoc}
@@ -114,18 +116,50 @@ needsStdlibIndex m = match m.needs
   NeedsStdlibIndex :: _ => True
   [] => False
 
--- A registered rule.  `check` is the whole pass for that rule: the STDLIB INDEX
--- (`StdlibIndex`, below — every exported stdlib name with its declared
--- signature, so a rule can ask what the stdlib actually provides instead of
--- consulting a curated list; it is a plain value, so `check` stays PURE even
--- though building the index needs `<IO>`) + the target file
--- PATH (so a rule may scope itself, e.g. skip stdlib-owned files) + Positions
--- (for per-decl source locations) + raw decls → hits.  `fix`, when `Some f`, is a
--- per-decl autofixer: given the syntactic constructor
--- `Oracle` (built once from the whole target file's decls — used by the
--- irrefutability logic to recognise single-constructor patterns) and a single
--- decl, it returns `Some replacementDecls` if the rule can safely rewrite that
--- decl, else `None`.  `None` = the rule is not auto-fixable.
+-- Where a visited node sits.  `ctxDeclName` and `ctxParams` name the body's
+-- owner (a clause's function, an `impl` or interface-default method, a
+-- let-group binding, a test's or prop's description) and its parameter
+-- patterns, so a call to the enclosing function is recognisable; a test or prop
+-- has none.  `ctxInTest` is True inside a `test` or `prop` body.  `ctxParent`
+-- is the kind of the nearest enclosing expression other than an `ELoc`, `None`
+-- at a body's root and for a declaration.  `ctxSpan` is the span of the
+-- nearest enclosing `ELoc`, else the declaration's start line.
+public export data Ctx = Ctx {
+  ctxDeclName : String,
+  ctxParams : List Pat,
+  ctxInTest : Bool,
+  ctxParent : Option ExprKind,
+  ctxSpan : Option Loc,
+}
+
+-- One callback a walking rule registers: on every expression node whose kind is
+-- listed (an `ELoc` is never visited; its span becomes the `Ctx` span beneath
+-- it), or on every top-level declaration, in source order.
+public export data Visitor =
+  | OnExpr (List ExprKind) (Ctx -> Expr -> List Finding)
+  | OnDecl (Ctx -> Decl -> List Finding)
+
+-- How a rule inspects a file.  `WholeFile` is the whole pass for the rule: the
+-- STDLIB INDEX (`StdlibIndex`, below — every exported stdlib name with its
+-- declared signature, so a rule can ask what the stdlib actually provides
+-- instead of consulting a curated list; it is a plain value, so the pass stays
+-- PURE even though building the index needs `<IO>`) + the target file PATH (so
+-- a rule may scope itself, e.g. skip stdlib-owned files) + Positions (for
+-- per-decl source locations) + raw decls → hits.  `Visits` takes the same
+-- inputs once per file and returns the rule's visitors, which the runner's one
+-- walk over the file drives; any per-file state the visitors need is computed
+-- there.  The two constructors are two kinds of pass, not failure and success.
+-- lint-disable-next-line rule-clone-type
+public export data RuleCheck =
+  | WholeFile (StdlibIndex -> String -> FileFacts -> Positions -> List Decl -> List Finding)
+  | Visits (StdlibIndex -> String -> FileFacts -> Positions -> List Decl -> List Visitor)
+
+-- A registered rule.  `check` says how it inspects a file.  `fix`, when
+-- `Some f`, is a per-decl autofixer: given the syntactic constructor `Oracle`
+-- (built once from the whole target file's decls — used by the irrefutability
+-- logic to recognise single-constructor patterns) and a single decl, it returns
+-- `Some replacementDecls` if the rule can safely rewrite that decl, else
+-- `None`.  `None` = the rule is not auto-fixable.
 -- `name`/`descr`/`severity`/`enabled`/`fix` are derived from `meta` by `mkRule`;
 -- `enabled`/`severity` are the defaults the CLI may override before running.
 public export data Rule = Rule {
@@ -134,7 +168,7 @@ public export data Rule = Rule {
   descr : String,
   severity : Severity,
   enabled : Bool,
-  check : StdlibIndex -> String -> FileFacts -> Positions -> List Decl -> List Finding,
+  check : RuleCheck,
   fix : Option (Oracle -> Decl -> Option (List Decl)),
 }
 
@@ -152,7 +186,7 @@ public export data CrossFileRule = CrossFileRule {
   check : List (String, Positions, List Decl) -> List Finding,
 }
 
--- The one constructor of a `Rule`: the record's plain fields are read off the
+-- The constructors of a `Rule`: the record's plain fields are read off the
 -- metadata so the two cannot disagree.  A rule whose `fixability` is
 -- `NotFixable` carries no fixer whatever `fix` says.
 export
@@ -160,7 +194,20 @@ mkRule : RuleMeta ->
   (StdlibIndex -> String -> FileFacts -> Positions -> List Decl -> List Finding) ->
   Option (Oracle -> Decl -> Option (List Decl)) ->
   Rule
-mkRule m check fix = Rule {
+mkRule m check fix = ruleOf m (WholeFile check) fix
+
+export
+mkVisitorRule : RuleMeta ->
+  (StdlibIndex -> String -> FileFacts -> Positions -> List Decl -> List Visitor) ->
+  Option (Oracle -> Decl -> Option (List Decl)) ->
+  Rule
+mkVisitorRule m visits fix = ruleOf m (Visits visits) fix
+
+ruleOf : RuleMeta ->
+  RuleCheck ->
+  Option (Oracle -> Decl -> Option (List Decl)) ->
+  Rule
+ruleOf m check fix = Rule {
   meta = m,
   name = m.name,
   descr = m.summary,
@@ -213,7 +260,7 @@ mkCrossFileRule m check = CrossFileRule {
 -- because for 55 names there is no such thing.  `stdlibAmbiguousNames` is that
 -- set, derived — never a list written down here.
 --
--- `Rule.check` is PURE and reading the stdlib needs `<IO>`, so the index is
+-- A rule's `check` is PURE and reading the stdlib needs `<IO>`, so the index is
 -- never built inside a rule.  Each IO entry point builds it ONCE and passes it
 -- down through `lintProgram` as `check`'s first argument.
 --
@@ -337,7 +384,8 @@ public export data DupClause = DupClause {
   dcPure : Bool,
 }
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Decl" true) (mem "Expr" false) (mem "Pat" false))))
+(DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false))))
@@ -370,10 +418,17 @@ public export data DupClause = DupClause {
 (DFunDef false "ruleMetaName" ((PVar "m")) (EFieldAccess (EVar "m") "name"))
 (DTypeSig true "needsStdlibIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
 (DFunDef false "needsStdlibIndex" ((PVar "m")) (EMatch (EFieldAccess (EVar "m") "needs") (arm (PCons (PCon "NeedsStdlibIndex") PWild) () (EVar "True")) (arm (PList) () (EVar "False"))))
-(DData Public "Rule" () ((variant "Rule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())
+(DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
+(DData Public "Visitor" () ((variant "OnExpr" (ConPos (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnDecl" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
+(DData Public "RuleCheck" () ((variant "WholeFile" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))) (variant "Visits" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor")))))))))) ())
+(DData Public "Rule" () ((variant "Rule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyCon "RuleCheck")) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())
 (DData Public "CrossFileRule" () ((variant "CrossFileRule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DTypeSig true "mkRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))) (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
-(DFunDef false "mkRule" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "NotFixable") () (EVar "None")))))))
+(DFunDef false "mkRule" ((PVar "m") (PVar "check") (PVar "fix")) (EApp (EApp (EApp (EVar "ruleOf") (EVar "m")) (EApp (EVar "WholeFile") (EVar "check"))) (EVar "fix")))
+(DTypeSig true "mkVisitorRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))) (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
+(DFunDef false "mkVisitorRule" ((PVar "m") (PVar "visits") (PVar "fix")) (EApp (EApp (EApp (EVar "ruleOf") (EVar "m")) (EApp (EVar "Visits") (EVar "visits"))) (EVar "fix")))
+(DTypeSig false "ruleOf" (TyFun (TyCon "RuleMeta") (TyFun (TyCon "RuleCheck") (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
+(DFunDef false "ruleOf" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "NotFixable") () (EVar "None")))))))
 (DTypeSig true "mkCrossFileRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))) (TyCon "CrossFileRule"))))
 (DFunDef false "mkCrossFileRule" ((PVar "m") (PVar "check")) (ERecordCreate "CrossFileRule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")))))
 (DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyApp (TyCon "List") (TyCon "String"))))) ())
@@ -396,7 +451,8 @@ public export data DupClause = DupClause {
 (DData Public "Directive" () ((variant "Directive" (ConPos (TyCon "DirScope") (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DData Public "DupClause" () ((variant "DupClause" (ConNamed (field "dcName" (TyCon "String")) (field "dcLine" (TyCon "Int")) (field "dcKey" (TyCon "String")) (field "dcCost" (TyCon "Int")) (field "dcPure" (TyCon "Bool"))))) ())
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Decl" true) (mem "Expr" false) (mem "Pat" false))))
+(DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false))))
@@ -429,10 +485,17 @@ public export data DupClause = DupClause {
 (DFunDef false "ruleMetaName" ((PVar "m")) (EFieldAccess (EVar "m") "name"))
 (DTypeSig true "needsStdlibIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
 (DFunDef false "needsStdlibIndex" ((PVar "m")) (EMatch (EFieldAccess (EVar "m") "needs") (arm (PCons (PCon "NeedsStdlibIndex") PWild) () (EVar "True")) (arm (PList) () (EVar "False"))))
-(DData Public "Rule" () ((variant "Rule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())
+(DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
+(DData Public "Visitor" () ((variant "OnExpr" (ConPos (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnDecl" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
+(DData Public "RuleCheck" () ((variant "WholeFile" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))) (variant "Visits" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor")))))))))) ())
+(DData Public "Rule" () ((variant "Rule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyCon "RuleCheck")) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())
 (DData Public "CrossFileRule" () ((variant "CrossFileRule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DTypeSig true "mkRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))) (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
-(DFunDef false "mkRule" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "NotFixable") () (EVar "None")))))))
+(DFunDef false "mkRule" ((PVar "m") (PVar "check") (PVar "fix")) (EApp (EApp (EApp (EVar "ruleOf") (EVar "m")) (EApp (EVar "WholeFile") (EVar "check"))) (EVar "fix")))
+(DTypeSig true "mkVisitorRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))) (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
+(DFunDef false "mkVisitorRule" ((PVar "m") (PVar "visits") (PVar "fix")) (EApp (EApp (EApp (EVar "ruleOf") (EVar "m")) (EApp (EVar "Visits") (EVar "visits"))) (EVar "fix")))
+(DTypeSig false "ruleOf" (TyFun (TyCon "RuleMeta") (TyFun (TyCon "RuleCheck") (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
+(DFunDef false "ruleOf" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "NotFixable") () (EVar "None")))))))
 (DTypeSig true "mkCrossFileRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))) (TyCon "CrossFileRule"))))
 (DFunDef false "mkCrossFileRule" ((PVar "m") (PVar "check")) (ERecordCreate "CrossFileRule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")))))
 (DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyApp (TyCon "List") (TyCon "String"))))) ())

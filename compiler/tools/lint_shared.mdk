@@ -17,7 +17,7 @@ import support.path.{stripMdk}
 import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
 import tools.lint_core.{DirScope(..), Directive(..), Finding(..)}
-import frontend.desugar.{mapChildren}
+export import frontend.ast_walk.{childExprs, mapChildExprs, stmtExprs}
 import hash_map.{HashMap, new, setInPlace}
 import tools.printer.{exprToString}
 import ir.sexp.{exprSexp}
@@ -477,83 +477,6 @@ lastSegOf [] = ""
 lastSegOf [x] = x
 lastSegOf (_ :: rest) = lastSegOf rest
 
--- immediate sub-expressions of an expr (order irrelevant; used to recurse).
-export
-childExprs : Expr -> List Expr
-childExprs (ELoc _ e) = [e]
-childExprs (EDoOrigin _ e) = [e]
-childExprs (EApp f x) = [f, x]
-childExprs (ELam _ b) = [b]
-childExprs (ELet _ _ _ e1 e2) = [e1, e2]
-childExprs (EMatch s arms) = s :: flatMap armExprs arms
-childExprs (EIf c t el) = [c, t, el]
-childExprs (EBinOp _ a b _) = [a, b]
-childExprs (EUnOp _ a _) = [a]
-childExprs (EInfix _ a b) = [a, b]
-childExprs (EFieldAccess e _ _) = [e]
-childExprs (ETuple es) = es
-childExprs (EListLit es) = es
-childExprs (EArrayLit es) = es
-childExprs (ERangeList lo hi _) = [lo, hi]
-childExprs (ERangeArray lo hi _) = [lo, hi]
-childExprs (ESlice e lo hi _) = [e, lo, hi]
-childExprs (ELetGroup binds body) = flatMap letBindExprs binds ++ [body]
-childExprs (ESection s) = sectionExprs s
-childExprs (EIndex a i) = [a, i]
-childExprs (EAnnot e _) = [e]
-childExprs (EHeadAnnot e _) = [e]
-childExprs (EBlock stmts) = flatMap stmtExprs stmts
-childExprs (EDo _ stmts) = flatMap stmtExprs stmts
-childExprs (EStringInterp parts) = flatMap interpPartExprs parts
-childExprs (EGuards arms) = flatMap guardArmExprs arms
-childExprs (ERecordCreate _ fs) = map fieldAssignExpr fs
-childExprs (ERecordUpdate e fs _) = e :: map fieldAssignExpr fs
-childExprs (EVariantUpdate _ e fs) = e :: map fieldAssignExpr fs
-childExprs (EMapLit _ kvs) = flatMap kvExprs kvs
-childExprs (ESetLit _ es) = es
-childExprs (EAsPat _ e) = [e]
-childExprs (EOrPat es) = es
-childExprs _ = []
-
-armExprs : Arm -> List Expr
-armExprs (Arm _ gs body) = flatMap guardExprs gs ++ [body]
-
-guardExprs : Guard -> List Expr
-guardExprs (GBool e) = [e]
-guardExprs (GBind _ e) = [e]
-
-export
-stmtExprs : DoStmt -> List Expr
-stmtExprs (DoExpr e) = [e]
-stmtExprs (DoBind _ e) = [e]
-stmtExprs (DoLet _ _ _ e _) = [e]
-stmtExprs (DoAssign _ e) = [e]
-stmtExprs (DoFieldAssign _ _ e) = [e]
-
-letBindExprs : LetBind -> List Expr
-letBindExprs (LetBind _ clauses _ _) = flatMap funClauseExprs clauses
-
-funClauseExprs : FunClause -> List Expr
-funClauseExprs (FunClause _ body) = [body]
-
-sectionExprs : Section -> List Expr
-sectionExprs (SecBare _) = []
-sectionExprs (SecRight _ e) = [e]
-sectionExprs (SecLeft e _) = [e]
-
-interpPartExprs : InterpPart -> List Expr
-interpPartExprs (InterpStr _) = []
-interpPartExprs (InterpExpr e) = [e]
-
-guardArmExprs : GuardArm -> List Expr
-guardArmExprs (GuardArm gs body) = flatMap guardExprs gs ++ [body]
-
-fieldAssignExpr : FieldAssign -> Expr
-fieldAssignExpr (FieldAssign _ e) = e
-
-kvExprs : (Expr, Expr) -> List Expr
-kvExprs (k, v) = [k, v]
-
 -- an `EVar x` leaf (under any ELoc wrapper)
 export
 isEVarNamed : String -> Expr -> Bool
@@ -602,15 +525,6 @@ andThenEtaFn x arg = match unwrapLoc arg
 --     definition, or it would rewrite the body to an infinite self-reference).
 -- Every rewrite is EXACTLY equivalent (see each rule's soundness note), so the
 -- self-compile fixpoint stays byte-identical after the tree is fixed.
-
--- rebuild every immediate child expr with `g`: the shared one-level step
--- (`desugar.mapChildren`) plus the parser's as-pattern node, which the other
--- whole-tree rewriters here (`rewriteLamExpr` &c.) descend into as well.
-export
-mapChildExprs : (Expr -> Expr) -> Expr -> Expr
-mapChildExprs g (EAsPat x e) = EAsPat x (g e)
-mapChildExprs g (EOrPat es) = EOrPat (map g es)
-mapChildExprs g e = mapChildren g e
 
 -- generic bottom-up rewrite: rebuild children first, THEN apply the node-local
 -- transform `f` at this (child-rewritten) node.  Bottom-up so a rewrite exposed by

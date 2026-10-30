@@ -45,16 +45,25 @@ import tools.lint.{
   allRuleNames,
   buildStdlibIndexResult,
   crossFileMetaProblems,
+  emptyStdlibIndex,
+  lintParseSource,
+  lintProgram,
   mergeCrossFileIntoTriples,
+  selectRules,
 }
+import tools.lint_walk.{runVisitors}
+import tools.lint_shared.{declLocList}
+import frontend.ast_walk.{ExprKind(..)}
 import tools.lint_core.{
   Category(..),
+  Ctx(..),
   CrossFileRule,
   Finding(..),
   Fixability(..),
   Ratchet(..),
   RuleMeta(..),
   Scope(..),
+  Visitor(..),
   mkCrossFileRule,
 }
 import tools.lint_cmd.{
@@ -514,3 +523,68 @@ test "naming an internal rule where internal is off is reported" = expectEach [
       (inactiveInternalRuleUse False ["rule-not-eq"] ["stdlib/list.mdk"]),
   ),
 ]
+
+-- ── the visitor walk ──────────────────────────────────────────────────────────
+-- A visitor that reports, at every application, the `Ctx` it was handed.
+ctxProbe : List Visitor
+ctxProbe = [OnExpr [KApp] (ctx _ => [ctxFinding ctx])]
+
+ctxFinding : Ctx -> Finding
+ctxFinding ctx = Finding {
+  rule = "probe",
+  message =
+    "\{ctx.ctxDeclName} params=\{intToString (listLen ctx.ctxParams)} test=\{debug ctx.ctxInTest} parent=\{debug ctx.ctxParent}",
+  severity = SevWarning,
+  loc = ctx.ctxSpan,
+}
+
+walkSrc : String
+walkSrc = "f x = g (h x)\ntest \"t\" = k 1\n"
+
+findingMessage : Finding -> String
+findingMessage f = f.message
+
+test "the visitor walk hands each callback its owner, test flag and parent kind" =
+  match lintParseSource walkSrc
+    Err _ => fail "the fixture did not parse"
+    Ok (decls, pos) =>
+      expectEqual
+        [
+          [
+            "f params=1 test=False parent=None",
+            "f params=1 test=False parent=Some KApp",
+            "t params=0 test=True parent=None",
+          ],
+        ]
+        (map
+          (map findingMessage)
+          (runVisitors [ctxProbe] (declLocList pos decls)))
+
+notEqSrc : String
+notEqSrc =
+  """interface Same a where
+  same : a -> a -> Bool
+  same x y = not (x == y)
+let rec loop n = not (n == 0)
+test "t" = expectTrue (not (1 == 2))
+"""
+
+test "rule-not-eq reaches interface-default, let-group and test bodies" =
+  match lintParseSource notEqSrc
+    Err _ => fail "the fixture did not parse"
+    Ok (decls, pos) =>
+      expectEqual
+        [
+          "negated equality. Rewrite as 'x /= y'",
+          "negated equality. Rewrite as 'n /= 0'",
+          "negated equality. Rewrite as '1 /= 2'",
+        ]
+        (map
+          findingMessage
+          (lintProgram
+            emptyStdlibIndex
+            (selectRules ["rule-not-eq"] [])
+            "t.mdk"
+            notEqSrc
+            pos
+            decls))
