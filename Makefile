@@ -455,6 +455,11 @@ inlang-tools-lint-baseline-test:
 inlang-tools-lint-test:
 	./medaka test --native compiler/tools/lint_test.mdk
 
+## compiler/tools/lint_scope_test.mdk is a `*_test.mdk` sibling outside every
+## entry's import closure ([W-MODULE-BLIND]): the scope model's precision cases.
+inlang-tools-lint-scope-test:
+	./medaka test compiler/tools/lint_scope_test.mdk
+
 ## The `medaka lint` behaviors only the built binary shows: what the working
 ## directory and the flag combinations do. compiler/tools/lint_cli_test.mdk is
 ## outside every entry's import closure ([W-MODULE-BLIND]).

@@ -10,6 +10,7 @@ import tools.lint_core.{
   FileFacts(..),
   Finding(..),
   Fixability(..),
+  Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
@@ -37,13 +38,13 @@ rule =
       summary =
         "an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure",
       doc =
-        "An `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse` reports neither operand on failure; use `expectEqual`/`expectNotEqual`. Findings are reported but `--fix` does not apply (#3837).\n\nBefore:\n  expectTrue (a == b)\nAfter:\n  expectEqual a b",
+        "An `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse` reports neither operand on failure; use `expectEqual`/`expectNotEqual`. `--fix` rewrites it only where every verb involved is `test`'s own import: a verb that resolves to a local or top-level binding, or to another module's import, is left alone.\n\nBefore:\n  expectTrue (a == b)\nAfter:\n  expectEqual a b",
       category = Style,
       scope = Internal,
       ratchet = Gated,
       defaultSeverity = SevWarning,
-      fixability = NotFixable,
-      needs = [],
+      fixability = Fixable,
+      needs = [NeedsScopes],
     }
     ruleTestEqualInTrue
     (Some testEqualInTrueFix)

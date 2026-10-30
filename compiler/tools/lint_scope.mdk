@@ -1,0 +1,448 @@
+-- compiler/tools/lint_scope.mdk — the per-file scope model of the lint rules: every
+-- binder of one file with its kind and span, and for every identifier use the
+-- binder it resolves to.  Built from the raw (pre-desugar) AST with a frame
+-- stack, the walk `tools/refindex.mdk` runs for references, but without its
+-- project-wide index tables: one file in, one immutable value out.
+--
+-- A use resolves to the innermost frame that binds its name; a file's own
+-- top-level names shadow its imports.  A name no frame binds is unresolved,
+-- which is what an `import m.*` member looks like (`wildImports` lists those
+-- modules).  The walk is built on `frontend.ast_walk`: the binding forms are
+-- named here and every other node descends through `childExprs`, so a new
+-- expression constructor that binds a name is the one case this walk must learn.
+
+import frontend.ast.{
+  Arm(..),
+  Decl(..),
+  DoStmt(..),
+  Expr(..),
+  ExternDecl(..),
+  FunClause(..),
+  Guard(..),
+  GuardArm(..),
+  IfaceMethod(..),
+  LetBind(..),
+  Loc(..),
+  Pat(..),
+  PropParam(..),
+  RecPatField(..),
+  UseMember(..),
+  UsePath(..),
+  noDeclLoc,
+}
+import frontend.ast_walk.{BodyOwner(..), DeclBody(..), childExprs, declBodies}
+import hash_map.{HashMap, new, setInPlace, get, findWithDefault}
+import support.util.{reverseL, startsWith}
+
+-- Where a name is bound.  `BImport` is a member of an `import m.{…}` group,
+-- `BTopLevel` a file-level function, extern or interface method, `BLetGroup` a
+-- file-level `let rec … with …` binding, `BWhere` a `where` or local
+-- `let rec` binding, `BLet` a `let` pattern, `BLambda` a lambda parameter,
+-- `BParam` a function, method or `prop` parameter, `BMatchArm` a `match` arm or
+-- guard-bind pattern and `BDoBind` a `do` statement's bind pattern.
+public export data BinderKind =
+  | BParam
+  | BLet
+  | BLambda
+  | BMatchArm
+  | BDoBind
+  | BWhere
+  | BLetGroup
+  | BImport
+  | BTopLevel
+  deriving (Eq, Debug)
+
+-- One bound name.  `binderSpan` is the name token where the parser kept one.
+-- `binderFrom` is the module path of an import member and `binderOrigin` the
+-- name it has in that module (they differ under `a as b`); both are empty for
+-- every other kind.  `binderId` is unique within one file.
+public export data Binder = Binder {
+  binderName : String,
+  binderKind : BinderKind,
+  binderSpan : Loc,
+  binderId : Int,
+  binderFrom : List String,
+  binderOrigin : String,
+}
+
+-- One identifier use: the name, the span of its nearest enclosing node with
+-- one, and the binder it resolved to (`None` = unresolved).
+public export data Use = Use {
+  useName : String,
+  useSite : Loc,
+  useBinder : Option Binder,
+}
+
+-- Abstract: read through the accessors below.  `fsSites` maps the start
+-- position of every binder site, every alternate or-pattern and clause site, and
+-- every resolved use to its binder; `fsCounts` is the use count per binder id.
+export data FileScopes = FileScopes {
+  fsBinders : List Binder,
+  fsUses : List Use,
+  fsWild : List (List String),
+  fsSites : HashMap String Binder,
+  fsCounts : HashMap Int Int,
+}
+
+-- Walk state: binders and uses newest first, alternate sites, the id counter.
+data W =
+  W (Ref (List Binder)) (Ref (List Use)) (Ref (List (Loc, Binder))) (Ref Int)
+
+-- (name, name token, kind, import module path, import origin name)
+data Site = Site String Loc BinderKind (List String) String
+
+siteKey : Loc -> String
+siteKey (Loc _ l c _ _) = "\{l}:\{c}"
+
+-- The binder a position stands for: a use resolves to what it names, a binder
+-- site (or an alternate site of the same binder) to itself.
+export
+binderOf : FileScopes -> Loc -> Option Binder
+binderOf fs loc = get (siteKey loc) fs.fsSites
+
+export
+allBinders : FileScopes -> List Binder
+allBinders fs = fs.fsBinders
+
+export
+allUses : FileScopes -> List Use
+allUses fs = fs.fsUses
+
+-- The modules a file imports with `import m.*`.
+export
+wildImports : FileScopes -> List (List String)
+wildImports fs = fs.fsWild
+
+-- Every use of `name`, resolved or not, whose position lies on a line in
+-- `[fromLine, toLine]`.
+export
+usesNamedIn : FileScopes -> Int -> Int -> String -> List Use
+usesNamedIn fs fromLine toLine name =
+  filter
+    (u => u.useName == name && lineWithin fromLine toLine u.useSite)
+    fs.fsUses
+
+-- Every binder of `name` that sits on a line in `[fromLine, toLine]`.
+export
+bindersNamedIn : FileScopes -> Int -> Int -> String -> List Binder
+bindersNamedIn fs fromLine toLine name =
+  filter
+    (b => b.binderName == name && lineWithin fromLine toLine b.binderSpan)
+    fs.fsBinders
+
+-- Every binder of `name` in the file.
+export
+bindersNamed : FileScopes -> String -> List Binder
+bindersNamed fs name = filter (b => b.binderName == name) fs.fsBinders
+
+lineWithin : Int -> Int -> Loc -> Bool
+lineWithin lo hi (Loc _ l _ _ _) = lo <= l && l <= hi
+
+localKind : BinderKind -> Bool
+localKind BImport = False
+localKind BTopLevel = False
+localKind BLetGroup = False
+localKind BParam = True
+localKind BLet = True
+localKind BLambda = True
+localKind BMatchArm = True
+localKind BDoBind = True
+localKind BWhere = True
+
+-- How many uses resolved to the binder.
+useCount : FileScopes -> Binder -> Int
+useCount fs b = findWithDefault 0 b.binderId fs.fsCounts
+
+-- The local binders nothing uses, in source order.  A name starting with `_` is
+-- an intentional discard and is not reported; file-level names and import
+-- members are not either, since another module may use them (see `importUses`).
+export
+unusedBinders : FileScopes -> List Binder
+unusedBinders fs =
+  filter
+    (b =>
+      localKind b.binderKind
+        && not (isDiscard b.binderName)
+        && useCount fs b == 0)
+    fs.fsBinders
+
+isDiscard : String -> Bool
+isDiscard name = startsWith "_" name
+
+-- Every import member with the number of uses that resolved to it.
+export
+importUses : FileScopes -> List (Binder, Int)
+importUses fs =
+  map
+    (b => (b, useCount fs b))
+    (filter (b => b.binderKind == BImport) fs.fsBinders)
+
+-- ── building ──────────────────────────────────────────────────────────────────
+export
+buildScopes : List Decl -> FileScopes
+buildScopes prog =
+  let w = W (Ref []) (Ref []) (Ref []) (Ref 0)
+  let imports = mintFrame w (flatMap importSites prog)
+  let tops = mintFrame w (flatMap topSites prog)
+  let _ = walkDecls w [tops, imports] prog
+  finish w (flatMap wildPaths prog)
+
+finish : W -> List (List String) -> FileScopes
+finish (W bs us alts _) wild =
+  let binders = reverseL !bs
+  let uses = reverseL !us
+  let sites = new ()
+  let counts = new ()
+  let _ = setUseSites sites uses
+  let _ = setBinderSites sites binders
+  let _ = setAltSites sites (reverseL !alts)
+  let _ = countUses counts uses
+  FileScopes {
+    fsBinders = binders,
+    fsUses = uses,
+    fsWild = wild,
+    fsSites = sites,
+    fsCounts = counts,
+  }
+
+setUseSites : HashMap String Binder -> List Use -> Unit
+setUseSites _ [] = ()
+setUseSites m ((Use { useSite = loc, useBinder = (Some b), ... }) :: rest) =
+  let _ = setInPlace (siteKey loc) b m
+  setUseSites m rest
+setUseSites m (_ :: rest) = setUseSites m rest
+
+setBinderSites : HashMap String Binder -> List Binder -> Unit
+setBinderSites _ [] = ()
+setBinderSites m (b :: rest) =
+  let _ = setInPlace (siteKey b.binderSpan) b m
+  setBinderSites m rest
+
+setAltSites : HashMap String Binder -> List (Loc, Binder) -> Unit
+setAltSites _ [] = ()
+setAltSites m ((loc, b) :: rest) =
+  let _ = setInPlace (siteKey loc) b m
+  setAltSites m rest
+
+countUses : HashMap Int Int -> List Use -> Unit
+countUses _ [] = ()
+countUses m ((Use { useBinder = (Some b), ... }) :: rest) =
+  let _ = setInPlace b.binderId (findWithDefault 0 b.binderId m + 1) m
+  countUses m rest
+countUses m (_ :: rest) = countUses m rest
+
+-- ── binder sites ──────────────────────────────────────────────────────────────
+importSites : Decl -> List Site
+importSites (DUse _ (UseGroup path members) _) = map (importSite path) members
+importSites _ = []
+
+importSite : List String -> UseMember -> Site
+importSite path (UseMember n _ loc alias) =
+  Site (fromOption n alias) loc BImport path n
+
+fromOption : a -> Option a -> a
+fromOption d None = d
+fromOption _ (Some x) = x
+
+wildPaths : Decl -> List (List String)
+wildPaths (DUse _ (UseWild path) _) = [path]
+wildPaths _ = []
+
+topSites : Decl -> List Site
+topSites (DFunDef _ n _ _ site _) = [plainSite n site BTopLevel]
+topSites (DExtern (ExternDecl { edName = n, edLoc = l, ... })) =
+  [plainSite n l BTopLevel]
+topSites (DLetGroup _ binds) = map (letBindSite BLetGroup) binds
+topSites (DInterface { methods, ... }) = flatMap ifaceMethodSite methods
+topSites (DAttrib _ d) = topSites d
+topSites _ = []
+
+ifaceMethodSite : IfaceMethod -> List Site
+ifaceMethodSite (IfaceMethod n _ _ loc) =
+  [plainSite n (fromOption noDeclLoc loc) BTopLevel]
+
+plainSite : String -> Loc -> BinderKind -> Site
+plainSite n loc k = Site n loc k [] ""
+
+letBindSite : BinderKind -> LetBind -> Site
+letBindSite k (LetBind n _ loc _) = plainSite n loc k
+
+-- The names a pattern binds, with their name tokens.  Every alternative of an
+-- or-pattern is listed: the later ones become alternate sites of the first's
+-- binder (`mintFrame` joins equal names).
+patSites : BinderKind -> Pat -> List Site
+patSites k (PVar x l _) = [plainSite x l k]
+patSites _ PWild = []
+patSites _ (PLit _) = []
+patSites k (PCon _ ps) = flatMap (patSites k) ps
+patSites k (PCons a b) = patSites k a ++ patSites k b
+patSites k (PTuple ps) = flatMap (patSites k) ps
+patSites k (PList ps) = flatMap (patSites k) ps
+patSites k (PAs x l _ p) = plainSite x l k :: patSites k p
+patSites k (POr ps) = flatMap (patSites k) ps
+patSites _ (PRng _ _ _) = []
+patSites k (PRec _ fields _) = flatMap (recFieldSites k) fields
+
+recFieldSites : BinderKind -> RecPatField -> List Site
+recFieldSites k (RecPatField name l _ None) = [plainSite name l k]
+recFieldSites k (RecPatField _ _ _ (Some p)) = patSites k p
+
+ownerSites : BodyOwner -> List Site
+ownerSites (OwnerClause _ ps) = flatMap (patSites BParam) ps
+ownerSites (OwnerImplMethod _ _ ps) = flatMap (patSites BParam) ps
+ownerSites (OwnerIfaceDefault _ _ ps) = flatMap (patSites BParam) ps
+ownerSites (OwnerTest _) = []
+ownerSites (OwnerProp _ params) = map propParamSite params
+ownerSites (OwnerLetGroup _ ps) = flatMap (patSites BParam) ps
+
+propParamSite : PropParam -> Site
+propParamSite (PropParam n l _) = plainSite n l BParam
+
+-- ── frames ────────────────────────────────────────────────────────────────────
+-- One frame from a site list.  A name met again in the same frame is another
+-- site of the binder already minted (an or-pattern's later alternative, a later
+-- clause of one function), not a new binder.
+mintFrame : W -> List Site -> List Binder
+mintFrame w sites = reverseL (mintFrameGo w [] sites)
+
+mintFrameGo : W -> List Binder -> List Site -> List Binder
+mintFrameGo _ acc [] = acc
+mintFrameGo w acc ((Site n l k from origin) :: rest) = match findBinder n acc
+  Some b =>
+    let _ = pushAlt w l b
+    mintFrameGo w acc rest
+  None => mintFrameGo w (mintOne w n l k from origin :: acc) rest
+
+pushAlt : W -> Loc -> Binder -> Unit
+pushAlt (W _ _ alts _) l b = alts := (l, b) :: !alts
+
+mintOne : W -> String -> Loc -> BinderKind -> List String -> String -> Binder
+mintOne (W bs _ _ counter) n l k from origin =
+  let id = !counter
+  counter := id + 1
+  let b = Binder {
+    binderName = n,
+    binderKind = k,
+    binderSpan = l,
+    binderId = id,
+    binderFrom = from,
+    binderOrigin = origin,
+  }
+  bs := b :: !bs
+  b
+
+findBinder : String -> List Binder -> Option Binder
+findBinder _ [] = None
+findBinder n (b :: rest) =
+  if b.binderName == n then Some b else findBinder n rest
+
+lookupFrames : String -> List (List Binder) -> Option Binder
+lookupFrames _ [] = None
+lookupFrames n (frame :: rest) = match findBinder n frame
+  Some b => Some b
+  None => lookupFrames n rest
+
+noteUse : W -> List (List Binder) -> Loc -> String -> Unit
+noteUse (W _ us _ _) scope loc n =
+  us :=
+    Use { useName = n, useSite = loc, useBinder = lookupFrames n scope } :: !us
+
+-- ── the walk ──────────────────────────────────────────────────────────────────
+walkDecls : W -> List (List Binder) -> List Decl -> Unit
+walkDecls _ _ [] = ()
+walkDecls w scope (d :: rest) =
+  let _ = walkBodies w scope (declBodies d)
+  walkDecls w scope rest
+
+walkBodies : W -> List (List Binder) -> List DeclBody -> Unit
+walkBodies _ _ [] = ()
+walkBodies w scope ((DeclBody owner body) :: rest) =
+  let frame = mintFrame w (ownerSites owner)
+  let _ = walkExpr w (frame :: scope) noDeclLoc body
+  walkBodies w scope rest
+
+walkExpr : W -> List (List Binder) -> Loc -> Expr -> Unit
+walkExpr w scope _ (ELoc l e) = walkExpr w scope l e
+walkExpr w scope _ (EDoOrigin l e) = walkExpr w scope l e
+walkExpr w scope loc (EVar n) = noteUse w scope loc n
+walkExpr w scope loc (ELam ps body) =
+  let frame = mintFrame w (flatMap (patSites BLambda) ps)
+  walkExpr w (frame :: scope) loc body
+walkExpr w scope loc (ELet _ isRec p rhs body) =
+  let frame = mintFrame w (patSites BLet p)
+  let _ = walkExpr w (if isRec then frame :: scope else scope) loc rhs
+  walkExpr w (frame :: scope) loc body
+walkExpr w scope loc (ELetGroup binds body) =
+  let frame = mintFrame w (map (letBindSite BWhere) binds)
+  let scope1 = frame :: scope
+  let _ = walkClauses w scope1 loc (flatMap letBindClauses binds)
+  walkExpr w scope1 loc body
+walkExpr w scope loc (EMatch scrut arms) =
+  let _ = walkExpr w scope loc scrut
+  walkArms w scope loc arms
+walkExpr w scope loc (EBlock stmts) = walkStmts w scope loc stmts
+walkExpr w scope loc (EDo _ stmts) = walkStmts w scope loc stmts
+walkExpr w scope loc (EGuards arms) = walkGuardArms w scope loc arms
+walkExpr w scope loc e = walkEach w scope loc (childExprs e)
+
+letBindClauses : LetBind -> List FunClause
+letBindClauses (LetBind _ clauses _ _) = clauses
+
+walkEach : W -> List (List Binder) -> Loc -> List Expr -> Unit
+walkEach _ _ _ [] = ()
+walkEach w scope loc (e :: rest) =
+  let _ = walkExpr w scope loc e
+  walkEach w scope loc rest
+
+walkClauses : W -> List (List Binder) -> Loc -> List FunClause -> Unit
+walkClauses _ _ _ [] = ()
+walkClauses w scope loc ((FunClause ps body) :: rest) =
+  let frame = mintFrame w (flatMap (patSites BParam) ps)
+  let _ = walkExpr w (frame :: scope) loc body
+  walkClauses w scope loc rest
+
+walkArms : W -> List (List Binder) -> Loc -> List Arm -> Unit
+walkArms _ _ _ [] = ()
+walkArms w scope loc ((Arm p gs body) :: rest) =
+  let scope1 = mintFrame w (patSites BMatchArm p) :: scope
+  let scope2 = walkGuards w scope1 loc gs
+  let _ = walkExpr w scope2 loc body
+  walkArms w scope loc rest
+
+walkGuardArms : W -> List (List Binder) -> Loc -> List GuardArm -> Unit
+walkGuardArms _ _ _ [] = ()
+walkGuardArms w scope loc ((GuardArm gs body) :: rest) =
+  let scope2 = walkGuards w scope loc gs
+  let _ = walkExpr w scope2 loc body
+  walkGuardArms w scope loc rest
+
+-- A guard list threads scope: a `Pat <- e` guard binds for the guards after it.
+walkGuards : W -> List (List Binder) -> Loc -> List Guard -> List (List Binder)
+walkGuards _ scope _ [] = scope
+walkGuards w scope loc ((GBool e) :: rest) =
+  let _ = walkExpr w scope loc e
+  walkGuards w scope loc rest
+walkGuards w scope loc ((GBind p e) :: rest) =
+  let _ = walkExpr w scope loc e
+  walkGuards w (mintFrame w (patSites BMatchArm p) :: scope) loc rest
+
+walkStmts : W -> List (List Binder) -> Loc -> List DoStmt -> Unit
+walkStmts _ _ _ [] = ()
+walkStmts w scope loc ((DoExpr e) :: rest) =
+  let _ = walkExpr w scope loc e
+  walkStmts w scope loc rest
+walkStmts w scope loc ((DoBind p e) :: rest) =
+  let _ = walkExpr w scope loc e
+  walkStmts w (mintFrame w (patSites BDoBind p) :: scope) loc rest
+walkStmts w scope loc ((DoLet _ isRec p e _) :: rest) =
+  let frame = mintFrame w (patSites BLet p)
+  let _ = walkExpr w (if isRec then frame :: scope else scope) loc e
+  walkStmts w (frame :: scope) loc rest
+walkStmts w scope loc ((DoAssign x e) :: rest) =
+  let _ = noteUse w scope loc x
+  let _ = walkExpr w scope loc e
+  walkStmts w scope loc rest
+walkStmts w scope loc ((DoFieldAssign x _ e) :: rest) =
+  let _ = noteUse w scope loc x
+  let _ = walkExpr w scope loc e
+  walkStmts w scope loc rest

@@ -6,6 +6,7 @@
 
 import frontend.ast.{Loc(..), Ty(..), Decl(..), Expr, Pat}
 import frontend.ast_walk.{ExprKind}
+import tools.lint_scope.{FileScopes}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..), Diag(..)}
 import support.util.{listLen, filterList, lookupAssoc}
@@ -44,12 +45,15 @@ memoGet (Memo cell f) = match !cell
 -- What every rule may ask of the one file being linted, each derived at most
 -- once per file and only if some active rule asks: the source text, its comment
 -- side channel, the constructor `Oracle`, and the per-clause duplicate-body keys
--- shared by the same-file rule and the cross-file occurrence list.
+-- shared by the same-file rule and the cross-file occurrence list, and the scope
+-- model (`tools/lint_scope.mdk`), built only for a rule whose metadata says
+-- `NeedsScopes`.
 public export data FileFacts = FileFacts {
   ffSrc : String,
   ffComments : Memo (List Comment),
   ffOracle : Memo Oracle,
   ffDupClauses : Memo (List DupClause),
+  ffScopes : Memo FileScopes,
 }
 
 export
@@ -63,6 +67,10 @@ factOracle ff = memoGet ff.ffOracle
 export
 factDupClauses : FileFacts -> List DupClause
 factDupClauses ff = memoGet ff.ffDupClauses
+
+export
+factScopes : FileFacts -> FileScopes
+factScopes ff = memoGet ff.ffScopes
 
 -- What kind of defect a rule reports, for the rules page and `--list-rules`.
 public export data Category =
@@ -85,7 +93,7 @@ public export data Fixability = Fixable | NotFixable
 
 -- An input a rule's `check` reads beyond the file itself; the runner builds
 -- only what some active rule needs.
-public export data Need = NeedsStdlibIndex
+public export data Need = NeedsStdlibIndex | NeedsScopes
 
 -- Everything the CLI, the rules page and the runner know about a rule besides
 -- its `check`.  `doc` states what the rule flags, why, and a before -> after
@@ -108,9 +116,23 @@ ruleMetaName m = m.name
 
 export
 needsStdlibIndex : RuleMeta -> Bool
-needsStdlibIndex m = match m.needs
-  NeedsStdlibIndex :: _ => True
-  [] => False
+needsStdlibIndex m = anyNeed isStdlibIndexNeed m.needs
+
+export
+needsScopes : RuleMeta -> Bool
+needsScopes m = anyNeed isScopesNeed m.needs
+
+anyNeed : (Need -> Bool) -> List Need -> Bool
+anyNeed _ [] = False
+anyNeed p (n :: rest) = p n || anyNeed p rest
+
+isStdlibIndexNeed : Need -> Bool
+isStdlibIndexNeed NeedsStdlibIndex = True
+isStdlibIndexNeed NeedsScopes = False
+
+isScopesNeed : Need -> Bool
+isScopesNeed NeedsScopes = True
+isScopesNeed NeedsStdlibIndex = False
 
 -- Where a visited node sits.  `ctxDeclName` and `ctxParams` name the body's
 -- owner (a clause's function, an `impl` or interface-default method, a
