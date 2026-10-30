@@ -1,0 +1,179 @@
+-- lint rule rule-destructure-in-param: a single-arm irrefutable `match` on a bare parameter. Destructure in the parameter position.
+
+import frontend.ast.{
+  Loc(..), Pat(..), RecPatField(..), Arm(..), Expr(..), Decl(..)
+}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import support.util.{allList, isEmptyL}
+import tools.printer.{exprToString}
+import frontend.exhaust.{Oracle}
+import tools.lint_core.{
+  Category(..),
+  FileFacts(..),
+  Finding(..),
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  factOracle,
+  mkRule,
+}
+import tools.lint_shared.{
+  armToClause,
+  ctorIsSingle,
+  declLocList,
+  matchBodyOnBareParam,
+  ruleNameDestructureInParam,
+  wholeWordIn,
+}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameDestructureInParam,
+      summary =
+        "function body is a single-arm `match` on a bare parameter with an irrefutable pattern (tuple/record/single-ctor). Destructure directly in the parameter position",
+      doc =
+        "A function body that is a single-arm `match` on a bare parameter with an irrefutable pattern (tuple, record, single-constructor) can destructure in the parameter position.\n\nBefore:\n  f p = match p\n    (a, b) => a + b\nAfter:\n  f (a, b) = a + b",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleDestructureInParam
+    (Some destructureInParamFix)
+
+-- ── rule: destructure-in-param ────────────────────────────────────────────────
+-- The single-arm sibling of `rule-match-on-param`.  A `DFunDef _ name pats body`
+-- whose body is a ONE-arm, guard-free `match <p>` over a bare parameter `p`, where
+-- the arm pattern is an IRREFUTABLE destructuring pattern (a tuple, or a record /
+-- single-payload / nullary constructor of a SINGLE-constructor type) and the arm
+-- body does NOT reference `p` anywhere else (Medaka has no as-patterns, so hoisting
+-- the pattern into the parameter position drops `p`'s binding).  In that case
+-- prefer destructuring directly in the parameter position:
+--   `f q = match q { AggQuery { from = t, … } => body }`
+--     → `f (AggQuery { from = t, … }) = body`.
+-- Irrefutability is proved via the Tier-0 `Oracle`: a constructor whose type has
+-- exactly ONE constructor is irrefutable; an unknown ctor (e.g. an imported type
+-- not declared in this file) is treated as NOT provably irrefutable → SKIP.  This
+-- is deliberately conservative: false negatives are fine, false positives corrupt
+-- code (they could turn a total match into a partial function clause).
+ruleDestructureInParam : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleDestructureInParam _ _ facts pos prog =
+  let orc = factOracle facts
+  flatMap (destructureDeclL orc) (declLocList pos prog)
+
+destructureDeclL : Oracle -> (Decl, Option Loc) -> List Finding
+destructureDeclL orc (d, loc) = match d
+  DFunDef _ name pats body _ _ => destructureFinding orc loc name pats body
+  _ => []
+
+destructureFinding : Oracle ->
+  Option Loc ->
+  String ->
+  List Pat ->
+  Expr ->
+  List Finding
+destructureFinding orc loc name pats body = match matchBodyOnBareParam pats body
+  Some (p, _, arms) => destructureArmsFinding orc loc name p arms
+  None => []
+
+destructureArmsFinding : Oracle ->
+  Option Loc ->
+  String ->
+  String ->
+  List Arm ->
+  List Finding
+destructureArmsFinding orc loc name p [arm] =
+  if destructureArmFires orc p arm then
+    [
+      Finding {
+        rule = ruleNameDestructureInParam,
+        message =
+          "function '\{name}' destructures parameter '\{p}' via a single-arm irrefutable `match`. Destructure it directly in the parameter position",
+        severity = SevWarning,
+        loc = loc,
+      },
+    ]
+  else
+    []
+destructureArmsFinding _ _ _ _ _ = []
+
+-- the single arm can be hoisted iff: guard-free, its pattern is an irrefutable
+-- destructuring pattern (not a bare var/wild/literal), and the arm body does NOT
+-- otherwise mention the scrutinee param (conservative printed whole-word scan —
+-- over-bail only, matching `armMentionsParam`).
+destructureArmFires : Oracle -> String -> Arm -> Bool
+destructureArmFires orc p (Arm pat guards body) =
+  isEmptyL guards
+    && destructurablePat orc pat
+    && not (wholeWordIn p (exprToString body))
+
+-- the TOP pattern is a real destructuring pattern (tuple / record / single-ctor
+-- constructor) whose sub-patterns are all irrefutable.  Bare var/wild (pointless
+-- to hoist), literals, `::`/`[…]` list patterns and ranges are excluded.
+destructurablePat : Oracle -> Pat -> Bool
+destructurablePat orc (PTuple ps) = allList (patIrrefutable orc) ps
+destructurablePat orc (PCon c ps) =
+  ctorIsSingle orc c && allList (patIrrefutable orc) ps
+destructurablePat orc (PRec c fs _) =
+  ctorIsSingle orc c && allList (recPatFieldIrrefutable orc) fs
+destructurablePat _ _ = False
+
+-- irrefutability of an arbitrary (possibly nested) pattern.  A var/wildcard binds
+-- unconditionally; a tuple is irrefutable iff every element is; a constructor /
+-- record iff its type is single-ctor AND every sub-pattern is; literals, `::`,
+-- list and range patterns are refutable.
+patIrrefutable : Oracle -> Pat -> Bool
+patIrrefutable _ (PVar _ _ _) = True
+patIrrefutable _ PWild = True
+patIrrefutable orc (PTuple ps) = allList (patIrrefutable orc) ps
+patIrrefutable orc (PCon c ps) =
+  ctorIsSingle orc c && allList (patIrrefutable orc) ps
+patIrrefutable orc (PRec c fs _) =
+  ctorIsSingle orc c && allList (recPatFieldIrrefutable orc) fs
+patIrrefutable orc (PAs _ _ _ p) = patIrrefutable orc p
+patIrrefutable _ _ = False
+
+recPatFieldIrrefutable : Oracle -> RecPatField -> Bool
+recPatFieldIrrefutable _ (RecPatField _ _ _ None) = True
+recPatFieldIrrefutable orc (RecPatField _ _ _ (Some p)) = patIrrefutable orc p
+
+-- ── destructure-in-param autofixer ────────────────────────────────────────────
+-- Reuses the shared `matchBodyOnBareParam` detector and the shared `armToClause`
+-- pattern-hoist transform (the N = 1 case).  The `destructureArmFires` gate has
+-- already proved the pattern irrefutable and the param unreferenced, so
+-- `armToClause`'s PWild re-bind special-case never triggers here.
+destructureInParamFix : Oracle -> Decl -> Option (List Decl)
+destructureInParamFix orc (DFunDef vis name pats body _ _) =
+  match matchBodyOnBareParam pats body
+    Some (p, k, arms) => destructureInParamFixArms orc vis name pats p k arms
+    None => None
+destructureInParamFix _ _ = None
+
+destructureInParamFixArms : Oracle ->
+  Bool ->
+  String ->
+  List Pat ->
+  String ->
+  Int ->
+  List Arm ->
+  Option (List Decl)
+destructureInParamFixArms orc vis name pats p k [arm] =
+  if destructureArmFires orc p arm then
+    Some [armToClause vis name p pats k arm]
+  else
+    None
+destructureInParamFixArms _ _ _ _ _ _ _ = None

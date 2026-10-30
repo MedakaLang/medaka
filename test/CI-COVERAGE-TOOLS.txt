@@ -520,6 +520,12 @@ test/lib_stale_warning         shell library, not a script (#482): sourced by th
                                opaque `differing sections: CRASH`. Defines functions only; running
                                it does nothing observable. Its behavior IS asserted — by those five
                                gates, which are each in a shard.
+test/lint_rule_lists           shell library, not a script: sourced by .githooks/pre-commit and
+                               test/diff_compiler_lint_baseline.sh to derive the gated / cross /
+                               baselined rule lists one way. Defines functions only; running it
+                               does nothing observable. Its behavior IS asserted — by
+                               diff_compiler_lint_baseline, whose self-test feeds it scratch
+                               registry listings.
 test/perf_shapes               shell library, not a script (#2066): sourced by
                                diff_compiler_perf_scaling and diff_compiler_ir_scaling for the two
                                shape generators they share (gen_xref, gen_manyifaces). Defines

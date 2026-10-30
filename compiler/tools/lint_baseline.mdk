@@ -9,7 +9,7 @@
 -- pinned, a file may go down freely, and going UP is an error.
 --
 -- ── THE INVARIANT (hold every change in this file to it) ─────────────────────
---   AN UNANSWERABLE QUESTION IS AN ERROR, NEVER A PASS.
+--   an unanswerable question is an error, never A PASS.
 -- A missing baseline file, malformed TOML, a duplicate row, a negative count,
 -- and — the one that matters most — a file that HAS findings for a rule but no
 -- row for that (file, rule) all resolve to a violation.  There is no "assume
@@ -28,9 +28,10 @@
 import driver.diagnostics.{Diag(..), diagIdText, Severity(..)}
 import tools.lint.{Finding(..), applyFindingDeny}
 import support.util.{
-  contains, listLen, filterList, joinNl, startsWith, sortUniqS, isSome
+  contains, listLen, filterList, joinNl, startsWith, sortUniqS, reverseL
 }
 import list.{sortOn}
+import hash_map.{HashMap, new, setInPlace, findWithDefault}
 import toml.{Toml, parse, getString, getInt, tableCount, tableEntry}
 
 -- ── the data ────────────────────────────────────────────────────────────────
@@ -67,24 +68,31 @@ parseLintBaseline : String -> String -> Result String LintBaseline
 parseLintBaseline origin src = match parse src
   Err e => Err "\{origin}: not valid TOML: \{e}"
   Ok doc =>
-    map LintBaseline (baselineRowsGo doc origin 0 (tableCount "entry" doc) [])
+    map
+      (rows => LintBaseline (reverseL rows))
+      (baselineRowsGo doc origin 0 (tableCount "entry" doc) (new ()) [])
 
+-- Rows come back in reverse; `seen` maps a file to the rules already read for
+-- it, so the duplicate check is a hash probe rather than a scan of `acc`.
 baselineRowsGo : Toml ->
   String ->
   Int ->
   Int ->
+  HashMap String (List String) ->
   List BaselineRow ->
   Result String (List BaselineRow)
-baselineRowsGo doc origin i n acc =
+baselineRowsGo doc origin i n seen acc =
   if i >= n then
     Ok acc
   else match baselineRowAt doc origin i
     Err e => Err e
     Ok r =>
-      if baselineHasKey acc r.file r.rule then
+      let rules = findWithDefault [] r.file seen
+      if contains r.rule rules then
         Err "\{origin}: duplicate row for '\{r.file}' / \{r.rule}"
       else
-        baselineRowsGo doc origin (i + 1) n (acc ++ [r])
+        let _ = setInPlace r.file (r.rule :: rules) seen
+        baselineRowsGo doc origin (i + 1) n seen (r :: acc)
 
 baselineRowAt : Toml -> String -> Int -> Result String BaselineRow
 baselineRowAt doc origin i = match tableEntry "entry" i doc
@@ -96,9 +104,6 @@ baselineRowAt doc origin i = match tableEntry "entry" i doc
       else
         Ok BaselineRow { file = f, rule = r, count = c }
     _ => Err "\{origin}: [[entry]] #\{intToString i} needs file, rule and count"
-
-baselineHasKey : List BaselineRow -> String -> String -> Bool
-baselineHasKey rows file rule = isSome (baselineAllowedGo rows file rule)
 
 -- ── the key ─────────────────────────────────────────────────────────────────
 
@@ -270,7 +275,7 @@ baselineFileHeader = stringConcat [
   "# below its count freely; exceeding it is an error, and so is having\n",
   "# findings for a rule with no row here at all.\n",
   "#\n",
-  "# Enforced by .githooks/pre-commit (BASELINED_LINT_RULES, per staged file)\n",
+  "# Enforced by .githooks/pre-commit (every baselined rule the registry lists, per staged file)\n",
   "# and by test/diff_compiler_lint_baseline.sh (whole tree, so --no-verify\n",
   "# cannot smuggle an increase past the hook).\n",
   "#\n",

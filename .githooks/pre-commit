@@ -7,27 +7,23 @@
 # and often violate style rules on purpose. Check 4 has a wider trigger (see below).
 #
 #   1. FORMAT: `medaka fmt --check` — aborts if any file differs from its formatted form.
-#   2. LINT:   `medaka lint --only=<gated rules> --deny=<gated rules>` — aborts if any
-#      file trips a GATED lint rule. MAX RATCHET: ALL rules are gated (the whole tree
-#      is at 0 findings, so any NEW finding of any rule — style or correctness — fails
-#      the commit). A genuine intentional exception can be silenced inline with an
-#      ESLint-style directive comment, e.g. `-- lint-disable-next-line rule-lambda-section`
-#      (also -line / -file forms). If a gated style rule proves too noisy in practice,
-#      remove it from GATED_LINT_RULES below (it then still warns under plain `medaka lint`).
-#   2b. BASELINED LINT: `medaka lint --baseline test/lint_baseline.toml
-#      --only=<baselined rules>` — for a rule the tree is NOT yet clean of, so the
-#      max ratchet of check 2 cannot carry it. Scoped to staged files under
-#      $LINT_ROOTS only (like check 3) — the baseline itself only ever covers
-#      those roots, so a file outside them is simply not checked by this rule at
-#      all, same as it already is for the gate. Each file's current finding count
-#      is pinned in test/lint_baseline.toml; a file may fall below its count
-#      freely, and exceeding it — or having findings with no row there at all —
-#      fails the commit. Counts move only by regenerating the file
-#      (`sh test/diff_compiler_lint_baseline.sh --write`), never by hand.
-#      test/diff_compiler_lint_baseline.sh re-checks the whole tree in CI, so
-#      `--no-verify` cannot smuggle an increase past this check.
-#   3. CROSS-FILE LINT: one project-wide scan (rule-duplicate-body can't be checked
-#      per-staged-file).
+#   2. LINT:   ONE `medaka lint --cache --internal` process over the staged .mdk plus
+#      the $CROSS_ROOTS project roots (the roots feed the cross-file scan that a
+#      per-staged-file pass cannot do; `--cache` makes them a replay). Which rules
+#      are checked, and how, is read from the binary's own registry
+#      (`medaka lint --list-rules --names --ratchet=... --tier=...`), never listed
+#      here. `--internal` also switches on the internal-scope rules, which a
+#      manifest without `[lint] internal = true` leaves off. A GATED rule may
+#      never fire at all (any NEW finding fails the commit);
+#      a BASELINED rule's per-file count, pinned in test/lint_baseline.toml, may
+#      only fall (a file with findings but no row fails too). A genuine intentional
+#      exception is silenced inline with an ESLint-style directive comment
+#      (`-- lint-disable-next-line <rule>`, also -line / -file forms). Counts move
+#      only by regenerating the file (`sh test/diff_compiler_lint_baseline.sh
+#      --write`), never by hand. Only findings in STAGED files, and cross-file
+#      findings, block the commit: an unstaged edit elsewhere is not this commit's.
+#      test/diff_compiler_lint_baseline.sh re-checks the whole tree in CI, over the
+#      same project roots, so `--no-verify` cannot smuggle an increase past this.
 #   4. SNAPSHOT: `make snapshot-check` — the per-stage snapshot suite, CHECK ONLY.
 #   5. LEXTOK:   an inline `test/bin/lex_main` compare — OPPORTUNISTIC: only runs if
 #      test/bin/lex_main already exists (this hook never builds an oracle). Scoped to
@@ -113,59 +109,13 @@
 # its golden to a later commit in the same PR; fmt/lint/lextok stay live either way.
 set -u
 
-# Lint rules that BLOCK a commit. The whole tree is at 0 lint findings, so every
-# rule is gated as a ratchet: any NEW warning fails the commit. Per-file rules are
-# checked per staged file; the cross-file rule (rule-duplicate-body) needs a
-# whole-project scan (it compares a body against OTHER files), so it's checked in
-# one scan over all source roots at once (catches cross-root duplicates too).
-# Intentional exceptions use inline directives (-- lint-disable-next-line / -file <rule>).
-GATED_LINT_RULES="rule-match-on-param,rule-hand-rolled-derivable,rule-bind-then-destructure,rule-lambda-section,rule-if-max-min,rule-andthen-pure-map,rule-destructure-in-param,rule-missing-signature,rule-not-eq,rule-bool-simplify,rule-rem-parity,rule-double-reverse,rule-when-unless,rule-complement-predicate,rule-match-to-map,rule-bind-chain-to-do,rule-dead-code,rule-concat-to-interp,rule-prefer-assign-op,rule-promissory-reader,rule-self-shadow-extern,rule-directive-reason,rule-regex-literal,rule-test-bool-literal-equal,rule-test-equal-in-true,rule-test-prelude-shadow"
-# Rules carried by the COUNT BASELINE instead of the max ratchet (check 2b, #2619).
-# A rule belongs here when the tree is not clean of it and draining it is not the
-# current change's job: rule-stdlib-reimpl's signature-aware matcher reaches ~70
-# pre-existing findings across ~30 files, mostly deliberate compiler/support
-# thin-wrapper duplication ([T-STDLIB-IMPORT]). Putting it in GATED_LINT_RULES
-# would be #1214's max-ratchet trap (a rule gated before the tree is clean of it);
-# leaving it nowhere left its count free to grow, which is what #2619 fixes.
-# rule-orelse-staircase (#2565) ships here for the same reason: it reaches 7
-# pre-existing first-match probe staircases across 6 files, and converting them to
-# orElse/findMap changes evaluation order (Medaka is strict, so a rewritten chain
-# runs every probe), which is a judgement call per site, not this rule's job.
-# rule-clone-type (#2566) ships here for the same reason: it reaches 6 pre-existing
-# Option/Result-shaped domain types across 4 files, and replacing one with the
-# stdlib type rewrites every consumer, which is a judgement call per site, not this
-# rule's job. Its exclusions are per-site `-- lint-disable-next-line rule-clone-type`
-# directives above the declarations a human has read, never a list of type names in
-# the linter: a name list would exonerate every like-named type in the tree.
-# rule-clause-map (#2567) ships here too: it reaches 17 pre-existing clause-form
-# list maps across 10 files, and each rewrite is a judgement call about whether the
-# named helper stays worth having, not this rule's job.
-BASELINED_LINT_RULES="rule-stdlib-reimpl,rule-orelse-staircase,rule-clone-type,rule-clause-map"
+# Lint enforcement reads its rule lists from the binary (see check 2), so a rule
+# added to the registry is enforced here without touching this file.
 LINT_BASELINE_FILE="test/lint_baseline.toml"
-# Cross-file rules, checked project-wide (not per staged file).
-#
-# rule-duplicate-body stays a MAX RATCHET rather than moving to the count
-# baseline above, and the reason is mechanical, not a preference (#2861): the
-# baseline promotes PER-FILE findings, and a cross-file rule's findings come
-# from a whole-target-set tier that `--baseline` and `--write-baseline` never
-# reach. Measured at e2daea65b: with the rule moved into
-# BASELINED_LINT_RULES, `--write-baseline` pins ZERO rows for it (so the count
-# is not published), and a brand-new undirectived duplicate passes
-# test/diff_compiler_lint_baseline.sh green (so nothing is enforced). Moving it
-# would have been a strict loss on both counts.
-#
-# The consequence of keeping the max ratchet is that a deliberate duplicate can
-# only be expressed as an inline suppression, so a suppression carries a real
-# obligation: state the CONSTRAINT that forced it, in words, at the site. An
-# issue number is not a reason. What the current suppressions hide is published
-# by `make dup-census`, deliberately as a report and not as a floor.
-GATED_CROSSFILE_RULES="rule-duplicate-body"
-# Source roots scanned for the cross-file check (dirs that exist are used).
-# ⚠️ `pds/` is a project under its own medaka.toml and is NOT in this list, so
-# no hook and no gate enforces any lint rule there; `make dup-census` reports
-# its live rule-duplicate-body count separately rather than letting the
-# enforced roots' zero stand for the whole tree.
-LINT_ROOTS="compiler stdlib sqlite"
+# Roots of the project-wide cross-file scan. Narrower than the per-file check on
+# purpose: the other projects carry cross-file findings that are not yet drained
+# (#2881), so scanning them would block every commit.
+CROSS_ROOTS="compiler stdlib sqlite"
 
 ROOT="$(git rev-parse --show-toplevel)"
 
@@ -223,89 +173,74 @@ if [ -n "$bad" ]; then
   exit 1
 fi
 
-# ── 2. lint check (gated rules only) ──────────────────────────────────────────
-badlint=""
-for f in $files; do
-  [ -f "$f" ] || continue
-  "$MEDAKA" lint --only="$GATED_LINT_RULES" --deny="$GATED_LINT_RULES" "$f" >/dev/null 2>&1 || badlint="$badlint $f"
-done
-
-if [ -n "$badlint" ]; then
+# ── 2. lint check (gated + baselined + cross-file, one process) ─────────────
+rule_names() { "$MEDAKA" lint --list-rules --names "$@" 2>/dev/null; }
+# shellcheck source=../test/lint_rule_lists.sh
+. "$ROOT/test/lint_rule_lists.sh"
+derive_lint_rules
+if [ -z "$LINT_DENY" ]; then
   echo "" >&2
-  echo "✗ pre-commit: gated lint rule(s) violated in staged .mdk ($GATED_LINT_RULES):" >&2
-  for f in $badlint; do echo "      $f" >&2; done
-  echo "" >&2
-  echo "  See findings:  medaka lint --only=$GATED_LINT_RULES$badlint" >&2
-  echo "  If intentional, silence inline with a directive comment above the site:" >&2
-  echo "                 -- lint-disable-next-line <rule>" >&2
-  echo "  Bypass once:   git commit --no-verify" >&2
+  echo "✗ pre-commit: $MEDAKA could not list the lint rules (is it older than this hook?)." >&2
+  echo "  Rebuild it:   make -C $ROOT medaka" >&2
+  echo "  Bypass once:  git commit --no-verify" >&2
   echo "" >&2
   exit 1
 fi
+ALL_GATED="$LINT_DENY"
+ONLY_RULES="$LINT_ONLY"
 
-# ── 2b. baselined lint check (per-file count ratchet) ────────────────────
-# Same per-staged-file loop as check 2, but scoped to $LINT_ROOTS (like check 3)
-# — the baseline itself (test/diff_compiler_lint_baseline.sh --write) only ever
-# scans those roots, so a staged file outside them has no baseline row to check
-# against by construction. Without this scoping, a file outside $LINT_ROOTS with
-# pre-existing findings hits the "no row" fail-closed arm below with a printed
-# remedy that cannot create a row for it (#2624 review S1-1).
-# The difference from check 2's verdict: check 2 fails on ANY finding, this one
-# fails only where a file's count for a baselined rule EXCEEDS its pinned row —
-# or where the baseline cannot answer at all (no row for a file that has
-# findings, or an unreadable baseline file). It never passes on a question it
-# could not answer.
-badbase=""
+# Targets: the cross-file roots, plus each staged file that lies outside them.
+lintfiles=""
 for f in $files; do
-  [ -f "$f" ] || continue
-  in_roots=0
-  for r in $LINT_ROOTS; do
-    case "$f" in
-      "$r"/*) in_roots=1 ;;
-    esac
+  [ -f "$f" ] && lintfiles="$lintfiles $f"
+done
+targets=""
+for r in $CROSS_ROOTS; do
+  [ -d "$ROOT/$r" ] && targets="$targets $r"
+done
+for f in $lintfiles; do
+  inside=0
+  for r in $CROSS_ROOTS; do
+    case "$f" in "$r"/*) inside=1 ;; esac
   done
-  [ "$in_roots" = 1 ] || continue
-  "$MEDAKA" lint --baseline="$ROOT/$LINT_BASELINE_FILE" --only="$BASELINED_LINT_RULES" "$f" >/dev/null 2>&1 || badbase="$badbase $f"
+  [ "$inside" = 1 ] || targets="$targets $f"
 done
 
-if [ -n "$badbase" ]; then
-  echo "" >&2
-  echo "✗ pre-commit: baselined lint count exceeded ($BASELINED_LINT_RULES):" >&2
-  for f in $badbase; do echo "      $f" >&2; done
-  echo "" >&2
-  echo "  See findings:  medaka lint --baseline=$LINT_BASELINE_FILE --only=$BASELINED_LINT_RULES$badbase" >&2
-  echo "  The count in $LINT_BASELINE_FILE may only FALL. Either remove the new" >&2
-  echo "  finding(s), or silence an intentional one inline above the site:" >&2
-  echo "                 -- lint-disable-next-line <rule>" >&2
-  echo "  A count that legitimately moves is re-pinned by REGENERATING the file," >&2
-  echo "  never by editing it:  sh test/diff_compiler_lint_baseline.sh --write" >&2
-  echo "  Bypass once:   git commit --no-verify" >&2
-  echo "" >&2
-  exit 1
-fi
-
-# ── 3. cross-file lint check (project-wide) ───────────────────────────────────
-# rule-duplicate-body compares a body against OTHER files, so a per-staged-file
-# check can't see the duplicate — scan the source roots as a whole. Runs only
-# because a .mdk is staged (we returned early otherwise). Respects inline
-# -- lint-disable-* directives (intentional dups are silenced in-source).
-# One project-wide scan over all source roots at once, so cross-ROOT duplicates
-# (a body shared between compiler/ and stdlib/, etc.) are caught too.
-roots=""
-[ -n "$files" ] && for r in $LINT_ROOTS; do [ -d "$ROOT/$r" ] && roots="$roots $ROOT/$r"; done
-if [ -n "$roots" ]; then
+lintout="$(mktemp)"
+trap 'rm -f "$lintout"' EXIT
+if [ -n "$lintfiles" ]; then
+  lintst=0
   # shellcheck disable=SC2086
-  if ! "$MEDAKA" lint --only="$GATED_CROSSFILE_RULES" --deny="$GATED_CROSSFILE_RULES" $roots >/dev/null 2>&1; then
-    echo "" >&2
-    echo "✗ pre-commit: cross-file lint rule(s) violated ($GATED_CROSSFILE_RULES):" >&2
-    echo "" >&2
-    # shellcheck disable=SC2086
-    echo "  See findings:  medaka lint --only=$GATED_CROSSFILE_RULES$roots" >&2
-    echo "  If intentional, silence with a directive in the offending file(s):" >&2
-    echo "                 -- lint-disable-file rule-duplicate-body" >&2
-    echo "  Bypass once:    git commit --no-verify" >&2
-    echo "" >&2
-    exit 1
+  "$MEDAKA" lint --cache --internal --baseline="$ROOT/$LINT_BASELINE_FILE" \
+    --only="$ONLY_RULES" --deny="$ALL_GATED" \
+    $targets >"$lintout" 2>&1 || lintst=$?
+  if [ "$lintst" -ne 0 ]; then
+    # An error counts when it is in a staged file or in the cross-file section.
+    blocking="$(awk -v staged="$lintfiles " '
+      /^cross-file:$/ { cross = 1 }
+      /^error: / {
+        if ($2 !~ /:[0-9]+:[0-9]+:$/) { print "(finding without a location)"; next }
+        split($2, loc, ":")
+        if (cross || index(staged, " " loc[1] " ") > 0) print loc[1]
+      }' "$lintout" | sort -u)"
+    # A failure that printed no error line at all (a crash, an unreadable file)
+    # is never passed over.
+    if [ -n "$blocking" ] || ! grep -q '^error: ' "$lintout"; then
+      echo "" >&2
+      echo "✗ pre-commit: lint violated (a gated rule may not fire at all; a baselined" >&2
+      echo "  rule's count may only fall below its row in $LINT_BASELINE_FILE):" >&2
+      printf '%s\n' "$blocking" | while IFS= read -r f; do [ -n "$f" ] && echo "      $f" >&2; done
+      grep -q '^error: ' "$lintout" || sed 's/^/      /' "$lintout" | head -20 >&2
+      echo "" >&2
+      echo "  See findings:  medaka lint --internal --baseline=$LINT_BASELINE_FILE --only=$ONLY_RULES$lintfiles" >&2
+      echo "  If intentional, silence inline with a directive comment above the site:" >&2
+      echo "                 -- lint-disable-next-line <rule>" >&2
+      echo "  A count that legitimately moves is re-pinned by REGENERATING the file," >&2
+      echo "  never by editing it:  sh test/diff_compiler_lint_baseline.sh --write" >&2
+      echo "  Bypass once:   git commit --no-verify" >&2
+      echo "" >&2
+      exit 1
+    fi
   fi
 fi
 

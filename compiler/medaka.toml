@@ -10,3 +10,9 @@ allow-internal = true
 # repository root, so the seed and a shipped binary are the same bytes in
 # every checkout. Read by manifestSiteRoot in compiler/driver/loader.mdk.
 site-root = ".."
+
+# Switches on the linter's internal-scope rules (`medaka lint --list-rules
+# --scope=internal`) for every file under this project.  Read by
+# manifestLintInternal in compiler/driver/loader.mdk.
+[lint]
+internal = true

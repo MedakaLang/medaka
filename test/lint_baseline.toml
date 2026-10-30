@@ -5,7 +5,7 @@
 # below its count freely; exceeding it is an error, and so is having
 # findings for a rule with no row here at all.
 #
-# Enforced by .githooks/pre-commit (BASELINED_LINT_RULES, per staged file)
+# Enforced by .githooks/pre-commit (every baselined rule the registry lists, per staged file)
 # and by test/diff_compiler_lint_baseline.sh (whole tree, so --no-verify
 # cannot smuggle an increase past the hook).
 #
@@ -109,6 +109,31 @@ count = 2
 [[entry]]
 file = "compiler/types/tc_types.mdk"
 rule = "rule-clone-type"
+count = 2
+
+[[entry]]
+file = "pds/lib/base58.mdk"
+rule = "rule-stdlib-reimpl"
+count = 2
+
+[[entry]]
+file = "pds/lib/handlers.mdk"
+rule = "rule-orelse-staircase"
+count = 1
+
+[[entry]]
+file = "pds/lib/httpclient.mdk"
+rule = "rule-clone-type"
+count = 1
+
+[[entry]]
+file = "pds/lib/httpclient.mdk"
+rule = "rule-stdlib-reimpl"
+count = 2
+
+[[entry]]
+file = "pds/lib/multiformats.mdk"
+rule = "rule-stdlib-reimpl"
 count = 2
 
 [[entry]]

@@ -38,6 +38,14 @@ checked per-staged-file (it needs the whole project graph to detect a duplicate)
 additionally runs one whole-project scan, `medaka lint compiler stdlib sqlite`, on top of the
 per-file checks.
 
+The hook derives its rule lists from the binary (`medaka lint --list-rules --names
+--ratchet=... --tier=...`), so a rule added to `compiler/tools/lint_registry.mdk` is enforced
+with no hook edit, and it runs ONE `medaka lint --cache --internal` process per commit over the
+staged files plus the project roots (the roots replay from the cache). Internal-scope rules
+(this repository's conventions; `--list-rules --scope=internal`) run only under `--internal`
+or a manifest whose `[lint]` section says `internal = true`, in the CLI and in `medaka_lint`
+over MCP alike. Adding a rule: `.claude/skills/add-lint-rule/SKILL.md`.
+
 ## [H-SNAPSHOT] what the snapshot check actually covers
 
 Gates on `test/diff_compiler_snapshot_frontend_test.mdk` over ANY staged `.mdk` — `test/` fixtures

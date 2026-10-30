@@ -4,11 +4,11 @@
 
 import test.*
 
-eqTrueLeft a = expectTrue (a == 1)
-eqFalseLeft a = expectFalse (a == 1)
-eqTrueRight a = expectTrue (a == 1)
-eqFalseRight a = expectFalse (a == 1)
-nestedEq flag = if flag then expectTrue flag else expectFalse flag
+eqTrueLeft a = expectEqual True (a == 1)
+eqFalseLeft a = expectEqual False (a == 1)
+eqTrueRight a = expectEqual (a == 1) True
+eqFalseRight a = expectEqual (a == 1) False
+nestedEq flag = if flag then expectEqual True flag else expectEqual flag False
 
 -- NEGATIVE: must stay untouched.
 bothLits = expectEqual True False
@@ -17,5 +17,6 @@ partialEq = expectEqual True
 notEqualVerb a = expectNotEqual True (a == 1)
 
 -- POSITIVE: `--fix` reaches a `test` and a `prop` body.
-test "a bool literal inside a test body" = expectTrue (isReady 1)
-prop "a bool literal inside a prop body" (n : Int) = expectFalse (isReady n)
+test "a bool literal inside a test body" = expectEqual True (isReady 1)
+prop "a bool literal inside a prop body" (n : Int) =
+  expectEqual (isReady n) False

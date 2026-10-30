@@ -181,7 +181,7 @@ because …"; "followed the conventions" is not an answer):
 
 1. **Which `stdlib/` or `compiler/support/` functions were looked for before
    any new helper was written?** Name them, or "no new helper". The reference
-   is `docs/stdlib/index.md`; `rule-stdlib-reimpl` in `compiler/tools/lint.mdk`
+   is `docs/stdlib/index.md`; `rule-stdlib-reimpl` in `compiler/tools/lint_rule_stdlib_reimpl.mdk`
    is a floor, not the check — it cannot see a renamed reimplementation.
 2. **Where did the new code land, and does that match the placement the
    contract stated?** Name the directory; if it differs, say why in one line.

@@ -175,7 +175,7 @@ CEIL_test="${TEST_IR_CEIL:-840000000}"
 # absolute hello-world ceiling cannot see — each cell is its own fixed command on its
 # own fixture, graded against ITS OWN measured cost, not the hello-world baseline.
 #
-# LINT cell — `medaka lint --disable rule-stdlib-reimpl compiler/tools/lint.mdk`
+# LINT cell — `medaka lint --disable rule-stdlib-reimpl compiler/tools/lint_cmd.mdk`
 # (S-lint-pays-for-what-it-uses, #2351/#2062): skip buildStdlibIndexResult (a full-stdlib
 # parse) when the only consuming rule (rule-stdlib-reimpl) is excluded. DERIVED
 # 2026-09-15 (S-pin-the-wins, this tree, base be76ffe99b), cachegrind method, two
@@ -187,6 +187,18 @@ CEIL_test="${TEST_IR_CEIL:-840000000}"
 #
 # Reverting drives the number 67% over ceiling — unlike the resolve.mdk case below,
 # this win is large relative to its own workload, so an absolute ceiling sees it.
+#
+# RE-POINTED 2026-10-29 (lint rule modules): `compiler/tools/lint.mdk` is now a
+# 59-line facade over the `lint_*` modules, so linting it cost 3.5M Ir and the
+# ceiling above could no longer see the index build (1.01G). The workload is now
+# `compiler/tools/lint_cmd.mdk`, a large file that still pays the whole-stdlib
+# parse whenever `rule-stdlib-reimpl` is enabled. Same method, cachegrind, two
+# back-to-back runs:
+#
+#   run 1        run 2        with the index built (no --disable)   CEIL (x1.20, up to 5M)
+#   136,011,113  136,012,241  1,143,456,963                         165,000,000
+#
+# Building the index despite `--disable` drives the cell 7x over its ceiling.
 #
 # CHECK-POLICY cell — `medaka check-policy demo/plugin_good.mdk --allow
 # "Cache,Log,FFI" --fn transform` (S-prelude-on-the-cold-verbs, half (a)): converge
@@ -233,10 +245,10 @@ CEIL_test="${TEST_IR_CEIL:-840000000}"
 # [P-TEST-SIBLING]) can observe — exporting them for a test hook would touch
 # resolve.mdk's snapshot/LEG-A corpus for a test-only change, outside this
 # slice's licensed sites. See the slice report's Notes.
-CEIL_lint="${LINT_IR_CEIL:-3515000000}"
+CEIL_lint="${LINT_IR_CEIL:-165000000}"
 CEIL_checkpolicy="${CHECKPOLICY_IR_CEIL:-1285000000}"
 
-LINT_TARGET="$ROOT/compiler/tools/lint.mdk"
+LINT_TARGET="$ROOT/compiler/tools/lint_cmd.mdk"
 POLICY_FILE="$ROOT/demo/plugin_good.mdk"
 [ -f "$LINT_TARGET" ] || { echo "missing fixture: $LINT_TARGET"; exit 2; }
 [ -f "$POLICY_FILE" ] || { echo "missing fixture: $POLICY_FILE"; exit 2; }
@@ -279,7 +291,7 @@ for verb in check build run test lint checkpolicy; do
   eval "ceil=\$CEIL_$verb"
 
   case "$verb" in
-    lint)         workload="lint --disable rule-stdlib-reimpl compiler/tools/lint.mdk" ;;
+    lint)         workload="lint --disable rule-stdlib-reimpl compiler/tools/lint_cmd.mdk" ;;
     checkpolicy)  workload="check-policy demo/plugin_good.mdk (--allow Cache,Log,FFI --fn transform)" ;;
     *)            workload="hello-world \`$verb\`" ;;
   esac

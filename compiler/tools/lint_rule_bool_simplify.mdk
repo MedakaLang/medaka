@@ -1,0 +1,114 @@
+-- lint rule rule-bool-simplify: a redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`). Simplify.
+
+import frontend.ast.{Loc(..), Expr(..), Decl(..)}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import tools.printer.{exprToString}
+import frontend.exhaust.{Oracle}
+import tools.lint_core.{
+  Category(..),
+  FileFacts(..),
+  Finding(..),
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  mkRule,
+}
+import tools.lint_shared.{
+  detApply,
+  exprRuleFindings,
+  exprRuleFix,
+  isBoolLit,
+  isFalseLit,
+  isTrueLit,
+  noExcl,
+  notArgOf,
+  ruleNameBoolSimplify,
+  unwrapLoc,
+}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameBoolSimplify,
+      summary =
+        "redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`, …). Simplify",
+      doc =
+        "A boolean expression with a redundant shape: `if c then True else False`, `x == True`, `not (not x)`. Each simplifies to a shorter equivalent.\n\nBefore:\n  if ok then True else False\nAfter:\n  ok",
+      category = Complexity,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleBoolSimplify
+    (Some boolSimplifyFix)
+
+-- build `not e` in the canonical `not <e>` (prelude fn) form the printer renders.
+mkNot : Expr -> Expr
+mkNot e = EApp (EVar "not") e
+
+-- ── rule: bool-simplify ───────────────────────────────────────────────────────
+-- Redundant boolean shapes, each rewritten to an EXACTLY equivalent one:
+--   if c then True else False → c        if c then False else True → not c
+--   x == True → x        x == False → not x        (also True/False on the LEFT)
+--   x /= True → not x    x /= False → x
+--   not (not x) → x
+-- Excluded (per spec): `if c then True else e` → `c || e` (short-circuit/effect
+-- risk).  A comparison with bool literals on BOTH sides is left alone.
+boolSimplifyOf : Expr -> Option Expr
+boolSimplifyOf (EIf c t el) = boolSimplifyIf c (unwrapLoc t) (unwrapLoc el)
+boolSimplifyOf (EBinOp op a b _)
+  | op == "==" || op == "/=" = boolSimplifyEq op a b
+boolSimplifyOf e = match notArgOf e
+  Some inner => map (y => y) (notArgOf (unwrapLoc inner))
+  None => None
+
+boolSimplifyIf : Expr -> Expr -> Expr -> Option Expr
+boolSimplifyIf c t el
+  | isTrueLit t && isFalseLit el = Some c
+  | isFalseLit t && isTrueLit el = Some (mkNot c)
+  | otherwise = None
+
+boolSimplifyEq : String -> Expr -> Expr -> Option Expr
+boolSimplifyEq op a b
+  | isBoolLit a && isBoolLit b = None
+  | isTrueLit b = Some (boolEqResult op a True)
+  | isFalseLit b = Some (boolEqResult op a False)
+  | isTrueLit a = Some (boolEqResult op b True)
+  | isFalseLit a = Some (boolEqResult op b False)
+  | otherwise = None
+
+-- the value operand `v`, negated iff (`==` against `False`) or (`/=` against
+-- `True`): `keepPositive = (op == "==") == constIsTrue`.
+boolEqResult : String -> Expr -> Bool -> Expr
+boolEqResult op v constIsTrue = if op == "==" == constIsTrue then v else mkNot v
+
+ruleBoolSimplify : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleBoolSimplify _ _ _ pos prog =
+  exprRuleFindings noExcl boolSimplifyOf boolSimplifyFinding pos prog
+
+boolSimplifyFinding : Option Loc -> Expr -> Finding
+boolSimplifyFinding loc rewritten = Finding {
+  rule = ruleNameBoolSimplify,
+  message =
+    "redundant boolean expression — rewrite as '"
+      ++ exprToString rewritten
+      ++ "'",
+  severity = SevWarning,
+  loc = loc,
+}
+
+boolSimplifyFix : Oracle -> Decl -> Option (List Decl)
+boolSimplifyFix _ d = exprRuleFix noExcl (detApply boolSimplifyOf) d

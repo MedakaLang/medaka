@@ -1,0 +1,94 @@
+-- lint rule rule-when-unless: an `if` with a `pure ()` branch. Prefer `when` / `unless`.
+
+import frontend.ast.{Loc(..), Lit(..), Expr(..), Decl(..)}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import tools.printer.{exprToString}
+import frontend.exhaust.{Oracle}
+import tools.lint_core.{
+  Category(..),
+  FileFacts(..),
+  Finding(..),
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  mkRule,
+}
+import tools.lint_shared.{
+  detApply,
+  exprRuleFindings,
+  exprRuleFix,
+  isEVarNamed,
+  ruleNameWhenUnless,
+  unwrapLoc,
+}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameWhenUnless,
+      summary =
+        "`if b then m else pure ()` / `if b then pure () else m`. Prefer `when b m` / `unless b m`",
+      doc =
+        "An `if` with `pure ()` in one branch is `when` or `unless`.\n\nBefore:\n  if b then act else pure ()\nAfter:\n  when b act",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleWhenUnless
+    (Some whenUnlessFix)
+
+-- ── rule: when-unless ─────────────────────────────────────────────────────────
+-- `if b then m else pure ()` → `when b m`; `if b then pure () else m` → `unless b
+-- m`.  Fires ONLY when the OTHER branch is EXACTLY `pure ()` (`EApp (EVar "pure")
+-- (ELit LUnit)`).  Excludes the `when`/`unless` definitions themselves (their
+-- bodies ARE this idiom → rewriting them would yield `when b m = when b m`).
+whenUnlessExcl : String -> Bool
+whenUnlessExcl name = name == "when" || name == "unless"
+
+isPureUnit : Expr -> Bool
+isPureUnit e = match unwrapLoc e
+  EApp hd arg => isEVarNamed "pure" hd && isUnitLit (unwrapLoc arg)
+  _ => False
+
+isUnitLit : Expr -> Bool
+isUnitLit (ELit LUnit) = True
+isUnitLit _ = False
+
+whenUnlessOf : Expr -> Option Expr
+whenUnlessOf (EIf c t el)
+  | isPureUnit el = Some (EApp (EApp (EVar "when") c) t)
+  | isPureUnit t = Some (EApp (EApp (EVar "unless") c) el)
+  | otherwise = None
+whenUnlessOf _ = None
+
+ruleWhenUnless : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleWhenUnless _ _ _ pos prog =
+  exprRuleFindings whenUnlessExcl whenUnlessOf whenUnlessFinding pos prog
+
+whenUnlessFinding : Option Loc -> Expr -> Finding
+whenUnlessFinding loc rewritten = Finding {
+  rule = ruleNameWhenUnless,
+  message =
+    "conditional effect with a `pure ()` branch. Rewrite as '"
+      ++ exprToString rewritten
+      ++ "'",
+  severity = SevWarning,
+  loc = loc,
+}
+
+whenUnlessFix : Oracle -> Decl -> Option (List Decl)
+whenUnlessFix _ d = exprRuleFix whenUnlessExcl (detApply whenUnlessOf) d

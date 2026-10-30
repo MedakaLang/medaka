@@ -1,0 +1,8 @@
+-- #3837 (a): a `where`-bound `expectTrue` would capture the verb the rewrite
+-- introduces.  The finding is reported; `--fix` leaves the file unchanged.
+
+import test.{expectEqual}
+
+f a = expectEqual True (a == 1)
+  where
+    expectTrue x = 3

@@ -7,26 +7,36 @@
 -- assertions because they call `requireArgs`/`optDefault`/`dieMsg`, which are
 -- defined there and shared with the other verbs; importing them here would
 -- make `driver` -> `tools` -> `driver` a cycle the loader rejects.
--- `lintHelpText`/`lintArgSpec` are spec VALUES, not callers, so the cycle does
--- not pin them: they stay only because the two gates that police argv surfaces
--- name `medaka_cli.mdk` in their `sources`.  `test` resolved this the other
--- way (`tools/test_cmd.mdk` holds `testHelpText`/`testArgSpec`, and both gates'
--- `sources` name it); the two verbs are deliberately not symmetric yet.
+-- `lintArgSpec` is a spec VALUE, not a caller, so the cycle does not pin it: it
+-- stays only because the two gates that police argv surfaces name
+-- `medaka_cli.mdk` in their `sources`.  `lintHelpText` lives here, with the
+-- `--list-rules`/`--explain` views of the registry.
 --
--- Rule implementations are not here either: they live in `tools/lint.mdk`
--- (`Rule`/`CrossFileRule`), the cache format in `tools/lint_cache.mdk`, and
--- the count baseline in `tools/lint_baseline.mdk`.  This module only sequences
--- them.
+-- Rule implementations are not here either: the `Rule`/`CrossFileRule` types
+-- live in `tools/lint_core.mdk`, the rules in the `tools/lint_rule_*` modules
+-- listed by `tools/lint_registry.mdk`, the per-file runner in
+-- `tools/lint_walk.mdk`, the cache format in `tools/lint_cache.mdk`, and the
+-- count baseline in `tools/lint_baseline.mdk`.  This module only sequences them.
 
-import support.util.{anyList, joinNl}
+import support.util.{anyList, contains, joinNl, joinWith, lookupAssoc}
+import support.path.{dirOf}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
+import string as Str
+import json.{Json(..), jArray, jObject, stringify}
 import frontend.ast.{Decl, Loc(..)}
 import frontend.parser.{
   Positions,
 }
-import driver.loader.{findProjectRoot, findProjectRootOrSelf, readSource}
+import driver.loader.{
+  findProjectRoot,
+  findProjectRootOrSelf,
+  manifestLintInternal,
+  readSource,
+}
 import driver.diagnostics.{
   Diag,
   cjAllToJson,
+  ppSeverity,
   diagIsError,
   ppDiagCliLines,
   ppDiagCliSrc,
@@ -36,9 +46,18 @@ import driver.diagnostics.{
 import support.cli_targets.{collectMdkFiles, expandLintTarget}
 import support.stage_count.{stageExit}
 import tools.lint.{
+  Category(..),
+  CrossFileRule(..),
   Directive,
   Finding,
-  Rule,
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule(..),
+  RuleMeta(..),
+  Scope(..),
+  ruleMetaName,
+  allCrossFileRules,
   StdlibIndex,
   allRules,
   applyFindingDeny,
@@ -83,6 +102,261 @@ import tools.lint_baseline.{
   findingRuleOf,
 }
 
+-- ── `medaka lint --help`, `--list-rules`, `--explain` ──────────────────────────
+-- The flag surface is declared by `lintArgSpec` in `medaka_cli.mdk`; the text
+-- and the registry views the flags print live here, next to the verb's engine.
+
+export
+lintHelpText : String
+lintHelpText = stringConcat [
+  "medaka lint — Lint files/dirs against style rules\n", "\n", "Usage:\n",
+  "  medaka lint [paths...] [flags]\n",
+  "  medaka lint --list-rules [filters] [--json|--markdown]\n",
+  "  medaka lint --explain <rule>\n", "\n",
+  "  --fix                 rewrite fixable findings in-place\n",
+  "  --json                emit the {\"files\":[...]} structured-diagnostics\n",
+  "                       envelope instead of human text (--fix is ignored)\n",
+  "  --cache                reuse per-file results for files whose content is\n",
+  "                       unchanged (opt-in, like ESLint's --cache)\n",
+  "  --disable=r1,r2,...    suppress findings from the named rules\n",
+  "  --only=r1,...          keep only findings from the named rules\n",
+  "  --deny=r1,...          promote findings from the named rules to error\n",
+  "  --baseline=<file>      error only where a file's per-rule finding count\n",
+  "                       exceeds its row in <file> (counts may fall freely)\n",
+  "  --write-baseline=<f>   regenerate <f> from this run instead of reporting\n",
+  "  --list-rules           list every rule with its metadata (--json for the\n",
+  "                       machine form, --markdown for docs/ops/LINT-RULES.md)\n",
+  "  --scope=universal|internal     with --list-rules: keep one scope\n",
+  "  --ratchet=gated|baselined      with --list-rules: keep one ratchet\n",
+  "  --tier=file|cross              with --list-rules: keep one rule tier\n",
+  "  --names                with --list-rules: print only the names, one per line\n",
+  "  --explain <rule>       print a rule's summary and documentation\n",
+  "  --internal             run the internal-scope rules on every target (they are\n",
+  "                       otherwise on only under a manifest with [lint] internal = true)\n",
+  "\n", "Target resolution: explicit file args are linted in order; a single\n",
+  "directory arg lints its top-level .mdk files (not recursive); no args\n",
+  "finds the medaka.toml project root and lints its top-level .mdk files.\n",
+  "Exit 0 unless a SevError finding exists.\n"
+]
+
+-- One distinct rule name with the tiers it is registered in.  `rule-duplicate-body`
+-- is registered twice (a same-file `Rule` and the `CrossFileRule`) under one name
+-- and appears once here, with both tiers; its per-file metadata is the row's.
+export data RuleRow = RuleRow { rrMeta : RuleMeta, rrTiers : List Tier }
+
+-- Which registry a rule is registered in: the per-file `allRules`, the
+-- cross-file `allCrossFileRules`, or both.
+export data Tier = TierFile | TierCross deriving (Eq)
+
+tierText : Tier -> String
+tierText TierFile = "file"
+tierText TierCross = "cross"
+
+export
+allRuleRows : List RuleRow
+allRuleRows =
+  let fileMetas = map ruleMetaOf allRules
+  let crossMetas = map crossMetaOf allCrossFileRules
+  let fileNames = map ruleMetaName fileMetas
+  let crossNames = map ruleMetaName crossMetas
+  let crossOnly =
+    filter (m => not (contains (ruleMetaName m) fileNames)) crossMetas
+  map (m => mkRow m (tiersOf (ruleMetaName m) crossNames)) fileMetas
+    ++ map (m => mkRow m [TierCross]) crossOnly
+
+ruleMetaOf : Rule -> RuleMeta
+ruleMetaOf r = r.meta
+
+crossMetaOf : CrossFileRule -> RuleMeta
+crossMetaOf r = r.meta
+
+mkRow : RuleMeta -> List Tier -> RuleRow
+mkRow m tiers = RuleRow { rrMeta = m, rrTiers = tiers }
+
+rowName : RuleRow -> String
+rowName row = ruleMetaName row.rrMeta
+
+tiersText : List Tier -> String
+tiersText tiers = joinWith "," (map tierText tiers)
+
+tiersOf : String -> List String -> List Tier
+tiersOf n crossNames
+  | contains n crossNames = [TierFile, TierCross]
+  | otherwise = [TierFile]
+
+scopeText : Scope -> String
+scopeText Universal = "universal"
+scopeText Internal = "internal"
+
+ratchetText : Ratchet -> String
+ratchetText Gated = "gated"
+ratchetText Baselined = "baselined"
+
+categoryText : Category -> String
+categoryText Correctness = "correctness"
+categoryText Suspicious = "suspicious"
+categoryText Perf = "perf"
+categoryText Complexity = "complexity"
+categoryText Style = "style"
+
+fixabilityText : Fixability -> String
+fixabilityText Fixable = "fixable"
+fixabilityText NotFixable = "not-fixable"
+
+needText : Need -> String
+needText NeedsStdlibIndex = "stdlib-index"
+
+-- `--scope`/`--ratchet`/`--tier` narrow the listing; an unrecognised value is an
+-- error naming the accepted ones, never an empty listing that reads as "none".
+export
+selectRuleRows : Option String ->
+  Option String ->
+  Option String ->
+  Result String (List RuleRow)
+selectRuleRows scope ratchet tier = do
+  s <- checkChoice "--scope" (choicesOf scopeText [Universal, Internal]) scope
+  r <- checkChoice
+    "--ratchet"
+    (choicesOf ratchetText [Gated, Baselined])
+    ratchet
+  t <- checkChoice "--tier" (choicesOf tierText [TierFile, TierCross]) tier
+  Ok (filter (rowMatches s r t) allRuleRows)
+
+choicesOf : (a -> String) -> List a -> List (String, a)
+choicesOf render values = map (v => (render v, v)) values
+
+checkChoice : String ->
+  List (String, a) ->
+  Option String ->
+  Result String (Option a)
+checkChoice _ _ None = Ok None
+checkChoice flagName choices (Some v) = match lookupAssoc v choices
+  Some value => Ok (Some value)
+  None =>
+    Err
+      "\{flagName} must be one of \{joinWith ", " (map fst choices)}, got `\{v}`"
+
+rowMatches : Option Scope -> Option Ratchet -> Option Tier -> RuleRow -> Bool
+rowMatches s r t row =
+  optMatches s row.rrMeta.scope
+    && optMatches r row.rrMeta.ratchet
+    && (match t
+      None => True
+      Some v => elem v row.rrTiers)
+
+optMatches : Eq a => Option a -> a -> Bool
+optMatches None _ = True
+optMatches (Some v) actual = v == actual
+
+-- Just the rule names, one per line: the form shell consumers read.
+export
+renderRuleRowsNames : List RuleRow -> String
+renderRuleRowsNames rows = joinNl (map rowName rows) ++ "\n"
+
+-- One tab-separated line per rule: name, scope, category, ratchet, fixability,
+-- tiers, summary.
+export
+renderRuleRowsText : List RuleRow -> String
+renderRuleRowsText rows = joinNl (map ruleRowLine rows) ++ "\n"
+
+ruleRowLine : RuleRow -> String
+ruleRowLine row =
+  let m = row.rrMeta
+  joinWith "\t" [
+    m.name,
+    scopeText m.scope,
+    categoryText m.category,
+    ratchetText m.ratchet,
+    fixabilityText m.fixability,
+    tiersText row.rrTiers,
+    m.summary,
+  ]
+
+export
+renderRuleRowsJson : List RuleRow -> String
+renderRuleRowsJson rows =
+  stringify (jObject [("rules", jArray (map ruleRowJson rows))]) ++ "\n"
+
+ruleRowJson : RuleRow -> Json
+ruleRowJson row =
+  let m = row.rrMeta
+  jObject [
+    ("name", JString m.name),
+    ("summary", JString m.summary),
+    ("doc", JString m.doc),
+    ("category", JString (categoryText m.category)),
+    ("scope", JString (scopeText m.scope)),
+    ("ratchet", JString (ratchetText m.ratchet)),
+    ("severity", JString (ppSeverity m.defaultSeverity)),
+    ("fixability", JString (fixabilityText m.fixability)),
+    ("needs", jArray (map (n => JString (needText n)) m.needs)),
+    ("tiers", jArray (map (t => JString (tierText t)) row.rrTiers)),
+  ]
+
+-- `--explain <rule>`: the summary, the documentation, then the classification.
+-- An unknown name is an `Err` that offers the first registered rule whose name
+-- contains the argument, when there is one.
+export
+explainRule : String -> Result String String
+explainRule q = match filter (row => rowName row == q) allRuleRows
+  row :: _ => Ok (explainText row)
+  [] =>
+    let near = filter (row => Str.contains q (rowName row)) allRuleRows
+    match near
+      row :: _ => Err "unknown rule `\{q}` (did you mean `\{rowName row}`?)"
+      [] => Err "unknown rule `\{q}` (see `medaka lint --list-rules`)"
+
+explainText : RuleRow -> String
+explainText row =
+  let m = row.rrMeta
+  joinNl [
+    m.name,
+    "",
+    m.summary,
+    "",
+    m.doc,
+    "",
+    "scope: \{scopeText m.scope}  category: \{categoryText m.category}  ratchet: \{ratchetText m.ratchet}  fixability: \{fixabilityText m.fixability}  tiers: \{tiersText row.rrTiers}",
+  ]
+
+-- The generated page `docs/ops/LINT-RULES.md`.  The `lint_test.mdk` test
+-- "docs/ops/LINT-RULES.md matches the registry" compares the checked-in page
+-- with this text.
+export
+rulesPageMarkdown : String
+rulesPageMarkdown =
+  joinNl
+      ([
+          "# Lint rules",
+          "",
+          "<!-- Generated by `medaka lint --list-rules --markdown`. Do not edit by hand. -->",
+          "",
+          "Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka program; `internal` rules enforce this repository's own conventions. `gated` rules must have zero findings across the enforced tree; `baselined` rules may only fall (`docs/ops/CLI-CONFORMANCE.md`, `.githooks/pre-commit`). Per-rule detail: `medaka lint --explain <rule>`.",
+          "",
+          "| Rule | Scope | Category | Ratchet | Fix | Tiers |",
+          "|---|---|---|---|---|---|",
+        ]
+        ++ map rulesPageTableRow allRuleRows
+        ++ flatMap rulesPageSection allRuleRows)
+    ++ "\n"
+
+rulesPageTableRow : RuleRow -> String
+rulesPageTableRow row =
+  let m = row.rrMeta
+  "| [`\{m.name}`](#\{m.name}) | \{scopeText m.scope} | \{categoryText m.category} | \{ratchetText m.ratchet} | \{fixabilityText m.fixability} | \{joinWith ", " (map tierText row.rrTiers)} |"
+
+rulesPageSection : RuleRow -> List String
+rulesPageSection row =
+  let m = row.rrMeta
+  ["", "## \{m.name}", "", m.summary, ""] ++ docBody m.doc
+
+-- Prose before the first `Before:` stays prose; the example goes in a fence.
+docBody : String -> List String
+docBody doc = match Str.indexOf "\n\nBefore:" doc
+  None => [doc]
+  Some i =>
+    [Str.take i doc, "", "```"] ++ Str.lines (Str.drop (i + 2) doc) ++ ["```"]
+
 -- Resolve `--cache` to `Some (cacheDir, ruleSetStamp)`, or `None` to run
 -- uncached.  TWO reasons this declines, both deliberate (#395):
 --
@@ -92,7 +366,7 @@ import tools.lint_baseline.{
 --     Combining --cache with either is a silent no-op, not an error.
 --   * `crossFileCacheSound` is False — someone added a second cross-file rule,
 --     whose per-file inputs nothing caches.  Under --cache that rule would
---     SILENTLY NOT RUN.  So --cache turns itself off instead, costing a slower
+--     silently not run.  So --cache turns itself off instead, costing a slower
 --     lint rather than a wrong one.  (No warning: this is a correct, quiet
 --     fallback, and a lint that prints compiler-internal chatter to stdout would
 --     break every caller that diffs its output.)
@@ -105,7 +379,7 @@ import tools.lint_baseline.{
 -- misses, never wrong answers.
 --
 -- The stamp folds in `stdlib.stdlibFingerprint` alongside `ruleSetStamp`
--- (#2327): `rule-stdlib-reimpl` reads the STDLIB SOURCE TREE from disk at
+-- (#2327): `rule-stdlib-reimpl` reads the stdlib source tree from disk at
 -- runtime (`buildStdlibIndexResult`), content `ruleSetStamp`'s binary hash never
 -- observes. Without this, editing `stdlib/list.mdk` would leave every OTHER
 -- file's cached findings silently answering with the pre-edit stdlib —
@@ -151,17 +425,26 @@ lintCacheCtx True False
 -- hard error (severity 1) — matches `runCheckJsonCmd`'s convention.
 export
 runLintJsonCmd : StdlibIndex ->
+  Bool ->
   List String ->
   List String ->
   List String ->
   Option (String, LintBaseline) ->
   List String ->
   <IO> Unit
-runLintJsonCmd idx disableNames onlyNames denyNames baseCtx files =
+runLintJsonCmd idx internalFlag disableNames onlyNames denyNames baseCtx files =
   let quads =
-    lintFilesToDiagQuads idx disableNames onlyNames denyNames baseCtx files
+    lintFilesToDiagQuads
+      idx
+      internalFlag
+      disableNames
+      onlyNames
+      denyNames
+      baseCtx
+      files
   let triples = map dropQuadParse quads
-  let cross = crossFileJsonFindings disableNames onlyNames denyNames quads
+  let cross =
+    crossFileJsonFindings internalFlag disableNames onlyNames denyNames quads
   let merged = mergeCrossFileIntoTriples cross triples
   let _ = putStr (cjAllToJson merged)
   if anyList cjLintTripleHasErr merged then stageExit 1
@@ -176,15 +459,17 @@ runLintJsonCmd idx disableNames onlyNames denyNames baseCtx files =
 -- `compiler/tools/lint_test.mdk`'s renderer-parity property can call the SAME
 -- function `runLintJsonCmd` calls, rather than a reimplementation.
 export
-crossFileJsonFindings : List String ->
+crossFileJsonFindings : Bool ->
+  List String ->
   List String ->
   List String ->
   List (String, String, List Diag, Positions, List Decl) ->
-  List Finding
-crossFileJsonFindings disableNames onlyNames denyNames quads =
+  <IO> List Finding
+crossFileJsonFindings internalFlag disableNames onlyNames denyNames quads =
   let parsedTriples = map quadToParseTriple quads
   let raw = runCrossFileRules onlyNames disableNames parsedTriples
-  let suppressed = applySuppressionsMulti (map quadToSrc quads) raw
+  let active = dropInactiveInternalCross allCrossFileRules internalFlag raw
+  let suppressed = applySuppressionsMulti (map quadToSrc quads) active
   applyFindingDeny denyNames suppressed
 
 export
@@ -209,16 +494,20 @@ dropQuadParse (path, src, diags, _, _) = (path, src, diags)
 -- reason as `crossFileJsonFindings` above.
 export
 lintFilesToDiagQuads : StdlibIndex ->
+  Bool ->
   List String ->
   List String ->
   List String ->
   Option (String, LintBaseline) ->
   List String ->
   <IO> List (String, String, List Diag, Positions, List Decl)
-lintFilesToDiagQuads _ _ _ _ _ [] = []
-lintFilesToDiagQuads idx disable only deny baseCtx (f :: rest) =
-  applyBaselineQuad baseCtx (lintFileDiagTripleParsed idx disable only deny f)
-    :: lintFilesToDiagQuads idx disable only deny baseCtx rest
+lintFilesToDiagQuads _ _ _ _ _ _ [] = []
+lintFilesToDiagQuads idx internalFlag disable only deny baseCtx (f :: rest) =
+  let fileDisable = disable ++ internalDisabledFor internalFlag f
+  applyBaselineQuad
+      baseCtx
+      (lintFileDiagTripleParsed idx fileDisable only deny f)
+    :: lintFilesToDiagQuads idx internalFlag disable only deny baseCtx rest
 
 applyBaselineQuad : Option (String, LintBaseline) ->
   (String, String, List Diag, Positions, List Decl) ->
@@ -236,16 +525,18 @@ applyBaselineQuad (Some (cwd, base)) (path, src, diags, pos, decls) =
 -- cross-file tier's parse inputs.
 export
 lintFilesToDiagTriples : StdlibIndex ->
+  Bool ->
   List String ->
   List String ->
   List String ->
   Option (String, LintBaseline) ->
   List String ->
   <IO> List (String, String, List Diag)
-lintFilesToDiagTriples _ _ _ _ _ [] = []
-lintFilesToDiagTriples idx disable only deny baseCtx (f :: rest) =
-  applyBaselineTriple baseCtx (lintFileDiagTriple idx disable only deny f)
-    :: lintFilesToDiagTriples idx disable only deny baseCtx rest
+lintFilesToDiagTriples _ _ _ _ _ _ [] = []
+lintFilesToDiagTriples idx internalFlag disable only deny baseCtx (f :: rest) =
+  let fileDisable = disable ++ internalDisabledFor internalFlag f
+  applyBaselineTriple baseCtx (lintFileDiagTriple idx fileDisable only deny f)
+    :: lintFilesToDiagTriples idx internalFlag disable only deny baseCtx rest
 
 -- The `--json` half of the baseline promotion.  Reports the same stderr lines
 -- the text path does: stdout stays exactly one JSON document (C4), so a machine
@@ -300,14 +591,19 @@ baselineFileCodes cwd (path, _, diags) =
 -- applied here (mirrors the per-file path).  Returns whether any finding is an
 -- error severity (feeds the exit code).
 export
-runCrossFileReport : List String ->
+runCrossFileReport : Bool ->
+  List String ->
   List String ->
   List String ->
   List (String, String, Positions, List Decl) ->
   <IO> Bool
-runCrossFileReport disableNames onlyNames denyNames parsed =
+runCrossFileReport internalFlag disableNames onlyNames denyNames parsed =
   let triples = map parsedToTriple parsed
-  let raw = runCrossFileRules onlyNames disableNames triples
+  let raw =
+    dropInactiveInternalCross
+      allCrossFileRules
+      internalFlag
+      (runCrossFileRules onlyNames disableNames triples)
   -- Honor inline `-- lint-disable-*` directives on cross-file findings too:
   -- each finding anchors to its own file, so filter against that file's own
   -- directives (recovered from its source) before the CLI flag filters.
@@ -323,7 +619,7 @@ runCrossFileReport disableNames onlyNames denyNames parsed =
 --   * directives are the entries' own (already parsed, cached or fresh) rather
 --     than re-lexed from source.
 --
--- THE JOIN RUNS EVERY TIME, over ALL files.  Only its per-file INPUTS are
+-- the join runs every time, over ALL files.  Only its per-file INPUTS are
 -- cached.  A duplicate-body finding names file A because of file B, so caching
 -- these findings would leave A's finding standing after B stopped duplicating
 -- it — A is unchanged, so A hits.  Scenario 3 of
@@ -331,14 +627,21 @@ runCrossFileReport disableNames onlyNames denyNames parsed =
 -- anyone who tries it.  Callers must have checked `crossFileCacheSound`
 -- (`lintCacheCtx` does).
 export
-runCrossFileReportCached : List String ->
+runCrossFileReportCached : Bool ->
+  List String ->
   List String ->
   List String ->
   List LintEntry ->
   <IO> Bool
-runCrossFileReportCached disableNames onlyNames denyNames entries =
+runCrossFileReportCached internalFlag disableNames onlyNames denyNames entries =
   let raw =
-    runCrossFileRulesFromOccs onlyNames disableNames (flatMap entryOccs entries)
+    dropInactiveInternalCross
+      allCrossFileRules
+      internalFlag
+      (runCrossFileRulesFromOccs
+        onlyNames
+        disableNames
+        (flatMap entryOccs entries))
   let suppressed = applySuppressionsMultiDirs (map entryDirTable entries) raw
   reportCrossFindings (applyFindingDeny denyNames suppressed)
 
@@ -403,6 +706,129 @@ resolveLintTargets [] =
     Some root => collectMdkFiles root
 resolveLintTargets targets = flatMap expandLintTarget targets
 
+-- ── internal-scope activation ───────────────────────────────────────────────
+-- An internal rule (`scope = Internal`) enforces this repository's own
+-- conventions, so it runs only where asked: `--internal`, or a manifest whose
+-- `[lint]` section says `internal = true` (checked per target file, against the
+-- nearest `medaka.toml`).  Everywhere else the rule is added to the disable list,
+-- which also keeps it out of a `--cache` replay (the cache holds the full roster;
+-- findings are filtered at render time).
+export
+internalRuleNames : List String
+internalRuleNames =
+  map rowName (filter (row => isInternalScope row.rrMeta.scope) allRuleRows)
+
+isInternalScope : Scope -> Bool
+isInternalScope Internal = True
+isInternalScope Universal = False
+
+-- The names to add to a file's disable list when internal rules are not active
+-- for it.
+export
+internalDisabledFor : Bool -> String -> <IO> List String
+internalDisabledFor internalFlag target =
+  if internalActiveFor internalFlag target then [] else internalRuleNames
+
+export
+internalActiveFor : Bool -> String -> <IO> Bool
+internalActiveFor True _ = True
+internalActiveFor False target =
+  internalActiveForDir (canonicalizePath (dirOf target))
+
+-- CLI-CONFORMANCE §5f: `--only`/`--deny` naming an internal rule where internal
+-- rules are not active matches nothing and would exit 0 like a clean file.
+-- The message for the first target it cannot reach, or `None`.
+export
+inactiveInternalRuleUse : Bool ->
+  List String ->
+  List String ->
+  <IO> Option String
+inactiveInternalRuleUse internalFlag names files =
+  let named = filter (n => contains n internalRuleNames) names
+  if internalFlag || named == [] then
+    None
+  else
+    firstInactiveTarget (joinWith ", " named) files
+
+firstInactiveTarget : String -> List String -> <IO> Option String
+firstInactiveTarget _ [] = None
+firstInactiveTarget named (f :: rest) =
+  if internalActiveFor False f then
+    firstInactiveTarget named rest
+  else
+    Some
+      "internal rule \{named} is not active for `\{f}`; pass --internal or set `[lint] internal = true` in the project's medaka.toml"
+
+-- The cross-file tier sees every target at once, so its internal-scope rules
+-- cannot be switched off by a per-file disable list.  Their findings are
+-- filtered instead, by whether internal rules are active for the file each
+-- finding lands in.
+export
+dropInactiveInternalCross : List CrossFileRule ->
+  Bool ->
+  List Finding ->
+  <IO> List Finding
+dropInactiveInternalCross _ _ [] = []
+dropInactiveInternalCross rules internalFlag (f :: rest) =
+  let keep =
+    if isInternalCrossRule rules f.rule then
+      findingInActiveProject internalFlag f
+    else
+      True
+  let kept = dropInactiveInternalCross rules internalFlag rest
+  if keep then f :: kept else kept
+
+isInternalCrossRule : List CrossFileRule -> String -> Bool
+isInternalCrossRule rules name = anyList (isInternalCrossNamed name) rules
+
+isInternalCrossNamed : String -> CrossFileRule -> Bool
+isInternalCrossNamed name r = r.name == name && isInternalScope r.meta.scope
+
+findingInActiveProject : Bool -> Finding -> <IO> Bool
+findingInActiveProject internalFlag f = match f.loc
+  Some (Loc file _ _ _ _) => internalActiveFor internalFlag file
+  None => True
+
+-- Activation is a property of the target's project, so the manifest walk starts
+-- from the target's ABSOLUTE directory (a relative start would read whichever
+-- manifest the cwd sits under).  Both answers are memoized for the process, in
+-- one cell keyed `dir <path>` / `root <path>`: a directory resolves to its root
+-- once, and a root's manifest is read and scanned once, instead of once per
+-- target file.
+internalActivationMemo : Ref (OrdMap Bool)
+internalActivationMemo = Ref omEmpty
+
+internalActiveForDir : String -> <IO> Bool
+internalActiveForDir dir = match memoLookup "dir \{dir}"
+  Some active => active
+  None =>
+    let active = match findProjectRoot dir
+      Some root => internalActiveForRoot root
+      None => False
+    memoStore "dir \{dir}" active
+
+internalActiveForRoot : String -> <IO> Bool
+internalActiveForRoot root = match memoLookup "root \{root}"
+  Some active => active
+  None => memoStore "root \{root}" (manifestLintInternal root)
+
+memoLookup : String -> Option Bool
+memoLookup key = omLookup key !internalActivationMemo
+
+memoStore : String -> Bool -> Bool
+memoStore key active =
+  internalActivationMemo := omInsert key active !internalActivationMemo
+  active
+
+-- How one `medaka lint` run treats its files: `--internal` forces the
+-- internal-scope rules on, `--fix` rewrites instead of reporting, and
+-- `lrMulti` (more than one target) adds the per-file "path:" header.
+public export data LintRun = LintRun {
+  lrInternal : Bool,
+  lrFix : Bool,
+  lrMulti : Bool,
+}
+
 -- Fold over file list, running lint on each.  acc = whether any SevError seen.
 -- Returns (anyError, entries, parsedFiles).
 --
@@ -421,8 +847,7 @@ resolveLintTargets targets = flatMap expandLintTarget targets
 -- (strictly) before the recursion.
 export
 lintFilesGo : StdlibIndex ->
-  Bool ->
-  Bool ->
+  LintRun ->
   List String ->
   List String ->
   List String ->
@@ -431,14 +856,14 @@ lintFilesGo : StdlibIndex ->
   List String ->
   Bool ->
   <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
-lintFilesGo _ _ _ _ _ _ _ _ [] acc = (acc, [], [])
-lintFilesGo idx fixMode multiFile disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest) acc =
-  if fixMode then
-    let hadErr = lintOneFileFix onlyNames disableNames f
+lintFilesGo _ _ _ _ _ _ _ [] acc = (acc, [], [])
+lintFilesGo idx run disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest) acc =
+  let fileDisable = disableNames ++ internalDisabledFor run.lrInternal f
+  if run.lrFix then
+    let hadErr = lintOneFileFix onlyNames fileDisable f
     lintFilesGo
       idx
-      fixMode
-      multiFile
+      run
       disableNames
       onlyNames
       denyNames
@@ -450,8 +875,8 @@ lintFilesGo idx fixMode multiFile disableNames onlyNames denyNames baseCtx cache
     let (hadErr, entries, parsed) =
       lintOneFileReport
         idx
-        multiFile
-        disableNames
+        run.lrMulti
+        fileDisable
         onlyNames
         denyNames
         baseCtx
@@ -460,8 +885,7 @@ lintFilesGo idx fixMode multiFile disableNames onlyNames denyNames baseCtx cache
     let (restErr, restEntries, restParsed) =
       lintFilesGo
         idx
-        fixMode
-        multiFile
+        run
         disableNames
         onlyNames
         denyNames

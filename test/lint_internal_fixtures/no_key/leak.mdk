@@ -1,0 +1,2 @@
+-- lint-disable-next-line rule-missing-signature
+f x = x
