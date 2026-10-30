@@ -667,7 +667,9 @@ The total number of bytes the program has allocated.
 randomInt : Int -> Int -> <Rand> Int
 ```
 
-A random integer between its two arguments, inclusive.
+A random integer between its two arguments, inclusive. Seeded per run
+unless `setSeed` or `MEDAKA_SEED` fixes the stream; for key material use
+`osEntropyBytes`.
 
 ### `randomBool`
 
@@ -675,7 +677,8 @@ A random integer between its two arguments, inclusive.
 randomBool : Unit -> <Rand> Bool
 ```
 
-A random boolean.
+A random boolean. Seeded per run unless `setSeed` or `MEDAKA_SEED` fixes
+the stream; for key material use `osEntropyBytes`.
 
 ### `randomFloat`
 
@@ -683,7 +686,8 @@ A random boolean.
 randomFloat : Unit -> <Rand> Float
 ```
 
-A random float.
+A random float. Seeded per run unless `setSeed` or `MEDAKA_SEED` fixes the
+stream; for key material use `osEntropyBytes`.
 
 ### `randomChar`
 
@@ -691,7 +695,8 @@ A random float.
 randomChar : Unit -> <Rand> Char
 ```
 
-A random character.
+A random character. Seeded per run unless `setSeed` or `MEDAKA_SEED` fixes
+the stream; for key material use `osEntropyBytes`.
 
 ### `setSeed`
 
@@ -699,8 +704,10 @@ A random character.
 setSeed : Int -> <Rand> Unit
 ```
 
-Seeds the random number generator, making the following draws
-repeatable.
+Seeds the random number generator, making the following draws repeatable:
+the same seed gives the same draws on every engine. Without it the stream is
+seeded per run (see `MEDAKA_SEED` for a repeatable run without editing the
+program). For key material use `osEntropyBytes`.
 
 ### `randomState`
 
@@ -708,8 +715,9 @@ repeatable.
 randomState : Unit -> <Rand> U64
 ```
 
-The complete deterministic RNG state, for replay or an isolated stream.
-Capturing it does not draw a value. OS entropy is a separate source.
+The complete RNG state, for replay or an isolated stream. Capturing it does
+not draw a value, but it does fix the per-run seed if nothing has seeded the
+generator yet. `osEntropyBytes` is a separate source that never reads it.
 
 ### `restoreRandomState`
 

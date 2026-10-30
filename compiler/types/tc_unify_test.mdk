@@ -12,7 +12,9 @@ import test.{
   expectEqual,
   expectFalse,
 }
-import frontend.ast.{TyConOrigin(..)}
+import frontend.ast.{
+  Decl(..), Loc(..), TyConOrigin(..), UseMember(..), UsePath(..)
+}
 import types.effect_rows.{pureRow}
 import types.repr.{Mono(..), Scheme(..), Tyvar(..), normalize}
 import types.tc_mono.{
@@ -28,8 +30,9 @@ import types.tc_mono_test.{
   genMTy,
   varsOf,
 }
-import types.tc_test_support.{codesOf, fresh}
-import types.tc_types.{ModuleCtx(..)}
+import types.tc_test_support.{codesOf, fresh, messagesOf}
+import support.ordmap.{omEmpty, omInsert}
+import types.tc_types.{DynCtx(..), ModuleCtx(..), dynFor}
 import types.tc_unify.{
   enterLevel,
   exitLevel,
@@ -38,6 +41,7 @@ import types.tc_unify.{
   instantiate,
   lowerToCurrent,
   unify,
+  unifyIn,
 }
 
 -- ── fixtures ──────────────────────────────────────────────────────────────
@@ -202,6 +206,49 @@ test "a constructor clash is a type mismatch and binds nothing" =
     expectEqual ["T-TYPE-MISMATCH", "T-TYPE-MISMATCH"] (codesOf m),
     expectEqual ["v0"] (shapes [a]),
   ]
+
+-- A module whose `take` is imported by name from `string`, with the cells the
+-- module install leaves for `import string.{take}`.
+importingTake : Bool -> ModuleCtx
+importingTake stdlibOwned =
+  let m = fresh ()
+  let loc = Loc "t.mdk" 1 0 1 0
+  m.mcCells.currentImportDefinersRef := omInsert "take" "string" omEmpty
+  m.mcCells.currentImportOriginsRef := omInsert "take" "take" omEmpty
+  m.mcCells.methodScopeCtxRef := Some (
+    [DUse False (UseGroup ["string"] [UseMember "take" False loc None]) loc],
+    0,
+  )
+  m.mcGraph.config := { m.mcGraph.config.value |
+    tcStdlibOwned =
+      if stdlibOwned then omInsert "string" () omEmpty else omEmpty,
+  }
+  m
+
+test "a clash at the application of a selectively imported stdlib name says which module the name came from" =
+  let m = importingTake True
+  let dyn = { dynFor m | dcCallee = Some "take" }
+  unifyIn dyn (tconBuiltin "Int") (tconBuiltin "Bool")
+  unifyIn
+    { dyn | dcCallee = Some "drop" }
+    (tconBuiltin "Int")
+    (tconBuiltin "Bool")
+  unify m (tconBuiltin "Int") (tconBuiltin "Bool")
+  expectEqual
+    [
+      "type mismatch: Int vs Bool; `take` here is `string.take` (selectively imported from `string`); an unqualified `take` from any other module needs its own import",
+      "type mismatch: Int vs Bool",
+      "type mismatch: Int vs Bool",
+    ]
+    (messagesOf m)
+
+test "a clash at a head imported from a user module carries no import note" =
+  let m = importingTake False
+  unifyIn
+    { dynFor m | dcCallee = Some "take" }
+    (tconBuiltin "Int")
+    (tconBuiltin "Bool")
+  expectEqual ["type mismatch: Int vs Bool"] (messagesOf m)
 
 test "unification descends applications and arrows and binds the variables it meets" =
   let m = fresh ()

@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census alloc-census retain-census doc-census bytes-census
+.PHONY: engines-doc medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census alloc-census retain-census doc-census bytes-census
 
 ## medaka  — build the native `medaka` CLI.
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -238,6 +238,11 @@ inlang-support-hooks-check:
 ## diff_compiler_capability_matrix runs extern_catalog_gate_test.mdk.
 inlang-backend-extern-catalog-test:
 	./medaka test compiler/backend/extern_catalog_test.mdk
+
+## The per-extern engine matrix and its drift guard (an effectful extern the
+## oracle binds that `run` does not); no entry imports the module or its sibling.
+inlang-tools-engine-table-test:
+	./medaka test --native compiler/tools/engine_table_test.mdk
 
 ## No entry imports a `_test.mdk` sibling, so the extern check's own tests
 ## run only from here.
@@ -638,6 +643,12 @@ docs-links:
 ##           touched). POSIX sh, Linux + macOS. Would need no build.
 pr-helper-test:
 	sh test/pr_helper_test.sh
+
+## engines-doc — regenerate docs/stdlib/ENGINES.md from the engine tables
+##           (compiler/tools/engine_table.mdk). GENERATED; the test in
+##           engine_table_test.mdk fails when the committed page drifts.
+engines-doc: medaka
+	ENGINES_BLESS=1 ./medaka test --native compiler/tools/engine_table_test.mdk
 
 ## docs-index — regenerate docs/README.md (THE doc index) from every doc's H1
 ##           + `**Status:**` banner. GENERATED file — never hand-edit it; run

@@ -82,7 +82,7 @@ export const SLICES = {
     keys: ['mdk_wall_time_sec', 'mdk_monotonic_sec', 'mdk_sleep_ms'],
     externs: ['wallTimeSec', 'monotonicSec', 'sleepMs'],
   },
-  entropy: { needs: ['Rand'], keys: ['mdk_os_entropy', ...RESULT_KEYS], externs: ['osEntropyBytes'] },
+  entropy: { needs: ['Rand'], keys: ['mdk_os_entropy', 'mdk_rng_seed', ...RESULT_KEYS], externs: ['osEntropyBytes'] },
   // fetchText: the url arrives on the path channel and the body (or the failure text)
   // leaves on the result channel.  The import answers with a promise, so it is
   // installed only through `host.importsFor(promising)`.
@@ -166,7 +166,7 @@ export const KEY_EXTERN = {
   mdk_make_dir: 'makeDir', mdk_remove_file: 'removeFile', mdk_remove_dir: 'removeDir', mdk_fsync: 'fsync', mdk_file_mode: 'fileMode',
   mdk_write_file_mode: 'writeFileMode',
   mdk_read_line: 'readLine', mdk_read_all: 'readAll', mdk_read_exactly: 'readExactly',
-  mdk_os_entropy: 'osEntropyBytes', mdk_executable_path: 'executablePath',
+  mdk_os_entropy: 'osEntropyBytes', mdk_rng_seed: 'osEntropyBytes', mdk_executable_path: 'executablePath',
   mdk_args_count: 'args', mdk_arg_len: 'args', mdk_arg_byte: 'args', mdk_exit: 'exit',
   mdk_wall_time_sec: 'wallTimeSec', mdk_monotonic_sec: 'monotonicSec', mdk_sleep_ms: 'sleepMs',
   mdk_fetch_text: 'fetchText',
@@ -970,6 +970,22 @@ export function createHost(profile, opts = {}) {
         crypto.getRandomValues(out.subarray(off, Math.min(off + 65536, out.length)));
       host.resultBuf = out;
       return 1;
+    },
+    // The unseeded RNG's first-draw seed: MEDAKA_SEED from the embedder's getEnv (a
+    // browser host supplies none), else 64 bits of the platform CSPRNG.  A malformed
+    // MEDAKA_SEED is an error, never a fallback to entropy; the range is native's
+    // 63-bit Int, so the seed equals the `setSeed n` it stands for.
+    mdk_rng_seed: () => {
+      const text = host.getEnv('MEDAKA_SEED');
+      if (text !== undefined) {
+        const n = /^[+-]?[0-9]+$/.test(text) ? BigInt(text) : null;
+        if (n === null || n < -(2n ** 62n) || n > 2n ** 62n - 1n)
+          throw new Error('MEDAKA_SEED must be a decimal integer');
+        return n;
+      }
+      const w = new BigUint64Array(1);
+      crypto.getRandomValues(w);
+      return BigInt.asIntN(64, w[0]);
     },
     mdk_executable_path: () => { host.resultBuf = enc(host.executablePath); return 1; },
     mdk_args_count: () => host.args.length,

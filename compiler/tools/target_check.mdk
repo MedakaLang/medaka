@@ -60,9 +60,17 @@ import driver.diagnostics.{
   readFileSafe,
   srcLinesArr,
 }
-import support.util.{lookupAssoc, joinWith, dedup, dedupBy, contains, anyList}
+import support.util.{
+  lookupAssoc,
+  joinWith,
+  dedup,
+  dedupBy,
+  contains,
+  anyList,
+  initList,
+}
 import string.{trim}
-import list.{lookup}
+import list.{lookup, last}
 
 export
 targetCapabilityCode : DiagCode
@@ -101,7 +109,7 @@ targetRefusal profile file paths analysis =
         Some d => match bound
           [] => [d]
           ds => ds
-        None => bound ++ builtinRefusals profile paths analysis
+        None => bound ++ builtinRefusals profile file paths analysis
 
 -- The file a target refusal is located in: a refused extern's module, else
 -- the entry.
@@ -270,10 +278,11 @@ noBindingDiag profile path (ed, chain) =
 -- any column leaves unprovided (`core_validate_test`), so a program none of
 -- whose modules names one skips the reach.
 builtinRefusals : TargetProfile ->
+  String ->
   List (String, String) ->
   TargetInputs ->
   List Diag
-builtinRefusals profile paths analysis =
+builtinRefusals profile file paths analysis =
   let column = profileColumn profile
   let named =
     anyList
@@ -288,7 +297,7 @@ builtinRefusals profile paths analysis =
         analysis.tiCore
         analysis.tiModules
     filterMap
-      (unprovidedReached profile paths analysis)
+      (unprovidedReached profile file paths analysis)
       (dedupBy (r => snd (fst r)) routes)
   else
     []
@@ -306,20 +315,85 @@ runtimeUnit : String
 runtimeUnit = "<runtime>"
 
 unprovidedReached : TargetProfile ->
+  String ->
   List (String, String) ->
   TargetInputs ->
   ((String, String), List (String, String)) ->
   Option Diag
-unprovidedReached profile paths analysis ((_, name), route) =
+unprovidedReached profile file paths analysis ((_, name), route) =
   let column = profileColumn profile
   map
     ((kind, why) =>
-      mkDiag
-        SevError
-        targetNotProvidedCode
-        "the built-in `\{name}` is reached\{reachRoute (map snd route)}, and the target `\{profileName profile}` does not provide it (\{gapKindName kind}: \{why}): \{gapCause kind}\{gapAdvice profile column kind name}"
-        (namingBindingLoc paths analysis route))
+      if deliberateRefusal column kind name then
+        mkDiag
+          SevError
+          targetNotProvidedCode
+          (deliberateMessage profile file paths analysis name why route)
+          (userFrameLoc paths analysis route)
+      else
+        mkDiag
+          SevError
+          targetNotProvidedCode
+          "the built-in `\{name}` is reached\{reachRoute (map snd route)}, and the target `\{profileName profile}` does not provide it (\{gapKindName kind}: \{why}): \{gapCause kind}\{gapAdvice profile column kind name}"
+          (namingBindingLoc paths analysis route))
     (unprovidedOn column name)
+
+-- The interpreter's refusal of a built-in the native column runs: chosen, not
+-- a gap, so it is worded as a refusal with the build command to take instead.
+deliberateRefusal : Backend -> GapKind -> String -> Bool
+deliberateRefusal EvalBackend GapPermanent name =
+  not (isUnprovidedOn LlvmBackend name)
+deliberateRefusal _ _ _ = False
+
+deliberateMessage : TargetProfile ->
+  String ->
+  List (String, String) ->
+  TargetInputs ->
+  String ->
+  String ->
+  List (String, String) ->
+  String
+deliberateMessage profile file paths analysis name why route =
+  let chain = map snd route
+  let located = match lastUserStep paths analysis route
+    Some _ => ""
+    None =>
+      "; no frame of your code is on the route, so this is located at the nearest frame"
+  "the built-in `\{name}` is reached\{reachRoute chain}, and `medaka run` refuses it on purpose (\{why})\{located}\nhelp: \{deliberateHelp profile file}"
+
+deliberateHelp : TargetProfile -> String -> String
+deliberateHelp profile file = match runTargetOf profile
+  Some t =>
+    "`medaka run` evaluates the program with the interpreter whatever its target; build it with `medaka build \{file} --target \{profileName t} -o <bin>`, then run `<bin>`"
+  None => "build it with `medaka build \{file} -o <bin>`, then run `<bin>`"
+
+-- The definition of the last binding of the program's own code on the route
+-- before the built-in: the user's helper that reached the extern, or `main`
+-- when `main` calls the library directly.
+userFrameLoc : List (String, String) ->
+  TargetInputs ->
+  List (String, String) ->
+  Option Loc
+userFrameLoc paths analysis route = match lastUserStep paths analysis route
+  Some (mid, n) => do
+    decls <- lookup mid analysis.tiModules
+    l <- definitionLoc n decls
+    Some (inFile (lookupAssoc mid paths) l)
+  None => namingBindingLoc paths analysis route
+
+lastUserStep : List (String, String) ->
+  TargetInputs ->
+  List (String, String) ->
+  Option (String, String)
+lastUserStep paths analysis route =
+  last (filter (isUserStep paths analysis) (initList route))
+
+-- A step is the program's own code when the loader mapped its module to a file
+-- and the module is not one the stdlib root owns.  The module's origin, not
+-- its path: a user directory may itself be named `stdlib`.
+isUserStep : List (String, String) -> TargetInputs -> (String, String) -> Bool
+isUserStep paths analysis (mid, _) =
+  isSome (lookupAssoc mid paths) && not (contains mid analysis.tiStdlibOwned)
 
 -- Whether the program or the compiler is at fault, by the row's gap kind.
 gapCause : GapKind -> String

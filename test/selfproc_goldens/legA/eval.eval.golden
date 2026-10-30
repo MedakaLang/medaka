@@ -98,6 +98,7 @@ doSetRef : Ref (Value a) -> Value a -> <a> Value a
 dropShadowed : List String -> List Decl -> List Decl
 dropShadowedExp : List String -> List Decl -> List Decl
 elementAdmits : String -> String -> <FileRead | a> Bool
+entropyU64 : Unit -> <Rand | a> U64
 entryPresent : String -> String -> <FileRead | a> Bool
 envFrameCells : EvalEnv a -> List (List (String, Ref a))
 eval : EvalEnv (Value a) -> Expr -> <a> Value a
@@ -404,11 +405,11 @@ pPanicAt : Value a -> Value a -> <a> b
 pPow : Value a -> Value a -> <a> Value a
 pPutStr : Value a -> <a> Value a
 pPutStrLn : Value a -> <a> Value a
-pRandomBool : Value a -> <a> Value a
-pRandomChar : Value a -> <a> Value a
-pRandomFloat : Value a -> <a> Value a
-pRandomInt : Value a -> Value a -> <a> Value a
-pRandomState : Value a -> <a> Value a
+pRandomBool : (Unit -> <a> U64) -> Value a -> <a> Value a
+pRandomChar : (Unit -> <a> U64) -> Value a -> <a> Value a
+pRandomFloat : (Unit -> <a> U64) -> Value a -> <a> Value a
+pRandomInt : (Unit -> <a> U64) -> Value a -> Value a -> <a> Value a
+pRandomState : Ref U64 -> Value a -> <a> Value a
 pReadAll : Value a -> <Stdin | a> Value a
 pReadExactly : Value a -> <Stdin | a> Value a
 pReadFile : Value a -> <FileRead | a> Value a
@@ -419,10 +420,10 @@ pRef : Value a -> <a> Value a
 pRemoveDir : Value a -> <FileWrite | a> Value a
 pRemoveFile : Value a -> <FileWrite | a> Value a
 pRename : Value a -> Value a -> <FileWrite | a> Value a
-pRestoreRandomState : Value a -> <a> Value a
+pRestoreRandomState : Ref U64 -> Value a -> <a> Value a
 pRound : Value a -> <a> Value a
 pSetRef : Value a -> Value a -> <a> Value a
-pSetSeed : Value a -> <a> Value a
+pSetSeed : Ref U64 -> Value a -> <a> Value a
 pSha256Native : Value a -> <a> Value a
 pShiftLeft : Value a -> Value a -> <a> Value a
 pShiftRight : Value a -> Value a -> <a> Value a
@@ -511,6 +512,7 @@ resolvePath : String -> <FileRead | a> Option String
 resultToValue : Result String (Value a) -> Value a
 rngDraw : Unit -> U64
 rngStateRef : Ref Int
+rngStep : Ref U64 -> U64
 rngU64Ref : Ref U64
 rootFullEnv : List (ModInfo (Value a)) -> List (String, Ref (Value a)) -> <a> List (String, Value a)
 rootFullEvalEnv : List (ModInfo (Value a)) -> List (String, Ref (Value a)) -> EvalEnv (Value a)
@@ -519,6 +521,12 @@ routeTag : EvalEnv (Value a) -> Route -> <a> String
 runGuards : EvalEnv (Value a) -> List Guard -> <a> Option (EvalEnv (Value a))
 runJsonMode : Ref Bool
 runMainForEffect : List (String, Value a) -> <a> Value a
+runRandomState : Value a -> <Env, Rand | a> Value a
+runRngDraw : Unit -> <Env, Rand | a> U64
+runRngEnsure : Unit -> <Env, Rand | a> Unit
+runRngRef : Ref U64
+runRngSeeded : Ref Bool
+runSeeds : (Value a -> <a> Value a) -> Value a -> <a> Value a
 runtimeCellsOf : List (String, Value a) -> <a> List (String, Ref (Value a))
 runtimePanic : DiagCode -> String -> a
 runtimeTypeTag : Value a -> Option String

@@ -1,5 +1,5 @@
 # META
-source_lines=1056
+source_lines=1072
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -488,25 +488,41 @@ extern allocBytes : Unit -> <IO> Float
 
 -- # Random numbers
 
--- | A random integer between its two arguments, inclusive.
+-- Until `setSeed` or `restoreRandomState` runs, the first draw seeds the
+-- generator from the operating system's entropy, so each run draws a different
+-- stream. Set the environment variable `MEDAKA_SEED` to a decimal integer to
+-- seed it like a leading `setSeed`; a value that is not an integer stops the
+-- program with an error. A browser host has no environment, so there `setSeed`
+-- is the only way to repeat a stream. The generator is not for key material:
+-- use `osEntropyBytes`.
+
+-- | A random integer between its two arguments, inclusive. Seeded per run
+-- unless `setSeed` or `MEDAKA_SEED` fixes the stream; for key material use
+-- `osEntropyBytes`.
 extern randomInt : Int -> Int -> <Rand> Int
 
--- | A random boolean.
+-- | A random boolean. Seeded per run unless `setSeed` or `MEDAKA_SEED` fixes
+-- the stream; for key material use `osEntropyBytes`.
 extern randomBool : Unit -> <Rand> Bool
 
--- | A random float.
+-- | A random float. Seeded per run unless `setSeed` or `MEDAKA_SEED` fixes the
+-- stream; for key material use `osEntropyBytes`.
 extern randomFloat : Unit -> <Rand> Float
 
--- | A random character.
+-- | A random character. Seeded per run unless `setSeed` or `MEDAKA_SEED` fixes
+-- the stream; for key material use `osEntropyBytes`.
 extern randomChar : Unit -> <Rand> Char
 
--- | Seeds the random number generator, making the following draws
--- repeatable.
+-- | Seeds the random number generator, making the following draws repeatable:
+-- the same seed gives the same draws on every engine. Without it the stream is
+-- seeded per run (see `MEDAKA_SEED` for a repeatable run without editing the
+-- program). For key material use `osEntropyBytes`.
 export
 extern setSeed : Int -> <Rand> Unit
 
--- | The complete deterministic RNG state, for replay or an isolated stream.
--- Capturing it does not draw a value. OS entropy is a separate source.
+-- | The complete RNG state, for replay or an isolated stream. Capturing it does
+-- not draw a value, but it does fix the per-run seed if nothing has seeded the
+-- generator yet. `osEntropyBytes` is a separate source that never reads it.
 export
 extern randomState : Unit -> <Rand> U64
 

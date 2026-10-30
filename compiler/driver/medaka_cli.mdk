@@ -1291,6 +1291,7 @@ checkTargetInputs rsrc csrc drive =
     tiModules = drive.cdMods,
     tiRuntime = desugaredPrelude rsrc,
     tiOutputs = drive.cdOutputs,
+    tiStdlibOwned = [],
   }
 
 -- `check --json`'s copy of the same refusal, folded into the entry's file.  A

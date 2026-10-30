@@ -140,7 +140,7 @@ MODULES_FUNCS_CEIL=6613   # measured, exact (sprint lint-lang-2-stdlib-surface; 
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
 PLAIN_BYTES_CEIL=495000
-PLAIN_FUNCS_CEIL=3685   # measured, exact (sprint lint-lang-2-stdlib-surface; 3610 before it): the untyped wasm entry takes the generic path for binders no declared signature reaches, which pulls the poly-dispatch helpers
+PLAIN_FUNCS_CEIL=3689   # measured, exact (sprint scripting-2: the four wasm RNG fixtures each gain $mdk_rng_ensure, +4; 3685 before it; earlier lint-lang-2-stdlib-surface 3610): the untyped wasm entry takes the generic path for binders no declared signature reaches, which pulls the poly-dispatch helpers
 
 TYPED_BYTES_CEIL=23500
 TYPED_FUNCS_CEIL=145
