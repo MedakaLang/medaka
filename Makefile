@@ -128,6 +128,9 @@ inlang-steps: $(INLANG_STEPS)
 inlang-ported:
 	sh test/diff_compiler_ported.sh
 
+inlang-report-names:
+	python3 test/alloc_census/report_names_test.py
+
 ## The floor gate for the whole `stdlib/` suite (#3214).  Every
 ## `stdlib/*.mdk` is reached through this one roster rather than a line of
 ## its own here: each row carries the executed-assertion floor that module
