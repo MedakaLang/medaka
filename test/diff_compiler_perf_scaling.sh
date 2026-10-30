@@ -5208,6 +5208,101 @@ else
   fi
 fi
 fi   # end PERF_ONLY unit: walkdir
+if want tomlent; then   # PERF_ONLY unit: tomlent
+# ── tomlent — `toml.tableEntries` under `medaka run`, over a document of N `[[gate]]` entries (#4628) ──
+#
+# What it grades: tableEntries' GROWTH on `run`. It reads the document's pairs once, so
+# a correct implementation is ~2.0x per doubling; an index loop over `tableEntry` scans
+# every pair per entry and reads ~4x. The fixture parses the document first and times
+# only the `tableEntries` call (allocBytes and the monotonic clock taken around it), so
+# `parse` is outside both figures. The per-PR arm is ALLOCATION (one run per size); the
+# TIME arm (min-of-K, heap pinned, under TIME_FLOOR it SKIPs) runs where TIME_ARM=1. The
+# entry count is asserted, so a wrong answer or a dead run is a failure, never a pass.
+TOMLENT_N="${PERF_TOMLENT_N:-500}"
+ten1="$TOMLENT_N"; ten2=$((TOMLENT_N * 2))
+gen_tomlent() {
+  {
+    printf 'import toml as TM\nimport time as T\nimport string.{join}\n\n'
+    printf 'entryText : Int -> String\n'
+    printf 'entryText i = "[[gate]]\\nname = \\"g\\{display i}\\"\\nshard = \\{display i}\\nowner = \\"o\\"\\nkind = \\"k\\"\\nlive = true"\n\n'
+    printf 'main =\n'
+    printf '  match TM.parse (join "\\n" (map entryText [0..%s]))\n' "$1"
+    printf '    Err e => println e\n'
+    printf '    Ok doc =>\n'
+    printf '      let a0 = allocBytes ()\n'
+    printf '      let t0 = T.monotonic ()\n'
+    printf '      let es = TM.tableEntries "gate" doc\n'
+    printf '      let n = length es\n'
+    printf '      let secs = T.elapsedSince t0\n'
+    printf '      let mb = (allocBytes () - a0) / 1048576.0\n'
+    printf '      println "tomlent \\{display n} \\{display mb} \\{display secs}"\n'
+  } > "$2"
+}
+tef1="$WORK/tomlent_$ten1.mdk"; tef2="$WORK/tomlent_$ten2.mdk"
+gen_tomlent "$ten1" "$tef1"; gen_tomlent "$ten2" "$tef2"
+TEMEDAKA="${MEDAKA:-$ROOT/medaka}"
+if [ "$TIME_ARM" = "1" ]; then tek="$PERF_K"; else tek=1; fi
+# tomlent_runs <fixture> <out>: <out> gets one `tomlent <count> <MB> <secs>` line per run.
+tomlent_runs() {
+  : > "$2"
+  _i=0
+  while [ "$_i" -lt "$tek" ]; do
+    GC_INITIAL_HEAP_SIZE="$TIME_HEAP" "$TEMEDAKA" run "$1" 2>/dev/null | grep '^tomlent ' >> "$2"
+    _i=$((_i+1))
+  done
+}
+TER1="$WORK/tomlent_r1"; TER2="$WORK/tomlent_r2"
+tomlent_runs "$tef1" "$TER1"; tomlent_runs "$tef2" "$TER2"
+tec1="$(awk 'NR==1{print $2}' "$TER1")"; tec2="$(awk 'NR==1{print $2}' "$TER2")"
+tea1="$(awk 'NR==1{printf "%.1f", $3}' "$TER1")"; tea2="$(awk 'NR==1{printf "%.1f", $3}' "$TER2")"
+tet1="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$TER1")"
+tet2="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$TER2")"
+te_bad=0
+for _v in "$tea1" "$tea2" "$tet1" "$tet2"; do
+  case "$_v" in ''|*[!0-9.]*) te_bad=1 ;; esac
+done
+if [ ! -x "$TEMEDAKA" ]; then
+  fail=$((fail+1))
+  printf '%-12s %8s  ** NO BINARY: %s is not built (make medaka) **\n' tomlent "$ten1" "$TEMEDAKA"
+elif [ "$te_bad" = "1" ] || [ "$tec1" != "$ten1" ] || [ "$tec2" != "$ten2" ]; then
+  # A missing line or a wrong count is a failure, never a silent pass.
+  fail=$((fail+1))
+  printf '%-12s %8s  ** BAD RUN: want counts %s/%s, got [%s]/[%s] (alloc [%s]/[%s] MB, secs [%s]/[%s]) **\n' \
+    tomlent "$ten1" "$ten1" "$ten2" "$tec1" "$tec2" "$tea1" "$tea2" "$tet1" "$tet2"
+else
+  ter="$(awk -v a="$tea1" -v b="$tea2" 'BEGIN{printf "%.2f", b/a}')"
+  te_small="$(awk -v a="$tea1" 'BEGIN{print (a+0 < 1.0) ? 1 : 0}')"
+  te_over="$(awk -v r="$ter" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')"
+  if [ "$te_small" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** N TOO SMALL — raise PERF_FINDALL_N (tableEntries alloc %s MB < 1.0) **\n' tomlent "$ten1" "$tea1"
+  elif [ "$te_over" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** SUPERLINEAR (run-alloc) ** tableEntries %s -> %s MB  r=%s (> %s, band N=%s->%s) — tableEntries allocation outgrew its document (stdlib/toml.mdk) **\n' \
+      tomlent "$ten1" "$tea1" "$tea2" "$ter" "$THRESH" "$ten1" "$ten2"
+  else
+    pass=$((pass+1))
+    printf '%-12s %8s  run-alloc tableEntries %s -> %s MB  r=%s  (LINEAR; band N=%s->%s)\n' \
+      tomlent "$ten1" "$tea1" "$tea2" "$ter" "$ten1" "$ten2"
+  fi
+  if [ "$TIME_ARM" = "1" ]; then
+    tet_below="$(awk -v v="$tet2" -v f="$TIME_FLOOR" 'BEGIN{print (v+0 < f+0) ? 1 : 0}')"
+    if [ "$tet_below" = "1" ]; then
+      printf '             time run: SKIP — too small to time-gate: %ss at N=%s < %ss floor\n' "$tet2" "$ten2" "$TIME_FLOOR"
+    else
+      tetr="$(awk -v a="$tet1" -v b="$tet2" 'BEGIN{printf "%.2f", b/a}')"
+      if [ "$(awk -v r="$tetr" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')" = "1" ]; then
+        fail=$((fail+1))
+        printf '%-12s %8s  ** SUPERLINEAR (run-TIME) ** tableEntries %ss -> %ss  r=%s (> %s, min-of-%s, band N=%s->%s)\n' \
+          tomlent "$ten1" "$tet1" "$tet2" "$tetr" "$THRESH" "$tek" "$ten1" "$ten2"
+      else
+        printf '             time run: tableEntries %ss -> %ss  r=%s  (min-of-%s, heap pinned)\n' "$tet1" "$tet2" "$tetr" "$tek"
+      fi
+    fi
+  fi
+fi
+
+fi   # end PERF_ONLY unit: tomlent
 printf -- '---------------------------------------------------------------------\n'
 printf '%d ok, %d known-superlinear (ledgered), %d regressed (threshold %sx per doubling)\n' "$pass" "$known" "$fail" "$THRESH"
 

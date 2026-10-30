@@ -172,6 +172,25 @@ Some "b"
 None
 ```
 
+### `tableEntries`
+
+```
+tableEntries : String -> Toml -> List Toml
+tableEntries name _
+```
+
+Every `[[name]]` entry in the document, in document order.
+
+Entry `i` is what `tableEntry name i` returns, but the document is read
+once for all of them. The list is empty when there are no entries.
+
+```medaka
+> parseTableNames "gate" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
+["a", "b"]
+> parseTableNames "gate" "[package]\nname = \"x\""
+[]
+```
+
 ## Instances
 
 ### `Display TomlValue`
