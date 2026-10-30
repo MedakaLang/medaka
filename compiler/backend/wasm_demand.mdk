@@ -1,3 +1,4 @@
+import ir.constructor_facts.{ConstructorFacts, declaredCtorArity}
 import frontend.runtime_constructors.{
   RuntimeOwner(..), namedRuntimeCtor, runtimeCtorFact
 }
@@ -1039,11 +1040,12 @@ catalogFamilies req =
     req.rows
 
 export
-planWasmDemand : WasmDemandInputs ->
+planWasmDemand : ConstructorFacts ->
+  WasmDemandInputs ->
   CProgram ->
   ExternRequirements ->
   WasmDemandPlan
-planWasmDemand inputs (cp@(CProgram groups ctorArs _ impls _ facts)) req =
+planWasmDemand constructors inputs (cp@(CProgram groups ctorArs _ impls _ facts)) req =
   let (source, hostKeys, _) =
     wasmDemandOf
       (requirementFacts req)
@@ -1115,7 +1117,8 @@ planWasmDemand inputs (cp@(CProgram groups ctorArs _ impls _ facts)) req =
     useClos = renderClos,
     stringOps = str,
     representation = representation,
-    representationTypes = physicalTypes cp refMode renderClos representation,
+    representationTypes =
+      physicalTypes constructors cp refMode renderClos representation,
     helpers = omKeys closed.helpers,
     intHelpers = omKeys closed.ints,
     censusHelpers = omKeys census.helpers,
@@ -1751,10 +1754,14 @@ representationOf source str acc =
     tupleArities = source.tupleArities ++ extraTuples,
   }
 
-physicalTypes : CProgram -> Bool -> Bool -> WasmDemand -> List String
-physicalTypes _ False _ _ = ["boxint", "float"]
-physicalTypes (CProgram _ ctorArs ctorTypes _ _ _) True clos rep =
-  let ctorIndex = omFromPairs (reverseL ctorArs) omEmpty
+physicalTypes : ConstructorFacts ->
+  CProgram ->
+  Bool ->
+  Bool ->
+  WasmDemand ->
+  List String
+physicalTypes _ _ False _ _ = ["boxint", "float"]
+physicalTypes constructors (CProgram _ _ ctorTypes _ _ _) True clos rep =
   omKeys
     (omFromNames
       ([
@@ -1777,7 +1784,7 @@ physicalTypes (CProgram _ ctorArs ctorTypes _ _ _) True clos rep =
               []
             else
               [WN.wasmName (WN.WUserType ty)]
-                ++ (if optionOr 0 (omLookup ctor ctorIndex) > 0 then
+                ++ (if optionOr 0 (declaredCtorArity constructors ctor) > 0 then
                   [WN.wasmName (WN.WConstructorType ctor)]
                 else
                   []))
@@ -2603,13 +2610,14 @@ jsWireTy "Float" = "f64"
 jsWireTy _ = "i32"
 
 export
-validateWasmDemand : WasmDemandInputs ->
+validateWasmDemand : ConstructorFacts ->
+  WasmDemandInputs ->
   CProgram ->
   ExternRequirements ->
   WasmDemandPlan ->
   List String
-validateWasmDemand inputs cp requirements actual =
-  let expected = planWasmDemand inputs cp requirements
+validateWasmDemand constructors inputs cp requirements actual =
+  let expected = planWasmDemand constructors inputs cp requirements
   let actualTypes = omFromNames actual.representationTypes omEmpty
   let expectedKeys = map (i => "\{i.namespace}:\{i.field}") expected.imports
   let actualKeys = map (i => "\{i.namespace}:\{i.field}") actual.imports
