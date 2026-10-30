@@ -109,6 +109,7 @@ fixtureNames = [
   "directive-reason",
   "double-reverse",
   "duplicate-body",
+  "fuse-list-pipeline",
   "hand-rolled-derivable",
   "if-max-min",
   "lambda-section",
@@ -368,6 +369,8 @@ test "rule-double-reverse fixture" = fixtureHolds "double-reverse"
 
 test "rule-duplicate-body fixture" = fixtureHolds "duplicate-body"
 
+test "rule-fuse-list-pipeline fixture" = fixtureHolds "fuse-list-pipeline"
+
 test "rule-hand-rolled-derivable fixture" = fixtureHolds "hand-rolled-derivable"
 
 test "rule-if-max-min fixture" = fixtureHolds "if-max-min"
@@ -444,6 +447,16 @@ unsafeCases = [
     "rule-if-max-min",
     "pickGt a b = if a > b then a else b\n",
     "pickGt a b = max a b\n",
+  ),
+  (
+    "rule-fuse-list-pipeline",
+    "none p xs = isEmpty (filter p xs)\n",
+    "none p xs = not (any p xs)\n",
+  ),
+  (
+    "rule-fuse-list-pipeline",
+    "nil xs = xs == []\n",
+    "nil xs = isEmpty xs\n",
   ),
 ]
 

@@ -6,9 +6,9 @@
 -- single lowercase letter, optionally followed by digits (`a`, `b`, `x1`); it
 -- binds any subexpression, and a metavariable repeated in `lhs` must match
 -- structurally equal subexpressions.  Any other name is literal.  A template
--- may contain names, literals, applications and binary operators; the root of
--- `lhs` is an application or a binary operator.  Every metavariable of `rhs`
--- is bound by `lhs`.
+-- may contain names, literals, the empty list `[]`, applications and binary
+-- operators; the root of `lhs` is an application or a binary operator.  Every
+-- metavariable of `rhs` is bound by `lhs`.
 --
 -- Side conditions.  Every lowercase literal name of `lhs` is a head: each use
 -- the row matches must resolve to the prelude's binding (`usesPreludeName`),
@@ -16,7 +16,9 @@
 -- unqualified spelling only.  `Atomic m` makes the row match only where
 -- `m` is bound to a name or a literal.  `NotInDefOf names` withholds the fix
 -- inside the definition of a function so named, where the rewrite would call
--- the function from its own body.
+-- the function from its own body.  A lowercase name the right side writes is
+-- introduced into the file: when the file binds it (or a wildcard import may),
+-- or it is the enclosing definition, the finding is reported without a fix.
 --
 -- Rows are compiled once per process, on first use; a rule module holds its
 -- compiled rows in a top-level value, so a run with no hint rule active never
@@ -40,7 +42,8 @@ import tools.lint_core.{
   StdlibIndex,
   Visitor(..),
 }
-import tools.lint_shared.{unwrapLoc, usesPreludeName, replaceNodeFix}
+import tools.lint_shared.{unwrapLoc, usesPreludeName, rebinds, replaceNodeFix}
+import list.{nub}
 
 -- Two kinds of side condition, not failure and success.
 -- lint-disable-next-line rule-clone-type
@@ -68,6 +71,8 @@ public export data Hint = Hint {
   hintKind : ExprKind,
   hintLhs : Tmpl,
   hintRhs : Expr,
+  hintIntro : List String,
+  hintKey : String,
 }
 
 -- ── compiling a row ──────────────────────────────────────────────────────────
@@ -95,6 +100,7 @@ templateOf (ELoc _ e) = templateOf e
 templateOf (e@(EVar _)) = Ok e
 templateOf (e@(ELit _)) = Ok e
 templateOf (e@(ENumLit _ _ _)) = Ok e
+templateOf (e@(EListLit [])) = Ok e
 templateOf (EApp f x) = match (templateOf f, templateOf x)
   (Ok f2, Ok x2) => Ok (EApp f2 x2)
   (Err m, _) => Err m
@@ -104,7 +110,15 @@ templateOf (EBinOp op a b r) = match (templateOf a, templateOf b)
   (Err m, _) => Err m
   (_, Err m) => Err m
 templateOf _ =
-  Err "a template holds only names, literals, applications and operators"
+  Err "a template holds only names, literals, `[]`, applications and operators"
+
+-- The lowercase literal names a right side writes: the names the rewrite
+-- introduces into the file.
+introducedOf : Expr -> List String
+introducedOf (EVar n) = if isMeta n || not (isHeadName n) then [] else [n]
+introducedOf (EApp f x) = nub (introducedOf f ++ introducedOf x)
+introducedOf (EBinOp _ a b _) = nub (introducedOf a ++ introducedOf b)
+introducedOf _ = []
 
 metasOf : Expr -> List String
 metasOf (EVar n) = if isMeta n then [n] else []
@@ -117,6 +131,27 @@ tmplOf (EVar n) = if isMeta n then TMeta n else TName n (isHeadName n)
 tmplOf (EApp f x) = TApp (tmplOf f) (tmplOf x)
 tmplOf (EBinOp op a b _) = TBin op (tmplOf a) (tmplOf b)
 tmplOf e = TLeaf (exprSexp e)
+
+-- What a left side's root is called, for telling at a glance that a node cannot
+-- match: the operator of a binary root, else the head name of an application
+-- spine, "" when the head is a metavariable.
+templateKey : Expr -> String
+templateKey e =
+  let k = nodeKey e
+  if isMeta k then "" else k
+
+-- The same name read off a subject node, without allocating.
+nodeKey : Expr -> String
+nodeKey e = match unwrapLoc e
+  EApp f _ => spineHead f
+  EBinOp op _ _ _ => op
+  _ => ""
+
+spineHead : Expr -> String
+spineHead f = match unwrapLoc f
+  EApp g _ => spineHead g
+  EVar n => n
+  _ => ""
 
 rootKind : Expr -> Option ExprKind
 rootKind (EApp _ _) = Some KApp
@@ -171,6 +206,8 @@ checkBound row kind lhs rhs bound =
       hintKind = kind,
       hintLhs = tmplOf lhs,
       hintRhs = rhs,
+      hintIntro = introducedOf rhs,
+      hintKey = templateKey lhs,
     }
 
 condMetas : List HintCond -> List String
@@ -302,9 +339,25 @@ hintsAt : String ->
   Expr ->
   List Finding
 hintsAt _ _ [] _ _ _ _ = []
-hintsAt name severity (h :: rest) idx facts ctx e = match matchHint h e
-  Some found => [hintFinding name severity h found idx facts ctx e]
-  None => hintsAt name severity rest idx facts ctx e
+hintsAt name severity (h :: rest) idx facts ctx e =
+  hintsKeyed (nodeKey e) name severity (h :: rest) idx facts ctx e
+
+hintsKeyed : String ->
+  String ->
+  Severity ->
+  List Hint ->
+  StdlibIndex ->
+  FileFacts ->
+  Ctx ->
+  Expr ->
+  List Finding
+hintsKeyed _ _ _ [] _ _ _ _ = []
+hintsKeyed key name severity (h :: rest) idx facts ctx e =
+  if h.hintKey == "" || h.hintKey == key then match matchHint h e
+    Some found => [hintFinding name severity h found idx facts ctx e]
+    None => hintsKeyed key name severity rest idx facts ctx e
+  else
+    hintsKeyed key name severity rest idx facts ctx e
 
 hintFinding : String ->
   Severity ->
@@ -334,7 +387,9 @@ hintFix : Hint ->
   Expr ->
   Option Fix
 hintFix h found idx facts ctx e rewritten =
-  if allHeadsPrelude idx facts found && not (inOwnDefinition h ctx) then
+  if allHeadsPrelude idx facts found
+    && not (any (rebinds idx facts ctx) h.hintIntro)
+    && not (inOwnDefinition h ctx) then
     replaceNodeFix h.hintRow.rowApplicability h.hintRow.rowFix ctx e rewritten
   else
     None

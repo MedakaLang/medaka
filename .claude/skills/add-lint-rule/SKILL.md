@@ -218,11 +218,12 @@ and `hints = compileHints hintRows`, `mkVisitorRule meta (idx path facts pos dec
 - **Metavariables:** a single lowercase letter, optionally followed by digits (`a`, `b`, `x1`). It
   binds any subexpression; a repeated one must match structurally equal subexpressions. Any other
   name is literal and matches the unqualified spelling only.
-- **Templates** hold names, literals, applications and binary operators. The left side's root is an
+- **Templates** hold names, literals, the empty list `[]`, applications and binary operators. The left side's root is an
   application or an operator; every metavariable of the right side is bound on the left.
 - **Prelude guard (always on):** each lowercase literal name on the left is a head. Each matched use
   must resolve to the prelude (`usesPreludeName`: no binder, no wildcard import that may bring the
-  name), else the finding is reported without a fix. Declare `needs = [NeedsScopes, NeedsWildIndex]`.
+  name), else the finding is reported without a fix. The same holds for each lowercase name the
+  right side writes (`rebinds`: the file binds it, a wildcard import may, or it is the enclosing definition). Declare `needs = [NeedsScopes, NeedsWildIndex]`.
 - **`Atomic "m"`:** the row matches only where `m` is bound to a name or a literal.
 - **`NotInDefOf names`:** the fix is withheld inside the definition of a function so named.
 - The replacement text is the right side printed with the matched subexpressions put in, bracketed

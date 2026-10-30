@@ -1,0 +1,129 @@
+-- Fixture for rule-fuse-list-pipeline: a list traversal the stdlib has one name for.
+-- Safe rows are fixed; Unsafe and Suggest rows are marked `unfixed`, because the
+-- harness fixes at the rule's `Safe` ceiling.  The introduced-name guard is
+-- file-wide, so no binder here is named `count`, `not`, `any`, `isEmpty` or
+-- `filterMap`; `lint_hints_test.mdk` pins that guard.
+
+import bytes as B
+
+-- POSITIVE: somes over map.
+-- expect-next-line rule-fuse-list-pipeline
+keptRows f xs = somes (map f xs)
+
+-- POSITIVE: length over filter, with a lambda predicate that needs its brackets.
+-- expect-next-line rule-fuse-list-pipeline
+hits xs = length (filter (x => x > 1) xs)
+
+-- POSITIVE: as an argument, the application keeps its brackets.
+-- expect-next-line rule-fuse-list-pipeline
+argHits xs = show (length (filter odd xs))
+
+-- POSITIVE: emptiness by length, each comparison.
+-- expect-next-line rule-fuse-list-pipeline
+lenZero xs = length xs == 0
+-- expect-next-line rule-fuse-list-pipeline
+zeroLen xs = 0 == length xs
+-- expect-next-line rule-fuse-list-pipeline
+lenNonZero xs = length xs /= 0
+-- expect-next-line rule-fuse-list-pipeline
+zeroNonLen xs = 0 /= length xs
+-- expect-next-line rule-fuse-list-pipeline
+lenPositive xs = length xs > 0
+-- expect-next-line rule-fuse-list-pipeline
+positiveLen xs = 0 < length xs
+
+-- POSITIVE: the negated forms sit under a boolean operator without extra brackets.
+-- expect-next-line rule-fuse-list-pipeline x2
+both xs ys = length xs > 0 && length ys == 0
+
+-- POSITIVE: a compound receiver.
+-- expect-next-line rule-fuse-list-pipeline
+lenCall f xs = length (f xs) == 0
+
+-- POSITIVE: in a test body, a prop body and a let-group.
+-- expect-next-line rule-fuse-list-pipeline
+test "length by count" = expectTrue (length [1, 2] > 0)
+
+-- expect-next-line rule-fuse-list-pipeline
+prop "length of a filter" (xs : List Int) = length (filter odd xs) >= 0
+
+-- expect-next-line rule-fuse-list-pipeline
+let rec loop xs = length xs == 0
+
+-- POSITIVE: a comment above the body, inside the declaration, survives the fix.
+-- expect-next-line rule-fuse-list-pipeline
+commentOut xs =
+  -- keep this note
+  length xs == 0
+
+-- POSITIVE, unfixed: a comment inside the matched span withholds the fix.
+-- expect-next-line rule-fuse-list-pipeline unfixed
+commentIn xs = length {- keep -} xs == 0
+
+-- POSITIVE, unfixed: isEmpty over filter is Unsafe (`any` stops at the first hit).
+-- expect-next-line rule-fuse-list-pipeline unfixed
+noneMatch p xs = isEmpty (filter p xs)
+
+-- POSITIVE, unfixed: comparison with `[]` is Unsafe (the binding becomes Foldable-general).
+-- expect-next-line rule-fuse-list-pipeline unfixed
+eqNil xs = xs == []
+-- expect-next-line rule-fuse-list-pipeline unfixed
+nilEq xs = [] == xs
+-- expect-next-line rule-fuse-list-pipeline unfixed
+neNil xs = xs /= []
+-- expect-next-line rule-fuse-list-pipeline unfixed
+nilNe xs = [] /= xs
+
+-- POSITIVE, unfixed: head over reverse is Suggest (`last` lives in `list`).
+-- expect-next-line rule-fuse-list-pipeline unfixed
+lastOf xs = head (reverse xs)
+
+-- POSITIVE, unfixed: two maps are Suggest (fusing interleaves effects).
+-- expect-next-line rule-fuse-list-pipeline unfixed
+twoMaps f g xs = map f (map g xs)
+
+-- POSITIVE, unfixed: a parameter named `length` is not the prelude's.
+-- expect-next-line rule-fuse-list-pipeline unfixed
+reboundLength length xs = length xs == 0
+
+-- POSITIVE, unfixed: a `where` function named `filter` is the file's own.
+-- expect-next-line rule-fuse-list-pipeline unfixed
+reboundFilter xs = length (filter even xs)
+  where
+    filter p ys = ys
+
+-- POSITIVE, unfixed: a `let` binding named `somes` is the file's own.
+-- expect-next-line rule-fuse-list-pipeline unfixed
+reboundSomes f xs =
+  let somes = id
+  somes (map f xs)
+
+-- POSITIVE: a binder of an unrelated name does not stand in the way.
+-- expect-next-line rule-fuse-list-pipeline
+otherBinder xs =
+  let ys = xs
+  length ys == 0
+
+-- NEGATIVE: a directive suppresses the finding.
+-- lint-disable-next-line rule-fuse-list-pipeline
+quietLen xs = length xs == 0
+
+-- NEGATIVE: a qualified `length` is the Bytes one.
+byteLen b = B.length b == 0
+
+-- NEGATIVE: comparisons that are not emptiness.
+lenOne xs = length xs == 1
+lenMore xs = length xs > 1
+lenLess xs = length xs < 1
+lenVs xs ys = length xs == length ys
+eqList xs ys = xs == ys
+eqOne xs = xs == [1]
+neOne xs = xs /= [1]
+
+-- NEGATIVE: not the traversal pairs.
+bareSomes xs = somes xs
+lenOfMap f xs = length (map f xs)
+mapOfFilter f p xs = map f (filter p xs)
+headOfMap f xs = head (map f xs)
+emptyOfMap f xs = isEmpty (map f xs)
+oneMap f xs = map f xs
