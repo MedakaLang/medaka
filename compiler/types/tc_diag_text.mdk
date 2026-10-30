@@ -1325,9 +1325,7 @@ export
 varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String
 varNameForId sigTvMaps m id = match findSigTvMap m sigTvMaps
   None => "a"
-  Some tvMap => match findTvName id tvMap
-    None => "a"
-    Some n => n
+  Some tvMap => optionOr "a" (findTvName id tvMap)
 
 findSigTvMap : String ->
   List (String, Ty, List (String, Mono)) ->

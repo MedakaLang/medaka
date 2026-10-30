@@ -1,5 +1,5 @@
 # META
-source_lines=2909
+source_lines=2907
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -1911,9 +1911,7 @@ useMemberAlias (UseMember _ _ _ alias) = alias
 -- the name a UseGroup member binds HERE: its alias if it has one, else its own name.
 export
 useMemberLocal : UseMember -> String
-useMemberLocal (UseMember n _ _ alias) = match alias
-  Some a => a
-  None => n
+useMemberLocal (UseMember n _ _ alias) = optionOr n alias
 
 -- the local name a MODULE alias binds an origin export under: `A` + `f` → `A.f`.
 export
@@ -3252,7 +3250,7 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "useMemberAlias" (TyFun (TyCon "UseMember") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "useMemberAlias" ((PCon "UseMember" PWild PWild PWild (PVar "alias"))) (EVar "alias"))
 (DTypeSig true "useMemberLocal" (TyFun (TyCon "UseMember") (TyCon "String")))
-(DFunDef false "useMemberLocal" ((PCon "UseMember" (PVar "n") PWild PWild (PVar "alias"))) (EMatch (EVar "alias") (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EVar "n"))))
+(DFunDef false "useMemberLocal" ((PCon "UseMember" (PVar "n") PWild PWild (PVar "alias"))) (EApp (EApp (EVar "optionOr") (EVar "n")) (EVar "alias")))
 (DTypeSig true "qualifiedLocal" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "qualifiedLocal" ((PVar "alias") (PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "alias"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))
 (DData Public "PropParam" () ((variant "PropParam" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "Ty")))) ())
@@ -3802,7 +3800,7 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "useMemberAlias" (TyFun (TyCon "UseMember") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "useMemberAlias" ((PCon "UseMember" PWild PWild PWild (PVar "alias"))) (EVar "alias"))
 (DTypeSig true "useMemberLocal" (TyFun (TyCon "UseMember") (TyCon "String")))
-(DFunDef false "useMemberLocal" ((PCon "UseMember" (PVar "n") PWild PWild (PVar "alias"))) (EMatch (EVar "alias") (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EVar "n"))))
+(DFunDef false "useMemberLocal" ((PCon "UseMember" (PVar "n") PWild PWild (PVar "alias"))) (EApp (EApp (EVar "optionOr") (EVar "n")) (EVar "alias")))
 (DTypeSig true "qualifiedLocal" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "qualifiedLocal" ((PVar "alias") (PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "alias"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))
 (DData Public "PropParam" () ((variant "PropParam" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "Ty")))) ())

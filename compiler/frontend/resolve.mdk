@@ -1153,9 +1153,7 @@ isModId : String -> (String, List String) -> Bool
 isModId n (mid, _) = mid == n
 
 isAmbiguous : Env -> String -> Bool
-isAmbiguous env n = match lookupAssoc n env.ambiguous
-  Some _ => True
-  None => False
+isAmbiguous env n = isSome (lookupAssoc n env.ambiguous)
 
 ambigMods : Env -> String -> List String
 ambigMods env n = match lookupAssoc n env.ambiguous
@@ -1165,9 +1163,7 @@ ambigMods env n = match lookupAssoc n env.ambiguous
 -- constructor peer of isAmbiguous/ambigMods (#674): is this ctor name brought in
 -- by ≥2 explicitly-importing modules?
 isCtorAmbiguous : Env -> String -> Bool
-isCtorAmbiguous env n = match lookupAssoc n env.ctorAmbiguous
-  Some _ => True
-  None => False
+isCtorAmbiguous env n = isSome (lookupAssoc n env.ctorAmbiguous)
 
 ctorAmbigMods : Env -> String -> List String
 ctorAmbigMods env n = match lookupAssoc n env.ctorAmbiguous
@@ -1215,18 +1211,13 @@ dottedBare n = match splitOnChar '.' n
 -- outright.  Both must agree on the disjunction, so it is written once.
 ctorOccurrenceContested : Env -> String -> Bool
 ctorOccurrenceContested env n =
-  isCtorAmbiguous env n
-    || (match aliasShadowedCtorMod env n
-      Some _ => True
-      None => False)
+  isCtorAmbiguous env n || isSome (aliasShadowedCtorMod env n)
 
 -- TYPE peer of isAmbiguous/ambigMods (#1110): is this TYPE name brought into scope
 -- by ≥2 explicitly-importing modules?  Read at every type-occurrence site — a
 -- `TyCon` head, a record-pattern head, a record-literal head.
 isTypeAmbiguous : Env -> String -> Bool
-isTypeAmbiguous env n = match lookupAssoc n env.typeAmbiguous
-  Some _ => True
-  None => False
+isTypeAmbiguous env n = isSome (lookupAssoc n env.typeAmbiguous)
 
 typeAmbigMods : Env -> String -> List String
 typeAmbigMods env n = match lookupAssoc n env.typeAmbiguous
@@ -1250,9 +1241,7 @@ typeAmbigMods env n = match lookupAssoc n env.typeAmbiguous
 -- 0.  That fixture predates this change and would go red if the tables were ever
 -- merged, which is precisely what makes it the regression test for this decision.
 isIfaceAmbiguous : Env -> String -> Bool
-isIfaceAmbiguous env n = match lookupAssoc n env.ifaceAmbiguous
-  Some _ => True
-  None => False
+isIfaceAmbiguous env n = isSome (lookupAssoc n env.ifaceAmbiguous)
 
 ifaceAmbigMods : Env -> String -> List String
 ifaceAmbigMods env n = match lookupAssoc n env.ifaceAmbiguous
@@ -3598,9 +3587,7 @@ addCtorDeclarers : String ->
   OrdMap (OrdMap Unit)
 addCtorDeclarers _ [] acc = acc
 addCtorDeclarers n (m :: ms) acc =
-  let names = match omLookup m acc
-    Some ns => ns
-    None => omEmpty
+  let names = optionOr omEmpty (omLookup m acc)
   addCtorDeclarers n ms (omInsert m (omInsert n () names) acc)
 
 declsDeclaringCtorIn : OrdMap (OrdMap Unit) ->
@@ -4473,9 +4460,7 @@ fileOfModuleErrors : List (String, String) ->
   (String, List ResError) ->
   (String, List ResError)
 fileOfModuleErrors modPaths (mid, errs) =
-  let file = match lookupAssoc mid modPaths
-    Some p => p
-    None => ""
+  let file = optionOr "" (lookupAssoc mid modPaths)
   (file, errs)
 
 -- ── #837: binding-id minting (stampBindingIds) ──────────────────────────────
@@ -4508,9 +4493,7 @@ fileOfModuleErrors modPaths (mid, errs) =
 -- nesting (N sequential lets, references to an outer binding) an O(depth) walk
 -- per EVar — O(depth²) over the body (the `scoperefs` shape, #1031).
 lookupBindId : OrdMap Int -> String -> Int
-lookupBindId env n = match omLookup n env
-  Some id => id
-  None => 0
+lookupBindId env n = optionOr 0 (omLookup n env)
 
 -- shadow-insert every name in `names` at sentinel id 0 (a local binder).  Names
 -- are inserted left-to-right so a later name in the same list wins a same-name

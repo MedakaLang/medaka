@@ -3217,9 +3217,7 @@ runTestCmd argv0 =
           let _ = match seedOpt
             Some s => seedPropRng s
             None => ()
-          let cases = match casesOpt
-            Some n => n
-            None => 100
+          let cases = optionOr 100 casesOpt
           let filterOpt = flagValue "--filter" a
           let jsonMode = flag "--json" a
           match a.positionals

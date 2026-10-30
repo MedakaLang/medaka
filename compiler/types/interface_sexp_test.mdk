@@ -961,9 +961,10 @@ someLoc : Option Loc
 someLoc = Some (Loc "m.mdk" 3 1 3 9)
 
 identIn : String -> Ns -> String -> Ident
-identIn m ns name = match mkIdent ns (OriginModule m) name
-  Some ident => ident
-  None => panic "a module origin is an identity"
+identIn m ns name =
+  optionOrPanic
+    "a module origin is an identity"
+    (mkIdent ns (OriginModule m) name)
 
 allNs : List Ns
 allNs = [NsType, NsIface, NsMethod, NsCtor, NsField, NsValue]

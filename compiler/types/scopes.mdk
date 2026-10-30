@@ -63,9 +63,8 @@ scopeFrame store sid =
   let frames = store.ssFrames.value
   if i < 0 || i >= arrayLength frames then
     panic "scope frame missing"
-  else match arrayGetUnsafe i frames
-    Some frame => frame
-    None => panic "scope frame missing"
+  else
+    optionOrPanic "scope frame missing" (arrayGetUnsafe i frames)
 
 export
 freshScope : ScopeStore ->

@@ -1,5 +1,5 @@
 # META
-source_lines=11587
+source_lines=11585
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -628,14 +628,12 @@ inputManifestRequirementW : WasmEmitInput -> ManifestRequirement
 inputManifestRequirementW (WasmEmitInputData _ _ requirement) = requirement
 
 physicalPlanW : EmitPlan -> WasmDemandPlan
-physicalPlanW plan = match plan.wasmPhysical
-  Some p => p
-  None => panic "internal error: missing-wasm-demand-plan"
+physicalPlanW plan =
+  optionOrPanic "internal error: missing-wasm-demand-plan" plan.wasmPhysical
 
 emitDemandW : WasmEmit -> WasmDemandPlan
-emitDemandW emit = match emit.physical
-  Some p => p
-  None => panic "internal error: missing-wasm-demand-plan"
+emitDemandW emit =
+  optionOrPanic "internal error: missing-wasm-demand-plan" emit.physical
 
 seedPhysicalW : WasmEmit -> WasmDemandPlan -> Unit
 seedPhysicalW emit physical =
@@ -11638,9 +11636,9 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "inputManifestRequirementW" (TyFun (TyCon "WasmEmitInput") (TyCon "ManifestRequirement")))
 (DFunDef false "inputManifestRequirementW" ((PCon "WasmEmitInputData" PWild PWild (PVar "requirement"))) (EVar "requirement"))
 (DTypeSig false "physicalPlanW" (TyFun (TyCon "EmitPlan") (TyCon "WasmDemandPlan")))
-(DFunDef false "physicalPlanW" ((PVar "plan")) (EMatch (EFieldAccess (EVar "plan") "wasmPhysical") (arm (PCon "Some" (PVar "p")) () (EVar "p")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "internal error: missing-wasm-demand-plan"))))))
+(DFunDef false "physicalPlanW" ((PVar "plan")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "internal error: missing-wasm-demand-plan"))) (EFieldAccess (EVar "plan") "wasmPhysical")))
 (DTypeSig false "emitDemandW" (TyFun (TyCon "WasmEmit") (TyCon "WasmDemandPlan")))
-(DFunDef false "emitDemandW" ((PVar "emit")) (EMatch (EFieldAccess (EVar "emit") "physical") (arm (PCon "Some" (PVar "p")) () (EVar "p")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "internal error: missing-wasm-demand-plan"))))))
+(DFunDef false "emitDemandW" ((PVar "emit")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "internal error: missing-wasm-demand-plan"))) (EFieldAccess (EVar "emit") "physical")))
 (DTypeSig false "seedPhysicalW" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmDemandPlan") (TyCon "Unit"))))
 (DFunDef false "seedPhysicalW" ((PVar "emit") (PVar "physical")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "seedDemandW") (EVar "emit")) (EFieldAccess (EVar "physical") "representation"))) (DoLet false false PWild (EApp (EApp (EVar "forEachU") (ELam ((PTuple (PVar "name") (PVar "cell"))) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EVar "hasWasmHelper") (EVar "physical")) (EVar "name"))))) (EListLit (ETuple (ELit (LString "strLeafRuntimeLines")) (EFieldAccess (EVar "emit") "useStrLeaf")) (ETuple (ELit (LString "strSearchRuntimeLines")) (EFieldAccess (EVar "emit") "useStrSearch")) (ETuple (ELit (LString "valueEqRuntimeLines")) (EFieldAccess (EVar "emit") "useValueCmp")) (ETuple (ELit (LString "valueCmpNumRuntimeLines")) (EFieldAccess (EVar "emit") "useValueCmpNum")) (ETuple (ELit (LString "valueAddRuntimeLines")) (EFieldAccess (EVar "emit") "useValueAdd")) (ETuple (ELit (LString "valueSubRuntimeLines")) (EFieldAccess (EVar "emit") "useValueSub")) (ETuple (ELit (LString "valueMulRuntimeLines")) (EFieldAccess (EVar "emit") "useValueMul")) (ETuple (ELit (LString "valueDivRuntimeLines")) (EFieldAccess (EVar "emit") "useValueDiv")) (ETuple (ELit (LString "valueModRuntimeLines")) (EFieldAccess (EVar "emit") "useValueMod")) (ETuple (ELit (LString "floatRuntimeLines")) (EFieldAccess (EVar "emit") "useFloat")) (ETuple (ELit (LString "stderrByteImportLines")) (EFieldAccess (EVar "emit") "trapImportNeeded")) (ETuple (ELit (LString "trapIntRuntimeLines")) (EFieldAccess (EVar "emit") "trapIntNeeded"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "intRtUsed")) (EFieldAccess (EVar "physical") "intHelpers"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteRtUsed")) (EFieldAccess (EVar "physical") "siteRuntime"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteNonexhUsed")) (EFieldAccess (EVar "physical") "nonexhaustiveRuntime")))))
 (DData Private "WasmFnImplIndex" () ((variant "WasmFnImplIndex" (ConNamed (field "fnNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "valNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "arities" (TyCon "ArityEnv")) (field "implBuckets" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry")))) (field "lazyGlobals" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "superCounts" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "trmc" (TyCon "TrmcVerdicts"))))) ())
@@ -13778,9 +13776,9 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "inputManifestRequirementW" (TyFun (TyCon "WasmEmitInput") (TyCon "ManifestRequirement")))
 (DFunDef false "inputManifestRequirementW" ((PCon "WasmEmitInputData" PWild PWild (PVar "requirement"))) (EVar "requirement"))
 (DTypeSig false "physicalPlanW" (TyFun (TyCon "EmitPlan") (TyCon "WasmDemandPlan")))
-(DFunDef false "physicalPlanW" ((PVar "plan")) (EMatch (EFieldAccess (EVar "plan") "wasmPhysical") (arm (PCon "Some" (PVar "p")) () (EVar "p")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "internal error: missing-wasm-demand-plan"))))))
+(DFunDef false "physicalPlanW" ((PVar "plan")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "internal error: missing-wasm-demand-plan"))) (EFieldAccess (EVar "plan") "wasmPhysical")))
 (DTypeSig false "emitDemandW" (TyFun (TyCon "WasmEmit") (TyCon "WasmDemandPlan")))
-(DFunDef false "emitDemandW" ((PVar "emit")) (EMatch (EFieldAccess (EVar "emit") "physical") (arm (PCon "Some" (PVar "p")) () (EVar "p")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "internal error: missing-wasm-demand-plan"))))))
+(DFunDef false "emitDemandW" ((PVar "emit")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "internal error: missing-wasm-demand-plan"))) (EFieldAccess (EVar "emit") "physical")))
 (DTypeSig false "seedPhysicalW" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmDemandPlan") (TyCon "Unit"))))
 (DFunDef false "seedPhysicalW" ((PVar "emit") (PVar "physical")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "seedDemandW") (EVar "emit")) (EFieldAccess (EVar "physical") "representation"))) (DoLet false false PWild (EApp (EApp (EVar "forEachU") (ELam ((PTuple (PVar "name") (PVar "cell"))) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EVar "hasWasmHelper") (EVar "physical")) (EVar "name"))))) (EListLit (ETuple (ELit (LString "strLeafRuntimeLines")) (EFieldAccess (EVar "emit") "useStrLeaf")) (ETuple (ELit (LString "strSearchRuntimeLines")) (EFieldAccess (EVar "emit") "useStrSearch")) (ETuple (ELit (LString "valueEqRuntimeLines")) (EFieldAccess (EVar "emit") "useValueCmp")) (ETuple (ELit (LString "valueCmpNumRuntimeLines")) (EFieldAccess (EVar "emit") "useValueCmpNum")) (ETuple (ELit (LString "valueAddRuntimeLines")) (EFieldAccess (EVar "emit") "useValueAdd")) (ETuple (ELit (LString "valueSubRuntimeLines")) (EFieldAccess (EVar "emit") "useValueSub")) (ETuple (ELit (LString "valueMulRuntimeLines")) (EFieldAccess (EVar "emit") "useValueMul")) (ETuple (ELit (LString "valueDivRuntimeLines")) (EFieldAccess (EVar "emit") "useValueDiv")) (ETuple (ELit (LString "valueModRuntimeLines")) (EFieldAccess (EVar "emit") "useValueMod")) (ETuple (ELit (LString "floatRuntimeLines")) (EFieldAccess (EVar "emit") "useFloat")) (ETuple (ELit (LString "stderrByteImportLines")) (EFieldAccess (EVar "emit") "trapImportNeeded")) (ETuple (ELit (LString "trapIntRuntimeLines")) (EFieldAccess (EVar "emit") "trapIntNeeded"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "intRtUsed")) (EFieldAccess (EVar "physical") "intHelpers"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteRtUsed")) (EFieldAccess (EVar "physical") "siteRuntime"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteNonexhUsed")) (EFieldAccess (EVar "physical") "nonexhaustiveRuntime")))))
 (DData Private "WasmFnImplIndex" () ((variant "WasmFnImplIndex" (ConNamed (field "fnNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "valNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "arities" (TyCon "ArityEnv")) (field "implBuckets" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry")))) (field "lazyGlobals" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "superCounts" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "trmc" (TyCon "TrmcVerdicts"))))) ())

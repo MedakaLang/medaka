@@ -1,5 +1,5 @@
 # META
-source_lines=328
+source_lines=324
 stages=DESUGAR,MARK
 # SOURCE
 -- The declaration rules for a user `extern`'s host bindings and declared row,
@@ -233,14 +233,10 @@ ffiNoHostFix p =
 
 -- A bound's spelling of a whole host, `"c*"`, written in a declaration row.
 dropTrailingStar : String -> String
-dropTrailingStar s = match stripSuffix "*" s
-  Some rest => rest
-  None => s
+dropTrailingStar s = optionOr s (stripSuffix "*" s)
 
 dropTrailingSlash : String -> String
-dropTrailingSlash s = match stripSuffix "/" s
-  Some rest => rest
-  None => s
+dropTrailingSlash s = optionOr s (stripSuffix "/" s)
 
 ffiUnboundHostMsg : String -> String -> String
 ffiUnboundHostMsg n h =
@@ -391,9 +387,9 @@ paramIsTopDomain _ = False
 (DTypeSig false "ffiNoHostFix" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ffiNoHostFix" ((PVar "p")) (EBlock (DoLet false false (PVar "base") (EApp (EVar "dropTrailingSlash") (EApp (EVar "dropTrailingStar") (EVar "p")))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EVar "base")) (EVar "ffiHosts")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "write `<FFI \"")) (EApp (EVar "display") (EVar "base"))) (ELit (LString "\">` for the `"))) (EApp (EVar "display") (EVar "base"))) (ELit (LString "` host"))) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "toLower") (EVar "base"))) (EVar "ffiHosts")) (EBinOp "++" (EBinOp "++" (ELit (LString "host names are lower-case: write `<FFI \"")) (EApp (EVar "display") (EApp (EVar "toLower") (EVar "base")))) (ELit (LString "\">`"))) (EBinOp "++" (EBinOp "++" (ELit (LString "write `<FFI \"c/")) (EApp (EVar "display") (EVar "p"))) (ELit (LString "\">` for a C library"))))))))
 (DTypeSig false "dropTrailingStar" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "dropTrailingStar" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "*"))) (EVar "s")) (arm (PCon "Some" (PVar "rest")) () (EVar "rest")) (arm (PCon "None") () (EVar "s"))))
+(DFunDef false "dropTrailingStar" ((PVar "s")) (EApp (EApp (EVar "optionOr") (EVar "s")) (EApp (EApp (EVar "stripSuffix") (ELit (LString "*"))) (EVar "s"))))
 (DTypeSig false "dropTrailingSlash" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "dropTrailingSlash" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "/"))) (EVar "s")) (arm (PCon "Some" (PVar "rest")) () (EVar "rest")) (arm (PCon "None") () (EVar "s"))))
+(DFunDef false "dropTrailingSlash" ((PVar "s")) (EApp (EApp (EVar "optionOr") (EVar "s")) (EApp (EApp (EVar "stripSuffix") (ELit (LString "/"))) (EVar "s"))))
 (DTypeSig false "ffiUnboundHostMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ffiUnboundHostMsg" ((PVar "n") (PVar "h")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` names the `"))) (EApp (EVar "display") (EVar "h"))) (ELit (LString "` host in its result row but has no `"))) (EApp (EVar "display") (EVar "h"))) (ELit (LString "` binding; add an indented `bind "))) (EApp (EVar "display") (EVar "h"))) (ELit (LString " \"<name>\"` line under its signature"))))
 (DTypeSig false "ffiUnknownHostMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -487,9 +483,9 @@ paramIsTopDomain _ = False
 (DTypeSig false "ffiNoHostFix" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ffiNoHostFix" ((PVar "p")) (EBlock (DoLet false false (PVar "base") (EApp (EVar "dropTrailingSlash") (EApp (EVar "dropTrailingStar") (EVar "p")))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EVar "base")) (EVar "ffiHosts")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "write `<FFI \"")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString "\">` for the `"))) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString "` host"))) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "toLower") (EVar "base"))) (EVar "ffiHosts")) (EBinOp "++" (EBinOp "++" (ELit (LString "host names are lower-case: write `<FFI \"")) (EApp (EMethodRef "display") (EApp (EVar "toLower") (EVar "base")))) (ELit (LString "\">`"))) (EBinOp "++" (EBinOp "++" (ELit (LString "write `<FFI \"c/")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "\">` for a C library"))))))))
 (DTypeSig false "dropTrailingStar" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "dropTrailingStar" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "*"))) (EVar "s")) (arm (PCon "Some" (PVar "rest")) () (EVar "rest")) (arm (PCon "None") () (EVar "s"))))
+(DFunDef false "dropTrailingStar" ((PVar "s")) (EApp (EApp (EVar "optionOr") (EVar "s")) (EApp (EApp (EVar "stripSuffix") (ELit (LString "*"))) (EVar "s"))))
 (DTypeSig false "dropTrailingSlash" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "dropTrailingSlash" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "/"))) (EVar "s")) (arm (PCon "Some" (PVar "rest")) () (EVar "rest")) (arm (PCon "None") () (EVar "s"))))
+(DFunDef false "dropTrailingSlash" ((PVar "s")) (EApp (EApp (EVar "optionOr") (EVar "s")) (EApp (EApp (EVar "stripSuffix") (ELit (LString "/"))) (EVar "s"))))
 (DTypeSig false "ffiUnboundHostMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ffiUnboundHostMsg" ((PVar "n") (PVar "h")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` names the `"))) (EApp (EMethodRef "display") (EVar "h"))) (ELit (LString "` host in its result row but has no `"))) (EApp (EMethodRef "display") (EVar "h"))) (ELit (LString "` binding; add an indented `bind "))) (EApp (EMethodRef "display") (EVar "h"))) (ELit (LString " \"<name>\"` line under its signature"))))
 (DTypeSig false "ffiUnknownHostMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))

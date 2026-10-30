@@ -221,9 +221,7 @@ public export data PropOutcome v =
 -- (name not found in the lookup) omits the location rather than printing a
 -- misleading `:0`.
 lineOfPropName : String -> List (String, Int) -> Int
-lineOfPropName name propLines = match lookupAssoc name propLines
-  Some l => l
-  None => 0
+lineOfPropName name propLines = optionOr 0 (lookupAssoc name propLines)
 
 propLocPrefix : String -> Int -> String
 propLocPrefix _ 0 = ""

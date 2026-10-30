@@ -1,5 +1,5 @@
 # META
-source_lines=1432
+source_lines=1433
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -1049,9 +1049,10 @@ mergeIfaceMethods methods =
   map (methodAt byName) (reverseL orderRev)
 
 methodAt : OrdMap IfaceMethod -> String -> IfaceMethod
-methodAt byName n = match omLookup n byName
-  Some m => m
-  None => panic "mergeIfaceMethods: unreachable — name inserted but missing"
+methodAt byName n =
+  optionOrPanic
+    "mergeIfaceMethods: unreachable — name inserted but missing"
+    (omLookup n byName)
 
 foldlMethods : (OrdMap IfaceMethod, List String) ->
   List IfaceMethod ->
@@ -1785,7 +1786,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DTypeSig false "mergeIfaceMethods" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "IfaceMethod"))))
 (DFunDef false "mergeIfaceMethods" ((PVar "methods")) (EBlock (DoLet false false (PTuple (PVar "byName") (PVar "orderRev")) (EApp (EApp (EVar "foldlMethods") (ETuple (EVar "omEmpty") (EListLit))) (EVar "methods"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EVar "methodAt") (EVar "byName"))) (EApp (EVar "reverseL") (EVar "orderRev"))))))
 (DTypeSig false "methodAt" (TyFun (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyFun (TyCon "String") (TyCon "IfaceMethod"))))
-(DFunDef false "methodAt" ((PVar "byName") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "byName")) (arm (PCon "Some" (PVar "m")) () (EVar "m")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "mergeIfaceMethods: unreachable — name inserted but missing"))))))
+(DFunDef false "methodAt" ((PVar "byName") (PVar "n")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "mergeIfaceMethods: unreachable — name inserted but missing"))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "byName"))))
 (DTypeSig false "foldlMethods" (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "foldlMethods" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "foldlMethods" ((PVar "acc") (PCons (PVar "m") (PVar "rest"))) (EApp (EApp (EVar "foldlMethods") (EApp (EApp (EVar "insertMethod") (EVar "acc")) (EVar "m"))) (EVar "rest")))
@@ -2294,7 +2295,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DTypeSig false "mergeIfaceMethods" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "IfaceMethod"))))
 (DFunDef false "mergeIfaceMethods" ((PVar "methods")) (EBlock (DoLet false false (PTuple (PVar "byName") (PVar "orderRev")) (EApp (EApp (EVar "foldlMethods") (ETuple (EVar "omEmpty") (EListLit))) (EVar "methods"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EVar "methodAt") (EVar "byName"))) (EApp (EVar "reverseL") (EVar "orderRev"))))))
 (DTypeSig false "methodAt" (TyFun (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyFun (TyCon "String") (TyCon "IfaceMethod"))))
-(DFunDef false "methodAt" ((PVar "byName") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "byName")) (arm (PCon "Some" (PVar "m")) () (EVar "m")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "mergeIfaceMethods: unreachable — name inserted but missing"))))))
+(DFunDef false "methodAt" ((PVar "byName") (PVar "n")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "mergeIfaceMethods: unreachable — name inserted but missing"))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "byName"))))
 (DTypeSig false "foldlMethods" (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "foldlMethods" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "foldlMethods" ((PVar "acc") (PCons (PVar "m") (PVar "rest"))) (EApp (EApp (EVar "foldlMethods") (EApp (EApp (EVar "insertMethod") (EVar "acc")) (EVar "m"))) (EVar "rest")))

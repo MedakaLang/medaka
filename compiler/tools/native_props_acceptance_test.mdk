@@ -695,9 +695,7 @@ drawCounterexamples (Err _) = []
 drawCounterexamples (Ok (_, report)) =
   map
     (row =>
-      let detail = match field "detail" row
-        Some text => text
-        None => ""
+      let detail = optionOr "" (field "detail" row)
       filter (contains "x = Draw") (lines detail))
     (propertyReports report)
 

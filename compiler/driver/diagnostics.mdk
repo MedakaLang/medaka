@@ -3236,9 +3236,7 @@ readFileSafe : String -> <IO> String
 readFileSafe path =
   match if path == stdinEntry then loadedSourceOf path else None
     Some src => src
-    None => match readFile path
-      Ok src => src
-      Err _ => ""
+    None => resultOr "" (readFile path)
 
 -- The single located parse-error diagnostic, as the {"files":[...]} JSON string.
 -- Uses the same serializer as other diagnostics, including typed edits.

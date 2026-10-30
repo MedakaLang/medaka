@@ -1,5 +1,5 @@
 # META
-source_lines=5735
+source_lines=5728
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -2107,16 +2107,13 @@ applyVariantUpdates updates (f :: fs) (v :: vs) =
   applyFieldUpdate updates f v :: applyVariantUpdates updates fs vs
 
 applyFieldUpdate : List (String, Value e) -> String -> Value e -> Value e
-applyFieldUpdate updates field old = match lookupAssoc field updates
-  Some v => v
-  None => old
+applyFieldUpdate updates field old = optionOr old (lookupAssoc field updates)
 
 export
 evalValueField : Value e -> Value e
 evalValueField (VRef cell) = !cell
-evalValueField (VRecord _ fields) = match lookupAssoc "value" fields
-  Some v => v
-  None => panic "record has no field 'value'"
+evalValueField (VRecord _ fields) =
+  optionOrPanic "record has no field 'value'" (lookupAssoc "value" fields)
 evalValueField _ = panic "field access on non-record/ref"
 
 export
@@ -3279,9 +3276,7 @@ evalFileTagName = "$__evalFile__"
 -- synthetic id (e.g. a snapshot-tool fixture's `__main__`) that was never a
 -- real, printable file.
 moduleFileOf : String -> String
-moduleFileOf mid = match lookupAssoc mid !modulePathMap
-  Some path => path
-  None => ""
+moduleFileOf mid = optionOr "" (lookupAssoc mid !modulePathMap)
 
 -- P0-2(a): evaluator recursion-depth guard.  The tree-walker recurses on the
 -- host C stack (`eval`->`apply`->`eval`...) with no TCO, so a deep non-tail
@@ -3585,9 +3580,7 @@ pRandomChar draw _ =
 charFromCodeUnsafe : Int -> Char
 -- Intentional cross-file duplicate of the same helper in prop_runner.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
-charFromCodeUnsafe n = match charFromCode n
-  Some c => c
-  None => ' '
+charFromCodeUnsafe n = optionOr ' ' (charFromCode n)
 
 pSetSeed : Ref U64 -> Value e -> <e> Value e
 pSetSeed ref (VInt seed) =
@@ -6462,10 +6455,10 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "applyVariantUpdates" (PWild PWild (PList)) (EListLit))
 (DFunDef false "applyVariantUpdates" ((PVar "updates") (PCons (PVar "f") (PVar "fs")) (PCons (PVar "v") (PVar "vs"))) (EBinOp "::" (EApp (EApp (EApp (EVar "applyFieldUpdate") (EVar "updates")) (EVar "f")) (EVar "v")) (EApp (EApp (EApp (EVar "applyVariantUpdates") (EVar "updates")) (EVar "fs")) (EVar "vs"))))
 (DTypeSig false "applyFieldUpdate" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "applyFieldUpdate" ((PVar "updates") (PVar "field") (PVar "old")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "field")) (EVar "updates")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "old"))))
+(DFunDef false "applyFieldUpdate" ((PVar "updates") (PVar "field") (PVar "old")) (EApp (EApp (EVar "optionOr") (EVar "old")) (EApp (EApp (EVar "lookupAssoc") (EVar "field")) (EVar "updates"))))
 (DTypeSig true "evalValueField" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "evalValueField" ((PCon "VRef" (PVar "cell"))) (EUnOp "!" (EVar "cell")))
-(DFunDef false "evalValueField" ((PCon "VRecord" PWild (PVar "fields"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "value"))) (EVar "fields")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "record has no field 'value'"))))))
+(DFunDef false "evalValueField" ((PCon "VRecord" PWild (PVar "fields"))) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "record has no field 'value'"))) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "value"))) (EVar "fields"))))
 (DFunDef false "evalValueField" (PWild) (EApp (EVar "panic") (ELit (LString "field access on non-record/ref"))))
 (DTypeSig true "evalField" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "evalField" ((PCon "VRecord" PWild (PVar "fields")) (PVar "field")) (EApp (EApp (EVar "fieldOr") (EVar "fields")) (EVar "field")))
@@ -6846,7 +6839,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "evalFileTagName" (TyCon "String"))
 (DFunDef false "evalFileTagName" () (ELit (LString "$__evalFile__")))
 (DTypeSig false "moduleFileOf" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "moduleFileOf" ((PVar "mid")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EUnOp "!" (EVar "modulePathMap"))) (arm (PCon "Some" (PVar "path")) () (EVar "path")) (arm (PCon "None") () (ELit (LString "")))))
+(DFunDef false "moduleFileOf" ((PVar "mid")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EUnOp "!" (EVar "modulePathMap")))))
 (DTypeSig false "evalDepthRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "evalDepthRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig false "evalDepthLimit" (TyCon "Int"))
@@ -6939,7 +6932,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "pRandomChar" (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyCon "U64"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pRandomChar" ((PVar "draw") PWild) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EApp (EVar "charFromCodeUnsafe") (EBinOp "+" (ELit (LInt 32)) (EApp (EVar "U64.toIntTruncating") (EBinOp "%" (EApp (EVar "draw") (ELit LUnit)) (ELit (LInt 95)))))))))
 (DTypeSig false "charFromCodeUnsafe" (TyFun (TyCon "Int") (TyCon "Char")))
-(DFunDef false "charFromCodeUnsafe" ((PVar "n")) (EMatch (EApp (EVar "charFromCode") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar " ")))))
+(DFunDef false "charFromCodeUnsafe" ((PVar "n")) (EApp (EApp (EVar "optionOr") (ELit (LChar " "))) (EApp (EVar "charFromCode") (EVar "n"))))
 (DTypeSig false "pSetSeed" (TyFun (TyApp (TyCon "Ref") (TyCon "U64")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pSetSeed" ((PVar "ref") (PCon "VInt" (PVar "seed"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "ref")) (EApp (EVar "U64.truncate") (EVar "seed")))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pSetSeed" (PWild PWild) (EApp (EVar "panic") (ELit (LString "setSeed: expected Int"))))
@@ -8338,10 +8331,10 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "applyVariantUpdates" (PWild PWild (PList)) (EListLit))
 (DFunDef false "applyVariantUpdates" ((PVar "updates") (PCons (PVar "f") (PVar "fs")) (PCons (PVar "v") (PVar "vs"))) (EBinOp "::" (EApp (EApp (EApp (EVar "applyFieldUpdate") (EVar "updates")) (EVar "f")) (EVar "v")) (EApp (EApp (EApp (EVar "applyVariantUpdates") (EVar "updates")) (EVar "fs")) (EVar "vs"))))
 (DTypeSig false "applyFieldUpdate" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "applyFieldUpdate" ((PVar "updates") (PVar "field") (PVar "old")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "field")) (EVar "updates")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "old"))))
+(DFunDef false "applyFieldUpdate" ((PVar "updates") (PVar "field") (PVar "old")) (EApp (EApp (EVar "optionOr") (EVar "old")) (EApp (EApp (EVar "lookupAssoc") (EVar "field")) (EVar "updates"))))
 (DTypeSig true "evalValueField" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "evalValueField" ((PCon "VRef" (PVar "cell"))) (EUnOp "!" (EVar "cell")))
-(DFunDef false "evalValueField" ((PCon "VRecord" PWild (PVar "fields"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "value"))) (EVar "fields")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "record has no field 'value'"))))))
+(DFunDef false "evalValueField" ((PCon "VRecord" PWild (PVar "fields"))) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "record has no field 'value'"))) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "value"))) (EVar "fields"))))
 (DFunDef false "evalValueField" (PWild) (EApp (EVar "panic") (ELit (LString "field access on non-record/ref"))))
 (DTypeSig true "evalField" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "evalField" ((PCon "VRecord" PWild (PVar "fields")) (PVar "field")) (EApp (EApp (EVar "fieldOr") (EVar "fields")) (EVar "field")))
@@ -8722,7 +8715,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "evalFileTagName" (TyCon "String"))
 (DFunDef false "evalFileTagName" () (ELit (LString "$__evalFile__")))
 (DTypeSig false "moduleFileOf" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "moduleFileOf" ((PVar "mid")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EUnOp "!" (EVar "modulePathMap"))) (arm (PCon "Some" (PVar "path")) () (EVar "path")) (arm (PCon "None") () (ELit (LString "")))))
+(DFunDef false "moduleFileOf" ((PVar "mid")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EUnOp "!" (EVar "modulePathMap")))))
 (DTypeSig false "evalDepthRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "evalDepthRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig false "evalDepthLimit" (TyCon "Int"))
@@ -8815,7 +8808,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "pRandomChar" (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyCon "U64"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pRandomChar" ((PVar "draw") PWild) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EApp (EVar "charFromCodeUnsafe") (EBinOp "+" (ELit (LInt 32)) (EApp (EVar "U64.toIntTruncating") (EBinOp "%" (EApp (EVar "draw") (ELit LUnit)) (ELit (LInt 95)))))))))
 (DTypeSig false "charFromCodeUnsafe" (TyFun (TyCon "Int") (TyCon "Char")))
-(DFunDef false "charFromCodeUnsafe" ((PVar "n")) (EMatch (EApp (EVar "charFromCode") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar " ")))))
+(DFunDef false "charFromCodeUnsafe" ((PVar "n")) (EApp (EApp (EVar "optionOr") (ELit (LChar " "))) (EApp (EVar "charFromCode") (EVar "n"))))
 (DTypeSig false "pSetSeed" (TyFun (TyApp (TyCon "Ref") (TyCon "U64")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pSetSeed" ((PVar "ref") (PCon "VInt" (PVar "seed"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "ref")) (EApp (EVar "U64.truncate") (EVar "seed")))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pSetSeed" (PWild PWild) (EApp (EVar "panic") (ELit (LString "setSeed: expected Int"))))

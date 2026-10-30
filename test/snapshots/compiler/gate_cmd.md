@@ -1,5 +1,5 @@
 # META
-source_lines=3771
+source_lines=3769
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -3732,9 +3732,7 @@ budgetMissingValue = [
 ]
 
 budgetCommitMessage : Args -> String
-budgetCommitMessage a = match flagValue "--commit-message" a
-  Some v => v
-  None => ""
+budgetCommitMessage a = optionOr "" (flagValue "--commit-message" a)
 
 -- `budget`, like `verify`, takes no positionals — a leftover token is
 -- rejected the same way an unclaimed flag would be.
@@ -4549,7 +4547,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "budgetMissingValue" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "budgetMissingValue" () (EListLit (ETuple (ELit (LString "--registry")) (ELit (LString "medaka gate budget: --registry needs a path"))) (ETuple (ELit (LString "--baseline")) (ELit (LString "medaka gate budget: --baseline needs a path"))) (ETuple (ELit (LString "--commit-message")) (ELit (LString "medaka gate budget: --commit-message needs a value")))))
 (DTypeSig false "budgetCommitMessage" (TyFun (TyCon "Args") (TyCon "String")))
-(DFunDef false "budgetCommitMessage" ((PVar "a")) (EMatch (EApp (EApp (EVar "flagValue") (ELit (LString "--commit-message"))) (EVar "a")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (ELit (LString "")))))
+(DFunDef false "budgetCommitMessage" ((PVar "a")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "flagValue") (ELit (LString "--commit-message"))) (EVar "a"))))
 (DTypeSig false "parseBudgetArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "BudgetArgs"))))
 (DFunDef false "parseBudgetArgs" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseArgs") (EVar "budgetArgSpec")) (EVar "argv")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "missingValueOverride") (EVar "budgetArgSpec")) (EVar "budgetMissingValue")) (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EMatch (EFieldAccess (EVar "a") "positionals") (arm (PList) () (EApp (EVar "Ok") (ERecordCreate "BudgetArgs" ((fa "registry" (EApp (EApp (EVar "flagValue") (ELit (LString "--registry"))) (EVar "a"))) (fa "baseline" (EApp (EApp (EVar "flagValue") (ELit (LString "--baseline"))) (EVar "a"))) (fa "commitMessage" (EApp (EVar "budgetCommitMessage") (EVar "a"))))))) (arm (PCons (PVar "p") PWild) () (EApp (EVar "Err") (EApp (EApp (EVar "unknownFlagMessage") (EVar "budgetArgSpec")) (EVar "p"))))))))
 (DTypeSig false "budgetCmdBody" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
@@ -5330,7 +5328,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "budgetMissingValue" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "budgetMissingValue" () (EListLit (ETuple (ELit (LString "--registry")) (ELit (LString "medaka gate budget: --registry needs a path"))) (ETuple (ELit (LString "--baseline")) (ELit (LString "medaka gate budget: --baseline needs a path"))) (ETuple (ELit (LString "--commit-message")) (ELit (LString "medaka gate budget: --commit-message needs a value")))))
 (DTypeSig false "budgetCommitMessage" (TyFun (TyCon "Args") (TyCon "String")))
-(DFunDef false "budgetCommitMessage" ((PVar "a")) (EMatch (EApp (EApp (EVar "flagValue") (ELit (LString "--commit-message"))) (EVar "a")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (ELit (LString "")))))
+(DFunDef false "budgetCommitMessage" ((PVar "a")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "flagValue") (ELit (LString "--commit-message"))) (EVar "a"))))
 (DTypeSig false "parseBudgetArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "BudgetArgs"))))
 (DFunDef false "parseBudgetArgs" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseArgs") (EVar "budgetArgSpec")) (EVar "argv")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "missingValueOverride") (EVar "budgetArgSpec")) (EVar "budgetMissingValue")) (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EMatch (EFieldAccess (EVar "a") "positionals") (arm (PList) () (EApp (EVar "Ok") (ERecordCreate "BudgetArgs" ((fa "registry" (EApp (EApp (EVar "flagValue") (ELit (LString "--registry"))) (EVar "a"))) (fa "baseline" (EApp (EApp (EVar "flagValue") (ELit (LString "--baseline"))) (EVar "a"))) (fa "commitMessage" (EApp (EVar "budgetCommitMessage") (EVar "a"))))))) (arm (PCons (PVar "p") PWild) () (EApp (EVar "Err") (EApp (EApp (EVar "unknownFlagMessage") (EVar "budgetArgSpec")) (EVar "p"))))))))
 (DTypeSig false "budgetCmdBody" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))

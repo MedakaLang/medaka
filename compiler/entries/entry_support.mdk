@@ -534,9 +534,7 @@ emitTargetGate _ runtimeDecls (Some p) [] =
   checkedTarget := Some (checkedTargetOf p runtimeDecls)
 emitTargetGate modsWithPath _ (Some _) ds =
   let file = entryPathOf modsWithPath
-  let src = match readFile file
-    Ok text => text
-    Err _ => ""
+  let src = resultOr "" (readFile file)
   let _ = ePutStrLn (joinNl (map (ppTargetDiag file src) ds))
   stageExit emitDiagExitCode
 

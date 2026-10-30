@@ -927,9 +927,7 @@ ruleActiveFixable only disable r =
     && ruleHasFixer r
 
 ruleHasFixer : Rule -> Bool
-ruleHasFixer r = match r.fix
-  Some _ => True
-  None => False
+ruleHasFixer r = isSome r.fix
 
 -- one (startLine, endLine, replacementText) per fixed decl, in source order.
 --

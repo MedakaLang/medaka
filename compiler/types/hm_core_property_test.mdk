@@ -512,9 +512,7 @@ schemeOf name source =
     [] => []
   (
     codes,
-    match lookup name schemes
-      Some text => text
-      None => "",
+    optionOr "" (lookup name schemes),
   )
 
 {- The principality comparison: the unannotated binding is accepted with a

@@ -453,11 +453,10 @@ methodCellEntriesFrom arr lo i acc
   | otherwise = match arrayGetUnsafe i arr
     None => methodCellEntriesFrom arr lo (i - 1) acc
     Some c =>
-      let arity = match c.ecArity.value
-        Some n => n
-        None =>
-          panic
-            "method cell published before its selected scheme supplied an arity"
+      let arity =
+        optionOrPanic
+          "method cell published before its selected scheme supplied an arity"
+          c.ecArity.value
       methodCellEntriesFrom
         arr
         lo

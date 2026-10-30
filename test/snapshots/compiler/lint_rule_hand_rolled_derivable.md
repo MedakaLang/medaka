@@ -1,5 +1,5 @@
 # META
-source_lines=119
+source_lines=117
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-hand-rolled-derivable: hand-written Eq/Ord/Debug impl that could be `deriving` (STYLE §6).
@@ -113,9 +113,7 @@ derivableHit orc loc iface tys
 -- `mkIdent _ OriginUnresolved _ = None`, but naming it directly keeps this
 -- module out of the #1110 OriginUnresolved ratchet).
 hasUserDataDecl : Oracle -> String -> Bool
-hasUserDataDecl orc tyName = match oGetCtors orc (TkBare NsType tyName)
-  Some _ => True
-  None => False
+hasUserDataDecl orc tyName = isSome (oGetCtors orc (TkBare NsType tyName))
 
 -- the head type name iff `tys` is exactly one TyCon-headed type
 singleNamedType : List Ty -> Option String
@@ -144,7 +142,7 @@ singleNamedType _ = None
 (DTypeSig false "derivableHit" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "derivableHit" ((PVar "orc") (PVar "loc") (PVar "iface") (PVar "tys")) (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EVar "derivableIfaces")) (EMatch (EApp (EVar "singleNamedType") (EVar "tys")) (arm (PCon "Some" (PVar "tyName")) () (EIf (EApp (EApp (EVar "hasUserDataDecl") (EVar "orc")) (EVar "tyName")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDerivable")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "hand-written `impl ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "` for '"))) (EApp (EVar "display") (EVar "tyName"))) (ELit (LString "' — use `deriving ("))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString ")`")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))) (EListLit))) (arm (PCon "None") () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hasUserDataDecl" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "hasUserDataDecl" ((PVar "orc") (PVar "tyName")) (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "tyName"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "hasUserDataDecl" ((PVar "orc") (PVar "tyName")) (EApp (EVar "isSome") (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "tyName")))))
 (DTypeSig false "singleNamedType" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "singleNamedType" ((PList (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "singleNamedType" (PWild) (EVar "None"))
@@ -171,7 +169,7 @@ singleNamedType _ = None
 (DTypeSig false "derivableHit" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "derivableHit" ((PVar "orc") (PVar "loc") (PVar "iface") (PVar "tys")) (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EVar "derivableIfaces")) (EMatch (EApp (EVar "singleNamedType") (EVar "tys")) (arm (PCon "Some" (PVar "tyName")) () (EIf (EApp (EApp (EVar "hasUserDataDecl") (EVar "orc")) (EVar "tyName")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDerivable")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "hand-written `impl ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "` for '"))) (EApp (EMethodRef "display") (EVar "tyName"))) (ELit (LString "' — use `deriving ("))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString ")`")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))) (EListLit))) (arm (PCon "None") () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hasUserDataDecl" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "hasUserDataDecl" ((PVar "orc") (PVar "tyName")) (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "tyName"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "hasUserDataDecl" ((PVar "orc") (PVar "tyName")) (EApp (EVar "isSome") (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "tyName")))))
 (DTypeSig false "singleNamedType" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "singleNamedType" ((PList (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "singleNamedType" (PWild) (EVar "None"))

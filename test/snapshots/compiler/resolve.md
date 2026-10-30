@@ -1,5 +1,5 @@
 # META
-source_lines=6283
+source_lines=6266
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -1157,9 +1157,7 @@ isModId : String -> (String, List String) -> Bool
 isModId n (mid, _) = mid == n
 
 isAmbiguous : Env -> String -> Bool
-isAmbiguous env n = match lookupAssoc n env.ambiguous
-  Some _ => True
-  None => False
+isAmbiguous env n = isSome (lookupAssoc n env.ambiguous)
 
 ambigMods : Env -> String -> List String
 ambigMods env n = match lookupAssoc n env.ambiguous
@@ -1169,9 +1167,7 @@ ambigMods env n = match lookupAssoc n env.ambiguous
 -- constructor peer of isAmbiguous/ambigMods (#674): is this ctor name brought in
 -- by ≥2 explicitly-importing modules?
 isCtorAmbiguous : Env -> String -> Bool
-isCtorAmbiguous env n = match lookupAssoc n env.ctorAmbiguous
-  Some _ => True
-  None => False
+isCtorAmbiguous env n = isSome (lookupAssoc n env.ctorAmbiguous)
 
 ctorAmbigMods : Env -> String -> List String
 ctorAmbigMods env n = match lookupAssoc n env.ctorAmbiguous
@@ -1219,18 +1215,13 @@ dottedBare n = match splitOnChar '.' n
 -- outright.  Both must agree on the disjunction, so it is written once.
 ctorOccurrenceContested : Env -> String -> Bool
 ctorOccurrenceContested env n =
-  isCtorAmbiguous env n
-    || (match aliasShadowedCtorMod env n
-      Some _ => True
-      None => False)
+  isCtorAmbiguous env n || isSome (aliasShadowedCtorMod env n)
 
 -- TYPE peer of isAmbiguous/ambigMods (#1110): is this TYPE name brought into scope
 -- by ≥2 explicitly-importing modules?  Read at every type-occurrence site — a
 -- `TyCon` head, a record-pattern head, a record-literal head.
 isTypeAmbiguous : Env -> String -> Bool
-isTypeAmbiguous env n = match lookupAssoc n env.typeAmbiguous
-  Some _ => True
-  None => False
+isTypeAmbiguous env n = isSome (lookupAssoc n env.typeAmbiguous)
 
 typeAmbigMods : Env -> String -> List String
 typeAmbigMods env n = match lookupAssoc n env.typeAmbiguous
@@ -1254,9 +1245,7 @@ typeAmbigMods env n = match lookupAssoc n env.typeAmbiguous
 -- 0.  That fixture predates this change and would go red if the tables were ever
 -- merged, which is precisely what makes it the regression test for this decision.
 isIfaceAmbiguous : Env -> String -> Bool
-isIfaceAmbiguous env n = match lookupAssoc n env.ifaceAmbiguous
-  Some _ => True
-  None => False
+isIfaceAmbiguous env n = isSome (lookupAssoc n env.ifaceAmbiguous)
 
 ifaceAmbigMods : Env -> String -> List String
 ifaceAmbigMods env n = match lookupAssoc n env.ifaceAmbiguous
@@ -3602,9 +3591,7 @@ addCtorDeclarers : String ->
   OrdMap (OrdMap Unit)
 addCtorDeclarers _ [] acc = acc
 addCtorDeclarers n (m :: ms) acc =
-  let names = match omLookup m acc
-    Some ns => ns
-    None => omEmpty
+  let names = optionOr omEmpty (omLookup m acc)
   addCtorDeclarers n ms (omInsert m (omInsert n () names) acc)
 
 declsDeclaringCtorIn : OrdMap (OrdMap Unit) ->
@@ -4477,9 +4464,7 @@ fileOfModuleErrors : List (String, String) ->
   (String, List ResError) ->
   (String, List ResError)
 fileOfModuleErrors modPaths (mid, errs) =
-  let file = match lookupAssoc mid modPaths
-    Some p => p
-    None => ""
+  let file = optionOr "" (lookupAssoc mid modPaths)
   (file, errs)
 
 -- ── #837: binding-id minting (stampBindingIds) ──────────────────────────────
@@ -4512,9 +4497,7 @@ fileOfModuleErrors modPaths (mid, errs) =
 -- nesting (N sequential lets, references to an outer binding) an O(depth) walk
 -- per EVar — O(depth²) over the body (the `scoperefs` shape, #1031).
 lookupBindId : OrdMap Int -> String -> Int
-lookupBindId env n = match omLookup n env
-  Some id => id
-  None => 0
+lookupBindId env n = optionOr 0 (omLookup n env)
 
 -- shadow-insert every name in `names` at sentinel id 0 (a local binder).  Names
 -- are inserted left-to-right so a later name in the same list wins a same-name
@@ -6532,11 +6515,11 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "isModId" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Bool"))))
 (DFunDef false "isModId" ((PVar "n") (PTuple (PVar "mid") PWild)) (EBinOp "==" (EVar "mid") (EVar "n")))
 (DTypeSig false "isAmbiguous" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isAmbiguous" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ambiguous")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "isAmbiguous" ((PVar "env") (PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ambiguous"))))
 (DTypeSig false "ambigMods" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ambigMods" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ambiguous")) (arm (PCon "Some" (PVar "mods")) () (EVar "mods")) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "isCtorAmbiguous" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isCtorAmbiguous" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ctorAmbiguous")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "isCtorAmbiguous" ((PVar "env") (PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ctorAmbiguous"))))
 (DTypeSig false "ctorAmbigMods" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ctorAmbigMods" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ctorAmbiguous")) (arm (PCon "Some" (PVar "mods")) () (EVar "mods")) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "aliasShadowedCtorMod" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -6548,13 +6531,13 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "dottedBare" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dottedBare" ((PVar "n")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "."))) (EVar "n")) (arm (PList PWild (PVar "bare")) () (EVar "bare")) (arm PWild () (EVar "n"))))
 (DTypeSig false "ctorOccurrenceContested" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ctorOccurrenceContested" ((PVar "env") (PVar "n")) (EBinOp "||" (EApp (EApp (EVar "isCtorAmbiguous") (EVar "env")) (EVar "n")) (EMatch (EApp (EApp (EVar "aliasShadowedCtorMod") (EVar "env")) (EVar "n")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False")))))
+(DFunDef false "ctorOccurrenceContested" ((PVar "env") (PVar "n")) (EBinOp "||" (EApp (EApp (EVar "isCtorAmbiguous") (EVar "env")) (EVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "aliasShadowedCtorMod") (EVar "env")) (EVar "n")))))
 (DTypeSig false "isTypeAmbiguous" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isTypeAmbiguous" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "typeAmbiguous")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "isTypeAmbiguous" ((PVar "env") (PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "typeAmbiguous"))))
 (DTypeSig false "typeAmbigMods" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "typeAmbigMods" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "typeAmbiguous")) (arm (PCon "Some" (PVar "mods")) () (EVar "mods")) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "isIfaceAmbiguous" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isIfaceAmbiguous" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ifaceAmbiguous")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "isIfaceAmbiguous" ((PVar "env") (PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ifaceAmbiguous"))))
 (DTypeSig false "ifaceAmbigMods" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ifaceAmbigMods" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ifaceAmbiguous")) (arm (PCon "Some" (PVar "mods")) () (EVar "mods")) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "lookupValue" (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "String") (TyCon "Bool")))))
@@ -7213,7 +7196,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "ctorNamesByDeclarer" ((PCons (PTuple PWild (PVar "base") (PVar "mids")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "ctorNamesByDeclarer") (EVar "rest")) (EApp (EApp (EApp (EVar "addCtorDeclarers") (EVar "base")) (EVar "mids")) (EVar "acc"))))
 (DTypeSig false "addCtorDeclarers" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "addCtorDeclarers" (PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "addCtorDeclarers" ((PVar "n") (PCons (PVar "m") (PVar "ms")) (PVar "acc")) (EBlock (DoLet false false (PVar "names") (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EVar "acc")) (arm (PCon "Some" (PVar "ns")) () (EVar "ns")) (arm (PCon "None") () (EVar "omEmpty")))) (DoExpr (EApp (EApp (EApp (EVar "addCtorDeclarers") (EVar "n")) (EVar "ms")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "names"))) (EVar "acc"))))))
+(DFunDef false "addCtorDeclarers" ((PVar "n") (PCons (PVar "m") (PVar "ms")) (PVar "acc")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "m")) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "addCtorDeclarers") (EVar "n")) (EVar "ms")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "names"))) (EVar "acc"))))))
 (DTypeSig false "declsDeclaringCtorIn" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "declsDeclaringCtorIn" ((PVar "byDeclarer") (PVar "pool") (PVar "m")) (EMatch (ETuple (EApp (EApp (EVar "omLookup") (EVar "m")) (EVar "byDeclarer")) (EApp (EApp (EVar "omLookup") (EVar "m")) (EVar "pool"))) (arm (PTuple (PCon "Some" (PVar "names")) (PCon "Some" (PVar "decls"))) () (EApp (EApp (EVar "filterList") (EApp (EVar "declDeclaresCtorIn") (EVar "names"))) (EVar "decls"))) (arm PWild () (EListLit))))
 (DTypeSig false "declDeclaresCtorIn" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Decl") (TyCon "Bool"))))
@@ -7333,9 +7316,9 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig true "resolveModulesErrorsByFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))))))))
 (DFunDef false "resolveModulesErrorsByFile" ((PVar "modPaths") (PVar "allowInternal") (PVar "trustedMods") (PVar "preludeKey") (PVar "runtimeDecls") (PVar "preludeDecls") (PVar "mods")) (EApp (EApp (EVar "map") (EApp (EVar "fileOfModuleErrors") (EVar "modPaths"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsPairsG") (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "preludeDecls")) (EVar "omEmpty")) (EVar "mods"))))
 (DTypeSig false "fileOfModuleErrors" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
-(DFunDef false "fileOfModuleErrors" ((PVar "modPaths") (PTuple (PVar "mid") (PVar "errs"))) (EBlock (DoLet false false (PVar "file") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "modPaths")) (arm (PCon "Some" (PVar "p")) () (EVar "p")) (arm (PCon "None") () (ELit (LString ""))))) (DoExpr (ETuple (EVar "file") (EVar "errs")))))
+(DFunDef false "fileOfModuleErrors" ((PVar "modPaths") (PTuple (PVar "mid") (PVar "errs"))) (EBlock (DoLet false false (PVar "file") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "modPaths")))) (DoExpr (ETuple (EVar "file") (EVar "errs")))))
 (DTypeSig false "lookupBindId" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "lookupBindId" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "env")) (arm (PCon "Some" (PVar "id")) () (EVar "id")) (arm (PCon "None") () (ELit (LInt 0)))))
+(DFunDef false "lookupBindId" ((PVar "env") (PVar "n")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "env"))))
 (DTypeSig false "insertZero" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
 (DFunDef false "insertZero" ((PList) (PVar "env")) (EVar "env"))
 (DFunDef false "insertZero" ((PCons (PVar "n") (PVar "rest")) (PVar "env")) (EApp (EApp (EVar "insertZero") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit (LInt 0))) (EVar "env"))))
@@ -8015,11 +7998,11 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "isModId" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Bool"))))
 (DFunDef false "isModId" ((PVar "n") (PTuple (PVar "mid") PWild)) (EBinOp "==" (EVar "mid") (EVar "n")))
 (DTypeSig false "isAmbiguous" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isAmbiguous" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ambiguous")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "isAmbiguous" ((PVar "env") (PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ambiguous"))))
 (DTypeSig false "ambigMods" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ambigMods" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ambiguous")) (arm (PCon "Some" (PVar "mods")) () (EVar "mods")) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "isCtorAmbiguous" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isCtorAmbiguous" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ctorAmbiguous")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "isCtorAmbiguous" ((PVar "env") (PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ctorAmbiguous"))))
 (DTypeSig false "ctorAmbigMods" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ctorAmbigMods" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ctorAmbiguous")) (arm (PCon "Some" (PVar "mods")) () (EVar "mods")) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "aliasShadowedCtorMod" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -8031,13 +8014,13 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "dottedBare" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dottedBare" ((PVar "n")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "."))) (EVar "n")) (arm (PList PWild (PVar "bare")) () (EVar "bare")) (arm PWild () (EVar "n"))))
 (DTypeSig false "ctorOccurrenceContested" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ctorOccurrenceContested" ((PVar "env") (PVar "n")) (EBinOp "||" (EApp (EApp (EVar "isCtorAmbiguous") (EVar "env")) (EVar "n")) (EMatch (EApp (EApp (EVar "aliasShadowedCtorMod") (EVar "env")) (EVar "n")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False")))))
+(DFunDef false "ctorOccurrenceContested" ((PVar "env") (PVar "n")) (EBinOp "||" (EApp (EApp (EVar "isCtorAmbiguous") (EVar "env")) (EVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "aliasShadowedCtorMod") (EVar "env")) (EVar "n")))))
 (DTypeSig false "isTypeAmbiguous" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isTypeAmbiguous" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "typeAmbiguous")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "isTypeAmbiguous" ((PVar "env") (PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "typeAmbiguous"))))
 (DTypeSig false "typeAmbigMods" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "typeAmbigMods" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "typeAmbiguous")) (arm (PCon "Some" (PVar "mods")) () (EVar "mods")) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "isIfaceAmbiguous" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isIfaceAmbiguous" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ifaceAmbiguous")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "isIfaceAmbiguous" ((PVar "env") (PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ifaceAmbiguous"))))
 (DTypeSig false "ifaceAmbigMods" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ifaceAmbigMods" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ifaceAmbiguous")) (arm (PCon "Some" (PVar "mods")) () (EVar "mods")) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "lookupValue" (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "String") (TyCon "Bool")))))
@@ -8696,7 +8679,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "ctorNamesByDeclarer" ((PCons (PTuple PWild (PVar "base") (PVar "mids")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "ctorNamesByDeclarer") (EVar "rest")) (EApp (EApp (EApp (EVar "addCtorDeclarers") (EVar "base")) (EVar "mids")) (EVar "acc"))))
 (DTypeSig false "addCtorDeclarers" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "addCtorDeclarers" (PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "addCtorDeclarers" ((PVar "n") (PCons (PVar "m") (PVar "ms")) (PVar "acc")) (EBlock (DoLet false false (PVar "names") (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EVar "acc")) (arm (PCon "Some" (PVar "ns")) () (EVar "ns")) (arm (PCon "None") () (EVar "omEmpty")))) (DoExpr (EApp (EApp (EApp (EVar "addCtorDeclarers") (EVar "n")) (EVar "ms")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "names"))) (EVar "acc"))))))
+(DFunDef false "addCtorDeclarers" ((PVar "n") (PCons (PVar "m") (PVar "ms")) (PVar "acc")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "m")) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "addCtorDeclarers") (EVar "n")) (EVar "ms")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "names"))) (EVar "acc"))))))
 (DTypeSig false "declsDeclaringCtorIn" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "declsDeclaringCtorIn" ((PVar "byDeclarer") (PVar "pool") (PVar "m")) (EMatch (ETuple (EApp (EApp (EVar "omLookup") (EVar "m")) (EVar "byDeclarer")) (EApp (EApp (EVar "omLookup") (EVar "m")) (EVar "pool"))) (arm (PTuple (PCon "Some" (PVar "names")) (PCon "Some" (PVar "decls"))) () (EApp (EApp (EVar "filterList") (EApp (EVar "declDeclaresCtorIn") (EVar "names"))) (EVar "decls"))) (arm PWild () (EListLit))))
 (DTypeSig false "declDeclaresCtorIn" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Decl") (TyCon "Bool"))))
@@ -8816,9 +8799,9 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig true "resolveModulesErrorsByFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))))))))
 (DFunDef false "resolveModulesErrorsByFile" ((PVar "modPaths") (PVar "allowInternal") (PVar "trustedMods") (PVar "preludeKey") (PVar "runtimeDecls") (PVar "preludeDecls") (PVar "mods")) (EApp (EApp (EMethodRef "map") (EApp (EVar "fileOfModuleErrors") (EVar "modPaths"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsPairsG") (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "preludeDecls")) (EVar "omEmpty")) (EVar "mods"))))
 (DTypeSig false "fileOfModuleErrors" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
-(DFunDef false "fileOfModuleErrors" ((PVar "modPaths") (PTuple (PVar "mid") (PVar "errs"))) (EBlock (DoLet false false (PVar "file") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "modPaths")) (arm (PCon "Some" (PVar "p")) () (EVar "p")) (arm (PCon "None") () (ELit (LString ""))))) (DoExpr (ETuple (EVar "file") (EVar "errs")))))
+(DFunDef false "fileOfModuleErrors" ((PVar "modPaths") (PTuple (PVar "mid") (PVar "errs"))) (EBlock (DoLet false false (PVar "file") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "modPaths")))) (DoExpr (ETuple (EVar "file") (EVar "errs")))))
 (DTypeSig false "lookupBindId" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "lookupBindId" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "env")) (arm (PCon "Some" (PVar "id")) () (EVar "id")) (arm (PCon "None") () (ELit (LInt 0)))))
+(DFunDef false "lookupBindId" ((PVar "env") (PVar "n")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "env"))))
 (DTypeSig false "insertZero" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
 (DFunDef false "insertZero" ((PList) (PVar "env")) (EVar "env"))
 (DFunDef false "insertZero" ((PCons (PVar "n") (PVar "rest")) (PVar "env")) (EApp (EApp (EVar "insertZero") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit (LInt 0))) (EVar "env"))))

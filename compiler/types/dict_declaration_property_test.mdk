@@ -221,9 +221,7 @@ prop "a signature's context is a contract the body is checked against and every 
   let (defOk, callOk) = genSigModel declared used instances
   let (codes, schemes) =
     graphCodesAndSchemes [("law", genSigProgram declared used instances)]
-  let scheme = match lookup "f" schemes
-    Some text => text
-    None => ""
+  let scheme = optionOr "" (lookup "f" schemes)
   let (ctx, ty) = splitContext scheme
   isEmpty codes == (defOk && callOk)
     && hasCode "T-MISSING-CONSTRAINT" codes == not defOk

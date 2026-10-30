@@ -1,5 +1,5 @@
 # META
-source_lines=4503
+source_lines=4501
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -1763,9 +1763,7 @@ lookupImportedStandalone env name = match lookupBinding env name
 export
 hasImportDefiner : ModuleCtx -> String -> Bool
 hasImportDefiner mctx name =
-  match omLookup name mctx.mcCells.currentImportDefinersRef.value
-    Some _ => True
-    None => False
+  isSome (omLookup name mctx.mcCells.currentImportDefinersRef.value)
 
 export
 bindingWithStandalone : EnvBinding ->
@@ -4801,7 +4799,7 @@ methodRowSameNameView rows =
 (DTypeSig true "lookupImportedStandalone" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
 (DFunDef false "lookupImportedStandalone" ((PVar "env") (PVar "name")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name")) (arm (PCon "Some" (PVar "binding")) () (EMatch (EFieldAccess (EVar "binding") "ebStandalone") (arm (PCon "Some" (PTuple (PCon "ImportedStandalone") (PVar "value"))) () (EApp (EVar "Some") (EFieldAccess (EVar "value") "vsScheme"))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig true "hasImportDefiner" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "hasImportDefiner" ((PVar "mctx") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentImportDefinersRef") "value")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "hasImportDefiner" ((PVar "mctx") (PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentImportDefinersRef") "value"))))
 (DTypeSig true "bindingWithStandalone" (TyFun (TyCon "EnvBinding") (TyFun (TyTuple (TyCon "StandaloneOrigin") (TyCon "ValueScheme")) (TyCon "EnvBinding"))))
 (DFunDef false "bindingWithStandalone" ((PVar "binding") (PVar "source")) (ERecordCreate "EnvBinding" ((fa "ebValue" (EFieldAccess (EVar "binding") "ebValue")) (fa "ebMethodRow" (EFieldAccess (EVar "binding") "ebMethodRow")) (fa "ebStandalone" (EApp (EVar "Some") (EVar "source"))))))
 (DTypeSig true "extendTermBindings" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "TcEnv"))))
@@ -5578,7 +5576,7 @@ methodRowSameNameView rows =
 (DTypeSig true "lookupImportedStandalone" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
 (DFunDef false "lookupImportedStandalone" ((PVar "env") (PVar "name")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name")) (arm (PCon "Some" (PVar "binding")) () (EMatch (EFieldAccess (EVar "binding") "ebStandalone") (arm (PCon "Some" (PTuple (PCon "ImportedStandalone") (PVar "value"))) () (EApp (EVar "Some") (EFieldAccess (EVar "value") "vsScheme"))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig true "hasImportDefiner" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "hasImportDefiner" ((PVar "mctx") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentImportDefinersRef") "value")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "hasImportDefiner" ((PVar "mctx") (PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentImportDefinersRef") "value"))))
 (DTypeSig true "bindingWithStandalone" (TyFun (TyCon "EnvBinding") (TyFun (TyTuple (TyCon "StandaloneOrigin") (TyCon "ValueScheme")) (TyCon "EnvBinding"))))
 (DFunDef false "bindingWithStandalone" ((PVar "binding") (PVar "source")) (ERecordCreate "EnvBinding" ((fa "ebValue" (EFieldAccess (EVar "binding") "ebValue")) (fa "ebMethodRow" (EFieldAccess (EVar "binding") "ebMethodRow")) (fa "ebStandalone" (EApp (EVar "Some") (EVar "source"))))))
 (DTypeSig true "extendTermBindings" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "TcEnv"))))

@@ -514,9 +514,7 @@ gDispFnArity e n =
 
 -- is `n` a member (root included) of a detected group?
 gDispIsMember : Emit -> String -> Bool
-gDispIsMember e n = match dispGroupOf !e.gDispGroups n
-  Some _ => True
-  None => False
+gDispIsMember e n = isSome (dispGroupOf !e.gDispGroups n)
 
 -- set the binding name attributed to subsequent gaps (the probe sets this per
 -- top-level binding / impl entry before emitting it).
@@ -1303,9 +1301,7 @@ definedArity e hd = definedArityOf e.arities omEmpty hd
 
 isKnownFn : Emit -> String -> Bool
 isKnownFn e name = match !e.knownFnMap
-  Some m => match omLookup name m
-    Some _ => True
-    None => False
+  Some m => isSome (omLookup name m)
   None => panic "llvm: knownFnMap read before install (internal error)"
 
 -- Canonicalize a referenced function name to the actual emitted symbol.  An emit
@@ -1353,9 +1349,7 @@ fnRetTy e name = match sigLookup e name
 -- (`e.ctors`) went with the retired scan; `e.ctorMap` is the only representation.
 isCtor : Emit -> String -> Bool
 isCtor e name = match !e.ctorMap
-  Some m => match omLookup name m
-    Some _ => True
-    None => False
+  Some m => isSome (omLookup name m)
   None => panic "llvm: ctorMap read before install (internal error)"
 
 -- ── impl table ────────────────────────────────────────────────────
@@ -1991,9 +1985,7 @@ emitConstantVar _ name = panic ("llvm: no constant " ++ name)
 -- is `x` a local (let/param) binding in the current emit env?  Used to let a local
 -- shadow the prelude math/bound constants (pi/e/intMaxBound/…) above.
 isLocal : OrdMap (String, LTy) -> String -> Bool
-isLocal env x = match omLookup x env
-  Some _ => True
-  None => False
+isLocal env x = isSome (omLookup x env)
 
 -- a Mut-aware variable lookup used at the emit site (emitVar): a local (let/param)
 -- operand shadows everything, so the env is checked FIRST; otherwise the name may
@@ -4794,9 +4786,7 @@ ffiSymOf e name = match omLookup name e.externFacts
   None => name
 
 isFfiExtern : Emit -> String -> Bool
-isFfiExtern e name = match ffiSigOf e name
-  Some _ => True
-  None => False
+isFfiExtern e name = isSome (ffiSigOf e name)
 
 -- declared arity = the arrow count of the declared signature (`Unit` params
 -- included: they are real Medaka arguments, they just marshal to nothing).
@@ -8154,9 +8144,7 @@ hiddenImplGroup e (ImplGroup method _ key _ _ _ _ _) =
   e.input.emitHalf == emitHalfProgram && hasPreludeImpl e method key
 
 hasPreludeImpl : Emit -> String -> String -> Bool
-hasPreludeImpl e method key = match preludeImplSym e method key
-  Some _ => True
-  None => False
+hasPreludeImpl e method key = isSome (preludeImplSym e method key)
 
 -- Run `act` (an ordinary emitFn/emitGroup), then throw its BODY TEXT away and keep
 -- only a `declare` per define it produced.
@@ -9903,9 +9891,7 @@ emitEtaClosure e fname =
 -- the declared arity of constructor `name` (its field count, from the ctor table).
 ctorArity : Emit -> String -> Int
 ctorArity e name = match !e.ctorMap
-  Some m => match omLookup name m
-    Some n => n
-    None => 0
+  Some m => optionOr 0 (omLookup name m)
   None => panic "llvm: ctorMap read before install (internal error)"
 
 -- #35: an APPLIED constructor, dispatched on saturation.  This is the arity check

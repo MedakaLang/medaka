@@ -1045,9 +1045,10 @@ mergeIfaceMethods methods =
   map (methodAt byName) (reverseL orderRev)
 
 methodAt : OrdMap IfaceMethod -> String -> IfaceMethod
-methodAt byName n = match omLookup n byName
-  Some m => m
-  None => panic "mergeIfaceMethods: unreachable — name inserted but missing"
+methodAt byName n =
+  optionOrPanic
+    "mergeIfaceMethods: unreachable — name inserted but missing"
+    (omLookup n byName)
 
 foldlMethods : (OrdMap IfaceMethod, List String) ->
   List IfaceMethod ->

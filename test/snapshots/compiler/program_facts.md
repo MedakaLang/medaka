@@ -1,5 +1,5 @@
 # META
-source_lines=126
+source_lines=127
 stages=DESUGAR,MARK
 # SOURCE
 -- The facts a typechecked program carries to the stages that read it: the
@@ -125,9 +125,10 @@ withFacts facts action =
 -- is a panic.
 export
 factsNow : Unit -> ProgramFacts
-factsNow _ = match !currentFacts
-  Some facts => facts
-  None => panic "program facts: read outside any withFacts bracket"
+factsNow _ =
+  optionOrPanic
+    "program facts: read outside any withFacts bracket"
+    !currentFacts
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "EvTable" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternSource" false) (mem "ExternHeadRows" false) (mem "ExternProvenance" true) (mem "sourceExterns" false))))
@@ -157,7 +158,7 @@ factsNow _ = match !currentFacts
 (DTypeSig true "withFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyVar "a")))))
 (DFunDef false "withFacts" ((PVar "facts") (PVar "action")) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentFacts"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EApp (EVar "Some") (EVar "facts")))) (DoLet false false (PVar "result") (EApp (EVar "action") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EVar "saved"))) (DoExpr (EVar "result"))))
 (DTypeSig true "factsNow" (TyFun (TyCon "Unit") (TyCon "ProgramFacts")))
-(DFunDef false "factsNow" (PWild) (EMatch (EUnOp "!" (EVar "currentFacts")) (arm (PCon "Some" (PVar "facts")) () (EVar "facts")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "program facts: read outside any withFacts bracket"))))))
+(DFunDef false "factsNow" (PWild) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "program facts: read outside any withFacts bracket"))) (EUnOp "!" (EVar "currentFacts"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "EvTable" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternSource" false) (mem "ExternHeadRows" false) (mem "ExternProvenance" true) (mem "sourceExterns" false))))
@@ -187,4 +188,4 @@ factsNow _ = match !currentFacts
 (DTypeSig true "withFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyVar "a")))))
 (DFunDef false "withFacts" ((PVar "facts") (PVar "action")) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentFacts"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EApp (EVar "Some") (EVar "facts")))) (DoLet false false (PVar "result") (EApp (EVar "action") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EVar "saved"))) (DoExpr (EVar "result"))))
 (DTypeSig true "factsNow" (TyFun (TyCon "Unit") (TyCon "ProgramFacts")))
-(DFunDef false "factsNow" (PWild) (EMatch (EUnOp "!" (EVar "currentFacts")) (arm (PCon "Some" (PVar "facts")) () (EVar "facts")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "program facts: read outside any withFacts bracket"))))))
+(DFunDef false "factsNow" (PWild) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "program facts: read outside any withFacts bracket"))) (EUnOp "!" (EVar "currentFacts"))))

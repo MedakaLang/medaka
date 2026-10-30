@@ -1,5 +1,5 @@
 # META
-source_lines=1520
+source_lines=1519
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -1307,9 +1307,8 @@ parseSnapshot text =
 metaSourceLines : List String -> Int
 metaSourceLines [] = 0
 metaSourceLines (l :: rest) =
-  if startsWith "source_lines=" l then match toInt (drop 13 l)
-    Some n => n
-    None => 0
+  if startsWith "source_lines=" l then
+    optionOr 0 (toInt (drop 13 l))
   else
     metaSourceLines rest
 
@@ -1810,7 +1809,7 @@ mapUnit f (x :: rest) =
 (DFunDef false "parseSnapshot" ((PVar "text")) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EVar "text"))) (DoExpr (EApp (EApp (EVar "collectSections") (EVar "ls")) (EApp (EVar "metaSourceLines") (EVar "ls"))))))
 (DTypeSig false "metaSourceLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int")))
 (DFunDef false "metaSourceLines" ((PList)) (ELit (LInt 0)))
-(DFunDef false "metaSourceLines" ((PCons (PVar "l") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "source_lines="))) (EVar "l")) (EMatch (EApp (EVar "toInt") (EApp (EApp (EVar "drop") (ELit (LInt 13))) (EVar "l"))) (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (ELit (LInt 0)))) (EApp (EVar "metaSourceLines") (EVar "rest"))))
+(DFunDef false "metaSourceLines" ((PCons (PVar "l") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "source_lines="))) (EVar "l")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EVar "toInt") (EApp (EApp (EVar "drop") (ELit (LInt 13))) (EVar "l")))) (EApp (EVar "metaSourceLines") (EVar "rest"))))
 (DTypeSig false "collectSections" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "collectSections" ((PList) PWild) (EListLit))
 (DFunDef false "collectSections" ((PCons (PVar "l") (PVar "rest")) (PVar "n")) (EIf (EApp (EVar "isHeaderLine") (EVar "l")) (EBlock (DoLet false false (PVar "name") (EApp (EApp (EVar "drop") (ELit (LInt 2))) (EVar "l"))) (DoExpr (EIf (EBinOp "==" (EVar "name") (ELit (LString "SOURCE"))) (EBlock (DoLet false false (PTuple (PVar "body") (PVar "tail2")) (EApp (EApp (EVar "splitAtN") (EVar "n")) (EVar "rest"))) (DoExpr (EBinOp "::" (ETuple (ELit (LString "SOURCE")) (EApp (EVar "blockOf") (EVar "body"))) (EApp (EApp (EVar "collectSections") (EVar "tail2")) (EVar "n"))))) (EBlock (DoLet false false (PTuple (PVar "body") (PVar "tail2")) (EApp (EVar "untilHeader") (EVar "rest"))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EApp (EVar "blockOf") (EApp (EVar "dropTrailingEmpty") (EVar "body")))) (EApp (EApp (EVar "collectSections") (EVar "tail2")) (EVar "n")))))))) (EApp (EApp (EVar "collectSections") (EVar "rest")) (EVar "n"))))
@@ -2152,7 +2151,7 @@ mapUnit f (x :: rest) =
 (DFunDef false "parseSnapshot" ((PVar "text")) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EVar "text"))) (DoExpr (EApp (EApp (EVar "collectSections") (EVar "ls")) (EApp (EVar "metaSourceLines") (EVar "ls"))))))
 (DTypeSig false "metaSourceLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int")))
 (DFunDef false "metaSourceLines" ((PList)) (ELit (LInt 0)))
-(DFunDef false "metaSourceLines" ((PCons (PVar "l") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "source_lines="))) (EVar "l")) (EMatch (EApp (EVar "toInt") (EApp (EApp (EVar "drop") (ELit (LInt 13))) (EVar "l"))) (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (ELit (LInt 0)))) (EApp (EVar "metaSourceLines") (EVar "rest"))))
+(DFunDef false "metaSourceLines" ((PCons (PVar "l") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "source_lines="))) (EVar "l")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EVar "toInt") (EApp (EApp (EVar "drop") (ELit (LInt 13))) (EVar "l")))) (EApp (EVar "metaSourceLines") (EVar "rest"))))
 (DTypeSig false "collectSections" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "collectSections" ((PList) PWild) (EListLit))
 (DFunDef false "collectSections" ((PCons (PVar "l") (PVar "rest")) (PVar "n")) (EIf (EApp (EVar "isHeaderLine") (EVar "l")) (EBlock (DoLet false false (PVar "name") (EApp (EApp (EVar "drop") (ELit (LInt 2))) (EVar "l"))) (DoExpr (EIf (EBinOp "==" (EVar "name") (ELit (LString "SOURCE"))) (EBlock (DoLet false false (PTuple (PVar "body") (PVar "tail2")) (EApp (EApp (EVar "splitAtN") (EVar "n")) (EVar "rest"))) (DoExpr (EBinOp "::" (ETuple (ELit (LString "SOURCE")) (EApp (EVar "blockOf") (EVar "body"))) (EApp (EApp (EVar "collectSections") (EVar "tail2")) (EVar "n"))))) (EBlock (DoLet false false (PTuple (PVar "body") (PVar "tail2")) (EApp (EVar "untilHeader") (EVar "rest"))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EApp (EVar "blockOf") (EApp (EVar "dropTrailingEmpty") (EVar "body")))) (EApp (EApp (EVar "collectSections") (EVar "tail2")) (EVar "n")))))))) (EApp (EApp (EVar "collectSections") (EVar "rest")) (EVar "n"))))
