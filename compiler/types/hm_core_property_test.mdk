@@ -367,7 +367,7 @@ modelScheme : Shape -> Ty
 modelScheme shape = parseTy (shapeScheme shape)
 
 isPolymorphic : Shape -> Bool
-isPolymorphic shape = occurrences (modelScheme shape) /= []
+isPolymorphic shape = not (isEmpty (occurrences (modelScheme shape)))
 
 -- The generated grounds, closed; two defaults when none were generated.
 groundsOf : List GTy -> List GTy
@@ -405,7 +405,7 @@ instancePair grounds shape =
 repeatedVar : Ty -> Option String
 repeatedVar ty =
   let occ = occurrences ty
-  match filter (v => length (filter (== v) occ) >= 2) occ
+  match filter (v => count (== v) occ >= 2) occ
     v :: _ => Some v
     [] => None
 
@@ -523,9 +523,9 @@ schemeOf name source =
    scheme up to renaming. -}
 principalAgrees : Ty -> (List String, String) -> (List String, String) -> Bool
 principalAgrees model (codes, inferred) (codesAgain, reinferred) =
-  codes == []
+  isEmpty codes
     && sameType (parseTy inferred) model
-    && codesAgain == []
+    && isEmpty codesAgain
     && alphaEquiv inferred reinferred
 
 annotatedBinding : String -> Shape -> String

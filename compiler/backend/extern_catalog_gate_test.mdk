@@ -96,7 +96,7 @@ import set as S
 
 duplicates : List String -> List String
 duplicates names =
-  toList (S.fromList (filter (n => length (filter (== n) names) > 1) names))
+  toList (S.fromList (filter (n => count (== n) names > 1) names))
 
 -- # The catalog against the declarations
 
@@ -141,7 +141,7 @@ gradeFindings rows =
 
 -- How many rows an engine provides.
 providedCount : (ExternRow -> Disposition f) -> List ExternRow -> Int
-providedCount column rows = length (filter (r => isBound (column r)) rows)
+providedCount column rows = count (r => isBound (column r)) rows
 
 -- The rows an engine does not provide, each with its category name.
 gapCategories : (ExternRow -> Disposition f) -> List ExternRow -> List String

@@ -128,7 +128,7 @@ test "the real core value round-trips byte for byte and keeps what it holds" =
             (expectEqual (length pe.peDecls) (length back.peDecls)),
           labelFail
             "the rows a tree references are kept"
-            (expectTrue (length back.peEvidence > 0)),
+            (expectTrue (not (isEmpty back.peEvidence))),
         ]
 
 test "every refusal is an Err of the right class" = match coreElab ()

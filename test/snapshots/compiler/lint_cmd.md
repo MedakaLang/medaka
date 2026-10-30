@@ -768,7 +768,7 @@ inactiveInternalRuleUse : Bool ->
   <IO> Option String
 inactiveInternalRuleUse internalFlag names files =
   let named = filter (n => contains n internalRuleNames) names
-  if internalFlag || named == [] then
+  if internalFlag || isEmpty named then
     None
   else
     firstInactiveTarget (joinWith ", " named) files
@@ -1314,7 +1314,7 @@ writeFixedSource target src newSrc n =
 (DFunDef false "internalActiveFor" ((PCon "True") PWild) (EVar "True"))
 (DFunDef false "internalActiveFor" ((PCon "False") (PVar "target")) (EApp (EVar "internalActiveForDir") (EApp (EVar "canonicalizePath") (EApp (EVar "dirOf") (EVar "target")))))
 (DTypeSig true "inactiveInternalRuleUse" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "inactiveInternalRuleUse" ((PVar "internalFlag") (PVar "names") (PVar "files")) (EBlock (DoLet false false (PVar "named") (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "internalRuleNames")))) (EVar "names"))) (DoExpr (EIf (EBinOp "||" (EVar "internalFlag") (EBinOp "==" (EVar "named") (EListLit))) (EVar "None") (EApp (EApp (EVar "firstInactiveTarget") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "named"))) (EVar "files"))))))
+(DFunDef false "inactiveInternalRuleUse" ((PVar "internalFlag") (PVar "names") (PVar "files")) (EBlock (DoLet false false (PVar "named") (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "internalRuleNames")))) (EVar "names"))) (DoExpr (EIf (EBinOp "||" (EVar "internalFlag") (EApp (EVar "isEmpty") (EVar "named"))) (EVar "None") (EApp (EApp (EVar "firstInactiveTarget") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "named"))) (EVar "files"))))))
 (DTypeSig false "firstInactiveTarget" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "firstInactiveTarget" (PWild (PList)) (EVar "None"))
 (DFunDef false "firstInactiveTarget" ((PVar "named") (PCons (PVar "f") (PVar "rest"))) (EIf (EApp (EApp (EVar "internalActiveFor") (EVar "False")) (EVar "f")) (EApp (EApp (EVar "firstInactiveTarget") (EVar "named")) (EVar "rest")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal rule ")) (EApp (EVar "display") (EVar "named"))) (ELit (LString " is not active for `"))) (EApp (EVar "display") (EVar "f"))) (ELit (LString "`; pass --internal or set `[lint] internal = true` in the project's medaka.toml"))))))
@@ -1520,7 +1520,7 @@ writeFixedSource target src newSrc n =
 (DFunDef false "internalActiveFor" ((PCon "True") PWild) (EVar "True"))
 (DFunDef false "internalActiveFor" ((PCon "False") (PVar "target")) (EApp (EVar "internalActiveForDir") (EApp (EVar "canonicalizePath") (EApp (EVar "dirOf") (EVar "target")))))
 (DTypeSig true "inactiveInternalRuleUse" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "inactiveInternalRuleUse" ((PVar "internalFlag") (PVar "names") (PVar "files")) (EBlock (DoLet false false (PVar "named") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "internalRuleNames")))) (EVar "names"))) (DoExpr (EIf (EBinOp "||" (EVar "internalFlag") (EBinOp "==" (EVar "named") (EListLit))) (EVar "None") (EApp (EApp (EVar "firstInactiveTarget") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "named"))) (EVar "files"))))))
+(DFunDef false "inactiveInternalRuleUse" ((PVar "internalFlag") (PVar "names") (PVar "files")) (EBlock (DoLet false false (PVar "named") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "internalRuleNames")))) (EVar "names"))) (DoExpr (EIf (EBinOp "||" (EVar "internalFlag") (EApp (EMethodRef "isEmpty") (EVar "named"))) (EVar "None") (EApp (EApp (EVar "firstInactiveTarget") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "named"))) (EVar "files"))))))
 (DTypeSig false "firstInactiveTarget" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "firstInactiveTarget" (PWild (PList)) (EVar "None"))
 (DFunDef false "firstInactiveTarget" ((PVar "named") (PCons (PVar "f") (PVar "rest"))) (EIf (EApp (EApp (EVar "internalActiveFor") (EVar "False")) (EVar "f")) (EApp (EApp (EVar "firstInactiveTarget") (EVar "named")) (EVar "rest")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal rule ")) (EApp (EMethodRef "display") (EVar "named"))) (ELit (LString " is not active for `"))) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString "`; pass --internal or set `[lint] internal = true` in the project's medaka.toml"))))))

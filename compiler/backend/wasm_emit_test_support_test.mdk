@@ -49,4 +49,4 @@ takeBlock (l :: rest) acc =
 -- how many lines of `block` contain `needle`
 export
 linesWith : String -> List String -> Int
-linesWith needle block = length (filter (l => contains needle l) block)
+linesWith needle block = count (l => contains needle l) block

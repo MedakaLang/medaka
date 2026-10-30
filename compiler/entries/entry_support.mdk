@@ -335,7 +335,7 @@ driveModulesGo runEmit runtimeP coreP entry roots =
             mods
             (desugaredPrelude rsrc)
             (desugaredPrelude csrc)
-            (map desugarPair (map dropPathTriple mods))
+            (map (dropPathTriple >> desugarPair) mods)
 
 -- A `--json` refusal: the envelope goes to the file, nothing to stderr, under
 -- the code that tells `build` the child's verdict is a diagnostic.

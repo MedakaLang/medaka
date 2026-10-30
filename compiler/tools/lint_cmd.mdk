@@ -764,7 +764,7 @@ inactiveInternalRuleUse : Bool ->
   <IO> Option String
 inactiveInternalRuleUse internalFlag names files =
   let named = filter (n => contains n internalRuleNames) names
-  if internalFlag || named == [] then
+  if internalFlag || isEmpty named then
     None
   else
     firstInactiveTarget (joinWith ", " named) files

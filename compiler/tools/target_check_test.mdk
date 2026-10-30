@@ -68,7 +68,7 @@ test "target_check: every NotProvided row of every profile's column is refused w
       (flatMap (pg => map (pairCase dir (fst pg)) (snd pg)) profileGaps))
 
 test "target_check: the matrix is non-empty on every column" =
-  expectEqual [] (filter (pg => length (snd pg) == 0) profileGaps |> map fst)
+  expectEqual [] (filter (pg => isEmpty (snd pg)) profileGaps |> map fst)
 
 -- # What each column reaches
 --

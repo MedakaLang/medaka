@@ -167,7 +167,10 @@ overExpansiveLaw : Shape -> Bool
 overExpansiveLaw shape =
   let oneUse = "useA = (g : \{shapeTypeAt "Int" shape})\n"
   let codes = codesFlat (signedProgram shape oneUse)
-  if overExpansive shape then elem "T-SIG-OVER-EXPANSIVE" codes else codes == []
+  if overExpansive shape then
+    elem "T-SIG-OVER-EXPANSIVE" codes
+  else
+    isEmpty codes
 
 prop "a polymorphic signature over an expansive body is T-SIG-OVER-EXPANSIVE" (shape : Shape) =
   overExpansiveLaw shape

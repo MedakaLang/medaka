@@ -174,8 +174,8 @@ test "(b) the manifest's [target] profile is what the accessor reads" =
 runView : Option String -> Result String (String, List String)
 runView sel =
   map
-    (p => (profileName p, map fst (profileGrants p)))
-    (map runProfile (selectProfile sel None))
+    (runProfile >> (p => (profileName p, map fst (profileGrants p))))
+    (selectProfile sel None)
 
 test "run checks against eval/run, narrowed by the selected profile" = expectEach
   [

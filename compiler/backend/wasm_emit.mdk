@@ -989,7 +989,7 @@ emitFfiEtaW prog name = match jsImportForW prog name
               ++ lamName
               ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))",
           ]
-          ++ map ("    " ++ _) (map localDeclRef params)
+          ++ map (localDeclRef >> ("    " ++ _)) params
           ++ indent body
           ++ ["  )"])
     wConstClos prog lamName arity

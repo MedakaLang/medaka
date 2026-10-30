@@ -31,7 +31,7 @@ import frontend.ast.{Decl}
 import types.tc_types.{DriveOutputs(..), emptyDriveOutputs}
 import frontend.parser.{parseLocated}
 import fs.{fixtureFiles}
-import list.{sort, somes}
+import list.{sort}
 import path.{dirname, stem}
 import string.{contains, endsWith, lines, trim, unlines}
 import test.{
@@ -89,7 +89,7 @@ check = match readFile "stdlib/runtime.mdk"
         expectEqual 42 (length srcs),
         expectNoFindings
           "diagnostics fixtures"
-          (Ok (somes (map (failureOf rsrc csrc) srcs))),
+          (Ok (filterMap (failureOf rsrc csrc) srcs)),
       ]
 
 test "diagnostics: analyze output matches each fixture's .analyze.golden" =
@@ -247,7 +247,7 @@ weakCheck rsrc csrc dir =
       expectEach [
         (
           "one WeakVar",
-          expectEqual 1 (length (filter isWeak (graphCells (map snd one)))),
+          expectEqual 1 (count isWeak (graphCells (map snd one))),
         ),
         (
           "renders as before",
@@ -741,7 +741,7 @@ rejectedThenFixed rsrc csrc dir p declaresImpl = match (
         let second = analyzeEntry rsrc csrc dir "\{p}main"
         let _ = analyzeEntry rsrc csrc dir "evmain"
         let cold = analyzeEntry rsrc csrc dir "\{p}main"
-        if isEmpty (filter (l => contains "R-UNBOUND" l) rejected) then
+        if not (any (l => contains "R-UNBOUND" l) rejected) then
           None
         else
           Some (second, cold)
@@ -900,7 +900,7 @@ main = 1
           expectEqual (Some depSrc) (omLookup dep sources),
         ),
         ("failure", expectTrue (isNone failed)),
-        ("failure keeps diagnostics", expectTrue (length buckets > 0)),
+        ("failure keeps diagnostics", expectTrue (not (isEmpty buckets))),
         (
           "entry on failure",
           expectEqual (Some entrySrc) (omLookup entry failedSources),

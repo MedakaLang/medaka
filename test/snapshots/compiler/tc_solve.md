@@ -1411,7 +1411,7 @@ methodReturnPrerequisites : ModuleCtx ->
 methodReturnPrerequisites mctx args row =
   match selectedRowReqMatch mctx args row
     Some (subst, reqs) =>
-      map prerequisiteEvidence (map (reqToObligation mctx subst) reqs)
+      map (reqToObligation mctx subst >> prerequisiteEvidence) reqs
     None => []
 
 -- The direct supers of [iface] at [args], as the predicates a dictionary for that
@@ -2771,7 +2771,7 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig false "exactReturnBlockers" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "SolverBlocker"))))
 (DFunDef false "exactReturnBlockers" ((PVar "args")) (EApp (EApp (EVar "map") (EVar "BlockingTypeVariable")) (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args"))))
 (DTypeSig false "methodReturnPrerequisites" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ImplRow") (TyApp (TyCon "List") (TyCon "PrerequisiteEvidence"))))))
-(DFunDef false "methodReturnPrerequisites" ((PVar "mctx") (PVar "args") (PVar "row")) (EMatch (EApp (EApp (EApp (EVar "selectedRowReqMatch") (EVar "mctx")) (EVar "args")) (EVar "row")) (arm (PCon "Some" (PTuple (PVar "subst") (PVar "reqs"))) () (EApp (EApp (EVar "map") (EVar "prerequisiteEvidence")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "reqToObligation") (EVar "mctx")) (EVar "subst"))) (EVar "reqs")))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "methodReturnPrerequisites" ((PVar "mctx") (PVar "args") (PVar "row")) (EMatch (EApp (EApp (EApp (EVar "selectedRowReqMatch") (EVar "mctx")) (EVar "args")) (EVar "row")) (arm (PCon "Some" (PTuple (PVar "subst") (PVar "reqs"))) () (EApp (EApp (EVar "map") (EBinOp ">>" (EApp (EApp (EVar "reqToObligation") (EVar "mctx")) (EVar "subst")) (EVar "prerequisiteEvidence"))) (EVar "reqs"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "instanceSuperEvidence" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "SuperEvidence"))))))
 (DFunDef false "instanceSuperEvidence" ((PVar "gctx") (PVar "iface") (PVar "args")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "superIface") (PVar "superArgs"))) (ERecordCreate "SuperEvidence" ((fa "superInterface" (EVar "superIface")) (fa "superArguments" (EApp (EApp (EVar "optionOr") (EListLit)) (EVar "superArgs"))))))) (EApp (EApp (EApp (EVar "directSuperGoals") (EVar "gctx")) (EVar "iface")) (EVar "args"))))
 (DTypeSig false "prerequisiteEvidence" (TyFun (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono"))) (TyCon "PrerequisiteEvidence")))
@@ -3238,7 +3238,7 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig false "exactReturnBlockers" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "SolverBlocker"))))
 (DFunDef false "exactReturnBlockers" ((PVar "args")) (EApp (EApp (EMethodRef "map") (EVar "BlockingTypeVariable")) (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args"))))
 (DTypeSig false "methodReturnPrerequisites" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ImplRow") (TyApp (TyCon "List") (TyCon "PrerequisiteEvidence"))))))
-(DFunDef false "methodReturnPrerequisites" ((PVar "mctx") (PVar "args") (PVar "row")) (EMatch (EApp (EApp (EApp (EVar "selectedRowReqMatch") (EVar "mctx")) (EVar "args")) (EVar "row")) (arm (PCon "Some" (PTuple (PVar "subst") (PVar "reqs"))) () (EApp (EApp (EMethodRef "map") (EVar "prerequisiteEvidence")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "reqToObligation") (EVar "mctx")) (EVar "subst"))) (EVar "reqs")))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "methodReturnPrerequisites" ((PVar "mctx") (PVar "args") (PVar "row")) (EMatch (EApp (EApp (EApp (EVar "selectedRowReqMatch") (EVar "mctx")) (EVar "args")) (EVar "row")) (arm (PCon "Some" (PTuple (PVar "subst") (PVar "reqs"))) () (EApp (EApp (EMethodRef "map") (EBinOp ">>" (EApp (EApp (EVar "reqToObligation") (EVar "mctx")) (EVar "subst")) (EVar "prerequisiteEvidence"))) (EVar "reqs"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "instanceSuperEvidence" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "SuperEvidence"))))))
 (DFunDef false "instanceSuperEvidence" ((PVar "gctx") (PVar "iface") (PVar "args")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "superIface") (PVar "superArgs"))) (ERecordCreate "SuperEvidence" ((fa "superInterface" (EVar "superIface")) (fa "superArguments" (EApp (EApp (EVar "optionOr") (EListLit)) (EVar "superArgs"))))))) (EApp (EApp (EApp (EVar "directSuperGoals") (EVar "gctx")) (EVar "iface")) (EVar "args"))))
 (DTypeSig false "prerequisiteEvidence" (TyFun (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono"))) (TyCon "PrerequisiteEvidence")))

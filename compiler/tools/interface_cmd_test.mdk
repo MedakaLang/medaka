@@ -445,7 +445,7 @@ test "the writer leaves a fresh pair whose counters describe its rows, the same 
               "the evidence counter is above the kept rows"
               (expectTrue
                 (pe.peEvCounter > 0
-                  && length pe.peEvidence > 0
+                  && not (isEmpty pe.peEvidence)
                   && length pe.peEvidence <= pe.peEvCounter)),
             labelFail
               "the binder count is the rows'"

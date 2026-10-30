@@ -5123,7 +5123,7 @@ prop "a goal's route and verdict do not depend on the order its instances are de
   match (programOf heads goal, programOf (reverse heads) goal)
     (Some forward, Some backward) =>
       checkCodes forward == checkCodes backward
-        && (checkCodes forward /= []
+        && (not (isEmpty (checkCodes forward))
           || routeWordsOf forward == routeWordsOf backward)
     _ => False
 
@@ -6443,8 +6443,8 @@ accCheck (QKind name run) =
         expectEqual
           (True, True)
           (
-            not (isEmpty (filter (startsWith "ev ") cold)),
-            not (isEmpty (filter (startsWith "disp ") cold)),
+            any (startsWith "ev ") cold,
+            any (startsWith "disp ") cold,
           ),
       ),
     ],

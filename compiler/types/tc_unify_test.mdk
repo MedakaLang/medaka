@@ -120,7 +120,7 @@ unifyPair a b swap =
   let ma = buildFresh m a
   let mb = buildFresh m b
   if swap then unify m mb ma else unify m ma mb
-  PairRead { accepted = codesOf m == [], readings = shapes [ma, mb] }
+  PairRead { accepted = isEmpty (codesOf m), readings = shapes [ma, mb] }
 
 -- A pair of model types to unify.  A quarter are independent draws, which clash or
 -- unify by chance; the rest are two independent "blurs" of one closed type, in which
@@ -336,10 +336,10 @@ prop "a variable is refused any type that strictly contains it, and accepted a c
     [] =>
       let v = freshVar m ()
       unify m v (TApp (tconBuiltin "List") (build [] t))
-      codesOf m == []
+      isEmpty (codesOf m)
     (k, v) :: _ =>
       unify m v (TApp (tconBuiltin "List") (build cells t))
-      codesOf m /= [] && all (== "T-INFINITE-TYPE") (codesOf m)
+      not (isEmpty (codesOf m)) && all (== "T-INFINITE-TYPE") (codesOf m)
 
 -- ── levels ────────────────────────────────────────────────────────────────
 

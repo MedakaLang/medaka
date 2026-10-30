@@ -99,7 +99,7 @@ prop "solving a shared row member after a warm normalization retains every produ
     && partial == modelLabels (prefix ++ xs)
     && stillOpen == [2]
     && observedLabels warm == modelLabels (prefix ++ xs ++ ys)
-    && length (snd (rowFlat warm)) == 0
+    && isEmpty (snd (rowFlat warm))
 
 rowFromBits : Int -> EffRow
 rowFromBits bits = closedRow (filter (n => bits / pow2 n % 2 == 1) [0..=2])
