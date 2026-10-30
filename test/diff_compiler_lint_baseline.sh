@@ -12,7 +12,9 @@
 # whole-tree assertion where neither can be routed around -- on every PR:
 #
 #   1. THE MAX-RATCHET CI TWIN: ONE `medaka lint --baseline` invocation checks the
-#      baselined rules AND every gated per-file rule. Gated rules have no row in
+#      baselined rules AND every gated per-file rule, including the same-file
+#      arm of a rule that also has a cross-file tier (it shares the rule's name,
+#      so naming the rule selects both). Gated rules have no row in
 #      test/lint_baseline.toml, so the baseline's own invariant ("a file that HAS
 #      findings for a rule but no row is a violation") makes ANY finding under a
 #      gated rule fail here too -- folded into one pass rather than a second
@@ -64,25 +66,42 @@ CROSS_ROOTS="compiler stdlib sqlite"
 cd "$ROOT" || exit 2
 
 rule_names() { "$MEDAKA" lint --list-rules --names "$@" 2>/dev/null; }
-csv() { paste -sd, - ; }
+. "$ROOT/test/lint_rule_lists.sh"
 
-CROSS="$(rule_names --ratchet=gated --tier=cross | csv)"
-RULES="$(rule_names --ratchet=baselined | csv)"
-cross_nl="$(rule_names --ratchet=gated --tier=cross)"
-gated_file=""
-for n in $(rule_names --ratchet=gated --tier=file); do
-  case "
-$cross_nl
-" in
-    *"
-$n
-"*) ;;
-    *) gated_file="$gated_file,$n" ;;
-  esac
-done
-GATED="${gated_file#,}"
-[ -n "$GATED" ] || { echo "could not list the gated lint rules from $MEDAKA"; exit 2; }
-[ -n "$RULES" ] || { echo "could not list the baselined lint rules from $MEDAKA"; exit 2; }
+# The derivation must survive an empty baselined set (the last baselined rule
+# drained) and an empty cross set: no dangling comma in --only.  Checked against
+# scratch registry listings, since the real registry has both kinds today.
+derive_selftest() {
+  (
+    rule_names() {
+      case "$*" in
+        "--ratchet=gated --tier=cross") printf '%s\n' $FAKE_CROSS ;;
+        "--ratchet=baselined") printf '%s\n' $FAKE_BASELINED ;;
+        "--ratchet=gated") printf '%s\n' $FAKE_GATED ;;
+      esac
+    }
+    FAKE_GATED="rule-a rule-dup rule-b"
+    FAKE_CROSS="rule-dup"
+    FAKE_BASELINED=""
+    derive_lint_rules
+    [ "$LINT_ONLY" = "rule-a,rule-b,rule-dup" ] || { echo "empty baselined: --only=$LINT_ONLY"; exit 1; }
+    FAKE_BASELINED="rule-z"
+    derive_lint_rules
+    [ "$LINT_ONLY" = "rule-a,rule-b,rule-dup,rule-z" ] || { echo "baselined: --only=$LINT_ONLY"; exit 1; }
+    FAKE_CROSS=""
+    FAKE_GATED="rule-a"
+    FAKE_BASELINED=""
+    derive_lint_rules
+    [ "$LINT_ONLY" = "rule-a" ] || { echo "no cross, no baselined: --only=$LINT_ONLY"; exit 1; }
+  )
+}
+derive_selftest || { echo "FAIL: lint rule-list derivation (test/lint_rule_lists.sh)"; exit 1; }
+
+derive_lint_rules
+CROSS="$LINT_CROSS"
+RULES="$LINT_BASELINED"
+ONLY="$LINT_ONLY"
+[ -n "$LINT_DENY" ] || { echo "could not list the gated lint rules from $MEDAKA"; exit 2; }
 
 # Every top-level directory with a tracked .mdk outside test/: the projects the
 # hook can lint.
@@ -91,7 +110,7 @@ targets="$(git ls-files -- '*.mdk' ':(exclude)test/**' | sed -n 's,/.*,,p' | sor
 
 if [ "${1:-}" = "--write" ]; then
   # shellcheck disable=SC2086
-  "$MEDAKA" lint --internal --write-baseline="$BASELINE_REL" --only="$RULES" $targets || exit 1
+  "$MEDAKA" lint --internal --write-baseline="$BASELINE_REL" --only="${RULES:-$LINT_DENY}" $targets || exit 1
   echo "-- regenerated $BASELINE_REL; review 'git diff $BASELINE_REL' before committing"
   exit 0
 fi
@@ -105,11 +124,11 @@ fi
 # ── assertion 1: count-baseline ratchet + the max-ratchet CI twin ───────────
 log="$(mktemp)"
 # shellcheck disable=SC2086
-"$MEDAKA" lint --internal --baseline="$BASELINE_REL" --only="$GATED,$RULES" $targets >"$log" 2>&1
+"$MEDAKA" lint --internal --baseline="$BASELINE_REL" --only="$ONLY" $targets >"$log" 2>&1
 status=$?
 
 if [ "$status" -ne 0 ]; then
-  echo "FAIL: lint baseline/max-ratchet violated ($GATED,$RULES)"
+  echo "FAIL: lint baseline/max-ratchet violated ($ONLY)"
   echo ""
   grep 'medaka lint: baseline:' "$log" || cat "$log"
   echo ""

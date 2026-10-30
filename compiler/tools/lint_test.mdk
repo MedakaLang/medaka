@@ -31,18 +31,38 @@
 -- target line does this).
 
 import test.{
-  Expectation, expectEqual, expectFalse, expectTrue, expectEach, fail
+  Expectation, expectEqual, expectFalse, expectTrue, expectEach, expectNotEqual,
+  fail
 }
 import tools.lint_cache.{decodeEntry, LintEntry}
 import string.{replace, lines}
 import support.util.{anyList, listLen, sortUniqS}
-import driver.diagnostics.{Diag(..), diagIdText}
+import driver.diagnostics.{Diag(..), Severity(..), diagIdText}
+import frontend.ast.{Loc(..)}
 import tools.lint.{
-  StdlibIndex, allRuleNames, buildStdlibIndexResult, mergeCrossFileIntoTriples
+  StdlibIndex,
+  allCrossFileRules,
+  allRuleNames,
+  buildStdlibIndexResult,
+  crossFileMetaProblems,
+  mergeCrossFileIntoTriples,
+}
+import tools.lint_core.{
+  Category(..),
+  CrossFileRule,
+  Finding(..),
+  Fixability(..),
+  Ratchet(..),
+  RuleMeta(..),
+  Scope(..),
+  mkCrossFileRule,
 }
 import tools.lint_cmd.{
   allRuleRows,
   explainRule,
+  dropInactiveInternalCross,
+  inactiveInternalRuleUse,
+  internalActiveFor,
   internalDisabledFor,
   internalRuleNames,
   lintFilesToDiagTriples,
@@ -108,7 +128,7 @@ test "the JSON path's own internals surface the duplicate-body finding" =
     Ok idx =>
       let quads = lintFilesToDiagQuads idx True [] [] [] None fixtureFiles
       let triples = map dropQuadParse quads
-      let cross = crossFileJsonFindings [] [] [] quads
+      let cross = crossFileJsonFindings True [] [] [] quads
       let merged = mergeCrossFileIntoTriples cross triples
       expectTrue (anyDupRuleDiag merged)
 
@@ -119,7 +139,7 @@ test "the MCP path's own internals produce the SAME finding set as JSON" =
     Ok idx =>
       let jsonQuads = lintFilesToDiagQuads idx True [] [] [] None fixtureFiles
       let jsonTriples = map dropQuadParse jsonQuads
-      let jsonCross = crossFileJsonFindings [] [] [] jsonQuads
+      let jsonCross = crossFileJsonFindings True [] [] [] jsonQuads
       let jsonMerged = mergeCrossFileIntoTriples jsonCross jsonTriples
       let mcpQuads = lintPathsToDiagQuads idx [] [] [] fixtureFiles
       let mcpTriples = map dropQuadParse mcpQuads
@@ -330,3 +350,167 @@ test "the MCP lint entry runs internal rules under [lint] internal = true" =
   match mcpDirectiveReasonFires "test/lint_internal_fixtures/on/leak.mdk"
     Err e => fail e
     Ok fired => expectTrue fired
+
+-- ── 7. cross-file rule metadata and activation ──────────────────────────────
+-- A probe rule built here, not registered: the metadata combinations no rule in
+-- the registry exercises yet.
+probeMeta : Scope -> Ratchet -> RuleMeta
+probeMeta scope ratchet = RuleMeta {
+  name = "rule-zz-probe",
+  summary = "probe",
+  doc = "probe",
+  category = Style,
+  scope = scope,
+  ratchet = ratchet,
+  defaultSeverity = SevWarning,
+  fixability = NotFixable,
+  needs = [],
+}
+
+probeRule : Scope -> Ratchet -> CrossFileRule
+probeRule scope ratchet = mkCrossFileRule (probeMeta scope ratchet) (_ => [])
+
+probeFindingIn : String -> Finding
+probeFindingIn file = Finding {
+  rule = "rule-zz-probe",
+  message = file,
+  severity = SevWarning,
+  loc = Some (Loc file 1 1 1 1),
+}
+
+findingFile : Finding -> String
+findingFile f = f.message
+
+test "no registered cross-file rule carries metadata that nothing enforces" = expectEach
+  [
+    ("the registry", expectEqual [] (crossFileMetaProblems allCrossFileRules)),
+    (
+      "a baselined cross-file rule is rejected",
+      expectNotEqual [] (crossFileMetaProblems [probeRule Universal Baselined]),
+    ),
+    (
+      "a gated internal cross-file rule is allowed",
+      expectEqual [] (crossFileMetaProblems [probeRule Internal Gated]),
+    ),
+  ]
+
+-- A cross-file rule sees every target at once, so its internal scope is applied
+-- to its findings, by the file each lands in.
+test "an internal cross-file rule's findings are dropped where internal is off" = expectEach
+  [
+    (
+      "a manifest-less project",
+      expectEqual
+        []
+        (map
+          findingFile
+          (dropInactiveInternalCross
+            [probeRule Internal Gated]
+            False
+            [probeFindingIn "stdlib/list.mdk"])),
+    ),
+    (
+      "a project with [lint] internal = true",
+      expectEqual
+        ["compiler/tools/lint.mdk"]
+        (map
+          findingFile
+          (dropInactiveInternalCross
+            [probeRule Internal Gated]
+            False
+            [probeFindingIn "compiler/tools/lint.mdk"])),
+    ),
+    (
+      "the --internal flag",
+      expectEqual
+        ["stdlib/list.mdk"]
+        (map
+          findingFile
+          (dropInactiveInternalCross
+            [probeRule Internal Gated]
+            True
+            [probeFindingIn "stdlib/list.mdk"])),
+    ),
+    (
+      "a universal rule is untouched",
+      expectEqual
+        ["stdlib/list.mdk"]
+        (map
+          findingFile
+          (dropInactiveInternalCross
+            [probeRule Universal Gated]
+            False
+            [probeFindingIn "stdlib/list.mdk"])),
+    ),
+    (
+      "only the findings in an inactive project are dropped",
+      expectEqual
+        ["compiler/tools/lint.mdk"]
+        (map
+          findingFile
+          (dropInactiveInternalCross
+            [probeRule Internal Gated]
+            False
+            [
+              probeFindingIn "stdlib/list.mdk",
+              probeFindingIn "compiler/tools/lint.mdk",
+            ])),
+    ),
+  ]
+
+-- Activation resolves from the target's absolute directory, so a path spelled
+-- with dot segments reads the same manifest as the plain one.
+test "internal activation does not depend on how the target is spelled" = expectEach
+  [
+    (
+      "a dot segment",
+      expectTrue (internalActiveFor False "./compiler/tools/lint.mdk"),
+    ),
+    (
+      "a parent step from a manifest-less project into the on one",
+      expectTrue
+        (internalActiveFor
+          False
+          "test/lint_internal_fixtures/no_key/../on/leak.mdk"),
+    ),
+    (
+      "a parent step from the on project into a manifest-less one",
+      expectFalse
+        (internalActiveFor
+          False
+          "test/lint_internal_fixtures/on/../quoted/leak.mdk"),
+    ),
+  ]
+
+test "naming an internal rule where internal is off is reported" = expectEach [
+  (
+    "an inactive target",
+    expectTrue
+      (isSome
+        (inactiveInternalRuleUse
+          False
+          ["rule-match-on-param"]
+          ["stdlib/list.mdk"])),
+  ),
+  (
+    "the flag",
+    expectEqual
+      None
+      (inactiveInternalRuleUse True ["rule-match-on-param"] ["stdlib/list.mdk"]),
+  ),
+  (
+    "an active project",
+    expectEqual
+      None
+      (inactiveInternalRuleUse
+        False
+        ["rule-match-on-param"]
+        ["compiler/tools/lint.mdk"]),
+  ),
+  (
+    "a universal rule",
+    expectEqual
+      None
+      (inactiveInternalRuleUse False ["rule-not-eq"] ["stdlib/list.mdk"]),
+  ),
+]

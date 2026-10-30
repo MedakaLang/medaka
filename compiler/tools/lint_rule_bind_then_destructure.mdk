@@ -1,4 +1,4 @@
--- lint rule bind-then-destructure: a do-bind immediately destructured by an irrefutable single-arm `match`. Inline the pattern into the bind.
+-- lint rule rule-bind-then-destructure: a do-bind immediately destructured by an irrefutable single-arm `match`. Inline the pattern into the bind.
 
 -- ── rule: bind-then-destructure ───────────────────────────────────────────────
 -- Inside any do/bare block, a `v <- e` bind immediately followed by a FINAL

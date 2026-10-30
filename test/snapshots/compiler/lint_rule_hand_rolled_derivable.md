@@ -2,7 +2,7 @@
 source_lines=118
 stages=DESUGAR,MARK
 # SOURCE
--- lint rule hand-rolled-derivable: hand-written Eq/Ord/Debug impl that could be `deriving` (STYLE §6).
+-- lint rule rule-hand-rolled-derivable: hand-written Eq/Ord/Debug impl that could be `deriving` (STYLE §6).
 
 import frontend.ast.{Ns(..), TabKey(..), Loc(..), Ty(..), Expr(..), Decl(..)}
 import frontend.parser.{Positions(..)}

@@ -18,10 +18,10 @@ set of entries (#4141).
 | `printer.mdk` | The comment-free Wadler/Leijen document printer over the AST | AST to source |
 | `fmt.mdk` | The comment-preserving formatter over `printer.mdk` | `formatProgram` |
 | `lint.mdk` | The `medaka lint` facade: re-exports the framework, registry and runner surface the CLI, MCP and tests consume | re-exports |
-| `lint_core.mdk` | The framework's data types: `Finding`, `Directive`, `FileFacts`, `Rule`, `RuleMeta`, `StdlibIndex`; imports no rule, registry or runner | types |
+| `lint_core.mdk` | The framework's data types: `Finding`, `Directive`, `FileFacts`, `Rule`, `RuleMeta`, `StdlibIndex`; imports no rule, registry or runner; its closure still holds about 100 `types.*` modules, reached through `frontend.exhaust` (`Oracle`) and `tools.printer` (`ppTy`), pinned by `test/arch_goldens/closure.tools.lint_core.golden` | types |
 | `lint_shared.mdk` | Helpers used by more than one lint module: rule-name constants, location helpers, the directive parser, stdlib path predicates | shared helpers |
 | `lint_dup.mdk` | The duplicate-body occurrence engine: per-clause facts, grouping and the cross-file join | `fileDupOccs` |
-| `lint_walk.mdk` | The lint runner: per-file facts, the autofix driver, filters, inline suppressions, the cross-file runner, stdlib-index builders | `lintProgram*` |
+| `lint_walk.mdk` | The lint runner: per-file facts, the autofix driver, filters, inline suppressions, the cross-file runner, stdlib-index builders; imports `lint_registry`, since running a rule means reading the registry's lists | `lintProgram*` |
 | `lint_registry.mdk` | THE REGISTRY: `allRules`, the cross-file registry and rule-name selection; one `import ... as Alias` and one `Alias.rule,` line per rule | `allRules`, `allCrossFileRules`, `allRuleNames` |
 | `lint_rule_<name>.mdk` | One universal lint rule per module, exporting `rule`; may not import another rule module, the registry or the runner | `rule` |
 | `lint_rule_internal_<name>.mdk` | One internal-scope rule (this repository's conventions) per module, exporting `rule`; same import limits | `rule` |
@@ -69,7 +69,7 @@ set of entries (#4141).
 
 ## Boundaries and checks
 - `test/arch_boundaries_test.mdk`, `test/arch_goldens/layering.golden`, `cells.golden`.
-- The pre-commit hook (`.githooks/pre-commit`): format, lint rules and snapshot check over staged `.mdk`.
+- The pre-commit hook (`.githooks/pre-commit`): format, lint rules and snapshot check over staged `.mdk`. The hook and `test/diff_compiler_lint_baseline.sh` pass `--internal` for every root, not only `stdlib/`, so the internal-scope rules are enforced wherever they lint, whatever a project's manifest says; both derive their rule lists through `test/lint_rule_lists.sh`.
 - `test/gates.toml` and `medaka gate verify`: the registry these modules read.
 - Module tests are `*_test.mdk` siblings.
 

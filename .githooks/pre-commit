@@ -175,26 +175,10 @@ fi
 
 # ── 2. lint check (gated + baselined + cross-file, one process) ─────────────
 rule_names() { "$MEDAKA" lint --list-rules --names "$@" 2>/dev/null; }
-csv() { paste -sd, - ; }
-
-cross_nl="$(rule_names --ratchet=gated --tier=cross)"
-CROSS_RULES="$(printf '%s\n' "$cross_nl" | csv)"
-BASELINED_RULES="$(rule_names --ratchet=baselined | csv)"
-# The per-file gated set is every gated rule minus the ones that run as the
-# cross-file scan; the scan is named separately in --only/--deny below.
-gated_file=""
-for n in $(rule_names --ratchet=gated); do
-  case "
-$cross_nl
-" in
-    *"
-$n
-"*) ;;
-    *) gated_file="$gated_file,$n" ;;
-  esac
-done
-GATED_RULES="${gated_file#,}"
-if [ -z "$GATED_RULES" ]; then
+# shellcheck source=../test/lint_rule_lists.sh
+. "$ROOT/test/lint_rule_lists.sh"
+derive_lint_rules
+if [ -z "$LINT_DENY" ]; then
   echo "" >&2
   echo "✗ pre-commit: $MEDAKA could not list the lint rules (is it older than this hook?)." >&2
   echo "  Rebuild it:   make -C $ROOT medaka" >&2
@@ -202,7 +186,8 @@ if [ -z "$GATED_RULES" ]; then
   echo "" >&2
   exit 1
 fi
-ALL_GATED="$GATED_RULES${CROSS_RULES:+,$CROSS_RULES}"
+ALL_GATED="$LINT_DENY"
+ONLY_RULES="$LINT_ONLY"
 
 # Targets: the cross-file roots, plus each staged file that lies outside them.
 lintfiles=""
@@ -227,7 +212,7 @@ if [ -n "$lintfiles" ]; then
   lintst=0
   # shellcheck disable=SC2086
   "$MEDAKA" lint --cache --internal --baseline="$ROOT/$LINT_BASELINE_FILE" \
-    --only="$ALL_GATED,$BASELINED_RULES" --deny="$ALL_GATED" \
+    --only="$ONLY_RULES" --deny="$ALL_GATED" \
     $targets >"$lintout" 2>&1 || lintst=$?
   if [ "$lintst" -ne 0 ]; then
     # An error counts when it is in a staged file or in the cross-file section.
@@ -247,7 +232,7 @@ if [ -n "$lintfiles" ]; then
       printf '%s\n' "$blocking" | while IFS= read -r f; do [ -n "$f" ] && echo "      $f" >&2; done
       grep -q '^error: ' "$lintout" || sed 's/^/      /' "$lintout" | head -20 >&2
       echo "" >&2
-      echo "  See findings:  medaka lint --internal --baseline=$LINT_BASELINE_FILE --only=$ALL_GATED,$BASELINED_RULES$lintfiles" >&2
+      echo "  See findings:  medaka lint --internal --baseline=$LINT_BASELINE_FILE --only=$ONLY_RULES$lintfiles" >&2
       echo "  If intentional, silence inline with a directive comment above the site:" >&2
       echo "                 -- lint-disable-next-line <rule>" >&2
       echo "  A count that legitimately moves is re-pinned by REGENERATING the file," >&2

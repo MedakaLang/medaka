@@ -4,7 +4,7 @@
 -- `allRules`.
 
 import support.util.{contains, anyList, filterList, isEmptyL}
-import tools.lint_core.{CrossFileRule(..), Rule(..)}
+import tools.lint_core.{CrossFileRule(..), Ratchet(..), Rule(..), RuleMeta(..)}
 import tools.lint_rule_internal_match_on_param as MatchOnParam
 import tools.lint_rule_stdlib_reimpl as StdlibReimpl
 import tools.lint_rule_not_eq as NotEq
@@ -83,6 +83,21 @@ allRules = [
 export
 allCrossFileRules : List CrossFileRule
 allCrossFileRules = [DuplicateBody.rule]
+
+-- Metadata a cross-file rule may not carry.  A `Baselined` ratchet is enforced by
+-- a per-file count row, and a cross-file finding has no file row to count
+-- against, so such a rule would be enforced by nothing.  (`Internal` scope is
+-- fine: the runner filters the tier's findings by the file they land in.)
+export
+crossFileMetaProblems : List CrossFileRule -> List String
+crossFileMetaProblems rules = flatMap crossFileRuleProblems rules
+
+crossFileRuleProblems : CrossFileRule -> List String
+crossFileRuleProblems r = match r.meta.ratchet
+  Baselined => [
+    "cross-file rule `\{r.name}` is Baselined; only a per-file rule can be (no count row exists for a cross-file finding), so it would be enforced by nothing",
+  ]
+  Gated => []
 
 -- Every registered rule name, per-file and cross-file, as plain Strings.
 -- CLI-CONFORMANCE.md §5f: `medaka lint --only=nosuchrule` would otherwise be

@@ -2,7 +2,7 @@
 source_lines=39
 stages=DESUGAR,MARK
 # SOURCE
--- lint rule duplicate-body: a top-level function body structurally identical to one in another file (cross-file copy-paste).
+-- lint rule rule-duplicate-body: a top-level function body structurally identical to one in another file (cross-file copy-paste).
 
 import frontend.ast.{Decl(..)}
 import frontend.parser.{Positions(..)}
