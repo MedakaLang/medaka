@@ -12,7 +12,9 @@ import test.{
   expectEqual,
   expectFalse,
 }
-import frontend.ast.{TyConOrigin(..)}
+import frontend.ast.{
+  Decl(..), Loc(..), TyConOrigin(..), UseMember(..), UsePath(..)
+}
 import types.effect_rows.{pureRow}
 import types.repr.{Mono(..), Scheme(..), Tyvar(..), normalize}
 import types.tc_mono.{
@@ -205,9 +207,26 @@ test "a constructor clash is a type mismatch and binds nothing" =
     expectEqual ["v0"] (shapes [a]),
   ]
 
-test "a clash at the application of a selectively imported name says which module the name came from" =
+-- A module whose `take` is imported by name from `string`, with the cells the
+-- module install leaves for `import string.{take}`.
+importingTake : Bool -> ModuleCtx
+importingTake stdlibOwned =
   let m = fresh ()
+  let loc = Loc "t.mdk" 1 0 1 0
   m.mcCells.currentImportDefinersRef := omInsert "take" "string" omEmpty
+  m.mcCells.currentImportOriginsRef := omInsert "take" "take" omEmpty
+  m.mcCells.methodScopeCtxRef := Some (
+    [DUse False (UseGroup ["string"] [UseMember "take" False loc None]) loc],
+    0,
+  )
+  m.mcGraph.config := { m.mcGraph.config.value |
+    tcStdlibOwned =
+      if stdlibOwned then omInsert "string" () omEmpty else omEmpty,
+  }
+  m
+
+test "a clash at the application of a selectively imported stdlib name says which module the name came from" =
+  let m = importingTake True
   let dyn = { dynFor m | dcCallee = Some "take" }
   unifyIn dyn (tconBuiltin "Int") (tconBuiltin "Bool")
   unifyIn
@@ -222,6 +241,14 @@ test "a clash at the application of a selectively imported name says which modul
       "type mismatch: Int vs Bool",
     ]
     (messagesOf m)
+
+test "a clash at a head imported from a user module carries no import note" =
+  let m = importingTake False
+  unifyIn
+    { dynFor m | dcCallee = Some "take" }
+    (tconBuiltin "Int")
+    (tconBuiltin "Bool")
+  expectEqual ["type mismatch: Int vs Bool"] (messagesOf m)
 
 test "unification descends applications and arrows and binds the variables it meets" =
   let m = fresh ()

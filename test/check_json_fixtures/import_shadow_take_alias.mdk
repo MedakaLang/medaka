@@ -1,0 +1,6 @@
+import string.{take as stake}
+
+f : List String -> List String
+f xs = stake (length xs - 1) xs
+
+main = f ["a", "b"]

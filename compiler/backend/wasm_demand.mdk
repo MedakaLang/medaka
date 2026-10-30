@@ -1953,7 +1953,7 @@ helperManifest _ "rngRuntimeLines" =
       ("mdk_random_bool", 0),
       ("mdk_random_char", 0),
     ]
-    []
+    ["mdk_rng_seed"]
 helperManifest _ "hashRuntimeLines" =
   HelperManifest
     [("mdk_hash_mix64", 1), ("mdk_hash_int", 1), ("mdk_hash_bool", 1)]

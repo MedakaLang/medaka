@@ -5,14 +5,20 @@
 What each engine does with each `stdlib/runtime.mdk` extern. An extern that is
 `real` on every engine is left out; so is any extern not in the catalog.
 
+## Columns
+
 - **oracle**: the pure interpreter the differential gates run (`externBindings`).
 - **run**: `medaka run` (`ioExternBindings` over the oracle).
 - **test**: `medaka test` and `medaka repl` (`testCapableExterns` over the oracle).
 - **native**, **wasm**: `medaka build` for each target (the extern catalog).
 
-Cells: `real` is the extern's actual effect; `canned` is bound but does not
+## Cells
+
+`real` is the extern's actual effect; `canned` is bound but does not
 perform the effect (a fixed value, a no-op or a captured buffer); `refused` is
 not bound, so the call is rejected or aborts.
+
+## Externs that differ
 
 | extern | oracle | run | test | native | wasm |
 |---|---|---|---|---|---|

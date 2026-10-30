@@ -80,7 +80,7 @@ import types.tc_mono.{
 import types.tc_state.{
   dynAtIfSome, wAll, wPush, wRestore, wSnapshot, currentScopeStore
 }
-import types.tc_env.{domainHasPatterns, tyTabKey}
+import types.tc_env.{declTopFnNames, domainHasPatterns, tyTabKey}
 import types.tc_diag.{
   firstTupleCallHint, pushTypeError, pushTypeErrorAt, pushTypeErrorHelpFixAt,
   recordTypeError
@@ -157,9 +157,12 @@ import frontend.ast.{
   TabKey(..),
   Ty(..),
   TyConOrigin(..),
+  UsePath(..),
   lookupTab,
   sameTyConHead,
   tabKeyEq,
+  useMemberLocal,
+  useMemberOrigin,
 }
 import types.registry.{HeadKey(..)}
 import map.{Map(..)}
@@ -192,7 +195,7 @@ import types.solver_contract.{Instantiation(..), Wanted(..)}
 import types.target_profile.{hostLabels}
 import types.disposition.{MethodDisposition(..)}
 import list.{drop, last, replicate}
-import support.ordmap.{omInsert, omLookup}
+import support.ordmap.{omHasKey, omInsert, omLookup}
 import types.invocation_basis.{paramPolaritiesIn}
 import types.effect_infer.{recordEffect, typeAuthority}
 import types.effect_solver as EffectSolver
@@ -1673,16 +1676,39 @@ typeMismatchReportRest dyn a b = match activeDo dyn
             TTypeMismatch
             "type mismatch: \{ppMono a} vs \{ppMono b}"
 
--- The mismatch is at an application whose head is a selectively imported name:
--- the import, not an unqualified `name` from some other module, chose the type.
+-- The mismatch is at an application whose head is a selectively imported stdlib
+-- name: the import, not an unqualified `name` from some other module, chose the type.
+-- Silent unless the written import is `import m.{name}` itself: not an alias, not a
+-- wildcard, not shadowed by the module's own definition of `name`, and not a
+-- user module (whose names are the author's own business).
 importedCalleeHelp : DynCtx -> Option String
 importedCalleeHelp dyn = match dyn.dcCallee
   None => None
   Some name =>
-    map
-      (mid =>
-        "`\{name}` here is `\{mid}.\{name}` (selectively imported from `\{mid}`); an unqualified `\{name}` from any other module needs its own import")
-      (omLookup name dyn.dcModule.mcCells.currentImportDefinersRef.value)
+    let cells = dyn.dcModule.mcCells
+    let decls = match cells.methodScopeCtxRef.value
+      Some (ds, _) => ds
+      None => []
+    let plain =
+      omLookup name cells.currentImportOriginsRef.value == Some name
+        && importsByName name decls
+        && not (elem name (declTopFnNames decls))
+    let owned = dyn.dcModule.mcGraph.config.value.tcStdlibOwned
+    match omLookup name cells.currentImportDefinersRef.value
+      Some mid if plain && omHasKey mid owned =>
+        Some
+          "`\{name}` here is `\{mid}.\{name}` (selectively imported from `\{mid}`); an unqualified `\{name}` from any other module needs its own import"
+      _ => None
+
+-- Some `import m.{..}` of [decls] lists [name] with no alias.
+importsByName : String -> List Decl -> Bool
+importsByName name decls = any (importDeclNames name) decls
+
+importDeclNames : String -> Decl -> Bool
+importDeclNames name (DAttrib _ d) = importDeclNames name d
+importDeclNames name (DUse _ (UseGroup _ ms) _) =
+  any (m => useMemberOrigin m == name && useMemberLocal m == name) ms
+importDeclNames _ _ = False
 
 -- a mismatch inside a do-lowered chain: if it is the monad-shape (`m b`) vs
 -- non-monad obligation, retarget to the tailored "do requires a monad" error;

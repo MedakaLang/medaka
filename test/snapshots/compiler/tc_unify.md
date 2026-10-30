@@ -1,5 +1,5 @@
 # META
-source_lines=2992
+source_lines=3018
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_unify: fresh variables and levels (including level lowering, `lowerToCurrent`,
@@ -84,7 +84,7 @@ import types.tc_mono.{
 import types.tc_state.{
   dynAtIfSome, wAll, wPush, wRestore, wSnapshot, currentScopeStore
 }
-import types.tc_env.{domainHasPatterns, tyTabKey}
+import types.tc_env.{declTopFnNames, domainHasPatterns, tyTabKey}
 import types.tc_diag.{
   firstTupleCallHint, pushTypeError, pushTypeErrorAt, pushTypeErrorHelpFixAt,
   recordTypeError
@@ -161,9 +161,12 @@ import frontend.ast.{
   TabKey(..),
   Ty(..),
   TyConOrigin(..),
+  UsePath(..),
   lookupTab,
   sameTyConHead,
   tabKeyEq,
+  useMemberLocal,
+  useMemberOrigin,
 }
 import types.registry.{HeadKey(..)}
 import map.{Map(..)}
@@ -196,7 +199,7 @@ import types.solver_contract.{Instantiation(..), Wanted(..)}
 import types.target_profile.{hostLabels}
 import types.disposition.{MethodDisposition(..)}
 import list.{drop, last, replicate}
-import support.ordmap.{omInsert, omLookup}
+import support.ordmap.{omHasKey, omInsert, omLookup}
 import types.invocation_basis.{paramPolaritiesIn}
 import types.effect_infer.{recordEffect, typeAuthority}
 import types.effect_solver as EffectSolver
@@ -1677,16 +1680,39 @@ typeMismatchReportRest dyn a b = match activeDo dyn
             TTypeMismatch
             "type mismatch: \{ppMono a} vs \{ppMono b}"
 
--- The mismatch is at an application whose head is a selectively imported name:
--- the import, not an unqualified `name` from some other module, chose the type.
+-- The mismatch is at an application whose head is a selectively imported stdlib
+-- name: the import, not an unqualified `name` from some other module, chose the type.
+-- Silent unless the written import is `import m.{name}` itself: not an alias, not a
+-- wildcard, not shadowed by the module's own definition of `name`, and not a
+-- user module (whose names are the author's own business).
 importedCalleeHelp : DynCtx -> Option String
 importedCalleeHelp dyn = match dyn.dcCallee
   None => None
   Some name =>
-    map
-      (mid =>
-        "`\{name}` here is `\{mid}.\{name}` (selectively imported from `\{mid}`); an unqualified `\{name}` from any other module needs its own import")
-      (omLookup name dyn.dcModule.mcCells.currentImportDefinersRef.value)
+    let cells = dyn.dcModule.mcCells
+    let decls = match cells.methodScopeCtxRef.value
+      Some (ds, _) => ds
+      None => []
+    let plain =
+      omLookup name cells.currentImportOriginsRef.value == Some name
+        && importsByName name decls
+        && not (elem name (declTopFnNames decls))
+    let owned = dyn.dcModule.mcGraph.config.value.tcStdlibOwned
+    match omLookup name cells.currentImportDefinersRef.value
+      Some mid if plain && omHasKey mid owned =>
+        Some
+          "`\{name}` here is `\{mid}.\{name}` (selectively imported from `\{mid}`); an unqualified `\{name}` from any other module needs its own import"
+      _ => None
+
+-- Some `import m.{..}` of [decls] lists [name] with no alias.
+importsByName : String -> List Decl -> Bool
+importsByName name decls = any (importDeclNames name) decls
+
+importDeclNames : String -> Decl -> Bool
+importDeclNames name (DAttrib _ d) = importDeclNames name d
+importDeclNames name (DUse _ (UseGroup _ ms) _) =
+  any (m => useMemberOrigin m == name && useMemberLocal m == name) ms
+importDeclNames _ _ = False
 
 -- a mismatch inside a do-lowered chain: if it is the monad-shape (`m b`) vs
 -- non-monad obligation, retarget to the tailored "do requires a monad" error;
@@ -2999,13 +3025,13 @@ zipBindFrom dyn _ _ = ()
 (DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "CDeclared" true) (mem "CDeclaredPrefix" true) (mem "CSlot" true) (mem "DynCtx" true) (mem "JoinContext" true) (mem "Kind" true) (mem "MethodInstantiationSubst" true) (mem "MethodTrackedInstantiation" true) (mem "ObligationSite" true) (mem "OblProjection" true) (mem "PendingJoin" true) (mem "Polarity" true) (mem "Predicate" true) (mem "PredicateSlotArgs" true) (mem "Provenance" true) (mem "UObligation" true) (mem "Windowed" true) (mem "DoCtx" false) (mem "dynFor" false) (mem "GraphCtx" false) (mem "ModuleCtx" false) (mem "PredicateSlot" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "authCellsIn" false) (mem "authRowCells" false) (mem "cellIdSet" false) (mem "containsI" false) (mem "dedupI" false) (mem "effvarLevel" false) (mem "headTyconMono" false) (mem "headTyconNameMono" false) (mem "isUnshaped" false) (mem "joinCellOf" false) (mem "minLevelOf" false) (mem "monoHasArrowInSlot" false) (mem "monoIsApp" false) (mem "monoSpineDepth" false) (mem "monoUnboundIds" false) (mem "newEffvarId" false) (mem "qualifierAuthIds" false) (mem "rowOfMembers" false) (mem "sameRootId" false) (mem "spineHead" false) (mem "substAuth" false) (mem "substMono" false) (mem "substMonos" false) (mem "substOblArgs" false) (mem "substRow" false) (mem "tconBuiltin" false) (mem "tupleUnifyClash" false) (mem "tyAppSpine" false) (mem "tyvarId" false) (mem "xmodOblArgId" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "dynAtIfSome" false) (mem "wAll" false) (mem "wPush" false) (mem "wRestore" false) (mem "wSnapshot" false) (mem "currentScopeStore" false))))
-(DUse false (UseGroup ("types" "tc_env") ((mem "domainHasPatterns" false) (mem "tyTabKey" false))))
+(DUse false (UseGroup ("types" "tc_env") ((mem "declTopFnNames" false) (mem "domainHasPatterns" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "firstTupleCallHint" false) (mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorHelpFixAt" false) (mem "recordTypeError" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "authorityCoverMsg" false) (mem "authorityIndexMsg" false) (mem "authorityTermTextIn" false) (mem "closedRowMismatchMsg" false) (mem "constrainedApplicationText" false) (mem "contraRowMsg" false) (mem "deferRequiresMonadMsg" false) (mem "doRequiresMonadMsg" false) (mem "elselessIfHelp" false) (mem "indexRowMismatchMsg" false) (mem "joinMismatchMsg" false) (mem "paramVarianceMismatchMsg" false) (mem "patternIndexMsg" false) (mem "renderFlatRow" false) (mem "residualFailureMsg" false) (mem "sameSpellingHint" false) (mem "starSpelling" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authDomainTop" false) (mem "authHasVars" false) (mem "authIsPattern" false) (mem "authIsTop" false) (mem "authJoinAll" false) (mem "authNorm" false) (mem "authSplit" false) (mem "authSub" false) (mem "authTop" false) (mem "authvarDomain" false) (mem "authvarId" false) (mem "authvarIsPattern" false) (mem "authvarLevel" false) (mem "authvarName" false) (mem "authVars" false) (mem "linkAuthvar" false) (mem "markAuthvarPattern" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomsDiff" false) (mem "atomsNorm" false) (mem "atomsUnion" false) (mem "builtinLabel" false) (mem "collectRows" false) (mem "effLabelName" false) (mem "effrowNorm" false) (mem "effvarId" false) (mem "findAtom" false) (mem "isJoinCell" false) (mem "labelKey" false) (mem "linkRow" false) (mem "pureRow" false) (mem "renderAtoms" false) (mem "rowFlat" false) (mem "rowHasSummary" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true) (mem "VecObl" true) (mem "normalize" false) (mem "ppAuthority" false) (mem "ppMono" false) (mem "tupleTagArity" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "lookupTab" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UsePath" true) (mem "lookupTab" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
@@ -3018,7 +3044,7 @@ zipBindFrom dyn _ _ = ()
 (DUse false (UseGroup ("types" "target_profile") ((mem "hostLabels" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "last" false) (mem "replicate" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "omInsert" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "paramPolaritiesIn" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "recordEffect" false) (mem "typeAuthority" false))))
 (DUse false (UseAlias ("types" "effect_solver") "EffectSolver"))
@@ -3277,7 +3303,13 @@ zipBindFrom dyn _ _ = ()
 (DTypeSig false "typeMismatchReportRest" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
 (DFunDef false "typeMismatchReportRest" ((PVar "dyn") (PVar "a") (PVar "b")) (EMatch (EApp (EVar "activeDo") (EVar "dyn")) (arm (PCon "Some" (PVar "doCtx")) () (EApp (EApp (EApp (EApp (EVar "typeMismatchInDo") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "a")) (EVar "b")) (EVar "doCtx"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "firstTupleCallHint") (EFieldAccess (EVar "dyn") "dcModule")) (EListLit (EVar "a") (EVar "b"))) (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "TTypeMismatch")) (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcLoc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "; "))) (EApp (EVar "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "fix"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "sameSpellingHint") (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "help")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "TTypeMismatch")) (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcLoc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "; "))) (EApp (EVar "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "None"))) (arm (PCon "None") () (EMatch (EApp (EVar "importedCalleeHelp") (EVar "dyn")) (arm (PCon "Some" (PVar "help")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "TTypeMismatch")) (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcLoc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "; "))) (EApp (EVar "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "None"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "pushTypeError") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "TTypeMismatch")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))))))))))))
 (DTypeSig false "importedCalleeHelp" (TyFun (TyCon "DynCtx") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "importedCalleeHelp" ((PVar "dyn")) (EMatch (EFieldAccess (EVar "dyn") "dcCallee") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "name")) () (EApp (EApp (EVar "map") (ELam ((PVar "mid")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` here is `"))) (EApp (EVar "display") (EVar "mid"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` (selectively imported from `"))) (EApp (EVar "display") (EVar "mid"))) (ELit (LString "`); an unqualified `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` from any other module needs its own import"))))) (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentImportDefinersRef") "value"))))))
+(DFunDef false "importedCalleeHelp" ((PVar "dyn")) (EMatch (EFieldAccess (EVar "dyn") "dcCallee") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "name")) () (EBlock (DoLet false false (PVar "cells") (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells")) (DoLet false false (PVar "decls") (EMatch (EFieldAccess (EFieldAccess (EVar "cells") "methodScopeCtxRef") "value") (arm (PCon "Some" (PTuple (PVar "ds") PWild)) () (EVar "ds")) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "plain") (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "cells") "currentImportOriginsRef") "value")) (EApp (EVar "Some") (EVar "name"))) (EApp (EApp (EVar "importsByName") (EVar "name")) (EVar "decls"))) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EVar "name")) (EApp (EVar "declTopFnNames") (EVar "decls")))))) (DoLet false false (PVar "owned") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcGraph") "config") "value") "tcStdlibOwned")) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "cells") "currentImportDefinersRef") "value")) (arm (PCon "Some" (PVar "mid")) ((GBool (EBinOp "&&" (EVar "plain") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "owned"))))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` here is `"))) (EApp (EVar "display") (EVar "mid"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` (selectively imported from `"))) (EApp (EVar "display") (EVar "mid"))) (ELit (LString "`); an unqualified `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` from any other module needs its own import"))))) (arm PWild () (EVar "None"))))))))
+(DTypeSig false "importsByName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
+(DFunDef false "importsByName" ((PVar "name") (PVar "decls")) (EApp (EApp (EVar "any") (EApp (EVar "importDeclNames") (EVar "name"))) (EVar "decls")))
+(DTypeSig false "importDeclNames" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Bool"))))
+(DFunDef false "importDeclNames" ((PVar "name") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "importDeclNames") (EVar "name")) (EVar "d")))
+(DFunDef false "importDeclNames" ((PVar "name") (PCon "DUse" PWild (PCon "UseGroup" PWild (PVar "ms")) PWild)) (EApp (EApp (EVar "any") (ELam ((PVar "m")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "useMemberOrigin") (EVar "m")) (EVar "name")) (EBinOp "==" (EApp (EVar "useMemberLocal") (EVar "m")) (EVar "name"))))) (EVar "ms")))
+(DFunDef false "importDeclNames" (PWild PWild) (EVar "False"))
 (DTypeSig false "typeMismatchInDo" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "DoCtx") (TyCon "Unit"))))))
 (DFunDef false "typeMismatchInDo" ((PVar "mctx") (PVar "a") (PVar "b") (PVar "doCtx")) (EIf (EBinOp "/=" (EApp (EVar "monoIsApp") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "monoIsApp") (EApp (EVar "normalize") (EVar "b")))) (EApp (EApp (EVar "recordDoMonadError") (EVar "mctx")) (EVar "doCtx")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TTypeMismatch")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "recordDoMonadError" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "DoCtx") (TyCon "Unit"))))
@@ -3551,13 +3583,13 @@ zipBindFrom dyn _ _ = ()
 (DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "CDeclared" true) (mem "CDeclaredPrefix" true) (mem "CSlot" true) (mem "DynCtx" true) (mem "JoinContext" true) (mem "Kind" true) (mem "MethodInstantiationSubst" true) (mem "MethodTrackedInstantiation" true) (mem "ObligationSite" true) (mem "OblProjection" true) (mem "PendingJoin" true) (mem "Polarity" true) (mem "Predicate" true) (mem "PredicateSlotArgs" true) (mem "Provenance" true) (mem "UObligation" true) (mem "Windowed" true) (mem "DoCtx" false) (mem "dynFor" false) (mem "GraphCtx" false) (mem "ModuleCtx" false) (mem "PredicateSlot" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "authCellsIn" false) (mem "authRowCells" false) (mem "cellIdSet" false) (mem "containsI" false) (mem "dedupI" false) (mem "effvarLevel" false) (mem "headTyconMono" false) (mem "headTyconNameMono" false) (mem "isUnshaped" false) (mem "joinCellOf" false) (mem "minLevelOf" false) (mem "monoHasArrowInSlot" false) (mem "monoIsApp" false) (mem "monoSpineDepth" false) (mem "monoUnboundIds" false) (mem "newEffvarId" false) (mem "qualifierAuthIds" false) (mem "rowOfMembers" false) (mem "sameRootId" false) (mem "spineHead" false) (mem "substAuth" false) (mem "substMono" false) (mem "substMonos" false) (mem "substOblArgs" false) (mem "substRow" false) (mem "tconBuiltin" false) (mem "tupleUnifyClash" false) (mem "tyAppSpine" false) (mem "tyvarId" false) (mem "xmodOblArgId" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "dynAtIfSome" false) (mem "wAll" false) (mem "wPush" false) (mem "wRestore" false) (mem "wSnapshot" false) (mem "currentScopeStore" false))))
-(DUse false (UseGroup ("types" "tc_env") ((mem "domainHasPatterns" false) (mem "tyTabKey" false))))
+(DUse false (UseGroup ("types" "tc_env") ((mem "declTopFnNames" false) (mem "domainHasPatterns" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "firstTupleCallHint" false) (mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorHelpFixAt" false) (mem "recordTypeError" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "authorityCoverMsg" false) (mem "authorityIndexMsg" false) (mem "authorityTermTextIn" false) (mem "closedRowMismatchMsg" false) (mem "constrainedApplicationText" false) (mem "contraRowMsg" false) (mem "deferRequiresMonadMsg" false) (mem "doRequiresMonadMsg" false) (mem "elselessIfHelp" false) (mem "indexRowMismatchMsg" false) (mem "joinMismatchMsg" false) (mem "paramVarianceMismatchMsg" false) (mem "patternIndexMsg" false) (mem "renderFlatRow" false) (mem "residualFailureMsg" false) (mem "sameSpellingHint" false) (mem "starSpelling" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authDomainTop" false) (mem "authHasVars" false) (mem "authIsPattern" false) (mem "authIsTop" false) (mem "authJoinAll" false) (mem "authNorm" false) (mem "authSplit" false) (mem "authSub" false) (mem "authTop" false) (mem "authvarDomain" false) (mem "authvarId" false) (mem "authvarIsPattern" false) (mem "authvarLevel" false) (mem "authvarName" false) (mem "authVars" false) (mem "linkAuthvar" false) (mem "markAuthvarPattern" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomsDiff" false) (mem "atomsNorm" false) (mem "atomsUnion" false) (mem "builtinLabel" false) (mem "collectRows" false) (mem "effLabelName" false) (mem "effrowNorm" false) (mem "effvarId" false) (mem "findAtom" false) (mem "isJoinCell" false) (mem "labelKey" false) (mem "linkRow" false) (mem "pureRow" false) (mem "renderAtoms" false) (mem "rowFlat" false) (mem "rowHasSummary" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true) (mem "VecObl" true) (mem "normalize" false) (mem "ppAuthority" false) (mem "ppMono" false) (mem "tupleTagArity" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "lookupTab" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UsePath" true) (mem "lookupTab" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
@@ -3570,7 +3602,7 @@ zipBindFrom dyn _ _ = ()
 (DUse false (UseGroup ("types" "target_profile") ((mem "hostLabels" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "last" false) (mem "replicate" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "omInsert" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "paramPolaritiesIn" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "recordEffect" false) (mem "typeAuthority" false))))
 (DUse false (UseAlias ("types" "effect_solver") "EffectSolver"))
@@ -3829,7 +3861,13 @@ zipBindFrom dyn _ _ = ()
 (DTypeSig false "typeMismatchReportRest" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
 (DFunDef false "typeMismatchReportRest" ((PVar "dyn") (PVar "a") (PVar "b")) (EMatch (EApp (EVar "activeDo") (EVar "dyn")) (arm (PCon "Some" (PVar "doCtx")) () (EApp (EApp (EApp (EApp (EVar "typeMismatchInDo") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "a")) (EVar "b")) (EVar "doCtx"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "firstTupleCallHint") (EFieldAccess (EVar "dyn") "dcModule")) (EListLit (EVar "a") (EVar "b"))) (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "TTypeMismatch")) (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcLoc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "fix"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "sameSpellingHint") (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "help")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "TTypeMismatch")) (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcLoc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "None"))) (arm (PCon "None") () (EMatch (EApp (EVar "importedCalleeHelp") (EVar "dyn")) (arm (PCon "Some" (PVar "help")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "TTypeMismatch")) (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcLoc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "None"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "pushTypeError") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "TTypeMismatch")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))))))))))))
 (DTypeSig false "importedCalleeHelp" (TyFun (TyCon "DynCtx") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "importedCalleeHelp" ((PVar "dyn")) (EMatch (EFieldAccess (EVar "dyn") "dcCallee") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "name")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "mid")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` here is `"))) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` (selectively imported from `"))) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString "`); an unqualified `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` from any other module needs its own import"))))) (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentImportDefinersRef") "value"))))))
+(DFunDef false "importedCalleeHelp" ((PVar "dyn")) (EMatch (EFieldAccess (EVar "dyn") "dcCallee") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "name")) () (EBlock (DoLet false false (PVar "cells") (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells")) (DoLet false false (PVar "decls") (EMatch (EFieldAccess (EFieldAccess (EVar "cells") "methodScopeCtxRef") "value") (arm (PCon "Some" (PTuple (PVar "ds") PWild)) () (EVar "ds")) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "plain") (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "cells") "currentImportOriginsRef") "value")) (EApp (EVar "Some") (EVar "name"))) (EApp (EApp (EVar "importsByName") (EVar "name")) (EVar "decls"))) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EVar "name")) (EApp (EVar "declTopFnNames") (EVar "decls")))))) (DoLet false false (PVar "owned") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcGraph") "config") "value") "tcStdlibOwned")) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "cells") "currentImportDefinersRef") "value")) (arm (PCon "Some" (PVar "mid")) ((GBool (EBinOp "&&" (EVar "plain") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "owned"))))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` here is `"))) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` (selectively imported from `"))) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString "`); an unqualified `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` from any other module needs its own import"))))) (arm PWild () (EVar "None"))))))))
+(DTypeSig false "importsByName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
+(DFunDef false "importsByName" ((PVar "name") (PVar "decls")) (EApp (EApp (EDictApp "any") (EApp (EVar "importDeclNames") (EVar "name"))) (EVar "decls")))
+(DTypeSig false "importDeclNames" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Bool"))))
+(DFunDef false "importDeclNames" ((PVar "name") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "importDeclNames") (EVar "name")) (EVar "d")))
+(DFunDef false "importDeclNames" ((PVar "name") (PCon "DUse" PWild (PCon "UseGroup" PWild (PVar "ms")) PWild)) (EApp (EApp (EDictApp "any") (ELam ((PVar "m")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "useMemberOrigin") (EVar "m")) (EVar "name")) (EBinOp "==" (EApp (EVar "useMemberLocal") (EVar "m")) (EVar "name"))))) (EVar "ms")))
+(DFunDef false "importDeclNames" (PWild PWild) (EVar "False"))
 (DTypeSig false "typeMismatchInDo" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "DoCtx") (TyCon "Unit"))))))
 (DFunDef false "typeMismatchInDo" ((PVar "mctx") (PVar "a") (PVar "b") (PVar "doCtx")) (EIf (EBinOp "/=" (EApp (EVar "monoIsApp") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "monoIsApp") (EApp (EVar "normalize") (EVar "b")))) (EApp (EApp (EVar "recordDoMonadError") (EVar "mctx")) (EVar "doCtx")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TTypeMismatch")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "recordDoMonadError" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "DoCtx") (TyCon "Unit"))))

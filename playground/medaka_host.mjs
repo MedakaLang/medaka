@@ -166,7 +166,7 @@ export const KEY_EXTERN = {
   mdk_make_dir: 'makeDir', mdk_remove_file: 'removeFile', mdk_remove_dir: 'removeDir', mdk_fsync: 'fsync', mdk_file_mode: 'fileMode',
   mdk_write_file_mode: 'writeFileMode',
   mdk_read_line: 'readLine', mdk_read_all: 'readAll', mdk_read_exactly: 'readExactly',
-  mdk_os_entropy: 'osEntropyBytes', mdk_executable_path: 'executablePath',
+  mdk_os_entropy: 'osEntropyBytes', mdk_rng_seed: 'osEntropyBytes', mdk_executable_path: 'executablePath',
   mdk_args_count: 'args', mdk_arg_len: 'args', mdk_arg_byte: 'args', mdk_exit: 'exit',
   mdk_wall_time_sec: 'wallTimeSec', mdk_monotonic_sec: 'monotonicSec', mdk_sleep_ms: 'sleepMs',
   mdk_fetch_text: 'fetchText',
