@@ -1,5 +1,5 @@
 # META
-source_lines=649
+source_lines=647
 stages=DESUGAR,MARK
 # SOURCE
 {- | A command-line argument parser.
@@ -462,9 +462,7 @@ isDeclaredShort sp t = match splitEq t
   None => declares t sp.flags
 
 declares : String -> List FlagSpec -> Bool
-declares nm fs = match findFlag nm fs
-  Some _ => True
-  None => False
+declares nm fs = isSome (findFlag nm fs)
 
 isAfterSeparator : Trailing -> Bool
 isAfterSeparator TrailingAfterSeparator = True
@@ -740,7 +738,7 @@ prop "Debug ArgSpec agrees with Eq" (n : String) =
 (DTypeSig false "isDeclaredShort" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isDeclaredShort" ((PVar "sp") (PVar "t")) (EMatch (EApp (EVar "splitEq") (EVar "t")) (arm (PCon "Some" (PTuple (PVar "nm") PWild)) () (EApp (EApp (EVar "declares") (EVar "nm")) (EFieldAccess (EVar "sp") "flags"))) (arm (PCon "None") () (EApp (EApp (EVar "declares") (EVar "t")) (EFieldAccess (EVar "sp") "flags")))))
 (DTypeSig false "declares" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FlagSpec")) (TyCon "Bool"))))
-(DFunDef false "declares" ((PVar "nm") (PVar "fs")) (EMatch (EApp (EApp (EVar "findFlag") (EVar "nm")) (EVar "fs")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "declares" ((PVar "nm") (PVar "fs")) (EApp (EVar "isSome") (EApp (EApp (EVar "findFlag") (EVar "nm")) (EVar "fs"))))
 (DTypeSig false "isAfterSeparator" (TyFun (TyCon "Trailing") (TyCon "Bool")))
 (DFunDef false "isAfterSeparator" ((PCon "TrailingAfterSeparator")) (EVar "True"))
 (DFunDef false "isAfterSeparator" (PWild) (EVar "False"))
@@ -883,7 +881,7 @@ prop "Debug ArgSpec agrees with Eq" (n : String) =
 (DTypeSig false "isDeclaredShort" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isDeclaredShort" ((PVar "sp") (PVar "t")) (EMatch (EApp (EVar "splitEq") (EVar "t")) (arm (PCon "Some" (PTuple (PVar "nm") PWild)) () (EApp (EApp (EVar "declares") (EVar "nm")) (EFieldAccess (EVar "sp") "flags"))) (arm (PCon "None") () (EApp (EApp (EVar "declares") (EVar "t")) (EFieldAccess (EVar "sp") "flags")))))
 (DTypeSig false "declares" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FlagSpec")) (TyCon "Bool"))))
-(DFunDef false "declares" ((PVar "nm") (PVar "fs")) (EMatch (EApp (EApp (EVar "findFlag") (EVar "nm")) (EVar "fs")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "declares" ((PVar "nm") (PVar "fs")) (EApp (EVar "isSome") (EApp (EApp (EVar "findFlag") (EVar "nm")) (EVar "fs"))))
 (DTypeSig false "isAfterSeparator" (TyFun (TyCon "Trailing") (TyCon "Bool")))
 (DFunDef false "isAfterSeparator" ((PCon "TrailingAfterSeparator")) (EVar "True"))
 (DFunDef false "isAfterSeparator" (PWild) (EVar "False"))

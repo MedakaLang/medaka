@@ -1232,9 +1232,7 @@ admitServiceAudience account registry table raw lxm = match proxyServiceDid raw
 
 isConfigured : Option AppviewTable -> String -> Bool
 isConfigured None _ = False
-isConfigured (Some configured) bare = match appviewRouteFor configured bare
-  None => False
-  Some _ => True
+isConfigured (Some configured) bare = isSome (appviewRouteFor configured bare)
 
 -- | The video service's DID: the audience the official client names for the
 -- upload-limits query that precedes an upload.

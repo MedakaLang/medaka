@@ -398,6 +398,4 @@ rowidOfRow (Some p) _ cells = match get p cells
       "INTEGER PRIMARY KEY column must be a non-NULL integer to build an index"
 
 keyOf : Int -> List Cell -> Cell
-keyOf colIdx row = match get colIdx row
-  Some c => c
-  None => CNull
+keyOf colIdx row = optionOr CNull (get colIdx row)

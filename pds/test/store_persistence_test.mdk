@@ -151,12 +151,8 @@ require False message = Err message
 -- final newline.
 lastLine : String -> String
 lastLine out =
-  let body = match stripSuffix "\n" out
-    Some b => b
-    None => out
-  match last (lines body)
-    Some l => l
-    None => ""
+  let body = optionOr out (stripSuffix "\n" out)
+  optionOr "" (last (lines body))
 
 requireLast : String -> String -> String -> Result String Unit
 requireLast want out message =
@@ -190,9 +186,7 @@ fileIsRegular p = match statFile p
 
 -- `path` relative to `root`.
 relativeTo : String -> String -> String
-relativeTo root path = match stripPrefix "\{root}/" path
-  Some rel => rel
-  None => path
+relativeTo root path = optionOr path (stripPrefix "\{root}/" path)
 
 -- `path` with its last `/component` removed, as `sub(/\/[^\/]*$/, "")`.
 parentOf : String -> String
@@ -430,9 +424,7 @@ firstOf _ (x :: _) = Ok x
 firstOf what [] = Err "no \{what}"
 
 isSidecar : String -> Bool
-isSidecar path = match stripSuffix ".mime" path
-  Some _ => True
-  None => False
+isSidecar path = isSome (stripSuffix ".mime" path)
 
 test "tamper: a tampered block file and a tampered blob file are refused, not served" = inScratch
   (bin scratch => do
@@ -857,10 +849,7 @@ test "stray: an entry no store wrote is skipped or refused as its module states,
     () <- require
       (not (contains "refused" base))
       "the unplanted baseline did not read cleanly: \{base}"
-    let field =
-      i => match get i fields
-        Some f => f
-        None => ""
+    let field = i => optionOr "" (get i fields)
     let blocksOk = field 1
     let blobsOk = field 3
     let countOk = field 5
@@ -1111,9 +1100,7 @@ countOf : String -> List String -> Int
 countOf pattern events = length (positions pattern events)
 
 eventAt : List String -> Int -> String
-eventAt events i = match get (i - 1) events
-  Some e => e
-  None => ""
+eventAt events i = optionOr "" (get (i - 1) events)
 
 {- | 12a. `persistTransition` runs the blob half before the repo half, and
    only the syscall order records which ran first. A record may name blob
@@ -1244,9 +1231,7 @@ renameEvent prev ev st0 =
   match words ev
     _ :: src :: dst :: _ =>
       if prev /= Some "F \{src}" then
-        let before = match prev
-          Some p => p
-          None => "<nothing>"
+        let before = optionOr "<nothing>" prev
         { st |
           bad =
             st.bad ++ ["UNBARRIERED PROMOTE: \{ev}\n  preceded by: \{before}"],
@@ -1472,9 +1457,7 @@ test "cost: the hundredth upload writes its own blob and sidecar, and no other b
       sum
         (map
           (l => match get 2 (words l)
-            Some s => match toInt s
-              Some n => n
-              None => 0
+            Some s => optionOr 0 (toInt s)
             None => 0)
           written)
     blobSize <- match map words (tagged "BLOB-CHURN-ADD size " add)

@@ -41,9 +41,7 @@ blockStoreSize (BlockStore entries) = size entries
 -- | Test whether a CID is present.
 export
 blockStoreHas : Cid -> BlockStore -> Bool
-blockStoreHas cid (BlockStore entries) = match findBytes cid entries
-  Some _ => True
-  None => False
+blockStoreHas cid (BlockStore entries) = isSome (findBytes cid entries)
 
 -- | Look up a block's bytes.
 export

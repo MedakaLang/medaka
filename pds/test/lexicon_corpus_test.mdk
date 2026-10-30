@@ -46,9 +46,10 @@ rowOf value = Row {
   id = field "id" value,
   collection = field "collection" value,
   rkey = field "rkey" value,
-  record = match get "record" value
-    Some record => record
-    None => panic "lexicon_corpus_test: a row without a record",
+  record =
+    optionOrPanic
+      "lexicon_corpus_test: a row without a record"
+      (get "record" value),
   verdict = field "verdict" value,
   message = field "message" value,
 }

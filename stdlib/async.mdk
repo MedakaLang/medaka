@@ -268,9 +268,7 @@ runAsync prog =
   let back = Ref []
   let parked = Ref []
   let _ = schedule front back parked 1
-  match !cell
-    Some a => a
-    None => panic "async: the program finished without producing a value"
+  optionOrPanic "async: the program finished without producing a value" !cell
 
 {- | `runAsync` for a program whose value is `Unit`.
 

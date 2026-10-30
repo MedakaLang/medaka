@@ -737,9 +737,7 @@ export impl Hashable Bytes where
 -- `Array Int` of the bytes, which would box a machine word per byte to
 -- produce the same characters.
 hexDigit : Int -> Char
-hexDigit n = match toDigit n
-  Some c => c
-  None => '?'
+hexDigit n = optionOr '?' (toDigit n)
 
 debugBytesHex : ByteBlock -> Int -> Int -> String
 debugBytesHex bb i n

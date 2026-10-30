@@ -135,11 +135,11 @@ export
 preflightResponse : Request -> Response
 preflightResponse request =
   let allowHeadersHeader =
-    match (makeHeader
-      "access-control-allow-headers"
-      (requestedHeaders (requestHeaders request)))
-      Ok header => header
-      Err _ => emptyAllowHeadersHeader
+    resultOr
+      emptyAllowHeadersHeader
+      (makeHeader
+        "access-control-allow-headers"
+        (requestedHeaders (requestHeaders request)))
   let headers = [
     allowOriginHeader,
     allowMethodsHeader,

@@ -54,9 +54,7 @@ rfcKeyB64 = "hJtXIZ2uSN5kbQfbtTNWbpdmhkV8FJG-Onbc6mxCcYg"
 -- literals, so there is one place a transcription error could hide and the
 -- length assertion below covers it.
 rfcKey : Bytes
-rfcKey = match decodeUrlSafe "\{rfcKeyB64}="
-  Ok bytes => bytes
-  Err _ => empty
+rfcKey = resultOr empty (decodeUrlSafe "\{rfcKeyB64}=")
 
 -- The same key admitted as a session-token key, which is what minting and
 -- verification take.

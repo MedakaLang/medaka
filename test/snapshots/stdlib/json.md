@@ -1,5 +1,5 @@
 # META
-source_lines=781
+source_lines=779
 stages=DESUGAR,MARK
 # SOURCE
 {- | A JSON value type with a parser and a serializer.
@@ -78,9 +78,7 @@ jObject xs = JObject (arrayFromList xs)
 -- `\uXXXX` (see `parseUnicodeScalar`), which must reject an invalid codepoint
 -- (e.g. a lone surrogate) with an `Err` rather than silently substituting.
 charOfCode : Int -> Char
-charOfCode k = match charFromCode k
-  Some c => c
-  None => ' '
+charOfCode k = optionOr ' ' (charFromCode k)
 
 -- # Serialization
 
@@ -794,7 +792,7 @@ prop "get finds an inserted key" (k : Int) (v : Int) =
 (DTypeSig true "jObject" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))) (TyCon "Json")))
 (DFunDef false "jObject" ((PVar "xs")) (EApp (EVar "JObject") (EApp (EVar "arrayFromList") (EVar "xs"))))
 (DTypeSig false "charOfCode" (TyFun (TyCon "Int") (TyCon "Char")))
-(DFunDef false "charOfCode" ((PVar "k")) (EMatch (EApp (EVar "charFromCode") (EVar "k")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar " ")))))
+(DFunDef false "charOfCode" ((PVar "k")) (EApp (EApp (EVar "optionOr") (ELit (LChar " "))) (EApp (EVar "charFromCode") (EVar "k"))))
 (DTypeSig false "renderFloat" (TyFun (TyCon "Float") (TyCon "String")))
 (DFunDef false "renderFloat" ((PVar "f")) (EApp (EVar "fixTrailingDot") (EApp (EVar "floatToString") (EVar "f"))))
 (DTypeSig false "fixTrailingDot" (TyFun (TyCon "String") (TyCon "String")))
@@ -984,7 +982,7 @@ prop "get finds an inserted key" (k : Int) (v : Int) =
 (DTypeSig true "jObject" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))) (TyCon "Json")))
 (DFunDef false "jObject" ((PVar "xs")) (EApp (EVar "JObject") (EApp (EVar "arrayFromList") (EVar "xs"))))
 (DTypeSig false "charOfCode" (TyFun (TyCon "Int") (TyCon "Char")))
-(DFunDef false "charOfCode" ((PVar "k")) (EMatch (EApp (EVar "charFromCode") (EVar "k")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar " ")))))
+(DFunDef false "charOfCode" ((PVar "k")) (EApp (EApp (EVar "optionOr") (ELit (LChar " "))) (EApp (EVar "charFromCode") (EVar "k"))))
 (DTypeSig false "renderFloat" (TyFun (TyCon "Float") (TyCon "String")))
 (DFunDef false "renderFloat" ((PVar "f")) (EApp (EVar "fixTrailingDot") (EApp (EVar "floatToString") (EVar "f"))))
 (DTypeSig false "fixTrailingDot" (TyFun (TyCon "String") (TyCon "String")))

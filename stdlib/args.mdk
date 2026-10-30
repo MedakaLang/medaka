@@ -458,9 +458,7 @@ isDeclaredShort sp t = match splitEq t
   None => declares t sp.flags
 
 declares : String -> List FlagSpec -> Bool
-declares nm fs = match findFlag nm fs
-  Some _ => True
-  None => False
+declares nm fs = isSome (findFlag nm fs)
 
 isAfterSeparator : Trailing -> Bool
 isAfterSeparator TrailingAfterSeparator = True

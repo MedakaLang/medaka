@@ -74,9 +74,7 @@ jObject xs = JObject (arrayFromList xs)
 -- `\uXXXX` (see `parseUnicodeScalar`), which must reject an invalid codepoint
 -- (e.g. a lone surrogate) with an `Err` rather than silently substituting.
 charOfCode : Int -> Char
-charOfCode k = match charFromCode k
-  Some c => c
-  None => ' '
+charOfCode k = optionOr ' ' (charFromCode k)
 
 -- # Serialization
 

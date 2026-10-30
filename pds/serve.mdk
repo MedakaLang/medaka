@@ -613,9 +613,7 @@ sessionSecretLine dir GeneratedInData =
    be the one its owner typed. -}
 passwordOf : String -> Result String String
 passwordOf text =
-  let password = match stripSuffix "\n" text
-    Some shorter => shorter
-    None => text
+  let password = optionOr text (stripSuffix "\n" text)
   if password == "" then Err "the password file is empty" else Ok password
 
 -- The password `secrets/password` supplies, read and admitted but not yet

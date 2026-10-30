@@ -182,9 +182,7 @@ canonicalNsid nsid =
     B.fromU8Array
       (arrayMakeWith (B.length bytes) (i =>
         if i < authorityEnd then lowerAsciiByte bytes[i] else bytes[i]))
-  match decodeUtf8 folded
-    Some canonical => canonical
-    None => nsid
+  optionOr nsid (decodeUtf8 folded)
 
 -- | Stable repository-facing wording retained while the validation authority
 -- moves into this shared module.

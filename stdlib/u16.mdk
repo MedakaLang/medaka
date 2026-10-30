@@ -241,9 +241,7 @@ trailingZeros x =
 
 -- every element is a byte by construction, so `fromArray` cannot refuse it.
 bytesOf : Array Int -> Bytes
-bytesOf bs = match B.fromArray bs
-  Some b => b
-  None => panic "u16.toBytes: a byte out of range"
+bytesOf bs = optionOrPanic "u16.toBytes: a byte out of range" (B.fromArray bs)
 
 -- the value whose bytes are [hi] and [lo], when the string is exactly two long.
 fromTwo : Bytes -> Int -> Int -> Option U16

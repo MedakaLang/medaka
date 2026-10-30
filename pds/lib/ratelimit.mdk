@@ -177,9 +177,7 @@ tablesInView stateWindow windowIdx previous current =
     (Tip, Tip)
 
 countersFor : String -> Map String ClientCounters -> ClientCounters
-countersFor key table = match get key table
-  Some counters => counters
-  None => emptyCounters
+countersFor key table = optionOr emptyCounters (get key table)
 
 {- | What one identity has spent on one class over the window ENDING at
    `elapsed` seconds into the current window: everything charged in this
