@@ -354,7 +354,7 @@ walkExpr hooks scope parent _ acc (ELoc l inner) =
   walkExpr hooks scope parent (Some l) acc inner
 walkExpr hooks scope parent span acc e =
   let k = exprKind e
-  let acc2 = visitHooks scope parent span k e acc hooks
+  let acc2 = visitHooks (scopeCtx scope parent span) k e acc hooks
   walkKids hooks scope k span acc2 (childExprs e)
 
 walkKids : List ExprHook ->
@@ -368,26 +368,16 @@ walkKids _ _ _ _ acc [] = acc
 walkKids hooks scope parent span acc (c :: cs) =
   walkKids hooks scope parent span (walkExpr hooks scope parent span acc c) cs
 
-visitHooks : BodyScope ->
-  ExprKind ->
-  Option Loc ->
+visitHooks : Ctx ->
   ExprKind ->
   Expr ->
   List (Int, Finding) ->
   List ExprHook ->
   List (Int, Finding)
-visitHooks _ _ _ _ _ acc [] = acc
-visitHooks scope parent span k e acc ((ExprHook i kinds cb) :: rest)
-  | hookWants k kinds =
-    visitHooks
-      scope
-      parent
-      span
-      k
-      e
-      (pushTagged i (cb (scopeCtx scope parent span) e) acc)
-      rest
-  | otherwise = visitHooks scope parent span k e acc rest
+visitHooks _ _ _ acc [] = acc
+visitHooks ctx k e acc ((ExprHook i kinds cb) :: rest)
+  | hookWants k kinds = visitHooks ctx k e (pushTagged i (cb ctx e) acc) rest
+  | otherwise = visitHooks ctx k e acc rest
 
 hookWants : ExprKind -> Option (List ExprKind) -> Bool
 hookWants _ None = True
@@ -683,7 +673,17 @@ isTestMember verb b =
 introducedIsFree : FileScopes -> Int -> Int -> String -> Bool
 introducedIsFree fs from to verb =
   isEmptyL (bindersNamedIn fs from to verb)
+    && isEmptyL (filterList unplacedBinder (bindersNamed fs verb))
+    && allList (== ["test"]) (wildImports fs)
     && allList (isTestMember verb) (filterList fileLevel (bindersNamed fs verb))
+
+-- A binder the parser built from an expression (lambda parameter, guard-bind,
+-- do-bind) has no source line, so no declaration's line range can place it:
+-- it counts as in scope everywhere.
+unplacedBinder : Binder -> Bool
+unplacedBinder b = match b.binderSpan
+  Loc _ 0 _ _ _ => True
+  _ => False
 
 fileLevel : Binder -> Bool
 fileLevel b = match b.binderKind

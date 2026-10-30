@@ -559,7 +559,7 @@ exprRuleHit : (String -> Bool) ->
   Expr ->
   List Finding
 exprRuleHit excl det mkFinding ctx e
-  | excl ctx.ctxDeclName = []
+  | not ctx.ctxInTest && excl ctx.ctxDeclName = []
   | otherwise = match det e
     Some hit => [mkFinding ctx.ctxSpan hit]
     None => []
@@ -583,8 +583,8 @@ declBodyFix _ excl rw (DFunDef vis name pats body site bid)
 declBodyFix tests excl rw (DAttrib a d) = match declBodyFix tests excl rw d
   Some [d2] => Some [DAttrib a d2]
   _ => None
-declBodyFix _ _ rw (d@(DImpl { implOrigin = _, methods })) =
-  let methods2 = map (fixImplMethodWith rw) methods
+declBodyFix _ excl rw (d@(DImpl { implOrigin = _, methods })) =
+  let methods2 = map (fixImplMethodWith excl rw) methods
   if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
     None
   else
@@ -595,8 +595,13 @@ declBodyFix True _ rw (DProp pub name ps body) =
   bodyFix (DProp pub name ps) rw body
 declBodyFix _ _ _ _ = None
 
-fixImplMethodWith : (Expr -> Expr) -> ImplMethod -> ImplMethod
-fixImplMethodWith rw (ImplMethod nm ps body) = ImplMethod nm ps (rw body)
+fixImplMethodWith : (String -> Bool) ->
+  (Expr -> Expr) ->
+  ImplMethod ->
+  ImplMethod
+fixImplMethodWith excl rw (ImplMethod nm ps body)
+  | excl nm = ImplMethod nm ps body
+  | otherwise = ImplMethod nm ps (rw body)
 
 -- `rebuild` is the constructor with everything but the body already applied.
 bodyFix : (Expr -> Decl) -> (Expr -> Expr) -> Expr -> Option (List Decl)

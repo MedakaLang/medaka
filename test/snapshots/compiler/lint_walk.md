@@ -358,7 +358,7 @@ walkExpr hooks scope parent _ acc (ELoc l inner) =
   walkExpr hooks scope parent (Some l) acc inner
 walkExpr hooks scope parent span acc e =
   let k = exprKind e
-  let acc2 = visitHooks scope parent span k e acc hooks
+  let acc2 = visitHooks (scopeCtx scope parent span) k e acc hooks
   walkKids hooks scope k span acc2 (childExprs e)
 
 walkKids : List ExprHook ->
@@ -372,26 +372,16 @@ walkKids _ _ _ _ acc [] = acc
 walkKids hooks scope parent span acc (c :: cs) =
   walkKids hooks scope parent span (walkExpr hooks scope parent span acc c) cs
 
-visitHooks : BodyScope ->
-  ExprKind ->
-  Option Loc ->
+visitHooks : Ctx ->
   ExprKind ->
   Expr ->
   List (Int, Finding) ->
   List ExprHook ->
   List (Int, Finding)
-visitHooks _ _ _ _ _ acc [] = acc
-visitHooks scope parent span k e acc ((ExprHook i kinds cb) :: rest)
-  | hookWants k kinds =
-    visitHooks
-      scope
-      parent
-      span
-      k
-      e
-      (pushTagged i (cb (scopeCtx scope parent span) e) acc)
-      rest
-  | otherwise = visitHooks scope parent span k e acc rest
+visitHooks _ _ _ acc [] = acc
+visitHooks ctx k e acc ((ExprHook i kinds cb) :: rest)
+  | hookWants k kinds = visitHooks ctx k e (pushTagged i (cb ctx e) acc) rest
+  | otherwise = visitHooks ctx k e acc rest
 
 hookWants : ExprKind -> Option (List ExprKind) -> Bool
 hookWants _ None = True
@@ -687,7 +677,17 @@ isTestMember verb b =
 introducedIsFree : FileScopes -> Int -> Int -> String -> Bool
 introducedIsFree fs from to verb =
   isEmptyL (bindersNamedIn fs from to verb)
+    && isEmptyL (filterList unplacedBinder (bindersNamed fs verb))
+    && allList (== ["test"]) (wildImports fs)
     && allList (isTestMember verb) (filterList fileLevel (bindersNamed fs verb))
+
+-- A binder the parser built from an expression (lambda parameter, guard-bind,
+-- do-bind) has no source line, so no declaration's line range can place it:
+-- it counts as in scope everywhere.
+unplacedBinder : Binder -> Bool
+unplacedBinder b = match b.binderSpan
+  Loc _ 0 _ _ _ => True
+  _ => False
 
 fileLevel : Binder -> Bool
 fileLevel b = match b.binderKind
@@ -1351,13 +1351,13 @@ runCrossRuleFromOccs only disable occs r
 (DFunDef false "walkBodies" ((PVar "hooks") (PVar "loc") (PVar "acc") (PCons (PCon "DeclBody" (PVar "owner") (PVar "body")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "walkBodies") (EVar "hooks")) (EVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "hooks")) (EApp (EApp (EVar "ownerScope") (EVar "owner")) (EVar "loc"))) (EVar "KLoc")) (EVar "loc")) (EVar "acc")) (EVar "body"))) (EVar "rest")))
 (DTypeSig false "walkExpr" (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))))))))))
 (DFunDef false "walkExpr" ((PVar "hooks") (PVar "scope") (PVar "parent") PWild (PVar "acc") (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "hooks")) (EVar "scope")) (EVar "parent")) (EApp (EVar "Some") (EVar "l"))) (EVar "acc")) (EVar "inner")))
-(DFunDef false "walkExpr" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "span") (PVar "acc") (PVar "e")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "exprKind") (EVar "e"))) (DoLet false false (PVar "acc2") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "hooks"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EVar "scope")) (EVar "k")) (EVar "span")) (EVar "acc2")) (EApp (EVar "childExprs") (EVar "e"))))))
+(DFunDef false "walkExpr" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "span") (PVar "acc") (PVar "e")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "exprKind") (EVar "e"))) (DoLet false false (PVar "acc2") (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EApp (EApp (EApp (EVar "scopeCtx") (EVar "scope")) (EVar "parent")) (EVar "span"))) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "hooks"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EVar "scope")) (EVar "k")) (EVar "span")) (EVar "acc2")) (EApp (EVar "childExprs") (EVar "e"))))))
 (DTypeSig false "walkKids" (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))))))))))
 (DFunDef false "walkKids" (PWild PWild PWild PWild (PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "walkKids" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "span") (PVar "acc") (PCons (PVar "c") (PVar "cs"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EVar "scope")) (EVar "parent")) (EVar "span")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "hooks")) (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "acc")) (EVar "c"))) (EVar "cs")))
-(DTypeSig false "visitHooks" (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ExprKind") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))))))
-(DFunDef false "visitHooks" (PWild PWild PWild PWild PWild (PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "visitHooks" ((PVar "scope") (PVar "parent") (PVar "span") (PVar "k") (PVar "e") (PVar "acc") (PCons (PCon "ExprHook" (PVar "i") (PVar "kinds") (PVar "cb")) (PVar "rest"))) (EIf (EApp (EApp (EVar "hookWants") (EVar "k")) (EVar "kinds")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "k")) (EVar "e")) (EApp (EApp (EApp (EVar "pushTagged") (EVar "i")) (EApp (EApp (EVar "cb") (EApp (EApp (EApp (EVar "scopeCtx") (EVar "scope")) (EVar "parent")) (EVar "span"))) (EVar "e"))) (EVar "acc"))) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "visitHooks" (TyFun (TyCon "Ctx") (TyFun (TyCon "ExprKind") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))))
+(DFunDef false "visitHooks" (PWild PWild PWild (PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "visitHooks" ((PVar "ctx") (PVar "k") (PVar "e") (PVar "acc") (PCons (PCon "ExprHook" (PVar "i") (PVar "kinds") (PVar "cb")) (PVar "rest"))) (EIf (EApp (EApp (EVar "hookWants") (EVar "k")) (EVar "kinds")) (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "ctx")) (EVar "k")) (EVar "e")) (EApp (EApp (EApp (EVar "pushTagged") (EVar "i")) (EApp (EApp (EVar "cb") (EVar "ctx")) (EVar "e"))) (EVar "acc"))) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "ctx")) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hookWants" (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExprKind"))) (TyCon "Bool"))))
 (DFunDef false "hookWants" (PWild (PCon "None")) (EVar "True"))
 (DFunDef false "hookWants" ((PVar "k") (PCon "Some" (PVar "kinds"))) (EApp (EApp (EVar "kindIn") (EVar "k")) (EVar "kinds")))
@@ -1433,7 +1433,9 @@ runCrossRuleFromOccs only disable occs r
 (DTypeSig false "isTestMember" (TyFun (TyCon "String") (TyFun (TyCon "Binder") (TyCon "Bool"))))
 (DFunDef false "isTestMember" ((PVar "verb") (PVar "b")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "b") "binderKind") (EVar "BImport")) (EBinOp "==" (EFieldAccess (EVar "b") "binderFrom") (EListLit (ELit (LString "test"))))) (EBinOp "==" (EFieldAccess (EVar "b") "binderOrigin") (EVar "verb"))))
 (DTypeSig false "introducedIsFree" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Bool"))))))
-(DFunDef false "introducedIsFree" ((PVar "fs") (PVar "from") (PVar "to") (PVar "verb")) (EBinOp "&&" (EApp (EVar "isEmptyL") (EApp (EApp (EApp (EApp (EVar "bindersNamedIn") (EVar "fs")) (EVar "from")) (EVar "to")) (EVar "verb"))) (EApp (EApp (EVar "allList") (EApp (EVar "isTestMember") (EVar "verb"))) (EApp (EApp (EVar "filterList") (EVar "fileLevel")) (EApp (EApp (EVar "bindersNamed") (EVar "fs")) (EVar "verb"))))))
+(DFunDef false "introducedIsFree" ((PVar "fs") (PVar "from") (PVar "to") (PVar "verb")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EApp (EApp (EApp (EApp (EVar "bindersNamedIn") (EVar "fs")) (EVar "from")) (EVar "to")) (EVar "verb"))) (EApp (EVar "isEmptyL") (EApp (EApp (EVar "filterList") (EVar "unplacedBinder")) (EApp (EApp (EVar "bindersNamed") (EVar "fs")) (EVar "verb"))))) (EApp (EApp (EVar "allList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EListLit (ELit (LString "test")))))) (EApp (EVar "wildImports") (EVar "fs")))) (EApp (EApp (EVar "allList") (EApp (EVar "isTestMember") (EVar "verb"))) (EApp (EApp (EVar "filterList") (EVar "fileLevel")) (EApp (EApp (EVar "bindersNamed") (EVar "fs")) (EVar "verb"))))))
+(DTypeSig false "unplacedBinder" (TyFun (TyCon "Binder") (TyCon "Bool")))
+(DFunDef false "unplacedBinder" ((PVar "b")) (EMatch (EFieldAccess (EVar "b") "binderSpan") (arm (PCon "Loc" PWild (PLit (LInt 0)) PWild PWild PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "fileLevel" (TyFun (TyCon "Binder") (TyCon "Bool")))
 (DFunDef false "fileLevel" ((PVar "b")) (EMatch (EFieldAccess (EVar "b") "binderKind") (arm (PCon "BImport") () (EVar "True")) (arm (PCon "BTopLevel") () (EVar "True")) (arm (PCon "BLetGroup") () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "reconcileTestImport" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))))
@@ -1653,13 +1655,13 @@ runCrossRuleFromOccs only disable occs r
 (DFunDef false "walkBodies" ((PVar "hooks") (PVar "loc") (PVar "acc") (PCons (PCon "DeclBody" (PVar "owner") (PVar "body")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "walkBodies") (EVar "hooks")) (EVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "hooks")) (EApp (EApp (EVar "ownerScope") (EVar "owner")) (EVar "loc"))) (EVar "KLoc")) (EVar "loc")) (EVar "acc")) (EVar "body"))) (EVar "rest")))
 (DTypeSig false "walkExpr" (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))))))))))
 (DFunDef false "walkExpr" ((PVar "hooks") (PVar "scope") (PVar "parent") PWild (PVar "acc") (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "hooks")) (EVar "scope")) (EVar "parent")) (EApp (EVar "Some") (EVar "l"))) (EVar "acc")) (EVar "inner")))
-(DFunDef false "walkExpr" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "span") (PVar "acc") (PVar "e")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "exprKind") (EVar "e"))) (DoLet false false (PVar "acc2") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "hooks"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EVar "scope")) (EVar "k")) (EVar "span")) (EVar "acc2")) (EApp (EVar "childExprs") (EVar "e"))))))
+(DFunDef false "walkExpr" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "span") (PVar "acc") (PVar "e")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "exprKind") (EVar "e"))) (DoLet false false (PVar "acc2") (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EApp (EApp (EApp (EVar "scopeCtx") (EVar "scope")) (EVar "parent")) (EVar "span"))) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "hooks"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EVar "scope")) (EVar "k")) (EVar "span")) (EVar "acc2")) (EApp (EVar "childExprs") (EVar "e"))))))
 (DTypeSig false "walkKids" (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))))))))))
 (DFunDef false "walkKids" (PWild PWild PWild PWild (PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "walkKids" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "span") (PVar "acc") (PCons (PVar "c") (PVar "cs"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EVar "scope")) (EVar "parent")) (EVar "span")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "hooks")) (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "acc")) (EVar "c"))) (EVar "cs")))
-(DTypeSig false "visitHooks" (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ExprKind") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))))))
-(DFunDef false "visitHooks" (PWild PWild PWild PWild PWild (PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "visitHooks" ((PVar "scope") (PVar "parent") (PVar "span") (PVar "k") (PVar "e") (PVar "acc") (PCons (PCon "ExprHook" (PVar "i") (PVar "kinds") (PVar "cb")) (PVar "rest"))) (EIf (EApp (EApp (EVar "hookWants") (EVar "k")) (EVar "kinds")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "k")) (EVar "e")) (EApp (EApp (EApp (EVar "pushTagged") (EVar "i")) (EApp (EApp (EVar "cb") (EApp (EApp (EApp (EVar "scopeCtx") (EVar "scope")) (EVar "parent")) (EVar "span"))) (EVar "e"))) (EVar "acc"))) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "visitHooks" (TyFun (TyCon "Ctx") (TyFun (TyCon "ExprKind") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))))
+(DFunDef false "visitHooks" (PWild PWild PWild (PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "visitHooks" ((PVar "ctx") (PVar "k") (PVar "e") (PVar "acc") (PCons (PCon "ExprHook" (PVar "i") (PVar "kinds") (PVar "cb")) (PVar "rest"))) (EIf (EApp (EApp (EVar "hookWants") (EVar "k")) (EVar "kinds")) (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "ctx")) (EVar "k")) (EVar "e")) (EApp (EApp (EApp (EVar "pushTagged") (EVar "i")) (EApp (EApp (EVar "cb") (EVar "ctx")) (EVar "e"))) (EVar "acc"))) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "ctx")) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hookWants" (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExprKind"))) (TyCon "Bool"))))
 (DFunDef false "hookWants" (PWild (PCon "None")) (EVar "True"))
 (DFunDef false "hookWants" ((PVar "k") (PCon "Some" (PVar "kinds"))) (EApp (EApp (EVar "kindIn") (EVar "k")) (EVar "kinds")))
@@ -1735,7 +1737,9 @@ runCrossRuleFromOccs only disable occs r
 (DTypeSig false "isTestMember" (TyFun (TyCon "String") (TyFun (TyCon "Binder") (TyCon "Bool"))))
 (DFunDef false "isTestMember" ((PVar "verb") (PVar "b")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "b") "binderKind") (EVar "BImport")) (EBinOp "==" (EFieldAccess (EVar "b") "binderFrom") (EListLit (ELit (LString "test"))))) (EBinOp "==" (EFieldAccess (EVar "b") "binderOrigin") (EVar "verb"))))
 (DTypeSig false "introducedIsFree" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Bool"))))))
-(DFunDef false "introducedIsFree" ((PVar "fs") (PVar "from") (PVar "to") (PVar "verb")) (EBinOp "&&" (EApp (EVar "isEmptyL") (EApp (EApp (EApp (EApp (EVar "bindersNamedIn") (EVar "fs")) (EVar "from")) (EVar "to")) (EVar "verb"))) (EApp (EApp (EVar "allList") (EApp (EVar "isTestMember") (EVar "verb"))) (EApp (EApp (EVar "filterList") (EVar "fileLevel")) (EApp (EApp (EVar "bindersNamed") (EVar "fs")) (EVar "verb"))))))
+(DFunDef false "introducedIsFree" ((PVar "fs") (PVar "from") (PVar "to") (PVar "verb")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EApp (EApp (EApp (EApp (EVar "bindersNamedIn") (EVar "fs")) (EVar "from")) (EVar "to")) (EVar "verb"))) (EApp (EVar "isEmptyL") (EApp (EApp (EVar "filterList") (EVar "unplacedBinder")) (EApp (EApp (EVar "bindersNamed") (EVar "fs")) (EVar "verb"))))) (EApp (EApp (EVar "allList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EListLit (ELit (LString "test")))))) (EApp (EVar "wildImports") (EVar "fs")))) (EApp (EApp (EVar "allList") (EApp (EVar "isTestMember") (EVar "verb"))) (EApp (EApp (EVar "filterList") (EVar "fileLevel")) (EApp (EApp (EVar "bindersNamed") (EVar "fs")) (EVar "verb"))))))
+(DTypeSig false "unplacedBinder" (TyFun (TyCon "Binder") (TyCon "Bool")))
+(DFunDef false "unplacedBinder" ((PVar "b")) (EMatch (EFieldAccess (EVar "b") "binderSpan") (arm (PCon "Loc" PWild (PLit (LInt 0)) PWild PWild PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "fileLevel" (TyFun (TyCon "Binder") (TyCon "Bool")))
 (DFunDef false "fileLevel" ((PVar "b")) (EMatch (EFieldAccess (EVar "b") "binderKind") (arm (PCon "BImport") () (EVar "True")) (arm (PCon "BTopLevel") () (EVar "True")) (arm (PCon "BLetGroup") () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "reconcileTestImport" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))))

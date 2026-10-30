@@ -1,0 +1,5 @@
+-- A lambda parameter `expectTrue` would capture the verb the rewrite introduces.
+
+import test.{expectEqual}
+
+f a = (expectTrue => expectEqual True (a == 1)) 3
