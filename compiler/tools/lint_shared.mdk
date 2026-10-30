@@ -105,6 +105,10 @@ ruleNameMatchToMap : String
 ruleNameMatchToMap = "rule-match-to-map"
 
 export
+ruleNameOptionEliminators : String
+ruleNameOptionEliminators = "rule-option-eliminators"
+
+export
 ruleNameBindChainToDo : String
 ruleNameBindChainToDo = "rule-bind-chain-to-do"
 
@@ -965,3 +969,21 @@ nameSetInto [] _ = ()
 nameSetInto (n :: rest) s =
   let _ = setInPlace n () s
   nameSetInto rest s
+
+-- The span the fix replaces.  An unparenthesised `match` starts at its keyword,
+-- which its own `ELoc` gives, but that `ELoc` runs to the layout token after the
+-- block, past any comment or blank line that follows.  The end is therefore the
+-- last arm's last token.  A parenthesised match is wrapped by the parentheses'
+-- `ELoc`, which starts at `(` and ends at `)`, so it is exact as it stands.
+export
+matchSpan : FileFacts -> Ctx -> Expr -> Option Loc
+matchSpan facts ctx (EMatch _ arms) = match (ctx.ctxOwn, lastArmSpan arms)
+  (Some (own@(Loc f sl sc _ _)), Some (Loc _ _ _ el ec)) =>
+    if parenAt facts sl sc then Some own else Some (Loc f sl sc el ec)
+  _ => None
+matchSpan _ _ _ = None
+
+lastArmSpan : List Arm -> Option Loc
+lastArmSpan arms = match last arms
+  Some (Arm _ _ body) => tightSpan body
+  None => None

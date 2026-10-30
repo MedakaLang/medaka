@@ -23,6 +23,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-when-unless`](#rule-when-unless) | universal | style | gated | fixable | file |
 | [`rule-complement-predicate`](#rule-complement-predicate) | universal | style | gated | fixable-unsafe | file |
 | [`rule-match-to-map`](#rule-match-to-map) | universal | style | gated | fixable | file |
+| [`rule-option-eliminators`](#rule-option-eliminators) | universal | style | gated | fixable | file |
 | [`rule-bind-chain-to-do`](#rule-bind-chain-to-do) | universal | complexity | gated | not-fixable | file |
 | [`rule-dead-code`](#rule-dead-code) | universal | suspicious | gated | not-fixable | file |
 | [`rule-concat-to-interp`](#rule-concat-to-interp) | universal | style | gated | fixable | file |
@@ -275,6 +276,21 @@ Before:
     Err e => Err e
 After:
   map f r
+```
+
+## rule-option-eliminators
+
+2-arm `match` on an Option/Result that unwraps with an atomic default, panics with a message, or answers whether it is `Some`. The prelude names these: `optionOr`, `optionOrPanic`, `isSome`, `isNone`, `resultOr`
+
+A two-arm `match` that returns the payload of `Some`/`Ok` and otherwise a literal, a variable or a nullary constructor is `optionOr`/`resultOr`; one that otherwise panics with a message is `optionOrPanic`; one that only answers `True`/`False` is `isSome`/`isNone`. A default that is a call is left alone: the function form evaluates it eagerly.
+
+```
+Before:
+  match o
+    Some x => x
+    None => 0
+After:
+  optionOr 0 o
 ```
 
 ## rule-bind-chain-to-do
