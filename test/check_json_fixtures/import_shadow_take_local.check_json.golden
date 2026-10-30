@@ -1,0 +1,1 @@
+{"files":[{"file":"stdlib/string.mdk","diagnostics":[]},{"file":"test/check_json_fixtures/import_shadow_take_local.mdk","diagnostics":[{"code":"T-TYPE-MISMATCH","kind":"type","message":"type mismatch: Int vs String","range":{"end":{"character":17,"line":3},"start":{"character":14,"line":3}},"severity":1,"source":"medaka"}]}]}

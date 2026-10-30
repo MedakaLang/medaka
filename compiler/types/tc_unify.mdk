@@ -1658,11 +1658,31 @@ typeMismatchReportRest dyn a b = match activeDo dyn
           "type mismatch: \{ppMono a} vs \{ppMono b}; \{help}"
           help
           None
-      None =>
-        pushTypeError
-          dyn.dcModule
-          TTypeMismatch
-          "type mismatch: \{ppMono a} vs \{ppMono b}"
+      None => match importedCalleeHelp dyn
+        Some help =>
+          pushTypeErrorHelpFixAt
+            dyn.dcModule
+            TTypeMismatch
+            dyn.dcModule.mcLoc
+            "type mismatch: \{ppMono a} vs \{ppMono b}; \{help}"
+            help
+            None
+        None =>
+          pushTypeError
+            dyn.dcModule
+            TTypeMismatch
+            "type mismatch: \{ppMono a} vs \{ppMono b}"
+
+-- The mismatch is at an application whose head is a selectively imported name:
+-- the import, not an unqualified `name` from some other module, chose the type.
+importedCalleeHelp : DynCtx -> Option String
+importedCalleeHelp dyn = match dyn.dcCallee
+  None => None
+  Some name =>
+    map
+      (mid =>
+        "`\{name}` here is `\{mid}.\{name}` (selectively imported from `\{mid}`); an unqualified `\{name}` from any other module needs its own import")
+      (omLookup name dyn.dcModule.mcCells.currentImportDefinersRef.value)
 
 -- a mismatch inside a do-lowered chain: if it is the monad-shape (`m b`) vs
 -- non-monad obligation, retarget to the tailored "do requires a monad" error;

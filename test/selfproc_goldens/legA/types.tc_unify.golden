@@ -65,6 +65,7 @@ generalizableEffvar : ModuleCtx -> Ref Effvar -> List Int
 generalize : ModuleCtx -> Mono -> Scheme
 generalizeBindingDeclared : DynCtx -> Map Int Unit -> List AuthResidual -> EffRow -> Mono -> Scheme
 ifacesConstrainingVar : ModuleCtx -> Int -> List String
+importedCalleeHelp : DynCtx -> Option String
 indexAtomsCovered : ModuleCtx -> List Atom -> List Atom -> List Atom
 indexOpenClosed : ModuleCtx -> List Atom -> Ref Effvar -> List Atom -> Unit
 indexOutsidePatterns : ModuleCtx -> Authority -> List Authority
