@@ -864,7 +864,8 @@ startsExtension (payload :: _) = isExtensionPayload payload
 startsExtension [] = False
 
 privateUseTail : List String -> Bool
-privateUseTail subtags = subtags /= [] && all (subtagOf 1 8 isAlnumCode) subtags
+privateUseTail subtags =
+  not (isEmpty subtags) && all (subtagOf 1 8 isAlnumCode) subtags
 
 isRegion : String -> Bool
 isRegion subtag =

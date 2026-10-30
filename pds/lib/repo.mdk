@@ -6,7 +6,7 @@
 import bytes as B
 import bytes.{Bytes, encodeUtf8}
 import hex.{encode}
-import list.{reverse, somes}
+import list.{reverse}
 import map.{Map, delete, fromList, get, set, size}
 import regex.{Regex, isFullMatchBytes, mustCompile}
 import set.{Set(..), has, insert}
@@ -1026,7 +1026,7 @@ footprintStep prior before after store = do
       (shiftNodes 1 (mstCreatedNodes before after) prior)
   added <- addRecords store (map ((_, cid, _) => cid) writes) moved
   dropRecords
-    (somes (map ((_, _, priorCid) => priorCid) writes) ++ map snd deletes)
+    (filterMap ((_, _, priorCid) => priorCid) writes ++ map snd deletes)
     added
 
 -- ── verifying a signed commit ───────────────────────────────────────────────

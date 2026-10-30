@@ -178,8 +178,7 @@ samples = map scFromBytesReduce sampleBytes
 
 -- A second, offset list, so the binary identities are not all `a op a`.
 samples2 : List Sc
-samples2 =
-  map scFromBytesReduce (map (bs => decBytes (decBytes bs)) sampleBytes)
+samples2 = map ((bs => decBytes (decBytes bs)) >> scFromBytesReduce) sampleBytes
 
 scNext : Sc -> Sc
 scNext a = scAdd a scOne

@@ -425,7 +425,7 @@ emptyBatchCell did server store before =
     (storeFingerprint after == before
       && commitField "cid" value == cidToString (repoCommitCid current)
       && commitField "rev" value == tidToString (repoCommitTid current)
-      && resultCids value == [])
+      && isEmpty (resultCids value))
     "state=\{stateWord (storeFingerprint after == before)} commit=\{commitField "cid" value} rev=\{commitField "rev" value}"
 
 -- ── revision consistency across a batch and the write that follows it ──

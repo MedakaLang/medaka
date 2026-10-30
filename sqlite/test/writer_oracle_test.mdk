@@ -157,7 +157,7 @@ pageTypeDecimal other = other
 -- the retired scripts' own `range(1, pages)` — the `types=` string below
 -- does NOT exclude it, since that one is a straight byte-for-byte dump.
 countHex : String -> List String -> Int
-countHex want hexes = length (filter (== want) (drop 1 hexes))
+countHex want hexes = count (== want) (drop 1 hexes)
 
 typesDigits : List String -> String
 typesDigits hexes = join "" (map pageTypeDecimal hexes)

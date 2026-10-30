@@ -354,7 +354,7 @@ gradeDecoded rows tag body = match carDecode body
     let pinned = rowCids rows "\{tag}-BLOCKS"
     let missing = filter (cid => not (elem cid blocks)) pinned
     let rootOk = roots == [rowValue rows "\{tag}-ROOT"]
-    let containOk = missing == []
+    let containOk = isEmpty missing
     let boundedOk = length blocks <= maxRecordBlocks tag
     let bytesOk = encode body == rowValue rows "\{tag}-CAR"
     let () = println "\{tag}-ROOT: \{gradeWord rootOk} \{join "," roots}"

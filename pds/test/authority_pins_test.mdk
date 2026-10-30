@@ -18,7 +18,7 @@
    interpreter binds no subprocess extern. -}
 
 import json.{Json, asArray, asInt, asString, get, parse}
-import list.{lookup, somes, zipWith}
+import list.{lookup, zipWith}
 import string.{endsWith}
 import test.{Expectation(..), expectEqual}
 import test_process.{medakaBin, spawnTimeoutSeconds, testJobs, underRoot}
@@ -101,7 +101,7 @@ errorCodesFor suffix doc =
 fileErrorCodes : String -> Json -> List String
 fileErrorCodes suffix file = match get "file" file
   Some path if optionOr False (map (endsWith suffix) (asString path)) =>
-    somes (map errorCode (arrayField "diagnostics" file))
+    filterMap errorCode (arrayField "diagnostics" file)
   _ => []
 
 -- | A diagnostic's code when its severity is 1, the LSP severity for an

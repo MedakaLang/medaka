@@ -23,7 +23,7 @@
 
 import array.{foldWithIndex}
 import io.{runVerb}
-import list.{lookup, nub, reverse, somes, sort}
+import list.{lookup, nub, reverse, sort}
 import string.{
   endsWith, isAlpha, isDigit, lines, startsWith, stripPrefix, toChars, trim,
   words
@@ -377,7 +377,7 @@ checkLedger hashes text =
         ++ conflictFindings [] impls
         ++ flatMap (vectorFindings hashes pinned) vectors
         ++ duplicateFindings [] vectors
-        ++ somes (map (missingRow named) hashes),
+        ++ filterMap (missingRow named) hashes,
   }
 
 stanzaAt : String -> Section -> String

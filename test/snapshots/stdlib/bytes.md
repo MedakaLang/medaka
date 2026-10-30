@@ -424,7 +424,7 @@ indexOf needle bytes = indexOfWithin 0 (length bytes) needle bytes
 export
 lastIndexOf : Bytes -> Bytes -> Option Int
 lastIndexOf needle haystack
-  | length needle == 0 = Some (length haystack)
+  | isEmpty needle = Some (length haystack)
   | otherwise = lastIndexOfGo needle haystack 0 None
 
 -- Walks forward from each hit, advancing one byte so overlapping matches
@@ -1058,7 +1058,7 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "indexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "indexOf" ((PVar "needle") (PVar "bytes")) (EApp (EApp (EApp (EApp (EVar "indexOfWithin") (ELit (LInt 0))) (EApp (EVar "length") (EVar "bytes"))) (EVar "needle")) (EVar "bytes")))
 (DTypeSig true "lastIndexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EApp (EVar "length") (EVar "needle")) (ELit (LInt 0))) (EApp (EVar "Some") (EApp (EVar "length") (EVar "haystack"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EApp (EVar "isEmpty") (EVar "needle")) (EApp (EVar "Some") (EApp (EVar "length") (EVar "haystack"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "lastIndexOfGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DFunDef false "lastIndexOfGo" ((PVar "needle") (PVar "haystack") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EVar "indexOfWithin") (EVar "from")) (EApp (EVar "length") (EVar "haystack"))) (EVar "needle")) (EVar "haystack")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "Some") (EVar "i"))))))
 (DTypeSig true "contains" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
@@ -1192,7 +1192,7 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "indexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "indexOf" ((PVar "needle") (PVar "bytes")) (EApp (EApp (EApp (EApp (EVar "indexOfWithin") (ELit (LInt 0))) (EApp (EVar "length#shadow") (EVar "bytes"))) (EVar "needle")) (EVar "bytes")))
 (DTypeSig true "lastIndexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EApp (EVar "length#shadow") (EVar "needle")) (ELit (LInt 0))) (EApp (EVar "Some") (EApp (EVar "length#shadow") (EVar "haystack"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EApp (EVar "isEmpty#shadow") (EVar "needle")) (EApp (EVar "Some") (EApp (EVar "length#shadow") (EVar "haystack"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "lastIndexOfGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DFunDef false "lastIndexOfGo" ((PVar "needle") (PVar "haystack") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EVar "indexOfWithin") (EVar "from")) (EApp (EVar "length#shadow") (EVar "haystack"))) (EVar "needle")) (EVar "haystack")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "Some") (EVar "i"))))))
 (DTypeSig true "contains" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
