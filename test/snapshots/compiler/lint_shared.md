@@ -1,5 +1,5 @@
 # META
-source_lines=803
+source_lines=963
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -16,13 +16,18 @@ import support.util.{
   contains, filterList, splitOnChar, joinWith, startsWith, listLen, anyList,
   joinNl, dedupBy
 }
-import list.{sortBy, last}
+import list.{drop, sortBy, last}
+import string.{lines}
 import support.path.{stripMdk}
 import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
 import tools.lint_core.{
-  Ctx(..), DirScope(..), Directive(..), Finding(..), Visitor(..)
+  Applicability(..), Ctx(..), DirScope(..), Directive(..), FileFacts(..),
+  Finding(..), Fix(..), FixEdit(..), StdlibIndex, Visitor(..), factScopes,
+  stdlibKnowsModule, stdlibSigIn
 }
+import tools.lint_fix.{Binding(..), parenIfNeeded}
+import tools.lint_scope.{binderOf, bindersNamed, wildImports}
 export import frontend.ast_walk.{childExprs, mapChildExprs, stmtExprs}
 import frontend.ast_walk.{DeclBody(..), declBodies}
 import hash_map.{HashMap, new, setInPlace}
@@ -554,18 +559,31 @@ exprRuleVisitors : (String -> Bool) ->
   (Option Loc -> Expr -> Finding) ->
   List Visitor
 exprRuleVisitors excl det mkFinding =
-  [OnAnyExpr (exprRuleHit excl det mkFinding)]
+  exprRuleEditVisitors excl det (_ _ _ => None) (loc hit _ => mkFinding loc hit)
 
-exprRuleHit : (String -> Bool) ->
+-- `exprRuleVisitors` whose findings carry a span fix: the same detector and the
+-- same gate, with `fixOf ctx e rewritten` as each finding's fix.  The fix is
+-- `None` where the rule withholds it; the finding is reported either way.
+export
+exprRuleEditVisitors : (String -> Bool) ->
   (Expr -> Option Expr) ->
-  (Option Loc -> Expr -> Finding) ->
+  (Ctx -> Expr -> Expr -> Option Fix) ->
+  (Option Loc -> Expr -> Option Fix -> Finding) ->
+  List Visitor
+exprRuleEditVisitors excl det fixOf mkFinding =
+  [OnAnyExpr (exprRuleEditHit excl det fixOf mkFinding)]
+
+exprRuleEditHit : (String -> Bool) ->
+  (Expr -> Option Expr) ->
+  (Ctx -> Expr -> Expr -> Option Fix) ->
+  (Option Loc -> Expr -> Option Fix -> Finding) ->
   Ctx ->
   Expr ->
   List Finding
-exprRuleHit excl det mkFinding ctx e
+exprRuleEditHit excl det fixOf mkFinding ctx e
   | not ctx.ctxInTest && excl ctx.ctxDeclName = []
   | otherwise = match det e
-    Some hit => [mkFinding ctx.ctxSpan hit]
+    Some hit => [mkFinding ctx.ctxSpan hit (fixOf ctx e hit)]
     None => []
 
 -- ── generic fix driver ────────────────────────────────────────────────────────
@@ -617,11 +635,6 @@ bodyFix rebuild rw body =
 export
 exprRuleFix : (String -> Bool) -> (Expr -> Expr) -> Decl -> Option (List Decl)
 exprRuleFix excl f d = declBodyFix False excl (rewriteExprBU f) d
-
--- Fix by a whole-body rewrite, for a rule whose traversal is not bottom-up.
-export
-exprRuleFixTree : (Expr -> Expr) -> Decl -> Option (List Decl)
-exprRuleFixTree rw d = declBodyFix False noExcl rw d
 
 -- no decls are excluded by name (the common case)
 export
@@ -680,6 +693,153 @@ isFalseLit e = isEVarNamed "False" e
 export
 isBoolLit : Expr -> Bool
 isBoolLit e = isTrueLit e || isFalseLit e
+
+-- ── span-edit fixes ──────────────────────────────────────────────────────────
+-- A rule that rewrites one expression builds its fix from these.  The edit
+-- replaces the node's own span, with the replacement bracketed for the
+-- kind of expression it now sits in.
+
+-- The span covering two spans, in source order.
+joinLocs : Option Loc -> Option Loc -> Option Loc
+joinLocs (Some (Loc f sl sc _ _)) (Some (Loc _ _ _ el ec)) =
+  Some (Loc f sl sc el ec)
+joinLocs _ _ = None
+
+-- The extent of an application or operator expression the parser leaves
+-- bare: from the `ELoc`s of its operands, `None` when an operand is a node
+-- whose own tokens no `ELoc` covers (a prefix operator, a field access).
+export
+tightSpan : Expr -> Option Loc
+tightSpan (ELoc l _) = Some l
+tightSpan (EApp f x) = joinLocs (tightSpan f) (tightSpan x)
+tightSpan (EBinOp _ a b _) = joinLocs (tightSpan a) (tightSpan b)
+tightSpan _ = None
+
+-- The span a replacement of the node being visited takes: the node's own
+-- wrapper, brackets included, else the extent of its operands.
+export
+nodeSpan : Ctx -> Expr -> Option Loc
+nodeSpan ctx e = match ctx.ctxOwn
+  Some l => Some l
+  None => tightSpan e
+
+-- How tightly the printed `e` binds: an atom reads the same in any position,
+-- anything else is bracketed where its parent would regroup it.
+export
+bindingOf : Expr -> Binding
+bindingOf e = match unwrapLoc e
+  EVar _ => Closed
+  ELit _ => Closed
+  ENumLit _ _ _ => Closed
+  EApp _ _ => Applied
+  ETuple _ => Closed
+  EListLit _ => Closed
+  EArrayLit _ => Closed
+  EStringInterp _ => Closed
+  ESection _ => Closed
+  EFieldAccess _ _ _ => Closed
+  _ => Open
+
+-- A fix of the given applicability replacing `span` with `text` bracketed for
+-- `ctx`'s parent, or `None` when there is no span or the text spans lines (the
+-- printer knows nothing of the indentation it lands in).
+export
+replaceFix : Applicability ->
+  String ->
+  Option Loc ->
+  Binding ->
+  Ctx ->
+  String ->
+  Option Fix
+replaceFix applicability message span binding ctx text
+  | elem '\n' (stringToChars text) = None
+  | otherwise =
+    map
+      (loc => Fix {
+        fixApplicability = applicability,
+        fixEdits = [FixEdit loc (parenIfNeeded binding ctx.ctxParent text)],
+        fixMessage = message,
+      })
+      span
+
+-- `replaceFix` for the rewrite of the expression `e` itself: `rewritten` replaces
+-- `e`'s node and is bracketed by its own binding strength.
+export
+replaceNodeFix : Applicability -> String -> Ctx -> Expr -> Expr -> Option Fix
+replaceNodeFix applicability message ctx e rewritten =
+  replaceFix
+    applicability
+    message
+    (nodeSpan ctx e)
+    (bindingOf rewritten)
+    ctx
+    (exprToString rewritten)
+
+-- The span of the identifier a use stands on: the innermost `ELoc` over an `EVar`.
+varSite : Expr -> Option Loc
+varSite (ELoc l inner) = match varSite inner
+  Some inner2 => Some inner2
+  None => match inner
+    EVar _ => Some l
+    _ => None
+varSite _ = None
+
+-- Whether an `import m.*` of the file may bring `name` into scope: `m` exports
+-- it, or `m` is a module the stdlib index cannot vouch for.
+wildBinds : StdlibIndex -> FileFacts -> String -> Bool
+wildBinds idx facts name =
+  any (wildMayBind idx name) (wildImports (factScopes facts))
+
+wildMayBind : StdlibIndex -> String -> List String -> Bool
+wildMayBind idx name path =
+  let modName = joinWith "." path
+  not (stdlibKnowsModule idx modName) || isSome (stdlibSigIn idx modName name)
+
+varName : Expr -> String
+varName e = match unwrapLoc e
+  EVar n => n
+  _ => ""
+
+-- Whether the use `hd` of a prelude name means the prelude's: no binder in
+-- the file resolves it and no wildcard import may bring the name.  A use whose
+-- site is unknown is not provable, so it counts as rebound.
+export
+usesPreludeName : StdlibIndex -> FileFacts -> Expr -> Bool
+usesPreludeName idx facts hd = match varSite hd
+  Some l =>
+    isNone (binderOf (factScopes facts) l)
+      && not (wildBinds idx facts (varName hd))
+  None => False
+
+-- Whether the file binds `name` anywhere, or a wildcard import may.
+export
+bindsName : StdlibIndex -> FileFacts -> String -> Bool
+bindsName idx facts name =
+  not (isEmpty (bindersNamed (factScopes facts) name))
+    || wildBinds idx facts name
+
+-- Whether a call to `name` written into the body `ctx` sits in would not be
+-- the prelude's: the file or a wildcard import binds it, or it is the name of
+-- the method being defined, so the call would be the method calling itself.  A
+-- test's or prop's owner name is its description, not a binder.
+export
+rebinds : StdlibIndex -> FileFacts -> Ctx -> String -> Bool
+rebinds idx facts ctx name =
+  not ctx.ctxInTest && ctx.ctxDeclName == name || bindsName idx facts name
+
+-- The 1-based line of the source, `None` past the end.
+export
+sourceLine : FileFacts -> Int -> Option String
+sourceLine facts n = match drop (n - 1) (lines facts.ffSrc)
+  l :: _ => Some l
+  [] => None
+
+-- Whether the character at line `sl`, column `sc` of the source is `(`.
+export
+parenAt : FileFacts -> Int -> Int -> Bool
+parenAt facts sl sc = match sourceLine facts sl
+  Some l => stringSlice sc (sc + 1) l == "("
+  None => False
 
 -- ── rule: match-to-map ────────────────────────────────────────────────────────
 -- A 2-arm `match` on an Option or Result that structurally IS a functor `map`
@@ -809,11 +969,14 @@ nameSetInto (n :: rest) s =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "listLen" false) (mem "anyList" false) (mem "joinNl" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "sortBy" false) (mem "last" false))))
+(DUse false (UseGroup ("string") ((mem "lines" false))))
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind") (mem "escape" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false) (mem "commentCol" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Visitor" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "stdlibKnowsModule" false) (mem "stdlibSigIn" false))))
+(DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true) (mem "parenIfNeeded" false))))
+(DUse false (UseGroup ("tools" "lint_scope") ((mem "binderOf" false) (mem "bindersNamed" false) (mem "wildImports" false))))
 (DUse true (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false) (mem "mapChildExprs" false) (mem "stmtExprs" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "DeclBody" true) (mem "declBodies" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false))))
@@ -1013,9 +1176,11 @@ nameSetInto (n :: rest) s =
 (DTypeSig true "detApply" (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "detApply" ((PVar "det") (PVar "e")) (EMatch (EApp (EVar "det") (EVar "e")) (arm (PCon "Some" (PVar "e2")) () (EVar "e2")) (arm (PCon "None") () (EVar "e"))))
 (DTypeSig true "exprRuleVisitors" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyApp (TyCon "List") (TyCon "Visitor"))))))
-(DFunDef false "exprRuleVisitors" ((PVar "excl") (PVar "det") (PVar "mkFinding")) (EListLit (EApp (EVar "OnAnyExpr") (EApp (EApp (EApp (EVar "exprRuleHit") (EVar "excl")) (EVar "det")) (EVar "mkFinding")))))
-(DTypeSig false "exprRuleHit" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "exprRuleHit" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PVar "ctx") (PVar "e")) (EIf (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "ctx") "ctxInTest")) (EApp (EVar "excl") (EFieldAccess (EVar "ctx") "ctxDeclName"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "det") (EVar "e")) (arm (PCon "Some" (PVar "hit")) () (EListLit (EApp (EApp (EVar "mkFinding") (EFieldAccess (EVar "ctx") "ctxSpan")) (EVar "hit")))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "exprRuleVisitors" ((PVar "excl") (PVar "det") (PVar "mkFinding")) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "excl")) (EVar "det")) (ELam (PWild PWild PWild) (EVar "None"))) (ELam ((PVar "loc") (PVar "hit") PWild) (EApp (EApp (EVar "mkFinding") (EVar "loc")) (EVar "hit")))))
+(DTypeSig true "exprRuleEditVisitors" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))) (TyApp (TyCon "List") (TyCon "Visitor")))))))
+(DFunDef false "exprRuleEditVisitors" ((PVar "excl") (PVar "det") (PVar "fixOf") (PVar "mkFinding")) (EListLit (EApp (EVar "OnAnyExpr") (EApp (EApp (EApp (EApp (EVar "exprRuleEditHit") (EVar "excl")) (EVar "det")) (EVar "fixOf")) (EVar "mkFinding")))))
+(DTypeSig false "exprRuleEditHit" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))))
+(DFunDef false "exprRuleEditHit" ((PVar "excl") (PVar "det") (PVar "fixOf") (PVar "mkFinding") (PVar "ctx") (PVar "e")) (EIf (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "ctx") "ctxInTest")) (EApp (EVar "excl") (EFieldAccess (EVar "ctx") "ctxDeclName"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "det") (EVar "e")) (arm (PCon "Some" (PVar "hit")) () (EListLit (EApp (EApp (EApp (EVar "mkFinding") (EFieldAccess (EVar "ctx") "ctxSpan")) (EVar "hit")) (EApp (EApp (EApp (EVar "fixOf") (EVar "ctx")) (EVar "e")) (EVar "hit"))))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declBodyFix" (TyFun (TyCon "Bool") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "declBodyFix" (PWild (PVar "excl") (PVar "rw") (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body") (PVar "site") (PVar "bid"))) (EIf (EApp (EVar "excl") (EVar "name")) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "bodyFix") (ELam ((PVar "b")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "b")) (EVar "site")) (EVar "bid")))) (EVar "rw")) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "declBodyFix" ((PVar "tests") (PVar "excl") (PVar "rw") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EMatch (EApp (EApp (EApp (EApp (EVar "declBodyFix") (EVar "tests")) (EVar "excl")) (EVar "rw")) (EVar "d")) (arm (PCon "Some" (PList (PVar "d2"))) () (EApp (EVar "Some") (EListLit (EApp (EApp (EVar "DAttrib") (EVar "a")) (EVar "d2"))))) (arm PWild () (EVar "None"))))
@@ -1029,8 +1194,6 @@ nameSetInto (n :: rest) s =
 (DFunDef false "bodyFix" ((PVar "rebuild") (PVar "rw") (PVar "body")) (EBlock (DoLet false false (PVar "body2") (EApp (EVar "rw") (EVar "body"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EVar "body2")) (EApp (EVar "exprSexp") (EVar "body"))) (EVar "None") (EApp (EVar "Some") (EListLit (EApp (EVar "rebuild") (EVar "body2"))))))))
 (DTypeSig true "exprRuleFix" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "exprRuleFix" ((PVar "excl") (PVar "f") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "declBodyFix") (EVar "False")) (EVar "excl")) (EApp (EVar "rewriteExprBU") (EVar "f"))) (EVar "d")))
-(DTypeSig true "exprRuleFixTree" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "exprRuleFixTree" ((PVar "rw") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "declBodyFix") (EVar "False")) (EVar "noExcl")) (EVar "rw")) (EVar "d")))
 (DTypeSig true "noExcl" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "noExcl" (PWild) (EVar "False"))
 (DTypeSig true "exprRuleFixTestDecls" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
@@ -1050,6 +1213,41 @@ nameSetInto (n :: rest) s =
 (DFunDef false "isFalseLit" ((PVar "e")) (EApp (EApp (EVar "isEVarNamed") (ELit (LString "False"))) (EVar "e")))
 (DTypeSig true "isBoolLit" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isBoolLit" ((PVar "e")) (EBinOp "||" (EApp (EVar "isTrueLit") (EVar "e")) (EApp (EVar "isFalseLit") (EVar "e"))))
+(DTypeSig false "joinLocs" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "joinLocs" ((PCon "Some" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild)) (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))
+(DFunDef false "joinLocs" (PWild PWild) (EVar "None"))
+(DTypeSig true "tightSpan" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "tightSpan" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "tightSpan" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "joinLocs") (EApp (EVar "tightSpan") (EVar "f"))) (EApp (EVar "tightSpan") (EVar "x"))))
+(DFunDef false "tightSpan" ((PCon "EBinOp" PWild (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "joinLocs") (EApp (EVar "tightSpan") (EVar "a"))) (EApp (EVar "tightSpan") (EVar "b"))))
+(DFunDef false "tightSpan" (PWild) (EVar "None"))
+(DTypeSig true "nodeSpan" (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "nodeSpan" ((PVar "ctx") (PVar "e")) (EMatch (EFieldAccess (EVar "ctx") "ctxOwn") (arm (PCon "Some" (PVar "l")) () (EApp (EVar "Some") (EVar "l"))) (arm (PCon "None") () (EApp (EVar "tightSpan") (EVar "e")))))
+(DTypeSig true "bindingOf" (TyFun (TyCon "Expr") (TyCon "Binding")))
+(DFunDef false "bindingOf" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" PWild) () (EVar "Closed")) (arm (PCon "ELit" PWild) () (EVar "Closed")) (arm (PCon "ENumLit" PWild PWild PWild) () (EVar "Closed")) (arm (PCon "EApp" PWild PWild) () (EVar "Applied")) (arm (PCon "ETuple" PWild) () (EVar "Closed")) (arm (PCon "EListLit" PWild) () (EVar "Closed")) (arm (PCon "EArrayLit" PWild) () (EVar "Closed")) (arm (PCon "EStringInterp" PWild) () (EVar "Closed")) (arm (PCon "ESection" PWild) () (EVar "Closed")) (arm (PCon "EFieldAccess" PWild PWild PWild) () (EVar "Closed")) (arm PWild () (EVar "Open"))))
+(DTypeSig true "replaceFix" (TyFun (TyCon "Applicability") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Binding") (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Fix")))))))))
+(DFunDef false "replaceFix" ((PVar "applicability") (PVar "message") (PVar "span") (PVar "binding") (PVar "ctx") (PVar "text")) (EIf (EApp (EApp (EVar "elem") (ELit (LChar "\n"))) (EApp (EVar "stringToChars") (EVar "text"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "map") (ELam ((PVar "loc")) (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "applicability")) (fa "fixEdits" (EListLit (EApp (EApp (EVar "FixEdit") (EVar "loc")) (EApp (EApp (EApp (EVar "parenIfNeeded") (EVar "binding")) (EFieldAccess (EVar "ctx") "ctxParent")) (EVar "text"))))) (fa "fixMessage" (EVar "message")))))) (EVar "span")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "replaceNodeFix" (TyFun (TyCon "Applicability") (TyFun (TyCon "String") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
+(DFunDef false "replaceNodeFix" ((PVar "applicability") (PVar "message") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "applicability")) (EVar "message")) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten"))))
+(DTypeSig false "varSite" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "varSite" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EMatch (EApp (EVar "varSite") (EVar "inner")) (arm (PCon "Some" (PVar "inner2")) () (EApp (EVar "Some") (EVar "inner2"))) (arm (PCon "None") () (EMatch (EVar "inner") (arm (PCon "EVar" PWild) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "None"))))))
+(DFunDef false "varSite" (PWild) (EVar "None"))
+(DTypeSig false "wildBinds" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "wildBinds" ((PVar "idx") (PVar "facts") (PVar "name")) (EApp (EApp (EVar "any") (EApp (EApp (EVar "wildMayBind") (EVar "idx")) (EVar "name"))) (EApp (EVar "wildImports") (EApp (EVar "factScopes") (EVar "facts")))))
+(DTypeSig false "wildMayBind" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
+(DFunDef false "wildMayBind" ((PVar "idx") (PVar "name") (PVar "path")) (EBlock (DoLet false false (PVar "modName") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "path"))) (DoExpr (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "stdlibKnowsModule") (EVar "idx")) (EVar "modName"))) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "stdlibSigIn") (EVar "idx")) (EVar "modName")) (EVar "name")))))))
+(DTypeSig false "varName" (TyFun (TyCon "Expr") (TyCon "String")))
+(DFunDef false "varName" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "")))))
+(DTypeSig true "usesPreludeName" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Expr") (TyCon "Bool")))))
+(DFunDef false "usesPreludeName" ((PVar "idx") (PVar "facts") (PVar "hd")) (EMatch (EApp (EVar "varSite") (EVar "hd")) (arm (PCon "Some" (PVar "l")) () (EBinOp "&&" (EApp (EVar "isNone") (EApp (EApp (EVar "binderOf") (EApp (EVar "factScopes") (EVar "facts"))) (EVar "l"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "wildBinds") (EVar "idx")) (EVar "facts")) (EApp (EVar "varName") (EVar "hd")))))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig true "bindsName" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "bindsName" ((PVar "idx") (PVar "facts") (PVar "name")) (EBinOp "||" (EApp (EVar "not") (EApp (EVar "isEmpty") (EApp (EApp (EVar "bindersNamed") (EApp (EVar "factScopes") (EVar "facts"))) (EVar "name")))) (EApp (EApp (EApp (EVar "wildBinds") (EVar "idx")) (EVar "facts")) (EVar "name"))))
+(DTypeSig true "rebinds" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyCon "Bool"))))))
+(DFunDef false "rebinds" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "name")) (EBinOp "||" (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "ctx") "ctxInTest")) (EBinOp "==" (EFieldAccess (EVar "ctx") "ctxDeclName") (EVar "name"))) (EApp (EApp (EApp (EVar "bindsName") (EVar "idx")) (EVar "facts")) (EVar "name"))))
+(DTypeSig true "sourceLine" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "sourceLine" ((PVar "facts") (PVar "n")) (EMatch (EApp (EApp (EVar "drop") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "lines") (EFieldAccess (EVar "facts") "ffSrc"))) (arm (PCons (PVar "l") PWild) () (EApp (EVar "Some") (EVar "l"))) (arm (PList) () (EVar "None"))))
+(DTypeSig true "parenAt" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "parenAt" ((PVar "facts") (PVar "sl") (PVar "sc")) (EMatch (EApp (EApp (EVar "sourceLine") (EVar "facts")) (EVar "sl")) (arm (PCon "Some" (PVar "l")) () (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "sc")) (EBinOp "+" (EVar "sc") (ELit (LInt 1)))) (EVar "l")) (ELit (LString "(")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "isNilPCon" (TyFun (TyCon "String") (TyFun (TyCon "Pat") (TyCon "Bool"))))
 (DFunDef false "isNilPCon" ((PVar "name") (PCon "PCon" (PVar "n") (PList))) (EBinOp "==" (EVar "n") (EVar "name")))
 (DFunDef false "isNilPCon" (PWild PWild) (EVar "False"))
@@ -1085,11 +1283,14 @@ nameSetInto (n :: rest) s =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "listLen" false) (mem "anyList" false) (mem "joinNl" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "sortBy" false) (mem "last" false))))
+(DUse false (UseGroup ("string") ((mem "lines" false))))
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind") (mem "escape" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false) (mem "commentCol" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Visitor" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "stdlibKnowsModule" false) (mem "stdlibSigIn" false))))
+(DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true) (mem "parenIfNeeded" false))))
+(DUse false (UseGroup ("tools" "lint_scope") ((mem "binderOf" false) (mem "bindersNamed" false) (mem "wildImports" false))))
 (DUse true (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false) (mem "mapChildExprs" false) (mem "stmtExprs" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "DeclBody" true) (mem "declBodies" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false))))
@@ -1289,9 +1490,11 @@ nameSetInto (n :: rest) s =
 (DTypeSig true "detApply" (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "detApply" ((PVar "det") (PVar "e")) (EMatch (EApp (EVar "det") (EVar "e")) (arm (PCon "Some" (PVar "e2")) () (EVar "e2")) (arm (PCon "None") () (EVar "e"))))
 (DTypeSig true "exprRuleVisitors" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyApp (TyCon "List") (TyCon "Visitor"))))))
-(DFunDef false "exprRuleVisitors" ((PVar "excl") (PVar "det") (PVar "mkFinding")) (EListLit (EApp (EVar "OnAnyExpr") (EApp (EApp (EApp (EVar "exprRuleHit") (EVar "excl")) (EVar "det")) (EVar "mkFinding")))))
-(DTypeSig false "exprRuleHit" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "exprRuleHit" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PVar "ctx") (PVar "e")) (EIf (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "ctx") "ctxInTest")) (EApp (EVar "excl") (EFieldAccess (EVar "ctx") "ctxDeclName"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "det") (EVar "e")) (arm (PCon "Some" (PVar "hit")) () (EListLit (EApp (EApp (EVar "mkFinding") (EFieldAccess (EVar "ctx") "ctxSpan")) (EVar "hit")))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "exprRuleVisitors" ((PVar "excl") (PVar "det") (PVar "mkFinding")) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "excl")) (EVar "det")) (ELam (PWild PWild PWild) (EVar "None"))) (ELam ((PVar "loc") (PVar "hit") PWild) (EApp (EApp (EVar "mkFinding") (EVar "loc")) (EVar "hit")))))
+(DTypeSig true "exprRuleEditVisitors" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))) (TyApp (TyCon "List") (TyCon "Visitor")))))))
+(DFunDef false "exprRuleEditVisitors" ((PVar "excl") (PVar "det") (PVar "fixOf") (PVar "mkFinding")) (EListLit (EApp (EVar "OnAnyExpr") (EApp (EApp (EApp (EApp (EVar "exprRuleEditHit") (EVar "excl")) (EVar "det")) (EVar "fixOf")) (EVar "mkFinding")))))
+(DTypeSig false "exprRuleEditHit" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))))
+(DFunDef false "exprRuleEditHit" ((PVar "excl") (PVar "det") (PVar "fixOf") (PVar "mkFinding") (PVar "ctx") (PVar "e")) (EIf (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "ctx") "ctxInTest")) (EApp (EVar "excl") (EFieldAccess (EVar "ctx") "ctxDeclName"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "det") (EVar "e")) (arm (PCon "Some" (PVar "hit")) () (EListLit (EApp (EApp (EApp (EVar "mkFinding") (EFieldAccess (EVar "ctx") "ctxSpan")) (EVar "hit")) (EApp (EApp (EApp (EVar "fixOf") (EVar "ctx")) (EVar "e")) (EVar "hit"))))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declBodyFix" (TyFun (TyCon "Bool") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "declBodyFix" (PWild (PVar "excl") (PVar "rw") (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body") (PVar "site") (PVar "bid"))) (EIf (EApp (EVar "excl") (EVar "name")) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "bodyFix") (ELam ((PVar "b")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "b")) (EVar "site")) (EVar "bid")))) (EVar "rw")) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "declBodyFix" ((PVar "tests") (PVar "excl") (PVar "rw") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EMatch (EApp (EApp (EApp (EApp (EVar "declBodyFix") (EVar "tests")) (EVar "excl")) (EVar "rw")) (EVar "d")) (arm (PCon "Some" (PList (PVar "d2"))) () (EApp (EVar "Some") (EListLit (EApp (EApp (EVar "DAttrib") (EVar "a")) (EVar "d2"))))) (arm PWild () (EVar "None"))))
@@ -1305,8 +1508,6 @@ nameSetInto (n :: rest) s =
 (DFunDef false "bodyFix" ((PVar "rebuild") (PVar "rw") (PVar "body")) (EBlock (DoLet false false (PVar "body2") (EApp (EVar "rw") (EVar "body"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EVar "body2")) (EApp (EVar "exprSexp") (EVar "body"))) (EVar "None") (EApp (EVar "Some") (EListLit (EApp (EVar "rebuild") (EVar "body2"))))))))
 (DTypeSig true "exprRuleFix" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "exprRuleFix" ((PVar "excl") (PVar "f") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "declBodyFix") (EVar "False")) (EVar "excl")) (EApp (EVar "rewriteExprBU") (EVar "f"))) (EVar "d")))
-(DTypeSig true "exprRuleFixTree" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "exprRuleFixTree" ((PVar "rw") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "declBodyFix") (EVar "False")) (EVar "noExcl")) (EVar "rw")) (EVar "d")))
 (DTypeSig true "noExcl" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "noExcl" (PWild) (EVar "False"))
 (DTypeSig true "exprRuleFixTestDecls" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
@@ -1326,6 +1527,41 @@ nameSetInto (n :: rest) s =
 (DFunDef false "isFalseLit" ((PVar "e")) (EApp (EApp (EVar "isEVarNamed") (ELit (LString "False"))) (EVar "e")))
 (DTypeSig true "isBoolLit" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isBoolLit" ((PVar "e")) (EBinOp "||" (EApp (EVar "isTrueLit") (EVar "e")) (EApp (EVar "isFalseLit") (EVar "e"))))
+(DTypeSig false "joinLocs" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "joinLocs" ((PCon "Some" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild)) (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))
+(DFunDef false "joinLocs" (PWild PWild) (EVar "None"))
+(DTypeSig true "tightSpan" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "tightSpan" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "tightSpan" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "joinLocs") (EApp (EVar "tightSpan") (EVar "f"))) (EApp (EVar "tightSpan") (EVar "x"))))
+(DFunDef false "tightSpan" ((PCon "EBinOp" PWild (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "joinLocs") (EApp (EVar "tightSpan") (EVar "a"))) (EApp (EVar "tightSpan") (EVar "b"))))
+(DFunDef false "tightSpan" (PWild) (EVar "None"))
+(DTypeSig true "nodeSpan" (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "nodeSpan" ((PVar "ctx") (PVar "e")) (EMatch (EFieldAccess (EVar "ctx") "ctxOwn") (arm (PCon "Some" (PVar "l")) () (EApp (EVar "Some") (EVar "l"))) (arm (PCon "None") () (EApp (EVar "tightSpan") (EVar "e")))))
+(DTypeSig true "bindingOf" (TyFun (TyCon "Expr") (TyCon "Binding")))
+(DFunDef false "bindingOf" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" PWild) () (EVar "Closed")) (arm (PCon "ELit" PWild) () (EVar "Closed")) (arm (PCon "ENumLit" PWild PWild PWild) () (EVar "Closed")) (arm (PCon "EApp" PWild PWild) () (EVar "Applied")) (arm (PCon "ETuple" PWild) () (EVar "Closed")) (arm (PCon "EListLit" PWild) () (EVar "Closed")) (arm (PCon "EArrayLit" PWild) () (EVar "Closed")) (arm (PCon "EStringInterp" PWild) () (EVar "Closed")) (arm (PCon "ESection" PWild) () (EVar "Closed")) (arm (PCon "EFieldAccess" PWild PWild PWild) () (EVar "Closed")) (arm PWild () (EVar "Open"))))
+(DTypeSig true "replaceFix" (TyFun (TyCon "Applicability") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Binding") (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Fix")))))))))
+(DFunDef false "replaceFix" ((PVar "applicability") (PVar "message") (PVar "span") (PVar "binding") (PVar "ctx") (PVar "text")) (EIf (EApp (EApp (EDictApp "elem") (ELit (LChar "\n"))) (EApp (EVar "stringToChars") (EVar "text"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EMethodRef "map") (ELam ((PVar "loc")) (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "applicability")) (fa "fixEdits" (EListLit (EApp (EApp (EVar "FixEdit") (EVar "loc")) (EApp (EApp (EApp (EVar "parenIfNeeded") (EVar "binding")) (EFieldAccess (EVar "ctx") "ctxParent")) (EVar "text"))))) (fa "fixMessage" (EVar "message")))))) (EVar "span")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "replaceNodeFix" (TyFun (TyCon "Applicability") (TyFun (TyCon "String") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
+(DFunDef false "replaceNodeFix" ((PVar "applicability") (PVar "message") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "applicability")) (EVar "message")) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten"))))
+(DTypeSig false "varSite" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "varSite" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EMatch (EApp (EVar "varSite") (EVar "inner")) (arm (PCon "Some" (PVar "inner2")) () (EApp (EVar "Some") (EVar "inner2"))) (arm (PCon "None") () (EMatch (EVar "inner") (arm (PCon "EVar" PWild) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "None"))))))
+(DFunDef false "varSite" (PWild) (EVar "None"))
+(DTypeSig false "wildBinds" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "wildBinds" ((PVar "idx") (PVar "facts") (PVar "name")) (EApp (EApp (EDictApp "any") (EApp (EApp (EVar "wildMayBind") (EVar "idx")) (EVar "name"))) (EApp (EVar "wildImports") (EApp (EVar "factScopes") (EVar "facts")))))
+(DTypeSig false "wildMayBind" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
+(DFunDef false "wildMayBind" ((PVar "idx") (PVar "name") (PVar "path")) (EBlock (DoLet false false (PVar "modName") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "path"))) (DoExpr (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "stdlibKnowsModule") (EVar "idx")) (EVar "modName"))) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "stdlibSigIn") (EVar "idx")) (EVar "modName")) (EVar "name")))))))
+(DTypeSig false "varName" (TyFun (TyCon "Expr") (TyCon "String")))
+(DFunDef false "varName" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "")))))
+(DTypeSig true "usesPreludeName" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Expr") (TyCon "Bool")))))
+(DFunDef false "usesPreludeName" ((PVar "idx") (PVar "facts") (PVar "hd")) (EMatch (EApp (EVar "varSite") (EVar "hd")) (arm (PCon "Some" (PVar "l")) () (EBinOp "&&" (EApp (EVar "isNone") (EApp (EApp (EVar "binderOf") (EApp (EVar "factScopes") (EVar "facts"))) (EVar "l"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "wildBinds") (EVar "idx")) (EVar "facts")) (EApp (EVar "varName") (EVar "hd")))))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig true "bindsName" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "bindsName" ((PVar "idx") (PVar "facts") (PVar "name")) (EBinOp "||" (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EApp (EApp (EVar "bindersNamed") (EApp (EVar "factScopes") (EVar "facts"))) (EVar "name")))) (EApp (EApp (EApp (EVar "wildBinds") (EVar "idx")) (EVar "facts")) (EVar "name"))))
+(DTypeSig true "rebinds" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyCon "Bool"))))))
+(DFunDef false "rebinds" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "name")) (EBinOp "||" (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "ctx") "ctxInTest")) (EBinOp "==" (EFieldAccess (EVar "ctx") "ctxDeclName") (EVar "name"))) (EApp (EApp (EApp (EVar "bindsName") (EVar "idx")) (EVar "facts")) (EVar "name"))))
+(DTypeSig true "sourceLine" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "sourceLine" ((PVar "facts") (PVar "n")) (EMatch (EApp (EApp (EVar "drop") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "lines") (EFieldAccess (EVar "facts") "ffSrc"))) (arm (PCons (PVar "l") PWild) () (EApp (EVar "Some") (EVar "l"))) (arm (PList) () (EVar "None"))))
+(DTypeSig true "parenAt" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "parenAt" ((PVar "facts") (PVar "sl") (PVar "sc")) (EMatch (EApp (EApp (EVar "sourceLine") (EVar "facts")) (EVar "sl")) (arm (PCon "Some" (PVar "l")) () (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "sc")) (EBinOp "+" (EVar "sc") (ELit (LInt 1)))) (EVar "l")) (ELit (LString "(")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "isNilPCon" (TyFun (TyCon "String") (TyFun (TyCon "Pat") (TyCon "Bool"))))
 (DFunDef false "isNilPCon" ((PVar "name") (PCon "PCon" (PVar "n") (PList))) (EBinOp "==" (EVar "n") (EVar "name")))
 (DFunDef false "isNilPCon" (PWild PWild) (EVar "False"))

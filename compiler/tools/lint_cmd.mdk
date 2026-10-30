@@ -46,6 +46,7 @@ import driver.diagnostics.{
 import support.cli_targets.{collectMdkFiles, expandLintTarget}
 import support.stage_count.{stageExit}
 import tools.lint.{
+  Applicability(..),
   Category(..),
   CrossFileRule(..),
   Directive,
@@ -56,13 +57,14 @@ import tools.lint.{
   Rule(..),
   RuleMeta(..),
   Scope(..),
+  applicabilityText,
+  maxApplicability,
   ruleMetaName,
   allCrossFileRules,
   StdlibIndex,
   allRules,
   applyFindingDeny,
   applyFindingFilters,
-  applyFixes,
   applySuppressionsDirs,
   applySuppressionsMulti,
   applySuppressionsMultiDirs,
@@ -70,6 +72,10 @@ import tools.lint.{
   factDirectives,
   factDupOccs,
   findingToDiag,
+  fixPassLimit,
+  fixSource,
+  FixRun(..),
+  runParts,
   isFindingError,
   lintFileDiagTriple,
   lintFileDiagTripleParsed,
@@ -114,6 +120,7 @@ lintHelpText = stringConcat [
   "  medaka lint --list-rules [filters] [--json|--markdown]\n",
   "  medaka lint --explain <rule>\n", "\n",
   "  --fix                 rewrite fixable findings in-place\n",
+  "  --unsafe-fixes        with --fix: also apply fixes that may change behavior\n",
   "  --json                emit the {\"files\":[...]} structured-diagnostics\n",
   "                       envelope instead of human text (--fix is ignored)\n",
   "  --cache                reuse per-file results for files whose content is\n",
@@ -201,10 +208,13 @@ categoryText Style = "style"
 
 fixabilityText : Fixability -> String
 fixabilityText Fixable = "fixable"
+fixabilityText FixableUnsafe = "fixable-unsafe"
+fixabilityText SuggestOnly = "suggest-only"
 fixabilityText NotFixable = "not-fixable"
 
 needText : Need -> String
 needText NeedsStdlibIndex = "stdlib-index"
+needText NeedsWildIndex = "wildcard-index"
 needText NeedsScopes = "scopes"
 
 -- `--scope`/`--ratchet`/`--tier` narrow the listing; an unrecognised value is an
@@ -290,6 +300,14 @@ ruleRowJson row =
     ("ratchet", JString (ratchetText m.ratchet)),
     ("severity", JString (ppSeverity m.defaultSeverity)),
     ("fixability", JString (fixabilityText m.fixability)),
+    (
+      "maxApplicability",
+      optionOr
+        JNull
+        (map
+          (a => JString (applicabilityText a))
+          (maxApplicability m.fixability)),
+    ),
     ("needs", jArray (map (n => JString (needText n)) m.needs)),
     ("tiers", jArray (map (t => JString (tierText t)) row.rrTiers)),
   ]
@@ -827,6 +845,7 @@ memoStore key active =
 public export data LintRun = LintRun {
   lrInternal : Bool,
   lrFix : Bool,
+  lrUnsafe : Bool,
   lrMulti : Bool,
 }
 
@@ -861,7 +880,7 @@ lintFilesGo _ _ _ _ _ _ _ [] acc = (acc, [], [])
 lintFilesGo idx run disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest) acc =
   let fileDisable = disableNames ++ internalDisabledFor run.lrInternal f
   if run.lrFix then
-    let hadErr = lintOneFileFix onlyNames fileDisable f
+    let hadErr = lintOneFileFix idx run.lrUnsafe onlyNames fileDisable f
     lintFilesGo
       idx
       run
@@ -1084,27 +1103,41 @@ lintFileFresh idx rules target src hash wantOccs (decls, pos) =
   )
 
 -- Fix a single file in-place.  Returns True only on I/O error (write errors exit 1).
-lintOneFileFix : List String -> List String -> String -> <IO> Bool
-lintOneFileFix onlyNames disableNames target = match readSource target
-  Err msg =>
-    let _ = ePutStrLn msg
-    True
-  Ok src => match lintParseSource src
-    Err e =>
-      ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
-      True
-    Ok parsedSource =>
-      lintFixParsed onlyNames disableNames target src parsedSource
-
-lintFixParsed : List String ->
+lintOneFileFix : StdlibIndex ->
+  Bool ->
+  List String ->
   List String ->
   String ->
-  String ->
-  (List Decl, Positions) ->
   <IO> Bool
-lintFixParsed onlyNames disableNames target src (decls, pos) =
-  let (newSrc, n) = applyFixes onlyNames disableNames src decls pos
-  if newSrc == src then
+lintOneFileFix idx unsafeMode onlyNames disableNames target =
+  match readSource target
+    Err msg =>
+      let _ = ePutStrLn msg
+      True
+    Ok src =>
+      let limit = if unsafeMode then Unsafe else Safe
+      match fixSource idx limit onlyNames disableNames target src
+        Err msg =>
+          let _ = ePutStrLn msg
+          True
+        Ok run => writeFixed target src run
+
+-- A run that stopped at the pass limit still writes what it fixed; it exits
+-- non-zero (C3: everything but clean) so a script sees the file is not done.
+writeFixed : String -> String -> FixRun -> <IO> Bool
+writeFixed target src run =
+  let (newSrc, n) = runParts run
+  let failed = writeFixedSource target src newSrc n
+  match run
+    Capped _ _ =>
+      ePutStrLn
+        "\{target}: stopped after \{intToString fixPassLimit} passes; run again"
+      True
+    Settled _ _ => failed
+
+writeFixedSource : String -> String -> String -> Int -> <IO> Bool
+writeFixedSource target src newSrc n =
+  if n == 0 && newSrc == src then
     let _ = putStrLn ("fixed 0 finding(s) in " ++ target)
     False
   else match writeFile target newSrc

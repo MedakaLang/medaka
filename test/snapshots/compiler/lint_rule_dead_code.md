@@ -1,5 +1,5 @@
 # META
-source_lines=312
+source_lines=313
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-dead-code: a private top-level binding that nothing reachable from the file's exports, `main` or doctests uses.
@@ -104,6 +104,7 @@ deadFinding (name, loc) = Finding {
       ++ "' is unreachable from exports/main/doctests — remove it (dead code)",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 -- private (unexported) top-level fn/value bindings, deduped by name (first loc),
@@ -333,7 +334,7 @@ blockDocLineIdents line =
 (DTypeSig false "deadPair" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Bool"))))
 (DFunDef false "deadPair" ((PVar "reach") (PTuple (PVar "n") PWild)) (EApp (EVar "not") (EApp (EApp (EVar "has") (EVar "n")) (EVar "reach"))))
 (DTypeSig false "deadFinding" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Finding")))
-(DFunDef false "deadFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDeadCode")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "private top-level '")) (EVar "name")) (ELit (LString "' is unreachable from exports/main/doctests — remove it (dead code)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DFunDef false "deadFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDeadCode")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "private top-level '")) (EVar "name")) (ELit (LString "' is unreachable from exports/main/doctests — remove it (dead code)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
 (DTypeSig false "privateDefLocs" (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "privateDefLocs" ((PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "exported") (EApp (EVar "nameSetOf") (EApp (EVar "exportedNames") (EVar "prog")))) (DoExpr (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "filterList") (EApp (EVar "candidatePair") (EVar "exported"))) (EApp (EApp (EVar "flatMap") (EVar "allDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))))
 (DTypeSig false "allDefNameL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
@@ -422,7 +423,7 @@ blockDocLineIdents line =
 (DTypeSig false "deadPair" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Bool"))))
 (DFunDef false "deadPair" ((PVar "reach") (PTuple (PVar "n") PWild)) (EApp (EVar "not") (EApp (EApp (EVar "has") (EVar "n")) (EVar "reach"))))
 (DTypeSig false "deadFinding" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Finding")))
-(DFunDef false "deadFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDeadCode")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "private top-level '")) (EVar "name")) (ELit (LString "' is unreachable from exports/main/doctests — remove it (dead code)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DFunDef false "deadFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDeadCode")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "private top-level '")) (EVar "name")) (ELit (LString "' is unreachable from exports/main/doctests — remove it (dead code)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
 (DTypeSig false "privateDefLocs" (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "privateDefLocs" ((PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "exported") (EApp (EVar "nameSetOf") (EApp (EVar "exportedNames") (EVar "prog")))) (DoExpr (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "filterList") (EApp (EVar "candidatePair") (EVar "exported"))) (EApp (EApp (EDictApp "flatMap") (EVar "allDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))))
 (DTypeSig false "allDefNameL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))

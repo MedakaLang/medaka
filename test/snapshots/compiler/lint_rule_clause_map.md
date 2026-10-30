@@ -1,5 +1,5 @@
 # META
-source_lines=212
+source_lines=213
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-clause-map: a two-clause `[]`/`(x :: xs)` recursion that is a hand-written `map` (suggest-only).
@@ -213,6 +213,7 @@ clauseMapFinding name g loc = Finding {
     "'\{name}' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as '\{exprToString (EApp (EVar "map") g)}' (suggest-only)",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Expr" true) (mem "Decl" true))))
@@ -257,7 +258,7 @@ clauseMapFinding name g loc = Finding {
 (DTypeSig false "clauseMapHit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "clauseMapHit" ((PVar "prog") (PTuple (PVar "name") (PVar "loc"))) (EMatch (EApp (EApp (EVar "clauseMapFnOf") (EVar "name")) (EVar "prog")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "g")) () (EListLit (EApp (EApp (EApp (EVar "clauseMapFinding") (EVar "name")) (EVar "g")) (EVar "loc"))))))
 (DTypeSig false "clauseMapFinding" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding")))))
-(DFunDef false "clauseMapFinding" ((PVar "name") (PVar "g") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameClauseMap")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as '"))) (EApp (EVar "display") (EApp (EVar "exprToString") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "map")))) (EVar "g"))))) (ELit (LString "' (suggest-only)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DFunDef false "clauseMapFinding" ((PVar "name") (PVar "g") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameClauseMap")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as '"))) (EApp (EVar "display") (EApp (EVar "exprToString") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "map")))) (EVar "g"))))) (ELit (LString "' (suggest-only)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
@@ -301,4 +302,4 @@ clauseMapFinding name g loc = Finding {
 (DTypeSig false "clauseMapHit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "clauseMapHit" ((PVar "prog") (PTuple (PVar "name") (PVar "loc"))) (EMatch (EApp (EApp (EVar "clauseMapFnOf") (EVar "name")) (EVar "prog")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "g")) () (EListLit (EApp (EApp (EApp (EVar "clauseMapFinding") (EVar "name")) (EVar "g")) (EVar "loc"))))))
 (DTypeSig false "clauseMapFinding" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding")))))
-(DFunDef false "clauseMapFinding" ((PVar "name") (PVar "g") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameClauseMap")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as '"))) (EApp (EMethodRef "display") (EApp (EVar "exprToString") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "map")))) (EVar "g"))))) (ELit (LString "' (suggest-only)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DFunDef false "clauseMapFinding" ((PVar "name") (PVar "g") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameClauseMap")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as '"))) (EApp (EMethodRef "display") (EApp (EVar "exprToString") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "map")))) (EVar "g"))))) (ELit (LString "' (suggest-only)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))

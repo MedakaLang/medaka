@@ -35,3 +35,39 @@ negClampZero x = if x < 0 then 0 else x
 
 -- NEGATIVE: degenerate — both comparison operands are structurally identical.
 negSameOperand a = if a > a then a else a
+
+-- The fix is withheld inside an `impl Ord`, where the call would resolve to the
+-- method being defined; the finding is reported on the impl's own line.  The shape
+-- is stdlib/i32.mdk's `min` and `max`.
+-- expect-next-line rule-if-max-min x2 unfixed
+export impl Ord Pt where
+  min a b = if a <= b then a else b
+  max a b = if a >= b then a else b
+
+-- The same shape in an impl of another interface is fixed.
+-- expect-next-line rule-if-max-min
+export impl Ranked Pt where
+  rank a b = if a > b then a else b
+
+-- The replacement is bracketed where its parent would regroup it: an argument
+-- takes it in brackets, an operand of an operator takes it bare.
+-- expect-next-line rule-if-max-min
+inArgument a b c = pick (if a > b then a else b) c
+
+-- expect-next-line rule-if-max-min
+inOperand a b = (if a > b then a else b) + 1
+
+-- A comment inside the `if` being replaced would be lost, so the fix is only
+-- suggested.
+-- expect-next-line rule-if-max-min unfixed
+commentInside a b = if a > b then a {- kept -} else b
+
+-- A comment above the `if` is outside its span, so the fix keeps it.
+-- expect-next-line rule-if-max-min
+commentOutside a b =
+  -- explains the choice
+  if a > b then a else b
+
+-- A directive that silences a finding silences its fix too.
+-- lint-disable-next-line rule-if-max-min
+suppressedIf a b = if a > b then a else b

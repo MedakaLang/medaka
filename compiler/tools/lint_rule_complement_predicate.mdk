@@ -4,12 +4,16 @@ import frontend.ast.{Loc(..), Expr(..), Decl(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
-import frontend.exhaust.{Oracle}
+import support.util.{anyList}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
+  Ctx(..),
   FileFacts,
   Finding(..),
+  Fix,
   Fixability(..),
+  Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
@@ -19,10 +23,10 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  detApply,
-  exprRuleVisitors,
-  exprRuleFix,
+  rebinds,
+  exprRuleEditVisitors,
   notArgOf,
+  replaceNodeFix,
   ruleNameComplementPredicate,
   unwrapLoc,
 }
@@ -41,11 +45,11 @@ rule =
       scope = Universal,
       ratchet = Gated,
       defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
+      fixability = FixableUnsafe,
+      needs = [NeedsScopes, NeedsWildIndex],
     }
     ruleComplementPredicate
-    (Some complementPredicateFix)
+    None
 
 -- `not (p args…)` where `p` is a registered predicate with a defined complement
 -- `q`, rewritten to `q args…` (the args carried verbatim).  Curated BIDIRECTIONAL
@@ -100,17 +104,43 @@ ruleComplementPredicate : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleComplementPredicate _ _ _ _ _ =
-  exprRuleVisitors complementExcl complementPredOf complementPredicateFinding
+ruleComplementPredicate idx _ facts _ _ =
+  exprRuleEditVisitors
+    complementExcl
+    complementPredOf
+    (complementPredicateFix idx facts)
+    complementPredicateFinding
 
-complementPredicateFinding : Option Loc -> Expr -> Finding
-complementPredicateFinding loc rewritten = Finding {
+complementPredicateFinding : Option Loc -> Expr -> Option Fix -> Finding
+complementPredicateFinding loc rewritten fix = Finding {
   rule = ruleNameComplementPredicate,
   message = "negated predicate. Rewrite as '" ++ exprToString rewritten ++ "'",
   severity = SevWarning,
   loc = loc,
+  fix = fix,
 }
 
-complementPredicateFix : Oracle -> Decl -> Option (List Decl)
-complementPredicateFix _ d =
-  exprRuleFix complementExcl (detApply complementPredOf) d
+-- The rewrite drops a `not`, reads the predicate, and calls the complement.  A
+-- binding of any of those names in the file withholds the fix.
+complementPredicateFix : StdlibIndex ->
+  FileFacts ->
+  Ctx ->
+  Expr ->
+  Expr ->
+  Option Fix
+complementPredicateFix idx facts ctx e rewritten =
+  if anyList (rebinds idx facts ctx) (complementNames e rewritten) then
+    None
+  else
+    replaceNodeFix Unsafe "call the complement" ctx e rewritten
+
+-- the names the rewrite of `not (p args…)` to `q args…` reads or writes
+complementNames : Expr -> Expr -> List String
+complementNames e rewritten = match notArgOf e
+  Some inner => "not" :: spineName (unwrapLoc inner) ++ spineName rewritten
+  None => []
+
+spineName : Expr -> List String
+spineName e = match appSpineHead e
+  Some n => [n]
+  None => []

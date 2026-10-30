@@ -1,5 +1,5 @@
 # META
-source_lines=158
+source_lines=160
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-regex-literal: a string literal passed to `compile`/`mustCompile` that fails to compile as a regex.
@@ -153,12 +153,14 @@ regexLiteralErrFinding loc pat = match compile pat
       "regex pattern \"\{pat}\" fails to compile: \{message} (position \{intToString position})",
     severity = SevWarning,
     loc = loc,
+    fix = None,
   }
   Ok _ => Finding {
     rule = ruleNameRegexLiteral,
     message = "regex pattern \"\{pat}\" fails to compile",
     severity = SevWarning,
     loc = loc,
+    fix = None,
   }
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "Expr" true) (mem "Decl" true))))
@@ -207,7 +209,7 @@ regexLiteralErrFinding loc pat = match compile pat
 (DFunDef false "regexLiteralFindingArg" ((PVar "loc") (PCon "ELit" (PCon "LString" (PVar "pat")))) (EApp (EApp (EVar "regexLiteralErrFinding") (EVar "loc")) (EVar "pat")))
 (DFunDef false "regexLiteralFindingArg" ((PVar "loc") PWild) (EApp (EApp (EVar "regexLiteralErrFinding") (EVar "loc")) (ELit (LString ""))))
 (DTypeSig false "regexLiteralErrFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
-(DFunDef false "regexLiteralErrFinding" ((PVar "loc") (PVar "pat")) (EMatch (EApp (EVar "compile") (EVar "pat")) (arm (PCon "Err" (PRec "RegexError" ((rf "message" None) (rf "position" None)) false)) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EVar "display") (EVar "pat"))) (ELit (LString "\" fails to compile: "))) (EApp (EVar "display") (EVar "message"))) (ELit (LString " (position "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "position")))) (ELit (LString ")")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc"))))) (arm (PCon "Ok" PWild) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EVar "display") (EVar "pat"))) (ELit (LString "\" fails to compile")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))))
+(DFunDef false "regexLiteralErrFinding" ((PVar "loc") (PVar "pat")) (EMatch (EApp (EVar "compile") (EVar "pat")) (arm (PCon "Err" (PRec "RegexError" ((rf "message" None) (rf "position" None)) false)) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EVar "display") (EVar "pat"))) (ELit (LString "\" fails to compile: "))) (EApp (EVar "display") (EVar "message"))) (ELit (LString " (position "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "position")))) (ELit (LString ")")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))) (arm (PCon "Ok" PWild) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EVar "display") (EVar "pat"))) (ELit (LString "\" fails to compile")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
@@ -255,4 +257,4 @@ regexLiteralErrFinding loc pat = match compile pat
 (DFunDef false "regexLiteralFindingArg" ((PVar "loc") (PCon "ELit" (PCon "LString" (PVar "pat")))) (EApp (EApp (EVar "regexLiteralErrFinding") (EVar "loc")) (EVar "pat")))
 (DFunDef false "regexLiteralFindingArg" ((PVar "loc") PWild) (EApp (EApp (EVar "regexLiteralErrFinding") (EVar "loc")) (ELit (LString ""))))
 (DTypeSig false "regexLiteralErrFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
-(DFunDef false "regexLiteralErrFinding" ((PVar "loc") (PVar "pat")) (EMatch (EApp (EVar "compile") (EVar "pat")) (arm (PCon "Err" (PRec "RegexError" ((rf "message" None) (rf "position" None)) false)) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EMethodRef "display") (EVar "pat"))) (ELit (LString "\" fails to compile: "))) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString " (position "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "position")))) (ELit (LString ")")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc"))))) (arm (PCon "Ok" PWild) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EMethodRef "display") (EVar "pat"))) (ELit (LString "\" fails to compile")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))))
+(DFunDef false "regexLiteralErrFinding" ((PVar "loc") (PVar "pat")) (EMatch (EApp (EVar "compile") (EVar "pat")) (arm (PCon "Err" (PRec "RegexError" ((rf "message" None) (rf "position" None)) false)) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EMethodRef "display") (EVar "pat"))) (ELit (LString "\" fails to compile: "))) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString " (position "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "position")))) (ELit (LString ")")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))) (arm (PCon "Ok" PWild) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EMethodRef "display") (EVar "pat"))) (ELit (LString "\" fails to compile")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))))

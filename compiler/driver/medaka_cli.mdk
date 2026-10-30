@@ -282,7 +282,7 @@ import tools.lint.{
   buildStdlibIndexResult,
   StdlibIndexError(..),
   emptyStdlibIndex,
-  stdlibIndexNeeded,
+  stdlibIndexNeededFor,
   applySuppressions,
   applySuppressionsMulti,
   applySuppressionsDirs,
@@ -3848,6 +3848,7 @@ runManifestArgs (ManifestArgs (Some target) fn) = match analyzeTarget target fn
 -- Parse target file(s) and run lint rules over the raw pre-desugar AST.
 -- Flags:
 --   --fix                rewrite fixable findings in-place
+--   --unsafe-fixes       with --fix: also apply the fixes marked Unsafe
 --   --json               emit the {"files":[...]} structured-diagnostics
 --                        envelope (same schema as `check --json`) instead of
 --                        human text; --fix is ignored in this mode (#249,
@@ -3881,6 +3882,9 @@ lintArgSpec =
   withStrictDash
     (spec "lint" [
       switch ["--fix"] "rewrite fixable findings in place",
+      switch
+        ["--unsafe-fixes"]
+        "with --fix: also apply fixes that may change behaviour",
       switch ["--json"] "emit the structured-diagnostics envelope",
       switch ["--cache"] "reuse per-file results for unchanged files",
       value ["--disable"] "r1,r2,..." "suppress findings from the named rules",
@@ -3934,6 +3938,7 @@ runLintCmd argv0 =
 lintRunFlags : List String
 lintRunFlags = [
   "--fix",
+  "--unsafe-fixes",
   "--cache",
   "--internal",
   "--disable",
@@ -4039,6 +4044,7 @@ runLintTargets a =
   let denyNames = lintNamesOf "--deny" a
   let _ = assertLintRuleNames (disableNames ++ onlyNames ++ denyNames)
   let fixMode = flag "--fix" a
+  let _ = assertUnsafeFixesNeedFix a
   let jsonMode = flag "--json" a
   let baselineArg = flagValue "--baseline" a
   let writeBaselineArg = flagValue "--write-baseline" a
@@ -4065,9 +4071,9 @@ runLintTargets a =
   -- `check` is pure, and rebuilding it per target file would re-parse the whole
   -- stdlib once per file.  It self-disables to empty when the stdlib cannot be
   -- read (see `buildStdlibIndexResult`), the same way `lintCacheCtx` declines below.
-  -- `stdlibIndexNeeded` answers whether the only rule that reads it is even in
-  -- the active `--only`/`--disable` set; when it isn't, `emptyStdlibIndex`
-  -- skips the whole-stdlib parse for free (every other rule ignores its
+  -- `stdlibIndexNeededFor` answers whether a rule that reads it is active
+  -- (`rule-stdlib-reimpl`, or an edit rule while some target has an
+  -- `import m.*`); when it isn't, `emptyStdlibIndex` skips the whole-stdlib parse for free (every other rule ignores its
   -- `StdlibIndex` argument, and this rule's own findings get discarded by the
   -- CLI-flag filters below regardless of what index it saw) — but ONLY on the
   -- uncached path, where that discarding happens in this same process, on this
@@ -4079,7 +4085,8 @@ runLintTargets a =
   -- silently omit that rule's findings for every later `--cache` read, even a
   -- default-rules one that never named it.
   let indexResult =
-    if stdlibIndexNeeded onlyNames disableNames || flag "--cache" a then
+    if stdlibIndexNeededFor onlyNames disableNames files
+      || flag "--cache" a then
       buildStdlibIndexResult
     else
       Ok emptyStdlibIndex
@@ -4153,6 +4160,7 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
     let run = LintRun {
       lrInternal = internalFlag,
       lrFix = fixMode,
+      lrUnsafe = flag "--unsafe-fixes" a,
       lrMulti = multiFile,
     }
     let (perFileErr, entries, parsed) =
@@ -4228,6 +4236,13 @@ assertBaselineFlagsCoherent baselineArg writeArg fixMode
   | isSome baselineArg && fixMode =
     dieMsg "medaka lint: --baseline cannot be combined with --fix"
   | otherwise = ()
+
+-- `--unsafe-fixes` widens what `--fix` applies; alone it would be accepted and
+-- do nothing, which reads as a clean run.
+assertUnsafeFixesNeedFix : Args -> <IO> Unit
+assertUnsafeFixesNeedFix a =
+  if flag "--unsafe-fixes" a && not (flag "--fix" a) then
+    dieMsg "medaka lint: --unsafe-fixes requires --fix"
 
 -- An unreadable or malformed baseline is fatal, never an empty one: a baseline
 -- that answers "no rows, so nothing exceeds" reports green for every file in the

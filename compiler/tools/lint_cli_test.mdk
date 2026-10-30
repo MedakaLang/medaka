@@ -7,7 +7,8 @@
 -- chosen directory and reads the exit code and the merged output.
 import test.{Expectation, expectEach, expectEqual, expectTrue, fail}
 import test_process.{boundedVerb, medakaBin, withScratchDir}
-import string.{contains, unwords}
+import string.{concat, contains, split, unwords}
+import list.{replicate}
 
 -- `f` matches on a bare parameter: `rule-match-on-param`, an internal rule.
 fixtureSrc : String
@@ -166,3 +167,159 @@ test "the registry views reject flags and targets they would ignore" = withScrat
             (lintIn "\{dir}/p5" ["--list-rules", "--names", "--scope=internal"]),
         ),
       ])
+
+-- The three registered fix ceilings, as `--list-rules --json` prints them: a
+-- `Safe` rule, an `Unsafe` one, and a rule with no fix.
+test "--list-rules --json prints each rule's maxApplicability" = withScratchDir
+  (dir => match stage dir
+    Err e => fail "could not stage the scratch tree: \{e}"
+    Ok _ =>
+      let listed = lintIn "\{dir}/p5" ["--list-rules", "--json"]
+      expectEach [
+        ruleCeilingIs listed "rule-not-eq" "\"safe\"",
+        ruleCeilingIs listed "rule-if-max-min" "\"unsafe\"",
+        ruleCeilingIs listed "rule-hand-rolled-derivable" "null",
+      ])
+
+-- The row for `rule` ends with its `maxApplicability` before `needs`.
+ruleCeilingIs : Result String (Int, String) ->
+  String ->
+  String ->
+  (String, Expectation)
+ruleCeilingIs listed rule want = (
+  "\{rule} has maxApplicability \{want}",
+  graded
+    0
+    (out =>
+      contains "\"name\":\"\{rule}\"" out
+        && contains "\"maxApplicability\":\{want},\"needs\"" (rowOf rule out))
+    listed,
+)
+
+-- The text from `rule`'s name to the end of its own row.
+rowOf : String -> String -> String
+rowOf rule out = match split "\"name\":\"\{rule}\"" out
+  _ :: rest :: _ => match split "\"tiers\"" rest
+    row :: _ => row
+    [] => ""
+  _ => ""
+
+test "--unsafe-fixes needs --fix and is not a registry-view flag" = withScratchDir
+  (dir => match stage dir
+    Err e => fail "could not stage the scratch tree: \{e}"
+    Ok _ =>
+      let reject label args want =
+        (label, graded 1 (contains want) (lintIn "\{dir}/p5" args))
+      expectEach [
+        reject
+          "without --fix"
+          ["--unsafe-fixes", "user.mdk"]
+          "--unsafe-fixes requires --fix",
+        reject
+          "with --list-rules"
+          ["--unsafe-fixes", "--fix", "--list-rules"]
+          "--unsafe-fixes cannot be combined with --list-rules",
+        reject
+          "with --explain"
+          ["--unsafe-fixes", "--fix", "--explain", "rule-not-eq"]
+          "--unsafe-fixes cannot be combined with --explain",
+      ])
+
+-- `if a > b then a else b` is `max a b` only for a total order, so the rule is
+-- `Unsafe`: plain `--fix` leaves the file, `--unsafe-fixes` rewrites it.
+test "--unsafe-fixes applies an unsafe fix that plain --fix leaves" = withScratchDir
+  (dir => match stage dir
+    Err e => fail "could not stage the scratch tree: \{e}"
+    Ok _ =>
+      match (writeFile
+        "\{dir}/p5/pick.mdk"
+        "pickGt a b = if a > b then a else b\n")
+        Err e => fail "could not write the probe: \{e}"
+        Ok _ => expectEach [
+          (
+            "plain --fix exits clean",
+            graded
+              0
+              (contains "fixed 0")
+              (lintIn "\{dir}/p5" ["--fix", "pick.mdk"]),
+          ),
+          (
+            "plain --fix leaves the file",
+            expectEqual
+              (Ok "pickGt a b = if a > b then a else b\n")
+              (readFile "\{dir}/p5/pick.mdk"),
+          ),
+          (
+            "--unsafe-fixes reports a fix",
+            graded
+              0
+              (contains "fixed 1")
+              (lintIn "\{dir}/p5" ["--fix", "--unsafe-fixes", "pick.mdk"]),
+          ),
+          (
+            "--unsafe-fixes rewrites the file",
+            expectEqual
+              (Ok "pickGt a b = max a b\n")
+              (readFile "\{dir}/p5/pick.mdk"),
+          ),
+        ])
+
+-- `lint --json` and `--fix` agree on what is safe: an edit over a comment is a
+-- suggestion in the report and is left alone by `--fix`.
+test "lint --json reports the applicability --fix acts on" = withScratchDir
+  (dir => match stage dir
+    Err e => fail "could not stage the scratch tree: \{e}"
+    Ok _ => match writeFile "\{dir}/p5/com.mdk" "h a b = not ({- c -} a == b)\n"
+      Err e => fail "could not write the probe: \{e}"
+      Ok _ => expectEach [
+        (
+          "the reported fix is a suggestion",
+          graded
+            0
+            (contains "\"applicability\":\"suggest\"")
+            (lintIn "\{dir}/p5" ["--json", "--only=rule-not-eq", "com.mdk"]),
+        ),
+        (
+          "the report names no safe fix",
+          graded
+            0
+            (out => not (contains "\"applicability\":\"safe\"" out))
+            (lintIn "\{dir}/p5" ["--json", "--only=rule-not-eq", "com.mdk"]),
+        ),
+      ])
+
+-- A chain deeper than the pass limit is written as far as it got, says so on
+-- stderr, and exits 1 (C3: anything but clean); a second run finishes it.
+test "--fix past the pass limit says so and exits non-zero" = withScratchDir
+  (dir => match stage dir
+    Err e => fail "could not stage the scratch tree: \{e}"
+    Ok _ => match writeFile "\{dir}/p5/deep.mdk" (deepChain 40)
+      Err e => fail "could not write the probe: \{e}"
+      Ok _ => expectEach [
+        (
+          "the first run stops and names the file and the limit",
+          graded
+            1
+            (contains "deep.mdk: stopped after 32 passes; run again")
+            (lintIn "\{dir}/p5" [
+              "--fix", "--only=rule-bool-simplify", "deep.mdk"
+            ]),
+        ),
+        (
+          "the second run finishes",
+          graded
+            0
+            (contains "fixed 8")
+            (lintIn "\{dir}/p5" [
+              "--fix", "--only=rule-bool-simplify", "deep.mdk"
+            ]),
+        ),
+        (
+          "the file is settled",
+          expectEqual (Ok "deep x = x\n") (readFile "\{dir}/p5/deep.mdk"),
+        ),
+      ])
+
+-- `deep x = x == True == ... == True` with `n` comparisons.
+deepChain : Int -> String
+deepChain n = "deep x = x" ++ concat (replicate n " == True") ++ "\n"

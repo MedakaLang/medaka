@@ -100,6 +100,7 @@ testEqInTrueFinding loc rewritten = Finding {
     "an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as '\{exprToString rewritten}'",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 testEqualInTrueFix : Oracle -> Decl -> Option (List Decl)

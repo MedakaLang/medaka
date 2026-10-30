@@ -1,5 +1,5 @@
 # META
-source_lines=137
+source_lines=138
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-self-shadow-extern: a top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`), an infinite self-recursion.
@@ -138,6 +138,7 @@ selfShadowFinding (name, loc) = Finding {
     "top-level '\{name}' unconditionally calls itself with no base case — an infinite self-recursion, not a forward to a same-named extern/definition. Rename the binding (give it a distinct name) or add a terminating `match`/`if`/guard",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Expr" true) (mem "Decl" true))))
@@ -176,7 +177,7 @@ selfShadowFinding (name, loc) = Finding {
 (DTypeSig false "appHead" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "appHead" ((PVar "e")) (EMatch (EApp (EVar "stripWrap") (EVar "e")) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "appHead") (EVar "f"))) (arm (PVar "x") () (EVar "x"))))
 (DTypeSig false "selfShadowFinding" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Finding")))
-(DFunDef false "selfShadowFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameSelfShadowExtern")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' unconditionally calls itself with no base case — an infinite self-recursion, not a forward to a same-named extern/definition. Rename the binding (give it a distinct name) or add a terminating `match`/`if`/guard")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DFunDef false "selfShadowFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameSelfShadowExtern")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' unconditionally calls itself with no base case — an infinite self-recursion, not a forward to a same-named extern/definition. Rename the binding (give it a distinct name) or add a terminating `match`/`if`/guard")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
@@ -214,4 +215,4 @@ selfShadowFinding (name, loc) = Finding {
 (DTypeSig false "appHead" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "appHead" ((PVar "e")) (EMatch (EApp (EVar "stripWrap") (EVar "e")) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "appHead") (EVar "f"))) (arm (PVar "x") () (EVar "x"))))
 (DTypeSig false "selfShadowFinding" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Finding")))
-(DFunDef false "selfShadowFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameSelfShadowExtern")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' unconditionally calls itself with no base case — an infinite self-recursion, not a forward to a same-named extern/definition. Rename the binding (give it a distinct name) or add a terminating `match`/`if`/guard")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DFunDef false "selfShadowFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameSelfShadowExtern")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' unconditionally calls itself with no base case — an infinite self-recursion, not a forward to a same-named extern/definition. Rename the binding (give it a distinct name) or add a terminating `match`/`if`/guard")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))

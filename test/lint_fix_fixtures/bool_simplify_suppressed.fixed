@@ -1,0 +1,5 @@
+-- NEGATIVE: a directive above the clause keeps rule-bool-simplify from rewriting it.
+-- lint-disable-next-line rule-bool-simplify
+eqT x = x == True
+
+main = println (eqT True)

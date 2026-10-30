@@ -102,4 +102,5 @@ missingSigFinding (name, loc) = Finding {
     "top-level '\{name}' has no type signature. Add a `\{name} : …` declaration",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }

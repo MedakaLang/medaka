@@ -263,6 +263,7 @@ readerFinding path subject (line, _, _) (firstReader :: more) = [
       "comment claims nothing reads `\{subject}` yet, but it is read on line \{firstReader}\{readerCountSuffix (listLen more)}. Restate the claim as what is measured today, or delete it",
     severity = SevWarning,
     loc = Some (Loc path line 1 line 1),
+    fix = None,
   },
 ]
 

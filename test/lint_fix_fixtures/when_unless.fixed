@@ -1,7 +1,7 @@
 -- Fixture for rule-when-unless autofix.
 
-whenShape b act = when b act
-unlessShape b act = unless b act
+whenShape b act = if b then act else pure ()
+unlessShape b act = if b then pure () else act
 
 -- NEGATIVE: must stay untouched.
 negPlain b act other = if b then act else other

@@ -1,3 +1,4 @@
+import driver.diagnostics.{fixEditsJson}
 import driver.diagnostic_value.{
   Diag(..), Fix(..), DiagId(..), diagIdText, Severity(..)
 }
@@ -42,6 +43,15 @@ fixField index (Some (Fix loc replacement)) = [
       ("range", optionOr JNull (locToLspRange index loc)),
       ("replacement", JString replacement),
     ],
+  ),
+]
+fixField index (Some (FixEdits applicability edits)) = [
+  (
+    "fix",
+    fixEditsJson
+      (loc => optionOr JNull (locToLspRange index loc))
+      applicability
+      edits,
   ),
 ]
 fixField _ None = []

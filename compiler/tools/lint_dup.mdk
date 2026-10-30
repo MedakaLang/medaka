@@ -381,6 +381,7 @@ dupFinding distinctFiles occ =
       "function '\{occName occ}' has a body structurally identical to a definition in \{joinWith ", " others} — consolidate into a shared module",
     severity = SevWarning,
     loc = Some (Loc file line 1 line 1),
+    fix = None,
   }
 
 -- insertion sort occurrences by (file, line) for deterministic output.

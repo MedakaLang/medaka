@@ -1,5 +1,5 @@
 # META
-source_lines=210
+source_lines=211
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-bind-then-destructure: a do-bind immediately destructured by an irrefutable single-arm `match`. Inline the pattern into the bind.
@@ -166,6 +166,7 @@ bindDestructureFinding loc v = Finding {
       ++ "' then immediately destructures it in a final `match`. Inline the pattern into the bind",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 -- ── autofix ──────────────────────────────────────────────────────────────────
@@ -255,7 +256,7 @@ whenSameHerald _ _ _ e = [DoExpr e]
 (DFunDef false "blockStmts" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "Some") (EVar "stmts")))
 (DFunDef false "blockStmts" (PWild) (EVar "None"))
 (DTypeSig false "bindDestructureFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
-(DFunDef false "bindDestructureFinding" ((PVar "loc") (PVar "v")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindThenDestructure")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "binds '")) (EVar "v")) (ELit (LString "' then immediately destructures it in a final `match`. Inline the pattern into the bind")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DFunDef false "bindDestructureFinding" ((PVar "loc") (PVar "v")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindThenDestructure")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "binds '")) (EVar "v")) (ELit (LString "' then immediately destructures it in a final `match`. Inline the pattern into the bind")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
 (DTypeSig false "bindThenDestructureFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "bindThenDestructureFix" ((PVar "orc") (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "noExcl")) (EApp (EVar "detApply") (EApp (EVar "bindThenDestructureRewrite") (EVar "orc")))) (EVar "d")))
 (DTypeSig false "bindThenDestructureRewrite" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
@@ -317,7 +318,7 @@ whenSameHerald _ _ _ e = [DoExpr e]
 (DFunDef false "blockStmts" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "Some") (EVar "stmts")))
 (DFunDef false "blockStmts" (PWild) (EVar "None"))
 (DTypeSig false "bindDestructureFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
-(DFunDef false "bindDestructureFinding" ((PVar "loc") (PVar "v")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindThenDestructure")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "binds '")) (EVar "v")) (ELit (LString "' then immediately destructures it in a final `match`. Inline the pattern into the bind")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DFunDef false "bindDestructureFinding" ((PVar "loc") (PVar "v")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindThenDestructure")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "binds '")) (EVar "v")) (ELit (LString "' then immediately destructures it in a final `match`. Inline the pattern into the bind")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
 (DTypeSig false "bindThenDestructureFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "bindThenDestructureFix" ((PVar "orc") (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "noExcl")) (EApp (EVar "detApply") (EApp (EVar "bindThenDestructureRewrite") (EVar "orc")))) (EVar "d")))
 (DTypeSig false "bindThenDestructureRewrite" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))

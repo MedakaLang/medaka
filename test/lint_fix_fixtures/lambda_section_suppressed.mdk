@@ -1,0 +1,5 @@
+-- NEGATIVE: a directive above the clause keeps rule-lambda-section from rewriting it.
+-- lint-disable-next-line rule-lambda-section
+rightMul = (x => x * 2)
+
+main = println (rightMul 4)
