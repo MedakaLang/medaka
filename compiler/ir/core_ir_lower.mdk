@@ -149,7 +149,6 @@ import support.util.{
   isNonEmptyL,
   joinWith,
   reverseL,
-  startsWith,
   dedupBy,
   lenKey,
   splitOnChar,
