@@ -1,5 +1,5 @@
 # META
-source_lines=510
+source_lines=584
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -64,9 +64,17 @@ import driver.diagnostics.{
   readFileSafe,
   srcLinesArr,
 }
-import support.util.{lookupAssoc, joinWith, dedup, dedupBy, contains, anyList}
+import support.util.{
+  lookupAssoc,
+  joinWith,
+  dedup,
+  dedupBy,
+  contains,
+  anyList,
+  splitOnChar,
+}
 import string.{trim}
-import list.{lookup}
+import list.{lookup, last}
 
 export
 targetCapabilityCode : DiagCode
@@ -105,7 +113,7 @@ targetRefusal profile file paths analysis =
         Some d => match bound
           [] => [d]
           ds => ds
-        None => bound ++ builtinRefusals profile paths analysis
+        None => bound ++ builtinRefusals profile file paths analysis
 
 -- The file a target refusal is located in: a refused extern's module, else
 -- the entry.
@@ -274,10 +282,11 @@ noBindingDiag profile path (ed, chain) =
 -- any column leaves unprovided (`core_validate_test`), so a program none of
 -- whose modules names one skips the reach.
 builtinRefusals : TargetProfile ->
+  String ->
   List (String, String) ->
   TargetInputs ->
   List Diag
-builtinRefusals profile paths analysis =
+builtinRefusals profile file paths analysis =
   let column = profileColumn profile
   let named =
     anyList
@@ -292,7 +301,7 @@ builtinRefusals profile paths analysis =
         analysis.tiCore
         analysis.tiModules
     filterMap
-      (unprovidedReached profile paths analysis)
+      (unprovidedReached profile file paths analysis)
       (dedupBy (r => snd (fst r)) routes)
   else
     []
@@ -310,20 +319,85 @@ runtimeUnit : String
 runtimeUnit = "<runtime>"
 
 unprovidedReached : TargetProfile ->
+  String ->
   List (String, String) ->
   TargetInputs ->
   ((String, String), List (String, String)) ->
   Option Diag
-unprovidedReached profile paths analysis ((_, name), route) =
+unprovidedReached profile file paths analysis ((_, name), route) =
   let column = profileColumn profile
   map
     ((kind, why) =>
-      mkDiag
-        SevError
-        targetNotProvidedCode
-        "the built-in `\{name}` is reached\{reachRoute (map snd route)}, and the target `\{profileName profile}` does not provide it (\{gapKindName kind}: \{why}): \{gapCause kind}\{gapAdvice profile column kind name}"
-        (namingBindingLoc paths analysis route))
+      if deliberateRefusal column kind name then
+        mkDiag
+          SevError
+          targetNotProvidedCode
+          (deliberateMessage profile file paths name why route)
+          (userFrameLoc paths analysis route)
+      else
+        mkDiag
+          SevError
+          targetNotProvidedCode
+          "the built-in `\{name}` is reached\{reachRoute (map snd route)}, and the target `\{profileName profile}` does not provide it (\{gapKindName kind}: \{why}): \{gapCause kind}\{gapAdvice profile column kind name}"
+          (namingBindingLoc paths analysis route))
     (unprovidedOn column name)
+
+-- The interpreter's refusal of a built-in the native column runs: chosen, not
+-- a gap, so it is worded as a refusal with the build command to take instead.
+deliberateRefusal : Backend -> GapKind -> String -> Bool
+deliberateRefusal EvalBackend GapPermanent name =
+  not (isUnprovidedOn LlvmBackend name)
+deliberateRefusal _ _ _ = False
+
+deliberateMessage : TargetProfile ->
+  String ->
+  List (String, String) ->
+  String ->
+  String ->
+  List (String, String) ->
+  String
+deliberateMessage profile file paths name why route =
+  let chain = map snd route
+  let located = match lastUserStep paths route
+    Some _ => ""
+    None =>
+      "; no frame of your code is on the route, so this is located at the nearest frame"
+  "the built-in `\{name}` is reached\{reachRoute chain}, and `medaka run` refuses it on purpose (\{why})\{located}\nhelp: \{deliberateHelp profile file}"
+
+deliberateHelp : TargetProfile -> String -> String
+deliberateHelp profile file = match runTargetOf profile
+  Some t =>
+    "`medaka run` evaluates the program with the interpreter whatever its target; build it with `medaka build \{file} --target \{profileName t} -o <bin>`, then run `<bin>`"
+  None => "build it with `medaka build \{file} -o <bin>`, then run `<bin>`"
+
+-- The definition of the last binding of the program's own code on the route
+-- before the built-in: the user's helper that reached the extern, or `main`
+-- when `main` calls the library directly.
+userFrameLoc : List (String, String) ->
+  TargetInputs ->
+  List (String, String) ->
+  Option Loc
+userFrameLoc paths analysis route = match lastUserStep paths route
+  Some (mid, n) => do
+    decls <- lookup mid analysis.tiModules
+    l <- definitionLoc n decls
+    Some (inFile (lookupAssoc mid paths) l)
+  None => namingBindingLoc paths analysis route
+
+lastUserStep : List (String, String) ->
+  List (String, String) ->
+  Option (String, String)
+lastUserStep paths route = last (filter (isUserStep paths) (dropLast route))
+
+isUserStep : List (String, String) -> (String, String) -> Bool
+isUserStep paths (mid, _) = match lookupAssoc mid paths
+  Some p => not (contains "stdlib" (splitOnChar '/' p))
+  None => False
+
+dropLast : List a -> List a
+dropLast [] = []
+dropLast [_] = []
+dropLast (x :: rest) = x :: dropLast rest
 
 -- Whether the program or the compiler is at fault, by the row's gap kind.
 gapCause : GapKind -> String
@@ -531,9 +605,9 @@ firstOr _ (x :: _) = x
 (DUse false (UseGroup ("tools" "check_policy") ((mem "TargetInputs" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "mkDiag" false) (mem "cjFoldIntoFile" false) (mem "ppDiagCliLines" false) (mem "readFileSafe" false) (mem "srcLinesArr" false))))
-(DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "joinWith" false) (mem "dedup" false) (mem "dedupBy" false) (mem "contains" false) (mem "anyList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "joinWith" false) (mem "dedup" false) (mem "dedupBy" false) (mem "contains" false) (mem "anyList" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("string") ((mem "trim" false))))
-(DUse false (UseGroup ("list") ((mem "lookup" false))))
+(DUse false (UseGroup ("list") ((mem "lookup" false) (mem "last" false))))
 (DTypeSig true "targetCapabilityCode" (TyCon "DiagCode"))
 (DFunDef false "targetCapabilityCode" () (EVar "TTargetCapability"))
 (DTypeSig true "targetNoBindingCode" (TyCon "DiagCode"))
@@ -541,7 +615,7 @@ firstOr _ (x :: _) = x
 (DTypeSig true "targetNotProvidedCode" (TyCon "DiagCode"))
 (DFunDef false "targetNotProvidedCode" () (EVar "TTargetNotProvided"))
 (DTypeSig true "targetRefusal" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyApp (TyCon "List") (TyCon "Diag")))))))
-(DFunDef false "targetRefusal" ((PVar "profile") (PVar "file") (PVar "paths") (PVar "analysis")) (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EFieldAccess (EVar "analysis") "tiSchemes")) (arm (PCon "None") () (EListLit (EApp (EApp (EVar "missingEntryDiag") (EVar "profile")) (EVar "file")))) (arm (PCon "Some" (PVar "sch")) () (EBlock (DoLet false false (PVar "bound") (EApp (EApp (EApp (EVar "bindingRefusals") (EVar "profile")) (EVar "paths")) (EVar "analysis"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "capabilityRefusal") (EVar "profile")) (EVar "analysis")) (EVar "sch")) (arm (PCon "Some" (PVar "d")) () (EMatch (EVar "bound") (arm (PList) () (EListLit (EVar "d"))) (arm (PVar "ds") () (EVar "ds")))) (arm (PCon "None") () (EBinOp "++" (EVar "bound") (EApp (EApp (EApp (EVar "builtinRefusals") (EVar "profile")) (EVar "paths")) (EVar "analysis"))))))))))
+(DFunDef false "targetRefusal" ((PVar "profile") (PVar "file") (PVar "paths") (PVar "analysis")) (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EFieldAccess (EVar "analysis") "tiSchemes")) (arm (PCon "None") () (EListLit (EApp (EApp (EVar "missingEntryDiag") (EVar "profile")) (EVar "file")))) (arm (PCon "Some" (PVar "sch")) () (EBlock (DoLet false false (PVar "bound") (EApp (EApp (EApp (EVar "bindingRefusals") (EVar "profile")) (EVar "paths")) (EVar "analysis"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "capabilityRefusal") (EVar "profile")) (EVar "analysis")) (EVar "sch")) (arm (PCon "Some" (PVar "d")) () (EMatch (EVar "bound") (arm (PList) () (EListLit (EVar "d"))) (arm (PVar "ds") () (EVar "ds")))) (arm (PCon "None") () (EBinOp "++" (EVar "bound") (EApp (EApp (EApp (EApp (EVar "builtinRefusals") (EVar "profile")) (EVar "file")) (EVar "paths")) (EVar "analysis"))))))))))
 (DTypeSig true "targetDiagFile" (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String"))))
 (DFunDef false "targetDiagFile" ((PVar "entry") (PCon "Diag" PWild PWild PWild (PCon "Some" (PCon "Loc" (PVar "f") PWild PWild PWild PWild)) PWild PWild)) (EIf (EBinOp "==" (EVar "f") (ELit (LString ""))) (EVar "entry") (EVar "f")))
 (DFunDef false "targetDiagFile" ((PVar "entry") PWild) (EVar "entry"))
@@ -565,16 +639,33 @@ firstOr _ (x :: _) = x
 (DFunDef false "unboundReached" ((PVar "profile") (PVar "paths") (PVar "chains") (PTuple (PVar "mid") (PVar "ed"))) (EMatch (EApp (EApp (EVar "lookup") (ETuple (EVar "mid") (EFieldAccess (EVar "ed") "edName"))) (EVar "chains")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "chain")) () (EBlock (DoLet false false (PVar "bound") (EMatch (EApp (EVar "profileBindingHost") (EVar "profile")) (arm (PCon "Some" (PVar "h")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "b")) (EBinOp "==" (EFieldAccess (EVar "b") "ebHost") (EVar "h")))) (EApp (EVar "externBindings") (EVar "ed")))) (arm (PCon "None") () (EVar "False")))) (DoExpr (EIf (EVar "bound") (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "noBindingDiag") (EVar "profile")) (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "paths"))) (ETuple (EVar "ed") (EVar "chain"))))))))))
 (DTypeSig false "noBindingDiag" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyTuple (TyCon "ExternDecl") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Diag")))))
 (DFunDef false "noBindingDiag" ((PVar "profile") (PVar "path") (PTuple (PVar "ed") (PVar "chain"))) (EBlock (DoLet false false (PVar "hosts") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EFieldAccess (EVar "b") "ebHost"))) (ELit (LString "`"))))) (EApp (EVar "externBindings") (EVar "ed"))))) (DoLet false false (PVar "target") (EApp (EVar "profileName") (EVar "profile"))) (DoLet false false (PVar "why") (EMatch (EApp (EVar "profileBindingHost") (EVar "profile")) (arm (PCon "Some" (PVar "h")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "has no binding for the host `")) (EApp (EVar "display") (EVar "h"))) (ELit (LString "`, which the target `"))) (EApp (EVar "display") (EVar "target"))) (ELit (LString "` calls foreign code through (it binds "))) (EApp (EVar "display") (EVar "hosts"))) (ELit (LString "); add a `bind "))) (EApp (EVar "display") (EVar "h"))) (ELit (LString "` clause or build for a target whose host it binds")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the target `")) (EApp (EVar "display") (EVar "target"))) (ELit (LString "` calls foreign code through no host (it binds "))) (EApp (EVar "display") (EVar "hosts"))) (ELit (LString "); build for a target whose host it binds")))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetNoBindingCode")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the extern `")) (EApp (EVar "display") (EFieldAccess (EVar "ed") "edName"))) (ELit (LString "` is reached"))) (EApp (EVar "display") (EApp (EVar "reachRoute") (EVar "chain")))) (ELit (LString ", and "))) (EApp (EVar "display") (EVar "why"))) (ELit (LString "")))) (EApp (EVar "Some") (EApp (EApp (EVar "inFile") (EVar "path")) (EFieldAccess (EVar "ed") "edLoc")))))))
-(DTypeSig false "builtinRefusals" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyApp (TyCon "List") (TyCon "Diag"))))))
-(DFunDef false "builtinRefusals" ((PVar "profile") (PVar "paths") (PVar "analysis")) (EBlock (DoLet false false (PVar "column") (EApp (EVar "profileColumn") (EVar "profile"))) (DoLet false false (PVar "named") (EApp (EApp (EVar "anyList") (ELam ((PTuple PWild (PVar "decls"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "d")) (EApp (EApp (EVar "anyList") (EApp (EVar "isUnprovidedOn") (EVar "column"))) (EApp (EVar "declRefs") (EVar "d"))))) (EVar "decls")))) (EFieldAccess (EVar "analysis") "tiModules"))) (DoExpr (EIf (EVar "named") (EBlock (DoLet false false (PVar "routes") (EApp (EApp (EApp (EApp (EVar "reachedExternRoutes") (EApp (EVar "reachRootsOf") (EVar "column"))) (EApp (EVar "Some") (ETuple (EVar "runtimeUnit") (EFieldAccess (EVar "analysis") "tiRuntime")))) (EFieldAccess (EVar "analysis") "tiCore")) (EFieldAccess (EVar "analysis") "tiModules"))) (DoExpr (EApp (EApp (EVar "filterMap") (EApp (EApp (EApp (EVar "unprovidedReached") (EVar "profile")) (EVar "paths")) (EVar "analysis"))) (EApp (EApp (EVar "dedupBy") (ELam ((PVar "r")) (EApp (EVar "snd") (EApp (EVar "fst") (EVar "r"))))) (EVar "routes"))))) (EListLit)))))
+(DTypeSig false "builtinRefusals" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyApp (TyCon "List") (TyCon "Diag")))))))
+(DFunDef false "builtinRefusals" ((PVar "profile") (PVar "file") (PVar "paths") (PVar "analysis")) (EBlock (DoLet false false (PVar "column") (EApp (EVar "profileColumn") (EVar "profile"))) (DoLet false false (PVar "named") (EApp (EApp (EVar "anyList") (ELam ((PTuple PWild (PVar "decls"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "d")) (EApp (EApp (EVar "anyList") (EApp (EVar "isUnprovidedOn") (EVar "column"))) (EApp (EVar "declRefs") (EVar "d"))))) (EVar "decls")))) (EFieldAccess (EVar "analysis") "tiModules"))) (DoExpr (EIf (EVar "named") (EBlock (DoLet false false (PVar "routes") (EApp (EApp (EApp (EApp (EVar "reachedExternRoutes") (EApp (EVar "reachRootsOf") (EVar "column"))) (EApp (EVar "Some") (ETuple (EVar "runtimeUnit") (EFieldAccess (EVar "analysis") "tiRuntime")))) (EFieldAccess (EVar "analysis") "tiCore")) (EFieldAccess (EVar "analysis") "tiModules"))) (DoExpr (EApp (EApp (EVar "filterMap") (EApp (EApp (EApp (EApp (EVar "unprovidedReached") (EVar "profile")) (EVar "file")) (EVar "paths")) (EVar "analysis"))) (EApp (EApp (EVar "dedupBy") (ELam ((PVar "r")) (EApp (EVar "snd") (EApp (EVar "fst") (EVar "r"))))) (EVar "routes"))))) (EListLit)))))
 (DTypeSig false "reachRootsOf" (TyFun (TyCon "Backend") (TyCon "ReachRoots")))
 (DFunDef false "reachRootsOf" ((PCon "LlvmBackend")) (EVar "EmittedRoots"))
 (DFunDef false "reachRootsOf" ((PCon "WasmBackend")) (EVar "EmittedRoots"))
 (DFunDef false "reachRootsOf" ((PCon "EvalBackend")) (EVar "DispatchedRoots"))
 (DTypeSig false "runtimeUnit" (TyCon "String"))
 (DFunDef false "runtimeUnit" () (ELit (LString "<runtime>")))
-(DTypeSig false "unprovidedReached" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyFun (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "Diag")))))))
-(DFunDef false "unprovidedReached" ((PVar "profile") (PVar "paths") (PVar "analysis") (PTuple (PTuple PWild (PVar "name")) (PVar "route"))) (EBlock (DoLet false false (PVar "column") (EApp (EVar "profileColumn") (EVar "profile"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "kind") (PVar "why"))) (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetNotProvidedCode")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the built-in `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` is reached"))) (EApp (EVar "display") (EApp (EVar "reachRoute") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "route"))))) (ELit (LString ", and the target `"))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not provide it ("))) (EApp (EVar "display") (EApp (EVar "gapKindName") (EVar "kind")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "why"))) (ELit (LString "): "))) (EApp (EVar "display") (EApp (EVar "gapCause") (EVar "kind")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "gapAdvice") (EVar "profile")) (EVar "column")) (EVar "kind")) (EVar "name")))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "namingBindingLoc") (EVar "paths")) (EVar "analysis")) (EVar "route"))))) (EApp (EApp (EVar "unprovidedOn") (EVar "column")) (EVar "name"))))))
+(DTypeSig false "unprovidedReached" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyFun (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "Diag"))))))))
+(DFunDef false "unprovidedReached" ((PVar "profile") (PVar "file") (PVar "paths") (PVar "analysis") (PTuple (PTuple PWild (PVar "name")) (PVar "route"))) (EBlock (DoLet false false (PVar "column") (EApp (EVar "profileColumn") (EVar "profile"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "kind") (PVar "why"))) (EIf (EApp (EApp (EApp (EVar "deliberateRefusal") (EVar "column")) (EVar "kind")) (EVar "name")) (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetNotProvidedCode")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "deliberateMessage") (EVar "profile")) (EVar "file")) (EVar "paths")) (EVar "name")) (EVar "why")) (EVar "route"))) (EApp (EApp (EApp (EVar "userFrameLoc") (EVar "paths")) (EVar "analysis")) (EVar "route"))) (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetNotProvidedCode")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the built-in `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` is reached"))) (EApp (EVar "display") (EApp (EVar "reachRoute") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "route"))))) (ELit (LString ", and the target `"))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not provide it ("))) (EApp (EVar "display") (EApp (EVar "gapKindName") (EVar "kind")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "why"))) (ELit (LString "): "))) (EApp (EVar "display") (EApp (EVar "gapCause") (EVar "kind")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "gapAdvice") (EVar "profile")) (EVar "column")) (EVar "kind")) (EVar "name")))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "namingBindingLoc") (EVar "paths")) (EVar "analysis")) (EVar "route")))))) (EApp (EApp (EVar "unprovidedOn") (EVar "column")) (EVar "name"))))))
+(DTypeSig false "deliberateRefusal" (TyFun (TyCon "Backend") (TyFun (TyCon "GapKind") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "deliberateRefusal" ((PCon "EvalBackend") (PCon "GapPermanent") (PVar "name")) (EApp (EVar "not") (EApp (EApp (EVar "isUnprovidedOn") (EVar "LlvmBackend")) (EVar "name"))))
+(DFunDef false "deliberateRefusal" (PWild PWild PWild) (EVar "False"))
+(DTypeSig false "deliberateMessage" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String"))))))))
+(DFunDef false "deliberateMessage" ((PVar "profile") (PVar "file") (PVar "paths") (PVar "name") (PVar "why") (PVar "route")) (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "route"))) (DoLet false false (PVar "located") (EMatch (EApp (EApp (EVar "lastUserStep") (EVar "paths")) (EVar "route")) (arm (PCon "Some" PWild) () (ELit (LString ""))) (arm (PCon "None") () (ELit (LString "; no frame of your code is on the route, so this is located at the nearest frame"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the built-in `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` is reached"))) (EApp (EVar "display") (EApp (EVar "reachRoute") (EVar "chain")))) (ELit (LString ", and `medaka run` refuses it on purpose ("))) (EApp (EVar "display") (EVar "why"))) (ELit (LString ")"))) (EApp (EVar "display") (EVar "located"))) (ELit (LString "\nhelp: "))) (EApp (EVar "display") (EApp (EApp (EVar "deliberateHelp") (EVar "profile")) (EVar "file")))) (ELit (LString ""))))))
+(DTypeSig false "deliberateHelp" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "deliberateHelp" ((PVar "profile") (PVar "file")) (EMatch (EApp (EVar "runTargetOf") (EVar "profile")) (arm (PCon "Some" (PVar "t")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`medaka run` evaluates the program with the interpreter whatever its target; build it with `medaka build ")) (EApp (EVar "display") (EVar "file"))) (ELit (LString " --target "))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "t")))) (ELit (LString " -o <bin>`, then run `<bin>`")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "build it with `medaka build ")) (EApp (EVar "display") (EVar "file"))) (ELit (LString " -o <bin>`, then run `<bin>`"))))))
+(DTypeSig false "userFrameLoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "userFrameLoc" ((PVar "paths") (PVar "analysis") (PVar "route")) (EMatch (EApp (EApp (EVar "lastUserStep") (EVar "paths")) (EVar "route")) (arm (PCon "Some" (PTuple (PVar "mid") (PVar "n"))) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "lookup") (EVar "mid")) (EFieldAccess (EVar "analysis") "tiModules"))) (ELam ((PVar "decls")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "definitionLoc") (EVar "n")) (EVar "decls"))) (ELam ((PVar "l")) (EApp (EVar "Some") (EApp (EApp (EVar "inFile") (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "paths"))) (EVar "l")))))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "namingBindingLoc") (EVar "paths")) (EVar "analysis")) (EVar "route")))))
+(DTypeSig false "lastUserStep" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "lastUserStep" ((PVar "paths") (PVar "route")) (EApp (EVar "last") (EApp (EApp (EVar "filter") (EApp (EVar "isUserStep") (EVar "paths"))) (EApp (EVar "dropLast") (EVar "route")))))
+(DTypeSig false "isUserStep" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "isUserStep" ((PVar "paths") (PTuple (PVar "mid") PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "paths")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "not") (EApp (EApp (EVar "contains") (ELit (LString "stdlib"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "p"))))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig false "dropLast" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
+(DFunDef false "dropLast" ((PList)) (EListLit))
+(DFunDef false "dropLast" ((PList PWild)) (EListLit))
+(DFunDef false "dropLast" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "dropLast") (EVar "rest"))))
 (DTypeSig false "gapCause" (TyFun (TyCon "GapKind") (TyCon "String")))
 (DFunDef false "gapCause" ((PCon "GapPermanent")) (ELit (LString "the target cannot provide it, by design")))
 (DFunDef false "gapCause" ((PCon "GapBug")) (ELit (LString "this is a gap in the compiler, not in the program")))
@@ -663,9 +754,9 @@ firstOr _ (x :: _) = x
 (DUse false (UseGroup ("tools" "check_policy") ((mem "TargetInputs" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "mkDiag" false) (mem "cjFoldIntoFile" false) (mem "ppDiagCliLines" false) (mem "readFileSafe" false) (mem "srcLinesArr" false))))
-(DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "joinWith" false) (mem "dedup" false) (mem "dedupBy" false) (mem "contains" false) (mem "anyList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "joinWith" false) (mem "dedup" false) (mem "dedupBy" false) (mem "contains" false) (mem "anyList" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("string") ((mem "trim" false))))
-(DUse false (UseGroup ("list") ((mem "lookup" false))))
+(DUse false (UseGroup ("list") ((mem "lookup" false) (mem "last" false))))
 (DTypeSig true "targetCapabilityCode" (TyCon "DiagCode"))
 (DFunDef false "targetCapabilityCode" () (EVar "TTargetCapability"))
 (DTypeSig true "targetNoBindingCode" (TyCon "DiagCode"))
@@ -673,7 +764,7 @@ firstOr _ (x :: _) = x
 (DTypeSig true "targetNotProvidedCode" (TyCon "DiagCode"))
 (DFunDef false "targetNotProvidedCode" () (EVar "TTargetNotProvided"))
 (DTypeSig true "targetRefusal" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyApp (TyCon "List") (TyCon "Diag")))))))
-(DFunDef false "targetRefusal" ((PVar "profile") (PVar "file") (PVar "paths") (PVar "analysis")) (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EFieldAccess (EVar "analysis") "tiSchemes")) (arm (PCon "None") () (EListLit (EApp (EApp (EVar "missingEntryDiag") (EVar "profile")) (EVar "file")))) (arm (PCon "Some" (PVar "sch")) () (EBlock (DoLet false false (PVar "bound") (EApp (EApp (EApp (EVar "bindingRefusals") (EVar "profile")) (EVar "paths")) (EVar "analysis"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "capabilityRefusal") (EVar "profile")) (EVar "analysis")) (EVar "sch")) (arm (PCon "Some" (PVar "d")) () (EMatch (EVar "bound") (arm (PList) () (EListLit (EVar "d"))) (arm (PVar "ds") () (EVar "ds")))) (arm (PCon "None") () (EBinOp "++" (EVar "bound") (EApp (EApp (EApp (EVar "builtinRefusals") (EVar "profile")) (EVar "paths")) (EVar "analysis"))))))))))
+(DFunDef false "targetRefusal" ((PVar "profile") (PVar "file") (PVar "paths") (PVar "analysis")) (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EFieldAccess (EVar "analysis") "tiSchemes")) (arm (PCon "None") () (EListLit (EApp (EApp (EVar "missingEntryDiag") (EVar "profile")) (EVar "file")))) (arm (PCon "Some" (PVar "sch")) () (EBlock (DoLet false false (PVar "bound") (EApp (EApp (EApp (EVar "bindingRefusals") (EVar "profile")) (EVar "paths")) (EVar "analysis"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "capabilityRefusal") (EVar "profile")) (EVar "analysis")) (EVar "sch")) (arm (PCon "Some" (PVar "d")) () (EMatch (EVar "bound") (arm (PList) () (EListLit (EVar "d"))) (arm (PVar "ds") () (EVar "ds")))) (arm (PCon "None") () (EBinOp "++" (EVar "bound") (EApp (EApp (EApp (EApp (EVar "builtinRefusals") (EVar "profile")) (EVar "file")) (EVar "paths")) (EVar "analysis"))))))))))
 (DTypeSig true "targetDiagFile" (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String"))))
 (DFunDef false "targetDiagFile" ((PVar "entry") (PCon "Diag" PWild PWild PWild (PCon "Some" (PCon "Loc" (PVar "f") PWild PWild PWild PWild)) PWild PWild)) (EIf (EBinOp "==" (EVar "f") (ELit (LString ""))) (EVar "entry") (EVar "f")))
 (DFunDef false "targetDiagFile" ((PVar "entry") PWild) (EVar "entry"))
@@ -697,16 +788,33 @@ firstOr _ (x :: _) = x
 (DFunDef false "unboundReached" ((PVar "profile") (PVar "paths") (PVar "chains") (PTuple (PVar "mid") (PVar "ed"))) (EMatch (EApp (EApp (EVar "lookup") (ETuple (EVar "mid") (EFieldAccess (EVar "ed") "edName"))) (EVar "chains")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "chain")) () (EBlock (DoLet false false (PVar "bound") (EMatch (EApp (EVar "profileBindingHost") (EVar "profile")) (arm (PCon "Some" (PVar "h")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "b")) (EBinOp "==" (EFieldAccess (EVar "b") "ebHost") (EVar "h")))) (EApp (EVar "externBindings") (EVar "ed")))) (arm (PCon "None") () (EVar "False")))) (DoExpr (EIf (EVar "bound") (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "noBindingDiag") (EVar "profile")) (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "paths"))) (ETuple (EVar "ed") (EVar "chain"))))))))))
 (DTypeSig false "noBindingDiag" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyTuple (TyCon "ExternDecl") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Diag")))))
 (DFunDef false "noBindingDiag" ((PVar "profile") (PVar "path") (PTuple (PVar "ed") (PVar "chain"))) (EBlock (DoLet false false (PVar "hosts") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EFieldAccess (EVar "b") "ebHost"))) (ELit (LString "`"))))) (EApp (EVar "externBindings") (EVar "ed"))))) (DoLet false false (PVar "target") (EApp (EVar "profileName") (EVar "profile"))) (DoLet false false (PVar "why") (EMatch (EApp (EVar "profileBindingHost") (EVar "profile")) (arm (PCon "Some" (PVar "h")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "has no binding for the host `")) (EApp (EMethodRef "display") (EVar "h"))) (ELit (LString "`, which the target `"))) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString "` calls foreign code through (it binds "))) (EApp (EMethodRef "display") (EVar "hosts"))) (ELit (LString "); add a `bind "))) (EApp (EMethodRef "display") (EVar "h"))) (ELit (LString "` clause or build for a target whose host it binds")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the target `")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString "` calls foreign code through no host (it binds "))) (EApp (EMethodRef "display") (EVar "hosts"))) (ELit (LString "); build for a target whose host it binds")))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetNoBindingCode")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the extern `")) (EApp (EMethodRef "display") (EFieldAccess (EVar "ed") "edName"))) (ELit (LString "` is reached"))) (EApp (EMethodRef "display") (EApp (EVar "reachRoute") (EVar "chain")))) (ELit (LString ", and "))) (EApp (EMethodRef "display") (EVar "why"))) (ELit (LString "")))) (EApp (EVar "Some") (EApp (EApp (EVar "inFile") (EVar "path")) (EFieldAccess (EVar "ed") "edLoc")))))))
-(DTypeSig false "builtinRefusals" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyApp (TyCon "List") (TyCon "Diag"))))))
-(DFunDef false "builtinRefusals" ((PVar "profile") (PVar "paths") (PVar "analysis")) (EBlock (DoLet false false (PVar "column") (EApp (EVar "profileColumn") (EVar "profile"))) (DoLet false false (PVar "named") (EApp (EApp (EVar "anyList") (ELam ((PTuple PWild (PVar "decls"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "d")) (EApp (EApp (EVar "anyList") (EApp (EVar "isUnprovidedOn") (EVar "column"))) (EApp (EVar "declRefs") (EVar "d"))))) (EVar "decls")))) (EFieldAccess (EVar "analysis") "tiModules"))) (DoExpr (EIf (EVar "named") (EBlock (DoLet false false (PVar "routes") (EApp (EApp (EApp (EApp (EVar "reachedExternRoutes") (EApp (EVar "reachRootsOf") (EVar "column"))) (EApp (EVar "Some") (ETuple (EVar "runtimeUnit") (EFieldAccess (EVar "analysis") "tiRuntime")))) (EFieldAccess (EVar "analysis") "tiCore")) (EFieldAccess (EVar "analysis") "tiModules"))) (DoExpr (EApp (EApp (EMethodRef "filterMap") (EApp (EApp (EApp (EVar "unprovidedReached") (EVar "profile")) (EVar "paths")) (EVar "analysis"))) (EApp (EApp (EVar "dedupBy") (ELam ((PVar "r")) (EApp (EVar "snd") (EApp (EVar "fst") (EVar "r"))))) (EVar "routes"))))) (EListLit)))))
+(DTypeSig false "builtinRefusals" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyApp (TyCon "List") (TyCon "Diag")))))))
+(DFunDef false "builtinRefusals" ((PVar "profile") (PVar "file") (PVar "paths") (PVar "analysis")) (EBlock (DoLet false false (PVar "column") (EApp (EVar "profileColumn") (EVar "profile"))) (DoLet false false (PVar "named") (EApp (EApp (EVar "anyList") (ELam ((PTuple PWild (PVar "decls"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "d")) (EApp (EApp (EVar "anyList") (EApp (EVar "isUnprovidedOn") (EVar "column"))) (EApp (EVar "declRefs") (EVar "d"))))) (EVar "decls")))) (EFieldAccess (EVar "analysis") "tiModules"))) (DoExpr (EIf (EVar "named") (EBlock (DoLet false false (PVar "routes") (EApp (EApp (EApp (EApp (EVar "reachedExternRoutes") (EApp (EVar "reachRootsOf") (EVar "column"))) (EApp (EVar "Some") (ETuple (EVar "runtimeUnit") (EFieldAccess (EVar "analysis") "tiRuntime")))) (EFieldAccess (EVar "analysis") "tiCore")) (EFieldAccess (EVar "analysis") "tiModules"))) (DoExpr (EApp (EApp (EMethodRef "filterMap") (EApp (EApp (EApp (EApp (EVar "unprovidedReached") (EVar "profile")) (EVar "file")) (EVar "paths")) (EVar "analysis"))) (EApp (EApp (EVar "dedupBy") (ELam ((PVar "r")) (EApp (EVar "snd") (EApp (EVar "fst") (EVar "r"))))) (EVar "routes"))))) (EListLit)))))
 (DTypeSig false "reachRootsOf" (TyFun (TyCon "Backend") (TyCon "ReachRoots")))
 (DFunDef false "reachRootsOf" ((PCon "LlvmBackend")) (EVar "EmittedRoots"))
 (DFunDef false "reachRootsOf" ((PCon "WasmBackend")) (EVar "EmittedRoots"))
 (DFunDef false "reachRootsOf" ((PCon "EvalBackend")) (EVar "DispatchedRoots"))
 (DTypeSig false "runtimeUnit" (TyCon "String"))
 (DFunDef false "runtimeUnit" () (ELit (LString "<runtime>")))
-(DTypeSig false "unprovidedReached" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyFun (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "Diag")))))))
-(DFunDef false "unprovidedReached" ((PVar "profile") (PVar "paths") (PVar "analysis") (PTuple (PTuple PWild (PVar "name")) (PVar "route"))) (EBlock (DoLet false false (PVar "column") (EApp (EVar "profileColumn") (EVar "profile"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "kind") (PVar "why"))) (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetNotProvidedCode")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the built-in `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` is reached"))) (EApp (EMethodRef "display") (EApp (EVar "reachRoute") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "route"))))) (ELit (LString ", and the target `"))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not provide it ("))) (EApp (EMethodRef "display") (EApp (EVar "gapKindName") (EVar "kind")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "why"))) (ELit (LString "): "))) (EApp (EMethodRef "display") (EApp (EVar "gapCause") (EVar "kind")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "gapAdvice") (EVar "profile")) (EVar "column")) (EVar "kind")) (EVar "name")))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "namingBindingLoc") (EVar "paths")) (EVar "analysis")) (EVar "route"))))) (EApp (EApp (EVar "unprovidedOn") (EVar "column")) (EVar "name"))))))
+(DTypeSig false "unprovidedReached" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyFun (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "Diag"))))))))
+(DFunDef false "unprovidedReached" ((PVar "profile") (PVar "file") (PVar "paths") (PVar "analysis") (PTuple (PTuple PWild (PVar "name")) (PVar "route"))) (EBlock (DoLet false false (PVar "column") (EApp (EVar "profileColumn") (EVar "profile"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "kind") (PVar "why"))) (EIf (EApp (EApp (EApp (EVar "deliberateRefusal") (EVar "column")) (EVar "kind")) (EVar "name")) (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetNotProvidedCode")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "deliberateMessage") (EVar "profile")) (EVar "file")) (EVar "paths")) (EVar "name")) (EVar "why")) (EVar "route"))) (EApp (EApp (EApp (EVar "userFrameLoc") (EVar "paths")) (EVar "analysis")) (EVar "route"))) (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetNotProvidedCode")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the built-in `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` is reached"))) (EApp (EMethodRef "display") (EApp (EVar "reachRoute") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "route"))))) (ELit (LString ", and the target `"))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not provide it ("))) (EApp (EMethodRef "display") (EApp (EVar "gapKindName") (EVar "kind")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "why"))) (ELit (LString "): "))) (EApp (EMethodRef "display") (EApp (EVar "gapCause") (EVar "kind")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "gapAdvice") (EVar "profile")) (EVar "column")) (EVar "kind")) (EVar "name")))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "namingBindingLoc") (EVar "paths")) (EVar "analysis")) (EVar "route")))))) (EApp (EApp (EVar "unprovidedOn") (EVar "column")) (EVar "name"))))))
+(DTypeSig false "deliberateRefusal" (TyFun (TyCon "Backend") (TyFun (TyCon "GapKind") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "deliberateRefusal" ((PCon "EvalBackend") (PCon "GapPermanent") (PVar "name")) (EApp (EVar "not") (EApp (EApp (EVar "isUnprovidedOn") (EVar "LlvmBackend")) (EVar "name"))))
+(DFunDef false "deliberateRefusal" (PWild PWild PWild) (EVar "False"))
+(DTypeSig false "deliberateMessage" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String"))))))))
+(DFunDef false "deliberateMessage" ((PVar "profile") (PVar "file") (PVar "paths") (PVar "name") (PVar "why") (PVar "route")) (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "route"))) (DoLet false false (PVar "located") (EMatch (EApp (EApp (EVar "lastUserStep") (EVar "paths")) (EVar "route")) (arm (PCon "Some" PWild) () (ELit (LString ""))) (arm (PCon "None") () (ELit (LString "; no frame of your code is on the route, so this is located at the nearest frame"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the built-in `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` is reached"))) (EApp (EMethodRef "display") (EApp (EVar "reachRoute") (EVar "chain")))) (ELit (LString ", and `medaka run` refuses it on purpose ("))) (EApp (EMethodRef "display") (EVar "why"))) (ELit (LString ")"))) (EApp (EMethodRef "display") (EVar "located"))) (ELit (LString "\nhelp: "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "deliberateHelp") (EVar "profile")) (EVar "file")))) (ELit (LString ""))))))
+(DTypeSig false "deliberateHelp" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "deliberateHelp" ((PVar "profile") (PVar "file")) (EMatch (EApp (EVar "runTargetOf") (EVar "profile")) (arm (PCon "Some" (PVar "t")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`medaka run` evaluates the program with the interpreter whatever its target; build it with `medaka build ")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString " --target "))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "t")))) (ELit (LString " -o <bin>`, then run `<bin>`")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "build it with `medaka build ")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString " -o <bin>`, then run `<bin>`"))))))
+(DTypeSig false "userFrameLoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "userFrameLoc" ((PVar "paths") (PVar "analysis") (PVar "route")) (EMatch (EApp (EApp (EVar "lastUserStep") (EVar "paths")) (EVar "route")) (arm (PCon "Some" (PTuple (PVar "mid") (PVar "n"))) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "lookup") (EVar "mid")) (EFieldAccess (EVar "analysis") "tiModules"))) (ELam ((PVar "decls")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "definitionLoc") (EVar "n")) (EVar "decls"))) (ELam ((PVar "l")) (EApp (EVar "Some") (EApp (EApp (EVar "inFile") (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "paths"))) (EVar "l")))))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "namingBindingLoc") (EVar "paths")) (EVar "analysis")) (EVar "route")))))
+(DTypeSig false "lastUserStep" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "lastUserStep" ((PVar "paths") (PVar "route")) (EApp (EVar "last") (EApp (EApp (EMethodRef "filter") (EApp (EVar "isUserStep") (EVar "paths"))) (EApp (EVar "dropLast") (EVar "route")))))
+(DTypeSig false "isUserStep" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "isUserStep" ((PVar "paths") (PTuple (PVar "mid") PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "paths")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "not") (EApp (EApp (EVar "contains") (ELit (LString "stdlib"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "p"))))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig false "dropLast" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
+(DFunDef false "dropLast" ((PList)) (EListLit))
+(DFunDef false "dropLast" ((PList PWild)) (EListLit))
+(DFunDef false "dropLast" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "dropLast") (EVar "rest"))))
 (DTypeSig false "gapCause" (TyFun (TyCon "GapKind") (TyCon "String")))
 (DFunDef false "gapCause" ((PCon "GapPermanent")) (ELit (LString "the target cannot provide it, by design")))
 (DFunDef false "gapCause" ((PCon "GapBug")) (ELit (LString "this is a gap in the compiler, not in the program")))
