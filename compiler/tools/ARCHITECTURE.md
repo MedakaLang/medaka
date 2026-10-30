@@ -17,12 +17,13 @@ set of entries (#4141).
 | `target_parse.mdk` | One parse, desugar and comment scan of a `medaka test` target per process | per-process memo |
 | `printer.mdk` | The comment-free Wadler/Leijen document printer over the AST | AST to source |
 | `fmt.mdk` | The comment-preserving formatter over `printer.mdk` | `formatProgram` |
-| `lint.mdk` | The `medaka lint` facade: re-exports the framework, registry and runner surface the CLI, MCP and tests consume | re-exports |
-| `lint_core.mdk` | The framework's data types: `Finding`, `Directive`, `FileFacts`, `Rule`, `RuleCheck`, `Ctx`, `Visitor`, `RuleMeta`, `StdlibIndex`; imports no rule, registry or runner; its closure still holds about 100 `types.*` modules, reached through `frontend.exhaust` (`Oracle`) and `tools.printer` (`ppTy`), pinned by `test/arch_goldens/closure.tools.lint_core.golden` | types |
+| `lint.mdk` | The `medaka lint` facade: re-exports the framework, registry and runner surface the CLI, MCP and tests consume; holds the `--fix` driver | re-exports, `fixSource` |
+| `lint_core.mdk` | The framework's data types: `Finding`, `Fix`, `FixEdit`, `Applicability`, `Fixability`, `Directive`, `FileFacts`, `Rule`, `RuleCheck`, `Ctx`, `Visitor`, `RuleMeta`, `StdlibIndex`; imports no rule, registry or runner; its closure still holds about 100 `types.*` modules, reached through `frontend.exhaust` (`Oracle`) and `tools.printer` (`ppTy`), pinned by `test/arch_goldens/closure.tools.lint_core.golden` | types |
 | `lint_shared.mdk` | Helpers used by more than one lint module: rule-name constants, location helpers, the directive parser, stdlib path predicates | shared helpers |
 | `lint_scope.mdk` | The per-file scope model: every binder with its kind and span, every identifier use resolved to its binder, unused local binders and import-member use counts; built on `frontend.ast_walk`, forbidden to import `types.*` or `tools.refindex`; built as a `FileFacts` memo only for a rule whose `needs` lists `NeedsScopes` | `FileScopes`, `binderOf`, `unusedBinders`, `importUses` |
 | `lint_dup.mdk` | The duplicate-body occurrence engine: per-clause facts, grouping and the cross-file join | `fileDupOccs` |
 | `lint_walk.mdk` | The lint runner: the one visitor walk per file, per-file facts, the autofix driver, filters, inline suppressions, the cross-file runner, stdlib-index builders; imports `lint_registry`, since running a rule means reading the registry's lists | `lintProgram*`, `runVisitors` |
+| `lint_fix.mdk` | The `--fix` edit pipeline: resolves each fix's span edits against the source snapshot, applies the non-overlapping subset the applicability limit allows, re-parses; imports no rule, registry or runner (the caller passes the linter in) | `applyFixes`, `parenIfNeeded` |
 | `lint_registry.mdk` | THE REGISTRY: `allRules`, the cross-file registry and rule-name selection; one `import ... as Alias` and one `Alias.rule,` line per rule | `allRules`, `allCrossFileRules`, `allRuleNames` |
 | `lint_rule_<name>.mdk` | One universal lint rule per module, exporting `rule`; may not import another rule module, the registry or the runner | `rule` |
 | `lint_rule_internal_<name>.mdk` | One internal-scope rule (this repository's conventions) per module, exporting `rule`; same import limits | `rule` |
@@ -61,6 +62,11 @@ set of entries (#4141).
 | `gate_cost.mdk` | The reader for `test/gate_cost_baseline.json` | cost baseline |
 | `gate_pack.mdk` | The gate scheduler: bin packing and the budget governor | `balance`, `budget` |
 | `interface_cmd.mdk` | `medaka interface`: write, show and verify the prelude interface file | interface verbs |
+
+`lint_fix.mdk` applies the span edits of `Fix` values in passes of at most eight, keeping the
+non-overlapping subset that the applicability limit allows, and writes nothing when a pass's output
+does not parse. `fixSource` in `tools/lint.mdk` runs that loop over the rules that emit edits, then
+the decl-rewrite adapter for the rest.
 
 ## Writing a walking rule
 A rule built with `mkVisitorRule` returns its visitors once per file from the same inputs a `WholeFile` check gets, and computes any per-file state there. `OnAnyExpr f` is called on every expression node whatever its kind; the detector-based rules (`exprRuleVisitors` in `lint_shared.mdk`) use it. `OnExpr kinds f` is called on every expression node whose `frontend.ast_walk.ExprKind` is listed, in every body `declBodies` names: function clauses, `impl` methods, interface defaults, tests, props and top-level let-group clauses. `OnDecl f` is called on every top-level declaration. Each call gets a `Ctx`: the body owner's name and parameter patterns, whether the body is a test or prop, the parent node's kind, and the nearest enclosing `ELoc` span. `lintProgramFacts` runs one walk for every visitor rule of the file and emits findings rule by rule in registry order. A rule that reads no expressions, such as dead-code or the comment rules, stays a `WholeFile` check built with `mkRule`. `Ctx` and `Visitor` live in `lint_core.mdk` because rule modules may not import `lint_walk.mdk`.
