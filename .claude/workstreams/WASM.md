@@ -318,7 +318,8 @@ test, every candidate through native build AND wasm build AND `medaka run`). The
   ⇒ **the scan is SHARED; only the extra nesting factor was wasm's.** #381's original "no llvm twin"
   framing was WRONG — llvm has a *quadratic* twin (ws:emitter measured native `match:emit` at
   **3.71/3.73** over N=1000→4000 — filed with its numbers as **#408**, spun out of #396). #401's memo pattern is a plausible lead for #349–#352 —
-   and it was **taken from `llvm_emit`'s per-`Emit` `ctorMap`/`installCtorMap` in the first place.**
+   and it was **taken from LLVM's per-emission constructor map in the first place.** The logical
+   constructor facts now come from `ir/constructor_facts.mdk`; target type IDs remain physical.
 
   ### 🔬 Three measurement traps, each of which produced a confidently WRONG published number
 

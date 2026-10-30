@@ -238,8 +238,8 @@ has_preamble_pin() {
   grep -F -q -- "$1" "$PREAMBLE_SRC" || printf '%s' "$PREAMBLE_FLAT" | grep -F -q -- "$1"
 }
 for required in \
-  'planWasmDemand : WasmDemandInputs -> CProgram -> ExternRequirements -> WasmDemandPlan' \
-  'validateWasmDemand : WasmDemandInputs -> CProgram -> ExternRequirements -> WasmDemandPlan -> List String' \
+  'planWasmDemand : ConstructorFacts -> WasmDemandInputs -> CProgram -> ExternRequirements -> WasmDemandPlan' \
+  'validateWasmDemand : ConstructorFacts -> WasmDemandInputs -> CProgram -> ExternRequirements -> WasmDemandPlan -> List String' \
   'representationTypes : List String' \
   'let closed = closeHelpers (hasUse source UseI64) roots' \
   'let imports = physicalImports closed hostKeys js' \

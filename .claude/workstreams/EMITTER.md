@@ -64,8 +64,8 @@ genuinely pays for the import.
 
 ### 3. `sigs` is MUTATED mid-emission — memoizing it serves stale Float types
 The two-pass Float propagation rewrites the sig table (`f x = x + 1.0` re-infers on pass 2).
-A once-built index broke `fn_float_chain` (1/172). `fnNames`/`distinctTypeNames`/ctor tables are
-constant and memoize fine; `sigs` is not. The real fix is #353 (carry the fact on the node).
+A once-built index broke `fn_float_chain` (1/172). `fnNames` and constructor facts in the shared
+plan are constant; `sigs` is not. The real fix is #353 (carry the fact on the node).
 
 ### 4. Two rebuilds to measure anything; a binary's speed comes from the emitter that compiled it
 Load the **`benchmark-emitter` skill** before timing a codegen change — one rebuild crosses the

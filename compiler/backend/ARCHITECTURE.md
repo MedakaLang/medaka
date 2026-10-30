@@ -1,6 +1,6 @@
 # backend/ — Core IR to LLVM text and WAT, plus the checks that gate emission
 
-**Status:** CURRENT — re-derived from source at a6769a09a6638118cec1e8f8b5d748237d7cb6dd on 2026-10-27. When it drifts, re-derive; do not patch.
+**Status:** CURRENT — re-derived from source at 1901e7111267f00b65670cd8779cbb2c9d886f29 on 2026-10-30. When it drifts, re-derive; do not patch.
 
 ## What this directory is
 The last stage (`ARCHITECTURE.md` section 1), layer `backend` in A1: above `ir/`. It consumes
@@ -63,6 +63,7 @@ Each fact has one producer; a carrier moves it; a validator or fixture fails whe
 | Wasm symbol identity | `compiler/backend/wasm_symbols.mdk` | `symbols : Ref SymbolRegistry` in the emission state of `compiler/backend/wasm_emit.mdk` | `checkCall`, `checkRef`, `checkDeclared`, `checkTypeUse`, `unresolved` | `compiler/backend/wasm_symbols_test.mdk`, `test/wasm/diff_wasm_typed.sh` | `requireHelperW`'s `unplanned-wasm-helper` judge; ratchet "wasm_emit writes a direct call only through callInstrW" |
 | Symbol origin (binding and position) | `compiler/support/symbol_origin.mdk` | `SymbolOrigin` inside each `SymbolDefect` | `defectOrigin` located by `compiler/driver/diagnostics.mdk` | `compiler/support/symbol_origin_test.mdk` | the per-emitter origin helpers (`bindingOf`, `placeOf` had three identical bodies) |
 | Leading dictionary count | `leadingDictParams` in `compiler/ir/core_ir_lower.mdk` | clause patterns | every consumer reads the one function | `compiler/ir/core_ir_lower_test.mdk` ("leadingDictParams counts only the leading dict witnesses") | `leadingDictPats`, `wLeadingDictPats`, `isDictParamName`; ratchet "no emitter counts leading dictionary parameters from their spelling" |
+| Runtime constructor facts and declared constructor facts | `runtimeCtorFact` / `runtimeRoster` in `compiler/frontend/runtime_constructors.mdk`; `planConstructors` in `compiler/ir/constructor_facts.mdk` | `constructorFacts` in `EmitPlan` | `validateConstructorFacts` from `core_validate.mdk` before backend output | `runtime_constructors_test.mdk`, `constructor_facts_test.mdk`, `core_validate_test.mdk` | LLVM semantic constructor maps and ordinal derivation; Wasm `WasmCtorIndex` semantic tables and ordinal derivation |
 | Dispatch and definition arities | `definedArityOf` in `compiler/ir/core_ir_lower.mdk` | `e.arities` of the LLVM emission state | `checkCall` shape check | `compiler/backend/llvm_symbols_test.mdk`, `test/diff_compiler_call_arity_test.mdk` | the LLVM dispatch-graph arity table |
 | Int-helper membership | `plan.censusIntHelpers` / `intHelpers` in `compiler/backend/wasm_demand.mdk` | the Wasm demand plan | `UndefinedReference` from the helper rows of `compiler/backend/wasm_preamble.mdk` | `compiler/backend/wasm_demand_test.mdk` | `noteIntRt` and its `unplanned-wasm-helper: Int` panic |
 | Wasm helper manifest | `helperManifest` in `compiler/backend/wasm_demand.mdk` | `HelperManifest` rows | block text agrees with its row | `compiler/backend/wasm_preamble_test.mdk` ("each helper block's text defines and calls what its manifest row states") | none |

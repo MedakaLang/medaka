@@ -74,7 +74,7 @@ orEmptyEntries
 paramEnv
 ptag
 reservedCtorArity
-reservedCtorsOfType
+runtimeCtorsOfType
 runtimeName
 sitePacked
 staticEntryDictRoutes

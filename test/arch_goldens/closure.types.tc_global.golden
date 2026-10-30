@@ -3,6 +3,7 @@ frontend.desugar
 frontend.exhaust
 frontend.marker
 frontend.resolve
+frontend.runtime_constructors
 frontend.visibility
 support.char
 support.diag_codes
