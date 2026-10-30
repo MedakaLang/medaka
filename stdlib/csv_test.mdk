@@ -1,0 +1,165 @@
+-- Tests for `stdlib/csv.mdk`: the reading rules, the writing rules, and the
+-- round trip between them.
+
+import csv.{parse, parseWith, render, renderWith}
+import string.{concat, repeat, take, contains}
+import test.{expectEqual, expectErrContains, expectTrue, expectEach}
+
+-- # Reading
+
+test "plain rows" =
+  expectEqual (Ok [["a", "b"], ["1", "2"]]) (parse "a,b\n1,2\n")
+
+test "empty fields are kept" = expectEach [
+  ("middle", expectEqual (Ok [["a", "", "b"]]) (parse "a,,b\n")),
+  ("only a delimiter", expectEqual (Ok [["", ""]]) (parse ",\n")),
+  ("trailing delimiter", expectEqual (Ok [["a", ""]]) (parse "a,\n")),
+]
+
+test "quoted fields hold the delimiter, doubled quotes and line breaks" = expectEach
+  [
+    ("delimiter", expectEqual (Ok [["a,b", "c"]]) (parse "\"a,b\",c\n")),
+    (
+      "doubled quote",
+      expectEqual (Ok [["say \"hi\""]]) (parse "\"say \"\"hi\"\"\"\n"),
+    ),
+    ("LF kept", expectEqual (Ok [["a\nb", "c"]]) (parse "\"a\nb\",c\n")),
+    (
+      "CRLF kept",
+      expectEqual (Ok [["a\r\nb", "c"]]) (parse "\"a\r\nb\",c\r\n"),
+    ),
+    ("empty line inside", expectEqual (Ok [["a\n\nb"]]) (parse "\"a\n\nb\"\n")),
+  ]
+
+test "both line endings end a row, and a final one adds no row" = expectEach [
+  ("LF", expectEqual (Ok [["a"], ["b"]]) (parse "a\nb\n")),
+  ("CRLF", expectEqual (Ok [["a"], ["b"]]) (parse "a\r\nb\r\n")),
+  ("no final break", expectEqual (Ok [["a"], ["b"]]) (parse "a\nb")),
+  ("empty input", expectEqual (Ok []) (parse "")),
+  (
+    "empty line is the empty row",
+    expectEqual (Ok [["a"], [], ["b"]]) (parse "a\n\nb\n"),
+  ),
+]
+
+test "whitespace and stray quotes in unquoted fields are kept" = expectEach [
+  ("spaces", expectEqual (Ok [[" a ", " b "]]) (parse " a , b \n")),
+  ("quote inside", expectEqual (Ok [["ab\"c", "d"]]) (parse "ab\"c,d\n")),
+  ("quote after a space", expectEqual (Ok [[" \"b\""]]) (parse " \"b\"\n")),
+]
+
+test "text after a closing quote joins the field" = expectEach [
+  ("letter", expectEqual (Ok [["ab", "c"]]) (parse "\"a\"b,c\n")),
+  (
+    "later quote is literal",
+    expectEqual (Ok [["ab\"c\"", "d"]]) (parse "\"a\"b\"c\",d\n"),
+  ),
+]
+
+test "a lone CR is an ordinary character" =
+  expectEqual (Ok [["a\rb", "c"]]) (parse "a\rb,c\n")
+
+test "TSV reads quoting too" = expectEach [
+  ("plain", expectEqual (Ok [["a", "b"]]) (parseWith '\t' "a\tb\n")),
+  (
+    "quoted tab",
+    expectEqual (Ok [["x\ty", "z"]]) (parseWith '\t' "\"x\ty\"\tz\n"),
+  ),
+  ("comma is data", expectEqual (Ok [["a,b", "c"]]) (parseWith '\t' "a,b\tc\n")),
+]
+
+test "an unterminated quote names the line it opened on" = expectEach [
+  (
+    "line 1",
+    expectEqual (Err "line 1: unterminated quoted field") (parse "a,\"b"),
+  ),
+  (
+    "line 2",
+    expectEqual
+      (Err "line 2: unterminated quoted field")
+      (parse "x\ny,\"b\nc\n"),
+  ),
+  (
+    "opened earlier",
+    expectEqual (Err "line 1: unterminated quoted field") (parse "\"a\nb\nc\n"),
+  ),
+  (
+    "lone quote",
+    expectEqual (Err "line 1: unterminated quoted field") (parse "\""),
+  ),
+  (
+    "doubled quote at end",
+    expectEqual (Err "line 1: unterminated quoted field") (parse "\"a\"\""),
+  ),
+]
+
+test "a delimiter that is a quote, LF or CR is refused" = expectEach [
+  ("quote", expectErrContains "double quote" (parseWith '"' "a")),
+  ("LF", expectErrContains "line feed" (parseWith '\n' "a")),
+  ("CR", expectErrContains "carriage return" (parseWith '\r' "a")),
+]
+
+-- # Writing
+
+test "a field is quoted only when it has to be" = expectEach [
+  ("plain", expectEqual "a,b c\n" (render [["a", "b c"]])),
+  ("delimiter", expectEqual "\"a,b\",\n" (render [["a,b", ""]])),
+  ("quote", expectEqual "\"say \"\"hi\"\"\"\n" (render [["say \"hi\""]])),
+  ("LF", expectEqual "\"a\nb\",c\n" (render [["a\nb", "c"]])),
+  ("CR", expectEqual "\"a\rb\"\n" (render [["a\rb"]])),
+  ("tab is plain for CSV", expectEqual "a\tb\n" (render [["a\tb"]])),
+]
+
+test "TSV quotes the tab, not the comma" =
+  expectEqual "a,b\t\"x\ty\"\n" (renderWith '\t' [["a,b", "x\ty"]])
+
+test "every row ends in LF, never CRLF" =
+  expectEqual "a\nb\n" (render [["a"], ["b"]])
+
+test "a row of one empty field is written quoted, the empty row is not" = expectEach
+  [
+    ("single empty field", expectEqual "\"\"\n" (render [[""]])),
+    ("empty row", expectEqual "\n" (render [[]])),
+    ("single empty field reads back", expectEqual (Ok [[""]]) (parse "\"\"\n")),
+    ("empty row reads back", expectEqual (Ok [[]]) (parse "\n")),
+    ("two empty fields", expectEqual ",\n" (render [["", ""]])),
+  ]
+
+-- # Round trips
+
+fragment : Int -> String
+fragment i = match (i % 8 + 8) % 8
+  0 => "a"
+  1 => ","
+  2 => "\""
+  3 => "\r"
+  4 => "\n"
+  5 => ""
+  6 => " "
+  _ => "\t"
+
+tableOf : List (List (List Int)) -> List (List String)
+tableOf rows = map (row => map (f => concat (map fragment f)) row) rows
+
+prop "parse undoes render, for fields holding delimiters, quotes, CR and LF" (rows : List (List (List Int))) =
+  parse (render (tableOf rows)) == Ok (tableOf rows)
+
+prop "parseWith undoes renderWith for tabs" (rows : List (List (List Int))) =
+  parseWith '\t' (renderWith '\t' (tableOf rows)) == Ok (tableOf rows)
+
+test "the round trip holds on the awkward rows named outright" =
+  let rows = [[], [""], ["", ""], ["\""], ["a,\"b\"\r\nc"], ["\n"], []]
+  expectEqual (Ok rows) (parse (render rows))
+
+-- # Totality
+
+mixed : String
+mixed = take 200 (repeat 30 "a,\"b\"\"\r\n ,")
+
+prefixOk : Int -> Bool
+prefixOk k = match parse (take k mixed)
+  Ok _ => True
+  Err e => contains "unterminated quoted field" e
+
+test "every prefix of a 200-character mixed input reads or is unterminated" =
+  expectTrue (all prefixOk [0..=200])

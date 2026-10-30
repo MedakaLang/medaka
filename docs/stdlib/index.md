@@ -348,6 +348,15 @@ SHA-256 of non-secret data, computed in the runtime.
 
 - [`sha256Fast`](crypto.sha256_fast.md#sha256fast)
 
+## [`csv`](csv.md)
+
+Reading and writing delimiter-separated text: CSV, and TSV by choosing a tab as the delimiter.
+
+- [`parse`](csv.md#parse)
+- [`parseWith`](csv.md#parsewith)
+- [`render`](csv.md#render)
+- [`renderWith`](csv.md#renderwith)
+
 ## [`fs`](fs.md)
 
 Filesystem helpers built on the host file primitives.
