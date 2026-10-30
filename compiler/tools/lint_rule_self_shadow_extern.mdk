@@ -16,7 +16,7 @@ import tools.lint_core.{
   StdlibIndex,
   mkRule,
 }
-import tools.lint_shared.{declLocList, ruleNameSelfShadowExtern}
+import tools.lint_shared.{declLocList, ruleNameSelfShadowExtern, unwrapLoc}
 
 export
 rule : Rule
@@ -110,9 +110,9 @@ unconditionalSelfCall name [] body = isBareSelf name (stripWrap body)
 unconditionalSelfCall name _ body = isHeadSelfApp name (stripWrap body)
 
 stripWrap : Expr -> Expr
-stripWrap (ELoc _ e) = stripWrap e
-stripWrap (EAnnot e _) = stripWrap e
-stripWrap e = e
+stripWrap e = match unwrapLoc e
+  EAnnot inner _ => stripWrap inner
+  other => other
 
 isBareSelf : String -> Expr -> Bool
 isBareSelf name (EVar w) = name == w

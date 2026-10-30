@@ -119,13 +119,15 @@ needsStdlibIndex m = match m.needs
 -- has none.  `ctxInTest` is True inside a `test` or `prop` body.  `ctxParent`
 -- is the kind of the nearest enclosing expression other than an `ELoc`, `None`
 -- at a body's root and for a declaration.  `ctxSpan` is the span of the
--- nearest enclosing `ELoc`, else the declaration's start line.
+-- nearest enclosing `ELoc`, else the declaration's start line.  `ctxDeclLoc` is
+-- always the declaration's start line, where an inline suppression sits.
 public export data Ctx = Ctx {
   ctxDeclName : String,
   ctxParams : List Pat,
   ctxInTest : Bool,
   ctxParent : Option ExprKind,
   ctxSpan : Option Loc,
+  ctxDeclLoc : Option Loc,
 }
 
 -- One callback a walking rule registers: on every expression node whose kind is

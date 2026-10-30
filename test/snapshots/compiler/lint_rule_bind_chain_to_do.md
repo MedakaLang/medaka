@@ -1,5 +1,5 @@
 # META
-source_lines=202
+source_lines=191
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-bind-chain-to-do: a deep (>=3) Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only).
@@ -23,7 +23,6 @@ import frontend.ast.{
   Loc(..),
   Pat(..),
   Arm(..),
-  ImplMethod(..),
   DoStmt(..),
   Expr(..),
   Decl(..),
@@ -34,6 +33,7 @@ import support.util.{isEmptyL, reverseL}
 import hash_map.{has}
 import tools.lint_core.{
   Category(..),
+  Ctx(..),
   FileFacts(..),
   Finding(..),
   Fixability(..),
@@ -42,11 +42,11 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex(..),
-  mkRule,
+  Visitor(..),
+  mkVisitorRule,
 }
 import tools.lint_shared.{
-  childExprs,
-  declLocList,
+  declHeadHits,
   isEVarNamed,
   isNilPCon,
   matchScrutOf,
@@ -60,7 +60,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameBindChainToDo,
       summary =
@@ -164,37 +164,26 @@ bindChainTermMapParts e = match unwrapLoc e
     _ => [e]
   _ => [e]
 
--- report a node as a chain HEAD iff its depth (in whichever monad) is ≥ 3; then
--- consume the chain (recurse into off-chain parts only) so sub-levels of the same
--- pyramid never fire.  Otherwise descend generically into children.
-bindChainHeads : Expr -> List Expr
-bindChainHeads e =
+-- A node is a chain HEAD iff its depth (in whichever monad) is >= 3; the chain
+-- is then consumed (only its off-chain parts are searched further) so the
+-- sub-levels of one pyramid never fire.
+bindChainPick : Expr -> Option (Expr, List Expr)
+bindChainPick e =
   let rd = bindChainDepth True e
   let od = bindChainDepth False e
-  if rd >= 3 || od >= 3 then
-    e :: flatMap bindChainHeads (bindChainOffChain (rd >= od) e)
-  else
-    flatMap bindChainHeads (childExprs e)
-
-bindChainDeclHeads : Decl -> List Expr
-bindChainDeclHeads (DFunDef _ _ _ body _ _) = bindChainHeads body
-bindChainDeclHeads (DImpl { methods, ... }) = flatMap bindChainImplHeads methods
-bindChainDeclHeads (DAttrib _ d) = bindChainDeclHeads d
-bindChainDeclHeads _ = []
-
-bindChainImplHeads : ImplMethod -> List Expr
-bindChainImplHeads (ImplMethod _ _ body) = bindChainHeads body
+  if rd >= 3 || od >= 3 then Some (e, bindChainOffChain (rd >= od) e) else None
 
 ruleBindChainToDo : StdlibIndex ->
   String ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleBindChainToDo _ _ _ pos prog = flatMap bindChainDeclL (declLocList pos prog)
+  List Visitor
+ruleBindChainToDo _ _ _ _ _ = [OnDecl bindChainAt]
 
-bindChainDeclL : (Decl, Option Loc) -> List Finding
-bindChainDeclL (d, loc) = map (bindChainFinding loc) (bindChainDeclHeads d)
+bindChainAt : Ctx -> Decl -> List Finding
+bindChainAt ctx d =
+  map (bindChainFinding ctx.ctxSpan) (declHeadHits bindChainPick d)
 
 bindChainFinding : Option Loc -> Expr -> Finding
 bindChainFinding loc _ = Finding {
@@ -205,15 +194,15 @@ bindChainFinding loc _ = Finding {
   loc = loc,
 }
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("hash_map") ((mem "has" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "childExprs" false) (mem "declLocList" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "matchToMapErrPassthru" false) (mem "matchToMapTransform" false) (mem "ruleNameBindChainToDo" false) (mem "stmtExprs" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "declHeadHits" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "matchToMapErrPassthru" false) (mem "matchToMapTransform" false) (mem "ruleNameBindChainToDo" false) (mem "stmtExprs" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameBindChainToDo")) (fa "summary" (ELit (LString "deep (≥3) nested Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only)"))) (fa "doc" (ELit (LString "Three or more nested `match` arms that each pass a `Result` or `Option` failure straight through form a pyramid. A `do` block flattens it. The rule only suggests; it has no fixer.\n\nBefore:\n  match a\n    Ok x => match b x\n      Ok y => match c y\n        Ok z => Ok z\n        Err e => Err e\n      Err e => Err e\n    Err e => Err e\nAfter:\n  do\n    x <- a\n    y <- b x\n    c y"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleBindChainToDo")) (EVar "None")))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameBindChainToDo")) (fa "summary" (ELit (LString "deep (≥3) nested Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only)"))) (fa "doc" (ELit (LString "Three or more nested `match` arms that each pass a `Result` or `Option` failure straight through form a pyramid. A `do` block flattens it. The rule only suggests; it has no fixer.\n\nBefore:\n  match a\n    Ok x => match b x\n      Ok y => match c y\n        Ok z => Ok z\n        Err e => Err e\n      Err e => Err e\n    Err e => Err e\nAfter:\n  do\n    x <- a\n    y <- b x\n    c y"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleBindChainToDo")) (EVar "None")))
 (DTypeSig false "bindChainDepth" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyCon "Int"))))
 (DFunDef false "bindChainDepth" ((PVar "isResult") (PVar "e")) (EBlock (DoLet false false (PTuple PWild (PVar "core")) (EApp (EVar "bindChainSplit") (EVar "e"))) (DoExpr (EMatch (EApp (EApp (EVar "bindChainHead") (EVar "isResult")) (EVar "core")) (arm (PCon "Some" (PVar "body")) () (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "bindChainDepth") (EVar "isResult")) (EVar "body")))) (arm (PCon "None") () (EIf (EApp (EVar "bindChainIsTermMap") (EVar "core")) (ELit (LInt 1)) (ELit (LInt 0))))))))
 (DTypeSig false "bindChainSplit" (TyFun (TyCon "Expr") (TyTuple (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Expr"))))
@@ -235,31 +224,24 @@ bindChainFinding loc _ = Finding {
 (DFunDef false "bindChainOffChain" ((PVar "isResult") (PVar "e")) (EBlock (DoLet false false (PTuple (PVar "lets") (PVar "core")) (EApp (EVar "bindChainSplit") (EVar "e"))) (DoExpr (EMatch (EApp (EApp (EVar "bindChainHead") (EVar "isResult")) (EVar "core")) (arm (PCon "Some" (PVar "body")) () (EBinOp "++" (EVar "lets") (EBinOp "::" (EApp (EVar "matchScrutOf") (EVar "core")) (EApp (EApp (EVar "bindChainOffChain") (EVar "isResult")) (EVar "body"))))) (arm (PCon "None") () (EIf (EApp (EVar "bindChainIsTermMap") (EVar "core")) (EBinOp "++" (EVar "lets") (EApp (EVar "bindChainTermMapParts") (EVar "core"))) (EBinOp "++" (EVar "lets") (EListLit (EVar "core")))))))))
 (DTypeSig false "bindChainTermMapParts" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
 (DFunDef false "bindChainTermMapParts" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "inner") (PVar "scrut")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "inner")) (arm (PCon "EApp" PWild (PVar "f")) () (EListLit (EVar "f") (EVar "scrut"))) (arm PWild () (EListLit (EVar "e"))))) (arm PWild () (EListLit (EVar "e")))))
-(DTypeSig false "bindChainHeads" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "bindChainHeads" ((PVar "e")) (EBlock (DoLet false false (PVar "rd") (EApp (EApp (EVar "bindChainDepth") (EVar "True")) (EVar "e"))) (DoLet false false (PVar "od") (EApp (EApp (EVar "bindChainDepth") (EVar "False")) (EVar "e"))) (DoExpr (EIf (EBinOp "||" (EBinOp ">=" (EVar "rd") (ELit (LInt 3))) (EBinOp ">=" (EVar "od") (ELit (LInt 3)))) (EBinOp "::" (EVar "e") (EApp (EApp (EVar "flatMap") (EVar "bindChainHeads")) (EApp (EApp (EVar "bindChainOffChain") (EBinOp ">=" (EVar "rd") (EVar "od"))) (EVar "e")))) (EApp (EApp (EVar "flatMap") (EVar "bindChainHeads")) (EApp (EVar "childExprs") (EVar "e")))))))
-(DTypeSig false "bindChainDeclHeads" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "bindChainDeclHeads" ((PCon "DFunDef" PWild PWild PWild (PVar "body") PWild PWild)) (EApp (EVar "bindChainHeads") (EVar "body")))
-(DFunDef false "bindChainDeclHeads" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (EVar "bindChainImplHeads")) (EVar "methods")))
-(DFunDef false "bindChainDeclHeads" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "bindChainDeclHeads") (EVar "d")))
-(DFunDef false "bindChainDeclHeads" (PWild) (EListLit))
-(DTypeSig false "bindChainImplHeads" (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "bindChainImplHeads" ((PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EVar "bindChainHeads") (EVar "body")))
-(DTypeSig false "ruleBindChainToDo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleBindChainToDo" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "bindChainDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
-(DTypeSig false "bindChainDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
-(DFunDef false "bindChainDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "map") (EApp (EVar "bindChainFinding") (EVar "loc"))) (EApp (EVar "bindChainDeclHeads") (EVar "d"))))
+(DTypeSig false "bindChainPick" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
+(DFunDef false "bindChainPick" ((PVar "e")) (EBlock (DoLet false false (PVar "rd") (EApp (EApp (EVar "bindChainDepth") (EVar "True")) (EVar "e"))) (DoLet false false (PVar "od") (EApp (EApp (EVar "bindChainDepth") (EVar "False")) (EVar "e"))) (DoExpr (EIf (EBinOp "||" (EBinOp ">=" (EVar "rd") (ELit (LInt 3))) (EBinOp ">=" (EVar "od") (ELit (LInt 3)))) (EApp (EVar "Some") (ETuple (EVar "e") (EApp (EApp (EVar "bindChainOffChain") (EBinOp ">=" (EVar "rd") (EVar "od"))) (EVar "e")))) (EVar "None")))))
+(DTypeSig false "ruleBindChainToDo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
+(DFunDef false "ruleBindChainToDo" (PWild PWild PWild PWild PWild) (EListLit (EApp (EVar "OnDecl") (EVar "bindChainAt"))))
+(DTypeSig false "bindChainAt" (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding")))))
+(DFunDef false "bindChainAt" ((PVar "ctx") (PVar "d")) (EApp (EApp (EVar "map") (EApp (EVar "bindChainFinding") (EFieldAccess (EVar "ctx") "ctxSpan"))) (EApp (EApp (EVar "declHeadHits") (EVar "bindChainPick")) (EVar "d"))))
 (DTypeSig false "bindChainFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "bindChainFinding" ((PVar "loc") PWild) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindChainToDo")) (fa "message" (ELit (LString "deep nested Result/Option passthrough-bind `match` chain (≥3 binds). Rewrite as a `do` block"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("hash_map") ((mem "has" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "childExprs" false) (mem "declLocList" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "matchToMapErrPassthru" false) (mem "matchToMapTransform" false) (mem "ruleNameBindChainToDo" false) (mem "stmtExprs" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "declHeadHits" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "matchToMapErrPassthru" false) (mem "matchToMapTransform" false) (mem "ruleNameBindChainToDo" false) (mem "stmtExprs" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameBindChainToDo")) (fa "summary" (ELit (LString "deep (≥3) nested Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only)"))) (fa "doc" (ELit (LString "Three or more nested `match` arms that each pass a `Result` or `Option` failure straight through form a pyramid. A `do` block flattens it. The rule only suggests; it has no fixer.\n\nBefore:\n  match a\n    Ok x => match b x\n      Ok y => match c y\n        Ok z => Ok z\n        Err e => Err e\n      Err e => Err e\n    Err e => Err e\nAfter:\n  do\n    x <- a\n    y <- b x\n    c y"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleBindChainToDo")) (EVar "None")))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameBindChainToDo")) (fa "summary" (ELit (LString "deep (≥3) nested Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only)"))) (fa "doc" (ELit (LString "Three or more nested `match` arms that each pass a `Result` or `Option` failure straight through form a pyramid. A `do` block flattens it. The rule only suggests; it has no fixer.\n\nBefore:\n  match a\n    Ok x => match b x\n      Ok y => match c y\n        Ok z => Ok z\n        Err e => Err e\n      Err e => Err e\n    Err e => Err e\nAfter:\n  do\n    x <- a\n    y <- b x\n    c y"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleBindChainToDo")) (EVar "None")))
 (DTypeSig false "bindChainDepth" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyCon "Int"))))
 (DFunDef false "bindChainDepth" ((PVar "isResult") (PVar "e")) (EBlock (DoLet false false (PTuple PWild (PVar "core")) (EApp (EVar "bindChainSplit") (EVar "e"))) (DoExpr (EMatch (EApp (EApp (EVar "bindChainHead") (EVar "isResult")) (EVar "core")) (arm (PCon "Some" (PVar "body")) () (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "bindChainDepth") (EVar "isResult")) (EVar "body")))) (arm (PCon "None") () (EIf (EApp (EVar "bindChainIsTermMap") (EVar "core")) (ELit (LInt 1)) (ELit (LInt 0))))))))
 (DTypeSig false "bindChainSplit" (TyFun (TyCon "Expr") (TyTuple (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Expr"))))
@@ -281,18 +263,11 @@ bindChainFinding loc _ = Finding {
 (DFunDef false "bindChainOffChain" ((PVar "isResult") (PVar "e")) (EBlock (DoLet false false (PTuple (PVar "lets") (PVar "core")) (EApp (EVar "bindChainSplit") (EVar "e"))) (DoExpr (EMatch (EApp (EApp (EVar "bindChainHead") (EVar "isResult")) (EVar "core")) (arm (PCon "Some" (PVar "body")) () (EBinOp "++" (EVar "lets") (EBinOp "::" (EApp (EVar "matchScrutOf") (EVar "core")) (EApp (EApp (EVar "bindChainOffChain") (EVar "isResult")) (EVar "body"))))) (arm (PCon "None") () (EIf (EApp (EVar "bindChainIsTermMap") (EVar "core")) (EBinOp "++" (EVar "lets") (EApp (EVar "bindChainTermMapParts") (EVar "core"))) (EBinOp "++" (EVar "lets") (EListLit (EVar "core")))))))))
 (DTypeSig false "bindChainTermMapParts" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
 (DFunDef false "bindChainTermMapParts" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "inner") (PVar "scrut")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "inner")) (arm (PCon "EApp" PWild (PVar "f")) () (EListLit (EVar "f") (EVar "scrut"))) (arm PWild () (EListLit (EVar "e"))))) (arm PWild () (EListLit (EVar "e")))))
-(DTypeSig false "bindChainHeads" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "bindChainHeads" ((PVar "e")) (EBlock (DoLet false false (PVar "rd") (EApp (EApp (EVar "bindChainDepth") (EVar "True")) (EVar "e"))) (DoLet false false (PVar "od") (EApp (EApp (EVar "bindChainDepth") (EVar "False")) (EVar "e"))) (DoExpr (EIf (EBinOp "||" (EBinOp ">=" (EVar "rd") (ELit (LInt 3))) (EBinOp ">=" (EVar "od") (ELit (LInt 3)))) (EBinOp "::" (EVar "e") (EApp (EApp (EDictApp "flatMap") (EVar "bindChainHeads")) (EApp (EApp (EVar "bindChainOffChain") (EBinOp ">=" (EVar "rd") (EVar "od"))) (EVar "e")))) (EApp (EApp (EDictApp "flatMap") (EVar "bindChainHeads")) (EApp (EVar "childExprs") (EVar "e")))))))
-(DTypeSig false "bindChainDeclHeads" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "bindChainDeclHeads" ((PCon "DFunDef" PWild PWild PWild (PVar "body") PWild PWild)) (EApp (EVar "bindChainHeads") (EVar "body")))
-(DFunDef false "bindChainDeclHeads" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (EVar "bindChainImplHeads")) (EVar "methods")))
-(DFunDef false "bindChainDeclHeads" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "bindChainDeclHeads") (EVar "d")))
-(DFunDef false "bindChainDeclHeads" (PWild) (EListLit))
-(DTypeSig false "bindChainImplHeads" (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "bindChainImplHeads" ((PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EVar "bindChainHeads") (EVar "body")))
-(DTypeSig false "ruleBindChainToDo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleBindChainToDo" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "bindChainDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
-(DTypeSig false "bindChainDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
-(DFunDef false "bindChainDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "bindChainFinding") (EVar "loc"))) (EApp (EVar "bindChainDeclHeads") (EVar "d"))))
+(DTypeSig false "bindChainPick" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
+(DFunDef false "bindChainPick" ((PVar "e")) (EBlock (DoLet false false (PVar "rd") (EApp (EApp (EVar "bindChainDepth") (EVar "True")) (EVar "e"))) (DoLet false false (PVar "od") (EApp (EApp (EVar "bindChainDepth") (EVar "False")) (EVar "e"))) (DoExpr (EIf (EBinOp "||" (EBinOp ">=" (EVar "rd") (ELit (LInt 3))) (EBinOp ">=" (EVar "od") (ELit (LInt 3)))) (EApp (EVar "Some") (ETuple (EVar "e") (EApp (EApp (EVar "bindChainOffChain") (EBinOp ">=" (EVar "rd") (EVar "od"))) (EVar "e")))) (EVar "None")))))
+(DTypeSig false "ruleBindChainToDo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
+(DFunDef false "ruleBindChainToDo" (PWild PWild PWild PWild PWild) (EListLit (EApp (EVar "OnDecl") (EVar "bindChainAt"))))
+(DTypeSig false "bindChainAt" (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding")))))
+(DFunDef false "bindChainAt" ((PVar "ctx") (PVar "d")) (EApp (EApp (EMethodRef "map") (EApp (EVar "bindChainFinding") (EFieldAccess (EVar "ctx") "ctxSpan"))) (EApp (EApp (EVar "declHeadHits") (EVar "bindChainPick")) (EVar "d"))))
 (DTypeSig false "bindChainFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "bindChainFinding" ((PVar "loc") PWild) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindChainToDo")) (fa "message" (ELit (LString "deep nested Result/Option passthrough-bind `match` chain (≥3 binds). Rewrite as a `do` block"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))

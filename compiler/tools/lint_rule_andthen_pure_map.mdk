@@ -1,29 +1,14 @@
 -- lint rule rule-andthen-pure-map: a monadic bind whose continuation only wraps a pure transformation (`andThen m (x => pure body)`). Prefer `map`.
 
-import frontend.ast.{
-  noBinderId,
-  Loc(..),
-  Pat(..),
-  Guard(..),
-  Arm(..),
-  ImplMethod(..),
-  DoStmt(..),
-  Section(..),
-  InterpPart(..),
-  GuardArm(..),
-  FieldAssign(..),
-  LetBind(..),
-  FunClause(..),
-  Expr(..),
-  Decl(..),
-}
+import frontend.ast.{noBinderId, Loc(..), Pat(..), Expr(..), Decl(..)}
+import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
-import ir.sexp.{exprSexp}
 import frontend.exhaust.{Oracle}
 import tools.lint_core.{
   Category(..),
+  Ctx(..),
   FileFacts(..),
   Finding(..),
   Fixability(..),
@@ -32,14 +17,16 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor(..),
+  mkVisitorRule,
 }
 import tools.lint_shared.{
   andThenEtaFn,
   childExprs,
-  declLocList,
-  implMethodsBodyKey,
+  detApply,
+  exprRuleFix,
   isEVarNamed,
+  noExcl,
   ruleNameAndThenPureMap,
   unwrapLoc,
 }
@@ -47,7 +34,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameAndThenPureMap,
       summary =
@@ -132,46 +119,20 @@ andThenPureMapBody m x (EApp pureHd arg)
 andThenPureMapBody _ _ _ = None
 
 -- ── check ─────────────────────────────────────────────────────────────────────
+-- The detector matches the raw `EApp`, never an `ELoc` wrapper, so a
+-- location-wrapped bind is counted once.
 ruleAndThenPureMap : StdlibIndex ->
   String ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleAndThenPureMap _ _ _ pos prog =
-  flatMap andThenPureMapDeclL (declLocList pos prog)
+  List Visitor
+ruleAndThenPureMap _ _ _ _ _ = [OnExpr [KApp] andThenPureMapAt]
 
-andThenPureMapDeclL : (Decl, Option Loc) -> List Finding
-andThenPureMapDeclL (d, loc) =
-  map (andThenPureMapFinding loc) (declAndThenPureMapHits d)
-
-declAndThenPureMapHits : Decl -> List Expr
-declAndThenPureMapHits (DFunDef _ _ _ body _ _) = collectAndThenPureMapHits body
-declAndThenPureMapHits (DImpl { methods, ... }) =
-  flatMap implMethodAndThenPureMapHits methods
-declAndThenPureMapHits (DAttrib _ d) = declAndThenPureMapHits d
-declAndThenPureMapHits _ = []
-
-implMethodAndThenPureMapHits : ImplMethod -> List Expr
-implMethodAndThenPureMapHits (ImplMethod _ _ body) =
-  collectAndThenPureMapHits body
-
--- every eligible bind anywhere in the expression tree (order irrelevant).  The
--- hit detector matches the RAW `EApp` (never an `ELoc` wrapper) so a location-
--- wrapped bind is counted exactly once — at the unwrapped node the tree walk
--- reaches — rather than twice (mirrors `lamHitOf` / `ifMaxMinHitOf`).
-collectAndThenPureMapHits : Expr -> List Expr
-collectAndThenPureMapHits e =
-  andThenPureMapHitOf e ++ flatMap collectAndThenPureMapHits (childExprs e)
-
-andThenPureMapHitOf : Expr -> List Expr
-andThenPureMapHitOf (EApp inner cont) =
-  optExprToList (andThenPureMapOf (EApp inner cont))
-andThenPureMapHitOf _ = []
-
-optExprToList : Option Expr -> List Expr
-optExprToList (Some x) = [x]
-optExprToList None = []
+andThenPureMapAt : Ctx -> Expr -> List Finding
+andThenPureMapAt ctx e = match andThenPureMapOf e
+  Some rewritten => [andThenPureMapFinding ctx.ctxDeclLoc rewritten]
+  None => []
 
 andThenPureMapFinding : Option Loc -> Expr -> Finding
 andThenPureMapFinding loc rewritten = Finding {
@@ -185,166 +146,10 @@ andThenPureMapFinding loc rewritten = Finding {
 }
 
 -- ── autofix ───────────────────────────────────────────────────────────────────
--- Rebuild the decl body converting every eligible bind to a `map` call.  Detects
--- "did anything change" by comparing the location-stripped sexp of old vs new
--- (same technique `lambdaSectionFix` / `ifMaxMinFix` use).
+-- Bottom-up: every eligible bind becomes a `map` application.
 andThenPureMapFix : Oracle -> Decl -> Option (List Decl)
-andThenPureMapFix _ (DFunDef vis name pats body site bid) =
-  let body2 = rewriteAndThenPureMapExpr body
-  if exprSexp body2 == exprSexp body then
-    None
-  else
-    Some [DFunDef vis name pats body2 site bid]
-andThenPureMapFix orc (DAttrib a d) = match andThenPureMapFix orc d
-  Some [d2] => Some [DAttrib a d2]
-  _ => None
-andThenPureMapFix _ (d@(DImpl { implOrigin = _, methods })) =
-  let methods2 = map fixImplMethodAndThenPureMap methods
-  if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
-    None
-  else
-    -- #1110: record UPDATE — re-synthesising would reset the acquired identity.
-    Some [DImpl { d | methods = methods2 }]
-andThenPureMapFix _ _ = None
+andThenPureMapFix _ d = exprRuleFix noExcl (detApply andThenPureMapRewrite) d
 
-fixImplMethodAndThenPureMap : ImplMethod -> ImplMethod
-fixImplMethodAndThenPureMap (ImplMethod nm ps body) =
-  ImplMethod nm ps (rewriteAndThenPureMapExpr body)
-
--- if a rewritten application is an eligible bind, collapse it; else keep it.
-tryAndThenPureMap : Expr -> Expr
-tryAndThenPureMap e = match andThenPureMapOf e
-  Some rewritten => rewritten
-  None => e
-
--- recursively rewrite children (bottom-up), then collapse THIS node if eligible.
-rewriteAndThenPureMapExpr : Expr -> Expr
-rewriteAndThenPureMapExpr (ELoc l e) = ELoc l (rewriteAndThenPureMapExpr e)
-rewriteAndThenPureMapExpr (EDoOrigin l e) =
-  EDoOrigin l (rewriteAndThenPureMapExpr e)
-rewriteAndThenPureMapExpr (EApp f x) =
-  tryAndThenPureMap
-    (EApp (rewriteAndThenPureMapExpr f) (rewriteAndThenPureMapExpr x))
-rewriteAndThenPureMapExpr (ELam ps b) = ELam ps (rewriteAndThenPureMapExpr b)
-rewriteAndThenPureMapExpr (ELet m isf p e1 e2) =
-  ELet m isf p (rewriteAndThenPureMapExpr e1) (rewriteAndThenPureMapExpr e2)
-rewriteAndThenPureMapExpr (EMatch s arms) =
-  EMatch (rewriteAndThenPureMapExpr s) (map rewriteAndThenPureMapArm arms)
-rewriteAndThenPureMapExpr (EIf c t el) =
-  EIf
-    (rewriteAndThenPureMapExpr c)
-    (rewriteAndThenPureMapExpr t)
-    (rewriteAndThenPureMapExpr el)
-rewriteAndThenPureMapExpr (EBinOp op a b r) =
-  EBinOp op (rewriteAndThenPureMapExpr a) (rewriteAndThenPureMapExpr b) r
-rewriteAndThenPureMapExpr (EUnOp op a r) =
-  EUnOp op (rewriteAndThenPureMapExpr a) r
-rewriteAndThenPureMapExpr (EInfix op a b) =
-  EInfix op (rewriteAndThenPureMapExpr a) (rewriteAndThenPureMapExpr b)
-rewriteAndThenPureMapExpr (EFieldAccess e f r) =
-  EFieldAccess (rewriteAndThenPureMapExpr e) f r
-rewriteAndThenPureMapExpr (ETuple es) =
-  ETuple (map rewriteAndThenPureMapExpr es)
-rewriteAndThenPureMapExpr (EListLit es) =
-  EListLit (map rewriteAndThenPureMapExpr es)
-rewriteAndThenPureMapExpr (EArrayLit es) =
-  EArrayLit (map rewriteAndThenPureMapExpr es)
-rewriteAndThenPureMapExpr (ERangeList lo hi i) =
-  ERangeList (rewriteAndThenPureMapExpr lo) (rewriteAndThenPureMapExpr hi) i
-rewriteAndThenPureMapExpr (ERangeArray lo hi i) =
-  ERangeArray (rewriteAndThenPureMapExpr lo) (rewriteAndThenPureMapExpr hi) i
-rewriteAndThenPureMapExpr (ESlice e lo hi i) =
-  ESlice
-    (rewriteAndThenPureMapExpr e)
-    (rewriteAndThenPureMapExpr lo)
-    (rewriteAndThenPureMapExpr hi)
-    i
-rewriteAndThenPureMapExpr (ELetGroup binds body) =
-  ELetGroup
-    (map rewriteAndThenPureMapLet binds)
-    (rewriteAndThenPureMapExpr body)
-rewriteAndThenPureMapExpr (ESection s) =
-  ESection (rewriteAndThenPureMapSection s)
-rewriteAndThenPureMapExpr (EIndex a i) =
-  EIndex (rewriteAndThenPureMapExpr a) (rewriteAndThenPureMapExpr i)
-rewriteAndThenPureMapExpr (EAnnot e t) = EAnnot (rewriteAndThenPureMapExpr e) t
-rewriteAndThenPureMapExpr (EHeadAnnot e t) =
-  EHeadAnnot (rewriteAndThenPureMapExpr e) t
-rewriteAndThenPureMapExpr (EBlock stmts) =
-  EBlock (map rewriteAndThenPureMapStmt stmts)
-rewriteAndThenPureMapExpr (EDo d stmts) =
-  EDo d (map rewriteAndThenPureMapStmt stmts)
-rewriteAndThenPureMapExpr (EStringInterp parts) =
-  EStringInterp (map rewriteAndThenPureMapInterp parts)
-rewriteAndThenPureMapExpr (EGuards arms) =
-  EGuards (map rewriteAndThenPureMapGuardArm arms)
-rewriteAndThenPureMapExpr (ERecordCreate n fs) =
-  ERecordCreate n (map rewriteAndThenPureMapField fs)
-rewriteAndThenPureMapExpr (ERecordUpdate e fs r) =
-  ERecordUpdate
-    (rewriteAndThenPureMapExpr e)
-    (map rewriteAndThenPureMapField fs)
-    r
-rewriteAndThenPureMapExpr (EVariantUpdate c e fs) =
-  EVariantUpdate
-    c
-    (rewriteAndThenPureMapExpr e)
-    (map rewriteAndThenPureMapField fs)
-rewriteAndThenPureMapExpr (EMapLit n kvs) =
-  EMapLit n (map rewriteAndThenPureMapKv kvs)
-rewriteAndThenPureMapExpr (ESetLit n es) =
-  ESetLit n (map rewriteAndThenPureMapExpr es)
-rewriteAndThenPureMapExpr (EAsPat x e) = EAsPat x (rewriteAndThenPureMapExpr e)
-rewriteAndThenPureMapExpr (EOrPat es) =
-  EOrPat (map rewriteAndThenPureMapExpr es)
-rewriteAndThenPureMapExpr e = e
-
-rewriteAndThenPureMapStmt : DoStmt -> DoStmt
-rewriteAndThenPureMapStmt (DoExpr e) = DoExpr (rewriteAndThenPureMapExpr e)
-rewriteAndThenPureMapStmt (DoBind p e) = DoBind p (rewriteAndThenPureMapExpr e)
-rewriteAndThenPureMapStmt (DoLet m r p e site) =
-  DoLet m r p (rewriteAndThenPureMapExpr e) site
-rewriteAndThenPureMapStmt (DoAssign x e) =
-  DoAssign x (rewriteAndThenPureMapExpr e)
-rewriteAndThenPureMapStmt (DoFieldAssign x fs e) =
-  DoFieldAssign x fs (rewriteAndThenPureMapExpr e)
-
-rewriteAndThenPureMapArm : Arm -> Arm
-rewriteAndThenPureMapArm (Arm p gs body) =
-  Arm p (map rewriteAndThenPureMapGuard gs) (rewriteAndThenPureMapExpr body)
-
-rewriteAndThenPureMapGuard : Guard -> Guard
-rewriteAndThenPureMapGuard (GBool e) = GBool (rewriteAndThenPureMapExpr e)
-rewriteAndThenPureMapGuard (GBind p e) = GBind p (rewriteAndThenPureMapExpr e)
-
-rewriteAndThenPureMapLet : LetBind -> LetBind
-rewriteAndThenPureMapLet (LetBind n clauses site bid) =
-  LetBind n (map rewriteAndThenPureMapClause clauses) site bid
-
-rewriteAndThenPureMapClause : FunClause -> FunClause
-rewriteAndThenPureMapClause (FunClause ps body) =
-  FunClause ps (rewriteAndThenPureMapExpr body)
-
-rewriteAndThenPureMapSection : Section -> Section
-rewriteAndThenPureMapSection (SecBare op) = SecBare op
-rewriteAndThenPureMapSection (SecRight op e) =
-  SecRight op (rewriteAndThenPureMapExpr e)
-rewriteAndThenPureMapSection (SecLeft e op) =
-  SecLeft (rewriteAndThenPureMapExpr e) op
-
-rewriteAndThenPureMapInterp : InterpPart -> InterpPart
-rewriteAndThenPureMapInterp (InterpStr s) = InterpStr s
-rewriteAndThenPureMapInterp (InterpExpr e) =
-  InterpExpr (rewriteAndThenPureMapExpr e)
-
-rewriteAndThenPureMapGuardArm : GuardArm -> GuardArm
-rewriteAndThenPureMapGuardArm (GuardArm gs body) =
-  GuardArm (map rewriteAndThenPureMapGuard gs) (rewriteAndThenPureMapExpr body)
-
-rewriteAndThenPureMapField : FieldAssign -> FieldAssign
-rewriteAndThenPureMapField (FieldAssign n e) =
-  FieldAssign n (rewriteAndThenPureMapExpr e)
-
-rewriteAndThenPureMapKv : (Expr, Expr) -> (Expr, Expr)
-rewriteAndThenPureMapKv (k, v) =
-  (rewriteAndThenPureMapExpr k, rewriteAndThenPureMapExpr v)
+andThenPureMapRewrite : Expr -> Option Expr
+andThenPureMapRewrite (e@(EApp _ _)) = andThenPureMapOf e
+andThenPureMapRewrite _ = None

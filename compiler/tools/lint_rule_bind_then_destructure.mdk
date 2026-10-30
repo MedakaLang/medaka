@@ -21,29 +21,17 @@
 -- finding), never produce an unsound fix.
 
 import frontend.ast.{
-  Loc(..),
-  Pat(..),
-  RecPatField(..),
-  Guard(..),
-  Arm(..),
-  DoStmt(..),
-  Section(..),
-  InterpPart(..),
-  GuardArm(..),
-  FieldAssign(..),
-  LetBind(..),
-  FunClause(..),
-  Expr(..),
-  Decl(..),
+  Loc(..), Pat(..), RecPatField(..), Arm(..), DoStmt(..), Expr(..), Decl(..)
 }
+import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import support.util.{anyList, reverseL}
 import tools.printer.{exprToString}
-import ir.sexp.{exprSexp}
 import frontend.exhaust.{Oracle}
 import tools.lint_core.{
   Category(..),
+  Ctx(..),
   FileFacts(..),
   Finding(..),
   Fixability(..),
@@ -52,13 +40,15 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex(..),
-  mkRule,
+  Visitor(..),
+  mkVisitorRule,
   factOracle,
 }
 import tools.lint_shared.{
-  childExprs,
   ctorIsSingle,
-  declLocList,
+  detApply,
+  exprRuleFix,
+  noExcl,
   ruleNameBindThenDestructure,
   unwrapLoc,
   wholeWordIn,
@@ -67,7 +57,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameBindThenDestructure,
       summary =
@@ -141,24 +131,27 @@ splitTail2 stmts = match reverseL stmts
   _ => None
 
 -- ── check ────────────────────────────────────────────────────────────────────
+-- Only `do` and bare blocks can end in the shape, so only those are visited.
 ruleBindThenDestructure : StdlibIndex ->
   String ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleBindThenDestructure _ _ facts pos prog =
-  let orc = factOracle facts
-  flatMap (bindDestructureDeclL orc) (declLocList pos prog)
+  List Visitor
+ruleBindThenDestructure _ _ facts _ _ =
+  [OnExpr [KDo, KBlock] (bindThenDestructureAt (factOracle facts))]
 
-bindDestructureDeclL : Oracle -> (Decl, Option Loc) -> List Finding
-bindDestructureDeclL orc (d, loc) =
-  map (bindDestructureFinding loc) (declBindHits orc d)
+bindThenDestructureAt : Oracle -> Ctx -> Expr -> List Finding
+bindThenDestructureAt orc ctx e = match blockStmts e
+  Some stmts => match bindMatchTail orc stmts
+    Some (_, v, _, _, _) => [bindDestructureFinding ctx.ctxDeclLoc v]
+    None => []
+  None => []
 
-declBindHits : Oracle -> Decl -> List String
-declBindHits orc (DFunDef _ _ _ body _ _) = collectBindHits orc body
-declBindHits orc (DAttrib _ d) = declBindHits orc d
-declBindHits _ _ = []
+blockStmts : Expr -> Option (List DoStmt)
+blockStmts (EDo _ stmts) = Some stmts
+blockStmts (EBlock stmts) = Some stmts
+blockStmts _ = None
 
 bindDestructureFinding : Option Loc -> String -> Finding
 bindDestructureFinding loc v = Finding {
@@ -171,106 +164,27 @@ bindDestructureFinding loc v = Finding {
   loc = loc,
 }
 
--- collect every collapsible tail's bound-var name, recursing into all sub-exprs.
-collectBindHits : Oracle -> Expr -> List String
-collectBindHits orc e =
-  tailHitOf orc e ++ flatMap (collectBindHits orc) (childExprs e)
-
-tailHitOf : Oracle -> Expr -> List String
-tailHitOf orc (EDo _ stmts) = hitNameOf orc stmts
-tailHitOf orc (EBlock stmts) = hitNameOf orc stmts
-tailHitOf _ _ = []
-
-hitNameOf : Oracle -> List DoStmt -> List String
-hitNameOf orc stmts = match bindMatchTail orc stmts
-  Some (_, v, _, _, _) => [v]
-  None => []
-
 -- ── autofix ──────────────────────────────────────────────────────────────────
--- Rebuild the decl body with every collapsible bind-then-match tail inlined.
--- The rewrite is structural (rebuilds every node), so we detect "did anything
--- change" by comparing the location-stripped sexp of the old vs new body — only
--- then do we return `Some [newDecl]` (the printer re-renders it).
+-- Bottom-up: every collapsible bind-then-match tail is inlined.
 bindThenDestructureFix : Oracle -> Decl -> Option (List Decl)
-bindThenDestructureFix orc (DFunDef vis name pats body site bid) =
-  let body2 = rewriteBindExpr orc body
-  if exprSexp body2 == exprSexp body then
-    None
-  else
-    Some [DFunDef vis name pats body2 site bid]
-bindThenDestructureFix orc (DAttrib a d) = match bindThenDestructureFix orc d
-  Some [d2] => Some [DAttrib a d2]
-  _ => None
-bindThenDestructureFix _ _ = None
+bindThenDestructureFix orc d =
+  exprRuleFix noExcl (detApply (bindThenDestructureRewrite orc)) d
 
--- recursively rewrite, then collapse the tail of each do/bare block.
-rewriteBindExpr : Oracle -> Expr -> Expr
-rewriteBindExpr orc (ELoc l e) = ELoc l (rewriteBindExpr orc e)
-rewriteBindExpr orc (EDoOrigin l e) = EDoOrigin l (rewriteBindExpr orc e)
-rewriteBindExpr orc (EApp f x) =
-  EApp (rewriteBindExpr orc f) (rewriteBindExpr orc x)
-rewriteBindExpr orc (ELam ps b) = ELam ps (rewriteBindExpr orc b)
-rewriteBindExpr orc (ELet m isf p e1 e2) =
-  ELet m isf p (rewriteBindExpr orc e1) (rewriteBindExpr orc e2)
-rewriteBindExpr orc (EMatch s arms) =
-  EMatch (rewriteBindExpr orc s) (map (rewriteBindArm orc) arms)
-rewriteBindExpr orc (EIf c t el) =
-  EIf (rewriteBindExpr orc c) (rewriteBindExpr orc t) (rewriteBindExpr orc el)
-rewriteBindExpr orc (EBinOp op a b r) =
-  EBinOp op (rewriteBindExpr orc a) (rewriteBindExpr orc b) r
-rewriteBindExpr orc (EUnOp op a r) = EUnOp op (rewriteBindExpr orc a) r
-rewriteBindExpr orc (EInfix op a b) =
-  EInfix op (rewriteBindExpr orc a) (rewriteBindExpr orc b)
-rewriteBindExpr orc (EFieldAccess e f r) =
-  EFieldAccess (rewriteBindExpr orc e) f r
-rewriteBindExpr orc (ETuple es) = ETuple (map (rewriteBindExpr orc) es)
-rewriteBindExpr orc (EListLit es) = EListLit (map (rewriteBindExpr orc) es)
-rewriteBindExpr orc (EArrayLit es) = EArrayLit (map (rewriteBindExpr orc) es)
-rewriteBindExpr orc (ERangeList lo hi i) =
-  ERangeList (rewriteBindExpr orc lo) (rewriteBindExpr orc hi) i
-rewriteBindExpr orc (ERangeArray lo hi i) =
-  ERangeArray (rewriteBindExpr orc lo) (rewriteBindExpr orc hi) i
-rewriteBindExpr orc (ESlice e lo hi i) =
-  ESlice
-    (rewriteBindExpr orc e)
-    (rewriteBindExpr orc lo)
-    (rewriteBindExpr orc hi)
-    i
-rewriteBindExpr orc (ELetGroup binds body) =
-  ELetGroup (map (rewriteBindLet orc) binds) (rewriteBindExpr orc body)
-rewriteBindExpr orc (ESection s) = ESection (rewriteBindSection orc s)
-rewriteBindExpr orc (EIndex a i) =
-  EIndex (rewriteBindExpr orc a) (rewriteBindExpr orc i)
-rewriteBindExpr orc (EAnnot e t) = EAnnot (rewriteBindExpr orc e) t
-rewriteBindExpr orc (EHeadAnnot e t) = EHeadAnnot (rewriteBindExpr orc e) t
-rewriteBindExpr orc (EBlock stmts) =
-  EBlock (collapseBindTail orc False (map (rewriteBindStmt orc) stmts))
-rewriteBindExpr orc (EDo d stmts) =
-  EDo d (collapseBindTail orc d (map (rewriteBindStmt orc) stmts))
-rewriteBindExpr orc (EStringInterp parts) =
-  EStringInterp (map (rewriteBindInterp orc) parts)
-rewriteBindExpr orc (EGuards arms) =
-  EGuards (map (rewriteBindGuardArm orc) arms)
-rewriteBindExpr orc (ERecordCreate n fs) =
-  ERecordCreate n (map (rewriteBindField orc) fs)
-rewriteBindExpr orc (ERecordUpdate e fs r) =
-  ERecordUpdate (rewriteBindExpr orc e) (map (rewriteBindField orc) fs) r
-rewriteBindExpr orc (EVariantUpdate c e fs) =
-  EVariantUpdate c (rewriteBindExpr orc e) (map (rewriteBindField orc) fs)
-rewriteBindExpr orc (EMapLit n kvs) = EMapLit n (map (rewriteBindKv orc) kvs)
-rewriteBindExpr orc (ESetLit n es) = ESetLit n (map (rewriteBindExpr orc) es)
-rewriteBindExpr orc (EAsPat x e) = EAsPat x (rewriteBindExpr orc e)
-rewriteBindExpr orc (EOrPat es) = EOrPat (map (rewriteBindExpr orc) es)
-rewriteBindExpr _ e = e
-
--- collapse a (already child-rewritten) statement list: if its last two statements
--- are the irrefutable bind-then-match shape, replace them with `pat <- e` plus the
+-- Replace the last two statements of a do/bare block with `pat <- e` plus the
 -- arm body's statements spliced inline.
-collapseBindTail : Oracle -> Bool -> List DoStmt -> List DoStmt
-collapseBindTail orc host stmts = match bindMatchTail orc stmts
-  Some (prefix, _, pat, boundE, body) =>
-    prefix ++ (DoBind pat boundE :: bodyToStmts host body)
-  None => stmts
+bindThenDestructureRewrite : Oracle -> Expr -> Option Expr
+bindThenDestructureRewrite orc (EDo d stmts) =
+  map (collapsed => EDo d collapsed) (collapseTail orc d stmts)
+bindThenDestructureRewrite orc (EBlock stmts) =
+  map (collapsed => EBlock collapsed) (collapseTail orc False stmts)
+bindThenDestructureRewrite _ _ = None
+
+collapseTail : Oracle -> Bool -> List DoStmt -> Option (List DoStmt)
+collapseTail orc host stmts =
+  map
+    ((prefix, _, pat, boundE, body) =>
+      prefix ++ (DoBind pat boundE :: bodyToStmts host body))
+    (bindMatchTail orc stmts)
 
 -- the arm body as statements: a bare block, or a monadic block heralded the SAME
 -- way as the host (`host`: the enclosing block's deferred flag), contributes its
@@ -287,47 +201,3 @@ whenSameHerald : Bool -> Bool -> List DoStmt -> Expr -> List DoStmt
 whenSameHerald host d stmts e
   | host == d = stmts
   | otherwise = [DoExpr e]
-
-rewriteBindStmt : Oracle -> DoStmt -> DoStmt
-rewriteBindStmt orc (DoExpr e) = DoExpr (rewriteBindExpr orc e)
-rewriteBindStmt orc (DoBind p e) = DoBind p (rewriteBindExpr orc e)
-rewriteBindStmt orc (DoLet m r p e site) =
-  DoLet m r p (rewriteBindExpr orc e) site
-rewriteBindStmt orc (DoAssign x e) = DoAssign x (rewriteBindExpr orc e)
-rewriteBindStmt orc (DoFieldAssign x fs e) =
-  DoFieldAssign x fs (rewriteBindExpr orc e)
-
-rewriteBindArm : Oracle -> Arm -> Arm
-rewriteBindArm orc (Arm p gs body) =
-  Arm p (map (rewriteBindGuard orc) gs) (rewriteBindExpr orc body)
-
-rewriteBindGuard : Oracle -> Guard -> Guard
-rewriteBindGuard orc (GBool e) = GBool (rewriteBindExpr orc e)
-rewriteBindGuard orc (GBind p e) = GBind p (rewriteBindExpr orc e)
-
-rewriteBindLet : Oracle -> LetBind -> LetBind
-rewriteBindLet orc (LetBind n clauses site bid) =
-  LetBind n (map (rewriteBindClause orc) clauses) site bid
-
-rewriteBindClause : Oracle -> FunClause -> FunClause
-rewriteBindClause orc (FunClause ps body) =
-  FunClause ps (rewriteBindExpr orc body)
-
-rewriteBindSection : Oracle -> Section -> Section
-rewriteBindSection _ (SecBare op) = SecBare op
-rewriteBindSection orc (SecRight op e) = SecRight op (rewriteBindExpr orc e)
-rewriteBindSection orc (SecLeft e op) = SecLeft (rewriteBindExpr orc e) op
-
-rewriteBindInterp : Oracle -> InterpPart -> InterpPart
-rewriteBindInterp _ (InterpStr s) = InterpStr s
-rewriteBindInterp orc (InterpExpr e) = InterpExpr (rewriteBindExpr orc e)
-
-rewriteBindGuardArm : Oracle -> GuardArm -> GuardArm
-rewriteBindGuardArm orc (GuardArm gs body) =
-  GuardArm (map (rewriteBindGuard orc) gs) (rewriteBindExpr orc body)
-
-rewriteBindField : Oracle -> FieldAssign -> FieldAssign
-rewriteBindField orc (FieldAssign n e) = FieldAssign n (rewriteBindExpr orc e)
-
-rewriteBindKv : Oracle -> (Expr, Expr) -> (Expr, Expr)
-rewriteBindKv orc (k, v) = (rewriteBindExpr orc k, rewriteBindExpr orc v)
