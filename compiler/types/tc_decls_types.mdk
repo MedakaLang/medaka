@@ -1639,8 +1639,8 @@ aliasArgScope : ModuleCtx ->
   (SigVars, List (String, Mono))
 aliasArgScope mctx etbl tvs key params args =
   let kinds =
-    optionOr
-      (map (_ => KType) params)
+    optionOrElse
+      (_ => map (_ => KType) params)
       (lookupTab key mctx.mcCells.dataParamKindsRef.value)
   let bound = aliasArgBindings mctx etbl tvs params kinds args
   (sigVarsUnion (fst bound) etbl, snd bound ++ tvs)
@@ -2133,7 +2133,8 @@ fieldTypeE mctx etbl tvs (Field _ ty) = fromAstTypeE mctx etbl tvs ty
 -- unbound name gets a fresh var (defers, never a spurious concrete head).
 export
 reqTyToMono : ModuleCtx -> List (String, Mono) -> Ty -> Mono
-reqTyToMono mctx sub (TyVar n) = optionOr (freshVar mctx ()) (lookupAssoc n sub)
+reqTyToMono mctx sub (TyVar n) =
+  optionOrElse (_ => freshVar mctx ()) (lookupAssoc n sub)
 reqTyToMono mctx _ (TyCon { tyConName = n, tyConOrigin = o }) = tconFrom o n
 reqTyToMono mctx sub (TyApp a b) =
   TApp (reqTyToMono mctx sub a) (reqTyToMono mctx sub b)

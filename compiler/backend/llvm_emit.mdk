@@ -13948,7 +13948,7 @@ typeOf _ _ (CList _) = LTCon
 typeOf _ _ (CRangeList _ _ _) = LTCon
 typeOf e env (CVar x _) = match omLookup x env
   Some (_, t) => valueLTy t
-  None => optionOr (runtimeLTy RTValue) (omLookup x e.globalTys)
+  None => optionOrElse (_ => runtimeLTy RTValue) (omLookup x e.globalTys)
 typeOf e env (CBinPrim op l _ tag _)
   | isCmpOp op = LTBool
   | op == "::" = LTCon

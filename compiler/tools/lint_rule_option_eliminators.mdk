@@ -30,6 +30,7 @@ import tools.lint_core.{
 }
 import tools.lint_shared.{
   bindingOf,
+  calledName,
   exprRuleEditVisitors,
   isEVarNamed,
   isNilPCon,
@@ -83,8 +84,7 @@ call1 fn arg scrut = EApp (EApp (EVar fn) arg) scrut
 
 -- `Some x => x` / `Ok x => x`: the success arm hands its payload back.
 isIdentityArm : String -> Pat -> Expr -> Bool
-isIdentityArm ctor (PCon c [PVar x _ _]) body =
-  c == ctor && isEVarNamed x body
+isIdentityArm ctor (PCon c [PVar x _ _]) body = c == ctor && isEVarNamed x body
 isIdentityArm _ _ _ = False
 
 -- `panic m` with an atomic message.
@@ -104,9 +104,13 @@ elimPair scrut (Arm ps gs bs) (Arm pf gf bf)
       map (m => call1 "optionOrPanic" m scrut) (panicMessage bf)
   | isIdentityArm "Ok" ps bs && isErrWild pf && atomic bf =
     Some (call1 "resultOr" bf scrut)
-  | isSomeWild ps && isNilPCon "None" pf && isBoolLit True bs
+  | isSomeWild ps
+    && isNilPCon "None" pf
+    && isBoolLit True bs
     && isBoolLit False bf = Some (EApp (EVar "isSome") scrut)
-  | isSomeWild ps && isNilPCon "None" pf && isBoolLit False bs
+  | isSomeWild ps
+    && isNilPCon "None" pf
+    && isBoolLit False bs
     && isBoolLit True bf = Some (EApp (EVar "isNone") scrut)
   | otherwise = None
 
@@ -150,13 +154,6 @@ optionElimFinding loc rewritten fix = Finding {
   fix = fix,
 }
 
--- The name the rewrite calls.
-calledName : Expr -> String
-calledName e = match unwrapLoc e
-  EApp f _ => calledName f
-  EVar n => n
-  _ => ""
-
 -- The `panic` the `optionOrPanic` shape reads, when the arm is one.
 panicHead : Expr -> Option Expr
 panicHead (EMatch _ arms) = firstJust panicArmHead arms
@@ -178,7 +175,8 @@ firstJust f (x :: rest) = orElse (f x) (firstJust f rest)
 -- what the text means.
 optionElimEdit : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
 optionElimEdit idx facts ctx e rewritten =
-  if rebinds idx facts ctx (calledName rewritten) || panicRebound idx facts e then
+  if rebinds idx facts ctx (calledName rewritten)
+    || panicRebound idx facts e then
     None
   else
     replaceFix

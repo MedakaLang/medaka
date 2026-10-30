@@ -55,7 +55,9 @@ export
 lowerExterns : ProgramFacts -> List Decl -> CProgram -> CProgram
 lowerExterns input decls (prog@(CProgram groups _ _ _ _ facts)) =
   let sources =
-    optionOr (sourceExterns RawSource "<raw>" [] decls) input.pfExternSources
+    optionOrElse
+      (_ => sourceExterns RawSource "<raw>" [] decls)
+      input.pfExternSources
   let rows = map externFact sources ++ implicitRuntimeFacts
   let inventory = externFactIndex rows
   let names =

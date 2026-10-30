@@ -267,7 +267,7 @@ test "diff_compiler_lint_fix fixtures reproduce their one-rule goldens" =
         isLint = False,
         suffix = ".fixed",
       }
-      72)
+      75)
 
 test "`medaka new`'s scaffold matches its golden tree" =
   report

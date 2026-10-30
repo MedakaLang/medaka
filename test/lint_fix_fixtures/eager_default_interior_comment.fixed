@@ -1,0 +1,9 @@
+-- Fixture for rule-eager-default autofix.
+-- NEGATIVE: a comment inside the rewritten span would be lost, so the fix is
+-- withheld and the file stays byte-identical.
+
+viaComment k xs =
+  optionOr
+    -- the miss path
+    (fresh k)
+    (lookup k xs)

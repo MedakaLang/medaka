@@ -2428,7 +2428,8 @@ instantiateStandaloneOccurrence outer name sym origin value =
     None =>
       recordShadowStandaloneObls env name inst.mtiSubstitution.misTypeSubst
   let key = if sym == "" then name else sym
-  let dc = optionOr (shadowDeclaredFor env.teDyn.dcModule name key) declared
+  let dc =
+    optionOrElse (_ => shadowDeclaredFor env.teDyn.dcModule name key) declared
   SelectedValueOccurrence {
     svoScheme = value.vsScheme,
     svoInstance = inst,

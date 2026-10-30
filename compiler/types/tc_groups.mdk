@@ -1262,7 +1262,7 @@ isLetrecGroup _ = True
 export
 memberForce : ScopedMember -> EffRow
 memberForce member =
-  optionOr (optionOr pureRow member.smForce) member.smForceBound.value
+  optionOrElse (_ => optionOr pureRow member.smForce) member.smForceBound.value
 
 sigTvMapUnboundIds : (String, Ty, List (String, Mono)) -> List Int
 sigTvMapUnboundIds (_, _, tvs) = flatMap (p => monoUnboundIds (snd p)) tvs

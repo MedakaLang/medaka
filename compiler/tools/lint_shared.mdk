@@ -105,6 +105,10 @@ ruleNameMatchToMap : String
 ruleNameMatchToMap = "rule-match-to-map"
 
 export
+ruleNameEagerDefault : String
+ruleNameEagerDefault = "rule-eager-default"
+
+export
 ruleNameOptionEliminators : String
 ruleNameOptionEliminators = "rule-option-eliminators"
 
@@ -771,6 +775,14 @@ replaceNodeFix applicability message ctx e rewritten =
     (bindingOf rewritten)
     ctx
     (exprToString rewritten)
+
+-- The name an application spine calls, "" when its head is not a name.
+export
+calledName : Expr -> String
+calledName e = match unwrapLoc e
+  EApp f _ => calledName f
+  EVar n => n
+  _ => ""
 
 -- The span of the identifier a use stands on: the innermost `ELoc` over an `EVar`.
 varSite : Expr -> Option Loc

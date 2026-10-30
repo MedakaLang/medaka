@@ -11029,8 +11029,8 @@ ctorTypeName prog name = match omLookup name (indexCtorTypesW (progIndex prog))
 -- the same discipline the struct-id fix uses.
 ctorOrdinal : Prog -> String -> Int
 ctorOrdinal prog name =
-  optionOr
-    (syntheticCtorOrdinal name)
+  optionOrElse
+    (_ => syntheticCtorOrdinal name)
     (orElse (reservedCtorOrdinal name) (userCtorOrdinalW prog name))
 
 -- the DECLARATION-ORDER ordinal of a name IFF it is a user-declared ctor (present in
@@ -13507,7 +13507,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "ctorTypeName" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ctorTypeName" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EApp (EVar "indexCtorTypesW") (EApp (EVar "progIndex") (EVar "prog")))) (arm (PCon "Some" (PVar "ty")) () (EVar "ty")) (arm (PCon "None") () (EIf (EApp (EVar "isSyntheticCtor") (EVar "name")) (EApp (EVar "syntheticCtorType") (EVar "name")) (EApp (EApp (EVar "reservedTypeOf") (EVar "prog")) (EVar "name"))))))
 (DTypeSig false "ctorOrdinal" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "ctorOrdinal" ((PVar "prog") (PVar "name")) (EApp (EApp (EVar "optionOr") (EApp (EVar "syntheticCtorOrdinal") (EVar "name"))) (EApp (EApp (EVar "orElse") (EApp (EVar "reservedCtorOrdinal") (EVar "name"))) (EApp (EApp (EVar "userCtorOrdinalW") (EVar "prog")) (EVar "name")))))
+(DFunDef false "ctorOrdinal" ((PVar "prog") (PVar "name")) (EApp (EApp (EVar "optionOrElse") (ELam (PWild) (EApp (EVar "syntheticCtorOrdinal") (EVar "name")))) (EApp (EApp (EVar "orElse") (EApp (EVar "reservedCtorOrdinal") (EVar "name"))) (EApp (EApp (EVar "userCtorOrdinalW") (EVar "prog")) (EVar "name")))))
 (DTypeSig false "userCtorOrdinalW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "userCtorOrdinalW" ((PVar "prog") (PVar "name")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EApp (EVar "indexCtorOrdinalsW") (EApp (EVar "progIndex") (EVar "prog")))))
 (DTypeSig false "ordinalOfHead" (TyFun (TyCon "Prog") (TyFun (TyCon "CHead") (TyCon "Int"))))
@@ -15647,7 +15647,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "ctorTypeName" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ctorTypeName" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EApp (EVar "indexCtorTypesW") (EApp (EVar "progIndex") (EVar "prog")))) (arm (PCon "Some" (PVar "ty")) () (EVar "ty")) (arm (PCon "None") () (EIf (EApp (EVar "isSyntheticCtor") (EVar "name")) (EApp (EVar "syntheticCtorType") (EVar "name")) (EApp (EApp (EVar "reservedTypeOf") (EVar "prog")) (EVar "name"))))))
 (DTypeSig false "ctorOrdinal" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "ctorOrdinal" ((PVar "prog") (PVar "name")) (EApp (EApp (EVar "optionOr") (EApp (EVar "syntheticCtorOrdinal") (EVar "name"))) (EApp (EApp (EMethodRef "orElse") (EApp (EVar "reservedCtorOrdinal") (EVar "name"))) (EApp (EApp (EVar "userCtorOrdinalW") (EVar "prog")) (EVar "name")))))
+(DFunDef false "ctorOrdinal" ((PVar "prog") (PVar "name")) (EApp (EApp (EVar "optionOrElse") (ELam (PWild) (EApp (EVar "syntheticCtorOrdinal") (EVar "name")))) (EApp (EApp (EMethodRef "orElse") (EApp (EVar "reservedCtorOrdinal") (EVar "name"))) (EApp (EApp (EVar "userCtorOrdinalW") (EVar "prog")) (EVar "name")))))
 (DTypeSig false "userCtorOrdinalW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "userCtorOrdinalW" ((PVar "prog") (PVar "name")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EApp (EVar "indexCtorOrdinalsW") (EApp (EVar "progIndex") (EVar "prog")))))
 (DTypeSig false "ordinalOfHead" (TyFun (TyCon "Prog") (TyFun (TyCon "CHead") (TyCon "Int"))))

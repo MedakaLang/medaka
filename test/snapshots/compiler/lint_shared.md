@@ -1,5 +1,5 @@
 # META
-source_lines=982
+source_lines=994
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -107,6 +107,10 @@ ruleNameComplementPredicate = "rule-complement-predicate"
 export
 ruleNameMatchToMap : String
 ruleNameMatchToMap = "rule-match-to-map"
+
+export
+ruleNameEagerDefault : String
+ruleNameEagerDefault = "rule-eager-default"
 
 export
 ruleNameOptionEliminators : String
@@ -776,6 +780,14 @@ replaceNodeFix applicability message ctx e rewritten =
     ctx
     (exprToString rewritten)
 
+-- The name an application spine calls, "" when its head is not a name.
+export
+calledName : Expr -> String
+calledName e = match unwrapLoc e
+  EApp f _ => calledName f
+  EVar n => n
+  _ => ""
+
 -- The span of the identifier a use stands on: the innermost `ELoc` over an `EVar`.
 varSite : Expr -> Option Loc
 varSite (ELoc l inner) = match varSite inner
@@ -1038,6 +1050,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameComplementPredicate" () (ELit (LString "rule-complement-predicate")))
 (DTypeSig true "ruleNameMatchToMap" (TyCon "String"))
 (DFunDef false "ruleNameMatchToMap" () (ELit (LString "rule-match-to-map")))
+(DTypeSig true "ruleNameEagerDefault" (TyCon "String"))
+(DFunDef false "ruleNameEagerDefault" () (ELit (LString "rule-eager-default")))
 (DTypeSig true "ruleNameOptionEliminators" (TyCon "String"))
 (DFunDef false "ruleNameOptionEliminators" () (ELit (LString "rule-option-eliminators")))
 (DTypeSig true "ruleNameBindChainToDo" (TyCon "String"))
@@ -1252,6 +1266,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "replaceFix" ((PVar "applicability") (PVar "message") (PVar "span") (PVar "binding") (PVar "ctx") (PVar "text")) (EIf (EApp (EApp (EVar "elem") (ELit (LChar "\n"))) (EApp (EVar "stringToChars") (EVar "text"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "map") (ELam ((PVar "loc")) (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "applicability")) (fa "fixEdits" (EListLit (EApp (EApp (EVar "FixEdit") (EVar "loc")) (EApp (EApp (EApp (EVar "parenIfNeeded") (EVar "binding")) (EFieldAccess (EVar "ctx") "ctxParent")) (EVar "text"))))) (fa "fixMessage" (EVar "message")))))) (EVar "span")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "replaceNodeFix" (TyFun (TyCon "Applicability") (TyFun (TyCon "String") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "replaceNodeFix" ((PVar "applicability") (PVar "message") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "applicability")) (EVar "message")) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten"))))
+(DTypeSig true "calledName" (TyFun (TyCon "Expr") (TyCon "String")))
+(DFunDef false "calledName" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "calledName") (EVar "f"))) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "")))))
 (DTypeSig false "varSite" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "varSite" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EMatch (EApp (EVar "varSite") (EVar "inner")) (arm (PCon "Some" (PVar "inner2")) () (EApp (EVar "Some") (EVar "inner2"))) (arm (PCon "None") () (EMatch (EVar "inner") (arm (PCon "EVar" PWild) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "None"))))))
 (DFunDef false "varSite" (PWild) (EVar "None"))
@@ -1361,6 +1377,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameComplementPredicate" () (ELit (LString "rule-complement-predicate")))
 (DTypeSig true "ruleNameMatchToMap" (TyCon "String"))
 (DFunDef false "ruleNameMatchToMap" () (ELit (LString "rule-match-to-map")))
+(DTypeSig true "ruleNameEagerDefault" (TyCon "String"))
+(DFunDef false "ruleNameEagerDefault" () (ELit (LString "rule-eager-default")))
 (DTypeSig true "ruleNameOptionEliminators" (TyCon "String"))
 (DFunDef false "ruleNameOptionEliminators" () (ELit (LString "rule-option-eliminators")))
 (DTypeSig true "ruleNameBindChainToDo" (TyCon "String"))
@@ -1575,6 +1593,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "replaceFix" ((PVar "applicability") (PVar "message") (PVar "span") (PVar "binding") (PVar "ctx") (PVar "text")) (EIf (EApp (EApp (EDictApp "elem") (ELit (LChar "\n"))) (EApp (EVar "stringToChars") (EVar "text"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EMethodRef "map") (ELam ((PVar "loc")) (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "applicability")) (fa "fixEdits" (EListLit (EApp (EApp (EVar "FixEdit") (EVar "loc")) (EApp (EApp (EApp (EVar "parenIfNeeded") (EVar "binding")) (EFieldAccess (EVar "ctx") "ctxParent")) (EVar "text"))))) (fa "fixMessage" (EVar "message")))))) (EVar "span")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "replaceNodeFix" (TyFun (TyCon "Applicability") (TyFun (TyCon "String") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "replaceNodeFix" ((PVar "applicability") (PVar "message") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "applicability")) (EVar "message")) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten"))))
+(DTypeSig true "calledName" (TyFun (TyCon "Expr") (TyCon "String")))
+(DFunDef false "calledName" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "calledName") (EVar "f"))) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "")))))
 (DTypeSig false "varSite" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "varSite" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EMatch (EApp (EVar "varSite") (EVar "inner")) (arm (PCon "Some" (PVar "inner2")) () (EApp (EVar "Some") (EVar "inner2"))) (arm (PCon "None") () (EMatch (EVar "inner") (arm (PCon "EVar" PWild) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "None"))))))
 (DFunDef false "varSite" (PWild) (EVar "None"))

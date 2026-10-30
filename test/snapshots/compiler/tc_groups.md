@@ -1266,7 +1266,7 @@ isLetrecGroup _ = True
 export
 memberForce : ScopedMember -> EffRow
 memberForce member =
-  optionOr (optionOr pureRow member.smForce) member.smForceBound.value
+  optionOrElse (_ => optionOr pureRow member.smForce) member.smForceBound.value
 
 sigTvMapUnboundIds : (String, Ty, List (String, Mono)) -> List Int
 sigTvMapUnboundIds (_, _, tvs) = flatMap (p => monoUnboundIds (snd p)) tvs
@@ -2609,7 +2609,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "isLetrecGroup" ((PList PWild)) (EVar "False"))
 (DFunDef false "isLetrecGroup" (PWild) (EVar "True"))
 (DTypeSig true "memberForce" (TyFun (TyCon "ScopedMember") (TyCon "EffRow")))
-(DFunDef false "memberForce" ((PVar "member")) (EApp (EApp (EVar "optionOr") (EApp (EApp (EVar "optionOr") (EVar "pureRow")) (EFieldAccess (EVar "member") "smForce"))) (EFieldAccess (EFieldAccess (EVar "member") "smForceBound") "value")))
+(DFunDef false "memberForce" ((PVar "member")) (EApp (EApp (EVar "optionOrElse") (ELam (PWild) (EApp (EApp (EVar "optionOr") (EVar "pureRow")) (EFieldAccess (EVar "member") "smForce")))) (EFieldAccess (EFieldAccess (EVar "member") "smForceBound") "value")))
 (DTypeSig false "sigTvMapUnboundIds" (TyFun (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))) (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "sigTvMapUnboundIds" ((PTuple PWild PWild (PVar "tvs"))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EApp (EVar "monoUnboundIds") (EApp (EVar "snd") (EVar "p"))))) (EVar "tvs")))
 (DTypeSig true "sccProtectedSignatureIds" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
@@ -3147,7 +3147,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "isLetrecGroup" ((PList PWild)) (EVar "False"))
 (DFunDef false "isLetrecGroup" (PWild) (EVar "True"))
 (DTypeSig true "memberForce" (TyFun (TyCon "ScopedMember") (TyCon "EffRow")))
-(DFunDef false "memberForce" ((PVar "member")) (EApp (EApp (EVar "optionOr") (EApp (EApp (EVar "optionOr") (EVar "pureRow")) (EFieldAccess (EVar "member") "smForce"))) (EFieldAccess (EFieldAccess (EVar "member") "smForceBound") "value")))
+(DFunDef false "memberForce" ((PVar "member")) (EApp (EApp (EVar "optionOrElse") (ELam (PWild) (EApp (EApp (EVar "optionOr") (EVar "pureRow")) (EFieldAccess (EVar "member") "smForce")))) (EFieldAccess (EFieldAccess (EVar "member") "smForceBound") "value")))
 (DTypeSig false "sigTvMapUnboundIds" (TyFun (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))) (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "sigTvMapUnboundIds" ((PTuple PWild PWild (PVar "tvs"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EApp (EVar "monoUnboundIds") (EApp (EVar "snd") (EVar "p"))))) (EVar "tvs")))
 (DTypeSig true "sccProtectedSignatureIds" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))

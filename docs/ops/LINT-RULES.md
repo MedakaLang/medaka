@@ -24,6 +24,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-complement-predicate`](#rule-complement-predicate) | universal | style | gated | fixable-unsafe | file |
 | [`rule-match-to-map`](#rule-match-to-map) | universal | style | gated | fixable | file |
 | [`rule-option-eliminators`](#rule-option-eliminators) | universal | style | gated | fixable | file |
+| [`rule-eager-default`](#rule-eager-default) | universal | perf | gated | fixable-unsafe | file |
 | [`rule-bind-chain-to-do`](#rule-bind-chain-to-do) | universal | complexity | gated | not-fixable | file |
 | [`rule-dead-code`](#rule-dead-code) | universal | suspicious | gated | not-fixable | file |
 | [`rule-concat-to-interp`](#rule-concat-to-interp) | universal | style | gated | fixable | file |
@@ -291,6 +292,21 @@ Before:
     None => 0
 After:
   optionOr 0 o
+```
+
+## rule-eager-default
+
+a call passed as the default of `optionOr`/`resultOr`, or as the argument of `whenL False`: it runs although its result is discarded. Use `optionOrElse`/`resultOrElse`
+
+`optionOr d o` and `resultOr d r` are ordinary calls, so `d` is evaluated before the call even when `o` is `Some` or `r` is `Ok`. A default that is a call is wasted work on every hit, and an effect or a panic in it happens anyway. `optionOrElse` and `resultOrElse` take a function that runs on the miss only. A literal, a variable, a tuple, an operator expression or a constructor application is not reported.
+
+`whenL False (f x)` is reported without a fix: its argument is evaluated although the guard is `False`.
+
+```
+Before:
+  optionOr (freshVar ctx ()) (lookup n sub)
+After:
+  optionOrElse (_ => freshVar ctx ()) (lookup n sub)
 ```
 
 ## rule-bind-chain-to-do
