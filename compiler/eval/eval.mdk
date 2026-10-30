@@ -192,7 +192,32 @@ public export data Value (e : Effect) =
 -- (so letrec / mutual recursion can back-patch a closure's own binding).
 -- Parameterized over the VALUE type (`v := Value e`), not the row — see the
 -- kind-inference note on `Value`.
-public export data EvalEnv v = EvalEnv (List (List (String, Ref v)))
+public export data EvalEnv v = EvalEnv (List (EnvFrame v))
+
+-- A call frame is a short list, scanned by name.  A module-level frame (a
+-- module's own top-level names, its imports, the shared global and runtime
+-- frames) holds hundreds of names and nearly every non-local reference misses
+-- its way through all of them, so it also carries a name index.  The
+-- index is built from the frame's own list, first entry winning, so a lookup
+-- answers exactly what the scan would; cells are shared, so a later
+-- back-patch or thunk force is seen through either.
+public export data EnvFrame v =
+  | ScanFrame (List (String, Ref v))
+  | IndexedFrame (List (String, Ref v)) (OrdMap (Ref v))
+
+export
+indexedFrame : List (String, Ref v) -> EnvFrame v
+indexedFrame cells = IndexedFrame cells (omFromPairs (reverseL cells) omEmpty)
+
+export
+frameCells : EnvFrame v -> List (String, Ref v)
+frameCells (ScanFrame cells) = cells
+frameCells (IndexedFrame cells _) = cells
+
+-- The frames' cells, nearest first, for a consumer that reads names only.
+export
+envFrameCells : EvalEnv v -> List (List (String, Ref v))
+envFrameCells (EvalEnv frames) = map frameCells frames
 
 -- ── value rendering ──────────────────────────────────────────────────────
 export
@@ -327,9 +352,7 @@ listSliceGo (x :: xs) i lo hi
 
 export
 startsWithAt : String -> Bool
-startsWithAt s =
-  let cs = stringToChars s
-  arrayLength cs > 0 && arrayGetUnsafe 0 cs == '@'
+startsWithAt s = startsWith "@" s
 
 containsInt : Int -> List Int -> Bool
 -- Intentional cross-file duplicate of wasm_emit.mdk's private helper. The
@@ -728,7 +751,7 @@ lookupRuntimeBinding : EvalEnv (Value e) -> String -> <e> Value e
 lookupRuntimeBinding (EvalEnv frames) name =
   lookupRuntimeBindingFrames frames name None
 
-lookupRuntimeBindingFrames : List (List (String, Ref (Value e))) ->
+lookupRuntimeBindingFrames : List (EnvFrame (Value e)) ->
   String ->
   Option (Ref (Value e)) ->
   <e> Value e
@@ -746,15 +769,13 @@ lookupRuntimeBindingFrames (frame :: rest) name found =
 lookupEnvOpt : EvalEnv (Value e) -> String -> <e> Option (Value e)
 lookupEnvOpt (EvalEnv frames) name = lookupFramesOpt frames name
 
-lookupFramesOpt : List (List (String, Ref (Value e))) ->
-  String ->
-  <e> Option (Value e)
+lookupFramesOpt : List (EnvFrame (Value e)) -> String -> <e> Option (Value e)
 lookupFramesOpt [] _ = None
 lookupFramesOpt (frame :: rest) name = match lookupFrameCell frame name
   Some cell => Some (forceCell cell name)
   None => lookupFramesOpt rest name
 
-lookupFrames : List (List (String, Ref (Value e))) -> String -> <e> Value e
+lookupFrames : List (EnvFrame (Value e)) -> String -> <e> Value e
 lookupFrames [] name =
   if contains name !ffiExternNamesRef then
     panic
@@ -785,8 +806,8 @@ export
 lookupMethod : EvalEnv (Value e) -> String -> <e> Value e
 lookupMethod (EvalEnv frames) name = lookupMethodFrames frames frames name
 
-lookupMethodFrames : List (List (String, Ref (Value e))) ->
-  List (List (String, Ref (Value e))) ->
+lookupMethodFrames : List (EnvFrame (Value e)) ->
+  List (EnvFrame (Value e)) ->
   String ->
   <e> Value e
 lookupMethodFrames all [] name = lookupFrames all name
@@ -843,33 +864,36 @@ force (VThunk f) = f ()
 force v = v
 
 -- #1033: opBump makes the by-name scan's O(depth) cost visible to the perf
--- gate's deterministic op-count arm (it never counted this scan before).
-lookupFrameCell : List (String, Ref (Value e)) ->
-  String ->
-  Option (Ref (Value e))
-lookupFrameCell [] _ = None
-lookupFrameCell ((n, cell) :: rest) name =
+-- gate's deterministic op-count arm; an indexed frame's probe counts one.
+lookupFrameCell : EnvFrame (Value e) -> String -> Option (Ref (Value e))
+lookupFrameCell (ScanFrame cells) name = lookupCells cells name
+lookupFrameCell (IndexedFrame _ index) name =
   let _ = opBump ()
-  if n == name then Some cell else lookupFrameCell rest name
+  omLookup name index
+
+lookupCells : List (String, Ref (Value e)) -> String -> Option (Ref (Value e))
+lookupCells [] _ = None
+lookupCells ((n, cell) :: rest) name =
+  let _ = opBump ()
+  if n == name then Some cell else lookupCells rest name
 
 -- ── lexical-address lookup (consumes annotate.mdk's EVarAt; DORMANT, §2.0) ──
 -- AGlobal falls back to the by-name scan — identical semantics: it reaches a
 -- top-level / prelude / global-method cell past any local frame (the self-host
 -- analog of the OCaml lookup_method shadow-bypass).  ALocal indexes (frame,
 -- slot) directly; the name check guards against any emit/consume frame-model
--- divergence with a loud panic (never silent corruption).  Frames stay a
--- `List (List ..)`: switching to array frames for true O(1) slot indexing was
--- measured a clear regression under the tree-walker (per-frame `arrayFromList`
--- cost > the by-name scan it saves), so the rep is unchanged — see PERF-NOTES.
+-- divergence with a loud panic (never silent corruption).  A call frame stays a
+-- list: switching to array frames for true O(1) slot indexing was measured a
+-- clear regression under the tree-walker (per-frame `arrayFromList` cost > the
+-- by-name scan it saves), so the rep is unchanged — see PERF-NOTES.
 lookupAtAddr : EvalEnv (Value e) -> String -> Addr -> <e> Value e
 lookupAtAddr env name AGlobal = lookupEnv env name
 lookupAtAddr (EvalEnv frames) name (ALocal depth slot) =
-  forceCell (addrCell (frameAtDepth frames depth name) slot name) name
+  forceCell
+    (addrCell (frameCells (frameAtDepth frames depth name)) slot name)
+    name
 
-frameAtDepth : List (List (String, Ref (Value e))) ->
-  Int ->
-  String ->
-  List (String, Ref (Value e))
+frameAtDepth : List (EnvFrame (Value e)) -> Int -> String -> EnvFrame (Value e)
 frameAtDepth [] _ name = panic ("EVarAt: frame depth out of range for " ++ name)
 frameAtDepth (frame :: rest) depth name
   | depth <= 0 = frame
@@ -884,7 +908,8 @@ addrCell ((n, cell) :: rest) slot name
 
 export
 extendEnv : EvalEnv (Value e) -> List (String, Value e) -> EvalEnv (Value e)
-extendEnv (EvalEnv frames) binds = EvalEnv (map cellOf binds :: frames)
+extendEnv (EvalEnv frames) binds =
+  EvalEnv (ScanFrame (map cellOf binds) :: frames)
 
 cellOf : (String, Value e) -> (String, Ref (Value e))
 cellOf (n, v) = (n, Ref v)
@@ -893,7 +918,7 @@ export
 pushFrame : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   EvalEnv (Value e)
-pushFrame (EvalEnv frames) frame = EvalEnv (frame :: frames)
+pushFrame (EvalEnv frames) frame = EvalEnv (ScanFrame frame :: frames)
 
 export
 findCell : List (String, Ref (Value e)) -> String -> Ref (Value e)
@@ -1860,12 +1885,18 @@ export
 narrowToIface : String -> Value e -> Value e
 narrowToIface "" v = v
 narrowToIface iface (VMulti vs) =
-  oneOrMultiV (filterList (v => candOfIface iface v) vs) []
+  let ofIface =
+    candOfIface (isNone (stringIndexOf "|" iface)) iface (iface ++ "|")
+  oneOrMultiV (filterList ofIface vs) []
 narrowToIface _ v = v
 
-candOfIface : String -> Value e -> Bool
-candOfIface iface (v@(VTypedImpl _ _ _ _ _)) = candIface v == iface
-candOfIface _ _ = True
+-- `candIface v == iface` without splitting every candidate's key on every method
+-- occurrence: the key's first `|`-field is `iface` exactly when `iface`
+-- holds no `|` and the key is `iface` or begins with `iface|`.
+candOfIface : Bool -> String -> String -> Value e -> Bool
+candOfIface barFree iface prefix (VTypedImpl _ key _ _ _) =
+  barFree && (key == iface || startsWith prefix key)
+candOfIface _ _ _ _ = True
 
 -- SHARED by eval.mdk's EMethodAt arm and core_ir_eval.mdk's CMethod arm.  The two
 -- parallel interpreters MUST agree here value-for-value (DICT-SEMANTICS §7), and
@@ -4555,10 +4586,11 @@ groupsNotNamedIn names gs = filterList (g => not (contains (fst g) names)) gs
 -- non-empty, and NOTHING extra when it is empty (see the lexical-address note above).
 export
 globalFramesWith : List (String, Ref (Value e)) ->
-  List (String, Ref (Value e)) ->
-  List (List (String, Ref (Value e)))
-globalFramesWith [] globalCells = [globalCells]
-globalFramesWith privateCells globalCells = [privateCells, globalCells]
+  EnvFrame (Value e) ->
+  List (EnvFrame (Value e))
+globalFramesWith [] globalFrame = [globalFrame]
+globalFramesWith privateCells globalFrame =
+  [indexedFrame privateCells, globalFrame]
 
 -- The prelude's surface as an IMPORT resolves it — what `import core as C` and
 -- `import core.{n as p}` bind, which is NOT the shared global frame.  A prelude
@@ -4625,14 +4657,15 @@ evalModulesWith facts extraExterns preludeDecls0 modules0 = withFacts
         ++ implMethodNames allDecls
         ++ map fst preludeShared
     let globalCells = map (n => (n, Ref VUnit)) globalNames
-    let runtimeCells = runtimeCellsOf externs
+    let globalFrame = indexedFrame globalCells
+    let runtimeFrame = indexedFrame (runtimeCellsOf externs)
     let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
     let globalEnv =
-      EvalEnv (globalFramesWith privateCells globalCells ++ [runtimeCells])
+      EvalEnv (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
     let mods =
       buildModInfos
-        globalCells
-        runtimeCells
+        globalFrame
+        runtimeFrame
         (coreImportExports privateCells globalCells preludeDecls)
         []
         modules
@@ -4658,14 +4691,14 @@ evalModulesWith facts extraExterns preludeDecls0 modules0 = withFacts
 -- core as C` / `import core.{n as p}` must reach the prelude's own standalone.
 -- One list cannot answer both — a single frame is first-match, so whichever cell
 -- it holds is the only one either consumer can see.
-buildModInfos : List (String, Ref (Value e)) ->
-  List (String, Ref (Value e)) ->
+buildModInfos : EnvFrame (Value e) ->
+  EnvFrame (Value e) ->
   ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
   List (ModInfo (Value e))
 buildModInfos _ _ _ _ [] = []
-buildModInfos globalCells runtimeCells coreExports exportsMap ((mid, decls) :: rest) =
+buildModInfos globalFrame runtimeFrame coreExports exportsMap ((mid, decls) :: rest) =
   let grps = groupsOf decls
   -- P0-9: each module's OWN constructors ALSO live in its LOCAL frame (they stay
   -- in the shared global too — see evalModulesWith — for by-name / `Type(..)`
@@ -4681,20 +4714,26 @@ buildModInfos globalCells runtimeCells coreExports exportsMap ((mid, decls) :: r
   -- an ordinary name lookup (which resolves in localCells/imports/globalCells
   -- almost always) never reaches it — only the once-per-call lookup in
   -- applyClosure/applyClosureF (below) ever searches this far.
-  let fileTagFrame = [(evalFileTagName, Ref (VString (moduleFileOf mid)))]
-  let menv =
-    EvalEnv [localCells, imports, globalCells, fileTagFrame, runtimeCells]
+  let fileTagFrame =
+    ScanFrame [(evalFileTagName, Ref (VString (moduleFileOf mid)))]
+  let menv = EvalEnv [
+    indexedFrame localCells,
+    indexedFrame imports,
+    globalFrame,
+    fileTagFrame,
+    runtimeFrame,
+  ]
   let exports =
     ModExports
       (localCells
-        ++ publicExternCells runtimeCells decls
-        ++ methodCellsOf globalCells decls
+        ++ publicExternCells (frameCells runtimeFrame) decls
+        ++ methodCellsOf (frameCells globalFrame) decls
         ++ pubReexports coreExports exportsMap decls)
       (ctorsByTypeOf decls)
   ModInfo mid decls grps localCells menv
     :: buildModInfos
-      globalCells
-      runtimeCells
+      globalFrame
+      runtimeFrame
       coreExports
       ((mid, exports) :: exportsMap)
       rest
@@ -4866,14 +4905,15 @@ buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 = withFacts
         ++ implMethodNames allDecls
         ++ map fst preludeShared
     let globalCells = map (n => (n, Ref VUnit)) globalNames
-    let runtimeCells = runtimeCellsOf externs
+    let globalFrame = indexedFrame globalCells
+    let runtimeFrame = indexedFrame (runtimeCellsOf externs)
     let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
     let globalEnv =
-      EvalEnv (globalFramesWith privateCells globalCells ++ [runtimeCells])
+      EvalEnv (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
     let mods =
       buildModInfos
-        globalCells
-        runtimeCells
+        globalFrame
+        runtimeFrame
         (coreImportExports privateCells globalCells preludeDecls)
         []
         modules
@@ -4900,12 +4940,12 @@ rootFullEnv mods globalCells = flattenEnv (rootFullEvalEnv mods globalCells)
 rootFullEvalEnv : List (ModInfo (Value e)) ->
   List (String, Ref (Value e)) ->
   EvalEnv (Value e)
-rootFullEvalEnv [] globalCells = EvalEnv [globalCells]
+rootFullEvalEnv [] globalCells = EvalEnv [ScanFrame globalCells]
 rootFullEvalEnv [ModInfo _ _ _ _ menv] _ = menv
 rootFullEvalEnv (_ :: rest) globalCells = rootFullEvalEnv rest globalCells
 
 flattenEnv : EvalEnv (Value e) -> <e> List (String, Value e)
-flattenEnv (EvalEnv frames) = map cellResult (concatList frames)
+flattenEnv env = map cellResult (concatList (envFrameCells env))
 
 concatList : List (List a) -> List a
 concatList [] = []

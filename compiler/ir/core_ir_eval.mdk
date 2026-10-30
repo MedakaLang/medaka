@@ -59,6 +59,9 @@ import types.private_mangle.{mangleCtorCollisions}
 import eval.eval.{
   Value(..),
   EvalEnv(..),
+  EnvFrame,
+  indexedFrame,
+  frameCells,
   lookupEnv,
   extendEnv,
   pushFrame,
@@ -509,7 +512,7 @@ cevalProgram (CProgram groups ctorArs ctorToType implEntries _ _) =
       ++ map cBindName groups
       ++ cImplMethodNames implEntries
   let cells = map (n => (n, Ref VUnit)) allNames
-  let env = EvalEnv [cells]
+  let env = EvalEnv [indexedFrame cells]
   let _ = installConsts cells boolSeeds
   let _ = installConsts cells (externBindings ())
   let _ = installConsts cells ctors
@@ -705,18 +708,19 @@ cevalModules facts preludeDecls0 modules0 = withFacts
         ++ implMethodNames allDecls
         ++ map cBindName preludeShared
     let globalCells = map (n => (n, Ref VUnit)) globalNames
-    let runtimeCells = runtimeCellsOf externs
+    let globalFrame = indexedFrame globalCells
+    let runtimeFrame = indexedFrame (runtimeCellsOf externs)
     let privateCells = map (n => (n, Ref VUnit)) (map cBindName preludePrivate)
     let globalEnv =
-      EvalEnv (globalFramesWith privateCells globalCells ++ [runtimeCells])
+      EvalEnv (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
     let mods =
       cBuildModInfos
         facts
         disp
         reqCounts
         arities
-        globalCells
-        runtimeCells
+        globalFrame
+        runtimeFrame
         (coreImportExports privateCells globalCells preludeDecls)
         []
         modules
@@ -741,14 +745,14 @@ cBuildModInfos : ProgramFacts ->
   List ((String, String, String), List Int) ->
   OrdMap Int ->
   OrdMap Int ->
-  List (String, Ref (Value e)) ->
-  List (String, Ref (Value e)) ->
+  EnvFrame (Value e) ->
+  EnvFrame (Value e) ->
   ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
   List (CModInfo (Value e))
 cBuildModInfos _ _ _ _ _ _ _ _ [] = []
-cBuildModInfos facts disp reqCounts arities globalCells runtimeCells coreExports exportsMap ((mid, decls) :: rest) =
+cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports exportsMap ((mid, decls) :: rest) =
   let cbinds = lowerGroupsWith facts decls
   let cimpls =
     lowerImplsWithFacts facts disp reqCounts arities facts.pfDispositions decls
@@ -764,7 +768,13 @@ cBuildModInfos facts disp reqCounts arities globalCells runtimeCells coreExports
   let localCells =
     map (n => (n, Ref VUnit)) (map cBindName cbinds ++ map fst modCtors)
   let imports = importFrameOf coreExports exportsMap decls
-  let menv = EvalEnv [localCells, imports, globalCells, runtimeCells]
+  let menv = EvalEnv
+    [
+      indexedFrame localCells,
+      indexedFrame imports,
+      globalFrame,
+      runtimeFrame,
+    ]
   -- IMPORT ALIASING (Core-IR port of the eval.mdk fix — these two module drivers are
   -- parallel and their frame semantics MUST move in lockstep): a module also exports the
   -- interface/impl METHODS it declares, bound to the SAME global (coalesced-dispatcher)
@@ -778,8 +788,8 @@ cBuildModInfos facts disp reqCounts arities globalCells runtimeCells coreExports
   let exports =
     ModExports
       (localCells
-        ++ publicExternCells runtimeCells decls
-        ++ methodCellsOf globalCells decls
+        ++ publicExternCells (frameCells runtimeFrame) decls
+        ++ methodCellsOf (frameCells globalFrame) decls
         ++ pubReexports coreExports exportsMap decls)
       (ctorsByTypeOf decls)
   CModInfo mid decls cbinds cimpls localCells menv
@@ -788,8 +798,8 @@ cBuildModInfos facts disp reqCounts arities globalCells runtimeCells coreExports
       disp
       reqCounts
       arities
-      globalCells
-      runtimeCells
+      globalFrame
+      runtimeFrame
       coreExports
       ((mid, exports) :: exportsMap)
       rest

@@ -5009,6 +5009,107 @@ else
 fi
 
 fi   # end PERF_ONLY unit: matchlits
+
+if want findall; then   # PERF_ONLY unit: findall
+# ── findall — `regex.findAll` under `medaka run`, the tree-walker over a stdlib loop (#4627) ──
+#
+# Every other unit profiles a COMPILER stage. This one grades the INTERPRETER on a real
+# stdlib workload: `R.findAll` over N and 2N lines of text, run by `$MEDAKA run`, the
+# binary under test. The fixture times and measures its own `findAll` call (allocBytes
+# and the monotonic clock taken around it), so load, check and interpreter setup are
+# outside both figures and nothing needs netting out.
+#
+# What it grades: findAll's GROWTH on `run`. The Pike VM is linear in the subject, so a
+# correct interpreter reads ~2.0x per doubling. The per-PR arm is ALLOCATION (the
+# interpreter's allocation is a function of the program, so one run per size); the TIME
+# arm (min-of-K, heap pinned, under TIME_FLOOR it SKIPs) runs where TIME_ARM=1.
+#
+# What it cannot grade: a CONSTANT factor. A by-name scan of the global and runtime
+# frames on every reference (#4627; eval.mdk's `EnvFrame` index is the fix) costs the
+# same multiple at every size, so it reads linear here; a ratio row cannot see it come
+# back. The output count is asserted, so a wrong answer or a dead run is a failure,
+# never a pass.
+FINDALL_N="${PERF_FINDALL_N:-250}"
+fan1="$FINDALL_N"; fan2=$((FINDALL_N * 2))
+gen_findall() {
+  {
+    printf 'import regex as R\nimport time as T\nimport string.{repeat}\n\n'
+    printf 'main =\n'
+    printf '  let s = repeat %s "let foo = bar E1234 baz\\n"\n' "$1"
+    printf '  let re = R.mustCompile "E[0-9]+"\n'
+    printf '  let a0 = allocBytes ()\n'
+    printf '  let t0 = T.monotonic ()\n'
+    printf '  let n = length (R.findAll re s)\n'
+    printf '  let secs = T.elapsedSince t0\n'
+    printf '  let mb = (allocBytes () - a0) / 1048576.0\n'
+    printf '  println "findall \\{display n} \\{display mb} \\{display secs}"\n'
+  } > "$2"
+}
+faf1="$WORK/findall_$fan1.mdk"; faf2="$WORK/findall_$fan2.mdk"
+gen_findall "$fan1" "$faf1"; gen_findall "$fan2" "$faf2"
+FAMEDAKA="${MEDAKA:-$ROOT/medaka}"
+if [ "$TIME_ARM" = "1" ]; then fak="$PERF_K"; else fak=1; fi
+# findall_runs <fixture> <out>: <out> gets one `findall <count> <MB> <secs>` line per run.
+findall_runs() {
+  : > "$2"
+  _i=0
+  while [ "$_i" -lt "$fak" ]; do
+    GC_INITIAL_HEAP_SIZE="$TIME_HEAP" "$FAMEDAKA" run "$1" 2>/dev/null | grep '^findall ' >> "$2"
+    _i=$((_i+1))
+  done
+}
+FAR1="$WORK/findall_r1"; FAR2="$WORK/findall_r2"
+findall_runs "$faf1" "$FAR1"; findall_runs "$faf2" "$FAR2"
+fac1="$(awk 'NR==1{print $2}' "$FAR1")"; fac2="$(awk 'NR==1{print $2}' "$FAR2")"
+faa1="$(awk 'NR==1{printf "%.1f", $3}' "$FAR1")"; faa2="$(awk 'NR==1{printf "%.1f", $3}' "$FAR2")"
+fat1="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$FAR1")"
+fat2="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$FAR2")"
+fa_bad=0
+for _v in "$faa1" "$faa2" "$fat1" "$fat2"; do
+  case "$_v" in ''|*[!0-9.]*) fa_bad=1 ;; esac
+done
+if [ ! -x "$FAMEDAKA" ]; then
+  fail=$((fail+1))
+  printf '%-12s %8s  ** NO BINARY: %s is not built (make medaka) **\n' findall "$fan1" "$FAMEDAKA"
+elif [ "$fa_bad" = "1" ] || [ "$fac1" != "$fan1" ] || [ "$fac2" != "$fan2" ]; then
+  # A missing line or a wrong count is a failure, never a silent pass.
+  fail=$((fail+1))
+  printf '%-12s %8s  ** BAD RUN: want counts %s/%s, got [%s]/[%s] (alloc [%s]/[%s] MB, secs [%s]/[%s]) **\n' \
+    findall "$fan1" "$fan1" "$fan2" "$fac1" "$fac2" "$faa1" "$faa2" "$fat1" "$fat2"
+else
+  far="$(awk -v a="$faa1" -v b="$faa2" 'BEGIN{printf "%.2f", b/a}')"
+  fa_small="$(awk -v a="$faa1" 'BEGIN{print (a+0 < 1.0) ? 1 : 0}')"
+  fa_over="$(awk -v r="$far" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')"
+  if [ "$fa_small" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** N TOO SMALL — raise PERF_FINDALL_N (findAll alloc %s MB < 1.0) **\n' findall "$fan1" "$faa1"
+  elif [ "$fa_over" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** SUPERLINEAR (run-alloc) ** findAll %s -> %s MB  r=%s (> %s, band N=%s->%s) — findAll allocation outgrew its subject (compiler/eval/eval.mdk or stdlib/regex.mdk) **\n' \
+      findall "$fan1" "$faa1" "$faa2" "$far" "$THRESH" "$fan1" "$fan2"
+  else
+    pass=$((pass+1))
+    printf '%-12s %8s  run-alloc findAll %s -> %s MB  r=%s  (LINEAR; band N=%s->%s)\n' \
+      findall "$fan1" "$faa1" "$faa2" "$far" "$fan1" "$fan2"
+  fi
+  if [ "$TIME_ARM" = "1" ]; then
+    fat_below="$(awk -v v="$fat2" -v f="$TIME_FLOOR" 'BEGIN{print (v+0 < f+0) ? 1 : 0}')"
+    if [ "$fat_below" = "1" ]; then
+      printf '             time run: SKIP — too small to time-gate: %ss at N=%s < %ss floor\n' "$fat2" "$fan2" "$TIME_FLOOR"
+    else
+      fatr="$(awk -v a="$fat1" -v b="$fat2" 'BEGIN{printf "%.2f", b/a}')"
+      if [ "$(awk -v r="$fatr" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')" = "1" ]; then
+        fail=$((fail+1))
+        printf '%-12s %8s  ** SUPERLINEAR (run-TIME) ** findAll %ss -> %ss  r=%s (> %s, min-of-%s, band N=%s->%s)\n' \
+          findall "$fan1" "$fat1" "$fat2" "$fatr" "$THRESH" "$fak" "$fan1" "$fan2"
+      else
+        printf '             time run: findAll %ss -> %ss  r=%s  (min-of-%s, heap pinned)\n' "$fat1" "$fat2" "$fatr" "$fak"
+      fi
+    fi
+  fi
+fi
+
+fi   # end PERF_ONLY unit: findall
 printf -- '---------------------------------------------------------------------\n'
 printf '%d ok, %d known-superlinear (ledgered), %d regressed (threshold %sx per doubling)\n' "$pass" "$known" "$fail" "$THRESH"
 
