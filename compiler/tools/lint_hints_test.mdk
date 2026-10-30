@@ -1,0 +1,145 @@
+-- Sibling test for lint_hints.mdk: every registered row compiles, a bad row is
+-- an error, and the matcher's metavariable, side-condition and nesting rules.
+
+import test.{
+  expectEach, expectEqual, expectErr, expectOk, expectTrue, expectFalse
+}
+import frontend.ast.{Decl(..), Expr}
+import frontend.parser.{parseResult}
+import tools.lint.{emptyStdlibIndex, lintParseSource, lintProgram}
+import tools.lint_core.{Applicability(..), Ctx(..), Finding(..), Rule}
+import tools.lint_hints.{
+  HintCond(..), HintRow(..), compileHint, inOwnDefinition, matchHint, Found(..)
+}
+import tools.lint_rule_double_reverse as DoubleReverse
+import tools.lint_rule_not_eq as NotEq
+
+rowOf : String -> List HintCond -> HintRow
+rowOf text conds = HintRow {
+  rowText = text,
+  rowMessage = "probe",
+  rowFix = "probe",
+  rowApplicability = Safe,
+  rowConds = conds,
+}
+
+compiled : HintRow -> Result String Unit
+compiled row = map (_ => ()) (compileHint row)
+
+subjectOf : String -> Expr
+subjectOf text = match parseResult ("x = " ++ text ++ "\n")
+  Ok [DFunDef _ _ [] body _ _] => body
+  _ => panic ("probe does not parse: " ++ text)
+
+-- Whether the row matches the subject at its root.
+matches : String -> List HintCond -> String -> Bool
+matches rowText conds subject = match compileHint (rowOf rowText conds)
+  Ok h => isSome (matchHint h (subjectOf subject))
+  Err m => panic m
+
+declCtx : String -> Bool -> Ctx
+declCtx name inTest = Ctx {
+  ctxDeclName = name,
+  ctxParams = [],
+  ctxInTest = inTest,
+  ctxParent = None,
+  ctxSpan = None,
+  ctxOwn = None,
+  ctxDeclLoc = None,
+}
+
+findingsOf : Rule -> String -> List Finding
+findingsOf rule src = match lintParseSource src
+  Ok (decls, pos) =>
+    lintProgram emptyStdlibIndex [rule] "probe.mdk" src pos decls
+  Err _ => panic "probe does not parse"
+
+test "every registered row compiles" =
+  expectEach
+    (map
+      (r => (r.rowText, expectOk (compiled r)))
+      (NotEq.hintRows ++ DoubleReverse.hintRows))
+
+test "a row that does not compile is an error, not a no-op" = expectEach [
+  ("unbalanced bracket", expectErr (compiled (rowOf "not (a == b ==> a" []))),
+  ("no separator", expectErr (compiled (rowOf "not (a == b)" []))),
+  ("two separators", expectErr (compiled (rowOf "f a ==> a ==> a" []))),
+  ("root is a name", expectErr (compiled (rowOf "a ==> a" []))),
+  (
+    "unsupported construct",
+    expectErr (compiled (rowOf "f (if a then b else c) ==> a" [])),
+  ),
+  ("unbound right side", expectErr (compiled (rowOf "f a ==> b" []))),
+  ("unbound condition", expectErr (compiled (rowOf "f a ==> a" [Atomic "b"]))),
+]
+
+test "a repeated metavariable needs equal subexpressions" = expectEach [
+  ("same names", expectTrue (matches "f a a ==> a" [] "g x x")),
+  ("different names", expectFalse (matches "f a a ==> a" [] "g x y")),
+  (
+    "equal applications",
+    expectTrue (matches "f a a ==> a" [] "g (h x) (h x)"),
+  ),
+  (
+    "unequal applications",
+    expectFalse (matches "f a a ==> a" [] "g (h x) (h y)"),
+  ),
+  (
+    "brackets are not structure",
+    expectTrue (matches "f a a ==> a" [] "g x (x)"),
+  ),
+]
+
+test "a literal name matches only that name, a metavariable anything" = expectEach
+  [
+    ("literal", expectTrue (matches "neg (neg a) ==> a" [] "neg (neg y)")),
+    ("other name", expectFalse (matches "neg (neg a) ==> a" [] "pos (neg y)")),
+    ("operator", expectFalse (matches "not (a == b) ==> a" [] "not (a /= b)")),
+    ("operands", expectTrue (matches "not (a == b) ==> a" [] "not (1 == y z)")),
+  ]
+
+test "a head name is recorded for the prelude check" =
+  match compileHint (rowOf "reverse (reverse a) ==> a" [])
+    Ok h => match matchHint h (subjectOf "reverse (reverse xs)")
+      Some found => expectEqual 2 (length found.foundHeads)
+      None => expectTrue False
+    Err m => panic m
+
+test "an atomic condition admits names and literals only" = expectEach [
+  ("name", expectTrue (matches "pick a b ==> a" [Atomic "b"] "pick x y")),
+  ("literal", expectTrue (matches "pick a b ==> a" [Atomic "b"] "pick x 1")),
+  ("call", expectFalse (matches "pick a b ==> a" [Atomic "b"] "pick x (g y)")),
+  (
+    "other operand free",
+    expectTrue (matches "pick a b ==> a" [Atomic "b"] "pick (g x) 1"),
+  ),
+]
+
+test "a definition-of condition holds inside a definition of that name only" =
+  match compileHint (rowOf "not (a == b) ==> a /= b" [NotInDefOf ["==", "/="]])
+    Ok h => expectEach [
+      ("inside ==", expectTrue (inOwnDefinition h (declCtx "==" False))),
+      ("inside /=", expectTrue (inOwnDefinition h (declCtx "/=" False))),
+      ("elsewhere", expectFalse (inOwnDefinition h (declCtx "same" False))),
+      ("a test named so", expectFalse (inOwnDefinition h (declCtx "==" True))),
+    ]
+    Err m => panic m
+
+test "nested matches are each reported" =
+  expectEqual
+    3
+    (length
+      (findingsOf
+        DoubleReverse.rule
+        "x xs = reverse (reverse (reverse (reverse xs)))\n"))
+
+test "a ported rule reports its message and fix" =
+  match findingsOf NotEq.rule "same a b = not (a == b)\n"
+    [f] => expectEach [
+      (
+        "message",
+        expectEqual "negated equality. Rewrite as 'a /= b'" f.message,
+      ),
+      ("fix", expectTrue (isSome f.fix)),
+    ]
+    _ => expectTrue False

@@ -24,6 +24,7 @@ set of entries (#4141).
 | `lint_dup.mdk` | The duplicate-body occurrence engine: per-clause facts, grouping and the cross-file join | `fileDupOccs` |
 | `lint_walk.mdk` | The lint runner: the one visitor walk per file, per-file facts, the autofix driver, filters, inline suppressions, the cross-file runner, stdlib-index builders; imports `lint_registry`, since running a rule means reading the registry's lists | `lintProgram*`, `runVisitors` |
 | `lint_fix.mdk` | The `--fix` edit pipeline: resolves each fix's span edits against the source snapshot, applies the non-overlapping subset the applicability limit allows, re-parses; imports no rule, registry or runner (the caller passes the linter in) | `applyFixes`, `parenIfNeeded` |
+| `lint_hints.mdk` | The rewrite-hint engine: compiles a row `lhs ==> rhs` once per process and on first use, matches it against expressions with metavariables, and builds the finding and its span fix; imports no rule, registry or runner | `HintRow`, `compileHints`, `hintVisitors` |
 | `lint_registry.mdk` | THE REGISTRY: `allRules`, the cross-file registry and rule-name selection; one `import ... as Alias` and one `Alias.rule,` line per rule | `allRules`, `allCrossFileRules`, `allRuleNames` |
 | `lint_rule_<name>.mdk` | One universal lint rule per module, exporting `rule`; may not import another rule module, the registry or the runner | `rule` |
 | `lint_rule_internal_<name>.mdk` | One internal-scope rule (this repository's conventions) per module, exporting `rule`; same import limits | `rule` |

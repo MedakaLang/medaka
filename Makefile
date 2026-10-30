@@ -470,6 +470,12 @@ inlang-tools-lint-scope-test:
 inlang-tools-lint-fix-test:
 	./medaka test compiler/tools/lint_fix_test.mdk
 
+## compiler/tools/lint_hints_test.mdk is a `*_test.mdk` sibling outside every
+## entry's import closure ([W-MODULE-BLIND]): the rewrite-hint matcher and every
+## registered hint row.
+inlang-tools-lint-hints-test:
+	./medaka test compiler/tools/lint_hints_test.mdk
+
 ## The `medaka lint` behaviors only the built binary shows: what the working
 ## directory and the flag combinations do. compiler/tools/lint_cli_test.mdk is
 ## outside every entry's import closure ([W-MODULE-BLIND]).

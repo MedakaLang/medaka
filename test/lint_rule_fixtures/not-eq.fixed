@@ -157,3 +157,15 @@ commentOutside a b =
 -- deliberate here, so `--fix` leaves it.
 -- lint-disable-next-line rule-not-eq
 suppressed a b = not (a == b)
+
+-- A `not` bound by a local `let` is the file's own, like a `where` one: the
+-- finding stays, the source is left alone.
+-- expect-next-line rule-not-eq unfixed
+reboundLet n =
+  let not = id
+  not (n == 3)
+
+-- The nearest binder of the use decides: the `not` here is the prelude's
+-- although a different function in the file rebinds the name.
+-- expect-next-line rule-not-eq
+elsewhereRebound n = n == 3

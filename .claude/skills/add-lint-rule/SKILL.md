@@ -154,7 +154,7 @@ replaceFix "<one-line message>" (nodeSpan ctx e) (bindingOf rewritten) ctx (expr
   `lambdaSpan` (`lint_rule_lambda_section.mdk`) or return `None`.
 - A `Fix` may hold several edits; they must not overlap each other, or the whole fix is dropped.
 - `exprRuleEditVisitors` skips test and prop bodies (`not ctxInTest`). A rule that must reach them
-  builds its own visitors, as `notEqVisitors` does in `lint_rule_not_eq.mdk`.
+  builds its own `OnExpr` visitors, or uses a hint row (section 9), whose visitor reaches them.
 
 **Choose the applicability.**
 
@@ -195,3 +195,43 @@ can be one multi-edit `Fix` when the import edit depends on that finding alone. 
 union over the file's other findings, as the test-verb import widen is for `rule-test-equal-in-true`
 and `rule-test-bool-literal-equal`, the rule stays on the adapter until the driver can compute the
 union.
+
+## 9. A rewrite rule is a hint row plus a fixture
+
+When the rule rewrites one expression shape to another, write a row, not a detector. A row is
+`lhs ==> rhs` in Medaka syntax, in `hintRows` of the rule module; `compiler/tools/lint_hints.mdk`
+is the matcher. `lint_rule_not_eq.mdk` and `lint_rule_double_reverse.mdk` are the models:
+
+```
+HintRow {
+  rowText = "reverse (reverse a) ==> a",
+  rowMessage = "`reverse (reverse …)` is a no-op",   -- finding: "<message>. Rewrite as '<rhs>'"
+  rowFix = "drop the double reversal",
+  rowApplicability = Safe,
+  rowConds = [],
+}
+```
+
+and `hints = compileHints hintRows`, `mkVisitorRule meta (idx path facts pos decls => hintVisitors <ruleName> SevWarning hints idx path facts pos decls) None`
+(the lambda keeps the rows unparsed until the rule runs).
+
+- **Metavariables:** a single lowercase letter, optionally followed by digits (`a`, `b`, `x1`). It
+  binds any subexpression; a repeated one must match structurally equal subexpressions. Any other
+  name is literal and matches the unqualified spelling only.
+- **Templates** hold names, literals, applications and binary operators. The left side's root is an
+  application or an operator; every metavariable of the right side is bound on the left.
+- **Prelude guard (always on):** each lowercase literal name on the left is a head. Each matched use
+  must resolve to the prelude (`usesPreludeName`: no binder, no wildcard import that may bring the
+  name), else the finding is reported without a fix. Declare `needs = [NeedsScopes, NeedsWildIndex]`.
+- **`Atomic "m"`:** the row matches only where `m` is bound to a name or a literal.
+- **`NotInDefOf names`:** the fix is withheld inside the definition of a function so named.
+- The replacement text is the right side printed with the matched subexpressions put in, bracketed
+  for its parent (`parenIfNeeded`); the first matching row reports. A row that does not compile
+  panics when the rule first runs, and `lint_hints_test.mdk` compiles every row listed there: add the
+  module's `hintRows` to its "every registered row compiles" test.
+- **Fixture:** `test/lint_rule_fixtures/<name>.{mdk,fixed}` with a positive, a shadowed head (a
+  `where`, a `let` and a parameter binding the name, marked `unfixed`) and the near misses.
+
+**Do not use a row** for a rewrite that is not one expression to another (declaration or pattern
+rewrites, several statements), that needs types, that depends on context the matcher cannot see
+(strictness of a default, whether a scrutinee is a value), or whose right side spans lines.

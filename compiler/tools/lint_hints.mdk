@@ -1,0 +1,355 @@
+-- compiler/tools/lint_hints.mdk — the rewrite-hint engine: a rule that rewrites
+-- one expression shape to another is a row of data, `lhs ==> rhs`, and this
+-- module is the matcher that turns rows into findings with span fixes.
+--
+-- Row syntax.  `lhs` and `rhs` are Medaka expressions.  A metavariable is a
+-- single lowercase letter, optionally followed by digits (`a`, `b`, `x1`); it
+-- binds any subexpression, and a metavariable repeated in `lhs` must match
+-- structurally equal subexpressions.  Any other name is literal.  A template
+-- may contain names, literals, applications and binary operators; the root of
+-- `lhs` is an application or a binary operator.  Every metavariable of `rhs`
+-- is bound by `lhs`.
+--
+-- Side conditions.  Every lowercase literal name of `lhs` is a head: each use
+-- the row matches must resolve to the prelude's binding (`usesPreludeName`),
+-- else the finding is reported without a fix.  A literal name matches the
+-- unqualified spelling only.  `Atomic m` makes the row match only where
+-- `m` is bound to a name or a literal.  `NotInDefOf names` withholds the fix
+-- inside the definition of a function so named, where the rewrite would call
+-- the function from its own body.
+--
+-- Rows are compiled once per process, on first use; a rule module holds its
+-- compiled rows in a top-level value, so a run with no hint rule active never
+-- parses one.  A row that does not compile panics there, and
+-- `lint_hints_test.mdk` compiles every registered row.
+
+import frontend.ast.{Expr(..), Decl(..), Loc}
+import frontend.ast_walk.{ExprKind(..)}
+import frontend.parser.{Positions(..), parseResult}
+import driver.diagnostics.{Severity(..)}
+import string.{split, isLower, isDigit}
+import support.util.{lookupAssoc}
+import tools.printer.{exprToString}
+import ir.sexp.{exprSexp}
+import tools.lint_core.{
+  Applicability(..),
+  Ctx(..),
+  FileFacts(..),
+  Finding(..),
+  Fix,
+  StdlibIndex,
+  Visitor(..),
+}
+import tools.lint_shared.{unwrapLoc, usesPreludeName, replaceNodeFix}
+
+-- Two kinds of side condition, not failure and success.
+-- lint-disable-next-line rule-clone-type
+public export data HintCond = Atomic String | NotInDefOf (List String)
+
+public export data HintRow = HintRow {
+  rowText : String,
+  rowMessage : String,
+  rowFix : String,
+  rowApplicability : Applicability,
+  rowConds : List HintCond,
+}
+
+-- A left side with its metavariables already told from its literal names, so
+-- matching a node never inspects a spelling.
+data Tmpl =
+  | TMeta String
+  | TName String Bool
+  | TApp Tmpl Tmpl
+  | TBin String Tmpl Tmpl
+  | TLeaf String
+
+public export data Hint = Hint {
+  hintRow : HintRow,
+  hintKind : ExprKind,
+  hintLhs : Tmpl,
+  hintRhs : Expr,
+}
+
+-- ── compiling a row ──────────────────────────────────────────────────────────
+
+-- A metavariable: one lowercase letter, then digits.
+isMeta : String -> Bool
+isMeta n = match toList (stringToChars n)
+  c :: rest => isLower c && all isDigit rest
+  [] => False
+
+-- A head: a lowercase literal name, the kind a file can rebind.
+isHeadName : String -> Bool
+isHeadName n = match toList (stringToChars n)
+  c :: _ => isLower c || c == '_'
+  [] => False
+
+exprOfText : String -> Result String Expr
+exprOfText text = match parseResult ("hint = " ++ text ++ "\n")
+  Ok [DFunDef _ _ [] body _ _] => Ok body
+  _ => Err ("does not parse as an expression: " ++ text)
+
+-- The template with its locations removed, or why it is not a template.
+templateOf : Expr -> Result String Expr
+templateOf (ELoc _ e) = templateOf e
+templateOf (e@(EVar _)) = Ok e
+templateOf (e@(ELit _)) = Ok e
+templateOf (e@(ENumLit _ _ _)) = Ok e
+templateOf (EApp f x) = match (templateOf f, templateOf x)
+  (Ok f2, Ok x2) => Ok (EApp f2 x2)
+  (Err m, _) => Err m
+  (_, Err m) => Err m
+templateOf (EBinOp op a b r) = match (templateOf a, templateOf b)
+  (Ok a2, Ok b2) => Ok (EBinOp op a2 b2 r)
+  (Err m, _) => Err m
+  (_, Err m) => Err m
+templateOf _ =
+  Err "a template holds only names, literals, applications and operators"
+
+metasOf : Expr -> List String
+metasOf (EVar n) = if isMeta n then [n] else []
+metasOf (EApp f x) = metasOf f ++ metasOf x
+metasOf (EBinOp _ a b _) = metasOf a ++ metasOf b
+metasOf _ = []
+
+tmplOf : Expr -> Tmpl
+tmplOf (EVar n) = if isMeta n then TMeta n else TName n (isHeadName n)
+tmplOf (EApp f x) = TApp (tmplOf f) (tmplOf x)
+tmplOf (EBinOp op a b _) = TBin op (tmplOf a) (tmplOf b)
+tmplOf e = TLeaf (exprSexp e)
+
+rootKind : Expr -> Option ExprKind
+rootKind (EApp _ _) = Some KApp
+rootKind (EBinOp _ _ _ _) = Some KBinOp
+rootKind _ = None
+
+condMeta : HintCond -> Option String
+condMeta (Atomic m) = Some m
+condMeta _ = None
+
+-- Compile one row, or say why it cannot be.
+export
+compileHint : HintRow -> Result String Hint
+compileHint row = match split " ==> " row.rowText
+  [lhsText, rhsText] => match (exprOfText lhsText, exprOfText rhsText)
+    (Ok l, Ok r) => match (templateOf l, templateOf r)
+      (Ok lhs, Ok rhs) => checkHint row lhs rhs
+      (Err m, _) => Err (rowFailure row m)
+      (_, Err m) => Err (rowFailure row m)
+    (Err m, _) => Err (rowFailure row m)
+    (_, Err m) => Err (rowFailure row m)
+  _ => Err (rowFailure row "expected exactly one ` ==> `")
+
+checkHint : HintRow -> Expr -> Expr -> Result String Hint
+checkHint row lhs rhs =
+  let bound = metasOf lhs
+  match rootKind lhs
+    None =>
+      Err (rowFailure row "the left side is not an application or an operator")
+    Some kind => checkBound row kind lhs rhs bound
+
+checkBound : HintRow ->
+  ExprKind ->
+  Expr ->
+  Expr ->
+  List String ->
+  Result String Hint
+checkBound row kind lhs rhs bound =
+  if any (m => not (elem m bound)) (metasOf rhs) then
+    Err
+      (rowFailure
+        row
+        "the right side uses a metavariable the left side does not bind")
+  else if any (m => not (elem m bound)) (condMetas row.rowConds) then
+    Err
+      (rowFailure
+        row
+        "a condition names a metavariable the left side does not bind")
+  else
+    Ok Hint {
+      hintRow = row,
+      hintKind = kind,
+      hintLhs = tmplOf lhs,
+      hintRhs = rhs,
+    }
+
+condMetas : List HintCond -> List String
+condMetas conds = flatMap (c => toList (condMeta c)) conds
+
+rowFailure : HintRow -> String -> String
+rowFailure row why = "hint row `\{row.rowText}`: \{why}"
+
+-- The rows compiled, panicking on the first that does not.
+export
+compileHints : List HintRow -> List Hint
+compileHints rows = map compileOrPanic rows
+
+compileOrPanic : HintRow -> Hint
+compileOrPanic row = match compileHint row
+  Ok h => h
+  Err m => panic m
+
+-- ── matching ─────────────────────────────────────────────────────────────────
+
+-- What a match bound: the metavariables, and the subject nodes that stood on
+-- the template's literal head names.
+public export data Found = Found {
+  foundBinds : List (String, Expr),
+  foundHeads : List Expr,
+}
+
+-- The subject against the template; a bound subexpression keeps its wrappers.
+export
+matchHint : Hint -> Expr -> Option Found
+matchHint h subject = match matchT h.hintLhs subject (Found [] [])
+  Some found => if condsHold h.hintRow.rowConds found then Some found else None
+  None => None
+
+condsHold : List HintCond -> Found -> Bool
+condsHold conds found = all (condHolds found) conds
+
+condHolds : Found -> HintCond -> Bool
+condHolds found (Atomic m) = match lookupAssoc m found.foundBinds
+  Some e => isAtomic e
+  None => False
+condHolds _ _ = True
+
+isAtomic : Expr -> Bool
+isAtomic e = match unwrapLoc e
+  EVar _ => True
+  ELit _ => True
+  ENumLit _ _ _ => True
+  _ => False
+
+matchT : Tmpl -> Expr -> Found -> Option Found
+matchT (TMeta n) subject found = bindMeta n subject found
+matchT (TName n isHead) subject found = match unwrapLoc subject
+  EVar m =>
+    if m == n then
+      Some (if isHead then
+        Found found.foundBinds (subject :: found.foundHeads)
+      else
+        found)
+    else
+      None
+  _ => None
+matchT (TApp pf px) subject found = match unwrapLoc subject
+  EApp sf sx => matchBoth pf sf px sx found
+  _ => None
+matchT (TBin op pa pb) subject found = match unwrapLoc subject
+  EBinOp op2 sa sb _ => if op == op2 then matchBoth pa sa pb sb found else None
+  _ => None
+matchT (TLeaf sexp) subject found =
+  if sexp == exprSexp (unwrapLoc subject) then Some found else None
+
+matchBoth : Tmpl -> Expr -> Tmpl -> Expr -> Found -> Option Found
+matchBoth p1 s1 p2 s2 found = match matchT p1 s1 found
+  Some found2 => matchT p2 s2 found2
+  None => None
+
+bindMeta : String -> Expr -> Found -> Option Found
+bindMeta n subject found = match lookupAssoc n found.foundBinds
+  Some prev =>
+    if exprSexp (unwrapLoc prev) == exprSexp (unwrapLoc subject) then
+      Some found
+    else
+      None
+  None => Some (Found ((n, subject) :: found.foundBinds) found.foundHeads)
+
+-- The right side with the bound subexpressions put in.
+export
+instantiate : Hint -> Found -> Expr
+instantiate h found = fill found.foundBinds h.hintRhs
+
+fill : List (String, Expr) -> Expr -> Expr
+fill binds (EVar n) = match lookupAssoc n binds
+  Some e => e
+  None => EVar n
+fill binds (EApp f x) = EApp (fill binds f) (fill binds x)
+fill binds (EBinOp op a b r) = EBinOp op (fill binds a) (fill binds b) r
+fill _ e = e
+
+-- ── the rule ─────────────────────────────────────────────────────────────────
+
+-- The expression kinds the rows' left sides can root at.
+hintKinds : List Hint -> List ExprKind
+hintKinds hints = fold addKind [] (map (h => h.hintKind) hints)
+
+addKind : List ExprKind -> ExprKind -> List ExprKind
+addKind seen k = if elem k seen then seen else seen ++ [k]
+
+-- The visitors a hint rule registers: one callback over the kinds its rows
+-- root at, reporting the first row that matches a node.
+export
+hintVisitors : String ->
+  Severity ->
+  List Hint ->
+  StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Visitor
+hintVisitors name severity hints idx _ facts _ _ =
+  [OnExpr (hintKinds hints) (hintsAt name severity hints idx facts)]
+
+hintsAt : String ->
+  Severity ->
+  List Hint ->
+  StdlibIndex ->
+  FileFacts ->
+  Ctx ->
+  Expr ->
+  List Finding
+hintsAt _ _ [] _ _ _ _ = []
+hintsAt name severity (h :: rest) idx facts ctx e = match matchHint h e
+  Some found => [hintFinding name severity h found idx facts ctx e]
+  None => hintsAt name severity rest idx facts ctx e
+
+hintFinding : String ->
+  Severity ->
+  Hint ->
+  Found ->
+  StdlibIndex ->
+  FileFacts ->
+  Ctx ->
+  Expr ->
+  Finding
+hintFinding name severity h found idx facts ctx e =
+  let rewritten = instantiate h found
+  Finding {
+    rule = name,
+    message = "\{h.hintRow.rowMessage}. Rewrite as '\{exprToString rewritten}'",
+    severity = severity,
+    loc = ctx.ctxSpan,
+    fix = hintFix h found idx facts ctx e rewritten,
+  }
+
+hintFix : Hint ->
+  Found ->
+  StdlibIndex ->
+  FileFacts ->
+  Ctx ->
+  Expr ->
+  Expr ->
+  Option Fix
+hintFix h found idx facts ctx e rewritten =
+  if allHeadsPrelude idx facts found && not (inOwnDefinition h ctx) then
+    replaceNodeFix h.hintRow.rowApplicability h.hintRow.rowFix ctx e rewritten
+  else
+    None
+
+allHeadsPrelude : StdlibIndex -> FileFacts -> Found -> Bool
+allHeadsPrelude idx facts found =
+  all (usesPreludeName idx facts) found.foundHeads
+
+-- Inside the definition of a function the row names, the rewrite would call it
+-- from its own body.  A test's or prop's owner name is its description.
+export
+inOwnDefinition : Hint -> Ctx -> Bool
+inOwnDefinition h ctx =
+  not ctx.ctxInTest && any (ownsName ctx) h.hintRow.rowConds
+
+ownsName : Ctx -> HintCond -> Bool
+ownsName ctx (NotInDefOf names) = elem ctx.ctxDeclName names
+ownsName _ _ = False
