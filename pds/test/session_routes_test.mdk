@@ -298,7 +298,7 @@ test "a login with the right password is 200" =
 test "a login is answered with the account's DID and handle" =
   let (_, response) = login testInstant 1 configuredStore
   expectEqual
-    (stringField "did" response ++ " " ++ stringField "handle" response)
+    "\{stringField "did" response} \{stringField "handle" response}"
     "\{accountDidText} \{accountHandleText}"
 
 test "a login is answered with an active session" =
