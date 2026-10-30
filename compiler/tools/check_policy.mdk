@@ -192,9 +192,8 @@ splitSemiGo cs n start i
 -- pattern (`a.com/*`) has no `=`.
 rhsIsProduct : String -> Bool
 rhsIsProduct rhs =
-  match splitOnFirstEq (stringToChars rhs) (arrayLength (stringToChars rhs)) 0
-    None => False
-    Some _ => True
+  isSome
+    (splitOnFirstEq (stringToChars rhs) (arrayLength (stringToChars rhs)) 0)
 
 -- a policy rhs is a set when it is brace-delimited (`Env={HOME,PATH}`) with no
 -- axis `=` inside (that's the product case, already routed above).

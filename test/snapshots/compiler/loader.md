@@ -1,5 +1,5 @@
 # META
-source_lines=1668
+source_lines=1666
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -182,9 +182,7 @@ findProjectRoot startDir = findRootGo startDir
 -- `findProjectRoot` directly instead of reaching for this.
 export
 findProjectRootOrSelf : String -> <IO> String
-findProjectRootOrSelf startDir = match findProjectRoot startDir
-  Some root => root
-  None => startDir
+findProjectRootOrSelf startDir = optionOr startDir (findProjectRoot startDir)
 
 -- The module-resolution roots for a single entry file: the entry's OWN
 -- directory first, then the project root found by walking up from there
@@ -1714,7 +1712,7 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DTypeSig true "findProjectRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "findProjectRoot" ((PVar "startDir")) (EApp (EVar "findRootGo") (EVar "startDir")))
 (DTypeSig true "findProjectRootOrSelf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "findProjectRootOrSelf" ((PVar "startDir")) (EMatch (EApp (EVar "findProjectRoot") (EVar "startDir")) (arm (PCon "Some" (PVar "root")) () (EVar "root")) (arm (PCon "None") () (EVar "startDir"))))
+(DFunDef false "findProjectRootOrSelf" ((PVar "startDir")) (EApp (EApp (EVar "optionOr") (EVar "startDir")) (EApp (EVar "findProjectRoot") (EVar "startDir"))))
 (DTypeSig true "entrySearchRoots" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "entrySearchRoots" ((PVar "entryDir")) (EBlock (DoLet false false (PVar "projRoot") (EApp (EVar "findProjectRootOrSelf") (EVar "entryDir"))) (DoExpr (EIf (EBinOp "==" (EVar "projRoot") (EVar "entryDir")) (EListLit (EVar "projRoot")) (EListLit (EVar "entryDir") (EVar "projRoot"))))))
 (DTypeSig false "findRootGo" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
@@ -1973,7 +1971,7 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DTypeSig true "findProjectRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "findProjectRoot" ((PVar "startDir")) (EApp (EVar "findRootGo") (EVar "startDir")))
 (DTypeSig true "findProjectRootOrSelf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "findProjectRootOrSelf" ((PVar "startDir")) (EMatch (EApp (EVar "findProjectRoot") (EVar "startDir")) (arm (PCon "Some" (PVar "root")) () (EVar "root")) (arm (PCon "None") () (EVar "startDir"))))
+(DFunDef false "findProjectRootOrSelf" ((PVar "startDir")) (EApp (EApp (EVar "optionOr") (EVar "startDir")) (EApp (EVar "findProjectRoot") (EVar "startDir"))))
 (DTypeSig true "entrySearchRoots" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "entrySearchRoots" ((PVar "entryDir")) (EBlock (DoLet false false (PVar "projRoot") (EApp (EVar "findProjectRootOrSelf") (EVar "entryDir"))) (DoExpr (EIf (EBinOp "==" (EVar "projRoot") (EVar "entryDir")) (EListLit (EVar "projRoot")) (EListLit (EVar "entryDir") (EVar "projRoot"))))))
 (DTypeSig false "findRootGo" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))

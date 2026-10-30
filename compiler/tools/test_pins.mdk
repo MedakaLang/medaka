@@ -387,12 +387,8 @@ pinFor pins file kind name engine = match buildPinIndex pins
 
 pinNamePresent : TestPin -> OrdMap Unit -> OrdMap Unit -> Bool
 pinNamePresent pin propNames testNames = match pin.pinKind
-  PropPin => match omLookup pin.pinName propNames
-    Some _ => True
-    None => False
-  TestPin => match omLookup pin.pinName testNames
-    Some _ => True
-    None => False
+  PropPin => isSome (omLookup pin.pinName propNames)
+  TestPin => isSome (omLookup pin.pinName testNames)
 
 validatePinNamesGo : List TestPin ->
   String ->

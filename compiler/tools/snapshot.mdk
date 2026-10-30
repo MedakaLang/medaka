@@ -1303,9 +1303,8 @@ parseSnapshot text =
 metaSourceLines : List String -> Int
 metaSourceLines [] = 0
 metaSourceLines (l :: rest) =
-  if startsWith "source_lines=" l then match toInt (drop 13 l)
-    Some n => n
-    None => 0
+  if startsWith "source_lines=" l then
+    optionOr 0 (toInt (drop 13 l))
   else
     metaSourceLines rest
 

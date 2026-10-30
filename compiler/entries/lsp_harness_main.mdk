@@ -135,9 +135,7 @@ fixtureUnparseableNoCrash medaka fixDir =
         Err _ => check "unparseable file: server survives documentSymbol" False
         Ok out => match parseFrames out
           (frames, _) =>
-            let responded = match responseById 2 frames
-              Some _ => True
-              None => False
+            let responded = isSome (responseById 2 frames)
             check "unparseable file: server survives documentSymbol" responded
 
 {- Fixture 5: semanticTokens/full over `f : List (Expr, Expr) -> Expr`.  The three

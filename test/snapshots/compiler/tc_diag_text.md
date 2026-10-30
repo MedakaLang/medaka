@@ -1,5 +1,5 @@
 # META
-source_lines=1516
+source_lines=1514
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag_text: the context-free message text of the typechecker: every message, help and fix
@@ -1329,9 +1329,7 @@ export
 varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String
 varNameForId sigTvMaps m id = match findSigTvMap m sigTvMaps
   None => "a"
-  Some tvMap => match findTvName id tvMap
-    None => "a"
-    Some n => n
+  Some tvMap => optionOr "a" (findTvName id tvMap)
 
 findSigTvMap : String ->
   List (String, Ty, List (String, Mono)) ->
@@ -1903,7 +1901,7 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DTypeSig true "missingConstraintVecMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "missingConstraintVecMsg" ((PVar "name") (PVar "iface") (PVar "varNames")) (EBlock (DoLet false false (PVar "pred") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EVar "iface") (EVar "varNames")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the body of `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` requires `"))) (EApp (EVar "display") (EVar "pred"))) (ELit (LString "`, which its signature does not declare; add `"))) (EApp (EVar "display") (EVar "pred"))) (ELit (LString " =>`"))))))
 (DTypeSig true "varNameForId" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "varNameForId" ((PVar "sigTvMaps") (PVar "m") (PVar "id")) (EMatch (EApp (EApp (EVar "findSigTvMap") (EVar "m")) (EVar "sigTvMaps")) (arm (PCon "None") () (ELit (LString "a"))) (arm (PCon "Some" (PVar "tvMap")) () (EMatch (EApp (EApp (EVar "findTvName") (EVar "id")) (EVar "tvMap")) (arm (PCon "None") () (ELit (LString "a"))) (arm (PCon "Some" (PVar "n")) () (EVar "n"))))))
+(DFunDef false "varNameForId" ((PVar "sigTvMaps") (PVar "m") (PVar "id")) (EMatch (EApp (EApp (EVar "findSigTvMap") (EVar "m")) (EVar "sigTvMaps")) (arm (PCon "None") () (ELit (LString "a"))) (arm (PCon "Some" (PVar "tvMap")) () (EApp (EApp (EVar "optionOr") (ELit (LString "a"))) (EApp (EApp (EVar "findTvName") (EVar "id")) (EVar "tvMap"))))))
 (DTypeSig false "findSigTvMap" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
 (DFunDef false "findSigTvMap" (PWild (PList)) (EVar "None"))
 (DFunDef false "findSigTvMap" ((PVar "m") (PCons (PTuple (PVar "n") PWild (PVar "tvMap")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "m")) (EApp (EVar "Some") (EVar "tvMap")) (EIf (EVar "otherwise") (EApp (EApp (EVar "findSigTvMap") (EVar "m")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -2363,7 +2361,7 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DTypeSig true "missingConstraintVecMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "missingConstraintVecMsg" ((PVar "name") (PVar "iface") (PVar "varNames")) (EBlock (DoLet false false (PVar "pred") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EVar "iface") (EVar "varNames")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the body of `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` requires `"))) (EApp (EMethodRef "display") (EVar "pred"))) (ELit (LString "`, which its signature does not declare; add `"))) (EApp (EMethodRef "display") (EVar "pred"))) (ELit (LString " =>`"))))))
 (DTypeSig true "varNameForId" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "varNameForId" ((PVar "sigTvMaps") (PVar "m") (PVar "id")) (EMatch (EApp (EApp (EVar "findSigTvMap") (EVar "m")) (EVar "sigTvMaps")) (arm (PCon "None") () (ELit (LString "a"))) (arm (PCon "Some" (PVar "tvMap")) () (EMatch (EApp (EApp (EVar "findTvName") (EVar "id")) (EVar "tvMap")) (arm (PCon "None") () (ELit (LString "a"))) (arm (PCon "Some" (PVar "n")) () (EVar "n"))))))
+(DFunDef false "varNameForId" ((PVar "sigTvMaps") (PVar "m") (PVar "id")) (EMatch (EApp (EApp (EVar "findSigTvMap") (EVar "m")) (EVar "sigTvMaps")) (arm (PCon "None") () (ELit (LString "a"))) (arm (PCon "Some" (PVar "tvMap")) () (EApp (EApp (EVar "optionOr") (ELit (LString "a"))) (EApp (EApp (EVar "findTvName") (EVar "id")) (EVar "tvMap"))))))
 (DTypeSig false "findSigTvMap" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
 (DFunDef false "findSigTvMap" (PWild (PList)) (EVar "None"))
 (DFunDef false "findSigTvMap" ((PVar "m") (PCons (PTuple (PVar "n") PWild (PVar "tvMap")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "m")) (EApp (EVar "Some") (EVar "tvMap")) (EIf (EVar "otherwise") (EApp (EApp (EVar "findSigTvMap") (EVar "m")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

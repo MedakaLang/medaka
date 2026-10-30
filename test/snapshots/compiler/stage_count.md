@@ -1,5 +1,5 @@
 # META
-source_lines=84
+source_lines=82
 stages=DESUGAR,MARK
 # SOURCE
 -- Deterministic per-stage CALL counter: how many times each pipeline stage ran in
@@ -33,9 +33,7 @@ stageBump key = match !stageCountOn
   False => ()
 
 countOf : String -> Int
-countOf key = match omLookup key !stageCounts
-  Some n => n
-  None => 0
+countOf key = optionOr 0 (omLookup key !stageCounts)
 
 -- Turn counting on when MEDAKA_STAGE_COUNTS is set and non-empty.
 export
@@ -98,7 +96,7 @@ stageDumpKeys (k :: rest) =
 (DTypeSig true "stageBump" (TyFun (TyCon "String") (TyCon "Unit")))
 (DFunDef false "stageBump" ((PVar "key")) (EMatch (EUnOp "!" (EVar "stageCountOn")) (arm (PCon "True") () (EApp (EApp (EVar "setRef") (EVar "stageCounts")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "+" (EApp (EVar "countOf") (EVar "key")) (ELit (LInt 1)))) (EUnOp "!" (EVar "stageCounts"))))) (arm (PCon "False") () (ELit LUnit))))
 (DTypeSig false "countOf" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "countOf" ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EUnOp "!" (EVar "stageCounts"))) (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (ELit (LInt 0)))))
+(DFunDef false "countOf" ((PVar "key")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "key")) (EUnOp "!" (EVar "stageCounts")))))
 (DTypeSig true "stageCountInit" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "stageCountInit" ((PLit LUnit)) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_STAGE_COUNTS"))) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "setRef") (EVar "stageCountOn")) (EBinOp "/=" (EVar "v") (ELit (LString ""))))) (arm (PCon "None") () (ELit LUnit))))
 (DTypeSig true "stageDump" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -126,7 +124,7 @@ stageDumpKeys (k :: rest) =
 (DTypeSig true "stageBump" (TyFun (TyCon "String") (TyCon "Unit")))
 (DFunDef false "stageBump" ((PVar "key")) (EMatch (EUnOp "!" (EVar "stageCountOn")) (arm (PCon "True") () (EApp (EApp (EVar "setRef") (EVar "stageCounts")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "+" (EApp (EVar "countOf") (EVar "key")) (ELit (LInt 1)))) (EUnOp "!" (EVar "stageCounts"))))) (arm (PCon "False") () (ELit LUnit))))
 (DTypeSig false "countOf" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "countOf" ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EUnOp "!" (EVar "stageCounts"))) (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (ELit (LInt 0)))))
+(DFunDef false "countOf" ((PVar "key")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "key")) (EUnOp "!" (EVar "stageCounts")))))
 (DTypeSig true "stageCountInit" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "stageCountInit" ((PLit LUnit)) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_STAGE_COUNTS"))) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "setRef") (EVar "stageCountOn")) (EBinOp "/=" (EVar "v") (ELit (LString ""))))) (arm (PCon "None") () (ELit LUnit))))
 (DTypeSig true "stageDump" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))

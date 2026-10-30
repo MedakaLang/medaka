@@ -1083,9 +1083,7 @@ lowersOf id m = match M.get id m
 nodeOf : Int ->
   Map Int (Ref Authvar, List Authority) ->
   (Ref Authvar, List Authority)
-nodeOf id m = match M.get id m
-  Some node => node
-  None => panic "missing authority equation vertex"
+nodeOf id m = optionOrPanic "missing authority equation vertex" (M.get id m)
 
 dependencies : (Ref Authvar -> Bool) ->
   Map Int (Ref Authvar, List Authority) ->
@@ -1143,9 +1141,8 @@ solveClass nodes idOfName widen (first :: rest) =
     _ => linkAuthvar rep (widen oldest (authJoinAll kept))
 
 idOfVertex : Map String Int -> String -> Int
-idOfVertex idOfName name = match M.get name idOfName
-  Some id => id
-  None => panic "missing authority vertex name"
+idOfVertex idOfName name =
+  optionOrPanic "missing authority vertex name" (M.get name idOfName)
 
 joinMembers : Authority -> List Authority
 joinMembers q = match authNorm q
@@ -1592,14 +1589,12 @@ singletonInclusion scope rigid rel = match (
   _ => []
 
 inclusionName : Map Int String -> Int -> String
-inclusionName names id = match M.get id names
-  Some name => name
-  None => panic "missing inclusion graph name"
+inclusionName names id =
+  optionOrPanic "missing inclusion graph name" (M.get id names)
 
 inclusionCell : Map String (Ref Effvar) -> String -> Ref Effvar
-inclusionCell cells name = match M.get name cells
-  Some cell => cell
-  None => panic "missing inclusion graph cell"
+inclusionCell cells name =
+  optionOrPanic "missing inclusion graph cell" (M.get name cells)
 
 inclusionLevel : Ref Effvar -> Int
 inclusionLevel cell = match !cell

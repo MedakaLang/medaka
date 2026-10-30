@@ -1,5 +1,5 @@
 # META
-source_lines=1648
+source_lines=1643
 stages=DESUGAR,MARK
 # SOURCE
 -- Binding-owned effect equations. Operational lower bounds and compatibility
@@ -1087,9 +1087,7 @@ lowersOf id m = match M.get id m
 nodeOf : Int ->
   Map Int (Ref Authvar, List Authority) ->
   (Ref Authvar, List Authority)
-nodeOf id m = match M.get id m
-  Some node => node
-  None => panic "missing authority equation vertex"
+nodeOf id m = optionOrPanic "missing authority equation vertex" (M.get id m)
 
 dependencies : (Ref Authvar -> Bool) ->
   Map Int (Ref Authvar, List Authority) ->
@@ -1147,9 +1145,8 @@ solveClass nodes idOfName widen (first :: rest) =
     _ => linkAuthvar rep (widen oldest (authJoinAll kept))
 
 idOfVertex : Map String Int -> String -> Int
-idOfVertex idOfName name = match M.get name idOfName
-  Some id => id
-  None => panic "missing authority vertex name"
+idOfVertex idOfName name =
+  optionOrPanic "missing authority vertex name" (M.get name idOfName)
 
 joinMembers : Authority -> List Authority
 joinMembers q = match authNorm q
@@ -1596,14 +1593,12 @@ singletonInclusion scope rigid rel = match (
   _ => []
 
 inclusionName : Map Int String -> Int -> String
-inclusionName names id = match M.get id names
-  Some name => name
-  None => panic "missing inclusion graph name"
+inclusionName names id =
+  optionOrPanic "missing inclusion graph name" (M.get id names)
 
 inclusionCell : Map String (Ref Effvar) -> String -> Ref Effvar
-inclusionCell cells name = match M.get name cells
-  Some cell => cell
-  None => panic "missing inclusion graph cell"
+inclusionCell cells name =
+  optionOrPanic "missing inclusion graph cell" (M.get name cells)
 
 inclusionLevel : Ref Effvar -> Int
 inclusionLevel cell = match !cell
@@ -1799,14 +1794,14 @@ relationProven escape rel =
 (DTypeSig false "lowersOf" (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyTuple (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "List") (TyCon "Authority")))) (TyApp (TyCon "List") (TyCon "Authority")))))
 (DFunDef false "lowersOf" ((PVar "id") (PVar "m")) (EMatch (EApp (EApp (EVar "M.get") (EVar "id")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "ls"))) () (EVar "ls")) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "nodeOf" (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyTuple (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "List") (TyCon "Authority")))) (TyTuple (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "List") (TyCon "Authority"))))))
-(DFunDef false "nodeOf" ((PVar "id") (PVar "m")) (EMatch (EApp (EApp (EVar "M.get") (EVar "id")) (EVar "m")) (arm (PCon "Some" (PVar "node")) () (EVar "node")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "missing authority equation vertex"))))))
+(DFunDef false "nodeOf" ((PVar "id") (PVar "m")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "missing authority equation vertex"))) (EApp (EApp (EVar "M.get") (EVar "id")) (EVar "m"))))
 (DTypeSig false "dependencies" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Bool")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyTuple (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "List") (TyCon "Authority")))) (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "dependencies" ((PVar "owned") (PVar "nodes") (PVar "ls")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "q")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "cell")) (EIf (EBinOp "&&" (EApp (EApp (EVar "M.has") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "nodes")) (EApp (EVar "owned") (EVar "cell"))) (EListLit (EApp (EVar "authvarId") (EVar "cell"))) (EListLit)))) (EApp (EVar "authVars") (EVar "q"))))) (EVar "ls")))
 (DTypeSig false "solveClass" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyTuple (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "List") (TyCon "Authority")))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "String")) (TyCon "Int")) (TyFun (TyFun (TyCon "Int") (TyFun (TyCon "Authority") (TyCon "Authority"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "solveClass" (PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "solveClass" ((PVar "nodes") (PVar "idOfName") (PVar "widen") (PCons (PVar "first") (PVar "rest"))) (EBlock (DoLet false false (PVar "repId") (EApp (EApp (EVar "idOfVertex") (EVar "idOfName")) (EVar "first"))) (DoLet false false (PTuple (PVar "rep") PWild) (EApp (EApp (EVar "nodeOf") (EVar "repId")) (EVar "nodes"))) (DoLet false false (PVar "members") (EApp (EApp (EVar "map") (EApp (EVar "idOfVertex") (EVar "idOfName"))) (EVar "rest"))) (DoLet false false (PVar "oldest") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "id")) (EBlock (DoLet false false (PTuple (PVar "cell") PWild) (EApp (EApp (EVar "nodeOf") (EVar "id")) (EVar "nodes"))) (DoExpr (EApp (EApp (EVar "min") (EVar "acc")) (EApp (EVar "authvarLevel") (EVar "cell"))))))) (EApp (EVar "authvarLevel") (EVar "rep"))) (EVar "members"))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "id")) (EApp (EVar "authvarIsPattern") (EApp (EVar "fst") (EApp (EApp (EVar "nodeOf") (EVar "id")) (EVar "nodes")))))) (EBinOp "::" (EVar "repId") (EVar "members"))) (EApp (EVar "markAuthvarPattern") (EVar "rep")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "id")) (EBlock (DoLet false false (PTuple (PVar "cell") PWild) (EApp (EApp (EVar "nodeOf") (EVar "id")) (EVar "nodes"))) (DoExpr (EApp (EApp (EVar "linkAuthvar") (EVar "cell")) (EApp (EVar "AVar") (EVar "rep"))))))) (ELit LUnit)) (EVar "members"))) (DoLet false false (PVar "all") (EApp (EApp (EVar "flatMap") (ELam ((PVar "id")) (EApp (EVar "snd") (EApp (EApp (EVar "nodeOf") (EVar "id")) (EVar "nodes"))))) (EBinOp "::" (EVar "repId") (EVar "members")))) (DoLet false false (PVar "kept") (EApp (EApp (EVar "filter") (ELam ((PVar "q")) (EApp (EVar "not") (EApp (EApp (EVar "isVar") (EVar "repId")) (EVar "q"))))) (EApp (EVar "joinMembers") (EApp (EVar "authJoinAll") (EVar "all"))))) (DoExpr (EMatch (EVar "kept") (arm (PList) () (ELit LUnit)) (arm PWild () (EApp (EApp (EVar "linkAuthvar") (EVar "rep")) (EApp (EApp (EVar "widen") (EVar "oldest")) (EApp (EVar "authJoinAll") (EVar "kept")))))))))
 (DTypeSig false "idOfVertex" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "String")) (TyCon "Int")) (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "idOfVertex" ((PVar "idOfName") (PVar "name")) (EMatch (EApp (EApp (EVar "M.get") (EVar "name")) (EVar "idOfName")) (arm (PCon "Some" (PVar "id")) () (EVar "id")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "missing authority vertex name"))))))
+(DFunDef false "idOfVertex" ((PVar "idOfName") (PVar "name")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "missing authority vertex name"))) (EApp (EApp (EVar "M.get") (EVar "name")) (EVar "idOfName"))))
 (DTypeSig false "joinMembers" (TyFun (TyCon "Authority") (TyApp (TyCon "List") (TyCon "Authority"))))
 (DFunDef false "joinMembers" ((PVar "q")) (EMatch (EApp (EVar "authNorm") (EVar "q")) (arm (PCon "AJoin" (PVar "ms")) () (EVar "ms")) (arm (PVar "other") () (EListLit (EVar "other")))))
 (DTypeSig false "isVar" (TyFun (TyCon "Int") (TyFun (TyCon "Authority") (TyCon "Bool"))))
@@ -1861,9 +1856,9 @@ relationProven escape rel =
 (DTypeSig false "singletonInclusion" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "RowRelation") (TyVar "c")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyApp (TyCon "Ref") (TyCon "Effvar"))))))))
 (DFunDef false "singletonInclusion" ((PVar "scope") (PVar "rigid") (PVar "rel")) (EMatch (ETuple (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrLower")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrUpper"))) (arm (PTuple (PTuple (PList) (PList (PVar "a"))) (PTuple (PList) (PList (PVar "b")))) () (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "eligibleUpper") (EVar "scope")) (EVar "rigid")) (EVar "a")) (EApp (EApp (EApp (EVar "eligibleUpper") (EVar "scope")) (EVar "rigid")) (EVar "b"))) (EListLit (ETuple (EVar "a") (EVar "b"))) (EListLit))) (arm PWild () (EListLit))))
 (DTypeSig false "inclusionName" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "String")) (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "inclusionName" ((PVar "names") (PVar "id")) (EMatch (EApp (EApp (EVar "M.get") (EVar "id")) (EVar "names")) (arm (PCon "Some" (PVar "name")) () (EVar "name")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "missing inclusion graph name"))))))
+(DFunDef false "inclusionName" ((PVar "names") (PVar "id")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "missing inclusion graph name"))) (EApp (EApp (EVar "M.get") (EVar "id")) (EVar "names"))))
 (DTypeSig false "inclusionCell" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "String")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))))
-(DFunDef false "inclusionCell" ((PVar "cells") (PVar "name")) (EMatch (EApp (EApp (EVar "M.get") (EVar "name")) (EVar "cells")) (arm (PCon "Some" (PVar "cell")) () (EVar "cell")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "missing inclusion graph cell"))))))
+(DFunDef false "inclusionCell" ((PVar "cells") (PVar "name")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "missing inclusion graph cell"))) (EApp (EApp (EVar "M.get") (EVar "name")) (EVar "cells"))))
 (DTypeSig false "inclusionLevel" (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyCon "Int")))
 (DFunDef false "inclusionLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" PWild (PVar "level")) () (EVar "level")) (arm PWild () (EApp (EVar "panic") (ELit (LString "non-flexible inclusion graph vertex"))))))
 (DTypeSig false "collapseInclusionClass" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "String")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))))))
@@ -2021,14 +2016,14 @@ relationProven escape rel =
 (DTypeSig false "lowersOf" (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyTuple (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "List") (TyCon "Authority")))) (TyApp (TyCon "List") (TyCon "Authority")))))
 (DFunDef false "lowersOf" ((PVar "id") (PVar "m")) (EMatch (EApp (EApp (EVar "M.get") (EVar "id")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "ls"))) () (EVar "ls")) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "nodeOf" (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyTuple (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "List") (TyCon "Authority")))) (TyTuple (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "List") (TyCon "Authority"))))))
-(DFunDef false "nodeOf" ((PVar "id") (PVar "m")) (EMatch (EApp (EApp (EVar "M.get") (EVar "id")) (EVar "m")) (arm (PCon "Some" (PVar "node")) () (EVar "node")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "missing authority equation vertex"))))))
+(DFunDef false "nodeOf" ((PVar "id") (PVar "m")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "missing authority equation vertex"))) (EApp (EApp (EVar "M.get") (EVar "id")) (EVar "m"))))
 (DTypeSig false "dependencies" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Bool")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyTuple (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "List") (TyCon "Authority")))) (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "dependencies" ((PVar "owned") (PVar "nodes") (PVar "ls")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "q")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "cell")) (EIf (EBinOp "&&" (EApp (EApp (EVar "M.has") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "nodes")) (EApp (EVar "owned") (EVar "cell"))) (EListLit (EApp (EVar "authvarId") (EVar "cell"))) (EListLit)))) (EApp (EVar "authVars") (EVar "q"))))) (EVar "ls")))
 (DTypeSig false "solveClass" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyTuple (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "List") (TyCon "Authority")))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "String")) (TyCon "Int")) (TyFun (TyFun (TyCon "Int") (TyFun (TyCon "Authority") (TyCon "Authority"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "solveClass" (PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "solveClass" ((PVar "nodes") (PVar "idOfName") (PVar "widen") (PCons (PVar "first") (PVar "rest"))) (EBlock (DoLet false false (PVar "repId") (EApp (EApp (EVar "idOfVertex") (EVar "idOfName")) (EVar "first"))) (DoLet false false (PTuple (PVar "rep") PWild) (EApp (EApp (EVar "nodeOf") (EVar "repId")) (EVar "nodes"))) (DoLet false false (PVar "members") (EApp (EApp (EMethodRef "map") (EApp (EVar "idOfVertex") (EVar "idOfName"))) (EVar "rest"))) (DoLet false false (PVar "oldest") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "id")) (EBlock (DoLet false false (PTuple (PVar "cell") PWild) (EApp (EApp (EVar "nodeOf") (EVar "id")) (EVar "nodes"))) (DoExpr (EApp (EApp (EMethodRef "min") (EVar "acc")) (EApp (EVar "authvarLevel") (EVar "cell"))))))) (EApp (EVar "authvarLevel") (EVar "rep"))) (EVar "members"))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "id")) (EApp (EVar "authvarIsPattern") (EApp (EVar "fst") (EApp (EApp (EVar "nodeOf") (EVar "id")) (EVar "nodes")))))) (EBinOp "::" (EVar "repId") (EVar "members"))) (EApp (EVar "markAuthvarPattern") (EVar "rep")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "id")) (EBlock (DoLet false false (PTuple (PVar "cell") PWild) (EApp (EApp (EVar "nodeOf") (EVar "id")) (EVar "nodes"))) (DoExpr (EApp (EApp (EVar "linkAuthvar") (EVar "cell")) (EApp (EVar "AVar") (EVar "rep"))))))) (ELit LUnit)) (EVar "members"))) (DoLet false false (PVar "all") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "id")) (EApp (EVar "snd") (EApp (EApp (EVar "nodeOf") (EVar "id")) (EVar "nodes"))))) (EBinOp "::" (EVar "repId") (EVar "members")))) (DoLet false false (PVar "kept") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "q")) (EApp (EVar "not") (EApp (EApp (EVar "isVar") (EVar "repId")) (EVar "q"))))) (EApp (EVar "joinMembers") (EApp (EVar "authJoinAll") (EDictApp "all"))))) (DoExpr (EMatch (EVar "kept") (arm (PList) () (ELit LUnit)) (arm PWild () (EApp (EApp (EVar "linkAuthvar") (EVar "rep")) (EApp (EApp (EVar "widen") (EVar "oldest")) (EApp (EVar "authJoinAll") (EVar "kept")))))))))
 (DTypeSig false "idOfVertex" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "String")) (TyCon "Int")) (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "idOfVertex" ((PVar "idOfName") (PVar "name")) (EMatch (EApp (EApp (EVar "M.get") (EVar "name")) (EVar "idOfName")) (arm (PCon "Some" (PVar "id")) () (EVar "id")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "missing authority vertex name"))))))
+(DFunDef false "idOfVertex" ((PVar "idOfName") (PVar "name")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "missing authority vertex name"))) (EApp (EApp (EVar "M.get") (EVar "name")) (EVar "idOfName"))))
 (DTypeSig false "joinMembers" (TyFun (TyCon "Authority") (TyApp (TyCon "List") (TyCon "Authority"))))
 (DFunDef false "joinMembers" ((PVar "q")) (EMatch (EApp (EVar "authNorm") (EVar "q")) (arm (PCon "AJoin" (PVar "ms")) () (EVar "ms")) (arm (PVar "other") () (EListLit (EVar "other")))))
 (DTypeSig false "isVar" (TyFun (TyCon "Int") (TyFun (TyCon "Authority") (TyCon "Bool"))))
@@ -2083,9 +2078,9 @@ relationProven escape rel =
 (DTypeSig false "singletonInclusion" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "RowRelation") (TyVar "c")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyApp (TyCon "Ref") (TyCon "Effvar"))))))))
 (DFunDef false "singletonInclusion" ((PVar "scope") (PVar "rigid") (PVar "rel")) (EMatch (ETuple (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrLower")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrUpper"))) (arm (PTuple (PTuple (PList) (PList (PVar "a"))) (PTuple (PList) (PList (PVar "b")))) () (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "eligibleUpper") (EVar "scope")) (EVar "rigid")) (EVar "a")) (EApp (EApp (EApp (EVar "eligibleUpper") (EVar "scope")) (EVar "rigid")) (EVar "b"))) (EListLit (ETuple (EVar "a") (EVar "b"))) (EListLit))) (arm PWild () (EListLit))))
 (DTypeSig false "inclusionName" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "String")) (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "inclusionName" ((PVar "names") (PVar "id")) (EMatch (EApp (EApp (EVar "M.get") (EVar "id")) (EVar "names")) (arm (PCon "Some" (PVar "name")) () (EVar "name")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "missing inclusion graph name"))))))
+(DFunDef false "inclusionName" ((PVar "names") (PVar "id")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "missing inclusion graph name"))) (EApp (EApp (EVar "M.get") (EVar "id")) (EVar "names"))))
 (DTypeSig false "inclusionCell" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "String")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))))
-(DFunDef false "inclusionCell" ((PVar "cells") (PVar "name")) (EMatch (EApp (EApp (EVar "M.get") (EVar "name")) (EVar "cells")) (arm (PCon "Some" (PVar "cell")) () (EVar "cell")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "missing inclusion graph cell"))))))
+(DFunDef false "inclusionCell" ((PVar "cells") (PVar "name")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "missing inclusion graph cell"))) (EApp (EApp (EVar "M.get") (EVar "name")) (EVar "cells"))))
 (DTypeSig false "inclusionLevel" (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyCon "Int")))
 (DFunDef false "inclusionLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" PWild (PVar "level")) () (EVar "level")) (arm PWild () (EApp (EVar "panic") (ELit (LString "non-flexible inclusion graph vertex"))))))
 (DTypeSig false "collapseInclusionClass" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "String")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))))))

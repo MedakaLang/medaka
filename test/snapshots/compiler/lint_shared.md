@@ -1,5 +1,5 @@
 # META
-source_lines=989
+source_lines=982
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -484,12 +484,7 @@ paramNameOf _ = None
 export
 memberLocalIfOrigin : String -> UseMember -> Option String
 memberLocalIfOrigin stdName (UseMember origin _ _ alias) =
-  if origin == stdName then
-    Some (match alias
-      Some a => a
-      None => origin)
-  else
-    None
+  if origin == stdName then Some (optionOr origin alias) else None
 
 export
 lastSegOf : List String -> String
@@ -550,9 +545,7 @@ rewriteExprBU f e = f (mapChildExprs (rewriteExprBU f) e)
 -- turn a detector into a total node transform (identity where it does not fire).
 export
 detApply : (Expr -> Option Expr) -> Expr -> Expr
-detApply det e = match det e
-  Some e2 => e2
-  None => e
+detApply det e = optionOr e (det e)
 
 -- ── generic check driver ──────────────────────────────────────────────────────
 -- The visitor a detector-based rule registers: one finding per detector hit on
@@ -1186,7 +1179,7 @@ lastArmSpan arms = match last arms
 (DFunDef false "paramNameOf" ((PCon "PVar" (PVar "n") PWild PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "paramNameOf" (PWild) (EVar "None"))
 (DTypeSig true "memberLocalIfOrigin" (TyFun (TyCon "String") (TyFun (TyCon "UseMember") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "memberLocalIfOrigin" ((PVar "stdName") (PCon "UseMember" (PVar "origin") PWild PWild (PVar "alias"))) (EIf (EBinOp "==" (EVar "origin") (EVar "stdName")) (EApp (EVar "Some") (EMatch (EVar "alias") (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EVar "origin")))) (EVar "None")))
+(DFunDef false "memberLocalIfOrigin" ((PVar "stdName") (PCon "UseMember" (PVar "origin") PWild PWild (PVar "alias"))) (EIf (EBinOp "==" (EVar "origin") (EVar "stdName")) (EApp (EVar "Some") (EApp (EApp (EVar "optionOr") (EVar "origin")) (EVar "alias"))) (EVar "None")))
 (DTypeSig true "lastSegOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "lastSegOf" ((PList)) (ELit (LString "")))
 (DFunDef false "lastSegOf" ((PList (PVar "x"))) (EVar "x"))
@@ -1204,7 +1197,7 @@ lastArmSpan arms = match last arms
 (DTypeSig true "rewriteExprBU" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "rewriteExprBU" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapChildExprs") (EApp (EVar "rewriteExprBU") (EVar "f"))) (EVar "e"))))
 (DTypeSig true "detApply" (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "detApply" ((PVar "det") (PVar "e")) (EMatch (EApp (EVar "det") (EVar "e")) (arm (PCon "Some" (PVar "e2")) () (EVar "e2")) (arm (PCon "None") () (EVar "e"))))
+(DFunDef false "detApply" ((PVar "det") (PVar "e")) (EApp (EApp (EVar "optionOr") (EVar "e")) (EApp (EVar "det") (EVar "e"))))
 (DTypeSig true "exprRuleVisitors" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyApp (TyCon "List") (TyCon "Visitor"))))))
 (DFunDef false "exprRuleVisitors" ((PVar "excl") (PVar "det") (PVar "mkFinding")) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "excl")) (EVar "det")) (ELam (PWild PWild PWild) (EVar "None"))) (ELam ((PVar "loc") (PVar "hit") PWild) (EApp (EApp (EVar "mkFinding") (EVar "loc")) (EVar "hit")))))
 (DTypeSig true "exprRuleEditVisitors" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))) (TyApp (TyCon "List") (TyCon "Visitor")))))))
@@ -1509,7 +1502,7 @@ lastArmSpan arms = match last arms
 (DFunDef false "paramNameOf" ((PCon "PVar" (PVar "n") PWild PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "paramNameOf" (PWild) (EVar "None"))
 (DTypeSig true "memberLocalIfOrigin" (TyFun (TyCon "String") (TyFun (TyCon "UseMember") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "memberLocalIfOrigin" ((PVar "stdName") (PCon "UseMember" (PVar "origin") PWild PWild (PVar "alias"))) (EIf (EBinOp "==" (EVar "origin") (EVar "stdName")) (EApp (EVar "Some") (EMatch (EVar "alias") (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EVar "origin")))) (EVar "None")))
+(DFunDef false "memberLocalIfOrigin" ((PVar "stdName") (PCon "UseMember" (PVar "origin") PWild PWild (PVar "alias"))) (EIf (EBinOp "==" (EVar "origin") (EVar "stdName")) (EApp (EVar "Some") (EApp (EApp (EVar "optionOr") (EVar "origin")) (EVar "alias"))) (EVar "None")))
 (DTypeSig true "lastSegOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "lastSegOf" ((PList)) (ELit (LString "")))
 (DFunDef false "lastSegOf" ((PList (PVar "x"))) (EVar "x"))
@@ -1527,7 +1520,7 @@ lastArmSpan arms = match last arms
 (DTypeSig true "rewriteExprBU" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "rewriteExprBU" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapChildExprs") (EApp (EVar "rewriteExprBU") (EVar "f"))) (EVar "e"))))
 (DTypeSig true "detApply" (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "detApply" ((PVar "det") (PVar "e")) (EMatch (EApp (EVar "det") (EVar "e")) (arm (PCon "Some" (PVar "e2")) () (EVar "e2")) (arm (PCon "None") () (EVar "e"))))
+(DFunDef false "detApply" ((PVar "det") (PVar "e")) (EApp (EApp (EVar "optionOr") (EVar "e")) (EApp (EVar "det") (EVar "e"))))
 (DTypeSig true "exprRuleVisitors" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyApp (TyCon "List") (TyCon "Visitor"))))))
 (DFunDef false "exprRuleVisitors" ((PVar "excl") (PVar "det") (PVar "mkFinding")) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "excl")) (EVar "det")) (ELam (PWild PWild PWild) (EVar "None"))) (ELam ((PVar "loc") (PVar "hit") PWild) (EApp (EApp (EVar "mkFinding") (EVar "loc")) (EVar "hit")))))
 (DTypeSig true "exprRuleEditVisitors" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))) (TyApp (TyCon "List") (TyCon "Visitor")))))))

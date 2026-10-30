@@ -1,5 +1,5 @@
 # META
-source_lines=2551
+source_lines=2547
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..), codeText}
@@ -1276,9 +1276,7 @@ readHeaders lenAcc = match readLineOpt ()
     if line == "" then
       Some lenAcc
     else
-      let lenAcc2 = match parseContentLength line
-        Some n => n
-        None => lenAcc
+      let lenAcc2 = optionOr lenAcc (parseContentLength line)
       readHeaders lenAcc2
 -- EOF mid-stream
 
@@ -2368,9 +2366,7 @@ lastChangeText _ = None
 -- json field accessors specialized to the shapes we read.
 export
 fieldOr : String -> Json -> Json
-fieldOr key j = match get key j
-  Some v => v
-  None => JNull
+fieldOr key j = optionOr JNull (get key j)
 
 export
 fieldStr : String -> Json -> Option String
@@ -2804,7 +2800,7 @@ unit = ()
 (DFunDef false "notificationMsg" ((PVar "meth") (PVar "params")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "method")) (EApp (EVar "JString") (EVar "meth"))) (ETuple (ELit (LString "params")) (EVar "params")))))
 (DData Public "Headers" () ((variant "Headers" (ConPos (TyCon "Int")))) ())
 (DTypeSig false "readHeaders" (TyFun (TyCon "Int") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "readHeaders" ((PVar "lenAcc")) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoLet false false (PVar "line") (EApp (EVar "stripCR") (EVar "raw"))) (DoExpr (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EApp (EVar "Some") (EVar "lenAcc")) (EBlock (DoLet false false (PVar "lenAcc2") (EMatch (EApp (EVar "parseContentLength") (EVar "line")) (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (EVar "lenAcc")))) (DoExpr (EApp (EVar "readHeaders") (EVar "lenAcc2"))))))))))
+(DFunDef false "readHeaders" ((PVar "lenAcc")) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoLet false false (PVar "line") (EApp (EVar "stripCR") (EVar "raw"))) (DoExpr (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EApp (EVar "Some") (EVar "lenAcc")) (EBlock (DoLet false false (PVar "lenAcc2") (EApp (EApp (EVar "optionOr") (EVar "lenAcc")) (EApp (EVar "parseContentLength") (EVar "line")))) (DoExpr (EApp (EVar "readHeaders") (EVar "lenAcc2"))))))))))
 (DTypeSig false "contentLengthRe" (TyCon "Regex"))
 (DFunDef false "contentLengthRe" () (EApp (EVar "mustCompile") (ELit (LString "^Content-Length: *([0-9]+)"))))
 (DTypeSig false "parseContentLength" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
@@ -3027,7 +3023,7 @@ unit = ()
 (DFunDef false "lastChangeText" ((PCon "JArray" (PVar "arr"))) (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "fieldStr") (ELit (LString "text"))) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EVar "arr"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "lastChangeText" (PWild) (EVar "None"))
 (DTypeSig true "fieldOr" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json"))))
-(DFunDef false "fieldOr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "JNull"))))
+(DFunDef false "fieldOr" ((PVar "key") (PVar "j")) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "get") (EVar "key")) (EVar "j"))))
 (DTypeSig true "fieldStr" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "fieldStr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asString") (EVar "v"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "requestId" (TyFun (TyCon "Json") (TyCon "Json")))
@@ -3296,7 +3292,7 @@ unit = ()
 (DFunDef false "notificationMsg" ((PVar "meth") (PVar "params")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "method")) (EApp (EVar "JString") (EVar "meth"))) (ETuple (ELit (LString "params")) (EVar "params")))))
 (DData Public "Headers" () ((variant "Headers" (ConPos (TyCon "Int")))) ())
 (DTypeSig false "readHeaders" (TyFun (TyCon "Int") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "readHeaders" ((PVar "lenAcc")) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoLet false false (PVar "line") (EApp (EVar "stripCR") (EVar "raw"))) (DoExpr (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EApp (EVar "Some") (EVar "lenAcc")) (EBlock (DoLet false false (PVar "lenAcc2") (EMatch (EApp (EVar "parseContentLength") (EVar "line")) (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (EVar "lenAcc")))) (DoExpr (EApp (EVar "readHeaders") (EVar "lenAcc2"))))))))))
+(DFunDef false "readHeaders" ((PVar "lenAcc")) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoLet false false (PVar "line") (EApp (EVar "stripCR") (EVar "raw"))) (DoExpr (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EApp (EVar "Some") (EVar "lenAcc")) (EBlock (DoLet false false (PVar "lenAcc2") (EApp (EApp (EVar "optionOr") (EVar "lenAcc")) (EApp (EVar "parseContentLength") (EVar "line")))) (DoExpr (EApp (EVar "readHeaders") (EVar "lenAcc2"))))))))))
 (DTypeSig false "contentLengthRe" (TyCon "Regex"))
 (DFunDef false "contentLengthRe" () (EApp (EVar "mustCompile") (ELit (LString "^Content-Length: *([0-9]+)"))))
 (DTypeSig false "parseContentLength" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
@@ -3519,7 +3515,7 @@ unit = ()
 (DFunDef false "lastChangeText" ((PCon "JArray" (PVar "arr"))) (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "fieldStr") (ELit (LString "text"))) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EVar "arr"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "lastChangeText" (PWild) (EVar "None"))
 (DTypeSig true "fieldOr" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json"))))
-(DFunDef false "fieldOr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "JNull"))))
+(DFunDef false "fieldOr" ((PVar "key") (PVar "j")) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "get") (EVar "key")) (EVar "j"))))
 (DTypeSig true "fieldStr" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "fieldStr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asString") (EVar "v"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "requestId" (TyFun (TyCon "Json") (TyCon "Json")))

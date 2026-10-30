@@ -480,12 +480,7 @@ paramNameOf _ = None
 export
 memberLocalIfOrigin : String -> UseMember -> Option String
 memberLocalIfOrigin stdName (UseMember origin _ _ alias) =
-  if origin == stdName then
-    Some (match alias
-      Some a => a
-      None => origin)
-  else
-    None
+  if origin == stdName then Some (optionOr origin alias) else None
 
 export
 lastSegOf : List String -> String
@@ -546,9 +541,7 @@ rewriteExprBU f e = f (mapChildExprs (rewriteExprBU f) e)
 -- turn a detector into a total node transform (identity where it does not fire).
 export
 detApply : (Expr -> Option Expr) -> Expr -> Expr
-detApply det e = match det e
-  Some e2 => e2
-  None => e
+detApply det e = optionOr e (det e)
 
 -- ── generic check driver ──────────────────────────────────────────────────────
 -- The visitor a detector-based rule registers: one finding per detector hit on

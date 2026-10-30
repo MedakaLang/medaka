@@ -624,14 +624,12 @@ inputManifestRequirementW : WasmEmitInput -> ManifestRequirement
 inputManifestRequirementW (WasmEmitInputData _ _ requirement) = requirement
 
 physicalPlanW : EmitPlan -> WasmDemandPlan
-physicalPlanW plan = match plan.wasmPhysical
-  Some p => p
-  None => panic "internal error: missing-wasm-demand-plan"
+physicalPlanW plan =
+  optionOrPanic "internal error: missing-wasm-demand-plan" plan.wasmPhysical
 
 emitDemandW : WasmEmit -> WasmDemandPlan
-emitDemandW emit = match emit.physical
-  Some p => p
-  None => panic "internal error: missing-wasm-demand-plan"
+emitDemandW emit =
+  optionOrPanic "internal error: missing-wasm-demand-plan" emit.physical
 
 seedPhysicalW : WasmEmit -> WasmDemandPlan -> Unit
 seedPhysicalW emit physical =

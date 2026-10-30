@@ -206,9 +206,7 @@ drivenEvidence gctx _ =
 
 localAbsFor : GraphCtx -> String -> Option LocalAbs
 localAbsFor gctx name =
-  match omLookup name gctx.graphRun.localAbs.lasBinders.value
-    Some found => found
-    None => None
+  optionOr None (omLookup name gctx.graphRun.localAbs.lasBinders.value)
 
 -- dict_pass for locals: an abstracted binder takes its dictionary parameters, and an
 -- occurrence of a binder that abstracted nothing is a plain variable again.

@@ -1,5 +1,5 @@
 # META
-source_lines=1756
+source_lines=1754
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -225,9 +225,7 @@ public export data PropOutcome v =
 -- (name not found in the lookup) omits the location rather than printing a
 -- misleading `:0`.
 lineOfPropName : String -> List (String, Int) -> Int
-lineOfPropName name propLines = match lookupAssoc name propLines
-  Some l => l
-  None => 0
+lineOfPropName name propLines = optionOr 0 (lookupAssoc name propLines)
 
 propLocPrefix : String -> Int -> String
 propLocPrefix _ 0 = ""
@@ -1819,7 +1817,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "checkProp" ((PVar "rootEnv") (PVar "body") (PVar "inputs")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EVar "rootEnv")) (EVar "inputs"))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VBool" (PVar "b")) () (EVar "b")) (arm PWild () (EVar "False"))))))
 (DData Public "PropOutcome" ("v") ((variant "PropPassed" (ConPos)) (variant "PropFailed" (ConPos (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "v"))) (TyCon "Bool")))) ())
 (DTypeSig false "lineOfPropName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "Int"))))
-(DFunDef false "lineOfPropName" ((PVar "name") (PVar "propLines")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "propLines")) (arm (PCon "Some" (PVar "l")) () (EVar "l")) (arm (PCon "None") () (ELit (LInt 0)))))
+(DFunDef false "lineOfPropName" ((PVar "name") (PVar "propLines")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "propLines"))))
 (DTypeSig false "propLocPrefix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "propLocPrefix" (PWild (PLit (LInt 0))) (ELit (LString "")))
 (DFunDef false "propLocPrefix" ((PVar "target") (PVar "line")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString ": "))))
@@ -2295,7 +2293,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "checkProp" ((PVar "rootEnv") (PVar "body") (PVar "inputs")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EVar "rootEnv")) (EVar "inputs"))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VBool" (PVar "b")) () (EVar "b")) (arm PWild () (EVar "False"))))))
 (DData Public "PropOutcome" ("v") ((variant "PropPassed" (ConPos)) (variant "PropFailed" (ConPos (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "v"))) (TyCon "Bool")))) ())
 (DTypeSig false "lineOfPropName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "Int"))))
-(DFunDef false "lineOfPropName" ((PVar "name") (PVar "propLines")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "propLines")) (arm (PCon "Some" (PVar "l")) () (EVar "l")) (arm (PCon "None") () (ELit (LInt 0)))))
+(DFunDef false "lineOfPropName" ((PVar "name") (PVar "propLines")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "propLines"))))
 (DTypeSig false "propLocPrefix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "propLocPrefix" (PWild (PLit (LInt 0))) (ELit (LString "")))
 (DFunDef false "propLocPrefix" ((PVar "target") (PVar "line")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString ": "))))

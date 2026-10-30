@@ -1,5 +1,5 @@
 # META
-source_lines=5082
+source_lines=5080
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_locate.{locateOffset, locateTokenDiagnostic}
@@ -4665,9 +4665,7 @@ programWithSpans = defer
 -- panic-on-unparseable behaviour the compiler + `medaka fmt` rely on.
 export
 parseWithPositions : String -> (List Decl, Positions)
-parseWithPositions src = match parseWithPositionsOpt src
-  Some r => r
-  None => panic "parse error"
+parseWithPositions src = optionOrPanic "parse error" (parseWithPositionsOpt src)
 
 -- Backward-compatibility alias kept for callers in `compiler/tools/lint.mdk`'s
 -- `lintFileDiagTriple` and `compiler/driver/medaka_cli.mdk`'s `lintFileFresh`. See
@@ -6520,7 +6518,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "programWithSpans" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "programWithSpans" () (EApp (EApp (EVar "deferThen") (EVar "skipNoise")) (ELam (PWild) (EApp (EVar "many") (EVar "spanDeclThenNoise")))))
 (DTypeSig true "parseWithPositions" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions"))))
-(DFunDef false "parseWithPositions" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "Some" (PVar "r")) () (EVar "r")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "parse error"))))))
+(DFunDef false "parseWithPositions" ((PVar "src")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "parse error"))) (EApp (EVar "parseWithPositionsOpt") (EVar "src"))))
 (DTypeSig true "parseWithPositionsLocated" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions"))))
 (DFunDef false "parseWithPositionsLocated" ((PVar "src")) (EApp (EVar "parseWithPositions") (EVar "src")))
 (DTypeSig true "parseWithPositionsOpt" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))
@@ -8021,7 +8019,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "programWithSpans" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "programWithSpans" () (EApp (EApp (EMethodRef "deferThen") (EVar "skipNoise")) (ELam (PWild) (EApp (EVar "many") (EVar "spanDeclThenNoise")))))
 (DTypeSig true "parseWithPositions" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions"))))
-(DFunDef false "parseWithPositions" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "Some" (PVar "r")) () (EVar "r")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "parse error"))))))
+(DFunDef false "parseWithPositions" ((PVar "src")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "parse error"))) (EApp (EVar "parseWithPositionsOpt") (EVar "src"))))
 (DTypeSig true "parseWithPositionsLocated" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions"))))
 (DFunDef false "parseWithPositionsLocated" ((PVar "src")) (EApp (EVar "parseWithPositions") (EVar "src")))
 (DTypeSig true "parseWithPositionsOpt" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))

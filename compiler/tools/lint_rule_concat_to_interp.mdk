@@ -90,9 +90,7 @@ strLitValueOf e = match unwrapLoc e
   _ => None
 
 isStrLitOperand : Expr -> Bool
-isStrLitOperand e = match strLitValueOf e
-  Some _ => True
-  None => False
+isStrLitOperand e = isSome (strLitValueOf e)
 
 -- decoded literal value contains the 2-char sequence `\{` (would open an interp
 -- hole) — such a literal is unsafe to inline into an interpolated string.

@@ -510,11 +510,7 @@ test "wasm reach keeps a dispatch-only impl and its lazy global, drops the rest"
 test "an unreached plan reports no reach and keeps every unit" =
   let plan = buildEmitPlan WasmBackend PreludeFreeRuntime reachProgram
   expectAll [
-    labelFail
-      "no wasmOnlyReach"
-      (expectTrue (match plan.wasmOnlyReach
-        Some _ => False
-        None => True)),
+    labelFail "no wasmOnlyReach" (expectTrue (isNone plan.wasmOnlyReach)),
     labelFail
       "dead keeps its eagerReach entry"
       (expectNotEqual (reachOf "dead" plan) ["<no entry>"]),
