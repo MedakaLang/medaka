@@ -1,0 +1,43 @@
+-- rule-bind-then-destructure with CONSTRUCTOR patterns (Tier 0 syntactic oracle).
+-- The single-ctor `data` decls are what let the oracle prove irrefutability.
+
+data Box a = Box a
+data Two = First Int | Second Int
+
+-- POSITIVE: `Box` is the SOLE constructor of its datatype → the single-arm
+-- match is irrefutable → fires.
+unwrap : Box Int -> Box Int
+-- expect-next-line rule-bind-then-destructure
+unwrap b0 = do
+  (Box x) <- mkBox b0
+  pure x
+
+-- NEGATIVE: `First` is one of TWO constructors → refutable → does NOT fire.
+pick : Two -> Two
+pick t0 = do
+  t <- mkTwo t0
+  match t
+    First v => pure v
+
+-- Positive + negative fixtures for rule-bind-then-destructure.
+
+-- POSITIVE: bind then final irrefutable tuple-destructure → fires.
+splitUp : Thing
+-- expect-next-line rule-bind-then-destructure
+splitUp = do
+  (a, b) <- compute
+  use a b
+
+-- NEGATIVE: the bound var is still used in the arm body → does NOT fire.
+keepWhole : Thing
+keepWhole = do
+  q <- compute
+  match q
+    (a, b) => use q a
+
+-- NEGATIVE: a constructor arm is refutable → skipped entirely.
+ctorCase : Thing
+ctorCase = do
+  r <- compute
+  match r
+    Some v => use v

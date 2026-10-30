@@ -55,3 +55,41 @@ prop "plain not in a prop body" (b : Bool) = not b /= b
 interface Plain a where
   plain : a -> Bool
   plain x = not (not' x)
+
+-- Fixture for rule-bool-simplify: redundant boolean shapes.
+
+-- POSITIVE: if selecting the two bool literals.
+-- expect-next-line rule-bool-simplify
+ifTF c = c
+-- expect-next-line rule-bool-simplify
+ifFT c = not c
+
+-- POSITIVE: comparison against a bool literal (either side).
+-- expect-next-line rule-bool-simplify
+eqT x = x
+-- expect-next-line rule-bool-simplify
+eqF x = not x
+-- expect-next-line rule-bool-simplify
+neT x = not x
+-- expect-next-line rule-bool-simplify
+neF x = x
+-- expect-next-line rule-bool-simplify
+tEq x = x
+
+-- POSITIVE: double negation (`not` only — `!` is Ref-deref since #1739 half A,
+-- so `!!x` below is a NEGATIVE case).
+-- expect-next-line rule-bool-simplify
+notNot x = x
+bangBang x = !!x
+
+-- NEGATIVE: `if c then True else e` (e not a literal) — excluded (short-circuit).
+negOrShape c e = if c then True else e
+
+-- NEGATIVE: only ONE branch is a literal.
+negOneLit c t = if c then t else False
+
+-- NEGATIVE: comparison of two bool literals is left alone.
+negBothLit = True == False
+
+-- NEGATIVE: single negation is not redundant.
+negSingle x = not x

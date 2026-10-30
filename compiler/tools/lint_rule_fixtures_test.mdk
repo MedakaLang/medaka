@@ -24,6 +24,14 @@
 -- fixture until the marker is dropped.  A fixture with `unfixed` markers must
 -- keep its line count under the fix.
 --
+-- Optional first line `-- fixture-path: <name>` is the virtual path the fixture
+-- is linted under (default `fixture.mdk`), for rules scoped by file name such as
+-- `rule-test-prelude-shadow`, which fires only under a `_test.mdk` name.
+--
+-- A rule whose metadata needs the stdlib index (`rule-stdlib-reimpl`) is linted
+-- with the index the CLI builds, built once per test process by that rule's
+-- `test` block; every other rule sees `emptyStdlibIndex`.
+--
 -- Internal-scope rules need no activation here: the scope filter lives in the
 -- CLI, and this harness selects the rule by name.
 --
@@ -46,23 +54,49 @@ import string.{lines, words, trim, stripPrefix}
 import frontend.ast.{Loc(..)}
 import tools.lint.{
   Finding(..),
+  StdlibIndex(..),
   allRuleNames,
   applyFixes,
+  buildStdlibIndexResult,
   emptyStdlibIndex,
   lintParseSource,
   lintProgram,
   selectRules,
+  stdlibIndexNeeded,
 }
 
 -- The rules that have a fixture, named without their `rule-` prefix; one
 -- `test` block per name below.
 fixtureNames : List String
 fixtureNames = [
+  "andthen-pure-map",
+  "bind-chain-to-do",
+  "bind-then-destructure",
   "bool-simplify",
+  "clause-map",
+  "clone-type",
+  "complement-predicate",
+  "concat-to-interp",
+  "dead-code",
+  "destructure-in-param",
+  "double-reverse",
+  "hand-rolled-derivable",
+  "if-max-min",
   "lambda-section",
+  "match-on-param",
+  "match-to-map",
   "missing-signature",
   "not-eq",
+  "orelse-staircase",
+  "promissory-reader",
+  "regex-literal",
+  "rem-parity",
+  "self-shadow-extern",
+  "stdlib-reimpl",
+  "test-bool-literal-equal",
   "test-equal-in-true",
+  "test-prelude-shadow",
+  "when-unless",
 ]
 
 fixtureDir : <Env "MEDAKA_ROOT"> String
@@ -114,20 +148,41 @@ findingLine f = match f.loc
   Some (Loc _ line _ _ _) => [line]
   None => []
 
--- The lines `rule` flags in `src`, or the parse failure.
-lintLines : String -> String -> Result String (List Int)
-lintLines rule src = match lintParseSource src
+pathPrefix : String
+pathPrefix = "-- fixture-path: "
+
+-- The virtual path a fixture is linted under: its header line, else `fixture.mdk`.
+fixturePath : String -> String
+fixturePath src = match lines src
+  first :: _ => match stripPrefix pathPrefix first
+    Some p => trim p
+    None => "fixture.mdk"
+  [] => "fixture.mdk"
+
+-- The lines `rule` flags in `src` under `path` with `idx`, or the parse failure.
+lintLinesAt : StdlibIndex ->
+  String ->
+  String ->
+  String ->
+  Result String (List Int)
+lintLinesAt idx path rule src = match lintParseSource src
   Err _ => Err "the source does not parse"
   Ok (decls, pos) =>
     Ok
       (flaggedLines
-        (lintProgram
-          emptyStdlibIndex
-          (selectRules [rule] [])
-          "fixture.mdk"
-          src
-          pos
-          decls))
+        (lintProgram idx (selectRules [rule] []) path src pos decls))
+
+lintLines : String -> String -> Result String (List Int)
+lintLines rule src = lintLinesAt emptyStdlibIndex (fixturePath src) rule src
+
+-- The index a rule is linted with: the CLI's when the rule reads it.
+indexFor : String -> <IO> Result String StdlibIndex
+indexFor rule =
+  if stdlibIndexNeeded [rule] [] then match buildStdlibIndexResult
+    Ok idx => Ok idx
+    Err _ => Err "cannot build the stdlib index"
+  else
+    Ok emptyStdlibIndex
 
 readOr : String -> <FileRead> Result String String
 readOr path = match readFile path
@@ -139,16 +194,18 @@ unknownMarkers src =
   filter (r => not (elem r allRuleNames)) (nub (map markedRule (markers src)))
 
 -- The flagged lines equal the annotated lines.
-flaggedMatchesMarked : String -> <Env "MEDAKA_ROOT", FileRead> Expectation
+flaggedMatchesMarked : String -> <IO, Env "MEDAKA_ROOT", FileRead> Expectation
 flaggedMatchesMarked name = match readOr "\{fixtureDir}/\{name}.mdk"
   Err e => fail e
   Ok src =>
     let rule = "rule-\{name}"
-    match unknownMarkers src
-      [] => match lintLines rule src
+    match (unknownMarkers src, indexFor rule)
+      (_ :: _, _) =>
+        fail "markers name unregistered rules: \{unknownMarkers src}"
+      (_, Err e) => fail e
+      ([], Ok idx) => match lintLinesAt idx (fixturePath src) rule src
         Err e => fail e
         Ok flagged => expectEqual (expectedLines rule src) flagged
-      unknown => fail "markers name unregistered rules: \{unknown}"
 
 -- Applying the rule's fix reproduces the `.fixed` file, which still parses and
 -- is clean of the rule.
@@ -185,7 +242,7 @@ rosterIsClosed = match listDir fixtureDir
 
 -- One rule's whole fixture: a positive exists, the flagged lines match the
 -- markers, and the fix (when there is a `.fixed`) is clean.
-fixtureHolds : String -> <Env "MEDAKA_ROOT", FileRead> Expectation
+fixtureHolds : String -> <IO, Env "MEDAKA_ROOT", FileRead> Expectation
 fixtureHolds name = expectAll [
   labelFail "marks a positive" (hasPositive name),
   labelFail "flagged lines" (flaggedMatchesMarked name),
@@ -197,15 +254,76 @@ hasPositive name = match readOr "\{fixtureDir}/\{name}.mdk"
   Err e => fail e
   Ok src => expectFalse (isEmpty (expectedLines "rule-\{name}" src))
 
+test "rule-andthen-pure-map fixture" = fixtureHolds "andthen-pure-map"
+
+test "rule-bind-chain-to-do fixture" = fixtureHolds "bind-chain-to-do"
+
+test "rule-bind-then-destructure fixture" = fixtureHolds "bind-then-destructure"
+
 test "rule-bool-simplify fixture" = fixtureHolds "bool-simplify"
 
+test "rule-clause-map fixture" = fixtureHolds "clause-map"
+
+test "rule-clone-type fixture" = fixtureHolds "clone-type"
+
+test "rule-complement-predicate fixture" = fixtureHolds "complement-predicate"
+
+test "rule-concat-to-interp fixture" = fixtureHolds "concat-to-interp"
+
+test "rule-dead-code fixture" = fixtureHolds "dead-code"
+
+test "rule-destructure-in-param fixture" = fixtureHolds "destructure-in-param"
+
+test "rule-double-reverse fixture" = fixtureHolds "double-reverse"
+
+test "rule-hand-rolled-derivable fixture" = fixtureHolds "hand-rolled-derivable"
+
+test "rule-if-max-min fixture" = fixtureHolds "if-max-min"
+
 test "rule-lambda-section fixture" = fixtureHolds "lambda-section"
+
+test "rule-match-on-param fixture" = fixtureHolds "match-on-param"
+
+test "rule-match-to-map fixture" = fixtureHolds "match-to-map"
 
 test "rule-missing-signature fixture" = fixtureHolds "missing-signature"
 
 test "rule-not-eq fixture" = fixtureHolds "not-eq"
 
+test "rule-orelse-staircase fixture" = fixtureHolds "orelse-staircase"
+
+test "rule-promissory-reader fixture" = fixtureHolds "promissory-reader"
+
+test "rule-regex-literal fixture" = fixtureHolds "regex-literal"
+
+test "rule-rem-parity fixture" = fixtureHolds "rem-parity"
+
+test "rule-self-shadow-extern fixture" = fixtureHolds "self-shadow-extern"
+
+test "rule-stdlib-reimpl fixture" = fixtureHolds "stdlib-reimpl"
+
+test "rule-test-bool-literal-equal fixture" =
+  fixtureHolds "test-bool-literal-equal"
+
 test "rule-test-equal-in-true fixture" = fixtureHolds "test-equal-in-true"
+
+test "rule-test-prelude-shadow fixture" = fixtureHolds "test-prelude-shadow"
+
+test "rule-when-unless fixture" = fixtureHolds "when-unless"
+
+-- The same declarations are silent outside a `_test.mdk` path, so the header
+-- path is what makes the rule fire.
+test "rule-test-prelude-shadow is silent under a non-test path" =
+  match readOr "\{fixtureDir}/test-prelude-shadow.mdk"
+    Err e => fail e
+    Ok src =>
+      match (lintLinesAt
+        emptyStdlibIndex
+        "fixture.mdk"
+        "rule-test-prelude-shadow"
+        src)
+        Err e => fail e
+        Ok flagged => expectEqual [] flagged
 
 test "every fixture file is on the roster" = rosterIsClosed
 
