@@ -36,10 +36,10 @@ running doctests in stdlib/args.mdk
   ok   stdlib/args.mdk:412: map (a => a.rest) (parseArgs (withTrailing TrailingRaw (spec "run" [switch ["--json"] "j"])) ["--json", "p.mdk", "--zzz"])
   ok   stdlib/args.mdk:416: map (a => a.rest) (parseArgs (withTrailing TrailingAfterSeparator (spec "gate" [switch ["--json"] "j"])) ["--json", "--", "--x", "--"])
   ok   stdlib/args.mdk:420: map (a => flagValue "--anything" a) (parseArgs (withUnknown CollectUnknown (spec "codemod" [])) ["--anything", "v"])
-  ok   stdlib/args.mdk:553: map (a => flag "--write" a) (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) [])
-  ok   stdlib/args.mdk:565: map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
-  ok   stdlib/args.mdk:579: map (a => lastValue "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
-  ok   stdlib/args.mdk:596: map (a => flagValues "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
+  ok   stdlib/args.mdk:551: map (a => flag "--write" a) (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) [])
+  ok   stdlib/args.mdk:563: map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
+  ok   stdlib/args.mdk:577: map (a => lastValue "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
+  ok   stdlib/args.mdk:594: map (a => flagValues "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
 
 stdlib/args.mdk: 41/41 passed
 Testing "Eq Args discriminates every field" [eval] ... OK (100 tests passed)
