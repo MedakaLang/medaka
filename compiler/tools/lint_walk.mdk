@@ -1,7 +1,8 @@
--- compiler/tools/lint_walk.mdk — the lint runner: `lintProgram*`, per-file
--- facts, the autofix driver, finding filters, inline suppressions, the cross-file
--- runner and the stdlib-index builders.  The CLI filters and severity-overrides
--- the registry's rules and hands them in, so this module knows nothing about flags.
+-- compiler/tools/lint_walk.mdk — the lint runner: `lintProgram*` and the one
+-- visitor walk per file (`runVisitors`), per-file facts, the autofix driver,
+-- finding filters, inline suppressions, the cross-file runner and the
+-- stdlib-index builders.  The CLI filters and severity-overrides the registry's
+-- rules and hands them in, so this module knows nothing about flags.
 
 import frontend.ast.{
   letBindName,
@@ -12,7 +13,17 @@ import frontend.ast.{
   useMemberLocal,
   IfaceMethod(..),
   Decl(..),
+  Expr(..),
   ExternDecl(..),
+  Pat,
+}
+import frontend.ast_walk.{
+  BodyOwner(..),
+  DeclBody(..),
+  ExprKind(..),
+  childExprs,
+  declBodies,
+  exprKind,
 }
 import frontend.parser.{
   Positions(..),
@@ -67,13 +78,16 @@ import frontend.lexer.{
 }
 import tools.lint_core.{
   CrossFileRule(..),
+  Ctx(..),
   DirScope(..),
   Directive(..),
   FileFacts(..),
   Finding(..),
   Rule(..),
+  RuleCheck(..),
   StdlibIndex(..),
   StdlibIndexError(..),
+  Visitor(..),
   factComments,
   factDupClauses,
   memoNew,
@@ -131,7 +145,9 @@ lintProgram idx rules path src pos prog =
   lintProgramFacts idx rules path (mkFileFacts src prog pos) pos prog
 
 -- `lintProgram` over facts the caller already holds, so the caller's own
--- comment/directive/key needs share the rules' derivations.
+-- comment/directive/key needs share the rules' derivations.  Findings come out
+-- rule by rule in `rules` order; every visitor rule's findings come from one
+-- shared walk of the file.
 export
 lintProgramFacts : StdlibIndex ->
   List Rule ->
@@ -141,19 +157,221 @@ lintProgramFacts : StdlibIndex ->
   List Decl ->
   List Finding
 lintProgramFacts idx rules path facts pos prog =
-  flatMap (runRuleOn idx path facts pos prog) rules
+  let enabled = filterList ruleEnabled rules
+  let visitorSets = flatMap (ruleVisitors idx path facts pos prog) enabled
+  let walked =
+    if isEmptyL visitorSets then
+      []
+    else
+      runVisitors visitorSets (declLocList pos prog)
+  ruleFindings idx path facts pos prog enabled walked
 
-runRuleOn : StdlibIndex ->
+ruleEnabled : Rule -> Bool
+ruleEnabled r = r.enabled
+
+ruleVisitors : StdlibIndex ->
   String ->
   FileFacts ->
   Positions ->
   List Decl ->
   Rule ->
+  List (List Visitor)
+ruleVisitors idx path facts pos prog r = match r.check
+  WholeFile _ => []
+  Visits visits => [visits idx path facts pos prog]
+
+-- `walked` holds one finding list per visitor rule, in `rules` order.
+ruleFindings : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Rule ->
+  List (List Finding) ->
   List Finding
-runRuleOn idx path facts pos prog r
-  | r.enabled =
-    map (restampSeverity r.severity) (r.check idx path facts pos prog)
-  | otherwise = []
+ruleFindings _ _ _ _ _ [] _ = []
+ruleFindings idx path facts pos prog (r :: rs) walked = match r.check
+  WholeFile check =>
+    map (restampSeverity r.severity) (check idx path facts pos prog)
+      ++ ruleFindings idx path facts pos prog rs walked
+  Visits _ => match walked
+    hits :: rest =>
+      map (restampSeverity r.severity) hits
+        ++ ruleFindings idx path facts pos prog rs rest
+    [] => ruleFindings idx path facts pos prog rs []
+
+-- ── the visitor walk ──────────────────────────────────────────────────────────
+-- One pass over a file's declarations (each paired with its start location)
+-- for every visitor set at once: each `OnDecl` sees every top-level
+-- declaration, and each `OnExpr` sees every expression node of the listed kinds
+-- in every body `declBodies` names, pre-order.  Returns one finding list per
+-- visitor set, in the order given.  No body is walked when no set has an
+-- `OnExpr`.
+export
+runVisitors : List (List Visitor) ->
+  List (Decl, Option Loc) ->
+  List (List Finding)
+runVisitors sets decls =
+  let tagged = zipWithIndex sets
+  let exprHooks = flatMap exprHooksOf tagged
+  let declHooks = flatMap declHooksOf tagged
+  let hits = reverseL (walkDecls exprHooks declHooks [] decls)
+  map (t => findingsTagged (fst t) hits) tagged
+
+data ExprHook = ExprHook Int (List ExprKind) (Ctx -> Expr -> List Finding)
+
+data DeclHook = DeclHook Int (Ctx -> Decl -> List Finding)
+
+-- What every node of one body shares: its owner's name and parameters, and
+-- whether it is a test or prop body.
+data BodyScope = BodyScope String (List Pat) Bool
+
+zipWithIndex : List a -> List (Int, a)
+zipWithIndex xs = zipIndexFrom 0 xs
+
+zipIndexFrom : Int -> List a -> List (Int, a)
+zipIndexFrom _ [] = []
+zipIndexFrom i (x :: rest) = (i, x) :: zipIndexFrom (i + 1) rest
+
+exprHooksOf : (Int, List Visitor) -> List ExprHook
+exprHooksOf (i, vs) = flatMap (exprHookOf i) vs
+
+exprHookOf : Int -> Visitor -> List ExprHook
+exprHookOf i (OnExpr kinds cb) = [ExprHook i kinds cb]
+exprHookOf _ (OnDecl _) = []
+
+declHooksOf : (Int, List Visitor) -> List DeclHook
+declHooksOf (i, vs) = flatMap (declHookOf i) vs
+
+declHookOf : Int -> Visitor -> List DeclHook
+declHookOf _ (OnExpr _ _) = []
+declHookOf i (OnDecl cb) = [DeclHook i cb]
+
+findingsTagged : Int -> List (Int, Finding) -> List Finding
+findingsTagged i hits = map snd (filterList (h => fst h == i) hits)
+
+-- `acc` holds the hits so far, newest first.  The walk recurses on its lists
+-- directly rather than through `fold`, whose dispatch and per-node closures
+-- were a measured share of lint's cost.
+walkDecls : List ExprHook ->
+  List DeclHook ->
+  List (Int, Finding) ->
+  List (Decl, Option Loc) ->
+  List (Int, Finding)
+walkDecls _ _ acc [] = acc
+walkDecls exprHooks declHooks acc ((d, loc) :: rest) =
+  let bodies = declBodies d
+  let acc2 = match declHooks
+    [] => acc
+    _ => runDeclHooks (scopeCtx (declScope bodies) KLoc loc) d acc declHooks
+  let acc3 = match exprHooks
+    [] => acc2
+    _ => walkBodies exprHooks loc acc2 bodies
+  walkDecls exprHooks declHooks acc3 rest
+
+-- A declaration's own `Ctx` reads its first body's owner, so a function clause
+-- carries its name and parameters and a test or prop is in a test.
+declScope : List DeclBody -> BodyScope
+declScope [] = BodyScope "" [] False
+declScope ((DeclBody owner _) :: _) = ownerScope owner
+
+ownerScope : BodyOwner -> BodyScope
+ownerScope (OwnerClause name ps) = BodyScope name ps False
+ownerScope (OwnerImplMethod _ m ps) = BodyScope m ps False
+ownerScope (OwnerIfaceDefault _ m ps) = BodyScope m ps False
+ownerScope (OwnerTest name) = BodyScope name [] True
+ownerScope (OwnerProp name _) = BodyScope name [] True
+ownerScope (OwnerLetGroup name ps) = BodyScope name ps False
+
+-- The walk carries the parent kind unwrapped, with `KLoc` standing for "no
+-- parent": an `ELoc` is never a parent, and the `Option` is built only when a
+-- callback fires.
+scopeCtx : BodyScope -> ExprKind -> Option Loc -> Ctx
+scopeCtx (BodyScope name ps inTest) parent span = Ctx {
+  ctxDeclName = name,
+  ctxParams = ps,
+  ctxInTest = inTest,
+  ctxParent = if parent == KLoc then None else Some parent,
+  ctxSpan = span,
+}
+
+runDeclHooks : Ctx ->
+  Decl ->
+  List (Int, Finding) ->
+  List DeclHook ->
+  List (Int, Finding)
+runDeclHooks _ _ acc [] = acc
+runDeclHooks ctx d acc ((DeclHook i cb) :: rest) =
+  runDeclHooks ctx d (pushTagged i (cb ctx d) acc) rest
+
+pushTagged : Int -> List Finding -> List (Int, Finding) -> List (Int, Finding)
+pushTagged _ [] acc = acc
+pushTagged i (f :: fs) acc = pushTagged i fs ((i, f) :: acc)
+
+walkBodies : List ExprHook ->
+  Option Loc ->
+  List (Int, Finding) ->
+  List DeclBody ->
+  List (Int, Finding)
+walkBodies _ _ acc [] = acc
+walkBodies hooks loc acc ((DeclBody owner body) :: rest) =
+  walkBodies
+    hooks
+    loc
+    (walkExpr hooks (ownerScope owner) KLoc loc acc body)
+    rest
+
+-- An `ELoc` is transparent: its span becomes the span beneath it and its
+-- parent is the parent of what it wraps.
+walkExpr : List ExprHook ->
+  BodyScope ->
+  ExprKind ->
+  Option Loc ->
+  List (Int, Finding) ->
+  Expr ->
+  List (Int, Finding)
+walkExpr hooks scope parent _ acc (ELoc l inner) =
+  walkExpr hooks scope parent (Some l) acc inner
+walkExpr hooks scope parent span acc e =
+  let k = exprKind e
+  let acc2 = visitHooks scope parent span k e acc hooks
+  walkKids hooks scope k span acc2 (childExprs e)
+
+walkKids : List ExprHook ->
+  BodyScope ->
+  ExprKind ->
+  Option Loc ->
+  List (Int, Finding) ->
+  List Expr ->
+  List (Int, Finding)
+walkKids _ _ _ _ acc [] = acc
+walkKids hooks scope parent span acc (c :: cs) =
+  walkKids hooks scope parent span (walkExpr hooks scope parent span acc c) cs
+
+visitHooks : BodyScope ->
+  ExprKind ->
+  Option Loc ->
+  ExprKind ->
+  Expr ->
+  List (Int, Finding) ->
+  List ExprHook ->
+  List (Int, Finding)
+visitHooks _ _ _ _ _ acc [] = acc
+visitHooks scope parent span k e acc ((ExprHook i kinds cb) :: rest)
+  | kindIn k kinds =
+    visitHooks
+      scope
+      parent
+      span
+      k
+      e
+      (pushTagged i (cb (scopeCtx scope parent span) e) acc)
+      rest
+  | otherwise = visitHooks scope parent span k e acc rest
+
+kindIn : ExprKind -> List ExprKind -> Bool
+kindIn _ [] = False
+kindIn k (x :: xs) = k == x || kindIn k xs
 
 restampSeverity : Severity -> Finding -> Finding
 restampSeverity sev f =

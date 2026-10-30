@@ -1,5 +1,5 @@
 # META
-source_lines=1396
+source_lines=1403
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -71,6 +71,13 @@ import support.util.{
   lookupAssoc,
 }
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
+
+-- lint-disable-file rule-duplicate-body
+-- mapChildren and its one-level helpers are structural twins of
+-- frontend.ast_walk.mapChildExprs and its helpers; desugar adopts ast_walk in
+-- #4649 (the move needs its own Ir measurement, desugar maps EAsPat/EOrPat as
+-- identity). The findings land on every clause line, which a next-line
+-- directive cannot cover.
 
 -- ── Bottom-up traversal engine (mirror of map_expr / map_decl) ────────────
 -- `mapExpr f e` rewrites every subexpression of `e` with `f`, post-order: the

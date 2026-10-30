@@ -537,6 +537,12 @@ inlang-frontend-parser-test:
 inlang-frontend-ast-codec-test:
 	./medaka test compiler/frontend/ast_codec_test.mdk
 
+## compiler/frontend/ast_walk_test.mdk is a `*_test.mdk` sibling, outside every
+## entry's import closure ([W-MODULE-BLIND]): it is what turns a constructor
+## missing from ast_walk's enumerations into a failure.
+inlang-frontend-ast-walk-test:
+	./medaka test compiler/frontend/ast_walk_test.mdk
+
 ## compiler/types/prelude_elab.mdk is imported by types.typecheck and
 ## driver.build_cmd; this step runs its own sibling test by name.
 inlang-types-prelude-elab-test:

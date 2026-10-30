@@ -68,6 +68,13 @@ import support.util.{
 }
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 
+-- lint-disable-file rule-duplicate-body
+-- mapChildren and its one-level helpers are structural twins of
+-- frontend.ast_walk.mapChildExprs and its helpers; desugar adopts ast_walk in
+-- #4649 (the move needs its own Ir measurement, desugar maps EAsPat/EOrPat as
+-- identity). The findings land on every clause line, which a next-line
+-- directive cannot cover.
+
 -- ── Bottom-up traversal engine (mirror of map_expr / map_decl) ────────────
 -- `mapExpr f e` rewrites every subexpression of `e` with `f`, post-order: the
 -- children are rewritten first, then `f` is applied to the rebuilt node.
