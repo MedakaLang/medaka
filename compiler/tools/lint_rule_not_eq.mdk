@@ -1,12 +1,14 @@
 -- lint rule rule-not-eq: a negated equality `not (a == b)` / `not (a /= b)`; prefer the operator.
 
 import frontend.ast.{Loc(..), Expr(..), Decl(..)}
+import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
 import frontend.exhaust.{Oracle}
 import tools.lint_core.{
   Category(..),
+  Ctx(..),
   FileFacts(..),
   Finding(..),
   Fixability(..),
@@ -15,11 +17,11 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor(..),
+  mkVisitorRule,
 }
 import tools.lint_shared.{
   detApply,
-  exprRuleFindings,
   exprRuleFix,
   noExcl,
   notArgOf,
@@ -30,7 +32,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameNotEq,
       summary =
@@ -44,7 +46,7 @@ rule =
       fixability = Fixable,
       needs = [],
     }
-    ruleNotEq
+    notEqVisitors
     (Some notEqFix)
 
 -- ── rule: not-eq ──────────────────────────────────────────────────────────────
@@ -61,13 +63,19 @@ notEqOf e = match notArgOf e
     _ => None
   None => None
 
-ruleNotEq : StdlibIndex ->
+-- `notArgOf` matches an application only, so only `EApp` nodes are visited.
+notEqVisitors : StdlibIndex ->
   String ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleNotEq _ _ _ pos prog = exprRuleFindings noExcl notEqOf notEqFinding pos prog
+  List Visitor
+notEqVisitors _ _ _ _ _ = [OnExpr [KApp] notEqAt]
+
+notEqAt : Ctx -> Expr -> List Finding
+notEqAt ctx e = match notEqOf e
+  Some rewritten => [notEqFinding ctx.ctxSpan rewritten]
+  None => []
 
 notEqFinding : Option Loc -> Expr -> Finding
 notEqFinding loc rewritten = Finding {

@@ -22,12 +22,13 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor,
+  mkVisitorRule,
 }
 import tools.lint_shared.{
   andThenEtaFn,
   detApply,
-  exprRuleFindings,
+  exprRuleVisitors,
   exprRuleFix,
   isEVarNamed,
   isNilPCon,
@@ -40,7 +41,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameMatchToMap,
       summary =
@@ -108,9 +109,9 @@ ruleMatchToMap : StdlibIndex ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleMatchToMap _ _ _ pos prog =
-  exprRuleFindings noExcl matchToMapOf matchToMapFinding pos prog
+  List Visitor
+ruleMatchToMap _ _ _ _ _ =
+  exprRuleVisitors noExcl matchToMapOf matchToMapFinding
 
 matchToMapFinding : Option Loc -> Expr -> Finding
 matchToMapFinding loc rewritten = Finding {

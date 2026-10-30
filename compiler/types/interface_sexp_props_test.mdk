@@ -147,7 +147,7 @@ decodes text = match decodeInterface text
 test "a truncated file is refused" =
   let n = S.length smallText
   let cuts =
-    filter (i => i < n) (nodeEnds smallText ++ tokenMiddles smallText ++ [0, 1])
+    filter (< n) (nodeEnds smallText ++ tokenMiddles smallText ++ [0, 1])
   expectAll [
     labelFail
       "node ends tried"

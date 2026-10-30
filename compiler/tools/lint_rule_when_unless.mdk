@@ -15,11 +15,12 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor,
+  mkVisitorRule,
 }
 import tools.lint_shared.{
   detApply,
-  exprRuleFindings,
+  exprRuleVisitors,
   exprRuleFix,
   isEVarNamed,
   ruleNameWhenUnless,
@@ -29,7 +30,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameWhenUnless,
       summary =
@@ -75,9 +76,9 @@ ruleWhenUnless : StdlibIndex ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleWhenUnless _ _ _ pos prog =
-  exprRuleFindings whenUnlessExcl whenUnlessOf whenUnlessFinding pos prog
+  List Visitor
+ruleWhenUnless _ _ _ _ _ =
+  exprRuleVisitors whenUnlessExcl whenUnlessOf whenUnlessFinding
 
 whenUnlessFinding : Option Loc -> Expr -> Finding
 whenUnlessFinding loc rewritten = Finding {

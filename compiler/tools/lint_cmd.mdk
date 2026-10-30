@@ -205,6 +205,7 @@ fixabilityText NotFixable = "not-fixable"
 
 needText : Need -> String
 needText NeedsStdlibIndex = "stdlib-index"
+needText NeedsScopes = "scopes"
 
 -- `--scope`/`--ratchet`/`--tier` narrow the listing; an unrecognised value is an
 -- error naming the accepted ones, never an empty listing that reads as "none".

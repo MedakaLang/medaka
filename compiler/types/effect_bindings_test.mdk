@@ -1460,39 +1460,27 @@ test "an Effect-parameter alias types a recursion group with two back edges" = e
     expectEqual
       []
       (messagesFor
-        (rowAliasGroupSource
-          ++ "type S (e : Effect) a = Box <Clock | e> a\n"
-          ++ twoBackEdges "S e Int" "boxPure n")),
+        "\{rowAliasGroupSource}type S (e : Effect) a = Box <Clock | e> a\n\{twoBackEdges "S e Int" "boxPure n"}"),
     expectEqual
       []
       (messagesFor
-        (rowAliasGroupSource
-          ++ "type S (e : Effect) a = Box e a\n"
-          ++ twoBackEdges "S e Int" "boxPure n")),
+        "\{rowAliasGroupSource}type S (e : Effect) a = Box e a\n\{twoBackEdges "S e Int" "boxPure n"}"),
     expectEqual
       []
       (messagesFor
-        (rowAliasGroupSource
-          ++ "type S (e : Effect) a = Box <Clock | e> a\n"
-          ++ twoBackEdges "S <Audit | e> Int" "boxPure n")),
+        "\{rowAliasGroupSource}type S (e : Effect) a = Box <Clock | e> a\n\{twoBackEdges "S <Audit | e> Int" "boxPure n"}"),
     expectEqual
       []
       (messagesFor
-        (rowAliasGroupSource
-          ++ "type T (e : Effect) a = Unit -> <Clock | e> a\n"
-          ++ twoBackEdges "T e Int" "(_ => n)")),
+        "\{rowAliasGroupSource}type T (e : Effect) a = Unit -> <Clock | e> a\n\{twoBackEdges "T e Int" "(_ => n)"}"),
     expectEqual
       []
       (messagesFor
-        (rowAliasGroupSource
-          ++ "type L (e : Effect) a = List (Unit -> <Clock | e> a)\n"
-          ++ twoBackEdges "L e Int" "[_ => n]")),
+        "\{rowAliasGroupSource}type L (e : Effect) a = List (Unit -> <Clock | e> a)\n\{twoBackEdges "L e Int" "[_ => n]"}"),
     expectEqual
       "Int -> Box <Clock | a> Int"
       (renderedFor
-        (rowAliasGroupSource
-          ++ "type S (e : Effect) a = Box <Clock | e> a\n"
-          ++ twoBackEdges "S e Int" "boxPure n")
+        "\{rowAliasGroupSource}type S (e : Effect) a = Box <Clock | e> a\n\{twoBackEdges "S e Int" "boxPure n"}"
         "h"),
     expectEqual
       []
@@ -1509,9 +1497,7 @@ test "an Effect-parameter alias types a recursion group with two back edges" = e
         "`f` performs <Audit> on a caller-chosen row <Clock | a>; declare <Audit> in that row, or perform it through an argument",
       ]
       (messagesFor
-        (rowAliasGroupSource
-          ++ "type T (e : Effect) a = Unit -> <Clock | e> a\n"
-          ++ twoBackEdges "T e Int" "(u => let _ = emitAudit u in n)")),
+        "\{rowAliasGroupSource}type T (e : Effect) a = Unit -> <Clock | e> a\n\{twoBackEdges "T e Int" "(u => let _ = emitAudit u in n)"}"),
   ]
 
 -- #3626: an alias of a row-wrapped non-function type contributes its row

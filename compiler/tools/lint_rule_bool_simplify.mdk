@@ -15,11 +15,12 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor,
+  mkVisitorRule,
 }
 import tools.lint_shared.{
   detApply,
-  exprRuleFindings,
+  exprRuleVisitors,
   exprRuleFix,
   isBoolLit,
   isFalseLit,
@@ -33,7 +34,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameBoolSimplify,
       summary =
@@ -95,9 +96,9 @@ ruleBoolSimplify : StdlibIndex ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleBoolSimplify _ _ _ pos prog =
-  exprRuleFindings noExcl boolSimplifyOf boolSimplifyFinding pos prog
+  List Visitor
+ruleBoolSimplify _ _ _ _ _ =
+  exprRuleVisitors noExcl boolSimplifyOf boolSimplifyFinding
 
 boolSimplifyFinding : Option Loc -> Expr -> Finding
 boolSimplifyFinding loc rewritten = Finding {

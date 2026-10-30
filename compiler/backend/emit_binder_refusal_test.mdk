@@ -363,7 +363,7 @@ main = 6.0
                         )
                         :: map
                           (row => (
-                            mode ++ "/" ++ fst row,
+                            "\{mode}/\{fst row}",
                             playgroundRefusal binary entry dir mode row,
                           ))
                           playgroundMutationRows)

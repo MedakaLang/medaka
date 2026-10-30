@@ -148,8 +148,7 @@ test "every refusal is an Err of the right class" = match coreElab ()
         (expectEqual
           "malformed header/digest"
           (verdict
-            (readElabFile
-              (S.take (n - 4) text ++ "x" ++ S.drop (n - 3) text)))),
+            (readElabFile "\{S.take (n - 4) text}x\{S.drop (n - 3) text}"))),
       labelFail
         "cut inside the body"
         (expectEqual
@@ -302,7 +301,7 @@ test "a counter lowered under a recomputed digest passes the header read and fai
               "(counters \{pe.peEvCounter} "
               "(counters \{topRow pe.peEvidence} "
               (S.drop (i + 1) text)
-          withBody (S.take i text ++ "\n" ++ body) ""
+          withBody "\{S.take i text}\n\{body}" ""
       expectAll [
         labelFail
           "the header read accepts it"

@@ -374,6 +374,9 @@ test "arch_boundaries: declaration-visibility counts match visibility.golden" =
 test "arch_boundaries: frontend.ast closure matches its golden" =
   closurePin "frontend.ast"
 
+test "arch_boundaries: frontend.ast_walk closure matches its golden" =
+  closurePin "frontend.ast_walk"
+
 test "arch_boundaries: frontend.visibility closure matches its golden" =
   closurePin "frontend.visibility"
 
@@ -681,6 +684,9 @@ test "arch_boundaries: support.diag_codes closure matches its golden" =
 
 test "arch_boundaries: tools.lint_core closure matches its golden" =
   closurePin "tools.lint_core"
+
+test "arch_boundaries: tools.lint_scope closure matches its golden" =
+  closurePin "tools.lint_scope"
 
 -- Defined names (column-0, first word not a declaration keyword): an
 -- identifier `[a-z_][A-Za-z0-9_']*` or a parenthesised operator.

@@ -1158,7 +1158,7 @@ test "mutation control: a dropped egress IPAddressDeny range is caught" =
       (mutantOf
         egressService
         "pds-egress.service.no-172"
-        (without (l => l == "IPAddressDeny=172.16.0.0/12")))
+        (without (== "IPAddressDeny=172.16.0.0/12")))
       egressServiceDirectives)
 
 {- | A blanket `IPAddressAllow` added to an otherwise correct egress unit.
@@ -1219,7 +1219,7 @@ test "mutation control: a wildcard-bound egress listener is caught" =
       (mutantOf
         egressCaddyfile
         "Caddyfile.egress.no-bind"
-        (without (l => l == "\tbind 127.0.0.1")))
+        (without (== "\tbind 127.0.0.1")))
       egressCaddyDirectives)
 
 -- Without `admin off` Caddy claims 127.0.0.1:2019, which the inbound Caddy
@@ -1231,7 +1231,7 @@ test "mutation control: an egress config without admin off is caught" =
       (mutantOf
         egressCaddyfile
         "Caddyfile.egress.no-admin-off"
-        (without (l => l == "\tadmin off")))
+        (without (== "\tadmin off")))
       egressCaddyDirectives)
 
 -- The three outbound units share one roster, so this also proves that
@@ -1243,7 +1243,7 @@ test "mutation control: a dropped backup IPAddressDeny range is caught" =
       (mutantOf
         backupService
         "pds-backup.service.no-169"
-        (without (l => l == "IPAddressDeny=169.254.0.0/16")))
+        (without (== "IPAddressDeny=169.254.0.0/16")))
       outboundUnitDirectives)
 
 {- | A replaying healthping timer.

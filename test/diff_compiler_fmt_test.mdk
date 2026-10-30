@@ -14,8 +14,8 @@
    | `diff_compiler_exhaust` | (in-process: `compiler/frontend/exhaust_test.mdk`) | `test/exhaust_fixtures` | `.expected` |
    | `diff_compiler_fmt` | `fmt_main` | `test/fmt_fixtures` + `test/parse_fixtures` | `.fmt.golden` |
    | `diff_compiler_lex_files` | `lex_main` | three lexer modules and twelve stdlib modules | `.lextok.golden` |
-   | `diff_compiler_lint` | `lint_main` | `test/lint_fixtures` | `.expected` |
-   | `diff_compiler_lint_fix` | `lint_fix_main` | `test/lint_fix_fixtures` | `.fixed` |
+   | `diff_compiler_lint` | `lint_main --only=<rule>` | `test/lint_fixtures` | `.expected` |
+   | `diff_compiler_lint_fix` | `lint_fix_main --only=<rule>` | `test/lint_fix_fixtures` | `.fixed` |
 
    `diff_compiler_lex_files`' corpus is REAL SOURCE, not fixtures: the
    lexer modules plus twelve stdlib modules, which exercise
@@ -25,9 +25,9 @@
    `diff_compiler_lint`'s probe reads an environment variable the other five
    do not: `lint_main` builds its stdlib index from `$MEDAKA_ROOT/stdlib`, and
    indexes NOTHING when that is unset, which silences every
-   `rule-stdlib-reimpl` finding. Eight of its 46 fixtures answer differently
-   without it and the goldens are the with-index answer, so an unset
-   `MEDAKA_ROOT` reds those eight rather than passing on an empty index.
+   `rule-stdlib-reimpl` finding. `inline_suppression` answers differently
+   without it and its golden is the with-index answer, so an unset
+   `MEDAKA_ROOT` reds it rather than passing on an empty index.
    `medaka gate run` sets it for every gate (`gate_cmd.gateArgs`); a bare
    `medaka test --native` on this file inherits whatever the shell had.
 
@@ -94,7 +94,8 @@
    which is the price of a corpus that shrinks reding too. -}
 
 import compiler_cli_test_support.{
-  boundedVerbsSeconds, chompNewlines, inFreshDirOf, stripUnitAutoPrint
+  boundedVerbsSeconds, chompNewlines, fixtureStems, inFreshDirOf,
+  stripUnitAutoPrint
 }
 import fs.{fixtureDirs, fixtureFiles}
 import json.{Json, asArray, asInt, asString, get, parse}
@@ -167,29 +168,106 @@ rows = [
     stripUnit = True,
     fixtures = 16,
   },
-  Row {
-    gate = "diff_compiler_lint",
-    probe = "test/bin/lint_main",
-    corpus = ["test/lint_fixtures"],
-    prelude = [],
-    goldenSuffix = ".expected",
-    sorted = True,
-    stripUnit = True,
-    fixtures = 46,
-  },
-  Row {
-    gate = "diff_compiler_lint_fix",
-    probe = "test/bin/lint_fix_main",
-    corpus = ["test/lint_fix_fixtures"],
-    prelude = [],
-    goldenSuffix = ".fixed",
-    sorted = False,
-    stripUnit = False,
-    fixtures = 38,
-  },
 ]
 
 test "every probe reproduces its corpus's goldens" = gradeProbeRows rows
+
+{- | The `<stem> <rules>` rows of `<dir>/ONLY.txt`: the one rule set each
+   fixture's golden is the report (or the fix) of, so adding a rule moves none
+   of them. `capture_goldens.sh` reads the same file. -}
+onlyRows : String -> <FileRead, IO> Result String (List (String, String))
+onlyRows dir = match readFile "\{medakaRoot}/\{dir}/ONLY.txt"
+  Err e => Err "\{dir}/ONLY.txt: \{e}"
+  Ok raw =>
+    Ok (somes (map onlyRow (filter (l => not (startsWith "#" l)) (lines raw))))
+
+onlyRow : String -> Option (String, String)
+onlyRow l = match split " " (trim l)
+  [name, rules] => Some (name, rules)
+  _ => None
+
+-- A narrowed probe run over one fixture directory: the probe binary, the
+-- directory, whether its stdout is lint output (graded as a sorted line set),
+-- and the golden's file suffix.
+data NarrowedProbe = NarrowedProbe {
+  probe : String,
+  dir : String,
+  isLint : Bool,
+  suffix : String,
+}
+
+-- One narrowed fixture: the probe run with `--only=<rules>`, graded on its
+-- exit and its stdout against the fixture's golden.
+narrowedFailure : NarrowedProbe ->
+  (String, String) ->
+  <Exec, FileRead, IO> Option String
+narrowedFailure np (name, rules) =
+  let src = "\{medakaRoot}/\{np.dir}/\{name}.mdk"
+  match boundedVerb "\{medakaRoot}/\{np.probe}" ["--only=\{rules}", src]
+    Err e => Some "\{name}: could not spawn \{np.probe}: \{e}"
+    Ok (code, out, err) => match processFailure np.probe name code err
+      Some m => Some m
+      None => match readFile "\{medakaRoot}/\{np.dir}/\{name}\{np.suffix}"
+        Err e => Some "\{name}: no readable golden: \{e}"
+        Ok raw =>
+          let text =
+            chompNewlines (if np.isLint then stripUnitAutoPrint out else out)
+          let actual =
+            if np.isLint then
+              chompNewlines (unlines (sort (lines text)))
+            else
+              text
+          if chompNewlines raw == actual then
+            None
+          else
+            Some "\{name}: \{diffNote (chompNewlines raw) actual}"
+
+narrowedFailures : NarrowedProbe -> Int -> <Exec, FileRead, IO> List String
+narrowedFailures np want = match fixtureStems "\{medakaRoot}/\{np.dir}"
+  Err e => ["\{np.dir}: \{e}"]
+  Ok stems => match onlyRows np.dir
+    Err e => [e]
+    Ok table => narrowedGrade np want stems table
+
+narrowedGrade : NarrowedProbe ->
+  Int ->
+  List String ->
+  List (String, String) ->
+  <Exec, FileRead, IO> List String
+narrowedGrade np want stems table =
+  let tabled = sort (map fst table)
+  let uncovered =
+    if stems == tabled then
+      []
+    else
+      ["\{np.dir}: fixtures \{debug stems} are not the tabled \{debug tabled}"]
+  countFloor np.dir want stems
+    ++ uncovered
+    ++ somes (map (narrowedFailure np) table)
+
+test "diff_compiler_lint fixtures reproduce their one-rule goldens" =
+  report
+    "lint"
+    (narrowedFailures
+      NarrowedProbe {
+        probe = "test/bin/lint_main",
+        dir = "test/lint_fixtures",
+        isLint = True,
+        suffix = ".expected",
+      }
+      5)
+
+test "diff_compiler_lint_fix fixtures reproduce their one-rule goldens" =
+  report
+    "lint-fix"
+    (narrowedFailures
+      NarrowedProbe {
+        probe = "test/bin/lint_fix_main",
+        dir = "test/lint_fix_fixtures",
+        isLint = False,
+        suffix = ".fixed",
+      }
+      45)
 
 test "`medaka new`'s scaffold matches its golden tree" =
   report

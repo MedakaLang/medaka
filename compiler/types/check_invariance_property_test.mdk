@@ -611,7 +611,7 @@ test "census: the permutation and split laws see both verdicts and real reorderi
         ((bs, _) =>
           length (splitModules bs CEven) == 2
             && length bs >= 2
-            && any (b => b == BUse) bs)
+            && any (== BUse) bs)
         programs),
   ]
 

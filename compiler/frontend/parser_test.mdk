@@ -743,9 +743,9 @@ test "expression, pattern and type nesting share the existing cap" =
           (map (ds => length ds) (mapErr parseErrorMessage (parseResult src))),
       ))
       [
-        ("expression", "main = " ++ deep ++ "1" ++ close ++ "\n"),
-        ("pattern", "f " ++ deep ++ "x" ++ close ++ " = 1\n"),
-        ("type", "f : " ++ deep ++ "Int" ++ close ++ "\n"),
+        ("expression", "main = \{deep}1\{close}\n"),
+        ("pattern", "f \{deep}x\{close} = 1\n"),
+        ("type", "f : \{deep}Int\{close}\n"),
       ])
 
 parsePublished : String -> Result String R.ParsedSource

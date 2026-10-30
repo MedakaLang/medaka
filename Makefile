@@ -455,11 +455,22 @@ inlang-tools-lint-baseline-test:
 inlang-tools-lint-test:
 	./medaka test --native compiler/tools/lint_test.mdk
 
+## compiler/tools/lint_scope_test.mdk is a `*_test.mdk` sibling outside every
+## entry's import closure ([W-MODULE-BLIND]): the scope model's precision cases.
+inlang-tools-lint-scope-test:
+	./medaka test compiler/tools/lint_scope_test.mdk
+
 ## The `medaka lint` behaviors only the built binary shows: what the working
 ## directory and the flag combinations do. compiler/tools/lint_cli_test.mdk is
 ## outside every entry's import closure ([W-MODULE-BLIND]).
 inlang-tools-lint-cli-test:
 	./medaka test compiler/tools/lint_cli_test.mdk
+
+## compiler/tools/lint_rule_fixtures_test.mdk is outside every entry's import
+## closure ([W-MODULE-BLIND]): the per-rule fixture harness over
+## test/lint_rule_fixtures. `--native`: it reads the fixture files.
+inlang-tools-lint-rule-fixtures-test:
+	./medaka test --native compiler/tools/lint_rule_fixtures_test.mdk
 
 ## S-two-way-draws-are-random (#2344): compiler/tools/prop_runner_test.mdk
 ## is outside every entry's import closure ([W-MODULE-BLIND]), so without
@@ -536,6 +547,12 @@ inlang-frontend-parser-test:
 ## step runs its own sibling test by name.
 inlang-frontend-ast-codec-test:
 	./medaka test compiler/frontend/ast_codec_test.mdk
+
+## compiler/frontend/ast_walk_test.mdk is a `*_test.mdk` sibling, outside every
+## entry's import closure ([W-MODULE-BLIND]): it is what turns a constructor
+## missing from ast_walk's enumerations into a failure.
+inlang-frontend-ast-walk-test:
+	./medaka test compiler/frontend/ast_walk_test.mdk
 
 ## compiler/types/prelude_elab.mdk is imported by types.typecheck and
 ## driver.build_cmd; this step runs its own sibling test by name.

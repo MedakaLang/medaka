@@ -1,0 +1,233 @@
+-- Fixture for rule-bind-chain-to-do (SUGGEST-ONLY): a DEEP (≥3) nested
+-- passthrough-bind `match` pyramid over Result/Option should become a `do` block.
+-- Only chains of DEPTH ≥ 3 fire; depth 1/2, a same-ctor re-wrap (a `map`, owned
+-- by rule-match-to-map), a mixed Result/Option chain, and a non-passthrough
+-- failure arm must NOT fire.
+
+-- POSITIVE: depth-3 Result chain (three nested Err-passthrough binds) → do-block.
+posResChain r = match step1 r
+  Err e => Err e
+  Ok a => match step2 a
+    Err e => Err e
+    Ok b => match step3 b
+      Err e => Err e
+      Ok c => combine a b c
+
+-- POSITIVE: depth-3 Option chain (three nested None-passthrough binds) → do-block.
+posOptChain o = match lookupA o
+  None => None
+  Some a => match lookupB a
+    None => None
+    Some b => match lookupC b
+      None => None
+      Some c => combine a b c
+
+-- POSITIVE: depth-3 Result chain ending in a functor `map` terminal (the map IS
+-- the final bind: `x <- m; pure (f x)`), so it counts toward the depth.
+posResMap r = match step1 r
+  Err e => Err e
+  Ok a => match step2 a
+    Err e => Err e
+    Ok b => map (c => combine a b c) (step3 b)
+
+-- NEGATIVE: depth-1 single bind — clearer as-is than a 1-statement do.
+negDepth1 r = match step1 r
+  Err e => Err e
+  Ok x => finish x
+
+-- NEGATIVE: depth-2 chain — below the depth-3 gate.
+negDepth2 r = match step1 r
+  Err e => Err e
+  Ok a => match step2 a
+    Err e => Err e
+    Ok b => combine a b
+
+-- NEGATIVE: same-ctor re-wrap (`Ok x => Ok (g x)`) — that is a `map`
+-- (rule-match-to-map owns it), not a bind chain.
+-- expect-next-line rule-match-on-param
+negRewrap r = match r
+  Err e => Err e
+  Ok x => Ok (g x)
+
+-- NEGATIVE: mixed Result/Option chain — not monad-consistent, so it breaks.
+negMixed r = match step1 r
+  Err e => Err e
+  Ok a => match lookupB a
+    None => None
+    Some b => match step3 b
+      Err e => Err e
+      Ok c => combine a b c
+
+-- NEGATIVE: failure arm REBUILDS (`Err (wrap e)`) rather than passing through
+-- verbatim — the top level is not a bind, so no depth-3 chain.
+negErrRebuild r = match step1 r
+  Err e => Err (wrap e)
+  Ok a => match step2 a
+    Err e => Err e
+    Ok b => match step3 b
+      Err e => Err e
+      Ok c => combine a b c
+
+-- Combined fixture: triggers all three lint rules.
+data Shape = Circle | Square
+
+impl Eq Shape where
+  eq Circle Circle = True
+  eq Square Square = True
+  eq _ _ = False
+
+reverse : List a -> List a
+reverse [] = []
+reverse (x::xs) = reverse xs ++ [x]
+
+classify : Int -> String
+-- expect-next-line rule-match-on-param
+classify n = match n
+  0 => "zero"
+  1 => "one"
+  _ => "other"
+
+-- Fixture for rule-destructure-in-param: the single-arm sibling of
+-- rule-match-on-param.  A function body that is a ONE-arm, guard-free `match` on
+-- a bare parameter with an IRREFUTABLE pattern (tuple / single-ctor record /
+-- single-ctor constructor) whose body does not otherwise mention the parameter
+-- → destructure directly in the parameter position.
+
+data Box a = Box a
+
+data Point = { x : Int, y : Int }
+
+data Color = Red | Green | Blue
+
+-- POSITIVE: tuple pattern (always irrefutable).
+fst2 p = match p
+  (a, b) => a
+
+-- POSITIVE: single-payload constructor of a SINGLE-ctor type (Box).
+unBox b = match b
+  Box v => v
+
+-- POSITIVE: record pattern of a single-ctor record type.
+sumPt pt = match pt
+  Point { x = xx, y = yy } => xx + yy
+
+-- NEGATIVE: >= 2 arms — that's rule-match-on-param, not this rule.
+-- expect-next-line rule-match-on-param
+colorName c = match c
+  Red => "red"
+  Green => "green"
+  Blue => "blue"
+
+-- NEGATIVE: single-arm but a MULTI-ctor type (Color) → pattern is refutable → skip.
+firstColor c = match c
+  Red => 0
+
+-- NEGATIVE: the arm body still references the scrutinee `p` — hoisting would drop
+-- its binding (Medaka has no as-patterns) → skip.
+dup p = match p
+  (a, b) => usePair p a
+
+-- NEGATIVE: bare-var arm — pointless to hoist.
+idv v = match v
+  w => w
+
+-- NEGATIVE: list-cons pattern is refutable → skip.
+headOf xs = match xs
+  h :: _ => h
+
+-- NEGATIVE: guarded arm → skip.
+guarded p = match p
+  (a, b) if a > b => a
+
+-- Positive fixture for rule-match-on-param (STYLE §8):
+-- function body is a multi-arm match over a bare parameter.
+greet : String -> String
+-- expect-next-line rule-match-on-param
+greet x = match x
+  "Alice" => "Hello Alice!"
+  "Bob" => "Hey Bob!"
+  _ => "Hi there!"
+
+-- Fixture for rule-match-to-map: a 2-arm `match` on Option/Result that IS a
+-- functor `map` over the success side → rewrite to `map f o` (hlint "use fmap").
+-- Only the two `map` shapes fire (Option None/Some, Result Err/Ok); the failure
+-- arm reconstructs VERBATIM and the success arm re-wraps the SAME ctor.
+
+-- POSITIVE: Option, eta-reduces to `map g o`.
+-- expect-next-line rule-match-on-param
+posOptEta o = match o
+  None => None
+  Some x => Some (g x)
+
+-- POSITIVE: Option, general expr → `map (x => x + 1) o`.
+-- expect-next-line rule-match-on-param
+posOptExpr o = match o
+  None => None
+  Some x => Some (x + 1)
+
+-- POSITIVE: Result, eta-reduces to `map g r`.
+-- expect-next-line rule-match-on-param
+posResEta r = match r
+  Err e => Err e
+  Ok x => Ok (g x)
+
+-- POSITIVE: Result, general expr (binary op, no eta) → `map (x => x + delta) r`.
+-- expect-next-line rule-match-on-param
+posResExpr r = match r
+  Err e => Err e
+  Ok x => Ok (x + delta)
+
+-- POSITIVE: tuple destructure binder → `map ((a, b) => a + b) r`.
+-- expect-next-line rule-match-on-param
+posTuple r = match r
+  Ok (a, b) => Ok (a + b)
+  Err e => Err e
+
+-- POSITIVE: wildcard binder → `map (_ => 42) o`.
+-- expect-next-line rule-match-on-param
+posWild o = match o
+  None => None
+  Some _ => Some 42
+
+-- POSITIVE: Some-first arm order still fires.
+-- expect-next-line rule-match-on-param
+posOrder o = match o
+  Some x => Some (g x)
+  None => None
+
+-- NEGATIVE: bind chain — the Ok arm UNWRAPS (no `Ok` re-wrap) → andThen, not map.
+-- expect-next-line rule-match-on-param
+negBind r = match r
+  Err e => Err e
+  Ok x => f x
+
+-- NEGATIVE: the Err arm REBUILDS (`Err (wrap e)`), not a verbatim passthrough.
+-- expect-next-line rule-match-on-param
+negErrRebuild r = match r
+  Err e => Err (wrap e)
+  Ok x => Ok (g x)
+
+-- NEGATIVE: failure arm returns a default value → getOrElse/option, not map.
+-- expect-next-line rule-match-on-param
+negDefault o = match o
+  None => []
+  Some x => Some x
+
+-- NEGATIVE: more than 2 arms.
+-- expect-next-line rule-match-on-param
+negThreeArms o = match o
+  None => None
+  Some 0 => Some 1
+  Some x => Some x
+
+-- NEGATIVE: an arm has a guard.
+-- expect-next-line rule-match-on-param
+negGuard o = match o
+  None => None
+  Some x if x > 0 => Some x
+
+-- NEGATIVE: the Some arm UNWRAPS instead of re-wrapping.
+-- expect-next-line rule-match-on-param
+negUnwrap o = match o
+  None => None
+  Some x => x

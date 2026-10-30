@@ -1,0 +1,128 @@
+-- Sibling test for lint_scope.mdk: each case parses a small program and asserts
+-- the binder a position resolves to as (name, kind, line, column of its site).
+-- Columns are 0-based, as in the AST.
+
+import test.{expectEach, expectEqual}
+import frontend.ast.{Loc(..)}
+import support.util.{listLen}
+import frontend.parser.{parseLocated}
+import tools.lint_scope.{
+  Binder(..),
+  BinderKind(..),
+  allBinders,
+  allUses,
+  binderOf,
+  buildScopes,
+  importUses,
+  unusedBinders,
+  wildImports,
+}
+
+-- The binder at (line, col), as (name, kind, site line, site column).
+resolved : String -> Int -> Int -> Option (String, BinderKind, Int, Int)
+resolved src line col =
+  map
+    (b =>
+      (b.binderName, b.binderKind, siteLine b.binderSpan, siteCol b.binderSpan))
+    (binderOf (buildScopes (parseLocated src)) (Loc "" line col line col))
+
+siteLine : Loc -> Int
+siteLine (Loc _ l _ _ _) = l
+
+siteCol : Loc -> Int
+siteCol (Loc _ _ c _ _) = c
+
+unusedNames : String -> List String
+unusedNames src =
+  map (b => b.binderName) (unusedBinders (buildScopes (parseLocated src)))
+
+test "a record pun is a use of the binder it names" =
+  expectEqual (Some ("r", BParam, 1, 2)) (resolved "k r = P { r }\n" 1 10)
+
+test "an interpolation hole is a use" =
+  expectEqual (Some ("n", BParam, 1, 2)) (resolved "g n = \"a\\{n}b\"\n" 1 10)
+
+-- A doctest line is a comment: it makes no use, so a name only it mentions is
+-- unused.
+test "a doctest line makes no use" =
+  let s = buildScopes (parseLocated "-- > f 3\nf x = 1\n")
+  expectEach [
+    ("no uses", expectEqual 0 (listLen (allUses s))),
+    (
+      "x is unused",
+      expectEqual ["x"] (map (b => b.binderName) (unusedBinders s)),
+    ),
+  ]
+
+test "where bindings resolve through their own and the enclosing frames" =
+  let src = "f x y = g x\n  where\n    g z = z + y\n"
+  expectEach [
+    (
+      "the call of g",
+      expectEqual (Some ("g", BWhere, 3, 4)) (resolved src 1 8),
+    ),
+    ("z in g", expectEqual (Some ("z", BParam, 3, 6)) (resolved src 3 10)),
+    ("y from f", expectEqual (Some ("y", BParam, 1, 4)) (resolved src 3 14)),
+    ("x from f", expectEqual (Some ("x", BParam, 1, 2)) (resolved src 1 10)),
+  ]
+
+test "an inner binder shadows the parameter and leaves it unused" =
+  let src = "f x = let x = 2 in x\n"
+  expectEach [
+    ("use", expectEqual (Some ("x", BLet, 1, 10)) (resolved src 1 19)),
+    ("unused", expectEqual ["x"] (unusedNames src)),
+  ]
+
+test "the alternatives of an or-pattern share one binder" =
+  let src = "h v = match v\n  A a => 0\n  B a | C a => a\n"
+  expectEach [
+    ("use", expectEqual (Some ("a", BMatchArm, 3, 4)) (resolved src 3 15)),
+    (
+      "second alternative",
+      expectEqual (Some ("a", BMatchArm, 3, 4)) (resolved src 3 10),
+    ),
+    (
+      "first arm's a is separate and unused",
+      expectEqual ["a"] (unusedNames src),
+    ),
+  ]
+
+test "an as-pattern binds its name and its subpattern" =
+  let src = "h v = match v\n  t@(Some u) => t\n"
+  expectEach [
+    ("t", expectEqual (Some ("t", BMatchArm, 2, 2)) (resolved src 2 16)),
+    ("u is unused", expectEqual ["u"] (unusedNames src)),
+  ]
+
+test "every binder form gets its own kind" =
+  let src = "f p = (q => q) (let r = 1 in r)\ng = do\n  s <- pure 1\n  pure s\n"
+  expectEqual
+    [
+      ("f", BTopLevel),
+      ("g", BTopLevel),
+      ("p", BParam),
+      ("q", BLambda),
+      ("r", BLet),
+      ("s", BDoBind),
+    ]
+    (map
+      (b => (b.binderName, b.binderKind))
+      (allBinders (buildScopes (parseLocated src))))
+
+test "imports: members, aliases, use counts, and a file's own name shadowing one" =
+  let src =
+    "import test.{expectEqual, expectFalse as expectTrue}\nimport test.*\nexpectEqual a b = a\nt = expectEqual 1 1\nu = expectTrue 1\n"
+  let s = buildScopes (parseLocated src)
+  expectEach [
+    (
+      "counts",
+      expectEqual
+        [("expectEqual", 0), ("expectTrue", 1)]
+        (map (p => ((fst p).binderName, snd p)) (importUses s)),
+    ),
+    (
+      "own definition wins",
+      expectEqual (Some ("expectEqual", BTopLevel, 3, 0)) (resolved src 4 4),
+    ),
+    ("wildcard", expectEqual [["test"]] (wildImports s)),
+  ]

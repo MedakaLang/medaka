@@ -3,4 +3,4 @@
 
 import test.*
 
-eqCase a = expectEqual True (a == 1)
+eqCase a = expectTrue (a == 1)

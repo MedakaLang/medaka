@@ -23,11 +23,12 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor,
+  mkVisitorRule,
 }
 import tools.lint_shared.{
   detApply,
-  exprRuleFindings,
+  exprRuleVisitors,
   exprRuleFix,
   isEVarNamed,
   noExcl,
@@ -38,7 +39,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNamePreferAssignOp,
       summary =
@@ -106,10 +107,10 @@ setRefWriteOf _ _ = None
 -- Returns `None` when nothing moved, so the generic drivers' change-detection and
 -- the fixer's "did this decl change" test both stay honest.
 --
--- NOTE the interaction with the two drivers, which is deliberate: `rewriteExprBU`
+-- NOTE the interaction with the two sides, which is deliberate: `rewriteExprBU`
 -- rebuilds children BEFORE applying this at the block, so by the time a block is
 -- visited its `let _ = setRef r v` has ALREADY become `let _ = r := v` and this
--- collapses it — one pass does both halves.  `collectRewrites` (the findings side)
+-- collapses it — one pass does both halves.  The findings side
 -- instead matches the RAW node, so those sites report only the `setRef` finding and
 -- are not double-counted; a block reports a collapse finding only when the source
 -- ALREADY wrote `let _ = r := v` by hand.
@@ -135,9 +136,9 @@ ruleForPreferAssign : StdlibIndex ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleForPreferAssign _ _ _ pos prog =
-  exprRuleFindings noExcl preferAssignOf preferAssignFinding pos prog
+  List Visitor
+ruleForPreferAssign _ _ _ _ _ =
+  exprRuleVisitors noExcl preferAssignOf preferAssignFinding
 
 -- The message is shape-directed: a `setRef` hit renders its `:=` replacement (the
 -- helpful "prefer …" form the sibling rules use), while a block-collapse hit does

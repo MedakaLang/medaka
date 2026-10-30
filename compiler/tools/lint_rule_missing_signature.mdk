@@ -6,10 +6,10 @@ import frontend.ast.{
 }
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
-import support.util.{filterList}
-import hash_map.{HashMap, has}
+import hash_map.{HashMap, has, new, setInPlace}
 import tools.lint_core.{
   Category(..),
+  Ctx(..),
   FileFacts(..),
   Finding(..),
   Fixability(..),
@@ -18,20 +18,15 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor(..),
+  mkVisitorRule,
 }
-import tools.lint_shared.{
-  dedupeNamesLoc,
-  declLocList,
-  nameSetOf,
-  ruleNameMissingSignature,
-  topDefNameL,
-}
+import tools.lint_shared.{nameSetOf, ruleNameMissingSignature, topDefNameL}
 
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameMissingSignature,
       summary =
@@ -45,34 +40,52 @@ rule =
       fixability = NotFixable,
       needs = [],
     }
-    ruleMissingSignature
+    missingSigVisitors
     None
 
 -- Flag a top-level value/function binding (`DFunDef`, incl. through `DAttrib`)
 -- whose name has NO sibling top-level `name : Type` signature (`DTypeSig`) in the
--- same file — Haskell's -Wmissing-signatures.  Purely syntactic: build the set of
--- signed names, then report `DFunDef` names absent from it.  `impl`/`interface`
--- method bodies are nested inside their own decl (not top-level `Decl`s), so a
--- `List Decl` walk never sees them; `prop`/`test`/`extern` are their own decl
--- kinds, not `DFunDef`, so they are excluded automatically.  `main` is exempt by
--- name (entry-point boilerplate).  Multi-clause defs dedupe to one finding.
-ruleMissingSignature : StdlibIndex ->
+-- same file — Haskell's -Wmissing-signatures.  Purely syntactic: the signed
+-- names are collected once per file, then each declaration is judged as the walk
+-- reaches it.  `impl`/`interface` method bodies are nested inside their own decl
+-- (not top-level `Decl`s), so a declaration visitor never sees them;
+-- `prop`/`test`/`extern` are their own decl kinds, not `DFunDef`, so they are
+-- excluded automatically.  `main` is exempt by name (entry-point boilerplate).
+-- Only the first clause of a name is judged, so a multi-clause def yields one
+-- finding; `seen` is that per-file record, fresh for every file.
+missingSigVisitors : StdlibIndex ->
   String ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleMissingSignature _ _ _ pos prog =
+  List Visitor
+missingSigVisitors _ _ _ _ prog =
   -- HashMap-as-set: `contains n sigNames` over the signed-name LIST was O(signs)
-  -- per def, i.e. O(defs x signs) across the filterList — and in the common case
+  -- per def, i.e. O(defs x signs) across the file — and in the common case
   -- where most defs ARE signed, signs grows with defs, so this was quadratic. It
   -- is a PURE SCAN (no extra allocation), so the alloc signal is blind to it and
   -- only the `manydefs` shape's lint-stage TIME catches it (the issue-#110 class).
-  map
-    missingSigFinding
-    (filterList
-      (missingSigPair (nameSetOf (flatMap topSigNameL prog)))
-      (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog))))
+  let signed = nameSetOf (flatMap topSigNameL prog)
+  let seen = new ()
+  [OnDecl (missingSigAt signed seen)]
+
+missingSigAt : HashMap String Unit ->
+  HashMap String Unit ->
+  Ctx ->
+  Decl ->
+  List Finding
+missingSigAt signed seen ctx d =
+  flatMap (firstUnsigned signed seen) (topDefNameL (d, ctx.ctxSpan))
+
+firstUnsigned : HashMap String Unit ->
+  HashMap String Unit ->
+  (String, Option Loc) ->
+  List Finding
+firstUnsigned signed seen (n, loc)
+  | has n seen = []
+  | otherwise =
+    setInPlace n () seen
+    if missingSigPair signed (n, loc) then [missingSigFinding (n, loc)] else []
 
 topSigNameL : Decl -> List String
 topSigNameL (DTypeSig _ name _ _) = [name]

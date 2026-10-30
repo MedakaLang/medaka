@@ -613,6 +613,8 @@ valuesGo nm ((k, v) :: rest)
 
 -- LAW: `Eq Args` must discriminate on all three fields, so a test asserting on
 -- a parse result cannot pass while the parse dropped a positional or a flag.
+-- The prop pins the result of `==` itself (the `== False` form is the subject); a `not` or `/=` rewrite would exercise another path.
+-- lint-disable-next-line rule-bool-simplify
 prop "Eq Args discriminates every field" (v : String) =
   let base = Args { given = [("--out", Some v)], positionals = [v], rest = [] }
   base == Args { given = [("--out", Some v)], positionals = [v], rest = [] }
@@ -625,6 +627,8 @@ prop "Eq Args discriminates every field" (v : String) =
 -- arity, must not compare equal.  (This is the composite the seven cells
 -- exist for: comparing an `ArgSpec` exercises every one of the seven
 -- instances.)
+-- The prop pins the result of `==` itself (the `== False` form is the subject); a `not` or `/=` rewrite would exercise another path.
+-- lint-disable-next-line rule-bool-simplify
 prop "Eq ArgSpec reaches through FlagSpec and Arity" (n : String) =
   let a = spec "fmt" [switch ["--write"] n]
   let b = spec "fmt" [switch ["--check"] n]
@@ -637,6 +641,8 @@ prop "Eq ArgSpec reaches through FlagSpec and Arity" (n : String) =
 -- LAW: `Debug` agrees with `Eq` on the composite: equal specs render
 -- identically, unequal ones render differently, so a failing assertion's
 -- printed value actually explains the failure.
+-- The prop pins the result of `==` itself (the `== False` form is the subject); a `not` or `/=` rewrite would exercise another path.
+-- lint-disable-next-line rule-bool-simplify
 prop "Debug ArgSpec agrees with Eq" (n : String) =
   let a = spec "fmt" [switch ["--write"] n]
   debug a == debug (spec "fmt" [switch ["--write"] n])

@@ -22,22 +22,39 @@
 -- harness sorts).  Mirror of compiler/entries/exhaust_main.mdk.
 
 import frontend.parser.{parseWithPositionsLocated}
-import tools.lint.{lintToLines, buildStdlibIndexResult, StdlibIndexError(..)}
+import string.{contains, join, lines, stripPrefix}
+import tools.lint.{
+  lintToLines, buildStdlibIndexResult, splitLintNames, StdlibIndexError(..)
+}
 import driver.diagnostics.{ppDiagCliSrc}
 import support.stage_count.{stageExit}
 
 export
 oracleMain : Unit -> <IO> Unit
 oracleMain () = match args ()
-  [targetPath] => withTarget targetPath
-  _ => ePutStrLn "usage: MEDAKA_ROOT=<repo> test/bin/lint_main <file.mdk>"
+  [targetPath] => withTarget [] targetPath
+  [flag, targetPath] => match stripPrefix "--only=" flag
+    Some names => withTarget (splitLintNames names) targetPath
+    None => ePutStrLn "unknown flag \{flag}"
+  _ =>
+    ePutStrLn
+      "usage: MEDAKA_ROOT=<repo> test/bin/lint_main [--only=<rules>] <file.mdk>"
 
-withTarget : String -> <IO> Unit
-withTarget targetPath = match readFile targetPath
+-- Keeps only the report lines of the named rules (all lines for an empty
+-- list), so a fixture golden depends on the one rule it is about.
+onlyRules : List String -> String -> String
+onlyRules [] report = report
+onlyRules names report =
+  join
+    "\n"
+    (filter (l => any (n => contains ": [\{n}] " l) names) (lines report))
+
+withTarget : List String -> String -> <IO> Unit
+withTarget only targetPath = match readFile targetPath
   Ok targetSrc =>
     -- `parseWithPositionsLocated` (#649): findings print location-STRIPPED
     -- here, but inline `-- lint-disable-line`/`-next-line` suppression still
-    -- keys off each Finding's real location, so a nested exprRuleFindings hit
+    -- keys off each Finding's real location, so a nested detector hit
     -- needs its own span rather than the enclosing decl's to suppress right.
     let (decls, pos) = parseWithPositionsLocated targetSrc
     -- The stdlib reference index, built ONCE here (a rule's `check` is pure, so
@@ -45,7 +62,8 @@ withTarget targetPath = match readFile targetPath
     -- if it ran on an empty index while the CLI ran on a real one, the gate
     -- would go green on output the CLI never produces.  Both build the same way.
     match buildStdlibIndexResult
-      Ok idx => putStr (lintToLines idx targetSrc targetPath pos decls)
+      Ok idx =>
+        putStr (onlyRules only (lintToLines idx targetSrc targetPath pos decls))
       Err (StdlibIndexError { path, source, diagnostic }) =>
         ePutStrLn (ppDiagCliSrc source path diagnostic)
         stageExit 1

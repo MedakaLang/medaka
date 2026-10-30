@@ -32,7 +32,7 @@ prop "composite keys distinguish equivalent raw concatenations split at differen
   lenKey (a ++ middle) ++ lenKey c /= lenKey a ++ lenKey (middle ++ c)
 
 prop "composite keys distinguish delimiter-collision pairs by construction" (a : String) (b : String) (c : String) =
-  lenKey (a ++ "|" ++ b) ++ lenKey c /= lenKey a ++ lenKey (b ++ "|" ++ c)
+  lenKey "\{a}|\{b}" ++ lenKey c /= lenKey a ++ lenKey "\{b}|\{c}"
 
 prop "line split and join round-trip arbitrary text including final newlines" (text : String) =
   joinNl (splitNl text) == text

@@ -135,10 +135,11 @@ test "adapter selects the first machine edit" =
   let second = ParseEdit loc "!=" "second" MachineApplicable
   let selected edits =
     match parseDiagnosticToDiag "a.mdk" (ParseDiagnostic BadNeq loc edits)
-      Diag _ _ _ _ _ fix => match fix
-        None => None
-        Some (Fix (Loc path sl sc el ec) replacement) =>
-          Some (path, (sl, sc), (el, ec), replacement)
+      Diag _ _ _ _ _ fix =>
+        map
+          ((Fix (Loc path sl sc el ec) replacement) =>
+            (path, (sl, sc), (el, ec), replacement))
+          fix
   expectEach [
     ("no edit", expectEqual None (selected [])),
     ("human only", expectEqual None (selected [human])),

@@ -1,0 +1,95 @@
+-- Fixture for rule-test-equal-in-true (an internal rule).  The line below each
+-- `expect-next-line` marker is the line the rule reports.  The rule reports the
+-- line of the declaration that holds the call, so each positive is a one-line
+-- declaration; a finding inside an interface default is reported at the
+-- interface header.
+
+import test.{Expectation, expectTrue, expectFalse, expectEqual}
+
+-- expect-next-line rule-test-equal-in-true
+check a b = expectTrue (a == b)
+
+-- expect-next-line rule-test-equal-in-true
+checkNe a b = expectTrue (a /= b)
+
+-- expect-next-line rule-test-equal-in-true
+checkFalse a b = expectFalse (a == b)
+
+-- expect-next-line rule-test-equal-in-true
+test "equality in a test body" = expectTrue (1 + 1 == 2)
+
+-- expect-next-line rule-test-equal-in-true
+prop "equality in a prop body" (n : Int) = expectTrue (n + 0 == n)
+
+-- expect-next-line rule-test-equal-in-true unfixed
+let rec loop n = expectFalse (n == 0)
+
+-- expect-next-line rule-test-equal-in-true unfixed
+interface Probe a where
+  probe : a -> a -> Expectation
+  probe x y = expectTrue (x == y)
+
+nearMisses a b = [expectEqual a b, expectTrue (a < b), expectTrue (a && b), expectTrue (f (a == b))]
+
+f x = x
+
+test "equality verb in a test body" = expectEqual (1 + 1) 2
+
+prop "ordering in a prop body" (n : Int) = expectTrue (n <= n)
+
+-- Fixture for rule-test-equal-in-true (#3235): an `==`/`/=` comparison wrapped in
+-- `expectTrue`/`expectFalse` reports neither operand on failure; the equality
+-- verbs render both.  The `expectFalse` forms carry the polarity flip.
+
+-- POSITIVE: expectTrue.
+-- expect-next-line rule-test-equal-in-true
+trueEq a = expectTrue (a == 1)
+-- expect-next-line rule-test-equal-in-true
+trueNe a = expectTrue (a /= 1)
+
+-- POSITIVE: expectFalse — the verb the operator names is replaced by its
+-- complement.
+-- expect-next-line rule-test-equal-in-true
+falseEq a = expectFalse (a == 1)
+-- expect-next-line rule-test-equal-in-true
+falseNe a = expectFalse (a /= 1)
+
+-- POSITIVE: nested anywhere in a body.
+-- expect-next-line rule-test-equal-in-true x2
+nestedTrue a b = if a then expectTrue (b == 2) else expectFalse (b == 3)
+
+-- NEGATIVE: orderings are excluded, for `rule-not-eq`'s reason — an ordering
+-- needs a different verb per operator, and the `expectFalse` complement of an
+-- ordering is unsound for Float (NaN).
+trueLt a = expectTrue (a < 1)
+falseGe a = expectFalse (a >= 1)
+
+-- NEGATIVE: a CONJUNCTION is not one comparison. `expectEqual` renders one pair
+-- of operands, so a rewrite would drop a fact.
+trueConj a b = expectTrue (a == 1 && b == 2)
+
+-- NEGATIVE: the argument is not a comparison at all.
+truePlain flag = expectTrue flag
+
+-- NEGATIVE: already the named verb.
+alreadyEqual a = expectEqual a 1
+
+-- POSITIVE, inside a `test` decl body. These three rules descend into `test`
+-- and `prop` bodies; the shared expression-rule driver does not, so the rows
+-- below are the only place that descent is observed.
+-- expect-next-line rule-test-equal-in-true
+test "an equality inside a test body" = expectTrue (1 == 1)
+
+-- POSITIVE, inside a `prop` decl body.
+-- expect-next-line rule-test-equal-in-true
+prop "an equality inside a prop body" (n : Int) = expectFalse (n == 0)
+
+-- NEGATIVE: `rule-test-equal-in-true` matches `expectTrue`/`expectFalse` over an
+-- equality; a `test` body holding a bare `not (1 == 2)` is silent for it. The
+-- same line is a positive of `rule-not-eq`, whose marker lives in not-eq.mdk.
+test "a non-test rule does not reach a test body" = not (1 == 2)
+
+-- NEGATIVE: the same shape in a `def` body is also silent for this rule; it is
+-- a positive of `rule-not-eq` only.
+-- (no marker: nothing of this rule fires here)
+notEqDef a = not (a == 1)
