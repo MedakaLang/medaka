@@ -889,6 +889,34 @@ export impl FromEntries (Map k v) (k, v) requires Ord k where
 export impl Monoid (Map k v) requires Ord k where
   empty = Tip
 
+-- # Grouping
+
+{- | How many elements of the list map to each key.
+
+   Only keys that occur are present.
+
+   > countBy (x => x % 2) [1, 2, 3, 5]
+   fromList [(0, 1), (1, 3)]
+   > countBy (x => x) ([] : List Int)
+   fromList [] -}
+export
+countBy : Ord k => (a -> <e> k) -> List a -> <e> Map k Int
+countBy key xs = fold (m x => insertWith (+) (key x) 1 m) Tip xs
+
+{- | The elements of the list collected under the key each maps to.
+
+   Within a group the elements keep their order in the input.
+
+   > groupByKey (x => x % 2) [1, 2, 3, 4, 5]
+   fromList [(0, [2, 4]), (1, [1, 3, 5])]
+   > groupByKey (x => x) ([] : List Int)
+   fromList [] -}
+export
+groupByKey : Ord k => (a -> <e> k) -> List a -> <e> Map k (List a)
+groupByKey key xs =
+  let reversed = fold (m x => insertWith (++) (key x) [x] m) Tip xs
+  map reverse reversed
+
 -- # Invariants
 
 {- | Whether the map's internal tree satisfies its invariants: keys in

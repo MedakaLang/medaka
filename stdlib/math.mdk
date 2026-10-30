@@ -9,6 +9,8 @@
    `abs`, `signum`, `min`, `max`, and `clamp` come from the prelude and
    work on floats already. -}
 
+import list.{drop, sort}
+
 -- # Angles
 
 {- | An angle in degrees converted to radians.
@@ -92,6 +94,82 @@ approxEq a b eps = abs (a - b) <= eps
 
 -- > approxEq 0.0 0.0 0.0
 -- True
+
+-- # Statistics
+
+{- | The arithmetic mean of a list, or `None` for an empty list.
+
+   > mean [1.0, 2.0, 3.0, 6.0]
+   Some 3.0
+   > mean []
+   None -}
+export
+mean : List Float -> Option Float
+mean [] = None
+mean xs = Some (sum xs / intToFloat (length xs))
+
+{- | The median of a list, or `None` for an empty list.
+
+   For an even length it is the mean of the two middle values. A NaN in
+   the list gives an unspecified result.
+
+   > median [3.0, 1.0, 2.0]
+   Some 2.0
+   > median [4.0, 1.0, 3.0, 2.0]
+   Some 2.5 -}
+export
+median : List Float -> Option Float
+median xs = percentile 50.0 xs
+
+{- | The sample standard deviation, dividing by `n - 1` as Python's
+   statistics module does, or `None` for fewer than two values.
+
+   A NaN in the list gives an unspecified result.
+
+   > stdev [1.0, 3.0]
+   Some 1.4142135623730951
+   > stdev [1.0]
+   None -}
+export
+stdev : List Float -> Option Float
+stdev xs
+  | length xs < 2 = None
+  | otherwise =
+    let m = sum xs / intToFloat (length xs)
+    let squares = sum (map (x => (x - m) * (x - m)) xs)
+    Some (sqrt (squares / intToFloat (length xs - 1)))
+
+{- | The `p`th percentile of a list, for `p` from 0 to 100, or `None` for an
+   empty list or a `p` outside that range.
+
+   It interpolates linearly between the closest ranks of the sorted list, as
+   numpy's default and Excel's inclusive percentile do. A NaN in the list gives
+   an unspecified result.
+
+   > percentile 0.0 [4.0, 1.0, 3.0, 2.0]
+   Some 1.0
+   > percentile 50.0 [4.0, 1.0, 3.0, 2.0]
+   Some 2.5
+   > percentile 100.0 [4.0, 1.0, 3.0, 2.0]
+   Some 4.0
+   > percentile 101.0 [1.0]
+   None -}
+export
+percentile : Float -> List Float -> Option Float
+percentile p xs
+  | isNaN p || p < 0.0 || p > 100.0 = None
+  | otherwise = interpolateRank (p / 100.0) (sort xs)
+
+-- `sorted` is ascending; the rank `q * (n - 1)` falls between two neighbours.
+interpolateRank : Float -> List Float -> Option Float
+interpolateRank _ [] = None
+interpolateRank q sorted =
+  let rank = q * intToFloat (length sorted - 1)
+  let lo = floatToInt (floor rank)
+  match drop lo sorted
+    a :: b :: _ => Some (a + (b - a) * (rank - intToFloat lo))
+    a :: _ => Some a
+    [] => None
 
 -- # Logarithms
 
