@@ -351,7 +351,9 @@ The subject with the first match replaced by `repl`.
 
 In `repl`, `$0` is the whole match, `$1` to `$9` are the capture groups,
 and `$$` is a literal `$`. A group that did not take part expands to the
-empty string, and a `$` before anything else is itself.
+empty string, and a `$` before anything else is itself. A backslash
+followed by a digit, such as `\1`, is not a backreference: it stays
+literal text, and the group is spelled `$1`.
 
 ```medaka
 > replace (mustCompile "\\d+") "N" "a1b2"
@@ -369,13 +371,18 @@ replaceAll re repl s
 
 The subject with every match replaced by `repl`.
 
-`repl` expands as in `replace`.
+`repl` expands as in `replace`, so a backslash followed by a digit, such
+as `\1`, stays literal text and the group is spelled `$1`.
 
 ```medaka
 > replaceAll (mustCompile "\\s+") " " "a  b\tc"
 "a b c"
 > replaceAll (mustCompile "a*") "-" "abc"
 "-b-c-"
+> replaceAll (mustCompile "(a)(b)") "\\2\\1" "xaby"
+"x\\2\\1y"
+> replaceAll (mustCompile "(a)(b)") "$2$1" "xaby"
+"xbay"
 ```
 
 ### `replaceAllWith`
