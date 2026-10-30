@@ -347,3 +347,141 @@ test "local same-spelled intToFloat without a runtime fact keeps its closure cal
     expectTextContainsAll ["call i64 %", "fadd double"] llvm,
     expectFalse (contains "sitofp i64" llvm),
   ]
+
+cachedDefaultProgram : CProgram
+cachedDefaultProgram =
+  CProgram
+    [CBind "main" [CClause [] (CLit (LInt 0))] noDeclLoc (BinderId "cache" 4)]
+    []
+    []
+    [
+      CImplEntry
+        "m"
+        0
+        0
+        (CImplDefault
+          "I"
+          "T"
+          "I|first|"
+          (ImplSym "tag1" "I" "first")
+          []
+          [PVar "$dict_m_0" noDeclLoc (BinderId "cache" 1)]
+          (CLit (LInt 11))),
+      CImplEntry
+        "m"
+        0
+        0
+        (CImplDefault
+          "I"
+          "T"
+          "I|second|"
+          (ImplSym "tag2" "I" "second")
+          []
+          [PVar "$dict_m_0" noDeclLoc (BinderId "cache" 2)]
+          (CLit (LInt 22))),
+      CImplEntry
+        "m"
+        0
+        0
+        (CImplDefault
+          "Other"
+          "T"
+          "Other|other|"
+          (ImplSym "tag3" "Other" "first")
+          []
+          [PVar "$dict_m_0" noDeclLoc (BinderId "cache" 3)]
+          (CLit (LInt 33))),
+      CImplEntry
+        "neighbor"
+        0
+        0
+        (CImplTagged
+          "T"
+          "I|third|"
+          "I"
+          (ImplSym "tag4" "I" "third")
+          []
+          []
+          (CLit (LInt 44))),
+    ]
+    []
+    { noDeclFacts |
+      factMethodResults = [
+        MethodResultFact {
+          iface = "I",
+          method = "m",
+          returnsHead = False,
+          callbackPositions = [],
+          valueArity = 0,
+        },
+        MethodResultFact {
+          iface = "Other",
+          method = "m",
+          returnsHead = False,
+          callbackPositions = [],
+          valueArity = 0,
+        },
+        MethodResultFact {
+          iface = "I",
+          method = "neighbor",
+          returnsHead = False,
+          callbackPositions = [],
+          valueArity = 0,
+        },
+      ],
+      factBinders = [
+        BinderRow {
+          brId = BinderId "cache" 4,
+          brName = "main",
+          brType = RTInt,
+          brReturns = Some RTInt,
+          brSigned = False,
+        },
+        BinderRow {
+          brId = BinderId "cache" 1,
+          brName = "$dict_m_0",
+          brType = RTValue,
+          brReturns = None,
+          brSigned = False,
+        },
+        BinderRow {
+          brId = BinderId "cache" 2,
+          brName = "$dict_m_0",
+          brType = RTValue,
+          brReturns = None,
+          brSigned = False,
+        },
+        BinderRow {
+          brId = BinderId "cache" 3,
+          brName = "$dict_m_0",
+          brType = RTValue,
+          brReturns = None,
+          brSigned = False,
+        },
+      ],
+    }
+
+test "default name cache keeps distinct descriptor components and an unrelated impl" =
+  let ll = llvmText cachedDefaultProgram
+  expectAll [
+    expectEqual
+      1
+      (countOccurrences
+        "define internal i64 @mdk.default.49.6d.6669727374("
+        ll),
+    expectEqual
+      1
+      (countOccurrences
+        "define internal i64 @mdk.default.49.6d.7365636f6e64("
+        ll),
+    expectEqual
+      1
+      (countOccurrences
+        "define internal i64 @mdk.default.4f74686572.6d.6669727374("
+        ll),
+    expectEqual
+      1
+      (countOccurrences
+        "define internal i64 @mdk.impl.74616734.6e65696768626f72("
+        ll),
+  ]
