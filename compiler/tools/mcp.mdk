@@ -476,8 +476,6 @@ mcpPrepared state path src =
       cache
     syntax <- snapshotSyntaxSource prepared
     if syntaxSourceText syntax == src then Some (generation, prepared) else None
-  -- The multiline assignment form is not accepted by the seed parser.
-  -- lint-disable-next-line rule-prefer-assign-op
   match found
     Some (generation, prepared) =>
       (SourceRevision uri None generation src, prepared)
@@ -486,12 +484,11 @@ mcpPrepared state path src =
       let prepared = parseSnapshotSyntax revision
       let entries2 =
         take 4 ((uri, next) :: filter ((key, _) => key /= uri) entries)
-      let _ =
-        state :=
-          McpSyntaxState
-            (insertSyntax defaultParseOptions prepared cache)
-            entries2
-            (next + 1)
+      state :=
+        McpSyntaxState
+          (insertSyntax defaultParseOptions prepared cache)
+          entries2
+          (next + 1)
       (revision, prepared)
 
 -- ── medaka_check tool ─────────────────────────────────────────────────────────
