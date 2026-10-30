@@ -1,0 +1,43 @@
+# <fixture stem> <comma-separated rules>: the only fixers `lint_fix_main --only=`
+# applies to that fixture, so its .fixed holds no edit by another rule. Read by
+# diff_compiler_fmt_test.mdk and capture_goldens.sh; a fixture with no row here
+# reds the gate.
+andthen_pure_map rule-andthen-pure-map
+bind_destructure_ctor rule-bind-then-destructure
+bind_then_destructure rule-bind-then-destructure
+bind_then_destructure_interior_comment rule-bind-then-destructure
+bool_simplify rule-bool-simplify
+complement_predicate rule-complement-predicate
+concat_to_interp rule-concat-to-interp
+destructure_in_param rule-destructure-in-param
+double_reverse rule-double-reverse
+guarded rule-match-on-param
+iface_occurrence_rebuild rule-lambda-section,rule-if-max-min,rule-andthen-pure-map,rule-concat-to-interp,rule-not-eq,rule-bool-simplify,rule-rem-parity,rule-double-reverse,rule-when-unless,rule-complement-predicate
+if_max_min rule-if-max-min
+lambda_section rule-lambda-section
+lambda_section_interior_comment rule-lambda-section
+match_on_param rule-match-on-param
+match_on_param_interior_comment rule-match-on-param
+match_on_param_wild_rebind rule-match-on-param
+match_to_map rule-match-to-map
+not_eq rule-not-eq
+rem_parity rule-rem-parity
+test_bool_literal_equal rule-test-bool-literal-equal
+test_equal_in_true rule-test-equal-in-true
+test_import_widen rule-test-equal-in-true,rule-test-bool-literal-equal
+test_import_widen_foreign_import rule-test-equal-in-true,rule-test-bool-literal-equal
+test_import_widen_interior_comment rule-test-equal-in-true,rule-test-bool-literal-equal
+test_import_widen_later_group rule-test-equal-in-true,rule-test-bool-literal-equal
+test_import_widen_local_binder rule-test-equal-in-true,rule-test-bool-literal-equal
+test_import_widen_own_verb rule-test-equal-in-true,rule-test-bool-literal-equal
+test_import_widen_string_literal rule-test-equal-in-true,rule-test-bool-literal-equal
+test_import_widen_top_level_collision rule-test-equal-in-true,rule-test-bool-literal-equal
+test_import_widen_trailing_comment rule-test-equal-in-true,rule-test-bool-literal-equal
+test_import_widen_true_direction rule-test-equal-in-true,rule-test-bool-literal-equal
+test_import_widen_wildcard rule-test-equal-in-true,rule-test-bool-literal-equal
+test_verb_alias_inverts rule-test-equal-in-true,rule-test-bool-literal-equal
+test_verb_param_shadow rule-test-equal-in-true,rule-test-bool-literal-equal
+test_verb_resolves_to_import rule-test-equal-in-true,rule-test-bool-literal-equal
+test_verb_where_bound_introduced rule-test-equal-in-true,rule-test-bool-literal-equal
+test_verb_where_bound_swapped rule-test-equal-in-true,rule-test-bool-literal-equal
+when_unless rule-when-unless

@@ -2190,7 +2190,7 @@ migration = "blocked:concurrent-spawn"
 run = "test/diff_compiler_lint_cache.sh"
 oracles = []
 sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_cache.sh"]
-corpus = ["test/lint_fixtures"]
+corpus = ["test/lint_fixtures", "test/lint_rule_fixtures"]
 toolchain = []
 link = "production"
 
@@ -2206,7 +2206,7 @@ migration = "done"
 run = "test/diff_compiler_lint_multi_test.mdk"
 oracles = []
 sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/compiler_cli_test_support.mdk"]
-corpus = ["test/lint_multi_fixtures", "test/lint_multi_dir_fixtures", "test/lint_crossfile_fixtures", "test/lint_internal_fixtures"]
+corpus = ["test/lint_multi_fixtures", "test/lint_multi_dir_fixtures", "test/lint_crossfile_fixtures", "test/lint_internal_fixtures", "test/lint_rule_fixtures"]
 toolchain = []
 link = "production"
 

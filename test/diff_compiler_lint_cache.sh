@@ -91,14 +91,16 @@ changed_shards() {
 }
 
 # ── the corpus ────────────────────────────────────────────────────────────────
-# A REAL one: test/lint_fixtures carries ~24 files that trip most of the rule
-# set (and exercise inline `-- lint-disable-*` directives, which the cache also
-# round-trips). Copied in rather than linted in place so scenarios 2/3 can edit
-# it. Copy only .mdk — the .expected goldens belong to the other lint gates.
+# A REAL one: test/lint_rule_fixtures carries a file per rule that trips most of
+# the rule set, and test/lint_fixtures adds the inline `-- lint-disable-*`
+# directive cases, which the cache also round-trips. Copied in rather than
+# linted in place so scenarios 2/3 can edit it. Copy only .mdk — the goldens
+# belong to the other lint gates.
 mkdir -p "$WORK/corpus"
+cp "$ROOT"/test/lint_rule_fixtures/*.mdk "$WORK/corpus/" 2>/dev/null
 cp "$ROOT"/test/lint_fixtures/*.mdk "$WORK/corpus/" 2>/dev/null
 n_fixtures="$(ls "$WORK"/corpus/*.mdk 2>/dev/null | wc -l | tr -d ' ')"
-[ "$n_fixtures" -ge 2 ] || { echo "corpus missing (test/lint_fixtures/*.mdk)"; exit 2; }
+[ "$n_fixtures" -ge 2 ] || { echo "corpus missing (test/lint_rule_fixtures/*.mdk)"; exit 2; }
 
 # Scenario 3's pair: two files sharing one structurally identical, non-trivial
 # body (>= dupComplexityThreshold = 10 AST nodes), in DIFFERENT files, which is
@@ -164,7 +166,7 @@ fi
 # ── 2. edit invalidation ─────────────────────────────────────────────────────
 # Append a finding-bearing decl to one cached file. The warm run must report it,
 # and must re-lint ONLY that file.
-cat >> "$WORK/corpus/bool_simplify.mdk" <<'EOF'
+cat >> "$WORK/corpus/bool-simplify.mdk" <<'EOF'
 
 editedProbe : Bool -> Bool
 editedProbe b = if b then True else False
@@ -196,8 +198,8 @@ fi
 # This is what fails if someone caches the cross-file rule's FINDINGS instead of
 # its per-file INPUTS (the occurrence list). The findings-cache version of this
 # code passes scenarios 1, 2, 4, 5 and 6 and fails only here.
-# Keyed on OUR pair's function name, not on the rule name: test/lint_fixtures has
-# its own duplicate-body pair (bind_chain_to_do.mdk <-> match_to_map.mdk) which
+# Keyed on OUR pair's function name, not on the rule name: the fixture corpus has
+# its own duplicate-body pair (bind-chain-to-do.mdk <-> match-to-map.mdk) which
 # stays reported throughout, so a bare `grep rule-duplicate-body` would match
 # that and never fail.
 dup_pair_reported() { grep -q "rule-duplicate-body.*sharedShape\|'sharedShape'.*rule-duplicate-body" "$1"; }
@@ -454,7 +456,7 @@ fi
 # active, so populating with `rule-stdlib-reimpl` disabled must not poison the
 # entry with a degraded (empty) stdlib index: a LATER default-rules `--cache`
 # read of the same entry must still see the finding.
-# corpus/stdlib_reimpl.mdk (copied in from test/lint_fixtures above) reimplements
+# corpus/stdlib-reimpl.mdk (copied in from test/lint_rule_fixtures above) reimplements
 # `list.reverse`, so it is the fixture that fires the rule under test.
 rm -rf "$CACHE"
 "$MEDAKA" lint --disable rule-stdlib-reimpl --cache corpus > "$WORK/warm8_populate.txt" 2>&1

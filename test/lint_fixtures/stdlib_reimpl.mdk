@@ -1,5 +1,0 @@
--- Positive fixture for rule-stdlib-reimpl (STYLE §7a):
--- top-level function shadows a common stdlib name.
-reverse : List a -> List a
-reverse [] = []
-reverse (x::xs) = reverse xs ++ [x]
