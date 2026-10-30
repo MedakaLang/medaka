@@ -609,6 +609,57 @@ Unchanged when `old` is absent or empty.
 "heLlo"
 ```
 
+### `replaceOnce`
+
+```
+replaceOnce : String -> String -> String -> Result String String
+replaceOnce old new s
+```
+
+The string with `old` replaced by `new`, provided `old` occurs exactly
+once.
+
+`Err` when `old` occurs no times, more than once, or is empty. The
+message names the first line of `old` (cut at 60 characters) and the
+number of occurrences found. Occurrences are counted as
+`countOccurrences` counts them.
+
+```medaka
+> replaceOnce "l" "L" "help"
+Ok "heLp"
+> replaceOnce "z" "Z" "hello"
+Err "expected 1 occurrence of `z…`, found 0"
+> replaceOnce "l" "L" "hello"
+Err "expected 1 occurrence of `l…`, found 2"
+> replaceOnce "" "x" "hello"
+Err "expected 1 occurrence of `…`, found 0"
+```
+
+### `cutBetween`
+
+```
+cutBetween : String -> String -> String -> Result String (String, String, String)
+cutBetween start end s
+```
+
+Splits `s` at the first `start` and the first `end` after it, giving
+the text before `start`, the text between the two, and the text after
+`end`. Neither anchor appears in the result.
+
+`Err` names the anchor that is missing: `start` anywhere in `s`, or
+`end` after `start`.
+
+```medaka
+> cutBetween "[" "]" "a[b]c"
+Ok ("a", "b", "c")
+> cutBetween "[" "]" "a[]c"
+Ok ("a", "", "c")
+> cutBetween "[" "]" "abc"
+Err "start anchor `[` not found"
+> cutBetween "[" "]" "a]b[c"
+Err "end anchor `]` not found after start"
+```
+
 ### `replaceAll`
 
 ```

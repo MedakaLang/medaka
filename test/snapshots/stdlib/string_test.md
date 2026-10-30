@@ -1,5 +1,5 @@
 # META
-source_lines=945
+source_lines=958
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -8,11 +8,11 @@ stages=DESUGAR,MARK
 -- byte offset would show.
 
 import string.{
-  StrCursor, byteLength, center, countOccurrences, drop, endsWith, fromChars,
-  indexOf, join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll,
-  reverse, nextChar, sliceBetween, startCursor, splitAt, startsWith,
-  stripPrefix, stripSuffix, take, toInt, toLower, toUpper, trim, trimLeft,
-  trimRight, unlines, unwords, utf8ByteLength
+  StrCursor, byteLength, center, countOccurrences, cutBetween, drop, endsWith,
+  fromChars, repeat, replaceOnce, indexOf, join, lastIndexOf, lines, padLeft,
+  padRight, replace, replaceAll, reverse, nextChar, sliceBetween, startCursor,
+  splitAt, startsWith, stripPrefix, stripSuffix, take, toInt, toLower, toUpper,
+  trim, trimLeft, trimRight, unlines, unwords, utf8ByteLength
 }
 import test.{expectEqual, expectFalse, expectTrue}
 
@@ -947,8 +947,21 @@ test "sliceBetween keeps the codepoint count of the slice" =
 test "a cursor from another string that bounds a valid range slices" =
   let other = advance 1 (startCursor "xy")
   expectEqual "h" (sliceBetween (startCursor "héllo") other)
+
+-- # replaceOnce and cutBetween
+
+test "replaceOnce names only the first line of a long multi-line old text" =
+  expectEqual
+    (Err "expected 1 occurrence of `\{take 60 (repeat 70 "a")}…`, found 0")
+    (replaceOnce "\{repeat 70 "a"}\nsecond" "x" "nothing")
+
+test "replaceOnce counts non-overlapping occurrences" =
+  expectEqual (Ok "baa") (replaceOnce "aaa" "b" "aaaaa")
+
+test "cutBetween counts codepoints, not bytes" =
+  expectEqual (Ok ("é", "ü", "ö")) (cutBetween "<" ">" "é<ü>ö")
 # DESUGAR
-(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -1194,8 +1207,11 @@ test "a cursor from another string that bounds a valid range slices" =
 (DTest false "sliceBetween from the start to the end is the whole string" (EBlock (DoLet false false (PVar "c") (EApp (EVar "startCursor") (ELit (LString "aé日😀")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "aé日😀")) (ELit (LInt 4)))) (EApp (EVar "strAndLen") (EApp (EApp (EVar "sliceBetween") (EVar "c")) (EApp (EApp (EVar "advance") (ELit (LInt 4))) (EVar "c"))))))))
 (DTest false "sliceBetween keeps the codepoint count of the slice" (EBlock (DoLet false false (PVar "c") (EApp (EVar "startCursor") (ELit (LString "aé日😀z")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日")) (ELit (LInt 2)))) (EApp (EVar "strAndLen") (EApp (EApp (EVar "sliceBetween") (EApp (EApp (EVar "advance") (ELit (LInt 1))) (EVar "c"))) (EApp (EApp (EVar "advance") (ELit (LInt 3))) (EVar "c"))))))))
 (DTest false "a cursor from another string that bounds a valid range slices" (EBlock (DoLet false false (PVar "other") (EApp (EApp (EVar "advance") (ELit (LInt 1))) (EApp (EVar "startCursor") (ELit (LString "xy"))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ELit (LString "h"))) (EApp (EApp (EVar "sliceBetween") (EApp (EVar "startCursor") (ELit (LString "héllo")))) (EVar "other"))))))
+(DTest false "replaceOnce names only the first line of a long multi-line old text" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EVar "display") (EApp (EApp (EVar "take") (ELit (LInt 60))) (EApp (EApp (EVar "repeat") (ELit (LInt 70))) (ELit (LString "a")))))) (ELit (LString "…`, found 0"))))) (EApp (EApp (EApp (EVar "replaceOnce") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "repeat") (ELit (LInt 70))) (ELit (LString "a"))))) (ELit (LString "\nsecond")))) (ELit (LString "x"))) (ELit (LString "nothing")))))
+(DTest false "replaceOnce counts non-overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ELit (LString "baa")))) (EApp (EApp (EApp (EVar "replaceOnce") (ELit (LString "aaa"))) (ELit (LString "b"))) (ELit (LString "aaaaa")))))
+(DTest false "cutBetween counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ETuple (ELit (LString "é")) (ELit (LString "ü")) (ELit (LString "ö"))))) (EApp (EApp (EApp (EVar "cutBetween") (ELit (LString "<"))) (ELit (LString ">"))) (ELit (LString "é<ü>ö")))))
 # MARK
-(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -1441,3 +1457,6 @@ test "a cursor from another string that bounds a valid range slices" =
 (DTest false "sliceBetween from the start to the end is the whole string" (EBlock (DoLet false false (PVar "c") (EApp (EVar "startCursor") (ELit (LString "aé日😀")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "aé日😀")) (ELit (LInt 4)))) (EApp (EVar "strAndLen") (EApp (EApp (EVar "sliceBetween") (EVar "c")) (EApp (EApp (EVar "advance") (ELit (LInt 4))) (EVar "c"))))))))
 (DTest false "sliceBetween keeps the codepoint count of the slice" (EBlock (DoLet false false (PVar "c") (EApp (EVar "startCursor") (ELit (LString "aé日😀z")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日")) (ELit (LInt 2)))) (EApp (EVar "strAndLen") (EApp (EApp (EVar "sliceBetween") (EApp (EApp (EVar "advance") (ELit (LInt 1))) (EVar "c"))) (EApp (EApp (EVar "advance") (ELit (LInt 3))) (EVar "c"))))))))
 (DTest false "a cursor from another string that bounds a valid range slices" (EBlock (DoLet false false (PVar "other") (EApp (EApp (EVar "advance") (ELit (LInt 1))) (EApp (EVar "startCursor") (ELit (LString "xy"))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ELit (LString "h"))) (EApp (EApp (EVar "sliceBetween") (EApp (EVar "startCursor") (ELit (LString "héllo")))) (EVar "other"))))))
+(DTest false "replaceOnce names only the first line of a long multi-line old text" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EMethodRef "display") (EApp (EApp (EVar "take") (ELit (LInt 60))) (EApp (EApp (EVar "repeat") (ELit (LInt 70))) (ELit (LString "a")))))) (ELit (LString "…`, found 0"))))) (EApp (EApp (EApp (EVar "replaceOnce") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "repeat") (ELit (LInt 70))) (ELit (LString "a"))))) (ELit (LString "\nsecond")))) (ELit (LString "x"))) (ELit (LString "nothing")))))
+(DTest false "replaceOnce counts non-overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ELit (LString "baa")))) (EApp (EApp (EApp (EVar "replaceOnce") (ELit (LString "aaa"))) (ELit (LString "b"))) (ELit (LString "aaaaa")))))
+(DTest false "cutBetween counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ETuple (ELit (LString "é")) (ELit (LString "ü")) (ELit (LString "ö"))))) (EApp (EApp (EApp (EVar "cutBetween") (ELit (LString "<"))) (ELit (LString ">"))) (ELit (LString "é<ü>ö")))))

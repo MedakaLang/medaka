@@ -530,6 +530,65 @@ spliceAt i oldLen new s = stringConcat [
   stringSlice (i + oldLen) (stringLength s) s,
 ]
 
+{- | The string with `old` replaced by `new`, provided `old` occurs exactly
+   once.
+
+   `Err` when `old` occurs no times, more than once, or is empty. The
+   message names the first line of `old` (cut at 60 characters) and the
+   number of occurrences found. Occurrences are counted as
+   `countOccurrences` counts them.
+
+   > replaceOnce "l" "L" "help"
+   Ok "heLp"
+   > replaceOnce "z" "Z" "hello"
+   Err "expected 1 occurrence of `z…`, found 0"
+   > replaceOnce "l" "L" "hello"
+   Err "expected 1 occurrence of `l…`, found 2"
+   > replaceOnce "" "x" "hello"
+   Err "expected 1 occurrence of `…`, found 0" -}
+export
+replaceOnce : String -> String -> String -> Result String String
+replaceOnce old new s = match countOccurrences old s
+  1 => Ok (replaceFirst old new s)
+  n => Err "expected 1 occurrence of `\{take 60 (firstLine old)}…`, found \{n}"
+
+firstLine : String -> String
+firstLine s = match lines s
+  [] => ""
+  l :: _ => l
+
+{- | Splits `s` at the first `start` and the first `end` after it, giving
+   the text before `start`, the text between the two, and the text after
+   `end`. Neither anchor appears in the result.
+
+   `Err` names the anchor that is missing: `start` anywhere in `s`, or
+   `end` after `start`.
+
+   > cutBetween "[" "]" "a[b]c"
+   Ok ("a", "b", "c")
+   > cutBetween "[" "]" "a[]c"
+   Ok ("a", "", "c")
+   > cutBetween "[" "]" "abc"
+   Err "start anchor `[` not found"
+   > cutBetween "[" "]" "a]b[c"
+   Err "end anchor `]` not found after start" -}
+export
+cutBetween : String ->
+  String ->
+  String ->
+  Result String (String, String, String)
+cutBetween start end s = match indexOf start s
+  None => Err "start anchor `\{start}` not found"
+  Some i =>
+    let afterStart = drop (i + stringLength start) s
+    match indexOf end afterStart
+      None => Err "end anchor `\{end}` not found after start"
+      Some j => Ok (
+        take i s,
+        take j afterStart,
+        drop (j + stringLength end) afterStart,
+      )
+
 {- | The string with every non-overlapping occurrence of `old` replaced by
    `new`.
 

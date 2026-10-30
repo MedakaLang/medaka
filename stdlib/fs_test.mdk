@@ -1,8 +1,9 @@
 -- Tests for the file primitives `stdlib/fs.mdk` builds on.
 
-import fs.{isDir, mkdirAll, walkDir}
+import fs.{editFile, isDir, mkdirAll, stat, walkDir}
 import path.{joinPath}
 import test.{Expectation, expectEqual, expectErrContains, fail}
+import io.{runVerb}
 import test_process.{scratchDir, withScratchDir}
 
 -- `readFile` refuses a file that is not UTF-8 rather than decoding it lossily,
@@ -97,3 +98,51 @@ wideWalkCheck dir = match buildWide dir 30 1000
 -- overflows.  This test runs natively, so it pins only the count.
 test "walkDir returns every entry of a tree of 30030 entries" =
   withScratchDir wideWalkCheck
+
+-- # editFile
+
+-- The text and modification time of a file, as one value to compare.
+fileState : String -> <FileRead> Result String (String, Float)
+fileState path = do
+  text <- readFile path
+  st <- stat path
+  Ok (text, st.mtime)
+
+-- Writes `before` to a fresh file, waits long enough for a rewrite to move the
+-- modification time (`stat` reports whole seconds), then runs `edit` on it and reports the file's state
+-- before and after together with the edit's own result.
+editOutcome : String ->
+  String ->
+  (String -> Result String String) ->
+  <Exec, IO, FileRead, FileWrite> Result String ((String, Float), (String, Float), Result String Unit)
+editOutcome dir before edit = do
+  let path = joinPath dir "target.txt"
+  () <- writeFile path before
+  s0 <- fileState path
+  _ <- runVerb "sleep" ["1.1"]
+  let r = editFile path edit
+  s1 <- fileState path
+  Ok (s0, s1, r)
+
+test "editFile on an Err from the function writes nothing and prefixes the path" = withScratchDir
+  (dir => match editOutcome dir "abc" (_ => Err "nope")
+    Err e => fail "setup failed: \{e}"
+    Ok (s0, s1, r) =>
+      expectEqual (s0, Err "\{joinPath dir "target.txt"}: nope") (s1, r))
+
+test "editFile with an Ok that changes nothing leaves text and mtime alone" = withScratchDir
+  (dir => match editOutcome dir "abc" Ok
+    Err e => fail "setup failed: \{e}"
+    Ok (s0, s1, r) => expectEqual (s0, Ok ()) (s1, r))
+
+test "editFile writes when the text changes" = withScratchDir
+  (dir => match editOutcome dir "abc" (s => Ok (s ++ "d"))
+    Err e => fail "setup failed: \{e}"
+    Ok ((t0, m0), (t1, m1), r) =>
+      expectEqual ("abc", "abcd", True, Ok ()) (t0, t1, m1 > m0, r))
+
+test "editFile on a missing file is an Err naming the path" = withScratchDir
+  (dir =>
+    expectErrContains
+      (joinPath dir "absent.txt")
+      (editFile (joinPath dir "absent.txt") Ok))

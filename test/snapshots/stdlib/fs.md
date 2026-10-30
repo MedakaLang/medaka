@@ -1,5 +1,5 @@
 # META
-source_lines=289
+source_lines=305
 stages=DESUGAR,MARK
 # SOURCE
 {- | Filesystem helpers built on the host file primitives.
@@ -73,6 +73,22 @@ copyFile : (src : String) ->
 copyFile src dst = match readFileBytes src
   Ok bytes => writeFileBytes dst bytes
   Err e => Err e
+
+{- | Rewrites the file at `path` with the result of `f` applied to its text.
+
+   `Err` from `f` writes nothing and is returned as `Err "<path>: <e>"`, as
+   is a failure to read. The file is written only when the new text differs
+   from what was read, so an unchanged edit leaves the modification time
+   alone. The write is a plain `writeFile`, not a durable replace. -}
+export
+editFile : (path : String) ->
+  (String -> Result String String) ->
+  <FileRead path, FileWrite path> Result String Unit
+editFile path f = match readFile path
+  Err e => Err "\{path}: \{e}"
+  Ok text => match f text
+    Err e => Err "\{path}: \{e}"
+    Ok t => if t == text then Ok () else writeFile path t
 
 {- | Replaces `target` with `content` so that a crash leaves either the
    old file or the new one, never a partial write.
@@ -309,6 +325,8 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 (DFunDef false "fileSize" ((PVar "p")) (EApp (EApp (EVar "map") (ELam ((PVar "st")) (EFieldAccess (EVar "st") "size"))) (EApp (EVar "stat") (EVar "p"))))
 (DTypeSig true "copyFile" (TyFun (TyNamed "src" (TyCon "String")) (TyFun (TyNamed "dst" (TyCon "String")) (TyEffect ((atom "FileRead" (name "src")) (atom "FileWrite" (name "dst"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "copyFile" ((PVar "src") (PVar "dst")) (EMatch (EApp (EVar "readFileBytes") (EVar "src")) (arm (PCon "Ok" (PVar "bytes")) () (EApp (EApp (EVar "writeFileBytes") (EVar "dst")) (EVar "bytes"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e")))))
+(DTypeSig true "editFile" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))) (TyEffect ((atom "FileRead" (name "path")) (atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DFunDef false "editFile" ((PVar "path") (PVar "f")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "f") (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "t")) () (EIf (EBinOp "==" (EVar "t") (EVar "text")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EApp (EVar "writeFile") (EVar "path")) (EVar "t"))))))))
 (DTypeSig true "replaceDurably" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("FileWrite") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
 (DFunDef false "replaceDurably" ((PVar "staged") (PVar "target") (PVar "content")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "writeFileMode") (EVar "staged")) (EVar "ownerOnlyMode")) (EVar "content"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EVar "fsync") (EVar "staged"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "rename") (EVar "staged")) (EVar "target"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "fsync") (EApp (EVar "dirname") (EVar "target"))))))))))))))))
 (DTypeSig true "mkdirAll" (TyFun (TyCon "String") (TyEffect ("FileWrite") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
@@ -352,6 +370,8 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 (DFunDef false "fileSize" ((PVar "p")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "st")) (EFieldAccess (EVar "st") "size"))) (EApp (EVar "stat") (EVar "p"))))
 (DTypeSig true "copyFile" (TyFun (TyNamed "src" (TyCon "String")) (TyFun (TyNamed "dst" (TyCon "String")) (TyEffect ((atom "FileRead" (name "src")) (atom "FileWrite" (name "dst"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "copyFile" ((PVar "src") (PVar "dst")) (EMatch (EApp (EVar "readFileBytes") (EVar "src")) (arm (PCon "Ok" (PVar "bytes")) () (EApp (EApp (EVar "writeFileBytes") (EVar "dst")) (EVar "bytes"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e")))))
+(DTypeSig true "editFile" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))) (TyEffect ((atom "FileRead" (name "path")) (atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DFunDef false "editFile" ((PVar "path") (PVar "f")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "f") (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "t")) () (EIf (EBinOp "==" (EVar "t") (EVar "text")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EApp (EVar "writeFile") (EVar "path")) (EVar "t"))))))))
 (DTypeSig true "replaceDurably" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("FileWrite") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
 (DFunDef false "replaceDurably" ((PVar "staged") (PVar "target") (PVar "content")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "writeFileMode") (EVar "staged")) (EVar "ownerOnlyMode")) (EVar "content"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "fsync") (EVar "staged"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "rename") (EVar "staged")) (EVar "target"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "fsync") (EApp (EVar "dirname") (EVar "target"))))))))))))))))
 (DTypeSig true "mkdirAll" (TyFun (TyCon "String") (TyEffect ("FileWrite") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))

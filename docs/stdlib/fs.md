@@ -83,6 +83,20 @@ Copies the bytes of `src` to `dst`, replacing any existing `dst`.
 
 A read failure is reported before anything is written.
 
+### `editFile`
+
+```
+editFile : (path : String) -> (String -> Result String String) -> <FileRead path, FileWrite path> Result String Unit
+editFile path f
+```
+
+Rewrites the file at `path` with the result of `f` applied to its text.
+
+`Err` from `f` writes nothing and is returned as `Err "<path>: <e>"`, as
+is a failure to read. The file is written only when the new text differs
+from what was read, so an unchanged edit leaves the modification time
+alone. The write is a plain `writeFile`, not a durable replace.
+
 ### `replaceDurably`
 
 ```
