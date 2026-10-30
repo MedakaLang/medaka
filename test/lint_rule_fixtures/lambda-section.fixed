@@ -1,0 +1,52 @@
+-- Fixture for rule-lambda-section.  The line below each `expect-next-line`
+-- marker is the line the rule reports.  The rule reports the line of the
+-- declaration that holds the lambda, so each positive is a one-line
+-- declaration; a finding inside an interface default is reported at the
+-- interface header.
+
+-- expect-next-line rule-lambda-section
+addOne xs = map (+ 1) xs
+
+-- expect-next-line rule-lambda-section
+leftSection xs = map (10 - _) xs
+
+-- expect-next-line rule-lambda-section
+bare xs = foldl (+) 0 xs
+
+-- expect-next-line rule-lambda-section unfixed
+test "lambda in a test body" = expectEqual (map (x => x * 2) [1, 2]) [2, 4]
+
+-- expect-next-line rule-lambda-section unfixed
+prop "lambda in a prop body" (xs : List Int) = map (x => x + 0) xs == xs
+
+-- expect-next-line rule-lambda-section unfixed
+let rec loop xs = filter (x => x > 0) xs
+
+-- expect-next-line rule-lambda-section unfixed
+interface Scaled a where
+  scaled : List a -> List a
+  scaled xs = map (x => x * 2) xs
+
+nearMisses xs =
+  [ map (x => x + x) xs
+  , map (x => f x + 1) xs
+  , map (x => x + g x) xs
+  , map (x => (x + 1) * 2) xs
+  , map (x y => y + x) xs
+  , map (x => x) xs
+  , map (a b => a + a) xs
+  ]
+
+f x = x
+
+g x = x
+
+keepsSection xs = map (+ 1) xs
+
+test "lambda calls a function in a test body" = expectEqual (map (x => f x) [1]) [1]
+
+prop "lambda uses its parameter twice in a prop body" (xs : List Int) = map (x => x + x) xs == xs
+
+interface Calls a where
+  calls : List a -> List a
+  calls xs = map (x => f x) xs

@@ -1,0 +1,36 @@
+-- Fixture for rule-not-eq.  The line below each `expect-next-line` marker is
+-- the line the rule reports.  The rule reports the line of the declaration
+-- that holds the expression, so each positive is a one-line declaration; a
+-- finding inside an interface default is reported at the interface header.
+
+-- expect-next-line rule-not-eq
+topLevel a b = a /= b
+
+-- expect-next-line rule-not-eq
+notNotEq a b = a == b
+
+-- expect-next-line rule-not-eq unfixed
+test "negation in a test body" = expectTrue (not (1 == 2))
+
+-- expect-next-line rule-not-eq unfixed
+prop "negation in a prop body" (n : Int) = not (n == n + 1)
+
+-- expect-next-line rule-not-eq unfixed
+let rec loop n = not (n == 0)
+
+-- expect-next-line rule-not-eq unfixed
+interface Same a where
+  same : a -> a -> Bool
+  same x y = not (x == y)
+
+nearMisses a b = [a /= b, a == b, not (a < b), not (g a), not (a == b || b)]
+
+g n = n > 0
+
+test "plain comparisons in a test body" = expectTrue (1 /= 2)
+
+prop "plain comparison in a prop body" (n : Int) = n == n
+
+interface Plain a where
+  plain : a -> a -> Bool
+  plain x y = x == y

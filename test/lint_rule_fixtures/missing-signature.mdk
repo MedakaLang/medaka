@@ -1,0 +1,41 @@
+-- Fixture for rule-missing-signature.  The line below each `expect-next-line`
+-- marker is the line the rule reports: the first clause of an unsigned
+-- top-level binding.
+
+signed : Int -> Int
+signed x = x + 1
+
+-- expect-next-line rule-missing-signature
+unsigned x = x + 1
+
+-- expect-next-line rule-missing-signature
+unsignedValue = 42
+
+twoClauses : Int -> Int
+twoClauses 0 = 1
+twoClauses n = n
+
+-- expect-next-line rule-missing-signature
+unsignedTwoClauses 0 = 1
+unsignedTwoClauses n = n
+
+main = signed 1
+
+-- A test and a prop body carry their own names, not a top-level binding.
+test "a test needs no signature" = expectTrue (signed 1 == 2)
+
+prop "a prop needs no signature" (n : Int) = signed n == n + 1
+
+-- expect-next-line rule-missing-signature
+helperNextToTests n = n * 2
+
+-- A local binding needs no signature of its own.
+scoped : Int -> Int
+scoped n =
+  let local = n + 1
+  local * 2
+
+interface Shape a where
+  area : a -> Int
+  describe : a -> String
+  describe x = "shape of area \{area x}"

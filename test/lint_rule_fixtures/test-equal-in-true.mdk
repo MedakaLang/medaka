@@ -1,0 +1,38 @@
+-- Fixture for rule-test-equal-in-true (an internal rule).  The line below each
+-- `expect-next-line` marker is the line the rule reports.  The rule reports the
+-- line of the declaration that holds the call, so each positive is a one-line
+-- declaration; a finding inside an interface default is reported at the
+-- interface header.
+
+import test.{Expectation, expectTrue, expectFalse, expectEqual}
+
+-- expect-next-line rule-test-equal-in-true
+check a b = expectTrue (a == b)
+
+-- expect-next-line rule-test-equal-in-true
+checkNe a b = expectTrue (a /= b)
+
+-- expect-next-line rule-test-equal-in-true
+checkFalse a b = expectFalse (a == b)
+
+-- expect-next-line rule-test-equal-in-true
+test "equality in a test body" = expectTrue (1 + 1 == 2)
+
+-- expect-next-line rule-test-equal-in-true
+prop "equality in a prop body" (n : Int) = expectTrue (n + 0 == n)
+
+-- expect-next-line rule-test-equal-in-true unfixed
+let rec loop n = expectFalse (n == 0)
+
+-- expect-next-line rule-test-equal-in-true unfixed
+interface Probe a where
+  probe : a -> a -> Expectation
+  probe x y = expectTrue (x == y)
+
+nearMisses a b = [expectEqual a b, expectTrue (a < b), expectTrue (a && b), expectTrue (f (a == b))]
+
+f x = x
+
+test "equality verb in a test body" = expectEqual (1 + 1) 2
+
+prop "ordering in a prop body" (n : Int) = expectTrue (n <= n)

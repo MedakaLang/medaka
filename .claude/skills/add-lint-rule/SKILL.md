@@ -75,6 +75,11 @@ from the registry (the listing equals `allRuleNames`; scope and ratchet filters 
 new rule bumps no number there. A new fixable rule's fixture in `test/lint_fix_fixtures/` raises the
 `fixtures = N` of the `diff_compiler_lint_fix` row in `test/diff_compiler_fmt_test.mdk` by one.
 
+A rule also needs a per-rule harness fixture, `test/lint_rule_fixtures/<name>.mdk` (name without the
+`rule-` prefix, plus `.fixed` when fixable), with positives marked `-- expect-next-line <rule>` in a
+top-level function, a `test` body, a `prop` body and a let-group or interface default; add the name to
+`fixtureNames` and a `test` block in `compiler/tools/lint_rule_fixtures_test.mdk` (grammar in its header).
+
 ## 5. Ratchet and drain (same PR)
 
 1. Census: `medaka lint --only=<rule> compiler stdlib sqlite` (add `--internal` for an internal rule).
