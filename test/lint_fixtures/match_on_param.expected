@@ -1,2 +1,0 @@
-warning: [rule-dead-code] private top-level 'greet' is unreachable from exports/main/doctests — remove it (dead code)
-warning: [rule-match-on-param] function 'greet' matches on parameter 'x' — use a multi-clause function definition

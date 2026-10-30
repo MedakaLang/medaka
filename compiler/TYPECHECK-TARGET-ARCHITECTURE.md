@@ -3663,7 +3663,7 @@ has bystander coverage when F1 is the only member that ran.
   A-3's unmarked #1277 acceptance legs (run + build) and is a landing gate for
   this unit.
 
-`test/lint_fixtures/derivable_needs_datadecl.mdk` is load-bearing coverage
+`test/lint_rule_fixtures/hand-rolled-derivable.mdk` is load-bearing coverage
 here — it is the only thing asserting that a user impl α-equal to a prelude impl
 stays accepted, and A-3.7 (not A-3.4) is where it is at risk. Do not tidy it.
 

@@ -1760,7 +1760,7 @@ false in a direction that would hide a live S0. F-3d keeps a **mutually-⊑
 see the pair, and its input is **user decls only**. Control 3's pair is
 **prelude-vs-user**, so coherence never compares it: `impl Eq Int` beside the
 prelude's still checks clean, exit 0, verified on the F-3d branch against
-`test/lint_fixtures/derivable_needs_datadecl.mdk` (`{"diagnostics":[]}`). That is
+`test/lint_rule_fixtures/hand-rolled-derivable.mdk` (`{"diagnostics":[]}`). That is
 **#1162's equal-head second symptom**, which this document elsewhere records as
 drained by nothing, and F-3d neither fixes nor worsens it. So: the hard arm's
 coverage is **user-vs-user only**; do not read "α-equal heads still hard-reject" as

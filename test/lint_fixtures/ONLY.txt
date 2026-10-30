@@ -1,0 +1,8 @@
+# <fixture stem> <comma-separated rules>: the only rules `lint_main --only=` runs
+# over that fixture. Read by diff_compiler_fmt_test.mdk and capture_goldens.sh;
+# a fixture with no row here reds the gate.
+clean rule-missing-signature
+clone_type rule-clone-type
+directive_reason rule-directive-reason
+inline_suppression rule-hand-rolled-derivable,rule-match-on-param,rule-stdlib-reimpl
+promissory_reader rule-promissory-reader

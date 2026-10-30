@@ -255,7 +255,7 @@ oracleMalformedStdlibIn dir = match boundedInTree 120 "cp" [
     Ok () => match boundedInTree 120 "env" [
       "MEDAKA_ROOT=\{dir}",
       underRoot "test/bin/lint_main",
-      underRoot "test/lint_fixtures/stdlib_reimpl_derived_index.mdk",
+      underRoot "test/lint_rule_fixtures/stdlib-reimpl.mdk",
     ]
       Err e => fail "could not spawn lint oracle: \{e}"
       Ok (code, out, err) => expectAll [

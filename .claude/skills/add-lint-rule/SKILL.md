@@ -66,19 +66,22 @@ three things follow:
 
 ## 4. Fixtures
 
-`test/lint_fixtures/<name>.mdk` + `.expected` for report-only rules; `test/lint_fix_fixtures/<name>.mdk`
-+ `.fixed` for fixable ones. Include a case that must NOT fire (the false-positive guard). Capture
-with `sh test/capture_goldens.sh --frozen lint_fix` only after deciding the expected output from
-the rule's doc; a golden records what the engine did. Native tests go in
-`compiler/tools/lint_test.mdk` (`expectEqual`, `expectTrue`). Its registry test derives its counts
-from the registry (the listing equals `allRuleNames`; scope and ratchet filters partition it), so a
-new rule bumps no number there. A new fixable rule's fixture in `test/lint_fix_fixtures/` raises the
-`fixtures = N` of the `diff_compiler_lint_fix` row in `test/diff_compiler_fmt_test.mdk` by one.
+A rule's tests are `test/lint_rule_fixtures/<name>.mdk` (name without the `rule-` prefix, plus
+`.fixed` when fixable), run by the harness `compiler/tools/lint_rule_fixtures_test.mdk` with only
+that rule enabled, so a new rule moves no other rule's golden. Mark positives
+`-- expect-next-line <rule>` in a top-level function, a `test` body, a `prop` body and a let-group
+or interface default; include a case that must NOT fire (the false-positive guard); add the name
+to `fixtureNames` and a `test` block (grammar in its header). Decide the expected output from the
+rule's doc; a golden records what the engine did. Native tests go in `compiler/tools/lint_test.mdk`
+(`expectEqual`, `expectTrue`). Its registry test derives its counts from the registry (the listing
+equals `allRuleNames`; scope and ratchet filters partition it), so a new rule bumps no number there.
 
-A rule also needs a per-rule harness fixture, `test/lint_rule_fixtures/<name>.mdk` (name without the
-`rule-` prefix, plus `.fixed` when fixable), with positives marked `-- expect-next-line <rule>` in a
-top-level function, a `test` body, a `prop` body and a let-group or interface default; add the name to
-`fixtureNames` and a `test` block in `compiler/tools/lint_rule_fixtures_test.mdk` (grammar in its header).
+`test/lint_fixtures` and `test/lint_fix_fixtures` keep only what the marker grammar cannot express
+(directive suppression, the fixer's interior-comment and `test`-import cases). Each of their
+fixtures names its rules in that directory's `ONLY.txt` and runs `--only=<those rules>`; a new
+entry there raises the count in the matching `narrowedFailures` call in
+`test/diff_compiler_fmt_test.mdk`. Re-cut those goldens with
+`sh test/capture_goldens.sh --frozen lint` / `--frozen lint_fix`.
 
 ## 5. Ratchet and drain (same PR)
 
