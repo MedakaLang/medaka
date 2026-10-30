@@ -215,7 +215,7 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Ord_gt_zZ_5f__5f_user_5f__5f__3a__3a_Ord_7c__5f__5f_user_5f__5f__2e_Color_7c_(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 8589934595, i64 8589934593)
+  %t0 = call i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4f7264.6774.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4f72645f37635f5f35665f5f35665f757365725f35665f5f35665f5f32655f436f6c6f725f37635f(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..0 to i64), i64 8589934595, i64 8589934593)
   %t1 = alloca i64
   %t3 = icmp eq i64 %t0, 3
   br i1 %t3, label %conyes4, label %connext4
@@ -237,10 +237,10 @@ decend2:
   call void @mdk_print_int(i64 %t8)
   ret i32 0
 }
-; mdk-module impl:Int_gt
-define internal i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Ord_gt_zZ_5f__5f_user_5f__5f__3a__3a_Ord_7c_Int_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
+; mdk-module impl.5f5f757365725f5f3a3a4f72647c496e747c.6774
+define internal i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4f7264.6774.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4f72645f37635f496e745f37635f(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
-  %t0 = call i64 @mdk_impl_Int_compare(i64 %arg1, i64 %arg2)
+  %t0 = call i64 @mdk.impl.496e74.636f6d70617265(i64 %arg1, i64 %arg2)
   %t1 = alloca i64
   %t3 = icmp eq i64 %t0, 5
   br i1 %t3, label %conyes4, label %connext4
@@ -255,10 +255,10 @@ decend2:
   ret i64 %t5
 }
 
-; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Color_gt
-define internal i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Ord_gt_zZ_5f__5f_user_5f__5f__3a__3a_Ord_7c__5f__5f_user_5f__5f__2e_Color_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
+; mdk-module impl.5f5f757365725f5f3a3a4f72647c5f5f757365725f5f2e436f6c6f727c.6774
+define internal i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4f7264.6774.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4f72645f37635f5f35665f5f35665f757365725f35665f5f35665f5f32655f436f6c6f725f37635f(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
-  %t0 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Color_compare(i64 %arg1, i64 %arg2)
+  %t0 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f436f6c6f72.636f6d70617265(i64 %arg1, i64 %arg2)
   %t1 = alloca i64
   %t3 = icmp eq i64 %t0, 5
   br i1 %t3, label %conyes4, label %connext4
@@ -273,8 +273,8 @@ decend2:
   ret i64 %t5
 }
 
-; mdk-module impl:Int_compare
-define internal i64 @mdk_impl_Int_compare(i64 %arg0, i64 %arg1) {
+; mdk-module impl.5f5f757365725f5f3a3a4f72647c496e747c.636f6d70617265
+define internal i64 @mdk.impl.496e74.636f6d70617265(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = icmp slt i64 %arg0, %arg1
   %t1 = zext i1 %t0 to i64
@@ -299,8 +299,8 @@ else13:
   ret i64 3
 }
 
-; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Color_compare
-define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Color_compare(i64 %arg0, i64 %arg1) {
+; mdk-module impl.5f5f757365725f5f3a3a4f72647c5f5f757365725f5f2e436f6c6f727c.636f6d70617265
+define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f436f6c6f72.636f6d70617265(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 8589934593
@@ -364,4 +364,4 @@ decend1:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_dc.program.0 = internal constant [1 x i64] [i64 4255471835846998265]
+@mdk.gen.dictcell.70726f6772616d..0 = internal constant [1 x i64] [i64 4255471835846998265]

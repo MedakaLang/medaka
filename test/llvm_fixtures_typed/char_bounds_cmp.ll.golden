@@ -216,23 +216,23 @@ define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
   %t0 = call i64 @mdk_char_from_code(i64 1)
-  %t1 = call i64 @mdk___user____unwrap(i64 %t0)
-  store i64 %t1, ptr @mdk_g___user____lo
+  %t1 = call i64 @mdk.user.6d356635663735373336353732356635665f5f756e77726170(i64 %t0)
+  store i64 %t1, ptr @mdk.global.6d356635663735373336353732356635665f5f6c6f
   %t2 = call i64 @mdk_char_from_code(i64 2228223)
-  %t3 = call i64 @mdk___user____unwrap(i64 %t2)
-  store i64 %t3, ptr @mdk_g___user____hi
-  %t4 = load i64, ptr @mdk_g___user____lo
+  %t3 = call i64 @mdk.user.6d356635663735373336353732356635665f5f756e77726170(i64 %t2)
+  store i64 %t3, ptr @mdk.global.6d356635663735373336353732356635665f5f6869
+  %t4 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6c6f
   %t5 = icmp sle i64 1, %t4
   %t6 = zext i1 %t5 to i64
   %t7 = shl i64 %t6, 1
   %t8 = or i64 %t7, 1
-  %t9 = call i64 @mdk___user____bit(i64 3, i64 %t8)
-  %t10 = load i64, ptr @mdk_g___user____lo
+  %t9 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 3, i64 %t8)
+  %t10 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6c6f
   %t11 = icmp eq i64 1, %t10
   %t12 = zext i1 %t11 to i64
   %t13 = shl i64 %t12, 1
   %t14 = or i64 %t13, 1
-  %t15 = call i64 @mdk___user____bit(i64 5, i64 %t14)
+  %t15 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 5, i64 %t14)
   %t16 = sub i64 %t15, 1
   %t17 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t9, i64 %t16)
   %t18 = extractvalue { i64, i1 } %t17, 0
@@ -244,12 +244,12 @@ intovf20:
   call void @mdk_int_overflow(i64 0, i64 %t21, i64 %t22)
   unreachable
 intok20:
-  %t23 = load i64, ptr @mdk_g___user____hi
+  %t23 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6869
   %t24 = icmp eq i64 2228223, %t23
   %t25 = zext i1 %t24 to i64
   %t26 = shl i64 %t25, 1
   %t27 = or i64 %t26, 1
-  %t28 = call i64 @mdk___user____bit(i64 9, i64 %t27)
+  %t28 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 9, i64 %t27)
   %t29 = sub i64 %t28, 1
   %t30 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t18, i64 %t29)
   %t31 = extractvalue { i64, i1 } %t30, 0
@@ -261,12 +261,12 @@ intovf33:
   call void @mdk_int_overflow(i64 0, i64 %t34, i64 %t35)
   unreachable
 intok33:
-  %t36 = load i64, ptr @mdk_g___user____hi
+  %t36 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6869
   %t37 = icmp sle i64 %t36, 2228223
   %t38 = zext i1 %t37 to i64
   %t39 = shl i64 %t38, 1
   %t40 = or i64 %t39, 1
-  %t41 = call i64 @mdk___user____bit(i64 17, i64 %t40)
+  %t41 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 17, i64 %t40)
   %t42 = sub i64 %t41, 1
   %t43 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t31, i64 %t42)
   %t44 = extractvalue { i64, i1 } %t43, 0
@@ -282,8 +282,8 @@ intok46:
   call void @mdk_print_int(i64 %t49)
   ret i32 0
 }
-; mdk-module program
-define internal i64 @mdk___user____bit(i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = ashr i64 %arg1, 1
   %t1 = icmp ne i64 %t0, 0
@@ -294,8 +294,8 @@ else2:
   ret i64 1
 }
 
-; mdk-module program
-define internal i64 @mdk___user____unwrap(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f756e77726170(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 562958543355907
@@ -341,7 +341,7 @@ decend1:
 
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
-; mdk-module program
-@mdk_g___user____lo = global i64 0
-; mdk-module program
-@mdk_g___user____hi = global i64 0
+; mdk-module module.5f5f757365725f5f
+@mdk.global.6d356635663735373336353732356635665f5f6c6f = global i64 0
+; mdk-module module.5f5f757365725f5f
+@mdk.global.6d356635663735373336353732356635665f5f6869 = global i64 0

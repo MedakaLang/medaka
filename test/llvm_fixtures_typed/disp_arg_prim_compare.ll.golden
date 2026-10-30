@@ -215,7 +215,7 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_impl_Int_compare(i64 7, i64 11)
+  %t0 = call i64 @mdk.impl.496e74.636f6d70617265(i64 7, i64 11)
   %t1 = alloca i64
   %t3 = icmp eq i64 %t0, 1
   br i1 %t3, label %conyes4, label %connext4
@@ -243,8 +243,8 @@ decend2:
   call void @mdk_print_int(i64 %t10)
   ret i32 0
 }
-; mdk-module impl:Int_compare
-define internal i64 @mdk_impl_Int_compare(i64 %arg0, i64 %arg1) {
+; mdk-module impl.5f5f757365725f5f3a3a4f72647c496e747c.636f6d70617265
+define internal i64 @mdk.impl.496e74.636f6d70617265(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = icmp slt i64 %arg0, %arg1
   %t1 = zext i1 %t0 to i64
@@ -269,8 +269,8 @@ else13:
   ret i64 3
 }
 
-; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Tag_compare
-define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Tag_compare(i64 %arg0, i64 %arg1) {
+; mdk-module impl.5f5f757365725f5f3a3a4f72647c5f5f757365725f5f2e5461677c.636f6d70617265
+define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f546167.636f6d70617265(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 8589934593

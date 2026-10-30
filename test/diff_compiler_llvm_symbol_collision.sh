@@ -21,7 +21,8 @@ FIX="$ROOT/test/symbol_collision_fixtures"
 [ -d "$FIX" ] || { printf 'FAIL: fixture corpus missing: %s\n' "$FIX"; exit 1; }
 
 MEDAKA_EMITTER="$EMITTER"
-export MEDAKA_EMITTER
+MEDAKA_WASM_EMITTER="$WASMEMIT"
+export MEDAKA_EMITTER MEDAKA_WASM_EMITTER
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -454,6 +455,35 @@ wasm_refuses negative_wasm 'emitted dict-witness tag collision' 'tag space: nati
 
 wasm_emit "$FIX/dict_witness/default_negative.mdk" default_negative_wasm
 wasm_refuses default_negative_wasm 'emitted dict-witness tag collision' 'tag space: native (LLVM) i64' 'Mzone' 'NYone'
+
+# A primed top-level name and its unprimed control both compute 3 + 10.
+printf "%s\n" 13 > "$WORK/primed.expected"
+for fixture in main control; do
+  for engine in eval native wasm; do
+    rm -f "$WORK/primed.bin" "$WORK/primed.wasm" "$WORK/primed.log"
+    checked=$((checked + 1))
+    case "$engine" in
+      eval)
+        MEDAKA_STRICT=1 "$MEDAKA" run "$FIX/primed/$fixture.mdk" > "$WORK/primed.out" 2> "$WORK/primed.err"
+        result=$?
+        ;;
+      native)
+        MEDAKA_STRICT=1 "$MEDAKA" build "$FIX/primed/$fixture.mdk" -o "$WORK/primed.bin" > "$WORK/primed.log" 2>&1 && [ -s "$WORK/primed.bin" ] && "$WORK/primed.bin" > "$WORK/primed.out" 2> "$WORK/primed.err"
+        result=$?
+        ;;
+      wasm)
+        MEDAKA_STRICT=1 "$MEDAKA" build --target wasm "$FIX/primed/$fixture.mdk" -o "$WORK/primed.wasm" > "$WORK/primed.log" 2>&1 && [ -s "$WORK/primed.wasm" ] && node "$ROOT/test/wasm/run.js" "$WORK/primed.wasm" > "$WORK/primed.out" 2> "$WORK/primed.err"
+        result=$?
+        ;;
+    esac
+    if [ "$result" -eq 0 ] && diff -u "$WORK/primed.expected" "$WORK/primed.out"; then
+      ok "primed $fixture $engine prints 13"
+    else
+      fail "primed $fixture $engine failed (exit $result)"
+      cat "$WORK/primed.log" "$WORK/primed.err" 2>/dev/null
+    fi
+  done
+done
 
 # Physical function and global names must remain distinct across modules.
 mkdir -p "$WORK/physical"
