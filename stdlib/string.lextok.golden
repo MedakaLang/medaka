@@ -2593,6 +2593,399 @@ IDENT "parts"
 NEWLINE
 EXPORT
 NEWLINE
+IDENT "dedent"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "dedent"
+IDENT "s"
+EQUAL
+INDENT
+LET
+IDENT "ls"
+EQUAL
+IDENT "map"
+IDENT "blankIfSpaceOnly"
+LPAREN
+IDENT "split"
+STRING "\n"
+LPAREN
+IDENT "dropOneNewline"
+IDENT "s"
+RPAREN
+RPAREN
+NEWLINE
+LET
+IDENT "k"
+EQUAL
+IDENT "length"
+LPAREN
+IDENT "commonMargin"
+IDENT "ls"
+RPAREN
+NEWLINE
+IDENT "join"
+STRING "\n"
+LPAREN
+IDENT "map"
+LPAREN
+IDENT "drop"
+IDENT "k"
+RPAREN
+IDENT "ls"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "indent"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "indent"
+IDENT "prefix"
+IDENT "s"
+EQUAL
+INDENT
+LET
+IDENT "ls"
+EQUAL
+IDENT "split"
+STRING "\n"
+IDENT "s"
+NEWLINE
+IDENT "join"
+STRING "\n"
+LPAREN
+IDENT "map"
+LPAREN
+IDENT "l"
+FAT_ARROW
+IF
+IDENT "isBlankLine"
+IDENT "l"
+THEN
+IDENT "l"
+ELSE
+IDENT "prepend"
+IDENT "prefix"
+IDENT "l"
+RPAREN
+IDENT "ls"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "dropOneNewline"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "dropOneNewline"
+IDENT "s"
+EQUAL
+IF
+IDENT "startsWith"
+STRING "\n"
+IDENT "s"
+THEN
+IDENT "drop"
+INT 1
+IDENT "s"
+ELSE
+IDENT "s"
+NEWLINE
+IDENT "isBlankLine"
+COLON
+UPPER "String"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isBlankLine"
+IDENT "l"
+EQUAL
+IDENT "indentRunLength"
+IDENT "l"
+LPAREN
+IDENT "length"
+IDENT "l"
+RPAREN
+INT 0
+EQ_EQ
+IDENT "length"
+IDENT "l"
+NEWLINE
+IDENT "blankIfSpaceOnly"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "blankIfSpaceOnly"
+IDENT "l"
+EQUAL
+IF
+IDENT "isBlankLine"
+IDENT "l"
+THEN
+STRING ""
+ELSE
+IDENT "l"
+NEWLINE
+IDENT "leadingIndent"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "leadingIndent"
+IDENT "l"
+EQUAL
+IDENT "take"
+LPAREN
+IDENT "indentRunLength"
+IDENT "l"
+LPAREN
+IDENT "length"
+IDENT "l"
+RPAREN
+INT 0
+RPAREN
+IDENT "l"
+NEWLINE
+IDENT "indentRunLength"
+COLON
+UPPER "String"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "indentRunLength"
+IDENT "l"
+IDENT "n"
+IDENT "i"
+INDENT
+PIPE
+IDENT "i"
+LT
+IDENT "n"
+AND
+IDENT "isIndentChar"
+LPAREN
+IDENT "charAtStr"
+IDENT "l"
+IDENT "i"
+RPAREN
+EQUAL
+IDENT "indentRunLength"
+IDENT "l"
+IDENT "n"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "i"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isIndentChar"
+COLON
+UPPER "Char"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isIndentChar"
+IDENT "c"
+EQUAL
+IDENT "c"
+EQ_EQ
+CHAR " "
+OR
+IDENT "c"
+EQ_EQ
+CHAR "\t"
+NEWLINE
+IDENT "commonMargin"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "commonMargin"
+LBRACKET
+RBRACKET
+EQUAL
+STRING ""
+NEWLINE
+IDENT "commonMargin"
+LPAREN
+IDENT "l"
+CONS
+IDENT "ls"
+RPAREN
+INDENT
+PIPE
+IDENT "l"
+EQ_EQ
+STRING ""
+EQUAL
+IDENT "commonMargin"
+IDENT "ls"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "sharedMargin"
+LPAREN
+IDENT "leadingIndent"
+IDENT "l"
+RPAREN
+IDENT "ls"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "sharedMargin"
+COLON
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "sharedMargin"
+IDENT "m"
+LBRACKET
+RBRACKET
+EQUAL
+IDENT "m"
+NEWLINE
+IDENT "sharedMargin"
+IDENT "m"
+LPAREN
+IDENT "l"
+CONS
+IDENT "ls"
+RPAREN
+INDENT
+PIPE
+IDENT "l"
+EQ_EQ
+STRING ""
+EQUAL
+IDENT "sharedMargin"
+IDENT "m"
+IDENT "ls"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "sharedMargin"
+LPAREN
+IDENT "commonPrefix"
+IDENT "m"
+LPAREN
+IDENT "leadingIndent"
+IDENT "l"
+RPAREN
+RPAREN
+IDENT "ls"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "commonPrefix"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "commonPrefix"
+IDENT "a"
+IDENT "b"
+EQUAL
+IDENT "take"
+LPAREN
+IDENT "sharedLength"
+IDENT "a"
+IDENT "b"
+INT 0
+RPAREN
+IDENT "a"
+NEWLINE
+IDENT "sharedLength"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "sharedLength"
+IDENT "a"
+IDENT "b"
+IDENT "i"
+INDENT
+PIPE
+IDENT "i"
+LT
+IDENT "length"
+IDENT "a"
+AND
+IDENT "i"
+LT
+IDENT "length"
+IDENT "b"
+AND
+IDENT "charAtStr"
+IDENT "a"
+IDENT "i"
+EQ_EQ
+IDENT "charAtStr"
+IDENT "b"
+IDENT "i"
+EQUAL
+INDENT
+IDENT "sharedLength"
+IDENT "a"
+IDENT "b"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "i"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
 IDENT "padLeft"
 COLON
 UPPER "Int"

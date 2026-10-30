@@ -1,5 +1,5 @@
 # META
-source_lines=1004
+source_lines=1088
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -8,12 +8,12 @@ stages=DESUGAR,MARK
 -- byte offset would show.
 
 import string.{
-  StrCursor, byteLength, center, countOccurrences, cutBetween, drop, endsWith,
-  fromChars, groupThousands, repeat, replaceOnce, indexOf, join, lastIndexOf,
-  lines, padLeft, padRight, replace, replaceAll, reverse, nextChar,
-  sliceBetween, startCursor, splitAt, startsWith, stripPrefix, stripSuffix,
-  take, toInt, toLower, toUpper, toFixed, trim, trimLeft, trimRight, unlines,
-  unwords, utf8ByteLength
+  StrCursor, byteLength, center, countOccurrences, cutBetween, dedent, drop,
+  endsWith, fromChars, groupThousands, indent, repeat, replaceOnce, indexOf,
+  join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll, reverse,
+  nextChar, sliceBetween, startCursor, splitAt, startsWith, stripPrefix,
+  stripSuffix, take, toInt, toLower, toUpper, toFixed, trim, trimLeft,
+  trimRight, unlines, unwords, utf8ByteLength
 }
 import test.{expectEqual, expectFalse, expectTrue}
 
@@ -1006,8 +1006,92 @@ test "groupThousands puts a comma at each group boundary" =
 
 test "groupThousands writes the most negative Int from its digits" =
   expectEqual "-4,611,686,018,427,387,904" (groupThousands intMinBound)
+
+-- # dedent and indent
+
+-- A raw block indented under its opening quotes reads as its text.
+test "dedent reads a raw block indented under its opening quotes" =
+  let block = r"""
+        foo = 1
+        bar = 2
+        """
+  expectEqual "foo = 1\nbar = 2\n" (dedent block)
+
+-- Python: textwrap.dedent("\nx") gives "\nx" after the one newline is dropped.
+test "dedent drops one leading newline and no more" =
+  expectEqual "\nx" (dedent "\n\nx")
+
+-- Python: textwrap.dedent("  a\n    b\n") gives "a\n  b\n".
+test "dedent removes the margin every line shares and keeps the rest" =
+  expectEqual "a\n  b\n" (dedent "  a\n    b\n")
+
+-- Python: the margins "    " and "\t  " share no prefix, so nothing is removed.
+test "dedent leaves a mixed tab-and-space margin alone" =
+  expectEqual "    a\n\t  b\n" (dedent "    a\n\t  b\n")
+
+-- Python: "\tx" and "  y" share no prefix, so nothing is removed.
+test "dedent with a tab against spaces removes nothing" =
+  expectEqual "\tx\n  y\n" (dedent "\tx\n  y\n")
+
+-- Python: the shared margin "  \t" is removed from both lines.
+test "dedent removes a tab-and-space margin shared by every line" =
+  expectEqual "x\ny\n" (dedent "  \tx\n  \ty\n")
+
+-- Python: "  a\n\n   b\n  \n" gives "a\n\n b\n\n".
+test "dedent empties blank and whitespace-only lines" =
+  expectEqual "a\n\n b\n\n" (dedent "  a\n\n   b\n  \n")
+
+-- Python: a tab-only middle line becomes empty, and the margin is two spaces.
+test "dedent keeps a blank middle line empty" =
+  expectEqual "a\n\nb\n" (dedent "  a\n\t\n  b\n")
+
+-- Python: "\r\n  a\r\n  b\r\n" is unchanged, because the CR makes the margin "".
+test "dedent treats a CR as ordinary content, so a CRLF margin is empty" =
+  expectEqual "\r\n  a\r\n  b\r\n" (dedent "\r\n  a\r\n  b\r\n")
+
+test "dedent of an empty string is empty" = expectEqual "" (dedent "")
+
+-- Python: textwrap.dedent("   ") gives "".
+test "dedent of only whitespace is empty" = expectEqual "" (dedent "   ")
+
+-- Python: textwrap.dedent("  a\n  b") gives "a\nb" with no newline added.
+test "dedent keeps a last line with no newline without one" =
+  expectEqual "a\nb" (dedent "  a\n  b")
+
+-- Python: textwrap.dedent("  a\n   ") gives "a\n".
+test "dedent empties a whitespace-only last line with no newline" =
+  expectEqual "a\n" (dedent "  a\n   ")
+
+-- Python: textwrap.dedent("a\n  b") gives "a\n  b".
+test "dedent leaves text with no shared margin alone" =
+  expectEqual "a\n  b" (dedent "a\n  b")
+
+-- Python: textwrap.indent("a\nb", "> ") gives "> a\n> b".
+test "indent prefixes each line that is not blank" =
+  expectEqual "> a\n> b" (indent "> " "a\nb")
+
+-- Python: textwrap.indent("a\n\n  \nb", "> ") gives "> a\n\n  \n> b".
+test "indent leaves blank and whitespace-only lines exactly as they are" =
+  expectEqual "> a\n\n  \n> b" (indent "> " "a\n\n  \nb")
+
+-- Python: a tab-only line is whitespace-only, so it is left as it is.
+test "indent leaves a tab-only line exactly as it is" =
+  expectEqual "> a\n\t\n> b\n" (indent "> " "a\n\t\nb\n")
+
+-- Python: textwrap.indent gives "> a\n" for "a\n" and "> a" for "a".
+test "indent keeps the line endings and adds none to a last line" =
+  expectEqual ["> a\n", "> a"] [indent "> " "a\n", indent "> " "a"]
+
+test "indent of an empty string is empty" = expectEqual "" (indent "> " "")
+
+-- Python: textwrap.indent("x\n\n\ty\n", "    ") gives "    x\n\n    \ty\n".
+test "indent prefixes a line that starts with a tab" =
+  expectEqual "    x\n\n    \ty\n" (indent "    " "x\n\n\ty\n")
+
+test "indent with an empty prefix leaves the text alone" =
+  expectEqual "a\n b" (indent "" "a\n b")
 # DESUGAR
-(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "groupThousands" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "dedent" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "groupThousands" false) (mem "indent" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -1267,8 +1351,29 @@ test "groupThousands writes the most negative Int from its digits" =
 (DTest false "groupThousands keeps the minus sign in front of the groups" (EApp (EApp (EVar "expectEqual") (ELit (LString "-1,234,567"))) (EApp (EVar "groupThousands") (EUnOp "-" (ELit (LInt 1234567))))))
 (DTest false "groupThousands puts a comma at each group boundary" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "1,000,000")) (ELit (LString "10,000")))) (EListLit (EApp (EVar "groupThousands") (ELit (LInt 1000000))) (EApp (EVar "groupThousands") (ELit (LInt 10000))))))
 (DTest false "groupThousands writes the most negative Int from its digits" (EApp (EApp (EVar "expectEqual") (ELit (LString "-4,611,686,018,427,387,904"))) (EApp (EVar "groupThousands") (EVar "intMinBound"))))
+(DTest false "dedent reads a raw block indented under its opening quotes" (EBlock (DoLet false false (PVar "block") (ELit (LString "\n        foo = 1\n        bar = 2\n        "))) (DoExpr (EApp (EApp (EVar "expectEqual") (ELit (LString "foo = 1\nbar = 2\n"))) (EApp (EVar "dedent") (EVar "block"))))))
+(DTest false "dedent drops one leading newline and no more" (EApp (EApp (EVar "expectEqual") (ELit (LString "\nx"))) (EApp (EVar "dedent") (ELit (LString "\n\nx")))))
+(DTest false "dedent removes the margin every line shares and keeps the rest" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\n  b\n"))) (EApp (EVar "dedent") (ELit (LString "  a\n    b\n")))))
+(DTest false "dedent leaves a mixed tab-and-space margin alone" (EApp (EApp (EVar "expectEqual") (ELit (LString "    a\n\t  b\n"))) (EApp (EVar "dedent") (ELit (LString "    a\n\t  b\n")))))
+(DTest false "dedent with a tab against spaces removes nothing" (EApp (EApp (EVar "expectEqual") (ELit (LString "\tx\n  y\n"))) (EApp (EVar "dedent") (ELit (LString "\tx\n  y\n")))))
+(DTest false "dedent removes a tab-and-space margin shared by every line" (EApp (EApp (EVar "expectEqual") (ELit (LString "x\ny\n"))) (EApp (EVar "dedent") (ELit (LString "  \tx\n  \ty\n")))))
+(DTest false "dedent empties blank and whitespace-only lines" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\n\n b\n\n"))) (EApp (EVar "dedent") (ELit (LString "  a\n\n   b\n  \n")))))
+(DTest false "dedent keeps a blank middle line empty" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\n\nb\n"))) (EApp (EVar "dedent") (ELit (LString "  a\n\t\n  b\n")))))
+(DTest false "dedent treats a CR as ordinary content, so a CRLF margin is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString "\r\n  a\r\n  b\r\n"))) (EApp (EVar "dedent") (ELit (LString "\r\n  a\r\n  b\r\n")))))
+(DTest false "dedent of an empty string is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "dedent") (ELit (LString "")))))
+(DTest false "dedent of only whitespace is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "dedent") (ELit (LString "   ")))))
+(DTest false "dedent keeps a last line with no newline without one" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\nb"))) (EApp (EVar "dedent") (ELit (LString "  a\n  b")))))
+(DTest false "dedent empties a whitespace-only last line with no newline" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\n"))) (EApp (EVar "dedent") (ELit (LString "  a\n   ")))))
+(DTest false "dedent leaves text with no shared margin alone" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\n  b"))) (EApp (EVar "dedent") (ELit (LString "a\n  b")))))
+(DTest false "indent prefixes each line that is not blank" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\n> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\nb")))))
+(DTest false "indent leaves blank and whitespace-only lines exactly as they are" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\n\n  \n> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\n\n  \nb")))))
+(DTest false "indent leaves a tab-only line exactly as it is" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\n\t\n> b\n"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\n\t\nb\n")))))
+(DTest false "indent keeps the line endings and adds none to a last line" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "> a\n")) (ELit (LString "> a")))) (EListLit (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\n"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a"))))))
+(DTest false "indent of an empty string is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "")))))
+(DTest false "indent prefixes a line that starts with a tab" (EApp (EApp (EVar "expectEqual") (ELit (LString "    x\n\n    \ty\n"))) (EApp (EApp (EVar "indent") (ELit (LString "    "))) (ELit (LString "x\n\n\ty\n")))))
+(DTest false "indent with an empty prefix leaves the text alone" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\n b"))) (EApp (EApp (EVar "indent") (ELit (LString ""))) (ELit (LString "a\n b")))))
 # MARK
-(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "groupThousands" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "dedent" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "groupThousands" false) (mem "indent" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -1528,3 +1633,24 @@ test "groupThousands writes the most negative Int from its digits" =
 (DTest false "groupThousands keeps the minus sign in front of the groups" (EApp (EApp (EVar "expectEqual") (ELit (LString "-1,234,567"))) (EApp (EVar "groupThousands") (EUnOp "-" (ELit (LInt 1234567))))))
 (DTest false "groupThousands puts a comma at each group boundary" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "1,000,000")) (ELit (LString "10,000")))) (EListLit (EApp (EVar "groupThousands") (ELit (LInt 1000000))) (EApp (EVar "groupThousands") (ELit (LInt 10000))))))
 (DTest false "groupThousands writes the most negative Int from its digits" (EApp (EApp (EVar "expectEqual") (ELit (LString "-4,611,686,018,427,387,904"))) (EApp (EVar "groupThousands") (EVar "intMinBound"))))
+(DTest false "dedent reads a raw block indented under its opening quotes" (EBlock (DoLet false false (PVar "block") (ELit (LString "\n        foo = 1\n        bar = 2\n        "))) (DoExpr (EApp (EApp (EVar "expectEqual") (ELit (LString "foo = 1\nbar = 2\n"))) (EApp (EVar "dedent") (EVar "block"))))))
+(DTest false "dedent drops one leading newline and no more" (EApp (EApp (EVar "expectEqual") (ELit (LString "\nx"))) (EApp (EVar "dedent") (ELit (LString "\n\nx")))))
+(DTest false "dedent removes the margin every line shares and keeps the rest" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\n  b\n"))) (EApp (EVar "dedent") (ELit (LString "  a\n    b\n")))))
+(DTest false "dedent leaves a mixed tab-and-space margin alone" (EApp (EApp (EVar "expectEqual") (ELit (LString "    a\n\t  b\n"))) (EApp (EVar "dedent") (ELit (LString "    a\n\t  b\n")))))
+(DTest false "dedent with a tab against spaces removes nothing" (EApp (EApp (EVar "expectEqual") (ELit (LString "\tx\n  y\n"))) (EApp (EVar "dedent") (ELit (LString "\tx\n  y\n")))))
+(DTest false "dedent removes a tab-and-space margin shared by every line" (EApp (EApp (EVar "expectEqual") (ELit (LString "x\ny\n"))) (EApp (EVar "dedent") (ELit (LString "  \tx\n  \ty\n")))))
+(DTest false "dedent empties blank and whitespace-only lines" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\n\n b\n\n"))) (EApp (EVar "dedent") (ELit (LString "  a\n\n   b\n  \n")))))
+(DTest false "dedent keeps a blank middle line empty" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\n\nb\n"))) (EApp (EVar "dedent") (ELit (LString "  a\n\t\n  b\n")))))
+(DTest false "dedent treats a CR as ordinary content, so a CRLF margin is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString "\r\n  a\r\n  b\r\n"))) (EApp (EVar "dedent") (ELit (LString "\r\n  a\r\n  b\r\n")))))
+(DTest false "dedent of an empty string is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "dedent") (ELit (LString "")))))
+(DTest false "dedent of only whitespace is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "dedent") (ELit (LString "   ")))))
+(DTest false "dedent keeps a last line with no newline without one" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\nb"))) (EApp (EVar "dedent") (ELit (LString "  a\n  b")))))
+(DTest false "dedent empties a whitespace-only last line with no newline" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\n"))) (EApp (EVar "dedent") (ELit (LString "  a\n   ")))))
+(DTest false "dedent leaves text with no shared margin alone" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\n  b"))) (EApp (EVar "dedent") (ELit (LString "a\n  b")))))
+(DTest false "indent prefixes each line that is not blank" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\n> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\nb")))))
+(DTest false "indent leaves blank and whitespace-only lines exactly as they are" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\n\n  \n> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\n\n  \nb")))))
+(DTest false "indent leaves a tab-only line exactly as it is" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\n\t\n> b\n"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\n\t\nb\n")))))
+(DTest false "indent keeps the line endings and adds none to a last line" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "> a\n")) (ELit (LString "> a")))) (EListLit (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\n"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a"))))))
+(DTest false "indent of an empty string is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "")))))
+(DTest false "indent prefixes a line that starts with a tab" (EApp (EApp (EVar "expectEqual") (ELit (LString "    x\n\n    \ty\n"))) (EApp (EApp (EVar "indent") (ELit (LString "    "))) (ELit (LString "x\n\n\ty\n")))))
+(DTest false "indent with an empty prefix leaves the text alone" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\n b"))) (EApp (EApp (EVar "indent") (ELit (LString ""))) (ELit (LString "a\n b")))))

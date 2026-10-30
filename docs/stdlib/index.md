@@ -1077,6 +1077,8 @@ Operations on `String` and `Char`.
 - [`words`](string.md#words)
 - [`unlines`](string.md#unlines)
 - [`unwords`](string.md#unwords)
+- [`dedent`](string.md#dedent)
+- [`indent`](string.md#indent)
 - [`padLeft`](string.md#padleft)
 - [`padRight`](string.md#padright)
 - [`center`](string.md#center)
