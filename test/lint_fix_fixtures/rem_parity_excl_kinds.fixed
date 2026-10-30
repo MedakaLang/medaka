@@ -1,0 +1,8 @@
+-- The name exclusion is for a function or method named isEven/isOdd, not a
+-- test whose description happens to match: the test body is rewritten, the
+-- impl method named isEven is not.
+
+test "isEven" = holds (4 % 2 == 0)
+
+impl Parity Int where
+  isEven n = n % 2 == 0

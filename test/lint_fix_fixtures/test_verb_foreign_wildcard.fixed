@@ -1,0 +1,7 @@
+-- A foreign `import other.*` may export `expectTrue`; the rewrite would then
+-- be an ambiguous occurrence, so it is not applied.
+
+import other.*
+import test.{expectEqual}
+
+eqCase a = expectEqual True (a == 1)

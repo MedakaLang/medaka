@@ -1,0 +1,8 @@
+-- A guard-bound `expectTrue` would capture the verb the rewrite introduces.
+-- The finding is reported; `--fix` leaves the file unchanged.
+
+import test.{expectEqual}
+
+f a o
+  | Some expectTrue <- o = expectEqual True (a == 1)
+  | otherwise = expectEqual True (a == 2)

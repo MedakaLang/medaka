@@ -261,6 +261,21 @@ test "--fix rewrites a verb that resolves to the test import" =
     "test/lint_fix_fixtures/test_verb_resolves_to_import.mdk"
     "test/lint_fix_fixtures/test_verb_resolves_to_import.fixed"
 
+test "a test whose label is isEven is still checked for parity tests" =
+  match buildStdlibIndexResult
+    Err _ => fail "could not build stdlib index"
+    Ok idx =>
+      let path = "test/lint_fix_fixtures/rem_parity_excl_kinds.mdk"
+      let triples = lintFilesToDiagTriples idx True [] [] [] None [path]
+      expectTrue
+        (anyList
+          (d => diagCode d == "rule-rem-parity")
+          (flatMap (diagsOfFile path) triples))
+
+test "--fix leaves an impl method named isEven alone" =
+  expectEach
+    (map fixLeavesAlone ["test/lint_fix_fixtures/rem_parity_excl_kinds.mdk"])
+
 -- `--fix` run over a fixture file: the rewritten source, `None` when the file
 -- cannot be read or parsed.
 fixedSource : String -> <FileRead> Option String
@@ -286,6 +301,11 @@ verbFixtures = [
   "test/lint_fix_fixtures/test_verb_where_bound_swapped.mdk",
   "test/lint_fix_fixtures/test_verb_param_shadow.mdk",
   "test/lint_fix_fixtures/test_verb_alias_inverts.mdk",
+  "test/lint_fix_fixtures/test_verb_guard_bind.mdk",
+  "test/lint_fix_fixtures/test_verb_guard_bind_equal.mdk",
+  "test/lint_fix_fixtures/test_verb_do_bind.mdk",
+  "test/lint_fix_fixtures/test_verb_lambda_bind.mdk",
+  "test/lint_fix_fixtures/test_verb_foreign_wildcard.mdk",
 ]
 
 reportsTestVerbRule : List (String, String, List Diag) ->
