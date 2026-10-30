@@ -275,9 +275,9 @@ extern sliceError : Int -> Int -> a
 -- eval.mdk register the buffer with the native runtime so every abort path
 -- (panic / index-OOB / non-exhaustive-match / stack-overflow / a fatal
 -- signal) can flush it before dying; see runtime/medaka_rt.c's
--- mdk_flush_run_stdout_on_abort. Not for general use: `stashRunStdout` takes
--- an O(1) pointer+length snapshot (no allocation, no observable effect by
--- itself) and `enableRunStdoutFlush` is called exactly once, only by the
+-- mdk_flush_run_stdout_on_abort. Not for general use: `stashRunStdout` appends
+-- one chunk as an amortized O(1) pointer+length record (the empty string clears
+-- the list; no observable effect by itself) and `enableRunStdoutFlush` is called exactly once, only by the
 -- real `medaka run` CLI driver, never by the pure differential-oracle eval
 -- probes, which share this same source but never call it, so their captured
 -- output is unaffected.

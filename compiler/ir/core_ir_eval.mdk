@@ -82,7 +82,8 @@ import eval.eval.{
   lookupBinding,
   isNullary,
   ppValue,
-  outputRef,
+  readOutput,
+  resetOutput,
   evalIndex,
   evalSlice,
   evalRange,
@@ -602,16 +603,16 @@ cevalMain prog = match lookupBinding "main" (cevalProgram prog)
   None => panic "core_ir eval: no `main` binding"
 
 -- Run the Core IR program for its OUTPUT (forcing `main`, whose IO side-effects
--- append to eval.mdk's outputRef) and return the captured stdout — the Core-IR
+-- append to eval.mdk's outputChunks) and return the captured stdout — the Core-IR
 -- analog of eval.mdk's evalOutput, for the typed / run corpora that diff stdout
 -- (=== EVAL === goldens) rather than pp_value of `main`.
 export
 cevalOutput : CProgram -> String
 cevalOutput prog =
-  outputRef := ""
+  resetOutput ()
   let binds = cevalProgram prog
   let _ = cRunMainForEffect binds
-  !outputRef
+  readOutput ()
 
 cRunMainForEffect : List (String, Value e) -> <e> Value e
 cRunMainForEffect binds = match lookupBinding "main" binds
@@ -842,7 +843,7 @@ cevalModulesOutputFacts : ProgramFacts ->
   List (String, List Decl) ->
   String
 cevalModulesOutputFacts facts preludeDecls modules = withFacts facts (_ =>
-  outputRef := ""
+  resetOutput ()
   let binds = cevalModules facts preludeDecls modules
   let _ = cRunMainForEffect binds
-  !outputRef)
+  readOutput ())

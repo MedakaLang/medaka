@@ -5303,6 +5303,89 @@ else
 fi
 
 fi   # end PERF_ONLY unit: tomlent
+if want stdout; then   # PERF_ONLY unit: stdout
+# ── stdout — N `putStrLn` calls under `medaka run`, which buffers the output (#4491) ──
+#
+# What it grades: the GROWTH of run's captured-stdout buffer. A linear buffer reads ~2.0x per
+# doubling; re-copying the whole buffer per print reads ~4x. The per-PR arm is ALLOCATION (one
+# run per size); the TIME arm (min-of-K, heap pinned, under TIME_FLOOR it SKIPs) runs where
+# TIME_ARM=1. The printed line count is asserted by the program's own counter.
+STDOUT_N="${PERF_STDOUT_N:-4000}"
+so1="$STDOUT_N"; so2=$((STDOUT_N * 2))
+gen_stdout() {
+  {
+    printf 'import time as T\n\nmain =\n'
+    printf '  let a0 = allocBytes ()\n'
+    printf '  let t0 = T.monotonic ()\n'
+    printf '  each (_ => putStrLn "0123456789012345678901234567890123456789") [1..=%s]\n' "$1"
+    printf '  let secs = T.elapsedSince t0\n'
+    printf '  let mb = (allocBytes () - a0) / 1048576.0\n'
+    printf '  println "stdout %s \\{display mb} \\{display secs}"\n' "$1"
+  } > "$2"
+}
+sof1="$WORK/stdout_$so1.mdk"; sof2="$WORK/stdout_$so2.mdk"
+gen_stdout "$so1" "$sof1"; gen_stdout "$so2" "$sof2"
+SOMEDAKA="${MEDAKA:-$ROOT/medaka}"
+if [ "$TIME_ARM" = "1" ]; then sok="$PERF_K"; else sok=1; fi
+# stdout_runs <fixture> <out>: <out> gets one `stdout <count> <MB> <secs>` line per run.
+stdout_runs() {
+  : > "$2"
+  _i=0
+  while [ "$_i" -lt "$sok" ]; do
+    GC_INITIAL_HEAP_SIZE="$TIME_HEAP" "$SOMEDAKA" run "$1" 2>/dev/null | grep '^stdout ' >> "$2"
+    _i=$((_i+1))
+  done
+}
+SOR1="$WORK/stdout_r1"; SOR2="$WORK/stdout_r2"
+stdout_runs "$sof1" "$SOR1"; stdout_runs "$sof2" "$SOR2"
+soc1="$(awk 'NR==1{print $2}' "$SOR1")"; soc2="$(awk 'NR==1{print $2}' "$SOR2")"
+soa1="$(awk 'NR==1{printf "%.1f", $3}' "$SOR1")"; soa2="$(awk 'NR==1{printf "%.1f", $3}' "$SOR2")"
+sot_1="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$SOR1")"
+sot_2="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$SOR2")"
+so_bad=0
+for _v in "$soa1" "$soa2" "$sot_1" "$sot_2"; do
+  case "$_v" in ''|*[!0-9.]*) so_bad=1 ;; esac
+done
+if [ ! -x "$SOMEDAKA" ]; then
+  fail=$((fail+1))
+  printf '%-12s %8s  ** NO BINARY: %s is not built (make medaka) **\n' stdout "$so1" "$SOMEDAKA"
+elif [ "$so_bad" = "1" ] || [ "$soc1" != "$so1" ] || [ "$soc2" != "$so2" ]; then
+  fail=$((fail+1))
+  printf '%-12s %8s  ** BAD RUN: want counts %s/%s, got [%s]/[%s] (alloc [%s]/[%s] MB, secs [%s]/[%s]) **\n' \
+    stdout "$so1" "$so1" "$so2" "$soc1" "$soc2" "$soa1" "$soa2" "$sot_1" "$sot_2"
+else
+  sor="$(awk -v a="$soa1" -v b="$soa2" 'BEGIN{printf "%.2f", b/a}')"
+  so_small="$(awk -v a="$soa1" 'BEGIN{print (a+0 < 1.0) ? 1 : 0}')"
+  so_over="$(awk -v r="$sor" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')"
+  if [ "$so_small" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** N TOO SMALL — raise PERF_STDOUT_N (stdout alloc %s MB < 1.0) **\n' stdout "$so1" "$soa1"
+  elif [ "$so_over" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** SUPERLINEAR (run-alloc) ** stdout %s -> %s MB  r=%s (> %s, band N=%s->%s) — the run stdout buffer outgrew its print count (compiler/eval/eval.mdk appendOutput) **\n' \
+      stdout "$so1" "$soa1" "$soa2" "$sor" "$THRESH" "$so1" "$so2"
+  else
+    pass=$((pass+1))
+    printf '%-12s %8s  run-alloc stdout %s -> %s MB  r=%s  (LINEAR; band N=%s->%s)\n' \
+      stdout "$so1" "$soa1" "$soa2" "$sor" "$so1" "$so2"
+  fi
+  if [ "$TIME_ARM" = "1" ]; then
+    sot_below="$(awk -v v="$sot_2" -v f="$TIME_FLOOR" 'BEGIN{print (v+0 < f+0) ? 1 : 0}')"
+    if [ "$sot_below" = "1" ]; then
+      printf '             time run: SKIP — too small to time-gate: %ss at N=%s < %ss floor\n' "$sot_2" "$so2" "$TIME_FLOOR"
+    else
+      sotr="$(awk -v a="$sot_1" -v b="$sot_2" 'BEGIN{printf "%.2f", b/a}')"
+      if [ "$(awk -v r="$sotr" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')" = "1" ]; then
+        fail=$((fail+1))
+        printf '%-12s %8s  ** SUPERLINEAR (run-TIME) ** stdout %ss -> %ss  r=%s (> %s, min-of-%s, band N=%s->%s)\n' \
+          stdout "$so1" "$sot_1" "$sot_2" "$sotr" "$THRESH" "$sok" "$so1" "$so2"
+      else
+        printf '             time run: stdout %ss -> %ss  r=%s  (min-of-%s, heap pinned)\n' "$sot_1" "$sot_2" "$sotr" "$sok"
+      fi
+    fi
+  fi
+fi
+fi   # end PERF_ONLY unit: stdout
 printf -- '---------------------------------------------------------------------\n'
 printf '%d ok, %d known-superlinear (ledgered), %d regressed (threshold %sx per doubling)\n' "$pass" "$known" "$fail" "$THRESH"
 

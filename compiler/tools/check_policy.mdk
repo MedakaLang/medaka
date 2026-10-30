@@ -48,7 +48,7 @@ import types.effect_rows.{atomKey, atomLabel, atomAuth, renderAtom, Atom(..)}
 -- cell, so we instead SYNTHESIZE Medaka stub funDefs (parsed from a tiny source
 -- string) that shadow those names, prepend them to the prelude, and drive
 -- evalModulesRootEnvFacts + apply.  The stubbed `logEvent` writes the `   [LOG] …`
--- line directly to the captured output buffer (eval's outputRef), reproducing
+-- line directly to the captured output buffer (eval's outputChunks), reproducing
 -- OCaml's log-then-result ordering byte-for-byte.
 
 import frontend.ast.{EffParamTy(..), effParamSurface, Decl(..)}
@@ -67,8 +67,8 @@ import types.typecheck.{
 }
 import types.program_facts.{factsOfElab, withFacts}
 import eval.eval.{
-  Value(..), evalModulesRootEnvFacts, buildStampExterns, apply, outputRef,
-  ppValue
+  Value(..), evalModulesRootEnvFacts, buildStampExterns, apply, readOutput,
+  resetOutput, ppValue
 }
 import support.util.{
   sortUniqS, joinWith, escStr, lookupAssoc, filterList, listLen, escOneHex2,
@@ -220,7 +220,7 @@ policyLabels ((l, p) :: rest) =
 -- Synthetic stub funDefs that shadow the user-declared platform externs.  Parsed
 -- from source so we don't hand-build the `stringConcat`/literal AST.  `logEvent`
 -- writes the OCaml-format `   [LOG] <s>\n` line straight to the captured output
--- buffer (eval forces putStr → outputRef), so the log lines land BEFORE the
+-- buffer (eval forces putStr → outputChunks), so the log lines land BEFORE the
 -- transform-result line we print afterward — matching the oracle's ordering.
 --
 -- The stdlib platform externs (getEnv/runCommand/readFile/writeFile/… — the
@@ -289,7 +289,7 @@ runPlugin fnName grants elab =
   let (coreE, modulesE) = mangleCtorCollisionsPair (elab.erCore, elab.erModules)
   let facts = factsOfElab elab
   withFacts facts (_ =>
-    outputRef := ""
+    resetOutput ()
     let rootEnv =
       evalModulesRootEnvFacts
         facts
@@ -303,7 +303,7 @@ runPlugin fnName grants elab =
         let granted =
           fold (f _ => apply f (VList [])) fnVal (replicate grants ())
         let result = apply granted (VString sample)
-        let logged = !outputRef
+        let logged = readOutput ()
         "\{logged}   \{fnName} \{escStr sample} = \{ppValue result}\n")
 
 lookupValue : String -> List (String, Value e) -> Option (Value e)

@@ -3217,9 +3217,20 @@ entryPresent dir name = match listDir dir
 -- appending is just a plain mutation).  ePutStr/ePutStrLn (stderr) are discarded HERE (the
 -- oracle table); under `medaka run` ioExternBindings overrides them with prims
 -- that stream to the real host stderr.
+outputChunks : Ref (List String)
+outputChunks = Ref []
+
+-- Captured stdout, newest chunk first, so a print is O(1); `readOutput` joins.
 export
-outputRef : Ref String
-outputRef = Ref ""
+readOutput : Unit -> <e> String
+readOutput _ = stringConcat (reverseL !outputChunks)
+
+export
+resetOutput : Unit -> <e> Unit
+resetOutput _ =
+  outputChunks := []
+  let _ = stashRunStdout ""
+  ()
 
 -- Runtime-diagnostic side channels (RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN.md).
 -- currentEvalLoc is updated at every ELoc node; currentEvalFile is set once by
@@ -3413,15 +3424,14 @@ fmtSentinel = "\u{01}"
 
 appendOutput : String -> <e> Value e
 appendOutput s =
-  outputRef := !outputRef ++ s
-  -- Snapshot the buffer's raw bytes into the native runtime (O(1)
-  -- pointer+length store; no allocation, no observable effect on its own —
-  -- see stdlib/runtime.mdk's stashRunStdout doc comment) so a subsequent
-  -- abort can flush it.  Called from BOTH the real `medaka run` path and the
+  outputChunks := s :: !outputChunks
+  -- Append the chunk's raw bytes to the native runtime's chunk list (amortized
+  -- O(1); no observable effect on its own — see stdlib/runtime.mdk's
+  -- stashRunStdout doc comment) so a subsequent abort can flush it.  Called from BOTH the real `medaka run` path and the
   -- pure differential-oracle path (this function is shared), which is fine:
   -- the stash is inert unless `enableRunStdoutFlush` was also called, and
   -- only `evalModulesOutputRunFacts` (never the oracle probes) calls that.
-  let _ = stashRunStdout !outputRef
+  let _ = stashRunStdout s
   VUnit
 
 pPutStr : Value e -> <e> Value e
@@ -3613,7 +3623,7 @@ pAllocBytes : Value e -> <e> Value e
 pAllocBytes _ = VFloat 0.0
 
 -- flushStdout is a genuine no-op under the interpreter's output model: stdout
--- is buffered into `outputRef` and printed only after `main` returns (see
+-- is buffered into `outputChunks` and printed only after `main` returns (see
 -- `stashRunStdout`/`enableRunStdoutFlush` below), so there is nothing to flush
 -- mid-run.  Implemented in the C runtime + LLVM emitter (issue #71); this binds
 -- it here so `medaka run`/`medaka test` don't panic `unbound variable`.
@@ -4383,7 +4393,7 @@ pByteBlockToString _ = panic "byteBlockToString: not a ByteBlock"
 
 -- byteBlockWriteStdout : ByteBlock -> <Stdout> Unit — the oracle's form, which
 -- appends to the same captured String putStr/putStrLn use (appendOutput /
--- outputRef).  A String holds only well-formed UTF-8, so a block that is not
+-- outputChunks).  A String holds only well-formed UTF-8, so a block that is not
 -- UTF-8 is captured with U+FFFD for each ill-formed subpart; `medaka run`
 -- overrides this with pByteBlockWriteStdoutIO, which writes the bytes as-is.
 pByteBlockWriteStdout : Value e -> <e> Value e
@@ -4457,7 +4467,7 @@ evalMain prog = withFacts
       None => runtimePanic ENoMain noMainMsg)
 
 -- Run the program for its OUTPUT (forcing `main`, whose IO side-effects append
--- to outputRef) and return the captured stdout — diffs against === EVAL ===.
+-- to outputChunks) and return the captured stdout — diffs against === EVAL ===.
 -- DRIVER-COLLAPSE Phase 5: the flat evalOutput is DELETED; evalOneOutputFacts (the
 -- 1-module case of evalModulesWith) is the surviving OUTPUT entry point.
 
@@ -5259,10 +5269,10 @@ evalModulesOutputFacts : ProgramFacts ->
   List (String, List Decl) ->
   String
 evalModulesOutputFacts facts preludeDecls modules = withFacts facts (_ =>
-  outputRef := ""
+  resetOutput ()
   let binds = evalModulesWith facts [] preludeDecls modules
   let _ = runMainForEffect binds
-  !outputRef)
+  readOutput ())
 
 -- ── run-path real-I/O externs (B2, RUN-EFFECTS) ────────────────────────────
 -- Real-I/O primitives installed ONLY by `medaka run`'s driver
@@ -5280,7 +5290,7 @@ evalModulesOutputFacts facts preludeDecls modules = withFacts facts (_ =>
 -- frozen constants were the ONLY implementation, so `medaka run` silently reported
 -- every elapsed interval as 0.0 and silently discarded every byte of stderr.
 --
--- STDERR IS UNBUFFERED, STDOUT IS NOT.  putStr/putStrLn append to `outputRef` and
+-- STDERR IS UNBUFFERED, STDOUT IS NOT.  putStr/putStrLn append to `outputChunks` and
 -- the CLI prints the buffer after `main` returns; ePutStr/ePutStrLn below write
 -- through to the host stderr IMMEDIATELY.  Streaming is the right call for a
 -- diagnostic channel: a log line that only appears after the program finishes is
@@ -5515,9 +5525,8 @@ pReadExactly _ = panic "readExactly: expected Int"
 -- Flushing here leaves stdio empty whenever the stash holds anything.
 pByteBlockWriteStdoutIO : Value e -> <Stdout | e> Value e
 pByteBlockWriteStdoutIO (VByteBlock b) =
-  let _ = putStr !outputRef
-  outputRef := ""
-  let _ = stashRunStdout ""
+  let _ = putStr (readOutput ())
+  resetOutput ()
   let _ = byteBlockWriteStdout (byteBlockFromIntArray b)
   let _ = flushStdout ()
   VUnit
@@ -5618,14 +5627,14 @@ evalModulesOutputRunFacts : ProgramFacts ->
 evalModulesOutputRunFacts facts preludeDecls modules = withFacts
   facts
   (_ =>
-    outputRef := ""
+    resetOutput ()
     -- Only the real `medaka run` CLI driver reaches this function (never the
     -- pure differential-oracle probes — see appendOutput/stashRunStdout above),
     -- so this is the one place it is safe to arm the abort-time flush.
     let _ = enableRunStdoutFlush ()
     let binds = evalModulesWith facts (ioExternBindings ()) preludeDecls modules
     let _ = runMainForEffect binds
-    !outputRef)
+    readOutput ())
 
 -- ── Phase 0 (DRIVER-COLLAPSE): 1-module eval wrappers over evalModulesWith ──
 -- evalOneFacts / evalOneOutputFacts / evalOneRootEnvFacts run a SINGLE program as
