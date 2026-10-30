@@ -2,7 +2,7 @@ import frontend.lexer.{
   Token(..), tokenToString, describeToken, tokenize, tokenizeWithOffsets,
   tokenizeWithOffsetPairs
 }
-import test.{Expectation, expectTrue, expectEqual, expectAll, expectEach}
+import test.{Expectation, expectEqual, expectAll, expectEach}
 import list.{zip, filterMap, take, drop}
 import frontend.parse_diagnostic.{ParseDiagnosticKind(..), UnicodeProblem(..)}
 
@@ -324,6 +324,7 @@ errOf : Token -> Option String
 errOf (TLexError (ByteLikeIdent old new)) = Some "ident:\{old}:\{new}"
 errOf (TLexError (NonAsciiByte _ _)) = Some "non-ascii"
 errOf (TLexError (BadByteLiteral _)) = Some "bad"
+errOf (TLexError (UnexpectedCharacter c)) = Some "unexpected:\{c}"
 errOf _ = None
 
 lexErrorKind : String -> String
@@ -379,18 +380,12 @@ test "shebang first line is skipped and later offsets keep their real positions"
       (take 3 (drop 1 (snd (tokenizeWithOffsets (shebang ++ body))))),
   ]
 
-test "shebang elsewhere than offset 0 stays a lex error" =
-  let hasErr src = any isLexError (tokenize src)
-  expectAll [
-    expectTrue (hasErr "main = 1\n#!/bin/x\n"),
-    expectTrue (hasErr "\n#!/bin/x\nmain = 1\n"),
-    expectTrue (hasErr " #!/bin/x\nmain = 1\n"),
-    expectTrue (not (hasErr "#!/bin/x\nmain = 1\n")),
-  ]
-
-isLexError : Token -> Bool
-isLexError (TLexError _) = True
-isLexError _ = False
+test "shebang elsewhere than offset 0 stays a lex error" = expectAll [
+  expectEqual "unexpected:#" (lexErrorKind "main = 1\n#!/bin/x\n"),
+  expectEqual "unexpected:#" (lexErrorKind "\n#!/bin/x\nmain = 1\n"),
+  expectEqual "unexpected:#" (lexErrorKind " #!/bin/x\nmain = 1\n"),
+  expectEqual "none" (lexErrorKind "#!/bin/x\nmain = 1\n"),
+]
 
 -- Raw literals: the TString bodies of a source, and the first literal's span.
 rawBodies : String -> List String
@@ -401,31 +396,31 @@ rawBodies src =
       _ => None)
     (tokenize src)
 
-rawSpan : String -> Option (Int, Int)
-rawSpan src =
+-- The span of the first token the predicate selects.
+firstSpanWhere : (Token -> Bool) -> String -> Option (Int, Int)
+firstSpanWhere pick src =
   let (tokens, spans) = tokenizeWithOffsetPairs src
   let found =
-    filterMap
-      ((t, sp) => match t
-        TString _ => Some sp
-        _ => None)
-      (zip tokens spans)
+    filterMap ((t, sp) => if pick t then Some sp else None) (zip tokens spans)
   match found
     sp :: _ => Some sp
     [] => None
 
+rawSpan : String -> Option (Int, Int)
+rawSpan src =
+  firstSpanWhere
+    (t => match t
+      TString _ => True
+      _ => False)
+    src
+
 unterminatedAt : String -> Option (Int, Int)
 unterminatedAt src =
-  let (tokens, spans) = tokenizeWithOffsetPairs src
-  let found =
-    filterMap
-      ((t, sp) => match t
-        TLexError UnterminatedString => Some sp
-        _ => None)
-      (zip tokens spans)
-  match found
-    sp :: _ => Some sp
-    [] => None
+  firstSpanWhere
+    (t => match t
+      TLexError UnterminatedString => True
+      _ => False)
+    src
 
 test "raw literals keep every character" = expectAll [
   expectEqual ["\\d+"] (rawBodies "r\"\\d+\""),
@@ -456,7 +451,8 @@ test "raw prefix needs a token start and an adjacent quote" = expectAll [
 test "unterminated raw literals are located at the r" = expectAll [
   expectEqual (Some (4, 11)) (unterminatedAt "x = r\"\"\"abc"),
   expectEqual (Some (4, 9)) (unterminatedAt "x = r\"abc"),
-  expectEqual (Some (4, 11)) (unterminatedAt "x = r\"ab\nc\""),
+  expectEqual (Some (4, 8)) (unterminatedAt "x = r\"ab\nc\""),
+  expectEqual (Some (4, 8)) (unterminatedAt "x = r\"ab\ny = 1\nz = 2\n"),
   expectEqual (Some (4, 8)) (unterminatedAt "x = r\"\"\""),
   expectEqual None (unterminatedAt "x = r"),
 ]

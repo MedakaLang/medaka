@@ -186,9 +186,9 @@ String escapes: `\n \t \r \0 \\ \"` and unicode `\u{48}` (char literals also tak
 (`"a{b}c"` prints `a{b}c`). There is **no `\v` or `\f`** — those escapes do not exist
 in Medaka.
 
-Any other backslash-letter (`\d`, `\q`, `\v`) is a lex error in every string form except raw strings: plain,
-triple-quoted, and the text after an interpolation in either. It is never silently decoded to
-the bare letter.
+Any other backslash-letter (`\d`, `\q`, `\v`) is a lex error in plain and triple-quoted
+strings, including the text after an interpolation in either. Raw strings take no escapes,
+so they never reject one. It is never silently decoded to the bare letter.
 
 Every plain or triple-quoted string, including the final text segment after an
 interpolation, requires its matching closing quote delimiter. EOF before that

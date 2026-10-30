@@ -1,0 +1,5 @@
+main = println "x\{r"a\d"}y"
+a = println "a\{r"\"}b"
+c = println "c\{r"""x\ny"""}d"
+n = "o\{r"\w"}p\{r"\s"}q\{"z"}"
+t = """t\{ r"\k" }u"""

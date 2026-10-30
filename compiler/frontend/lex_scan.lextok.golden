@@ -1060,30 +1060,7 @@ IDENT "src"
 INT 1
 EQ_EQ
 CHAR "!"
-EQUAL
-INDENT
-LET
-IDENT "e"
-EQUAL
-IDENT "skipLineComment"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-NEWLINE
-IDENT "emitOne"
-IDENT "ctx"
-LPAREN
-UPPER "RComment"
-IDENT "pos"
-IDENT "e"
-RPAREN
-IDENT "e"
-IDENT "depth"
-IDENT "id"
-NEWLINE
-DEDENT
-NEWLINE
-PIPE
+OR
 IDENT "c"
 EQ_EQ
 CHAR "-"

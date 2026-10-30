@@ -588,7 +588,7 @@ readRawLiteral src pos =
 rawLineGo : Array Char -> Int -> Int -> Int -> Result LexError (String, Int)
 rawLineGo src len open p
   | p >= len || isNL (at src p) || isCR (at src p) =
-    lexFailure open len UnterminatedString
+    lexFailure open p UnterminatedString
   | isQuote (at src p) = Ok (copyCharRange src (open + 2) p, p + 1)
   | otherwise = rawLineGo src len open (p + 1)
 

@@ -28,11 +28,10 @@
 
 ; ── Comments ─────────────────────────────────────────────────────────
 (comment) @comment
-(shebang) @comment
+; The shebang and raw_string_lit node captures wait on parser.c regeneration (#4671).
 
 ; ── String / char literals ────────────────────────────────────────────
 (string_lit) @string
-(raw_string_lit) @string
 (char_lit)   @string.special.symbol
 
 ; ── Numeric literals ──────────────────────────────────────────────────
