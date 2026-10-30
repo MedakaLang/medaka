@@ -15,7 +15,7 @@
 -- for its own bootstrap path.
 
 import list.{reverse}
-import string.{split, startsWith, endsWith, contains, lastIndexOf}
+import string.{split, startsWith, endsWith, contains, lastIndexOf, toChars}
 
 -- # Components
 
@@ -198,6 +198,110 @@ filterEmpty : List String -> List String
 filterEmpty [] = []
 filterEmpty (s :: rest) =
   if s == "" then filterEmpty rest else s :: filterEmpty rest
+
+-- # Glob patterns
+
+{- | Whether `path` matches the glob `pattern`.
+
+   Both are split into segments on `/`, so repeated and trailing slashes do
+   not matter, but a leading `/` must be on both or on neither. Within one
+   segment `*` matches any run of characters and `?` exactly one character;
+   neither crosses a `/`, and a leading `.` is matched like any other
+   character. A segment that is exactly `**` matches any number of whole
+   segments, none included, so `a/**/b` matches `a/b`. `**` inside a longer
+   segment acts as `*`. There are no braces, character classes or escapes.
+   The empty pattern matches only the empty path.
+
+   > matchGlob "*.mdk" "a.mdk"
+   True
+   > matchGlob "*.mdk" "sub/a.mdk"
+   False
+   > matchGlob "a/**/b" "a/b"
+   True
+   > matchGlob "a/**/b" "a/x/y/b"
+   True
+   > matchGlob "a/**" "a/x/y"
+   True
+   > matchGlob "?.txt" "a.txt"
+   True
+   > matchGlob "?.txt" "ab.txt"
+   False
+   > matchGlob "a/b.txt" "a/b.txt"
+   True
+   > matchGlob "a**b" "axyb"
+   True
+   > matchGlob "a**b" "ax/yb"
+   False
+   > matchGlob "*" ".hidden"
+   True
+   > matchGlob "/a/*" "/a/b"
+   True
+   > matchGlob "/a/*" "a/b"
+   False
+   > matchGlob "a/*" "a/b/"
+   True
+   > matchGlob "" ""
+   True
+   > matchGlob "" "a"
+   False
+   > matchGlob "*a*a*a*a*a*a*b" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   False -}
+export
+matchGlob : String -> String -> Bool
+matchGlob pattern path =
+  isAbsolute pattern == isAbsolute path
+    && matchSegments (segments pattern) (segments path)
+
+matchSegments : List String -> List String -> Bool
+matchSegments [] [] = True
+matchSegments [] _ = False
+matchSegments ("**" :: ps) xs = matchSegments ps xs || skipSegment ps xs
+matchSegments (_ :: _) [] = False
+matchSegments (p :: ps) (x :: xs) =
+  matchChars (toList (toChars p)) (toList (toChars x)) && matchSegments ps xs
+
+skipSegment : List String -> List String -> Bool
+skipSegment _ [] = False
+skipSegment ps (_ :: xs) = matchSegments ("**" :: ps) xs
+
+-- Matches one segment by tracking every pattern suffix the text read so far
+-- can leave unmatched, so the cost is the text length times the pattern
+-- length however many `*` the pattern holds. A run of `*` counts as one.
+matchChars : List Char -> List Char -> Bool
+matchChars pat cs = matchRun (closeStars [collapseStars pat]) cs
+
+collapseStars : List Char -> List Char
+collapseStars ('*' :: '*' :: ps) = collapseStars ('*' :: ps)
+collapseStars (p :: ps) = p :: collapseStars ps
+collapseStars [] = []
+
+matchRun : List (List Char) -> List Char -> Bool
+matchRun [] _ = False
+matchRun states [] = any (== []) states
+matchRun states (c :: cs) = matchRun (closeStars (stepStates c states)) cs
+
+-- Adds, after each suffix that starts with `*`, the suffix that skips it.
+closeStars : List (List Char) -> List (List Char)
+closeStars states = dedupeRuns (flatMap skipStar states)
+
+skipStar : List Char -> List (List Char)
+skipStar ('*' :: rest) = ['*' :: rest, rest]
+skipStar s = [s]
+
+stepStates : Char -> List (List Char) -> List (List Char)
+stepStates c states = dedupeRuns (flatMap (stepState c) states)
+
+stepState : Char -> List Char -> List (List Char)
+stepState _ [] = []
+stepState _ ('*' :: rest) = ['*' :: rest]
+stepState _ ('?' :: rest) = [rest]
+stepState c (p :: rest) = if p == c then [rest] else []
+
+-- The suffixes arrive ordered by position, so equal ones are adjacent.
+dedupeRuns : List (List Char) -> List (List Char)
+dedupeRuns (a :: b :: rest) =
+  if a == b then dedupeRuns (b :: rest) else a :: dedupeRuns (b :: rest)
+dedupeRuns xs = xs
 
 -- # Predicates
 

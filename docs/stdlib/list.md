@@ -906,6 +906,27 @@ The sort is stable.
 [1, 1, 2, 3]
 ```
 
+### `Down`
+
+```
+data Down a
+  = Down a
+```
+
+A value ordered in reverse.
+
+Comparing two `Down` values compares the wrapped values the other way
+round, so `Down 1 > Down 2`. Use it in a sort key to sort descending.
+
+```medaka
+> Down 1 > Down 2
+True
+> sort [Down 1, Down 3, Down 2]
+[Down 3, Down 2, Down 1]
+```
+
+Instances: `Eq`, `Debug`, `Ord`
+
 ### `sortOn`
 
 ```
@@ -916,11 +937,13 @@ sortOn key xs
 The list sorted in ascending order of `key`.
 
 `key` is computed once per element, so it may be expensive. The sort is
-stable.
+stable. Wrap a key in `Down` to sort that part descending.
 
 ```medaka
-> sortOn (x => 0 - x) [1, 3, 2]
+> sortOn (x => Down x) [1, 3, 2]
 [3, 2, 1]
+> sortOn (r => (Down (snd r), fst r)) [("b", 1), ("a", 2), ("c", 2)]
+[("a", 2), ("c", 2), ("b", 1)]
 ```
 
 ### `nubBy`

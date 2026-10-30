@@ -1234,6 +1234,7 @@ hostHelperRoots = [
   ("mdk_executable_path", "ioExecutablePathLines"),
   ("mdk_args_count", "ioArgsLines"),
   ("mdk_str_to_float", "floatStrLines"),
+  ("mdk_float_fixed", "floatFixedLines"),
 ]
 
 export
@@ -1842,6 +1843,7 @@ helperOrder = [
   "osEntropyLines",
   "readFileBytesLines",
   "floatStrLines",
+  "floatFixedLines",
   "trapIntRuntimeLines",
   "intRuntimeLines",
   "siteRuntimeLines",
@@ -2170,6 +2172,10 @@ helperManifest _ "floatStrLines" =
       "mdk_path_reset", "mdk_path_push", "mdk_str_to_float",
       "mdk_str_to_float_ok"
     ]
+helperManifest _ "floatFixedLines" =
+  HelperManifest
+    [("mdk_float_to_fixed", 2)]
+    ["mdk_float_fixed", "mdk_float_fixed_byte"]
 helperManifest _ "trapIntRuntimeLines" =
   HelperManifest
     [("mdk_write_err_digits", 1), ("mdk_write_err_int", 1)]
@@ -2318,6 +2324,7 @@ helperDependencies _ _ = []
 
 helperHostKeys : String -> List String
 helperHostKeys "floatFmtImportLines" = ["mdk_float_fmt", "mdk_float_fmt_byte"]
+helperHostKeys "floatFixedLines" = ["mdk_float_fixed", "mdk_float_fixed_byte"]
 helperHostKeys "floatStrLines" =
   ["mdk_path_push", "mdk_path_reset", "mdk_str_to_float", "mdk_str_to_float_ok"]
 helperHostKeys "ioAppendFileLines" =
@@ -2368,6 +2375,7 @@ helperTypes "byteBlockRuntimeLines" = ["arr", "str", "u8arr"]
 helperTypes "charFromCodeRuntimeLines" = ["C_Some"]
 helperTypes "closApplyLines" = ["argarr", "clos"]
 helperTypes "floatRuntimeLines" = ["float", "str", "u8arr"]
+helperTypes "floatFixedLines" = ["str", "u8arr"]
 helperTypes "floatStrLines" = ["C_Some", "float", "str", "u8arr"]
 helperTypes "hashFloatRuntimeLines" = ["float"]
 helperTypes "hashStringRuntimeLines" = ["str", "u8arr"]
@@ -2530,6 +2538,8 @@ hostImportSigOf "mdk_result_byte" = Some " (param i32) (result i32)"
 hostImportSigOf "mdk_write_file_reset" = Some ""
 hostImportSigOf "mdk_write_file_push" = Some " (param i32)"
 hostImportSigOf "mdk_write_file_commit" = Some " (result i32)"
+hostImportSigOf "mdk_float_fixed" = Some " (param i32) (param f64) (result i32)"
+hostImportSigOf "mdk_float_fixed_byte" = Some " (param i32) (result i32)"
 hostImportSigOf "mdk_str_to_float" = Some " (result f64)"
 hostImportSigOf "mdk_str_to_float_ok" = Some " (result i32)"
 hostImportSigOf "mdk_grant_reset" = Some ""

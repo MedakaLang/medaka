@@ -1,5 +1,5 @@
 # META
-source_lines=303
+source_lines=407
 stages=DESUGAR,MARK
 # SOURCE
 {- | Manipulation of `/`-separated paths as text.
@@ -19,7 +19,7 @@ stages=DESUGAR,MARK
 -- for its own bootstrap path.
 
 import list.{reverse}
-import string.{split, startsWith, endsWith, contains, lastIndexOf}
+import string.{split, startsWith, endsWith, contains, lastIndexOf, toChars}
 
 -- # Components
 
@@ -203,6 +203,110 @@ filterEmpty [] = []
 filterEmpty (s :: rest) =
   if s == "" then filterEmpty rest else s :: filterEmpty rest
 
+-- # Glob patterns
+
+{- | Whether `path` matches the glob `pattern`.
+
+   Both are split into segments on `/`, so repeated and trailing slashes do
+   not matter, but a leading `/` must be on both or on neither. Within one
+   segment `*` matches any run of characters and `?` exactly one character;
+   neither crosses a `/`, and a leading `.` is matched like any other
+   character. A segment that is exactly `**` matches any number of whole
+   segments, none included, so `a/**/b` matches `a/b`. `**` inside a longer
+   segment acts as `*`. There are no braces, character classes or escapes.
+   The empty pattern matches only the empty path.
+
+   > matchGlob "*.mdk" "a.mdk"
+   True
+   > matchGlob "*.mdk" "sub/a.mdk"
+   False
+   > matchGlob "a/**/b" "a/b"
+   True
+   > matchGlob "a/**/b" "a/x/y/b"
+   True
+   > matchGlob "a/**" "a/x/y"
+   True
+   > matchGlob "?.txt" "a.txt"
+   True
+   > matchGlob "?.txt" "ab.txt"
+   False
+   > matchGlob "a/b.txt" "a/b.txt"
+   True
+   > matchGlob "a**b" "axyb"
+   True
+   > matchGlob "a**b" "ax/yb"
+   False
+   > matchGlob "*" ".hidden"
+   True
+   > matchGlob "/a/*" "/a/b"
+   True
+   > matchGlob "/a/*" "a/b"
+   False
+   > matchGlob "a/*" "a/b/"
+   True
+   > matchGlob "" ""
+   True
+   > matchGlob "" "a"
+   False
+   > matchGlob "*a*a*a*a*a*a*b" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   False -}
+export
+matchGlob : String -> String -> Bool
+matchGlob pattern path =
+  isAbsolute pattern == isAbsolute path
+    && matchSegments (segments pattern) (segments path)
+
+matchSegments : List String -> List String -> Bool
+matchSegments [] [] = True
+matchSegments [] _ = False
+matchSegments ("**" :: ps) xs = matchSegments ps xs || skipSegment ps xs
+matchSegments (_ :: _) [] = False
+matchSegments (p :: ps) (x :: xs) =
+  matchChars (toList (toChars p)) (toList (toChars x)) && matchSegments ps xs
+
+skipSegment : List String -> List String -> Bool
+skipSegment _ [] = False
+skipSegment ps (_ :: xs) = matchSegments ("**" :: ps) xs
+
+-- Matches one segment by tracking every pattern suffix the text read so far
+-- can leave unmatched, so the cost is the text length times the pattern
+-- length however many `*` the pattern holds. A run of `*` counts as one.
+matchChars : List Char -> List Char -> Bool
+matchChars pat cs = matchRun (closeStars [collapseStars pat]) cs
+
+collapseStars : List Char -> List Char
+collapseStars ('*' :: '*' :: ps) = collapseStars ('*' :: ps)
+collapseStars (p :: ps) = p :: collapseStars ps
+collapseStars [] = []
+
+matchRun : List (List Char) -> List Char -> Bool
+matchRun [] _ = False
+matchRun states [] = any (== []) states
+matchRun states (c :: cs) = matchRun (closeStars (stepStates c states)) cs
+
+-- Adds, after each suffix that starts with `*`, the suffix that skips it.
+closeStars : List (List Char) -> List (List Char)
+closeStars states = dedupeRuns (flatMap skipStar states)
+
+skipStar : List Char -> List (List Char)
+skipStar ('*' :: rest) = ['*' :: rest, rest]
+skipStar s = [s]
+
+stepStates : Char -> List (List Char) -> List (List Char)
+stepStates c states = dedupeRuns (flatMap (stepState c) states)
+
+stepState : Char -> List Char -> List (List Char)
+stepState _ [] = []
+stepState _ ('*' :: rest) = ['*' :: rest]
+stepState _ ('?' :: rest) = [rest]
+stepState c (p :: rest) = if p == c then [rest] else []
+
+-- The suffixes arrive ordered by position, so equal ones are adjacent.
+dedupeRuns : List (List Char) -> List (List Char)
+dedupeRuns (a :: b :: rest) =
+  if a == b then dedupeRuns (b :: rest) else a :: dedupeRuns (b :: rest)
+dedupeRuns xs = xs
+
 -- # Predicates
 
 {- | Whether the path starts with `/`.
@@ -307,7 +411,7 @@ prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p
     normalize (joinPath (dirname p) (basename p)) == normalize p
 # DESUGAR
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
-(DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false) (mem "endsWith" false) (mem "contains" false) (mem "lastIndexOf" false))))
+(DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false) (mem "endsWith" false) (mem "contains" false) (mem "lastIndexOf" false) (mem "toChars" false))))
 (DTypeSig true "dirname" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dirname" ((PVar "path")) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "/"))) (EVar "path")) (arm (PCon "None") () (ELit (LString "."))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "head") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "head") (ELit (LString ""))) (ELit (LString "/")) (EVar "head")))))))
 (DTypeSig true "basename" (TyFun (TyCon "String") (TyCon "String")))
@@ -339,6 +443,42 @@ prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p
 (DTypeSig false "filterEmpty" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "filterEmpty" ((PList)) (EListLit))
 (DFunDef false "filterEmpty" ((PCons (PVar "s") (PVar "rest"))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "filterEmpty") (EVar "rest")) (EBinOp "::" (EVar "s") (EApp (EVar "filterEmpty") (EVar "rest")))))
+(DTypeSig true "matchGlob" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "matchGlob" ((PVar "pattern") (PVar "path")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "isAbsolute") (EVar "pattern")) (EApp (EVar "isAbsolute") (EVar "path"))) (EApp (EApp (EVar "matchSegments") (EApp (EVar "segments") (EVar "pattern"))) (EApp (EVar "segments") (EVar "path")))))
+(DTypeSig false "matchSegments" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "matchSegments" ((PList) (PList)) (EVar "True"))
+(DFunDef false "matchSegments" ((PList) PWild) (EVar "False"))
+(DFunDef false "matchSegments" ((PCons (PLit (LString "**")) (PVar "ps")) (PVar "xs")) (EBinOp "||" (EApp (EApp (EVar "matchSegments") (EVar "ps")) (EVar "xs")) (EApp (EApp (EVar "skipSegment") (EVar "ps")) (EVar "xs"))))
+(DFunDef false "matchSegments" ((PCons PWild PWild) (PList)) (EVar "False"))
+(DFunDef false "matchSegments" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "x") (PVar "xs"))) (EBinOp "&&" (EApp (EApp (EVar "matchChars") (EApp (EVar "toList") (EApp (EVar "toChars") (EVar "p")))) (EApp (EVar "toList") (EApp (EVar "toChars") (EVar "x")))) (EApp (EApp (EVar "matchSegments") (EVar "ps")) (EVar "xs"))))
+(DTypeSig false "skipSegment" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "skipSegment" (PWild (PList)) (EVar "False"))
+(DFunDef false "skipSegment" ((PVar "ps") (PCons PWild (PVar "xs"))) (EApp (EApp (EVar "matchSegments") (EBinOp "::" (ELit (LString "**")) (EVar "ps"))) (EVar "xs")))
+(DTypeSig false "matchChars" (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyCon "Bool"))))
+(DFunDef false "matchChars" ((PVar "pat") (PVar "cs")) (EApp (EApp (EVar "matchRun") (EApp (EVar "closeStars") (EListLit (EApp (EVar "collapseStars") (EVar "pat"))))) (EVar "cs")))
+(DTypeSig false "collapseStars" (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyCon "Char"))))
+(DFunDef false "collapseStars" ((PCons (PLit (LChar "*")) (PCons (PLit (LChar "*")) (PVar "ps")))) (EApp (EVar "collapseStars") (EBinOp "::" (ELit (LChar "*")) (EVar "ps"))))
+(DFunDef false "collapseStars" ((PCons (PVar "p") (PVar "ps"))) (EBinOp "::" (EVar "p") (EApp (EVar "collapseStars") (EVar "ps"))))
+(DFunDef false "collapseStars" ((PList)) (EListLit))
+(DTypeSig false "matchRun" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char"))) (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyCon "Bool"))))
+(DFunDef false "matchRun" ((PList) PWild) (EVar "False"))
+(DFunDef false "matchRun" ((PVar "states") (PList)) (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EListLit)))) (EVar "states")))
+(DFunDef false "matchRun" ((PVar "states") (PCons (PVar "c") (PVar "cs"))) (EApp (EApp (EVar "matchRun") (EApp (EVar "closeStars") (EApp (EApp (EVar "stepStates") (EVar "c")) (EVar "states")))) (EVar "cs")))
+(DTypeSig false "closeStars" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char")))))
+(DFunDef false "closeStars" ((PVar "states")) (EApp (EVar "dedupeRuns") (EApp (EApp (EVar "flatMap") (EVar "skipStar")) (EVar "states"))))
+(DTypeSig false "skipStar" (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char")))))
+(DFunDef false "skipStar" ((PCons (PLit (LChar "*")) (PVar "rest"))) (EListLit (EBinOp "::" (ELit (LChar "*")) (EVar "rest")) (EVar "rest")))
+(DFunDef false "skipStar" ((PVar "s")) (EListLit (EVar "s")))
+(DTypeSig false "stepStates" (TyFun (TyCon "Char") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char"))))))
+(DFunDef false "stepStates" ((PVar "c") (PVar "states")) (EApp (EVar "dedupeRuns") (EApp (EApp (EVar "flatMap") (EApp (EVar "stepState") (EVar "c"))) (EVar "states"))))
+(DTypeSig false "stepState" (TyFun (TyCon "Char") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char"))))))
+(DFunDef false "stepState" (PWild (PList)) (EListLit))
+(DFunDef false "stepState" (PWild (PCons (PLit (LChar "*")) (PVar "rest"))) (EListLit (EBinOp "::" (ELit (LChar "*")) (EVar "rest"))))
+(DFunDef false "stepState" (PWild (PCons (PLit (LChar "?")) (PVar "rest"))) (EListLit (EVar "rest")))
+(DFunDef false "stepState" ((PVar "c") (PCons (PVar "p") (PVar "rest"))) (EIf (EBinOp "==" (EVar "p") (EVar "c")) (EListLit (EVar "rest")) (EListLit)))
+(DTypeSig false "dedupeRuns" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char")))))
+(DFunDef false "dedupeRuns" ((PCons (PVar "a") (PCons (PVar "b") (PVar "rest")))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EApp (EVar "dedupeRuns") (EBinOp "::" (EVar "b") (EVar "rest"))) (EBinOp "::" (EVar "a") (EApp (EVar "dedupeRuns") (EBinOp "::" (EVar "b") (EVar "rest"))))))
+(DFunDef false "dedupeRuns" ((PVar "xs")) (EVar "xs"))
 (DTypeSig true "isAbsolute" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isAbsolute" ((PVar "path")) (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "path")))
 (DTypeSig true "stripPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -356,7 +496,7 @@ prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p
 (DProp false "dirname ++ / ++ basename normalizes back to the original absolute path" ((pp "p" (TyCon "String"))) (EIf (EBinOp "||" (EBinOp "==" (EVar "p") (ELit (LString ""))) (EApp (EVar "not") (EApp (EVar "isAbsolute") (EVar "p")))) (EVar "True") (EBinOp "==" (EApp (EVar "normalize") (EApp (EApp (EVar "joinPath") (EApp (EVar "dirname") (EVar "p"))) (EApp (EVar "basename") (EVar "p")))) (EApp (EVar "normalize") (EVar "p")))))
 # MARK
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
-(DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false) (mem "endsWith" false) (mem "contains" false) (mem "lastIndexOf" false))))
+(DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false) (mem "endsWith" false) (mem "contains" false) (mem "lastIndexOf" false) (mem "toChars" false))))
 (DTypeSig true "dirname" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dirname" ((PVar "path")) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "/"))) (EVar "path")) (arm (PCon "None") () (ELit (LString "."))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "head") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "head") (ELit (LString ""))) (ELit (LString "/")) (EVar "head")))))))
 (DTypeSig true "basename" (TyFun (TyCon "String") (TyCon "String")))
@@ -388,6 +528,42 @@ prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p
 (DTypeSig false "filterEmpty" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "filterEmpty" ((PList)) (EListLit))
 (DFunDef false "filterEmpty" ((PCons (PVar "s") (PVar "rest"))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "filterEmpty") (EVar "rest")) (EBinOp "::" (EVar "s") (EApp (EVar "filterEmpty") (EVar "rest")))))
+(DTypeSig true "matchGlob" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "matchGlob" ((PVar "pattern") (PVar "path")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "isAbsolute") (EVar "pattern")) (EApp (EVar "isAbsolute") (EVar "path"))) (EApp (EApp (EVar "matchSegments") (EApp (EVar "segments") (EVar "pattern"))) (EApp (EVar "segments") (EVar "path")))))
+(DTypeSig false "matchSegments" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "matchSegments" ((PList) (PList)) (EVar "True"))
+(DFunDef false "matchSegments" ((PList) PWild) (EVar "False"))
+(DFunDef false "matchSegments" ((PCons (PLit (LString "**")) (PVar "ps")) (PVar "xs")) (EBinOp "||" (EApp (EApp (EVar "matchSegments") (EVar "ps")) (EVar "xs")) (EApp (EApp (EVar "skipSegment") (EVar "ps")) (EVar "xs"))))
+(DFunDef false "matchSegments" ((PCons PWild PWild) (PList)) (EVar "False"))
+(DFunDef false "matchSegments" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "x") (PVar "xs"))) (EBinOp "&&" (EApp (EApp (EVar "matchChars") (EApp (EMethodRef "toList") (EApp (EVar "toChars") (EVar "p")))) (EApp (EMethodRef "toList") (EApp (EVar "toChars") (EVar "x")))) (EApp (EApp (EVar "matchSegments") (EVar "ps")) (EVar "xs"))))
+(DTypeSig false "skipSegment" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "skipSegment" (PWild (PList)) (EVar "False"))
+(DFunDef false "skipSegment" ((PVar "ps") (PCons PWild (PVar "xs"))) (EApp (EApp (EVar "matchSegments") (EBinOp "::" (ELit (LString "**")) (EVar "ps"))) (EVar "xs")))
+(DTypeSig false "matchChars" (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyCon "Bool"))))
+(DFunDef false "matchChars" ((PVar "pat") (PVar "cs")) (EApp (EApp (EVar "matchRun") (EApp (EVar "closeStars") (EListLit (EApp (EVar "collapseStars") (EVar "pat"))))) (EVar "cs")))
+(DTypeSig false "collapseStars" (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyCon "Char"))))
+(DFunDef false "collapseStars" ((PCons (PLit (LChar "*")) (PCons (PLit (LChar "*")) (PVar "ps")))) (EApp (EVar "collapseStars") (EBinOp "::" (ELit (LChar "*")) (EVar "ps"))))
+(DFunDef false "collapseStars" ((PCons (PVar "p") (PVar "ps"))) (EBinOp "::" (EVar "p") (EApp (EVar "collapseStars") (EVar "ps"))))
+(DFunDef false "collapseStars" ((PList)) (EListLit))
+(DTypeSig false "matchRun" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char"))) (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyCon "Bool"))))
+(DFunDef false "matchRun" ((PList) PWild) (EVar "False"))
+(DFunDef false "matchRun" ((PVar "states") (PList)) (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EListLit)))) (EVar "states")))
+(DFunDef false "matchRun" ((PVar "states") (PCons (PVar "c") (PVar "cs"))) (EApp (EApp (EVar "matchRun") (EApp (EVar "closeStars") (EApp (EApp (EVar "stepStates") (EVar "c")) (EVar "states")))) (EVar "cs")))
+(DTypeSig false "closeStars" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char")))))
+(DFunDef false "closeStars" ((PVar "states")) (EApp (EVar "dedupeRuns") (EApp (EApp (EDictApp "flatMap") (EVar "skipStar")) (EVar "states"))))
+(DTypeSig false "skipStar" (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char")))))
+(DFunDef false "skipStar" ((PCons (PLit (LChar "*")) (PVar "rest"))) (EListLit (EBinOp "::" (ELit (LChar "*")) (EVar "rest")) (EVar "rest")))
+(DFunDef false "skipStar" ((PVar "s")) (EListLit (EVar "s")))
+(DTypeSig false "stepStates" (TyFun (TyCon "Char") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char"))))))
+(DFunDef false "stepStates" ((PVar "c") (PVar "states")) (EApp (EVar "dedupeRuns") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "stepState") (EVar "c"))) (EVar "states"))))
+(DTypeSig false "stepState" (TyFun (TyCon "Char") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char"))))))
+(DFunDef false "stepState" (PWild (PList)) (EListLit))
+(DFunDef false "stepState" (PWild (PCons (PLit (LChar "*")) (PVar "rest"))) (EListLit (EBinOp "::" (ELit (LChar "*")) (EVar "rest"))))
+(DFunDef false "stepState" (PWild (PCons (PLit (LChar "?")) (PVar "rest"))) (EListLit (EVar "rest")))
+(DFunDef false "stepState" ((PVar "c") (PCons (PVar "p") (PVar "rest"))) (EIf (EBinOp "==" (EVar "p") (EVar "c")) (EListLit (EVar "rest")) (EListLit)))
+(DTypeSig false "dedupeRuns" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Char")))))
+(DFunDef false "dedupeRuns" ((PCons (PVar "a") (PCons (PVar "b") (PVar "rest")))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EApp (EVar "dedupeRuns") (EBinOp "::" (EVar "b") (EVar "rest"))) (EBinOp "::" (EVar "a") (EApp (EVar "dedupeRuns") (EBinOp "::" (EVar "b") (EVar "rest"))))))
+(DFunDef false "dedupeRuns" ((PVar "xs")) (EVar "xs"))
 (DTypeSig true "isAbsolute" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isAbsolute" ((PVar "path")) (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "path")))
 (DTypeSig true "stripPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
