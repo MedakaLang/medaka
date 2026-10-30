@@ -866,6 +866,8 @@ data TailDefine = TailDefine String Int Bool
 
 data Emit = Emit {
   input : EmitInput,
+  implNames : Ref (OrdMap (OrdMap String)),
+  defaultNames : Ref (OrdMap (OrdMap (OrdMap String))),
   -- the gensym id every per-scope counter starts from (`EmitStateConfig.counter0`
   -- — 0 for the prelude half, `programHalfIdBase` for the program half).
   counter0 : Int,
@@ -1568,11 +1570,34 @@ preludeImplPairKey method identity = "\{method}\n\{identity}"
 -- the lifted define an entry's calls target: `mdk_impl_<symTag>_<method>` for a
 -- supplied method, `mdk_default_...` for an inherited default's per-instance body.
 -- Both read the entry's stamp.
-implEntryFnName : String -> CImplEntry -> String
-implEntryFnName method (CImplEntry _ _ _ (CImplTagged _ _ _ (ImplSym tag _ _) _ _ _)) =
-  implFnName tag method
-implEntryFnName method (CImplEntry _ _ _ (CImplDefault _ _ _ sym _ _ _)) =
-  implDefaultFnName sym method
+implEntryFnName : Emit -> String -> CImplEntry -> String
+implEntryFnName e method (CImplEntry _ _ _ (CImplTagged _ _ _ (ImplSym tag _ _) _ _ _)) =
+  let byMethod = match omLookup tag !e.implNames
+    Some m => m
+    None => omEmpty
+  match omLookup method byMethod
+    Some name => name
+    None =>
+      let name = implFnName tag method
+      e.implNames := omInsert tag (omInsert method name byMethod) !e.implNames
+      name
+implEntryFnName e method (CImplEntry _ _ _ (CImplDefault _ _ _ (sym@(ImplSym _ iface key)) _ _ _)) =
+  let byMethod = match omLookup iface !e.defaultNames
+    Some m => m
+    None => omEmpty
+  let byKey = match omLookup method byMethod
+    Some m => m
+    None => omEmpty
+  match omLookup key byKey
+    Some name => name
+    None =>
+      let name = implDefaultFnName sym method
+      e.defaultNames :=
+        omInsert
+          iface
+          (omInsert method (omInsert key name byKey) byMethod)
+          !e.defaultNames
+      name
 
 -- the stamped symbol tag of an entry of either kind
 implEntrySymTag : CImplEntry -> String
@@ -7462,7 +7487,7 @@ emitMethod e env name iface siteArity (route@(RKey tag _ _)) implRoutes methRout
       -- call that passes them too
       emitCallMode
         e
-        (implEntryFnName name entry)
+        (implEntryFnName e name entry)
         (dictWords ++ argOps)
         mode
         resTy
@@ -8007,7 +8032,7 @@ emitMethodDispatch e env name iface siteArity dict methRoutes argOps =
       -- F10: saturate against the impl's own parameters (see emitDispatchArmBody).
       emitArityCall
         e
-        (implEntryFnName name ent)
+        (implEntryFnName e name ent)
         argOps
         (implSrcValueArity ent)
         LTInt
@@ -8360,7 +8385,7 @@ emitDispatcherBody e name iface nmw nargs siteArity =
       -- impl parameter count can still differ from the occurrence arity.
       emitArityCall
         e
-        (implEntryFnName name ent)
+        (implEntryFnName e name ent)
         (dispWordNames "%arg" nargs 0)
         (implSrcValueArity ent)
         LTInt
@@ -8605,7 +8630,7 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     let (rv, _) =
       emitArityCall
         e
-        (implEntryFnName name ent)
+        (implEntryFnName e name ent)
         (methWords ++ cellDicts ++ argOps)
         armArity
         LTInt
@@ -8860,7 +8885,7 @@ filterGroupsForEntries : Emit ->
 filterGroupsForEntries _ _ _ [] = []
 filterGroupsForEntries e method entries (g :: rest) =
   if anyList
-    (entry => implEntryFnName method entry == groupFnName g)
+    (entry => implEntryFnName e method entry == groupFnName g)
     entries then
     g :: filterGroupsForEntries e method entries rest
   else
@@ -9582,7 +9607,7 @@ gatherGroup e entries (method, key) =
         positions
         (clauseArity cls)
         cls
-        (implEntryFnName method ent)
+        (implEntryFnName e method ent)
     None => panic "llvm: impl group without an entry (internal error)"
 
 -- the head tycon tag of the impl whose (method, key) matches (the first such entry).
@@ -13652,7 +13677,7 @@ directCallOperands e env ex =
               ent
               (MethodEvidence iface siteArity route implRoutes methRoutes)
           let dictWords = dictWordsOf e env dictRoutes
-          Some (implEntryFnName name ent, dictWords ++ argOps)
+          Some (implEntryFnName e name ent, dictWords ++ argOps)
         None => None
       else
         None
@@ -15047,6 +15072,8 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   let rows = binderRowsOf facts.factBinders
   let e = Emit {
     input = input,
+    implNames = Ref omEmpty,
+    defaultNames = Ref omEmpty,
     counter0 = cfg.counter0,
     trmc = cfg.trmc,
     methodResults = cfg.methodResults,
