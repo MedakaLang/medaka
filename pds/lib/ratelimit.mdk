@@ -50,7 +50,7 @@
 import bytes as B
 import bytes.{Bytes, decodeUtf8}
 import http.{Header, headerName, headerValue, makeHeader}
-import list.{head, reverse}
+import list.{last}
 import map.{Map(..), filterWithKey, get, has, set, size}
 import regex.{Regex, isFullMatch, mustCompile}
 import string.{split, trim}
@@ -559,7 +559,7 @@ isXffHeader h = headerName h == "x-forwarded-for"
    bucket, so a client whose own bucket was exhausted could win a fresh
    allowance by sending its address twice. -}
 xffLastHop : List Header -> Result String (Option String)
-xffLastHop headers = match head (reverse (filter isXffHeader headers))
+xffLastHop headers = match last (filter isXffHeader headers)
   Some nearest => lastHopToken (headerValue nearest)
   None => Ok None
 
@@ -587,7 +587,7 @@ lastHopToken bytes = match checkXffHeaderBytes (B.length bytes)
     Err message => Err message
     Ok () => match decodeUtf8 bytes
       None => Ok None
-      Some text => match head (reverse (map trim (split "," text)))
+      Some text => match last (map trim (split "," text))
         Some candidate =>
           if isAddressToken candidate then Ok (Some candidate) else Ok None
         None => Ok None

@@ -281,8 +281,7 @@ untouchedNodes : List (Cid, Bytes) -> Mst -> Mst -> Int
 untouchedNodes blocks before after =
   let beforeKeys = cidKeys (mstNodeBlocks before)
   let afterKeys = cidKeys (mstNodeBlocks after)
-  length
-    (filter (key => elem key beforeKeys && elem key afterKeys) (cidKeys blocks))
+  count (key => elem key beforeKeys && elem key afterKeys) (cidKeys blocks)
 
 sameBlockBytes : List (Cid, Bytes) -> List (Cid, Bytes) -> Bool
 sameBlockBytes expected actual =

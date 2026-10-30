@@ -48,7 +48,7 @@ import array as A
 import bytes.{fromArrayAssumeByteDomain}
 import fs.{walkDir}
 import hex.{encode, encodeString}
-import list.{get, indexed, last, somes, sort}
+import list.{get, indexed, last, sort}
 import path.{joinPath}
 import regex as R
 import string.{
@@ -175,7 +175,7 @@ hasMatch pattern out =
 
 -- Every line that starts with `prefix`, the prefix removed.
 tagged : String -> String -> List String
-tagged prefix out = somes (map (stripPrefix prefix) (lines out))
+tagged prefix out = filterMap (stripPrefix prefix) (lines out)
 
 -- Every regular file under `dir`, sorted.
 filesUnder : String -> <FileRead> Result String (List String)
@@ -258,7 +258,7 @@ repoResumed p = do
   () <- requireLine "SAVE records 3" p.save "save did not write three records"
   () <- requireLast "LOAD: PASS" p.load "load route did not pass"
   let saved = tagged "SAVE " p.save
-  () <- require (saved /= []) "save produced no state summary"
+  () <- require (not (isEmpty saved)) "save produced no state summary"
   () <- require
     (saved == tagged "LOAD " p.load)
     "reloaded head commit CID / record count / getRepo CAR differ"
@@ -275,7 +275,7 @@ blobsResumed p = do
   () <- requireLast "BLOB-LOAD: PASS" p.blobLoad "blob load route did not pass"
   let saved = tagged "BLOBSAVE " p.blobSave
   let loaded = tagged "BLOBLOAD " p.blobLoad
-  () <- require (saved /= []) "blob save produced no state summary"
+  () <- require (not (isEmpty saved)) "blob save produced no state summary"
   () <- require
     (saved == loaded)
     "reloaded blob CID / declared MIME type / bytes differ"
@@ -472,7 +472,7 @@ test "oversize: a blob the pure layer refuses reaches no file at all" = inScratc
       "an oversize blob was not refused before writing"
     files <- filesUnder dir
     require
-      (files == [])
+      (isEmpty files)
       "an oversize blob left \{intToString (length files)} file(s) on disk")
 
 -- # Half-written directories
@@ -504,7 +504,9 @@ unpromotedHead bin scratch = do
     loaded
     "an unpromoted head did not reload at all"
   let oldState = tagged "OLD " old
-  () <- require (oldState /= []) "old-generation save produced no state summary"
+  () <- require
+    (not (isEmpty oldState))
+    "old-generation save produced no state summary"
   () <- require
     (oldState == tagged "LOAD " loaded)
     "an unpromoted head served a repository that is not the previous one"
@@ -1002,7 +1004,7 @@ modesUnder bin scratch mask bytesMode = do
         _ => True)
       survey
   require
-    (wrong == [])
+    (isEmpty wrong)
     "under umask \{mask}, \{intToString (length wrong)} file(s) are not at the mode they owe (class mode owed path):\n\{join "\n" wrong}"
 
 test "modes: every text file at 0600 under any umask; block and blob bytes follow the umask" = inScratch
@@ -1084,7 +1086,7 @@ traceRoute bin scratch route dir = do
       dir,
     ])
   text <- readText traceFile
-  Ok (out, somes (map traceEvent (lines text)))
+  Ok (out, filterMap traceEvent (lines text))
 
 -- 1-based positions of the events matching `pattern`: line numbers in the
 -- normalized trace, which is what every order assertion compares.
@@ -1251,7 +1253,7 @@ renameEvent prev ev st0 =
         }
       else
         let (bad, owed) =
-          if st.flushed && st.owed /= [] then
+          if st.flushed && not (isEmpty st.owed) then
             (
               st.bad
                 ++ map
@@ -1321,7 +1323,7 @@ gradeBarriers events =
 routeViolations : (String, List String) -> List String
 routeViolations (route, events) =
   let (renames, created, bad) = gradeBarriers events
-  if bad == [] then
+  if isEmpty bad then
     []
   else
     [
@@ -1413,7 +1415,7 @@ traceAll bin scratch = do
   () <- blobAreaBarriered repo (snd blobSaved)
   let violations = flatMap routeViolations routes
   () <- require
-    (violations == [])
+    (isEmpty violations)
     "a rename or a mkdir published a name no barrier had put on disk:\n\{join "\n" violations}"
   pathsExercised everything
 
@@ -1525,7 +1527,7 @@ test "cost: one commit writes the blocks it adds, and no block the repository al
     let moved = filter (l => not (elem l before)) after
     let rewritten = filter (l => elem (stampPath l) held) moved
     () <- require
-      (rewritten == [])
+      (isEmpty rewritten)
       "one commit rewrote \{intToString (length rewritten)} of the \{intToString (length before)} block files the repository already held:\n\{join "\n" rewritten}"
     () <- require
       (length moved >= 2 && length moved <= 8)

@@ -420,7 +420,7 @@ indexOf needle bytes = indexOfWithin 0 (length bytes) needle bytes
 export
 lastIndexOf : Bytes -> Bytes -> Option Int
 lastIndexOf needle haystack
-  | length needle == 0 = Some (length haystack)
+  | isEmpty needle = Some (length haystack)
   | otherwise = lastIndexOfGo needle haystack 0 None
 
 -- Walks forward from each hit, advancing one byte so overlapping matches

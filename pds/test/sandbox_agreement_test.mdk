@@ -42,7 +42,7 @@
    Runs under `medaka test --native`: every assertion but the derivation's
    own spawns `medaka`, and the interpreter binds no subprocess extern. -}
 
-import list.{lookup, somes, zip, zipWith}
+import list.{lookup, zip, zipWith}
 import string.{join, lines, startsWith, stripPrefix, unwords, words}
 import test.{Expectation(..), expectEqual, expectEqualLines}
 import test_process.{medakaBin, spawnTimeoutSeconds, testJobs, underRoot}
@@ -116,7 +116,7 @@ ungoverned = [
 
 -- | Every value the unit gives `key`, one per line that sets it.
 directiveValues : String -> List String -> List String
-directiveValues key ls = somes (map (stripPrefix "\{key}=") ls)
+directiveValues key ls = filterMap (stripPrefix "\{key}=") ls
 
 {- | The `check-policy --allow` entries the unit's lines give, or why they
    cannot be read. The `FileWrite` and `Net` entries are what the sandbox
