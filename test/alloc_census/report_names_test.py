@@ -41,6 +41,43 @@ class Reports(unittest.TestCase):
         self.assertIn(names[0] + ' Cons', r.stdout)
         self.assertIn(names[1] + ' Cons', r.stdout)
 
+    def test_dispatch_census_and_classifier_controls(self):
+        script = (ROOT / 'test/o2_survivor_census.sh').read_text()
+        fixture = 'interface Metric a where\n  measure : a -> Int\n\ndata T0 = MkT0 Int\nimpl Metric T0 where\n  measure (MkT0 x) = x + 0\n\ndata T1 = MkT1 Int\nimpl Metric T1 where\n  measure (MkT1 x) = x + 1\n\ndata T2 = MkT2 Int\nimpl Metric T2 where\n  measure (MkT2 x) = x + 2\n\ndata T3 = MkT3 Int\nimpl Metric T3 where\n  measure (MkT3 x) = x + 3\n\nprobe : Metric a => a -> a -> Int\nprobe x y = measure x + measure y\nmain = println (probe (MkT0 10) (MkT0 20))\n'
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            (p / 'dispatch_probe.mdk').write_text(fixture)
+            script = script.replace('ROOT="$(cd "$(dirname "$0")/.." && pwd)"',
+                                    'ROOT="' + str(ROOT) + '"')
+            script = script.replace('CORPUS="$ROOT/test/o2_survivor_fixtures"',
+                                    'CORPUS="' + d + '"')
+            runner = p / 'census.sh'
+            runner.write_text(script)
+            result = subprocess.run(['sh', str(runner)], text=True, capture_output=True, check=True)
+            def check_dispatch(output):
+                section = output.split('OPAQUE_CALL survives:', 1)[1].split('ALLOCATION:', 1)[0]
+                lines = [line for line in section.splitlines() if '@mdk.dispatch..6d656173757265.0.1.1(' in line]
+                self.assertEqual(2, len(lines), output)
+                self.assertIn('@mdk_int_overflow_at(', section)
+            check_dispatch(result.stdout)
+            self.assertIn('ALLOCATION: none', result.stdout)
+            self.assertIn('LOAD: 0 total', result.stdout)
+            self.assertIn('TAG_ARITH: 3 op(s)', result.stdout)
+            self.assertIn('0 BUILD_FAILED, 0 ELIMINATED', result.stdout)
+            with self.assertRaises(AssertionError):
+                check_dispatch(result.stdout.replace('@mdk.dispatch.', '@hidden.dispatch.', 1))
+
+        assignment = next(line for line in script.splitlines() if line.strip().startswith('opaque='))
+        def classify(body):
+            r = subprocess.run(['sh', '-c', assignment + '\nprintf "%s\\n" "$opaque"'],
+                               env=dict(os.environ, body=body), text=True, capture_output=True, check=True)
+            return r.stdout.strip()
+        self.assertEqual('', classify('  call i64 @mdk.user.6162()'))
+        self.assertEqual('', classify('  call ptr @GC_malloc(i64 8)\n  call ptr @mdk_alloc(i64 8)'))
+        self.assertIn('@mdk_int_overflow_at(', classify('  call void @mdk_int_overflow_at()'))
+        self.assertIn('@"mdk.dispatch..6d656173757265.0.1.1"(',
+                      classify('  call i64 @"mdk.dispatch..6d656173757265.0.1.1"()'))
+
     def test_census_and_selector_mutation(self):
         cmd = ['sh', str(ROOT / 'test/o2_survivor_census.sh')]
         normal = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True, check=True)

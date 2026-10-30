@@ -6,7 +6,7 @@
 # function body from the OPTIMIZED output, and report what survives,
 # bucketed:
 #
-#   OPAQUE_CALL   — a `call`/`tail call` to an `@mdk_*` runtime or dispatch
+#   OPAQUE_CALL   — a `call`/`tail call` to an `@mdk_*` runtime or `@mdk.dispatch.*` dispatch
 #                   helper (`runtime/medaka_rt.c`) that -O2 did not inline
 #                   away. Excludes calls to module-qualified user functions
 #                   (encoded `@mdk.user.<hex>`; legacy `@mdk_<module>__<name>`
@@ -156,7 +156,7 @@ PYCODE
     continue
   fi
 
-  opaque="$(printf '%s\n' "$body" | grep -E 'call[^@]*@mdk_[A-Za-z0-9_]*\(' | grep -Ev '@mdk_[A-Za-z0-9_]*alloc' | grep -Ev '@mdk_[A-Za-z0-9_]*__[A-Za-z0-9_]*\(' || true)"
+  opaque="$(printf '%s\n' "$body" | grep -E 'call[^@]*@(mdk_[A-Za-z0-9_]*|"?mdk\.dispatch\.[0-9a-f]*\.[0-9a-f]*\.[0-9]+\.[0-9]+\.[0-9]+"?)\(' | grep -Ev '@mdk_[A-Za-z0-9_]*alloc' | grep -Ev '@mdk_[A-Za-z0-9_]*__[A-Za-z0-9_]*\(' || true)"
   alloc="$(printf '%s\n' "$body" | grep -E 'call[^@]*@(GC_malloc|mdk_[A-Za-z0-9_]*alloc)' || true)"
   loads="$(printf '%s\n' "$body" | grep -E '= *load ' || true)"
   n_loads=$(printf '%s\n' "$loads" | grep -c . || true)
