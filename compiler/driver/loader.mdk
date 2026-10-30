@@ -564,11 +564,29 @@ findModuleOrEntryFile deps roots entry modId = match entryUnderRoots roots entry
   Some pathRoot => Some pathRoot
   None => findModuleFile deps roots modId
 
+-- The name `medaka run -` gives a program read from standard input: the entry
+-- path every diagnostic shows, and the one entry `entryUnderRoots` accepts
+-- without a file behind it.  Relative imports and the `medaka.toml` walk-up
+-- resolve against the working directory, since it has no directory of its own.
+export
+stdinEntry : String
+stdinEntry = "<stdin>"
+
+-- The whole program text from standard input.
+export
+readStdinProgram : Unit -> <Stdin> String
+readStdinProgram _ = readAll ()
+
+-- The loader `read` override serving `text` for the stdin entry only.
+export
+stdinReadOverride : String -> String -> Option String
+stdinReadOverride text path = if path == stdinEntry then Some text else None
+
 entryUnderRoots : List String -> String -> <IO> Option (String, String)
 entryUnderRoots [] _ = None
 entryUnderRoots (r :: rs) entry =
   let under = startsWith "\{r}/" entry || r == "." && not (startsWith "/" entry)
-  if entry /= "" && under && fileExists entry then
+  if entry /= "" && under && (entry == stdinEntry || fileExists entry) then
     Some (entry, r)
   else
     entryUnderRoots rs entry

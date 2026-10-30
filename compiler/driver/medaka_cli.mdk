@@ -133,6 +133,9 @@ import frontend.desugar.{desugarIn}
 import tools.target_parse.{targetDesugared}
 import driver.loader.{
   loadProgramFilesLocatedE,
+  stdinEntry,
+  readStdinProgram,
+  stdinReadOverride,
   readSource,
   readSourceE,
   sourceNotUtf8Message,
@@ -2794,7 +2797,7 @@ flushPendingRunDiags True = flushRunEnvelope !pendingRunDiags
 runHelpText : String
 runHelpText = stringConcat [
   "medaka run — Type-check and run a program (interpreter)\n", "\n", "Usage:\n",
-  "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]\n",
+  "  medaka run [--json] [--allow-internal] [--release] <file.mdk | -> [args...]\n",
   "\n",
   "  --json            emit the Diag JSON envelope on stderr instead of human\n",
   "                    text, for a runtime panic, a static (resolve/type) error\n",
@@ -2817,7 +2820,11 @@ runHelpText = stringConcat [
   "`run` is the interpreter: it starts at once but runs slowly. For speed, use\n",
   "`medaka build`, the fast native path.\n", "\n",
   "Args after <file.mdk> are passed through to the program's own `args`.\n",
-  "Inline-eval (`-e <expr>`) is NOT supported — pass a file.\n"
+  "`medaka run -` reads the program from standard input (a heredoc), so the\n",
+  "program's own `readAll`/`readLine` see end-of-file; a script that is also a\n",
+  "filter must be run from a file. Imports resolve against the current directory.\n",
+  "`medaka run /dev/stdin` is the equivalent spelling that names the file as such.\n",
+  "Inline-eval (`-e <expr>`) is NOT supported; use `medaka run -` and a heredoc.\n"
 ]
 
 -- `run`'s flag vocabulary, as `runHelpText` documents it.  `--types` is also
@@ -2869,7 +2876,9 @@ runRunCmd argv =
     -- positional is checked — anything after it is the program's own
     -- passthrough args (ARGS NOTE above), which may legitimately start with
     -- `-`.
-    target :: _ if stringLength target > 0 && stringSlice 0 1 target == "-" =>
+    target :: _ if target /= "-"
+      && stringLength target > 0
+      && stringSlice 0 1 target == "-" =>
       -- C2: same event, the shared wording.  This stays a check on the FIRST
       -- positional only — everything after it is the program's own argv,
       -- `--`-shaped or not (`medaka run argv.mdk -- --foo` must still deliver
@@ -2883,7 +2892,10 @@ runRunCmd argv =
     -- `medaka build`.
     target :: _ if (hasSlash target || endsWith ".mdk" target)
       && not (fileExists target) => runAbort ("error: no such file: " ++ target)
-    target :: progArgs =>
+    rawTarget :: progArgs =>
+      let isStdin = rawTarget == "-"
+      let target = if isStdin then stdinEntry else rawTarget
+      let stdinText = if isStdin then readStdinProgram () else ""
       perfArm perfT0
       carryTargetProfile (runTargetFlag argv) target
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
@@ -2906,7 +2918,7 @@ runRunCmd argv =
       -- itself (#100) and rendered by moduleLoadErrText, so neither one is a
       -- bare `parse error` panic any more.  The entry is re-parsed only in the
       -- loader's failure arm below, so valid input pays no second parse.
-      let tsrc = readFileSafe target
+      let tsrc = if isStdin then stdinText else readFileSafe target
       -- #186/#1360: keep the loader's per-module PATHS instead of dropping
       -- them at the load site.  They were already being carried here and
       -- discarded one line later, which is why every imported module's
@@ -2914,7 +2926,8 @@ runRunCmd argv =
       -- `moduleLoadErrText` renders in `<IO>`, so this step stays a local
       -- match rather than composing through `orExit`/`mapErr` (both fixed to
       -- a pure error-rendering function).
-      let modsWithPath = match loadProgramFilesLocatedE (_ => None) target roots
+      let readEntry = stdinReadOverride stdinText
+      let modsWithPath = match loadProgramFilesLocatedE readEntry target roots
         Err lerr =>
           let _ = reportShippedHeaders (deferredInto jsonMode) prelude
           let _ = orExit (mapErr (ppParseError tsrc target) (parseResult tsrc))
@@ -2986,7 +2999,7 @@ runRunCmd argv =
           -- ppDiagCliSrc, instead of an opaque "type error in <file>" message.
           -- A program resolve rejected was not driven and carries its resolve
           -- errors here.
-          let tsrc = readFileSafe target
+          let tsrc = if isStdin then stdinText else readFileSafe target
           let diags = flatMap snd front.foDiags
           match (filter diagIsError diags, front.foDriven)
             ([], Some analysis) =>

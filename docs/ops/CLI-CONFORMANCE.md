@@ -143,6 +143,11 @@ present tree — re-derive with `make cli-conformance-census` to see the current
 >   ```
 >   Note that `--` is passed through as an ordinary argument, not consumed as a separator.
 >   That is the current contract and C2 does not change it.
+> * `medaka run -` takes the program text from standard input and names it `<stdin>` in every
+>   diagnostic; the words after `-` are the program's argv. The program's own stdin is already
+>   consumed, so its `readAll`/`readLine` see end-of-file; a script that is also a filter must
+>   be run from a file. A stdin program has no directory, so relative imports and the
+>   `medaka.toml` walk-up resolve against the current working directory.
 
 **The disposition classes**, as the census reports them:
 

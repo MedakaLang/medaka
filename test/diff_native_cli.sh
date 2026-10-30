@@ -242,6 +242,18 @@ else
   printf 'skip run/* (native run not yet wired)\n'
 fi
 
+# ── run -: the program text comes from stdin (#4633) ─────────────────────────
+# `stdin_args` also reads its own stdin (empty: the program text consumed it) and
+# prints its argv; `stdin_typeerr` pins the `<stdin>` file name in a diagnostic.
+if [ "$RUN_WIRED" = 1 ]; then
+  got="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run - a b < "$FIX/run/stdin_args.mdk" 2>/dev/null)"
+  if [ "$got" = "$(cat "$GOLD/run/stdin_args.golden")" ]; then pass=$((pass+1)); printf 'ok   run/stdin_args\n'
+  else fail=$((fail+1)); printf 'FAIL run/stdin_args\n  got: [%s]\n' "$got"; fi
+  got="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run - < "$FIX/run/stdin_typeerr.mdk" 2>&1 >/dev/null)"
+  if [ "$got" = "$(cat "$GOLD/run/stdin_typeerr.golden")" ]; then pass=$((pass+1)); printf 'ok   run/stdin_typeerr\n'
+  else fail=$((fail+1)); printf 'FAIL run/stdin_typeerr\n  got: [%s]\n' "$got"; fi
+fi
+
 # ── run: main shapes (#1681, #2413) ──────────────────────────────────────────
 # `run/main_shape_nonunit.mdk` is `main = 3 + 1`: a zero-arg value main of a
 # non-Unit type, which `run` prints through its Display impl exactly as the
