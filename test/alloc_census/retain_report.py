@@ -8,6 +8,7 @@ function and by module, then the referrer table when the run had targets.
 Live bytes include the census's own 8-byte header per object.
 """
 import os
+import re
 import subprocess
 import sys
 from collections import defaultdict
@@ -100,6 +101,38 @@ def key_name(key):
 
 def module(fn):
     fn = fn.replace('++ in ', '').replace('rt:', '')
+    # Source definitions encode the logical m<hex module>__<raw name> as a
+    # component; generated names encode a scope of module.<hex module>.
+    def decode_hex(s):
+        if not re.fullmatch(r'(?:[0-9a-f]{2})*', s):
+            return None
+        try:
+            return bytes.fromhex(s).decode('utf-8')
+        except UnicodeDecodeError:
+            return None
+
+    user = re.fullmatch(r'mdk\.(?:user|global|state|force|worker\.(?:raw|float))\.([0-9a-f]*)', fn)
+    if user:
+        logical = decode_hex(user.group(1))
+        pair = re.fullmatch(r'm((?:[0-9a-f]{2})*)__.*', logical or '', re.DOTALL)
+        if pair:
+            module_name = decode_hex(pair.group(1))
+            if module_name is not None:
+                return module_name
+        return fn
+    generated = re.fullmatch(r'mdk\.gen\.([a-z]+)\.([0-9a-f]*)\.([0-9a-f]*)\.(0|[1-9][0-9]*)', fn)
+    if generated and generated.group(1) in {
+        'string', 'trap', 'lambda', 'methodvalue', 'dictvalue', 'namedpap',
+        'indirectpap', 'dictcell', 'ctorcell', 'eta', 'ctorpap', 'ctoreta',
+        'externeta', 'u64', 'i64', 'globalname',
+    }:
+        scope = decode_hex(generated.group(2))
+        subject = decode_hex(generated.group(3))
+        if scope is not None and subject is not None and scope.startswith('module.'):
+            module_name = decode_hex(scope[7:])
+            if module_name is not None:
+                return module_name
+        return fn
     # lifted lambdas, eta and pap wrappers name their module in a dotted suffix:
     # mdk_lam.frontend_parser.36, mdk_eta_<target>.frontend_parser.34
     parts = fn.split('.')
