@@ -849,6 +849,24 @@ long long mdk_float_to_string(double d) {
   return mdk_str_cell(buf, len, len);
 }
 
+/* floatToFixed: `digits` places after the point (the wrapper clamps to 0..100),
+ * correctly rounded from the exact binary value, ties to even (glibc/Python
+ * `%.*f`).  NaN and infinity print as floatToString prints them, decided before
+ * snprintf so a negative NaN never yields "-nan".  The longest finite result is
+ * 309 integer digits + '.' + 100 fraction digits + sign + NUL. */
+long long mdk_float_to_fixed(long long digits, double d) {
+  char buf[309 + 1 + 100 + 1 + 1 + 8];
+  if (isnan(d) || isinf(d)) {
+    mdk_float_lexeme(d, buf);
+  } else {
+    if (digits < 0) digits = 0;
+    if (digits > 100) digits = 100;
+    snprintf(buf, sizeof buf, "%.*f", (int)digits, d);
+  }
+  long long len = (long long)strlen(buf);
+  return mdk_str_cell(buf, len, len);
+}
+
 /* ---------------------------------------------------------------------------
  * BUILD-BINARY STDOUT-LOSS FIX (companion to the `medaka run` "drops stdout on
  * panic" fix below, but for a COMPILED, non-interpreter `medaka build` binary).

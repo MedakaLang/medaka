@@ -1121,6 +1121,18 @@ floatToString : Float -> String
 
 A float in decimal.
 
+### `floatToFixed`
+
+```
+floatToFixed : Int -> Float -> String
+```
+
+A float with a fixed number of digits after the point, the digit count
+first. The text is rounded from the float's exact binary value, with exact
+ties going to the even digit, and a value that rounds to zero keeps its sign.
+`NaN` and the infinities print as `floatToString` prints them. It is only
+ever called with `0` to `100` digits, by `string.toFixed`.
+
 ## Arrays
 
 ### `arrayLength`

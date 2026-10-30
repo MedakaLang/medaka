@@ -287,6 +287,33 @@ Some 3.5
 None
 ```
 
+### `toFixed`
+
+```
+toFixed : Int -> Float -> String
+toFixed digits x
+```
+
+`x` written with `digits` places after the decimal point, the digit count
+first.
+
+The text is rounded from the exact binary value of `x`, not from its
+shortest decimal form, and an exact tie goes to the even digit, as in C
+and Python. A negative `digits` counts as `0` and one above `100` as `100`.
+`NaN` and the infinities print as `floatToString` prints them, and a
+negative value that rounds to zero keeps its `-`.
+
+```medaka
+> toFixed 2 12.3456
+"12.35"
+> toFixed 2 2.675
+"2.67"
+> toFixed 0 2.5
+"2"
+> toFixed (-3) 7.5
+"8"
+```
+
 ## Searching
 
 ### `startsWith`

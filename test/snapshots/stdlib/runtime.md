@@ -1,5 +1,5 @@
 # META
-source_lines=1073
+source_lines=1080
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -721,6 +721,13 @@ extern intToString : Int -> String
 -- | A float in decimal.
 extern floatToString : Float -> String
 
+-- | A float with a fixed number of digits after the point, the digit count
+-- first. The text is rounded from the float's exact binary value, with exact
+-- ties going to the even digit, and a value that rounds to zero keeps its sign.
+-- `NaN` and the infinities print as `floatToString` prints them. It is only
+-- ever called with `0` to `100` digits, by `string.toFixed`.
+extern floatToFixed : Int -> Float -> String
+
 -- | A string as a quoted, escaped Medaka literal.
 export
 extern debugStringLit : String -> String
@@ -1210,6 +1217,7 @@ extern stringToLower : String -> String
 (DExtern false "floatToBytes64" (TyFun (TyCon "Float") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DExtern true "intToString" (TyFun (TyCon "Int") (TyCon "String")))
 (DExtern false "floatToString" (TyFun (TyCon "Float") (TyCon "String")))
+(DExtern false "floatToFixed" (TyFun (TyCon "Int") (TyFun (TyCon "Float") (TyCon "String"))))
 (DExtern true "debugStringLit" (TyFun (TyCon "String") (TyCon "String")))
 (DExtern false "debugCharLit" (TyFun (TyCon "Char") (TyCon "String")))
 (DExtern true "arrayLength" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int")))
@@ -1424,6 +1432,7 @@ extern stringToLower : String -> String
 (DExtern false "floatToBytes64" (TyFun (TyCon "Float") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DExtern true "intToString" (TyFun (TyCon "Int") (TyCon "String")))
 (DExtern false "floatToString" (TyFun (TyCon "Float") (TyCon "String")))
+(DExtern false "floatToFixed" (TyFun (TyCon "Int") (TyFun (TyCon "Float") (TyCon "String"))))
 (DExtern true "debugStringLit" (TyFun (TyCon "String") (TyCon "String")))
 (DExtern false "debugCharLit" (TyFun (TyCon "Char") (TyCon "String")))
 (DExtern true "arrayLength" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int")))

@@ -1,5 +1,5 @@
 # META
-source_lines=924
+source_lines=945
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -241,6 +241,27 @@ toInt s = stringToInt s
 export
 toFloat : String -> Option Float
 toFloat s = stringToFloat s
+
+{- | `x` written with `digits` places after the decimal point, the digit count
+   first.
+
+   The text is rounded from the exact binary value of `x`, not from its
+   shortest decimal form, and an exact tie goes to the even digit, as in C
+   and Python. A negative `digits` counts as `0` and one above `100` as `100`.
+   `NaN` and the infinities print as `floatToString` prints them, and a
+   negative value that rounds to zero keeps its `-`.
+
+   > toFixed 2 12.3456
+   "12.35"
+   > toFixed 2 2.675
+   "2.67"
+   > toFixed 0 2.5
+   "2"
+   > toFixed (-3) 7.5
+   "8" -}
+export
+toFixed : Int -> Float -> String
+toFixed digits x = floatToFixed (max 0 (min 100 digits)) x
 
 -- # Searching
 
@@ -968,6 +989,8 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DFunDef false "toInt" ((PVar "s")) (EApp (EVar "stringToInt") (EVar "s")))
 (DTypeSig true "toFloat" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Float"))))
 (DFunDef false "toFloat" ((PVar "s")) (EApp (EVar "stringToFloat") (EVar "s")))
+(DTypeSig true "toFixed" (TyFun (TyCon "Int") (TyFun (TyCon "Float") (TyCon "String"))))
+(DFunDef false "toFixed" ((PVar "digits") (PVar "x")) (EApp (EApp (EVar "floatToFixed") (EApp (EApp (EVar "max") (ELit (LInt 0))) (EApp (EApp (EVar "min") (ELit (LInt 100))) (EVar "digits")))) (EVar "x")))
 (DTypeSig true "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "startsWith" ((PVar "prefix") (PVar "s")) (EApp (EApp (EVar "stringStartsWith") (EVar "prefix")) (EVar "s")))
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -1141,6 +1164,8 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DFunDef false "toInt" ((PVar "s")) (EApp (EVar "stringToInt") (EVar "s")))
 (DTypeSig true "toFloat" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Float"))))
 (DFunDef false "toFloat" ((PVar "s")) (EApp (EVar "stringToFloat") (EVar "s")))
+(DTypeSig true "toFixed" (TyFun (TyCon "Int") (TyFun (TyCon "Float") (TyCon "String"))))
+(DFunDef false "toFixed" ((PVar "digits") (PVar "x")) (EApp (EApp (EVar "floatToFixed") (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EApp (EApp (EMethodRef "min") (ELit (LInt 100))) (EVar "digits")))) (EVar "x")))
 (DTypeSig true "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "startsWith" ((PVar "prefix") (PVar "s")) (EApp (EApp (EVar "stringStartsWith") (EVar "prefix")) (EVar "s")))
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))

@@ -8,7 +8,7 @@ import string.{
   fromChars, repeat, replaceOnce, indexOf, join, lastIndexOf, lines, padLeft,
   padRight, replace, replaceAll, reverse, nextChar, sliceBetween, startCursor,
   splitAt, startsWith, stripPrefix, stripSuffix, take, toInt, toLower, toUpper,
-  trim, trimLeft, trimRight, unlines, unwords, utf8ByteLength
+  toFixed, trim, trimLeft, trimRight, unlines, unwords, utf8ByteLength
 }
 import test.{expectEqual, expectFalse, expectTrue}
 
@@ -956,3 +956,27 @@ test "replaceOnce counts non-overlapping occurrences" =
 
 test "cutBetween counts codepoints, not bytes" =
   expectEqual (Ok ("é", "ü", "ö")) (cutBetween "<" ">" "é<ü>ö")
+
+-- # toFixed
+
+test "toFixed rounds the exact binary value, so 2.675 gives 2.67" =
+  expectEqual "2.67" (toFixed 2 2.675)
+
+test "toFixed sends exact ties to the even digit" =
+  expectEqual
+    ["0.12", "0.38", "0.62"]
+    [toFixed 2 0.125, toFixed 2 0.375, toFixed 2 0.625]
+
+test "toFixed keeps the sign of negative zero and of a value that rounds to zero" =
+  expectEqual ["-0.00", "-0"] [toFixed 2 (-0.0), toFixed 0 (-0.4)]
+
+test "toFixed treats a negative digit count as 0" =
+  expectEqual "2" (toFixed (-1) 1.5)
+
+test "toFixed clamps the digit count to 100" =
+  expectEqual ("1.5" ++ repeat 99 "0") (toFixed 120 1.5)
+
+test "toFixed prints NaN and the infinities as floatToString does" =
+  expectEqual
+    ["nan", "inf", "-inf"]
+    [toFixed 2 (0.0 / 0.0), toFixed 2 (1.0 / 0.0), toFixed 2 (-1.0 / 0.0)]

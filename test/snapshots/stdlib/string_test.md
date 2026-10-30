@@ -1,5 +1,5 @@
 # META
-source_lines=958
+source_lines=982
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -12,7 +12,7 @@ import string.{
   fromChars, repeat, replaceOnce, indexOf, join, lastIndexOf, lines, padLeft,
   padRight, replace, replaceAll, reverse, nextChar, sliceBetween, startCursor,
   splitAt, startsWith, stripPrefix, stripSuffix, take, toInt, toLower, toUpper,
-  trim, trimLeft, trimRight, unlines, unwords, utf8ByteLength
+  toFixed, trim, trimLeft, trimRight, unlines, unwords, utf8ByteLength
 }
 import test.{expectEqual, expectFalse, expectTrue}
 
@@ -960,8 +960,32 @@ test "replaceOnce counts non-overlapping occurrences" =
 
 test "cutBetween counts codepoints, not bytes" =
   expectEqual (Ok ("é", "ü", "ö")) (cutBetween "<" ">" "é<ü>ö")
+
+-- # toFixed
+
+test "toFixed rounds the exact binary value, so 2.675 gives 2.67" =
+  expectEqual "2.67" (toFixed 2 2.675)
+
+test "toFixed sends exact ties to the even digit" =
+  expectEqual
+    ["0.12", "0.38", "0.62"]
+    [toFixed 2 0.125, toFixed 2 0.375, toFixed 2 0.625]
+
+test "toFixed keeps the sign of negative zero and of a value that rounds to zero" =
+  expectEqual ["-0.00", "-0"] [toFixed 2 (-0.0), toFixed 0 (-0.4)]
+
+test "toFixed treats a negative digit count as 0" =
+  expectEqual "2" (toFixed (-1) 1.5)
+
+test "toFixed clamps the digit count to 100" =
+  expectEqual ("1.5" ++ repeat 99 "0") (toFixed 120 1.5)
+
+test "toFixed prints NaN and the infinities as floatToString does" =
+  expectEqual
+    ["nan", "inf", "-inf"]
+    [toFixed 2 (0.0 / 0.0), toFixed 2 (1.0 / 0.0), toFixed 2 (-1.0 / 0.0)]
 # DESUGAR
-(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -1210,8 +1234,14 @@ test "cutBetween counts codepoints, not bytes" =
 (DTest false "replaceOnce names only the first line of a long multi-line old text" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EVar "display") (EApp (EApp (EVar "take") (ELit (LInt 60))) (EApp (EApp (EVar "repeat") (ELit (LInt 70))) (ELit (LString "a")))))) (ELit (LString "…`, found 0"))))) (EApp (EApp (EApp (EVar "replaceOnce") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "repeat") (ELit (LInt 70))) (ELit (LString "a"))))) (ELit (LString "\nsecond")))) (ELit (LString "x"))) (ELit (LString "nothing")))))
 (DTest false "replaceOnce counts non-overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ELit (LString "baa")))) (EApp (EApp (EApp (EVar "replaceOnce") (ELit (LString "aaa"))) (ELit (LString "b"))) (ELit (LString "aaaaa")))))
 (DTest false "cutBetween counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ETuple (ELit (LString "é")) (ELit (LString "ü")) (ELit (LString "ö"))))) (EApp (EApp (EApp (EVar "cutBetween") (ELit (LString "<"))) (ELit (LString ">"))) (ELit (LString "é<ü>ö")))))
+(DTest false "toFixed rounds the exact binary value, so 2.675 gives 2.67" (EApp (EApp (EVar "expectEqual") (ELit (LString "2.67"))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (ELit (LFloat 2.675)))))
+(DTest false "toFixed sends exact ties to the even digit" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "0.12")) (ELit (LString "0.38")) (ELit (LString "0.62")))) (EListLit (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (ELit (LFloat 0.125))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (ELit (LFloat 0.375))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (ELit (LFloat 0.625))))))
+(DTest false "toFixed keeps the sign of negative zero and of a value that rounds to zero" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "-0.00")) (ELit (LString "-0")))) (EListLit (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (EUnOp "-" (ELit (LFloat 0.0)))) (EApp (EApp (EVar "toFixed") (ELit (LInt 0))) (EUnOp "-" (ELit (LFloat 0.4)))))))
+(DTest false "toFixed treats a negative digit count as 0" (EApp (EApp (EVar "expectEqual") (ELit (LString "2"))) (EApp (EApp (EVar "toFixed") (EUnOp "-" (ELit (LInt 1)))) (ELit (LFloat 1.5)))))
+(DTest false "toFixed clamps the digit count to 100" (EApp (EApp (EVar "expectEqual") (EBinOp "++" (ELit (LString "1.5")) (EApp (EApp (EVar "repeat") (ELit (LInt 99))) (ELit (LString "0"))))) (EApp (EApp (EVar "toFixed") (ELit (LInt 120))) (ELit (LFloat 1.5)))))
+(DTest false "toFixed prints NaN and the infinities as floatToString does" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "nan")) (ELit (LString "inf")) (ELit (LString "-inf")))) (EListLit (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (EBinOp "/" (ELit (LFloat 0.0)) (ELit (LFloat 0.0)))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (EBinOp "/" (ELit (LFloat 1.0)) (ELit (LFloat 0.0)))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (EBinOp "/" (EUnOp "-" (ELit (LFloat 1.0))) (ELit (LFloat 0.0)))))))
 # MARK
-(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -1460,3 +1490,9 @@ test "cutBetween counts codepoints, not bytes" =
 (DTest false "replaceOnce names only the first line of a long multi-line old text" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EMethodRef "display") (EApp (EApp (EVar "take") (ELit (LInt 60))) (EApp (EApp (EVar "repeat") (ELit (LInt 70))) (ELit (LString "a")))))) (ELit (LString "…`, found 0"))))) (EApp (EApp (EApp (EVar "replaceOnce") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "repeat") (ELit (LInt 70))) (ELit (LString "a"))))) (ELit (LString "\nsecond")))) (ELit (LString "x"))) (ELit (LString "nothing")))))
 (DTest false "replaceOnce counts non-overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ELit (LString "baa")))) (EApp (EApp (EApp (EVar "replaceOnce") (ELit (LString "aaa"))) (ELit (LString "b"))) (ELit (LString "aaaaa")))))
 (DTest false "cutBetween counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ETuple (ELit (LString "é")) (ELit (LString "ü")) (ELit (LString "ö"))))) (EApp (EApp (EApp (EVar "cutBetween") (ELit (LString "<"))) (ELit (LString ">"))) (ELit (LString "é<ü>ö")))))
+(DTest false "toFixed rounds the exact binary value, so 2.675 gives 2.67" (EApp (EApp (EVar "expectEqual") (ELit (LString "2.67"))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (ELit (LFloat 2.675)))))
+(DTest false "toFixed sends exact ties to the even digit" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "0.12")) (ELit (LString "0.38")) (ELit (LString "0.62")))) (EListLit (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (ELit (LFloat 0.125))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (ELit (LFloat 0.375))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (ELit (LFloat 0.625))))))
+(DTest false "toFixed keeps the sign of negative zero and of a value that rounds to zero" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "-0.00")) (ELit (LString "-0")))) (EListLit (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (EUnOp "-" (ELit (LFloat 0.0)))) (EApp (EApp (EVar "toFixed") (ELit (LInt 0))) (EUnOp "-" (ELit (LFloat 0.4)))))))
+(DTest false "toFixed treats a negative digit count as 0" (EApp (EApp (EVar "expectEqual") (ELit (LString "2"))) (EApp (EApp (EVar "toFixed") (EUnOp "-" (ELit (LInt 1)))) (ELit (LFloat 1.5)))))
+(DTest false "toFixed clamps the digit count to 100" (EApp (EApp (EVar "expectEqual") (EBinOp "++" (ELit (LString "1.5")) (EApp (EApp (EVar "repeat") (ELit (LInt 99))) (ELit (LString "0"))))) (EApp (EApp (EVar "toFixed") (ELit (LInt 120))) (ELit (LFloat 1.5)))))
+(DTest false "toFixed prints NaN and the infinities as floatToString does" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "nan")) (ELit (LString "inf")) (ELit (LString "-inf")))) (EListLit (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (EBinOp "/" (ELit (LFloat 0.0)) (ELit (LFloat 0.0)))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (EBinOp "/" (ELit (LFloat 1.0)) (ELit (LFloat 0.0)))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (EBinOp "/" (EUnOp "-" (ELit (LFloat 1.0))) (ELit (LFloat 0.0)))))))

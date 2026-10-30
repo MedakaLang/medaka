@@ -1,0 +1,30 @@
+-- floatToFixed (string.toFixed) over the rounding, sign and clamp rows. Every
+-- engine must print the same text: the exact binary value, ties to even, the
+-- sign of -0.0 and of a value that rounds to zero.
+import string.{join, toFixed}
+
+main =
+  println
+    (join "\n" [
+      toFixed 2 2.675,
+      toFixed 2 0.125,
+      toFixed 2 (-1.005),
+      toFixed 2 0.375,
+      toFixed 2 0.625,
+      toFixed 2 (-0.0),
+      toFixed 0 1e+21,
+      toFixed 0 0.5,
+      toFixed 0 1.5,
+      toFixed 0 2.5,
+      toFixed 0 (-0.4),
+      toFixed 2 (0.0 / 0.0),
+      toFixed 2 (1.0 / 0.0),
+      toFixed 2 (-1.0 / 0.0),
+      toFixed 0 12.3456,
+      toFixed (-1) 12.5,
+      toFixed 2 12.3456,
+      toFixed 120 1.5,
+      toFixed 3 123456789.98765433,
+      toFixed 5 5e-324,
+      toFixed 2 1.7976931348623157e+308,
+    ])

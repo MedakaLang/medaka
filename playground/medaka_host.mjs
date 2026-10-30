@@ -49,7 +49,7 @@ const MATH_KEYS = [
 export const SLICES = {
   stdout: { needs: ['Stdout'], keys: ['mdk_write_byte'], externs: ['putStr'] },
   stderr: { needs: ['Stderr'], keys: ['mdk_write_err_byte'], externs: ['ePutStr'] },
-  floatfmt: { needs: [], keys: ['mdk_float_fmt', 'mdk_float_fmt_byte'] },
+  floatfmt: { needs: [], keys: ['mdk_float_fmt', 'mdk_float_fmt_byte', 'mdk_float_fixed', 'mdk_float_fixed_byte'] },
   math: { needs: [], keys: MATH_KEYS },
   strtod: { needs: [], keys: ['mdk_str_to_float', 'mdk_str_to_float_ok', ...PATH_KEYS] },
   fs: {
@@ -274,6 +274,40 @@ export function fmt12g(d) {
   if (neg) out = '-' + out;
   if (!/[.eEni]/.test(out)) out = out + '.0';   // the `.0` append rule
   return out;
+}
+
+// ── floatToFixed (≡ medaka_rt.c mdk_float_to_fixed) ──────────────────────────
+// Number.prototype.toFixed is NOT used: it rounds the decimal expansion half-up and
+// drops the sign of -0, and it prints 1e21 in exponent form, where C and Python
+// (and so native) round the exact binary value with ties to even and keep every sign.
+// The double is split into an integer mantissa and a power of two, scaled by 10^k and
+// rounded in BigInt with exact ties going to the EVEN digit, so the result is the
+// correctly rounded decimal of the exact value, the same as C's `%.*f`.  The sign is
+// the sign BIT, so -0.0 and a negative value that rounds to zero keep their `-`.
+const f64Scratch = new DataView(new ArrayBuffer(8));
+export function fmtFixed(k, d) {
+  if (Number.isNaN(d)) return 'nan';
+  if (d === Infinity) return 'inf';
+  if (d === -Infinity) return '-inf';
+  f64Scratch.setFloat64(0, d);
+  const bits = f64Scratch.getBigUint64(0);
+  const neg = (bits >> 63n) === 1n;
+  const e = Number((bits >> 52n) & 0x7ffn);
+  const frac = bits & ((1n << 52n) - 1n);
+  const m = e === 0 ? frac : (frac | (1n << 52n));
+  const ex = e === 0 ? -1074 : e - 1075;
+  const scaled = m * 10n ** BigInt(k);
+  let q;
+  if (ex >= 0) q = scaled << BigInt(ex);
+  else {
+    const den = 1n << BigInt(-ex);
+    q = scaled / den;
+    const twice = (scaled % den) * 2n;
+    if (twice > den || (twice === den && (q & 1n) === 1n)) q += 1n;
+  }
+  let s = q.toString().padStart(k + 1, '0');
+  if (k > 0) s = s.slice(0, s.length - k) + '.' + s.slice(s.length - k);
+  return neg ? '-' + s : s;
 }
 
 // ── string -> float (WH2: ≡ medaka_rt.c mdk_string_to_float) ─────────────────
@@ -679,7 +713,7 @@ export function createHost(profile, opts = {}) {
     fetch: opts.fetch,
     stdoutBuf: [], stderrBuf: [],
     pathBuf: [], resultBuf: new Uint8Array(0), writeBuf: [],
-    floatFmtBuf: new Uint8Array(0), strToFloatOk: 0,
+    floatFmtBuf: new Uint8Array(0), floatFixedBuf: new Uint8Array(0), strToFloatOk: 0,
     argBytes: null, waitCell: null,
     // The grant the guest pushed for the next file operation (null: none pushed, or
     // already taken), the element it is pushing, the grant that ended with a -2 push
@@ -691,7 +725,7 @@ export function createHost(profile, opts = {}) {
     host.stdoutBuf = []; host.stderrBuf = [];
     host.pathBuf = []; host.resultBuf = new Uint8Array(0); host.writeBuf = [];
     host.stdinBuf = new Uint8Array(0); host.stdinPos = 0; host.stdinEof = false;
-    host.floatFmtBuf = new Uint8Array(0); host.strToFloatOk = 0; host.argBytes = null;
+    host.floatFmtBuf = new Uint8Array(0); host.floatFixedBuf = new Uint8Array(0); host.strToFloatOk = 0; host.argBytes = null;
     host.grant = null; host.grantElem = []; host.grantFirst = null; host.stat = null; host.bounds = [];
   };
   host.deliver = (stream) => {
@@ -779,6 +813,9 @@ export function createHost(profile, opts = {}) {
     // module then reads each byte via mdk_float_fmt_byte to rebuild a $str.
     mdk_float_fmt: (d) => { host.floatFmtBuf = enc(fmt12g(d)); return host.floatFmtBuf.length; },
     mdk_float_fmt_byte: (i) => host.floatFmtBuf[i] & 0xff,
+    // floatToFixed: format with `k` digits (0..100), cache the bytes, return the length.
+    mdk_float_fixed: (k, d) => { host.floatFixedBuf = enc(fmtFixed(k, d)); return host.floatFixedBuf.length; },
+    mdk_float_fixed_byte: (i) => host.floatFixedBuf[i] & 0xff,
     // libm math: the transcendentals (+ pow/atan2/hypot) have no WasmGC opcode,
     // so they route to JS Math.*; the IEEE-exact ops lower to wasm opcodes.
     mdk_cbrt: Math.cbrt, mdk_exp: Math.exp, mdk_log: Math.log,
