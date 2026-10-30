@@ -5110,6 +5110,104 @@ else
 fi
 
 fi   # end PERF_ONLY unit: findall
+
+if want walkdir; then   # PERF_ONLY unit: walkdir
+# ── walkdir — `fs.walkDir` under `medaka run`, over one flat directory of N files (#4629) ──
+#
+# What it grades: walkDir's GROWTH on `run`. A linear walk reads ~2.0x per doubling.
+# The per-PR arm is ALLOCATION (one run per size); the TIME arm (min-of-K, heap pinned,
+# under TIME_FLOOR it SKIPs) runs where TIME_ARM=1. The count is asserted, so a wrong
+# answer or a dead run is a failure, never a pass.
+# N=1000 reads 2.70x on the old code, under the 3.0x threshold: at that size the linear
+# per-entry cost still dominates the quadratic copy. N=4000 reads 3.37x on the old code.
+WALKDIR_N="${PERF_WALKDIR_N:-4000}"
+wd1="$WALKDIR_N"; wd2=$((WALKDIR_N * 2))
+# walkdir_tree <dir> <n>: <n> empty files directly under <dir>.
+walkdir_tree() {
+  rm -rf "$1"; mkdir -p "$1"
+  _i=0
+  while [ "$_i" -lt "$2" ]; do : > "$1/f$_i"; _i=$((_i+1)); done
+}
+gen_walkdir() {
+  {
+    printf 'import fs.{walkDir}\nimport time as T\n\n'
+    printf 'countWalk : String -> <FileRead> Int\n'
+    printf 'countWalk dir = match walkDir dir\n  Ok xs => length xs\n  Err _ => 0 - 1\n\n'
+    printf 'main =\n'
+    printf '  let a0 = allocBytes ()\n'
+    printf '  let t0 = T.monotonic ()\n'
+    printf '  let n = countWalk "%s"\n' "$1"
+    printf '  let secs = T.elapsedSince t0\n'
+    printf '  let mb = (allocBytes () - a0) / 1048576.0\n'
+    printf '  println "walkdir \\{display n} \\{display mb} \\{display secs}"\n'
+  } > "$2"
+}
+wdt1="$WORK/walkdir_tree_$wd1"; wdt2="$WORK/walkdir_tree_$wd2"
+walkdir_tree "$wdt1" "$wd1"; walkdir_tree "$wdt2" "$wd2"
+wdf1="$WORK/walkdir_$wd1.mdk"; wdf2="$WORK/walkdir_$wd2.mdk"
+gen_walkdir "$wdt1" "$wdf1"; gen_walkdir "$wdt2" "$wdf2"
+WDMEDAKA="${MEDAKA:-$ROOT/medaka}"
+if [ "$TIME_ARM" = "1" ]; then wdk="$PERF_K"; else wdk=1; fi
+# walkdir_runs <fixture> <out>: <out> gets one `walkdir <count> <MB> <secs>` line per run.
+walkdir_runs() {
+  : > "$2"
+  _i=0
+  while [ "$_i" -lt "$wdk" ]; do
+    GC_INITIAL_HEAP_SIZE="$TIME_HEAP" "$WDMEDAKA" run "$1" 2>/dev/null | grep '^walkdir ' >> "$2"
+    _i=$((_i+1))
+  done
+}
+WDR1="$WORK/walkdir_r1"; WDR2="$WORK/walkdir_r2"
+walkdir_runs "$wdf1" "$WDR1"; walkdir_runs "$wdf2" "$WDR2"
+wdc1="$(awk 'NR==1{print $2}' "$WDR1")"; wdc2="$(awk 'NR==1{print $2}' "$WDR2")"
+wda1="$(awk 'NR==1{printf "%.1f", $3}' "$WDR1")"; wda2="$(awk 'NR==1{printf "%.1f", $3}' "$WDR2")"
+wdt_1="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$WDR1")"
+wdt_2="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$WDR2")"
+wd_bad=0
+for _v in "$wda1" "$wda2" "$wdt_1" "$wdt_2"; do
+  case "$_v" in ''|*[!0-9.]*) wd_bad=1 ;; esac
+done
+if [ ! -x "$WDMEDAKA" ]; then
+  fail=$((fail+1))
+  printf '%-12s %8s  ** NO BINARY: %s is not built (make medaka) **\n' walkdir "$wd1" "$WDMEDAKA"
+elif [ "$wd_bad" = "1" ] || [ "$wdc1" != "$wd1" ] || [ "$wdc2" != "$wd2" ]; then
+  # A missing line or a wrong count is a failure, never a silent pass.
+  fail=$((fail+1))
+  printf '%-12s %8s  ** BAD RUN: want counts %s/%s, got [%s]/[%s] (alloc [%s]/[%s] MB, secs [%s]/[%s]) **\n' \
+    walkdir "$wd1" "$wd1" "$wd2" "$wdc1" "$wdc2" "$wda1" "$wda2" "$wdt_1" "$wdt_2"
+else
+  wdr="$(awk -v a="$wda1" -v b="$wda2" 'BEGIN{printf "%.2f", b/a}')"
+  wd_small="$(awk -v a="$wda1" 'BEGIN{print (a+0 < 1.0) ? 1 : 0}')"
+  wd_over="$(awk -v r="$wdr" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')"
+  if [ "$wd_small" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** N TOO SMALL — raise PERF_WALKDIR_N (walkDir alloc %s MB < 1.0) **\n' walkdir "$wd1" "$wda1"
+  elif [ "$wd_over" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** SUPERLINEAR (run-alloc) ** walkDir %s -> %s MB  r=%s (> %s, band N=%s->%s) — walkDir allocation outgrew its entry count (stdlib/fs.mdk walkEntries) **\n' \
+      walkdir "$wd1" "$wda1" "$wda2" "$wdr" "$THRESH" "$wd1" "$wd2"
+  else
+    pass=$((pass+1))
+    printf '%-12s %8s  run-alloc walkDir %s -> %s MB  r=%s  (LINEAR; band N=%s->%s)\n' \
+      walkdir "$wd1" "$wda1" "$wda2" "$wdr" "$wd1" "$wd2"
+  fi
+  if [ "$TIME_ARM" = "1" ]; then
+    wdt_below="$(awk -v v="$wdt_2" -v f="$TIME_FLOOR" 'BEGIN{print (v+0 < f+0) ? 1 : 0}')"
+    if [ "$wdt_below" = "1" ]; then
+      printf '             time run: SKIP — too small to time-gate: %ss at N=%s < %ss floor\n' "$wdt_2" "$wd2" "$TIME_FLOOR"
+    else
+      wdtr="$(awk -v a="$wdt_1" -v b="$wdt_2" 'BEGIN{printf "%.2f", b/a}')"
+      if [ "$(awk -v r="$wdtr" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')" = "1" ]; then
+        fail=$((fail+1))
+        printf '%-12s %8s  ** SUPERLINEAR (run-TIME) ** walkDir %ss -> %ss  r=%s (> %s, min-of-%s, band N=%s->%s)\n' \
+          walkdir "$wd1" "$wdt_1" "$wdt_2" "$wdtr" "$THRESH" "$wdk" "$wd1" "$wd2"
+      else
+        printf '             time run: walkDir %ss -> %ss  r=%s  (min-of-%s, heap pinned)\n' "$wdt_1" "$wdt_2" "$wdtr" "$wdk"
+      fi
+    fi
+  fi
+fi
+fi   # end PERF_ONLY unit: walkdir
 printf -- '---------------------------------------------------------------------\n'
 printf '%d ok, %d known-superlinear (ledgered), %d regressed (threshold %sx per doubling)\n' "$pass" "$known" "$fail" "$THRESH"
 

@@ -14,6 +14,7 @@
 
 import core.{Result(..)}
 import io.{ownerOnlyMode}
+import list.{reverse}
 import path.{dirname, joinPath}
 import string.{contains}
 
@@ -144,8 +145,10 @@ export
 walkDir : String -> <FileRead> Result String (List String)
 walkDir root = match listDir root
   Err e => Err e
-  Ok entries => walkEntries root entries []
+  Ok entries => map reverse (walkEntries root entries [])
 
+-- `acc` holds every path found so far, last first, so each entry is a cons;
+-- `walkDir` reverses it once at the end.
 walkEntries : String ->
   List String ->
   List String ->
@@ -156,11 +159,13 @@ walkEntries root (name :: rest) acc =
   match stat full
     Err e => Err e
     Ok st =>
-      if st.isDir then match walkDir full
+      if st.isDir then match listDir full
         Err e => Err e
-        Ok sub => walkEntries root rest (acc ++ (full :: sub))
+        Ok subs => match walkEntries full subs (full :: acc)
+          Err e => Err e
+          Ok acc1 => walkEntries root rest acc1
       else
-        walkEntries root rest (acc ++ [full])
+        walkEntries root rest (full :: acc)
 
 filesOnly : List String -> <FileRead> Result String (List String)
 filesOnly [] = Ok []
