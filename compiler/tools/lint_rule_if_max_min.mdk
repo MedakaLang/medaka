@@ -24,11 +24,9 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  bindingOf,
   rebinds,
   declLocList,
-  nodeSpan,
-  replaceFix,
+  replaceNodeFix,
   ruleNameIfMaxMin,
   unwrapLoc,
 }
@@ -175,13 +173,7 @@ ifMaxMinFix idx ordLocs facts ctx e (fn, a, b) =
     None
   else
     let call = EApp (EApp (EVar fn) a) b
-    replaceFix
-      Unsafe
-      ("select with " ++ fn)
-      (nodeSpan ctx e)
-      (bindingOf call)
-      ctx
-      (exprToString call)
+    replaceNodeFix Unsafe ("select with " ++ fn) ctx e call
 
 -- The declaration locations of the `impl Ord` blocks.  The walk gives every body
 -- of an impl the impl's own location as its `ctxDeclLoc`.
@@ -199,9 +191,5 @@ isOrdImpl (DAttrib _ d) = isOrdImpl d
 isOrdImpl _ = False
 
 inOrdImpl : Option Loc -> List Loc -> Bool
-inOrdImpl (Some l) ls = any (m => sameLoc l m) ls
+inOrdImpl (Some l) ls = elem l ls
 inOrdImpl None _ = False
-
-sameLoc : Loc -> Loc -> Bool
-sameLoc (Loc f a b c d) (Loc g e h i j) =
-  f == g && a == e && b == h && c == i && d == j

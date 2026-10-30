@@ -1,5 +1,5 @@
 # META
-source_lines=112
+source_lines=104
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-not-eq: a negated equality `not (a == b)` / `not (a /= b)`; prefer the operator.
@@ -7,7 +7,6 @@ stages=DESUGAR,MARK
 import frontend.ast.{Loc(..), Expr(..), Decl(..)}
 import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..)}
-import tools.lint_fix.{Binding(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
 import tools.lint_core.{
@@ -28,9 +27,8 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  nodeSpan,
   notArgOf,
-  replaceFix,
+  replaceNodeFix,
   ruleNameNotEq,
   unwrapLoc,
   usesPreludeName,
@@ -105,24 +103,17 @@ notEqFinding loc rewritten fix = Finding {
 notEqFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Expr -> Option Fix
 notEqFix idx facts ctx e hd rewritten =
   if usesPreludeName idx facts hd && not (definesEquality ctx) then
-    replaceFix
-      Safe
-      "use the operator"
-      (nodeSpan ctx e)
-      Open
-      ctx
-      (exprToString rewritten)
+    replaceNodeFix Safe "use the operator" ctx e rewritten
   else
     None
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
-(DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Fix" false) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "nodeSpan" false) (mem "notArgOf" false) (mem "replaceFix" false) (mem "ruleNameNotEq" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "notArgOf" false) (mem "replaceNodeFix" false) (mem "ruleNameNotEq" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameNotEq")) (fa "summary" (ELit (LString "negated equality `not (a == b)` / `not (a /= b)`. Prefer `a /= b` / `a == b`"))) (fa "doc" (ELit (LString "A negated equality test has a direct operator.\n\nBefore:\n  not (a == b)\nAfter:\n  a /= b"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsStdlibIndex")))))) (EVar "notEqVisitors")) (EVar "None")))
 (DTypeSig false "notEqOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
@@ -136,16 +127,15 @@ notEqFix idx facts ctx e hd rewritten =
 (DTypeSig false "notEqFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
 (DFunDef false "notEqFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameNotEq")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "negated equality. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "notEqFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix")))))))))
-(DFunDef false "notEqFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "hd") (PVar "rewritten")) (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd")) (EApp (EVar "not") (EApp (EVar "definesEquality") (EVar "ctx")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Safe")) (ELit (LString "use the operator"))) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EVar "Open")) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten"))) (EVar "None")))
+(DFunDef false "notEqFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "hd") (PVar "rewritten")) (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd")) (EApp (EVar "not") (EApp (EVar "definesEquality") (EVar "ctx")))) (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EVar "Safe")) (ELit (LString "use the operator"))) (EVar "ctx")) (EVar "e")) (EVar "rewritten")) (EVar "None")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
-(DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Fix" false) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "nodeSpan" false) (mem "notArgOf" false) (mem "replaceFix" false) (mem "ruleNameNotEq" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "notArgOf" false) (mem "replaceNodeFix" false) (mem "ruleNameNotEq" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameNotEq")) (fa "summary" (ELit (LString "negated equality `not (a == b)` / `not (a /= b)`. Prefer `a /= b` / `a == b`"))) (fa "doc" (ELit (LString "A negated equality test has a direct operator.\n\nBefore:\n  not (a == b)\nAfter:\n  a /= b"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsStdlibIndex")))))) (EVar "notEqVisitors")) (EVar "None")))
 (DTypeSig false "notEqOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
@@ -159,4 +149,4 @@ notEqFix idx facts ctx e hd rewritten =
 (DTypeSig false "notEqFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
 (DFunDef false "notEqFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameNotEq")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "negated equality. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "notEqFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix")))))))))
-(DFunDef false "notEqFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "hd") (PVar "rewritten")) (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd")) (EApp (EVar "not") (EApp (EVar "definesEquality") (EVar "ctx")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Safe")) (ELit (LString "use the operator"))) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EVar "Open")) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten"))) (EVar "None")))
+(DFunDef false "notEqFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "hd") (PVar "rewritten")) (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd")) (EApp (EVar "not") (EApp (EVar "definesEquality") (EVar "ctx")))) (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EVar "Safe")) (ELit (LString "use the operator"))) (EVar "ctx")) (EVar "e")) (EVar "rewritten")) (EVar "None")))

@@ -128,7 +128,7 @@ every top-level directory, not only `compiler stdlib sqlite`.
 A fix is a span edit. The visitor attaches a `Fix` (`fixApplicability`, `fixEdits : List FixEdit`,
 `fixMessage`) to each finding; `fixSource` in `tools/lint.mdk` runs the edit loop over the rules that
 emit edits, then the decl-rewrite adapter. `compiler/tools/lint_fix.mdk` validates every edit against
-the source snapshot, applies a non-overlapping subset, re-parses, and repeats for at most eight passes.
+the source snapshot, applies a non-overlapping subset, re-parses, and repeats for at most 32 passes.
 A rule whose fix cannot be expressed as span edits stays on the decl-rewrite adapter (`exprRuleFix`
 in `lint_shared.mdk`).
 

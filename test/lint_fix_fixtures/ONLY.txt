@@ -67,3 +67,7 @@ bind_then_destructure_suppressed rule-bind-then-destructure
 test_equal_in_true_suppressed rule-test-equal-in-true
 test_bool_literal_equal_suppressed rule-test-bool-literal-equal
 impl_method_self_call rule-andthen-pure-map,rule-match-to-map,rule-concat-to-interp,rule-if-max-min,rule-when-unless
+bool_simplify_suppressed rule-bool-simplify
+lambda_section_suppressed rule-lambda-section
+when_unless_suppressed rule-when-unless
+bool_simplify_deep_chain rule-bool-simplify

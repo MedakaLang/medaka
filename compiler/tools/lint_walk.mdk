@@ -121,6 +121,7 @@ import tools.lint_shared.{
   sortUniqS,
   zipDeclPos,
 }
+import tools.lint_fix.{demoteOverComments}
 import tools.lint_dup.{dupClauseOfDecl, dupJoin, dupOccsOfClauses}
 import tools.lint_registry.{
   allCrossFileRules, allRules, crossRuleActive, selectRules
@@ -1114,7 +1115,13 @@ lintFileDiagTripleParsed idx disable only deny path =
           (factDirectives facts)
           (lintProgramFacts idx (selectRules only disable) path facts pos decls)
       let findings = applyFindingFilters disable only deny allFindings
-      (path, src, map findingToDiag findings, pos, decls)
+      (
+        path,
+        src,
+        map findingToDiag (demoteOverComments path src findings),
+        pos,
+        decls,
+      )
 
 -- `lintFileDiagTripleParsed`, dropping the parse — the shape every existing
 -- caller that does not need the cross-file tier's inputs still wants.

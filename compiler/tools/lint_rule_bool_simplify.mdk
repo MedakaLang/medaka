@@ -22,14 +22,12 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  bindingOf,
   rebinds,
   isBoolLit,
   isFalseLit,
   isTrueLit,
-  nodeSpan,
   notArgOf,
-  replaceFix,
+  replaceNodeFix,
   ruleNameBoolSimplify,
   unwrapLoc,
 }
@@ -132,13 +130,7 @@ boolSimplifyFix idx facts ctx e rewritten =
   if touchesNot e rewritten && rebinds idx facts ctx "not" then
     None
   else
-    replaceFix
-      Safe
-      "simplify the boolean expression"
-      (nodeSpan ctx e)
-      (bindingOf rewritten)
-      ctx
-      (exprToString rewritten)
+    replaceNodeFix Safe "simplify the boolean expression" ctx e rewritten
 
 touchesNot : Expr -> Expr -> Bool
 touchesNot e rewritten = isSome (notArgOf e) || isSome (notArgOf rewritten)

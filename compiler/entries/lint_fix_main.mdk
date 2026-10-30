@@ -12,11 +12,10 @@ import string.{stripPrefix}
 import tools.lint.{
   Applicability(..),
   StdlibIndex,
-  buildStdlibIndexResult,
-  emptyStdlibIndex,
   fixSource,
+  indexForRules,
+  runParts,
   splitLintNames,
-  stdlibIndexNeeded,
 }
 
 export
@@ -32,20 +31,11 @@ oracleMain () = match args ()
 
 withTarget : List String -> String -> <IO> Unit
 withTarget only targetPath = match readFile targetPath
-  Ok targetSrc => match indexFor only
+  Ok targetSrc => match indexForRules only
     Ok idx => match fixSource idx Unsafe only [] targetPath targetSrc
-      Ok (newSrc, _) => putStr newSrc
+      Ok run => putStr (fst (runParts run))
       Err msg => ePutStrLn msg
     Err msg => ePutStrLn msg
   Err msg => ePutStrLn msg
-
--- The stdlib index when a selected rule reads it, else the empty one.
-indexFor : List String -> <IO> Result String StdlibIndex
-indexFor only =
-  if stdlibIndexNeeded only [] then match buildStdlibIndexResult
-    Ok idx => Ok idx
-    Err _ => Err "cannot build the stdlib index"
-  else
-    Ok emptyStdlibIndex
 
 main = oracleMain ()

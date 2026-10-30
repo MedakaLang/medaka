@@ -1,0 +1,4 @@
+-- Fixture for rule-bool-simplify: a twelve-deep chain settles in one run.
+deep x = x == True == True == True == True == True == True == True == True == True == True == True == True
+
+main = println (deep True)

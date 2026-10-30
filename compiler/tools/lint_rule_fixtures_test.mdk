@@ -80,15 +80,16 @@ import tools.lint.{
   StdlibIndex(..),
   allRuleNames,
   Applicability(..),
+  FixRun(..),
   fixSource,
+  indexForRules,
+  runParts,
   applySuppressions,
-  buildStdlibIndexResult,
   emptyStdlibIndex,
   lintParseSource,
   lintProgram,
   maxApplicability,
   selectRules,
-  stdlibIndexNeeded,
 }
 
 -- The rules that have a fixture, named without their `rule-` prefix; one
@@ -240,15 +241,6 @@ lintLinesAt idx path rule src = match lintParseSource src
 lintLines : String -> String -> Result String (List Int)
 lintLines rule src = lintLinesAt emptyStdlibIndex (fixturePath src) rule src
 
--- The index a rule is linted with: the CLI's when the rule reads it.
-indexFor : String -> <IO> Result String StdlibIndex
-indexFor rule =
-  if stdlibIndexNeeded [rule] [] then match buildStdlibIndexResult
-    Ok idx => Ok idx
-    Err _ => Err "cannot build the stdlib index"
-  else
-    Ok emptyStdlibIndex
-
 readOr : String -> <FileRead> Result String String
 readOr path = match readFile path
   Ok s => Ok s
@@ -264,7 +256,7 @@ flaggedMatchesMarked name = match readOr "\{fixtureDir}/\{name}.mdk"
   Err e => fail e
   Ok src =>
     let rule = "rule-\{name}"
-    match (unknownMarkers src, indexFor rule)
+    match (unknownMarkers src, indexForRules [rule])
       (_ :: _, _) =>
         fail "markers name unregistered rules: \{unknownMarkers src}"
       (_, Err e) => fail e
@@ -280,7 +272,7 @@ fixMatchesFixed name =
   if not (fileExists fixedPath) then
     pass
   else match (readOr "\{fixtureDir}/\{name}.mdk", readOr fixedPath)
-    (Ok src, Ok expected) => match indexFor "rule-\{name}"
+    (Ok src, Ok expected) => match indexForRules ["rule-\{name}"]
       Err e => fail e
       Ok idx => fixOutcome idx "rule-\{name}" src expected
     (Err e, _) => fail e
@@ -292,15 +284,17 @@ fixOutcome : StdlibIndex -> String -> String -> String -> Expectation
 fixOutcome idx rule src expected =
   match fixSource idx (ruleCeiling rule) [rule] [] (fixturePath src) src
     Err e => fail "the fix: \{e}"
-    Ok (fixed, _) => match lintLines rule fixed
-      Err e => fail "the fixed source: \{e}"
-      Ok remaining => expectAll [
-        labelFail "fix output" (expectEqual expected fixed),
-        labelFail
-          "findings left after the fix"
-          (expectEqual (unfixedLines rule src) remaining),
-        labelFail "plain --fix" (plainFixOutcome idx rule src),
-      ]
+    Ok run =>
+      let fixed = fst (runParts run)
+      match lintLines rule fixed
+        Err e => fail "the fixed source: \{e}"
+        Ok remaining => expectAll [
+          labelFail "fix output" (expectEqual expected fixed),
+          labelFail
+            "findings left after the fix"
+            (expectEqual (unfixedLines rule src) remaining),
+          labelFail "plain --fix" (plainFixOutcome idx rule src),
+        ]
 
 -- The most the rule's fixes may be trusted, `Safe` for a rule with no ceiling.
 ruleCeiling : String -> Applicability
@@ -315,7 +309,7 @@ plainFixOutcome idx rule src = match ruleCeiling rule
   Safe => pass
   _ => match fixSource idx Safe [rule] [] (fixturePath src) src
     Err e => fail "the plain fix: \{e}"
-    Ok (fixed, _) => expectEqual src fixed
+    Ok run => expectEqual src (fst (runParts run))
 
 -- Every fixture file in the directory has a roster row, and the reverse; and
 -- the roster names exactly the registered rules, so a rule added without a
@@ -457,15 +451,17 @@ test "an unsafe rule is left alone by --fix and applied by --unsafe-fixes" =
   expectAll (map unsafeCase unsafeCases)
 
 unsafeCase : (String, String, String) -> <IO> Expectation
-unsafeCase (rule, src, fixed) = labelFail rule (match indexFor rule
+unsafeCase (rule, src, fixed) = labelFail rule (match indexForRules [rule]
   Err e => fail e
   Ok idx => expectAll [
     labelFail
       "plain --fix"
-      (expectEqual (Ok (src, 0)) (fixSource idx Safe [rule] [] "ev.mdk" src)),
+      (expectEqual
+        (Ok (Settled src 0))
+        (fixSource idx Safe [rule] [] "ev.mdk" src)),
     labelFail
       "--unsafe-fixes"
       (expectEqual
-        (Ok (fixed, 1))
+        (Ok (Settled fixed 1))
         (fixSource idx Unsafe [rule] [] "ev.mdk" src)),
   ])

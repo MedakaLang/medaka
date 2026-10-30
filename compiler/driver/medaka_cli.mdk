@@ -4029,7 +4029,7 @@ runLintTargets a =
   let denyNames = lintNamesOf "--deny" a
   let _ = assertLintRuleNames (disableNames ++ onlyNames ++ denyNames)
   let fixMode = flag "--fix" a
-  let _ = assertUnsafeFixesNeedFix (flag "--unsafe-fixes" a) fixMode
+  let _ = assertUnsafeFixesNeedFix a
   let jsonMode = flag "--json" a
   let baselineArg = flagValue "--baseline" a
   let writeBaselineArg = flagValue "--write-baseline" a
@@ -4223,9 +4223,9 @@ assertBaselineFlagsCoherent baselineArg writeArg fixMode
 
 -- `--unsafe-fixes` widens what `--fix` applies; alone it would be accepted and
 -- do nothing, which reads as a clean run.
-assertUnsafeFixesNeedFix : Bool -> Bool -> <IO> Unit
-assertUnsafeFixesNeedFix unsafeMode fixMode =
-  if unsafeMode && not fixMode then
+assertUnsafeFixesNeedFix : Args -> <IO> Unit
+assertUnsafeFixesNeedFix a =
+  if flag "--unsafe-fixes" a && not (flag "--fix" a) then
     dieMsg "medaka lint: --unsafe-fixes requires --fix"
 
 -- An unreadable or malformed baseline is fatal, never an empty one: a baseline
