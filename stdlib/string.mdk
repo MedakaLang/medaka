@@ -30,7 +30,6 @@
 -- List/Array duals: `arrayFromList` and `array.toList` convert in one call.
 
 import core.{Ordering(..), Ord, Debug, Foldable, Mappable, Option}
-import list.{head}
 
 -- `Debug String`/`Debug Char` and the other primitive instances live in the
 -- prelude (`core.mdk`), so they resolve without importing `string`.
@@ -616,8 +615,13 @@ replaceOnce old new s = match countOccurrences old s
   1 => Ok (replaceFirst old new s)
   n => Err "expected 1 occurrence of `\{take 60 (firstLine old)}…`, found \{n}"
 
+-- Matches on `lines` instead of calling `list.head`: `string` imports only
+-- `core`, so a `list` import here would load `list` into every program that
+-- imports `string`.
 firstLine : String -> String
-firstLine s = optionOr "" (head (lines s))
+firstLine s = match lines s
+  [] => ""
+  l :: _ => l
 
 {- | Splits `s` at the first `start` and the first `end` after it, giving
    the text before `start`, the text between the two, and the text after
