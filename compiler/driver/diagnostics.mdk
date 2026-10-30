@@ -103,6 +103,7 @@ import driver.loader.{
   loadProgramFilesLocatedCachedE,
   loadProgramFilesLocatedCachedSourcesE,
   loadedSourceOf,
+  stdinEntry,
   parseCachedLocated,
   loadProgramFilesLocatedE,
   dropPathTriple,
@@ -3208,11 +3209,15 @@ cjHasErrD (_, diags) = anyList diagIsError diags
 -- readFile that yields "" on error (any real read failure surfaces as a diag).
 -- Shared with medaka_cli's driver code (which imports it) so the two don't
 -- diverge — the one canonical "read a target, tolerate a missing file" helper.
+-- The stdin entry has no file: its text is the one the loader parsed.
 export
 readFileSafe : String -> <IO> String
-readFileSafe path = match readFile path
-  Ok src => src
-  Err _ => ""
+readFileSafe path =
+  match if path == stdinEntry then loadedSourceOf path else None
+    Some src => src
+    None => match readFile path
+      Ok src => src
+      Err _ => ""
 
 -- The single located parse-error diagnostic, as the {"files":[...]} JSON string.
 -- Uses the same serializer as other diagnostics, including typed edits.

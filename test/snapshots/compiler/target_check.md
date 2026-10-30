@@ -1,5 +1,5 @@
 # META
-source_lines=584
+source_lines=588
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -74,6 +74,7 @@ import support.util.{
   initList,
 }
 import string.{trim}
+import driver.loader.{stdinEntry}
 import list.{lookup, last}
 
 export
@@ -366,10 +367,13 @@ deliberateMessage profile file paths analysis name why route =
   "the built-in `\{name}` is reached\{reachRoute chain}, and `medaka run` refuses it on purpose (\{why})\{located}\nhelp: \{deliberateHelp profile file}"
 
 deliberateHelp : TargetProfile -> String -> String
-deliberateHelp profile file = match runTargetOf profile
-  Some t =>
-    "`medaka run` evaluates the program with the interpreter whatever its target; build it with `medaka build \{file} --target \{profileName t} -o <bin>`, then run `<bin>`"
-  None => "build it with `medaka build \{file} -o <bin>`, then run `<bin>`"
+deliberateHelp profile file
+  | file == stdinEntry =
+    "save the program to a file first, then build that file with `medaka build` and run the binary it makes"
+  | otherwise = match runTargetOf profile
+    Some t =>
+      "`medaka run` evaluates the program with the interpreter whatever its target; build it with `medaka build \{file} --target \{profileName t} -o <bin>`, then run `<bin>`"
+    None => "build it with `medaka build \{file} -o <bin>`, then run `<bin>`"
 
 -- The definition of the last binding of the program's own code on the route
 -- before the built-in: the user's helper that reached the extern, or `main`
@@ -607,6 +611,7 @@ firstOr _ (x :: _) = x
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "mkDiag" false) (mem "cjFoldIntoFile" false) (mem "ppDiagCliLines" false) (mem "readFileSafe" false) (mem "srcLinesArr" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "joinWith" false) (mem "dedup" false) (mem "dedupBy" false) (mem "contains" false) (mem "anyList" false) (mem "initList" false))))
 (DUse false (UseGroup ("string") ((mem "trim" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "stdinEntry" false))))
 (DUse false (UseGroup ("list") ((mem "lookup" false) (mem "last" false))))
 (DTypeSig true "targetCapabilityCode" (TyCon "DiagCode"))
 (DFunDef false "targetCapabilityCode" () (EVar "TTargetCapability"))
@@ -655,7 +660,7 @@ firstOr _ (x :: _) = x
 (DTypeSig false "deliberateMessage" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String")))))))))
 (DFunDef false "deliberateMessage" ((PVar "profile") (PVar "file") (PVar "paths") (PVar "analysis") (PVar "name") (PVar "why") (PVar "route")) (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "route"))) (DoLet false false (PVar "located") (EMatch (EApp (EApp (EApp (EVar "lastUserStep") (EVar "paths")) (EVar "analysis")) (EVar "route")) (arm (PCon "Some" PWild) () (ELit (LString ""))) (arm (PCon "None") () (ELit (LString "; no frame of your code is on the route, so this is located at the nearest frame"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the built-in `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` is reached"))) (EApp (EVar "display") (EApp (EVar "reachRoute") (EVar "chain")))) (ELit (LString ", and `medaka run` refuses it on purpose ("))) (EApp (EVar "display") (EVar "why"))) (ELit (LString ")"))) (EApp (EVar "display") (EVar "located"))) (ELit (LString "\nhelp: "))) (EApp (EVar "display") (EApp (EApp (EVar "deliberateHelp") (EVar "profile")) (EVar "file")))) (ELit (LString ""))))))
 (DTypeSig false "deliberateHelp" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "deliberateHelp" ((PVar "profile") (PVar "file")) (EMatch (EApp (EVar "runTargetOf") (EVar "profile")) (arm (PCon "Some" (PVar "t")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`medaka run` evaluates the program with the interpreter whatever its target; build it with `medaka build ")) (EApp (EVar "display") (EVar "file"))) (ELit (LString " --target "))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "t")))) (ELit (LString " -o <bin>`, then run `<bin>`")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "build it with `medaka build ")) (EApp (EVar "display") (EVar "file"))) (ELit (LString " -o <bin>`, then run `<bin>`"))))))
+(DFunDef false "deliberateHelp" ((PVar "profile") (PVar "file")) (EIf (EBinOp "==" (EVar "file") (EVar "stdinEntry")) (ELit (LString "save the program to a file first, then build that file with `medaka build` and run the binary it makes")) (EIf (EVar "otherwise") (EMatch (EApp (EVar "runTargetOf") (EVar "profile")) (arm (PCon "Some" (PVar "t")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`medaka run` evaluates the program with the interpreter whatever its target; build it with `medaka build ")) (EApp (EVar "display") (EVar "file"))) (ELit (LString " --target "))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "t")))) (ELit (LString " -o <bin>`, then run `<bin>`")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "build it with `medaka build ")) (EApp (EVar "display") (EVar "file"))) (ELit (LString " -o <bin>`, then run `<bin>`"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "userFrameLoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "userFrameLoc" ((PVar "paths") (PVar "analysis") (PVar "route")) (EMatch (EApp (EApp (EApp (EVar "lastUserStep") (EVar "paths")) (EVar "analysis")) (EVar "route")) (arm (PCon "Some" (PTuple (PVar "mid") (PVar "n"))) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "lookup") (EVar "mid")) (EFieldAccess (EVar "analysis") "tiModules"))) (ELam ((PVar "decls")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "definitionLoc") (EVar "n")) (EVar "decls"))) (ELam ((PVar "l")) (EApp (EVar "Some") (EApp (EApp (EVar "inFile") (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "paths"))) (EVar "l")))))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "namingBindingLoc") (EVar "paths")) (EVar "analysis")) (EVar "route")))))
 (DTypeSig false "lastUserStep" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
@@ -752,6 +757,7 @@ firstOr _ (x :: _) = x
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "mkDiag" false) (mem "cjFoldIntoFile" false) (mem "ppDiagCliLines" false) (mem "readFileSafe" false) (mem "srcLinesArr" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "joinWith" false) (mem "dedup" false) (mem "dedupBy" false) (mem "contains" false) (mem "anyList" false) (mem "initList" false))))
 (DUse false (UseGroup ("string") ((mem "trim" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "stdinEntry" false))))
 (DUse false (UseGroup ("list") ((mem "lookup" false) (mem "last" false))))
 (DTypeSig true "targetCapabilityCode" (TyCon "DiagCode"))
 (DFunDef false "targetCapabilityCode" () (EVar "TTargetCapability"))
@@ -800,7 +806,7 @@ firstOr _ (x :: _) = x
 (DTypeSig false "deliberateMessage" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String")))))))))
 (DFunDef false "deliberateMessage" ((PVar "profile") (PVar "file") (PVar "paths") (PVar "analysis") (PVar "name") (PVar "why") (PVar "route")) (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "route"))) (DoLet false false (PVar "located") (EMatch (EApp (EApp (EApp (EVar "lastUserStep") (EVar "paths")) (EVar "analysis")) (EVar "route")) (arm (PCon "Some" PWild) () (ELit (LString ""))) (arm (PCon "None") () (ELit (LString "; no frame of your code is on the route, so this is located at the nearest frame"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the built-in `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` is reached"))) (EApp (EMethodRef "display") (EApp (EVar "reachRoute") (EVar "chain")))) (ELit (LString ", and `medaka run` refuses it on purpose ("))) (EApp (EMethodRef "display") (EVar "why"))) (ELit (LString ")"))) (EApp (EMethodRef "display") (EVar "located"))) (ELit (LString "\nhelp: "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "deliberateHelp") (EVar "profile")) (EVar "file")))) (ELit (LString ""))))))
 (DTypeSig false "deliberateHelp" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "deliberateHelp" ((PVar "profile") (PVar "file")) (EMatch (EApp (EVar "runTargetOf") (EVar "profile")) (arm (PCon "Some" (PVar "t")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`medaka run` evaluates the program with the interpreter whatever its target; build it with `medaka build ")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString " --target "))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "t")))) (ELit (LString " -o <bin>`, then run `<bin>`")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "build it with `medaka build ")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString " -o <bin>`, then run `<bin>`"))))))
+(DFunDef false "deliberateHelp" ((PVar "profile") (PVar "file")) (EIf (EBinOp "==" (EVar "file") (EVar "stdinEntry")) (ELit (LString "save the program to a file first, then build that file with `medaka build` and run the binary it makes")) (EIf (EVar "otherwise") (EMatch (EApp (EVar "runTargetOf") (EVar "profile")) (arm (PCon "Some" (PVar "t")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`medaka run` evaluates the program with the interpreter whatever its target; build it with `medaka build ")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString " --target "))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "t")))) (ELit (LString " -o <bin>`, then run `<bin>`")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "build it with `medaka build ")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString " -o <bin>`, then run `<bin>`"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "userFrameLoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "userFrameLoc" ((PVar "paths") (PVar "analysis") (PVar "route")) (EMatch (EApp (EApp (EApp (EVar "lastUserStep") (EVar "paths")) (EVar "analysis")) (EVar "route")) (arm (PCon "Some" (PTuple (PVar "mid") (PVar "n"))) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "lookup") (EVar "mid")) (EFieldAccess (EVar "analysis") "tiModules"))) (ELam ((PVar "decls")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "definitionLoc") (EVar "n")) (EVar "decls"))) (ELam ((PVar "l")) (EApp (EVar "Some") (EApp (EApp (EVar "inFile") (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "paths"))) (EVar "l")))))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "namingBindingLoc") (EVar "paths")) (EVar "analysis")) (EVar "route")))))
 (DTypeSig false "lastUserStep" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "TargetInputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))

@@ -716,7 +716,7 @@ usage _ =
     (stringConcat [
       "medaka. A functional language compiler\n", "\n", "Usage:\n",
       "  medaka                    Show this message\n",
-      "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]   Type-check and run a program\n",
+      "  medaka run [--json] [--allow-internal] [--release] <file.mdk | -> [args...]   Type-check and run a program\n",
       "  medaka build <file.mdk> [-o <out>] [--keep-ir]  Compile to a native binary (LLVM + clang)\n",
       "  medaka check [--json] [--types] [--allow-internal] <file.mdk>    Type-check without running\n",
       "  medaka test [--native | --engines eval,native] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk]    Run doctests + prop tests (--native runs doctests through a compiled native binary INSTEAD of the interpreter; --engines runs the listed set, exit is the AND)\n",
@@ -2823,7 +2823,6 @@ runHelpText = stringConcat [
   "`medaka run -` reads the program from standard input (a heredoc), so the\n",
   "program's own `readAll`/`readLine` see end-of-file; a script that is also a\n",
   "filter must be run from a file. Imports resolve against the current directory.\n",
-  "`medaka run /dev/stdin` is the equivalent spelling that names the file as such.\n",
   "Inline-eval (`-e <expr>`) is NOT supported; use `medaka run -` and a heredoc.\n"
 ]
 
@@ -2866,7 +2865,7 @@ runRunCmd argv =
   match runArgvFilter argv
     [] =>
       runAbort
-        "usage: medaka run [--json] [--allow-internal] [--release] [--target <profile>] <file.mdk> [args...]"
+        "usage: medaka run [--json] [--allow-internal] [--release] [--target <profile>] <file.mdk | -> [args...]"
     -- #219: a leading-`-` token `dropFlags` didn't recognize (e.g. `-e`) used
     -- to fall through as the entry `target`, so the loader rejected it as
     -- "unknown module: -e" — a message that sends the reader debugging a
@@ -2892,10 +2891,13 @@ runRunCmd argv =
     -- `medaka build`.
     target :: _ if (hasSlash target || endsWith ".mdk" target)
       && not (fileExists target) => runAbort ("error: no such file: " ++ target)
+    target :: _ if target == stdinEntry =>
+      runAbort
+        "error: `<stdin>` is not a file; use `medaka run -` to read the program from standard input"
     rawTarget :: progArgs =>
       let isStdin = rawTarget == "-"
       let target = if isStdin then stdinEntry else rawTarget
-      let stdinText = if isStdin then readStdinProgram () else ""
+      let stdinText = if isStdin then orExit (readStdinProgram ()) else ""
       perfArm perfT0
       carryTargetProfile (runTargetFlag argv) target
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot

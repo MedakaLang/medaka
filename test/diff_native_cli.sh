@@ -252,6 +252,14 @@ if [ "$RUN_WIRED" = 1 ]; then
   got="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run - < "$FIX/run/stdin_typeerr.mdk" 2>&1 >/dev/null)"
   if [ "$got" = "$(cat "$GOLD/run/stdin_typeerr.golden")" ]; then pass=$((pass+1)); printf 'ok   run/stdin_typeerr\n'
   else fail=$((fail+1)); printf 'FAIL run/stdin_typeerr\n  got: [%s]\n' "$got"; fi
+  # A program that is not valid UTF-8 is refused through `-` as through a file.
+  got="$(printf 'main = println "\377"\n' | MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run - 2>&1)"; rc=$?
+  if [ "$got" = "<stdin>: not valid UTF-8; re-save the file as UTF-8" ] && [ "$rc" = 1 ]; then pass=$((pass+1)); printf 'ok   run/stdin_not_utf8\n'
+  else fail=$((fail+1)); printf 'FAIL run/stdin_not_utf8 (rc=%s)\n  got: [%s]\n' "$rc" "$got"; fi
+  # A `#!` line moves no line number: the diagnostic on line 3 says line 3, rendered.
+  got="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$FIX/run/shebang_typeerr.mdk" 2>&1 >/dev/null | sed "s#$ROOT/##g")"
+  if [ "$got" = "$(cat "$GOLD/run/shebang_typeerr.golden")" ]; then pass=$((pass+1)); printf 'ok   run/shebang_typeerr\n'
+  else fail=$((fail+1)); printf 'FAIL run/shebang_typeerr\n  got: [%s]\n' "$got"; fi
 fi
 
 # ── run: main shapes (#1681, #2413) ──────────────────────────────────────────
@@ -358,7 +366,7 @@ if [ "$RUN_WIRED" = 1 ]; then
 fi
 
 # ── test ──────────────────────────────────────────────────────────────────────
-TEST_FIXTURES="doc prop nodoc"
+TEST_FIXTURES="doc prop nodoc shebang"
 TEST_WIRED=1
 if [ "$TEST_WIRED" = 1 ]; then
   for base in $TEST_FIXTURES; do

@@ -70,7 +70,7 @@ readForeignLibs : String -> <IO> List (String, String)
 readModuleProgF : (String -> String -> Result ParseError (List Decl)) -> (String -> Option String) -> List (String, String) -> List String -> String -> String -> <IO> Result LoadError (String, String, List Decl)
 readSource : String -> <FileRead> Result String String
 readSourceE : String -> <FileRead> Result (Option String) String
-readStdinProgram : Unit -> <Stdin> String
+readStdinProgram : Unit -> <Stdin> Result String String
 relUnderRoots : List String -> String -> String
 resolveDepFile : List (String, String) -> String -> <IO> Option (String, String)
 retainParsed : Ref (Map String (List Decl)) -> List String -> Unit

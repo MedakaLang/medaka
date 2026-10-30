@@ -27,6 +27,7 @@ import frontend.parser.{
   parseErrorMessage,
 }
 import frontend.visibility.{useModId}
+import string as Str
 import support.util.{
   contains,
   listLen,
@@ -572,10 +573,22 @@ export
 stdinEntry : String
 stdinEntry = "<stdin>"
 
--- The whole program text from standard input.
+-- The whole program text from standard input, or why there is none.  `readAll`
+-- decodes lossily and cannot tell a read failure from an empty stream, so an
+-- empty result is refused as unreadable, and a U+FFFD in the text is refused
+-- the way a non-UTF-8 source file is (a program that spells U+FFFD itself is
+-- refused too; write it as an escape).
 export
-readStdinProgram : Unit -> <Stdin> String
-readStdinProgram _ = readAll ()
+readStdinProgram : Unit -> <Stdin> Result String String
+readStdinProgram _ =
+  let text = readAll ()
+  if text == "" then
+    Err
+      "\{stdinEntry}: no program text could be read from standard input (it is empty, closed or unreadable)"
+  else if Str.contains "�" text then
+    Err (sourceNotUtf8Message stdinEntry)
+  else
+    Ok text
 
 -- The loader `read` override serving `text` for the stdin entry only.
 export

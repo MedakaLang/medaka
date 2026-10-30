@@ -361,8 +361,18 @@ renameUserMain : String -> String
 renameUserMain src =
   let (toks, spans) = probeTokens src
   match mainHeadLines (lineStartsOf src) toks spans
+    [] => blankShebang src
+    heads => blankShebang (joinNl (renameHeads 1 heads (splitNl src)))
+
+-- A `#!` line is only valid at offset 0 of a file, and a probe puts its own
+-- lines in front of the target, so the line is emptied (its newline and every
+-- later line number kept).
+blankShebang : String -> String
+blankShebang src
+  | startsWith "#!" src = match splitNl src
+    _ :: rest => joinNl ("" :: rest)
     [] => src
-    heads => joinNl (renameHeads 1 heads (splitNl src))
+  | otherwise = src
 
 -- The 1-based lines, ascending, on which a `main` identifier token starts at
 -- column 0.

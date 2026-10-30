@@ -1,5 +1,5 @@
 # META
-source_lines=1655
+source_lines=1668
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -31,6 +31,7 @@ import frontend.parser.{
   parseErrorMessage,
 }
 import frontend.visibility.{useModId}
+import string as Str
 import support.util.{
   contains,
   listLen,
@@ -576,10 +577,22 @@ export
 stdinEntry : String
 stdinEntry = "<stdin>"
 
--- The whole program text from standard input.
+-- The whole program text from standard input, or why there is none.  `readAll`
+-- decodes lossily and cannot tell a read failure from an empty stream, so an
+-- empty result is refused as unreadable, and a U+FFFD in the text is refused
+-- the way a non-UTF-8 source file is (a program that spells U+FFFD itself is
+-- refused too; write it as an escape).
 export
-readStdinProgram : Unit -> <Stdin> String
-readStdinProgram _ = readAll ()
+readStdinProgram : Unit -> <Stdin> Result String String
+readStdinProgram _ =
+  let text = readAll ()
+  if text == "" then
+    Err
+      "\{stdinEntry}: no program text could be read from standard input (it is empty, closed or unreadable)"
+  else if Str.contains "�" text then
+    Err (sourceNotUtf8Message stdinEntry)
+  else
+    Ok text
 
 -- The loader `read` override serving `text` for the stdin entry only.
 export
@@ -1663,6 +1676,7 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "UsePath" true) (mem "Loc" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocated" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseAlias ("string") "Str"))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "initList" false) (mem "startsWith" false) (mem "endsWith" false) (mem "joinDot" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "splitNl" false) (mem "stringTrim" false) (mem "sortUniqS" false))))
 (DTypeSig false "lastOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "lastOr" ((PVar "d") (PList)) (EVar "d"))
@@ -1775,8 +1789,8 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DFunDef false "findModuleOrEntryFile" ((PVar "deps") (PVar "roots") (PVar "entry") (PVar "modId")) (EMatch (EApp (EApp (EVar "entryUnderRoots") (EVar "roots")) (EVar "entry")) (arm (PCon "Some" (PVar "pathRoot")) () (EApp (EVar "Some") (EVar "pathRoot"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "modId")))))
 (DTypeSig true "stdinEntry" (TyCon "String"))
 (DFunDef false "stdinEntry" () (ELit (LString "<stdin>")))
-(DTypeSig true "readStdinProgram" (TyFun (TyCon "Unit") (TyEffect ("Stdin") None (TyCon "String"))))
-(DFunDef false "readStdinProgram" (PWild) (EApp (EVar "readAll") (ELit LUnit)))
+(DTypeSig true "readStdinProgram" (TyFun (TyCon "Unit") (TyEffect ("Stdin") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "readStdinProgram" (PWild) (EBlock (DoLet false false (PVar "text") (EApp (EVar "readAll") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "text") (ELit (LString ""))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "stdinEntry"))) (ELit (LString ": no program text could be read from standard input (it is empty, closed or unreadable)")))) (EIf (EApp (EApp (EVar "Str.contains") (ELit (LString "�"))) (EVar "text")) (EApp (EVar "Err") (EApp (EVar "sourceNotUtf8Message") (EVar "stdinEntry"))) (EApp (EVar "Ok") (EVar "text")))))))
 (DTypeSig true "stdinReadOverride" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "stdinReadOverride" ((PVar "text") (PVar "path")) (EIf (EBinOp "==" (EVar "path") (EVar "stdinEntry")) (EApp (EVar "Some") (EVar "text")) (EVar "None")))
 (DTypeSig false "entryUnderRoots" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
@@ -1921,6 +1935,7 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "UsePath" true) (mem "Loc" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocated" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseAlias ("string") "Str"))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "initList" false) (mem "startsWith" false) (mem "endsWith" false) (mem "joinDot" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "splitNl" false) (mem "stringTrim" false) (mem "sortUniqS" false))))
 (DTypeSig false "lastOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "lastOr" ((PVar "d") (PList)) (EVar "d"))
@@ -2033,8 +2048,8 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DFunDef false "findModuleOrEntryFile" ((PVar "deps") (PVar "roots") (PVar "entry") (PVar "modId")) (EMatch (EApp (EApp (EVar "entryUnderRoots") (EVar "roots")) (EVar "entry")) (arm (PCon "Some" (PVar "pathRoot")) () (EApp (EVar "Some") (EVar "pathRoot"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "modId")))))
 (DTypeSig true "stdinEntry" (TyCon "String"))
 (DFunDef false "stdinEntry" () (ELit (LString "<stdin>")))
-(DTypeSig true "readStdinProgram" (TyFun (TyCon "Unit") (TyEffect ("Stdin") None (TyCon "String"))))
-(DFunDef false "readStdinProgram" (PWild) (EApp (EVar "readAll") (ELit LUnit)))
+(DTypeSig true "readStdinProgram" (TyFun (TyCon "Unit") (TyEffect ("Stdin") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "readStdinProgram" (PWild) (EBlock (DoLet false false (PVar "text") (EApp (EVar "readAll") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "text") (ELit (LString ""))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "stdinEntry"))) (ELit (LString ": no program text could be read from standard input (it is empty, closed or unreadable)")))) (EIf (EApp (EApp (EVar "Str.contains") (ELit (LString "�"))) (EVar "text")) (EApp (EVar "Err") (EApp (EVar "sourceNotUtf8Message") (EVar "stdinEntry"))) (EApp (EVar "Ok") (EVar "text")))))))
 (DTypeSig true "stdinReadOverride" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "stdinReadOverride" ((PVar "text") (PVar "path")) (EIf (EBinOp "==" (EVar "path") (EVar "stdinEntry")) (EApp (EVar "Some") (EVar "text")) (EVar "None")))
 (DTypeSig false "entryUnderRoots" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))

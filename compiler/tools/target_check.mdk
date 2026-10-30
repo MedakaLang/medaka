@@ -70,6 +70,7 @@ import support.util.{
   initList,
 }
 import string.{trim}
+import driver.loader.{stdinEntry}
 import list.{lookup, last}
 
 export
@@ -362,10 +363,13 @@ deliberateMessage profile file paths analysis name why route =
   "the built-in `\{name}` is reached\{reachRoute chain}, and `medaka run` refuses it on purpose (\{why})\{located}\nhelp: \{deliberateHelp profile file}"
 
 deliberateHelp : TargetProfile -> String -> String
-deliberateHelp profile file = match runTargetOf profile
-  Some t =>
-    "`medaka run` evaluates the program with the interpreter whatever its target; build it with `medaka build \{file} --target \{profileName t} -o <bin>`, then run `<bin>`"
-  None => "build it with `medaka build \{file} -o <bin>`, then run `<bin>`"
+deliberateHelp profile file
+  | file == stdinEntry =
+    "save the program to a file first, then build that file with `medaka build` and run the binary it makes"
+  | otherwise = match runTargetOf profile
+    Some t =>
+      "`medaka run` evaluates the program with the interpreter whatever its target; build it with `medaka build \{file} --target \{profileName t} -o <bin>`, then run `<bin>`"
+    None => "build it with `medaka build \{file} -o <bin>`, then run `<bin>`"
 
 -- The definition of the last binding of the program's own code on the route
 -- before the built-in: the user's helper that reached the extern, or `main`

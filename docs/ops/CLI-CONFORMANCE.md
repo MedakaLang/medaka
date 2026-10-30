@@ -147,7 +147,8 @@ present tree — re-derive with `make cli-conformance-census` to see the current
 >   diagnostic; the words after `-` are the program's argv. The program's own stdin is already
 >   consumed, so its `readAll`/`readLine` see end-of-file; a script that is also a filter must
 >   be run from a file. A stdin program has no directory, so relative imports and the
->   `medaka.toml` walk-up resolve against the current working directory.
+>   `medaka.toml` walk-up resolve against the current working directory. Text that is empty,
+  unreadable or not valid UTF-8 is refused, as a source file that is not UTF-8 is.
 
 **The disposition classes**, as the census reports them:
 
