@@ -1,5 +1,5 @@
 # META
-source_lines=472
+source_lines=484
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -153,7 +153,7 @@ clampApplicability Safe Safe = Safe
 
 -- An input a rule's `check` reads beyond the file itself; the runner builds
 -- only what some active rule needs.
-public export data Need = NeedsStdlibIndex | NeedsScopes
+public export data Need = NeedsStdlibIndex | NeedsWildIndex | NeedsScopes
 
 -- Everything the CLI, the rules page and the runner know about a rule besides
 -- its `check`.  `doc` states what the rule flags, why, and a before -> after
@@ -184,11 +184,23 @@ needsScopes m = anyList isScopesNeed m.needs
 
 isStdlibIndexNeed : Need -> Bool
 isStdlibIndexNeed NeedsStdlibIndex = True
+isStdlibIndexNeed NeedsWildIndex = False
 isStdlibIndexNeed NeedsScopes = False
+
+-- A rule whose name guards read the index only to resolve an `import m.*`.
+export
+needsWildIndex : RuleMeta -> Bool
+needsWildIndex m = anyList isWildIndexNeed m.needs
+
+isWildIndexNeed : Need -> Bool
+isWildIndexNeed NeedsWildIndex = True
+isWildIndexNeed NeedsStdlibIndex = False
+isWildIndexNeed NeedsScopes = False
 
 isScopesNeed : Need -> Bool
 isScopesNeed NeedsScopes = True
 isScopesNeed NeedsStdlibIndex = False
+isScopesNeed NeedsWildIndex = False
 
 -- Where a visited node sits.  `ctxDeclName` and `ctxParams` name the body's
 -- owner (a clause's function, an `impl` or interface-default method, a
@@ -528,7 +540,7 @@ public export data DupClause = DupClause {
 (DFunDef false "clampApplicability" ((PCon "Unsafe") PWild) (EVar "Unsafe"))
 (DFunDef false "clampApplicability" (PWild (PCon "Unsafe")) (EVar "Unsafe"))
 (DFunDef false "clampApplicability" ((PCon "Safe") (PCon "Safe")) (EVar "Safe"))
-(DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos)) (variant "NeedsScopes" (ConPos))) ())
+(DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos)) (variant "NeedsWildIndex" (ConPos)) (variant "NeedsScopes" (ConPos))) ())
 (DData Public "RuleMeta" () ((variant "RuleMeta" (ConNamed (field "name" (TyCon "String")) (field "summary" (TyCon "String")) (field "doc" (TyCon "String")) (field "category" (TyCon "Category")) (field "scope" (TyCon "Scope")) (field "ratchet" (TyCon "Ratchet")) (field "defaultSeverity" (TyCon "Severity")) (field "fixability" (TyCon "Fixability")) (field "needs" (TyApp (TyCon "List") (TyCon "Need")))))) ())
 (DTypeSig true "ruleMetaName" (TyFun (TyCon "RuleMeta") (TyCon "String")))
 (DFunDef false "ruleMetaName" ((PVar "m")) (EFieldAccess (EVar "m") "name"))
@@ -538,10 +550,18 @@ public export data DupClause = DupClause {
 (DFunDef false "needsScopes" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isScopesNeed")) (EFieldAccess (EVar "m") "needs")))
 (DTypeSig false "isStdlibIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
 (DFunDef false "isStdlibIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "True"))
+(DFunDef false "isStdlibIndexNeed" ((PCon "NeedsWildIndex")) (EVar "False"))
 (DFunDef false "isStdlibIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))
+(DTypeSig true "needsWildIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
+(DFunDef false "needsWildIndex" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isWildIndexNeed")) (EFieldAccess (EVar "m") "needs")))
+(DTypeSig false "isWildIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
+(DFunDef false "isWildIndexNeed" ((PCon "NeedsWildIndex")) (EVar "True"))
+(DFunDef false "isWildIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "False"))
+(DFunDef false "isWildIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))
 (DTypeSig false "isScopesNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
 (DFunDef false "isScopesNeed" ((PCon "NeedsScopes")) (EVar "True"))
 (DFunDef false "isScopesNeed" ((PCon "NeedsStdlibIndex")) (EVar "False"))
+(DFunDef false "isScopesNeed" ((PCon "NeedsWildIndex")) (EVar "False"))
 (DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxOwn" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxDeclLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Public "Visitor" () ((variant "OnExpr" (ConPos (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnAnyExpr" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnDecl" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Public "RuleCheck" () ((variant "WholeFile" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))) (variant "Visits" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor")))))))))) ())
@@ -630,7 +650,7 @@ public export data DupClause = DupClause {
 (DFunDef false "clampApplicability" ((PCon "Unsafe") PWild) (EVar "Unsafe"))
 (DFunDef false "clampApplicability" (PWild (PCon "Unsafe")) (EVar "Unsafe"))
 (DFunDef false "clampApplicability" ((PCon "Safe") (PCon "Safe")) (EVar "Safe"))
-(DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos)) (variant "NeedsScopes" (ConPos))) ())
+(DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos)) (variant "NeedsWildIndex" (ConPos)) (variant "NeedsScopes" (ConPos))) ())
 (DData Public "RuleMeta" () ((variant "RuleMeta" (ConNamed (field "name" (TyCon "String")) (field "summary" (TyCon "String")) (field "doc" (TyCon "String")) (field "category" (TyCon "Category")) (field "scope" (TyCon "Scope")) (field "ratchet" (TyCon "Ratchet")) (field "defaultSeverity" (TyCon "Severity")) (field "fixability" (TyCon "Fixability")) (field "needs" (TyApp (TyCon "List") (TyCon "Need")))))) ())
 (DTypeSig true "ruleMetaName" (TyFun (TyCon "RuleMeta") (TyCon "String")))
 (DFunDef false "ruleMetaName" ((PVar "m")) (EFieldAccess (EVar "m") "name"))
@@ -640,10 +660,18 @@ public export data DupClause = DupClause {
 (DFunDef false "needsScopes" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isScopesNeed")) (EFieldAccess (EVar "m") "needs")))
 (DTypeSig false "isStdlibIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
 (DFunDef false "isStdlibIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "True"))
+(DFunDef false "isStdlibIndexNeed" ((PCon "NeedsWildIndex")) (EVar "False"))
 (DFunDef false "isStdlibIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))
+(DTypeSig true "needsWildIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
+(DFunDef false "needsWildIndex" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isWildIndexNeed")) (EFieldAccess (EVar "m") "needs")))
+(DTypeSig false "isWildIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
+(DFunDef false "isWildIndexNeed" ((PCon "NeedsWildIndex")) (EVar "True"))
+(DFunDef false "isWildIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "False"))
+(DFunDef false "isWildIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))
 (DTypeSig false "isScopesNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
 (DFunDef false "isScopesNeed" ((PCon "NeedsScopes")) (EVar "True"))
 (DFunDef false "isScopesNeed" ((PCon "NeedsStdlibIndex")) (EVar "False"))
+(DFunDef false "isScopesNeed" ((PCon "NeedsWildIndex")) (EVar "False"))
 (DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxOwn" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxDeclLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Public "Visitor" () ((variant "OnExpr" (ConPos (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnAnyExpr" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnDecl" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Public "RuleCheck" () ((variant "WholeFile" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))) (variant "Visits" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor")))))))))) ())

@@ -47,7 +47,7 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [NeedsScopes, NeedsStdlibIndex],
+      needs = [NeedsScopes, NeedsWildIndex],
     }
     ruleBoolSimplify
     None

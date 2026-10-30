@@ -1,5 +1,5 @@
 # META
-source_lines=1389
+source_lines=1426
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_walk.mdk — the lint runner: `lintProgram*` and the one
@@ -70,6 +70,7 @@ import support.util.{
 }
 import hash_map.{HashMap, new, get, setInPlace, has, keys, findWithDefault}
 import list.{take, drop, indexed}
+import string.{indexOf}
 import tools.printer.{declToString}
 import support.path.{dirOf, stripMdk}
 import frontend.marker.{declRefs}
@@ -106,6 +107,7 @@ import tools.lint_core.{
   memoNew,
   needsScopes,
   needsStdlibIndex,
+  needsWildIndex,
 }
 import tools.lint_scope.{
   Binder(..),
@@ -465,6 +467,41 @@ restampSeverity sev f = Finding {
 export
 stdlibIndexNeeded : List String -> List String -> Bool
 stdlibIndexNeeded only disable = anyList (ruleNeedsIndex only disable) allRules
+
+-- Whether the index is worth building for linting `paths`: a rule that reads
+-- it outright is active, or a rule whose guards read it only for wildcard
+-- imports is active and some path has an `import m.*`.
+export
+stdlibIndexNeededFor : List String -> List String -> List String -> <IO> Bool
+stdlibIndexNeededFor only disable paths =
+  stdlibIndexNeeded only disable
+    || wildIndexNeeded only disable && anyPathWild paths
+
+anyPathWild : List String -> <IO> Bool
+anyPathWild [] = False
+anyPathWild (p :: rest) =
+  sourceHasWildImport (readFileSafe p) || anyPathWild rest
+
+-- Whether a rule whose guards read the index for wildcard imports is active.
+export
+wildIndexNeeded : List String -> List String -> Bool
+wildIndexNeeded only disable =
+  anyList (ruleNeedsWildIndex only disable) allRules
+
+ruleNeedsWildIndex : List String -> List String -> Rule -> Bool
+ruleNeedsWildIndex only disable r =
+  needsWildIndex r.meta
+    && (isEmptyL only || contains r.name only)
+    && not (contains r.name disable)
+
+-- Whether some line of `src` looks like an `import m.*`; a superset of the
+-- parsed wildcard imports, so a false positive costs only an index build.
+export
+sourceHasWildImport : String -> Bool
+sourceHasWildImport src = anyList isWildImportLine (splitNl src)
+
+isWildImportLine : String -> Bool
+isWildImportLine l = startsWith "import " l && isSome (indexOf ".*" l)
 
 ruleNeedsScopes : Rule -> Bool
 ruleNeedsScopes r = needsScopes r.meta
@@ -1399,13 +1436,14 @@ runCrossRuleFromOccs only disable occs r
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "endsWith" false) (mem "dedup" false) (mem "isSome" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false) (mem "keys" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false) (mem "indexed" false))))
+(DUse false (UseGroup ("string") ((mem "indexOf" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "stripMdk" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "fixToDiagFix" false) (mem "factDupClauses" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoNew" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "fixToDiagFix" false) (mem "factDupClauses" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoNew" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false) (mem "needsWildIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "Use" true) (mem "bindersNamed" false) (mem "bindersNamedIn" false) (mem "buildScopes" false) (mem "usesNamedIn" false) (mem "wildImports" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false) (mem "declLocList" false) (mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false) (mem "zipDeclPos" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "demoteOverComments" false))))
@@ -1501,6 +1539,19 @@ runCrossRuleFromOccs only disable occs r
 (DFunDef false "restampSeverity" ((PVar "sev") (PVar "f")) (ERecordCreate "Finding" ((fa "rule" (EFieldAccess (EVar "f") "rule")) (fa "message" (EFieldAccess (EVar "f") "message")) (fa "severity" (EVar "sev")) (fa "loc" (EFieldAccess (EVar "f") "loc")) (fa "fix" (EFieldAccess (EVar "f") "fix")))))
 (DTypeSig true "stdlibIndexNeeded" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "stdlibIndexNeeded" ((PVar "only") (PVar "disable")) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "ruleNeedsIndex") (EVar "only")) (EVar "disable"))) (EVar "allRules")))
+(DTypeSig true "stdlibIndexNeededFor" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "stdlibIndexNeededFor" ((PVar "only") (PVar "disable") (PVar "paths")) (EBinOp "||" (EApp (EApp (EVar "stdlibIndexNeeded") (EVar "only")) (EVar "disable")) (EBinOp "&&" (EApp (EApp (EVar "wildIndexNeeded") (EVar "only")) (EVar "disable")) (EApp (EVar "anyPathWild") (EVar "paths")))))
+(DTypeSig false "anyPathWild" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "anyPathWild" ((PList)) (EVar "False"))
+(DFunDef false "anyPathWild" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "||" (EApp (EVar "sourceHasWildImport") (EApp (EVar "readFileSafe") (EVar "p"))) (EApp (EVar "anyPathWild") (EVar "rest"))))
+(DTypeSig true "wildIndexNeeded" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "wildIndexNeeded" ((PVar "only") (PVar "disable")) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "ruleNeedsWildIndex") (EVar "only")) (EVar "disable"))) (EVar "allRules")))
+(DTypeSig false "ruleNeedsWildIndex" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Rule") (TyCon "Bool")))))
+(DFunDef false "ruleNeedsWildIndex" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "needsWildIndex") (EFieldAccess (EVar "r") "meta")) (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
+(DTypeSig true "sourceHasWildImport" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "sourceHasWildImport" ((PVar "src")) (EApp (EApp (EVar "anyList") (EVar "isWildImportLine")) (EApp (EVar "splitNl") (EVar "src"))))
+(DTypeSig false "isWildImportLine" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isWildImportLine" ((PVar "l")) (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "import "))) (EVar "l")) (EApp (EVar "isSome") (EApp (EApp (EVar "indexOf") (ELit (LString ".*"))) (EVar "l")))))
 (DTypeSig false "ruleNeedsScopes" (TyFun (TyCon "Rule") (TyCon "Bool")))
 (DFunDef false "ruleNeedsScopes" ((PVar "r")) (EApp (EVar "needsScopes") (EFieldAccess (EVar "r") "meta")))
 (DTypeSig false "ruleNeedsIndex" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Rule") (TyCon "Bool")))))
@@ -1722,13 +1773,14 @@ runCrossRuleFromOccs only disable occs r
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "endsWith" false) (mem "dedup" false) (mem "isSome" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false) (mem "keys" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false) (mem "indexed" false))))
+(DUse false (UseGroup ("string") ((mem "indexOf" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "stripMdk" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "fixToDiagFix" false) (mem "factDupClauses" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoNew" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "fixToDiagFix" false) (mem "factDupClauses" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoNew" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false) (mem "needsWildIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "Use" true) (mem "bindersNamed" false) (mem "bindersNamedIn" false) (mem "buildScopes" false) (mem "usesNamedIn" false) (mem "wildImports" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false) (mem "declLocList" false) (mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false) (mem "zipDeclPos" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "demoteOverComments" false))))
@@ -1824,6 +1876,19 @@ runCrossRuleFromOccs only disable occs r
 (DFunDef false "restampSeverity" ((PVar "sev") (PVar "f")) (ERecordCreate "Finding" ((fa "rule" (EFieldAccess (EVar "f") "rule")) (fa "message" (EFieldAccess (EVar "f") "message")) (fa "severity" (EVar "sev")) (fa "loc" (EFieldAccess (EVar "f") "loc")) (fa "fix" (EFieldAccess (EVar "f") "fix")))))
 (DTypeSig true "stdlibIndexNeeded" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "stdlibIndexNeeded" ((PVar "only") (PVar "disable")) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "ruleNeedsIndex") (EVar "only")) (EVar "disable"))) (EVar "allRules")))
+(DTypeSig true "stdlibIndexNeededFor" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "stdlibIndexNeededFor" ((PVar "only") (PVar "disable") (PVar "paths")) (EBinOp "||" (EApp (EApp (EVar "stdlibIndexNeeded") (EVar "only")) (EVar "disable")) (EBinOp "&&" (EApp (EApp (EVar "wildIndexNeeded") (EVar "only")) (EVar "disable")) (EApp (EVar "anyPathWild") (EVar "paths")))))
+(DTypeSig false "anyPathWild" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "anyPathWild" ((PList)) (EVar "False"))
+(DFunDef false "anyPathWild" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "||" (EApp (EVar "sourceHasWildImport") (EApp (EVar "readFileSafe") (EVar "p"))) (EApp (EVar "anyPathWild") (EVar "rest"))))
+(DTypeSig true "wildIndexNeeded" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "wildIndexNeeded" ((PVar "only") (PVar "disable")) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "ruleNeedsWildIndex") (EVar "only")) (EVar "disable"))) (EVar "allRules")))
+(DTypeSig false "ruleNeedsWildIndex" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Rule") (TyCon "Bool")))))
+(DFunDef false "ruleNeedsWildIndex" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "needsWildIndex") (EFieldAccess (EVar "r") "meta")) (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
+(DTypeSig true "sourceHasWildImport" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "sourceHasWildImport" ((PVar "src")) (EApp (EApp (EVar "anyList") (EVar "isWildImportLine")) (EApp (EVar "splitNl") (EVar "src"))))
+(DTypeSig false "isWildImportLine" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isWildImportLine" ((PVar "l")) (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "import "))) (EVar "l")) (EApp (EVar "isSome") (EApp (EApp (EVar "indexOf") (ELit (LString ".*"))) (EVar "l")))))
 (DTypeSig false "ruleNeedsScopes" (TyFun (TyCon "Rule") (TyCon "Bool")))
 (DFunDef false "ruleNeedsScopes" ((PVar "r")) (EApp (EVar "needsScopes") (EFieldAccess (EVar "r") "meta")))
 (DTypeSig false "ruleNeedsIndex" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Rule") (TyCon "Bool")))))

@@ -1,5 +1,5 @@
 # META
-source_lines=1149
+source_lines=1150
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cmd.mdk — the `medaka lint` engine.
@@ -218,6 +218,7 @@ fixabilityText NotFixable = "not-fixable"
 
 needText : Need -> String
 needText NeedsStdlibIndex = "stdlib-index"
+needText NeedsWildIndex = "wildcard-index"
 needText NeedsScopes = "scopes"
 
 -- `--scope`/`--ratchet`/`--tier` narrow the listing; an unrecognised value is an
@@ -1207,6 +1208,7 @@ writeFixedSource target src newSrc n =
 (DFunDef false "fixabilityText" ((PCon "NotFixable")) (ELit (LString "not-fixable")))
 (DTypeSig false "needText" (TyFun (TyCon "Need") (TyCon "String")))
 (DFunDef false "needText" ((PCon "NeedsStdlibIndex")) (ELit (LString "stdlib-index")))
+(DFunDef false "needText" ((PCon "NeedsWildIndex")) (ELit (LString "wildcard-index")))
 (DFunDef false "needText" ((PCon "NeedsScopes")) (ELit (LString "scopes")))
 (DTypeSig true "selectRuleRows" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "RuleRow")))))))
 (DFunDef false "selectRuleRows" ((PVar "scope") (PVar "ratchet") (PVar "tier")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--scope"))) (EApp (EApp (EVar "choicesOf") (EVar "scopeText")) (EListLit (EVar "Universal") (EVar "Internal")))) (EVar "scope"))) (ELam ((PVar "s")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--ratchet"))) (EApp (EApp (EVar "choicesOf") (EVar "ratchetText")) (EListLit (EVar "Gated") (EVar "Baselined")))) (EVar "ratchet"))) (ELam ((PVar "r")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--tier"))) (EApp (EApp (EVar "choicesOf") (EVar "tierText")) (EListLit (EVar "TierFile") (EVar "TierCross")))) (EVar "tier"))) (ELam ((PVar "t")) (EApp (EVar "Ok") (EApp (EApp (EVar "filter") (EApp (EApp (EApp (EVar "rowMatches") (EVar "s")) (EVar "r")) (EVar "t"))) (EVar "allRuleRows"))))))))))
@@ -1412,6 +1414,7 @@ writeFixedSource target src newSrc n =
 (DFunDef false "fixabilityText" ((PCon "NotFixable")) (ELit (LString "not-fixable")))
 (DTypeSig false "needText" (TyFun (TyCon "Need") (TyCon "String")))
 (DFunDef false "needText" ((PCon "NeedsStdlibIndex")) (ELit (LString "stdlib-index")))
+(DFunDef false "needText" ((PCon "NeedsWildIndex")) (ELit (LString "wildcard-index")))
 (DFunDef false "needText" ((PCon "NeedsScopes")) (ELit (LString "scopes")))
 (DTypeSig true "selectRuleRows" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "RuleRow")))))))
 (DFunDef false "selectRuleRows" ((PVar "scope") (PVar "ratchet") (PVar "tier")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--scope"))) (EApp (EApp (EVar "choicesOf") (EVar "scopeText")) (EListLit (EVar "Universal") (EVar "Internal")))) (EVar "scope"))) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--ratchet"))) (EApp (EApp (EVar "choicesOf") (EVar "ratchetText")) (EListLit (EVar "Gated") (EVar "Baselined")))) (EVar "ratchet"))) (ELam ((PVar "r")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--tier"))) (EApp (EApp (EVar "choicesOf") (EVar "tierText")) (EListLit (EVar "TierFile") (EVar "TierCross")))) (EVar "tier"))) (ELam ((PVar "t")) (EApp (EVar "Ok") (EApp (EApp (EMethodRef "filter") (EApp (EApp (EApp (EVar "rowMatches") (EVar "s")) (EVar "r")) (EVar "t"))) (EVar "allRuleRows"))))))))))

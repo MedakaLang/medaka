@@ -70,6 +70,8 @@ export import tools.lint_walk.{
   splitLintNames,
   stdlibFingerprint,
   stdlibIndexNeeded,
+  stdlibIndexNeededFor,
+  wildIndexNeeded,
 }
 
 -- ── fixing ───────────────────────────────────────────────────────────────────
@@ -122,7 +124,8 @@ parseFailure src path e = ppDiagCliSrc src path (parseErrDiag path e)
 export
 indexForRules : List String -> <IO> Result String StdlibIndex
 indexForRules only =
-  if stdlibIndexNeeded only [] then match buildStdlibIndexResult
+  if stdlibIndexNeeded only []
+    || wildIndexNeeded only [] then match buildStdlibIndexResult
     Ok idx => Ok idx
     Err _ => Err "cannot build the stdlib index"
   else
