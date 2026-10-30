@@ -134,6 +134,7 @@ runtimeDecls = [
   fn "void" "mdk_print_str" ["i64"],
   fn "i64" "mdk_int_to_string" ["i64"],
   fn "i64" "mdk_float_to_string" ["double"],
+  fn "i64" "mdk_float_to_fixed" ["i64", "double"],
   fn "i64" "llvm.fptosi.sat.i64.f64" ["double"],
   -- #762: NaN-sign fold barrier.  See fenceFloatOperand in llvm_emit.mdk.
   fn "double" "llvm.arithmetic.fence.f64" ["double"],

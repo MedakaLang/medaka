@@ -371,6 +371,7 @@ wasmHelperKeyRows = [
       "mdk_str_to_float_ok",
     ],
   ),
+  ("floatToFixed", ["mdk_float_fixed", "mdk_float_fixed_byte"]),
 ]
 
 -- A file extern's grant goes to the host element by element, ahead of its path.
@@ -507,6 +508,7 @@ wasmUseRows = [
   ("bytesToFloat64", [UseFloat, UseArray]),
   ("floatToBytes64", [UseFloat, UseArray]),
   ("floatToString", [UseStr, UseFloat]),
+  ("floatToFixed", [UseStr, UseFloat]),
   ("debugStringLit", [UseStr, UseStrLeaf]),
   ("debugCharLit", [UseStr, UseStrLeaf]),
   ("arrayLength", [UseArray]),
@@ -1242,6 +1244,11 @@ catalogRows = [
   ExternRow
     "floatToString"
     (CSymbol LlvmNum "mdk_float_to_string")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "floatToFixed"
+    (CSymbol LlvmNum "mdk_float_to_fixed")
     (Inline WasmStr)
     Interpreted,
   ExternRow
