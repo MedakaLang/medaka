@@ -12,7 +12,8 @@ import support.util.{
   contains, filterList, splitOnChar, joinWith, startsWith, listLen, anyList,
   joinNl, dedupBy
 }
-import list.{sortBy, last}
+import list.{drop, sortBy, last}
+import string.{lines}
 import support.path.{stripMdk}
 import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
@@ -642,11 +643,6 @@ export
 exprRuleFix : (String -> Bool) -> (Expr -> Expr) -> Decl -> Option (List Decl)
 exprRuleFix excl f d = declBodyFix False excl (rewriteExprBU f) d
 
--- Fix by a whole-body rewrite, for a rule whose traversal is not bottom-up.
-export
-exprRuleFixTree : (Expr -> Expr) -> Decl -> Option (List Decl)
-exprRuleFixTree rw d = declBodyFix False noExcl rw d
-
 -- no decls are excluded by name (the common case)
 export
 noExcl : String -> Bool
@@ -789,6 +785,13 @@ usesPreludeName facts hd = match varSite hd
 export
 bindsName : FileFacts -> String -> Bool
 bindsName facts name = not (isEmpty (bindersNamed (factScopes facts) name))
+
+-- The 1-based line of the source, `""` past the end.
+export
+sourceLine : FileFacts -> Int -> String
+sourceLine facts n = match drop (n - 1) (lines facts.ffSrc)
+  l :: _ => l
+  [] => ""
 
 -- ── rule: match-to-map ────────────────────────────────────────────────────────
 -- A 2-arm `match` on an Option or Result that structurally IS a functor `map`

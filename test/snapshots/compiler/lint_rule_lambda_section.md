@@ -1,5 +1,5 @@
 # META
-source_lines=215
+source_lines=210
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-lambda-section: a lambda whose body is one binary op on its parameter(s). Prefer an operator section.
@@ -9,9 +9,9 @@ import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import support.util.{contains}
-import list.{drop, last}
+import list.{last}
 import support.char.{isIdentChar}
-import string.{lines, stripSuffix, trimRight, unwords}
+import string.{stripSuffix, trimRight, unwords}
 import tools.printer.{exprToString}
 import tools.lint_fix.{Binding(..)}
 import tools.lint_core.{
@@ -33,6 +33,7 @@ import tools.lint_shared.{
   isEVarNamed,
   mentionsVar,
   replaceFix,
+  sourceLine,
   ruleNameLambdaSection,
   unwrapLoc,
 }
@@ -201,12 +202,6 @@ patVarName : Pat -> List String
 patVarName (PVar x _ _) = [x]
 patVarName _ = []
 
--- The 1-based line of the source.
-sourceLine : FileFacts -> Int -> String
-sourceLine facts n = match drop (n - 1) (lines facts.ffSrc)
-  l :: _ => l
-  [] => ""
-
 -- The column where `params` begins, given the text before the arrow.
 paramsStart : String -> String -> Option Int
 paramsStart before params = match stripSuffix params (trimRight before)
@@ -223,13 +218,13 @@ endsInIdent text = match last (toList (stringToChars text))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "last" false))))
+(DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false))))
-(DUse false (UseGroup ("string") ((mem "lines" false) (mem "stripSuffix" false) (mem "trimRight" false) (mem "unwords" false))))
+(DUse false (UseGroup ("string") ((mem "stripSuffix" false) (mem "trimRight" false) (mem "unwords" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "replaceFix" false) (mem "ruleNameLambdaSection" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "replaceFix" false) (mem "sourceLine" false) (mem "ruleNameLambdaSection" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameLambdaSection")) (fa "summary" (ELit (LString "lambda whose body is a single binary op on its parameter(s). Prefer an operator section (STYLE \"Dogfooding\")"))) (fa "doc" (ELit (LString "A lambda whose body is a single binary operator applied to its parameter is an operator section. The section is shorter and names no throwaway variable.\n\nBefore:\n  map (x => x + 1) xs\nAfter:\n  map (+ 1) xs"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleLambdaSection")) (EVar "None")))
 (DTypeSig false "sectionSymOps" (TyApp (TyCon "List") (TyCon "String")))
@@ -264,8 +259,6 @@ endsInIdent text = match last (toList (stringToChars text))
 (DTypeSig false "patVarName" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patVarName" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
 (DFunDef false "patVarName" (PWild) (EListLit))
-(DTypeSig false "sourceLine" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "sourceLine" ((PVar "facts") (PVar "n")) (EMatch (EApp (EApp (EVar "drop") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "lines") (EFieldAccess (EVar "facts") "ffSrc"))) (arm (PCons (PVar "l") PWild) () (EVar "l")) (arm (PList) () (ELit (LString "")))))
 (DTypeSig false "paramsStart" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "paramsStart" ((PVar "before") (PVar "params")) (EMatch (EApp (EApp (EVar "stripSuffix") (EVar "params")) (EApp (EVar "trimRight") (EVar "before"))) (arm (PCon "Some" (PVar "rest")) () (EIf (EApp (EVar "endsInIdent") (EVar "rest")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "rest"))))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "endsInIdent" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -276,13 +269,13 @@ endsInIdent text = match last (toList (stringToChars text))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "last" false))))
+(DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false))))
-(DUse false (UseGroup ("string") ((mem "lines" false) (mem "stripSuffix" false) (mem "trimRight" false) (mem "unwords" false))))
+(DUse false (UseGroup ("string") ((mem "stripSuffix" false) (mem "trimRight" false) (mem "unwords" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "replaceFix" false) (mem "ruleNameLambdaSection" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "replaceFix" false) (mem "sourceLine" false) (mem "ruleNameLambdaSection" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameLambdaSection")) (fa "summary" (ELit (LString "lambda whose body is a single binary op on its parameter(s). Prefer an operator section (STYLE \"Dogfooding\")"))) (fa "doc" (ELit (LString "A lambda whose body is a single binary operator applied to its parameter is an operator section. The section is shorter and names no throwaway variable.\n\nBefore:\n  map (x => x + 1) xs\nAfter:\n  map (+ 1) xs"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleLambdaSection")) (EVar "None")))
 (DTypeSig false "sectionSymOps" (TyApp (TyCon "List") (TyCon "String")))
@@ -317,8 +310,6 @@ endsInIdent text = match last (toList (stringToChars text))
 (DTypeSig false "patVarName" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patVarName" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
 (DFunDef false "patVarName" (PWild) (EListLit))
-(DTypeSig false "sourceLine" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "sourceLine" ((PVar "facts") (PVar "n")) (EMatch (EApp (EApp (EVar "drop") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "lines") (EFieldAccess (EVar "facts") "ffSrc"))) (arm (PCons (PVar "l") PWild) () (EVar "l")) (arm (PList) () (ELit (LString "")))))
 (DTypeSig false "paramsStart" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "paramsStart" ((PVar "before") (PVar "params")) (EMatch (EApp (EApp (EVar "stripSuffix") (EVar "params")) (EApp (EVar "trimRight") (EVar "before"))) (arm (PCon "Some" (PVar "rest")) () (EIf (EApp (EVar "endsInIdent") (EVar "rest")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "rest"))))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "endsInIdent" (TyFun (TyCon "String") (TyCon "Bool")))

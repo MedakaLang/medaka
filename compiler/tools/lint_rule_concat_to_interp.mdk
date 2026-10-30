@@ -29,13 +29,14 @@ import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import support.util.{listLen, anyList, isNonEmptyL}
 import tools.printer.{exprToString}
-import frontend.exhaust.{Oracle}
 import tools.lint_core.{
   Category(..),
   Ctx(..),
   FileFacts(..),
   Finding(..),
+  Fix,
   Fixability(..),
+  Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
@@ -45,10 +46,13 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
+  bindingOf,
+  bindsName,
   declHeadHits,
-  exprRuleFixTree,
   mapChildExprs,
+  replaceFix,
   ruleNameConcatToInterp,
+  tightSpan,
   unwrapLoc,
 }
 
@@ -67,10 +71,10 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [],
+      needs = [NeedsScopes],
     }
     ruleConcatToInterp
-    (Some concatToInterpFix)
+    None
 
 -- flatten a `++` spine into its operands, left-to-right (each still ELoc-wrapped).
 concatOperands : Expr -> List Expr
@@ -155,10 +159,11 @@ rewriteConcatExpr e = match concatChainOf e
   Some e2 => e2
   None => mapChildExprs rewriteConcatExpr e
 
--- One rewritten node per maximal chain; the search continues into the hole
--- operands, not the consumed `++` spine.
-concatChainPick : Expr -> Option (Expr, List Expr)
-concatChainPick e = map (e2 => (e2, concatOperands e)) (concatChainOf e)
+-- One rewritten node per maximal chain, with the chain's span: the search continues
+-- into the hole operands, not the consumed `++` spine.
+concatChainPick : Expr -> Option ((Expr, Option Loc), List Expr)
+concatChainPick e =
+  map (e2 => ((e2, tightSpan e), concatOperands e)) (concatChainOf e)
 
 ruleConcatToInterp : StdlibIndex ->
   String ->
@@ -166,14 +171,21 @@ ruleConcatToInterp : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleConcatToInterp _ _ _ _ _ = [OnDecl concatToInterpAt]
+ruleConcatToInterp _ _ facts _ _ = [OnDecl (concatToInterpAt facts)]
 
-concatToInterpAt : Ctx -> Decl -> List Finding
-concatToInterpAt ctx d =
-  map (concatToInterpFinding ctx.ctxSpan) (declHeadHits concatChainPick d)
+concatToInterpAt : FileFacts -> Ctx -> Decl -> List Finding
+concatToInterpAt facts ctx d =
+  map (concatToInterpHit facts ctx) (declHeadHits concatChainPick d)
 
-concatToInterpFinding : Option Loc -> Expr -> Finding
-concatToInterpFinding loc rewritten = Finding {
+concatToInterpHit : FileFacts -> Ctx -> (Expr, Option Loc) -> Finding
+concatToInterpHit facts ctx (rewritten, span) =
+  concatToInterpFinding
+    ctx.ctxSpan
+    rewritten
+    (concatToInterpFix facts ctx span rewritten)
+
+concatToInterpFinding : Option Loc -> Expr -> Option Fix -> Finding
+concatToInterpFinding loc rewritten fix = Finding {
   rule = ruleNameConcatToInterp,
   message =
     "`++` chain of string literals and expressions. Rewrite as an interpolated string '"
@@ -181,8 +193,20 @@ concatToInterpFinding loc rewritten = Finding {
       ++ "'",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = fix,
 }
 
-concatToInterpFix : Oracle -> Decl -> Option (List Decl)
-concatToInterpFix _ d = exprRuleFixTree rewriteConcatExpr d
+-- The fix replaces the chain's span with the interpolated string.  An interpolation
+-- hole desugars to a call of `display`, so the fix is withheld where the file binds
+-- `display`: that binding would capture the new call.
+concatToInterpFix : FileFacts -> Ctx -> Option Loc -> Expr -> Option Fix
+concatToInterpFix facts ctx span rewritten =
+  if bindsName facts "display" then
+    None
+  else
+    replaceFix
+      "interpolate the string"
+      span
+      (bindingOf rewritten)
+      ctx
+      (exprToString rewritten)

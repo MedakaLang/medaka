@@ -3,6 +3,7 @@
 # diff_compiler_fmt_test.mdk and capture_goldens.sh; a fixture with no row here
 # reds the gate.
 andthen_pure_map rule-andthen-pure-map
+andthen_pure_map_local_map rule-andthen-pure-map
 bind_destructure_ctor rule-bind-then-destructure
 bind_then_destructure rule-bind-then-destructure
 bind_then_destructure_interior_comment rule-bind-then-destructure
@@ -11,10 +12,12 @@ bool_simplify_local_not rule-bool-simplify
 complement_predicate rule-complement-predicate
 complement_predicate_local_not rule-complement-predicate
 concat_to_interp rule-concat-to-interp
+concat_to_interp_local_display rule-concat-to-interp
 destructure_in_param rule-destructure-in-param
 double_reverse rule-double-reverse
 guarded rule-match-on-param
 if_max_min rule-if-max-min
+if_max_min_local_max rule-if-max-min
 iface_occurrence_rebuild rule-lambda-section,rule-if-max-min,rule-andthen-pure-map,rule-concat-to-interp,rule-not-eq,rule-bool-simplify,rule-rem-parity,rule-double-reverse,rule-when-unless,rule-complement-predicate
 lambda_section rule-lambda-section
 lambda_section_interior_comment rule-lambda-section
@@ -22,6 +25,7 @@ match_on_param rule-match-on-param
 match_on_param_interior_comment rule-match-on-param
 match_on_param_wild_rebind rule-match-on-param
 match_to_map rule-match-to-map
+match_to_map_local_map rule-match-to-map
 not_eq rule-not-eq
 rem_parity rule-rem-parity
 rem_parity_brackets rule-rem-parity
