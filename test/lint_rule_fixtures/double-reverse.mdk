@@ -43,3 +43,21 @@ single xs = reverse xs
 
 -- NEGATIVE: not two reverses.
 mapped f xs = reverse (map f xs)
+
+-- POSITIVE, unfixed: a `where` function named `reverse` is the file's own.
+-- expect-next-line rule-double-reverse unfixed
+reboundWhere xs = reverse (reverse xs)
+  where
+    reverse ys = ys
+
+-- POSITIVE, unfixed: so is a `let` binding.
+-- expect-next-line rule-double-reverse unfixed
+reboundLet xs =
+  let reverse = id
+  reverse (reverse xs)
+
+-- POSITIVE: a local binding of an unrelated name does not stand in the way.
+-- expect-next-line rule-double-reverse
+otherBinder xs =
+  let ys = xs
+  reverse (reverse ys)
