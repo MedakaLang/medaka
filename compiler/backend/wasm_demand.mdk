@@ -1947,6 +1947,7 @@ helperManifest _ "stderrRuntimeLines" =
 helperManifest _ "rngRuntimeLines" =
   HelperManifest
     [
+      ("mdk_rng_ensure", 0),
       ("mdk_next_u64", 0),
       ("mdk_random_int", 2),
       ("mdk_random_bool", 0),
@@ -2351,6 +2352,7 @@ helperHostKeys "ioWriteFileModeLines" =
   ["mdk_write_file_mode", "mdk_write_file_push", "mdk_write_file_reset"]
 helperHostKeys "jsffiArrayLines" = ["mdk_path_push", "mdk_result_byte"]
 helperHostKeys "jsffiResultStrLines" = ["mdk_result_byte", "mdk_result_len"]
+helperHostKeys "rngRuntimeLines" = ["mdk_rng_seed"]
 helperHostKeys "osEntropyLines" =
   ["mdk_os_entropy", "mdk_result_byte", "mdk_result_len"]
 helperHostKeys "readFileBytesLines" =
@@ -2518,6 +2520,7 @@ hostImportSigOf "mdk_read_line" = Some " (result i32)"
 hostImportSigOf "mdk_read_all" = Some ""
 hostImportSigOf "mdk_read_exactly" = Some " (param i64) (result i32)"
 hostImportSigOf "mdk_os_entropy" = Some " (param i64) (result i32)"
+hostImportSigOf "mdk_rng_seed" = Some " (result i64)"
 hostImportSigOf "mdk_executable_path" = Some " (result i32)"
 hostImportSigOf "mdk_args_count" = Some " (result i32)"
 hostImportSigOf "mdk_arg_len" = Some " (param i32) (result i32)"

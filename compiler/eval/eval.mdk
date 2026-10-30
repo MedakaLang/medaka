@@ -3534,45 +3534,49 @@ rngStateRef = Ref 123456789
 rngU64Ref : Ref U64
 rngU64Ref = Ref 0
 
--- One SplitMix64 step: advance the global state and return the finalized draw.
-rngDraw : Unit -> U64
-rngDraw _ =
-  let s = !rngU64Ref + u64Golden
-  rngU64Ref := s
+-- One SplitMix64 step: advance [ref] and return the finalized draw.  The oracle
+-- draws from `rngU64Ref` (state 0 until `setSeed`); `medaka run` draws from its
+-- own `runRngRef`, so entropy seeding never reaches the differential oracle.
+rngStep : Ref U64 -> U64
+rngStep ref =
+  let s = !ref + u64Golden
+  ref := s
   u64Finalize s
+
+rngDraw : Unit -> U64
+rngDraw _ = rngStep rngU64Ref
 
 -- randomInt lo hi (INCLUSIVE). Mirrors mdk_random_int (medaka_rt.c) EXACTLY:
 -- `lo > hi` answers `lo`, and every other span, up to the full range's 2^63,
 -- draws `lo + next % span`.  The span and the sum are computed in `U64`, so no
 -- 63-bit Int op is ever asked to hold a value it cannot (issues #98, #3451).
-pRandomInt : Value e -> Value e -> <e> Value e
-pRandomInt (VInt lo) (VInt hi) =
+pRandomInt : (Unit -> <e> U64) -> Value e -> Value e -> <e> Value e
+pRandomInt draw (VInt lo) (VInt hi) =
   let loU = U64.truncate lo
   let rangeU = U64.truncate hi - loU + 1
   if hi < lo then
     VInt lo
   else
-    let rem = rngDraw () % rangeU
+    let rem = draw () % rangeU
     -- `lo + rem` lies in [lo, hi], so its signed 64-bit reading fits `Int` and
     -- bits 63 and 62 agree: the low 63 bits are the number.
     VInt (U64.toIntTruncating (loU + rem))
-pRandomInt _ _ = panic "randomInt: expected Int Int"
+pRandomInt _ _ _ = panic "randomInt: expected Int Int"
 
-pRandomBool : Value e -> <e> Value e
-pRandomBool _ = VBool (U64.bitAnd (rngDraw ()) 1 == 1)
+pRandomBool : (Unit -> <e> U64) -> Value e -> <e> Value e
+pRandomBool draw _ = VBool (U64.bitAnd (draw ()) 1 == 1)
 
-pRandomFloat : Value e -> <e> Value e
-pRandomFloat _ =
+pRandomFloat : (Unit -> <e> U64) -> Value e -> <e> Value e
+pRandomFloat draw _ =
   -- `intToFloat 9007199254740992` is the double 2^53 (the mantissa scale); written
   -- via an Int literal because `medaka fmt` corrupts a >= 1e15 float literal (#51).
-  let bits = U64.toIntTruncating (U64.shiftRight (rngDraw ()) 11)
+  let bits = U64.toIntTruncating (U64.shiftRight (draw ()) 11)
   VFloat (intToFloat bits * (1.0 / intToFloat 9007199254740992) * 2.0 - 1.0)
 
-pRandomChar : Value e -> <e> Value e
-pRandomChar _ =
+pRandomChar : (Unit -> <e> U64) -> Value e -> <e> Value e
+pRandomChar draw _ =
   VChar
-    (charToStr
-      (charFromCodeUnsafe (32 + U64.toIntTruncating (rngDraw () % 95))))
+    (charToStr (charFromCodeUnsafe (32 + U64.toIntTruncating (draw () % 95))))
 
 charFromCodeUnsafe : Int -> Char
 -- Intentional cross-file duplicate of the same helper in prop_runner.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
@@ -3581,24 +3585,24 @@ charFromCodeUnsafe n = match charFromCode n
   Some c => c
   None => ' '
 
-pSetSeed : Value e -> <e> Value e
-pSetSeed (VInt seed) =
-  rngU64Ref := U64.truncate seed
+pSetSeed : Ref U64 -> Value e -> <e> Value e
+pSetSeed ref (VInt seed) =
+  ref := U64.truncate seed
   VUnit
-pSetSeed _ = panic "setSeed: expected Int"
+pSetSeed _ _ = panic "setSeed: expected Int"
 
-pRandomState : Value e -> <e> Value e
-pRandomState _ =
-  let state = !rngU64Ref
+pRandomState : Ref U64 -> Value e -> <e> Value e
+pRandomState ref _ =
+  let state = !ref
   VU64
     (U64.toIntTruncating (U64.shiftRight state 32))
     (U64.toIntTruncating (U64.bitAnd state 0xFFFFFFFF))
 
-pRestoreRandomState : Value e -> <e> Value e
-pRestoreRandomState (VU64 hi lo) =
-  rngU64Ref := U64.bitOr (U64.shiftLeft (U64.truncate hi) 32) (U64.truncate lo)
+pRestoreRandomState : Ref U64 -> Value e -> <e> Value e
+pRestoreRandomState ref (VU64 hi lo) =
+  ref := U64.bitOr (U64.shiftLeft (U64.truncate hi) 32) (U64.truncate lo)
   VUnit
-pRestoreRandomState _ = panic "restoreRandomState: expected U64"
+pRestoreRandomState _ _ = panic "restoreRandomState: expected U64"
 
 -- ORACLE-ONLY frozen constants for the clock/GC externs.  These are the
 -- DIFFERENTIAL-ORACLE bindings: the oracle drivers diff captured stdout, so a
@@ -3640,13 +3644,13 @@ externBindings : Unit -> List (String, Value e)
 externBindings _ = [
   ("$withFileReadBound", scopedFileBound False),
   ("$withFileWriteBound", scopedFileBound True),
-  ("randomInt", prim2M pRandomInt),
-  ("randomBool", prim1M pRandomBool),
-  ("randomFloat", prim1M pRandomFloat),
-  ("randomChar", prim1M pRandomChar),
-  ("setSeed", prim1M pSetSeed),
-  ("randomState", prim1M pRandomState),
-  ("restoreRandomState", prim1M pRestoreRandomState),
+  ("randomInt", prim2M (pRandomInt rngDraw)),
+  ("randomBool", prim1M (pRandomBool rngDraw)),
+  ("randomFloat", prim1M (pRandomFloat rngDraw)),
+  ("randomChar", prim1M (pRandomChar rngDraw)),
+  ("setSeed", prim1M (pSetSeed rngU64Ref)),
+  ("randomState", prim1M (pRandomState rngU64Ref)),
+  ("restoreRandomState", prim1M (pRestoreRandomState rngU64Ref)),
   ("wallTimeSec", prim1M pWallTimeSec),
   ("monotonicSec", prim1M pMonotonicSec),
   ("sleepMs", prim1M pSleepMs),
@@ -5539,6 +5543,53 @@ pOsEntropyBytes : Value e -> <Rand | e> Value e
 pOsEntropyBytes (VInt n) = vIntArray (osEntropyBytes n)
 pOsEntropyBytes _ = panic "osEntropyBytes: expected Int"
 
+-- ── `medaka run` RNG ──────────────────────────────────────────────────────
+-- The run's own SplitMix64 stream, separate from the oracle's `rngU64Ref`. Until
+-- `setSeed` / `restoreRandomState` seeds it, the first draw (or `randomState`)
+-- seeds it from MEDAKA_SEED when set, else from OS entropy. A malformed
+-- MEDAKA_SEED panics rather than falling back to entropy.
+runRngRef : Ref U64
+runRngRef = Ref 0
+
+runRngSeeded : Ref Bool
+runRngSeeded = Ref False
+
+runRngEnsure : Unit -> <Env, Rand | e> Unit
+runRngEnsure _ =
+  if !runRngSeeded then
+    ()
+  else
+    let seed = match getEnv "MEDAKA_SEED"
+      Some text => match stringToInt text
+        Some n => U64.truncate n
+        None => panic "MEDAKA_SEED must be a decimal integer"
+      None => entropyU64 ()
+    runRngRef := seed
+    runRngSeeded := True
+
+entropyU64 : Unit -> <Rand | e> U64
+entropyU64 _ =
+  fold
+    (acc b => U64.bitOr (U64.shiftLeft acc 8) (U64.truncate b))
+    0
+    (arrayToListG (osEntropyBytes 8))
+
+runRngDraw : Unit -> <Env, Rand | e> U64
+runRngDraw _ =
+  runRngEnsure ()
+  rngStep runRngRef
+
+runSeeds : (Value e -> <e> Value e) -> Value e -> <e> Value e
+runSeeds f v =
+  let r = f v
+  runRngSeeded := True
+  r
+
+runRandomState : Value e -> <Env, Rand | e> Value e
+runRandomState v =
+  runRngEnsure ()
+  pRandomState runRngRef v
+
 -- The pure build-stamp externs, shared by `medaka run` (ioExternBindings) and
 -- `medaka check-policy`'s sample run so an entry using them evaluates in both.
 export
@@ -5562,6 +5613,14 @@ ioHostExterns _ = [
   ("allocBytes", prim1M pAllocBytesIO),
   ("ePutStr", prim1M pEPutStr),
   ("ePutStrLn", prim1M pEPutStrLn),
+  -- Random: the run's own entropy-seeded stream (see runRngRef)
+  ("randomInt", prim2M (pRandomInt runRngDraw)),
+  ("randomBool", prim1M (pRandomBool runRngDraw)),
+  ("randomFloat", prim1M (pRandomFloat runRngDraw)),
+  ("randomChar", prim1M (pRandomChar runRngDraw)),
+  ("setSeed", prim1M (runSeeds (pSetSeed runRngRef))),
+  ("randomState", prim1M runRandomState),
+  ("restoreRandomState", prim1M (runSeeds (pRestoreRandomState runRngRef))),
   -- File
   ("readFile", granted1 False Follow pReadFile),
   ("readFileBytes", granted1 False Follow pReadFileBytes),

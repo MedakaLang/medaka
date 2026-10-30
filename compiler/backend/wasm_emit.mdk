@@ -1555,6 +1555,10 @@ globalW prog op name =
 rngStateW : String
 rngStateW = "$mdk_rng_state"
 
+-- 1 once `setSeed` / `restoreRandomState` or the first draw has set the state
+rngSeededW : String
+rngSeededW = "$mdk_rng_seeded"
+
 -- `ref.func` of [name] in a body: the function must exist and an element
 -- declaration must list it.
 refFuncW : Prog -> String -> String
@@ -2554,7 +2558,10 @@ emitRefProgram prog plan groups =
     seedSymbolsW
       prog
       physical
-      ((if isEmptyL rngGlobal then [] else [symNameW rngStateW])
+      ((if isEmptyL rngGlobal then
+          []
+        else
+          [symNameW rngStateW, symNameW rngSeededW])
         ++ flatMap wDispGlobalNames dispGroups
         ++ map gname valNames
         ++ map
@@ -6325,6 +6332,8 @@ emitLeafExternRef prog env d "setSeed" [n] =
     ++ [
       unboxIntW prog,
       globalW prog "global.set" rngStateW,
+      "i32.const 1",
+      globalW prog "global.set" rngSeededW,
       "i32.const 0",
       "ref.i31",
     ]
@@ -6332,13 +6341,24 @@ emitLeafExternRef prog env d "setSeed" _ =
   gapLP prog "wasm W8: setSeed takes exactly one argument"
 emitLeafExternRef prog env d "randomState" [u] =
   emitRefExpr prog env d u
-    ++ ["drop", globalW prog "global.get" rngStateW, "struct.new $u64"]
+    ++ [
+      "drop",
+      rtCallW prog "mdk_rng_ensure" 0,
+      globalW prog "global.get" rngStateW,
+      "struct.new $u64",
+    ]
 emitLeafExternRef prog env d "randomState" _ =
   gapLP prog "wasm W8: randomState takes exactly one (Unit) argument"
 emitLeafExternRef prog env d "restoreRandomState" [state] =
   emitRefExpr prog env d state
     ++ unboxU64W
-    ++ [globalW prog "global.set" rngStateW, "i32.const 0", "ref.i31"]
+    ++ [
+      globalW prog "global.set" rngStateW,
+      "i32.const 1",
+      globalW prog "global.set" rngSeededW,
+      "i32.const 0",
+      "ref.i31",
+    ]
 emitLeafExternRef prog env d "restoreRandomState" _ =
   gapLP prog "wasm W8: restoreRandomState takes exactly one argument"
 -- #199: hashInt unboxes the FULL-WIDTH Int (via $mdk_unbox_int → i64) so an Int key
