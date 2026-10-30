@@ -1,0 +1,231 @@
+-- Fixture for rule-bind-chain-to-do (SUGGEST-ONLY): a DEEP (≥3) nested
+-- passthrough-bind `match` pyramid over Result/Option should become a `do` block.
+-- Only chains of DEPTH ≥ 3 fire; depth 1/2, a same-ctor re-wrap (a `map`, owned
+-- by rule-match-to-map), a mixed Result/Option chain, and a non-passthrough
+-- failure arm must NOT fire.
+
+-- POSITIVE: depth-3 Result chain (three nested Err-passthrough binds) → do-block.
+posResChain r = match step1 r
+  Err e => Err e
+  Ok a => match step2 a
+    Err e => Err e
+    Ok b => match step3 b
+      Err e => Err e
+      Ok c => combine a b c
+
+-- POSITIVE: depth-3 Option chain (three nested None-passthrough binds) → do-block.
+posOptChain o = match lookupA o
+  None => None
+  Some a => match lookupB a
+    None => None
+    Some b => match lookupC b
+      None => None
+      Some c => combine a b c
+
+-- POSITIVE: depth-3 Result chain ending in a functor `map` terminal (the map IS
+-- the final bind: `x <- m; pure (f x)`), so it counts toward the depth.
+posResMap r = match step1 r
+  Err e => Err e
+  Ok a => match step2 a
+    Err e => Err e
+    Ok b => map (c => combine a b c) (step3 b)
+
+-- NEGATIVE: depth-1 single bind — clearer as-is than a 1-statement do.
+negDepth1 r = match step1 r
+  Err e => Err e
+  Ok x => finish x
+
+-- NEGATIVE: depth-2 chain — below the depth-3 gate.
+negDepth2 r = match step1 r
+  Err e => Err e
+  Ok a => match step2 a
+    Err e => Err e
+    Ok b => combine a b
+
+-- NEGATIVE: same-ctor re-wrap (`Ok x => Ok (g x)`) — that is a `map`
+-- (rule-match-to-map owns it), not a bind chain.
+-- expect-next-line rule-match-to-map
+negRewrap r = match r
+  Err e => Err e
+  Ok x => Ok (g x)
+
+-- NEGATIVE: mixed Result/Option chain — not monad-consistent, so it breaks.
+negMixed r = match step1 r
+  Err e => Err e
+  Ok a => match lookupB a
+    None => None
+    Some b => match step3 b
+      Err e => Err e
+      Ok c => combine a b c
+
+-- NEGATIVE: failure arm REBUILDS (`Err (wrap e)`) rather than passing through
+-- verbatim — the top level is not a bind, so no depth-3 chain.
+negErrRebuild r = match step1 r
+  Err e => Err (wrap e)
+  Ok a => match step2 a
+    Err e => Err e
+    Ok b => match step3 b
+      Err e => Err e
+      Ok c => combine a b c
+
+-- Fixture for rule-match-to-map: a 2-arm `match` on Option/Result that IS a
+-- functor `map` over the success side → rewrite to `map f o` (hlint "use fmap").
+-- Only the two `map` shapes fire (Option None/Some, Result Err/Ok); the failure
+-- arm reconstructs VERBATIM and the success arm re-wraps the SAME ctor.
+
+-- POSITIVE: Option, eta-reduces to `map g o`.
+-- expect-next-line rule-match-to-map
+posOptEta o = match o
+  None => None
+  Some x => Some (g x)
+
+-- POSITIVE: Option, general expr → `map (x => x + 1) o`.
+-- expect-next-line rule-match-to-map
+posOptExpr o = match o
+  None => None
+  Some x => Some (x + 1)
+
+-- POSITIVE: Result, eta-reduces to `map g r`.
+-- expect-next-line rule-match-to-map
+posResEta r = match r
+  Err e => Err e
+  Ok x => Ok (g x)
+
+-- POSITIVE: Result, general expr (binary op, no eta) → `map (x => x + delta) r`.
+-- expect-next-line rule-match-to-map
+posResExpr r = match r
+  Err e => Err e
+  Ok x => Ok (x + delta)
+
+-- POSITIVE: tuple destructure binder → `map ((a, b) => a + b) r`.
+-- expect-next-line rule-match-to-map
+posTuple r = match r
+  Ok (a, b) => Ok (a + b)
+  Err e => Err e
+
+-- POSITIVE: wildcard binder → `map (_ => 42) o`.
+-- expect-next-line rule-match-to-map
+posWild o = match o
+  None => None
+  Some _ => Some 42
+
+-- POSITIVE: Some-first arm order still fires.
+-- expect-next-line rule-match-to-map
+posOrder o = match o
+  Some x => Some (g x)
+  None => None
+
+-- NEGATIVE: bind chain — the Ok arm UNWRAPS (no `Ok` re-wrap) → andThen, not map.
+negBind r = match r
+  Err e => Err e
+  Ok x => f x
+
+-- NEGATIVE: the Err arm REBUILDS (`Err (wrap e)`), not a verbatim passthrough.
+negErrRebuild r = match r
+  Err e => Err (wrap e)
+  Ok x => Ok (g x)
+
+-- NEGATIVE: failure arm returns a default value → getOrElse/option, not map.
+negDefault o = match o
+  None => []
+  Some x => Some x
+
+-- NEGATIVE: more than 2 arms.
+negThreeArms o = match o
+  None => None
+  Some 0 => Some 1
+  Some x => Some x
+
+-- NEGATIVE: an arm has a guard.
+negGuard o = match o
+  None => None
+  Some x if x > 0 => Some x
+
+-- NEGATIVE: the Some arm UNWRAPS instead of re-wrapping.
+negUnwrap o = match o
+  None => None
+  Some x => x
+
+-- Fixture for rule-orelse-staircase (SUGGEST-ONLY): a first-match PROBE staircase
+-- — nested `match`es that try a fresh probe per level, hand that probe's own
+-- payload straight back on success, and fall through to the next probe on failure
+-- — should become `orElse` / `findMap`.  Only chains of DEPTH ≥ 2 fire; a single
+-- level (a `withDefault`), a success arm that CONSUMES its payload (the
+-- heterogeneous probe chain #2565 scopes out), a mixed Option/Result chain, and an
+-- `Err e` arm that inspects the failure must NOT fire.
+
+-- POSITIVE: depth-2 Option staircase returning the payload (`Some v => v`).
+posUnwrap2 k = match lookupA k
+  Some v => v
+  None => match lookupB k
+    Some v => v
+    None => dflt
+
+-- POSITIVE: depth-3 Option staircase returning the Option (`Some v => Some v`).
+posOption3 k = match lookupA k
+  Some v => Some v
+  None => match lookupB k
+    Some v => Some v
+    -- expect-next-line rule-match-to-map
+    None => match lookupC k
+      Some v => Some v
+      None => None
+
+-- POSITIVE: depth-2 Result staircase — `Ok v => Ok v` with an `Err _` fallthrough.
+posResult2 k = match tryA k
+  Ok v => Ok v
+  Err _ => match tryB k
+    Ok v => Ok v
+    Err _ => tryC k
+
+-- POSITIVE: arm order reversed (failure arm written first) is the same staircase.
+posArmOrder k = match lookupA k
+  None => match lookupB k
+    None => dflt
+    Some v => v
+  Some v => v
+
+-- NEGATIVE: depth-1 — one probe and a default. That is `withDefault`, not a
+-- staircase, and there is nothing to chain with `orElse`.
+negDepth1 k = match lookupA k
+  Some v => v
+  None => dflt
+
+-- NEGATIVE: the #2565 non-hit shape — each success arm CONSUMES its payload with
+-- its own continuation (`inferAppExpr`'s probe chain). The levels do not share a
+-- result type, so `orElse` does not typecheck over them, and Medaka being strict an
+-- eager rewrite would run every probe. Explicitly out of scope.
+negHeterogeneous f x = match probeSpine f
+  Some (name, refs, nodes) => applySpine name refs nodes f x
+  None => match probeHead f
+    Some (name, refs) => applyHead name refs f x
+    None => match probeVar f
+      Some name => applyVar name f x
+      None => applyPlain f x
+
+-- NEGATIVE: mixed Option/Result staircase — not monad-consistent, so neither
+-- combinator applies and no chain reaches depth 2.
+negMixed k = match lookupA k
+  Some v => v
+  None => match tryB k
+    Ok v => Ok v
+    Err _ => match lookupC k
+      Some v => v
+      None => dflt
+
+-- NEGATIVE: the failure arm INSPECTS the error (`Err e => … e …`) rather than
+-- falling through, so the level is not a plain re-probe.
+negErrInspected k = match tryA k
+  Ok v => Ok v
+  Err e => match tryB (recover e)
+    Ok v => Ok v
+    Err _ => dflt
+
+-- NEGATIVE: the success arm re-wraps a TRANSFORMED payload (`Some v => Some (g v)`).
+-- That is a `map` (rule-match-to-map owns it), not an identity passthrough.
+negRewrapTransform k = match lookupA k
+  Some v => Some (g v)
+  -- expect-next-line rule-match-to-map
+  None => match lookupB k
+    Some v => Some (g v)
+    None => None

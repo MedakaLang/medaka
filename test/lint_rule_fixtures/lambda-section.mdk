@@ -50,3 +50,57 @@ prop "lambda uses its parameter twice in a prop body" (xs : List Int) = map (x =
 interface Calls a where
   calls : List a -> List a
   calls xs = map (x => f x) xs
+
+-- Fixture for rule-lambda-section: lambdas rewritable to operator sections.
+
+-- POSITIVE: right sections (param is the LEFT operand; RHS free of the param).
+-- expect-next-line rule-lambda-section
+rightEq = (x => x == 3)
+-- expect-next-line rule-lambda-section
+rightMul = (x => x * 2)
+-- expect-next-line rule-lambda-section
+rightCons = (x => x :: rest)
+-- expect-next-line rule-lambda-section
+rightConcat = (x => x ++ suffix)
+
+-- POSITIVE: left sections (param is the RIGHT operand; LHS free of the param).
+-- expect-next-line rule-lambda-section
+leftMul = (x => 2 * x)
+-- expect-next-line rule-lambda-section
+leftSub = (x => 10 - x)
+-- expect-next-line rule-lambda-section
+leftCompose = (x => base >> x)
+
+-- POSITIVE: bare sections (two params, in order, each once).
+-- expect-next-line rule-lambda-section
+bareAdd = (x y => x + y)
+-- expect-next-line rule-lambda-section
+bareLt = (a b => a < b)
+
+-- POSITIVE: nested anywhere in a decl body.
+-- expect-next-line rule-lambda-section
+nestedInApp = filterOut (n => n > 0) items
+
+-- expect-next-line rule-lambda-section
+nestedInLet =
+  let g = (v => v && flag)
+  g True
+
+-- NEGATIVE: `-` right section would parse as unary negation — must NOT fire.
+negRightSub = (x => x - 5)
+
+-- NEGATIVE: param used twice / on both operands — must NOT fire.
+negSelf = (x => x + x)
+
+-- NEGATIVE: param buried in a sub-expression — must NOT fire.
+negSubexpr = (x => f x + 1)
+
+-- NEGATIVE: two params out of order — must NOT fire.
+negReorder = (x y => y + x)
+
+-- NEGATIVE: three params — not a section shape.
+negThree = (x y z => x + y)
+
+-- NEGATIVE: not a binary op at all.
+negUnary = (x => -x)
+negApp = (x => f x)
