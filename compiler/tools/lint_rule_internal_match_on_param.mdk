@@ -104,6 +104,7 @@ matchParamHit loc name pats p
         "function '\{name}' matches on parameter '\{p}' — use a multi-clause function definition",
       severity = SevWarning,
       loc = loc,
+      fix = None,
     },
   ]
   | otherwise = []

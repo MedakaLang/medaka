@@ -1,5 +1,5 @@
 # META
-source_lines=54
+source_lines=56
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{Loc}
@@ -23,7 +23,9 @@ public export data Severity = SevError | SevWarning
 -- surfaced JSON-only (CLI text is unchanged) and are `None` for most diagnostics;
 -- parse and resolve diagnostics may populate them. A `Fix` replaces its
 -- `Loc` span with the replacement string.
-public export data Fix = Fix Loc String
+-- `FixEdits` is a lint fix: an applicability name (`safe`, `unsafe`,
+-- `suggest`) and several span edits that apply together.
+public export data Fix = Fix Loc String | FixEdits String (List (Loc, String))
 
 -- A diagnostic id is a compiler code or a lint rule name, two sources that share the one
 -- `Diag`; neither is the other's failure case, so `Result` does not fit.
@@ -60,7 +62,7 @@ mkDiag sev code msg loc = Diag sev (Coded code) msg loc None None
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" false))))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" false) (mem "DiagKind" true) (mem "codeKind" false) (mem "codeText" false) (mem "kindText" false))))
 (DData Public "Severity" () ((variant "SevError" (ConPos)) (variant "SevWarning" (ConPos))) ())
-(DData Public "Fix" () ((variant "Fix" (ConPos (TyCon "Loc") (TyCon "String")))) ())
+(DData Public "Fix" () ((variant "Fix" (ConPos (TyCon "Loc") (TyCon "String"))) (variant "FixEdits" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String")))))) ())
 (DData Public "DiagId" () ((variant "Coded" (ConPos (TyCon "DiagCode"))) (variant "LintRule" (ConPos (TyCon "String")))) ())
 (DImpl true "Eq" ((TyCon "DiagId")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Coded" (PVar "__a0")) (PCon "Coded" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LintRule" (PVar "__a0")) (PCon "LintRule" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Diag" () ((variant "Diag" (ConPos (TyCon "Severity") (TyCon "DiagId") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Fix"))))) ())
@@ -79,7 +81,7 @@ mkDiag sev code msg loc = Diag sev (Coded code) msg loc None None
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" false))))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" false) (mem "DiagKind" true) (mem "codeKind" false) (mem "codeText" false) (mem "kindText" false))))
 (DData Public "Severity" () ((variant "SevError" (ConPos)) (variant "SevWarning" (ConPos))) ())
-(DData Public "Fix" () ((variant "Fix" (ConPos (TyCon "Loc") (TyCon "String")))) ())
+(DData Public "Fix" () ((variant "Fix" (ConPos (TyCon "Loc") (TyCon "String"))) (variant "FixEdits" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String")))))) ())
 (DData Public "DiagId" () ((variant "Coded" (ConPos (TyCon "DiagCode"))) (variant "LintRule" (ConPos (TyCon "String")))) ())
 (DImpl true "Eq" ((TyCon "DiagId")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Coded" (PVar "__a0")) (PCon "Coded" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LintRule" (PVar "__a0")) (PCon "LintRule" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Diag" () ((variant "Diag" (ConPos (TyCon "Severity") (TyCon "DiagId") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Fix"))))) ())

@@ -9,6 +9,7 @@ import frontend.ast_walk.{ExprKind}
 import tools.lint_scope.{FileScopes}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..), Diag(..)}
+import driver.diagnostic_value as DV
 import support.util.{listLen, filterList, lookupAssoc, anyList}
 import hash_map.{HashMap, new, size, findWithDefault}
 import tools.printer.{ppTy}
@@ -22,7 +23,39 @@ public export data Finding = Finding {
   message : String,
   severity : Severity,
   loc : Option Loc,
+  fix : Option Fix,
 }
+
+-- How far a fix may be trusted.  `Safe` is applied by `--fix`, `Unsafe` only
+-- by `--fix --unsafe-fixes`, `Suggest` is shown and never applied.
+public export data Applicability = Safe | Unsafe | Suggest deriving (Eq)
+
+-- One source edit: the text between the start and end of `feSpan` becomes
+-- `feText`.  Columns are codepoint offsets within the line, as in every `Loc`.
+public export data FixEdit = FixEdit { feSpan : Loc, feText : String }
+
+-- A finding's rewrite as span edits.  The edits of one fix are applied
+-- together or not at all.
+public export data Fix = Fix {
+  fixApplicability : Applicability,
+  fixEdits : List FixEdit,
+  fixMessage : String,
+}
+
+-- The applicability's lowercase name, as `--json` and `--list-rules` print it.
+export
+applicabilityText : Applicability -> String
+applicabilityText Safe = "safe"
+applicabilityText Unsafe = "unsafe"
+applicabilityText Suggest = "suggest"
+
+-- The `Diag` form of a fix, for `--json`.
+export
+fixToDiagFix : Fix -> DV.Fix
+fixToDiagFix fx =
+  DV.FixEdits
+    (applicabilityText fx.fixApplicability)
+    (map (e => (e.feSpan, e.feText)) fx.fixEdits)
 
 -- A write-once cell holding a derived value, forced on first demand.  Rules run
 -- under a pure `check`, and the cell is private to one file's `FileFacts`, so
@@ -88,8 +121,22 @@ public export data Scope = Universal | Internal deriving (Eq)
 -- count that may only fall (`Baselined`).
 public export data Ratchet = Gated | Baselined deriving (Eq)
 
--- Whether `--fix` may rewrite the findings of a rule.
-public export data Fixability = Fixable | NotFixable
+-- The most a rule's fixes may be trusted: `Fixable` is `Safe`, and a rule
+-- whose fixes `--fix` leaves alone is `FixableUnsafe` or `SuggestOnly`.
+-- `Fixable` also marks the rules that carry a whole-declaration fixer.
+public export data Fixability =
+  | Fixable
+  | FixableUnsafe
+  | SuggestOnly
+  | NotFixable
+
+-- The applicability ceiling of a fixability, `None` for a rule with no fix.
+export
+maxApplicability : Fixability -> Option Applicability
+maxApplicability Fixable = Some Safe
+maxApplicability FixableUnsafe = Some Unsafe
+maxApplicability SuggestOnly = Some Suggest
+maxApplicability NotFixable = None
 
 -- An input a rule's `check` reads beyond the file itself; the runner builds
 -- only what some active rule needs.
@@ -235,6 +282,8 @@ ruleOf m check fix = Rule {
   check = check,
   fix = match m.fixability
     Fixable => fix
+    FixableUnsafe => None
+    SuggestOnly => None
     NotFixable => None,
 }
 

@@ -153,6 +153,7 @@ lambdaSectionFinding loc s = Finding {
       ++ "'",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 -- ── autofix ───────────────────────────────────────────────────────────────────

@@ -162,6 +162,7 @@ bindDestructureFinding loc v = Finding {
       ++ "' then immediately destructures it in a final `match`. Inline the pattern into the bind",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 -- ── autofix ──────────────────────────────────────────────────────────────────

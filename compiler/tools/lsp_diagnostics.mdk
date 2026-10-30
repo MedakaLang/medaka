@@ -44,6 +44,25 @@ fixField index (Some (Fix loc replacement)) = [
     ],
   ),
 ]
+fixField index (Some (FixEdits applicability edits)) = [
+  (
+    "fix",
+    jObject [
+      ("applicability", JString applicability),
+      (
+        "edits",
+        JArray
+          (arrayFromList
+            (map
+              ((loc, replacement) => jObject [
+                ("range", optionOr JNull (locToLspRange index loc)),
+                ("replacement", JString replacement),
+              ])
+              edits)),
+      ),
+    ],
+  ),
+]
 fixField _ None = []
 
 export

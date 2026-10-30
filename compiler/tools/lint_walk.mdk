@@ -91,6 +91,7 @@ import tools.lint_core.{
   StdlibIndexError(..),
   Visitor(..),
   factComments,
+  fixToDiagFix,
   factDupClauses,
   factScopes,
   memoNew,
@@ -387,8 +388,13 @@ kindIn _ [] = False
 kindIn k (x :: xs) = k == x || kindIn k xs
 
 restampSeverity : Severity -> Finding -> Finding
-restampSeverity sev f =
-  Finding { rule = f.rule, message = f.message, severity = sev, loc = f.loc }
+restampSeverity sev f = Finding {
+  rule = f.rule,
+  message = f.message,
+  severity = sev,
+  loc = f.loc,
+  fix = f.fix,
+}
 
 -- Whether some rule in the active `--only`/`--disable` set declares
 -- `NeedsStdlibIndex` in its metadata.  Mirrors `ruleActiveFixable`'s only/disable
@@ -957,6 +963,7 @@ lintFindingDenyGo names (f :: rest)
         message = f.message,
         severity = SevError,
         loc = f.loc,
+        fix = f.fix,
       }
       :: lintFindingDenyGo names rest
   | otherwise = f :: lintFindingDenyGo names rest
@@ -972,7 +979,13 @@ isFindingError f = match f.severity
 export
 findingToDiag : Finding -> Diag
 findingToDiag f =
-  Diag f.severity (LintRule f.rule) "[\{f.rule}] \{f.message}" f.loc None None
+  Diag
+    f.severity
+    (LintRule f.rule)
+    "[\{f.rule}] \{f.message}"
+    f.loc
+    None
+    (map fixToDiagFix f.fix)
 
 -- Run the full lint pipeline (all rules, inline `-- lint-disable-*` suppression,
 -- then the `--disable`/`--only`/`--deny` CLI-flag-style filters) over ONE file

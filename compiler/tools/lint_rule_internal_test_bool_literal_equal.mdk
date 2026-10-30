@@ -96,6 +96,7 @@ testBoolLitEqFinding loc rewritten = Finding {
     "`expectEqual` against a boolean literal. Rewrite as '\{exprToString rewritten}'",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 testBoolLiteralEqualFix : Oracle -> Decl -> Option (List Decl)

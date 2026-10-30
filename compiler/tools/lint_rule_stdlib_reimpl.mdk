@@ -417,6 +417,7 @@ stdlibFinding name modName stdName loc = Finding {
     "top-level '\{name}' reimplements stdlib '\{modName}.\{stdName}' (same declared signature) — use the stdlib version",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 -- ── declared-signature identity, up to renaming ───────────────────────────────

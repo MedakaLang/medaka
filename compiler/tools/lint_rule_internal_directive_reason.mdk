@@ -270,4 +270,5 @@ directiveReasonFinding c = Finding {
     "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason",
   severity = SevWarning,
   loc = Some (Loc "" (commentLine c) 1 (commentLine c) 1),
+  fix = None,
 }

@@ -300,7 +300,8 @@ decListGo f arr i n
 decFinding : Json -> Option Finding
 decFinding j =
   map4
-    (r m s l => Finding { rule = r, message = m, severity = s, loc = l })
+    (r m s l =>
+      Finding { rule = r, message = m, severity = s, loc = l, fix = None })
     (decStr "rule" j)
     (decStr "message" j)
     (optBind (decStr "severity" j) decSeverity)

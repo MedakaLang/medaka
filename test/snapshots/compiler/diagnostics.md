@@ -1,5 +1,5 @@
 # META
-source_lines=3454
+source_lines=3468
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -2654,6 +2654,20 @@ cjFixJsonWithSource src (Fix loc repl) = jObject [
   ("range", cjRangeOfLoc src (Some loc)),
   ("replacement", JString repl),
 ]
+cjFixJsonWithSource src (FixEdits applicability edits) = jObject [
+  ("applicability", JString applicability),
+  (
+    "edits",
+    JArray
+      (arrayFromList
+        (map
+          ((loc, repl) => jObject [
+            ("range", cjRangeOfLoc src (Some loc)),
+            ("replacement", JString repl),
+          ])
+          edits)),
+  ),
+]
 
 export
 cjDiagnostic : String -> String -> Diag -> Json
@@ -3829,6 +3843,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "cjFixJson" () (EApp (EVar "cjFixJsonWithSource") (ELit (LString ""))))
 (DTypeSig false "cjFixJsonWithSource" (TyFun (TyCon "String") (TyFun (TyCon "Fix") (TyCon "Json"))))
 (DFunDef false "cjFixJsonWithSource" ((PVar "src") (PCon "Fix" (PVar "loc") (PVar "repl"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EApp (EVar "Some") (EVar "loc")))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "repl"))))))
+(DFunDef false "cjFixJsonWithSource" ((PVar "src") (PCon "FixEdits" (PVar "applicability") (PVar "edits"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "applicability")) (EApp (EVar "JString") (EVar "applicability"))) (ETuple (ELit (LString "edits")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "loc") (PVar "repl"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EApp (EVar "Some") (EVar "loc")))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "repl"))))))) (EVar "edits"))))))))
 (DTypeSig true "cjDiagnostic" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "Json")))))
 (DFunDef false "cjDiagnostic" (PWild (PVar "src") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EApp (EVar "diagIdText") (EVar "code"))))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EVar "map") (EApp (EVar "cjFixJsonWithSource") (EVar "src"))) (EVar "fix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EVar "map") (EVar "JString")) (EVar "help")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EApp (EVar "diagKind") (EVar "sev")) (EVar "code")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EVar "loc"))) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (EApp (EVar "cjSevCode") (EVar "sev")))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))))
 (DTypeSig true "cjFileEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Json")))))
@@ -4348,6 +4363,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "cjFixJson" () (EApp (EVar "cjFixJsonWithSource") (ELit (LString ""))))
 (DTypeSig false "cjFixJsonWithSource" (TyFun (TyCon "String") (TyFun (TyCon "Fix") (TyCon "Json"))))
 (DFunDef false "cjFixJsonWithSource" ((PVar "src") (PCon "Fix" (PVar "loc") (PVar "repl"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EApp (EVar "Some") (EVar "loc")))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "repl"))))))
+(DFunDef false "cjFixJsonWithSource" ((PVar "src") (PCon "FixEdits" (PVar "applicability") (PVar "edits"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "applicability")) (EApp (EVar "JString") (EVar "applicability"))) (ETuple (ELit (LString "edits")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "loc") (PVar "repl"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EApp (EVar "Some") (EVar "loc")))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "repl"))))))) (EVar "edits"))))))))
 (DTypeSig true "cjDiagnostic" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "Json")))))
 (DFunDef false "cjDiagnostic" (PWild (PVar "src") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EApp (EVar "diagIdText") (EVar "code"))))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "cjFixJsonWithSource") (EVar "src"))) (EVar "fix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EMethodRef "map") (EVar "JString")) (EVar "help")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EApp (EVar "diagKind") (EVar "sev")) (EVar "code")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EVar "loc"))) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (EApp (EVar "cjSevCode") (EVar "sev")))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))))
 (DTypeSig true "cjFileEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Json")))))

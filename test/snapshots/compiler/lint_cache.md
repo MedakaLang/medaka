@@ -1,5 +1,5 @@
 # META
-source_lines=480
+source_lines=481
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cache.mdk — the on-disk cache behind `medaka lint --cache` (#395).
@@ -304,7 +304,8 @@ decListGo f arr i n
 decFinding : Json -> Option Finding
 decFinding j =
   map4
-    (r m s l => Finding { rule = r, message = m, severity = s, loc = l })
+    (r m s l =>
+      Finding { rule = r, message = m, severity = s, loc = l, fix = None })
     (decStr "rule" j)
     (decStr "message" j)
     (optBind (decStr "severity" j) decSeverity)
@@ -545,7 +546,7 @@ makeStagingDir cacheDir =
 (DTypeSig false "decListGo" (TyFun (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyVar "a"))))))))
 (DFunDef false "decListGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Some") (EListLit)) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "map2") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "::" (EVar "_a") (EVar "_b")))) (EApp (EVar "f") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EApp (EApp (EApp (EApp (EVar "decListGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "decFinding" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Finding"))))
-(DFunDef false "decFinding" ((PVar "j")) (EApp (EApp (EApp (EApp (EApp (EVar "map4") (ELam ((PVar "r") (PVar "m") (PVar "s") (PVar "l")) (ERecordCreate "Finding" ((fa "rule" (EVar "r")) (fa "message" (EVar "m")) (fa "severity" (EVar "s")) (fa "loc" (EVar "l")))))) (EApp (EApp (EVar "decStr") (ELit (LString "rule"))) (EVar "j"))) (EApp (EApp (EVar "decStr") (ELit (LString "message"))) (EVar "j"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "decStr") (ELit (LString "severity"))) (EVar "j"))) (EVar "decSeverity"))) (EApp (EVar "decLoc") (EApp (EApp (EVar "get") (ELit (LString "loc"))) (EVar "j")))))
+(DFunDef false "decFinding" ((PVar "j")) (EApp (EApp (EApp (EApp (EApp (EVar "map4") (ELam ((PVar "r") (PVar "m") (PVar "s") (PVar "l")) (ERecordCreate "Finding" ((fa "rule" (EVar "r")) (fa "message" (EVar "m")) (fa "severity" (EVar "s")) (fa "loc" (EVar "l")) (fa "fix" (EVar "None")))))) (EApp (EApp (EVar "decStr") (ELit (LString "rule"))) (EVar "j"))) (EApp (EApp (EVar "decStr") (ELit (LString "message"))) (EVar "j"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "decStr") (ELit (LString "severity"))) (EVar "j"))) (EVar "decSeverity"))) (EApp (EVar "decLoc") (EApp (EApp (EVar "get") (ELit (LString "loc"))) (EVar "j")))))
 (DTypeSig false "decSeverity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Severity"))))
 (DFunDef false "decSeverity" ((PLit (LString "error"))) (EApp (EVar "Some") (EVar "SevError")))
 (DFunDef false "decSeverity" ((PLit (LString "warning"))) (EApp (EVar "Some") (EVar "SevWarning")))
@@ -661,7 +662,7 @@ makeStagingDir cacheDir =
 (DTypeSig false "decListGo" (TyFun (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyVar "a"))))))))
 (DFunDef false "decListGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Some") (EListLit)) (EIf (EVar "otherwise") (EApp (EApp (EApp (EDictApp "map2") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "::" (EVar "_a") (EVar "_b")))) (EApp (EVar "f") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EApp (EApp (EApp (EApp (EVar "decListGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "decFinding" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Finding"))))
-(DFunDef false "decFinding" ((PVar "j")) (EApp (EApp (EApp (EApp (EApp (EVar "map4") (ELam ((PVar "r") (PVar "m") (PVar "s") (PVar "l")) (ERecordCreate "Finding" ((fa "rule" (EVar "r")) (fa "message" (EVar "m")) (fa "severity" (EVar "s")) (fa "loc" (EVar "l")))))) (EApp (EApp (EVar "decStr") (ELit (LString "rule"))) (EVar "j"))) (EApp (EApp (EVar "decStr") (ELit (LString "message"))) (EVar "j"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "decStr") (ELit (LString "severity"))) (EVar "j"))) (EVar "decSeverity"))) (EApp (EVar "decLoc") (EApp (EApp (EVar "get") (ELit (LString "loc"))) (EVar "j")))))
+(DFunDef false "decFinding" ((PVar "j")) (EApp (EApp (EApp (EApp (EApp (EVar "map4") (ELam ((PVar "r") (PVar "m") (PVar "s") (PVar "l")) (ERecordCreate "Finding" ((fa "rule" (EVar "r")) (fa "message" (EVar "m")) (fa "severity" (EVar "s")) (fa "loc" (EVar "l")) (fa "fix" (EVar "None")))))) (EApp (EApp (EVar "decStr") (ELit (LString "rule"))) (EVar "j"))) (EApp (EApp (EVar "decStr") (ELit (LString "message"))) (EVar "j"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "decStr") (ELit (LString "severity"))) (EVar "j"))) (EVar "decSeverity"))) (EApp (EVar "decLoc") (EApp (EApp (EVar "get") (ELit (LString "loc"))) (EVar "j")))))
 (DTypeSig false "decSeverity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Severity"))))
 (DFunDef false "decSeverity" ((PLit (LString "error"))) (EApp (EVar "Some") (EVar "SevError")))
 (DFunDef false "decSeverity" ((PLit (LString "warning"))) (EApp (EVar "Some") (EVar "SevWarning")))

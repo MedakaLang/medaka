@@ -19,7 +19,9 @@ public export data Severity = SevError | SevWarning
 -- surfaced JSON-only (CLI text is unchanged) and are `None` for most diagnostics;
 -- parse and resolve diagnostics may populate them. A `Fix` replaces its
 -- `Loc` span with the replacement string.
-public export data Fix = Fix Loc String
+-- `FixEdits` is a lint fix: an applicability name (`safe`, `unsafe`,
+-- `suggest`) and several span edits that apply together.
+public export data Fix = Fix Loc String | FixEdits String (List (Loc, String))
 
 -- A diagnostic id is a compiler code or a lint rule name, two sources that share the one
 -- `Diag`; neither is the other's failure case, so `Result` does not fit.

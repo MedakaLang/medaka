@@ -109,6 +109,7 @@ complementPredicateFinding loc rewritten = Finding {
   message = "negated predicate. Rewrite as '" ++ exprToString rewritten ++ "'",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 complementPredicateFix : Oracle -> Decl -> Option (List Decl)

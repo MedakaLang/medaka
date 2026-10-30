@@ -142,6 +142,7 @@ ifMaxMinFinding loc (fn, a, b) = Finding {
     "if-then-else selects the \{if fn == "max" then "larger" else "smaller"} of the same two operands. Rewrite as '\{exprToString (EApp (EApp (EVar fn) a) b)}'",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 -- ── autofix ───────────────────────────────────────────────────────────────────

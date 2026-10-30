@@ -122,6 +122,7 @@ matchToMapFinding loc rewritten = Finding {
       ++ "'",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 matchToMapFix : Oracle -> Decl -> Option (List Decl)

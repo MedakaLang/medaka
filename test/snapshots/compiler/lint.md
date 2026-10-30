@@ -1,5 +1,5 @@
 # META
-source_lines=60
+source_lines=65
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` facade.  The framework lives in
@@ -8,11 +8,14 @@ stages=DESUGAR,MARK
 -- this module re-exports the surface the CLI, MCP server and tests consume.
 
 export import tools.lint_core.{
+  Applicability(..),
   Category(..),
   CrossFileRule(..),
   DirScope(..),
   Directive(..),
   Finding(..),
+  Fix(..),
+  FixEdit(..),
   Fixability(..),
   Need(..),
   Ratchet(..),
@@ -21,7 +24,9 @@ export import tools.lint_core.{
   Scope(..),
   StdlibIndex(..),
   StdlibIndexError(..),
+  applicabilityText,
   emptyStdlibIndex,
+  maxApplicability,
   ruleMetaName,
 }
 export import tools.lint_shared.{collectDirectives}
@@ -63,13 +68,13 @@ export import tools.lint_walk.{
   stdlibIndexNeeded,
 }
 # DESUGAR
-(DUse true (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "CrossFileRule" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "emptyStdlibIndex" false) (mem "ruleMetaName" false))))
+(DUse true (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "CrossFileRule" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "applicabilityText" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "ruleMetaName" false))))
 (DUse true (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false))))
 (DUse true (UseGroup ("tools" "lint_dup") ((mem "fileDupOccs" false))))
 (DUse true (UseGroup ("tools" "lint_registry") ((mem "allCrossFileRules" false) (mem "allRuleNames" false) (mem "allRules" false) (mem "crossFileMetaProblems" false) (mem "crossFileSelected" false) (mem "selectRules" false))))
 (DUse true (UseGroup ("tools" "lint_walk") ((mem "applyFindingDeny" false) (mem "applyFindingFilters" false) (mem "applyFixes" false) (mem "applySuppressions" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsMultiDirs" false) (mem "buildStdlibIndexResult" false) (mem "crossFileCacheSound" false) (mem "factDirectives" false) (mem "factDupOccs" false) (mem "findingToDiag" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "lintFileDiagTripleParsed" false) (mem "lintParseSource" false) (mem "lintProgram" false) (mem "lintProgramFacts" false) (mem "lintToLines" false) (mem "mergeCrossFileIntoTriples" false) (mem "mkFileFacts" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "splitLintNames" false) (mem "stdlibFingerprint" false) (mem "stdlibIndexNeeded" false))))
 # MARK
-(DUse true (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "CrossFileRule" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "emptyStdlibIndex" false) (mem "ruleMetaName" false))))
+(DUse true (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "CrossFileRule" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "applicabilityText" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "ruleMetaName" false))))
 (DUse true (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false))))
 (DUse true (UseGroup ("tools" "lint_dup") ((mem "fileDupOccs" false))))
 (DUse true (UseGroup ("tools" "lint_registry") ((mem "allCrossFileRules" false) (mem "allRuleNames" false) (mem "allRules" false) (mem "crossFileMetaProblems" false) (mem "crossFileSelected" false) (mem "selectRules" false))))

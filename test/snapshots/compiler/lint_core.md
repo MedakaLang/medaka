@@ -1,5 +1,5 @@
 # META
-source_lines=404
+source_lines=453
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -13,6 +13,7 @@ import frontend.ast_walk.{ExprKind}
 import tools.lint_scope.{FileScopes}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..), Diag(..)}
+import driver.diagnostic_value as DV
 import support.util.{listLen, filterList, lookupAssoc, anyList}
 import hash_map.{HashMap, new, size, findWithDefault}
 import tools.printer.{ppTy}
@@ -26,7 +27,39 @@ public export data Finding = Finding {
   message : String,
   severity : Severity,
   loc : Option Loc,
+  fix : Option Fix,
 }
+
+-- How far a fix may be trusted.  `Safe` is applied by `--fix`, `Unsafe` only
+-- by `--fix --unsafe-fixes`, `Suggest` is shown and never applied.
+public export data Applicability = Safe | Unsafe | Suggest deriving (Eq)
+
+-- One source edit: the text between the start and end of `feSpan` becomes
+-- `feText`.  Columns are codepoint offsets within the line, as in every `Loc`.
+public export data FixEdit = FixEdit { feSpan : Loc, feText : String }
+
+-- A finding's rewrite as span edits.  The edits of one fix are applied
+-- together or not at all.
+public export data Fix = Fix {
+  fixApplicability : Applicability,
+  fixEdits : List FixEdit,
+  fixMessage : String,
+}
+
+-- The applicability's lowercase name, as `--json` and `--list-rules` print it.
+export
+applicabilityText : Applicability -> String
+applicabilityText Safe = "safe"
+applicabilityText Unsafe = "unsafe"
+applicabilityText Suggest = "suggest"
+
+-- The `Diag` form of a fix, for `--json`.
+export
+fixToDiagFix : Fix -> DV.Fix
+fixToDiagFix fx =
+  DV.FixEdits
+    (applicabilityText fx.fixApplicability)
+    (map (e => (e.feSpan, e.feText)) fx.fixEdits)
 
 -- A write-once cell holding a derived value, forced on first demand.  Rules run
 -- under a pure `check`, and the cell is private to one file's `FileFacts`, so
@@ -92,8 +125,22 @@ public export data Scope = Universal | Internal deriving (Eq)
 -- count that may only fall (`Baselined`).
 public export data Ratchet = Gated | Baselined deriving (Eq)
 
--- Whether `--fix` may rewrite the findings of a rule.
-public export data Fixability = Fixable | NotFixable
+-- The most a rule's fixes may be trusted: `Fixable` is `Safe`, and a rule
+-- whose fixes `--fix` leaves alone is `FixableUnsafe` or `SuggestOnly`.
+-- `Fixable` also marks the rules that carry a whole-declaration fixer.
+public export data Fixability =
+  | Fixable
+  | FixableUnsafe
+  | SuggestOnly
+  | NotFixable
+
+-- The applicability ceiling of a fixability, `None` for a rule with no fix.
+export
+maxApplicability : Fixability -> Option Applicability
+maxApplicability Fixable = Some Safe
+maxApplicability FixableUnsafe = Some Unsafe
+maxApplicability SuggestOnly = Some Suggest
+maxApplicability NotFixable = None
 
 -- An input a rule's `check` reads beyond the file itself; the runner builds
 -- only what some active rule needs.
@@ -239,6 +286,8 @@ ruleOf m check fix = Rule {
   check = check,
   fix = match m.fixability
     Fixable => fix
+    FixableUnsafe => None
+    SuggestOnly => None
     NotFixable => None,
 }
 
@@ -412,12 +461,23 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
+(DUse false (UseAlias ("driver" "diagnostic_value") "DV"))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "anyList" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "size" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
-(DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
+(DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "fix" (TyApp (TyCon "Option") (TyCon "Fix")))))) ())
+(DData Public "Applicability" () ((variant "Safe" (ConPos)) (variant "Unsafe" (ConPos)) (variant "Suggest" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Applicability")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Safe") (PCon "Safe")) () (EVar "True")) (arm (PTuple (PCon "Unsafe") (PCon "Unsafe")) () (EVar "True")) (arm (PTuple (PCon "Suggest") (PCon "Suggest")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DData Public "FixEdit" () ((variant "FixEdit" (ConNamed (field "feSpan" (TyCon "Loc")) (field "feText" (TyCon "String"))))) ())
+(DData Public "Fix" () ((variant "Fix" (ConNamed (field "fixApplicability" (TyCon "Applicability")) (field "fixEdits" (TyApp (TyCon "List") (TyCon "FixEdit"))) (field "fixMessage" (TyCon "String"))))) ())
+(DTypeSig true "applicabilityText" (TyFun (TyCon "Applicability") (TyCon "String")))
+(DFunDef false "applicabilityText" ((PCon "Safe")) (ELit (LString "safe")))
+(DFunDef false "applicabilityText" ((PCon "Unsafe")) (ELit (LString "unsafe")))
+(DFunDef false "applicabilityText" ((PCon "Suggest")) (ELit (LString "suggest")))
+(DTypeSig true "fixToDiagFix" (TyFun (TyCon "Fix") (TyCon "DV.Fix")))
+(DFunDef false "fixToDiagFix" ((PVar "fx")) (EApp (EApp (EVar "DV.FixEdits") (EApp (EVar "applicabilityText") (EFieldAccess (EVar "fx") "fixApplicability"))) (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EFieldAccess (EVar "e") "feSpan") (EFieldAccess (EVar "e") "feText")))) (EFieldAccess (EVar "fx") "fixEdits"))))
 (DData Abstract "Memo" ("a") ((variant "Memo" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyCon "Unit") (TyVar "a"))))) ())
 (DTypeSig true "memoNew" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyApp (TyCon "Memo") (TyVar "a"))))
 (DFunDef false "memoNew" ((PVar "f")) (EApp (EApp (EVar "Memo") (EApp (EVar "Ref") (EVar "None"))) (EVar "f")))
@@ -437,7 +497,12 @@ public export data DupClause = DupClause {
 (DImpl true "Eq" ((TyCon "Scope")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Universal") (PCon "Universal")) () (EVar "True")) (arm (PTuple (PCon "Internal") (PCon "Internal")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Ratchet" () ((variant "Gated" (ConPos)) (variant "Baselined" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Ratchet")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Gated") (PCon "Gated")) () (EVar "True")) (arm (PTuple (PCon "Baselined") (PCon "Baselined")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DData Public "Fixability" () ((variant "Fixable" (ConPos)) (variant "NotFixable" (ConPos))) ())
+(DData Public "Fixability" () ((variant "Fixable" (ConPos)) (variant "FixableUnsafe" (ConPos)) (variant "SuggestOnly" (ConPos)) (variant "NotFixable" (ConPos))) ())
+(DTypeSig true "maxApplicability" (TyFun (TyCon "Fixability") (TyApp (TyCon "Option") (TyCon "Applicability"))))
+(DFunDef false "maxApplicability" ((PCon "Fixable")) (EApp (EVar "Some") (EVar "Safe")))
+(DFunDef false "maxApplicability" ((PCon "FixableUnsafe")) (EApp (EVar "Some") (EVar "Unsafe")))
+(DFunDef false "maxApplicability" ((PCon "SuggestOnly")) (EApp (EVar "Some") (EVar "Suggest")))
+(DFunDef false "maxApplicability" ((PCon "NotFixable")) (EVar "None"))
 (DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos)) (variant "NeedsScopes" (ConPos))) ())
 (DData Public "RuleMeta" () ((variant "RuleMeta" (ConNamed (field "name" (TyCon "String")) (field "summary" (TyCon "String")) (field "doc" (TyCon "String")) (field "category" (TyCon "Category")) (field "scope" (TyCon "Scope")) (field "ratchet" (TyCon "Ratchet")) (field "defaultSeverity" (TyCon "Severity")) (field "fixability" (TyCon "Fixability")) (field "needs" (TyApp (TyCon "List") (TyCon "Need")))))) ())
 (DTypeSig true "ruleMetaName" (TyFun (TyCon "RuleMeta") (TyCon "String")))
@@ -462,7 +527,7 @@ public export data DupClause = DupClause {
 (DTypeSig true "mkVisitorRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))) (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
 (DFunDef false "mkVisitorRule" ((PVar "m") (PVar "visits") (PVar "fix")) (EApp (EApp (EApp (EVar "ruleOf") (EVar "m")) (EApp (EVar "Visits") (EVar "visits"))) (EVar "fix")))
 (DTypeSig false "ruleOf" (TyFun (TyCon "RuleMeta") (TyFun (TyCon "RuleCheck") (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
-(DFunDef false "ruleOf" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "NotFixable") () (EVar "None")))))))
+(DFunDef false "ruleOf" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "FixableUnsafe") () (EVar "None")) (arm (PCon "SuggestOnly") () (EVar "None")) (arm (PCon "NotFixable") () (EVar "None")))))))
 (DTypeSig true "mkCrossFileRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))) (TyCon "CrossFileRule"))))
 (DFunDef false "mkCrossFileRule" ((PVar "m") (PVar "check")) (ERecordCreate "CrossFileRule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")))))
 (DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyApp (TyCon "List") (TyCon "String"))))) ())
@@ -490,12 +555,23 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
+(DUse false (UseAlias ("driver" "diagnostic_value") "DV"))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "anyList" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "size" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
-(DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
+(DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "fix" (TyApp (TyCon "Option") (TyCon "Fix")))))) ())
+(DData Public "Applicability" () ((variant "Safe" (ConPos)) (variant "Unsafe" (ConPos)) (variant "Suggest" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Applicability")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Safe") (PCon "Safe")) () (EVar "True")) (arm (PTuple (PCon "Unsafe") (PCon "Unsafe")) () (EVar "True")) (arm (PTuple (PCon "Suggest") (PCon "Suggest")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DData Public "FixEdit" () ((variant "FixEdit" (ConNamed (field "feSpan" (TyCon "Loc")) (field "feText" (TyCon "String"))))) ())
+(DData Public "Fix" () ((variant "Fix" (ConNamed (field "fixApplicability" (TyCon "Applicability")) (field "fixEdits" (TyApp (TyCon "List") (TyCon "FixEdit"))) (field "fixMessage" (TyCon "String"))))) ())
+(DTypeSig true "applicabilityText" (TyFun (TyCon "Applicability") (TyCon "String")))
+(DFunDef false "applicabilityText" ((PCon "Safe")) (ELit (LString "safe")))
+(DFunDef false "applicabilityText" ((PCon "Unsafe")) (ELit (LString "unsafe")))
+(DFunDef false "applicabilityText" ((PCon "Suggest")) (ELit (LString "suggest")))
+(DTypeSig true "fixToDiagFix" (TyFun (TyCon "Fix") (TyCon "DV.Fix")))
+(DFunDef false "fixToDiagFix" ((PVar "fx")) (EApp (EApp (EVar "DV.FixEdits") (EApp (EVar "applicabilityText") (EFieldAccess (EVar "fx") "fixApplicability"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EFieldAccess (EVar "e") "feSpan") (EFieldAccess (EVar "e") "feText")))) (EFieldAccess (EVar "fx") "fixEdits"))))
 (DData Abstract "Memo" ("a") ((variant "Memo" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyCon "Unit") (TyVar "a"))))) ())
 (DTypeSig true "memoNew" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyApp (TyCon "Memo") (TyVar "a"))))
 (DFunDef false "memoNew" ((PVar "f")) (EApp (EApp (EVar "Memo") (EApp (EVar "Ref") (EVar "None"))) (EVar "f")))
@@ -515,7 +591,12 @@ public export data DupClause = DupClause {
 (DImpl true "Eq" ((TyCon "Scope")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Universal") (PCon "Universal")) () (EVar "True")) (arm (PTuple (PCon "Internal") (PCon "Internal")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Ratchet" () ((variant "Gated" (ConPos)) (variant "Baselined" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Ratchet")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Gated") (PCon "Gated")) () (EVar "True")) (arm (PTuple (PCon "Baselined") (PCon "Baselined")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DData Public "Fixability" () ((variant "Fixable" (ConPos)) (variant "NotFixable" (ConPos))) ())
+(DData Public "Fixability" () ((variant "Fixable" (ConPos)) (variant "FixableUnsafe" (ConPos)) (variant "SuggestOnly" (ConPos)) (variant "NotFixable" (ConPos))) ())
+(DTypeSig true "maxApplicability" (TyFun (TyCon "Fixability") (TyApp (TyCon "Option") (TyCon "Applicability"))))
+(DFunDef false "maxApplicability" ((PCon "Fixable")) (EApp (EVar "Some") (EVar "Safe")))
+(DFunDef false "maxApplicability" ((PCon "FixableUnsafe")) (EApp (EVar "Some") (EVar "Unsafe")))
+(DFunDef false "maxApplicability" ((PCon "SuggestOnly")) (EApp (EVar "Some") (EVar "Suggest")))
+(DFunDef false "maxApplicability" ((PCon "NotFixable")) (EVar "None"))
 (DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos)) (variant "NeedsScopes" (ConPos))) ())
 (DData Public "RuleMeta" () ((variant "RuleMeta" (ConNamed (field "name" (TyCon "String")) (field "summary" (TyCon "String")) (field "doc" (TyCon "String")) (field "category" (TyCon "Category")) (field "scope" (TyCon "Scope")) (field "ratchet" (TyCon "Ratchet")) (field "defaultSeverity" (TyCon "Severity")) (field "fixability" (TyCon "Fixability")) (field "needs" (TyApp (TyCon "List") (TyCon "Need")))))) ())
 (DTypeSig true "ruleMetaName" (TyFun (TyCon "RuleMeta") (TyCon "String")))
@@ -540,7 +621,7 @@ public export data DupClause = DupClause {
 (DTypeSig true "mkVisitorRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))) (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
 (DFunDef false "mkVisitorRule" ((PVar "m") (PVar "visits") (PVar "fix")) (EApp (EApp (EApp (EVar "ruleOf") (EVar "m")) (EApp (EVar "Visits") (EVar "visits"))) (EVar "fix")))
 (DTypeSig false "ruleOf" (TyFun (TyCon "RuleMeta") (TyFun (TyCon "RuleCheck") (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
-(DFunDef false "ruleOf" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "NotFixable") () (EVar "None")))))))
+(DFunDef false "ruleOf" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "FixableUnsafe") () (EVar "None")) (arm (PCon "SuggestOnly") () (EVar "None")) (arm (PCon "NotFixable") () (EVar "None")))))))
 (DTypeSig true "mkCrossFileRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))) (TyCon "CrossFileRule"))))
 (DFunDef false "mkCrossFileRule" ((PVar "m") (PVar "check")) (ERecordCreate "CrossFileRule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")))))
 (DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyApp (TyCon "List") (TyCon "String"))))) ())

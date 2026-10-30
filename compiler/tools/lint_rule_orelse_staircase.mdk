@@ -185,6 +185,7 @@ orElseFinding isResult loc = Finding {
   message = orElseMessage isResult,
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 orElseMessage : Bool -> String
