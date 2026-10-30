@@ -1,0 +1,1 @@
+main = println "inline: the program came from stdin"

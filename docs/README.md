@@ -58,6 +58,7 @@ Tutorial-style onboarding, not a spec. Not yet cross-linked into this index's st
 | [`08-do-and-thenables.md`](guide/08-do-and-thenables.md) | `do` and Thenables | — |
 | [`09-modules-and-projects.md`](guide/09-modules-and-projects.md) | Modules & Projects | — |
 | [`10-tooling-and-workflow.md`](guide/10-tooling-and-workflow.md) | Tooling & Workflow | — |
+| [`11-writing-scripts.md`](guide/11-writing-scripts.md) | Writing a script in Medaka | — |
 | [`OUTLINE.md`](guide/OUTLINE.md) | Medaka Guide — Outline | — |
 | [`haskell-ocaml-delta.md`](guide/haskell-ocaml-delta.md) | For Haskell and OCaml Readers | — |
 
@@ -168,6 +169,8 @@ What's in the standard library, what's planned, module-by-module status.
 | [`crypto.hmac.md`](stdlib/crypto.hmac.md) | crypto.hmac | — |
 | [`crypto.sha256.md`](stdlib/crypto.sha256.md) | crypto.sha256 | — |
 | [`crypto.sha256_fast.md`](stdlib/crypto.sha256_fast.md) | crypto.sha256_fast | — |
+| [`csv.md`](stdlib/csv.md) | csv | — |
+| [`diff.md`](stdlib/diff.md) | diff | — |
 | [`fs.md`](stdlib/fs.md) | fs | — |
 | [`hash_map.md`](stdlib/hash_map.md) | hash_map | — |
 | [`hash_set.md`](stdlib/hash_set.md) | hash_set | — |

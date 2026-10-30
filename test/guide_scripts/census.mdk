@@ -1,0 +1,38 @@
+import fs.{glob, mkdirAll, walkFiles}
+import io.{readLines}
+import list.{Down(..), sortOn}
+import map.{countBy, entries}
+import path.{extname}
+import string.{groupThousands, padLeft, padRight, repeat, toFixed}
+
+put path n = resultOrPanic path (writeFile path (repeat n "x = 1\n"))
+
+makeTree _ =
+  resultOrPanic "mkdir" (mkdirAll "tree/src/sub")
+  resultOrPanic "mkdir" (mkdirAll "tree/docs")
+  put "tree/src/a.mdk" 1200
+  put "tree/src/b.mdk" 30
+  put "tree/src/sub/c.mdk" 4
+  put "tree/docs/guide.md" 250
+  put "tree/docs/notes.md" 7
+  put "tree/Makefile" 3
+
+lineCount path = length (resultOrPanic path (readLines path))
+
+row total (ext, n) =
+  let share = 100.0 * intToFloat n / intToFloat total
+  padRight 10 ' ' (if ext == "" then "(none)" else ext)
+    ++ padLeft 6 ' ' (intToString n)
+    ++ padLeft 8 ' ' (toFixed 1 share ++ "%")
+
+main =
+  makeTree ()
+  let files = resultOrPanic "walk" (walkFiles "tree")
+  let ranked =
+    sortOn (kv => (Down (snd kv), fst kv)) (entries (countBy extname files))
+  println "ext         files   share"
+  each println (map (row (length files)) ranked)
+  let total = fold (n p => n + lineCount p) 0 files
+  println "\{length files} files, \{groupThousands total} lines"
+  let mdk = resultOrPanic "glob" (glob "tree/**/*.mdk")
+  println "mdk: \{debug mdk}"

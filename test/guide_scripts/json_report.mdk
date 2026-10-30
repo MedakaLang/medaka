@@ -1,0 +1,69 @@
+import csv as C
+import json.{Json(..), asNumber, atPath, jObject, parseLines, pretty}
+import list.{partitionResults}
+import map.{entries, groupByKey}
+import math.{mean, median, percentile, roundInt}
+import string.{dedent, toFixed}
+
+log : String
+log =
+  r"""
+  {"path": "/home", "ms": 12.5, "status": 200}
+  {"path": "/api", "ms": 80, "status": 200}
+  {"path": "/api", "ms": 240.25, "status": 500}
+  not json
+  {"path": "/home", "ms": 15, "status": 404}
+  """
+
+data Req = { path : String, ms : Float, status : Int }
+
+text : String -> Json -> Result String String
+text key j = match atPath [key] j
+  Ok (JString s) => Ok s
+  Ok _ => Err "\{key}: not a string"
+  Err e => Err e
+
+number : String -> Json -> Result String Float
+number key j = match atPath [key] j
+  Err e => Err e
+  Ok v => match asNumber v
+    Some x => Ok x
+    None => Err "\{key}: not a number"
+
+request : Json -> Result String Req
+request j = do
+  path <- text "path" j
+  ms <- number "ms" j
+  status <- number "status" j
+  pure Req { path = path, ms = ms, status = roundInt status }
+
+whole : Option Float -> Json
+whole x = JInt (roundInt (optionOr 0.0 x))
+
+pathRow : (String, List Req) -> List String
+pathRow (path, rs) =
+  let avg = optionOr 0.0 (mean (map (r => r.ms) rs))
+  [path, intToString (length rs), toFixed 1 avg]
+
+main =
+  let (bad, parsed) = partitionResults (parseLines (dedent log))
+  let (unusable, reqs) = partitionResults (map request parsed)
+  let times = map (r => r.ms) reqs
+  let byStatus = entries (groupByKey (r => r.status) reqs)
+  let stats = jObject [
+    ("mean", whole (mean times)),
+    ("median", whole (median times)),
+    ("p90", whole (percentile 90.0 times)),
+  ]
+  let statuses = map ((s, rs) => (intToString s, JInt (length rs))) byStatus
+  let report = jObject [
+    ("requests", JInt (length reqs)),
+    ("skipped", JInt (length bad + length unusable)),
+    ("ms", stats),
+    ("by_status", jObject statuses),
+  ]
+  println (pretty 2 report)
+  println (debug (atPath ["by_status", "200"] report))
+  println (debug (atPath ["ms", "max"] report))
+  let byPath = entries (groupByKey (r => r.path) reqs)
+  print (C.render (["path", "count", "mean_ms"] :: map pathRow byPath))

@@ -1,0 +1,445 @@
+-- Gate-test for docs/guide/11-writing-scripts.md.
+--
+-- Every program the page shows lives under test/guide_scripts/ and runs here
+-- through the compiled binary, in an empty scratch directory, against its
+-- recorded `.out` file. The page is then required to contain each source and
+-- each recorded output verbatim, so the page and the tested code cannot drift
+-- apart. The page's quoted compiler messages are the same strings the
+-- programs under bad/ are graded against.
+--
+-- `--native`: it spawns `medaka` and `sh`, which the interpreter does not bind.
+
+import fs.{walkFiles}
+import io.{runVerb}
+import list.{nub, sort}
+import string.{
+  contains,
+  endsWith,
+  lines,
+  replaceAll,
+  split,
+  startsWith,
+  stripSuffix,
+  trim,
+}
+import test.{
+  expectAll,
+  expectAtLeast,
+  expectEach,
+  expectEqual,
+  expectTextContainsAll,
+  fail,
+  labelFail,
+}
+import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
+
+dirRel : String
+dirRel = "test/guide_scripts"
+
+pageRel : String
+pageRel = "docs/guide/11-writing-scripts.md"
+
+chomp : String -> String
+chomp s = optionOr s (stripSuffix "\n" s)
+
+-- The absolute form of a path whose directory exists.
+absOf path = match runVerb "sh" [
+  "-c",
+  "cd \"$(dirname \"$1\")\" && echo \"$(pwd)/$(basename \"$1\")\"",
+  "sh",
+  path,
+]
+  Err e => Err e
+  Ok (0, out, _) => Ok (trim out)
+  Ok (code, _, err) =>
+    Err "resolving \{path} exited \{intToString code}: \{err}"
+
+-- A shell body run in a fresh empty directory. In it, $0 is the absolute
+-- medaka binary and $1 the absolute program file.
+inScratch body =
+  "d=$(mktemp -d); cd \"$d\" || exit 99; \{body}; rc=$?; cd /; rm -rf \"$d\"; exit $rc"
+
+runIn pre = "\{pre}MEDAKA_STRICT=1 \"$0\" run \"$1\""
+
+buildIn pre =
+  "MEDAKA_STRICT=1 \"$0\" build \"$1\" -o prog >/dev/null && \{pre}./prog"
+
+spawnBody bin file body =
+  boundedVerbSeconds 300 "sh" ["-c", inScratch body, bin, file]
+
+-- Stdout of a spawn that exited 0 with nothing on stderr, else why it did not.
+clean r = match r
+  Err e => Err e
+  Ok (0, out, "") => Ok out
+  Ok (code, out, err) =>
+    Err "exit \{intToString code}, stdout \{debug out}, stderr \{debug err}"
+
+fixture name = "\{medakaRoot}/\{dirRel}/\{name}"
+
+withBinAndFile name k = match absOf medakaBin
+  Err e => fail e
+  Ok bin => match absOf (fixture "\{name}.mdk")
+    Err e => fail e
+    Ok file => k bin file
+
+-- The program `name` under `body`, graded against `<recorded>.out`.
+gradedAs recorded name body = withBinAndFile
+  name
+  (bin file => match readFile (fixture "\{recorded}.out")
+    Err e => fail "cannot read \{recorded}.out: \{e}"
+    Ok want => expectEqual (Ok want) (clean (spawnBody bin file body)))
+
+graded name body = gradedAs name name body
+
+-- The program `name` under `body` must fail with stderr containing `needle`.
+rejected name body needle = withBinAndFile
+  name
+  (bin file => match spawnBody bin file body
+    Err e => fail e
+    Ok (0, out, _) => fail "\{name} was accepted: stdout \{debug out}"
+    Ok (_, _, err) => expectTextContainsAll [needle] err)
+
+pageText _ = match readFile "\{medakaRoot}/\{pageRel}"
+  Err e => Err "cannot read \{pageRel}: \{e}"
+  Ok text => Ok (replaceAll "\\|" "|" text)
+
+-- # Quoted compiler messages
+
+runCommandMessage : String
+runCommandMessage =
+  "the built-in `runCommand` is reached via `main → capture → runCommandOk → runCommand`, and `medaka run` refuses it on purpose (implemented by llvm; running a subprocess from the interpreter waits on a security decision)"
+
+overflowMessage : String
+overflowMessage =
+  "runtime error [E-STACK-OVERFLOW]: recursion too deep: evaluator call depth exceeded 25000; `medaka run` has no tail-call optimisation, so build a native binary with `medaka build`"
+
+noMainMessage : String
+noMainMessage = "no `main` in this file; add `main = ...`"
+
+rejections : List (String, String)
+rejections = [
+  (
+    "bad/do_block",
+    "this `do` block needs a `Thenable` value here, such as `Option` or `Result`, but got `Unit`; bind a plain `Unit` with `let` instead of `<-`",
+  ),
+  (
+    "bad/result_statement",
+    "this statement's value (`Result String Unit`) is discarded; only a `Unit` expression may stand alone as a statement",
+  ),
+  ("bad/effect_row", "performs <Stdout> where only <> is allowed"),
+  ("bad/bare_import", "unbound variable `walkDir`; add `import fs.{walkDir}`"),
+  (
+    "bad/show",
+    "unbound variable `show`; did you mean `debug`? (Haskell's `show` is `debug` in Medaka)",
+  ),
+  ("bad/concat_map", "unbound variable `concatMap`"),
+  (
+    "bad/match_text",
+    "ambiguous field `.text`: it is declared by `Group` and `Match` and the record type is undetermined; annotate the record, as in `(r : Group).text`",
+  ),
+]
+
+-- # Programs
+
+interpreted : List String
+interpreted = [
+  "edit_file",
+  "census",
+  "json_report",
+  "cheat",
+  "rt_sequencing",
+  "rt_results",
+  "rt_effects",
+  "rt_imports",
+  "rt_lines",
+  "rt_floats",
+  "rt_regex",
+  "rt_replace",
+  "rt_discard",
+  "hello_script",
+  "inline_stdin",
+  "tie",
+  "float_exponent",
+]
+
+-- Programs that reach `runCommand`, which `medaka run` refuses.
+built : List String
+built = ["run_compare", "cheat_proc"]
+
+-- Interpreted programs that must also agree when built.
+builtToo : List String
+builtToo = ["cheat", "census", "json_report", "edit_file", "rt_imports", "tie"]
+
+-- Every program the page shows whole, and every recorded output it shows.
+shownSources : List String
+shownSources = [
+  "hello_script",
+  "draw",
+  "edit_file",
+  "census",
+  "run_compare",
+  "json_report",
+  "rt_sequencing",
+  "rt_results",
+  "rt_discard",
+  "rt_effects",
+  "rt_imports",
+  "rt_floats",
+  "rt_regex",
+  "rt_replace",
+  "rt_lines",
+  "limit_csv",
+  "float_exponent",
+  "tie",
+]
+
+shownOutputs : List String
+shownOutputs = [
+  "hello_script",
+  "draw",
+  "edit_file",
+  "census",
+  "run_compare",
+  "json_report",
+  "rt_sequencing",
+  "rt_results",
+  "rt_discard",
+  "rt_effects",
+  "rt_imports",
+  "rt_floats",
+  "rt_regex",
+  "rt_replace",
+  "rt_lines",
+  "limit_csv_ok",
+  "float_exponent",
+  "float_exponent.py",
+  "tie",
+  "tie.gnu",
+]
+
+everyFile : List String
+everyFile =
+  shownSources ++ interpreted ++ built ++ map fst rejections ++ ["stdin_empty"]
+
+test "each interpreted program prints its recorded output under medaka run" =
+  expectEach (map (n => (n, graded n (runIn ""))) interpreted)
+
+test "each program that starts a process builds and prints its recorded output" =
+  expectEach (map (n => (n, graded n (buildIn ""))) built)
+
+test "programs run under medaka run print the same when built" =
+  expectEach (map (n => (n, graded n (buildIn ""))) builtToo)
+
+test "medaka run refuses the program that reaches runCommand, and says to build" = expectAll
+  [
+    rejected "run_compare" (runIn "") runCommandMessage,
+    rejected "run_compare" (runIn "") "then run `<bin>`",
+  ]
+
+test "each rejected program fails with the message the page quotes" =
+  expectEach (map ((n, needle) => (n, rejected n (runIn "") needle)) rejections)
+
+-- # Script forms
+
+test "a #! line is skipped, and an executable script runs through env -S" = expectAll
+  [
+    labelFail
+      "medaka run FILE skips the #! line"
+      (graded "hello_script" (runIn "")),
+    labelFail
+      "./FILE runs through env -S medaka run"
+      (graded
+        "hello_script"
+        "export MEDAKA_STRICT=1; cp \"$1\" ./hello && chmod +x ./hello && PATH=\"$(dirname \"$0\"):$PATH\" ./hello"),
+  ]
+
+test "plain env hands over `medaka run` as one program name on Linux" = withBinAndFile
+  "hello_script"
+  (bin file =>
+    match (spawnBody
+      bin
+      file
+      "if [ \"$(uname)\" != Linux ]; then echo 'No such file or directory (medaka run)'; else printf '#!/usr/bin/env medaka run\\nmain = println \"x\"\\n' > plain && chmod +x plain && PATH=\"$(dirname \"$0\"):$PATH\" ./plain 2>&1; true; fi")
+      Err e => fail e
+      Ok (_, out, _) =>
+        expectTextContainsAll ["medaka run", "No such file or directory"] out)
+
+test "medaka run - reads the program from stdin, and the program sees EOF" = expectAll
+  [
+    labelFail
+      "inline program"
+      (graded "inline_stdin" "MEDAKA_STRICT=1 \"$0\" run - < \"$1\""),
+    labelFail
+      "readAll in a stdin program"
+      (gradedAs
+        "stdin_empty"
+        "stdin_empty"
+        "MEDAKA_STRICT=1 \"$0\" run - < \"$1\""),
+  ]
+
+test "medaka run /dev/stdin does not run a program that arrives through a pipe" =
+  rejected
+    "inline_stdin"
+    "cat \"$1\" | MEDAKA_STRICT=1 \"$0\" run /dev/stdin"
+    noMainMessage
+
+-- # MEDAKA_SEED
+
+test "MEDAKA_SEED makes draws repeat on run and on a built program" = expectAll
+  [
+    labelFail "run, first" (graded "draw" (runIn "MEDAKA_SEED=42 ")),
+    labelFail "run, second" (graded "draw" (runIn "MEDAKA_SEED=42 ")),
+    labelFail "built" (graded "draw" (buildIn "MEDAKA_SEED=42 ")),
+  ]
+
+test "without MEDAKA_SEED three runs of the same program draw differently" = withBinAndFile
+  "draw"
+  (bin file => match clean (spawnBody bin file (runIn ""))
+    Err e => fail e
+    Ok a => match clean (spawnBody bin file (runIn ""))
+      Err e => fail e
+      Ok b => match clean (spawnBody bin file (runIn ""))
+        Err e => fail e
+        Ok c => expectEqual 3 (length (nub [a, b, c])))
+
+-- # Limits
+
+test "csv.parse overflows the interpreter at 25000 rows and not at 24000" = expectAll
+  [
+    labelFail
+      "24000 rows run"
+      (gradedAs "limit_csv_ok" "limit_csv" (runIn "N=24000 ")),
+    labelFail
+      "25000 rows run"
+      (rejected "limit_csv" (runIn "N=25000 ") overflowMessage),
+    labelFail
+      "300000 rows built"
+      (withBinAndFile
+        "limit_csv"
+        (bin file => match clean (spawnBody bin file (buildIn "N=300000 "))
+          Err e => fail e
+          Ok out => expectEqual "rows: 300000\n" out)),
+  ]
+
+test "json.pretty writes an exponent where Python writes digits" = withBinAndFile
+  "float_exponent"
+  (bin file => match readFile (fixture "float_exponent.py.out")
+    Err e => fail e
+    Ok want =>
+      match (spawnBody
+        bin
+        file
+        "if command -v python3 >/dev/null; then python3 -c 'import json; [print(json.dumps(x)) for x in [1.0e11, 1.0e12, 1.5e14, 1.0e15, 1.0e16]]'; else echo NOPYTHON; fi")
+        Err e => fail e
+        Ok (0, "NOPYTHON\n", _) => expectEqual 1 1
+        Ok r => expectEqual (Ok want) (clean (Ok r)))
+
+test "diff.unified and GNU diff -u pick different shortest scripts for one tie" =
+  gradedAs
+    "tie.gnu"
+    "tie"
+    "printf 'c\\na\\n' > a; printf 'b\\nc\\nc\\na\\na\\n' > b; diff -U3 --label A --label B a b; true"
+
+-- # The page
+
+test "the page contains each program and each recorded output verbatim" =
+  match pageText ()
+    Err e => fail e
+    Ok page =>
+      let sources =
+        map
+          (n => (
+            "\{n}.mdk",
+            match readFile (fixture "\{n}.mdk")
+              Err e => fail e
+              Ok src => expectTextContainsAll [chomp src] page,
+          ))
+          shownSources
+      let outputs =
+        map
+          (n => (
+            "\{n}.out",
+            match readFile (fixture "\{n}.out")
+              Err e => fail e
+              Ok out => expectTextContainsAll [chomp out] page,
+          ))
+          shownOutputs
+      expectEach (sources ++ outputs)
+
+test "the page quotes every compiler message the programs produce" =
+  match pageText ()
+    Err e => fail e
+    Ok page =>
+      expectTextContainsAll
+        ([runCommandMessage, overflowMessage, noMainMessage]
+          ++ map snd rejections)
+        page
+
+-- The cheat sheet: the setup before the `-- cells` marker is shown whole, and
+-- each line after it is one table cell.
+cellMarker : String
+cellMarker = "  -- cells\n"
+
+cheatParts name = match readFile (fixture "\{name}.mdk")
+  Err e => Err e
+  Ok text => match split cellMarker text
+    [setup, cells] => Ok (setup, filter (l => trim l /= "") (lines cells))
+    _ => Err "\{name}.mdk: expected exactly one `-- cells` marker"
+
+test "the page shows each cheat-sheet setup and each cell verbatim" =
+  match pageText ()
+    Err e => fail e
+    Ok page => match (cheatParts "cheat", cheatParts "cheat_proc")
+      (Ok (setup1, cells1), Ok (setup2, cells2)) => expectAll [
+        expectTextContainsAll [setup1, setup2] page,
+        expectEach
+          (map
+            (c => (c, expectTextContainsAll [trim c] page))
+            (cells1 ++ cells2)),
+        labelFail
+          "no cell wraps onto a second line"
+          (expectEqual [] (filter (startsWith "   ") (cells1 ++ cells2))),
+        labelFail "thirty idioms" (expectAtLeast 30 (length (cells1 ++ cells2))),
+      ]
+      (Err e, _) => fail e
+      (_, Err e) => fail e
+
+test "the page covers each first-round-trip topic" = match pageText ()
+  Err e => fail e
+  Ok page =>
+    expectTextContainsAll
+      [
+        "`resultOrPanic \"context\" (…)`",
+        "import fs as F",
+        "import fs.{walkDir}",
+        "floatToInt (round x)",
+        "math.roundInt",
+        "`$1`",
+        "(m : R.Match)",
+        "../stdlib/ENGINES.md",
+        "`string.replace old new s` replaces only the first occurrence",
+        "`replaceAll`",
+        "`replaceOnce`",
+        "#!/usr/bin/env -S medaka run",
+        "medaka run - <<'EOF'",
+        "MEDAKA_SEED",
+        "medaka run /dev/stdin",
+        "recursion too deep",
+      ]
+      page
+
+-- Every file under test/guide_scripts is named above, and every name exists.
+test "test/guide_scripts holds exactly the programs this test names" =
+  match walkFiles "\{medakaRoot}/\{dirRel}"
+    Err e => fail e
+    Ok files =>
+      let prefix = "\{medakaRoot}/\{dirRel}/"
+      let stems =
+        sort
+          (filterMap
+            (f => stripSuffix ".mdk" (replaceAll prefix "" f))
+            (filter (endsWith ".mdk") files))
+      let named = nub everyFile
+      labelFail
+        "a program the test does not name"
+        (expectEqual [] (filter (s => not (any (== s) named)) stems))

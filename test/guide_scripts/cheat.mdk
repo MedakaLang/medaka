@@ -1,0 +1,46 @@
+import diff.{unified}
+import fs.{copyFile, mkdirAll}
+import io.{getEnvOr, readLines}
+import json.{atPath, parse}
+import list.{last, reverse, sort, sortOn, take}
+import map.{countBy, entries}
+import path.{basename}
+import regex as R
+import string.{contains, lines, replaceAll, split, toFixed, trim}
+
+matchText : R.Match -> String
+matchText m = m.text
+
+main =
+  let digits = R.mustCompile r"\d+"
+  let doc = resultOrPanic "json" (parse "{\"a\": {\"b\": 1}}")
+  let text = "alpha beta\nbeta gamma\ngamma\n"
+  let s = "  banana split  "
+  resultOrPanic "setup" (writeFile "notes.txt" text)
+  -- cells
+  println (getEnvOr "NO_SUCH_VARIABLE" "default")
+  println "total: \{1 + 2}"
+  resultOrPanic "write" (writeFile "out.txt" "hello\n")
+  println (replaceAll "a" "o" s)
+  println (debug (trim s))
+  println (debug (split "," "a,b,c"))
+  println (debug (readFile "out.txt"))
+  println (debug ([3, 1, 2] |> sort |> reverse))
+  each println ["a", "b"]
+  each println (filter (contains "beta") (lines text))
+  println (debug (map last (readLines "notes.txt")))
+  println (debug (take 2 (lines text)))
+  resultOrPanic "mkdir" (mkdirAll "a/b/c")
+  println (R.replaceAll (R.mustCompile r"b+") "B" "abba")
+  resultOrPanic "rm" (removeFile "out.txt")
+  println (debug (args ()))
+  println (debug (map (x => x * x) (filter isEven [1, 2, 3, 4])))
+  println (debug (map matchText (R.findAll digits "a1b22")))
+  println (toFixed 2 3.14159)
+  println (debug (sortOn stringLength ["ccc", "a", "bb"]))
+  println (debug (map length (readLines "notes.txt")))
+  resultOrPanic "cp" (copyFile "notes.txt" "copy.txt")
+  println (basename "src/lib/main.mdk")
+  println (debug (entries (countBy (x => x) ["a", "b", "a"])))
+  println (debug (atPath ["a", "b"] doc))
+  print (unified 1 ("old", "a\nb\n") ("new", "a\nB\n"))

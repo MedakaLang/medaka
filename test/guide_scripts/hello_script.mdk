@@ -1,0 +1,2 @@
+#!/usr/bin/env -S medaka run
+main = println "hello from a script"

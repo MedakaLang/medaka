@@ -244,6 +244,12 @@ inlang-backend-extern-catalog-test:
 inlang-tools-engine-table-test:
 	./medaka test --native compiler/tools/engine_table_test.mdk
 
+## The programs on docs/guide/11-writing-scripts.md live under
+## test/guide_scripts/; no entry imports the test that runs them and checks
+## the page against them. Native: it spawns `medaka` and `sh`.
+inlang-guide-scripts-test:
+	./medaka test --native test/guide_scripts_test.mdk
+
 ## No entry imports a `_test.mdk` sibling, so the extern check's own tests
 ## run only from here.
 inlang-backend-core-validate-test:
