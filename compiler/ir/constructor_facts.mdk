@@ -1,0 +1,184 @@
+import list.{findMap}
+import ir.core_ir.{CProgram(..)}
+import frontend.runtime_constructors.{
+  RuntimeOwner(..), RuntimeCtorId(..), namedRuntimeCtor, runtimeCtorFact,
+  runtimeRoster, runtimeCtorName, runtimeOwnerWord
+}
+import support.ordmap.{
+  OrdMap, omEmpty, omLookup, omHasKey, omInsert, omFromPairs, omMapValues
+}
+import support.util.{reverseL}
+import map.{entries}
+
+public export data ConstructorFacts = ConstructorFacts {
+  arities : OrdMap Int,
+  owners : OrdMap String,
+  rosters : OrdMap (List String),
+  ordinals : OrdMap Int,
+  typeOrder : List String,
+}
+
+export
+planConstructors : CProgram -> ConstructorFacts
+planConstructors (CProgram _ ars tys _ _ _) =
+  let initial = ConstructorFacts {
+    arities = omFromPairs (reverseL ars) omEmpty,
+    owners = omEmpty,
+    rosters = omEmpty,
+    ordinals = omEmpty,
+    typeOrder = [],
+  }
+  let facts = collectConstructors tys omEmpty initial
+  { facts |
+    rosters = omMapValues reverseL facts.rosters,
+    typeOrder = reverseL facts.typeOrder,
+  }
+
+collectConstructors : List (String, String) ->
+  OrdMap Int ->
+  ConstructorFacts ->
+  ConstructorFacts
+collectConstructors [] _ facts = facts
+collectConstructors ((ctor, ty) :: rest) counts facts =
+  let position = optionOr 0 (omLookup ty counts)
+  let firstType = not (omHasKey ty counts)
+  let firstCtor = not (omHasKey ctor facts.owners)
+  let next = { facts |
+    owners = if firstCtor then omInsert ctor ty facts.owners else facts.owners,
+    ordinals =
+      if firstCtor then
+        omInsert ctor position facts.ordinals
+      else
+        facts.ordinals,
+    rosters =
+      omInsert
+        ty
+        (ctor :: optionOr [] (omLookup ty facts.rosters))
+        facts.rosters,
+    typeOrder = if firstType then ty :: facts.typeOrder else facts.typeOrder,
+  }
+  collectConstructors rest (omInsert ty (position + 1) counts) next
+
+export
+declaredCtorArity : ConstructorFacts -> String -> Option Int
+declaredCtorArity facts name = omLookup name facts.arities
+
+export
+declaredCtorOwner : ConstructorFacts -> String -> Option String
+declaredCtorOwner facts name = omLookup name facts.owners
+
+export
+declaredCtorOrdinal : ConstructorFacts -> String -> Option Int
+declaredCtorOrdinal facts name = omLookup name facts.ordinals
+
+export
+declaredTypeCtors : ConstructorFacts -> String -> List String
+declaredTypeCtors facts name = optionOr [] (omLookup name facts.rosters)
+
+export
+validateConstructorFacts : CProgram -> ConstructorFacts -> List String
+validateConstructorFacts cp facts =
+  let expected = planConstructors cp
+  let (CProgram _ ars tys _ _ _) = cp
+  (if entries facts.arities == entries expected.arities then
+      []
+    else
+      ["constructor-fact: arity projection disagrees with Core"])
+    ++ (if entries facts.owners == entries expected.owners then
+      []
+    else
+      ["constructor-fact: owner projection disagrees with Core"])
+    ++ (if entries facts.rosters == entries expected.rosters then
+      []
+    else
+      ["constructor-fact: roster projection disagrees with Core"])
+    ++ (if entries facts.ordinals == entries expected.ordinals then
+      []
+    else
+      ["constructor-fact: ordinal projection disagrees with Core"])
+    ++ (if facts.typeOrder == expected.typeOrder then
+      []
+    else
+      ["constructor-fact: type order disagrees with Core"])
+    ++ flatMap
+      ((name, arity) =>
+        if arity < 0 then
+          ["constructor-fact: negative arity for " ++ name]
+        else
+          [])
+      ars
+    ++ flatMap (validateRuntimeRoster expected) expected.typeOrder
+    ++ flatMap validateRuntimeOwner tys
+    ++ flatMap (validateRuntimeArity expected) ars
+    ++ validateOwnerPositions expected expected.typeOrder omEmpty
+
+runtimeOwner : String -> Option RuntimeOwner
+runtimeOwner word =
+  findMap
+    (owner => if runtimeOwnerWord owner == Some word then Some owner else None)
+    [RuntimeList, RuntimeOption, RuntimeResult, RuntimeOrdering, RuntimeBool]
+
+validateRuntimeRoster : ConstructorFacts -> String -> List String
+validateRuntimeRoster facts ty = match runtimeOwner ty
+  None => []
+  Some owner =>
+    let roster = filterMap runtimeCtorName (runtimeRoster owner)
+    if declaredTypeCtors facts ty == roster then
+      []
+    else
+      ["constructor-fact: runtime roster disagrees for " ++ ty]
+
+validateRuntimeOwner : (String, String) -> List String
+validateRuntimeOwner (name, ty) = match namedRuntimeCtor name
+  Some RuntimeCons => []
+  Some RuntimeNil => []
+  Some id =>
+    if runtimeOwnerWord (runtimeCtorFact id).owner == Some ty then
+      []
+    else
+      ["constructor-fact: runtime owner disagrees for " ++ name]
+  None => match runtimeOwner ty
+    Some _ => ["constructor-fact: unknown runtime constructor " ++ name]
+    None => []
+
+validateRuntimeArity : ConstructorFacts -> (String, Int) -> List String
+validateRuntimeArity facts (name, arity) = match namedRuntimeCtor name
+  None => []
+  Some id =>
+    let builtin = match id
+      RuntimeCons => declaredCtorOwner facts name == Some "List"
+      RuntimeNil => declaredCtorOwner facts name == Some "List"
+      _ => True
+    if builtin && arity /= (runtimeCtorFact id).arity then
+      ["constructor-fact: runtime arity disagrees for " ++ name]
+    else
+      []
+
+-- A constructor in an earlier type's roster must agree with its first owner's
+-- position; otherwise the table assigns two incompatible declaration orders.
+validateOwnerPositions : ConstructorFacts ->
+  List String ->
+  OrdMap Unit ->
+  List String
+validateOwnerPositions _ [] _ = []
+validateOwnerPositions facts (ty :: rest) seen =
+  let (next, defects) =
+    validateRosterPositions facts (declaredTypeCtors facts ty) 0 seen
+  defects ++ validateOwnerPositions facts rest next
+
+validateRosterPositions : ConstructorFacts ->
+  List String ->
+  Int ->
+  OrdMap Unit ->
+  (OrdMap Unit, List String)
+validateRosterPositions _ [] _ seen = (seen, [])
+validateRosterPositions facts (name :: rest) position seen =
+  let first = not (omHasKey name seen)
+  let bad =
+    if first && declaredCtorOrdinal facts name /= Some position then
+      ["constructor-fact: ambiguous owner ordinal for " ++ name]
+    else
+      []
+  let (next, defects) =
+    validateRosterPositions facts rest (position + 1) (omInsert name () seen)
+  (next, bad ++ defects)

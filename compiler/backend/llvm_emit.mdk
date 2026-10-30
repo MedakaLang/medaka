@@ -1,3 +1,10 @@
+import ir.constructor_facts.{
+  ConstructorFacts, declaredCtorArity, declaredCtorOwner, declaredCtorOrdinal
+}
+import frontend.runtime_constructors.{
+  RuntimeOwner(..), RuntimeCtorId(..), namedRuntimeCtor, runtimeCtorFact,
+  runtimeRoster, runtimeCtorName, runtimeOwnerWord
+}
 import types.symbol_origins.{CoreSymbolOrigins}
 import types.symbol_origins as SO
 import backend.llvm_symbol_names as LN
@@ -919,13 +926,10 @@ data Emit = Emit {
   curSelfFnParams : Ref (List String),
   knownFnMap : Ref (Option (OrdMap Unit)),
   lazyGlobalMap : Ref (Option (OrdMap Unit)),
-  ctorMap : Ref (Option (OrdMap Int)),
+  constructorFacts : ConstructorFacts,
   sigMap : Ref (Option (OrdMap FnSig)),
   implsByMethod : Ref (Option (OrdMap (List CImplEntry))),
   implMethodSet : Ref (Option (OrdMap Unit)),
-  ctorTypeMap : Ref (Option (OrdMap String)),
-  ctorsByType : Ref (Option (OrdMap (List String))),
-  ctorOrdinalMap : Ref (Option (OrdMap Int)),
   typeIdMap : Ref (Option (OrdMap Int)),
   dispCache : Ref (List String),
   -- constant dict / closure cells already emitted, keyed by `constCellKey`
@@ -1281,10 +1285,6 @@ isLazyGlobal e x = match !e.lazyGlobalMap
   Some m => omHasKey x m
   None => panic "llvm: lazyGlobalMap read before install (internal error)"
 
--- ctor-arity table index (ct field is set once at Emit construction, constant).
-installCtorMap : Emit -> List (String, Int) -> Unit
-installCtorMap e t = e.ctorMap := Some (omFromPairs (reverseL t) omEmpty)
-
 -- the signature index, read by `sigLookup`; `reverseL` makes the FIRST entry win
 -- on a duplicate name.
 installSigMap : Emit -> List (String, FnSig) -> Unit
@@ -1342,16 +1342,8 @@ fnRetTy e name = match sigLookup e name
   Some (FnSig _ rty) => rty
   None => runtimeLTy RTValue
 
--- ── constructor table ─────────────────────────────────────────────
--- membership of the constructor arity index decides whether a `CVar`/`CApp` head
--- names an ADT constructor (→ heap allocation).  RUN-EMIT-003: the raw list form
--- (`e.ctors`) went with the retired scan; `e.ctorMap` is the only representation.
 isCtor : Emit -> String -> Bool
-isCtor e name = match !e.ctorMap
-  Some m => match omLookup name m
-    Some _ => True
-    None => False
-  None => panic "llvm: ctorMap read before install (internal error)"
+isCtor e name = isSome (declaredCtorArity e.constructorFacts name)
 
 -- ── impl table ────────────────────────────────────────────────────
 -- the program's CImplEntry list (set once in emitProgram).  A CMethod site reads
@@ -1669,91 +1661,21 @@ implEntryKey : CImplEntry -> String
 implEntryKey (CImplEntry _ _ _ (CImplTagged _ key _ _ _ _ _)) = key
 implEntryKey (CImplEntry _ _ _ (CImplDefault _ _ key _ _ _ _)) = key
 
--- ── ctor→type map ─────────────────────────────────────────────────
--- the program's constructor→type-name map (CProgram's 3rd field).  An arg-tag
--- dispatch loads the discriminating argument's constructor tag at run time; this
--- map names the constructors each candidate TYPE owns, so the dispatch chain can
--- test "is the loaded ctor tag one of type T's constructors?" by OR-ing the
--- hashName of each.  RUN-EMIT-003: the raw list form (`e.ctorTypes`) went with the
--- retired scan; the indices below are the only representation.
-
--- #990: the ctor→type table indexed into an OrdMap, built once in emitProgram.  `cellTag`
--- (the composite ctor tag, run on EVERY ctor alloc AND every ctor tag-test) computes
--- `ctorTypeId × shift + ctorOrdinal`, and BOTH did `lookupAssoc name (ctorTypeTable e)`
--- over the WHOLE O(types) list; `ctorHasSiblings` (refutable-let, per PCon) does the same.
--- On dispatch-heavy code — many single-ctor data types, one per interface — that is
--- O(ctors·types) = O(N²) `emit`-stage OP-COUNT (this is the residual LLVM emit-op
--- quadratic #986 measured INDEPENDENT of the method-arity lookups; #990).  The map returns the SAME
--- first-match (`omFromPairs (reverseL …)` = first pair wins on a duplicate ctor name,
--- matching lookupAssoc), so the composite tag — and the emitted IR — is byte-identical.
--- Uninstalled (None) it FALLS BACK to the list scan, identical answer either way.
-
--- #352: the THREE derived views of the SAME constant ctor→type table that #990 left
--- as whole-table scans, all built at this one install point (so none can go stale):
---
---   * `e.ctorsByType`   type → its constructors IN TABLE ORDER.  Replaces
---     `ctorsOfTypeIn`, which filtered the WHOLE table on every call — and its
---     callers run per ctor site (`ctorOrdinal` via `cellTag`), per refutable-let
---     PCon (`ctorHasSiblings`) and per dispatch arm (`emitTagMatch`).
---   * `e.ctorOrdinalMap` ctor → its 0-based index within its type's ctor list.
---     Replaces `indexOfStr name (ctorsOfType e ty)`, which is O(that type's ctors)
---     AND allocates an `Option` per step (`map (+ 1)` recursion) — so on an N-ctor
---     type this was O(N²) in TIME **and** in ALLOCATION.
---   * `e.typeIdMap`      type → its dense id (index among `distinctTypeNames`).
---     Replaces `indexOfStr ty (distinctTypeNames e)`, O(types) per ctor site.
---
--- ORDER IS LOAD-BEARING and is preserved, not assumed: the buckets are built by a
--- left fold that PREPENDS then `omMapValues reverseL`s (the `groupImplsByMethod`
--- discipline), so each bucket is exactly `ctorsOfTypeIn`'s filtered order — which
--- `emitTagMatch` renders as an OR-chain of `hashName`s, so any reorder would move
--- emitted IR.  Ordinals/type-ids are read off those ordered lists and installed with
--- `omFromPairs (reverseL …)` so the FIRST occurrence wins, exactly matching the
--- `indexOfStr`/`ctorTypeOf` first-match they replace (a ctor name owned by two types
--- keeps the first type's ordinal).  Uninstalled (None) every reader falls back to the
--- original scan, so a probe that never calls emitProgram is unaffected.
---
--- Measured (profile_main emit stage, prelude constant subtracted, N=250/500/1000):
--- the N-distinct-single-ctor-type shape read op r1=2.61 r2=2.93 before.
-installCtorTypeMap : Emit -> List (String, String) -> Unit
-installCtorTypeMap e t =
-  let byType = groupCtorsByType t
-  let tys = nubStr (typeNamesOf t)
-  e.ctorsByType := Some byType
-  e.ctorOrdinalMap :=
-    Some (omFromPairs (reverseL (ctorOrdinalPairs byType tys)) omEmpty)
-  e.typeIdMap := Some (omFromPairs (reverseL (numberFrom 0 tys)) omEmpty)
-  e.ctorTypeMap := Some (omFromPairs (reverseL t) omEmpty)
-
--- one LEFT fold prepending each ctor to its type's bucket (O(1) per entry), then
--- `omMapValues reverseL` restores TABLE order in each bucket — total O(entries).
-groupCtorsByType : List (String, String) -> OrdMap (List String)
-groupCtorsByType t = omMapValues reverseL (foldCtorsByType t omEmpty)
-
-foldCtorsByType : List (String, String) ->
-  OrdMap (List String) ->
-  OrdMap (List String)
-foldCtorsByType [] acc = acc
-foldCtorsByType ((c, ty) :: rest) acc =
-  foldCtorsByType rest (omInsert ty (c :: optionOr [] (omLookup ty acc)) acc)
-
--- (ctor, ordinal) for every ctor of every type, types visited in first-appearance
--- order and each bucket numbered from 0 — so `omFromPairs (reverseL …)` keeps the
--- first occurrence, matching `indexOfStr name (ctorsOfType e ty)`.
-ctorOrdinalPairs : OrdMap (List String) -> List String -> List (String, Int)
-ctorOrdinalPairs _ [] = []
-ctorOrdinalPairs byType (ty :: rest) =
-  numberFrom 0 (optionOr [] (omLookup ty byType))
-    ++ ctorOrdinalPairs byType rest
+-- Physical type identifiers follow the shared declaration order.
+installTypeIds : Emit -> Unit
+installTypeIds e =
+  e.typeIdMap :=
+    Some
+      (omFromPairs
+        (reverseL (numberFrom 0 e.constructorFacts.typeOrder))
+        omEmpty)
 
 numberFrom : Int -> List String -> List (String, Int)
 numberFrom _ [] = []
 numberFrom i (x :: rest) = (x, i) :: numberFrom (i + 1) rest
 
--- the type name owning constructor [name], index-backed (RUN-EMIT-003: no scan path).
 ctorTypeOf : Emit -> String -> Option String
-ctorTypeOf e name = match !e.ctorTypeMap
-  Some m => omLookup name m
-  None => panic "llvm: ctorTypeMap read before install (internal error)"
+ctorTypeOf e name = declaredCtorOwner e.constructorFacts name
 
 -- ── globals registry ────────────────────────────────────────────
 -- the top-level value/`Ref` globals registry ref: `name -> (initialised?, LTy)`.
@@ -1776,33 +1698,20 @@ dropAssoc _ [] = []
 dropAssoc k ((n, v) :: rest) =
   if n == k then rest else (n, v) :: dropAssoc k rest
 
--- the constructor names owned by a type, in program order.  The runtime ADTs
--- (List/Option/Result/Ordering) carry RESERVED built-in constructors that are not
--- user-declared, so they are absent from the ctor→type table (`ctorTypeTable`); an
--- arg-tag dispatch over such a type (e.g. an UNANNOTATED `fold`/`Foldable List`
--- caller whose route stays RNone — `total xs = fold (+) 0 xs`) would otherwise see
--- an empty ctor list and hit the "owns no constructors" gap.  Fall back to the
--- reserved ctors so the tag-match discriminates on the built-in cell tags.
--- #352: index-backed (a bucket is non-empty by construction, so an ABSENT type is
--- exactly the old empty-filter case → the reserved fallback).  RUN-EMIT-003: the
--- full-table-filter second path is RETIRED; the reserved-ctor arm below is a
--- SEMANTIC fallback for a type absent from the table, not an uninstalled-index one.
 ctorsOfType : Emit -> String -> List String
-ctorsOfType e ty = match !e.ctorsByType
-  Some m => match omLookup ty m
-    Some cs => cs
-    None => reservedCtorsOfType ty
-  None => panic "llvm: ctorsByType read before install (internal error)"
+ctorsOfType e ty = match omLookup ty e.constructorFacts.rosters
+  Some cs => cs
+  None => runtimeCtorsOfType ty
 
--- the reserved built-in constructors of a runtime ADT, mirroring `reservedTag`'s
--- ordinal layout (List = Cons|Nil, Option = Some|None, Result = Ok|Err,
--- Ordering = Lt|Eq|Gt).  Empty for any other (user) type.
-reservedCtorsOfType : String -> List String
-reservedCtorsOfType "List" = ["Cons", "Nil"]
-reservedCtorsOfType "Option" = ["Some", "None"]
-reservedCtorsOfType "Result" = ["Ok", "Err"]
-reservedCtorsOfType "Ordering" = ["Lt", "Eq", "Gt"]
-reservedCtorsOfType _ = []
+runtimeCtorsOfType : String -> List String
+runtimeCtorsOfType ty =
+  flatMap
+    (owner =>
+      if runtimeOwnerWord owner == Some ty then
+        filterMap runtimeCtorName (runtimeRoster owner)
+      else
+        [])
+    [RuntimeList, RuntimeOption, RuntimeResult, RuntimeOrdering]
 
 -- ── tag / box helpers (the value-representation, made concrete) ──────────────
 -- untag an immediate int word -> raw i64 (arithmetic shift, preserves sign).
@@ -9958,11 +9867,7 @@ emitEtaClosure e fname =
 
 -- the declared arity of constructor `name` (its field count, from the ctor table).
 ctorArity : Emit -> String -> Int
-ctorArity e name = match !e.ctorMap
-  Some m => match omLookup name m
-    Some n => n
-    None => 0
-  None => panic "llvm: ctorMap read before install (internal error)"
+ctorArity e name = optionOr 0 (declaredCtorArity e.constructorFacts name)
 
 -- #35: an APPLIED constructor, dispatched on saturation.  This is the arity check
 -- that the emitVar-side comment below has always ASSUMED but which emitApp did not
@@ -10430,27 +10335,17 @@ reservedTypeBase : Int
 reservedTypeBase = 65536
 
 reservedTag : String -> Option Int
-reservedTag name =
-  if name == "Cons" then
-    Some ((reservedTypeBase + 0) * ctorTagShift + 0)
-  else if name == "Nil" then
-    Some ((reservedTypeBase + 0) * ctorTagShift + 1)
-  else if name == "Some" then
-    Some ((reservedTypeBase + 1) * ctorTagShift + 0)
-  else if name == "None" then
-    Some ((reservedTypeBase + 1) * ctorTagShift + 1)
-  else if name == "Ok" then
-    Some ((reservedTypeBase + 2) * ctorTagShift + 0)
-  else if name == "Err" then
-    Some ((reservedTypeBase + 2) * ctorTagShift + 1)
-  else if name == "Lt" then
-    Some ((reservedTypeBase + 3) * ctorTagShift + 0)
-  else if name == "Eq" then
-    Some ((reservedTypeBase + 3) * ctorTagShift + 1)
-  else if name == "Gt" then
-    Some ((reservedTypeBase + 3) * ctorTagShift + 2)
-  else
-    None
+reservedTag name = match namedRuntimeCtor name
+  Some id =>
+    let fact = runtimeCtorFact id
+    let slot = match fact.owner
+      RuntimeList => Some 0
+      RuntimeOption => Some 1
+      RuntimeResult => Some 2
+      RuntimeOrdering => Some 3
+      _ => None
+    map (n => (reservedTypeBase + n) * ctorTagShift + fact.ordinal) slot
+  None => None
 
 -- the cell-header tag a NAME stamps / is tested against.  Sentinel headers
 -- ("$tuple"/"$ref"/"$closure") keep their hash; the runtime ADTs route through
@@ -10472,63 +10367,20 @@ cellTag e name =
     Some t => t
     None => ctorTypeId e name * ctorTagShift + ctorOrdinal e name
 
--- the 0-based index of constructor `name` in its type's declaration-ordered ctor
--- list.  The built-in list Cons/Nil are not user-declared (absent from the
--- ctor→type table) → reserved ordinals 0/1 of the synthetic list type.
 ctorOrdinal : Emit -> String -> Int
-ctorOrdinal e name = match ctorTypeOf e name
-  -- #352: `ctorTypeOf name = Some ty` means `name` IS in the ctor→type table, so it
-  -- is in `ty`'s bucket and therefore in the ordinal map — the map probe and the
-  -- `indexOfStr` scan return the same Int.  RUN-EMIT-003: the scan path is retired.
-  Some _ => match !e.ctorOrdinalMap
-    Some m => optionOr 0 (omLookup name m)
-    None => panic "llvm: ctorOrdinalMap read before install (internal error)"
-  None => if name == "Nil" then 1 else 0
+ctorOrdinal e name = match declaredCtorOrdinal e.constructorFacts name
+  Some ordinal => ordinal
+  None =>
+    optionOr
+      0
+      (map (id => (runtimeCtorFact id).ordinal) (namedRuntimeCtor name))
 
--- the dense per-type id of the type that owns constructor `name`: its index among
--- the program's distinct type names (declaration order).  The built-in list (and
--- any name not in the ctor→type table) gets a reserved id one past the user types,
--- so its composite tags can never collide with a user type's.
 ctorTypeId : Emit -> String -> Int
-ctorTypeId e name = match ctorTypeOf e name
-  -- #352: `e.typeIdMap` is built from the SAME `nubStr (typeNamesOf …)` list that
-  -- `distinctTypeNames` memoizes, numbered from 0 — so the probe and the
-  -- `indexOfStr` scan agree, and `omSize` is that list's length (nubStr ⇒ distinct).
-  -- RUN-EMIT-003: both `distinctTypeNames`-scan paths are retired.
-  Some ty => match !e.typeIdMap
-    Some m => optionOr 0 (omLookup ty m)
-    None => panic "llvm: typeIdMap read before install (internal error)"
-  None => match !e.typeIdMap
-    Some m => omSize m
-    None => panic "llvm: typeIdMap read before install (internal error)"
-
--- RUN-EMIT-003: `distinctTypeNames` (and the `distinctTypeNamesCache` memo that
--- existed only to make its O(n²) `nubStr` affordable) are GONE with the two
--- `ctorTypeId` scan branches that were their only callers.  `e.typeIdMap` is built
--- from exactly that `nubStr (typeNamesOf …)` list numbered from 0 (see
--- `installCtorTypeMap`), so `omSize` IS the distinct-type count and a probe IS the
--- index — the list never needs materialising during an emission.
-
-typeNamesOf : List (String, String) -> List String
-typeNamesOf [] = []
-typeNamesOf ((_, t) :: rest) = t :: typeNamesOf rest
-
--- dedup a list of strings, preserving first-occurrence order.  #990: the seen-set is an
--- OrdMap (membership O(log k)) instead of a `contains`-scanned list (O(k)) — so the nub
--- is O(N log N) not O(N²).  `distinctTypeNames` memoizes the result, but the one-time
--- computation was itself O(types²) and thus a QUADRATIC `emit`-op contributor as the type
--- count grows (one-per-interface on dispatch-heavy code).  Output order is unchanged
--- (first occurrence kept), so every downstream type-id / ordinal is byte-identical.
-nubStr : List String -> List String
-nubStr xs = nubStrAcc xs omEmpty
-
-nubStrAcc : List String -> OrdMap Unit -> List String
-nubStrAcc [] _ = []
-nubStrAcc (x :: xs) seen =
-  if omHasKey x seen then
-    nubStrAcc xs seen
-  else
-    x :: nubStrAcc xs (omInsert x () seen)
+ctorTypeId e name = match !e.typeIdMap
+  Some ids => match ctorTypeOf e name
+    Some ty => optionOr 0 (omLookup ty ids)
+    None => omSize ids
+  None => panic "llvm: typeIdMap read before install (internal error)"
 
 -- allocate a constructor cell {tag, field…}; the field words are already emitted.
 -- Result is the cell pointer as an i64 word, typed LTCon.  A NULLARY constructor
@@ -11524,17 +11376,11 @@ conHeadInfo _ = None
 -- constructor names since a covered-constructor set only ever carries names
 -- (`conHeadInfo`), never a type.
 reservedRosterOf : String -> Option (List String)
-reservedRosterOf name =
-  if contains name ["Cons", "Nil"] then
-    Some ["Cons", "Nil"]
-  else if contains name ["Some", "None"] then
-    Some ["Some", "None"]
-  else if contains name ["Ok", "Err"] then
-    Some ["Ok", "Err"]
-  else if contains name ["Lt", "Eq", "Gt"] then
-    Some ["Lt", "Eq", "Gt"]
-  else
-    None
+reservedRosterOf name = match namedRuntimeCtor name
+  Some id => match (runtimeCtorFact id).owner
+    RuntimeBool => None
+    owner => Some (filterMap runtimeCtorName (runtimeRoster owner))
+  None => None
 
 -- #2848 (S-dead-tails): true when `covered` (the constructor names a
 -- CTSwitch's own branches test) already accounts for every constructor of
@@ -11583,21 +11429,17 @@ coveredCtorNames ((CTBranch h _) :: rest) = match conHeadInfo h
 -- fast paths are therefore an optimisation only — never a soundness premise.
 data DiscRep = RepAllImm | RepAllBox | RepTwoSplit String | RepMixed
 
--- the declared arity of a RESERVED built-in constructor — the ones `ctorMap` has
+-- the declared arity of a reserved built-in constructor — the ones Core has
 -- no entry for (List/Option/Result/Ordering, mirroring `reservedTag`'s roster).
 -- `ctorArity` cannot answer for these: it returns 0 for any absent name, which is
 -- indistinguishable from a genuinely nullary ctor and would classify `Cons` as an
 -- immediate.  So membership is asked FIRST and this table answers second.
 reservedCtorArity : String -> Option Int
-reservedCtorArity name =
-  if name == "Cons" then
-    Some 2
-  else if contains name ["Some", "Ok", "Err"] then
-    Some 1
-  else if contains name ["Nil", "None", "Lt", "Eq", "Gt"] then
-    Some 0
-  else
-    None
+reservedCtorArity name = match namedRuntimeCtor name
+  Some id => match (runtimeCtorFact id).owner
+    RuntimeBool => None
+    _ => Some (runtimeCtorFact id).arity
+  None => None
 
 -- the field count of a constructor when it can be established, `None` when it
 -- cannot.  A name BOTH tables claim (a user type declaring one of the exempt
@@ -14890,7 +14732,7 @@ tableStats : Emit -> List (String, Int)
 tableStats e = [
   ("implEntries", listLen !e.implEntries),
   ("globalsReg", listLen !e.globalsReg),
-  ("ctorType", optOmSize !e.ctorTypeMap),
+  ("ctorType", omSize e.constructorFacts.owners),
   ("externArity", omSize e.externFacts),
   ("knownFnMap", optOmSize !e.knownFnMap),
   ("sigMap", optOmSize !e.sigMap),
@@ -14918,6 +14760,7 @@ programEmitConfig gapMode input plan groups = EmitStateConfig {
   lazyNames = plan.lazyGlobals,
   trmc = plan.trmc,
   methodResults = plan.methodResults,
+  constructorFacts = plan.constructorFacts,
   externRequirements = plan.externRequirements,
   dispGroups = Some plan.dispGroups,
 }
@@ -15033,6 +14876,7 @@ data EmitStateConfig = EmitStateConfig {
   lazyNames : List String,
   trmc : TrmcVerdicts,
   methodResults : OrdMap (OrdMap MethodResultFact),
+  constructorFacts : ConstructorFacts,
   externRequirements : ExternRequirements,
   dispGroups : Option (List DispGroup),
 }
@@ -15086,6 +14930,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     counter0 = cfg.counter0,
     trmc = cfg.trmc,
     methodResults = cfg.methodResults,
+    constructorFacts = cfg.constructorFacts,
     curModule = Ref scopeProgram,
     counters = Ref omEmpty,
     buf = Ref [],
@@ -15118,13 +14963,9 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     curSelfFnParams = Ref [],
     knownFnMap = Ref None,
     lazyGlobalMap = Ref None,
-    ctorMap = Ref None,
     sigMap = Ref None,
     implsByMethod = Ref None,
     implMethodSet = Ref None,
-    ctorTypeMap = Ref None,
-    ctorsByType = Ref None,
-    ctorOrdinalMap = Ref None,
     typeIdMap = Ref None,
     dispCache = Ref [],
     dictConstCache = Ref [],
@@ -15158,10 +14999,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   -- program.  Reads of these lower to `call @mdk_force_<x>()`; every other global
   -- stays on the byte-identical eager prologue.
   let _ = installLazyGlobalMap e cfg.lazyNames
-  let _ = installCtorMap e ctorArs
-  -- #990: index the ctor→type table so cellTag's per-ctor ctorTypeId/ctorOrdinal/
-  -- ctorHasSiblings lookups are O(log types) not O(types) — reverseL ⇒ first-wins.
-  let _ = installCtorTypeMap e ctorTypes
+  let _ = installTypeIds e
   let _ = installSigMap e (programSigs e (fnBinds groups))
   -- #990: group the flat impl-entry list by interface method ONCE, so every per-site
   -- dispatch scan (implsOf) is O(bucket) not
@@ -15575,6 +15413,7 @@ emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
     lazyNames = [],
     trmc = plan.trmc,
     methodResults = plan.methodResults,
+    constructorFacts = plan.constructorFacts,
     externRequirements = plan.externRequirements,
     dispGroups = None,
   }
