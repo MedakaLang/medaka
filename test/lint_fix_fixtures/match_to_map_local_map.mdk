@@ -1,0 +1,11 @@
+-- Fixture for rule-match-to-map: a file that binds `map` anywhere withholds the fix,
+-- since the replacement calls `map` and the binding would capture it.
+-- The match is still reported; `.fixed` is the source unchanged.
+
+posOptEta k m = match lookup k m
+  None => None
+  Some x => Some (g x)
+
+shadowMap xs = xs
+  where
+    map g ys = ys

@@ -1,5 +1,5 @@
 # META
-source_lines=3828
+source_lines=3826
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_occurrence: method and literal occurrence inference, operator dispatch-site recording
@@ -2353,8 +2353,6 @@ recordSelectedStandaloneRoutes : ModuleCtx ->
   Mono ->
   Unit
 recordSelectedStandaloneRoutes mctx _ _ [] _ = ()
--- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
--- lint-disable-next-line rule-prefer-assign-op
 recordSelectedStandaloneRoutes mctx mname dicts ((r, inner) :: rest) tx =
   pushSiteGoal
     mctx.mcGraph

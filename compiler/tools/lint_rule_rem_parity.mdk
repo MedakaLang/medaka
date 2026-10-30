@@ -4,12 +4,15 @@ import frontend.ast.{Loc(..), Lit(..), Expr(..), Decl(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
-import frontend.exhaust.{Oracle}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
+  Ctx(..),
   FileFacts,
   Finding(..),
+  Fix,
   Fixability(..),
+  Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
@@ -19,9 +22,9 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  detApply,
-  exprRuleVisitors,
-  exprRuleFix,
+  rebinds,
+  exprRuleEditVisitors,
+  replaceNodeFix,
   ruleNameRemParity,
   unwrapLoc,
 }
@@ -40,11 +43,11 @@ rule =
       scope = Universal,
       ratchet = Gated,
       defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [],
+      fixability = FixableUnsafe,
+      needs = [NeedsScopes, NeedsWildIndex],
     }
     ruleRemParity
-    (Some remParityFix)
+    None
 
 -- `e` is the integer literal `k` — either an `ELit (LInt k)` or a Num-poly
 -- `ENumLit k …` (the parser emits the latter for expression int literals; sexp
@@ -88,16 +91,28 @@ ruleRemParity : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleRemParity _ _ _ _ _ =
-  exprRuleVisitors remParityExcl remParityOf remParityFinding
+ruleRemParity idx _ facts _ _ =
+  exprRuleEditVisitors
+    remParityExcl
+    remParityOf
+    (remParityFix idx facts)
+    remParityFinding
 
-remParityFinding : Option Loc -> Expr -> Finding
-remParityFinding loc rewritten = Finding {
+remParityFinding : Option Loc -> Expr -> Option Fix -> Finding
+remParityFinding loc rewritten fix = Finding {
   rule = ruleNameRemParity,
   message = "parity test. Rewrite as '" ++ exprToString rewritten ++ "'",
   severity = SevWarning,
   loc = loc,
+  fix = fix,
 }
 
-remParityFix : Oracle -> Decl -> Option (List Decl)
-remParityFix _ d = exprRuleFix remParityExcl (detApply remParityOf) d
+-- The rewrite calls `isEven` or `isOdd` by name.  A binding of either name
+-- anywhere in the file would capture the call, so the fix is withheld there
+-- (the finding stays).  The prelude's pair is `core.mdk`'s `isEven`/`isOdd`.
+remParityFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+remParityFix idx facts ctx e rewritten =
+  if rebinds idx facts ctx "isEven" || rebinds idx facts ctx "isOdd" then
+    None
+  else
+    replaceNodeFix Unsafe "use the parity predicate" ctx e rewritten

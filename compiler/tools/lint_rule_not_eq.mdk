@@ -5,13 +5,15 @@ import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
-import frontend.exhaust.{Oracle}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
   Ctx(..),
   FileFacts(..),
   Finding(..),
   Fixability(..),
+  Fix,
+  Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
@@ -21,12 +23,11 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  detApply,
-  exprRuleFix,
-  noExcl,
   notArgOf,
+  replaceNodeFix,
   ruleNameNotEq,
   unwrapLoc,
+  usesPreludeName,
 }
 
 export
@@ -44,10 +45,10 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [],
+      needs = [NeedsScopes, NeedsWildIndex],
     }
     notEqVisitors
-    (Some notEqFix)
+    None
 
 -- ── rule: not-eq ──────────────────────────────────────────────────────────────
 -- `not (a == b)` → `a /= b`; `not (a /= b)` → `a == b` (also the unary-`!` forms).
@@ -63,27 +64,41 @@ notEqOf e = match notArgOf e
     _ => None
   None => None
 
+-- Inside the definition of `==` or `/=` the written operator would be the
+-- method calling itself.
+definesEquality : Ctx -> Bool
+definesEquality ctx =
+  not ctx.ctxInTest && (ctx.ctxDeclName == "==" || ctx.ctxDeclName == "/=")
+
 -- `notArgOf` matches an application only, so only `EApp` nodes are visited.
+-- The fix is withheld where the file rebinds `not`: the call is then the
+-- file's own, and the rewrite would change what it computes.
 notEqVisitors : StdlibIndex ->
   String ->
   FileFacts ->
   Positions ->
   List Decl ->
   List Visitor
-notEqVisitors _ _ _ _ _ = [OnExpr [KApp] notEqAt]
+notEqVisitors idx _ facts _ _ = [OnExpr [KApp] (notEqAt idx facts)]
 
-notEqAt : Ctx -> Expr -> List Finding
-notEqAt ctx e = match notEqOf e
-  Some rewritten => [notEqFinding ctx.ctxSpan rewritten]
-  None => []
+notEqAt : StdlibIndex -> FileFacts -> Ctx -> Expr -> List Finding
+notEqAt idx facts ctx e = match (notEqOf e, e)
+  (Some rewritten, EApp hd _) =>
+    [notEqFinding ctx.ctxSpan rewritten (notEqFix idx facts ctx e hd rewritten)]
+  _ => []
 
-notEqFinding : Option Loc -> Expr -> Finding
-notEqFinding loc rewritten = Finding {
+notEqFinding : Option Loc -> Expr -> Option Fix -> Finding
+notEqFinding loc rewritten fix = Finding {
   rule = ruleNameNotEq,
   message = "negated equality. Rewrite as '" ++ exprToString rewritten ++ "'",
   severity = SevWarning,
   loc = loc,
+  fix = fix,
 }
 
-notEqFix : Oracle -> Decl -> Option (List Decl)
-notEqFix _ d = exprRuleFix noExcl (detApply notEqOf) d
+notEqFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Expr -> Option Fix
+notEqFix idx facts ctx e hd rewritten =
+  if usesPreludeName idx facts hd && not (definesEquality ctx) then
+    replaceNodeFix Safe "use the operator" ctx e rewritten
+  else
+    None

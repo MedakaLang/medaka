@@ -1963,8 +1963,7 @@ spineHeadMono t = match peelQual t
 
 export
 locEq : Loc -> Loc -> Bool
-locEq (Loc f1 a1 b1 c1 d1) (Loc f2 a2 b2 c2 d2) =
-  f1 == f2 && a1 == a2 && b1 == b2 && c1 == c2 && d1 == d2
+locEq a b = a == b
 
 -- strip leading `=>` constraints / effect rows so the walk aligns the method's
 -- value type with the occurrence mono.

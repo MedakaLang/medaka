@@ -4,12 +4,15 @@ import frontend.ast.{Loc(..), Expr(..), Decl(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
-import frontend.exhaust.{Oracle}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
+  Ctx(..),
   FileFacts(..),
   Finding(..),
+  Fix,
   Fixability(..),
+  Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
@@ -19,13 +22,13 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  detApply,
-  exprRuleVisitors,
-  exprRuleFix,
+  exprRuleEditVisitors,
   isEVarNamed,
   noExcl,
+  replaceNodeFix,
   ruleNameDoubleReverse,
   unwrapLoc,
+  usesPreludeName,
 }
 
 export
@@ -42,10 +45,10 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [],
+      needs = [NeedsScopes, NeedsWildIndex],
     }
     ruleDoubleReverse
-    (Some doubleReverseFix)
+    None
 
 -- ── rule: double-reverse ──────────────────────────────────────────────────────
 -- `reverse (reverse x)` → `x` (`reverse` is an involution).
@@ -62,11 +65,15 @@ ruleDoubleReverse : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleDoubleReverse _ _ _ _ _ =
-  exprRuleVisitors noExcl doubleReverseOf doubleReverseFinding
+ruleDoubleReverse idx _ facts _ _ =
+  exprRuleEditVisitors
+    noExcl
+    doubleReverseOf
+    (doubleReverseFix idx facts)
+    doubleReverseFinding
 
-doubleReverseFinding : Option Loc -> Expr -> Finding
-doubleReverseFinding loc rewritten = Finding {
+doubleReverseFinding : Option Loc -> Expr -> Option Fix -> Finding
+doubleReverseFinding loc rewritten fix = Finding {
   rule = ruleNameDoubleReverse,
   message =
     "`reverse (reverse …)` is a no-op. Rewrite as '"
@@ -74,7 +81,22 @@ doubleReverseFinding loc rewritten = Finding {
       ++ "'",
   severity = SevWarning,
   loc = loc,
+  fix = fix,
 }
 
-doubleReverseFix : Oracle -> Decl -> Option (List Decl)
-doubleReverseFix _ d = exprRuleFix noExcl (detApply doubleReverseOf) d
+-- The rewrite drops both `reverse` calls, so each must be the one the file
+-- resolves to the prelude's: a `reverse` the file binds is not the list
+-- involution the rule knows, and its fix is withheld.
+doubleReverseFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+doubleReverseFix idx facts ctx e rewritten =
+  if reversesArePrelude idx facts e then
+    replaceNodeFix Safe "drop the double reversal" ctx e rewritten
+  else
+    None
+
+-- Both `reverse` heads of the matched pair resolve to the prelude's.
+reversesArePrelude : StdlibIndex -> FileFacts -> Expr -> Bool
+reversesArePrelude idx facts (EApp hd1 arg1) = match unwrapLoc arg1
+  EApp hd2 _ => usesPreludeName idx facts hd1 && usesPreludeName idx facts hd2
+  _ => False
+reversesArePrelude _ _ _ = False

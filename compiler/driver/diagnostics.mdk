@@ -2651,6 +2651,27 @@ cjFixJsonWithSource src (Fix loc repl) = jObject [
   ("range", cjRangeOfLoc src (Some loc)),
   ("replacement", JString repl),
 ]
+cjFixJsonWithSource src (FixEdits applicability edits) =
+  fixEditsJson (loc => cjRangeOfLoc src (Some loc)) applicability edits
+
+-- The `{applicability, edits}` object of a span-edit fix, each edit's range
+-- rendered by `rangeOf`: the CLI and the language server differ only there.
+export
+fixEditsJson : (Loc -> Json) -> String -> List (Loc, String) -> Json
+fixEditsJson rangeOf applicability edits = jObject [
+  ("applicability", JString applicability),
+  (
+    "edits",
+    JArray
+      (arrayFromList
+        (map
+          ((loc, repl) => jObject [
+            ("range", rangeOf loc),
+            ("replacement", JString repl),
+          ])
+          edits)),
+  ),
+]
 
 export
 cjDiagnostic : String -> String -> Diag -> Json

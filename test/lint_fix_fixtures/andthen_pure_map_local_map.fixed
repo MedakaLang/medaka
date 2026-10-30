@@ -1,0 +1,9 @@
+-- Fixture for rule-andthen-pure-map: a file that binds `map` anywhere withholds
+-- every fix, since the replacement calls `map` and the binding would capture it.
+-- The bind is still reported; `.fixed` is the source unchanged.
+
+etaFn m f = andThen m (x => pure (f x))
+
+shadowMap xs = xs
+  where
+    map g ys = ys

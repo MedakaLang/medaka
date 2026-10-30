@@ -1,0 +1,6 @@
+-- NEGATIVE: a directive over the declaration keeps rule-test-bool-literal-equal from rewriting it.
+
+import test.*
+
+-- lint-disable-next-line rule-test-bool-literal-equal
+eqTrueLeft a = expectEqual True (a == 1)

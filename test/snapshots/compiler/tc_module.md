@@ -1,5 +1,5 @@
 # META
-source_lines=4476
+source_lines=4460
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_module: the per-module check in one order: declarations, top-level groups, test and prop
@@ -1068,8 +1068,6 @@ checkBodyImpl : GraphCtx ->
   List Decl ->
   List Decl ->
   (ModuleBindings, List Decl, ModuleCtx)
--- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
--- lint-disable-next-line rule-prefer-assign-op
 checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   let seed = moduleSeed.msSchemes
   let mctx = freshModuleCtx gctx runSeed mid
@@ -1202,7 +1200,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- on Flat, and the `IE` projection on Module (which carries this module's own impls, its
   -- ordinal being included by `declEnvVisibleAt`).  Built ONCE per module rather than per
   -- group: rebuilding it inside the reducer would be O(decls) per SCC, i.e. quadratic.
-  setRef mctx.mcCells.residualUnivRef moduleImplUniv
+  mctx.mcCells.residualUnivRef := moduleImplUniv
   -- (#4) shadows.  definerShadows uses the SHARED form — buildDefinerShadows over the
   -- full visible universe, scoped to THIS module's decls (prog0).  On Flat, prog0 =
   -- userProg and fullUniverse = prog, so this is exactly the old flat `buildDefinerShadows
@@ -1256,8 +1254,6 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- (#4 + #3-restore) mode-specific pre-inference ref setup (all pure/independent of the
   -- register+globalS block below, so order-safe).  Module installs importer-shadow state and restores the cross-module dict
   -- accumulators `freshModuleCtx` just wiped.
-  -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
-  -- lint-disable-next-line rule-prefer-assign-op
 
   -- #1425 site 2: `mid` is BOUND here now — the three lockstep re-keys at the end of this
   -- arm need this module's identity, and the arm can no longer discard it.
@@ -1303,20 +1299,18 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- such as `Tweak a Int` and `Tweak a Bool` to the ambiguous goal `Tweak a`.
   -- The graph-wide bare-name snapshot below remains vector-free because it lacks
   -- this source identity.
-  setRef
-    mctx.mcCells.funPredicateSlotsRef
-    (aliasConstraintEntries
+  mctx.mcCells.funPredicateSlotsRef :=
+    aliasConstraintEntries
         gctx
         prog
         gctx.crossRun.crossModuleFunPredicateSlotsQualRef.value
-      ++ mctx.mcCells.funPredicateSlotsRef.value)
-  setRef
-    mctx.mcCells.funConstraintDeclaredRef
-    (aliasConstraintEntries
+      ++ mctx.mcCells.funPredicateSlotsRef.value
+  mctx.mcCells.funConstraintDeclaredRef :=
+    aliasConstraintEntries
         gctx
         prog
         gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value
-      ++ mctx.mcCells.funConstraintDeclaredRef.value)
+      ++ mctx.mcCells.funConstraintDeclaredRef.value
   -- #1425 site 2: the three tables above were just seeded WHOLESALE from graph-wide
   -- BARE-NAME accumulators, so every name this module declares is currently answered by
   -- whichever module's same-named binding the topological order happened to put first.
@@ -1330,13 +1324,12 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
       prog
       gctx.crossRun.crossModuleFunPredicateSlotsQualRef.value
       mctx.mcCells.funPredicateSlotsRef.value)
-  setRef
-    mctx.mcCells.funConstraintDeclaredRef
-    (selfDeclArities
+  mctx.mcCells.funConstraintDeclaredRef :=
+    selfDeclArities
       mid
       prog
       gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value
-      mctx.mcCells.funConstraintDeclaredRef.value)
+      mctx.mcCells.funConstraintDeclaredRef.value
   -- ONE derivation, two projections.  The two refs are read together
   -- (`qualConstraintKey` assembles a `(definer, origin)` key out of both), so they
   -- must not be derived by two independent walks that could admit different rows.
@@ -1349,14 +1342,13 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- `reverseL` before `omFromPairs` so the FIRST entry wins a duplicate key, matching
   -- the first-match policy of the sibling tables set just above
   -- (`omFromPairs` is last-write-wins; see its own note in support/ordmap.mdk).
-  setRef
-    mctx.mcCells.importedSchemeOblsRef
-    (omFromPairs
+  mctx.mcCells.importedSchemeOblsRef :=
+    omFromPairs
       (reverseL
         (importedSchemeOblEntries
           prog
           gctx.crossRun.crossModuleSchemeOblsQualRef.value))
-      omEmpty)
+      omEmpty
   -- #2563: install THIS module's method scope — its decls and ordinal, the inputs
   -- `methodScopeHere` answers from on first read of each spelling (stage K's
   -- `deMethods` is the whole graph; nothing is copied per module).
@@ -1614,38 +1606,33 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   dedupPredicateSlotsTable mctx ()
   -- #1425: restore the rows the per-module view masked (see `selfNameRows`) — the view
   -- must not propagate as a graph-wide deletion into the next module's seed.
-  setRef
-    gctx.crossRun.crossModuleFunPredicateSlotsRef
-    (predicateSlotTableWithoutArgs
+  gctx.crossRun.crossModuleFunPredicateSlotsRef :=
+    predicateSlotTableWithoutArgs
       (mctx.mcCells.funPredicateSlotsRef.value
         ++ selfNameRows
           prog
-          gctx.crossRun.crossModuleFunPredicateSlotsRef.value))
-  setRef
-    gctx.crossRun.crossModuleFunPredicateSlotsQualRef
-    (attributeModuleEntries mid prog mctx.mcCells.funPredicateSlotsRef.value
-      ++ gctx.crossRun.crossModuleFunPredicateSlotsQualRef.value)
+          gctx.crossRun.crossModuleFunPredicateSlotsRef.value)
+  gctx.crossRun.crossModuleFunPredicateSlotsQualRef :=
+    attributeModuleEntries mid prog mctx.mcCells.funPredicateSlotsRef.value
+      ++ gctx.crossRun.crossModuleFunPredicateSlotsQualRef.value
   -- The sidecar's two snapshots, paired with the ids snapshots above.
-  setRef
-    gctx.crossRun.crossModuleFunConstraintDeclaredRef
-    (mctx.mcCells.funConstraintDeclaredRef.value
+  gctx.crossRun.crossModuleFunConstraintDeclaredRef :=
+    mctx.mcCells.funConstraintDeclaredRef.value
       ++ selfNameRows
         prog
-        gctx.crossRun.crossModuleFunConstraintDeclaredRef.value)
-  setRef
-    gctx.crossRun.crossModuleFunConstraintDeclaredQualRef
-    (attributeModuleEntries mid prog mctx.mcCells.funConstraintDeclaredRef.value
-      ++ gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value)
+        gctx.crossRun.crossModuleFunConstraintDeclaredRef.value
+  gctx.crossRun.crossModuleFunConstraintDeclaredQualRef :=
+    attributeModuleEntries mid prog mctx.mcCells.funConstraintDeclaredRef.value
+      ++ gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value
   gctx.crossRun.crossModuleMethodPredicateSlotsRef :=
     mctx.mcCells.methodPredicateSlotsRef.value
-  setRef
-    gctx.crossRun.crossModuleMethodPredicateSlotsQualRef
-    (emptyMethodModulePredicateSlots mid prog
+  gctx.crossRun.crossModuleMethodPredicateSlotsQualRef :=
+    emptyMethodModulePredicateSlots mid prog
       ++ attributeMethodModulePredicateSlots
         mid
         prog
         mctx.mcCells.methodPredicateSlotsRef.value
-      ++ gctx.crossRun.crossModuleMethodPredicateSlotsQualRef.value)
+      ++ gctx.crossRun.crossModuleMethodPredicateSlotsQualRef.value
   -- #1114 (#845, DICT-SEMANTICS §4.2 D6(a)): snapshot THIS module's scheme contexts
   -- alongside the three arity tables above.  The arity tables carry only what
   -- `funConstraintsRef` holds, whose INFERRED half is gated on `dictEligibleSetRef`
@@ -1655,14 +1642,13 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- always-on store of the same fact and is what the SAME-module use site already
   -- reads; this makes the cross-module use site read it too, under the same
   -- source-exact (mid, name) key.
-  setRef
-    gctx.crossRun.crossModuleSchemeOblsQualRef
-    (attributeModuleSchemeObls
+  gctx.crossRun.crossModuleSchemeOblsQualRef :=
+    attributeModuleSchemeObls
         mid
         prog
         gctx.crossRun.crossModuleSchemeOblsQualRef.value
         mctx.mcCells.schemeObligationsRef.value
-      ++ gctx.crossRun.crossModuleSchemeOblsQualRef.value)
+      ++ gctx.crossRun.crossModuleSchemeOblsQualRef.value
   -- Impl missing a required method: reads `classEnvHere` above, stage K's `CE` at this
   -- module's ordinal.  The miss arm of `ceRequiredAt` is `[]`, so an envelope that lacks an
   -- interface's row turns every live rejection here into a silent accept: `declEnvsRef` must
@@ -3920,8 +3906,6 @@ elabModuleStamp : ModuleCtx ->
   List Decl ->
   List Decl ->
   (ModuleBindings, List Decl, ModuleCtx)
--- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
--- lint-disable-next-line rule-prefer-assign-op
 elabModuleStamp prev mid seedVars accData implDecls prog =
   -- Stampers execute after graph inference via `drainStampQueue`, not here.
   -- See `StampCtx` and `moduleStampOrder` for the replay mechanism.

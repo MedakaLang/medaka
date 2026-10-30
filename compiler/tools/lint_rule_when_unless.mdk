@@ -4,12 +4,15 @@ import frontend.ast.{Loc(..), Lit(..), Expr(..), Decl(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
-import frontend.exhaust.{Oracle}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
+  Ctx(..),
   FileFacts(..),
   Finding(..),
+  Fix,
   Fixability(..),
+  Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
@@ -19,10 +22,10 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  detApply,
-  exprRuleVisitors,
-  exprRuleFix,
+  rebinds,
+  exprRuleEditVisitors,
   isEVarNamed,
+  replaceNodeFix,
   ruleNameWhenUnless,
   unwrapLoc,
 }
@@ -42,10 +45,10 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [],
+      needs = [NeedsScopes, NeedsWildIndex],
     }
     ruleWhenUnless
-    (Some whenUnlessFix)
+    None
 
 -- ── rule: when-unless ─────────────────────────────────────────────────────────
 -- `if b then m else pure ()` → `when b m`; `if b then pure () else m` → `unless b
@@ -77,11 +80,15 @@ ruleWhenUnless : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleWhenUnless _ _ _ _ _ =
-  exprRuleVisitors whenUnlessExcl whenUnlessOf whenUnlessFinding
+ruleWhenUnless idx _ facts _ _ =
+  exprRuleEditVisitors
+    whenUnlessExcl
+    whenUnlessOf
+    (whenUnlessFix idx facts)
+    whenUnlessFinding
 
-whenUnlessFinding : Option Loc -> Expr -> Finding
-whenUnlessFinding loc rewritten = Finding {
+whenUnlessFinding : Option Loc -> Expr -> Option Fix -> Finding
+whenUnlessFinding loc rewritten fix = Finding {
   rule = ruleNameWhenUnless,
   message =
     "conditional effect with a `pure ()` branch. Rewrite as '"
@@ -89,7 +96,16 @@ whenUnlessFinding loc rewritten = Finding {
       ++ "'",
   severity = SevWarning,
   loc = loc,
+  fix = fix,
 }
 
-whenUnlessFix : Oracle -> Decl -> Option (List Decl)
-whenUnlessFix _ d = exprRuleFix whenUnlessExcl (detApply whenUnlessOf) d
+-- The rewrite reads `pure` (the dropped `pure ()`) and calls `when` or `unless`.
+-- A binding of any of the three names in the file withholds the fix.
+whenUnlessFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+whenUnlessFix idx facts ctx e rewritten =
+  if rebinds idx facts ctx "pure"
+    || rebinds idx facts ctx "when"
+    || rebinds idx facts ctx "unless" then
+    None
+  else
+    replaceNodeFix Safe "use when / unless" ctx e rewritten

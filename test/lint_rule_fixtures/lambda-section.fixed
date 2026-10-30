@@ -13,19 +13,19 @@ leftSection xs = map (10 - _) xs
 -- expect-next-line rule-lambda-section
 bare xs = foldl (+) 0 xs
 
--- expect-next-line rule-lambda-section unfixed
-test "lambda in a test body" = expectEqual (map (x => x * 2) [1, 2]) [2, 4]
+-- expect-next-line rule-lambda-section
+test "lambda in a test body" = expectEqual (map (* 2) [1, 2]) [2, 4]
 
--- expect-next-line rule-lambda-section unfixed
-prop "lambda in a prop body" (xs : List Int) = map (x => x + 0) xs == xs
+-- expect-next-line rule-lambda-section
+prop "lambda in a prop body" (xs : List Int) = map (+ 0) xs == xs
 
--- expect-next-line rule-lambda-section unfixed
-let rec loop xs = filter (x => x > 0) xs
+-- expect-next-line rule-lambda-section
+let rec loop xs = filter (> 0) xs
 
--- expect-next-line rule-lambda-section unfixed
+-- expect-next-line rule-lambda-section
 interface Scaled a where
   scaled : List a -> List a
-  scaled xs = map (x => x * 2) xs
+  scaled xs = map (* 2) xs
 
 nearMisses xs =
   [ map (x => x + x) xs
@@ -104,3 +104,20 @@ negThree = (x y z => x + y)
 -- NEGATIVE: not a binary op at all.
 negUnary = (x => -x)
 negApp = (x => f x)
+
+-- A lambda with no brackets of its own is replaced from its first parameter.
+-- expect-next-line rule-lambda-section
+unbracketed = (+ 1)
+
+-- expect-next-line rule-lambda-section
+unbracketedPair = (*)
+
+-- A comment inside the span being replaced would be lost, so the fix is only
+-- suggested; a comment elsewhere in the declaration does not stand in its way.
+-- expect-next-line rule-lambda-section unfixed
+commentInside = (x => {- kept -} x + 1)
+
+-- expect-next-line rule-lambda-section
+commentOutside =
+  -- explains the choice
+  (+ 1)

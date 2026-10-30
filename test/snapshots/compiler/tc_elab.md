@@ -1,5 +1,5 @@
 # META
-source_lines=2052
+source_lines=2050
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_elab: dict-passing elaboration (`dictPass`), the grant rewrite (`grantWholeDomain`),
@@ -1837,8 +1837,6 @@ dictPassModulesScoped : ModuleCtx ->
   List (String, List Decl) ->
   List (String, List Decl)
 dictPassModulesScoped mctx _ _ _ _ _ _ [] = []
--- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
--- lint-disable-next-line rule-prefer-assign-op
 dictPassModulesScoped mctx idx dictNames promotedQ importerReach core2 allModules ((mid, prog) :: rest) =
   let importers = transitiveImporters importerReach mid allModules
   let importerDecls = flatMap snd importers

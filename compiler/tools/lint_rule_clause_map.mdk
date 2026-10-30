@@ -209,4 +209,5 @@ clauseMapFinding name g loc = Finding {
     "'\{name}' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as '\{exprToString (EApp (EVar "map") g)}' (suggest-only)",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }

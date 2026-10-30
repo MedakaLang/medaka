@@ -43,7 +43,7 @@ public export data Lit =
 -- reports itself: the Core IR lowering copies the span of an arithmetic
 -- operand, a `match` or a refutable `let` onto that node's trap site, and the
 -- native and WasmGC emitters print it.
-public export data Loc = Loc String Int Int Int Int
+public export data Loc = Loc String Int Int Int Int deriving (Eq)
 
 -- The site a synthesized `DFunDef`, `DoLet` or `ELet` carries: the zero-width
 -- 1:0 span the unlocated `parse` path gives every token, which the evaluator's

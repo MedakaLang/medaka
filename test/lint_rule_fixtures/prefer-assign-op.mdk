@@ -15,3 +15,41 @@ stamp r =
 plain : Ref Int -> Unit
 plain r =
   r := 3
+
+-- A `setRef` the file rebinds is not the prelude's: the write is reported and
+-- the source left alone.  The prelude's `setRef` in the same file is still
+-- rewritten.
+-- expect-next-line rule-prefer-assign-op unfixed
+reboundWhere r = setRef r 5
+  where
+    setRef a b = ()
+
+-- expect-next-line rule-prefer-assign-op
+plainAfterRebound r = setRef r 6
+
+-- The replacement is bracketed where its parent would regroup it.
+-- expect-next-line rule-prefer-assign-op
+inArgument r = id (setRef r 7)
+
+-- expect-next-line rule-prefer-assign-op
+inOperand r = 1 + setRef r 8
+
+-- A comment inside the span being replaced would be lost, so the fix is only
+-- suggested; a comment elsewhere in the declaration does not stand in its way.
+-- expect-next-line rule-prefer-assign-op unfixed
+commentInside r = setRef r {- kept -} 9
+
+-- expect-next-line rule-prefer-assign-op
+commentOutside r =
+  -- explains the choice
+  setRef r 10
+
+-- The collapse's span is the `let _ = ` text, so a comment in it withholds it.
+-- expect-next-line rule-prefer-assign-op unfixed
+collapseCommentInside r =
+  let _ = {- kept -} r := 11
+  ()
+
+-- A directive that silences a finding silences its fix too.
+-- lint-disable-next-line rule-prefer-assign-op
+suppressed r = setRef r 12

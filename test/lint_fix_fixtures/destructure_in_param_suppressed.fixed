@@ -1,0 +1,5 @@
+-- NEGATIVE: a directive over the declaration keeps rule-destructure-in-param from rewriting it.
+
+-- lint-disable-next-line rule-destructure-in-param
+fst2 p = match p
+  (a, b) => a

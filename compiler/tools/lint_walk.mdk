@@ -66,6 +66,7 @@ import support.util.{
 }
 import hash_map.{HashMap, new, get, setInPlace, has, keys, findWithDefault}
 import list.{take, drop, indexed}
+import string.{indexOf}
 import tools.printer.{declToString}
 import support.path.{dirOf, stripMdk}
 import frontend.marker.{declRefs}
@@ -85,17 +86,24 @@ import tools.lint_core.{
   Directive(..),
   FileFacts(..),
   Finding(..),
+  Fix(..),
+  Fixability(..),
   Rule(..),
   RuleCheck(..),
   StdlibIndex(..),
   StdlibIndexError(..),
   Visitor(..),
   factComments,
+  fixToDiagFix,
   factDupClauses,
   factScopes,
+  clampApplicability,
+  emptyStdlibIndex,
+  maxApplicability,
   memoNew,
   needsScopes,
   needsStdlibIndex,
+  needsWildIndex,
 }
 import tools.lint_scope.{
   Binder(..),
@@ -115,6 +123,7 @@ import tools.lint_shared.{
   sortUniqS,
   zipDeclPos,
 }
+import tools.lint_fix.{demoteOverComments}
 import tools.lint_dup.{dupClauseOfDecl, dupJoin, dupOccsOfClauses}
 import tools.lint_registry.{
   allCrossFileRules, allRules, crossRuleActive, selectRules
@@ -208,11 +217,11 @@ ruleFindings : StdlibIndex ->
 ruleFindings _ _ _ _ _ [] _ = []
 ruleFindings idx path facts pos prog (r :: rs) walked = match r.check
   WholeFile check =>
-    map (restampSeverity r.severity) (check idx path facts pos prog)
+    map (restampFinding r) (check idx path facts pos prog)
       ++ ruleFindings idx path facts pos prog rs walked
   Visits _ => match walked
     hits :: rest =>
-      map (restampSeverity r.severity) hits
+      map (restampFinding r) hits
         ++ ruleFindings idx path facts pos prog rs rest
     [] => ruleFindings idx path facts pos prog rs []
 
@@ -275,7 +284,12 @@ walkDecls exprHooks declHooks acc ((d, loc) :: rest) =
   let bodies = declBodies d
   let acc2 = match declHooks
     [] => acc
-    _ => runDeclHooks (scopeCtx (declScope bodies loc) KLoc loc) d acc declHooks
+    _ =>
+      runDeclHooks
+        (scopeCtx (declScope bodies loc) KLoc loc None)
+        d
+        acc
+        declHooks
   let acc3 = match exprHooks
     [] => acc2
     _ => walkBodies exprHooks loc acc2 bodies
@@ -298,13 +312,14 @@ ownerScope (OwnerLetGroup name ps) loc = BodyScope name ps PlainBody loc
 -- The walk carries the parent kind unwrapped, with `KLoc` standing for "no
 -- parent": an `ELoc` is never a parent, and the `Option` is built only when a
 -- callback fires.
-scopeCtx : BodyScope -> ExprKind -> Option Loc -> Ctx
-scopeCtx (BodyScope name ps kind declLoc) parent span = Ctx {
+scopeCtx : BodyScope -> ExprKind -> Option Loc -> Option Loc -> Ctx
+scopeCtx (BodyScope name ps kind declLoc) parent span own = Ctx {
   ctxDeclName = name,
   ctxParams = ps,
   ctxInTest = isTestBody kind,
   ctxParent = if parent == KLoc then None else Some parent,
   ctxSpan = span,
+  ctxOwn = own,
   ctxDeclLoc = declLoc,
 }
 
@@ -339,7 +354,8 @@ walkBodies hooks loc acc ((DeclBody owner body) :: rest) =
     rest
 
 -- An `ELoc` is transparent: its span becomes the span beneath it and its
--- parent is the parent of what it wraps.
+-- parent is the parent of what it wraps.  The outermost `ELoc` of a run of
+-- them is the node's own extent (`ctxOwn`); a node no `ELoc` wraps has none.
 walkExpr : List ExprHook ->
   BodyScope ->
   ExprKind ->
@@ -348,10 +364,34 @@ walkExpr : List ExprHook ->
   Expr ->
   List (Int, Finding)
 walkExpr hooks scope parent _ acc (ELoc l inner) =
-  walkExpr hooks scope parent (Some l) acc inner
+  walkWrapped hooks scope parent l l acc inner
 walkExpr hooks scope parent span acc e =
+  walkNode hooks scope parent span None acc e
+
+walkWrapped : List ExprHook ->
+  BodyScope ->
+  ExprKind ->
+  Loc ->
+  Loc ->
+  List (Int, Finding) ->
+  Expr ->
+  List (Int, Finding)
+walkWrapped hooks scope parent outer _ acc (ELoc l inner) =
+  walkWrapped hooks scope parent outer l acc inner
+walkWrapped hooks scope parent outer innermost acc e =
+  walkNode hooks scope parent (Some innermost) (Some outer) acc e
+
+walkNode : List ExprHook ->
+  BodyScope ->
+  ExprKind ->
+  Option Loc ->
+  Option Loc ->
+  List (Int, Finding) ->
+  Expr ->
+  List (Int, Finding)
+walkNode hooks scope parent span own acc e =
   let k = exprKind e
-  let acc2 = visitHooks (scopeCtx scope parent span) k e acc hooks
+  let acc2 = visitHooks (scopeCtx scope parent span own) k e acc hooks
   walkKids hooks scope k span acc2 (childExprs e)
 
 walkKids : List ExprHook ->
@@ -386,9 +426,34 @@ kindIn : ExprKind -> List ExprKind -> Bool
 kindIn _ [] = False
 kindIn k (x :: xs) = k == x || kindIn k xs
 
+-- A rule's finding under the rule's own severity, its fix held to the rule's
+-- applicability ceiling.
+restampFinding : Rule -> Finding -> Finding
+restampFinding r f = Finding {
+  rule = f.rule,
+  message = f.message,
+  severity = r.severity,
+  loc = f.loc,
+  fix = map (clampFix r.meta.fixability) f.fix,
+}
+
+clampFix : Fixability -> Fix -> Fix
+clampFix fixability fx = match maxApplicability fixability
+  Some ceiling => Fix {
+    fixApplicability = clampApplicability ceiling fx.fixApplicability,
+    fixEdits = fx.fixEdits,
+    fixMessage = fx.fixMessage,
+  }
+  None => fx
+
 restampSeverity : Severity -> Finding -> Finding
-restampSeverity sev f =
-  Finding { rule = f.rule, message = f.message, severity = sev, loc = f.loc }
+restampSeverity sev f = Finding {
+  rule = f.rule,
+  message = f.message,
+  severity = sev,
+  loc = f.loc,
+  fix = f.fix,
+}
 
 -- Whether some rule in the active `--only`/`--disable` set declares
 -- `NeedsStdlibIndex` in its metadata.  Mirrors `ruleActiveFixable`'s only/disable
@@ -398,6 +463,41 @@ restampSeverity sev f =
 export
 stdlibIndexNeeded : List String -> List String -> Bool
 stdlibIndexNeeded only disable = anyList (ruleNeedsIndex only disable) allRules
+
+-- Whether the index is worth building for linting `paths`: a rule that reads
+-- it outright is active, or a rule whose guards read it only for wildcard
+-- imports is active and some path has an `import m.*`.
+export
+stdlibIndexNeededFor : List String -> List String -> List String -> <IO> Bool
+stdlibIndexNeededFor only disable paths =
+  stdlibIndexNeeded only disable
+    || wildIndexNeeded only disable && anyPathWild paths
+
+anyPathWild : List String -> <IO> Bool
+anyPathWild [] = False
+anyPathWild (p :: rest) =
+  sourceHasWildImport (readFileSafe p) || anyPathWild rest
+
+-- Whether a rule whose guards read the index for wildcard imports is active.
+export
+wildIndexNeeded : List String -> List String -> Bool
+wildIndexNeeded only disable =
+  anyList (ruleNeedsWildIndex only disable) allRules
+
+ruleNeedsWildIndex : List String -> List String -> Rule -> Bool
+ruleNeedsWildIndex only disable r =
+  needsWildIndex r.meta
+    && (isEmptyL only || contains r.name only)
+    && not (contains r.name disable)
+
+-- Whether some line of `src` looks like an `import m.*`; a superset of the
+-- parsed wildcard imports, so a false positive costs only an index build.
+export
+sourceHasWildImport : String -> Bool
+sourceHasWildImport src = anyList isWildImportLine (splitNl src)
+
+isWildImportLine : String -> Bool
+isWildImportLine l = startsWith "import " l && isSome (indexOf ".*" l)
 
 ruleNeedsScopes : Rule -> Bool
 ruleNeedsScopes r = needsScopes r.meta
@@ -412,12 +512,18 @@ export
 buildStdlibIndexResult : <IO> Result StdlibIndexError StdlibIndex
 buildStdlibIndexResult =
   map
-    (triples => mkStdlibIndex (groupStdlibSigs triples))
+    (triples => mkStdlibIndex (groupStdlibSigs triples) triples)
     (stdlibSigTriplesResult lintStdlibDir)
 
 -- The sorted name list is computed here, once, not per linted file.
-mkStdlibIndex : HashMap String (List (String, Ty)) -> StdlibIndex
-mkStdlibIndex m = StdlibIndex m (sortUniqS (keys m))
+mkStdlibIndex : HashMap String (List (String, Ty)) ->
+  List (String, String, Ty) ->
+  StdlibIndex
+mkStdlibIndex m triples =
+  StdlibIndex m (sortUniqS (keys m)) (sortUniqS (map fst3 triples))
+
+fst3 : (String, String, Ty) -> String
+fst3 (modName, _, _) = modName
 
 -- `<MEDAKA_ROOT>/stdlib`, resolved exactly as the CLI resolves it (`envOr
 -- "MEDAKA_ROOT" defaultMedakaRoot`, `driver/build_cmd.mdk`) — an unset or empty
@@ -563,6 +669,32 @@ exportedSigPair (DExtern (ExternDecl { edPub = True, edName = name, edTy = ty, .
 exportedSigPair (DAttrib _ d) = exportedSigPair d
 exportedSigPair _ = []
 
+-- The (rule, line) of every finding of `rules` that no inline directive
+-- suppresses.  A decl fixer runs only where its rule has one of these on the
+-- decl's lines: a directive says the shape is deliberate.
+liveFindingLines : String ->
+  FileFacts ->
+  List Rule ->
+  Positions ->
+  List Decl ->
+  List (String, Int)
+liveFindingLines src facts rules pos prog =
+  flatMap
+    findingRuleLine
+    (applySuppressions
+      src
+      (lintProgramFacts emptyStdlibIndex rules "" facts pos prog))
+
+findingRuleLine : Finding -> List (String, Int)
+findingRuleLine f = match f.loc
+  Some (Loc _ line _ _ _) => [(f.rule, line)]
+  None => []
+
+-- Whether `r` has a live finding on the lines `[s, e]`.
+ruleLiveIn : List (String, Int) -> (Int, Int) -> Rule -> Bool
+ruleLiveIn live (s, e) r =
+  anyList (p => fst p == r.name && s <= snd p && snd p <= e) live
+
 -- ── autofix driver (Task A3) ───────────────────────────────────────────────────
 -- The CLI calls this for `--fix`, passing only plain data (the
 -- `--only`/`--disable` name lists, the source text, the parsed decls +
@@ -586,12 +718,10 @@ applyFixes only disable src prog pos =
   let cmts = collectComments src
   let cmtLines = map commentLine cmts
   let declPos = zipDeclPos prog (positionsDecls pos)
-  let facts =
-    if anyList ruleNeedsScopes rules then
-      Some (mkFileFacts src prog pos)
-    else
-      None
-  let tagged = collectSplices facts cmtLines orc rules declPos
+  let allFacts = mkFileFacts src prog pos
+  let facts = if anyList ruleNeedsScopes rules then Some allFacts else None
+  let live = liveFindingLines src allFacts rules pos prog
+  let tagged = collectSplices facts live cmtLines orc rules declPos
   let (kept, widen) = reconcileTestImport cmts declPos tagged
   (applySplices src (withWiden widen kept), listLen kept)
 
@@ -811,14 +941,17 @@ ruleHasFixer r = match r.fix
 -- left untouched).  A leading doc-comment ABOVE the decl is on a line
 -- `< declPosLine` → outside the span → the fix is still allowed (no over-bail).
 collectSplices : Option FileFacts ->
+  List (String, Int) ->
   List Int ->
   Oracle ->
   List Rule ->
   List (Decl, DeclPos) ->
   List ((Int, Int, String), List String)
-collectSplices _ _ _ _ [] = []
-collectSplices facts cmtLines orc rules ((d, dp) :: rest) =
-  match firstFix orc rules d
+collectSplices _ _ _ _ _ [] = []
+collectSplices facts live cmtLines orc rules ((d, dp) :: rest) =
+  let liveRules =
+    filterList (ruleLiveIn live (declPosLine dp, declPosEndLine dp)) rules
+  match firstFix orc liveRules d
     Some newDecls =>
       let delta = testVerbDelta d newDecls
       if spanHasComment cmtLines (declPosLine dp) (declPosEndLine dp)
@@ -828,14 +961,14 @@ collectSplices facts cmtLines orc rules ((d, dp) :: rest) =
             (declPosLine dp, declPosEndLine dp)
             delta.stopped
             delta.started) then
-        collectSplices facts cmtLines orc rules rest
+        collectSplices facts live cmtLines orc rules rest
       else
         (
             (declPosLine dp, declPosEndLine dp, renderDecls newDecls),
             delta.started,
           )
-          :: collectSplices facts cmtLines orc rules rest
-    None => collectSplices facts cmtLines orc rules rest
+          :: collectSplices facts live cmtLines orc rules rest
+    None => collectSplices facts live cmtLines orc rules rest
 
 -- True iff some comment line falls within the inclusive span `[startLine, endLine]`.
 spanHasComment : List Int -> Int -> Int -> Bool
@@ -957,6 +1090,7 @@ lintFindingDenyGo names (f :: rest)
         message = f.message,
         severity = SevError,
         loc = f.loc,
+        fix = f.fix,
       }
       :: lintFindingDenyGo names rest
   | otherwise = f :: lintFindingDenyGo names rest
@@ -972,7 +1106,13 @@ isFindingError f = match f.severity
 export
 findingToDiag : Finding -> Diag
 findingToDiag f =
-  Diag f.severity (LintRule f.rule) "[\{f.rule}] \{f.message}" f.loc None None
+  Diag
+    f.severity
+    (LintRule f.rule)
+    "[\{f.rule}] \{f.message}"
+    f.loc
+    None
+    (map fixToDiagFix f.fix)
 
 -- Run the full lint pipeline (all rules, inline `-- lint-disable-*` suppression,
 -- then the `--disable`/`--only`/`--deny` CLI-flag-style filters) over ONE file
@@ -1012,7 +1152,13 @@ lintFileDiagTripleParsed idx disable only deny path =
           (factDirectives facts)
           (lintProgramFacts idx (selectRules only disable) path facts pos decls)
       let findings = applyFindingFilters disable only deny allFindings
-      (path, src, map findingToDiag findings, pos, decls)
+      (
+        path,
+        src,
+        map findingToDiag (demoteOverComments path src findings),
+        pos,
+        decls,
+      )
 
 -- `lintFileDiagTripleParsed`, dropping the parse — the shape every existing
 -- caller that does not need the cross-file tier's inputs still wants.

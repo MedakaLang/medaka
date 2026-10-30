@@ -9,14 +9,18 @@ import frontend.ast.{
 }
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
+import list.{last}
 import support.util.{isEmptyL}
 import tools.printer.{exprToString}
-import frontend.exhaust.{Oracle}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
+  Ctx(..),
   FileFacts(..),
   Finding(..),
+  Fix,
   Fixability(..),
+  Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
@@ -27,15 +31,18 @@ import tools.lint_core.{
 }
 import tools.lint_shared.{
   andThenEtaFn,
-  detApply,
-  exprRuleVisitors,
-  exprRuleFix,
+  bindingOf,
+  rebinds,
+  exprRuleEditVisitors,
   isEVarNamed,
   isNilPCon,
   matchToMapErrPassthru,
   matchToMapTransform,
   noExcl,
+  replaceFix,
   ruleNameMatchToMap,
+  parenAt,
+  tightSpan,
 }
 
 export
@@ -53,10 +60,10 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [],
+      needs = [NeedsScopes, NeedsWildIndex],
     }
     ruleMatchToMap
-    (Some matchToMapFix)
+    None
 
 -- build the map function: eta-reduce `p => f p` to `f` (reusing `andThenEtaFn`),
 -- else a lambda over the (possibly non-simple) binder pattern.
@@ -110,11 +117,15 @@ ruleMatchToMap : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleMatchToMap _ _ _ _ _ =
-  exprRuleVisitors noExcl matchToMapOf matchToMapFinding
+ruleMatchToMap idx _ facts _ _ =
+  exprRuleEditVisitors
+    noExcl
+    matchToMapOf
+    (matchToMapEdit idx facts)
+    matchToMapFinding
 
-matchToMapFinding : Option Loc -> Expr -> Finding
-matchToMapFinding loc rewritten = Finding {
+matchToMapFinding : Option Loc -> Expr -> Option Fix -> Finding
+matchToMapFinding loc rewritten fix = Finding {
   rule = ruleNameMatchToMap,
   message =
     "2-arm match maps over an Option/Result — rewrite as '"
@@ -122,7 +133,38 @@ matchToMapFinding loc rewritten = Finding {
       ++ "'",
   severity = SevWarning,
   loc = loc,
+  fix = fix,
 }
 
-matchToMapFix : Oracle -> Decl -> Option (List Decl)
-matchToMapFix _ d = exprRuleFix noExcl (detApply matchToMapOf) d
+-- The fix replaces the whole `match` with the `map` call.  The call is `map`, so the
+-- fix is withheld where the file binds `map`, which would capture it.  The arms'
+-- constructors are not rebindable and need no guard.
+matchToMapEdit : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+matchToMapEdit idx facts ctx e rewritten =
+  if rebinds idx facts ctx "map" then
+    None
+  else
+    replaceFix
+      Safe
+      "use map"
+      (matchSpan facts ctx e)
+      (bindingOf rewritten)
+      ctx
+      (exprToString rewritten)
+
+-- The span the fix replaces.  An unparenthesised `match` starts at its keyword,
+-- which its own `ELoc` gives, but that `ELoc` runs to the layout token after the
+-- block, past any comment or blank line that follows.  The end is therefore the
+-- last arm's last token.  A parenthesised match is wrapped by the parentheses'
+-- `ELoc`, which starts at `(` and ends at `)`, so it is exact as it stands.
+matchSpan : FileFacts -> Ctx -> Expr -> Option Loc
+matchSpan facts ctx (EMatch _ arms) = match (ctx.ctxOwn, lastArmSpan arms)
+  (Some (own@(Loc f sl sc _ _)), Some (Loc _ _ _ el ec)) =>
+    if parenAt facts sl sc then Some own else Some (Loc f sl sc el ec)
+  _ => None
+matchSpan _ _ _ = None
+
+lastArmSpan : List Arm -> Option Loc
+lastArmSpan arms = match last arms
+  Some (Arm _ _ body) => tightSpan body
+  None => None

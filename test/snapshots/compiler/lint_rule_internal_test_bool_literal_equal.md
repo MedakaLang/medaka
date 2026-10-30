@@ -1,5 +1,5 @@
 # META
-source_lines=103
+source_lines=104
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-test-bool-literal-equal: `expectEqual` against a `True`/`False` literal. Prefer `expectTrue` / `expectFalse`.
@@ -100,6 +100,7 @@ testBoolLitEqFinding loc rewritten = Finding {
     "`expectEqual` against a boolean literal. Rewrite as '\{exprToString rewritten}'",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 testBoolLiteralEqualFix : Oracle -> Decl -> Option (List Decl)
@@ -123,7 +124,7 @@ testBoolLiteralEqualFix _ d =
 (DTypeSig false "ruleTestBoolLiteralEqual" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleTestBoolLiteralEqual" (PWild PWild PWild PWild PWild) (EApp (EApp (EApp (EVar "exprRuleVisitors") (EVar "noExcl")) (EVar "testBoolLitEqOf")) (EVar "testBoolLitEqFinding")))
 (DTypeSig false "testBoolLitEqFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
-(DFunDef false "testBoolLitEqFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolLiteralEqual")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`expectEqual` against a boolean literal. Rewrite as '")) (EApp (EVar "display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DFunDef false "testBoolLitEqFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolLiteralEqual")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`expectEqual` against a boolean literal. Rewrite as '")) (EApp (EVar "display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
 (DTypeSig false "testBoolLiteralEqualFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "testBoolLiteralEqualFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFixTestDecls") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "testBoolLitEqOf"))) (EVar "d")))
 # MARK
@@ -144,6 +145,6 @@ testBoolLiteralEqualFix _ d =
 (DTypeSig false "ruleTestBoolLiteralEqual" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleTestBoolLiteralEqual" (PWild PWild PWild PWild PWild) (EApp (EApp (EApp (EVar "exprRuleVisitors") (EVar "noExcl")) (EVar "testBoolLitEqOf")) (EVar "testBoolLitEqFinding")))
 (DTypeSig false "testBoolLitEqFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
-(DFunDef false "testBoolLitEqFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolLiteralEqual")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`expectEqual` against a boolean literal. Rewrite as '")) (EApp (EMethodRef "display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DFunDef false "testBoolLitEqFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolLiteralEqual")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`expectEqual` against a boolean literal. Rewrite as '")) (EApp (EMethodRef "display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
 (DTypeSig false "testBoolLiteralEqualFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "testBoolLiteralEqualFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFixTestDecls") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "testBoolLitEqOf"))) (EVar "d")))

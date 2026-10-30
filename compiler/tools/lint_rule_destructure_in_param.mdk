@@ -105,6 +105,7 @@ destructureArmsFinding orc loc name p [arm] =
           "function '\{name}' destructures parameter '\{p}' via a single-arm irrefutable `match`. Destructure it directly in the parameter position",
         severity = SevWarning,
         loc = loc,
+        fix = None,
       },
     ]
   else

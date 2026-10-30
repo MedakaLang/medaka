@@ -46,3 +46,21 @@ negFlag flag = not flag
 
 -- NEGATIVE: a bare predicate call is already canonical.
 negPlain xs = isEmptyL xs
+
+-- POSITIVE: as an argument, the call keeps the argument's brackets.
+-- expect-next-line rule-complement-predicate
+argCmp xs = g (not (isSome xs))
+
+-- POSITIVE: a comment above the body, inside the declaration, survives the fix.
+-- expect-next-line rule-complement-predicate
+commentOutC xs =
+  -- keep this note
+  not (isEmptyL xs)
+
+-- POSITIVE, unfixed: a comment inside the matched span withholds the fix.
+-- expect-next-line rule-complement-predicate unfixed
+commentInC xs = not (isEmptyL {- keep -} xs)
+
+-- NEGATIVE: a directive suppresses the finding.
+-- lint-disable-next-line rule-complement-predicate
+quietC xs = not (isEmptyL xs)

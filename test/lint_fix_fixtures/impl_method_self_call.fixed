@@ -1,0 +1,23 @@
+-- Fixture for the impl-method guard of the span-edit fixes.
+-- NEGATIVE: each rewrite would write a call to the very method it sits in, so
+-- every fix is withheld and the file stays byte-identical.
+
+data Box a = Box a
+
+impl Mappable Box where
+  map f b = andThen b (x => pure (f x))
+
+impl Mappable Maybe where
+  map f o = match o
+    None => None
+    Some x => Some (f x)
+
+impl Displayed Box where
+  display b = "<" ++ show b ++ ">"
+
+impl Ranked Box where
+  max a b = if a > b then a else b
+  min a b = if a < b then a else b
+
+impl Runner Box where
+  when b m = if b then m else pure ()

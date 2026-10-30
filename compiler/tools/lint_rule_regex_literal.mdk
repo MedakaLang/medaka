@@ -149,10 +149,12 @@ regexLiteralErrFinding loc pat = match compile pat
       "regex pattern \"\{pat}\" fails to compile: \{message} (position \{intToString position})",
     severity = SevWarning,
     loc = loc,
+    fix = None,
   }
   Ok _ => Finding {
     rule = ruleNameRegexLiteral,
     message = "regex pattern \"\{pat}\" fails to compile",
     severity = SevWarning,
     loc = loc,
+    fix = None,
   }

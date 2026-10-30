@@ -1,0 +1,287 @@
+-- compiler/tools/lint_fix.mdk — turns the fixes findings carry into validated
+-- source edits and iterates to a fixed point.  It imports no rule module, no
+-- registry and nothing from `types/`: the caller passes the linter in as a
+-- function, so the driver sees only findings.
+
+import list.{sortBy}
+import frontend.ast.{Loc(..)}
+import frontend.ast_walk.{ExprKind(..)}
+import frontend.lex_scan.{scanRawChars}
+import frontend.lex_token.{RawTok(..)}
+import frontend.syntax_source.{SourceSpan(..)}
+import tools.lint_core.{Applicability(..), Finding(..), Fix(..), FixEdit(..)}
+import tools.source_edits.{
+  EditError, SourceEdit(..), applySourceEdits, validateSourceEdits
+}
+import tools.source_snapshot.{SourceSnapshot(..), makeSnapshot, snapshotId}
+import support.source_index.{sourcePositionToOffset}
+
+-- Why a fix run produced nothing.  The input that does not parse is the
+-- caller's; an output that does not parse is a fixer's bug, and is never
+-- returned.
+public export data FixError =
+  | SourceDoesNotParse String
+  | FixedOutputDoesNotParse Int String
+  | EditsRejected EditError
+
+export
+fixErrorText : FixError -> String
+fixErrorText (SourceDoesNotParse msg) = msg
+fixErrorText (FixedOutputDoesNotParse pass msg) =
+  "the fixed source of pass \{intToString pass} does not parse: \{msg}"
+fixErrorText (EditsRejected _) = "the chosen edits were rejected"
+
+-- Most passes one run makes.  Each pass applies a non-overlapping subset of the
+-- file's fixes, so a chain of nested rewrites settles one layer per pass.  The
+-- longest operator chain a rule rewrites in the tree is 28 operands, so 32
+-- passes settle every real file, and the bound is what keeps two fixes that undo
+-- each other from looping.
+maxPasses : Int
+maxPasses = 32
+
+-- What a fix run left: a source no fix applies to any more, or one still
+-- carrying fixes after `maxPasses` passes.
+public export data FixRun =
+  | Settled String Int
+  | Capped String Int
+  deriving (Eq, Debug)
+
+export
+fixPassLimit : Int
+fixPassLimit = maxPasses
+
+-- The source and fix count of a run, and the run with both replaced.
+export
+runParts : FixRun -> (String, Int)
+runParts (Settled src n) = (src, n)
+runParts (Capped src n) = (src, n)
+
+export
+sameCap : FixRun -> String -> Int -> FixRun
+sameCap (Settled _ _) src n = Settled src n
+sameCap (Capped _ _) src n = Capped src n
+
+-- A fix whose locations are resolved to offsets: its edits against the pass's
+-- snapshot, and the offsets spanning all of them.
+data Resolved = Resolved {
+  rsApplicability : Applicability,
+  rsEdits : List SourceEdit,
+  rsLo : Int,
+  rsHi : Int,
+}
+
+rank : Applicability -> Int
+rank Safe = 0
+rank Unsafe = 1
+rank Suggest = 2
+
+-- `Suggest` is shown and never applied; `Unsafe` needs the limit to allow it.
+applicable : Applicability -> Applicability -> Bool
+applicable limit a = a /= Suggest && rank a <= rank limit
+
+-- The fixes the findings carry, in finding order.
+fixesOf : List Finding -> List Fix
+fixesOf findings = flatMap findingFix findings
+
+findingFix : Finding -> List Fix
+findingFix f = toList f.fix
+
+resolveEdits : SourceSnapshot -> List FixEdit -> Option (List SourceEdit)
+resolveEdits _ [] = Some []
+resolveEdits (snap@(SourceSnapshot _ _ _ text index)) ((FixEdit (Loc _ sl sc el ec) repl) :: rest) =
+  match (sourcePositionToOffset index sl sc, sourcePositionToOffset index el ec)
+    (Some lo, Some hi) =>
+      let edit =
+        SourceEdit
+          (snapshotId snap)
+          (SourceSpan lo hi)
+          (stringSlice lo hi text)
+          repl
+      if lo <= hi then map (edit :: _) (resolveEdits snap rest) else None
+    _ => None
+
+editLo : SourceEdit -> Int
+editLo (SourceEdit _ (SourceSpan lo _) _ _) = lo
+
+editHi : SourceEdit -> Int
+editHi (SourceEdit _ (SourceSpan _ hi) _ _) = hi
+
+-- `None` for a fix with an unplaceable edit or overlapping edits of its own.
+resolveFix : SourceSnapshot -> Fix -> Option Resolved
+resolveFix snap fx = match resolveEdits snap fx.fixEdits
+  Some (edits@(first :: _)) => match validateSourceEdits snap edits
+    Ok _ => Some Resolved {
+      rsApplicability = fx.fixApplicability,
+      rsEdits = edits,
+      rsLo = fold min (editLo first) (map editLo edits),
+      rsHi = fold max (editHi first) (map editHi edits),
+    }
+    Err _ => None
+  _ => None
+
+-- The span of every comment in `src`.
+commentSpans : String -> List SourceSpan
+commentSpans src = flatMap commentSpan (scanRawChars (stringToChars src))
+
+commentSpan : RawTok -> List SourceSpan
+commentSpan (RComment s e) = [SourceSpan s e]
+commentSpan _ = []
+
+-- A comment overlapping an edit's span would be deleted by the replacement.
+-- One that ends where the span starts, or starts where it ends, is untouched.
+editTouchesComment : List SourceSpan -> SourceEdit -> Bool
+editTouchesComment comments e =
+  any (spanOverlaps (editLo e) (editHi e)) comments
+
+spanOverlaps : Int -> Int -> SourceSpan -> Bool
+spanOverlaps lo hi (SourceSpan s t) = s < hi && lo < t
+
+-- A fix that would drop a comment is only suggested.
+demote : List SourceSpan -> Resolved -> Resolved
+demote comments r =
+  if any (editTouchesComment comments) r.rsEdits then
+    Resolved {
+      rsApplicability = Suggest,
+      rsEdits = r.rsEdits,
+      rsLo = r.rsLo,
+      rsHi = r.rsHi,
+    }
+  else
+    r
+
+-- The findings of `src` with each fix carrying the applicability `--fix` would
+-- act on: one whose edits overlap a comment is `Suggest`, as in `chooseFixes`.
+-- `--json` reports through this, so a consumer never applies what `--fix`
+-- withholds.
+export
+demoteOverComments : String -> String -> List Finding -> List Finding
+demoteOverComments path src findings =
+  let comments = commentSpans src
+  if isEmpty comments then
+    findings
+  else
+    let snap = makeSnapshot path None 0 src
+    map (demoteFinding snap comments) findings
+
+demoteFinding : SourceSnapshot -> List SourceSpan -> Finding -> Finding
+demoteFinding snap comments f =
+  { f | fix = map (demoteFix snap comments) f.fix }
+
+demoteFix : SourceSnapshot -> List SourceSpan -> Fix -> Fix
+demoteFix snap comments fx = match resolveFix snap fx
+  Some r =>
+    if any (editTouchesComment comments) r.rsEdits then
+      { fx | fixApplicability = Suggest }
+    else
+      fx
+  None => fx
+
+compareResolved : Resolved -> Resolved -> Ordering
+compareResolved a b =
+  if a.rsLo == b.rsLo then compare a.rsHi b.rsHi else compare a.rsLo b.rsLo
+
+-- Greedy by start offset: a fix is taken when it begins at or after the end of
+-- the last one taken (never at a point already holding an insertion), and
+-- the rest wait for the next pass.
+pick : Int -> List Resolved -> List Resolved
+pick _ [] = []
+pick edge (r :: rest)
+  | r.rsLo > edge || r.rsLo == edge && r.rsHi > edge = r :: pick r.rsHi rest
+  | otherwise = pick edge rest
+
+chooseFixes : Applicability -> SourceSnapshot -> List Fix -> List Resolved
+chooseFixes limit (snap@(SourceSnapshot _ _ _ text _)) fixes =
+  let resolved = flatMap (f => toList (resolveFix snap f)) fixes
+  if isEmpty resolved then
+    []
+  else
+    let comments = commentSpans text
+    let ready =
+      filter
+        (r => applicable limit r.rsApplicability)
+        (map (demote comments) resolved)
+    pick (0 - 1) (sortBy compareResolved ready)
+
+-- Fix `src` (read from `path`, which names the snapshot) until no fix at the
+-- `limit` remains.  `lint` is the caller's linter: it returns the findings of a
+-- source, or the reason it does not parse.  Returns the fixed source and the
+-- number of fixes applied, `Capped` when fixes remain after `maxPasses`.  Every pass re-parses its input, so an output that
+-- does not parse is reported and never returned.
+export
+applyFixes : (String -> String -> Result String (List Finding)) ->
+  Applicability ->
+  String ->
+  String ->
+  Result FixError FixRun
+applyFixes lint limit path src = fixPass lint limit path 0 0 src
+
+fixPass : (String -> String -> Result String (List Finding)) ->
+  Applicability ->
+  String ->
+  Int ->
+  Int ->
+  String ->
+  Result FixError FixRun
+fixPass lint limit path n total src = match lint path src
+  Err msg =>
+    if n == 0 then
+      Err (SourceDoesNotParse msg)
+    else
+      Err (FixedOutputDoesNotParse n msg)
+  Ok findings =>
+    let snap = makeSnapshot path None n src
+    let chosen = chooseFixes limit snap (fixesOf findings)
+    if isEmpty chosen then
+      Ok (Settled src total)
+    else if n >= maxPasses then
+      Ok (Capped src total)
+    else match applySourceEdits snap (flatMap (r => r.rsEdits) chosen)
+      Err e => Err (EditsRejected e)
+      Ok out => fixPass lint limit path (n + 1) (total + length chosen) out
+
+-- How tightly a replacement's text binds.  `Closed` text (a literal, a name,
+-- anything already bracketed) reads the same in any position; `Applied` text
+-- (a call) binds tighter than any operator but needs brackets as an operand of
+-- an application or a projection; `Open` text (an operator expression, a
+-- lambda, `if`, `match`) may need brackets wherever it has a parent.
+public export data Binding = Closed | Applied | Open
+
+-- `text` placed where its `Ctx` says an expression of kind `parent` sits:
+-- bracketed when it is `Open` and the parent would regroup it.  A body's root
+-- (`None`) and the parents that separate their children by punctuation take it
+-- bare.
+export
+parenIfNeeded : Binding -> Option ExprKind -> String -> String
+parenIfNeeded Closed _ text = text
+parenIfNeeded Applied None text = text
+parenIfNeeded Applied (Some parent) text =
+  if bindsTighterThanCall parent then "(" ++ text ++ ")" else text
+parenIfNeeded Open None text = text
+parenIfNeeded Open (Some parent) text =
+  if separatesChildren parent then text else "(" ++ text ++ ")"
+
+bindsTighterThanCall : ExprKind -> Bool
+bindsTighterThanCall KApp = True
+bindsTighterThanCall KFieldAccess = True
+bindsTighterThanCall KIndex = True
+bindsTighterThanCall KSlice = True
+bindsTighterThanCall KUnOp = True
+bindsTighterThanCall _ = False
+
+separatesChildren : ExprKind -> Bool
+separatesChildren KTuple = True
+separatesChildren KListLit = True
+separatesChildren KArrayLit = True
+separatesChildren KStringInterp = True
+separatesChildren KBlock = True
+separatesChildren KIf = True
+separatesChildren KMatch = True
+separatesChildren KLam = True
+separatesChildren KLet = True
+separatesChildren KLetGroup = True
+separatesChildren KGuards = True
+separatesChildren KDo = True
+separatesChildren KRecordCreate = True
+separatesChildren KMapLit = True
+separatesChildren KSetLit = True
+separatesChildren _ = False

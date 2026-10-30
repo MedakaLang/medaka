@@ -9,19 +9,19 @@ topLevel a b = a /= b
 -- expect-next-line rule-not-eq
 notNotEq a b = a == b
 
--- expect-next-line rule-not-eq unfixed
-test "negation in a test body" = expectTrue (not (1 == 2))
+-- expect-next-line rule-not-eq
+test "negation in a test body" = expectTrue (1 /= 2)
 
--- expect-next-line rule-not-eq unfixed
-prop "negation in a prop body" (n : Int) = not (n == n + 1)
+-- expect-next-line rule-not-eq
+prop "negation in a prop body" (n : Int) = n /= n + 1
 
--- expect-next-line rule-not-eq unfixed
-let rec loop n = not (n == 0)
+-- expect-next-line rule-not-eq
+let rec loop n = n /= 0
 
--- expect-next-line rule-not-eq unfixed
+-- expect-next-line rule-not-eq
 interface Same a where
   same : a -> a -> Bool
-  same x y = not (x == y)
+  same x y = x /= y
 
 nearMisses a b = [a /= b, a == b, not (a < b), not (g a), not (a == b || b)]
 
@@ -106,13 +106,54 @@ test "an equality inside a test body" = expectTrue (1 == 1)
 prop "an equality inside a prop body" (n : Int) = expectFalse (n == 0)
 
 -- POSITIVE, inside a `test` decl body: the walk descends into `test` and `prop`
--- bodies, so `rule-not-eq` reaches `not (1 == 2)`. The fixer does not rewrite
--- test bodies, so the finding is marked `unfixed` and survives the fix.
--- expect-next-line rule-not-eq unfixed
-test "a non-test rule does not reach a test body" = not (1 == 2)
+-- bodies, so `rule-not-eq` reaches `not (1 == 2)` and the fix rewrites it.
+-- expect-next-line rule-not-eq
+test "a non-test rule does not reach a test body" = 1 /= 2
 
 -- POSITIVE, in a `def` body: flagged and rewritten, the `.fixed` file shows
--- `a /= 1`. Together with the `unfixed` row above this pins that the fixer
--- reaches `def` bodies and only those.
+-- `a /= 1`.
 -- expect-next-line rule-not-eq
 notEqDef a = a /= 1
+
+-- A `not` the file rebinds is not the prelude's, so the call is reported and
+-- the source left alone (#4662): the fix would otherwise change what a local
+-- `not` computes.  The binding may be a `where` function or a parameter.
+-- expect-next-line rule-not-eq unfixed
+reboundWhere n = not (n == 3)
+  where
+    not b = b
+
+-- expect-next-line rule-not-eq unfixed
+reboundParam not n = not (n == 3)
+
+-- The prelude's `not` in the same file is still rewritten.
+-- expect-next-line rule-not-eq
+plainAfterRebound n = n /= 3
+
+-- The replacement is bracketed where its parent would regroup it.
+-- expect-next-line rule-not-eq
+inArgument a b = pick (a /= b) a
+
+-- expect-next-line rule-not-eq
+inSection a b = map (&& (a /= b)) [a]
+
+-- expect-next-line rule-not-eq
+inChain a b c = c && (a == b) && c
+
+-- expect-next-line rule-not-eq
+inList a b = [a /= b, a]
+
+-- A comment inside the span being replaced would be lost, so the fix is only
+-- suggested; a comment elsewhere in the declaration does not stand in its way.
+-- expect-next-line rule-not-eq unfixed
+commentInside a b = not (a == {- kept -} b)
+
+-- expect-next-line rule-not-eq
+commentOutside a b =
+  -- explains the choice
+  a /= b
+
+-- A directive that silences a finding silences its fix too: the spelling is
+-- deliberate here, so `--fix` leaves it.
+-- lint-disable-next-line rule-not-eq
+suppressed a b = not (a == b)

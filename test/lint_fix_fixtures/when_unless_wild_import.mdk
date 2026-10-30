@@ -1,0 +1,6 @@
+-- Fixture for rule-when-unless autofix.
+-- NEGATIVE: `import core.*` may bring its own `when` into scope, so the fix is withheld.
+
+import core.*
+
+whenShape b act = if b then act else pure ()
