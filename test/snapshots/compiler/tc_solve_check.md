@@ -1,5 +1,5 @@
 # META
-source_lines=3491
+source_lines=3487
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve_check: the solver boundary judgments and the write side of a binder's dictionary
@@ -2572,8 +2572,6 @@ registerConstraintRegs mctx (reg :: rest) =
 -- change the dict ARITY, while inventing a vector would be wrong; so absence is
 -- meaningful — an ids-only slot is a distinct state from a slot with empty args.
 setFunConstraintEntry : ModuleCtx -> String -> List PredicateSlot -> Unit
--- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
--- lint-disable-next-line rule-prefer-assign-op
 setFunConstraintEntry mctx m slots =
   mctx.mcCells.funPredicateSlotsRef :=
     (m, slots) :: mctx.mcCells.funPredicateSlotsRef.value
@@ -2595,11 +2593,9 @@ setFunConstraintEntry mctx m slots =
   -- direction.  The slots' vectors are the very prefix `expandSupersEntry` reads back out of
   -- `funPredicateSlotsRef`, so the two dedups see identical input; an unknown vector
   -- yields `[]` for its slot, the scalar count.
-  setRef
-    mctx.mcCells.funConstraintDeclaredRef
-    ((m, CDPLen (listLen (dedupSlotVecs (map predicateSlotView slots))))
-      :: mctx.mcCells.funConstraintDeclaredRef.value)
-  ()
+  mctx.mcCells.funConstraintDeclaredRef :=
+    (m, CDPLen (listLen (dedupSlotVecs (map predicateSlotView slots))))
+      :: mctx.mcCells.funConstraintDeclaredRef.value
 
 -- register a member's constraints: its slots into `funPredicateSlotsRef` + activeDictVars
 -- (the kept/abstract slots).
@@ -3777,7 +3773,7 @@ inferredPredicateSlotIdTag aid bid cid id
 (DFunDef false "registerConstraintRegs" ((PVar "mctx") (PList)) (ELit LUnit))
 (DFunDef false "registerConstraintRegs" ((PVar "mctx") (PCons (PVar "reg") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "registerMember") (EVar "mctx")) (EFieldAccess (EVar "reg") "crName")) (EFieldAccess (EVar "reg") "crScope")) (EFieldAccess (EVar "reg") "crIfaceMonos")) (EFieldAccess (EVar "reg") "crArgVecs"))) (DoExpr (EApp (EApp (EVar "registerConstraintRegs") (EVar "mctx")) (EVar "rest")))))
 (DTypeSig false "setFunConstraintEntry" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyCon "Unit")))))
-(DFunDef false "setFunConstraintEntry" ((PVar "mctx") (PVar "m") (PVar "slots")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsRef")) (EBinOp "::" (ETuple (EVar "m") (EVar "slots")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsIdxRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (EVar "slots")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsIdxRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funConstraintDeclaredRef")) (EBinOp "::" (ETuple (EVar "m") (EApp (EVar "CDPLen") (EApp (EVar "listLen") (EApp (EVar "dedupSlotVecs") (EApp (EApp (EVar "map") (EVar "predicateSlotView")) (EVar "slots")))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funConstraintDeclaredRef") "value")))) (DoExpr (ELit LUnit))))
+(DFunDef false "setFunConstraintEntry" ((PVar "mctx") (PVar "m") (PVar "slots")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsRef")) (EBinOp "::" (ETuple (EVar "m") (EVar "slots")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsIdxRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (EVar "slots")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsIdxRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funConstraintDeclaredRef")) (EBinOp "::" (ETuple (EVar "m") (EApp (EVar "CDPLen") (EApp (EVar "listLen") (EApp (EVar "dedupSlotVecs") (EApp (EApp (EVar "map") (EVar "predicateSlotView")) (EVar "slots")))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funConstraintDeclaredRef") "value"))))))
 (DTypeSig false "registerMember" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))) (TyCon "Unit")))))))
 (DFunDef false "registerMember" ((PVar "mctx") PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "registerMember" ((PVar "mctx") (PVar "m") (PVar "scope") (PVar "ifaceMonos") (PVar "argVecs")) (EBlock (DoLet false false (PVar "slots") (EApp (EApp (EVar "declaredPredicateSlots") (EVar "ifaceMonos")) (EVar "argVecs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerPredicateSlotIds") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "scope")) (ELit (LInt 0))) (EVar "slots"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerSlotPredGivens") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "scope")) (ELit (LInt 0))) (EVar "slots"))) (DoExpr (EApp (EApp (EApp (EVar "setFunConstraintEntry") (EVar "mctx")) (EVar "m")) (EVar "slots")))))
@@ -4157,7 +4153,7 @@ inferredPredicateSlotIdTag aid bid cid id
 (DFunDef false "registerConstraintRegs" ((PVar "mctx") (PList)) (ELit LUnit))
 (DFunDef false "registerConstraintRegs" ((PVar "mctx") (PCons (PVar "reg") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "registerMember") (EVar "mctx")) (EFieldAccess (EVar "reg") "crName")) (EFieldAccess (EVar "reg") "crScope")) (EFieldAccess (EVar "reg") "crIfaceMonos")) (EFieldAccess (EVar "reg") "crArgVecs"))) (DoExpr (EApp (EApp (EVar "registerConstraintRegs") (EVar "mctx")) (EVar "rest")))))
 (DTypeSig false "setFunConstraintEntry" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyCon "Unit")))))
-(DFunDef false "setFunConstraintEntry" ((PVar "mctx") (PVar "m") (PVar "slots")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsRef")) (EBinOp "::" (ETuple (EVar "m") (EVar "slots")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsIdxRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (EVar "slots")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsIdxRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funConstraintDeclaredRef")) (EBinOp "::" (ETuple (EVar "m") (EApp (EVar "CDPLen") (EApp (EVar "listLen") (EApp (EVar "dedupSlotVecs") (EApp (EApp (EMethodRef "map") (EVar "predicateSlotView")) (EVar "slots")))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funConstraintDeclaredRef") "value")))) (DoExpr (ELit LUnit))))
+(DFunDef false "setFunConstraintEntry" ((PVar "mctx") (PVar "m") (PVar "slots")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsRef")) (EBinOp "::" (ETuple (EVar "m") (EVar "slots")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsIdxRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (EVar "slots")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsIdxRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funConstraintDeclaredRef")) (EBinOp "::" (ETuple (EVar "m") (EApp (EVar "CDPLen") (EApp (EVar "listLen") (EApp (EVar "dedupSlotVecs") (EApp (EApp (EMethodRef "map") (EVar "predicateSlotView")) (EVar "slots")))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funConstraintDeclaredRef") "value"))))))
 (DTypeSig false "registerMember" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))) (TyCon "Unit")))))))
 (DFunDef false "registerMember" ((PVar "mctx") PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "registerMember" ((PVar "mctx") (PVar "m") (PVar "scope") (PVar "ifaceMonos") (PVar "argVecs")) (EBlock (DoLet false false (PVar "slots") (EApp (EApp (EVar "declaredPredicateSlots") (EVar "ifaceMonos")) (EVar "argVecs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerPredicateSlotIds") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "scope")) (ELit (LInt 0))) (EVar "slots"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerSlotPredGivens") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "scope")) (ELit (LInt 0))) (EVar "slots"))) (DoExpr (EApp (EApp (EApp (EVar "setFunConstraintEntry") (EVar "mctx")) (EVar "m")) (EVar "slots")))))

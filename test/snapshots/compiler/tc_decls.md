@@ -1,5 +1,5 @@
 # META
-source_lines=3251
+source_lines=3248
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls: declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs`
@@ -992,8 +992,6 @@ tabKeyModule (TkBare _ _) = None
 -- an alias another module declares.
 export
 rejectCyclicAliases : ModuleCtx -> List Decl -> Unit
--- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
--- lint-disable-next-line rule-prefer-assign-op
 rejectCyclicAliases mctx prog =
   let table = mctx.mcCells.aliasTableRef.value
   -- BARE NAMES on purpose — see `buildAliasGraphEntry`.
@@ -1010,11 +1008,10 @@ rejectCyclicAliases mctx prog =
   let cyclic = !cyclicOut
   emitCyclicAliasErrors mctx prog table cyclic
   let cyclicSet = omFromNames cyclic omEmpty
-  setRef
-    mctx.mcCells.aliasTableRef
-    (filterList
+  mctx.mcCells.aliasTableRef :=
+    filterList
       (entry => not (omHasKey (tabKeyName (fst entry)) cyclicSet))
-      table)
+      table
 
 -- like astTypeFresh but also returns the name→fresh-tyvar map (the same fresh
 -- vars used in the Mono), so a caller can check post-unify whether each
