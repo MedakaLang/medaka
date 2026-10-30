@@ -1,0 +1,18 @@
+-- Fixture for rule-when-unless autofix: the replacement is bracketed for the
+-- parent it sits in, a comment outside the span survives, and a comment inside
+-- the span withholds the fix.  This file binds no when/unless/pure, so the fix
+-- is offered.
+
+-- argument of an application
+wArg b act = g (when b act)
+
+-- a comment above the body, inside the declaration, survives the fix
+multi b act =
+  -- keep this note
+  when b act
+
+-- a comment inside the matched span withholds the fix
+inside b act = if b then act {- keep -} else pure ()
+
+-- NEGATIVE: must stay untouched.
+negPlain b act other = if b then act else other

@@ -1,15 +1,18 @@
 -- Fixture for rule-rem-parity: `n % 2 == 0` → isEven, `n % 2 /= 0` → isOdd.
+-- This file binds isEven and isOdd itself, so every rewrite here would call the
+-- file's own pair: the fix is withheld (the findings stay).  The fix path is
+-- pinned by test/lint_fix_fixtures/rem_parity_brackets.mdk.
 
--- POSITIVE: the two parity comparisons (either operand order).
--- expect-next-line rule-rem-parity
+-- POSITIVE, unfixed: the two parity comparisons (either operand order).
+-- expect-next-line rule-rem-parity unfixed
 evenTest n = n % 2 == 0
--- expect-next-line rule-rem-parity
+-- expect-next-line rule-rem-parity unfixed
 oddTest n = n % 2 /= 0
--- expect-next-line rule-rem-parity
+-- expect-next-line rule-rem-parity unfixed
 evenFlipped n = 0 == n % 2
 
--- POSITIVE: nested in a body.
--- expect-next-line rule-rem-parity
+-- POSITIVE, unfixed: nested in a body.
+-- expect-next-line rule-rem-parity unfixed
 nested n = if n % 2 == 0 then n else n + 1
 
 -- NEGATIVE: `% 2 == 1` is WRONG for negative odd n (`%` follows the dividend).

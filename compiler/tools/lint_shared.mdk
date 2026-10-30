@@ -567,6 +567,31 @@ exprRuleHit excl det mkFinding ctx e
     Some hit => [mkFinding ctx.ctxSpan hit]
     None => []
 
+-- `exprRuleVisitors` whose findings carry a span fix: the same detector and the
+-- same gate, with `fixOf ctx e rewritten` as each finding's fix.  The fix is
+-- `None` where the rule withholds it; the finding is reported either way.
+export
+exprRuleEditVisitors : (String -> Bool) ->
+  (Expr -> Option Expr) ->
+  (Ctx -> Expr -> Expr -> Option Fix) ->
+  (Option Loc -> Expr -> Option Fix -> Finding) ->
+  List Visitor
+exprRuleEditVisitors excl det fixOf mkFinding =
+  [OnAnyExpr (exprRuleEditHit excl det fixOf mkFinding)]
+
+exprRuleEditHit : (String -> Bool) ->
+  (Expr -> Option Expr) ->
+  (Ctx -> Expr -> Expr -> Option Fix) ->
+  (Option Loc -> Expr -> Option Fix -> Finding) ->
+  Ctx ->
+  Expr ->
+  List Finding
+exprRuleEditHit excl det fixOf mkFinding ctx e
+  | not ctx.ctxInTest && excl ctx.ctxDeclName = []
+  | otherwise = match det e
+    Some hit => [mkFinding ctx.ctxSpan hit (fixOf ctx e hit)]
+    None => []
+
 -- ── generic fix driver ────────────────────────────────────────────────────────
 -- Rebuild the decl's bodies with `rw` and return `Some [newDecl]` only when the
 -- location-stripped sexp changed (the change-detection every fixer uses).  `excl`

@@ -1,0 +1,28 @@
+-- Fixture for rule-rem-parity autofix: the replacement is bracketed for the
+-- parent it sits in, a comment outside the span survives, and a comment inside
+-- the span withholds the fix.  This file binds no isEven/isOdd, so the fix is
+-- offered.
+
+-- argument of an application
+argOf n = g (n % 2 == 0)
+
+-- operand of a chain
+chainOf n b = b && n % 2 == 0
+
+-- list element
+listOf n = [n % 2 == 0, n % 2 /= 0]
+
+-- lambda body
+mapped xs = map (m => m % 2 == 0) xs
+
+-- a comment above the body, inside the declaration, survives the fix
+multi n =
+  -- keep this note
+  n % 2 == 0
+
+-- a comment inside the matched span withholds the fix
+inside n = n % 2 == {- keep -} 0
+
+-- NEGATIVE: a directive suppresses the finding.
+-- lint-disable-next-line rule-rem-parity
+quiet n = n % 2 == 0
