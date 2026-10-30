@@ -115,7 +115,7 @@ varsOf (MFun a b) = varsOf a ++ varsOf b
 
 export
 isClosed : MTy -> Bool
-isClosed t = varsOf t == []
+isClosed t = isEmpty (varsOf t)
 
 -- One shared unbound cell per distinct variable id, so a repeated variable is one cell.
 cellsFor : List Int -> List (Int, Ref Tyvar)
@@ -257,9 +257,9 @@ prop "anyMember is symmetric and is True exactly for a shared name" (xs : List I
   let a = map (k => "v\{intToString (abs k % 4)}") xs
   let b = map (k => "v\{intToString (abs k % 4)}") ys
   anyMember a b == anyMember b a
-    && anyMember a b == (length (filter (x => elem x b) a) > 0)
+    && anyMember a b == any (x => elem x b) a
     && not (anyMember [] a)
-    && anyMember a a == (a /= [])
+    && anyMember a a == not (isEmpty a)
 
 test "two same-named types from different modules are different types" =
   let a = tconFrom (OriginModule "m1") "T"

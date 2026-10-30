@@ -200,9 +200,6 @@ flipOutcomeAt text i = match decodeInterface (flipAt i text)
 siteOffset : String -> (String, String, Int) -> Option Int
 siteOffset text (_, marker, offset) = map (+ offset) (S.indexOf marker text)
 
-count : String -> List String -> Int
-count outcome outcomes = length (filter (== outcome) outcomes)
-
 -- Where the digest's coverage begins: the newline that ends the header line.
 -- A flip before it reads as a different key, which the loader compares with
 -- the compiler's own and finds stale.
@@ -237,10 +234,10 @@ test "no flipped body byte decodes to a different file" = expectAll [
   labelFail "positions tried" (expectAtLeast 1000 (length tinyOutcomes)),
   labelFail
     "flips that change what the file says"
-    (expectEqual 0 (count "Ok different" tinyOutcomes)),
+    (expectEqual 0 (count (== "Ok different") tinyOutcomes)),
   labelFail
     "most flips are refused"
-    (expectAtLeast (length tinyOutcomes / 2) (count "Err" tinyOutcomes)),
+    (expectAtLeast (length tinyOutcomes / 2) (count (== "Err") tinyOutcomes)),
   labelFail
     "the fixed sites in the body are refused"
     (expectAll [

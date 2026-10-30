@@ -3550,7 +3550,7 @@ validateHelperPlansGo planEnv runtimeM rawCoreM rawM plans baseline rejected =
       let delta = helperDiagDelta baseline diags
       let helperFiles = helperFileIndex helpers 0 omEmpty
       let (bad, unexpected) = helperDiagFailures helperFiles delta omEmpty False
-      if omKeys bad == [] then
+      if isEmpty (omKeys bad) then
         if unexpected then
           HelperValidation
             (helperPair runtimeM rawCoreM rawM [])

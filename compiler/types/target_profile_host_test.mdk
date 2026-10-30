@@ -91,7 +91,7 @@ observedFinding needs (p :: s :: seen :: _) =
     [] => ["slice \{s}: observed on \{p} but missing from the host's SLICES"]
     (SliceNeeds _ proc ns) :: _ =>
       let missing = filter (l => not (elem l granted)) ns
-      let wantReal = missing == [] && (not proc || p == processProfile)
+      let wantReal = isEmpty missing && (not proc || p == processProfile)
       let want = if wantReal then "real" else "withheld"
       if want == seen then
         []

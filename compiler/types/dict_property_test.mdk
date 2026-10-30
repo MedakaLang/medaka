@@ -161,7 +161,7 @@ public export data Selection = Missing | Unique | Ambiguous deriving (Eq, Debug)
 c1Model : List Head -> Goal -> Selection
 c1Model heads goal =
   let ms = filter (h => matches h (goalHT goal)) (map headHT heads)
-  if ms == [] then
+  if isEmpty ms then
     Missing
   else
     let minimal =
@@ -178,7 +178,7 @@ noImplCode = "T-NO-IMPL"
 -- instance is the missing-instance rejection (§6 C1) and never ambiguity,
 -- and ambiguity is reported exactly when the model says so.
 selectionAgrees : Selection -> List String -> Bool
-selectionAgrees Unique codes = codes == []
+selectionAgrees Unique codes = isEmpty codes
 selectionAgrees Missing codes =
   hasCode noImplCode codes && not (hasCode ambiguityCode codes)
 selectionAgrees Ambiguous codes = hasCode ambiguityCode codes
@@ -248,7 +248,7 @@ prop "a twice-declared head that is minimal at the goal is rejected and not as m
   if duplicateReached others dup goal then
     let twice = tagImpl (++ "2") dup
     let codes = codesFlat (c1Program plain (others ++ [dup]) goal ++ twice)
-    codes /= [] && not (hasCode noImplCode codes)
+    not (isEmpty codes) && not (hasCode noImplCode codes)
   else
     True
 
@@ -721,8 +721,7 @@ allCtx = [CHole, CBox] ++ map CPairL [AInt, AStr] ++ map CPairR [AInt, AStr]
 test "census: the determination law sees all three outcomes" =
   let cases =
     flatMap (hs => map (c => (hs, c, determinationModel hs c)) allCtx) headSets
-  let several =
-    (hs, c) => length (filter (h => unifies h (ctxHT c)) (map headHT hs)) >= 2
+  let several = (hs, c) => count (h => unifies h (ctxHT c)) (map headHT hs) >= 2
   expectAll [
     expectEqual 4920 (length cases),
     expectAtLeast 50 (countWhere ((_, _, s) => s == Missing) cases),

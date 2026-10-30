@@ -711,7 +711,7 @@ cevalModules facts preludeDecls0 modules0 = withFacts
     let globalCells = map (n => (n, Ref VUnit)) globalNames
     let globalFrame = indexedFrame globalCells
     let runtimeFrame = indexedFrame (runtimeCellsOf externs)
-    let privateCells = map (n => (n, Ref VUnit)) (map cBindName preludePrivate)
+    let privateCells = map (cBindName >> (n => (n, Ref VUnit))) preludePrivate
     let globalEnv =
       EvalEnv (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
     let mods =

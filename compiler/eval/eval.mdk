@@ -4428,7 +4428,7 @@ installConsts cells ((n, v) :: rest) =
 export
 runtimeCellsOf : List (String, Value e) -> <e> List (String, Ref (Value e))
 runtimeCellsOf externs =
-  let cells = map (n => (n, Ref VUnit)) (map fst externs)
+  let cells = map (fst >> (n => (n, Ref VUnit))) externs
   let _ = installConsts cells externs
   cells
 
@@ -4673,7 +4673,7 @@ evalModulesWith facts extraExterns preludeDecls0 modules0 = withFacts
     let globalCells = map (n => (n, Ref VUnit)) globalNames
     let globalFrame = indexedFrame globalCells
     let runtimeFrame = indexedFrame (runtimeCellsOf externs)
-    let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
+    let privateCells = map (fst >> (n => (n, Ref VUnit))) preludePrivate
     let globalEnv =
       EvalEnv (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
     let mods =
@@ -4921,7 +4921,7 @@ buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 = withFacts
     let globalCells = map (n => (n, Ref VUnit)) globalNames
     let globalFrame = indexedFrame globalCells
     let runtimeFrame = indexedFrame (runtimeCellsOf externs)
-    let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
+    let privateCells = map (fst >> (n => (n, Ref VUnit))) preludePrivate
     let globalEnv =
       EvalEnv (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
     let mods =

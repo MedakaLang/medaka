@@ -90,7 +90,7 @@ parseDiagnosticJson snapshot fallback d pd = match snapshot
               locToLspRange index l == locToLspRange index (diagnosticLoc pd)
             None => False)
       if matching
-        && length (parseDiagnosticActions snapshot [pd]) > 0 then match base
+        && not (isEmpty (parseDiagnosticActions snapshot [pd])) then match base
         JObject fields =>
           jObject (toList fields ++ [("data", snapshotJson snapshot)])
         _ => base

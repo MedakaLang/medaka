@@ -798,9 +798,7 @@ test "#4053: P's scheme renders the same after Q's drive" =
   let p = drive "p" pSrc
   let before = rendered p
   let _ = drive "q" qSrc
-  expectEqual
-    0
-    (length (filter (pr => fst pr /= snd pr) (zip before (rendered p))))
+  expectEqual 0 (count (pr => fst pr /= snd pr) (zip before (rendered p)))
 
 test "published schemes hold no Link" =
   let p = drive "p" pSrc
@@ -1141,7 +1139,7 @@ shapesPresent shapes table =
       (e => match e
         EvEntry _ v => evShapeOf v)
       table
-  map (k => not (isEmpty (filter (== k) have))) shapes
+  map (k => elem k have) shapes
 
 test "a driven program's cpEvidence carries every kind the program mints" =
   let r = talkReport ()

@@ -433,7 +433,7 @@ ensureDiagnostic : RecoveryLimits ->
   RecoveredSource ->
   RecoveredSource
 ensureDiagnostic (RecoveryLimits _ _ _ maxDiagnostics) diagnostic result =
-  if maxDiagnostics <= 0 || length (recoveredDiagnostics result) > 0 then
+  if maxDiagnostics <= 0 || not (isEmpty (recoveredDiagnostics result)) then
     result
   else
     makeRecoveredSource

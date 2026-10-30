@@ -340,5 +340,5 @@ prop "a closed written type converts to the closed Mono of its model, with no di
   let m = ctxFor []
   let mono = fromAstType m [] (written t)
   ppMono mono == ppMono (expected t)
-    && monoUnboundIds mono == []
-    && codesOf m == []
+    && isEmpty (monoUnboundIds mono)
+    && isEmpty (codesOf m)
