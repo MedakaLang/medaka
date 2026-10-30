@@ -19,12 +19,13 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor,
+  mkVisitorRule,
 }
 import tools.lint_shared.{
   detApply,
-  exprRuleFindingsInTests,
-  exprRuleFixInTests,
+  exprRuleVisitors,
+  exprRuleFixTestDecls,
   isBoolLit,
   isEVarNamed,
   isFalseLit,
@@ -37,7 +38,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameTestBoolLiteralEqual,
       summary =
@@ -83,9 +84,9 @@ ruleTestBoolLiteralEqual : StdlibIndex ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleTestBoolLiteralEqual _ _ _ pos prog =
-  exprRuleFindingsInTests noExcl testBoolLitEqOf testBoolLitEqFinding pos prog
+  List Visitor
+ruleTestBoolLiteralEqual _ _ _ _ _ =
+  exprRuleVisitors noExcl testBoolLitEqOf testBoolLitEqFinding
 
 testBoolLitEqFinding : Option Loc -> Expr -> Finding
 testBoolLitEqFinding loc rewritten = Finding {
@@ -98,4 +99,4 @@ testBoolLitEqFinding loc rewritten = Finding {
 
 testBoolLiteralEqualFix : Oracle -> Decl -> Option (List Decl)
 testBoolLiteralEqualFix _ d =
-  exprRuleFixInTests noExcl (detApply testBoolLitEqOf) d
+  exprRuleFixTestDecls noExcl (detApply testBoolLitEqOf) d

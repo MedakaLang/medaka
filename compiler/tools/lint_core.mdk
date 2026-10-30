@@ -130,9 +130,12 @@ public export data Ctx = Ctx {
 
 -- One callback a walking rule registers: on every expression node whose kind is
 -- listed (an `ELoc` is never visited; its span becomes the `Ctx` span beneath
--- it), or on every top-level declaration, in source order.
+-- it), on every expression node whatever its kind (`OnAnyExpr`, for a rule
+-- whose detector inspects raw nodes of any shape), or on every top-level
+-- declaration, in source order.
 public export data Visitor =
   | OnExpr (List ExprKind) (Ctx -> Expr -> List Finding)
+  | OnAnyExpr (Ctx -> Expr -> List Finding)
   | OnDecl (Ctx -> Decl -> List Finding)
 
 -- How a rule inspects a file.  `WholeFile` is the whole pass for the rule: the

@@ -1,5 +1,5 @@
 # META
-source_lines=159
+source_lines=158
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-regex-literal: a string literal passed to `compile`/`mustCompile` that fails to compile as a regex.
@@ -22,10 +22,11 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor,
+  mkVisitorRule,
 }
 import tools.lint_shared.{
-  exprRuleFindings,
+  exprRuleVisitors,
   lastSegOf,
   memberLocalIfOrigin,
   noExcl,
@@ -36,7 +37,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameRegexLiteral,
       summary =
@@ -103,14 +104,12 @@ ruleRegexLiteral : StdlibIndex ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleRegexLiteral _ _ _ pos prog =
-  exprRuleFindings
+  List Visitor
+ruleRegexLiteral _ _ _ _ prog =
+  exprRuleVisitors
     noExcl
     (regexLiteralOf (regexLiteralCallNames ++ regexImportedCallNames prog))
     regexLiteralFinding
-    pos
-    prog
 
 -- The parser ELoc-wraps every expr, callee and argument included, so both
 -- must be peeled (`stripELoc`) before the shape match.
@@ -168,10 +167,10 @@ regexLiteralErrFinding loc pat = match compile pat
 (DUse false (UseGroup ("support" "util") ((mem "contains" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("regex") ((mem "RegexError" true) (mem "compile" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "exprRuleFindings" false) (mem "lastSegOf" false) (mem "memberLocalIfOrigin" false) (mem "noExcl" false) (mem "ruleNameRegexLiteral" false) (mem "stripELoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "exprRuleVisitors" false) (mem "lastSegOf" false) (mem "memberLocalIfOrigin" false) (mem "noExcl" false) (mem "ruleNameRegexLiteral" false) (mem "stripELoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameRegexLiteral")) (fa "summary" (ELit (LString "a string literal passed directly to `compile`/`mustCompile` fails to compile as a regex pattern"))) (fa "doc" (ELit (LString "A string literal passed directly to `compile` or `mustCompile` that is not a valid regex fails at run time on every call. The rule compiles it at lint time.\n\nBefore:\n  mustCompile \"(unclosed\"\nAfter:\n  mustCompile \"(closed)\""))) (fa "category" (EVar "Correctness")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleRegexLiteral")) (EVar "None")))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameRegexLiteral")) (fa "summary" (ELit (LString "a string literal passed directly to `compile`/`mustCompile` fails to compile as a regex pattern"))) (fa "doc" (ELit (LString "A string literal passed directly to `compile` or `mustCompile` that is not a valid regex fails at run time on every call. The rule compiles it at lint time.\n\nBefore:\n  mustCompile \"(unclosed\"\nAfter:\n  mustCompile \"(closed)\""))) (fa "category" (EVar "Correctness")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleRegexLiteral")) (EVar "None")))
 (DTypeSig false "regexLiteralCallNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "regexLiteralCallNames" () (EListLit (ELit (LString "compile")) (ELit (LString "mustCompile"))))
 (DTypeSig false "regexImportedCallNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -187,8 +186,8 @@ regexLiteralErrFinding loc pat = match compile pat
 (DFunDef false "regexLocalNamesInPath" ((PVar "stdName") (PCon "UseWild" (PVar "path"))) (EIf (EBinOp "==" (EApp (EVar "lastSegOf") (EVar "path")) (ELit (LString "regex"))) (EListLit (EVar "stdName")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "regexLocalNamesInPath" ((PVar "stdName") (PCon "UseAlias" (PVar "path") (PVar "alias"))) (EIf (EBinOp "==" (EApp (EVar "lastSegOf") (EVar "path")) (ELit (LString "regex"))) (EListLit (EApp (EApp (EVar "qualifiedLocal") (EVar "alias")) (EVar "stdName"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "regexLocalNamesInPath" (PWild PWild) (EListLit))
-(DTypeSig false "ruleRegexLiteral" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleRegexLiteral" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EApp (EVar "regexLiteralOf") (EBinOp "++" (EVar "regexLiteralCallNames") (EApp (EVar "regexImportedCallNames") (EVar "prog"))))) (EVar "regexLiteralFinding")) (EVar "pos")) (EVar "prog")))
+(DTypeSig false "ruleRegexLiteral" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
+(DFunDef false "ruleRegexLiteral" (PWild PWild PWild PWild (PVar "prog")) (EApp (EApp (EApp (EVar "exprRuleVisitors") (EVar "noExcl")) (EApp (EVar "regexLiteralOf") (EBinOp "++" (EVar "regexLiteralCallNames") (EApp (EVar "regexImportedCallNames") (EVar "prog"))))) (EVar "regexLiteralFinding")))
 (DTypeSig false "regexLiteralOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "regexLiteralOf" ((PVar "names") (PVar "e")) (EApp (EApp (EApp (EVar "regexLiteralOfSpine") (EVar "names")) (EVar "e")) (EApp (EVar "stripELoc") (EVar "e"))))
 (DTypeSig false "regexLiteralOfSpine" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
@@ -216,10 +215,10 @@ regexLiteralErrFinding loc pat = match compile pat
 (DUse false (UseGroup ("support" "util") ((mem "contains" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("regex") ((mem "RegexError" true) (mem "compile" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "exprRuleFindings" false) (mem "lastSegOf" false) (mem "memberLocalIfOrigin" false) (mem "noExcl" false) (mem "ruleNameRegexLiteral" false) (mem "stripELoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "exprRuleVisitors" false) (mem "lastSegOf" false) (mem "memberLocalIfOrigin" false) (mem "noExcl" false) (mem "ruleNameRegexLiteral" false) (mem "stripELoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameRegexLiteral")) (fa "summary" (ELit (LString "a string literal passed directly to `compile`/`mustCompile` fails to compile as a regex pattern"))) (fa "doc" (ELit (LString "A string literal passed directly to `compile` or `mustCompile` that is not a valid regex fails at run time on every call. The rule compiles it at lint time.\n\nBefore:\n  mustCompile \"(unclosed\"\nAfter:\n  mustCompile \"(closed)\""))) (fa "category" (EVar "Correctness")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleRegexLiteral")) (EVar "None")))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameRegexLiteral")) (fa "summary" (ELit (LString "a string literal passed directly to `compile`/`mustCompile` fails to compile as a regex pattern"))) (fa "doc" (ELit (LString "A string literal passed directly to `compile` or `mustCompile` that is not a valid regex fails at run time on every call. The rule compiles it at lint time.\n\nBefore:\n  mustCompile \"(unclosed\"\nAfter:\n  mustCompile \"(closed)\""))) (fa "category" (EVar "Correctness")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleRegexLiteral")) (EVar "None")))
 (DTypeSig false "regexLiteralCallNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "regexLiteralCallNames" () (EListLit (ELit (LString "compile")) (ELit (LString "mustCompile"))))
 (DTypeSig false "regexImportedCallNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -235,8 +234,8 @@ regexLiteralErrFinding loc pat = match compile pat
 (DFunDef false "regexLocalNamesInPath" ((PVar "stdName") (PCon "UseWild" (PVar "path"))) (EIf (EBinOp "==" (EApp (EVar "lastSegOf") (EVar "path")) (ELit (LString "regex"))) (EListLit (EVar "stdName")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "regexLocalNamesInPath" ((PVar "stdName") (PCon "UseAlias" (PVar "path") (PVar "alias"))) (EIf (EBinOp "==" (EApp (EVar "lastSegOf") (EVar "path")) (ELit (LString "regex"))) (EListLit (EApp (EApp (EVar "qualifiedLocal") (EVar "alias")) (EVar "stdName"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "regexLocalNamesInPath" (PWild PWild) (EListLit))
-(DTypeSig false "ruleRegexLiteral" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleRegexLiteral" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EApp (EVar "regexLiteralOf") (EBinOp "++" (EVar "regexLiteralCallNames") (EApp (EVar "regexImportedCallNames") (EVar "prog"))))) (EVar "regexLiteralFinding")) (EVar "pos")) (EVar "prog")))
+(DTypeSig false "ruleRegexLiteral" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
+(DFunDef false "ruleRegexLiteral" (PWild PWild PWild PWild (PVar "prog")) (EApp (EApp (EApp (EVar "exprRuleVisitors") (EVar "noExcl")) (EApp (EVar "regexLiteralOf") (EBinOp "++" (EVar "regexLiteralCallNames") (EApp (EVar "regexImportedCallNames") (EVar "prog"))))) (EVar "regexLiteralFinding")))
 (DTypeSig false "regexLiteralOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "regexLiteralOf" ((PVar "names") (PVar "e")) (EApp (EApp (EApp (EVar "regexLiteralOfSpine") (EVar "names")) (EVar "e")) (EApp (EVar "stripELoc") (EVar "e"))))
 (DTypeSig false "regexLiteralOfSpine" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))

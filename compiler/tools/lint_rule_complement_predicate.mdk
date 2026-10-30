@@ -15,11 +15,12 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor,
+  mkVisitorRule,
 }
 import tools.lint_shared.{
   detApply,
-  exprRuleFindings,
+  exprRuleVisitors,
   exprRuleFix,
   notArgOf,
   ruleNameComplementPredicate,
@@ -29,7 +30,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameComplementPredicate,
       summary =
@@ -98,14 +99,9 @@ ruleComplementPredicate : StdlibIndex ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleComplementPredicate _ _ _ pos prog =
-  exprRuleFindings
-    complementExcl
-    complementPredOf
-    complementPredicateFinding
-    pos
-    prog
+  List Visitor
+ruleComplementPredicate _ _ _ _ _ =
+  exprRuleVisitors complementExcl complementPredOf complementPredicateFinding
 
 complementPredicateFinding : Option Loc -> Expr -> Finding
 complementPredicateFinding loc rewritten = Finding {

@@ -16,7 +16,9 @@ import list.{sortBy, last}
 import support.path.{stripMdk}
 import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
-import tools.lint_core.{DirScope(..), Directive(..), Finding(..)}
+import tools.lint_core.{
+  Ctx(..), DirScope(..), Directive(..), Finding(..), Visitor(..)
+}
 export import frontend.ast_walk.{childExprs, mapChildExprs, stmtExprs}
 import hash_map.{HashMap, new, setInPlace}
 import tools.printer.{exprToString}
@@ -541,72 +543,31 @@ detApply det e = match det e
   None => e
 
 -- ── generic check driver ──────────────────────────────────────────────────────
--- Collect one finding per detector hit anywhere in a decl body, skipping decls
--- whose name the exclusion predicate rejects.  `mkFinding loc rewritten` builds
--- the rule's message from the rewritten node (for a helpful "prefer …" hint).
--- `loc` here is the HIT's own location (#649) — the nearest `ELoc` enclosing the
--- matched expression, tracked by `collectRewrites` as it descends — falling back
--- to the decl's location only for a hit with no enclosing `ELoc` on its path at
--- all (the decl-level `loc` threaded in as the initial "nearest so far").
+-- The visitor a detector-based rule registers: one finding per detector hit on
+-- any node of any body the dispatch walk reaches (clause, impl method, interface
+-- default, test, prop, let-group binding), skipping bodies whose owner name the
+-- exclusion predicate rejects.  `mkFinding loc rewritten` builds the rule's
+-- message from the rewritten node; `loc` is the hit's own location (#649), the
+-- nearest `ELoc` enclosing it, else the declaration's.
 export
-exprRuleFindings : (String -> Bool) ->
+exprRuleVisitors : (String -> Bool) ->
   (Expr -> Option Expr) ->
   (Option Loc -> Expr -> Finding) ->
-  Positions ->
-  List Decl ->
-  List Finding
-exprRuleFindings excl det mkFinding pos prog =
-  flatMap (exprRuleDeclL excl det mkFinding) (declLocList pos prog)
+  List Visitor
+exprRuleVisitors excl det mkFinding =
+  [OnAnyExpr (exprRuleHit excl det mkFinding)]
 
-exprRuleDeclL : (String -> Bool) ->
+exprRuleHit : (String -> Bool) ->
   (Expr -> Option Expr) ->
   (Option Loc -> Expr -> Finding) ->
-  (Decl, Option Loc) ->
-  List Finding
-exprRuleDeclL excl det mkFinding (d, loc) =
-  map ((hitLoc, hit) => mkFinding hitLoc hit) (declRewriteHits excl det loc d)
-
-declRewriteHits : (String -> Bool) ->
-  (Expr -> Option Expr) ->
-  Option Loc ->
-  Decl ->
-  List (Option Loc, Expr)
-declRewriteHits excl det loc (DFunDef _ name _ body _ _)
-  | excl name = []
-  | otherwise = collectRewrites loc det body
-declRewriteHits _ det loc (DImpl { methods, ... }) =
-  flatMap (implMethodRewriteHits loc det) methods
-declRewriteHits excl det loc (DAttrib _ d) = declRewriteHits excl det loc d
-declRewriteHits _ _ _ _ = []
-
-implMethodRewriteHits : Option Loc ->
-  (Expr -> Option Expr) ->
-  ImplMethod ->
-  List (Option Loc, Expr)
-implMethodRewriteHits loc det (ImplMethod _ _ body) =
-  collectRewrites loc det body
-
--- every detector hit anywhere in the tree, paired with ITS OWN location (#649).
--- `curLoc` tracks the nearest enclosing `ELoc` seen so far as we descend,
--- starting from the decl's location (the fallback for a hit with no `ELoc` on
--- its path).  The detector matches the RAW node — an `ELoc`-wrapped node
--- contributes nothing here, `childExprs` descends into it, and its `Loc`
--- becomes the new `curLoc` for everything beneath it — so each real node is
--- counted exactly once, now stamped with the location of the innermost `ELoc`
--- that actually wraps it (mirrors `collectLamSections`).
-export
-collectRewrites : Option Loc ->
-  (Expr -> Option Expr) ->
+  Ctx ->
   Expr ->
-  List (Option Loc, Expr)
-collectRewrites _ det (ELoc l e) = collectRewrites (Some l) det e
-collectRewrites curLoc det e =
-  optExprToLocList curLoc (det e)
-    ++ flatMap (collectRewrites curLoc det) (childExprs e)
-
-optExprToLocList : Option Loc -> Option Expr -> List (Option Loc, Expr)
-optExprToLocList _ None = []
-optExprToLocList loc (Some x) = [(loc, x)]
+  List Finding
+exprRuleHit excl det mkFinding ctx e
+  | excl ctx.ctxDeclName = []
+  | otherwise = match det e
+    Some hit => [mkFinding ctx.ctxSpan hit]
+    None => []
 
 -- ── generic fix driver ────────────────────────────────────────────────────────
 -- Rebuild the decl body applying `f` bottom-up; return `Some [newDecl]` only when
@@ -643,72 +604,24 @@ export
 noExcl : String -> Bool
 noExcl _ = False
 
--- ── the in-tests variants of the two drivers above ───────────────────────────
--- `exprRuleFindings`/`exprRuleFix` reach a `DFunDef` body, a `DImpl` method body
--- and through a `DAttrib`, and stop there: a `test "…"` or `prop "…"` body is a
--- `DTest`/`DProp`, which lands on their final wildcard arm and is never walked.
--- Measured on this tree (#3235): the three `expectEqual True …` sites in
--- `gzip/lib/huffman.mdk` and every one of the 26 sites the two test-verb rules
--- below answer for live inside a `test "…"` body, so a rule built on the plain
--- drivers reports a clean tree over code it never read.
---
--- These two variants add exactly the `DTest`/`DProp` descent and DELEGATE every
--- other decl shape back to the plain driver, so the two walkers cannot drift.
--- They are OPT-IN, taken only by `rule-test-bool-literal-equal` and
--- `rule-test-equal-in-true`: the plain drivers are untouched, so the twelve
--- other rules built on them — `rule-not-eq` included — keep exactly the reach
--- they had. That asymmetry is deliberate and is NOT a half-finished migration:
--- widening the plain drivers surfaces 23 pre-existing findings for five other
--- gated max-ratchet rules across eight `stdlib/`+`compiler/` files, which is a
--- drain of its own and not this rule's to pay.
+-- The fix side of the two test-verb rules: `exprRuleFix` plus a descent into a
+-- `test` or `prop` body.  The other rules' fixers keep `exprRuleFix`, so they
+-- leave test bodies untouched although their findings now reach them; a fix
+-- there is each rule's own decision (the test-import reconciliation in
+-- `lint_walk` is what makes a test-body rewrite safe for the verb rules).
 export
-exprRuleFindingsInTests : (String -> Bool) ->
-  (Expr -> Option Expr) ->
-  (Option Loc -> Expr -> Finding) ->
-  Positions ->
-  List Decl ->
-  List Finding
-exprRuleFindingsInTests excl det mkFinding pos prog =
-  flatMap (exprRuleDeclLInTests excl det mkFinding) (declLocList pos prog)
-
-exprRuleDeclLInTests : (String -> Bool) ->
-  (Expr -> Option Expr) ->
-  (Option Loc -> Expr -> Finding) ->
-  (Decl, Option Loc) ->
-  List Finding
-exprRuleDeclLInTests excl det mkFinding (d, loc) =
-  map
-    ((hitLoc, hit) => mkFinding hitLoc hit)
-    (declRewriteHitsInTests excl det loc d)
-
-declRewriteHitsInTests : (String -> Bool) ->
-  (Expr -> Option Expr) ->
-  Option Loc ->
-  Decl ->
-  List (Option Loc, Expr)
-declRewriteHitsInTests _ det loc (DTest _ _ body) = collectRewrites loc det body
-declRewriteHitsInTests _ det loc (DProp _ _ _ body) =
-  collectRewrites loc det body
--- `parseAttrib` wraps ANY decl, a test decl included, so the attributed case has
--- to re-enter HERE rather than fall through to the plain driver's own `DAttrib`
--- arm, which would drop back to the non-test walker one level down.
-declRewriteHitsInTests excl det loc (DAttrib _ d) =
-  declRewriteHitsInTests excl det loc d
-declRewriteHitsInTests excl det loc d = declRewriteHits excl det loc d
-
-export
-exprRuleFixInTests : (String -> Bool) ->
+exprRuleFixTestDecls : (String -> Bool) ->
   (Expr -> Expr) ->
   Decl ->
   Option (List Decl)
-exprRuleFixInTests _ f (DTest pub name body) =
+exprRuleFixTestDecls _ f (DTest pub name body) =
   testDeclFix (DTest pub name) f body
-exprRuleFixInTests _ f (DProp pub name ps body) =
+exprRuleFixTestDecls _ f (DProp pub name ps body) =
   testDeclFix (DProp pub name ps) f body
-exprRuleFixInTests excl f (DAttrib a d) = match exprRuleFixInTests excl f d
+exprRuleFixTestDecls excl f (DAttrib a d) = match exprRuleFixTestDecls excl f d
   Some [d2] => Some [DAttrib a d2]
   _ => None
-exprRuleFixInTests excl f d = exprRuleFix excl f d
+exprRuleFixTestDecls excl f d = exprRuleFix excl f d
 
 -- Shared tail of the `DTest`/`DProp` fix arms: rebuild the body, and emit a
 -- replacement only when the location-stripped sexp changed — the same
