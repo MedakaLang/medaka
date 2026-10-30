@@ -276,7 +276,12 @@ walkDecls exprHooks declHooks acc ((d, loc) :: rest) =
   let bodies = declBodies d
   let acc2 = match declHooks
     [] => acc
-    _ => runDeclHooks (scopeCtx (declScope bodies loc) KLoc loc) d acc declHooks
+    _ =>
+      runDeclHooks
+        (scopeCtx (declScope bodies loc) KLoc loc None)
+        d
+        acc
+        declHooks
   let acc3 = match exprHooks
     [] => acc2
     _ => walkBodies exprHooks loc acc2 bodies
@@ -299,13 +304,14 @@ ownerScope (OwnerLetGroup name ps) loc = BodyScope name ps PlainBody loc
 -- The walk carries the parent kind unwrapped, with `KLoc` standing for "no
 -- parent": an `ELoc` is never a parent, and the `Option` is built only when a
 -- callback fires.
-scopeCtx : BodyScope -> ExprKind -> Option Loc -> Ctx
-scopeCtx (BodyScope name ps kind declLoc) parent span = Ctx {
+scopeCtx : BodyScope -> ExprKind -> Option Loc -> Option Loc -> Ctx
+scopeCtx (BodyScope name ps kind declLoc) parent span own = Ctx {
   ctxDeclName = name,
   ctxParams = ps,
   ctxInTest = isTestBody kind,
   ctxParent = if parent == KLoc then None else Some parent,
   ctxSpan = span,
+  ctxOwn = own,
   ctxDeclLoc = declLoc,
 }
 
@@ -340,7 +346,8 @@ walkBodies hooks loc acc ((DeclBody owner body) :: rest) =
     rest
 
 -- An `ELoc` is transparent: its span becomes the span beneath it and its
--- parent is the parent of what it wraps.
+-- parent is the parent of what it wraps.  The outermost `ELoc` of a run of
+-- them is the node's own extent (`ctxOwn`); a node no `ELoc` wraps has none.
 walkExpr : List ExprHook ->
   BodyScope ->
   ExprKind ->
@@ -349,10 +356,34 @@ walkExpr : List ExprHook ->
   Expr ->
   List (Int, Finding)
 walkExpr hooks scope parent _ acc (ELoc l inner) =
-  walkExpr hooks scope parent (Some l) acc inner
+  walkWrapped hooks scope parent l l acc inner
 walkExpr hooks scope parent span acc e =
+  walkNode hooks scope parent span None acc e
+
+walkWrapped : List ExprHook ->
+  BodyScope ->
+  ExprKind ->
+  Loc ->
+  Loc ->
+  List (Int, Finding) ->
+  Expr ->
+  List (Int, Finding)
+walkWrapped hooks scope parent outer _ acc (ELoc l inner) =
+  walkWrapped hooks scope parent outer l acc inner
+walkWrapped hooks scope parent outer innermost acc e =
+  walkNode hooks scope parent (Some innermost) (Some outer) acc e
+
+walkNode : List ExprHook ->
+  BodyScope ->
+  ExprKind ->
+  Option Loc ->
+  Option Loc ->
+  List (Int, Finding) ->
+  Expr ->
+  List (Int, Finding)
+walkNode hooks scope parent span own acc e =
   let k = exprKind e
-  let acc2 = visitHooks (scopeCtx scope parent span) k e acc hooks
+  let acc2 = visitHooks (scopeCtx scope parent span own) k e acc hooks
   walkKids hooks scope k span acc2 (childExprs e)
 
 walkKids : List ExprHook ->

@@ -186,9 +186,11 @@ fixPass lint limit path n total src = match lint path src
       Ok out => fixPass lint limit path (n + 1) (total + length chosen) out
 
 -- How tightly a replacement's text binds.  `Closed` text (a literal, a name,
--- a call, anything already bracketed) reads the same in any position; `Open`
--- text (an operator expression, a lambda, `if`, `match`) may need brackets.
-public export data Binding = Closed | Open
+-- anything already bracketed) reads the same in any position; `Applied` text
+-- (a call) binds tighter than any operator but needs brackets as an operand of
+-- an application or a projection; `Open` text (an operator expression, a
+-- lambda, `if`, `match`) may need brackets wherever it has a parent.
+public export data Binding = Closed | Applied | Open
 
 -- `text` placed where its `Ctx` says an expression of kind `parent` sits:
 -- bracketed when it is `Open` and the parent would regroup it.  A body's root
@@ -197,9 +199,20 @@ public export data Binding = Closed | Open
 export
 parenIfNeeded : Binding -> Option ExprKind -> String -> String
 parenIfNeeded Closed _ text = text
+parenIfNeeded Applied None text = text
+parenIfNeeded Applied (Some parent) text =
+  if bindsTighterThanCall parent then "(" ++ text ++ ")" else text
 parenIfNeeded Open None text = text
 parenIfNeeded Open (Some parent) text =
   if separatesChildren parent then text else "(" ++ text ++ ")"
+
+bindsTighterThanCall : ExprKind -> Bool
+bindsTighterThanCall KApp = True
+bindsTighterThanCall KFieldAccess = True
+bindsTighterThanCall KIndex = True
+bindsTighterThanCall KSlice = True
+bindsTighterThanCall KUnOp = True
+bindsTighterThanCall _ = False
 
 separatesChildren : ExprKind -> Bool
 separatesChildren KTuple = True
@@ -207,6 +220,12 @@ separatesChildren KListLit = True
 separatesChildren KArrayLit = True
 separatesChildren KStringInterp = True
 separatesChildren KBlock = True
+separatesChildren KIf = True
+separatesChildren KMatch = True
+separatesChildren KLam = True
+separatesChildren KLet = True
+separatesChildren KLetGroup = True
+separatesChildren KGuards = True
 separatesChildren KDo = True
 separatesChildren KRecordCreate = True
 separatesChildren KMapLit = True

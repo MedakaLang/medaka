@@ -22,20 +22,20 @@ neTrue x = not x
 -- expect-next-line rule-bool-simplify
 doubleNot x = x
 
--- expect-next-line rule-bool-simplify unfixed
-test "redundant if in a test body" = expectTrue (if 1 < 2 then True else False)
+-- expect-next-line rule-bool-simplify
+test "redundant if in a test body" = expectTrue (1 < 2)
 
--- expect-next-line rule-bool-simplify unfixed
-prop "redundant comparison in a prop body" (b : Bool) = (b == True) == b
+-- expect-next-line rule-bool-simplify
+prop "redundant comparison in a prop body" (b : Bool) = b == b
 
--- expect-next-line rule-bool-simplify unfixed
-let rec loop b = not (not b)
+-- expect-next-line rule-bool-simplify
+let rec loop b = b
 
--- expect-next-line rule-bool-simplify unfixed
+-- expect-next-line rule-bool-simplify
 interface Flag a where
   flag : a -> Bool
   both : a -> Bool
-  both x = flag x == True
+  both x = flag x
 
 nearMisses c x =
   [ if c then True else c
@@ -93,3 +93,24 @@ negBothLit = True == False
 
 -- NEGATIVE: single negation is not redundant.
 negSingle x = not x
+
+-- A rewrite that reads or writes `not` is withheld where the file binds `not`
+-- anywhere (#4662): the call it introduces could land inside that binding.
+-- See test/lint_fix_fixtures/bool_simplify_local_not.mdk.
+
+-- The replacement is bracketed where its parent would regroup it.
+-- expect-next-line rule-bool-simplify
+inArgument x = pick (not x) x
+
+-- expect-next-line rule-bool-simplify
+inChain x y = y && not x && y
+
+-- A comment inside the span being replaced would be lost, so the fix is only
+-- suggested; a comment elsewhere in the declaration does not stand in its way.
+-- expect-next-line rule-bool-simplify unfixed
+commentInside c = if c then {- kept -} True else False
+
+commentOutside c =
+  -- explains the choice
+  -- expect-next-line rule-bool-simplify
+  c

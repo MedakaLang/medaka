@@ -1,0 +1,9 @@
+-- Fixture: a rewrite that reads or writes `not` is withheld where the file binds
+-- `not` (#4662); a rewrite that needs no `not` is still made.
+shadowed c = if c then False else True
+  where
+    not b = b
+
+alsoWithheld x = x == False
+
+plain c = c

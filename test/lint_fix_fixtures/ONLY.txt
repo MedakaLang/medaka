@@ -7,6 +7,7 @@ bind_destructure_ctor rule-bind-then-destructure
 bind_then_destructure rule-bind-then-destructure
 bind_then_destructure_interior_comment rule-bind-then-destructure
 bool_simplify rule-bool-simplify
+bool_simplify_local_not rule-bool-simplify
 complement_predicate rule-complement-predicate
 concat_to_interp rule-concat-to-interp
 destructure_in_param rule-destructure-in-param

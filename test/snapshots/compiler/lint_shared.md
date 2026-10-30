@@ -1,5 +1,5 @@
 # META
-source_lines=803
+source_lines=891
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -21,8 +21,11 @@ import support.path.{stripMdk}
 import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
 import tools.lint_core.{
-  Ctx(..), DirScope(..), Directive(..), Finding(..), Visitor(..)
+  Applicability(..), Ctx(..), DirScope(..), Directive(..), FileFacts(..),
+  Finding(..), Fix(..), FixEdit(..), Visitor(..), factScopes
 }
+import tools.lint_fix.{Binding(..), parenIfNeeded}
+import tools.lint_scope.{binderOf, bindersNamed}
 export import frontend.ast_walk.{childExprs, mapChildExprs, stmtExprs}
 import frontend.ast_walk.{DeclBody(..), declBodies}
 import hash_map.{HashMap, new, setInPlace}
@@ -681,6 +684,91 @@ export
 isBoolLit : Expr -> Bool
 isBoolLit e = isTrueLit e || isFalseLit e
 
+-- ── span-edit fixes ──────────────────────────────────────────────────────────
+-- A rule that rewrites one expression builds its fix from these.  The edit
+-- replaces the node's own span, with the replacement bracketed for the
+-- kind of expression it now sits in.
+
+-- The span covering two spans, in source order.
+joinLocs : Option Loc -> Option Loc -> Option Loc
+joinLocs (Some (Loc f sl sc _ _)) (Some (Loc _ _ _ el ec)) =
+  Some (Loc f sl sc el ec)
+joinLocs _ _ = None
+
+-- The extent of an application or operator expression the parser leaves
+-- bare: from the `ELoc`s of its operands, `None` when an operand is a node
+-- whose own tokens no `ELoc` covers (a prefix operator, a field access).
+export
+tightSpan : Expr -> Option Loc
+tightSpan (ELoc l _) = Some l
+tightSpan (EApp f x) = joinLocs (tightSpan f) (tightSpan x)
+tightSpan (EBinOp _ a b _) = joinLocs (tightSpan a) (tightSpan b)
+tightSpan _ = None
+
+-- The span a replacement of the node being visited takes: the node's own
+-- wrapper, brackets included, else the extent of its operands.
+export
+nodeSpan : Ctx -> Expr -> Option Loc
+nodeSpan ctx e = match ctx.ctxOwn
+  Some l => Some l
+  None => tightSpan e
+
+-- How tightly the printed `e` binds: an atom reads the same in any position,
+-- anything else is bracketed where its parent would regroup it.
+export
+bindingOf : Expr -> Binding
+bindingOf e = match unwrapLoc e
+  EVar _ => Closed
+  ELit _ => Closed
+  ENumLit _ _ _ => Closed
+  EApp _ _ => Applied
+  ETuple _ => Closed
+  EListLit _ => Closed
+  EArrayLit _ => Closed
+  EStringInterp _ => Closed
+  ESection _ => Closed
+  EFieldAccess _ _ _ => Closed
+  _ => Open
+
+-- A `Safe` fix replacing `span` with `text` bracketed for `ctx`'s parent, or
+-- `None` when there is no span or the text spans lines (the printer knows
+-- nothing of the indentation it lands in).
+export
+replaceFix : String -> Option Loc -> Binding -> Ctx -> String -> Option Fix
+replaceFix message span binding ctx text
+  | elem '\n' (stringToChars text) = None
+  | otherwise =
+    map
+      (loc => Fix {
+        fixApplicability = Safe,
+        fixEdits = [FixEdit loc (parenIfNeeded binding ctx.ctxParent text)],
+        fixMessage = message,
+      })
+      span
+
+-- The span of the identifier a use stands on: the innermost `ELoc` over an `EVar`.
+varSite : Expr -> Option Loc
+varSite (ELoc l inner) = match varSite inner
+  Some inner2 => Some inner2
+  None => match inner
+    EVar _ => Some l
+    _ => None
+varSite _ = None
+
+-- Whether the use `hd` of a prelude name means the prelude's: no binder in
+-- the file resolves it.  A use whose site is unknown is not
+-- provable, so it counts as rebound.
+export
+usesPreludeName : FileFacts -> Expr -> Bool
+usesPreludeName facts hd = match varSite hd
+  Some l => isNone (binderOf (factScopes facts) l)
+  None => False
+
+-- Whether the file binds `name` anywhere.
+export
+bindsName : FileFacts -> String -> Bool
+bindsName facts name = not (isEmpty (bindersNamed (factScopes facts) name))
+
 -- ── rule: match-to-map ────────────────────────────────────────────────────────
 -- A 2-arm `match` on an Option or Result that structurally IS a functor `map`
 -- over the success side — rewrite to `map f o` (hlint "use fmap").  Fires on
@@ -813,7 +901,9 @@ nameSetInto (n :: rest) s =
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind") (mem "escape" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false) (mem "commentCol" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Visitor" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Visitor" true) (mem "factScopes" false))))
+(DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true) (mem "parenIfNeeded" false))))
+(DUse false (UseGroup ("tools" "lint_scope") ((mem "binderOf" false) (mem "bindersNamed" false))))
 (DUse true (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false) (mem "mapChildExprs" false) (mem "stmtExprs" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "DeclBody" true) (mem "declBodies" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false))))
@@ -1050,6 +1140,27 @@ nameSetInto (n :: rest) s =
 (DFunDef false "isFalseLit" ((PVar "e")) (EApp (EApp (EVar "isEVarNamed") (ELit (LString "False"))) (EVar "e")))
 (DTypeSig true "isBoolLit" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isBoolLit" ((PVar "e")) (EBinOp "||" (EApp (EVar "isTrueLit") (EVar "e")) (EApp (EVar "isFalseLit") (EVar "e"))))
+(DTypeSig false "joinLocs" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "joinLocs" ((PCon "Some" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild)) (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))
+(DFunDef false "joinLocs" (PWild PWild) (EVar "None"))
+(DTypeSig true "tightSpan" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "tightSpan" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "tightSpan" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "joinLocs") (EApp (EVar "tightSpan") (EVar "f"))) (EApp (EVar "tightSpan") (EVar "x"))))
+(DFunDef false "tightSpan" ((PCon "EBinOp" PWild (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "joinLocs") (EApp (EVar "tightSpan") (EVar "a"))) (EApp (EVar "tightSpan") (EVar "b"))))
+(DFunDef false "tightSpan" (PWild) (EVar "None"))
+(DTypeSig true "nodeSpan" (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "nodeSpan" ((PVar "ctx") (PVar "e")) (EMatch (EFieldAccess (EVar "ctx") "ctxOwn") (arm (PCon "Some" (PVar "l")) () (EApp (EVar "Some") (EVar "l"))) (arm (PCon "None") () (EApp (EVar "tightSpan") (EVar "e")))))
+(DTypeSig true "bindingOf" (TyFun (TyCon "Expr") (TyCon "Binding")))
+(DFunDef false "bindingOf" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" PWild) () (EVar "Closed")) (arm (PCon "ELit" PWild) () (EVar "Closed")) (arm (PCon "ENumLit" PWild PWild PWild) () (EVar "Closed")) (arm (PCon "EApp" PWild PWild) () (EVar "Applied")) (arm (PCon "ETuple" PWild) () (EVar "Closed")) (arm (PCon "EListLit" PWild) () (EVar "Closed")) (arm (PCon "EArrayLit" PWild) () (EVar "Closed")) (arm (PCon "EStringInterp" PWild) () (EVar "Closed")) (arm (PCon "ESection" PWild) () (EVar "Closed")) (arm (PCon "EFieldAccess" PWild PWild PWild) () (EVar "Closed")) (arm PWild () (EVar "Open"))))
+(DTypeSig true "replaceFix" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Binding") (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
+(DFunDef false "replaceFix" ((PVar "message") (PVar "span") (PVar "binding") (PVar "ctx") (PVar "text")) (EIf (EApp (EApp (EVar "elem") (ELit (LChar "\n"))) (EApp (EVar "stringToChars") (EVar "text"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "map") (ELam ((PVar "loc")) (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "Safe")) (fa "fixEdits" (EListLit (EApp (EApp (EVar "FixEdit") (EVar "loc")) (EApp (EApp (EApp (EVar "parenIfNeeded") (EVar "binding")) (EFieldAccess (EVar "ctx") "ctxParent")) (EVar "text"))))) (fa "fixMessage" (EVar "message")))))) (EVar "span")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "varSite" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "varSite" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EMatch (EApp (EVar "varSite") (EVar "inner")) (arm (PCon "Some" (PVar "inner2")) () (EApp (EVar "Some") (EVar "inner2"))) (arm (PCon "None") () (EMatch (EVar "inner") (arm (PCon "EVar" PWild) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "None"))))))
+(DFunDef false "varSite" (PWild) (EVar "None"))
+(DTypeSig true "usesPreludeName" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "usesPreludeName" ((PVar "facts") (PVar "hd")) (EMatch (EApp (EVar "varSite") (EVar "hd")) (arm (PCon "Some" (PVar "l")) () (EApp (EVar "isNone") (EApp (EApp (EVar "binderOf") (EApp (EVar "factScopes") (EVar "facts"))) (EVar "l")))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig true "bindsName" (TyFun (TyCon "FileFacts") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "bindsName" ((PVar "facts") (PVar "name")) (EApp (EVar "not") (EApp (EVar "isEmpty") (EApp (EApp (EVar "bindersNamed") (EApp (EVar "factScopes") (EVar "facts"))) (EVar "name")))))
 (DTypeSig true "isNilPCon" (TyFun (TyCon "String") (TyFun (TyCon "Pat") (TyCon "Bool"))))
 (DFunDef false "isNilPCon" ((PVar "name") (PCon "PCon" (PVar "n") (PList))) (EBinOp "==" (EVar "n") (EVar "name")))
 (DFunDef false "isNilPCon" (PWild PWild) (EVar "False"))
@@ -1089,7 +1200,9 @@ nameSetInto (n :: rest) s =
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind") (mem "escape" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false) (mem "commentCol" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Visitor" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Visitor" true) (mem "factScopes" false))))
+(DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true) (mem "parenIfNeeded" false))))
+(DUse false (UseGroup ("tools" "lint_scope") ((mem "binderOf" false) (mem "bindersNamed" false))))
 (DUse true (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false) (mem "mapChildExprs" false) (mem "stmtExprs" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "DeclBody" true) (mem "declBodies" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false))))
@@ -1326,6 +1439,27 @@ nameSetInto (n :: rest) s =
 (DFunDef false "isFalseLit" ((PVar "e")) (EApp (EApp (EVar "isEVarNamed") (ELit (LString "False"))) (EVar "e")))
 (DTypeSig true "isBoolLit" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isBoolLit" ((PVar "e")) (EBinOp "||" (EApp (EVar "isTrueLit") (EVar "e")) (EApp (EVar "isFalseLit") (EVar "e"))))
+(DTypeSig false "joinLocs" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "joinLocs" ((PCon "Some" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild)) (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))
+(DFunDef false "joinLocs" (PWild PWild) (EVar "None"))
+(DTypeSig true "tightSpan" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "tightSpan" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "tightSpan" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "joinLocs") (EApp (EVar "tightSpan") (EVar "f"))) (EApp (EVar "tightSpan") (EVar "x"))))
+(DFunDef false "tightSpan" ((PCon "EBinOp" PWild (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "joinLocs") (EApp (EVar "tightSpan") (EVar "a"))) (EApp (EVar "tightSpan") (EVar "b"))))
+(DFunDef false "tightSpan" (PWild) (EVar "None"))
+(DTypeSig true "nodeSpan" (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "nodeSpan" ((PVar "ctx") (PVar "e")) (EMatch (EFieldAccess (EVar "ctx") "ctxOwn") (arm (PCon "Some" (PVar "l")) () (EApp (EVar "Some") (EVar "l"))) (arm (PCon "None") () (EApp (EVar "tightSpan") (EVar "e")))))
+(DTypeSig true "bindingOf" (TyFun (TyCon "Expr") (TyCon "Binding")))
+(DFunDef false "bindingOf" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" PWild) () (EVar "Closed")) (arm (PCon "ELit" PWild) () (EVar "Closed")) (arm (PCon "ENumLit" PWild PWild PWild) () (EVar "Closed")) (arm (PCon "EApp" PWild PWild) () (EVar "Applied")) (arm (PCon "ETuple" PWild) () (EVar "Closed")) (arm (PCon "EListLit" PWild) () (EVar "Closed")) (arm (PCon "EArrayLit" PWild) () (EVar "Closed")) (arm (PCon "EStringInterp" PWild) () (EVar "Closed")) (arm (PCon "ESection" PWild) () (EVar "Closed")) (arm (PCon "EFieldAccess" PWild PWild PWild) () (EVar "Closed")) (arm PWild () (EVar "Open"))))
+(DTypeSig true "replaceFix" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Binding") (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
+(DFunDef false "replaceFix" ((PVar "message") (PVar "span") (PVar "binding") (PVar "ctx") (PVar "text")) (EIf (EApp (EApp (EDictApp "elem") (ELit (LChar "\n"))) (EApp (EVar "stringToChars") (EVar "text"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EMethodRef "map") (ELam ((PVar "loc")) (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "Safe")) (fa "fixEdits" (EListLit (EApp (EApp (EVar "FixEdit") (EVar "loc")) (EApp (EApp (EApp (EVar "parenIfNeeded") (EVar "binding")) (EFieldAccess (EVar "ctx") "ctxParent")) (EVar "text"))))) (fa "fixMessage" (EVar "message")))))) (EVar "span")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "varSite" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "varSite" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EMatch (EApp (EVar "varSite") (EVar "inner")) (arm (PCon "Some" (PVar "inner2")) () (EApp (EVar "Some") (EVar "inner2"))) (arm (PCon "None") () (EMatch (EVar "inner") (arm (PCon "EVar" PWild) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "None"))))))
+(DFunDef false "varSite" (PWild) (EVar "None"))
+(DTypeSig true "usesPreludeName" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "usesPreludeName" ((PVar "facts") (PVar "hd")) (EMatch (EApp (EVar "varSite") (EVar "hd")) (arm (PCon "Some" (PVar "l")) () (EApp (EVar "isNone") (EApp (EApp (EVar "binderOf") (EApp (EVar "factScopes") (EVar "facts"))) (EVar "l")))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig true "bindsName" (TyFun (TyCon "FileFacts") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "bindsName" ((PVar "facts") (PVar "name")) (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EApp (EApp (EVar "bindersNamed") (EApp (EVar "factScopes") (EVar "facts"))) (EVar "name")))))
 (DTypeSig true "isNilPCon" (TyFun (TyCon "String") (TyFun (TyCon "Pat") (TyCon "Bool"))))
 (DFunDef false "isNilPCon" ((PVar "name") (PCon "PCon" (PVar "n") (PList))) (EBinOp "==" (EVar "n") (EVar "name")))
 (DFunDef false "isNilPCon" (PWild PWild) (EVar "False"))

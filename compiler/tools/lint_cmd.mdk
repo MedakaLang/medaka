@@ -22,7 +22,6 @@ import support.util.{anyList, contains, joinNl, joinWith, lookupAssoc}
 import support.path.{dirOf}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
 import string as Str
-import tools.lint_fix as LF
 import json.{Json(..), jArray, jObject, stringify}
 import frontend.ast.{Decl, Loc(..)}
 import frontend.parser.{
@@ -66,7 +65,6 @@ import tools.lint.{
   allRules,
   applyFindingDeny,
   applyFindingFilters,
-  applyFixes,
   applySuppressionsDirs,
   applySuppressionsMulti,
   applySuppressionsMultiDirs,
@@ -74,6 +72,7 @@ import tools.lint.{
   factDirectives,
   factDupOccs,
   findingToDiag,
+  fixSource,
   isFindingError,
   lintFileDiagTriple,
   lintFileDiagTripleParsed,
@@ -1100,8 +1099,6 @@ lintFileFresh idx rules target src hash wantOccs (decls, pos) =
   )
 
 -- Fix a single file in-place.  Returns True only on I/O error (write errors exit 1).
--- The span-edit fixes run first, to their fixed point; the whole-declaration
--- fixers then run over the result.
 lintOneFileFix : StdlibIndex ->
   Bool ->
   List String ->
@@ -1113,78 +1110,17 @@ lintOneFileFix idx unsafeMode onlyNames disableNames target =
     Err msg =>
       let _ = ePutStrLn msg
       True
-    Ok src => match lintParseSource src
-      Err e =>
-        ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
-        True
-      Ok parsedSource =>
-        let rules = selectRules onlyNames disableNames
-        if anyList emitsEdits rules then
-          lintFixEdited
-            (editLinter idx rules)
-            (if unsafeMode then Unsafe else Safe)
-            onlyNames
-            disableNames
-            target
-            src
-            parsedSource
-        else
-          lintFixParsed onlyNames disableNames target src 0 parsedSource
-
--- A rule whose fixes are span edits rather than a whole-declaration rewrite:
--- fixable, yet carrying no declaration fixer.
-emitsEdits : Rule -> Bool
-emitsEdits r = match r.meta.fixability
-  Fixable => isNone r.fix
-  NotFixable => False
-  _ => True
-
-lintFixEdited : (String -> String -> Result String (List Finding)) ->
-  Applicability ->
-  List String ->
-  List String ->
-  String ->
-  String ->
-  (List Decl, Positions) ->
-  <IO> Bool
-lintFixEdited linter limit onlyNames disableNames target src parsedSource =
-  match LF.applyFixes linter limit target src
-    Err e =>
-      let _ = ePutStrLn "\{target}: \{LF.fixErrorText e}"
-      True
-    Ok (src1, n1) =>
-      if n1 == 0 then
-        lintFixParsed onlyNames disableNames target src 0 parsedSource
-      else match lintParseSource src1
-        Ok parsed1 =>
-          lintFixParsed onlyNames disableNames target src1 n1 parsed1
-        Err e =>
-          ePutStrLn (ppDiagCliSrc src1 target (parseErrDiag target e))
+    Ok src =>
+      let limit = if unsafeMode then Unsafe else Safe
+      match fixSource idx limit onlyNames disableNames target src
+        Err msg =>
+          let _ = ePutStrLn msg
           True
+        Ok (newSrc, n) => writeFixed target src newSrc n
 
--- The findings of a source under `rules`, or why it does not parse.
-editLinter : StdlibIndex ->
-  List Rule ->
-  String ->
-  String ->
-  Result String (List Finding)
-editLinter idx rules path src = match lintParseSource src
-  Err e => Err (ppDiagCliSrc src path (parseErrDiag path e))
-  Ok (decls, pos) =>
-    let facts = mkFileFacts src decls pos
-    Ok (lintProgramFacts idx rules path facts pos decls)
-
-lintFixParsed : List String ->
-  List String ->
-  String ->
-  String ->
-  Int ->
-  (List Decl, Positions) ->
-  <IO> Bool
-lintFixParsed onlyNames disableNames target src edited (decls, pos) =
-  let (newSrc, adapted) = applyFixes onlyNames disableNames src decls pos
-  let n = edited + adapted
-  if edited == 0 && newSrc == src then
+writeFixed : String -> String -> String -> Int -> <IO> Bool
+writeFixed target src newSrc n =
+  if n == 0 && newSrc == src then
     let _ = putStrLn ("fixed 0 finding(s) in " ++ target)
     False
   else match writeFile target newSrc
