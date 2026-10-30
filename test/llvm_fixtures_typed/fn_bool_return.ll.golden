@@ -215,13 +215,13 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk___user____isPos(i64 11)
+  %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6973506f73(i64 11)
   %t1 = ashr i64 %t0, 1
   call void @mdk_print_bool(i64 %t1)
   ret i32 0
 }
-; mdk-module program
-define internal i64 @mdk___user____isPos(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f6973506f73(i64 %arg0) {
 entry:
   %t0 = icmp sgt i64 %arg0, 1
   %t1 = zext i1 %t0 to i64

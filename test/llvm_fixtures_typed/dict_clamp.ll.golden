@@ -215,18 +215,18 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk___user____myClamp(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 1, i64 21, i64 199)
+  %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6d79436c616d70(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..0 to i64), i64 1, i64 21, i64 199)
   %t1 = ashr i64 %t0, 1
   call void @mdk_print_int(i64 %t1)
   ret i32 0
 }
-; mdk-module program
-define internal i64 @mdk___user____myClamp(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f6d79436c616d70(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3) {
 entry:
   %t0 = call ptr @mdk_alloc(i64 40)
   store i64 1, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
-  store i64 ptrtoint (ptr @mdk_lam.program.1 to i64), ptr %t1
+  store i64 ptrtoint (ptr @mdk.gen.lambda.6d6f64756c652e35663566373537333635373235663566..0 to i64), ptr %t1
   %t2 = getelementptr i8, ptr %t0, i64 16
   store i64 %arg1, ptr %t2
   %t3 = getelementptr i8, ptr %t0, i64 24
@@ -242,8 +242,8 @@ entry:
   ret i64 %t10
 }
 
-; mdk-module impl:Int_lt
-define internal i64 @mdk_impl_Int_lt(i64 %arg0, i64 %arg1) {
+; mdk-module impl.5f5f757365725f5f3a3a4f72647c496e747c.6c74
+define internal i64 @mdk.impl.496e74.6c74(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = icmp slt i64 %arg0, %arg1
   %t1 = zext i1 %t0 to i64
@@ -255,9 +255,9 @@ entry:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_dc.program.0 = internal constant [1 x i64] [i64 -54051695436414980]
-; mdk-module program
-define internal i64 @mdk_lam.program.1(i64 %clos, i64 %arg0) {
+@mdk.gen.dictcell.70726f6772616d..0 = internal constant [1 x i64] [i64 -54051695436414980]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.lambda.6d6f64756c652e35663566373537333635373235663566..0(i64 %clos, i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %clos to ptr
   %t1 = getelementptr i8, ptr %t0, i64 16
@@ -268,14 +268,14 @@ entry:
   %t6 = inttoptr i64 %clos to ptr
   %t7 = getelementptr i8, ptr %t6, i64 32
   %t8 = load i64, ptr %t7
-  %t9 = call i64 @mdk_impl_Int_lt(i64 %arg0, i64 %t2)
+  %t9 = call i64 @mdk.impl.496e74.6c74(i64 %arg0, i64 %t2)
   %t10 = ashr i64 %t9, 1
   %t11 = icmp ne i64 %t10, 0
   br i1 %t11, label %then12, label %else12
 then12:
   ret i64 %t2
 else12:
-  %t13 = call i64 @mdk_impl_Int_lt(i64 %t8, i64 %arg0)
+  %t13 = call i64 @mdk.impl.496e74.6c74(i64 %t8, i64 %arg0)
   %t14 = ashr i64 %t13, 1
   %t15 = icmp ne i64 %t14, 0
   br i1 %t15, label %then16, label %else16

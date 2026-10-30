@@ -274,13 +274,13 @@ entry:
   %t32 = getelementptr i8, ptr %t30, i64 16
   store i64 %t29, ptr %t32
   %t33 = ptrtoint ptr %t30 to i64
-  %t34 = call i64 @mdk___user____total(i64 %t33)
+  %t34 = call i64 @mdk.user.6d356635663735373336353732356635665f5f746f74616c(i64 %t33)
   %t35 = ashr i64 %t34, 1
   call void @mdk_print_int(i64 %t35)
   ret i32 0
 }
-; mdk-module program
-define internal i64 @mdk___user____score(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f73636f7265(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t4 = and i64 %arg0, 1
@@ -399,8 +399,8 @@ decend1:
   ret i64 %t68
 }
 
-; mdk-module program
-define internal i64 @mdk___user____total(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f746f74616c(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 562949953421315
@@ -440,8 +440,8 @@ conyes20:
   %t30 = inttoptr i64 %arg0 to ptr
   %t31 = getelementptr i8, ptr %t30, i64 16
   %t32 = load i64, ptr %t31
-  %t33 = call i64 @mdk___user____score(i64 %t29)
-  %t34 = call i64 @mdk___user____total(i64 %t32)
+  %t33 = call i64 @mdk.user.6d356635663735373336353732356635665f5f73636f7265(i64 %t29)
+  %t34 = call i64 @mdk.user.6d356635663735373336353732356635665f5f746f74616c(i64 %t32)
   %t35 = sub i64 %t34, 1
   %t36 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t33, i64 %t35)
   %t37 = extractvalue { i64, i1 } %t36, 0

@@ -215,49 +215,49 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_force___user____base()
+  %t0 = call i64 @mdk.force.6d356635663735373336353732356635665f5f62617365()
   %t1 = ashr i64 %t0, 1
   call void @mdk_print_int(i64 %t1)
   ret i32 0
 }
 ; mdk-module program
-define internal i64 @mdk_force_$memo_Int_def() {
+define internal i64 @mdk.force.246d656d6f5f496e745f646566() {
 entry:
-  %t0 = load i8, ptr @mdk_gs_$memo_Int_def
+  %t0 = load i8, ptr @mdk.state.246d656d6f5f496e745f646566
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
 lz_forced:
-  %t1 = load i64, ptr @mdk_g_$memo_Int_def
+  %t1 = load i64, ptr @mdk.global.246d656d6f5f496e745f646566
   ret i64 %t1
 lz_forcing:
-  call void @mdk_cyclic_value(ptr @.gname.$memo_Int_def)
+  call void @mdk_cyclic_value(ptr @mdk.gen.globalname.70726f6772616d.246d656d6f5f496e745f646566.0)
   unreachable
 lz_unforced:
-  store i8 1, ptr @mdk_gs_$memo_Int_def
-  %t2 = call i64 @mdk_impl_Int_def()
-  store i64 %t2, ptr @mdk_g_$memo_Int_def
-  store i8 2, ptr @mdk_gs_$memo_Int_def
+  store i8 1, ptr @mdk.state.246d656d6f5f496e745f646566
+  %t2 = call i64 @mdk.impl.496e74.646566()
+  store i64 %t2, ptr @mdk.global.246d656d6f5f496e745f646566
+  store i8 2, ptr @mdk.state.246d656d6f5f496e745f646566
   ret i64 %t2
 }
-; mdk-module program
-define internal i64 @mdk_force___user____base() {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.force.6d356635663735373336353732356635665f5f62617365() {
 entry:
-  %t0 = load i8, ptr @mdk_gs___user____base
+  %t0 = load i8, ptr @mdk.state.6d356635663735373336353732356635665f5f62617365
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
 lz_forced:
-  %t1 = load i64, ptr @mdk_g___user____base
+  %t1 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f62617365
   ret i64 %t1
 lz_forcing:
-  call void @mdk_cyclic_value(ptr @.gname.__user____base)
+  call void @mdk_cyclic_value(ptr @mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f62617365.0)
   unreachable
 lz_unforced:
-  store i8 1, ptr @mdk_gs___user____base
-  %t2 = call i64 @mdk_force_$memo_Int_def()
-  store i64 %t2, ptr @mdk_g___user____base
-  store i8 2, ptr @mdk_gs___user____base
+  store i8 1, ptr @mdk.state.6d356635663735373336353732356635665f5f62617365
+  %t2 = call i64 @mdk.force.246d656d6f5f496e745f646566()
+  store i64 %t2, ptr @mdk.global.6d356635663735373336353732356635665f5f62617365
+  store i8 2, ptr @mdk.state.6d356635663735373336353732356635665f5f62617365
   ret i64 %t2
 }
-; mdk-module impl:Int_def
-define internal i64 @mdk_impl_Int_def() {
+; mdk-module impl.5f5f757365725f5f3a3a44656661756c747c496e747c.646566
+define internal i64 @mdk.impl.496e74.646566() {
 entry:
   ret i64 15
 }
@@ -265,14 +265,14 @@ entry:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_g_$memo_Int_def = global i64 0
+@mdk.global.246d656d6f5f496e745f646566 = global i64 0
 ; mdk-module program
-@mdk_gs_$memo_Int_def = global i8 0
+@mdk.state.246d656d6f5f496e745f646566 = global i8 0
+; mdk-module module.5f5f757365725f5f
+@mdk.global.6d356635663735373336353732356635665f5f62617365 = global i64 0
+; mdk-module module.5f5f757365725f5f
+@mdk.state.6d356635663735373336353732356635665f5f62617365 = global i8 0
 ; mdk-module program
-@mdk_g___user____base = global i64 0
-; mdk-module program
-@mdk_gs___user____base = global i8 0
-; mdk-module program
-@.gname.$memo_Int_def = private unnamed_addr constant [14 x i8] c"\24\6D\65\6D\6F\5F\49\6E\74\5F\64\65\66\00"
-; mdk-module program
-@.gname.__user____base = private unnamed_addr constant [15 x i8] c"\5F\5F\75\73\65\72\5F\5F\5F\5F\62\61\73\65\00"
+@mdk.gen.globalname.70726f6772616d.246d656d6f5f496e745f646566.0 = private unnamed_addr constant [14 x i8] c"\24\6D\65\6D\6F\5F\49\6E\74\5F\64\65\66\00"
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f62617365.0 = private unnamed_addr constant [24 x i8] c"\6D\35\66\35\66\37\35\37\33\36\35\37\32\35\66\35\66\5F\5F\62\61\73\65\00"

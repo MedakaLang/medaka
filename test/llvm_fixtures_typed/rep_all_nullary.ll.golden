@@ -215,8 +215,8 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk___user____shade(i64 1)
-  %t1 = call i64 @mdk___user____shade(i64 3)
+  %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f7368616465(i64 1)
+  %t1 = call i64 @mdk.user.6d356635663735373336353732356635665f5f7368616465(i64 3)
   %t2 = sub i64 21, 1
   %t3 = ashr i64 %t1, 1
   %t4 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t3, i64 %t2)
@@ -241,7 +241,7 @@ intovf15:
   call void @mdk_int_overflow(i64 0, i64 %t16, i64 %t17)
   unreachable
 intok15:
-  %t18 = call i64 @mdk___user____shade(i64 5)
+  %t18 = call i64 @mdk.user.6d356635663735373336353732356635665f5f7368616465(i64 5)
   %t19 = sub i64 201, 1
   %t20 = ashr i64 %t18, 1
   %t21 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t20, i64 %t19)
@@ -266,7 +266,7 @@ intovf32:
   call void @mdk_int_overflow(i64 0, i64 %t33, i64 %t34)
   unreachable
 intok32:
-  %t35 = call i64 @mdk___user____rank(i64 562975723225089)
+  %t35 = call i64 @mdk.user.6d356635663735373336353732356635665f5f72616e6b(i64 562975723225089)
   %t36 = sub i64 2001, 1
   %t37 = ashr i64 %t35, 1
   %t38 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t37, i64 %t36)
@@ -291,7 +291,7 @@ intovf49:
   call void @mdk_int_overflow(i64 0, i64 %t50, i64 %t51)
   unreachable
 intok49:
-  %t52 = call i64 @mdk___user____rank(i64 562975723225091)
+  %t52 = call i64 @mdk.user.6d356635663735373336353732356635665f5f72616e6b(i64 562975723225091)
   %t53 = sub i64 20001, 1
   %t54 = ashr i64 %t52, 1
   %t55 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t54, i64 %t53)
@@ -316,7 +316,7 @@ intovf66:
   call void @mdk_int_overflow(i64 0, i64 %t67, i64 %t68)
   unreachable
 intok66:
-  %t69 = call i64 @mdk___user____rank(i64 562975723225093)
+  %t69 = call i64 @mdk.user.6d356635663735373336353732356635665f5f72616e6b(i64 562975723225093)
   %t70 = sub i64 200001, 1
   %t71 = ashr i64 %t69, 1
   %t72 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t71, i64 %t70)
@@ -345,8 +345,8 @@ intok83:
   call void @mdk_print_int(i64 %t86)
   ret i32 0
 }
-; mdk-module program
-define internal i64 @mdk___user____shade(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f7368616465(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 1
@@ -378,8 +378,8 @@ decend1:
   ret i64 %t10
 }
 
-; mdk-module program
-define internal i64 @mdk___user____rank(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f72616e6b(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 562975723225089

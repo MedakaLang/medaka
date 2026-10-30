@@ -215,8 +215,8 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk___user____isNil(i64 562949953421315)
-  %t1 = call i64 @mdk___user____isNil(i64 3)
+  %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f69734e696c(i64 562949953421315)
+  %t1 = call i64 @mdk.user.6d356635663735373336353732356635665f5f69734e696c(i64 3)
   %t2 = sub i64 21, 1
   %t3 = ashr i64 %t1, 1
   %t4 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t3, i64 %t2)
@@ -244,9 +244,9 @@ intok15:
   %t18 = call ptr @mdk_alloc(i64 16)
   store i64 3, ptr %t18
   %t19 = getelementptr i8, ptr %t18, i64 8
-  store i64 ptrtoint (ptr @.strc.program.0 to i64), ptr %t19
+  store i64 ptrtoint (ptr @mdk.gen.string.70726f6772616d..0 to i64), ptr %t19
   %t20 = ptrtoint ptr %t18 to i64
-  %t21 = call i64 @mdk___user____isNil(i64 %t20)
+  %t21 = call i64 @mdk.user.6d356635663735373336353732356635665f5f69734e696c(i64 %t20)
   %t22 = sub i64 201, 1
   %t23 = ashr i64 %t21, 1
   %t24 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t23, i64 %t22)
@@ -271,7 +271,7 @@ intovf35:
   call void @mdk_int_overflow(i64 0, i64 %t36, i64 %t37)
   unreachable
 intok35:
-  %t38 = call i64 @mdk___user____render(i64 562949953421315)
+  %t38 = call i64 @mdk.user.6d356635663735373336353732356635665f5f72656e646572(i64 562949953421315)
   %t39 = sub i64 2001, 1
   %t40 = ashr i64 %t38, 1
   %t41 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t40, i64 %t39)
@@ -296,7 +296,7 @@ intovf52:
   call void @mdk_int_overflow(i64 0, i64 %t53, i64 %t54)
   unreachable
 intok52:
-  %t55 = call i64 @mdk___user____render(i64 3)
+  %t55 = call i64 @mdk.user.6d356635663735373336353732356635665f5f72656e646572(i64 3)
   %t56 = sub i64 20001, 1
   %t57 = ashr i64 %t55, 1
   %t58 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t57, i64 %t56)
@@ -321,7 +321,7 @@ intovf69:
   call void @mdk_int_overflow(i64 0, i64 %t70, i64 %t71)
   unreachable
 intok69:
-  %t72 = call i64 @mdk___user____render(i64 5)
+  %t72 = call i64 @mdk.user.6d356635663735373336353732356635665f5f72656e646572(i64 5)
   %t73 = sub i64 200001, 1
   %t74 = ashr i64 %t72, 1
   %t75 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t74, i64 %t73)
@@ -349,9 +349,9 @@ intok86:
   %t89 = call ptr @mdk_alloc(i64 16)
   store i64 3, ptr %t89
   %t90 = getelementptr i8, ptr %t89, i64 8
-  store i64 ptrtoint (ptr @.strc.program.1 to i64), ptr %t90
+  store i64 ptrtoint (ptr @mdk.gen.string.70726f6772616d..1 to i64), ptr %t90
   %t91 = ptrtoint ptr %t89 to i64
-  %t92 = call i64 @mdk___user____render(i64 %t91)
+  %t92 = call i64 @mdk.user.6d356635663735373336353732356635665f5f72656e646572(i64 %t91)
   %t93 = sub i64 2000001, 1
   %t94 = ashr i64 %t92, 1
   %t95 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t94, i64 %t93)
@@ -383,7 +383,7 @@ intok106:
   %t111 = getelementptr i8, ptr %t109, i64 16
   store i64 3, ptr %t111
   %t112 = ptrtoint ptr %t109 to i64
-  %t113 = call i64 @mdk___user____render(i64 %t112)
+  %t113 = call i64 @mdk.user.6d356635663735373336353732356635665f5f72656e646572(i64 %t112)
   %t114 = sub i64 20000001, 1
   %t115 = ashr i64 %t113, 1
   %t116 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t115, i64 %t114)
@@ -408,7 +408,7 @@ intovf127:
   call void @mdk_int_overflow(i64 0, i64 %t128, i64 %t129)
   unreachable
 intok127:
-  %t130 = call i64 @mdk___user____sumL(i64 ptrtoint (ptr @mdk_dc.program.4 to i64))
+  %t130 = call i64 @mdk.user.6d356635663735373336353732356635665f5f73756d4c(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..4 to i64))
   %t131 = sub i64 200000001, 1
   %t132 = ashr i64 %t130, 1
   %t133 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t132, i64 %t131)
@@ -437,8 +437,8 @@ intok144:
   call void @mdk_print_int(i64 %t147)
   ret i32 0
 }
-; mdk-module program
-define internal i64 @mdk___user____isNil(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f69734e696c(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t4 = and i64 %arg0, 1
@@ -468,8 +468,8 @@ decend1:
   ret i64 %t12
 }
 
-; mdk-module program
-define internal i64 @mdk___user____render(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f72656e646572(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t4 = and i64 %arg0, 1
@@ -595,8 +595,8 @@ decend1:
   ret i64 %t69
 }
 
-; mdk-module program
-define internal i64 @mdk___user____sumL(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f73756d4c(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t4 = and i64 %arg0, 1
@@ -641,7 +641,7 @@ conyes20:
   %t30 = inttoptr i64 %arg0 to ptr
   %t31 = getelementptr i8, ptr %t30, i64 16
   %t32 = load i64, ptr %t31
-  %t33 = call i64 @mdk___user____sumL(i64 %t32)
+  %t33 = call i64 @mdk.user.6d356635663735373336353732356635665f5f73756d4c(i64 %t32)
   %t34 = sub i64 %t33, 1
   %t35 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t29, i64 %t34)
   %t36 = extractvalue { i64, i1 } %t35, 0
@@ -666,12 +666,12 @@ decend1:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@.strc.program.0 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\78\00" }
+@mdk.gen.string.70726f6772616d..0 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\78\00" }
 ; mdk-module program
-@.strc.program.1 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\79\00" }
+@mdk.gen.string.70726f6772616d..1 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\79\00" }
 ; mdk-module program
-@mdk_dc.program.2 = internal constant [3 x i64] [i64 281474976710656, i64 9, i64 562949953421315]
+@mdk.gen.dictcell.70726f6772616d..2 = internal constant [3 x i64] [i64 281474976710656, i64 9, i64 562949953421315]
 ; mdk-module program
-@mdk_dc.program.3 = internal constant [3 x i64] [i64 281474976710656, i64 5, i64 ptrtoint (ptr @mdk_dc.program.2 to i64)]
+@mdk.gen.dictcell.70726f6772616d..3 = internal constant [3 x i64] [i64 281474976710656, i64 5, i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..2 to i64)]
 ; mdk-module program
-@mdk_dc.program.4 = internal constant [3 x i64] [i64 281474976710656, i64 3, i64 ptrtoint (ptr @mdk_dc.program.3 to i64)]
+@mdk.gen.dictcell.70726f6772616d..4 = internal constant [3 x i64] [i64 281474976710656, i64 3, i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..3 to i64)]

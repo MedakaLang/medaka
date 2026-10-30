@@ -232,7 +232,7 @@ entry:
   %t8 = getelementptr i8, ptr %t6, i64 16
   store i64 %t5, ptr %t8
   %t9 = ptrtoint ptr %t6 to i64
-  %t10 = call double @mdk___user____mag2__fw(i64 %t9)
+  %t10 = call double @mdk.worker.float.6d356635663735373336353732356635665f5f6d616732(i64 %t9)
   %t11 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t11
   %t12 = getelementptr i8, ptr %t11, i64 8
@@ -250,7 +250,7 @@ entry:
   %t19 = getelementptr i8, ptr %t17, i64 16
   store i64 %t16, ptr %t19
   %t20 = ptrtoint ptr %t17 to i64
-  %t21 = call double @mdk___user____addF__fw(i64 %t20)
+  %t21 = call double @mdk.worker.float.6d356635663735373336353732356635665f5f61646446(i64 %t20)
   %t22 = call double @llvm.arithmetic.fence.f64(double %t10)
   %t23 = fadd double %t22, %t21
   %t24 = call ptr @mdk_alloc_atomic(i64 16)
@@ -264,8 +264,8 @@ entry:
   call void @mdk_print_float(double %t29)
   ret i32 0
 }
-; mdk-module program
-define internal i64 @mdk___user____mag2(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f6d616732(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -305,8 +305,8 @@ entry:
   ret i64 %t32
 }
 
-; mdk-module program
-define internal double @mdk___user____mag2__fw(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal double @mdk.worker.float.6d356635663735373336353732356635665f5f6d616732(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -341,8 +341,8 @@ entry:
   ret double %t29
 }
 
-; mdk-module program
-define internal i64 @mdk___user____addF(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f61646446(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -366,8 +366,8 @@ entry:
   ret i64 %t16
 }
 
-; mdk-module program
-define internal double @mdk___user____addF__fw(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal double @mdk.worker.float.6d356635663735373336353732356635665f5f61646446(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8

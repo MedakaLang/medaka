@@ -215,10 +215,10 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  call void @mdk_eputstrln(i64 ptrtoint (ptr @.strc.program.0 to i64))
+  call void @mdk_eputstrln(i64 ptrtoint (ptr @mdk.gen.string.70726f6772616d..0 to i64))
   ret i32 0
 }
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@.strc.program.0 = private unnamed_addr constant { i64, i64, i64, [4 x i8] } { i64 1, i64 3, i64 3, [4 x i8] c"\65\72\72\00" }
+@mdk.gen.string.70726f6772616d..0 = private unnamed_addr constant { i64, i64, i64, [4 x i8] } { i64 1, i64 3, i64 3, [4 x i8] c"\65\72\72\00" }

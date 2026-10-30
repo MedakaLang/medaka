@@ -6,6 +6,7 @@ support.ordmap
 support.path
 support.scc
 support.stage_count
+support.symbol_encoding
 support.util
 types.capability_manifest
 types.disposition
@@ -33,4 +34,5 @@ types.runtime_grants
 types.runtime_types
 types.scopes
 types.solver_contract
+types.symbol_origins
 types.tc_types
