@@ -97,6 +97,7 @@ remParityFinding loc rewritten = Finding {
   message = "parity test. Rewrite as '" ++ exprToString rewritten ++ "'",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 remParityFix : Oracle -> Decl -> Option (List Decl)

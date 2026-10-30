@@ -2650,6 +2650,20 @@ cjFixJsonWithSource src (Fix loc repl) = jObject [
   ("range", cjRangeOfLoc src (Some loc)),
   ("replacement", JString repl),
 ]
+cjFixJsonWithSource src (FixEdits applicability edits) = jObject [
+  ("applicability", JString applicability),
+  (
+    "edits",
+    JArray
+      (arrayFromList
+        (map
+          ((loc, repl) => jObject [
+            ("range", cjRangeOfLoc src (Some loc)),
+            ("replacement", JString repl),
+          ])
+          edits)),
+  ),
+]
 
 export
 cjDiagnostic : String -> String -> Diag -> Json

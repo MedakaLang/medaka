@@ -3832,6 +3832,7 @@ runManifestArgs (ManifestArgs (Some target) fn) = match analyzeTarget target fn
 -- Parse target file(s) and run lint rules over the raw pre-desugar AST.
 -- Flags:
 --   --fix                rewrite fixable findings in-place
+--   --unsafe-fixes       with --fix: also apply the fixes marked Unsafe
 --   --json               emit the {"files":[...]} structured-diagnostics
 --                        envelope (same schema as `check --json`) instead of
 --                        human text; --fix is ignored in this mode (#249,
@@ -3865,6 +3866,9 @@ lintArgSpec =
   withStrictDash
     (spec "lint" [
       switch ["--fix"] "rewrite fixable findings in place",
+      switch
+        ["--unsafe-fixes"]
+        "with --fix: also apply fixes that may change behaviour",
       switch ["--json"] "emit the structured-diagnostics envelope",
       switch ["--cache"] "reuse per-file results for unchanged files",
       value ["--disable"] "r1,r2,..." "suppress findings from the named rules",
@@ -3918,6 +3922,7 @@ runLintCmd argv0 =
 lintRunFlags : List String
 lintRunFlags = [
   "--fix",
+  "--unsafe-fixes",
   "--cache",
   "--internal",
   "--disable",
@@ -4023,6 +4028,7 @@ runLintTargets a =
   let denyNames = lintNamesOf "--deny" a
   let _ = assertLintRuleNames (disableNames ++ onlyNames ++ denyNames)
   let fixMode = flag "--fix" a
+  let _ = assertUnsafeFixesNeedFix (flag "--unsafe-fixes" a) fixMode
   let jsonMode = flag "--json" a
   let baselineArg = flagValue "--baseline" a
   let writeBaselineArg = flagValue "--write-baseline" a
@@ -4137,6 +4143,7 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
     let run = LintRun {
       lrInternal = internalFlag,
       lrFix = fixMode,
+      lrUnsafe = flag "--unsafe-fixes" a,
       lrMulti = multiFile,
     }
     let (perFileErr, entries, parsed) =
@@ -4212,6 +4219,13 @@ assertBaselineFlagsCoherent baselineArg writeArg fixMode
   | isSome baselineArg && fixMode =
     dieMsg "medaka lint: --baseline cannot be combined with --fix"
   | otherwise = ()
+
+-- `--unsafe-fixes` widens what `--fix` applies; alone it would be accepted and
+-- do nothing, which reads as a clean run.
+assertUnsafeFixesNeedFix : Bool -> Bool -> <IO> Unit
+assertUnsafeFixesNeedFix unsafeMode fixMode =
+  if unsafeMode && not fixMode then
+    dieMsg "medaka lint: --unsafe-fixes requires --fix"
 
 -- An unreadable or malformed baseline is fatal, never an empty one: a baseline
 -- that answers "no rows, so nothing exceeds" reports green for every file in the

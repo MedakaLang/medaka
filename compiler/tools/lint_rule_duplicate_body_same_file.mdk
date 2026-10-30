@@ -160,6 +160,7 @@ sameFileFinding grp occ =
       "function '\{sameFileOccName occ}' has a body structurally identical to '\{joinWith "', '" (map sameFileOccName others)}' in this same file — consolidate into one function",
     severity = SevWarning,
     loc = Some (Loc "" (sameFileOccLine occ) 1 (sameFileOccLine occ) 1),
+    fix = None,
   }
 
 sortSameFileOccs : List (String, Int, String) -> List (String, Int, String)

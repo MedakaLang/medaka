@@ -1,5 +1,5 @@
 # META
-source_lines=157
+source_lines=176
 stages=DESUGAR,MARK
 # SOURCE
 import driver.diagnostic_value.{
@@ -45,6 +45,25 @@ fixField index (Some (Fix loc replacement)) = [
     jObject [
       ("range", optionOr JNull (locToLspRange index loc)),
       ("replacement", JString replacement),
+    ],
+  ),
+]
+fixField index (Some (FixEdits applicability edits)) = [
+  (
+    "fix",
+    jObject [
+      ("applicability", JString applicability),
+      (
+        "edits",
+        JArray
+          (arrayFromList
+            (map
+              ((loc, replacement) => jObject [
+                ("range", optionOr JNull (locToLspRange index loc)),
+                ("replacement", JString replacement),
+              ])
+              edits)),
+      ),
     ],
   ),
 ]
@@ -178,6 +197,7 @@ parseDiagnosticActions snapshot diagnostics =
 (DFunDef false "diagnosticWithRange" ((PVar "range") (PVar "d")) (EApp (EVar "jObject") (EApp (EApp (EVar "fields") (EVar "range")) (EVar "d"))))
 (DTypeSig false "fixField" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
 (DFunDef false "fixField" ((PVar "index") (PCon "Some" (PCon "Fix" (PVar "loc") (PVar "replacement")))) (EListLit (ETuple (ELit (LString "fix")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EVar "index")) (EVar "loc")))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "replacement"))))))))
+(DFunDef false "fixField" ((PVar "index") (PCon "Some" (PCon "FixEdits" (PVar "applicability") (PVar "edits")))) (EListLit (ETuple (ELit (LString "fix")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "applicability")) (EApp (EVar "JString") (EVar "applicability"))) (ETuple (ELit (LString "edits")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "loc") (PVar "replacement"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EVar "index")) (EVar "loc")))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "replacement"))))))) (EVar "edits"))))))))))
 (DFunDef false "fixField" (PWild (PCon "None")) (EListLit))
 (DTypeSig true "diagnosticJson" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Diag") (TyCon "Json"))))
 (DFunDef false "diagnosticJson" ((PVar "index") (PVar "d")) (EApp (EApp (EApp (EVar "diagnosticJsonOr") (EVar "index")) (EVar "JNull")) (EVar "d")))
@@ -210,6 +230,7 @@ parseDiagnosticActions snapshot diagnostics =
 (DFunDef false "diagnosticWithRange" ((PVar "range") (PVar "d")) (EApp (EVar "jObject") (EApp (EApp (EVar "fields") (EVar "range")) (EVar "d"))))
 (DTypeSig false "fixField" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
 (DFunDef false "fixField" ((PVar "index") (PCon "Some" (PCon "Fix" (PVar "loc") (PVar "replacement")))) (EListLit (ETuple (ELit (LString "fix")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EMethodRef "index")) (EVar "loc")))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "replacement"))))))))
+(DFunDef false "fixField" ((PVar "index") (PCon "Some" (PCon "FixEdits" (PVar "applicability") (PVar "edits")))) (EListLit (ETuple (ELit (LString "fix")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "applicability")) (EApp (EVar "JString") (EVar "applicability"))) (ETuple (ELit (LString "edits")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "loc") (PVar "replacement"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EVar "optionOr") (EVar "JNull")) (EApp (EApp (EVar "locToLspRange") (EMethodRef "index")) (EVar "loc")))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "replacement"))))))) (EVar "edits"))))))))))
 (DFunDef false "fixField" (PWild (PCon "None")) (EListLit))
 (DTypeSig true "diagnosticJson" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Diag") (TyCon "Json"))))
 (DFunDef false "diagnosticJson" ((PVar "index") (PVar "d")) (EApp (EApp (EApp (EVar "diagnosticJsonOr") (EMethodRef "index")) (EVar "JNull")) (EVar "d")))

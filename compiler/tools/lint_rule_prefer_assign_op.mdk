@@ -150,6 +150,7 @@ preferAssignFinding loc rewritten = Finding {
   message = preferAssignMessage rewritten,
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 preferAssignMessage : Expr -> String

@@ -181,6 +181,7 @@ concatToInterpFinding loc rewritten = Finding {
       ++ "'",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 concatToInterpFix : Oracle -> Decl -> Option (List Decl)

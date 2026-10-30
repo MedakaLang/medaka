@@ -89,6 +89,7 @@ whenUnlessFinding loc rewritten = Finding {
       ++ "'",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 whenUnlessFix : Oracle -> Decl -> Option (List Decl)

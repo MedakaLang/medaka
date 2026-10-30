@@ -83,6 +83,7 @@ notEqFinding loc rewritten = Finding {
   message = "negated equality. Rewrite as '" ++ exprToString rewritten ++ "'",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 notEqFix : Oracle -> Decl -> Option (List Decl)

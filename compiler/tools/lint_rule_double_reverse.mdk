@@ -74,6 +74,7 @@ doubleReverseFinding loc rewritten = Finding {
       ++ "'",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 doubleReverseFix : Oracle -> Decl -> Option (List Decl)

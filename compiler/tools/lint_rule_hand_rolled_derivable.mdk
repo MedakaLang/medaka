@@ -91,6 +91,7 @@ derivableHit orc loc iface tys
               "hand-written `impl \{iface}` for '\{tyName}' — use `deriving (\{iface})`",
             severity = SevWarning,
             loc = loc,
+            fix = None,
           },
         ]
       else

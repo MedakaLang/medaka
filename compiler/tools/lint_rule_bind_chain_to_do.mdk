@@ -188,4 +188,5 @@ bindChainFinding loc _ = Finding {
     "deep nested Result/Option passthrough-bind `match` chain (≥3 binds). Rewrite as a `do` block",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }

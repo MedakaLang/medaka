@@ -88,4 +88,5 @@ preludeShadowFinding name loc = Finding {
     "top-level `\{name}` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }

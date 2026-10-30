@@ -109,6 +109,7 @@ boolSimplifyFinding loc rewritten = Finding {
       ++ "'",
   severity = SevWarning,
   loc = loc,
+  fix = None,
 }
 
 boolSimplifyFix : Oracle -> Decl -> Option (List Decl)

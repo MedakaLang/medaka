@@ -1,0 +1,184 @@
+-- Sibling test for lint_fix.mdk.  No registered rule emits span edits yet, so
+-- each case runs the driver over a probe linter built here: it parses the
+-- source (a source that does not parse is an error, as in the CLI) and reports
+-- one fix per occurrence of a needle.
+
+import test.{expectEach, expectEqual, expectTrue}
+import frontend.ast.{Loc(..)}
+import frontend.ast_walk.{ExprKind(..)}
+import support.source_index.{indexSource, offsetToSourcePosition}
+import json.{stringify}
+import string.{indexOf}
+import tools.lint.{findingToDiag, lintParseSource}
+import tools.lint_core.{Applicability(..), Finding(..), Fix(..), FixEdit(..)}
+import tools.lint_fix.{
+  Binding(..), FixError, applyFixes, fixErrorText, parenIfNeeded
+}
+import driver.diagnostics.{Severity(..), cjDiagnostic}
+
+-- A probe rewrite: replace every occurrence of the needle with the text, at the
+-- applicability.
+data Probe = Probe {
+  needle : String,
+  text : String,
+  applicability : Applicability,
+}
+
+occurrences : String -> String -> List Int
+occurrences needle src =
+  let n = stringLength needle
+  filter (o => stringSlice o (o + n) src == needle) [0..=stringLength src - n]
+
+locOf : String -> Int -> Int -> Loc
+locOf src lo hi =
+  let index = indexSource src
+  match (offsetToSourcePosition index lo, offsetToSourcePosition index hi)
+    (Some (l1, c1), Some (l2, c2)) => Loc "probe.mdk" l1 c1 l2 c2
+    _ => Loc "probe.mdk" 0 0 0 0
+
+probeFinding : Applicability -> Loc -> String -> Finding
+probeFinding applicability loc replacement = Finding {
+  rule = "rule-probe",
+  message = "probe",
+  severity = SevWarning,
+  loc = Some loc,
+  fix = Some Fix {
+    fixApplicability = applicability,
+    fixEdits = [FixEdit { feSpan = loc, feText = replacement }],
+    fixMessage = "probe",
+  },
+}
+
+probeFindings : List Probe -> String -> List Finding
+probeFindings probes src =
+  flatMap
+    (p =>
+      map
+        (o =>
+          probeFinding
+            p.applicability
+            (locOf src o (o + stringLength p.needle))
+            p.text)
+        (occurrences p.needle src))
+    probes
+
+-- The probe as the driver's linter: a source that does not parse is an error.
+probeLinter : List Probe -> String -> String -> Result String (List Finding)
+probeLinter probes _ src = match lintParseSource src
+  Err _ => Err "does not parse"
+  Ok _ => Ok (probeFindings probes src)
+
+outcome : Result FixError (String, Int) -> Result String (String, Int)
+outcome (Ok r) = Ok r
+outcome (Err e) = Err (fixErrorText e)
+
+runProbes : List Probe -> Applicability -> String -> Result String (String, Int)
+runProbes probes limit src =
+  outcome (applyFixes (probeLinter probes) limit "probe.mdk" src)
+
+safe : String -> String -> Probe
+safe needle text = Probe { needle = needle, text = text, applicability = Safe }
+
+-- Columns are codepoints: the edit sits after a two-byte, a three-byte and a
+-- four-byte (surrogate pair) codepoint, at hand-counted columns 12..15 of line
+-- 2.  A byte or UTF-16 column would land inside or beyond the string.
+test "a column after non-ASCII text is a codepoint offset" =
+  let src = "a = \"é→😀\"\nb = (\"é→😀\", old)\n"
+  let loc = Loc "probe.mdk" 2 12 2 15
+  let linter =
+    _ s => Ok (if s == src then [probeFinding Safe loc "new"] else [])
+  expectEqual
+    (Ok ("a = \"é→😀\"\nb = (\"é→😀\", new)\n", 1))
+    (outcome (applyFixes linter Safe "probe.mdk" src))
+
+-- The second fix overlaps the first inside its span, so it waits for the second
+-- pass, where it still matches the rewritten text.
+test "two overlapping edits converge over two passes" =
+  expectEqual
+    (Ok ("main = f h x\n", 2))
+    (runProbes
+      [safe "f (g x)" "f g x", safe "g x" "h x"]
+      Safe
+      "main = f (g x)\n")
+
+test "a comment inside the edit span demotes the fix" =
+  let src = "main = f (g\n  -- keep me\n  x)\n"
+  expectEqual
+    (Ok (src, 0))
+    (runProbes [safe "f (g\n  -- keep me\n  x)" "f g x"] Safe src)
+
+test "a comment outside the edit span does not block it" =
+  expectEqual
+    (Ok ("-- head\nmain = f g x -- tail\n", 1))
+    (runProbes
+      [safe "f (g x)" "f g x"]
+      Safe
+      "-- head\nmain = f (g x) -- tail\n")
+
+test "an edit touching a comment's boundary is not blocked" =
+  expectEqual
+    (Ok ("main = g -- tail\n", 1))
+    (runProbes [safe "f " ""] Safe "main = f g -- tail\n")
+
+test "a fixed output that does not parse is an error and is not returned" =
+  expectEqual
+    (Err "the fixed source of pass 1 does not parse: does not parse")
+    (runProbes [safe "x)" "x))"] Safe "main = f (g x)\n")
+
+test "a source that does not parse is reported as it is" =
+  expectEqual (Err "does not parse") (runProbes [] Safe "main = (\n")
+
+test "applicability decides what each limit applies" =
+  let src = "main = u v w\n"
+  let probes = [
+    safe "u" "U",
+    Probe { needle = "v", text = "V", applicability = Unsafe },
+    Probe { needle = "w", text = "W", applicability = Suggest },
+  ]
+  expectEach [
+    (
+      "safe",
+      expectEqual (Ok ("main = U v w\n", 1)) (runProbes probes Safe src),
+    ),
+    (
+      "unsafe",
+      expectEqual (Ok ("main = U V w\n", 2)) (runProbes probes Unsafe src),
+    ),
+    (
+      "suggest never applies",
+      expectEqual (Ok ("main = U V w\n", 2)) (runProbes probes Suggest src),
+    ),
+  ]
+
+test "parenIfNeeded brackets an open replacement only where it would regroup" = expectEach
+  [
+    ("closed", expectEqual "f x" (parenIfNeeded Closed (Some KApp) "f x")),
+    ("root", expectEqual "a + b" (parenIfNeeded Open None "a + b")),
+    ("tuple", expectEqual "a + b" (parenIfNeeded Open (Some KTuple) "a + b")),
+    (
+      "operand",
+      expectEqual "(a + b)" (parenIfNeeded Open (Some KBinOp) "a + b"),
+    ),
+    ("argument", expectEqual "(a + b)" (parenIfNeeded Open (Some KApp) "a + b")),
+  ]
+
+-- `--json` carries the applicability and every edit of a finding's fix.
+test "a finding's fix renders its applicability and edits in json" =
+  let loc = Loc "probe.mdk" 1 7 1 10
+  let json =
+    stringify
+      (cjDiagnostic
+        "probe.mdk"
+        "main = old\n"
+        (findingToDiag (probeFinding Unsafe loc "new")))
+  expectEach [
+    (
+      "applicability",
+      expectTrue (isSome (indexOf "\"applicability\":\"unsafe\"" json)),
+    ),
+    (
+      "replacement",
+      expectTrue (isSome (indexOf "\"replacement\":\"new\"" json)),
+    ),
+    ("edits", expectTrue (isSome (indexOf "\"edits\":[" json))),
+  ]
