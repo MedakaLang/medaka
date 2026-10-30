@@ -1,7 +1,0 @@
-mapArm
-mapDoStmt
-mapFieldAssign
-mapFunClause
-mapGuard
-mapGuardArm
-mapLetBind

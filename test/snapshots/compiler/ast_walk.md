@@ -1,5 +1,5 @@
 # META
-source_lines=406
+source_lines=411
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/frontend/ast_walk.mdk — exhaustive traversal of the raw (pre-desugar)
@@ -33,6 +33,11 @@ import frontend.ast.{
   PropParam,
   Section(..),
 }
+
+-- lint-disable-file rule-duplicate-body
+-- The one-level rebuilders below are structural twins of frontend.desugar's
+-- mapChildren family; desugar adopts this module in #4649, where the move gets
+-- its own Ir measurement (desugar maps EAsPat/EOrPat as identity).
 
 -- One constructor per `Expr` constructor, for selecting nodes by kind.
 public export data ExprKind =

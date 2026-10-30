@@ -765,8 +765,8 @@ prop "Display Toml agrees with Eq Toml" (k : String) (n : Int) =
   let d = Toml [(k ++ "x", TInt n)]
   display a == display b
     && eq a b
-    && not (display a == display c)
-    && not (display a == display d)
+    && display a /= display c
+    && display a /= display d
 
 -- LAW: every key and every value reaches the output (nothing is silently
 -- dropped as the entry list grows).
