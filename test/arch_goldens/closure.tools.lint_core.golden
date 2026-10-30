@@ -26,6 +26,7 @@ frontend.parse_positions
 frontend.parse_result
 frontend.parser
 frontend.resolve
+frontend.runtime_constructors
 frontend.visibility
 support.char
 support.diag_codes

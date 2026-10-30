@@ -192,15 +192,17 @@ has held zero module-level `Ref` cells since, and
 ### 3.3 Per-program derived indexes
 
 `llvm_emit.emitProgram` also builds indexes in its per-emission `Emit` context,
-including `knownFnMap`, `lazyGlobalMap`, `ctorMap`, `sigMap`, `defArityMap`,
-`ctorTypeMap`, `recByName`, `recByLabel`, and implementation-group indexes.
-Wasm builds a parallel `Prog` value plus a per-emission `WasmEmit` context
-holding its indexes and feature flags. Neither backend has module-level state
-left; `Emit` carries 42 `Ref` fields and `WasmEmit` 54 (derive:
+including `knownFnMap`, `lazyGlobalMap`, `sigMap`, `defArityMap`, `recByName`,
+`recByLabel`, and implementation-group indexes. Logical constructor owners,
+arities, rosters and ordinals come from `EmitPlan.constructorFacts`; LLVM keeps
+only `typeIdMap` for physical tags. Wasm's `WasmProgramIndex.ctor` carries the
+same facts, while target type encoders and TRMC destination-subset indexes stay
+physical. Wasm also has a per-emission `WasmEmit` context for feature flags.
+Neither backend has module-level state left; `Emit` carries 42 `Ref` fields and `WasmEmit` 54 (derive:
 `sed -n '/^data EmitData/,/^}/p' compiler/backend/llvm_emit.mdk | grep -c ': Ref '`
 and the `WasmEmit` peer). The two records are disjoint and carry only the facts their backend reads. LLVM
-retains shared method-name classification; Wasm retains its constructor float
-index, main-kind hints, FFI index, and runtime extern domain.
+retains shared method-name classification; Wasm retains constructor float-field
+indexes, main-kind hints, FFI index, and runtime extern domain.
 
 These indexes improve asymptotic behavior when they are caches of authoritative
 data. They become semantic authorities when the underlying fact was absent from

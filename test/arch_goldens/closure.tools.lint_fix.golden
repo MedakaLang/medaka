@@ -28,6 +28,7 @@ frontend.parse_result
 frontend.parser
 frontend.recovery_result
 frontend.resolve
+frontend.runtime_constructors
 frontend.syntax_source
 frontend.visibility
 support.char
