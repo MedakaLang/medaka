@@ -868,7 +868,7 @@ force v = v
 lookupFrameCell : EnvFrame (Value e) -> String -> Option (Ref (Value e))
 lookupFrameCell (ScanFrame cells) name = lookupCells cells name
 lookupFrameCell (IndexedFrame _ index) name =
-  let _ = opBump ()
+  opBump ()
   omLookup name index
 
 lookupCells : List (String, Ref (Value e)) -> String -> Option (Ref (Value e))
@@ -3425,14 +3425,14 @@ fmtSentinel = "\u{01}"
 appendOutput : String -> <e> Value e
 appendOutput s =
   outputChunks := s :: !outputChunks
-  -- Append the chunk's raw bytes to the native runtime's chunk list (amortized
-  -- O(1); no observable effect on its own — see stdlib/runtime.mdk's
-  -- stashRunStdout doc comment) so a subsequent abort can flush it.  Called from BOTH the real `medaka run` path and the
-  -- pure differential-oracle path (this function is shared), which is fine:
-  -- the stash is inert unless `enableRunStdoutFlush` was also called, and
-  -- only `evalModulesOutputRunFacts` (never the oracle probes) calls that.
-  let _ = stashRunStdout s
-  VUnit
+  -- The runtime's chunk list lets an abort flush what was printed.  An empty
+  -- chunk is never stashed: the runtime reads it as "clear", and only
+  -- resetOutput may clear.  Inert unless `enableRunStdoutFlush` was called.
+  match s
+    "" => VUnit
+    _ =>
+      stashRunStdout s
+      VUnit
 
 pPutStr : Value e -> <e> Value e
 pPutStr (VString s) = appendOutput s

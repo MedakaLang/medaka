@@ -872,7 +872,7 @@ force v = v
 lookupFrameCell : EnvFrame (Value e) -> String -> Option (Ref (Value e))
 lookupFrameCell (ScanFrame cells) name = lookupCells cells name
 lookupFrameCell (IndexedFrame _ index) name =
-  let _ = opBump ()
+  opBump ()
   omLookup name index
 
 lookupCells : List (String, Ref (Value e)) -> String -> Option (Ref (Value e))
@@ -3429,14 +3429,14 @@ fmtSentinel = "\u{01}"
 appendOutput : String -> <e> Value e
 appendOutput s =
   outputChunks := s :: !outputChunks
-  -- Append the chunk's raw bytes to the native runtime's chunk list (amortized
-  -- O(1); no observable effect on its own — see stdlib/runtime.mdk's
-  -- stashRunStdout doc comment) so a subsequent abort can flush it.  Called from BOTH the real `medaka run` path and the
-  -- pure differential-oracle path (this function is shared), which is fine:
-  -- the stash is inert unless `enableRunStdoutFlush` was also called, and
-  -- only `evalModulesOutputRunFacts` (never the oracle probes) calls that.
-  let _ = stashRunStdout s
-  VUnit
+  -- The runtime's chunk list lets an abort flush what was printed.  An empty
+  -- chunk is never stashed: the runtime reads it as "clear", and only
+  -- resetOutput may clear.  Inert unless `enableRunStdoutFlush` was called.
+  match s
+    "" => VUnit
+    _ =>
+      stashRunStdout s
+      VUnit
 
 pPutStr : Value e -> <e> Value e
 pPutStr (VString s) = appendOutput s
@@ -5936,7 +5936,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "force" ((PVar "v")) (EVar "v"))
 (DTypeSig false "lookupFrameCell" (TyFun (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupFrameCell" ((PCon "ScanFrame" (PVar "cells")) (PVar "name")) (EApp (EApp (EVar "lookupCells") (EVar "cells")) (EVar "name")))
-(DFunDef false "lookupFrameCell" ((PCon "IndexedFrame" PWild (PVar "index")) (PVar "name")) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "index")))))
+(DFunDef false "lookupFrameCell" ((PCon "IndexedFrame" PWild (PVar "index")) (PVar "name")) (EBlock (DoExpr (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "index")))))
 (DTypeSig false "lookupCells" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupCells" ((PList) PWild) (EVar "None"))
 (DFunDef false "lookupCells" ((PCons (PTuple (PVar "n") (PVar "cell")) (PVar "rest")) (PVar "name")) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "cell")) (EApp (EApp (EVar "lookupCells") (EVar "rest")) (EVar "name"))))))
@@ -6816,7 +6816,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "fmtSentinel" (TyCon "String"))
 (DFunDef false "fmtSentinel" () (ELit (LString "\u{01}")))
 (DTypeSig false "appendOutput" (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "appendOutput" ((PVar "s")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputChunks")) (EBinOp "::" (EVar "s") (EUnOp "!" (EVar "outputChunks"))))) (DoLet false false PWild (EApp (EVar "stashRunStdout") (EVar "s"))) (DoExpr (EVar "VUnit"))))
+(DFunDef false "appendOutput" ((PVar "s")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputChunks")) (EBinOp "::" (EVar "s") (EUnOp "!" (EVar "outputChunks"))))) (DoExpr (EMatch (EVar "s") (arm (PLit (LString "")) () (EVar "VUnit")) (arm PWild () (EBlock (DoExpr (EApp (EVar "stashRunStdout") (EVar "s"))) (DoExpr (EVar "VUnit"))))))))
 (DTypeSig false "pPutStr" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pPutStr" ((PCon "VString" (PVar "s"))) (EApp (EVar "appendOutput") (EVar "s")))
 (DFunDef false "pPutStr" (PWild) (EApp (EVar "panic") (ELit (LString "putStr: not a String"))))
@@ -7796,7 +7796,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "force" ((PVar "v")) (EVar "v"))
 (DTypeSig false "lookupFrameCell" (TyFun (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupFrameCell" ((PCon "ScanFrame" (PVar "cells")) (PVar "name")) (EApp (EApp (EVar "lookupCells") (EVar "cells")) (EVar "name")))
-(DFunDef false "lookupFrameCell" ((PCon "IndexedFrame" PWild (PVar "index")) (PVar "name")) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "omLookup") (EVar "name")) (EMethodRef "index")))))
+(DFunDef false "lookupFrameCell" ((PCon "IndexedFrame" PWild (PVar "index")) (PVar "name")) (EBlock (DoExpr (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "omLookup") (EVar "name")) (EMethodRef "index")))))
 (DTypeSig false "lookupCells" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupCells" ((PList) PWild) (EVar "None"))
 (DFunDef false "lookupCells" ((PCons (PTuple (PVar "n") (PVar "cell")) (PVar "rest")) (PVar "name")) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "cell")) (EApp (EApp (EVar "lookupCells") (EVar "rest")) (EVar "name"))))))
@@ -8676,7 +8676,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "fmtSentinel" (TyCon "String"))
 (DFunDef false "fmtSentinel" () (ELit (LString "\u{01}")))
 (DTypeSig false "appendOutput" (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "appendOutput" ((PVar "s")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputChunks")) (EBinOp "::" (EVar "s") (EUnOp "!" (EVar "outputChunks"))))) (DoLet false false PWild (EApp (EVar "stashRunStdout") (EVar "s"))) (DoExpr (EVar "VUnit"))))
+(DFunDef false "appendOutput" ((PVar "s")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputChunks")) (EBinOp "::" (EVar "s") (EUnOp "!" (EVar "outputChunks"))))) (DoExpr (EMatch (EVar "s") (arm (PLit (LString "")) () (EVar "VUnit")) (arm PWild () (EBlock (DoExpr (EApp (EVar "stashRunStdout") (EVar "s"))) (DoExpr (EVar "VUnit"))))))))
 (DTypeSig false "pPutStr" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pPutStr" ((PCon "VString" (PVar "s"))) (EApp (EVar "appendOutput") (EVar "s")))
 (DFunDef false "pPutStr" (PWild) (EApp (EVar "panic") (ELit (LString "putStr: not a String"))))

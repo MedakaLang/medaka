@@ -981,8 +981,8 @@ void mdk_print_unit(void)       { printf("()\n"); }
 
 /* ---------------------------------------------------------------------------
  * "run drops stdout on panic" fix.  `medaka run`'s tree-walking interpreter
- * buffers a program's stdout in an in-language Ref<String> (eval.mdk's
- * outputRef) and only writes it to real stdout via ONE final `putStr` call
+ * buffers a program's stdout in an in-language list of chunks (eval.mdk's
+ * outputChunks) and only writes it to real stdout via ONE final `putStr` call
  * after `main` returns NORMALLY (medaka_cli.mdk's `runProgramOutput`).
  * Medaka panics are NOT catchable (no exception handling, no unwind), so a
  * panicking program's buffered stdout used to be silently discarded — the
@@ -1013,15 +1013,19 @@ void mdk_print_unit(void)       { printf("()\n"); }
  * already flushes automatically), so the flag stays 0 and every check below
  * is a no-op for it.
  */
-/* The stash is a chunk list: each non-empty call appends the string's bytes
-   (pointer+length into a GC-owned, immutable cell kept alive by eval.mdk's
-   chunk list) and the empty string clears the list.  Appending is amortized
-   O(1), so printing stays linear in total output.  The array lives in plain
-   malloc memory, which the abort path may read without allocating. */
+/* The stash is a chunk list, oldest first: each non-empty call appends the
+   string's bytes (pointer+length into a GC-owned, immutable cell kept alive by
+   eval.mdk's outputChunks).  The empty string clears the list, so the caller
+   never stashes an empty chunk; only resetOutput clears.  Appending is
+   amortized O(1), so printing stays linear in total output.  The array lives
+   in plain malloc memory, which the abort path may read without allocating. */
 typedef struct { const char *bytes; long long len; } mdk_run_chunk;
 static mdk_run_chunk *volatile mdk_run_chunks = NULL;
 static volatile long long mdk_run_chunk_count = 0;
 static long long mdk_run_chunk_cap = 0;
+/* Set when the array cannot grow: later chunks are then not stashed, so an
+   abort flushes a prefix of the output and never skips a chunk in the middle. */
+static int mdk_run_chunks_full = 0;
 
 void mdk_enable_run_stdout_flush(long long w) {
   (void)w;
@@ -1033,12 +1037,14 @@ void mdk_stash_run_stdout(long long w) {
   long long byte_len = ((const long long *)cell)[1];
   if (byte_len == 0) {
     mdk_run_chunk_count = 0;
+    mdk_run_chunks_full = 0;
     return;
   }
+  if (mdk_run_chunks_full) return;
   if (mdk_run_chunk_count == mdk_run_chunk_cap) {
     long long cap = mdk_run_chunk_cap ? mdk_run_chunk_cap * 2 : 256;
     mdk_run_chunk *grown = realloc(mdk_run_chunks, (size_t)cap * sizeof *grown);
-    if (!grown) return;
+    if (!grown) { mdk_run_chunks_full = 1; return; }
     mdk_run_chunks = grown;
     mdk_run_chunk_cap = cap;
   }
@@ -1289,7 +1295,7 @@ noreturn void mdk_panic_at(long long w, unsigned long long site) {
 /* User `exit n`. Unlike the other abort paths above this carries no diagnostic
    -- it is a silent, coded-free process termination -- but it still needs the
    SAME mdk_flush_run_stdout_on_abort() call they all make: under `medaka run`
-   stdout is buffered in the interpreter's outputRef and normally only printed
+   stdout is buffered in the interpreter's outputChunks and normally only printed
    by the CLI driver AFTER `main` returns, so a mid-`main` `exit` call would
    otherwise silently drop everything printed before it (the same class of bug
    as "run drops stdout on panic", just for a clean exit instead of a crash).

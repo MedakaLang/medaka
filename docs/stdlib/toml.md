@@ -185,9 +185,9 @@ Entry `i` is what `tableEntry name i` returns, but the document is read
 once for all of them. The list is empty when there are no entries.
 
 ```medaka
-> parseTableNames "gate" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
-["a", "b"]
-> parseTableNames "gate" "[package]\nname = \"x\""
+> map (getString "name") (tableEntries "gate" (Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")]))
+[Some "a", Some "b"]
+> tableEntries "gate" (Toml [("package.name", TString "x")])
 []
 ```
 

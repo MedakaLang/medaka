@@ -5191,7 +5191,9 @@ else
     printf '%-12s %8s  run-alloc walkDir %s -> %s MB  r=%s  (LINEAR; band N=%s->%s)\n' \
       walkdir "$wd1" "$wda1" "$wda2" "$wdr" "$wd1" "$wd2"
   fi
-  if [ "$TIME_ARM" = "1" ]; then
+  # The TIME arm is opt-in (PERF_WALKDIR_TIME=1): list accumulation is superlinear in
+  # TIME under `run` on the old code too (evaluator cost), so the alloc arm is the verdict.
+  if [ "$TIME_ARM" = "1" ] && [ "${PERF_WALKDIR_TIME:-0}" = "1" ]; then
     wdt_below="$(awk -v v="$wdt_2" -v f="$TIME_FLOOR" 'BEGIN{print (v+0 < f+0) ? 1 : 0}')"
     if [ "$wdt_below" = "1" ]; then
       printf '             time run: SKIP — too small to time-gate: %ss at N=%s < %ss floor\n' "$wdt_2" "$wd2" "$TIME_FLOOR"

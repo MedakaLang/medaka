@@ -66,3 +66,34 @@ walkOrderCheck dir = match buildTree dir
 -- by its contents, and a nested result stays in place.
 test "walkDir lists a nested tree in document order, each directory before its contents" =
   withScratchDir walkOrderCheck
+
+-- `n` empty files named `f1`..`fn` under `dir`.
+writeEmptyFiles : String -> Int -> <FileWrite> Result String Unit
+writeEmptyFiles dir n
+  | n == 0 = Ok ()
+  | otherwise = match writeFile (joinPath dir "f\{intToString n}") ""
+    Err e => Err e
+    Ok _ => writeEmptyFiles dir (n - 1)
+
+-- `dirs` directories `d1`..`dn` of `files` empty files each under `root`.
+buildWide : String -> Int -> Int -> <FileWrite> Result String Unit
+buildWide root dirs files
+  | dirs == 0 = Ok ()
+  | otherwise =
+    let dir = joinPath root "d\{intToString dirs}"
+    match mkdirAll dir
+      Err e => Err e
+      Ok _ => match writeEmptyFiles dir files
+        Err e => Err e
+        Ok _ => buildWide root (dirs - 1) files
+
+wideWalkCheck : String -> <Exec, IO, FileRead, FileWrite> Expectation
+wideWalkCheck dir = match buildWide dir 30 1000
+  Err e => fail "could not build the tree: \{e}"
+  Ok _ => expectEqual (Ok 30030) (map length (walkDir dir))
+
+-- A result wider than the interpreter's recursion cap (25000): under `medaka
+-- run`, which has no tail calls, any pass whose depth is the entry count
+-- overflows.  This test runs natively, so it pins only the count.
+test "walkDir returns every entry of a tree of 30030 entries" =
+  withScratchDir wideWalkCheck
