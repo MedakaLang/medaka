@@ -33,7 +33,54 @@ function bad(msg) {
   exit 1
 }
 
-{ line = $0; sub(/^define internal /, "define ", line); lines[++n] = line }
+# Decode descriptor components into the previous audit vocabulary, retaining a
+# one-to-one map so two physical definitions can never collapse into one row.
+function unhex(s,    out,i,a,b) {
+  if (length(s) % 2) bad("odd descriptor component " s)
+  out = ""
+  for (i = 1; i <= length(s); i += 2) {
+    a = index("0123456789abcdef", substr(s, i, 1)) - 1
+    b = index("0123456789abcdef", substr(s, i + 1, 1)) - 1
+    if (a < 0 || b < 0) bad("invalid descriptor component " s)
+    out = out sprintf("%c", a * 16 + b)
+  }
+  return out
+}
+function logical(s,    name,parts,module) {
+  name = unhex(s)
+  if (match(name, /^m[0-9a-f]+__/)) {
+    module = unhex(substr(name, 2, RLENGTH - 3))
+    gsub(/\./, "_", module)
+    return module "__" substr(name, RLENGTH + 1)
+  }
+  return name
+}
+function translate(symbol,    x,a,n) {
+  if (symbol ~ /^mdk[.]user[.]/) return "mdk_" logical(substr(symbol, 10))
+  if (symbol ~ /^mdk[.]force[.]/) return "mdk_force_" logical(substr(symbol, 11))
+  if (symbol ~ /^mdk[.]worker[.]raw[.]/) return "mdk_" logical(substr(symbol, 16)) "__rw"
+  if (symbol ~ /^mdk[.]impl[.]/) {
+    x = substr(symbol, 10); n = split(x, a, "[.]")
+    if (n == 2) return "mdk_impl_" unhex(a[1]) "_" unhex(a[2])
+  }
+  return symbol
+}
+{
+  line = $0
+  sub(/^define internal /, "define ", line)
+  rest = line; line = ""
+  while (match(rest, /@mdk[._][A-Za-z0-9_.$]+/)) {
+    start = RSTART; len = RLENGTH
+    physical = substr(rest, start + 1, len - 1)
+    canonical = translate(physical)
+    if (canonical in physicalOf && physicalOf[canonical] != physical)
+      bad("descriptor collision at " canonical)
+    physicalOf[canonical] = physical
+    line = line substr(rest, 1, start - 1) "@" canonical
+    rest = substr(rest, start + len)
+  }
+  lines[++n] = line rest
+}
 
 END {
   if (failed) exit 1
@@ -41,10 +88,19 @@ END {
   impl = "@mdk_impl_Array_index("
   # Locate the twin's and the forwarder's definitions.
   for (i = 1; i <= n; i++) {
-    if (index(lines[i], "define i64 " twin) == 1) twinStart = i
-    if (index(lines[i], "define i64 " impl) == 1) implStart = i
+    if (index(lines[i], "define i64 " twin) == 1) {
+      if (twinStart) bad("duplicate arrayIndexAt definition")
+      twinStart = i
+    }
+    if (index(lines[i], "define i64 " impl) == 1) {
+      if (implStart) bad("duplicate Array index definition")
+      implStart = i
+    }
   }
   if (!twinStart) {
+    for (i = 1; i <= n; i++)
+      if (index(lines[i], twin) && index(lines[i], "declare ") != 1)
+        bad("arrayIndexAt reference without a definition")
     for (i = 1; i <= n; i++) print lines[i]
     exit 0
   }
