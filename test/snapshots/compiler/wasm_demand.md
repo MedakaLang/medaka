@@ -1,7 +1,10 @@
 # META
-source_lines=2716
+source_lines=2726
 stages=DESUGAR,MARK
 # SOURCE
+import frontend.runtime_constructors.{
+  RuntimeOwner(..), namedRuntimeCtor, runtimeCtorFact
+}
 import backend.wasm_symbol_names as WN
 import support.symbol_encoding.{encodePair}
 import frontend.ast.{
@@ -610,8 +613,15 @@ anyBind p (b :: rest) = p b || anyBind p rest
 fnMemberIndexW : OrdMap Unit -> String -> Bool
 fnMemberIndexW names n = omHasKey n names
 
+export
 isReservedCtor : String -> Bool
-isReservedCtor n = contains n ["Some", "None", "Ok", "Err", "Lt", "Eq", "Gt"]
+isReservedCtor n = match namedRuntimeCtor n
+  Some ctor => match (runtimeCtorFact ctor).owner
+    RuntimeOption => True
+    RuntimeResult => True
+    RuntimeOrdering => True
+    _ => False
+  None => False
 
 public export data WasmTypeContext = WasmTypeContext {
   rows : OrdMap BinderRow,
@@ -2719,6 +2729,7 @@ stmtHasFallthrough (CSExpr e) = exprHasFallthrough e
 stmtHasFallthrough (CSLet _ _ e) = exprHasFallthrough e
 stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 # DESUGAR
+(DUse false (UseGroup ("frontend" "runtime_constructors") ((mem "RuntimeOwner" true) (mem "namedRuntimeCtor" false) (mem "runtimeCtorFact" false))))
 (DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "BinderId" true) (mem "Loc" true) (mem "isTaggedFixedHead" false))))
@@ -2963,8 +2974,8 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "anyBind" ((PVar "p") (PCons (PVar "b") (PVar "rest"))) (EBinOp "||" (EApp (EVar "p") (EVar "b")) (EApp (EApp (EVar "anyBind") (EVar "p")) (EVar "rest"))))
 (DTypeSig false "fnMemberIndexW" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "fnMemberIndexW" ((PVar "names") (PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")))
-(DTypeSig false "isReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isReservedCtor" ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EListLit (ELit (LString "Some")) (ELit (LString "None")) (ELit (LString "Ok")) (ELit (LString "Err")) (ELit (LString "Lt")) (ELit (LString "Eq")) (ELit (LString "Gt")))))
+(DTypeSig true "isReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isReservedCtor" ((PVar "n")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "n")) (arm (PCon "Some" (PVar "ctor")) () (EMatch (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "ctor")) "owner") (arm (PCon "RuntimeOption") () (EVar "True")) (arm (PCon "RuntimeResult") () (EVar "True")) (arm (PCon "RuntimeOrdering") () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DData Public "WasmTypeContext" () ((variant "WasmTypeContext" (ConNamed (field "rows" (TyApp (TyCon "OrdMap") (TyCon "BinderRow"))) (field "tops" (TyApp (TyCon "OrdMap") (TyCon "BinderRow"))) (field "fnNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "valNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "externFacts" (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact"))) (field "ctorFloatFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int")))) (field "ctorArities" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))) ())
 (DTypeSig true "wasmTypeContext" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "CProgram") (TyCon "WasmTypeContext"))))
 (DFunDef false "wasmTypeContext" ((PVar "ctorFields") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") PWild PWild PWild (PVar "facts"))) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (ELam ((PVar "row")) (ETuple (EApp (EVar "intToString") (EApp (EVar "binderOrdinal") (EFieldAccess (EVar "row") "brId"))) (EVar "row")))) (EFieldAccess (EVar "facts") "factBinders")))) (EVar "omEmpty"))) (DoExpr (ERecordCreate "WasmTypeContext" ((fa "rows" (EVar "rows")) (fa "tops" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "filterMap") (ELam ((PCon "CBind" (PVar "n") PWild PWild (PVar "bid"))) (EApp (EApp (EVar "map") (ELam ((PVar "row")) (ETuple (EVar "n") (EVar "row")))) (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EApp (EVar "binderOrdinal") (EVar "bid")))) (EVar "rows"))))) (EVar "groups")))) (EVar "omEmpty"))) (fa "fnNames" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EBinOp "&&" (EBinOp "/=" (EApp (EVar "bindName") (EVar "b")) (ELit (LString "main"))) (EApp (EVar "not") (EApp (EVar "isValBind") (EVar "b")))))) (EVar "groups")))) (EVar "omEmpty"))) (fa "valNames" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EBinOp "&&" (EBinOp "/=" (EApp (EVar "bindName") (EVar "b")) (ELit (LString "main"))) (EApp (EVar "isValBind") (EVar "b"))))) (EVar "groups")))) (EVar "omEmpty"))) (fa "externFacts" (EFieldAccess (EVar "facts") "factExterns")) (fa "ctorFloatFields" (EVar "ctorFields")) (fa "ctorArities" (EVar "ctorArs")))))))
@@ -3557,6 +3568,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "stmtHasFallthrough" ((PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EVar "exprHasFallthrough") (EVar "e")))
 (DFunDef false "stmtHasFallthrough" ((PCon "CSAssign" PWild (PVar "e"))) (EApp (EVar "exprHasFallthrough") (EVar "e")))
 # MARK
+(DUse false (UseGroup ("frontend" "runtime_constructors") ((mem "RuntimeOwner" true) (mem "namedRuntimeCtor" false) (mem "runtimeCtorFact" false))))
 (DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "BinderId" true) (mem "Loc" true) (mem "isTaggedFixedHead" false))))
@@ -3801,8 +3813,8 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "anyBind" ((PVar "p") (PCons (PVar "b") (PVar "rest"))) (EBinOp "||" (EApp (EVar "p") (EVar "b")) (EApp (EApp (EVar "anyBind") (EVar "p")) (EVar "rest"))))
 (DTypeSig false "fnMemberIndexW" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "fnMemberIndexW" ((PVar "names") (PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")))
-(DTypeSig false "isReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isReservedCtor" ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EListLit (ELit (LString "Some")) (ELit (LString "None")) (ELit (LString "Ok")) (ELit (LString "Err")) (ELit (LString "Lt")) (ELit (LString "Eq")) (ELit (LString "Gt")))))
+(DTypeSig true "isReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isReservedCtor" ((PVar "n")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "n")) (arm (PCon "Some" (PVar "ctor")) () (EMatch (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "ctor")) "owner") (arm (PCon "RuntimeOption") () (EVar "True")) (arm (PCon "RuntimeResult") () (EVar "True")) (arm (PCon "RuntimeOrdering") () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DData Public "WasmTypeContext" () ((variant "WasmTypeContext" (ConNamed (field "rows" (TyApp (TyCon "OrdMap") (TyCon "BinderRow"))) (field "tops" (TyApp (TyCon "OrdMap") (TyCon "BinderRow"))) (field "fnNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "valNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "externFacts" (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact"))) (field "ctorFloatFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int")))) (field "ctorArities" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))) ())
 (DTypeSig true "wasmTypeContext" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "CProgram") (TyCon "WasmTypeContext"))))
 (DFunDef false "wasmTypeContext" ((PVar "ctorFields") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") PWild PWild PWild (PVar "facts"))) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (ETuple (EApp (EVar "intToString") (EApp (EVar "binderOrdinal") (EFieldAccess (EVar "row") "brId"))) (EVar "row")))) (EFieldAccess (EVar "facts") "factBinders")))) (EVar "omEmpty"))) (DoExpr (ERecordCreate "WasmTypeContext" ((fa "rows" (EVar "rows")) (fa "tops" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "filterMap") (ELam ((PCon "CBind" (PVar "n") PWild PWild (PVar "bid"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (ETuple (EVar "n") (EVar "row")))) (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EApp (EVar "binderOrdinal") (EVar "bid")))) (EVar "rows"))))) (EVar "groups")))) (EVar "omEmpty"))) (fa "fnNames" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EBinOp "&&" (EBinOp "/=" (EApp (EVar "bindName") (EVar "b")) (ELit (LString "main"))) (EApp (EVar "not") (EApp (EVar "isValBind") (EVar "b")))))) (EVar "groups")))) (EVar "omEmpty"))) (fa "valNames" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EBinOp "&&" (EBinOp "/=" (EApp (EVar "bindName") (EVar "b")) (ELit (LString "main"))) (EApp (EVar "isValBind") (EVar "b"))))) (EVar "groups")))) (EVar "omEmpty"))) (fa "externFacts" (EFieldAccess (EVar "facts") "factExterns")) (fa "ctorFloatFields" (EVar "ctorFields")) (fa "ctorArities" (EVar "ctorArs")))))))
