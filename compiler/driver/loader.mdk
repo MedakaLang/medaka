@@ -27,6 +27,7 @@ import frontend.parser.{
   parseErrorMessage,
 }
 import frontend.visibility.{useModId}
+import string as Str
 import support.util.{
   contains,
   listLen,
@@ -564,11 +565,41 @@ findModuleOrEntryFile deps roots entry modId = match entryUnderRoots roots entry
   Some pathRoot => Some pathRoot
   None => findModuleFile deps roots modId
 
+-- The name `medaka run -` gives a program read from standard input: the entry
+-- path every diagnostic shows, and the one entry `entryUnderRoots` accepts
+-- without a file behind it.  Relative imports and the `medaka.toml` walk-up
+-- resolve against the working directory, since it has no directory of its own.
+export
+stdinEntry : String
+stdinEntry = "<stdin>"
+
+-- The whole program text from standard input, or why there is none.  `readAll`
+-- decodes lossily and cannot tell a read failure from an empty stream, so an
+-- empty result is refused as unreadable, and a U+FFFD in the text is refused
+-- the way a non-UTF-8 source file is (a program that spells U+FFFD itself is
+-- refused too; write it as an escape).
+export
+readStdinProgram : Unit -> <Stdin> Result String String
+readStdinProgram _ =
+  let text = readAll ()
+  if text == "" then
+    Err
+      "\{stdinEntry}: no program text could be read from standard input (it is empty, closed or unreadable)"
+  else if Str.contains "�" text then
+    Err (sourceNotUtf8Message stdinEntry)
+  else
+    Ok text
+
+-- The loader `read` override serving `text` for the stdin entry only.
+export
+stdinReadOverride : String -> String -> Option String
+stdinReadOverride text path = if path == stdinEntry then Some text else None
+
 entryUnderRoots : List String -> String -> <IO> Option (String, String)
 entryUnderRoots [] _ = None
 entryUnderRoots (r :: rs) entry =
   let under = startsWith "\{r}/" entry || r == "." && not (startsWith "/" entry)
-  if entry /= "" && under && fileExists entry then
+  if entry /= "" && under && (entry == stdinEntry || fileExists entry) then
     Some (entry, r)
   else
     entryUnderRoots rs entry
@@ -1268,6 +1299,42 @@ scanSiteRoot inDeps (line :: rest) =
     [] => None
   else
     scanSiteRoot inDeps rest
+
+-- Does the project rooted at `root` switch on the linter's internal-scope rules
+-- (`[lint]` section, `internal = true`)?  Read like `allow-internal`: False when
+-- the manifest is missing, unreadable or states anything but the bare token
+-- `true`.  The key is only honoured inside `[lint]`, since `internal` is too
+-- common a word to claim in every section.
+export
+manifestLintInternal : String -> <IO> Bool
+manifestLintInternal root =
+  let tomlPath = stringConcat [root, "/medaka.toml"]
+  if fileExists tomlPath then match readFile tomlPath
+    Err _ => False
+    Ok src => scanLintInternal False (splitNl src)
+  else
+    False
+
+scanLintInternal : Bool -> List String -> Bool
+scanLintInternal _ [] = False
+scanLintInternal inLint (line :: rest) =
+  let t = stringTrim line
+  let header = match splitOnChar "#" t
+    h :: _ => stringTrim h
+    [] => t
+  if startsWith "[" header then
+    scanLintInternal (header == "[lint]") rest
+  else if inLint && keyBeforeEq t == "internal" then
+    lineValueIsTrue t
+  else
+    scanLintInternal inLint rest
+
+-- True when the text after the `=` is the bare token `true`; a trailing `#`
+-- comment is inert.
+lineValueIsTrue : String -> Bool
+lineValueIsTrue t = match splitOnChar "#" (rawValAfterEq t)
+  value :: _ => stringTrim value == "true"
+  [] => False
 
 -- A module is trusted when the root it resolved under is a trusted root, or
 -- when its file lies anywhere under `stdlibRoot`. The second arm is what

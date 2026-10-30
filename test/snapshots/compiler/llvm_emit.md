@@ -2503,9 +2503,9 @@ emitIoExtern e env "flushStdout" args = match emitArgs e env args
     let _ = emit e (rtLine e "" "void" "mdk_flushstdout" (i64Ops [u]))
     ("1", LTUnit)
   _ => panic "llvm: flushStdout takes exactly one argument"
--- "run drops stdout on panic" fix: stashRunStdout snapshots the interpreter's
--- currently-buffered stdout (a pointer+length store; no allocation) so an
--- abort can flush it; enableRunStdoutFlush arms that flush.  See
+-- "run drops stdout on panic" fix: stashRunStdout appends one printed chunk
+-- (a pointer+length store; no allocation) to the runtime's chunk list so an
+-- abort can flush it, and the empty string clears the list; enableRunStdoutFlush arms that flush.  See
 -- runtime/medaka_rt.c's mdk_flush_run_stdout_on_abort and eval.mdk's
 -- appendOutput/evalModulesOutputRunFacts.
 emitIoExtern e env "stashRunStdout" args = match emitArgs e env args

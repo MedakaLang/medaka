@@ -9,8 +9,12 @@
    `isFile`, and `fileSize`.
 
    Every operation returns `Result String a`, with the host's error message
-   in `Err`. File operations run only in a built program, not under the
-   interpreter. -}
+   in `Err`.
+
+   `medaka run`, `medaka test` and a built program touch the real filesystem.
+   Only `medaka test --engines eval` and `medaka repl` do not bind the file
+   primitives, so a doctest that reaches one is rejected there; see
+   [ENGINES](ENGINES.md) for every engine. -}
 
 import core.{Result(..)}
 import io.{ownerOnlyMode}
@@ -144,23 +148,29 @@ export
 walkDir : String -> <FileRead> Result String (List String)
 walkDir root = match listDir root
   Err e => Err e
-  Ok entries => walkEntries root entries []
+  Ok entries => walkEntries root entries
 
-walkEntries : String ->
-  List String ->
-  List String ->
-  <FileRead> Result String (List String)
-walkEntries _ [] acc = Ok acc
-walkEntries root (name :: rest) acc =
+-- Each directory's result is built forward, so no pass is as deep as the
+-- tree's total entry count: `run` has no tail calls, and a depth-limited
+-- evaluator would otherwise overflow on a large tree.  The explicit `match`
+-- chain, not a `do` block, keeps the per-entry frame count of a flat directory
+-- at its current limit.
+walkEntries : String -> List String -> <FileRead> Result String (List String)
+walkEntries _ [] = Ok []
+-- lint-disable-next-line rule-bind-chain-to-do
+walkEntries root (name :: rest) =
   let full = joinPath root name
   match stat full
     Err e => Err e
     Ok st =>
-      if st.isDir then match walkDir full
+      if st.isDir then match listDir full
         Err e => Err e
-        Ok sub => walkEntries root rest (acc ++ (full :: sub))
+        Ok subs => match walkEntries full subs
+          Err e => Err e
+          Ok inner =>
+            map (after => full :: inner ++ after) (walkEntries root rest)
       else
-        walkEntries root rest (acc ++ [full])
+        map (full :: _) (walkEntries root rest)
 
 filesOnly : List String -> <FileRead> Result String (List String)
 filesOnly [] = Ok []
@@ -247,6 +257,8 @@ expectUnitCount want units =
 -- LAW: derived `Eq FileStat` is reflexive and discriminates on EVERY field --
 -- a derived instance that silently ignored a field would still be reflexive,
 -- so both halves are needed.
+-- The prop pins the result of `==` itself (the `== False` form is the subject); a `not` or `/=` rewrite would exercise another path.
+-- lint-disable-next-line rule-bool-simplify
 prop "Eq FileStat is reflexive and field-discriminating" (n : Int) (b : Bool) =
   let base = FileStat {
     size = n,
@@ -262,6 +274,8 @@ prop "Eq FileStat is reflexive and field-discriminating" (n : Int) (b : Bool) =
 
 -- LAW: derived `Debug FileStat` renders every field, so two records that
 -- differ anywhere render differently (and equal records render identically).
+-- The prop pins the result of `==` itself (the `== False` form is the subject); a `not` or `/=` rewrite would exercise another path.
+-- lint-disable-next-line rule-bool-simplify
 prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
   let x = FileStat { size = n, isDir = b, isFile = not b, mtime = intToFloat n }
   let y = FileStat { x | size = n + 1 }

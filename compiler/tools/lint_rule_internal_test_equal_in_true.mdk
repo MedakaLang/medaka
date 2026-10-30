@@ -1,0 +1,107 @@
+-- lint rule rule-test-equal-in-true: an `==`/`/=` wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual`/`expectNotEqual`.
+
+import frontend.ast.{Loc(..), Expr(..), Decl(..)}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import tools.printer.{exprToString}
+import frontend.exhaust.{Oracle}
+import tools.lint_core.{
+  Category(..),
+  FileFacts(..),
+  Finding(..),
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  Visitor,
+  mkVisitorRule,
+}
+import tools.lint_shared.{
+  detApply,
+  exprRuleVisitors,
+  exprRuleFixTestDecls,
+  isEVarNamed,
+  noExcl,
+  ruleNameTestEqualInTrue,
+  unwrapLoc,
+}
+
+export
+rule : Rule
+rule =
+  mkVisitorRule
+    RuleMeta {
+      name = ruleNameTestEqualInTrue,
+      summary =
+        "an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure",
+      doc =
+        "An `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse` reports neither operand on failure; use `expectEqual`/`expectNotEqual`. `--fix` rewrites it only where every verb involved is `test`'s own import: a verb that resolves to a local or top-level binding, or to another module's import, is left alone.\n\nBefore:\n  expectTrue (a == b)\nAfter:\n  expectEqual a b",
+      category = Style,
+      scope = Internal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [NeedsScopes],
+    }
+    ruleTestEqualInTrue
+    (Some testEqualInTrueFix)
+
+-- ── rule: test-equal-in-true ──────────────────────────────────────────────────
+-- `expectTrue (a == b)` → `expectEqual a b`, `expectTrue (a /= b)` →
+-- `expectNotEqual a b`, and the `expectFalse` forms with the verb's polarity
+-- flipped.  The point is the FAILURE MESSAGE, not the assertion: `expectTrue`
+-- can only report "expected True, got False", where the equality verbs render
+-- both operands.
+--
+-- ONLY `==`/`/=`, for the same reason `rule-not-eq` excludes the orderings: a
+-- rewrite of `expectTrue (a < b)` would need an ordering-aware verb, a
+-- different one per operator, and the `expectFalse` polarity flip of an
+-- ordering is unsound for `Float` (NaN makes `not (a < b)` ≠ `a >= b`).
+--
+-- `expectEqual`/`expectNotEqual` carry a `Debug a` obligation that `expectTrue`
+-- does not, and a lint rule has no type environment to discharge it, so `--fix`
+-- on a comparison of a type with no `Debug` impl produces a file that no longer
+-- typechecks.  That failure is LOUD (the next `check` rejects it), which is what
+-- licenses shipping the fix at all.
+testEqInTrueOf : Expr -> Option Expr
+testEqInTrueOf (EApp hd arg)
+  | isEVarNamed "expectTrue" hd = testEqVerbOf False (unwrapLoc arg)
+  | isEVarNamed "expectFalse" hd = testEqVerbOf True (unwrapLoc arg)
+testEqInTrueOf _ = None
+
+-- `negated` = the wrapper was `expectFalse`, so the verb the operator names is
+-- replaced by its complement.
+testEqVerbOf : Bool -> Expr -> Option Expr
+testEqVerbOf negated (EBinOp "==" a b _) =
+  Some (testEqCall (if negated then "expectNotEqual" else "expectEqual") a b)
+testEqVerbOf negated (EBinOp "/=" a b _) =
+  Some (testEqCall (if negated then "expectEqual" else "expectNotEqual") a b)
+testEqVerbOf _ _ = None
+
+testEqCall : String -> Expr -> Expr -> Expr
+testEqCall nm a b = EApp (EApp (EVar nm) a) b
+
+ruleTestEqualInTrue : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Visitor
+ruleTestEqualInTrue _ _ _ _ _ =
+  exprRuleVisitors noExcl testEqInTrueOf testEqInTrueFinding
+
+testEqInTrueFinding : Option Loc -> Expr -> Finding
+testEqInTrueFinding loc rewritten = Finding {
+  rule = ruleNameTestEqualInTrue,
+  message =
+    "an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as '\{exprToString rewritten}'",
+  severity = SevWarning,
+  loc = loc,
+  fix = None,
+}
+
+testEqualInTrueFix : Oracle -> Decl -> Option (List Decl)
+testEqualInTrueFix _ d = exprRuleFixTestDecls noExcl (detApply testEqInTrueOf) d

@@ -1,0 +1,8 @@
+pat = r"\d+"
+plain = "x"
+src = r"""
+  f = "q \{x}"
+    g = r"\n"
+"""
+
+use = [r"a", "b", r"c\"]

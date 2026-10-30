@@ -1,5 +1,5 @@
 # META
-source_lines=275
+source_lines=289
 stages=DESUGAR,MARK
 # SOURCE
 {- | Filesystem helpers built on the host file primitives.
@@ -13,8 +13,12 @@ stages=DESUGAR,MARK
    `isFile`, and `fileSize`.
 
    Every operation returns `Result String a`, with the host's error message
-   in `Err`. File operations run only in a built program, not under the
-   interpreter. -}
+   in `Err`.
+
+   `medaka run`, `medaka test` and a built program touch the real filesystem.
+   Only `medaka test --engines eval` and `medaka repl` do not bind the file
+   primitives, so a doctest that reaches one is rejected there; see
+   [ENGINES](ENGINES.md) for every engine. -}
 
 import core.{Result(..)}
 import io.{ownerOnlyMode}
@@ -148,23 +152,29 @@ export
 walkDir : String -> <FileRead> Result String (List String)
 walkDir root = match listDir root
   Err e => Err e
-  Ok entries => walkEntries root entries []
+  Ok entries => walkEntries root entries
 
-walkEntries : String ->
-  List String ->
-  List String ->
-  <FileRead> Result String (List String)
-walkEntries _ [] acc = Ok acc
-walkEntries root (name :: rest) acc =
+-- Each directory's result is built forward, so no pass is as deep as the
+-- tree's total entry count: `run` has no tail calls, and a depth-limited
+-- evaluator would otherwise overflow on a large tree.  The explicit `match`
+-- chain, not a `do` block, keeps the per-entry frame count of a flat directory
+-- at its current limit.
+walkEntries : String -> List String -> <FileRead> Result String (List String)
+walkEntries _ [] = Ok []
+-- lint-disable-next-line rule-bind-chain-to-do
+walkEntries root (name :: rest) =
   let full = joinPath root name
   match stat full
     Err e => Err e
     Ok st =>
-      if st.isDir then match walkDir full
+      if st.isDir then match listDir full
         Err e => Err e
-        Ok sub => walkEntries root rest (acc ++ (full :: sub))
+        Ok subs => match walkEntries full subs
+          Err e => Err e
+          Ok inner =>
+            map (after => full :: inner ++ after) (walkEntries root rest)
       else
-        walkEntries root rest (acc ++ [full])
+        map (full :: _) (walkEntries root rest)
 
 filesOnly : List String -> <FileRead> Result String (List String)
 filesOnly [] = Ok []
@@ -251,6 +261,8 @@ expectUnitCount want units =
 -- LAW: derived `Eq FileStat` is reflexive and discriminates on EVERY field --
 -- a derived instance that silently ignored a field would still be reflexive,
 -- so both halves are needed.
+-- The prop pins the result of `==` itself (the `== False` form is the subject); a `not` or `/=` rewrite would exercise another path.
+-- lint-disable-next-line rule-bool-simplify
 prop "Eq FileStat is reflexive and field-discriminating" (n : Int) (b : Bool) =
   let base = FileStat {
     size = n,
@@ -266,6 +278,8 @@ prop "Eq FileStat is reflexive and field-discriminating" (n : Int) (b : Bool) =
 
 -- LAW: derived `Debug FileStat` renders every field, so two records that
 -- differ anywhere render differently (and equal records render identically).
+-- The prop pins the result of `==` itself (the `== False` form is the subject); a `not` or `/=` rewrite would exercise another path.
+-- lint-disable-next-line rule-bool-simplify
 prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
   let x = FileStat { size = n, isDir = b, isFile = not b, mtime = intToFloat n }
   let y = FileStat { x | size = n + 1 }
@@ -302,10 +316,10 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 (DTypeSig true "mkdirAllDurably" (TyFun (TyCon "String") (TyEffect ("FileRead" "FileWrite") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "mkdirAllDurably" ((PVar "path")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "path") (ELit (LString ""))) (EBinOp "==" (EVar "path") (ELit (LString ".")))) (EBinOp "==" (EVar "path") (ELit (LString "/")))) (EApp (EVar "fileExists") (EVar "path"))) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EApp (EVar "andThen") (EApp (EVar "mkdirAllDurably") (EApp (EVar "dirname") (EVar "path")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EVar "mkdirAll") (EVar "path"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "fsync") (EApp (EVar "dirname") (EVar "path")))))))))))))
 (DTypeSig true "walkDir" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "walkDir" ((PVar "root")) (EMatch (EApp (EVar "listDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EApp (EVar "walkEntries") (EVar "root")) (EVar "entries")) (EListLit)))))
-(DTypeSig false "walkEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "walkEntries" (PWild (PList) (PVar "acc")) (EApp (EVar "Ok") (EVar "acc")))
-(DFunDef false "walkEntries" ((PVar "root") (PCons (PVar "name") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "full") (EApp (EApp (EVar "joinPath") (EVar "root")) (EVar "name"))) (DoExpr (EMatch (EApp (EVar "stat") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "st")) () (EIf (EFieldAccess (EVar "st") "isDir") (EMatch (EApp (EVar "walkDir") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "sub")) () (EApp (EApp (EApp (EVar "walkEntries") (EVar "root")) (EVar "rest")) (EBinOp "++" (EVar "acc") (EBinOp "::" (EVar "full") (EVar "sub")))))) (EApp (EApp (EApp (EVar "walkEntries") (EVar "root")) (EVar "rest")) (EBinOp "++" (EVar "acc") (EListLit (EVar "full"))))))))))
+(DFunDef false "walkDir" ((PVar "root")) (EMatch (EApp (EVar "listDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EVar "walkEntries") (EVar "root")) (EVar "entries")))))
+(DTypeSig false "walkEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "walkEntries" (PWild (PList)) (EApp (EVar "Ok") (EListLit)))
+(DFunDef false "walkEntries" ((PVar "root") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "full") (EApp (EApp (EVar "joinPath") (EVar "root")) (EVar "name"))) (DoExpr (EMatch (EApp (EVar "stat") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "st")) () (EIf (EFieldAccess (EVar "st") "isDir") (EMatch (EApp (EVar "listDir") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "subs")) () (EMatch (EApp (EApp (EVar "walkEntries") (EVar "full")) (EVar "subs")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "inner")) () (EApp (EApp (EVar "map") (ELam ((PVar "after")) (EBinOp "::" (EVar "full") (EBinOp "++" (EVar "inner") (EVar "after"))))) (EApp (EApp (EVar "walkEntries") (EVar "root")) (EVar "rest"))))))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "full") (EVar "_s")))) (EApp (EApp (EVar "walkEntries") (EVar "root")) (EVar "rest")))))))))
 (DTypeSig false "filesOnly" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "filesOnly" ((PList)) (EApp (EVar "Ok") (EListLit)))
 (DFunDef false "filesOnly" ((PCons (PVar "p") (PVar "rest"))) (EMatch (EApp (EVar "isFile") (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PCon "True")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "p") (EVar "_s")))) (EApp (EVar "filesOnly") (EVar "rest")))) (arm (PCon "Ok" (PCon "False")) () (EApp (EVar "filesOnly") (EVar "rest")))))
@@ -345,10 +359,10 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 (DTypeSig true "mkdirAllDurably" (TyFun (TyCon "String") (TyEffect ("FileRead" "FileWrite") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "mkdirAllDurably" ((PVar "path")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "path") (ELit (LString ""))) (EBinOp "==" (EVar "path") (ELit (LString ".")))) (EBinOp "==" (EVar "path") (ELit (LString "/")))) (EApp (EVar "fileExists") (EVar "path"))) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "mkdirAllDurably") (EApp (EVar "dirname") (EVar "path")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "mkdirAll") (EVar "path"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "fsync") (EApp (EVar "dirname") (EVar "path")))))))))))))
 (DTypeSig true "walkDir" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "walkDir" ((PVar "root")) (EMatch (EApp (EVar "listDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EApp (EVar "walkEntries") (EVar "root")) (EVar "entries")) (EListLit)))))
-(DTypeSig false "walkEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "walkEntries" (PWild (PList) (PVar "acc")) (EApp (EVar "Ok") (EVar "acc")))
-(DFunDef false "walkEntries" ((PVar "root") (PCons (PVar "name") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "full") (EApp (EApp (EVar "joinPath") (EVar "root")) (EVar "name"))) (DoExpr (EMatch (EApp (EVar "stat") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "st")) () (EIf (EFieldAccess (EVar "st") "isDir") (EMatch (EApp (EVar "walkDir") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "sub")) () (EApp (EApp (EApp (EVar "walkEntries") (EVar "root")) (EVar "rest")) (EBinOp "++" (EVar "acc") (EBinOp "::" (EVar "full") (EMethodRef "sub")))))) (EApp (EApp (EApp (EVar "walkEntries") (EVar "root")) (EVar "rest")) (EBinOp "++" (EVar "acc") (EListLit (EVar "full"))))))))))
+(DFunDef false "walkDir" ((PVar "root")) (EMatch (EApp (EVar "listDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EVar "walkEntries") (EVar "root")) (EVar "entries")))))
+(DTypeSig false "walkEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "walkEntries" (PWild (PList)) (EApp (EVar "Ok") (EListLit)))
+(DFunDef false "walkEntries" ((PVar "root") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "full") (EApp (EApp (EVar "joinPath") (EVar "root")) (EVar "name"))) (DoExpr (EMatch (EApp (EVar "stat") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "st")) () (EIf (EFieldAccess (EVar "st") "isDir") (EMatch (EApp (EVar "listDir") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "subs")) () (EMatch (EApp (EApp (EVar "walkEntries") (EVar "full")) (EVar "subs")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "inner")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "after")) (EBinOp "::" (EVar "full") (EBinOp "++" (EVar "inner") (EVar "after"))))) (EApp (EApp (EVar "walkEntries") (EVar "root")) (EVar "rest"))))))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "full") (EVar "_s")))) (EApp (EApp (EVar "walkEntries") (EVar "root")) (EVar "rest")))))))))
 (DTypeSig false "filesOnly" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "filesOnly" ((PList)) (EApp (EVar "Ok") (EListLit)))
 (DFunDef false "filesOnly" ((PCons (PVar "p") (PVar "rest"))) (EMatch (EApp (EVar "isFile") (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PCon "True")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "p") (EVar "_s")))) (EApp (EVar "filesOnly") (EVar "rest")))) (arm (PCon "Ok" (PCon "False")) () (EApp (EVar "filesOnly") (EVar "rest")))))

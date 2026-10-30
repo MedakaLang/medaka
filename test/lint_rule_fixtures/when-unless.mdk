@@ -1,0 +1,19 @@
+-- Fixture for rule-when-unless: an `if` with an exact `pure ()` branch.
+-- This file binds `when` and `unless` itself, so the rewrite would call the
+-- file's own pair: the fix is withheld (the findings stay).  The fix path is
+-- pinned by test/lint_fix_fixtures/when_unless_brackets.mdk.
+
+-- POSITIVE, unfixed: else branch is `pure ()` → `when`.
+-- expect-next-line rule-when-unless unfixed
+whenShape b act = if b then act else pure ()
+
+-- POSITIVE, unfixed: then branch is `pure ()` → `unless`.
+-- expect-next-line rule-when-unless unfixed
+unlessShape b act = if b then pure () else act
+
+-- NEGATIVE: neither branch is `pure ()`.
+negPlain b act other = if b then act else other
+
+-- NEGATIVE: the `when`/`unless` definitions THEMSELVES must not self-rewrite.
+when b m = if b then m else pure ()
+unless b m = if b then pure () else m

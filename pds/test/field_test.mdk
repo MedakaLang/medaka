@@ -193,7 +193,7 @@ test "fromBytes >> toBytes round-trips at every limb boundary (incl. the 26/22 s
 test "toBytes is 32 bytes" =
   expectSatisfies
     "every sample to encode to 32 bytes"
-    (all (n => n == 32))
+    (all (== 32))
     (map (a => length (feToBytes a)) samples)
 
 test "fromBytes REJECTS p" = expectTrue (match feFromBytes pBytes

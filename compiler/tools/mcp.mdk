@@ -85,7 +85,12 @@ import tools.lsp.{
   methodOf,
   unit,
 }
-import tools.lint_cmd.{quadToParseTriple, quadToSrc}
+import tools.lint_cmd.{
+  dropInactiveInternalCross,
+  internalDisabledFor,
+  quadToParseTriple,
+  quadToSrc,
+}
 import frontend.ast.{Decl, Loc(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{
@@ -100,6 +105,7 @@ import frontend.lexer.{tokenizeWithOffsetPairs}
 import tools.fmt.{formatSourceChecked}
 import tools.lint.{
   Finding,
+  allCrossFileRules,
   lintFileDiagTripleParsed,
   mergeCrossFileIntoTriples,
   runCrossFileRules,
@@ -109,7 +115,7 @@ import tools.lint.{
   buildStdlibIndexResult,
   StdlibIndexError(..),
   emptyStdlibIndex,
-  stdlibIndexNeeded,
+  stdlibIndexNeededFor,
   StdlibIndex,
 }
 import tools.test_cmd.{runTestGradedReportParts, TestReportError(..)}
@@ -470,8 +476,6 @@ mcpPrepared state path src =
       cache
     syntax <- snapshotSyntaxSource prepared
     if syntaxSourceText syntax == src then Some (generation, prepared) else None
-  -- The multiline assignment form is not accepted by the seed parser.
-  -- lint-disable-next-line rule-prefer-assign-op
   match found
     Some (generation, prepared) =>
       (SourceRevision uri None generation src, prepared)
@@ -480,12 +484,11 @@ mcpPrepared state path src =
       let prepared = parseSnapshotSyntax revision
       let entries2 =
         take 4 ((uri, next) :: filter ((key, _) => key /= uri) entries)
-      let _ =
-        state :=
-          McpSyntaxState
-            (insertSyntax defaultParseOptions prepared cache)
-            entries2
-            (next + 1)
+      state :=
+        McpSyntaxState
+          (insertSyntax defaultParseOptions prepared cache)
+          entries2
+          (next + 1)
       (revision, prepared)
 
 -- ── medaka_check tool ─────────────────────────────────────────────────────────
@@ -1495,7 +1498,15 @@ lintPathsToDiagQuads : StdlibIndex ->
   List String ->
   <IO> List (String, String, List Diag, Positions, List Decl)
 lintPathsToDiagQuads idx disable only deny paths =
-  map (lintFileDiagTripleParsed idx disable only deny) paths
+  map
+    (f =>
+      lintFileDiagTripleParsed
+        idx
+        (disable ++ internalDisabledFor False f)
+        only
+        deny
+        f)
+    paths
 
 -- Run the cross-file tier (`runCrossFileRules`) over the parses `quads`
 -- already carries, honoring `only`/`disable` (inside `runCrossFileRules`),
@@ -1509,10 +1520,14 @@ crossFileMcpFindings : List String ->
   List String ->
   List String ->
   List (String, String, List Diag, Positions, List Decl) ->
-  List Finding
+  <IO> List Finding
 crossFileMcpFindings disable only deny quads =
   let parsedTriples = map quadToParseTriple quads
-  let raw = runCrossFileRules only disable parsedTriples
+  let raw =
+    dropInactiveInternalCross
+      allCrossFileRules
+      False
+      (runCrossFileRules only disable parsedTriples)
   let suppressed = applySuppressionsMulti (map quadToSrc quads) raw
   applyFindingDeny deny suppressed
 
@@ -1554,10 +1569,10 @@ runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
     let only = lintNameListArg "only" args
     let deny = lintNameListArg "deny" args
     -- at most once per REQUEST, not per path (see lintPathsToDiagQuads) — and
-    -- not at all when `rule-stdlib-reimpl`, the sole `StdlibIndex` reader, is
-    -- outside the active `disable`/`only` set (see `stdlibIndexNeeded`).
+    -- not at all when no `StdlibIndex` reader is active for these paths (see
+    -- `stdlibIndexNeededFor`).
     let indexResult =
-      if stdlibIndexNeeded only disable then
+      if stdlibIndexNeededFor only disable paths then
         buildStdlibIndexResult
       else
         Ok emptyStdlibIndex

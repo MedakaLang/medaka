@@ -1,0 +1,9 @@
+-- A local helper that runs a command, on a path `main` never takes: `medaka run`
+-- refuses it, naming the helper's call and the build command.
+listDir : Unit -> <IO> Unit
+listDir _ = match runCommand "ls" []
+  Ok _ => println "listed"
+  Err e => println e
+
+main : <IO> Unit
+main = if False then listDir () else println "done"

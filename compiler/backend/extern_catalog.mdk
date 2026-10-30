@@ -752,8 +752,8 @@ catalogRows = [
       GapPermanent
       "a subprocess has no WasmGC host equivalent: Exec is granted on native and run only, and no wasm profile grants it")
     (NotProvided
-      GapBug
-      "implemented by llvm, missing from the interpreter on purpose: the interpreter waits on a decision about the --allow-exec security posture"),
+      GapPermanent
+      "implemented by llvm; running a subprocess from the interpreter waits on a security decision"),
   ExternRow
     "runCommandBatch"
     (CSymbol LlvmFile "mdk_run_command_batch")
@@ -761,8 +761,8 @@ catalogRows = [
       GapPermanent
       "a subprocess has no WasmGC host equivalent: Exec is granted on native and run only, and no wasm profile grants it")
     (NotProvided
-      GapBug
-      "implemented by llvm, missing from the interpreter on purpose: the same --allow-exec posture as runCommand"),
+      GapPermanent
+      "implemented by llvm; refused for the same reason as `runCommand`"),
   ExternRow
     "exit"
     (CSymbol LlvmAbort "mdk_exit")
@@ -803,7 +803,7 @@ catalogRows = [
     (CSymbol LlvmIo "mdk_stash_run_stdout")
     (NotProvided
       GapPermanent
-      "internal `medaka run` CLI plumbing (interpreter-only outputRef stash for the \"run drops stdout on panic\" fix) — the compiler is only ever built via the LLVM backend, never wasm, so no WasmGC program ever exercises this")
+      "internal `medaka run` CLI plumbing (interpreter-only chunk-list stash for the \"run drops stdout on panic\" fix) — the compiler is only ever built via the LLVM backend, never wasm, so no WasmGC program ever exercises this")
     Interpreted,
   ExternRow
     "enableRunStdoutFlush"

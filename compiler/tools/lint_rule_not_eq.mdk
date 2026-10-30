@@ -1,0 +1,104 @@
+-- lint rule rule-not-eq: a negated equality `not (a == b)` / `not (a /= b)`; prefer the operator.
+
+import frontend.ast.{Loc(..), Expr(..), Decl(..)}
+import frontend.ast_walk.{ExprKind(..)}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import tools.printer.{exprToString}
+import tools.lint_core.{
+  Applicability(..),
+  Category(..),
+  Ctx(..),
+  FileFacts(..),
+  Finding(..),
+  Fixability(..),
+  Fix,
+  Need(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  Visitor(..),
+  mkVisitorRule,
+}
+import tools.lint_shared.{
+  notArgOf,
+  replaceNodeFix,
+  ruleNameNotEq,
+  unwrapLoc,
+  usesPreludeName,
+}
+
+export
+rule : Rule
+rule =
+  mkVisitorRule
+    RuleMeta {
+      name = ruleNameNotEq,
+      summary =
+        "negated equality `not (a == b)` / `not (a /= b)`. Prefer `a /= b` / `a == b`",
+      doc =
+        "A negated equality test has a direct operator.\n\nBefore:\n  not (a == b)\nAfter:\n  a /= b",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [NeedsScopes, NeedsWildIndex],
+    }
+    notEqVisitors
+    None
+
+-- ── rule: not-eq ──────────────────────────────────────────────────────────────
+-- `not (a == b)` → `a /= b`; `not (a /= b)` → `a == b` (also the unary-`!` forms).
+-- ONLY `==`/`/=` — they are TOTAL, so De Morgan applies unconditionally.  `<`/`>`
+-- &c. are deliberately excluded: their complement is unsound for `Float` (NaN
+-- makes `not (a < b)` ≠ `a >= b`).  The flipped `EBinOp` reuses the original's
+-- site id (the parser's `unminted`; lint output is never typechecked).
+notEqOf : Expr -> Option Expr
+notEqOf e = match notArgOf e
+  Some inner => match unwrapLoc inner
+    EBinOp "==" a b r => Some (EBinOp "/=" a b r)
+    EBinOp "/=" a b r => Some (EBinOp "==" a b r)
+    _ => None
+  None => None
+
+-- Inside the definition of `==` or `/=` the written operator would be the
+-- method calling itself.
+definesEquality : Ctx -> Bool
+definesEquality ctx =
+  not ctx.ctxInTest && (ctx.ctxDeclName == "==" || ctx.ctxDeclName == "/=")
+
+-- `notArgOf` matches an application only, so only `EApp` nodes are visited.
+-- The fix is withheld where the file rebinds `not`: the call is then the
+-- file's own, and the rewrite would change what it computes.
+notEqVisitors : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Visitor
+notEqVisitors idx _ facts _ _ = [OnExpr [KApp] (notEqAt idx facts)]
+
+notEqAt : StdlibIndex -> FileFacts -> Ctx -> Expr -> List Finding
+notEqAt idx facts ctx e = match (notEqOf e, e)
+  (Some rewritten, EApp hd _) =>
+    [notEqFinding ctx.ctxSpan rewritten (notEqFix idx facts ctx e hd rewritten)]
+  _ => []
+
+notEqFinding : Option Loc -> Expr -> Option Fix -> Finding
+notEqFinding loc rewritten fix = Finding {
+  rule = ruleNameNotEq,
+  message = "negated equality. Rewrite as '" ++ exprToString rewritten ++ "'",
+  severity = SevWarning,
+  loc = loc,
+  fix = fix,
+}
+
+notEqFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Expr -> Option Fix
+notEqFix idx facts ctx e hd rewritten =
+  if usesPreludeName idx facts hd && not (definesEquality ctx) then
+    replaceNodeFix Safe "use the operator" ctx e rewritten
+  else
+    None

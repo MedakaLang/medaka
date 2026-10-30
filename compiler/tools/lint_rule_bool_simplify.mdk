@@ -1,0 +1,136 @@
+-- lint rule rule-bool-simplify: a redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`). Simplify.
+
+import frontend.ast.{Loc(..), Expr(..), Decl(..)}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import tools.printer.{exprToString}
+import tools.lint_core.{
+  Applicability(..),
+  Category(..),
+  Ctx(..),
+  FileFacts(..),
+  Finding(..),
+  Fix,
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  Visitor(..),
+  mkVisitorRule,
+}
+import tools.lint_shared.{
+  rebinds,
+  isBoolLit,
+  isFalseLit,
+  isTrueLit,
+  notArgOf,
+  replaceNodeFix,
+  ruleNameBoolSimplify,
+  unwrapLoc,
+}
+
+export
+rule : Rule
+rule =
+  mkVisitorRule
+    RuleMeta {
+      name = ruleNameBoolSimplify,
+      summary =
+        "redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`, …). Simplify",
+      doc =
+        "A boolean expression with a redundant shape: `if c then True else False`, `x == True`, `not (not x)`. Each simplifies to a shorter equivalent.\n\nBefore:\n  if ok then True else False\nAfter:\n  ok",
+      category = Complexity,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [NeedsScopes, NeedsWildIndex],
+    }
+    ruleBoolSimplify
+    None
+
+-- build `not e` in the canonical `not <e>` (prelude fn) form the printer renders.
+mkNot : Expr -> Expr
+mkNot e = EApp (EVar "not") e
+
+-- ── rule: bool-simplify ───────────────────────────────────────────────────────
+-- Redundant boolean shapes, each rewritten to an EXACTLY equivalent one:
+--   if c then True else False → c        if c then False else True → not c
+--   x == True → x        x == False → not x        (also True/False on the LEFT)
+--   x /= True → not x    x /= False → x
+--   not (not x) → x
+-- Excluded (per spec): `if c then True else e` → `c || e` (short-circuit/effect
+-- risk).  A comparison with bool literals on BOTH sides is left alone.
+boolSimplifyOf : Expr -> Option Expr
+boolSimplifyOf (EIf c t el) = boolSimplifyIf c (unwrapLoc t) (unwrapLoc el)
+boolSimplifyOf (EBinOp op a b _)
+  | op == "==" || op == "/=" = boolSimplifyEq op a b
+boolSimplifyOf e = match notArgOf e
+  Some inner => map (y => y) (notArgOf (unwrapLoc inner))
+  None => None
+
+boolSimplifyIf : Expr -> Expr -> Expr -> Option Expr
+boolSimplifyIf c t el
+  | isTrueLit t && isFalseLit el = Some c
+  | isFalseLit t && isTrueLit el = Some (mkNot c)
+  | otherwise = None
+
+boolSimplifyEq : String -> Expr -> Expr -> Option Expr
+boolSimplifyEq op a b
+  | isBoolLit a && isBoolLit b = None
+  | isTrueLit b = Some (boolEqResult op a True)
+  | isFalseLit b = Some (boolEqResult op a False)
+  | isTrueLit a = Some (boolEqResult op b True)
+  | isFalseLit a = Some (boolEqResult op b False)
+  | otherwise = None
+
+-- the value operand `v`, negated iff (`==` against `False`) or (`/=` against
+-- `True`): `keepPositive = (op == "==") == constIsTrue`.
+boolEqResult : String -> Expr -> Bool -> Expr
+boolEqResult op v constIsTrue = if op == "==" == constIsTrue then v else mkNot v
+
+ruleBoolSimplify : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Visitor
+ruleBoolSimplify idx _ facts _ _ = [OnAnyExpr (boolSimplifyAt idx facts)]
+
+boolSimplifyAt : StdlibIndex -> FileFacts -> Ctx -> Expr -> List Finding
+boolSimplifyAt idx facts ctx e = match boolSimplifyOf e
+  Some rewritten => [
+    boolSimplifyFinding
+      ctx.ctxSpan
+      rewritten
+      (boolSimplifyFix idx facts ctx e rewritten),
+  ]
+  None => []
+
+boolSimplifyFinding : Option Loc -> Expr -> Option Fix -> Finding
+boolSimplifyFinding loc rewritten fix = Finding {
+  rule = ruleNameBoolSimplify,
+  message =
+    "redundant boolean expression — rewrite as '"
+      ++ exprToString rewritten
+      ++ "'",
+  severity = SevWarning,
+  loc = loc,
+  fix = fix,
+}
+
+-- A rewrite that reads or writes a call to `not` is withheld where the file
+-- binds `not` anywhere: the call it introduces could land inside that binding's
+-- scope, and the one it removes could be the file's own.
+boolSimplifyFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+boolSimplifyFix idx facts ctx e rewritten =
+  if touchesNot e rewritten && rebinds idx facts ctx "not" then
+    None
+  else
+    replaceNodeFix Safe "simplify the boolean expression" ctx e rewritten
+
+touchesNot : Expr -> Expr -> Bool
+touchesNot e rewritten = isSome (notArgOf e) || isSome (notArgOf rewritten)

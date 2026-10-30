@@ -1,5 +1,5 @@
 # META
-source_lines=480
+source_lines=481
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cache.mdk — the on-disk cache behind `medaka lint --cache` (#395).
@@ -10,7 +10,7 @@ stages=DESUGAR,MARK
 -- parse + rule pass for a file whose CONTENT is unchanged.
 --
 -- ── THE INVARIANT (hold every change in this file to it) ──────────────────────
---   A MISS IS ALWAYS SAFE.  A WRONG HIT IS SILENT WRONGNESS.
+--   A miss is always safe.  A wrong hit is silent wrongness.
 -- Every ambiguity — unreadable shard, malformed JSON, unknown format version, a
 -- foreign rule-set stamp, a path/hash mismatch, a field of the wrong shape —
 -- resolves to `None` (a miss: re-lint the file).  There is no "probably fine"
@@ -18,7 +18,7 @@ stages=DESUGAR,MARK
 -- a lint that reports nothing and exits 0, which is this repo's defining failure
 -- mode ("this didn't run" == "this passed").
 --
--- ── WHAT IS CACHED, AND THE ONE THING THAT MUST NOT BE ───────────────────────
+-- ── what is cached, and the one thing that must not be ───────────────────────
 -- Per file, keyed by content hash: its `findings`, its `dupOccs`, its
 -- `directives`.
 --
@@ -52,7 +52,7 @@ import frontend.ast.{Loc(..)}
 import driver.diagnostics.{Severity(..)}
 import io.{runCommandOk}
 import u64 as U64
-import tools.lint.{Finding(..), Directive(..), DirScope(..)}
+import tools.lint_core.{Finding(..), Directive(..), DirScope(..)}
 import support.util.{joinWith, listLen, filterList, splitOnChar, stringTrim}
 import support.char.{isAlnum}
 import json.{
@@ -110,7 +110,7 @@ contentHashOf src =
 -- ── the rule-set stamp ───────────────────────────────────────────────────────
 -- Editing a rule's LOGIC (its name unchanged) must invalidate every entry, so
 -- the key covers the rule set's identity as well as the file's content.  We hash
--- THE RUNNING BINARY.  Rejected alternatives, all silent-green (#395):
+-- the running binary.  Rejected alternatives, all silent-green (#395):
 --   * `medaka --version` — a release string; does not move when a rule changes.
 --   * a hand-bumped `lintRulesVersion` — rots the first time someone forgets.
 --   * a hash of `allRules` names/severities — catches added/removed rules and
@@ -304,7 +304,8 @@ decListGo f arr i n
 decFinding : Json -> Option Finding
 decFinding j =
   map4
-    (r m s l => Finding { rule = r, message = m, severity = s, loc = l })
+    (r m s l =>
+      Finding { rule = r, message = m, severity = s, loc = l, fix = None })
     (decStr "rule" j)
     (decStr "message" j)
     (optBind (decStr "severity" j) decSeverity)
@@ -402,7 +403,7 @@ loadEntry cacheDir stamp path hash = match readFile (shardPathOf cacheDir path)
 -- be written must never fail a lint, so every IO error here is swallowed and the
 -- run reports its findings regardless (the next run simply misses).
 --
--- ⚠️ ATOMICITY.  Each shard is staged in a per-process temp dir and `rename`d
+-- ATOMICITY.  Each shard is staged in a per-process temp dir and `rename`d
 -- into place — a reader therefore sees a shard whole or not at all, never
 -- half-written, no matter how many `medaka lint --cache` runs are in flight.
 -- Two traps this shape avoids:
@@ -487,7 +488,7 @@ makeStagingDir cacheDir =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseAlias ("u64") "U64"))
-(DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false) (mem "at" false))))
@@ -545,7 +546,7 @@ makeStagingDir cacheDir =
 (DTypeSig false "decListGo" (TyFun (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyVar "a"))))))))
 (DFunDef false "decListGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Some") (EListLit)) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "map2") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "::" (EVar "_a") (EVar "_b")))) (EApp (EVar "f") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EApp (EApp (EApp (EApp (EVar "decListGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "decFinding" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Finding"))))
-(DFunDef false "decFinding" ((PVar "j")) (EApp (EApp (EApp (EApp (EApp (EVar "map4") (ELam ((PVar "r") (PVar "m") (PVar "s") (PVar "l")) (ERecordCreate "Finding" ((fa "rule" (EVar "r")) (fa "message" (EVar "m")) (fa "severity" (EVar "s")) (fa "loc" (EVar "l")))))) (EApp (EApp (EVar "decStr") (ELit (LString "rule"))) (EVar "j"))) (EApp (EApp (EVar "decStr") (ELit (LString "message"))) (EVar "j"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "decStr") (ELit (LString "severity"))) (EVar "j"))) (EVar "decSeverity"))) (EApp (EVar "decLoc") (EApp (EApp (EVar "get") (ELit (LString "loc"))) (EVar "j")))))
+(DFunDef false "decFinding" ((PVar "j")) (EApp (EApp (EApp (EApp (EApp (EVar "map4") (ELam ((PVar "r") (PVar "m") (PVar "s") (PVar "l")) (ERecordCreate "Finding" ((fa "rule" (EVar "r")) (fa "message" (EVar "m")) (fa "severity" (EVar "s")) (fa "loc" (EVar "l")) (fa "fix" (EVar "None")))))) (EApp (EApp (EVar "decStr") (ELit (LString "rule"))) (EVar "j"))) (EApp (EApp (EVar "decStr") (ELit (LString "message"))) (EVar "j"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "decStr") (ELit (LString "severity"))) (EVar "j"))) (EVar "decSeverity"))) (EApp (EVar "decLoc") (EApp (EApp (EVar "get") (ELit (LString "loc"))) (EVar "j")))))
 (DTypeSig false "decSeverity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Severity"))))
 (DFunDef false "decSeverity" ((PLit (LString "error"))) (EApp (EVar "Some") (EVar "SevError")))
 (DFunDef false "decSeverity" ((PLit (LString "warning"))) (EApp (EVar "Some") (EVar "SevWarning")))
@@ -603,7 +604,7 @@ makeStagingDir cacheDir =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseAlias ("u64") "U64"))
-(DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false) (mem "at" false))))
@@ -661,7 +662,7 @@ makeStagingDir cacheDir =
 (DTypeSig false "decListGo" (TyFun (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyVar "a"))))))))
 (DFunDef false "decListGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Some") (EListLit)) (EIf (EVar "otherwise") (EApp (EApp (EApp (EDictApp "map2") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "::" (EVar "_a") (EVar "_b")))) (EApp (EVar "f") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EApp (EApp (EApp (EApp (EVar "decListGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "decFinding" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Finding"))))
-(DFunDef false "decFinding" ((PVar "j")) (EApp (EApp (EApp (EApp (EApp (EVar "map4") (ELam ((PVar "r") (PVar "m") (PVar "s") (PVar "l")) (ERecordCreate "Finding" ((fa "rule" (EVar "r")) (fa "message" (EVar "m")) (fa "severity" (EVar "s")) (fa "loc" (EVar "l")))))) (EApp (EApp (EVar "decStr") (ELit (LString "rule"))) (EVar "j"))) (EApp (EApp (EVar "decStr") (ELit (LString "message"))) (EVar "j"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "decStr") (ELit (LString "severity"))) (EVar "j"))) (EVar "decSeverity"))) (EApp (EVar "decLoc") (EApp (EApp (EVar "get") (ELit (LString "loc"))) (EVar "j")))))
+(DFunDef false "decFinding" ((PVar "j")) (EApp (EApp (EApp (EApp (EApp (EVar "map4") (ELam ((PVar "r") (PVar "m") (PVar "s") (PVar "l")) (ERecordCreate "Finding" ((fa "rule" (EVar "r")) (fa "message" (EVar "m")) (fa "severity" (EVar "s")) (fa "loc" (EVar "l")) (fa "fix" (EVar "None")))))) (EApp (EApp (EVar "decStr") (ELit (LString "rule"))) (EVar "j"))) (EApp (EApp (EVar "decStr") (ELit (LString "message"))) (EVar "j"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "decStr") (ELit (LString "severity"))) (EVar "j"))) (EVar "decSeverity"))) (EApp (EVar "decLoc") (EApp (EApp (EVar "get") (ELit (LString "loc"))) (EVar "j")))))
 (DTypeSig false "decSeverity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Severity"))))
 (DFunDef false "decSeverity" ((PLit (LString "error"))) (EApp (EVar "Some") (EVar "SevError")))
 (DFunDef false "decSeverity" ((PLit (LString "warning"))) (EApp (EVar "Some") (EVar "SevWarning")))

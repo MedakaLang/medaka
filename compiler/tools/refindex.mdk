@@ -1558,8 +1558,6 @@ buildRefIndex : (String -> Option String) ->
   <IO> RefIndex
 buildRefIndex read entry roots runtimeSrc coreSrc =
   let parseCache = Ref omEmpty
-  -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
-  -- lint-disable-next-line rule-prefer-assign-op
   match loadProgramFilesLocatedCached parseCache read entry roots
     Err _ => emptyIndex ()
     Ok mods =>
@@ -1570,7 +1568,7 @@ buildRefIndex read entry roots runtimeSrc coreSrc =
       -- measures ONLY the project-indexing work — the quantity the scaling gate
       -- grades N-vs-2N.  A large constant prelude term would otherwise drag the
       -- linear ratio below 2.0 and mask the signal.
-      let _ = ctx.opCnt := 0
+      ctx.opCnt := 0
       let _ = processModules ctx read mods
       RefIndex {
         defs = ctx.defs,
@@ -1810,15 +1808,13 @@ buildRefIndexProjectWithParsed : (String -> Option String) ->
   String ->
   String ->
   <IO> RefIndex
--- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
--- lint-disable-next-line rule-prefer-assign-op
 buildRefIndexProjectWithParsed read parse projectRoot runtimeSrc coreSrc =
   let ctx = newCtx ()
   let _ = seedPrelude ctx "runtime" runtimeSrc
   let _ = seedPrelude ctx "core" coreSrc
   -- Reset AFTER prelude seeding, same rationale as `buildRefIndex`: `riOps`
   -- must measure only the project-indexing work the scaling gate grades.
-  let _ = ctx.opCnt := 0
+  ctx.opCnt := 0
   let midPaths = midPathsOf projectRoot
   let mods = topoOrderModules ctx read parse midPaths
   let _ = processParsed ctx mods

@@ -31,12 +31,12 @@ test "all six source and lexical constant shadows remain ordinary globals and lo
       (name => (
         name,
         expectAll [
-          expectEqual [] (symbols (lowered (name ++ " = 42\nmain = " ++ name))),
+          expectEqual [] (symbols (lowered "\{name} = 42\nmain = \{name}")),
           expectEqual
             []
-            (symbols (lowered ("main = let " ++ name ++ " = 42 in " ++ name))),
+            (symbols (lowered "main = let \{name} = 42 in \{name}")),
           expectEqual
-            ["$extern$r" ++ intToString (stringLength name) ++ ":" ++ name]
+            ["$extern$r\{intToString (stringLength name)}:\{name}"]
             (symbols (lowered ("main = " ++ name))),
         ],
       ))

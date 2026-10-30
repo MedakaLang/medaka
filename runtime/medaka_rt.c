@@ -981,8 +981,8 @@ void mdk_print_unit(void)       { printf("()\n"); }
 
 /* ---------------------------------------------------------------------------
  * "run drops stdout on panic" fix.  `medaka run`'s tree-walking interpreter
- * buffers a program's stdout in an in-language Ref<String> (eval.mdk's
- * outputRef) and only writes it to real stdout via ONE final `putStr` call
+ * buffers a program's stdout in an in-language list of chunks (eval.mdk's
+ * outputChunks) and only writes it to real stdout via ONE final `putStr` call
  * after `main` returns NORMALLY (medaka_cli.mdk's `runProgramOutput`).
  * Medaka panics are NOT catchable (no exception handling, no unwind), so a
  * panicking program's buffered stdout used to be silently discarded — the
@@ -991,10 +991,9 @@ void mdk_print_unit(void)       { printf("()\n"); }
  * a sentinel, then check whether it appears) blind: both `run`'s stdout AND
  * its exit code look identical whether the program ran or not.
  *
- * mdk_stash_run_stdout lets eval.mdk register the buffer's raw bytes (a
+ * mdk_stash_run_stdout lets eval.mdk register each printed chunk's raw bytes (a
  * pointer + length into an already-allocated, GC-owned, IMMUTABLE string
- * cell -- storing the pointer performs no allocation and no observable
- * effect) after every print.  mdk_enable_run_stdout_flush is called exactly
+ * cell; see the chunk list below) after every print.  mdk_enable_run_stdout_flush is called exactly
  * once, only by the real `medaka run` CLI driver (evalModulesOutputRunFacts /
  * evalModulesOutputAsync) -- never by the pure differential-oracle eval
  * probes, which share this exact source but never call it, so their
@@ -1014,8 +1013,19 @@ void mdk_print_unit(void)       { printf("()\n"); }
  * already flushes automatically), so the flag stays 0 and every check below
  * is a no-op for it.
  */
-static const char *volatile mdk_run_stdout_bytes = NULL;
-static volatile long long mdk_run_stdout_len = 0;
+/* The stash is a chunk list, oldest first: each non-empty call appends the
+   string's bytes (pointer+length into a GC-owned, immutable cell kept alive by
+   eval.mdk's outputChunks).  The empty string clears the list, so the caller
+   never stashes an empty chunk; only resetOutput clears.  Appending is
+   amortized O(1), so printing stays linear in total output.  The array lives
+   in plain malloc memory, which the abort path may read without allocating. */
+typedef struct { const char *bytes; long long len; } mdk_run_chunk;
+static mdk_run_chunk *volatile mdk_run_chunks = NULL;
+static volatile long long mdk_run_chunk_count = 0;
+static long long mdk_run_chunk_cap = 0;
+/* Set when the array cannot grow: later chunks are then not stashed, so an
+   abort flushes a prefix of the output and never skips a chunk in the middle. */
+static int mdk_run_chunks_full = 0;
 
 void mdk_enable_run_stdout_flush(long long w) {
   (void)w;
@@ -1025,8 +1035,22 @@ void mdk_enable_run_stdout_flush(long long w) {
 void mdk_stash_run_stdout(long long w) {
   const char *cell = (const char *)w;
   long long byte_len = ((const long long *)cell)[1];
-  mdk_run_stdout_bytes = cell + 24;
-  mdk_run_stdout_len = byte_len;
+  if (byte_len == 0) {
+    mdk_run_chunk_count = 0;
+    mdk_run_chunks_full = 0;
+    return;
+  }
+  if (mdk_run_chunks_full) return;
+  if (mdk_run_chunk_count == mdk_run_chunk_cap) {
+    long long cap = mdk_run_chunk_cap ? mdk_run_chunk_cap * 2 : 256;
+    mdk_run_chunk *grown = realloc(mdk_run_chunks, (size_t)cap * sizeof *grown);
+    if (!grown) { mdk_run_chunks_full = 1; return; }
+    mdk_run_chunks = grown;
+    mdk_run_chunk_cap = cap;
+  }
+  mdk_run_chunks[mdk_run_chunk_count].bytes = cell + 24;
+  mdk_run_chunks[mdk_run_chunk_count].len = byte_len;
+  mdk_run_chunk_count++;
 }
 
 /* Async-signal-safe: only word-sized reads and write(2), no allocation, no
@@ -1035,15 +1059,18 @@ void mdk_stash_run_stdout(long long w) {
    can't double-print. */
 static void mdk_flush_run_stdout_on_abort(void) {
   if (!mdk_run_stdout_flush_enabled) return;
-  const char *bytes = mdk_run_stdout_bytes;
-  long long len = mdk_run_stdout_len;
-  mdk_run_stdout_bytes = NULL;
-  mdk_run_stdout_len = 0;
-  while (len > 0) {
-    ssize_t n = write(1, bytes, (size_t)len);
-    if (n <= 0) break;
-    bytes += n;
-    len -= n;
+  mdk_run_chunk *chunks = mdk_run_chunks;
+  long long count = mdk_run_chunk_count;
+  mdk_run_chunk_count = 0;
+  for (long long i = 0; i < count; i++) {
+    const char *bytes = chunks[i].bytes;
+    long long len = chunks[i].len;
+    while (len > 0) {
+      ssize_t n = write(1, bytes, (size_t)len);
+      if (n <= 0) return;
+      bytes += n;
+      len -= n;
+    }
   }
 }
 
@@ -1268,7 +1295,7 @@ noreturn void mdk_panic_at(long long w, unsigned long long site) {
 /* User `exit n`. Unlike the other abort paths above this carries no diagnostic
    -- it is a silent, coded-free process termination -- but it still needs the
    SAME mdk_flush_run_stdout_on_abort() call they all make: under `medaka run`
-   stdout is buffered in the interpreter's outputRef and normally only printed
+   stdout is buffered in the interpreter's outputChunks and normally only printed
    by the CLI driver AFTER `main` returns, so a mid-`main` `exit` call would
    otherwise silently drop everything printed before it (the same class of bug
    as "run drops stdout on panic", just for a clean exit instead of a crash).
@@ -3491,15 +3518,46 @@ long long mdk_read_all(long long u) {
   long long r = mdk_str_lossy(buf, (long long)len); free(buf); return r;
 }
 
-/* ── RNG — deterministic SplitMix64 (native extern catalog, Tier D) ───────────
- * The SAME algorithm runs in the tree-walker oracle (lib/eval.ml splitmix64_next),
- * seeded identically, so random* output is byte-identical per seed and stable
- * across backends (project decision 2026-06-07). State is a uint64; default 0;
- * mdk_set_seed sets it. Range semantics preserved from the old oracle: randomInt
- * INCLUSIVE [lo,hi]; randomFloat in [-1,1); randomChar ASCII [32,126]. */
+/* ── RNG — SplitMix64 (native extern catalog, Tier D) ─────────────────────────
+ * The SAME algorithm runs in the evaluator and the wasm preamble, so for a given
+ * seed random* output is byte-identical across engines (setSeed n, or
+ * MEDAKA_SEED=n, reproduces a stream anywhere).  The state is a uint64.  Until
+ * the program seeds it (setSeed / restoreRandomState), the first draw seeds it
+ * from the OS entropy source, or from MEDAKA_SEED when that is set; a malformed
+ * MEDAKA_SEED or an unavailable entropy source is a loud failure, never a
+ * predictable default.  Range semantics: randomInt INCLUSIVE [lo,hi]; randomFloat
+ * in [-1,1); randomChar ASCII [32,126]. */
 static unsigned long long mdk_rng_state = 0;
+static int mdk_rng_seeded = 0;
+
+static void mdk_rng_ensure(void) {
+  if (mdk_rng_seeded) return;
+  const char *env = getenv("MEDAKA_SEED");
+  if (env != NULL) {
+    char *end = NULL;
+    errno = 0;
+    long long v = strtoll(env, &end, 10);
+    /* 63-bit Int range, so the seed equals the `setSeed n` it stands for. */
+    /* Decimal digits with an optional sign, as run and wasm read it: strtoll
+     * alone would skip leading whitespace. */
+    int lead = env[0] == '+' || env[0] == '-' || (env[0] >= '0' && env[0] <= '9');
+    if (!lead || *end != '\0' || errno != 0 ||
+        v < -(1LL << 62) || v > (1LL << 62) - 1)
+      mdk_panic(mdk_str_cstr("MEDAKA_SEED must be a decimal integer"));
+    mdk_rng_state = (unsigned long long)v;
+  } else {
+    unsigned char b[8];
+    if (getentropy(b, sizeof b) != 0)
+      mdk_panic(mdk_str_cstr("random: operating system entropy source failed"));
+    unsigned long long v = 0;
+    for (int i = 0; i < 8; i++) v = (v << 8) | b[i];
+    mdk_rng_state = v;
+  }
+  mdk_rng_seeded = 1;
+}
 
 static unsigned long long mdk_next_u64(void) {
+  mdk_rng_ensure();
   mdk_rng_state += 0x9E3779B97F4A7C15ULL;
   unsigned long long z = mdk_rng_state;
   z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
@@ -3509,13 +3567,16 @@ static unsigned long long mdk_next_u64(void) {
 
 void mdk_set_seed(long long tagged) {        /* setSeed : Int -> Unit */
   mdk_rng_state = (unsigned long long)(tagged >> 1);
+  mdk_rng_seeded = 1;
 }
 long long mdk_random_state(long long unit) {
   (void)unit;
+  mdk_rng_ensure();
   return mdk_box_u64(mdk_rng_state);
 }
 void mdk_restore_random_state(long long state) {
   mdk_rng_state = mdk_u64_payload(state);
+  mdk_rng_seeded = 1;
 }
 /* randomInt : Int -> Int -> Int (INCLUSIVE).  Returns a RAW int — the emitter tags it. */
 /* The span hi - lo + 1 is computed unsigned: for the full Int range it is

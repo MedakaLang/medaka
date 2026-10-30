@@ -1,0 +1,159 @@
+-- Fixture for rule-not-eq.  The line below each `expect-next-line` marker is
+-- the line the rule reports.  The rule reports the line of the declaration
+-- that holds the expression, so each positive is a one-line declaration; a
+-- finding inside an interface default is reported at the interface header.
+
+-- expect-next-line rule-not-eq
+topLevel a b = not (a == b)
+
+-- expect-next-line rule-not-eq
+notNotEq a b = not (a /= b)
+
+-- expect-next-line rule-not-eq
+test "negation in a test body" = expectTrue (not (1 == 2))
+
+-- expect-next-line rule-not-eq
+prop "negation in a prop body" (n : Int) = not (n == n + 1)
+
+-- expect-next-line rule-not-eq
+let rec loop n = not (n == 0)
+
+-- expect-next-line rule-not-eq
+interface Same a where
+  same : a -> a -> Bool
+  same x y = not (x == y)
+
+nearMisses a b = [a /= b, a == b, not (a < b), not (g a), not (a == b || b)]
+
+g n = n > 0
+
+test "plain comparisons in a test body" = expectTrue (1 /= 2)
+
+prop "plain comparison in a prop body" (n : Int) = n == n
+
+interface Plain a where
+  plain : a -> a -> Bool
+  plain x y = x == y
+
+-- Fixture for rule-not-eq: negated equality `not (a == b)` / `not (a /= b)`
+-- → `a /= b` / `a == b`.  The unary-`!` forms are NEGATIVE cases (see below).
+
+-- POSITIVE: `not` applied to `==` / `/=`.
+-- expect-next-line rule-not-eq
+notEq a b = not (a == b)
+-- expect-next-line rule-not-eq
+notNe a b = not (a /= b)
+
+-- NEGATIVE (#1739 half A): `!` is Ref-DEREFERENCE now, not boolean negation, so
+-- these must NOT fire. A rule that still read `!` as `not` would rewrite a cell
+-- read into boolean logic, and `--fix` would apply it unprompted.
+bangEq a b = !(a == b)
+bangNe a b = !(a /= b)
+
+-- POSITIVE: nested anywhere in a body.
+-- expect-next-line rule-not-eq
+nested a b c = if not (a == b) then c else a
+
+-- NEGATIVE: ordering complements are unsound for Float (NaN) — `<`/`>` excluded.
+negLt a b = not (a < b)
+negGt a b = not (a > b)
+negLe a b = not (a <= b)
+
+-- NEGATIVE: `not` of a non-comparison is a real negation, not this idiom.
+negFlag flag = not flag
+
+-- NEGATIVE: a bare equality is already canonical.
+negPlain a b = a == b
+
+-- Fixture for rule-test-equal-in-true (#3235): an `==`/`/=` comparison wrapped in
+-- `expectTrue`/`expectFalse` reports neither operand on failure; the equality
+-- verbs render both.  The `expectFalse` forms carry the polarity flip.
+
+-- POSITIVE: expectTrue.
+trueEq a = expectTrue (a == 1)
+trueNe a = expectTrue (a /= 1)
+
+-- POSITIVE: expectFalse — the verb the operator names is replaced by its
+-- complement.
+falseEq a = expectFalse (a == 1)
+falseNe a = expectFalse (a /= 1)
+
+-- POSITIVE: nested anywhere in a body.
+nestedTrue a b = if a then expectTrue (b == 2) else expectFalse (b == 3)
+
+-- NEGATIVE: orderings are excluded, for `rule-not-eq`'s reason — an ordering
+-- needs a different verb per operator, and the `expectFalse` complement of an
+-- ordering is unsound for Float (NaN).
+trueLt a = expectTrue (a < 1)
+falseGe a = expectFalse (a >= 1)
+
+-- NEGATIVE: a CONJUNCTION is not one comparison. `expectEqual` renders one pair
+-- of operands, so a rewrite would drop a fact.
+trueConj a b = expectTrue (a == 1 && b == 2)
+
+-- NEGATIVE: the argument is not a comparison at all.
+truePlain flag = expectTrue flag
+
+-- NEGATIVE: already the named verb.
+alreadyEqual a = expectEqual a 1
+
+-- Neither of the next two bodies holds a `not (a == b)`, so `rule-not-eq` is
+-- silent on them; they are the positives of the test-verb rules, whose rows
+-- sit in the same shared text.
+test "an equality inside a test body" = expectTrue (1 == 1)
+
+-- POSITIVE, inside a `prop` decl body.
+prop "an equality inside a prop body" (n : Int) = expectFalse (n == 0)
+
+-- POSITIVE, inside a `test` decl body: the walk descends into `test` and `prop`
+-- bodies, so `rule-not-eq` reaches `not (1 == 2)` and the fix rewrites it.
+-- expect-next-line rule-not-eq
+test "a non-test rule does not reach a test body" = not (1 == 2)
+
+-- POSITIVE, in a `def` body: flagged and rewritten, the `.fixed` file shows
+-- `a /= 1`.
+-- expect-next-line rule-not-eq
+notEqDef a = not (a == 1)
+
+-- A `not` the file rebinds is not the prelude's, so the call is reported and
+-- the source left alone (#4662): the fix would otherwise change what a local
+-- `not` computes.  The binding may be a `where` function or a parameter.
+-- expect-next-line rule-not-eq unfixed
+reboundWhere n = not (n == 3)
+  where
+    not b = b
+
+-- expect-next-line rule-not-eq unfixed
+reboundParam not n = not (n == 3)
+
+-- The prelude's `not` in the same file is still rewritten.
+-- expect-next-line rule-not-eq
+plainAfterRebound n = not (n == 3)
+
+-- The replacement is bracketed where its parent would regroup it.
+-- expect-next-line rule-not-eq
+inArgument a b = pick (not (a == b)) a
+
+-- expect-next-line rule-not-eq
+inSection a b = map (&& not (a == b)) [a]
+
+-- expect-next-line rule-not-eq
+inChain a b c = c && not (a /= b) && c
+
+-- expect-next-line rule-not-eq
+inList a b = [not (a == b), a]
+
+-- A comment inside the span being replaced would be lost, so the fix is only
+-- suggested; a comment elsewhere in the declaration does not stand in its way.
+-- expect-next-line rule-not-eq unfixed
+commentInside a b = not (a == {- kept -} b)
+
+-- expect-next-line rule-not-eq
+commentOutside a b =
+  -- explains the choice
+  not (a == b)
+
+-- A directive that silences a finding silences its fix too: the spelling is
+-- deliberate here, so `--fix` leaves it.
+-- lint-disable-next-line rule-not-eq
+suppressed a b = not (a == b)

@@ -1,0 +1,9 @@
+-- Fixture for rule-concat-to-interp: a file that binds `display` anywhere withholds
+-- the fix, since an interpolation hole desugars to a call of `display`.
+-- The chain is still reported; `.fixed` is the source unchanged.
+
+greet x y = "hi " ++ x ++ " and " ++ y
+
+shadowDisplay xs = xs
+  where
+    display v = v

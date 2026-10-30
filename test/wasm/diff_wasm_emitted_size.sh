@@ -145,7 +145,7 @@ MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/aw
 
 # Plain bytes grew from 494342 to 508888 with 3685 functions unchanged.
 PLAIN_BYTES_CEIL=510000
-PLAIN_FUNCS_CEIL=3685   # measured, exact (sprint lint-lang-2-stdlib-surface; 3610 before it): the untyped wasm entry takes the generic path for binders no declared signature reaches, which pulls the poly-dispatch helpers
+PLAIN_FUNCS_CEIL=3689   # four RNG fixtures each add mdk_rng_ensure
 
 TYPED_BYTES_CEIL=23500
 TYPED_FUNCS_CEIL=145

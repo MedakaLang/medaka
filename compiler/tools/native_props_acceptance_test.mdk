@@ -739,7 +739,7 @@ test "custom Arbitrary draws leave the program random stream intact" =
       (
         "main.mdk",
         randomArbitrarySource
-          ++ "prop \"isolated custom stream\" (x : Draw) = randomState () == (0 : U64)\n",
+          ++ "firstState : Ref (Option U64)\nfirstState = Ref None\nsameState s = match !firstState\n  None =>\n    let _ = firstState := Some s\n    True\n  Some t => t == s\nprop \"isolated custom stream\" (x : Draw) = sameState (randomState ())\n",
       ),
     ]
     (target =>

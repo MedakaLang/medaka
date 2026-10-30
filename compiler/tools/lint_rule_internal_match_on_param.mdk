@@ -1,0 +1,166 @@
+-- lint rule rule-match-on-param: a function whose whole body is a `match` on one of its own bare parameters (STYLE §8).
+
+import frontend.ast.{
+  Loc(..), Pat(..), Arm(..), ImplMethod(..), Expr(..), Decl(..)
+}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import support.util.{listLen, anyList, isNonEmptyL}
+import tools.printer.{exprToString}
+import frontend.exhaust.{Oracle}
+import tools.lint_core.{
+  Category(..),
+  FileFacts(..),
+  Finding(..),
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  mkRule,
+}
+import tools.lint_shared.{
+  armToClause,
+  declLocList,
+  isBareParam,
+  matchBodyOnBareParam,
+  patIsWild,
+  ruleNameMatchParam,
+  unwrapLoc,
+  wholeWordIn,
+}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameMatchParam,
+      summary =
+        "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)",
+      doc =
+        "A function whose whole body is a `match` on one of its own parameters is clearer as several clauses: the patterns move into the parameter position and the extra indentation level goes away. This enforces STYLE section 8, a repository taste ruling.\n\nBefore:\n  len xs = match xs\n    [] => 0\n    _ :: t => 1 + len t\nAfter:\n  len [] = 0\n  len (_ :: t) = 1 + len t",
+      category = Style,
+      scope = Internal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleMatchOnParam
+    (Some matchParamFix)
+
+-- ── rule: match-on-param (STYLE §8) ───────────────────────────────────────────
+-- A `DFunDef _ name pats body` (or an impl method) whose body is a `match` with
+-- ≥2 arms over an `EVar p` where `p` is a bare `PVar p` parameter.  Single-arm
+-- matches are skipped (STYLE's "when not to convert").
+ruleMatchOnParam : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleMatchOnParam _ _ _ pos prog = flatMap matchParamDeclL (declLocList pos prog)
+
+matchParamDeclL : (Decl, Option Loc) -> List Finding
+matchParamDeclL (d, loc) = matchParamDecl loc d
+
+matchParamDecl : Option Loc -> Decl -> List Finding
+matchParamDecl loc (DFunDef _ name pats body _ _) =
+  matchParamFinding loc name pats body
+matchParamDecl loc (DImpl { methods, ... }) =
+  flatMap (matchParamMethod loc) methods
+matchParamDecl loc (DAttrib _ d) = matchParamDecl loc d
+matchParamDecl _ _ = []
+
+matchParamMethod : Option Loc -> ImplMethod -> List Finding
+matchParamMethod loc (ImplMethod name pats body) =
+  matchParamFinding loc name pats body
+
+matchParamFinding : Option Loc -> String -> List Pat -> Expr -> List Finding
+matchParamFinding loc name pats body = match unwrapLoc body
+  EMatch scrut arms => matchParamArms loc name pats scrut arms
+  _ => []
+
+matchParamArms : Option Loc ->
+  String ->
+  List Pat ->
+  Expr ->
+  List Arm ->
+  List Finding
+matchParamArms loc name pats scrut arms
+  | listLen arms < 2 = []
+  | otherwise = match unwrapLoc scrut
+    EVar p => matchParamHit loc name pats p
+    _ => []
+
+matchParamHit : Option Loc -> String -> List Pat -> String -> List Finding
+matchParamHit loc name pats p
+  | anyList (isBareParam p) pats = [
+    Finding {
+      rule = ruleNameMatchParam,
+      message =
+        "function '\{name}' matches on parameter '\{p}' — use a multi-clause function definition",
+      severity = SevWarning,
+      loc = loc,
+      fix = None,
+    },
+  ]
+  | otherwise = []
+
+-- ── §8 autofixer (Task A) ──────────────────────────────────────────────────────
+-- Rewrites `f x = match x { p1 => e1; p2 => e2 }` → `f p1 = e1` / `f p2 = e2`.
+-- Safe subset only — returns `None` (rule still warns) unless ALL hold:
+--   * the decl is a bare `DFunDef` (not attributed: splitting an attributed fn
+--     into clauses would duplicate/move the attribute),
+--   * its body (under `ELoc`) is an `EMatch` on a bare param `p` with ≥2 arms,
+--   * NO arm has a guard — function-clause guards don't round-trip through
+--     `DFunDef` (no guard slot),
+--   * NO arm with a NON-wildcard pattern references the scrutinee param `p` —
+--     after the rewrite `p` is replaced by the arm pattern, so a non-wildcard arm
+--     body still mentioning `p` would be left unbound (e.g.
+--     `f x = match x { Some v => g x }`).  A `PWild` arm referencing `p` is the
+--     EXCEPTION: it is rewritten with `PVar p` (not `_`), which re-binds the
+--     scrutinee, so it converts safely.  We test the reference by a conservative
+--     whole-word scan of the PRINTED arm body: the printer renders every `EVar p`
+--     as the token `p`, so a real reference is never missed (the scan can only
+--     over-bail, which is safe).
+matchParamFix : Oracle -> Decl -> Option (List Decl)
+matchParamFix _ (DFunDef vis name pats body _ _) =
+  match matchBodyOnBareParam pats body
+    Some (p, k, arms) => matchParamFixArms vis name pats p k arms
+    None => None
+matchParamFix _ _ = None
+
+matchParamFixArms : Bool ->
+  String ->
+  List Pat ->
+  String ->
+  Int ->
+  List Arm ->
+  Option (List Decl)
+matchParamFixArms vis name pats p k arms
+  | listLen arms < 2 = None
+  | anyList armHasGuard arms = None
+  | anyList (armUnsafeMention p) arms = None
+  | otherwise = Some (map (armToClause vis name p pats k) arms)
+
+-- an arm with any guard qualifier (refutable bind or boolean) can't be a clause
+armHasGuard : Arm -> Bool
+armHasGuard (Arm _ guards _) = isNonEmptyL guards
+
+-- does the arm body still reference the scrutinee param (conservative, printed)
+armMentionsParam : String -> Arm -> Bool
+armMentionsParam p (Arm _ _ body) = wholeWordIn p (exprToString body)
+
+-- an arm that mentions the scrutinee but CAN'T be safely re-bound.  A `PWild`
+-- arm can: we re-emit the clause pattern as `PVar p`, re-binding the scrutinee
+-- so the body's reference stays valid.  Any non-wildcard pattern (`c::rest`, or
+-- a bare `PVar y` that renames) can't re-bind `p`, so we keep the conservative
+-- bail there.
+armUnsafeMention : String -> Arm -> Bool
+armUnsafeMention p arm = armMentionsParam p arm && not (armPatIsWild arm)
+
+armPatIsWild : Arm -> Bool
+armPatIsWild (Arm pat _ _) = patIsWild pat

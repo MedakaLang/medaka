@@ -1,0 +1,106 @@
+-- lint rule rule-missing-signature: a top-level value or function binding with no sibling type signature. Add one.
+
+import frontend.ast.{
+  Loc(..),
+  Decl(..),
+}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import hash_map.{HashMap, has, new, setInPlace}
+import tools.lint_core.{
+  Category(..),
+  Ctx(..),
+  FileFacts(..),
+  Finding(..),
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  Visitor(..),
+  mkVisitorRule,
+}
+import tools.lint_shared.{nameSetOf, ruleNameMissingSignature, topDefNameL}
+
+export
+rule : Rule
+rule =
+  mkVisitorRule
+    RuleMeta {
+      name = ruleNameMissingSignature,
+      summary =
+        "top-level value/function binding has no sibling type signature (name : Type). Add one (Haskell -Wmissing-signatures)",
+      doc =
+        "A top-level binding without a sibling type signature has an inferred type that changes silently when its body does. Write the signature (Haskell -Wmissing-signatures).\n\nBefore:\n  double x = x * 2\nAfter:\n  double : Int -> Int\n  double x = x * 2",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    missingSigVisitors
+    None
+
+-- Flag a top-level value/function binding (`DFunDef`, incl. through `DAttrib`)
+-- whose name has NO sibling top-level `name : Type` signature (`DTypeSig`) in the
+-- same file — Haskell's -Wmissing-signatures.  Purely syntactic: the signed
+-- names are collected once per file, then each declaration is judged as the walk
+-- reaches it.  `impl`/`interface` method bodies are nested inside their own decl
+-- (not top-level `Decl`s), so a declaration visitor never sees them;
+-- `prop`/`test`/`extern` are their own decl kinds, not `DFunDef`, so they are
+-- excluded automatically.  `main` is exempt by name (entry-point boilerplate).
+-- Only the first clause of a name is judged, so a multi-clause def yields one
+-- finding; `seen` is that per-file record, fresh for every file.
+missingSigVisitors : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Visitor
+missingSigVisitors _ _ _ _ prog =
+  -- HashMap-as-set: `contains n sigNames` over the signed-name LIST was O(signs)
+  -- per def, i.e. O(defs x signs) across the file — and in the common case
+  -- where most defs ARE signed, signs grows with defs, so this was quadratic. It
+  -- is a PURE SCAN (no extra allocation), so the alloc signal is blind to it and
+  -- only the `manydefs` shape's lint-stage TIME catches it (the issue-#110 class).
+  let signed = nameSetOf (flatMap topSigNameL prog)
+  let seen = new ()
+  [OnDecl (missingSigAt signed seen)]
+
+missingSigAt : HashMap String Unit ->
+  HashMap String Unit ->
+  Ctx ->
+  Decl ->
+  List Finding
+missingSigAt signed seen ctx d =
+  flatMap (firstUnsigned signed seen) (topDefNameL (d, ctx.ctxSpan))
+
+firstUnsigned : HashMap String Unit ->
+  HashMap String Unit ->
+  (String, Option Loc) ->
+  List Finding
+firstUnsigned signed seen (n, loc)
+  | has n seen = []
+  | otherwise =
+    setInPlace n () seen
+    if missingSigPair signed (n, loc) then [missingSigFinding (n, loc)] else []
+
+topSigNameL : Decl -> List String
+topSigNameL (DTypeSig _ name _ _) = [name]
+topSigNameL (DAttrib _ d) = topSigNameL d
+topSigNameL _ = []
+
+missingSigPair : HashMap String Unit -> (String, Option Loc) -> Bool
+missingSigPair sigNames (n, _) = not (n == "main" || has n sigNames)
+
+missingSigFinding : (String, Option Loc) -> Finding
+missingSigFinding (name, loc) = Finding {
+  rule = ruleNameMissingSignature,
+  message =
+    "top-level '\{name}' has no type signature. Add a `\{name} : …` declaration",
+  severity = SevWarning,
+  loc = loc,
+  fix = None,
+}

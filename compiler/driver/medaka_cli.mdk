@@ -133,6 +133,9 @@ import frontend.desugar.{desugarIn}
 import tools.target_parse.{targetDesugared}
 import driver.loader.{
   loadProgramFilesLocatedE,
+  stdinEntry,
+  readStdinProgram,
+  stdinReadOverride,
   readSource,
   readSourceE,
   sourceNotUtf8Message,
@@ -279,7 +282,7 @@ import tools.lint.{
   buildStdlibIndexResult,
   StdlibIndexError(..),
   emptyStdlibIndex,
-  stdlibIndexNeeded,
+  stdlibIndexNeededFor,
   applySuppressions,
   applySuppressionsMulti,
   applySuppressionsDirs,
@@ -331,7 +334,14 @@ import tools.codemod.{
   CodeMode(..),
 }
 import tools.lint_cmd.{
+  explainRule,
   lintCacheCtx,
+  lintHelpText,
+  renderRuleRowsJson,
+  renderRuleRowsNames,
+  renderRuleRowsText,
+  rulesPageMarkdown,
+  selectRuleRows,
   runLintJsonCmd,
   lintFilesToDiagTriples,
   baselineFileCodes,
@@ -339,6 +349,8 @@ import tools.lint_cmd.{
   runCrossFileReportCached,
   resolveLintTargets,
   lintFilesGo,
+  LintRun(..),
+  inactiveInternalRuleUse,
 }
 import support.cli_targets.{lintTargetExists, expandLintTarget}
 import tools.check_policy.{
@@ -704,7 +716,7 @@ usage _ =
     (stringConcat [
       "medaka. A functional language compiler\n", "\n", "Usage:\n",
       "  medaka                    Show this message\n",
-      "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]   Type-check and run a program\n",
+      "  medaka run [--json] [--allow-internal] [--release] <file.mdk | -> [args...]   Type-check and run a program\n",
       "  medaka build <file.mdk> [-o <out>] [--keep-ir]  Compile to a native binary (LLVM + clang)\n",
       "  medaka check [--json] [--types] [--allow-internal] <file.mdk>    Type-check without running\n",
       "  medaka test [--native | --engines eval,native] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk]    Run doctests + prop tests (--native runs doctests through a compiled native binary INSTEAD of the interpreter; --engines runs the listed set, exit is the AND)\n",
@@ -1282,6 +1294,7 @@ checkTargetInputs rsrc csrc drive =
     tiModules = drive.cdMods,
     tiRuntime = desugaredPrelude rsrc,
     tiOutputs = drive.cdOutputs,
+    tiStdlibOwned = [],
   }
 
 -- `check --json`'s copy of the same refusal, folded into the entry's file.  A
@@ -2784,7 +2797,7 @@ flushPendingRunDiags True = flushRunEnvelope !pendingRunDiags
 runHelpText : String
 runHelpText = stringConcat [
   "medaka run — Type-check and run a program (interpreter)\n", "\n", "Usage:\n",
-  "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]\n",
+  "  medaka run [--json] [--allow-internal] [--release] <file.mdk | -> [args...]\n",
   "\n",
   "  --json            emit the Diag JSON envelope on stderr instead of human\n",
   "                    text, for a runtime panic, a static (resolve/type) error\n",
@@ -2807,7 +2820,10 @@ runHelpText = stringConcat [
   "`run` is the interpreter: it starts at once but runs slowly. For speed, use\n",
   "`medaka build`, the fast native path.\n", "\n",
   "Args after <file.mdk> are passed through to the program's own `args`.\n",
-  "Inline-eval (`-e <expr>`) is NOT supported — pass a file.\n"
+  "`medaka run -` reads the program from standard input (a heredoc), so the\n",
+  "program's own `readAll`/`readLine` see end-of-file; a script that is also a\n",
+  "filter must be run from a file. Imports resolve against the current directory.\n",
+  "Inline-eval (`-e <expr>`) is NOT supported; use `medaka run -` and a heredoc.\n"
 ]
 
 -- `run`'s flag vocabulary, as `runHelpText` documents it.  `--types` is also
@@ -2849,7 +2865,7 @@ runRunCmd argv =
   match runArgvFilter argv
     [] =>
       runAbort
-        "usage: medaka run [--json] [--allow-internal] [--release] [--target <profile>] <file.mdk> [args...]"
+        "usage: medaka run [--json] [--allow-internal] [--release] [--target <profile>] <file.mdk | -> [args...]"
     -- #219: a leading-`-` token `dropFlags` didn't recognize (e.g. `-e`) used
     -- to fall through as the entry `target`, so the loader rejected it as
     -- "unknown module: -e" — a message that sends the reader debugging a
@@ -2859,7 +2875,9 @@ runRunCmd argv =
     -- positional is checked — anything after it is the program's own
     -- passthrough args (ARGS NOTE above), which may legitimately start with
     -- `-`.
-    target :: _ if stringLength target > 0 && stringSlice 0 1 target == "-" =>
+    target :: _ if target /= "-"
+      && stringLength target > 0
+      && stringSlice 0 1 target == "-" =>
       -- C2: same event, the shared wording.  This stays a check on the FIRST
       -- positional only — everything after it is the program's own argv,
       -- `--`-shaped or not (`medaka run argv.mdk -- --foo` must still deliver
@@ -2873,7 +2891,13 @@ runRunCmd argv =
     -- `medaka build`.
     target :: _ if (hasSlash target || endsWith ".mdk" target)
       && not (fileExists target) => runAbort ("error: no such file: " ++ target)
-    target :: progArgs =>
+    target :: _ if target == stdinEntry =>
+      runAbort
+        "error: `<stdin>` is not a file; use `medaka run -` to read the program from standard input"
+    rawTarget :: progArgs =>
+      let isStdin = rawTarget == "-"
+      let target = if isStdin then stdinEntry else rawTarget
+      let stdinText = if isStdin then orExit (readStdinProgram ()) else ""
       perfArm perfT0
       carryTargetProfile (runTargetFlag argv) target
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
@@ -2896,7 +2920,7 @@ runRunCmd argv =
       -- itself (#100) and rendered by moduleLoadErrText, so neither one is a
       -- bare `parse error` panic any more.  The entry is re-parsed only in the
       -- loader's failure arm below, so valid input pays no second parse.
-      let tsrc = readFileSafe target
+      let tsrc = if isStdin then stdinText else readFileSafe target
       -- #186/#1360: keep the loader's per-module PATHS instead of dropping
       -- them at the load site.  They were already being carried here and
       -- discarded one line later, which is why every imported module's
@@ -2904,7 +2928,8 @@ runRunCmd argv =
       -- `moduleLoadErrText` renders in `<IO>`, so this step stays a local
       -- match rather than composing through `orExit`/`mapErr` (both fixed to
       -- a pure error-rendering function).
-      let modsWithPath = match loadProgramFilesLocatedE (_ => None) target roots
+      let readEntry = stdinReadOverride stdinText
+      let modsWithPath = match loadProgramFilesLocatedE readEntry target roots
         Err lerr =>
           let _ = reportShippedHeaders (deferredInto jsonMode) prelude
           let _ = orExit (mapErr (ppParseError tsrc target) (parseResult tsrc))
@@ -2976,7 +3001,7 @@ runRunCmd argv =
           -- ppDiagCliSrc, instead of an opaque "type error in <file>" message.
           -- A program resolve rejected was not driven and carries its resolve
           -- errors here.
-          let tsrc = readFileSafe target
+          let tsrc = if isStdin then stdinText else readFileSafe target
           let diags = flatMap snd front.foDiags
           match (filter diagIsError diags, front.foDriven)
             ([], Some analysis) =>
@@ -3823,6 +3848,7 @@ runManifestArgs (ManifestArgs (Some target) fn) = match analyzeTarget target fn
 -- Parse target file(s) and run lint rules over the raw pre-desugar AST.
 -- Flags:
 --   --fix                rewrite fixable findings in-place
+--   --unsafe-fixes       with --fix: also apply the fixes marked Unsafe
 --   --json               emit the {"files":[...]} structured-diagnostics
 --                        envelope (same schema as `check --json`) instead of
 --                        human text; --fix is ignored in this mode (#249,
@@ -3847,27 +3873,6 @@ runManifestArgs (ManifestArgs (Some target) fn) = match analyzeTarget target fn
 --   no file arg             → find medaka.toml project root, lint top-level .mdk files
 --     (note: top-level only — subdirectory .mdk files are not walked recursively)
 -- Exit 0 unless a SevError finding exists (only via --deny in v1 report mode).
-lintHelpText : String
-lintHelpText = stringConcat [
-  "medaka lint — Lint files/dirs against style rules\n", "\n", "Usage:\n",
-  "  medaka lint [paths...] [flags]\n", "\n",
-  "  --fix                 rewrite fixable findings in-place\n",
-  "  --json                emit the {\"files\":[...]} structured-diagnostics\n",
-  "                       envelope instead of human text (--fix is ignored)\n",
-  "  --cache                reuse per-file results for files whose content is\n",
-  "                       unchanged (opt-in, like ESLint's --cache)\n",
-  "  --disable=r1,r2,...    suppress findings from the named rules\n",
-  "  --only=r1,...          keep only findings from the named rules\n",
-  "  --deny=r1,...          promote findings from the named rules to error\n",
-  "  --baseline=<file>      error only where a file's per-rule finding count\n",
-  "                       exceeds its row in <file> (counts may fall freely)\n",
-  "  --write-baseline=<f>   regenerate <f> from this run instead of reporting\n",
-  "\n", "Target resolution: explicit file args are linted in order; a single\n",
-  "directory arg lints its top-level .mdk files (not recursive); no args\n",
-  "finds the medaka.toml project root and lints its top-level .mdk files.\n",
-  "Exit 0 unless a SevError finding exists.\n"
-]
-
 -- Declaration order is the roster order, reproducing the old
 -- `lintBoolFlags ++ lintValueFlags` rendering.
 -- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` would otherwise fall
@@ -3877,6 +3882,9 @@ lintArgSpec =
   withStrictDash
     (spec "lint" [
       switch ["--fix"] "rewrite fixable findings in place",
+      switch
+        ["--unsafe-fixes"]
+        "with --fix: also apply fixes that may change behaviour",
       switch ["--json"] "emit the structured-diagnostics envelope",
       switch ["--cache"] "reuse per-file results for unchanged files",
       value ["--disable"] "r1,r2,..." "suppress findings from the named rules",
@@ -3893,10 +3901,131 @@ lintArgSpec =
         ["--write-baseline"]
         "<file>"
         "regenerate <file> from this run instead of reporting",
+      switch ["--list-rules"] "list every rule with its metadata",
+      switch ["--markdown"] "with --list-rules: render docs/ops/LINT-RULES.md",
+      value
+        ["--scope"]
+        "universal|internal"
+        "with --list-rules: keep one scope",
+      value
+        ["--ratchet"]
+        "gated|baselined"
+        "with --list-rules: keep one ratchet",
+      value ["--tier"] "file|cross" "with --list-rules: keep one rule tier",
+      switch ["--names"] "with --list-rules: print only the rule names",
+      value ["--explain"] "<rule>" "print a rule's summary and documentation",
+      switch
+        ["--internal"]
+        "run the internal-scope rules on every target, manifest or not",
     ])
 
 runLintCmd : List String -> <IO> Unit
 runLintCmd argv0 =
+  let a = requireArgs lintArgSpec argv0
+  if flag "--list-rules" a then
+    let _ = assertRegistryViewFlags "--list-rules" listRulesBannedFlags a
+    runLintListRules a
+  else if isSome (flagValue "--explain" a) then
+    let _ = assertRegistryViewFlags "--explain" explainBannedFlags a
+    runLintExplain a
+  else
+    let _ = assertNoListOnlyFlags a
+    runLintTargets a
+
+-- Flags that mean nothing to a registry view are rejected rather than accepted
+-- and ignored.  `--json` is meaningful to `--list-rules` only, and `--markdown`
+-- is the page renderer, so it takes no filter or format flag.
+lintRunFlags : List String
+lintRunFlags = [
+  "--fix",
+  "--unsafe-fixes",
+  "--cache",
+  "--internal",
+  "--disable",
+  "--only",
+  "--deny",
+  "--baseline",
+  "--write-baseline",
+]
+
+listRulesBannedFlags : List String
+listRulesBannedFlags = ["--explain"] ++ lintRunFlags
+
+explainBannedFlags : List String
+explainBannedFlags =
+  [
+      "--json",
+      "--markdown",
+      "--names",
+      "--scope",
+      "--ratchet",
+      "--tier",
+    ]
+    ++ lintRunFlags
+
+flagGiven : Args -> String -> Bool
+flagGiven a n = flag n a || isSome (flagValue n a)
+
+assertRegistryViewFlags : String -> List String -> Args -> <IO> Unit
+assertRegistryViewFlags mode banned a =
+  let bad = filter (flagGiven a) banned
+  if a.positionals /= [] then
+    dieMsg "medaka lint: \{mode} takes no target paths"
+  else if bad /= [] then
+    dieMsg "medaka lint: \{joinWith ", " bad} cannot be combined with \{mode}"
+  else if mode == "--list-rules" && flag "--markdown" a then
+    assertMarkdownTakesNoFilter a
+
+assertMarkdownTakesNoFilter : Args -> <IO> Unit
+assertMarkdownTakesNoFilter a =
+  let bad =
+    filter (flagGiven a) ["--json", "--names", "--scope", "--ratchet", "--tier"]
+  if bad /= [] then
+    dieMsg
+      "medaka lint: \{joinWith ", " bad} cannot be combined with --markdown"
+
+-- `--list-rules` and `--explain` print the registry and read no files; a
+-- list-only filter given without `--list-rules` would otherwise be accepted
+-- and ignored.
+assertNoListOnlyFlags : Args -> <IO> Unit
+assertNoListOnlyFlags a =
+  if flag "--markdown" a
+    || flag "--names" a
+    || isSome (flagValue "--scope" a)
+    || isSome (flagValue "--ratchet" a)
+    || isSome (flagValue "--tier" a) then
+    dieMsg
+      "medaka lint: --markdown/--names/--scope/--ratchet/--tier require --list-rules"
+
+runLintListRules : Args -> <IO> Unit
+runLintListRules a =
+  if flag "--markdown" a then
+    putStr rulesPageMarkdown
+  else
+    let picked =
+      selectRuleRows
+        (flagValue "--scope" a)
+        (flagValue "--ratchet" a)
+        (flagValue "--tier" a)
+    match picked
+      Err msg => dieMsg "medaka lint: \{msg}"
+      Ok rows =>
+        if flag "--json" a then
+          putStr (renderRuleRowsJson rows)
+        else if flag "--names" a then
+          putStr (renderRuleRowsNames rows)
+        else
+          putStr (renderRuleRowsText rows)
+
+runLintExplain : Args -> <IO> Unit
+runLintExplain a = match optDefault (flagValue "--explain" a) ""
+  "" => dieMsg "medaka lint: --explain needs a rule name"
+  name => match explainRule name
+    Err msg => dieMsg "medaka lint: \{msg}"
+    Ok text => putStrLn text
+
+runLintTargets : Args -> <IO> Unit
+runLintTargets a =
   -- C1: `parseLintFlagList` keys on the `--flag=` prefix (the spelling the
   -- pre-commit hook uses).  Rewriting the space form INTO that prefix instead
   -- leaves `--deny rule-x`'s `rule-x` behind as an ordinary
@@ -3910,12 +4039,12 @@ runLintCmd argv0 =
   -- C2: `lint`'s SILENT-ACCEPT cell — `lintTargets` skipped every `--`-shaped
   -- token, so `medaka lint --zzz ok.mdk` printed nothing and exited 0,
   -- indistinguishable from a clean run.
-  let a = requireArgs lintArgSpec argv0
   let disableNames = lintNamesOf "--disable" a
   let onlyNames = lintNamesOf "--only" a
   let denyNames = lintNamesOf "--deny" a
   let _ = assertLintRuleNames (disableNames ++ onlyNames ++ denyNames)
   let fixMode = flag "--fix" a
+  let _ = assertUnsafeFixesNeedFix a
   let jsonMode = flag "--json" a
   let baselineArg = flagValue "--baseline" a
   let writeBaselineArg = flagValue "--write-baseline" a
@@ -3931,15 +4060,20 @@ runLintCmd argv0 =
   -- that its target set was empty too, and an error on stderr leaves stdout's
   -- one-JSON-document rule intact (C4).
   let _ = assertLintTargetsNonEmpty files
+  let _ =
+    assertInternalRulesReachable
+      (flag "--internal" a)
+      (onlyNames ++ denyNames)
+      files
   -- The stdlib reference index: every exported stdlib name with its DECLARED
   -- signature, for the rules that ask what the stdlib actually provides.  Built
   -- at most ONCE per `medaka lint` invocation and threaded down — a rule's
   -- `check` is pure, and rebuilding it per target file would re-parse the whole
   -- stdlib once per file.  It self-disables to empty when the stdlib cannot be
   -- read (see `buildStdlibIndexResult`), the same way `lintCacheCtx` declines below.
-  -- `stdlibIndexNeeded` answers whether the only rule that reads it is even in
-  -- the active `--only`/`--disable` set; when it isn't, `emptyStdlibIndex`
-  -- skips the whole-stdlib parse for free (every other rule ignores its
+  -- `stdlibIndexNeededFor` answers whether a rule that reads it is active
+  -- (`rule-stdlib-reimpl`, or an edit rule while some target has an
+  -- `import m.*`); when it isn't, `emptyStdlibIndex` skips the whole-stdlib parse for free (every other rule ignores its
   -- `StdlibIndex` argument, and this rule's own findings get discarded by the
   -- CLI-flag filters below regardless of what index it saw) — but ONLY on the
   -- uncached path, where that discarding happens in this same process, on this
@@ -3951,7 +4085,8 @@ runLintCmd argv0 =
   -- silently omit that rule's findings for every later `--cache` read, even a
   -- default-rules one that never named it.
   let indexResult =
-    if stdlibIndexNeeded onlyNames disableNames || flag "--cache" a then
+    if stdlibIndexNeededFor onlyNames disableNames files
+      || flag "--cache" a then
       buildStdlibIndexResult
     else
       Ok emptyStdlibIndex
@@ -3992,9 +4127,11 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
   -- handed down alongside the parsed rows.
   let cwd = canonicalizePath "."
   let baseCtx = loadLintBaselineCtx cwd baselineArg
+  let internalFlag = flag "--internal" a
   if isSome writeBaselineArg then
     runLintWriteBaselineCmd
       stdlibIdx
+      internalFlag
       disableNames
       onlyNames
       denyNames
@@ -4002,7 +4139,14 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
       (optDefault writeBaselineArg "")
       files
   else if jsonMode then
-    runLintJsonCmd stdlibIdx disableNames onlyNames denyNames baseCtx files
+    runLintJsonCmd
+      stdlibIdx
+      internalFlag
+      disableNames
+      onlyNames
+      denyNames
+      baseCtx
+      files
   else
     let multiFile = match files
       _ :: _ :: _ => True
@@ -4013,11 +4157,16 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
     -- It is EMPTY whenever `crossFileCacheSound` holds, with or without --cache:
     -- the tier is then reached through the entries' occurrences instead (see
     -- runCrossFileReportCached).
+    let run = LintRun {
+      lrInternal = internalFlag,
+      lrFix = fixMode,
+      lrUnsafe = flag "--unsafe-fixes" a,
+      lrMulti = multiFile,
+    }
     let (perFileErr, entries, parsed) =
       lintFilesGo
         stdlibIdx
-        fixMode
-        multiFile
+        run
         disableNames
         onlyNames
         denyNames
@@ -4032,12 +4181,27 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
         False
       else match cacheCtx
         Some _ =>
-          runCrossFileReportCached disableNames onlyNames denyNames entries
+          runCrossFileReportCached
+            internalFlag
+            disableNames
+            onlyNames
+            denyNames
+            entries
         None =>
           if crossFileCacheSound then
-            runCrossFileReportCached disableNames onlyNames denyNames entries
+            runCrossFileReportCached
+              internalFlag
+              disableNames
+              onlyNames
+              denyNames
+              entries
           else
-            runCrossFileReport disableNames onlyNames denyNames parsed
+            runCrossFileReport
+              internalFlag
+              disableNames
+              onlyNames
+              denyNames
+              parsed
     -- Persist AFTER reporting: the cache is an optimisation, so a failure to
     -- write one must never change what a run says or whether it exits 0.
     let _ = match cacheCtx
@@ -4073,6 +4237,13 @@ assertBaselineFlagsCoherent baselineArg writeArg fixMode
     dieMsg "medaka lint: --baseline cannot be combined with --fix"
   | otherwise = ()
 
+-- `--unsafe-fixes` widens what `--fix` applies; alone it would be accepted and
+-- do nothing, which reads as a clean run.
+assertUnsafeFixesNeedFix : Args -> <IO> Unit
+assertUnsafeFixesNeedFix a =
+  if flag "--unsafe-fixes" a && not (flag "--fix" a) then
+    dieMsg "medaka lint: --unsafe-fixes requires --fix"
+
 -- An unreadable or malformed baseline is fatal, never an empty one: a baseline
 -- that answers "no rows, so nothing exceeds" reports green for every file in the
 -- tree (lint_baseline.mdk's invariant).
@@ -4092,6 +4263,7 @@ loadLintBaselineCtx cwd (Some path) = match readLintBaseline path
 -- have found — a baseline can never be written from a different derivation than
 -- the one that checks it.
 runLintWriteBaselineCmd : StdlibIndex ->
+  Bool ->
   List String ->
   List String ->
   List String ->
@@ -4099,9 +4271,16 @@ runLintWriteBaselineCmd : StdlibIndex ->
   String ->
   List String ->
   <IO> Unit
-runLintWriteBaselineCmd idx disableNames onlyNames denyNames cwd out files =
+runLintWriteBaselineCmd idx internalFlag disableNames onlyNames denyNames cwd out files =
   let triples =
-    lintFilesToDiagTriples idx disableNames onlyNames denyNames None files
+    lintFilesToDiagTriples
+      idx
+      internalFlag
+      disableNames
+      onlyNames
+      denyNames
+      None
+      files
   let parseFailures = flatMap lintBaselineParseFailures triples
   if listLen parseFailures > 0 then
     emitWarningLines parseFailures
@@ -4154,6 +4333,12 @@ assertLintRuleNames names =
       ePutStrLn
         "medaka lint: unknown rule \{joinWith ", " bad} (known: \{joinWith ", " allRuleNames})"
     stageExit 1
+
+assertInternalRulesReachable : Bool -> List String -> List String -> <IO> Unit
+assertInternalRulesReachable internalFlag names files =
+  match inactiveInternalRuleUse internalFlag names files
+    Some msg => dieMsg "medaka lint: \{msg}"
+    None => ()
 
 -- C3's "found nothing is a failure" arm for `lint`, mirroring `fmt`'s and
 -- `codemod`'s wording exactly so the three verbs answer the empty case with one

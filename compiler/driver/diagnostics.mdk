@@ -103,6 +103,7 @@ import driver.loader.{
   loadProgramFilesLocatedCachedE,
   loadProgramFilesLocatedCachedSourcesE,
   loadedSourceOf,
+  stdinEntry,
   parseCachedLocated,
   loadProgramFilesLocatedE,
   dropPathTriple,
@@ -2650,6 +2651,27 @@ cjFixJsonWithSource src (Fix loc repl) = jObject [
   ("range", cjRangeOfLoc src (Some loc)),
   ("replacement", JString repl),
 ]
+cjFixJsonWithSource src (FixEdits applicability edits) =
+  fixEditsJson (loc => cjRangeOfLoc src (Some loc)) applicability edits
+
+-- The `{applicability, edits}` object of a span-edit fix, each edit's range
+-- rendered by `rangeOf`: the CLI and the language server differ only there.
+export
+fixEditsJson : (Loc -> Json) -> String -> List (Loc, String) -> Json
+fixEditsJson rangeOf applicability edits = jObject [
+  ("applicability", JString applicability),
+  (
+    "edits",
+    JArray
+      (arrayFromList
+        (map
+          ((loc, repl) => jObject [
+            ("range", rangeOf loc),
+            ("replacement", JString repl),
+          ])
+          edits)),
+  ),
+]
 
 export
 cjDiagnostic : String -> String -> Diag -> Json
@@ -3208,11 +3230,15 @@ cjHasErrD (_, diags) = anyList diagIsError diags
 -- readFile that yields "" on error (any real read failure surfaces as a diag).
 -- Shared with medaka_cli's driver code (which imports it) so the two don't
 -- diverge — the one canonical "read a target, tolerate a missing file" helper.
+-- The stdin entry has no file: its text is the one the loader parsed.
 export
 readFileSafe : String -> <IO> String
-readFileSafe path = match readFile path
-  Ok src => src
-  Err _ => ""
+readFileSafe path =
+  match if path == stdinEntry then loadedSourceOf path else None
+    Some src => src
+    None => match readFile path
+      Ok src => src
+      Err _ => ""
 
 -- The single located parse-error diagnostic, as the {"files":[...]} JSON string.
 -- Uses the same serializer as other diagnostics, including typed edits.

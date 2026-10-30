@@ -1,0 +1,118 @@
+-- lint rule rule-rem-parity: `n % 2 == 0` and `n % 2 /= 0` parity tests. Prefer `isEven n` / `isOdd n`.
+
+import frontend.ast.{Loc(..), Lit(..), Expr(..), Decl(..)}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import tools.printer.{exprToString}
+import tools.lint_core.{
+  Applicability(..),
+  Category(..),
+  Ctx(..),
+  FileFacts,
+  Finding(..),
+  Fix,
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  Visitor,
+  mkVisitorRule,
+}
+import tools.lint_shared.{
+  rebinds,
+  exprRuleEditVisitors,
+  replaceNodeFix,
+  ruleNameRemParity,
+  unwrapLoc,
+}
+
+export
+rule : Rule
+rule =
+  mkVisitorRule
+    RuleMeta {
+      name = ruleNameRemParity,
+      summary =
+        "`n % 2 == 0` / `n % 2 /= 0` parity test. Prefer `isEven n` / `isOdd n`",
+      doc =
+        "A remainder-by-two comparison against zero is a parity test; the prelude names it.\n\nBefore:\n  n % 2 == 0\nAfter:\n  isEven n",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = FixableUnsafe,
+      needs = [NeedsScopes, NeedsWildIndex],
+    }
+    ruleRemParity
+    None
+
+-- `e` is the integer literal `k` — either an `ELit (LInt k)` or a Num-poly
+-- `ENumLit k …` (the parser emits the latter for expression int literals; sexp
+-- renders both identically, so both must be recognised).
+isIntLit : Int -> Expr -> Bool
+isIntLit k e = match unwrapLoc e
+  ELit (LInt n) => n == k
+  ENumLit n _ _ => n == k
+  _ => False
+
+-- `n % 2 == 0` → `isEven n`; `n % 2 /= 0` → `isOdd n` (either operand order).
+-- ONLY the `== 0` / `/= 0` comparisons: Medaka's `%` follows the DIVIDEND's sign
+-- (`-3 % 2 = -1`), so `n % 2 == 1` is FALSE for negative odd `n` — excluded.
+-- Excludes the `isEven`/`isOdd` definitions themselves (their bodies ARE this
+-- idiom; rewriting them would produce `isEven n = isEven n`).
+remParityExcl : String -> Bool
+remParityExcl name = name == "isEven" || name == "isOdd"
+
+remParityOf : Expr -> Option Expr
+remParityOf (EBinOp op a b _)
+  | op == "==" || op == "/=" =
+    if isIntLit 0 b then
+      remParityFrom op (unwrapLoc a)
+    else if isIntLit 0 a then
+      remParityFrom op (unwrapLoc b)
+    else
+      None
+remParityOf _ = None
+
+remParityFrom : String -> Expr -> Option Expr
+remParityFrom op (EBinOp "%" n two _)
+  | isIntLit 2 two = Some (EApp (EVar (parityFn op)) n)
+remParityFrom _ _ = None
+
+parityFn : String -> String
+parityFn op = if op == "==" then "isEven" else "isOdd"
+
+ruleRemParity : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Visitor
+ruleRemParity idx _ facts _ _ =
+  exprRuleEditVisitors
+    remParityExcl
+    remParityOf
+    (remParityFix idx facts)
+    remParityFinding
+
+remParityFinding : Option Loc -> Expr -> Option Fix -> Finding
+remParityFinding loc rewritten fix = Finding {
+  rule = ruleNameRemParity,
+  message = "parity test. Rewrite as '" ++ exprToString rewritten ++ "'",
+  severity = SevWarning,
+  loc = loc,
+  fix = fix,
+}
+
+-- The rewrite calls `isEven` or `isOdd` by name.  A binding of either name
+-- anywhere in the file would capture the call, so the fix is withheld there
+-- (the finding stays).  The prelude's pair is `core.mdk`'s `isEven`/`isOdd`.
+remParityFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+remParityFix idx facts ctx e rewritten =
+  if rebinds idx facts ctx "isEven" || rebinds idx facts ctx "isOdd" then
+    None
+  else
+    replaceNodeFix Unsafe "use the parity predicate" ctx e rewritten

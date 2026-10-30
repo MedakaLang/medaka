@@ -11,8 +11,12 @@ The primitives are in scope without an import: `readFile`, `writeFile`,
 `isFile`, and `fileSize`.
 
 Every operation returns `Result String a`, with the host's error message
-in `Err`. File operations run only in a built program, not under the
-interpreter.
+in `Err`.
+
+`medaka run`, `medaka test` and a built program touch the real filesystem.
+Only `medaka test --engines eval` and `medaka repl` do not bind the file
+primitives, so a doctest that reaches one is rejected there; see
+[ENGINES](ENGINES.md) for every engine.
 
 ## Metadata
 

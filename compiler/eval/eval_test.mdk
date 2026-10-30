@@ -15,7 +15,15 @@ import frontend.ast.{
   Loc(..),
 }
 import types.route_key.{implRouteKeyWord}
-import eval.eval.{buildMethodReqCounts, Value(..), evalModulesOutput, ppValue}
+import eval.eval.{
+  buildMethodReqCounts,
+  Value(..),
+  evalModulesOutput,
+  ppValue,
+  externBindings,
+  ioExternBindings,
+}
+import list.{lookup}
 import ir.core_ir_eval.{cevalModulesOutput}
 
 testLoc : Loc
@@ -124,4 +132,36 @@ test "public runtime extern aliases share their primitive cell in both evaluator
   [
     expectEqual "" (evalModulesOutput [] runtimeAliasModules),
     expectEqual "" (cevalModulesOutput [] runtimeAliasModules),
+  ]
+
+applyPrim : Value <IO> -> Value <IO> -> <IO> Value <IO>
+applyPrim (VPrim f) v = f v
+applyPrim other _ = other
+
+bindingOf : String -> List (String, Value <IO>) -> Value <IO>
+bindingOf name binds = match lookup name binds
+  Some v => v
+  None => VUnit
+
+-- `medaka run` draws from its own stream, so seeding or drawing it never moves
+-- the differential oracle's state, and a given seed gives the same draws in both.
+test "run's random externs use a stream separate from the oracle's" =
+  let oracle = externBindings ()
+  let run = ioExternBindings ()
+  let draw =
+    binds =>
+      applyPrim
+        (applyPrim (bindingOf "randomInt" binds) (VInt 0))
+        (VInt 1000000000)
+  let seed = binds => applyPrim (bindingOf "setSeed" binds) (VInt 42)
+  let state = binds => applyPrim (bindingOf "randomState" binds) VUnit
+  let _ = seed run
+  let fromRun = draw run
+  let oracleState = state oracle
+  let _ = seed oracle
+  let fromOracle = draw oracle
+  expectAll [
+    expectEqual "0" (ppValue oracleState),
+    expectEqual (ppValue fromRun) (ppValue fromOracle),
+    expectEqual "75817894" (ppValue fromOracle),
   ]

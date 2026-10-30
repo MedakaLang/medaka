@@ -72,7 +72,9 @@ lintBoth args =
     (boundedInTree 120 medakaBin args)
 
 test "diff_compiler_lint_multi: directory target matches its golden" =
-  lintGolden ["lint", multiFixtures] "\{multiFixtures}/multi.expected"
+  lintGolden
+    ["lint", "--internal", multiFixtures]
+    "\{multiFixtures}/multi.expected"
 
 -- #1173: a missing path must exit 1 and say so.
 nonexistentPath : <Exec, IO> Expectation
@@ -154,7 +156,7 @@ test "diff_compiler_lint_crossfile: recursive walk and cross-file duplicate-body
     (
       "cross-file text golden",
       lintGolden
-        ["lint", crossfileFixtures]
+        ["lint", "--internal", crossfileFixtures]
         "\{crossfileFixtures}/crossfile.expected",
     ),
     (
@@ -253,7 +255,7 @@ oracleMalformedStdlibIn dir = match boundedInTree 120 "cp" [
     Ok () => match boundedInTree 120 "env" [
       "MEDAKA_ROOT=\{dir}",
       underRoot "test/bin/lint_main",
-      underRoot "test/lint_fixtures/stdlib_reimpl_derived_index.mdk",
+      underRoot "test/lint_rule_fixtures/stdlib-reimpl.mdk",
     ]
       Err e => fail "could not spawn lint oracle: \{e}"
       Ok (code, out, err) => expectAll [

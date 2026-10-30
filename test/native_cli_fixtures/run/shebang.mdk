@@ -1,0 +1,3 @@
+#!/usr/bin/env -S medaka run
+main : <IO> Unit
+main = putStrLn "hi"

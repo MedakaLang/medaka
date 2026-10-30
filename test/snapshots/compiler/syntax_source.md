@@ -1,5 +1,5 @@
 # META
-source_lines=187
+source_lines=188
 stages=DESUGAR,MARK
 # SOURCE
 import support.stage_count.{stageBump}
@@ -56,8 +56,9 @@ pieces size pos (r :: rest) =
 comments : String -> List RawTok -> List Trivia
 comments _ [] = []
 comments src ((RComment s e) :: rest) =
+  let opener = stringSlice s (s + 2) src
   let kind =
-    if stringSlice s (s + 2) src == "--" then LineComment else BlockComment
+    if opener == "--" || opener == "#!" then LineComment else BlockComment
   Trivia kind (SourceSpan s e) :: comments src rest
 comments src (_ :: rest) = comments src rest
 
@@ -222,7 +223,7 @@ syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural
 (DFunDef false "pieces" ((PVar "size") (PVar "pos") (PCons (PVar "r") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "s") (PVar "end") (PVar "kind")) (EApp (EVar "rawRange") (EVar "r"))) (DoLet false false (PVar "e") (EApp (EApp (EVar "min") (EVar "size")) (EVar "end"))) (DoExpr (EIf (EBinOp "<=" (EVar "e") (EVar "pos")) (EApp (EApp (EApp (EVar "pieces") (EVar "size")) (EVar "pos")) (EVar "rest")) (EIf (EBinOp ">" (EVar "s") (EVar "pos")) (EBinOp "::" (EApp (EApp (EVar "SourcePiece") (EVar "SourceGap")) (EApp (EApp (EVar "SourceSpan") (EVar "pos")) (EApp (EApp (EVar "min") (EVar "size")) (EVar "s")))) (EApp (EApp (EApp (EVar "pieces") (EVar "size")) (EVar "s")) (EBinOp "::" (EVar "r") (EVar "rest")))) (EBinOp "::" (EApp (EApp (EVar "SourcePiece") (EVar "kind")) (EApp (EApp (EVar "SourceSpan") (EVar "pos")) (EVar "e"))) (EApp (EApp (EApp (EVar "pieces") (EVar "size")) (EVar "e")) (EVar "rest"))))))))
 (DTypeSig false "comments" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyApp (TyCon "List") (TyCon "Trivia")))))
 (DFunDef false "comments" (PWild (PList)) (EListLit))
-(DFunDef false "comments" ((PVar "src") (PCons (PCon "RComment" (PVar "s") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "kind") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "s")) (EBinOp "+" (EVar "s") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "--"))) (EVar "LineComment") (EVar "BlockComment"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "Trivia") (EVar "kind")) (EApp (EApp (EVar "SourceSpan") (EVar "s")) (EVar "e"))) (EApp (EApp (EVar "comments") (EVar "src")) (EVar "rest"))))))
+(DFunDef false "comments" ((PVar "src") (PCons (PCon "RComment" (PVar "s") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "opener") (EApp (EApp (EApp (EVar "stringSlice") (EVar "s")) (EBinOp "+" (EVar "s") (ELit (LInt 2)))) (EVar "src"))) (DoLet false false (PVar "kind") (EIf (EBinOp "||" (EBinOp "==" (EVar "opener") (ELit (LString "--"))) (EBinOp "==" (EVar "opener") (ELit (LString "#!")))) (EVar "LineComment") (EVar "BlockComment"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "Trivia") (EVar "kind")) (EApp (EApp (EVar "SourceSpan") (EVar "s")) (EVar "e"))) (EApp (EApp (EVar "comments") (EVar "src")) (EVar "rest"))))))
 (DFunDef false "comments" ((PVar "src") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "comments") (EVar "src")) (EVar "rest")))
 (DTypeSig true "publishSyntax" (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SyntaxAdmission")) (TyCon "SyntaxSource")))))
 (DFunDef false "publishSyntax" () (EApp (EVar "publishSyntaxPrepared") (EVar "None")))
@@ -287,7 +288,7 @@ syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural
 (DFunDef false "pieces" ((PVar "size") (PVar "pos") (PCons (PVar "r") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "s") (PVar "end") (PVar "kind")) (EApp (EVar "rawRange") (EVar "r"))) (DoLet false false (PVar "e") (EApp (EApp (EMethodRef "min") (EVar "size")) (EVar "end"))) (DoExpr (EIf (EBinOp "<=" (EVar "e") (EVar "pos")) (EApp (EApp (EApp (EVar "pieces") (EVar "size")) (EVar "pos")) (EVar "rest")) (EIf (EBinOp ">" (EVar "s") (EVar "pos")) (EBinOp "::" (EApp (EApp (EVar "SourcePiece") (EVar "SourceGap")) (EApp (EApp (EVar "SourceSpan") (EVar "pos")) (EApp (EApp (EMethodRef "min") (EVar "size")) (EVar "s")))) (EApp (EApp (EApp (EVar "pieces") (EVar "size")) (EVar "s")) (EBinOp "::" (EVar "r") (EVar "rest")))) (EBinOp "::" (EApp (EApp (EVar "SourcePiece") (EVar "kind")) (EApp (EApp (EVar "SourceSpan") (EVar "pos")) (EVar "e"))) (EApp (EApp (EApp (EVar "pieces") (EVar "size")) (EVar "e")) (EVar "rest"))))))))
 (DTypeSig false "comments" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyApp (TyCon "List") (TyCon "Trivia")))))
 (DFunDef false "comments" (PWild (PList)) (EListLit))
-(DFunDef false "comments" ((PVar "src") (PCons (PCon "RComment" (PVar "s") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "kind") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "s")) (EBinOp "+" (EVar "s") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "--"))) (EVar "LineComment") (EVar "BlockComment"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "Trivia") (EVar "kind")) (EApp (EApp (EVar "SourceSpan") (EVar "s")) (EVar "e"))) (EApp (EApp (EVar "comments") (EVar "src")) (EVar "rest"))))))
+(DFunDef false "comments" ((PVar "src") (PCons (PCon "RComment" (PVar "s") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "opener") (EApp (EApp (EApp (EVar "stringSlice") (EVar "s")) (EBinOp "+" (EVar "s") (ELit (LInt 2)))) (EVar "src"))) (DoLet false false (PVar "kind") (EIf (EBinOp "||" (EBinOp "==" (EVar "opener") (ELit (LString "--"))) (EBinOp "==" (EVar "opener") (ELit (LString "#!")))) (EVar "LineComment") (EVar "BlockComment"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "Trivia") (EVar "kind")) (EApp (EApp (EVar "SourceSpan") (EVar "s")) (EVar "e"))) (EApp (EApp (EVar "comments") (EVar "src")) (EVar "rest"))))))
 (DFunDef false "comments" ((PVar "src") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "comments") (EVar "src")) (EVar "rest")))
 (DTypeSig true "publishSyntax" (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SyntaxAdmission")) (TyCon "SyntaxSource")))))
 (DFunDef false "publishSyntax" () (EApp (EVar "publishSyntaxPrepared") (EVar "None")))

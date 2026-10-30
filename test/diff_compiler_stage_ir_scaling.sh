@@ -485,7 +485,7 @@ mangle=$(stage_symbol types.private_mangle mangleUnitsWithOrigins) \
 dce=$(stage_symbol ir.dce dceFilter) \
 trmc=$(stage_symbol backend.trmc_analysis detectDispatchGroups) \
 fmt=$(stage_symbol tools.fmt formatSource) \
-lint=$(stage_symbol tools.lint lintProgram)"
+lint=$(stage_symbol tools.lint_walk lintProgram)"
 
 # ── THE MULTI-MODULE ARM ─────────────────────────────────────────────────────
 #

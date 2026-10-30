@@ -292,7 +292,7 @@ uploadWildcard body =
 test "uploadBlob under */* takes video/mp4 from an mp4 body's ftyp box" =
   let response = uploadWildcard mp4Bytes
   expectEqual
-    (outcome response ++ " " ++ blobStringField "mimeType" response)
+    "\{outcome response} \{blobStringField "mimeType" response}"
     "200 OK video/mp4"
 
 test "uploadBlob under */* refuses a body it cannot recognise" =

@@ -1729,6 +1729,26 @@ while IFS= read -r f; do
   done
 done < "$CHANGED_PATHS"
 
+# A fixture corpus an in-language test reads, but no gate does: a change under it
+# re-runs the module that reads it.
+if grep -q '^test/lint_internal_fixtures/' "$CHANGED_PATHS"; then
+  for _if in $inlang_files; do
+    [ "$_if" = "compiler/tools/lint_test.mdk" ] || continue
+    case " $inlang_run " in *" $_if "*) ;; *) inlang_run="$inlang_run $_if" ;; esac
+  done
+fi
+
+# The interpreter's extern tables are graded by in-language tests no gate runs
+# (the catalog's interpreter column, #3913; the engine matrix's drift guard): a
+# change under compiler/eval/, to the runtime extern declarations or to the
+# catalog's rows (the matrix's native and wasm columns) re-runs both.
+if grep -q -e '^compiler/eval/' -e '^stdlib/runtime\.mdk$' -e '^compiler/backend/extern_catalog\.mdk$' "$CHANGED_PATHS"; then
+  for _if in $inlang_files; do
+    case "$_if" in compiler/backend/extern_catalog_test.mdk|compiler/tools/engine_table_test.mdk) ;; *) continue ;; esac
+    case " $inlang_run " in *" $_if "*) ;; *) inlang_run="$inlang_run $_if" ;; esac
+  done
+fi
+
 # ── resolve gates → the ORACLES they actually need ───────────────────────────
 #
 # ⚠️ A PATTERN THAT MATCHES ZERO GATES IS AN ERROR, NOT AN EMPTY SET.

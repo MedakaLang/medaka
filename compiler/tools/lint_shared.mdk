@@ -1,0 +1,963 @@
+-- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
+-- the rule-name constants, location and trimming helpers, the suppression
+-- directive parser, and the stdlib path predicates.
+
+import frontend.ast.{
+  Loc(..), Expr(..), Decl(..), noBinderId, noDeclLoc, Ty(..), Pat(..),
+  UseMember(..), Guard(..), Arm(..), ImplMethod(..), DoStmt(..), Section(..),
+  InterpPart(..), GuardArm(..), FieldAssign(..), LetBind(..), FunClause(..)
+}
+import frontend.parser.{Positions(..), DeclPos, positionsDecls, declPosLine}
+import support.util.{
+  contains, filterList, splitOnChar, joinWith, startsWith, listLen, anyList,
+  joinNl, dedupBy
+}
+import list.{drop, sortBy, last}
+import string.{lines}
+import support.path.{stripMdk}
+import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
+import frontend.lexer.{Comment, commentLine, commentText, commentCol}
+import tools.lint_core.{
+  Applicability(..), Ctx(..), DirScope(..), Directive(..), FileFacts(..),
+  Finding(..), Fix(..), FixEdit(..), StdlibIndex, Visitor(..), factScopes,
+  stdlibKnowsModule, stdlibSigIn
+}
+import tools.lint_fix.{Binding(..), parenIfNeeded}
+import tools.lint_scope.{binderOf, bindersNamed, wildImports}
+export import frontend.ast_walk.{childExprs, mapChildExprs, stmtExprs}
+import frontend.ast_walk.{DeclBody(..), declBodies}
+import hash_map.{HashMap, new, setInPlace}
+import tools.printer.{exprToString}
+import ir.sexp.{exprSexp}
+import frontend.exhaust.{Oracle, oGetCtorSiblings}
+
+-- ── rule names (kept in sync between the Rule entry and its Findings) ─────────
+export
+ruleNameMatchParam : String
+ruleNameMatchParam = "rule-match-on-param"
+
+export
+ruleNameDerivable : String
+ruleNameDerivable = "rule-hand-rolled-derivable"
+
+export
+ruleNameStdlibReimpl : String
+ruleNameStdlibReimpl = "rule-stdlib-reimpl"
+
+export
+ruleNameDuplicateBody : String
+ruleNameDuplicateBody = "rule-duplicate-body"
+
+export
+ruleNameBindThenDestructure : String
+ruleNameBindThenDestructure = "rule-bind-then-destructure"
+
+export
+ruleNameLambdaSection : String
+ruleNameLambdaSection = "rule-lambda-section"
+
+export
+ruleNameIfMaxMin : String
+ruleNameIfMaxMin = "rule-if-max-min"
+
+export
+ruleNameAndThenPureMap : String
+ruleNameAndThenPureMap = "rule-andthen-pure-map"
+
+export
+ruleNameDestructureInParam : String
+ruleNameDestructureInParam = "rule-destructure-in-param"
+
+export
+ruleNameMissingSignature : String
+ruleNameMissingSignature = "rule-missing-signature"
+
+export
+ruleNameNotEq : String
+ruleNameNotEq = "rule-not-eq"
+
+export
+ruleNameBoolSimplify : String
+ruleNameBoolSimplify = "rule-bool-simplify"
+
+export
+ruleNameRemParity : String
+ruleNameRemParity = "rule-rem-parity"
+
+export
+ruleNameDoubleReverse : String
+ruleNameDoubleReverse = "rule-double-reverse"
+
+export
+ruleNameWhenUnless : String
+ruleNameWhenUnless = "rule-when-unless"
+
+export
+ruleNameComplementPredicate : String
+ruleNameComplementPredicate = "rule-complement-predicate"
+
+export
+ruleNameMatchToMap : String
+ruleNameMatchToMap = "rule-match-to-map"
+
+export
+ruleNameBindChainToDo : String
+ruleNameBindChainToDo = "rule-bind-chain-to-do"
+
+export
+ruleNameDeadCode : String
+ruleNameDeadCode = "rule-dead-code"
+
+export
+ruleNameConcatToInterp : String
+ruleNameConcatToInterp = "rule-concat-to-interp"
+
+export
+ruleNameSelfShadowExtern : String
+ruleNameSelfShadowExtern = "rule-self-shadow-extern"
+
+export
+ruleNamePreferAssignOp : String
+ruleNamePreferAssignOp = "rule-prefer-assign-op"
+
+export
+ruleNamePromissoryReader : String
+ruleNamePromissoryReader = "rule-promissory-reader"
+
+export
+ruleNameOrElseStaircase : String
+ruleNameOrElseStaircase = "rule-orelse-staircase"
+
+export
+ruleNameCloneType : String
+ruleNameCloneType = "rule-clone-type"
+
+export
+ruleNameClauseMap : String
+ruleNameClauseMap = "rule-clause-map"
+
+export
+ruleNameDirectiveReason : String
+ruleNameDirectiveReason = "rule-directive-reason"
+
+export
+ruleNameRegexLiteral : String
+ruleNameRegexLiteral = "rule-regex-literal"
+
+export
+ruleNameTestBoolLiteralEqual : String
+ruleNameTestBoolLiteralEqual = "rule-test-bool-literal-equal"
+
+export
+ruleNameTestEqualInTrue : String
+ruleNameTestEqualInTrue = "rule-test-equal-in-true"
+
+export
+ruleNameTestPreludeShadow : String
+ruleNameTestPreludeShadow = "rule-test-prelude-shadow"
+
+-- Is the target file part of the stdlib itself?  A `stdlib` path SEGMENT (so
+-- `stdlib/core.mdk`, `./stdlib/list.mdk`, `/abs/medaka/stdlib/map.mdk` all match,
+-- but `test/lint_fixtures/foo.mdk` does not).
+--
+-- `rule-hand-rolled-derivable` uses this blanket path test as-is: a hand-
+-- written `impl Eq/Ord/Debug` anywhere inside the stdlib is legitimate
+-- regardless of which stdlib file it lives in or which type it's for
+-- (bootstrap ordering, a ctor/class name clash, or a non-structural instance
+-- whose `deriving` would be semantically WRONG) — the exemption there is
+-- "this is stdlib code," not "this file owns this particular name."
+--
+-- `rule-stdlib-reimpl` does NOT use this: its exemption is per (path, name)
+-- OWNERSHIP, not per path — see `firstMatchingModule` below.  A blanket path skip
+-- would wrongly exempt a stdlib file that only CONSUMES a name it doesn't own
+-- (`stdlib/toml.mdk` reimplementing `list.reverse` as `listReverse`) right
+-- alongside the file that legitimately defines it.
+export
+isStdlibPath : String -> Bool
+isStdlibPath path = contains "stdlib" (splitOnChar '/' path)
+
+-- The import id a path under `stdlib/` names: the segments after the last
+-- `stdlib` segment, dot-joined, so `stdlib/crypto/hmac.mdk` is `crypto.hmac`.
+-- `None` for a path with no `stdlib` segment.
+export
+stdlibModuleOf : String -> Option String
+stdlibModuleOf path = stdlibModuleGo (splitOnChar '/' (stripMdk path)) None
+
+stdlibModuleGo : List String -> Option String -> Option String
+stdlibModuleGo [] found = found
+stdlibModuleGo (seg :: rest) found =
+  if seg == "stdlib" then
+    stdlibModuleGo rest (Some (joinWith "." rest))
+  else
+    stdlibModuleGo rest found
+
+-- Sorted, duplicate-free `String` list.  Local to lint: `support.util.sortUniqS`
+-- is an insertion sort and these call sites run once per file or per def.
+export
+sortUniqS : List String -> List String
+sortUniqS xs = dedupSortedS (sortBy stringCompare xs)
+
+dedupSortedS : List String -> List String
+dedupSortedS (a :: b :: rest) =
+  if a == b then dedupSortedS (b :: rest) else a :: dedupSortedS (b :: rest)
+dedupSortedS xs = xs
+
+export
+zipDeclPos : List Decl -> List DeclPos -> List (Decl, DeclPos)
+zipDeclPos [] _ = []
+zipDeclPos _ [] = []
+zipDeclPos (d :: ds) (p :: ps) = (d, p) :: zipDeclPos ds ps
+
+export
+collectDirectives : List Comment -> List Directive
+collectDirectives cmts = flatMap (c => dirToList (parseDirective c)) cmts
+
+dirToList : Option Directive -> List Directive
+dirToList None = []
+dirToList (Some d) = [d]
+
+-- A comment becomes a directive iff it is a `--` line comment whose trimmed body
+-- (after the `--`) starts with a directive keyword.  `commentText` includes the
+-- delimiters, so we strip a leading `--` then re-trim.
+export
+parseDirective : Comment -> Option Directive
+parseDirective c =
+  let body = trimWs (commentText c)
+  if startsWith "--" body then
+    parseDirectiveBody
+      (commentLine c)
+      (trimWs (stringSlice 2 (stringLength body) body))
+  else
+    None
+
+lintDisableNextLineRe : Regex
+lintDisableNextLineRe = keywordRe "lint-disable-next-line"
+
+lintDisableLineRe : Regex
+lintDisableLineRe = keywordRe "lint-disable-line"
+
+lintDisableFileRe : Regex
+lintDisableFileRe = keywordRe "lint-disable-file"
+
+-- `kw` at the start of `s`, followed by end-of-string or whitespace (so
+-- `lint-disable-lineXYZ` does NOT match `lint-disable-line`), with the
+-- remainder captured in group 1.
+keywordRe : String -> Regex
+keywordRe kw = mustCompile ("^" ++ escape kw ++ "($|[ \\t].*)$")
+
+parseDirectiveBody : Int -> String -> Option Directive
+parseDirectiveBody line s =
+  if startsWith "lint-" s then parseDirectiveKeyword line s else None
+
+-- Every directive keyword begins `lint-`, so `parseDirectiveBody` only reaches
+-- the regexes for text that can match one.
+parseDirectiveKeyword : Int -> String -> Option Directive
+parseDirectiveKeyword line s = match matchKeyword lintDisableNextLineRe s
+  Some names => Some (Directive (DScopeLine (line + 1)) (parseRuleNames names))
+  None => match matchKeyword lintDisableLineRe s
+    Some names => Some (Directive (DScopeLine line) (parseRuleNames names))
+    None =>
+      map
+        (names => Directive DScopeFile (parseRuleNames names))
+        (matchKeyword lintDisableFileRe s)
+
+-- If `s` matches `re` (`keywordRe`'s keyword-plus-boundary shape), return the
+-- trimmed remainder (the rule-name list) captured in group 1; else None.
+matchKeyword : Regex -> String -> Option String
+matchKeyword re s = match reFind re s
+  Some m => match m.groups
+    (Some g) :: _ => Some (trimWs g.text)
+    _ => None
+  None => None
+
+-- Split a rule-name list on commas and/or spaces, dropping empty fragments.
+parseRuleNames : String -> List String
+parseRuleNames s =
+  filterList nonEmptyStr (flatMap (splitOnChar ' ') (splitOnChar ',' s))
+
+nonEmptyStr : String -> Bool
+nonEmptyStr n = n /= ""
+
+-- trim ASCII whitespace from both ends. Narrower than stdlib `string.trim`
+-- (space/tab/CR/LF only, vs. `isSpace`'s broader VT/FF) — inputs here are
+-- lint-directive comment bodies, where a stray VT/FF is plausible source
+-- text and swapping to `trim` would silently change what counts as a
+-- directive boundary. Kept intentionally; see #2349.
+export
+trimWs : String -> String
+-- lint-disable-next-line rule-stdlib-reimpl
+trimWs s =
+  let cs = stringToChars s
+  let n = arrayLength cs
+  let a = trimWsStart cs n 0
+  let b = trimWsEnd cs a n
+  stringSlice a b s
+
+trimWsStart : Array Char -> Int -> Int -> Int
+trimWsStart cs n i
+  | i >= n = i
+  | isWsChar (arrayGetUnsafe i cs) = trimWsStart cs n (i + 1)
+  | otherwise = i
+
+trimWsEnd : Array Char -> Int -> Int -> Int
+trimWsEnd cs a n
+  | n <= a = a
+  | isWsChar (arrayGetUnsafe (n - 1) cs) = trimWsEnd cs a (n - 1)
+  | otherwise = n
+
+isWsChar : Char -> Bool
+isWsChar c = c == ' ' || c == '\t' || c == '\r' || c == '\n'
+
+-- ── small AST helpers ─────────────────────────────────────────────────────────
+
+-- strip the transparent ELoc wrapper(s) to reach the real node
+export
+unwrapLoc : Expr -> Expr
+unwrapLoc (ELoc _ e) = unwrapLoc e
+unwrapLoc e = e
+
+-- ── per-decl source locations (Task B) ─────────────────────────────────────────
+-- `Positions` carries one `DeclPos` per top-level decl, parallel to the decl
+-- list.  We pair each decl with `Some (Loc … startLine 1 startLine 1)` so a rule
+-- can stamp its finding with the decl's REAL start line (decls themselves carry
+-- no `Loc`).  This is the only location source the carat path (CLI) needs; the
+-- golden line format (`findingLine`) ignores it, so goldens stay location-stripped.
+export
+declLocList : Positions -> List Decl -> List (Decl, Option Loc)
+declLocList pos prog = zipDeclLoc prog (positionsDecls pos)
+
+zipDeclLoc : List Decl -> List DeclPos -> List (Decl, Option Loc)
+zipDeclLoc [] _ = []
+zipDeclLoc (d :: ds) [] = (d, None) :: zipDeclLoc ds []
+zipDeclLoc (d :: ds) (p :: ps) = (d, Some (declPosToLoc p)) :: zipDeclLoc ds ps
+
+declPosToLoc : DeclPos -> Loc
+declPosToLoc p = let l = declPosLine p in Loc "" l 1 l 1
+
+-- ── helpers used by two or more rules ───────────────────────────────────────────
+
+export
+isBareParam : String -> Pat -> Bool
+isBareParam p (PVar q _ _) = p == q
+isBareParam _ _ = False
+
+-- ── SHARED detector (rule-match-on-param + rule-destructure-in-param) ──────────
+-- The function-clause body (under `ELoc`) is a `match <p>` whose scrutinee is a
+-- bare-`PVar p` parameter at position `k` in `pats`.  Returns `(p, k, arms)`.
+-- Arm-count / guard / irrefutability gates live in each rule.  `paramIndex`
+-- only yields `Some` when a bare `PVar p` parameter exists, so a `Some` result
+-- already guarantees the scrutinee is a bare parameter.
+export
+matchBodyOnBareParam : List Pat -> Expr -> Option (String, Int, List Arm)
+matchBodyOnBareParam pats body = match unwrapLoc body
+  EMatch scrut arms => match unwrapLoc scrut
+    EVar p => map (k => (p, k, arms)) (paramIndex p pats)
+    _ => None
+  _ => None
+
+export
+patIsWild : Pat -> Bool
+patIsWild PWild = True
+patIsWild _ = False
+
+-- position of the first bare-`PVar p` parameter
+paramIndex : String -> List Pat -> Option Int
+paramIndex p pats = paramIndexGo p pats 0
+
+paramIndexGo : String -> List Pat -> Int -> Option Int
+paramIndexGo _ [] _ = None
+paramIndexGo p (pat :: rest) i
+  | isBareParam p pat = Some i
+  | otherwise = paramIndexGo p rest (i + 1)
+
+-- one clause: replace the param at position k with the arm pattern, body = arm
+-- rhs.  Special case: a `PWild` arm whose body references the scrutinee `p` is
+-- rendered with `PVar p` instead of `_`, re-binding the scrutinee so the body's
+-- reference stays valid (the bail in `matchParamFixVar` has already rejected any
+-- UNSAFE — non-wildcard — mention).
+export
+armToClause : Bool -> String -> String -> List Pat -> Int -> Arm -> Decl
+armToClause vis name p pats k (Arm pat _ body) =
+  let cpat =
+    if patIsWild pat && wholeWordIn p (exprToString body) then
+      PVar p (Loc "" 0 0 0 0) noBinderId
+    else
+      pat
+  DFunDef vis name (replaceAt k cpat pats) body noDeclLoc noBinderId
+
+replaceAt : Int -> a -> List a -> List a
+replaceAt _ _ [] = []
+replaceAt 0 x (_ :: rest) = x :: rest
+replaceAt n x (y :: rest) = y :: replaceAt (n - 1) x rest
+
+-- whole-word (identifier-token) occurrence of `name` in `s`.  Boundaries are any
+-- non-identifier char (isAlnum covers alnum/_/').  Over-matches into string
+-- literals etc. — that only makes the fix gate MORE conservative, never less.
+--
+-- The boundary is a hand-built CONSUMING class around the escaped name
+-- (`(?:^|[^A-Za-z0-9_'])…(?:$|[^A-Za-z0-9_'])`) rather than the engine's
+-- built-in `\b`, which is ASCII `[A-Za-z0-9_]` only and would narrow a name
+-- ending in `'`. `isMatch` tries every start position independently (it is
+-- not a left-to-right non-overlapping scan), so this is safe for a plain
+-- existence check even though the class is consuming.
+export
+wholeWordIn : String -> String -> Bool
+wholeWordIn name s = isMatch (mustCompile (wholeWordPattern name)) s
+
+wholeWordPattern : String -> String
+wholeWordPattern name =
+  "(?:^|[^A-Za-z0-9_'])" ++ escape name ++ "(?:$|[^A-Za-z0-9_'])"
+
+-- the constructor `c` belongs to a type declared (or built-in) with EXACTLY one
+-- constructor — so a `c …` pattern can never fail to match.  An unknown ctor
+-- (its type isn't visible in this file) is NOT provably single → False (SKIP).
+export
+ctorIsSingle : Oracle -> String -> Bool
+ctorIsSingle orc c = match oGetCtorSiblings orc c
+  -- the constructor's OWN declaration's set, not a round trip through its
+  -- type's spelling, which two same-named types share (#3465)
+  Some ctors => listLen ctors == 1
+  None => False
+
+export
+tyHeadName : Ty -> Option String
+tyHeadName (TyCon { tyConName = n }) = Some n
+tyHeadName (TyApp f _) = tyHeadName f
+tyHeadName _ = None
+
+export
+topDefNameL : (Decl, Option Loc) -> List (String, Option Loc)
+topDefNameL (DFunDef _ name _ _ _ _, loc) = [(name, loc)]
+topDefNameL (DAttrib _ d, loc) = topDefNameL (d, loc)
+topDefNameL _ = []
+
+-- keep the first (name, loc) per distinct name, preserving order
+-- (#242: order-preserving dedup on the name key → shared support.util.dedupBy)
+export
+dedupeNamesLoc : List (String, Option Loc) -> List (String, Option Loc)
+dedupeNamesLoc xs = dedupBy fst xs
+
+export
+clausesOf : String -> List Decl -> List (List Pat, Expr)
+clausesOf _ [] = []
+clausesOf name ((DAttrib _ d) :: rest) = clausesOf name (d :: rest)
+clausesOf name ((DFunDef _ n ps body _ _) :: rest)
+  | n == name = (ps, body) :: clausesOf name rest
+  | otherwise = clausesOf name rest
+clausesOf name (_ :: rest) = clausesOf name rest
+
+-- The parser wraps every expr production in a transparent `ELoc` (span info
+-- for diagnostics) — mirrors `frontend/parser.mdk`'s own private `stripLoc`,
+-- unexported there, so a shape match here must peel it locally.
+export
+stripELoc : Expr -> Expr
+stripELoc (ELoc _ e) = stripELoc e
+stripELoc e = e
+
+-- Flattens a curried application spine: `f a b` is `EApp (EApp f a) b`.
+export
+appSpineOf : Expr -> (Expr, List Expr)
+appSpineOf e = appSpineGo e []
+
+appSpineGo : Expr -> List Expr -> (Expr, List Expr)
+appSpineGo e acc = match stripELoc e
+  EApp f a => appSpineGo f (a :: acc)
+  other => (other, acc)
+
+export
+paramNameOf : Pat -> Option String
+paramNameOf (PVar n _ _) = Some n
+paramNameOf _ = None
+
+export
+memberLocalIfOrigin : String -> UseMember -> Option String
+memberLocalIfOrigin stdName (UseMember origin _ _ alias) =
+  if origin == stdName then
+    Some (match alias
+      Some a => a
+      None => origin)
+  else
+    None
+
+export
+lastSegOf : List String -> String
+lastSegOf [] = ""
+lastSegOf [x] = x
+lastSegOf (_ :: rest) = lastSegOf rest
+
+-- an `EVar x` leaf (under any ELoc wrapper)
+export
+isEVarNamed : String -> Expr -> Bool
+isEVarNamed x e = match unwrapLoc e
+  EVar w => w == x
+  _ => False
+
+-- does `x` occur (conservatively: anywhere) in `e`?  A nested binder re-binding
+-- `x` only makes this OVER-count → we bail (safe), never rewrite unsoundly.
+export
+mentionsVar : String -> Expr -> Bool
+mentionsVar x e = match unwrapLoc e
+  EVar w => w == x
+  e2 => anyList (mentionsVar x) (childExprs e2)
+
+implMethodsBodyKey : List ImplMethod -> String
+implMethodsBodyKey ms = joinNl (map implMethodBodySexp ms)
+
+implMethodBodySexp : ImplMethod -> String
+implMethodBodySexp (ImplMethod _ _ body) = exprSexp body
+
+-- if `arg` is `f x` — x as the SOLE final argument, `f` not mentioning x —
+-- return `Some f` (the eta-reduced function); else `None`.
+export
+andThenEtaFn : String -> Expr -> Option Expr
+andThenEtaFn x arg = match unwrapLoc arg
+  EApp f lastArg if isEVarNamed x lastArg && not (mentionsVar x f) => Some f
+  _ => None
+
+-- ══ local-expression rewrite rules (shared generic walk) ═══════════════════════
+-- A rule whose finding is one AST node replaced by an equivalent one supplies
+-- only:
+--   * a detector `Expr -> Option Expr` matching the RAW node (NOT under its outer
+--     `ELoc` — `childExprs` descends through `ELoc`, so matching the wrapper too
+--     would double-count).  It returns the rewritten node.
+--   * an excluded-decl-name predicate (a rule whose target idiom IS the body of a
+--     stdlib primitive it rewrites TO — `isEven`/`isOdd` for rule-rem-parity,
+--     `when`/`unless` for rule-when-unless — must skip that primitive's own
+--     definition, or it would rewrite the body to an infinite self-reference).
+-- The check is a visitor; the fix is the one bottom-up rewriter below.  Every
+-- rewrite is EXACTLY equivalent (see each rule's soundness note), so the
+-- self-compile fixpoint stays byte-identical after the tree is fixed.
+
+-- generic bottom-up rewrite: rebuild children first, THEN apply the node-local
+-- transform `f` at this (child-rewritten) node.  Bottom-up so a rewrite exposed by
+-- an inner one (`not (not (not x))`) is re-collapsed by the enclosing node.
+export
+rewriteExprBU : (Expr -> Expr) -> Expr -> Expr
+rewriteExprBU f e = f (mapChildExprs (rewriteExprBU f) e)
+
+-- turn a detector into a total node transform (identity where it does not fire).
+export
+detApply : (Expr -> Option Expr) -> Expr -> Expr
+detApply det e = match det e
+  Some e2 => e2
+  None => e
+
+-- ── generic check driver ──────────────────────────────────────────────────────
+-- The visitor a detector-based rule registers: one finding per detector hit on
+-- any node of any body the dispatch walk reaches (clause, impl method, interface
+-- default, test, prop, let-group binding), skipping bodies whose owner name the
+-- exclusion predicate rejects.  `mkFinding loc rewritten` builds the rule's
+-- message from the rewritten node; `loc` is the hit's own location (#649), the
+-- nearest `ELoc` enclosing it, else the declaration's.
+export
+exprRuleVisitors : (String -> Bool) ->
+  (Expr -> Option Expr) ->
+  (Option Loc -> Expr -> Finding) ->
+  List Visitor
+exprRuleVisitors excl det mkFinding =
+  exprRuleEditVisitors excl det (_ _ _ => None) (loc hit _ => mkFinding loc hit)
+
+-- `exprRuleVisitors` whose findings carry a span fix: the same detector and the
+-- same gate, with `fixOf ctx e rewritten` as each finding's fix.  The fix is
+-- `None` where the rule withholds it; the finding is reported either way.
+export
+exprRuleEditVisitors : (String -> Bool) ->
+  (Expr -> Option Expr) ->
+  (Ctx -> Expr -> Expr -> Option Fix) ->
+  (Option Loc -> Expr -> Option Fix -> Finding) ->
+  List Visitor
+exprRuleEditVisitors excl det fixOf mkFinding =
+  [OnAnyExpr (exprRuleEditHit excl det fixOf mkFinding)]
+
+exprRuleEditHit : (String -> Bool) ->
+  (Expr -> Option Expr) ->
+  (Ctx -> Expr -> Expr -> Option Fix) ->
+  (Option Loc -> Expr -> Option Fix -> Finding) ->
+  Ctx ->
+  Expr ->
+  List Finding
+exprRuleEditHit excl det fixOf mkFinding ctx e
+  | not ctx.ctxInTest && excl ctx.ctxDeclName = []
+  | otherwise = match det e
+    Some hit => [mkFinding ctx.ctxSpan hit (fixOf ctx e hit)]
+    None => []
+
+-- ── generic fix driver ────────────────────────────────────────────────────────
+-- Rebuild the decl's bodies with `rw` and return `Some [newDecl]` only when the
+-- location-stripped sexp changed (the change-detection every fixer uses).  `excl`
+-- skips a function by name.  `tests` also descends into a `test` or `prop` body:
+-- the other rules' findings reach test bodies but their fixers leave them alone,
+-- and a rewrite there is each rule's own decision (the test-import
+-- reconciliation in `lint_walk` is what makes it safe for the verb rules).  A
+-- fixer sees a `Decl`, not a `Ctx`, so "in a test" is the decl's own shape.
+declBodyFix : Bool ->
+  (String -> Bool) ->
+  (Expr -> Expr) ->
+  Decl ->
+  Option (List Decl)
+declBodyFix _ excl rw (DFunDef vis name pats body site bid)
+  | excl name = None
+  | otherwise = bodyFix (b => DFunDef vis name pats b site bid) rw body
+declBodyFix tests excl rw (DAttrib a d) = match declBodyFix tests excl rw d
+  Some [d2] => Some [DAttrib a d2]
+  _ => None
+declBodyFix _ excl rw (d@(DImpl { implOrigin = _, methods })) =
+  let methods2 = map (fixImplMethodWith excl rw) methods
+  if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
+    None
+  else
+    -- #1110: record UPDATE — re-synthesising would reset the acquired identity.
+    Some [DImpl { d | methods = methods2 }]
+declBodyFix True _ rw (DTest pub name body) = bodyFix (DTest pub name) rw body
+declBodyFix True _ rw (DProp pub name ps body) =
+  bodyFix (DProp pub name ps) rw body
+declBodyFix _ _ _ _ = None
+
+fixImplMethodWith : (String -> Bool) ->
+  (Expr -> Expr) ->
+  ImplMethod ->
+  ImplMethod
+fixImplMethodWith excl rw (ImplMethod nm ps body)
+  | excl nm = ImplMethod nm ps body
+  | otherwise = ImplMethod nm ps (rw body)
+
+-- `rebuild` is the constructor with everything but the body already applied.
+bodyFix : (Expr -> Decl) -> (Expr -> Expr) -> Expr -> Option (List Decl)
+bodyFix rebuild rw body =
+  let body2 = rw body
+  if exprSexp body2 == exprSexp body then None else Some [rebuild body2]
+
+-- Fix by a node-local transform `f` applied bottom-up.
+export
+exprRuleFix : (String -> Bool) -> (Expr -> Expr) -> Decl -> Option (List Decl)
+exprRuleFix excl f d = declBodyFix False excl (rewriteExprBU f) d
+
+-- no decls are excluded by name (the common case)
+export
+noExcl : String -> Bool
+noExcl _ = False
+
+-- `exprRuleFix` that also rewrites `test` and `prop` bodies.
+export
+exprRuleFixTestDecls : (String -> Bool) ->
+  (Expr -> Expr) ->
+  Decl ->
+  Option (List Decl)
+exprRuleFixTestDecls excl f d = declBodyFix True excl (rewriteExprBU f) d
+
+-- ── head collection ───────────────────────────────────────────────────────────
+-- For a rule that reports a pattern's outermost node and then CONSUMES it: `pick`
+-- returns the finding payload plus the sub-expressions to keep searching (the
+-- parts of the matched node that are not themselves the pattern); on no match
+-- the search continues into every child.  `declHeadHits` runs it over each body
+-- of a declaration.
+collectHeads : (Expr -> Option (a, List Expr)) -> Expr -> List a
+collectHeads pick e = match pick e
+  Some (hit, rest) => hit :: flatMap (collectHeads pick) rest
+  None => flatMap (collectHeads pick) (childExprs e)
+
+export
+declHeadHits : (Expr -> Option (a, List Expr)) -> Decl -> List a
+declHeadHits pick d = flatMap (declBodyHeads pick) (declBodies d)
+
+declBodyHeads : (Expr -> Option (a, List Expr)) -> DeclBody -> List a
+declBodyHeads pick (DeclBody _ body) = collectHeads pick body
+
+-- ── shared node predicates ────────────────────────────────────────────────────
+
+-- `e` is a logical negation `not X`; return the negated operand `X`.  `not` parses
+-- to `EApp (EVar "not") X`.
+--
+-- The `EUnOp "!"` arm is GONE (#1739 half A) and must not come back: `!x` is now
+-- Ref-DEREFERENCE, so reading it as a negation would make every rule below rewrite a
+-- cell read into boolean logic — `!r` would "simplify" to something that no longer
+-- reads the Ref at all.  That is a silent-wrongness rewrite, and `--fix` would apply
+-- it unprompted.  `not` is the sole boolean negation.
+export
+notArgOf : Expr -> Option Expr
+notArgOf (EApp hd x) = if isEVarNamed "not" hd then Some x else None
+notArgOf _ = None
+
+export
+isTrueLit : Expr -> Bool
+isTrueLit e = isEVarNamed "True" e
+
+export
+isFalseLit : Expr -> Bool
+isFalseLit e = isEVarNamed "False" e
+
+export
+isBoolLit : Expr -> Bool
+isBoolLit e = isTrueLit e || isFalseLit e
+
+-- ── span-edit fixes ──────────────────────────────────────────────────────────
+-- A rule that rewrites one expression builds its fix from these.  The edit
+-- replaces the node's own span, with the replacement bracketed for the
+-- kind of expression it now sits in.
+
+-- The span covering two spans, in source order.
+joinLocs : Option Loc -> Option Loc -> Option Loc
+joinLocs (Some (Loc f sl sc _ _)) (Some (Loc _ _ _ el ec)) =
+  Some (Loc f sl sc el ec)
+joinLocs _ _ = None
+
+-- The extent of an application or operator expression the parser leaves
+-- bare: from the `ELoc`s of its operands, `None` when an operand is a node
+-- whose own tokens no `ELoc` covers (a prefix operator, a field access).
+export
+tightSpan : Expr -> Option Loc
+tightSpan (ELoc l _) = Some l
+tightSpan (EApp f x) = joinLocs (tightSpan f) (tightSpan x)
+tightSpan (EBinOp _ a b _) = joinLocs (tightSpan a) (tightSpan b)
+tightSpan _ = None
+
+-- The span a replacement of the node being visited takes: the node's own
+-- wrapper, brackets included, else the extent of its operands.
+export
+nodeSpan : Ctx -> Expr -> Option Loc
+nodeSpan ctx e = match ctx.ctxOwn
+  Some l => Some l
+  None => tightSpan e
+
+-- How tightly the printed `e` binds: an atom reads the same in any position,
+-- anything else is bracketed where its parent would regroup it.
+export
+bindingOf : Expr -> Binding
+bindingOf e = match unwrapLoc e
+  EVar _ => Closed
+  ELit _ => Closed
+  ENumLit _ _ _ => Closed
+  EApp _ _ => Applied
+  ETuple _ => Closed
+  EListLit _ => Closed
+  EArrayLit _ => Closed
+  EStringInterp _ => Closed
+  ESection _ => Closed
+  EFieldAccess _ _ _ => Closed
+  _ => Open
+
+-- A fix of the given applicability replacing `span` with `text` bracketed for
+-- `ctx`'s parent, or `None` when there is no span or the text spans lines (the
+-- printer knows nothing of the indentation it lands in).
+export
+replaceFix : Applicability ->
+  String ->
+  Option Loc ->
+  Binding ->
+  Ctx ->
+  String ->
+  Option Fix
+replaceFix applicability message span binding ctx text
+  | elem '\n' (stringToChars text) = None
+  | otherwise =
+    map
+      (loc => Fix {
+        fixApplicability = applicability,
+        fixEdits = [FixEdit loc (parenIfNeeded binding ctx.ctxParent text)],
+        fixMessage = message,
+      })
+      span
+
+-- `replaceFix` for the rewrite of the expression `e` itself: `rewritten` replaces
+-- `e`'s node and is bracketed by its own binding strength.
+export
+replaceNodeFix : Applicability -> String -> Ctx -> Expr -> Expr -> Option Fix
+replaceNodeFix applicability message ctx e rewritten =
+  replaceFix
+    applicability
+    message
+    (nodeSpan ctx e)
+    (bindingOf rewritten)
+    ctx
+    (exprToString rewritten)
+
+-- The span of the identifier a use stands on: the innermost `ELoc` over an `EVar`.
+varSite : Expr -> Option Loc
+varSite (ELoc l inner) = match varSite inner
+  Some inner2 => Some inner2
+  None => match inner
+    EVar _ => Some l
+    _ => None
+varSite _ = None
+
+-- Whether an `import m.*` of the file may bring `name` into scope: `m` exports
+-- it, or `m` is a module the stdlib index cannot vouch for.
+wildBinds : StdlibIndex -> FileFacts -> String -> Bool
+wildBinds idx facts name =
+  any (wildMayBind idx name) (wildImports (factScopes facts))
+
+wildMayBind : StdlibIndex -> String -> List String -> Bool
+wildMayBind idx name path =
+  let modName = joinWith "." path
+  not (stdlibKnowsModule idx modName) || isSome (stdlibSigIn idx modName name)
+
+varName : Expr -> String
+varName e = match unwrapLoc e
+  EVar n => n
+  _ => ""
+
+-- Whether the use `hd` of a prelude name means the prelude's: no binder in
+-- the file resolves it and no wildcard import may bring the name.  A use whose
+-- site is unknown is not provable, so it counts as rebound.
+export
+usesPreludeName : StdlibIndex -> FileFacts -> Expr -> Bool
+usesPreludeName idx facts hd = match varSite hd
+  Some l =>
+    isNone (binderOf (factScopes facts) l)
+      && not (wildBinds idx facts (varName hd))
+  None => False
+
+-- Whether the file binds `name` anywhere, or a wildcard import may.
+export
+bindsName : StdlibIndex -> FileFacts -> String -> Bool
+bindsName idx facts name =
+  not (isEmpty (bindersNamed (factScopes facts) name))
+    || wildBinds idx facts name
+
+-- Whether a call to `name` written into the body `ctx` sits in would not be
+-- the prelude's: the file or a wildcard import binds it, or it is the name of
+-- the method being defined, so the call would be the method calling itself.  A
+-- test's or prop's owner name is its description, not a binder.
+export
+rebinds : StdlibIndex -> FileFacts -> Ctx -> String -> Bool
+rebinds idx facts ctx name =
+  not ctx.ctxInTest && ctx.ctxDeclName == name || bindsName idx facts name
+
+-- The 1-based line of the source, `None` past the end.
+export
+sourceLine : FileFacts -> Int -> Option String
+sourceLine facts n = match drop (n - 1) (lines facts.ffSrc)
+  l :: _ => Some l
+  [] => None
+
+-- Whether the character at line `sl`, column `sc` of the source is `(`.
+export
+parenAt : FileFacts -> Int -> Int -> Bool
+parenAt facts sl sc = match sourceLine facts sl
+  Some l => stringSlice sc (sc + 1) l == "("
+  None => False
+
+-- ── rule: match-to-map ────────────────────────────────────────────────────────
+-- A 2-arm `match` on an Option or Result that structurally IS a functor `map`
+-- over the success side — rewrite to `map f o` (hlint "use fmap").  Fires on
+-- EXACTLY these two shapes (the mapError/bimap variants fire nowhere in-tree):
+--   Option: `match o { None => None; Some p => Some <expr> }` → `map (p => <expr>) o`
+--   Result: `match r { Err v => Err v; Ok  p => Ok  <expr> }` → `map (p => <expr>) r`
+-- Arm order is either way.  ETA-REDUCE to `map f o` when `<expr>` is exactly
+-- `f p` (p the plain binder used once as the sole/last argument, `f` not
+-- mentioning p).  Firing conditions (census-precision ~100%):
+--   (1) EXACTLY 2 arms, NO guards, flat single-expression bodies.
+--   (2) ONE Option ctor-pair (None+Some) or ONE Result ctor-pair (Err+Ok); these
+--       ctor names belong only to the prelude Option/Result types, so keying off
+--       the arm patterns is sound with no type inference.
+--   (3) the PASSTHROUGH arm reconstructs VERBATIM: `None => None`, or `Err v =>
+--       Err v` with the SAME identifier v (rejects `Err e => Err (…e…)` rebuilds
+--       and `None => Some …`).
+--   (4) LINCHPIN — the transform arm's body HEAD is literally the SAME ctor
+--       wrapping an expression (`Some <expr>` / `Ok <expr>`).  This excludes the
+--       `Ok x => f x` / `Ok x => andThen …` BIND chains (they UNWRAP, no re-wrap)
+--       which are `andThen`/monadic, NOT map.
+-- No self-reference risk: the prelude `map` impls are multi-clause function
+-- clauses, not a scrutinee `EMatch`, so `map`'s own definition never fires.
+
+-- pattern is a nullary `PCon name` (e.g. `None`)
+export
+isNilPCon : String -> Pat -> Bool
+isNilPCon name (PCon n []) = n == name
+isNilPCon _ _ = False
+
+-- transform arm: `PCon ctor [binder] => <ctor> <expr>` — the body head is
+-- LITERALLY `ctor` (condition 4).  Returns `(binder, <expr>)`.
+export
+matchToMapTransform : String -> Pat -> Expr -> Option (Pat, Expr)
+matchToMapTransform ctor (PCon c [binder]) body
+  | c == ctor = match unwrapLoc body
+    EApp hd inner => if isEVarNamed ctor hd then Some (binder, inner) else None
+    _ => None
+matchToMapTransform _ _ _ = None
+
+-- Arm `PCon ctor [v] => <ctor> v` — unwraps and re-wraps the SAME identifier v,
+-- so the arm is the identity on that constructor.  Rejects a rebuild
+-- (`Err e => Err (wrap e)`) and a ctor swap (`None => Some …`).
+export
+ctorVarPassthru : String -> Pat -> Expr -> Bool
+ctorVarPassthru ctor (PCon c [PVar v _ _]) body
+  | c == ctor = match unwrapLoc body
+    EApp hd arg => isEVarNamed ctor hd && isEVarNamed v arg
+    _ => False
+ctorVarPassthru _ _ _ = False
+
+-- Result passthrough arm: `Err v => Err v` with the SAME identifier v (condition 3).
+export
+matchToMapErrPassthru : Pat -> Expr -> Bool
+matchToMapErrPassthru p body = ctorVarPassthru "Err" p body
+
+-- the scrutinee of a `match`, or the expression itself when it is not one.
+export
+matchScrutOf : Expr -> Expr
+matchScrutOf e = match unwrapLoc e
+  EMatch s _ => s
+  _ => e
+
+-- The code portion of every source line (text before the line's comment, or the
+-- whole line when it has none), by one linear merge of the line list against the
+-- comment list — both are in ascending line order.
+export
+codePortions : List String -> List Comment -> Int -> List String
+codePortions [] _ _ = []
+codePortions (l :: rest) [] n = l :: codePortions rest [] (n + 1)
+codePortions (l :: rest) (c :: cs) n
+  | commentLine c < n = codePortions (l :: rest) cs n
+  | commentLine c == n =
+    stringSlice 0 (commentCol c) l :: codePortions rest cs (n + 1)
+  | otherwise = l :: codePortions rest (c :: cs) (n + 1)
+
+-- One claim candidate per comment BLOCK: consecutive full-line comments form a
+-- block; a trailing comment (code before it on its line) is a block of its own.
+-- Fields: first line, last line, trailing?, the joined comment text.
+public export data CommentBlock = CommentBlock Int Int Bool String
+
+export
+commentBlocks : List Comment -> Array String -> List CommentBlock
+commentBlocks [] _ = []
+commentBlocks (c :: rest) codeLines =
+  let line = commentLine c
+  let trailing = trimWs (codeLineAt codeLines line) /= ""
+  if trailing then
+    CommentBlock line line True (commentText c) :: commentBlocks rest codeLines
+  else match commentBlockExtend rest codeLines line (commentText c)
+    (lastLine, text, rest2) =>
+      CommentBlock line lastLine False text :: commentBlocks rest2 codeLines
+
+commentBlockExtend : List Comment ->
+  Array String ->
+  Int ->
+  String ->
+  (Int, String, List Comment)
+commentBlockExtend [] _ last text = (last, text, [])
+commentBlockExtend (c :: rest) codeLines last text
+  | commentLine c == last + 1
+    && trimWs (codeLineAt codeLines (last + 1)) == "" =
+    commentBlockExtend rest codeLines (last + 1) "\{text}\n\{commentText c}"
+  | otherwise = (last, text, c :: rest)
+
+export
+codeLineAt : Array String -> Int -> String
+codeLineAt codeLines line
+  | line >= 1 && line <= arrayLength codeLines =
+    arrayGetUnsafe (line - 1) codeLines
+  | otherwise = ""
+
+-- Build a HashMap-as-set from a name list (membership testing only).
+export
+nameSetOf : List String -> HashMap String Unit
+nameSetOf names =
+  let s = new ()
+  let _ = nameSetInto names s
+  s
+
+nameSetInto : List String -> HashMap String Unit -> Unit
+nameSetInto [] _ = ()
+nameSetInto (n :: rest) s =
+  let _ = setInPlace n () s
+  nameSetInto rest s

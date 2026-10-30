@@ -1,0 +1,6 @@
+import string.{take}
+
+f : (Int -> Int) -> Int
+f take = take "x"
+
+main = f (n => n)

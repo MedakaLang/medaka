@@ -1,0 +1,216 @@
+-- lint rule rule-lambda-section: a lambda whose body is one binary op on its parameter(s). Prefer an operator section.
+
+import frontend.ast.{Loc(..), Pat(..), Section(..), Expr(..), Decl(..)}
+import frontend.ast_walk.{ExprKind(..)}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import support.util.{contains}
+import list.{last}
+import support.char.{isIdentChar}
+import string.{stripSuffix, trimRight, unwords}
+import tools.printer.{exprToString}
+import tools.lint_fix.{Binding(..)}
+import tools.lint_core.{
+  Applicability(..),
+  Category(..),
+  Ctx(..),
+  FileFacts(..),
+  Finding(..),
+  Fix,
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  Visitor(..),
+  mkVisitorRule,
+}
+import tools.lint_shared.{
+  isEVarNamed,
+  mentionsVar,
+  replaceFix,
+  parenAt,
+  sourceLine,
+  ruleNameLambdaSection,
+  unwrapLoc,
+}
+
+export
+rule : Rule
+rule =
+  mkVisitorRule
+    RuleMeta {
+      name = ruleNameLambdaSection,
+      summary =
+        "lambda whose body is a single binary op on its parameter(s). Prefer an operator section (STYLE \"Dogfooding\")",
+      doc =
+        "A lambda whose body is a single binary operator applied to its parameter is an operator section. The section is shorter and names no throwaway variable.\n\nBefore:\n  map (x => x + 1) xs\nAfter:\n  map (+ 1) xs",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [],
+    }
+    ruleLambdaSection
+    None
+
+-- ── rule: lambda-section (STYLE "Dogfooding" — operator sections) ─────────────
+-- A single-clause lambda whose body is ONE binary operation on its bound
+-- parameter(s), rewritable to the canonical operator SECTION idiom:
+--   (x => x OP e)   [e free of x]  → (OP e)    right section  ESection (SecRight OP e)
+--   (x => e OP x)   [e free of x]  → (e OP _)   left section   ESection (SecLeft e OP)
+--   (x y => x OP y)  [x ≠ y]       → (OP)       bare section   ESection (SecBare OP)
+--
+-- CONSERVATISM (a false positive here CORRUPTS code):
+--   * single-param: the param must be EXACTLY one operand of the OUTERMOST binary
+--     op (a bare `EVar x` leaf); the OTHER operand must NOT mention x anywhere.
+--     So `x => x OP x`, `x => f x OP e`, `x => (x + 1) OP e` all skip.
+--   * two-param: body is exactly `EVar x OP EVar y` (in order, distinct names).
+--   * only the SYMBOLIC operators the parser accepts as sections round-trip
+--     (`sectionOpStr` in parser.mdk): + * / == /= < > <= >= && || :: ++ |> >> <<,
+--     plus `-` for LEFT/BARE only (a `-` RIGHT section `(- e)` parses as unary
+--     negation — EXCLUDED).  Backtick infix (`EInfix`) is NOT handled: the printer
+--     emits a word-operator section without backticks, so it would not round-trip.
+--   * `ELam` is inherently single-clause / guard-free, so no extra guard check is
+--     needed (contrast the §8 match-on-param rule).
+-- The check walks the WHOLE decl expression tree (a lambda can nest anywhere) —
+-- including impl-method bodies; the fix replaces each eligible lambda with its
+-- `ESection`.
+
+-- symbolic operators that round-trip as a section (parser.mdk `sectionOpStr`).
+sectionSymOps : List String
+sectionSymOps = [
+  "+",
+  "*",
+  "/",
+  "==",
+  "/=",
+  "<",
+  ">",
+  "<=",
+  ">=",
+  "&&",
+  "||",
+  "::",
+  "++",
+  "|>",
+  ">>",
+  "<<",
+]
+
+-- `-` is a valid LEFT/BARE section but NOT a right section (`(- e)` = negation).
+rightSectionOp : String -> Bool
+rightSectionOp op = contains op sectionSymOps
+
+leftSectionOp : String -> Bool
+leftSectionOp op = op == "-" || contains op sectionSymOps
+
+bareSectionOp : String -> Bool
+bareSectionOp op = op == "-" || contains op sectionSymOps
+
+-- the section a lambda collapses to, or None if it is not an eligible shape.
+lamSection : List Pat -> Expr -> Option Section
+lamSection [PVar x _ _] body = lamSection1 x (unwrapLoc body)
+lamSection [PVar x _ _, PVar y _ _] body
+  | x /= y = lamSection2 x y (unwrapLoc body)
+  | otherwise = None
+lamSection _ _ = None
+
+lamSection1 : String -> Expr -> Option Section
+lamSection1 x (EBinOp op a b _)
+  | isEVarNamed x a && rightSectionOp op && not (mentionsVar x b) =
+    Some (SecRight op b)
+  | isEVarNamed x b && leftSectionOp op && not (mentionsVar x a) =
+    Some (SecLeft a op)
+  | otherwise = None
+lamSection1 _ _ = None
+
+lamSection2 : String -> String -> Expr -> Option Section
+lamSection2 x y (EBinOp op a b _)
+  | isEVarNamed x a && isEVarNamed y b && bareSectionOp op = Some (SecBare op)
+  | otherwise = None
+lamSection2 _ _ _ = None
+
+-- ── check ─────────────────────────────────────────────────────────────────────
+-- Only `ELam` nodes can match, so only those are visited.
+ruleLambdaSection : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Visitor
+ruleLambdaSection _ _ facts _ _ = [OnExpr [KLam] (lambdaSectionAt facts)]
+
+lambdaSectionAt : FileFacts -> Ctx -> Expr -> List Finding
+lambdaSectionAt facts ctx (ELam pats body) = match lamSection pats body
+  Some sec => [
+    lambdaSectionFinding
+      ctx.ctxDeclLoc
+      sec
+      (lambdaSectionFix facts ctx pats sec),
+  ]
+  None => []
+lambdaSectionAt _ _ _ = []
+
+lambdaSectionFinding : Option Loc -> Section -> Option Fix -> Finding
+lambdaSectionFinding loc s fix = Finding {
+  rule = ruleNameLambdaSection,
+  message =
+    "lambda is a single binary operation on its parameter(s). Rewrite as the operator section '"
+      ++ exprToString (ESection s)
+      ++ "'",
+  severity = SevWarning,
+  loc = loc,
+  fix = fix,
+}
+
+-- ── autofix ───────────────────────────────────────────────────────────────────
+-- The section carries its own brackets, so it reads the same wherever the
+-- lambda stood.
+lambdaSectionFix : FileFacts -> Ctx -> List Pat -> Section -> Option Fix
+lambdaSectionFix facts ctx pats sec =
+  replaceFix
+    Safe
+    "use the operator section"
+    (lambdaSpan facts ctx pats)
+    Closed
+    ctx
+    (exprToString (ESection sec))
+
+-- The `ELoc` of a lambda starts at its arrow and its parameters carry no
+-- positions, so the source line gives the rest.  A parenthesised lambda is
+-- wrapped by a further `ELoc` whose first character is the bracket, and the
+-- section replaces it, brackets and all.  An unbracketed one is replaced from
+-- its first parameter, found by reading the parameter names back from the
+-- arrow; any other spacing leaves the finding without a fix.
+lambdaSpan : FileFacts -> Ctx -> List Pat -> Option Loc
+lambdaSpan facts ctx pats = match ctx.ctxOwn
+  Some (own@(Loc f sl sc el ec)) =>
+    if parenAt facts sl sc then
+      Some own
+    else match sourceLine facts sl
+      Some line =>
+        map
+          (start => Loc f sl start el ec)
+          (paramsStart
+            (stringSlice 0 sc line)
+            (unwords (flatMap patVarName pats)))
+      None => None
+  None => None
+
+patVarName : Pat -> List String
+patVarName (PVar x _ _) = [x]
+patVarName _ = []
+
+-- The column where `params` begins, given the text before the arrow.
+paramsStart : String -> String -> Option Int
+paramsStart before params = match stripSuffix params (trimRight before)
+  Some rest => if endsInIdent rest then None else Some (stringLength rest)
+  None => None
+
+endsInIdent : String -> Bool
+endsInIdent text = match last (toList (stringToChars text))
+  Some c => isIdentChar c
+  None => False

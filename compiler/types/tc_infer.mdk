@@ -111,6 +111,7 @@ import types.tc_env.{
   extendLocalVar,
   extendLocalVars,
   funClausePair,
+  lookupLocalFlag,
   lookupMethodRow,
   lookupRecordByName,
   lookupStandaloneValue,
@@ -2539,8 +2540,12 @@ appArgExpr _ = None
 applicationRow : TcEnv -> Expr -> Mono -> Mono -> Mono -> EffRow
 applicationRow env appExpr ft xt result = match normalize ft
   TFun dom row res =>
-    argumentInto env (appArgExpr appExpr) dom xt
-    bindFrom env.teDyn result res
+    let callee = match appSpineName appExpr
+      Some name if not (lookupLocalFlag env name) => Some name
+      _ => None
+    let calleeEnv = { env | teDyn = { env.teDyn | dcCallee = callee } }
+    argumentInto calleeEnv (appArgExpr appExpr) dom xt
+    bindFrom calleeEnv.teDyn result res
     row
   _ =>
     let unknown = openRow env.teDyn.dcModule ()

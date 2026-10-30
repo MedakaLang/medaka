@@ -1,0 +1,407 @@
+-- compiler/tools/lint_dup.mdk — the duplicate-body occurrence engine: per-clause
+-- facts, occurrence grouping and the cross-file join.  The runner (`lint_walk`),
+-- the `lint` facade and the cross-file rule all use it, so it sits below them.
+
+import frontend.ast.{Loc(..), Pat(..), FieldAssign(..), Expr(..), Decl(..)}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import support.util.{listLen, allList, filterList, reverseL, joinWith}
+import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
+import support.char.{isUpper}
+import ir.sexp.{exprSexp, patSexp}
+import tools.lint_core.{DupClause(..), Finding(..)}
+import tools.lint_shared.{
+  declLocList, ruleNameDuplicateBody, sortUniqS, unwrapLoc
+}
+
+-- minimum body complexity (count of AST nodes) to be eligible.  Calibrated so the
+-- real stdlib/compiler libraries stay quiet absent genuine duplication.
+dupComplexityThreshold : Int
+dupComplexityThreshold = 10
+
+-- structural identity key: param-pattern shapes ++ ELoc-stripped body sexp.
+structuralKey : List Pat -> Expr -> String
+structuralKey pats body =
+  "\{joinWith "|" (map patSexp pats)} => \{exprSexp body}"
+
+-- complexity proxy: every `node`/`slist` in the sexp dump emits a '(', so counting
+-- '(' counts AST nodes without a second traversal.
+bodyComplexity : Expr -> Int
+bodyComplexity body =
+  let cs = stringToChars (exprSexp body)
+  countOpenParens cs (arrayLength cs) 0 0
+
+countOpenParens : Array Char -> Int -> Int -> Int -> Int
+countOpenParens cs n i acc
+  | i >= n = acc
+  | arrayGetUnsafe i cs == '(' = countOpenParens cs n (i + 1) (acc + 1)
+  | otherwise = countOpenParens cs n (i + 1) acc
+
+-- ── over-fire narrowing (#893): "pure data" bodies never fire ──────────────────
+-- A body built ENTIRELY out of literals, variable references, tuples/lists/
+-- records/maps/sets of those, and data-CONSTRUCTOR application (an `EApp` whose
+-- ultimate head is an upper-case `EVar` — Medaka's ctor-naming convention) is
+-- DATA, not logic: it calls no function, branches on nothing.  Two files that
+-- coincidentally wire up parallel fixture literals with the same shape (e.g. a
+-- `specs : List (String, String, Option Int, List (List Cell))` table built from
+-- differently-named-but-identically-shaped rows) are not a copy-paste hazard —
+-- there is no *behavior* to diverge, only data, and the fields plainly differ
+-- file-to-file even when the structural skeleton matches.  A body containing
+-- ANY call to a lower-case function (a real combinator, a `println`, string
+-- interpolation invoking a formatter, …) or any control flow (`if`/`match`/
+-- `do`) is NOT pure data and remains fully eligible — that is where actual
+-- logic can silently diverge, which is the defect this rule exists to catch.
+isPureDataExpr : Expr -> Bool
+isPureDataExpr e =
+  let e2 = unwrapLoc e
+  match e2
+    ELit _ => True
+    ENumLit _ _ _ => True
+    EWideLit _ _ _ _ => True
+    EVar _ => True
+    ETuple es => allList isPureDataExpr es
+    EListLit es => allList isPureDataExpr es
+    EArrayLit es => allList isPureDataExpr es
+    ERecordCreate _ fields => allList isPureDataField fields
+    EMapLit _ kvs => allList isPureDataKv kvs
+    ESetLit _ es => allList isPureDataExpr es
+    EAnnot inner _ => isPureDataExpr inner
+    EUnOp _ inner _ => isPureDataExpr inner
+    EApp _ _ if appHeadIsCtor e2 => allList isPureDataExpr (appArgs e2)
+    _ => False
+
+isPureDataField : FieldAssign -> Bool
+isPureDataField (FieldAssign _ e) = isPureDataExpr e
+
+isPureDataKv : (Expr, Expr) -> Bool
+isPureDataKv (k, v) = isPureDataExpr k && isPureDataExpr v
+
+-- the ultimate callee of an `EApp` spine is an upper-case `EVar` (a data ctor,
+-- by Medaka's naming convention — see `isUpperFirst`), not an ordinary function.
+appHeadIsCtor : Expr -> Bool
+appHeadIsCtor e = match unwrapLoc e
+  EVar name => isUpperFirst name
+  EApp f _ => appHeadIsCtor f
+  _ => False
+
+-- an `EApp` spine's arguments, left-to-right (innermost-first application
+-- unwound into a flat list).
+appArgs : Expr -> List Expr
+appArgs e = reverseL (appArgsRev e)
+
+appArgsRev : Expr -> List Expr
+appArgsRev e = match unwrapLoc e
+  EApp f a => a :: appArgsRev f
+  _ => []
+
+isUpperFirst : String -> Bool
+isUpperFirst s =
+  if stringLength s == 0 then
+    False
+  else
+    isUpper (arrayGetUnsafe 0 (stringToChars s))
+
+-- THE join: occurrences (from every file) → findings.  Split out of
+-- `ruleDuplicateBody` for #395's `--cache`, which reaches the same join from
+-- occurrences it deserialized rather than from freshly-parsed decls.  Both
+-- callers run THIS function, so a cached run's cross-file findings are computed
+-- by the identical code an uncached one runs.
+--
+-- This split is the whole correctness story of the lint cache.  A cache MUST
+-- store the per-file INPUTS to this join (`fileDupOccs`) and re-run it every
+-- time — never the findings it returns.  A finding here names file A *because
+-- of* file B, so a cached A-finding survives an edit to B that should have
+-- retracted it: the finding silently lingers (or, symmetrically, never
+-- appears).  Re-running the join is cheap — it measures LINEAR at occs≈10k, as
+-- `emitDupGroup`'s scan short-circuits at char 0 on distinct keys — so there is
+-- no efficiency argument for caching its output either.  Scenario 3 of
+-- test/diff_compiler_lint_cache.sh exists to fail loudly if someone ever tries.
+--
+-- PERFORMANCE, and a debunking that was itself half-wrong.  This join used to
+-- read:
+--
+--     let keys = sortUniqS (map occKey occs)
+--     flatMap (emitDupGroup occs) keys        -- emitDupGroup filters ALL occs
+--
+-- i.e. for each of ~10k distinct keys, a `filterList` over all ~10k occurrences:
+-- 100M string comparisons, QUADRATIC in occurrence count.  #395's spike graded
+-- that shape "measured LINEAR at occs=8000" — but what it actually established
+-- is that each comparison is O(1) rather than O(key length), because distinct
+-- sexp keys mismatch at char 0.  The comparisons are cheap; there are n² of
+-- them.  MEASURED here at N vs 2N with a warm cache (which removes the parse and
+-- leaves the join exposed): 0.115 s → 0.416 s, a 3.6x growth for 2x the input —
+-- quadratic, not the 2.0x of linear.  It cost 0.6 s of a 0.97 s warm run.
+--
+-- It hid for the same two reasons this repo keeps rediscovering: it was dwarfed
+-- by the parse it sat behind (so it never showed up cold), and a pure `List`
+-- scan ALLOCATES NOTHING, so `diff_compiler_perf_scaling` — which grades
+-- allocation growth, deliberately, because GC bytes are machine-independent —
+-- is blind to it (issue #110's class).
+--
+-- Now: bucket the occurrences by key ONCE (linear), then emit only from the
+-- groups that can actually fire.  A group needs ≥2 occurrences across ≥2 files,
+-- which in a clean tree is a handful out of ~10k — so the `sortUniqS` that
+-- orders the output for determinism now sorts that handful rather than every
+-- key.  Same findings, same order.
+export
+dupJoin : List (String, Int, String, String) -> List Finding
+dupJoin occs =
+  let groups = groupOccsByKey occs
+  let live =
+    filterList
+      (k => dupGroupFires (findWithDefault [] k groups))
+      (dupDistinctKeys occs)
+  dedupeFindings
+    (flatMap
+      (k => emitDupGroup (reverseL (findWithDefault [] k groups)))
+      (sortUniqS live))
+
+-- Both occurrence grains can key the SAME duplicate pair: a multi-clause
+-- function whose every clause matches another's fires once per matching clause
+-- and once in aggregate, and the aggregate anchors at the first individually
+-- eligible clause — the very line the clause grain reports.  The two findings
+-- are then word-for-word identical, and a reader gains nothing from reading the
+-- sentence twice.
+--
+-- Repeats are dropped HERE rather than prevented at the occurrence level because
+-- only the rendered finding can tell whether two grains say the same thing: the
+-- grains carry different keys, so they group over different partner-file sets,
+-- and a clause grain that spans strictly more files than the aggregate says
+-- something the aggregate does not.  First finding wins, so the `sortUniqS`-
+-- ordered output above keeps its order.
+dedupeFindings : List Finding -> List Finding
+dedupeFindings fs =
+  let seen = new ()
+  dedupeFindingsGo seen fs
+
+dedupeFindingsGo : HashMap String Unit -> List Finding -> List Finding
+dedupeFindingsGo _ [] = []
+dedupeFindingsGo seen (f :: rest)
+  | has (findingDedupeKey f) seen = dedupeFindingsGo seen rest
+  | otherwise =
+    let _ = setInPlace (findingDedupeKey f) () seen
+    f :: dedupeFindingsGo seen rest
+
+findingDedupeKey : Finding -> String
+findingDedupeKey f = "\{f.rule}\n\{dupLocKey f.loc}\n\{f.message}"
+
+dupLocKey : Option Loc -> String
+dupLocKey (Some (Loc file line col _ _)) = "\{file}:\{line}:\{col}"
+dupLocKey None = "-"
+
+-- key → its occurrences, in one linear pass.  Each bucket accumulates REVERSED
+-- (prepend is O(1)); `dupJoin` reverses on the way out so the occurrence order
+-- reaching `emitDupGroup` matches the old filter-in-input-order behaviour.
+-- (`sortDupOccs` sorts them anyway — this only keeps the pre-sort list identical
+-- so the two implementations are diffable.)
+groupOccsByKey : List (String, Int, String, String) ->
+  HashMap String (List (String, Int, String, String))
+groupOccsByKey occs =
+  let m = new ()
+  let _ = groupOccsGo m occs
+  m
+
+groupOccsGo : HashMap String (List (String, Int, String, String)) ->
+  List (String, Int, String, String) ->
+  Unit
+groupOccsGo _ [] = ()
+groupOccsGo m (o :: rest) =
+  let _ = setInPlace (occKey o) (o :: findWithDefault [] (occKey o) m) m
+  groupOccsGo m rest
+
+-- Distinct keys in first-appearance order.  `keys` on the HashMap would do this
+-- too, but its order is bucket order — a function of the hash, so it would make
+-- the output depend on table internals.  This is deterministic by construction,
+-- and `dupJoin` sorts the survivors regardless.  (A `HashMap String Unit` as the
+-- seen-set, rather than a HashSet, only because hash_set's `new`/`has` would
+-- collide with hash_map's under this module's flat import list.)
+dupDistinctKeys : List (String, Int, String, String) -> List String
+dupDistinctKeys occs =
+  let seen = new ()
+  dupDistinctGo seen occs
+
+dupDistinctGo : HashMap String Unit ->
+  List (String, Int, String, String) ->
+  List String
+dupDistinctGo _ [] = []
+dupDistinctGo seen (o :: rest)
+  | has (occKey o) seen = dupDistinctGo seen rest
+  | otherwise =
+    let _ = setInPlace (occKey o) () seen
+    occKey o :: dupDistinctGo seen rest
+
+-- Can this key's group emit at all?  ≥2 occurrences spanning ≥2 distinct files.
+-- Cheap pre-filter so the sort and `emitDupGroup` only ever see live groups.
+dupGroupFires : List (String, Int, String, String) -> Bool
+dupGroupFires grp =
+  listLen grp >= 2 && listLen (sortUniqS (map occFile grp)) >= 2
+
+-- one occurrence per eligible top-level CLAUSE, plus one per eligible
+-- multi-clause FUNCTION: (file, line, name, key)
+export
+fileDupOccs : (String, Positions, List Decl) ->
+  List (String, Int, String, String)
+fileDupOccs (path, pos, decls) =
+  dupOccsOfClauses path (flatMap dupClauseOfDecl (declLocList pos decls))
+
+export
+dupOccsOfClauses : String ->
+  List DupClause ->
+  List (String, Int, String, String)
+dupOccsOfClauses path clauses =
+  flatMap (dupOccsOfGroup path) (dupClauseGroups clauses)
+
+export
+dupClauseOfDecl : (Decl, Option Loc) -> List DupClause
+dupClauseOfDecl (d, loc) = match d
+  DFunDef _ name pats body _ _ => [
+    DupClause {
+      dcName = name,
+      dcLine = locLineOf loc,
+      dcKey = structuralKey pats body,
+      dcCost = bodyComplexity body,
+      dcPure = isPureDataExpr body,
+    },
+  ]
+  DAttrib _ inner => dupClauseOfDecl (inner, loc)
+  _ => []
+
+-- Clauses of one function are adjacent in the decl list, so consecutive runs of
+-- a name group them.  Grouping by name across the whole file instead would fuse
+-- two unrelated definitions if a file ever held one name twice.
+dupClauseGroups : List DupClause -> List (List DupClause)
+dupClauseGroups [] = []
+dupClauseGroups (c :: rest) =
+  let (same, others) = dupSpanName c.dcName rest
+  (c :: same) :: dupClauseGroups others
+
+dupSpanName : String -> List DupClause -> (List DupClause, List DupClause)
+dupSpanName _ [] = ([], [])
+dupSpanName nm (c :: rest)
+  | c.dcName == nm =
+    let (same, others) = dupSpanName nm rest
+    (c :: same, others)
+  | otherwise = ([], c :: rest)
+
+dupOccsOfGroup : String -> List DupClause -> List (String, Int, String, String)
+dupOccsOfGroup path cs = dupClauseOccs path cs ++ dupAggregateOcc path cs
+
+-- Clause grain: each clause that clears the floor on its own, keyed and reported
+-- at its own line.  This is the original (pre-#2651) occurrence set.
+dupClauseOccs : String -> List DupClause -> List (String, Int, String, String)
+dupClauseOccs _ [] = []
+dupClauseOccs path (c :: cs)
+  | c.dcCost >= dupComplexityThreshold && not c.dcPure =
+    (path, c.dcLine, c.dcName, c.dcKey) :: dupClauseOccs path cs
+  | otherwise = dupClauseOccs path cs
+
+-- Function grain.  The group is eligible when the COMBINED body clears the floor
+-- and at least one clause is real logic: a function all of whose clauses are
+-- pure data is data, which is #893's narrowing applied at function grain instead
+-- of clause grain.  A one-clause group has nothing to aggregate — its function
+-- grain is byte-for-byte its clause grain — so it yields nothing here.
+dupAggregateOcc : String -> List DupClause -> List (String, Int, String, String)
+dupAggregateOcc _ [] = []
+dupAggregateOcc _ [_] = []
+dupAggregateOcc path (c :: cs)
+  | dupGroupCost (c :: cs) >= dupComplexityThreshold
+    && not (allList dcPureOf (c :: cs)) = [
+    (
+      path,
+      dupAnchorLine (c :: cs) c.dcLine,
+      c.dcName,
+      joinWith "\n" (map dcKeyOf (c :: cs)),
+    ),
+  ]
+  | otherwise = []
+
+-- WHERE the finding points, and this is load-bearing rather than cosmetic.
+-- A suppression directive is matched against the reported line, so moving an
+-- anchor silently un-suppresses a duplicate someone has already adjudicated —
+-- and this tree carries over a hundred such directives.  So the anchor is the
+-- first clause that clears the floor on its own, which is exactly the clause the
+-- per-clause rule reports and therefore exactly the clause every existing
+-- directive was placed above.  Aggregation then only ADDS findings; it moves
+-- none.  A function that fires only in aggregate has no such clause and no
+-- directive to preserve, so it anchors at its first clause, where a reader looks
+-- to find the function.
+dupAnchorLine : List DupClause -> Int -> Int
+dupAnchorLine [] fallback = fallback
+dupAnchorLine (c :: cs) fallback
+  | c.dcCost >= dupComplexityThreshold && not c.dcPure = c.dcLine
+  | otherwise = dupAnchorLine cs fallback
+
+dcKeyOf : DupClause -> String
+dcKeyOf c = c.dcKey
+
+dcPureOf : DupClause -> Bool
+dcPureOf c = c.dcPure
+
+dupGroupCost : List DupClause -> Int
+dupGroupCost [] = 0
+dupGroupCost (c :: cs) = c.dcCost + dupGroupCost cs
+
+locLineOf : Option Loc -> Int
+locLineOf (Some (Loc _ l _ _ _)) = l
+locLineOf None = 1
+
+occFile : (String, Int, String, String) -> String
+occFile (f, _, _, _) = f
+
+occLine : (String, Int, String, String) -> Int
+occLine (_, l, _, _) = l
+
+occName : (String, Int, String, String) -> String
+occName (_, _, n, _) = n
+
+occKey : (String, Int, String, String) -> String
+occKey (_, _, _, k) = k
+
+-- emit findings for one structural-key group, but only when it spans ≥2 files.
+-- Takes the group itself; `dupJoin` bucketed the occurrences by key and already
+-- dropped the groups that cannot fire (see `dupGroupFires`).  The ≥2-file check
+-- stays here regardless — this function's contract is "≥2 files or nothing", and
+-- it must not depend on its caller having filtered.
+emitDupGroup : List (String, Int, String, String) -> List Finding
+emitDupGroup grp =
+  let distinctFiles = sortUniqS (map occFile grp)
+  if listLen distinctFiles < 2 then
+    []
+  else
+    map (dupFinding distinctFiles) (sortDupOccs grp)
+
+dupFinding : List String -> (String, Int, String, String) -> Finding
+dupFinding distinctFiles occ =
+  let file = occFile occ
+  let line = occLine occ
+  let others = filterList (/= file) distinctFiles
+  Finding {
+    rule = ruleNameDuplicateBody,
+    message =
+      "function '\{occName occ}' has a body structurally identical to a definition in \{joinWith ", " others} — consolidate into a shared module",
+    severity = SevWarning,
+    loc = Some (Loc file line 1 line 1),
+    fix = None,
+  }
+
+-- insertion sort occurrences by (file, line) for deterministic output.
+sortDupOccs : List (String, Int, String, String) ->
+  List (String, Int, String, String)
+sortDupOccs [] = []
+sortDupOccs (x :: xs) = dupInsert x (sortDupOccs xs)
+
+dupInsert : (String, Int, String, String) ->
+  List (String, Int, String, String) ->
+  List (String, Int, String, String)
+dupInsert x [] = [x]
+dupInsert x (y :: ys)
+  | dupOccLe x y = x :: y :: ys
+  | otherwise = y :: dupInsert x ys
+
+dupOccLe : (String, Int, String, String) ->
+  (String, Int, String, String) ->
+  Bool
+dupOccLe a b = match stringCompare (occFile a) (occFile b)
+  Lt => True
+  Gt => False
+  Eq => occLine a <= occLine b

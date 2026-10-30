@@ -130,6 +130,7 @@ Cross-cutting process docs: how the test suite is organized, how a build ships, 
 | [`EDGE-DEPLOY.md`](ops/EDGE-DEPLOY.md) | Deploying a Medaka program to Cloudflare Workers | — |
 | [`EFFECTS-REARCHITECTURE-HANDOFF.md`](ops/EFFECTS-REARCHITECTURE-HANDOFF.md) | Effects rearchitecture session handoff | The arrow half |
 | [`GATE-REGISTRY-DESIGN.md`](ops/GATE-REGISTRY-DESIGN.md) | GATE-REGISTRY-DESIGN.md — the gate registry format and `medaka gate` driver | LANDED |
+| [`LINT-RULES.md`](ops/LINT-RULES.md) | Lint rules | — |
 | [`MCP.md`](ops/MCP.md) | MCP.md — `medaka mcp`, the LSP-for-agents | IMPLEMENTED |
 | [`PDS-B14-ATTACK-LIST.md`](ops/PDS-B14-ATTACK-LIST.md) | PDS B14 running-instance attack list | — |
 | [`PDS-CONFORMANCE-WALKTHROUGH.md`](ops/PDS-CONFORMANCE-WALKTHROUGH.md) | PDS-CONFORMANCE-WALKTHROUGH.md — criterion A8, run by hand from the official app | written ahead of the first G-QUIET deploy |
@@ -151,6 +152,7 @@ What's in the standard library, what's planned, module-by-module status.
 
 | Doc | What it is | Status |
 |-----|------------|--------|
+| [`ENGINES.md`](stdlib/ENGINES.md) | Engines | — |
 | [`FP-STDLIB-DESIGN.md`](stdlib/FP-STDLIB-DESIGN.md) | FP Standard Library — Typeclasses, Combinators & Error Handling | IMPLEMENTED |
 | [`P1-STDLIB-DESIGN.md`](stdlib/P1-STDLIB-DESIGN.md) | P1 Standard Library — Design & Prioritization | PARTIAL |
 | [`STDLIB.md`](stdlib/STDLIB.md) | Medaka Standard Library — Design Notes & Roadmap | — |

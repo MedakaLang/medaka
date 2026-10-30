@@ -1,0 +1,36 @@
+-- Two top-level functions in one file with structurally identical bodies are
+-- both flagged; a function with a different body is not.
+widthOne : Int -> String
+-- expect-next-line rule-duplicate-body
+widthOne n =
+  if n > 640 then
+    "wide"
+  else if n > 320 then
+    "narrow"
+  else if n > 80 then
+    "tiny"
+  else
+    "hidden"
+
+widthTwo : Int -> String
+-- expect-next-line rule-duplicate-body
+widthTwo n =
+  if n > 640 then
+    "wide"
+  else if n > 320 then
+    "narrow"
+  else if n > 80 then
+    "tiny"
+  else
+    "hidden"
+
+widthThree : Int -> String
+widthThree n =
+  if n > 900 then
+    "huge"
+  else if n > 450 then
+    "big"
+  else if n > 90 then
+    "small"
+  else
+    "none"

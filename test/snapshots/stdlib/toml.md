@@ -1,5 +1,5 @@
 # META
-source_lines=777
+source_lines=833
 stages=DESUGAR,MARK
 # SOURCE
 {- | A reader for a subset of TOML.
@@ -22,6 +22,7 @@ stages=DESUGAR,MARK
 -- `compiler/support/manifest.mdk`.
 
 import list.{reverse}
+import map.{Map(..), get, insertWith}
 import string.{trim, lines, toInt, startsWith, drop, indexOf, contains}
 import core.{Display}
 import regex.{Regex, mustCompile, find as reFind}
@@ -539,14 +540,29 @@ export
 tableCount : String -> Toml -> Int
 tableCount name (Toml kvs) = tableCountGo (stringConcat [name, "."]) kvs 0
 
-stripTablePrefix : String ->
+-- One scan of `kvs` for entry `i`: the entry's pairs with the prefix removed
+-- (reversed) and the largest index + 1 seen over all keys, as `tableCount`
+-- counts it, so an out-of-range `i` is told apart from an entry with no keys.
+tableEntryGo : String ->
+  String ->
   List (String, TomlValue) ->
-  List (String, TomlValue)
-stripTablePrefix _ [] = []
-stripTablePrefix prefix ((k, v) :: rest)
-  | startsWith prefix k =
-    (drop (stringLength prefix) k, v) :: stripTablePrefix prefix rest
-  | otherwise = stripTablePrefix prefix rest
+  Int ->
+  List (String, TomlValue) ->
+  (Int, List (String, TomlValue))
+tableEntryGo _ _ [] best acc = (best, acc)
+tableEntryGo prefix entryPrefix ((k, v) :: rest) best acc =
+  let best2 = match tableIdxOf prefix k
+    None => best
+    Some j => max (j + 1) best
+  if startsWith entryPrefix k then
+    tableEntryGo
+      prefix
+      entryPrefix
+      rest
+      best2
+      ((drop (stringLength entryPrefix) k, v) :: acc)
+  else
+    tableEntryGo prefix entryPrefix rest best2 acc
 
 {- | The `i`-th `[[name]]` entry, counting from `0`, as a document of its
    own, or `None` when `i` is out of range.
@@ -560,13 +576,53 @@ stripTablePrefix prefix ((k, v) :: rest)
    None -}
 export
 tableEntry : String -> Int -> Toml -> Option Toml
-tableEntry name i (Toml kvs) =
-  if i < 0 || i >= tableCount name (Toml kvs) then
-    None
-  else
-    Some
-      (Toml
-        (stripTablePrefix (stringConcat [name, ".", intToString i, "."]) kvs))
+tableEntry name i (Toml kvs)
+  | i < 0 = None
+  | otherwise =
+    let entryPrefix = stringConcat [name, ".", intToString i, "."]
+    let (count, entry) =
+      tableEntryGo (stringConcat [name, "."]) entryPrefix kvs 0 []
+    if i >= count then None else Some (Toml (reverse entry))
+
+-- The entry index and unqualified key of `k` when it belongs to an entry of
+-- `prefix`, spelled the way `tableEntry` spells it.
+entryKeyOf : String -> String -> Option (Int, String)
+entryKeyOf prefix k = match tableIdxOf prefix k
+  Some i if i >= 0 =>
+    let entryPrefix = stringConcat [prefix, intToString i, "."]
+    if startsWith entryPrefix k then
+      Some (i, drop (stringLength entryPrefix) k)
+    else
+      None
+  _ => None
+
+-- Groups the pairs of `kvs` by entry index, document order within an entry.
+-- Folds from the right so each cons lands in front of the later pairs.
+groupEntries : String ->
+  List (String, TomlValue) ->
+  Map Int (List (String, TomlValue))
+groupEntries _ [] = Tip
+groupEntries prefix ((k, v) :: rest) =
+  let groups = groupEntries prefix rest
+  match entryKeyOf prefix k
+    None => groups
+    Some (i, key) => insertWith (++) i [(key, v)] groups
+
+{- | Every `[[name]]` entry in the document, in document order.
+
+   Entry `i` is what `tableEntry name i` returns, but the document is read
+   once for all of them. The list is empty when there are no entries.
+
+   > map (getString "name") (tableEntries "gate" (Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")]))
+   [Some "a", Some "b"]
+   > tableEntries "gate" (Toml [("package.name", TString "x")])
+   [] -}
+export
+tableEntries : String -> Toml -> List Toml
+tableEntries name (Toml kvs) =
+  let prefix = stringConcat [name, "."]
+  let groups = groupEntries prefix kvs
+  map (i => Toml (optionOr [] (get i groups))) [0..tableCountGo prefix kvs 0]
 
 -- ── Eq and Debug instances ──────────────────────────────────────────────────
 
@@ -769,8 +825,8 @@ prop "Display Toml agrees with Eq Toml" (k : String) (n : Int) =
   let d = Toml [(k ++ "x", TInt n)]
   display a == display b
     && eq a b
-    && not (display a == display c)
-    && not (display a == display d)
+    && display a /= display c
+    && display a /= display d
 
 -- LAW: every key and every value reaches the output (nothing is silently
 -- dropped as the entry list grows).
@@ -781,6 +837,7 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
     && contains (displayTomlValue (TInt n)) two
 # DESUGAR
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
+(DUse false (UseGroup ("map") ((mem "Map" true) (mem "get" false) (mem "insertWith" false))))
 (DUse false (UseGroup ("string") ((mem "trim" false) (mem "lines" false) (mem "toInt" false) (mem "startsWith" false) (mem "drop" false) (mem "indexOf" false) (mem "contains" false))))
 (DUse false (UseGroup ("core") ((mem "Display" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind"))))
@@ -874,11 +931,18 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DFunDef false "tableCountGo" ((PVar "prefix") (PCons (PTuple (PVar "k") PWild) (PVar "rest")) (PVar "best")) (EMatch (EApp (EApp (EVar "tableIdxOf") (EVar "prefix")) (EVar "k")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "tableCountGo") (EVar "prefix")) (EVar "rest")) (EVar "best"))) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "tableCountGo") (EVar "prefix")) (EVar "rest")) (EApp (EApp (EVar "max") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "best"))))))
 (DTypeSig true "tableCount" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyCon "Int"))))
 (DFunDef false "tableCount" ((PVar "name") (PCon "Toml" (PVar "kvs"))) (EApp (EApp (EApp (EVar "tableCountGo") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString "."))))) (EVar "kvs")) (ELit (LInt 0))))
-(DTypeSig false "stripTablePrefix" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))))))
-(DFunDef false "stripTablePrefix" (PWild (PList)) (EListLit))
-(DFunDef false "stripTablePrefix" ((PVar "prefix") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "k")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "prefix"))) (EVar "k")) (EVar "v")) (EApp (EApp (EVar "stripTablePrefix") (EVar "prefix")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "stripTablePrefix") (EVar "prefix")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "tableEntryGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))))))))))
+(DFunDef false "tableEntryGo" (PWild PWild (PList) (PVar "best") (PVar "acc")) (ETuple (EVar "best") (EVar "acc")))
+(DFunDef false "tableEntryGo" ((PVar "prefix") (PVar "entryPrefix") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "best") (PVar "acc")) (EBlock (DoLet false false (PVar "best2") (EMatch (EApp (EApp (EVar "tableIdxOf") (EVar "prefix")) (EVar "k")) (arm (PCon "None") () (EVar "best")) (arm (PCon "Some" (PVar "j")) () (EApp (EApp (EVar "max") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EVar "best"))))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "entryPrefix")) (EVar "k")) (EApp (EApp (EApp (EApp (EApp (EVar "tableEntryGo") (EVar "prefix")) (EVar "entryPrefix")) (EVar "rest")) (EVar "best2")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "entryPrefix"))) (EVar "k")) (EVar "v")) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EVar "tableEntryGo") (EVar "prefix")) (EVar "entryPrefix")) (EVar "rest")) (EVar "best2")) (EVar "acc"))))))
 (DTypeSig true "tableEntry" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "Toml"))))))
-(DFunDef false "tableEntry" ((PVar "name") (PVar "i") (PCon "Toml" (PVar "kvs"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EApp (EVar "tableCount") (EVar "name")) (EApp (EVar "Toml") (EVar "kvs"))))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "Toml") (EApp (EApp (EVar "stripTablePrefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString ".")) (EApp (EVar "intToString") (EVar "i")) (ELit (LString "."))))) (EVar "kvs"))))))
+(DFunDef false "tableEntry" ((PVar "name") (PVar "i") (PCon "Toml" (PVar "kvs"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "entryPrefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString ".")) (EApp (EVar "intToString") (EVar "i")) (ELit (LString "."))))) (DoLet false false (PTuple (PVar "count") (PVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "tableEntryGo") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString "."))))) (EVar "entryPrefix")) (EVar "kvs")) (ELit (LInt 0))) (EListLit))) (DoExpr (EIf (EBinOp ">=" (EVar "i") (EVar "count")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "Toml") (EApp (EVar "reverse") (EVar "entry"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "entryKeyOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "entryKeyOf" ((PVar "prefix") (PVar "k")) (EMatch (EApp (EApp (EVar "tableIdxOf") (EVar "prefix")) (EVar "k")) (arm (PCon "Some" (PVar "i")) ((GBool (EBinOp ">=" (EVar "i") (ELit (LInt 0))))) (EBlock (DoLet false false (PVar "entryPrefix") (EApp (EVar "stringConcat") (EListLit (EVar "prefix") (EApp (EVar "intToString") (EVar "i")) (ELit (LString "."))))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "entryPrefix")) (EVar "k")) (EApp (EVar "Some") (ETuple (EVar "i") (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "entryPrefix"))) (EVar "k")))) (EVar "None"))))) (arm PWild () (EVar "None"))))
+(DTypeSig false "groupEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
+(DFunDef false "groupEntries" (PWild (PList)) (EVar "Tip"))
+(DFunDef false "groupEntries" ((PVar "prefix") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false (PVar "groups") (EApp (EApp (EVar "groupEntries") (EVar "prefix")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "entryKeyOf") (EVar "prefix")) (EVar "k")) (arm (PCon "None") () (EVar "groups")) (arm (PCon "Some" (PTuple (PVar "i") (PVar "key"))) () (EApp (EApp (EApp (EApp (EVar "insertWith") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "++" (EVar "_a") (EVar "_b")))) (EVar "i")) (EListLit (ETuple (EVar "key") (EVar "v")))) (EVar "groups")))))))
+(DTypeSig true "tableEntries" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "List") (TyCon "Toml")))))
+(DFunDef false "tableEntries" ((PVar "name") (PCon "Toml" (PVar "kvs"))) (EBlock (DoLet false false (PVar "prefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString "."))))) (DoLet false false (PVar "groups") (EApp (EApp (EVar "groupEntries") (EVar "prefix")) (EVar "kvs"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EApp (EVar "Toml") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "get") (EVar "i")) (EVar "groups")))))) (ERangeList (ELit (LInt 0)) (EApp (EApp (EApp (EVar "tableCountGo") (EVar "prefix")) (EVar "kvs")) (ELit (LInt 0))) false)))))
 (DTypeSig false "eqTomlValue" (TyFun (TyCon "TomlValue") (TyFun (TyCon "TomlValue") (TyCon "Bool"))))
 (DFunDef false "eqTomlValue" ((PCon "TString" (PVar "a")) (PCon "TString" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "eqTomlValue" ((PCon "TArray" (PVar "a")) (PCon "TArray" (PVar "b"))) (EApp (EApp (EVar "eqStrLists") (EVar "a")) (EVar "b")))
@@ -942,10 +1006,11 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "allDistinct" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "allDistinct" ((PList)) (EVar "True"))
 (DFunDef false "allDistinct" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EVar "all") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "x") (EVar "_s")))) (EVar "rest")) (EApp (EVar "allDistinct") (EVar "rest"))))
-(DProp false "Display Toml agrees with Eq Toml" ((pp "k" (TyCon "String")) (pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n")))))) (DoLet false false (PVar "b") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n")))))) (DoLet false false (PVar "c") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EBinOp "+" (EVar "n") (ELit (LInt 1)))))))) (DoLet false false (PVar "d") (EApp (EVar "Toml") (EListLit (ETuple (EBinOp "++" (EVar "k") (ELit (LString "x"))) (EApp (EVar "TInt") (EVar "n")))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "display") (EVar "a")) (EApp (EVar "display") (EVar "b"))) (EApp (EApp (EVar "eq") (EVar "a")) (EVar "b"))) (EApp (EVar "not") (EBinOp "==" (EApp (EVar "display") (EVar "a")) (EApp (EVar "display") (EVar "c"))))) (EApp (EVar "not") (EBinOp "==" (EApp (EVar "display") (EVar "a")) (EApp (EVar "display") (EVar "d"))))))))
+(DProp false "Display Toml agrees with Eq Toml" ((pp "k" (TyCon "String")) (pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n")))))) (DoLet false false (PVar "b") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n")))))) (DoLet false false (PVar "c") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EBinOp "+" (EVar "n") (ELit (LInt 1)))))))) (DoLet false false (PVar "d") (EApp (EVar "Toml") (EListLit (ETuple (EBinOp "++" (EVar "k") (ELit (LString "x"))) (EApp (EVar "TInt") (EVar "n")))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "display") (EVar "a")) (EApp (EVar "display") (EVar "b"))) (EApp (EApp (EVar "eq") (EVar "a")) (EVar "b"))) (EBinOp "/=" (EApp (EVar "display") (EVar "a")) (EApp (EVar "display") (EVar "c")))) (EBinOp "/=" (EApp (EVar "display") (EVar "a")) (EApp (EVar "display") (EVar "d")))))))
 (DProp false "Display Toml renders every entry" ((pp "k" (TyCon "String")) (pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "one") (EApp (EVar "display") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n"))))))) (DoLet false false (PVar "two") (EApp (EVar "display") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n"))) (ETuple (EBinOp "++" (EVar "k") (ELit (LString "2"))) (EApp (EVar "TInt") (EVar "n"))))))) (DoExpr (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "two")) (EApp (EVar "stringLength") (EVar "one"))) (EApp (EApp (EVar "contains") (EApp (EVar "displayTomlValue") (EApp (EVar "TInt") (EVar "n")))) (EVar "two"))))))
 # MARK
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
+(DUse false (UseGroup ("map") ((mem "Map" true) (mem "get" false) (mem "insertWith" false))))
 (DUse false (UseGroup ("string") ((mem "trim" false) (mem "lines" false) (mem "toInt" false) (mem "startsWith" false) (mem "drop" false) (mem "indexOf" false) (mem "contains" false))))
 (DUse false (UseGroup ("core") ((mem "Display" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind"))))
@@ -1039,11 +1104,18 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DFunDef false "tableCountGo" ((PVar "prefix") (PCons (PTuple (PVar "k") PWild) (PVar "rest")) (PVar "best")) (EMatch (EApp (EApp (EVar "tableIdxOf") (EVar "prefix")) (EVar "k")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "tableCountGo") (EVar "prefix")) (EVar "rest")) (EVar "best"))) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "tableCountGo") (EVar "prefix")) (EVar "rest")) (EApp (EApp (EMethodRef "max") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "best"))))))
 (DTypeSig true "tableCount" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyCon "Int"))))
 (DFunDef false "tableCount" ((PVar "name") (PCon "Toml" (PVar "kvs"))) (EApp (EApp (EApp (EVar "tableCountGo") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString "."))))) (EVar "kvs")) (ELit (LInt 0))))
-(DTypeSig false "stripTablePrefix" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))))))
-(DFunDef false "stripTablePrefix" (PWild (PList)) (EListLit))
-(DFunDef false "stripTablePrefix" ((PVar "prefix") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "k")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "prefix"))) (EVar "k")) (EVar "v")) (EApp (EApp (EVar "stripTablePrefix") (EVar "prefix")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "stripTablePrefix") (EVar "prefix")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "tableEntryGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))))))))))
+(DFunDef false "tableEntryGo" (PWild PWild (PList) (PVar "best") (PVar "acc")) (ETuple (EVar "best") (EVar "acc")))
+(DFunDef false "tableEntryGo" ((PVar "prefix") (PVar "entryPrefix") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "best") (PVar "acc")) (EBlock (DoLet false false (PVar "best2") (EMatch (EApp (EApp (EVar "tableIdxOf") (EVar "prefix")) (EVar "k")) (arm (PCon "None") () (EVar "best")) (arm (PCon "Some" (PVar "j")) () (EApp (EApp (EMethodRef "max") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EVar "best"))))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "entryPrefix")) (EVar "k")) (EApp (EApp (EApp (EApp (EApp (EVar "tableEntryGo") (EVar "prefix")) (EVar "entryPrefix")) (EVar "rest")) (EVar "best2")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "entryPrefix"))) (EVar "k")) (EVar "v")) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EVar "tableEntryGo") (EVar "prefix")) (EVar "entryPrefix")) (EVar "rest")) (EVar "best2")) (EVar "acc"))))))
 (DTypeSig true "tableEntry" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "Toml"))))))
-(DFunDef false "tableEntry" ((PVar "name") (PVar "i") (PCon "Toml" (PVar "kvs"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EApp (EVar "tableCount") (EVar "name")) (EApp (EVar "Toml") (EVar "kvs"))))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "Toml") (EApp (EApp (EVar "stripTablePrefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString ".")) (EApp (EVar "intToString") (EVar "i")) (ELit (LString "."))))) (EVar "kvs"))))))
+(DFunDef false "tableEntry" ((PVar "name") (PVar "i") (PCon "Toml" (PVar "kvs"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "entryPrefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString ".")) (EApp (EVar "intToString") (EVar "i")) (ELit (LString "."))))) (DoLet false false (PTuple (PVar "count") (PVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "tableEntryGo") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString "."))))) (EVar "entryPrefix")) (EVar "kvs")) (ELit (LInt 0))) (EListLit))) (DoExpr (EIf (EBinOp ">=" (EVar "i") (EDictApp "count")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "Toml") (EApp (EVar "reverse") (EVar "entry"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "entryKeyOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "entryKeyOf" ((PVar "prefix") (PVar "k")) (EMatch (EApp (EApp (EVar "tableIdxOf") (EVar "prefix")) (EVar "k")) (arm (PCon "Some" (PVar "i")) ((GBool (EBinOp ">=" (EVar "i") (ELit (LInt 0))))) (EBlock (DoLet false false (PVar "entryPrefix") (EApp (EVar "stringConcat") (EListLit (EVar "prefix") (EApp (EVar "intToString") (EVar "i")) (ELit (LString "."))))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "entryPrefix")) (EVar "k")) (EApp (EVar "Some") (ETuple (EVar "i") (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "entryPrefix"))) (EVar "k")))) (EVar "None"))))) (arm PWild () (EVar "None"))))
+(DTypeSig false "groupEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
+(DFunDef false "groupEntries" (PWild (PList)) (EVar "Tip"))
+(DFunDef false "groupEntries" ((PVar "prefix") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false (PVar "groups") (EApp (EApp (EVar "groupEntries") (EVar "prefix")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "entryKeyOf") (EVar "prefix")) (EVar "k")) (arm (PCon "None") () (EVar "groups")) (arm (PCon "Some" (PTuple (PVar "i") (PVar "key"))) () (EApp (EApp (EApp (EApp (EVar "insertWith") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "++" (EVar "_a") (EVar "_b")))) (EVar "i")) (EListLit (ETuple (EVar "key") (EVar "v")))) (EVar "groups")))))))
+(DTypeSig true "tableEntries" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "List") (TyCon "Toml")))))
+(DFunDef false "tableEntries" ((PVar "name") (PCon "Toml" (PVar "kvs"))) (EBlock (DoLet false false (PVar "prefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString "."))))) (DoLet false false (PVar "groups") (EApp (EApp (EVar "groupEntries") (EVar "prefix")) (EVar "kvs"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EApp (EVar "Toml") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "get") (EVar "i")) (EVar "groups")))))) (ERangeList (ELit (LInt 0)) (EApp (EApp (EApp (EVar "tableCountGo") (EVar "prefix")) (EVar "kvs")) (ELit (LInt 0))) false)))))
 (DTypeSig false "eqTomlValue" (TyFun (TyCon "TomlValue") (TyFun (TyCon "TomlValue") (TyCon "Bool"))))
 (DFunDef false "eqTomlValue" ((PCon "TString" (PVar "a")) (PCon "TString" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "eqTomlValue" ((PCon "TArray" (PVar "a")) (PCon "TArray" (PVar "b"))) (EApp (EApp (EVar "eqStrLists") (EVar "a")) (EVar "b")))
@@ -1107,5 +1179,5 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "allDistinct" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "allDistinct" ((PList)) (EVar "True"))
 (DFunDef false "allDistinct" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EDictApp "all") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "x") (EVar "_s")))) (EVar "rest")) (EApp (EVar "allDistinct") (EVar "rest"))))
-(DProp false "Display Toml agrees with Eq Toml" ((pp "k" (TyCon "String")) (pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n")))))) (DoLet false false (PVar "b") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n")))))) (DoLet false false (PVar "c") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EBinOp "+" (EVar "n") (ELit (LInt 1)))))))) (DoLet false false (PVar "d") (EApp (EVar "Toml") (EListLit (ETuple (EBinOp "++" (EVar "k") (ELit (LString "x"))) (EApp (EVar "TInt") (EVar "n")))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EMethodRef "display") (EVar "a")) (EApp (EMethodRef "display") (EVar "b"))) (EApp (EApp (EMethodRef "eq") (EVar "a")) (EVar "b"))) (EApp (EVar "not") (EBinOp "==" (EApp (EMethodRef "display") (EVar "a")) (EApp (EMethodRef "display") (EVar "c"))))) (EApp (EVar "not") (EBinOp "==" (EApp (EMethodRef "display") (EVar "a")) (EApp (EMethodRef "display") (EVar "d"))))))))
+(DProp false "Display Toml agrees with Eq Toml" ((pp "k" (TyCon "String")) (pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n")))))) (DoLet false false (PVar "b") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n")))))) (DoLet false false (PVar "c") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EBinOp "+" (EVar "n") (ELit (LInt 1)))))))) (DoLet false false (PVar "d") (EApp (EVar "Toml") (EListLit (ETuple (EBinOp "++" (EVar "k") (ELit (LString "x"))) (EApp (EVar "TInt") (EVar "n")))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EMethodRef "display") (EVar "a")) (EApp (EMethodRef "display") (EVar "b"))) (EApp (EApp (EMethodRef "eq") (EVar "a")) (EVar "b"))) (EBinOp "/=" (EApp (EMethodRef "display") (EVar "a")) (EApp (EMethodRef "display") (EVar "c")))) (EBinOp "/=" (EApp (EMethodRef "display") (EVar "a")) (EApp (EMethodRef "display") (EVar "d")))))))
 (DProp false "Display Toml renders every entry" ((pp "k" (TyCon "String")) (pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "one") (EApp (EMethodRef "display") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n"))))))) (DoLet false false (PVar "two") (EApp (EMethodRef "display") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n"))) (ETuple (EBinOp "++" (EVar "k") (ELit (LString "2"))) (EApp (EVar "TInt") (EVar "n"))))))) (DoExpr (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "two")) (EApp (EVar "stringLength") (EVar "one"))) (EApp (EApp (EVar "contains") (EApp (EVar "displayTomlValue") (EApp (EVar "TInt") (EVar "n")))) (EVar "two"))))))

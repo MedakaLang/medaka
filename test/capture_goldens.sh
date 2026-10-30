@@ -304,12 +304,27 @@ if [ -n "$FROZEN_TAG" ]; then
         echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no module in the self-lex corpus or any tracked .lextok.golden sibling"; exit 2
       fi ;;
     lint_fix)
-      regen_frozen lint_fix_main fixed "" "$ROOT/test/lint_fix_fixtures/*.mdk"
+      # Each fixture runs with `--only=<its rules>` from ONLY.txt, the file the
+      # gate reads, so a golden holds no edit by a rule the fixture is not about.
+      LFIX="$BIN/lint_fix_main"
+      [ -x "$LFIX" ] || { echo "missing $LFIX — run: sh test/build_oracles.sh --build-one lint_fix_main"; exit 2; }
+      for f in "$ROOT"/test/lint_fix_fixtures/*.mdk; do
+        [ -f "$f" ] || continue
+        only_match "$(basename "$f" .mdk)" || continue
+        rules="$(awk -v n="$(basename "$f" .mdk)" '$1 == n { print $2 }' "$ROOT/test/lint_fix_fixtures/ONLY.txt")"
+        [ -n "$rules" ] || { echo "no row for $(basename "$f") in test/lint_fix_fixtures/ONLY.txt"; exit 2; }
+        lf_tmp="$(mktemp)"
+        "$LFIX" "--only=$rules" "$f" 2>/dev/null | strip_unit | sed "s#$ROOT/##g" > "$lf_tmp"
+        fwrote=$((fwrote+1))
+        finish_write "${f%.mdk}.fixed" "$lf_tmp"
+        rm -f "$lf_tmp"
+      done
       if [ -n "$ONLY_FILTER" ] && [ "$fwrote" -eq 0 ]; then
         echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/lint_fix_fixtures/"; exit 2
       fi ;;
     lint)
-      # test/lint_fixtures/<name>.expected : lint_main's own report, trailing
+      # test/lint_fixtures/<name>.expected : lint_main's report limited to the rules
+      # named for <name> in test/lint_fixtures/ONLY.txt, trailing
       # Unit auto-print dropped and LC_ALL=C sorted — the order the
       # `diff_compiler_lint` row in test/diff_compiler_fmt_test.mdk compares in.
       # regen_frozen cannot serve this family: it neither sorts nor pins
@@ -325,7 +340,9 @@ if [ -n "$FROZEN_TAG" ]; then
         [ -f "$f" ] || continue
         only_match "$(basename "$f" .mdk)" || continue
         lt_tmp="$(mktemp)"
-        "$LINT" "$f" 2>/dev/null | strip_unit | LC_ALL=C sort > "$lt_tmp"
+        rules="$(awk -v n="$(basename "$f" .mdk)" '$1 == n { print $2 }' "$ROOT/test/lint_fixtures/ONLY.txt")"
+        [ -n "$rules" ] || { echo "no row for $(basename "$f") in test/lint_fixtures/ONLY.txt"; exit 2; }
+        "$LINT" "--only=$rules" "$f" 2>/dev/null | strip_unit | LC_ALL=C sort > "$lt_tmp"
         fwrote=$((fwrote+1))
         finish_write "${f%.mdk}.expected" "$lt_tmp"
         rm -f "$lt_tmp"
@@ -564,7 +581,7 @@ if [ -n "$FROZEN_TAG" ]; then
       done
 
       # ── test/ ───────────────────────────────────────────────────────────
-      for base in doc prop nodoc; do
+      for base in doc prop nodoc shebang; do
         f="$NCFIX/test/$base.mdk"
         [ -f "$f" ] || continue
         only_match "$base" || continue

@@ -343,19 +343,19 @@ test "a declared obligation argument is admitted when its variables are all boun
   expectEach [
     (
       "a bound variable",
-      expectTrue (declaredOblArgOk (i => i == 3) (toMono (MVar 3))),
+      expectTrue (declaredOblArgOk (== 3) (toMono (MVar 3))),
     ),
     (
       "an unbound variable",
-      expectFalse (declaredOblArgOk (i => i == 3) (toMono (MVar 4))),
+      expectFalse (declaredOblArgOk (== 3) (toMono (MVar 4))),
     ),
     (
       "an application over bound variables",
-      expectTrue (declaredOblArgOk (i => i == 3) (TApp box (toMono (MVar 3)))),
+      expectTrue (declaredOblArgOk (== 3) (TApp box (toMono (MVar 3)))),
     ),
     (
       "an application over an unbound variable",
-      expectFalse (declaredOblArgOk (i => i == 3) (TApp box (toMono (MVar 4)))),
+      expectFalse (declaredOblArgOk (== 3) (TApp box (toMono (MVar 4)))),
     ),
     (
       "a ground type",

@@ -1,0 +1,6 @@
+-- Fixture for rule-not-eq autofix.
+-- NEGATIVE: `import core.*` may bring its own `not` into scope, so the fix is withheld.
+
+import core.*
+
+notEq a b = not (a == b)

@@ -38,6 +38,7 @@ joinSlash : List String -> String
 keyBeforeEq : String -> String
 keyEqGo : String -> Int -> Int -> String
 lastOr : a -> List a -> a
+lineValueIsTrue : String -> Bool
 loadErrorMessage : LoadError -> String
 loadProgram : String -> List String -> <IO> Result String (List (String, List Decl))
 loadProgramE : String -> List String -> <IO> Result LoadError (List (String, List Decl))
@@ -50,6 +51,7 @@ loadedPairs : List (String, String, List Decl) -> List (String, String)
 loadedSourceOf : String -> Option String
 loadedSourcesRef : Ref (Map String String)
 manifestAllowsInternal : String -> <IO> Bool
+manifestLintInternal : String -> <IO> Bool
 manifestSiteRoot : String -> <IO> Option String
 mdkBaseName : String -> Option String
 modIdToPath : (String, String, List Decl) -> (String, String)
@@ -68,6 +70,7 @@ readForeignLibs : String -> <IO> List (String, String)
 readModuleProgF : (String -> String -> Result ParseError (List Decl)) -> (String -> Option String) -> List (String, String) -> List String -> String -> String -> <IO> Result LoadError (String, String, List Decl)
 readSource : String -> <FileRead> Result String String
 readSourceE : String -> <FileRead> Result (Option String) String
+readStdinProgram : Unit -> <Stdin> Result String String
 relUnderRoots : List String -> String -> String
 resolveDepFile : List (String, String) -> String -> <IO> Option (String, String)
 retainParsed : Ref (Map String (List Decl)) -> List String -> Unit
@@ -77,6 +80,7 @@ rewriteDecl : List (String, String) -> List String -> Decl -> <IO> Decl
 rewriteDecls : List (String, String) -> List String -> List Decl -> <IO> List Decl
 rewriteUsePath : String -> UsePath -> UsePath
 scanAllowInternal : Bool -> List String -> Bool
+scanLintInternal : Bool -> List String -> Bool
 scanSiteRoot : Bool -> List String -> Option String
 settleLoad : List (String, String, List Decl) -> List String
 slashToDot : String -> String
@@ -84,6 +88,8 @@ sourceNotUtf8Message : String -> String
 splitDot : String -> List String
 splitGo : String -> String -> Int -> Int -> String -> List String
 splitOnChar : String -> String -> List String
+stdinEntry : String
+stdinReadOverride : String -> String -> Option String
 stdlibOwnedMods : String -> List String -> String -> List (String, List Decl) -> <IO> List String
 stdlibOwnership : String -> List String -> String -> List (String, List Decl) -> <IO> (Bool, List String)
 stripSuffixStr : String -> String -> String

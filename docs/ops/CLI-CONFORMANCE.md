@@ -143,6 +143,12 @@ present tree — re-derive with `make cli-conformance-census` to see the current
 >   ```
 >   Note that `--` is passed through as an ordinary argument, not consumed as a separator.
 >   That is the current contract and C2 does not change it.
+> * `medaka run -` takes the program text from standard input and names it `<stdin>` in every
+>   diagnostic; the words after `-` are the program's argv. The program's own stdin is already
+>   consumed, so its `readAll`/`readLine` see end-of-file; a script that is also a filter must
+>   be run from a file. A stdin program has no directory, so relative imports and the
+>   `medaka.toml` walk-up resolve against the current working directory. Text that is empty,
+  unreadable or not valid UTF-8 is refused, as a source file that is not UTF-8 is.
 
 **The disposition classes**, as the census reports them:
 
@@ -484,6 +490,27 @@ build                --release              NOT-PARSED     error: medaka build t
 | `lint --only=nosuchrule` / `--disable=nosuchrule` | unknown rule name silently accepted, exit 0 | ✅ **DRAINED by S-unknown-flag-floor** — both now answer `medaka lint: unknown rule <name> (known: …)`, rc 1. |
 | `fmt --write --stdout` | mutually exclusive modes both accepted; `--stdout` wins, no write, exit 0 | ✅ **DRAINED by S-unknown-flag-floor** — now `medaka fmt: --stdout --write are mutually exclusive; pass one`, rc 1 (`snapshot`'s own mode-conflict rejection was already the right model, now mirrored here). |
 | `gate run --jobs <n>` | accepted, ignored, **documented as such** | ✅ conforming dead surface (E6) |
+
+### 5f-lint. `medaka lint` registry-view and activation flags
+
+Declared by `lintArgSpec` (`medaka_cli.mdk`); text in `lintHelpText` (`compiler/tools/lint_cmd.mdk`).
+The rule lists these print come from the registry (`compiler/tools/lint_registry.mdk`), never a hand copy.
+
+| Flag | Behaviour | Disposition |
+|---|---|---|
+| `--list-rules` | prints every rule with its metadata (scope, ratchet, tier, category); `--json` is the machine form | conforming |
+| `--explain <rule>` | prints one rule's summary and documentation; an unknown name is rejected, rc 1 | conforming |
+| `--scope=universal\|internal` | with `--list-rules`: keeps one scope; any other value is rejected, rc 1 | conforming |
+| `--ratchet=gated\|baselined` | with `--list-rules`: keeps one ratchet; any other value is rejected, rc 1 | conforming |
+| `--tier=file\|cross` | with `--list-rules`: keeps one rule tier; any other value is rejected, rc 1 | conforming |
+| `--fix` pass limit | a run that still has fixes after 32 passes writes what it fixed, prints `<file>: stopped after 32 passes; run again` to stderr and exits 1 (C3: everything but clean); a second run continues | conforming |
+| `--unsafe-fixes` | with `--fix`: also applies fixes that may change behavior, meaning those whose rule ceiling is `Unsafe`; `Suggest` fixes are never applied (a rule with `SuggestOnly`, or a fix whose edit overlaps a comment); without `--fix` it is rejected, rc 1 | conforming |
+| `--json` | emits the `{"files":[...]}` envelope; a finding whose rule attaches a fix carries `fix: {applicability, edits: [{range, replacement}]}`, with the range zero-based as the diagnostic range is, and the field is absent when there is none; `--fix` is ignored, so no file is written. `applicability` is the value `--fix` acts on: a comment-overlapping edit, which `--fix` withholds, is reported `suggest` | conforming |
+| `--markdown` | with `--list-rules`: renders the page committed as `docs/ops/LINT-RULES.md` | conforming |
+| `--internal` | runs the internal-scope rules on every target; without it they run only under a manifest whose `[lint]` section says `internal = true`, found from the target's own directory, never the working directory's (CLI and `medaka_lint` over MCP alike) | conforming |
+| `--only=` / `--deny=` naming an internal rule | where internal rules are not active for a target the rule would match nothing and the run would read as clean, so it is rejected, rc 1, naming the rule and telling to pass `--internal` or set `[lint] internal = true` | conforming |
+| `--list-rules` / `--explain` with a target, `--fix`, `--unsafe-fixes`, `--cache`, `--internal`, `--disable`, `--only`, `--deny`, `--baseline` or `--write-baseline` (and `--explain` with `--json` or a list filter, `--markdown` with a filter or `--json`) | the view prints the registry and reads nothing else, so the flag would be accepted and ignored; rejected, rc 1 | conforming |
+| `--explain ''` | an empty rule name is rejected, rc 1, rather than matched to the nearest rule | conforming |
 
 ### 5g. What is now GATED, and what still is not
 

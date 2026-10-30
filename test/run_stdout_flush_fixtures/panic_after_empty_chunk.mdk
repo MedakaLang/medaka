@@ -1,0 +1,11 @@
+-- Several chunks around an empty `putStr ""`, then a panic.  The abort flush
+-- must show all three lines: an empty chunk is not a request to clear what
+-- was printed before it (gate diff_compiler_run_stdout_flush).
+main : <IO> Unit
+main =
+  println "line 1"
+  println "line 2"
+  putStr ""
+  println "line 3"
+  let x = panic "boom" : Int
+  println "\{x}"

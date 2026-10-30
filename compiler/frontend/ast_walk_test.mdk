@@ -1,0 +1,98 @@
+-- Sibling test for frontend/ast_walk.mdk: its enumerations stay exhaustive,
+-- every kind of declaration body is reached under its owner, and a span is
+-- recovered for a node the parser leaves unwrapped.
+
+import test.{expectEach, expectEqual, expectNoFindings}
+import test_process.{boundedVerb, medakaBin, underRoot}
+import string.{contains, lines}
+import frontend.ast.{Decl(..), Loc(..)}
+import frontend.ast_walk.{BodyOwner(..), DeclBody(..), declBodies, exprSpan}
+import frontend.parser.{parseLocated}
+
+-- Exhaustiveness is a warning, so a constructor missing from one of the
+-- module's enumerations shows only in `check`'s output.  A `check` that exits
+-- nonzero did not judge the module and counts as not run.
+test "medaka check reports no non-exhaustive clauses in ast_walk.mdk" =
+  expectNoFindings
+    "non-exhaustive clauses in compiler/frontend/ast_walk.mdk"
+    (andThen
+      (boundedVerb medakaBin [
+        "check",
+        underRoot "compiler/frontend/ast_walk.mdk",
+      ])
+      nonExhaustiveLines)
+
+nonExhaustiveLines : (Int, String, String) -> Result String (List String)
+nonExhaustiveLines (0, out, err) =
+  Ok (filter (contains "non-exhaustive") (lines (out ++ err)))
+nonExhaustiveLines (code, _, err) =
+  Err "medaka check exited \{intToString code}: \{err}"
+
+ownerTag : DeclBody -> String
+ownerTag (DeclBody (OwnerClause n _) _) = "clause \{n}"
+ownerTag (DeclBody (OwnerImplMethod i m _) _) = "method \{i}.\{m}"
+ownerTag (DeclBody (OwnerIfaceDefault i m _) _) = "default \{i}.\{m}"
+ownerTag (DeclBody (OwnerTest n) _) = "test \{n}"
+ownerTag (DeclBody (OwnerProp n _) _) = "prop \{n}"
+ownerTag (DeclBody (OwnerLetGroup n _) _) = "let-group \{n}"
+
+bodiesSrc : String
+bodiesSrc =
+  """f : Int -> Int
+f x = x
+interface Size a where
+  size : a -> Int
+  size _ = 0
+impl Size Bool where
+  size _ = 1
+let rec down n = if n == 0 then 0 else down (n - 1)
+test "t" = expectEqual 1 1
+prop "p" (n : Int) = n == n
+"""
+
+test "declBodies names the owner of every kind of body" =
+  expectEqual
+    [
+      "clause f",
+      "default Size.size",
+      "method Size.size",
+      "let-group down",
+      "test t",
+      "prop p",
+    ]
+    (map ownerTag (flatMap declBodies (parseLocated bodiesSrc)))
+
+-- A body's start line and column and end line and column; `Loc` has no `Eq`.
+data SpanPos = SpanPos {
+  startLine : Int,
+  startCol : Int,
+  endLine : Int,
+  endCol : Int,
+} deriving (Eq, Debug)
+
+bodySpans : String -> List (Option SpanPos)
+bodySpans src = map bodySpan (parseLocated src)
+
+bodySpan : Decl -> Option SpanPos
+bodySpan (DFunDef _ _ _ body _ _) =
+  map
+    ((Loc _ sl sc el ec) =>
+      SpanPos { startLine = sl, startCol = sc, endLine = el, endCol = ec })
+    (exprSpan body)
+bodySpan _ = None
+
+test "exprSpan of an unwrapped node covers its leftmost and rightmost leaves" = expectEach
+  [
+    (
+      "application",
+      expectEqual
+        [Some SpanPos { startLine = 1, startCol = 4, endLine = 1, endCol = 13 }]
+        (bodySpans "f = g 1 (h 2)"),
+    ),
+    (
+      "operator",
+      expectEqual
+        [Some SpanPos { startLine = 1, startCol = 4, endLine = 1, endCol = 9 }]
+        (bodySpans "f = a + b"),
+    ),
+  ]

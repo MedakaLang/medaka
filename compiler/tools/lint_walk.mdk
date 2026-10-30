@@ -1,0 +1,1426 @@
+-- compiler/tools/lint_walk.mdk — the lint runner: `lintProgram*` and the one
+-- visitor walk per file (`runVisitors`), per-file facts, the autofix driver,
+-- finding filters, inline suppressions, the cross-file runner and the
+-- stdlib-index builders.  The CLI filters and severity-overrides the registry's
+-- rules and hands them in, so this module knows nothing about flags.
+
+import frontend.ast.{
+  letBindName,
+  Loc(..),
+  Ty(..),
+  UsePath(..),
+  UseMember(..),
+  useMemberLocal,
+  IfaceMethod(..),
+  Decl(..),
+  Expr(..),
+  ExternDecl(..),
+  Pat,
+}
+import frontend.ast_walk.{
+  BodyOwner(..),
+  DeclBody(..),
+  ExprKind(..),
+  childExprs,
+  declBodies,
+  exprKind,
+}
+import frontend.parser.{
+  Positions(..),
+  DeclPos,
+  positionsDecls,
+  declPosLine,
+  declPosEndLine,
+  parseWithPositions,
+  parseResultPairs,
+  parseWithPositionsOptPairs,
+  prescanErrorPairs,
+  ParseError,
+}
+import driver.diagnostics.{
+  Severity(..),
+  Diag(..),
+  DiagId(..),
+  ppSeverity,
+  readFileSafe,
+  parseErrDiag,
+}
+import support.util.{
+  contains,
+  listLen,
+  anyList,
+  allList,
+  filterList,
+  joinNl,
+  isEmptyL,
+  isNonEmptyL,
+  reverseL,
+  splitNl,
+  splitOnChar,
+  joinWith,
+  startsWith,
+  endsWith,
+  dedup,
+  isSome,
+  lookupAssoc,
+}
+import hash_map.{HashMap, new, get, setInPlace, has, keys, findWithDefault}
+import list.{take, drop, indexed}
+import string.{indexOf}
+import tools.printer.{declToString}
+import support.path.{dirOf, stripMdk}
+import frontend.marker.{declRefs}
+import frontend.exhaust.{Oracle, buildOracle}
+import support.stage_count.{stageBump}
+import frontend.lexer.{
+  Comment,
+  collectComments,
+  tokenizeWithOffsetPairs,
+  commentLine,
+  commentText,
+}
+import tools.lint_core.{
+  CrossFileRule(..),
+  Ctx(..),
+  DirScope(..),
+  Directive(..),
+  FileFacts(..),
+  Finding(..),
+  Fix(..),
+  Fixability(..),
+  Rule(..),
+  RuleCheck(..),
+  StdlibIndex(..),
+  StdlibIndexError(..),
+  Visitor(..),
+  factComments,
+  fixToDiagFix,
+  factDupClauses,
+  factScopes,
+  clampApplicability,
+  emptyStdlibIndex,
+  maxApplicability,
+  memoNew,
+  needsScopes,
+  needsStdlibIndex,
+  needsWildIndex,
+}
+import tools.lint_scope.{
+  Binder(..),
+  BinderKind(..),
+  FileScopes,
+  Use(..),
+  bindersNamed,
+  bindersNamedIn,
+  buildScopes,
+  usesNamedIn,
+  wildImports,
+}
+import tools.lint_shared.{
+  collectDirectives,
+  declLocList,
+  ruleNameDuplicateBody,
+  sortUniqS,
+  zipDeclPos,
+}
+import tools.lint_fix.{demoteOverComments}
+import tools.lint_dup.{dupClauseOfDecl, dupJoin, dupOccsOfClauses}
+import tools.lint_registry.{
+  allCrossFileRules, allRules, crossRuleActive, selectRules
+}
+
+export
+mkFileFacts : String -> List Decl -> Positions -> FileFacts
+mkFileFacts src prog pos = FileFacts {
+  ffSrc = src,
+  ffComments = memoNew (_ => collectComments src),
+  ffOracle = memoNew (_ => buildOracle prog),
+  ffDupClauses = memoNew (_ => flatMap dupClauseOfDecl (declLocList pos prog)),
+  ffScopes = memoNew (_ => buildScopes prog),
+}
+
+-- The file's inline-suppression directives, off the shared comment channel.
+export
+factDirectives : FileFacts -> List Directive
+factDirectives ff = collectDirectives (factComments ff)
+
+-- The file's cross-file duplicate-body occurrences (what `--cache` persists),
+-- off the clause keys the same-file rule also reads.
+export
+factDupOccs : String -> FileFacts -> List (String, Int, String, String)
+factDupOccs path ff = dupOccsOfClauses path (factDupClauses ff)
+
+-- Run the enabled rules over a program, collecting every finding.  `pos` carries
+-- per-decl source spans so each rule can stamp its finding with the decl's real
+-- location.  Each rule's findings are re-stamped with the rule's (possibly
+-- CLI-overridden) severity so a `--deny` promotion propagates without the rule
+-- knowing about flags.
+-- `idx` is the stdlib reference index, built ONCE by the IO caller (see
+-- `buildStdlibIndexResult`) and handed to every rule; a caller with no stdlib to read
+-- passes `emptyStdlibIndex` and the rules simply learn nothing from it.
+export
+lintProgram : StdlibIndex ->
+  List Rule ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
+lintProgram idx rules path src pos prog =
+  lintProgramFacts idx rules path (mkFileFacts src prog pos) pos prog
+
+-- `lintProgram` over facts the caller already holds, so the caller's own
+-- comment/directive/key needs share the rules' derivations.  Findings come out
+-- rule by rule in `rules` order; every visitor rule's findings come from one
+-- shared walk of the file.
+export
+lintProgramFacts : StdlibIndex ->
+  List Rule ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+lintProgramFacts idx rules path facts pos prog =
+  let enabled = filterList ruleEnabled rules
+  let visitorSets = flatMap (ruleVisitors idx path facts pos prog) enabled
+  let walked =
+    if isEmptyL visitorSets then
+      []
+    else
+      runVisitors visitorSets (declLocList pos prog)
+  ruleFindings idx path facts pos prog enabled walked
+
+ruleEnabled : Rule -> Bool
+ruleEnabled r = r.enabled
+
+ruleVisitors : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  Rule ->
+  List (List Visitor)
+ruleVisitors idx path facts pos prog r = match r.check
+  WholeFile _ => []
+  Visits visits => [visits idx path facts pos prog]
+
+-- `walked` holds one finding list per visitor rule, in `rules` order.
+ruleFindings : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Rule ->
+  List (List Finding) ->
+  List Finding
+ruleFindings _ _ _ _ _ [] _ = []
+ruleFindings idx path facts pos prog (r :: rs) walked = match r.check
+  WholeFile check =>
+    map (restampFinding r) (check idx path facts pos prog)
+      ++ ruleFindings idx path facts pos prog rs walked
+  Visits _ => match walked
+    hits :: rest =>
+      map (restampFinding r) hits
+        ++ ruleFindings idx path facts pos prog rs rest
+    [] => ruleFindings idx path facts pos prog rs []
+
+-- ── the visitor walk ──────────────────────────────────────────────────────────
+-- One pass over a file's declarations (each paired with its start location)
+-- for every visitor set at once: each `OnDecl` sees every top-level
+-- declaration, and each `OnExpr` sees every expression node of the listed kinds
+-- in every body `declBodies` names, pre-order.  Returns one finding list per
+-- visitor set, in the order given.  No body is walked when no set has an
+-- `OnExpr`.
+export
+runVisitors : List (List Visitor) ->
+  List (Decl, Option Loc) ->
+  List (List Finding)
+runVisitors sets decls =
+  let tagged = indexed sets
+  let exprHooks = flatMap (hooksOf exprHookOf) tagged
+  let declHooks = flatMap (hooksOf declHookOf) tagged
+  let hits = reverseL (walkDecls exprHooks declHooks [] decls)
+  map (t => findingsTagged (fst t) hits) tagged
+
+data ExprHook =
+  ExprHook Int (Option (List ExprKind)) (Ctx -> Expr -> List Finding)
+
+data DeclHook = DeclHook Int (Ctx -> Decl -> List Finding)
+
+-- What every node of one body shares: its owner's name and parameters, and
+-- whether it is a test or prop body.
+data BodyScope = BodyScope String (List Pat) BodyKind (Option Loc)
+
+data BodyKind = PlainBody | TestBody
+
+-- The hooks of one visitor set, each tagged with the set's index.
+hooksOf : (Int -> Visitor -> List h) -> (Int, List Visitor) -> List h
+hooksOf hookOf (i, vs) = flatMap (hookOf i) vs
+
+exprHookOf : Int -> Visitor -> List ExprHook
+exprHookOf i (OnExpr kinds cb) = [ExprHook i (Some kinds) cb]
+exprHookOf i (OnAnyExpr cb) = [ExprHook i None cb]
+exprHookOf _ (OnDecl _) = []
+
+declHookOf : Int -> Visitor -> List DeclHook
+declHookOf _ (OnExpr _ _) = []
+declHookOf _ (OnAnyExpr _) = []
+declHookOf i (OnDecl cb) = [DeclHook i cb]
+
+findingsTagged : Int -> List (Int, Finding) -> List Finding
+findingsTagged i hits = map snd (filterList (h => fst h == i) hits)
+
+-- `acc` holds the hits so far, newest first.  The walk recurses on its lists
+-- directly rather than through `fold`, whose dispatch and per-node closures
+-- were a measured share of lint's cost.
+walkDecls : List ExprHook ->
+  List DeclHook ->
+  List (Int, Finding) ->
+  List (Decl, Option Loc) ->
+  List (Int, Finding)
+walkDecls _ _ acc [] = acc
+walkDecls exprHooks declHooks acc ((d, loc) :: rest) =
+  let bodies = declBodies d
+  let acc2 = match declHooks
+    [] => acc
+    _ =>
+      runDeclHooks
+        (scopeCtx (declScope bodies loc) KLoc loc None)
+        d
+        acc
+        declHooks
+  let acc3 = match exprHooks
+    [] => acc2
+    _ => walkBodies exprHooks loc acc2 bodies
+  walkDecls exprHooks declHooks acc3 rest
+
+-- A declaration's own `Ctx` reads its first body's owner, so a function clause
+-- carries its name and parameters and a test or prop is in a test.
+declScope : List DeclBody -> Option Loc -> BodyScope
+declScope [] loc = BodyScope "" [] PlainBody loc
+declScope ((DeclBody owner _) :: _) loc = ownerScope owner loc
+
+ownerScope : BodyOwner -> Option Loc -> BodyScope
+ownerScope (OwnerClause name ps) loc = BodyScope name ps PlainBody loc
+ownerScope (OwnerImplMethod _ m ps) loc = BodyScope m ps PlainBody loc
+ownerScope (OwnerIfaceDefault _ m ps) loc = BodyScope m ps PlainBody loc
+ownerScope (OwnerTest name) loc = BodyScope name [] TestBody loc
+ownerScope (OwnerProp name _) loc = BodyScope name [] TestBody loc
+ownerScope (OwnerLetGroup name ps) loc = BodyScope name ps PlainBody loc
+
+-- The walk carries the parent kind unwrapped, with `KLoc` standing for "no
+-- parent": an `ELoc` is never a parent, and the `Option` is built only when a
+-- callback fires.
+scopeCtx : BodyScope -> ExprKind -> Option Loc -> Option Loc -> Ctx
+scopeCtx (BodyScope name ps kind declLoc) parent span own = Ctx {
+  ctxDeclName = name,
+  ctxParams = ps,
+  ctxInTest = isTestBody kind,
+  ctxParent = if parent == KLoc then None else Some parent,
+  ctxSpan = span,
+  ctxOwn = own,
+  ctxDeclLoc = declLoc,
+}
+
+isTestBody : BodyKind -> Bool
+isTestBody TestBody = True
+isTestBody PlainBody = False
+
+runDeclHooks : Ctx ->
+  Decl ->
+  List (Int, Finding) ->
+  List DeclHook ->
+  List (Int, Finding)
+runDeclHooks _ _ acc [] = acc
+runDeclHooks ctx d acc ((DeclHook i cb) :: rest) =
+  runDeclHooks ctx d (pushTagged i (cb ctx d) acc) rest
+
+pushTagged : Int -> List Finding -> List (Int, Finding) -> List (Int, Finding)
+pushTagged _ [] acc = acc
+pushTagged i (f :: fs) acc = pushTagged i fs ((i, f) :: acc)
+
+walkBodies : List ExprHook ->
+  Option Loc ->
+  List (Int, Finding) ->
+  List DeclBody ->
+  List (Int, Finding)
+walkBodies _ _ acc [] = acc
+walkBodies hooks loc acc ((DeclBody owner body) :: rest) =
+  walkBodies
+    hooks
+    loc
+    (walkExpr hooks (ownerScope owner loc) KLoc loc acc body)
+    rest
+
+-- An `ELoc` is transparent: its span becomes the span beneath it and its
+-- parent is the parent of what it wraps.  The outermost `ELoc` of a run of
+-- them is the node's own extent (`ctxOwn`); a node no `ELoc` wraps has none.
+walkExpr : List ExprHook ->
+  BodyScope ->
+  ExprKind ->
+  Option Loc ->
+  List (Int, Finding) ->
+  Expr ->
+  List (Int, Finding)
+walkExpr hooks scope parent _ acc (ELoc l inner) =
+  walkWrapped hooks scope parent l l acc inner
+walkExpr hooks scope parent span acc e =
+  walkNode hooks scope parent span None acc e
+
+walkWrapped : List ExprHook ->
+  BodyScope ->
+  ExprKind ->
+  Loc ->
+  Loc ->
+  List (Int, Finding) ->
+  Expr ->
+  List (Int, Finding)
+walkWrapped hooks scope parent outer _ acc (ELoc l inner) =
+  walkWrapped hooks scope parent outer l acc inner
+walkWrapped hooks scope parent outer innermost acc e =
+  walkNode hooks scope parent (Some innermost) (Some outer) acc e
+
+walkNode : List ExprHook ->
+  BodyScope ->
+  ExprKind ->
+  Option Loc ->
+  Option Loc ->
+  List (Int, Finding) ->
+  Expr ->
+  List (Int, Finding)
+walkNode hooks scope parent span own acc e =
+  let k = exprKind e
+  let acc2 = visitHooks (scopeCtx scope parent span own) k e acc hooks
+  walkKids hooks scope k span acc2 (childExprs e)
+
+walkKids : List ExprHook ->
+  BodyScope ->
+  ExprKind ->
+  Option Loc ->
+  List (Int, Finding) ->
+  List Expr ->
+  List (Int, Finding)
+walkKids _ _ _ _ acc [] = acc
+walkKids hooks scope parent span acc (c :: cs) =
+  walkKids hooks scope parent span (walkExpr hooks scope parent span acc c) cs
+
+visitHooks : Ctx ->
+  ExprKind ->
+  Expr ->
+  List (Int, Finding) ->
+  List ExprHook ->
+  List (Int, Finding)
+visitHooks _ _ _ acc [] = acc
+visitHooks ctx k e acc ((ExprHook i kinds cb) :: rest)
+  | hookWants k kinds = visitHooks ctx k e (pushTagged i (cb ctx e) acc) rest
+  | otherwise = visitHooks ctx k e acc rest
+
+hookWants : ExprKind -> Option (List ExprKind) -> Bool
+hookWants _ None = True
+hookWants k (Some kinds) = kindIn k kinds
+
+-- A direct scan, not `elem`: this runs for every hook on every node, and the
+-- `Foldable` dispatch of `elem` measured +193M Ir on `lint compiler/frontend`.
+kindIn : ExprKind -> List ExprKind -> Bool
+kindIn _ [] = False
+kindIn k (x :: xs) = k == x || kindIn k xs
+
+-- A rule's finding under the rule's own severity, its fix held to the rule's
+-- applicability ceiling.
+restampFinding : Rule -> Finding -> Finding
+restampFinding r f = Finding {
+  rule = f.rule,
+  message = f.message,
+  severity = r.severity,
+  loc = f.loc,
+  fix = map (clampFix r.meta.fixability) f.fix,
+}
+
+clampFix : Fixability -> Fix -> Fix
+clampFix fixability fx = match maxApplicability fixability
+  Some ceiling => Fix {
+    fixApplicability = clampApplicability ceiling fx.fixApplicability,
+    fixEdits = fx.fixEdits,
+    fixMessage = fx.fixMessage,
+  }
+  None => fx
+
+restampSeverity : Severity -> Finding -> Finding
+restampSeverity sev f = Finding {
+  rule = f.rule,
+  message = f.message,
+  severity = sev,
+  loc = f.loc,
+  fix = f.fix,
+}
+
+-- Whether some rule in the active `--only`/`--disable` set declares
+-- `NeedsStdlibIndex` in its metadata.  Mirrors `ruleActiveFixable`'s only/disable
+-- semantics (the `enabled`/fixer checks that helper also makes don't apply
+-- here: the registry always enables these rules). A caller uses this to decide
+-- whether `buildStdlibIndexResult` is worth its cost at all.
+export
+stdlibIndexNeeded : List String -> List String -> Bool
+stdlibIndexNeeded only disable = anyList (ruleNeedsIndex only disable) allRules
+
+-- Whether the index is worth building for linting `paths`: a rule that reads
+-- it outright is active, or a rule whose guards read it only for wildcard
+-- imports is active and some path has an `import m.*`.
+export
+stdlibIndexNeededFor : List String -> List String -> List String -> <IO> Bool
+stdlibIndexNeededFor only disable paths =
+  stdlibIndexNeeded only disable
+    || wildIndexNeeded only disable && anyPathWild paths
+
+anyPathWild : List String -> <IO> Bool
+anyPathWild [] = False
+anyPathWild (p :: rest) =
+  sourceHasWildImport (readFileSafe p) || anyPathWild rest
+
+-- Whether a rule whose guards read the index for wildcard imports is active.
+export
+wildIndexNeeded : List String -> List String -> Bool
+wildIndexNeeded only disable =
+  anyList (ruleNeedsWildIndex only disable) allRules
+
+ruleNeedsWildIndex : List String -> List String -> Rule -> Bool
+ruleNeedsWildIndex only disable r =
+  needsWildIndex r.meta
+    && (isEmptyL only || contains r.name only)
+    && not (contains r.name disable)
+
+-- Whether some line of `src` looks like an `import m.*`; a superset of the
+-- parsed wildcard imports, so a false positive costs only an index build.
+export
+sourceHasWildImport : String -> Bool
+sourceHasWildImport src = anyList isWildImportLine (splitNl src)
+
+isWildImportLine : String -> Bool
+isWildImportLine l = startsWith "import " l && isSome (indexOf ".*" l)
+
+ruleNeedsScopes : Rule -> Bool
+ruleNeedsScopes r = needsScopes r.meta
+
+ruleNeedsIndex : List String -> List String -> Rule -> Bool
+ruleNeedsIndex only disable r =
+  needsStdlibIndex r.meta
+    && (isEmptyL only || contains r.name only)
+    && not (contains r.name disable)
+
+export
+buildStdlibIndexResult : <IO> Result StdlibIndexError StdlibIndex
+buildStdlibIndexResult =
+  map
+    (triples => mkStdlibIndex (groupStdlibSigs triples) triples)
+    (stdlibSigTriplesResult lintStdlibDir)
+
+-- The sorted name list is computed here, once, not per linted file.
+mkStdlibIndex : HashMap String (List (String, Ty)) ->
+  List (String, String, Ty) ->
+  StdlibIndex
+mkStdlibIndex m triples =
+  StdlibIndex m (sortUniqS (keys m)) (sortUniqS (map fst3 triples))
+
+fst3 : (String, String, Ty) -> String
+fst3 (modName, _, _) = modName
+
+-- `<MEDAKA_ROOT>/stdlib`, resolved exactly as the CLI resolves it (`envOr
+-- "MEDAKA_ROOT" defaultMedakaRoot`, `driver/build_cmd.mdk`) — an unset or empty
+-- var falls back to the running executable's own directory, so a relocated
+-- `medaka` still finds its stdlib.  Restated locally rather than imported so the
+-- lint graph — and with it `entries/lint_main.mdk`, the gate oracle — does not
+-- pull in `driver/build_cmd.mdk`.  Same reason `tools/lsp.mdk` keeps its own.
+lintStdlibDir : <IO> String
+lintStdlibDir = match getEnv "MEDAKA_ROOT"
+  Some v => if v == "" then exeStdlibDir () else "\{v}/stdlib"
+  None => exeStdlibDir ()
+
+exeStdlibDir : Unit -> <IO> String
+exeStdlibDir _ = "\{dirOf (executablePath ())}/stdlib"
+
+-- ── cache-staleness guard for `--cache` ─────────────────────────────────────
+-- `rule-stdlib-reimpl` (and only it, among `allRules`) reads content
+-- `--cache`'s key never sees: `buildStdlibIndexResult` parses the stdlib source tree
+-- from disk at runtime, not the running binary `lint_cache.ruleSetStamp`
+-- hashes. Editing `stdlib/list.mdk` changes what this rule reports for an
+-- UNCHANGED compiler/sqlite file, so a cached shard for that file would
+-- silently keep serving the pre-edit answer forever — a wrong hit, exactly
+-- the failure mode `lint_cache.mdk`'s module doc forbids. Folded into the
+-- cache stamp by the caller (`lintCacheCtx`, `medaka_cli.mdk`) alongside
+-- `ruleSetStamp`, so any stdlib edit invalidates every shard, the same way a
+-- rule-logic change does (#2327).
+export
+stdlibFingerprint : <IO> String
+stdlibFingerprint = match stdlibMemberPaths lintStdlibDir
+  None => ""
+  Some names =>
+    let joined = stdlibFingerprintGo lintStdlibDir names
+    -- Hashed down to a fixed-size digest rather than stored raw: this string
+    -- lands in EVERY shard's `stamp` field (`lint_cache.storeEntries`), so
+    -- keeping it compact matters the same way `contentHashOf`'s two-lane
+    -- digest does. `listLen names` guards against the all-files-missing
+    -- degenerate case ("" for both an empty stdlib and a 0-file listDir)
+    -- collapsing into the same fingerprint as a genuinely absent stdlib.
+    "\{hashString joined}.\{listLen names}"
+
+stdlibFingerprintGo : String -> List String -> <IO> String
+stdlibFingerprintGo _ [] = ""
+stdlibFingerprintGo dir (n :: rest) =
+  let path = "\{dir}/\{n}"
+  let h = hashString (readFileSafe path)
+  "\{n}:\{h};\{stdlibFingerprintGo dir rest}"
+
+-- (module, name, declared type) for every exported signature in the stdlib's
+-- `.mdk` files.  A directory that will not list yields [] — the
+-- degradation path, silent by design (lint printing compiler-internal chatter to
+-- stdout would break every caller that diffs its output, exactly as
+-- `lintCacheCtx` argues for `--cache`).
+stdlibSigTriplesResult : String ->
+  <IO> Result StdlibIndexError (List (String, String, Ty))
+stdlibSigTriplesResult dir = match stdlibMemberPaths dir
+  None => Ok []
+  Some paths => stdlibSigsGo dir paths
+
+export
+lintParseSource : String -> Result ParseError (List Decl, Positions)
+lintParseSource src =
+  let (tokens, offsets) = tokenizeWithOffsetPairs src
+  match prescanErrorPairs src tokens offsets
+    Some e => Err e
+    None =>
+      let _ = stageBump "parse.positions"
+      match parseWithPositionsOptPairs src tokens offsets
+        Some parsed => Ok parsed
+        None =>
+          map
+            (_ => parseWithPositions src)
+            (parseResultPairs src tokens offsets)
+
+stdlibSigsGo : String ->
+  List String ->
+  <IO> Result StdlibIndexError (List (String, String, Ty))
+stdlibSigsGo _ [] = Ok []
+stdlibSigsGo dir (relPath :: rest) =
+  let path = "\{dir}/\{relPath}"
+  let src = readFileSafe path
+  match lintParseSource src
+    Err e => Err StdlibIndexError {
+      path = path,
+      source = src,
+      diagnostic = parseErrDiag path e,
+    }
+    Ok (decls, _) =>
+      let modName = joinWith "." (splitOnChar '/' (stripMdk relPath))
+      let sigs = flatMap (d => stampModule modName (exportedSigPair d)) decls
+      map (sigs ++ _) (stdlibSigsGo dir rest)
+
+-- Group the flat triples by NAME, preserving stdlib-file order within a name.
+-- Appending rather than overwriting is the whole point: `setInPlace` alone
+-- would keep one module's `reverse` and drop the other's without a word.
+groupStdlibSigs : List (String, String, Ty) ->
+  HashMap String (List (String, Ty))
+groupStdlibSigs triples =
+  let m = new ()
+  let _ = groupStdlibSigsInto triples m
+  m
+
+groupStdlibSigsInto : List (String, String, Ty) ->
+  HashMap String (List (String, Ty)) ->
+  Unit
+groupStdlibSigsInto [] _ = ()
+groupStdlibSigsInto ((modName, name, ty) :: rest) m =
+  let _ = setInPlace name (findWithDefault [] name m ++ [(modName, ty)]) m
+  groupStdlibSigsInto rest m
+
+-- The `.mdk` members under `dir` as `dir`-relative paths (`list.mdk`,
+-- `crypto/hmac.mdk`), dot-entries dropped, sorted for determinism.  `None`
+-- when `dir` itself will not list.
+stdlibMemberPaths : String -> <IO> Option (List String)
+stdlibMemberPaths dir = match listDir dir
+  Err _ => None
+  Ok entries => Some (sortUniqS (memberPathsGo dir "" entries))
+
+memberPathsGo : String -> String -> List String -> <IO> List String
+memberPathsGo _ _ [] = []
+memberPathsGo dir prefix (n :: rest) =
+  let here =
+    if startsWith "." n then
+      []
+    else if endsWith ".mdk" n then
+      ["\{prefix}\{n}"]
+    else match listDir "\{dir}/\{prefix}\{n}"
+      Err _ => []
+      Ok sub => memberPathsGo dir "\{prefix}\{n}/" sub
+  here ++ memberPathsGo dir prefix rest
+
+stampModule : String -> List (String, Ty) -> List (String, String, Ty)
+stampModule modName pairs = map (p => (modName, fst p, snd p)) pairs
+
+-- Only EXPORTED declarations: an unexported stdlib helper is not a name user
+-- code can be reimplementing.  `DExtern` carries a declared type the same way,
+-- so an `export extern` counts — today `stdlib/runtime.mdk` writes its externs
+-- bare (prelude-global, not `export`-marked), so that arm matches nothing yet;
+-- it is here so the index does not silently need a second edit if that changes.
+exportedSigPair : Decl -> List (String, Ty)
+exportedSigPair (DTypeSig True name ty _) = [(name, ty)]
+exportedSigPair (DExtern (ExternDecl { edPub = True, edName = name, edTy = ty, ... })) =
+  [(name, ty)]
+exportedSigPair (DAttrib _ d) = exportedSigPair d
+exportedSigPair _ = []
+
+-- The (rule, line) of every finding of `rules` that no inline directive
+-- suppresses.  A decl fixer runs only where its rule has one of these on the
+-- decl's lines: a directive says the shape is deliberate.
+liveFindingLines : String ->
+  FileFacts ->
+  List Rule ->
+  Positions ->
+  List Decl ->
+  List (String, Int)
+liveFindingLines src facts rules pos prog =
+  flatMap
+    findingRuleLine
+    (applySuppressions
+      src
+      (lintProgramFacts emptyStdlibIndex rules "" facts pos prog))
+
+findingRuleLine : Finding -> List (String, Int)
+findingRuleLine f = match f.loc
+  Some (Loc _ line _ _ _) => [(f.rule, line)]
+  None => []
+
+-- Whether `r` has a live finding on the lines `[s, e]`.
+ruleLiveIn : List (String, Int) -> (Int, Int) -> Rule -> Bool
+ruleLiveIn live (s, e) r =
+  anyList (p => fst p == r.name && s <= snd p && snd p <= e) live
+
+-- ── autofix driver (Task A3) ───────────────────────────────────────────────────
+-- The CLI calls this for `--fix`, passing only plain data (the
+-- `--only`/`--disable` name lists, the source text, the parsed decls +
+-- `Positions`) and getting plain data back.
+--
+-- Algorithm: for each decl, the first active fixable rule whose fixer applies
+-- yields `Some replacementDecls`; we render those via the printer and record a
+-- splice over the decl's own source line range (`DeclPos` start..end).  Splices
+-- are applied bottom-up (descending start line) so earlier line numbers stay
+-- valid.  Returns `(rewrittenSource, fixedCount)`; unchanged source if no fix.
+export
+applyFixes : List String ->
+  List String ->
+  String ->
+  List Decl ->
+  Positions ->
+  (String, Int)
+applyFixes only disable src prog pos =
+  let rules = filterList (ruleActiveFixable only disable) allRules
+  let orc = buildOracle prog
+  let cmts = collectComments src
+  let cmtLines = map commentLine cmts
+  let declPos = zipDeclPos prog (positionsDecls pos)
+  let allFacts = mkFileFacts src prog pos
+  let facts = if anyList ruleNeedsScopes rules then Some allFacts else None
+  let live = liveFindingLines src allFacts rules pos prog
+  let tagged = collectSplices facts live cmtLines orc rules declPos
+  let (kept, widen) = reconcileTestImport cmts declPos tagged
+  (applySplices src (withWiden widen kept), listLen kept)
+
+withWiden : Option (Int, Int, String) ->
+  List (Int, Int, String) ->
+  List (Int, Int, String)
+withWiden None splices = splices
+withWiden (Some sp) splices = insertSpliceAsc sp splices
+
+-- The `stdlib/test.mdk` verbs a fixer can introduce.  Every other name a fixer
+-- emits is prelude-global.
+testVerbNames : List String
+testVerbNames = ["expectEqual", "expectNotEqual", "expectTrue", "expectFalse"]
+
+-- How many times a `test` verb is called.
+data VerbCount = VerbCount { verbName : String, verbUses : Int }
+
+-- The verbs a rewrite stops calling and the verbs it starts calling more.
+data VerbDelta = VerbDelta { stopped : List String, started : List String }
+
+-- How many times each `test` verb is called in a decl list, read off the AST
+-- (never the rendered text, where a string literal could name a verb).
+testVerbCounts : List Decl -> List VerbCount
+testVerbCounts ds =
+  let refs = flatMap declRefs ds
+  map
+    (v =>
+      VerbCount { verbName = v, verbUses = listLen (filterList (== v) refs) })
+    testVerbNames
+
+-- The verbs a rewrite stops calling, and the verbs it starts calling more.  A
+-- verb the declaration already mentions for another reason (a parameter named
+-- `expectTrue`) is still introduced when the rewrite adds a call to it.
+testVerbDelta : Decl -> List Decl -> VerbDelta
+testVerbDelta d newDecls =
+  let before = testVerbCounts [d]
+  let after = testVerbCounts newDecls
+  let moved = filterList (c => verbUsesIn c.verbName after /= c.verbUses) before
+  VerbDelta {
+    stopped =
+      map
+        verbOf
+        (filterList (c => verbUsesIn c.verbName after < c.verbUses) moved),
+    started =
+      map
+        verbOf
+        (filterList (c => verbUsesIn c.verbName after > c.verbUses) moved),
+  }
+
+verbOf : VerbCount -> String
+verbOf c = c.verbName
+
+verbUsesIn : String -> List VerbCount -> Int
+verbUsesIn v cs = match find (c => c.verbName == v) cs
+  Some c => c.verbUses
+  None => 0
+
+-- A fix whose rewrite touches a `test` verb is applied only when every use of a
+-- verb it matched, within the declaration, resolves to that verb's `import
+-- test.{…}` member under its own name (or is unresolved while the file has
+-- `import test.*`), and no binder that is not the same `test` verb captures a
+-- verb it introduces: neither a file-level one nor a local one inside the
+-- declaration.  Matching `expectEqual` by name alone would otherwise rewrite a
+-- file's own `expectEqual` into a call to a verb that file never imported, and
+-- introducing a name the file already binds would silently call that binding
+-- instead.  A fix that touches a verb under a rule that declares no `NeedsScopes`
+-- is refused: nothing says its verb is `test`'s.
+testFixAllowed : Option FileFacts ->
+  (Int, Int) ->
+  List String ->
+  List String ->
+  Bool
+testFixAllowed _ _ _ [] = True
+testFixAllowed None _ _ _ = False
+testFixAllowed (Some facts) (from, to) matched introduced =
+  let fs = factScopes facts
+  isNonEmptyL matched
+    && allList (matchedIsTestVerb fs from to) matched
+    && allList (introducedIsFree fs from to) introduced
+
+matchedIsTestVerb : FileScopes -> Int -> Int -> String -> Bool
+matchedIsTestVerb fs from to verb =
+  let uses = usesNamedIn fs from to verb
+  isNonEmptyL uses && allList (useIsTestVerb fs verb) uses
+
+useIsTestVerb : FileScopes -> String -> Use -> Bool
+useIsTestVerb fs verb u = match u.useBinder
+  Some b => isTestMember verb b
+  None => elem ["test"] (wildImports fs)
+
+-- The binder is the `import test.{verb}` member, not an alias or another module's.
+isTestMember : String -> Binder -> Bool
+isTestMember verb b =
+  b.binderKind == BImport && b.binderFrom == ["test"] && b.binderOrigin == verb
+
+introducedIsFree : FileScopes -> Int -> Int -> String -> Bool
+introducedIsFree fs from to verb =
+  isEmptyL (bindersNamedIn fs from to verb)
+    && isEmptyL (filterList unplacedBinder (bindersNamed fs verb))
+    && allList (== ["test"]) (wildImports fs)
+    && allList (isTestMember verb) (filterList fileLevel (bindersNamed fs verb))
+
+-- A binder the parser built from an expression (lambda parameter, guard-bind,
+-- do-bind) has no source line, so no declaration's line range can place it:
+-- it counts as in scope everywhere.
+unplacedBinder : Binder -> Bool
+unplacedBinder b = match b.binderSpan
+  Loc _ 0 _ _ _ => True
+  _ => False
+
+fileLevel : Binder -> Bool
+fileLevel b = match b.binderKind
+  BImport => True
+  BTopLevel => True
+  BLetGroup => True
+  _ => False
+
+-- A fix that introduces a call to a `test` verb must leave the file's
+-- `import test.{…}` list naming it, or the next `check` fails with an unbound
+-- variable.  Returns the splices to apply plus the (zero or one) splice that
+-- widens the import.  A fix whose verb is missing from every `import test.{…}`
+-- group is kept only when some group can be widened without losing a comment:
+-- otherwise it is dropped and stays a finding.  `import test.*` already binds
+-- the verbs, so that file is untouched here.  A bare or aliased `import test`,
+-- or no import at all, never bound the matched verb, so `testFixAllowed` has
+-- already dropped every fix in such a file.
+reconcileTestImport : List Comment ->
+  List (Decl, DeclPos) ->
+  List ((Int, Int, String), List String) ->
+  (List (Int, Int, String), Option (Int, Int, String))
+reconcileTestImport cmts declPos tagged =
+  let groups = testGroups declPos
+  let listed = flatMap (g => map useMemberLocal (fst g)) groups
+  let wild = anyList isTestWild (map fst declPos)
+  if isEmptyL groups || wild then
+    (map fst tagged, None)
+  else
+    let missingOf = verbs => filterList (v => not (contains v listed)) verbs
+    let target = findWidenable cmts groups
+    let kept =
+      filterList (t => isEmptyL (missingOf (snd t)) || isSome target) tagged
+    let missing = dedup (flatMap (t => missingOf (snd t)) kept)
+    match target
+      Some (pub, path, members, loc, dp, trailing) =>
+        if isEmptyL missing then
+          (map fst kept, None)
+        else
+          let widened =
+            UseGroup
+              path
+              (members ++ map (v => UseMember v False loc None) missing)
+          let txt = declToString (DUse pub widened loc) ++ trailing
+          (map fst kept, Some (declPosLine dp, declPosEndLine dp, txt))
+      None => (map fst kept, None)
+
+isTestWild : Decl -> Bool
+isTestWild (DUse _ (UseWild path) _) = path == ["test"]
+isTestWild _ = False
+
+testGroups : List (Decl, DeclPos) ->
+  List (List UseMember, (Bool, List String, Loc, DeclPos))
+testGroups [] = []
+testGroups ((DUse pub (UseGroup path members) loc, dp) :: rest)
+  | path == ["test"] = (members, (pub, path, loc, dp)) :: testGroups rest
+testGroups (_ :: rest) = testGroups rest
+
+-- The first `import test.{…}` group whose span holds no comment, or only a
+-- `--` comment on its last line, which the rewritten import re-appends.
+findWidenable : List Comment ->
+  List (List UseMember, (Bool, List String, Loc, DeclPos)) ->
+  Option (Bool, List String, List UseMember, Loc, DeclPos, String)
+findWidenable _ [] = None
+findWidenable cmts ((members, (pub, path, loc, dp)) :: rest) =
+  match spanComments cmts (declPosLine dp) (declPosEndLine dp)
+    [] => Some (pub, path, members, loc, dp, "")
+    [c] =>
+      if commentLine c == declPosEndLine dp
+        && startsWith "--" (commentText c) then
+        Some (pub, path, members, loc, dp, " " ++ commentText c)
+      else
+        findWidenable cmts rest
+    _ => findWidenable cmts rest
+
+spanComments : List Comment -> Int -> Int -> List Comment
+spanComments cmts s e =
+  filterList (c => s <= commentLine c && commentLine c <= e) cmts
+
+insertSpliceAsc : (Int, Int, String) ->
+  List (Int, Int, String) ->
+  List (Int, Int, String)
+insertSpliceAsc sp [] = [sp]
+insertSpliceAsc (s, e, t) ((s2, e2, t2) :: rest)
+  | s < s2 = (s, e, t) :: (s2, e2, t2) :: rest
+  | otherwise = (s2, e2, t2) :: insertSpliceAsc (s, e, t) rest
+
+-- a rule participates in `--fix` iff it is enabled, passes the --only/--disable
+-- filters, AND carries a fixer.
+ruleActiveFixable : List String -> List String -> Rule -> Bool
+ruleActiveFixable only disable r =
+  r.enabled
+    && (isEmptyL only || contains r.name only)
+    && not (contains r.name disable)
+    && ruleHasFixer r
+
+ruleHasFixer : Rule -> Bool
+ruleHasFixer r = match r.fix
+  Some _ => True
+  None => False
+
+-- one (startLine, endLine, replacementText) per fixed decl, in source order.
+--
+-- COMMENT-LOSS SAFETY-NET (mirrors `medaka fmt`'s verbatim bail).  The printer
+-- carries NO comments, so splicing printer output over a decl's `[startLine,
+-- endLine]` span would silently DELETE any comment inside that span.  So before
+-- emitting a splice we check `spanHasComment`: if the decl's span contains an
+-- interior comment line we SKIP the fix (the rule still WARNS; the source is
+-- left untouched).  A leading doc-comment ABOVE the decl is on a line
+-- `< declPosLine` → outside the span → the fix is still allowed (no over-bail).
+collectSplices : Option FileFacts ->
+  List (String, Int) ->
+  List Int ->
+  Oracle ->
+  List Rule ->
+  List (Decl, DeclPos) ->
+  List ((Int, Int, String), List String)
+collectSplices _ _ _ _ _ [] = []
+collectSplices facts live cmtLines orc rules ((d, dp) :: rest) =
+  let liveRules =
+    filterList (ruleLiveIn live (declPosLine dp, declPosEndLine dp)) rules
+  match firstFix orc liveRules d
+    Some newDecls =>
+      let delta = testVerbDelta d newDecls
+      if spanHasComment cmtLines (declPosLine dp) (declPosEndLine dp)
+        || not
+          (testFixAllowed
+            facts
+            (declPosLine dp, declPosEndLine dp)
+            delta.stopped
+            delta.started) then
+        collectSplices facts live cmtLines orc rules rest
+      else
+        (
+            (declPosLine dp, declPosEndLine dp, renderDecls newDecls),
+            delta.started,
+          )
+          :: collectSplices facts live cmtLines orc rules rest
+    None => collectSplices facts live cmtLines orc rules rest
+
+-- True iff some comment line falls within the inclusive span `[startLine, endLine]`.
+spanHasComment : List Int -> Int -> Int -> Bool
+spanHasComment cmtLines startLine endLine =
+  anyList (l => startLine <= l && l <= endLine) cmtLines
+
+firstFix : Oracle -> List Rule -> Decl -> Option (List Decl)
+firstFix _ [] _ = None
+firstFix orc (r :: rs) d = match applyRuleFix orc r d
+  Some newDecls => Some newDecls
+  None => firstFix orc rs d
+
+applyRuleFix : Oracle -> Rule -> Decl -> Option (List Decl)
+applyRuleFix orc r d = match r.fix
+  Some f => f orc d
+  None => None
+
+-- render replacement decls, one per line (printer emits a single decl, no NL).
+renderDecls : List Decl -> String
+renderDecls ds = joinNl (map declToString ds)
+
+-- apply splices to the source.  `collectSplices` yields them ascending by start
+-- line; reversing → descending so each edit leaves lower line numbers valid.
+applySplices : String -> List (Int, Int, String) -> String
+applySplices src splices = joinNl (foldSplices (splitNl src) (reverseL splices))
+
+foldSplices : List String -> List (Int, Int, String) -> List String
+foldSplices lines [] = lines
+foldSplices lines ((s, e, txt) :: rest) =
+  foldSplices (spliceLines lines s e txt) rest
+
+-- replace the 1-based inclusive line range [s..e] with `txt`'s own lines.
+spliceLines : List String -> Int -> Int -> String -> List String
+spliceLines lines s e txt = take (s - 1) lines ++ splitNl txt ++ drop e lines
+
+-- ── CLI-flag-style finding filters ────────────────────────────────────────────
+-- `--disable`/`--only`/`--deny` (and the `medaka_lint` MCP tool's `disable`/
+-- `only`/`deny` args) all filter a `List Finding` by rule name, entirely in
+-- terms of `Finding.rule` — no `Rule`-record field access, so these are safe
+-- to run from any caller.  Shared by `medaka_cli.mdk` (the `medaka lint` CLI,
+-- both human and `--json` modes) and `mcp.mdk` (`medaka_lint`) so the two
+-- surfaces can never apply the flags differently.
+
+-- Parse --prefix=v1,v2,... from argv; returns [] if not present.
+export
+parseLintFlagList : String -> List String -> List String
+parseLintFlagList prefix [] = []
+parseLintFlagList prefix (x :: rest)
+  | startsWith prefix x =
+    splitLintNames (stringSlice (stringLength prefix) (stringLength x) x)
+  | otherwise = parseLintFlagList prefix rest
+
+-- Split a comma-separated string.  Uses literal ',' to avoid Char-param issues.
+-- Exported so a caller with an already-split comma-separated value in hand
+-- (rather than a raw `--flag=v1,v2` argv token) — e.g. the `medaka_lint` MCP
+-- tool's `deny`/`only`/`disable` args — can reuse the exact same splitter
+-- `parseLintFlagList` uses, instead of re-deriving comma-splitting.  NOTE:
+-- `splitLintNames ""` returns `[""]`, not `[]` — callers with an optional,
+-- possibly-absent value should special-case the empty string themselves
+-- (see mcp.mdk's `lintNameListArg`).
+export
+splitLintNames : String -> List String
+splitLintNames s = splitLintNamesGo (stringToChars s) s 0 0 (stringLength s)
+
+splitLintNamesGo : Array Char -> String -> Int -> Int -> Int -> List String
+splitLintNamesGo chars s start i n
+  | i >= n = [stringSlice start n s]
+  | arrayGetUnsafe i chars == ',' =
+    stringSlice start i s :: splitLintNamesGo chars s (i + 1) (i + 1) n
+  | otherwise = splitLintNamesGo chars s start (i + 1) n
+
+-- Apply finding-level filters.  Operates on Finding.rule (a String) so no
+-- Rule-record field access is needed by the caller.
+export
+applyFindingFilters : List String ->
+  List String ->
+  List String ->
+  List Finding ->
+  List Finding
+applyFindingFilters disable only deny findings =
+  let after1 = applyFindingOnly only findings
+  let after2 = applyFindingDisable disable after1
+  applyFindingDeny deny after2
+
+-- --only: keep findings whose rule is in the list (no-op when empty).
+applyFindingOnly : List String -> List Finding -> List Finding
+applyFindingOnly [] findings = findings
+applyFindingOnly names findings = lintFindingOnlyGo names findings
+
+lintFindingOnlyGo : List String -> List Finding -> List Finding
+lintFindingOnlyGo _ [] = []
+lintFindingOnlyGo names (f :: rest)
+  | contains f.rule names = f :: lintFindingOnlyGo names rest
+  | otherwise = lintFindingOnlyGo names rest
+
+-- --disable: remove findings whose rule is in the list (no-op when empty).
+applyFindingDisable : List String -> List Finding -> List Finding
+applyFindingDisable [] findings = findings
+applyFindingDisable names findings = lintFindingDisableGo names findings
+
+lintFindingDisableGo : List String -> List Finding -> List Finding
+lintFindingDisableGo _ [] = []
+lintFindingDisableGo names (f :: rest)
+  | contains f.rule names = lintFindingDisableGo names rest
+  | otherwise = f :: lintFindingDisableGo names rest
+
+-- --deny: promote findings to SevError when their rule is in the list.
+export
+applyFindingDeny : List String -> List Finding -> List Finding
+applyFindingDeny [] findings = findings
+applyFindingDeny names findings = lintFindingDenyGo names findings
+
+lintFindingDenyGo : List String -> List Finding -> List Finding
+lintFindingDenyGo _ [] = []
+lintFindingDenyGo names (f :: rest)
+  | contains f.rule names =
+    Finding {
+        rule = f.rule,
+        message = f.message,
+        severity = SevError,
+        loc = f.loc,
+        fix = f.fix,
+      }
+      :: lintFindingDenyGo names rest
+  | otherwise = f :: lintFindingDenyGo names rest
+
+export
+isFindingError : Finding -> Bool
+isFindingError f = match f.severity
+  SevError => True
+  SevWarning => False
+
+-- ── rendering ─────────────────────────────────────────────────────────────────
+
+export
+findingToDiag : Finding -> Diag
+findingToDiag f =
+  Diag
+    f.severity
+    (LintRule f.rule)
+    "[\{f.rule}] \{f.message}"
+    f.loc
+    None
+    (map fixToDiagFix f.fix)
+
+-- Run the full lint pipeline (all rules, inline `-- lint-disable-*` suppression,
+-- then the `--disable`/`--only`/`--deny` CLI-flag-style filters) over ONE file
+-- and return `(path, src, List Diag, Positions, List Decl)` — the per-file
+-- triple `driver.diagnostics.cjAllToJson` expects, PLUS the parse the
+-- cross-file tier (`runCrossFileRules`) needs as `(path, Positions, decls)`.
+-- Shared by `medaka lint --json` (medaka_cli.mdk) and the `medaka_lint` MCP
+-- tool (mcp.mdk) so both surfaces serialize through the SAME envelope
+-- `check --json` uses, with the lint rule name landing in each diagnostic's
+-- `code` (via `findingToDiag`).  Uses `readFileSafe` (the same ""-on-read-error
+-- helper `checkJsonFile` uses), so an unreadable path parses as empty source
+-- and yields `(path, "", [], <positions of "">, [])` — total, no crash, and
+-- consistent with `check --json`'s own file-variant behaviour on a missing
+-- target. A `Finding` at a nested sub-expression (`exprRuleVisitors`)
+-- carries THAT expression's own location,
+-- not the enclosing decl's.
+-- `idx` is the stdlib reference index.  It is a PARAMETER rather than something
+-- this function builds, because both callers (`medaka lint --json`'s
+-- `runLintJsonCmd` and `mcp.mdk`'s `medaka_lint`) sequence this over a LIST of
+-- paths — building the index here would re-parse the whole stdlib once per
+-- target file instead of once per process.
+export
+lintFileDiagTripleParsed : StdlibIndex ->
+  List String ->
+  List String ->
+  List String ->
+  String ->
+  <IO> (String, String, List Diag, Positions, List Decl)
+lintFileDiagTripleParsed idx disable only deny path =
+  let src = readFileSafe path
+  match lintParseSource src
+    Err e => (path, src, [parseErrDiag path e], Positions [] [] 0 [], [])
+    Ok (decls, pos) =>
+      let facts = mkFileFacts src decls pos
+      let allFindings =
+        applySuppressionsDirs
+          (factDirectives facts)
+          (lintProgramFacts idx (selectRules only disable) path facts pos decls)
+      let findings = applyFindingFilters disable only deny allFindings
+      (
+        path,
+        src,
+        map findingToDiag (demoteOverComments path src findings),
+        pos,
+        decls,
+      )
+
+-- `lintFileDiagTripleParsed`, dropping the parse — the shape every existing
+-- caller that does not need the cross-file tier's inputs still wants.
+export
+lintFileDiagTriple : StdlibIndex ->
+  List String ->
+  List String ->
+  List String ->
+  String ->
+  <IO> (String, String, List Diag)
+lintFileDiagTriple idx disable only deny path =
+  dropParsedTriple (lintFileDiagTripleParsed idx disable only deny path)
+
+dropParsedTriple : (String, String, List Diag, Positions, List Decl) ->
+  (String, String, List Diag)
+dropParsedTriple (path, src, diags, _, _) = (path, src, diags)
+
+-- One finding per line: `<severity>: [<rule>] <message>` (location-stripped, the
+-- golden harness sorts).  Mirror of exhaust.mdk's `exhaustToLines`.  `src` is the
+-- raw source text: findings are produced by `lintProgram`, then filtered through
+-- the inline-suppression directives (`-- lint-disable-*`) recovered from `src`'s
+-- comment side channel (see `applySuppressions`).
+-- `idx` is the stdlib reference index, built by the caller
+-- (`entries/lint_main.mdk` — THE gate oracle — builds a real one, so the gate
+-- and the CLI see the same rule inputs).
+export
+lintToLines : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  String
+lintToLines idx src path pos prog =
+  joinNl
+    (map
+      findingLine
+      (applySuppressions src (lintProgram idx allRules path src pos prog)))
+
+findingLine : Finding -> String
+findingLine f = "\{ppSeverity f.severity}: [\{f.rule}] \{f.message}"
+
+-- ── inline suppression directives (ESLint-style) ──────────────────────────────
+-- A finding can be silenced by a `--` line comment whose trimmed body starts
+-- with one of these directive keywords (chosen to MIRROR ESLint's
+-- `eslint-disable-*` family; keep them exactly unless there's a strong reason):
+--
+--   `-- lint-disable-next-line [rules]`  suppress findings on the NEXT source line
+--   `-- lint-disable-line      [rules]`  suppress findings on THIS comment's line
+--   `-- lint-disable-file      [rules]`  suppress the rules ANYWHERE in the file
+--
+-- With NO rule names the directive applies to ALL rules; otherwise it lists rule
+-- ids (comma- and/or space-separated, e.g. `rule-match-on-param, rule-stdlib-reimpl`)
+-- matched against a Finding's `rule` field.  Unknown rule names are harmless
+-- no-ops.  A finding at line L with rule R is suppressed iff SOME directive both
+-- covers R (its rule set is empty or contains R) and whose scope includes L.
+--
+-- SEAM.  Comments are stripped by the lexer before layout, so the parser never
+-- sees them and no rule can observe a directive.  Instead findings are produced
+-- FIRST by `lintProgram`, then FILTERED here using the lexer's out-of-band
+-- comment side channel (`collectComments src`).  The two lint entry points
+-- (`compiler/driver/medaka_cli.mdk` report arm + this module's `lintToLines`,
+-- used by `compiler/entries/lint_main.mdk`) call `applySuppressions src findings`
+-- right after `lintProgram`.  A finding's line comes from its `loc` (the decl's
+-- start line, stamped by `declLocList`); a finding without a `loc` can only be
+-- silenced by a whole-file directive.
+
+-- Filter out every finding covered by an inline-suppression directive found in
+-- the source's comment side channel.
+export
+applySuppressions : String -> List Finding -> List Finding
+applySuppressions src findings =
+  applySuppressionsDirs (directivesOfSource src) findings
+
+-- The same filter, but taking the file's ALREADY-PARSED directives instead of
+-- re-deriving them from source.  `--cache` (#395) stores a file's directives in
+-- its shard, so a cache hit has them in hand and must not re-run
+-- `collectDirectives` (which re-lexes the file — the very cost the cache
+-- exists to skip).  `applySuppressions` is this function plus the parse, so the
+-- cached and uncached paths share ONE suppression implementation and cannot
+-- drift apart.
+export
+applySuppressionsDirs : List Directive -> List Finding -> List Finding
+applySuppressionsDirs dirs findings =
+  filterList (f => not (isSuppressed dirs f)) findings
+
+-- Cross-file variant: findings anchor to DIFFERENT files, so a single `src`
+-- cannot cover them.  Given each file's source (`(path, src)`), silence every
+-- finding covered by an inline directive in ITS OWN file's comment side channel.
+-- Directives are parsed once per file (not per finding).  General over any
+-- cross-file rule; the cross-file report path calls this before flag filters.
+export
+applySuppressionsMulti : List (String, String) -> List Finding -> List Finding
+applySuppressionsMulti srcs findings =
+  applySuppressionsMultiDirs (map fileDirectivesOf srcs) findings
+
+-- Pre-parsed-directive counterpart of `applySuppressionsMulti`, for the same
+-- reason `applySuppressionsDirs` exists: a `--cache` run already holds every
+-- file's directives and must not re-lex to recover them.
+export
+applySuppressionsMultiDirs : List (String, List Directive) ->
+  List Finding ->
+  List Finding
+applySuppressionsMultiDirs dirTable findings =
+  let table = dirTableMap dirTable
+  filterList (f => not (findingSuppressedMulti table f)) findings
+
+-- First row per path wins, as the list scan it replaces did.
+dirTableMap : List (String, List Directive) -> HashMap String (List Directive)
+dirTableMap rows =
+  let m = new ()
+  let _ = dirTableFill m rows
+  m
+
+dirTableFill : HashMap String (List Directive) ->
+  List (String, List Directive) ->
+  Unit
+dirTableFill _ [] = ()
+dirTableFill m ((p, ds) :: rest) =
+  let _ = if has p m then () else setInPlace p ds m
+  dirTableFill m rest
+
+fileDirectivesOf : (String, String) -> (String, List Directive)
+fileDirectivesOf (path, src) = (path, directivesOfSource src)
+
+findingSuppressedMulti : HashMap String (List Directive) -> Finding -> Bool
+findingSuppressedMulti dirTable f = match get (findingFileOf f) dirTable
+  None => False
+  Some dirs => isSuppressed dirs f
+
+findingFileOf : Finding -> String
+findingFileOf f = match f.loc
+  Some (Loc file _ _ _ _) => file
+  None => ""
+
+directivesOfSource : String -> List Directive
+directivesOfSource src = collectDirectives (collectComments src)
+
+isSuppressed : List Directive -> Finding -> Bool
+isSuppressed dirs f = anyList (dirCoversFinding f) dirs
+
+dirCoversFinding : Finding -> Directive -> Bool
+dirCoversFinding f (Directive scope names) =
+  (isEmptyL names || contains f.rule names)
+    && scopeMatches (findingLineNo f) scope
+
+scopeMatches : Option Int -> DirScope -> Bool
+scopeMatches _ DScopeFile = True
+scopeMatches (Some line) (DScopeLine l) = line == l
+scopeMatches None (DScopeLine _) = False
+
+findingLineNo : Finding -> Option Int
+findingLineNo f = map ((Loc _ l _ _ _) => l) f.loc
+
+-- ── cross-file runner ─────────────────────────────────────────────────────────
+-- Run the enabled cross-file rules over every target file, honoring the same
+-- --only/--disable name filters the per-file rules use.  --deny promotion is
+-- left to the CLI (which already owns it for per-file findings).
+export
+runCrossFileRules : List String ->
+  List String ->
+  List (String, Positions, List Decl) ->
+  List Finding
+runCrossFileRules only disable files =
+  flatMap (runCrossRuleOn only disable files) allCrossFileRules
+
+runCrossRuleOn : List String ->
+  List String ->
+  List (String, Positions, List Decl) ->
+  CrossFileRule ->
+  List Finding
+runCrossRuleOn only disable files r
+  | crossRuleActive only disable r =
+    map (restampSeverity r.severity) (r.check files)
+  | otherwise = []
+
+-- Fold cross-file findings into the per-file `(path, src, List Diag)` triples
+-- the JSON envelope (`cjAllToJson`) and the `medaka_lint` MCP tool both
+-- serialize.  Each `Finding` already carries ITS OWN occurrence's file in
+-- `loc` (`emitDupGroup` emits one finding per occurrence), so a finding is
+-- appended to the triple whose path matches that file — never aggregated
+-- under a new key.  A finding whose file is not already among `triples`
+-- would get a synthesized `(file, "", [diag])` entry appended instead of
+-- being dropped — a defensive fallback, structurally unreachable from both
+-- of today's call sites, since each builds `triples` from exactly the same
+-- file list it hands to `runCrossFileRules`, so every finding's file is
+-- already present.  Kept for the day a caller passes a narrower path set
+-- than its cross-file rules run over.  A `Finding` with no `loc` (only the
+-- cross-file rule shape used today always sets one) is skipped: there is no
+-- file to attribute it to.
+export
+mergeCrossFileIntoTriples : List Finding ->
+  List (String, String, List Diag) ->
+  List (String, String, List Diag)
+mergeCrossFileIntoTriples [] triples = triples
+mergeCrossFileIntoTriples (f :: rest) triples =
+  mergeCrossFileIntoTriples rest (mergeOneFinding f triples)
+
+mergeOneFinding : Finding ->
+  List (String, String, List Diag) ->
+  List (String, String, List Diag)
+mergeOneFinding f triples = match f.loc
+  None => triples
+  Some (Loc file _ _ _ _) =>
+    if anyList (tripleHasPath file) triples then
+      map (appendIfPath file (findingToDiag f)) triples
+    else
+      triples ++ [(file, "", [findingToDiag f])]
+
+tripleHasPath : String -> (String, String, List Diag) -> Bool
+tripleHasPath file (path, _, _) = path == file
+
+appendIfPath : String ->
+  Diag ->
+  (String, String, List Diag) ->
+  (String, String, List Diag)
+appendIfPath file diag (path, src, diags) =
+  if path == file then (path, src, diags ++ [diag]) else (path, src, diags)
+
+-- ── the cross-file tier, reached from CACHED per-file inputs (#395) ────────────
+-- `runCrossFileRules` needs every file's `(path, Positions, decls)` — i.e. a
+-- PARSE of every target, which is exactly what `--cache` skips.  So a cached run
+-- reaches the tier through the occurrence lists it persisted per file instead.
+--
+-- The soundness seam.  `fileDupOccs` is the per-file input of ONE rule.  This
+-- entry point is therefore only equivalent to `runCrossFileRules` while
+-- `allCrossFileRules` is exactly `[duplicateBodyRule]` — a second cross-file
+-- rule would have its own per-file inputs, which nothing here caches or feeds
+-- it, and it would silently not run under `--cache`.  That is a whole rule
+-- reporting nothing while exiting 0: this repo's defining failure mode.
+--
+-- Rather than trust a future agent to read this comment, `crossFileCacheSound`
+-- DERIVES the answer from the live registry, and the CLI refuses `--cache`
+-- (falling back to a full uncached run) when it goes False.  Adding a cross-file
+-- rule then costs a slower lint, never a wrong one — the #395 invariant: a miss
+-- is always safe, a wrong hit is silent wrongness.
+export
+crossFileCacheSound : Bool
+crossFileCacheSound = match allCrossFileRules
+  [r] => r.name == ruleNameDuplicateBody
+  _ => False
+
+-- Cached counterpart of `runCrossFileRules`: same --only/--disable gating, same
+-- severity restamp, same join — but fed occurrences instead of parses.  Callers
+-- MUST check `crossFileCacheSound` first (see above).
+export
+runCrossFileRulesFromOccs : List String ->
+  List String ->
+  List (String, Int, String, String) ->
+  List Finding
+runCrossFileRulesFromOccs only disable occs =
+  flatMap (runCrossRuleFromOccs only disable occs) allCrossFileRules
+
+-- The `r.name == ruleNameDuplicateBody` conjunct is belt-and-braces behind the
+-- CLI's `crossFileCacheSound` check: it means a caller that ignores that check
+-- still cannot run `dupJoin` under some OTHER rule's name and severity — it just
+-- gets the dup rule alone, which is what the guard would have caught anyway.
+runCrossRuleFromOccs : List String ->
+  List String ->
+  List (String, Int, String, String) ->
+  CrossFileRule ->
+  List Finding
+runCrossRuleFromOccs only disable occs r
+  | crossRuleActive only disable r && r.name == ruleNameDuplicateBody =
+    map (restampSeverity r.severity) (dupJoin occs)
+  | otherwise = []

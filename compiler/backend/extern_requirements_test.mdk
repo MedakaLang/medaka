@@ -423,7 +423,7 @@ test "source and decoded declaration rows reject duplicates before map insertion
           (kind => (
             kind,
             match boundedVerbSeconds 90 "env" [
-              duplicateProbeVar ++ "=" ++ kind,
+              "\{duplicateProbeVar}=\{kind}",
               executablePath (),
             ]
               Err e => fail e

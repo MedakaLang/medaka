@@ -3,7 +3,7 @@ import frontend.lex_token.{Token(..), RawTok(..)}
 import frontend.lex_literal.{
   LiteralFlavor(..), LiteralPart(..), LiteralCursor(..), LiteralRead(..),
   LiteralStop(..), LexError(..), readLiteral, readCharacter, readByteLiteral,
-  copyCharRange, dedentSegments, dedentTripleInterp
+  readRawLiteral, copyCharRange, dedentSegments, dedentTripleInterp
 }
 import support.char.{
   isSp, isTab, isNL, isCR, isQuote, isApos, isBackslash, isBacktick, isSpace,
@@ -205,7 +205,8 @@ scanAt : ScanCursor ->
 scanAt ctx src len pos depth id c
   | isSpace c = scanOne ctx src len (pos + 1) depth id
   | isNL c || isCR c = handleNewline ctx src len pos depth id
-  | c == '-' && pos + 1 < len && at src (pos + 1) == '-' =
+  | c == '#' && pos == 0 && len > 1 && at src 1 == '!'
+    || c == '-' && pos + 1 < len && at src (pos + 1) == '-' =
     let e = skipLineComment src len pos
     emitOne ctx (RComment pos e) e depth id
   | c == '{' && pos + 1 < len && at src (pos + 1) == '-' =
@@ -221,6 +222,8 @@ scanAt ctx src len pos depth id c
     scanLiteral ctx src (pos + 1) pos depth id PlainLiteral InitialLiteral
   | isApos c = scanChar ctx src pos depth id
   | c == 'b' && opensByteLiteral src len pos = scanByte ctx src len pos depth id
+  | c == 'r' && opensRawLiteral src len pos =
+    scanRawLiteral ctx src pos depth id
   | isLower c || c == '_' = scanLower ctx src len pos depth id
   | isUpper c = scanUpper ctx src len pos depth id
   | isBacktick c = scanBacktick ctx src len pos depth id
@@ -715,6 +718,20 @@ opensByteLiteral src len pos =
     && isApos (at src (pos + 1))
     && not (afterIdentChar src pos)
     && (isBackslash (at src (pos + 2)) || singleCharBody src len (pos + 2))
+
+-- `r` opens a raw literal when it does not continue an identifier and the
+-- `"` follows with no space.
+opensRawLiteral : Array Char -> Int -> Int -> Bool
+opensRawLiteral src len pos =
+  pos + 1 < len && isQuote (at src (pos + 1)) && not (afterIdentChar src pos)
+
+-- The token starts at the `r`, so a consumer reading source text at a literal's
+-- span start sees the raw prefix.
+scanRawLiteral : ScanCursor -> Array Char -> Int -> Int -> LexFrame -> RawTok
+scanRawLiteral ctx src pos depth frame = match readRawLiteral src pos
+  Ok (value, next) =>
+    emitOne ctx (RTok (TString value) pos next) next depth frame
+  Err (LexError kind start end) => lexErrorTok ctx start end kind
 
 afterIdentChar : Array Char -> Int -> Bool
 afterIdentChar src pos = pos > 0 && isAlnum (at src (pos - 1))

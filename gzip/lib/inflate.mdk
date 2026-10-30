@@ -858,7 +858,7 @@ test "packed back-reference distance=2 reads newly emitted high bytes" =
     (
       Ok (),
       B.fromArrayAssumeByteDomain
-        (arrayMakeWith 11 (i => if i % 2 == 0 then 128 else 255)),
+        (arrayMakeWith 11 (i => if isEven i then 128 else 255)),
     )
     (copyBackPackedResult (B.fromArrayAssumeByteDomain [|128, 255|]) 2 9)
 

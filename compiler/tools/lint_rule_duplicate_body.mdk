@@ -1,0 +1,39 @@
+-- lint rule rule-duplicate-body: a top-level function body structurally identical to one in another file (cross-file copy-paste).
+
+import frontend.ast.{Decl(..)}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import tools.lint_core.{
+  Category(..),
+  Finding(..),
+  Fixability(..),
+  Ratchet(..),
+  RuleMeta(..),
+  Scope(..),
+  CrossFileRule,
+  mkCrossFileRule,
+}
+import tools.lint_shared.{ruleNameDuplicateBody}
+import tools.lint_dup.{dupJoin, fileDupOccs}
+
+export
+rule : CrossFileRule
+rule =
+  mkCrossFileRule
+    RuleMeta {
+      name = ruleNameDuplicateBody,
+      summary =
+        "top-level function body is structurally identical to one in another file (copy-paste; consolidate)",
+      doc =
+        "A top-level function whose body is structurally identical to one in another file (location-stripped, above a complexity floor) is copy-paste across modules. Consolidate into one module and import it. The same-file arm of the rule covers duplicates inside one file.\n\nBefore:\n  a.mdk: f x = big x\n  b.mdk: g y = big y   -- same body shape\nAfter:\n  one definition, imported where needed",
+      category = Complexity,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleDuplicateBody
+
+ruleDuplicateBody : List (String, Positions, List Decl) -> List Finding
+ruleDuplicateBody files = dupJoin (flatMap fileDupOccs files)

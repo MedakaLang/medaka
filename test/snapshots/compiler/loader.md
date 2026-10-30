@@ -1,5 +1,5 @@
 # META
-source_lines=1601
+source_lines=1668
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -31,6 +31,7 @@ import frontend.parser.{
   parseErrorMessage,
 }
 import frontend.visibility.{useModId}
+import string as Str
 import support.util.{
   contains,
   listLen,
@@ -568,11 +569,41 @@ findModuleOrEntryFile deps roots entry modId = match entryUnderRoots roots entry
   Some pathRoot => Some pathRoot
   None => findModuleFile deps roots modId
 
+-- The name `medaka run -` gives a program read from standard input: the entry
+-- path every diagnostic shows, and the one entry `entryUnderRoots` accepts
+-- without a file behind it.  Relative imports and the `medaka.toml` walk-up
+-- resolve against the working directory, since it has no directory of its own.
+export
+stdinEntry : String
+stdinEntry = "<stdin>"
+
+-- The whole program text from standard input, or why there is none.  `readAll`
+-- decodes lossily and cannot tell a read failure from an empty stream, so an
+-- empty result is refused as unreadable, and a U+FFFD in the text is refused
+-- the way a non-UTF-8 source file is (a program that spells U+FFFD itself is
+-- refused too; write it as an escape).
+export
+readStdinProgram : Unit -> <Stdin> Result String String
+readStdinProgram _ =
+  let text = readAll ()
+  if text == "" then
+    Err
+      "\{stdinEntry}: no program text could be read from standard input (it is empty, closed or unreadable)"
+  else if Str.contains "�" text then
+    Err (sourceNotUtf8Message stdinEntry)
+  else
+    Ok text
+
+-- The loader `read` override serving `text` for the stdin entry only.
+export
+stdinReadOverride : String -> String -> Option String
+stdinReadOverride text path = if path == stdinEntry then Some text else None
+
 entryUnderRoots : List String -> String -> <IO> Option (String, String)
 entryUnderRoots [] _ = None
 entryUnderRoots (r :: rs) entry =
   let under = startsWith "\{r}/" entry || r == "." && not (startsWith "/" entry)
-  if entry /= "" && under && fileExists entry then
+  if entry /= "" && under && (entry == stdinEntry || fileExists entry) then
     Some (entry, r)
   else
     entryUnderRoots rs entry
@@ -1273,6 +1304,42 @@ scanSiteRoot inDeps (line :: rest) =
   else
     scanSiteRoot inDeps rest
 
+-- Does the project rooted at `root` switch on the linter's internal-scope rules
+-- (`[lint]` section, `internal = true`)?  Read like `allow-internal`: False when
+-- the manifest is missing, unreadable or states anything but the bare token
+-- `true`.  The key is only honoured inside `[lint]`, since `internal` is too
+-- common a word to claim in every section.
+export
+manifestLintInternal : String -> <IO> Bool
+manifestLintInternal root =
+  let tomlPath = stringConcat [root, "/medaka.toml"]
+  if fileExists tomlPath then match readFile tomlPath
+    Err _ => False
+    Ok src => scanLintInternal False (splitNl src)
+  else
+    False
+
+scanLintInternal : Bool -> List String -> Bool
+scanLintInternal _ [] = False
+scanLintInternal inLint (line :: rest) =
+  let t = stringTrim line
+  let header = match splitOnChar "#" t
+    h :: _ => stringTrim h
+    [] => t
+  if startsWith "[" header then
+    scanLintInternal (header == "[lint]") rest
+  else if inLint && keyBeforeEq t == "internal" then
+    lineValueIsTrue t
+  else
+    scanLintInternal inLint rest
+
+-- True when the text after the `=` is the bare token `true`; a trailing `#`
+-- comment is inert.
+lineValueIsTrue : String -> Bool
+lineValueIsTrue t = match splitOnChar "#" (rawValAfterEq t)
+  value :: _ => stringTrim value == "true"
+  [] => False
+
 -- A module is trusted when the root it resolved under is a trusted root, or
 -- when its file lies anywhere under `stdlibRoot`. The second arm is what
 -- trusts a nested stdlib module (`stdlib/crypto/hmac.mdk`) checked as the
@@ -1609,6 +1676,7 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "UsePath" true) (mem "Loc" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocated" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseAlias ("string") "Str"))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "initList" false) (mem "startsWith" false) (mem "endsWith" false) (mem "joinDot" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "splitNl" false) (mem "stringTrim" false) (mem "sortUniqS" false))))
 (DTypeSig false "lastOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "lastOr" ((PVar "d") (PList)) (EVar "d"))
@@ -1719,9 +1787,15 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DFunDef false "findInRoots" ((PCons (PVar "r") (PVar "rs")) (PVar "modId")) (EBlock (DoLet false false (PVar "path") (EApp (EApp (EVar "fileOfModuleId") (EVar "r")) (EVar "modId"))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "path")) (EApp (EVar "Some") (ETuple (EVar "path") (EVar "r"))) (EApp (EApp (EVar "findInRoots") (EVar "rs")) (EVar "modId"))))))
 (DTypeSig false "findModuleOrEntryFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))))
 (DFunDef false "findModuleOrEntryFile" ((PVar "deps") (PVar "roots") (PVar "entry") (PVar "modId")) (EMatch (EApp (EApp (EVar "entryUnderRoots") (EVar "roots")) (EVar "entry")) (arm (PCon "Some" (PVar "pathRoot")) () (EApp (EVar "Some") (EVar "pathRoot"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "modId")))))
+(DTypeSig true "stdinEntry" (TyCon "String"))
+(DFunDef false "stdinEntry" () (ELit (LString "<stdin>")))
+(DTypeSig true "readStdinProgram" (TyFun (TyCon "Unit") (TyEffect ("Stdin") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "readStdinProgram" (PWild) (EBlock (DoLet false false (PVar "text") (EApp (EVar "readAll") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "text") (ELit (LString ""))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "stdinEntry"))) (ELit (LString ": no program text could be read from standard input (it is empty, closed or unreadable)")))) (EIf (EApp (EApp (EVar "Str.contains") (ELit (LString "�"))) (EVar "text")) (EApp (EVar "Err") (EApp (EVar "sourceNotUtf8Message") (EVar "stdinEntry"))) (EApp (EVar "Ok") (EVar "text")))))))
+(DTypeSig true "stdinReadOverride" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "stdinReadOverride" ((PVar "text") (PVar "path")) (EIf (EBinOp "==" (EVar "path") (EVar "stdinEntry")) (EApp (EVar "Some") (EVar "text")) (EVar "None")))
 (DTypeSig false "entryUnderRoots" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "entryUnderRoots" ((PList) PWild) (EVar "None"))
-(DFunDef false "entryUnderRoots" ((PCons (PVar "r") (PVar "rs")) (PVar "entry")) (EBlock (DoLet false false (PVar "under") (EBinOp "||" (EApp (EApp (EVar "startsWith") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "r"))) (ELit (LString "/")))) (EVar "entry")) (EBinOp "&&" (EBinOp "==" (EVar "r") (ELit (LString "."))) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "entry")))))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "entry") (ELit (LString ""))) (EVar "under")) (EApp (EVar "fileExists") (EVar "entry"))) (EApp (EVar "Some") (ETuple (EVar "entry") (EVar "r"))) (EApp (EApp (EVar "entryUnderRoots") (EVar "rs")) (EVar "entry"))))))
+(DFunDef false "entryUnderRoots" ((PCons (PVar "r") (PVar "rs")) (PVar "entry")) (EBlock (DoLet false false (PVar "under") (EBinOp "||" (EApp (EApp (EVar "startsWith") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "r"))) (ELit (LString "/")))) (EVar "entry")) (EBinOp "&&" (EBinOp "==" (EVar "r") (ELit (LString "."))) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "entry")))))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "entry") (ELit (LString ""))) (EVar "under")) (EBinOp "||" (EBinOp "==" (EVar "entry") (EVar "stdinEntry")) (EApp (EVar "fileExists") (EVar "entry")))) (EApp (EVar "Some") (ETuple (EVar "entry") (EVar "r"))) (EApp (EApp (EVar "entryUnderRoots") (EVar "rs")) (EVar "entry"))))))
 (DData Public "LoadError" () ((variant "LoadMsg" (ConPos (TyCon "String"))) (variant "LoadParseFailed" (ConPos (TyCon "String") (TyCon "String") (TyCon "ParseError"))) (variant "LoadCycle" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Loc")))))) ())
 (DTypeSig true "loadErrorMessage" (TyFun (TyCon "LoadError") (TyCon "String")))
 (DFunDef false "loadErrorMessage" ((PCon "LoadMsg" (PVar "m"))) (EVar "m"))
@@ -1805,6 +1879,13 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DTypeSig false "scanSiteRoot" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "scanSiteRoot" (PWild (PList)) (EVar "None"))
 (DFunDef false "scanSiteRoot" ((PVar "inDeps") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoLet false false (PVar "header") (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EVar "t")) (arm (PCons (PVar "h") PWild) () (EApp (EVar "stringTrim") (EVar "h"))) (arm (PList) () (EVar "t")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "header")) (EApp (EApp (EVar "scanSiteRoot") (EBinOp "==" (EVar "header") (ELit (LString "[dependencies]")))) (EVar "rest")) (EIf (EVar "inDeps") (EApp (EApp (EVar "scanSiteRoot") (EVar "inDeps")) (EVar "rest")) (EIf (EBinOp "==" (EApp (EVar "keyBeforeEq") (EVar "t")) (ELit (LString "site-root"))) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EApp (EVar "rawValAfterEq") (EVar "t"))) (arm (PCons (PVar "value") PWild) () (EApp (EVar "Some") (EApp (EVar "unquote") (EApp (EVar "stringTrim") (EVar "value"))))) (arm (PList) () (EVar "None"))) (EApp (EApp (EVar "scanSiteRoot") (EVar "inDeps")) (EVar "rest"))))))))
+(DTypeSig true "manifestLintInternal" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "manifestLintInternal" ((PVar "root")) (EBlock (DoLet false false (PVar "tomlPath") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/medaka.toml"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "tomlPath")) (EMatch (EApp (EVar "readFile") (EVar "tomlPath")) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "scanLintInternal") (EVar "False")) (EApp (EVar "splitNl") (EVar "src"))))) (EVar "False")))))
+(DTypeSig false "scanLintInternal" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "scanLintInternal" (PWild (PList)) (EVar "False"))
+(DFunDef false "scanLintInternal" ((PVar "inLint") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoLet false false (PVar "header") (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EVar "t")) (arm (PCons (PVar "h") PWild) () (EApp (EVar "stringTrim") (EVar "h"))) (arm (PList) () (EVar "t")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "header")) (EApp (EApp (EVar "scanLintInternal") (EBinOp "==" (EVar "header") (ELit (LString "[lint]")))) (EVar "rest")) (EIf (EBinOp "&&" (EVar "inLint") (EBinOp "==" (EApp (EVar "keyBeforeEq") (EVar "t")) (ELit (LString "internal")))) (EApp (EVar "lineValueIsTrue") (EVar "t")) (EApp (EApp (EVar "scanLintInternal") (EVar "inLint")) (EVar "rest")))))))
+(DTypeSig false "lineValueIsTrue" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "lineValueIsTrue" ((PVar "t")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EApp (EVar "rawValAfterEq") (EVar "t"))) (arm (PCons (PVar "value") PWild) () (EBinOp "==" (EApp (EVar "stringTrim") (EVar "value")) (ELit (LString "true")))) (arm (PList) () (EVar "False"))))
 (DTypeSig false "trustedModsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "trustedModsGo" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "stdlibRoot") (PVar "trustedRoots") (PCons (PVar "m") (PVar "ms"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "stdlibRoot")) (EVar "trustedRoots")) (EVar "ms"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EApp (EApp (EVar "underDir") (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))) (EApp (EVar "canonicalizePath") (EVar "path")))) (EBinOp "::" (EVar "m") (EVar "rest")) (EVar "rest"))) (arm (PCon "None") () (EVar "rest"))))))
@@ -1854,6 +1935,7 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "UsePath" true) (mem "Loc" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocated" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseAlias ("string") "Str"))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "initList" false) (mem "startsWith" false) (mem "endsWith" false) (mem "joinDot" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "splitNl" false) (mem "stringTrim" false) (mem "sortUniqS" false))))
 (DTypeSig false "lastOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "lastOr" ((PVar "d") (PList)) (EVar "d"))
@@ -1964,9 +2046,15 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DFunDef false "findInRoots" ((PCons (PVar "r") (PVar "rs")) (PVar "modId")) (EBlock (DoLet false false (PVar "path") (EApp (EApp (EVar "fileOfModuleId") (EVar "r")) (EVar "modId"))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "path")) (EApp (EVar "Some") (ETuple (EVar "path") (EVar "r"))) (EApp (EApp (EVar "findInRoots") (EVar "rs")) (EVar "modId"))))))
 (DTypeSig false "findModuleOrEntryFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))))
 (DFunDef false "findModuleOrEntryFile" ((PVar "deps") (PVar "roots") (PVar "entry") (PVar "modId")) (EMatch (EApp (EApp (EVar "entryUnderRoots") (EVar "roots")) (EVar "entry")) (arm (PCon "Some" (PVar "pathRoot")) () (EApp (EVar "Some") (EVar "pathRoot"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "modId")))))
+(DTypeSig true "stdinEntry" (TyCon "String"))
+(DFunDef false "stdinEntry" () (ELit (LString "<stdin>")))
+(DTypeSig true "readStdinProgram" (TyFun (TyCon "Unit") (TyEffect ("Stdin") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "readStdinProgram" (PWild) (EBlock (DoLet false false (PVar "text") (EApp (EVar "readAll") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "text") (ELit (LString ""))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "stdinEntry"))) (ELit (LString ": no program text could be read from standard input (it is empty, closed or unreadable)")))) (EIf (EApp (EApp (EVar "Str.contains") (ELit (LString "�"))) (EVar "text")) (EApp (EVar "Err") (EApp (EVar "sourceNotUtf8Message") (EVar "stdinEntry"))) (EApp (EVar "Ok") (EVar "text")))))))
+(DTypeSig true "stdinReadOverride" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "stdinReadOverride" ((PVar "text") (PVar "path")) (EIf (EBinOp "==" (EVar "path") (EVar "stdinEntry")) (EApp (EVar "Some") (EVar "text")) (EVar "None")))
 (DTypeSig false "entryUnderRoots" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "entryUnderRoots" ((PList) PWild) (EVar "None"))
-(DFunDef false "entryUnderRoots" ((PCons (PVar "r") (PVar "rs")) (PVar "entry")) (EBlock (DoLet false false (PVar "under") (EBinOp "||" (EApp (EApp (EVar "startsWith") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString "/")))) (EVar "entry")) (EBinOp "&&" (EBinOp "==" (EVar "r") (ELit (LString "."))) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "entry")))))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "entry") (ELit (LString ""))) (EVar "under")) (EApp (EVar "fileExists") (EVar "entry"))) (EApp (EVar "Some") (ETuple (EVar "entry") (EVar "r"))) (EApp (EApp (EVar "entryUnderRoots") (EVar "rs")) (EVar "entry"))))))
+(DFunDef false "entryUnderRoots" ((PCons (PVar "r") (PVar "rs")) (PVar "entry")) (EBlock (DoLet false false (PVar "under") (EBinOp "||" (EApp (EApp (EVar "startsWith") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString "/")))) (EVar "entry")) (EBinOp "&&" (EBinOp "==" (EVar "r") (ELit (LString "."))) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "entry")))))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "entry") (ELit (LString ""))) (EVar "under")) (EBinOp "||" (EBinOp "==" (EVar "entry") (EVar "stdinEntry")) (EApp (EVar "fileExists") (EVar "entry")))) (EApp (EVar "Some") (ETuple (EVar "entry") (EVar "r"))) (EApp (EApp (EVar "entryUnderRoots") (EVar "rs")) (EVar "entry"))))))
 (DData Public "LoadError" () ((variant "LoadMsg" (ConPos (TyCon "String"))) (variant "LoadParseFailed" (ConPos (TyCon "String") (TyCon "String") (TyCon "ParseError"))) (variant "LoadCycle" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Loc")))))) ())
 (DTypeSig true "loadErrorMessage" (TyFun (TyCon "LoadError") (TyCon "String")))
 (DFunDef false "loadErrorMessage" ((PCon "LoadMsg" (PVar "m"))) (EVar "m"))
@@ -2050,6 +2138,13 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DTypeSig false "scanSiteRoot" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "scanSiteRoot" (PWild (PList)) (EVar "None"))
 (DFunDef false "scanSiteRoot" ((PVar "inDeps") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoLet false false (PVar "header") (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EVar "t")) (arm (PCons (PVar "h") PWild) () (EApp (EVar "stringTrim") (EVar "h"))) (arm (PList) () (EVar "t")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "header")) (EApp (EApp (EVar "scanSiteRoot") (EBinOp "==" (EVar "header") (ELit (LString "[dependencies]")))) (EVar "rest")) (EIf (EVar "inDeps") (EApp (EApp (EVar "scanSiteRoot") (EVar "inDeps")) (EVar "rest")) (EIf (EBinOp "==" (EApp (EVar "keyBeforeEq") (EVar "t")) (ELit (LString "site-root"))) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EApp (EVar "rawValAfterEq") (EVar "t"))) (arm (PCons (PVar "value") PWild) () (EApp (EVar "Some") (EApp (EVar "unquote") (EApp (EVar "stringTrim") (EVar "value"))))) (arm (PList) () (EVar "None"))) (EApp (EApp (EVar "scanSiteRoot") (EVar "inDeps")) (EVar "rest"))))))))
+(DTypeSig true "manifestLintInternal" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "manifestLintInternal" ((PVar "root")) (EBlock (DoLet false false (PVar "tomlPath") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/medaka.toml"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "tomlPath")) (EMatch (EApp (EVar "readFile") (EVar "tomlPath")) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "scanLintInternal") (EVar "False")) (EApp (EVar "splitNl") (EVar "src"))))) (EVar "False")))))
+(DTypeSig false "scanLintInternal" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "scanLintInternal" (PWild (PList)) (EVar "False"))
+(DFunDef false "scanLintInternal" ((PVar "inLint") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoLet false false (PVar "header") (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EVar "t")) (arm (PCons (PVar "h") PWild) () (EApp (EVar "stringTrim") (EVar "h"))) (arm (PList) () (EVar "t")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "header")) (EApp (EApp (EVar "scanLintInternal") (EBinOp "==" (EVar "header") (ELit (LString "[lint]")))) (EVar "rest")) (EIf (EBinOp "&&" (EVar "inLint") (EBinOp "==" (EApp (EVar "keyBeforeEq") (EVar "t")) (ELit (LString "internal")))) (EApp (EVar "lineValueIsTrue") (EVar "t")) (EApp (EApp (EVar "scanLintInternal") (EVar "inLint")) (EVar "rest")))))))
+(DTypeSig false "lineValueIsTrue" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "lineValueIsTrue" ((PVar "t")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EApp (EVar "rawValAfterEq") (EVar "t"))) (arm (PCons (PVar "value") PWild) () (EBinOp "==" (EApp (EVar "stringTrim") (EVar "value")) (ELit (LString "true")))) (arm (PList) () (EVar "False"))))
 (DTypeSig false "trustedModsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "trustedModsGo" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "stdlibRoot") (PVar "trustedRoots") (PCons (PVar "m") (PVar "ms"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "stdlibRoot")) (EVar "trustedRoots")) (EVar "ms"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EApp (EApp (EVar "underDir") (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))) (EApp (EVar "canonicalizePath") (EVar "path")))) (EBinOp "::" (EVar "m") (EVar "rest")) (EVar "rest"))) (arm (PCon "None") () (EVar "rest"))))))

@@ -3,7 +3,7 @@ driver.build_cmd	4
 driver.diagnostics	4
 driver.loader	1
 entries.playground_main	1
-eval.eval	16
+eval.eval	18
 frontend.desugar	1
 frontend.desugar_cache	2
 frontend.parse_cache	1
@@ -12,6 +12,7 @@ support.opcount	2
 support.scc	6
 support.stage_count	2
 support.timer	3
+tools.lint_cmd	1
 tools.lsp	2
 tools.lsp_harness	1
 tools.printer	8

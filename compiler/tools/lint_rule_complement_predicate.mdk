@@ -1,0 +1,146 @@
+-- lint rule rule-complement-predicate: `not (p x)` where `p` has a defined complement predicate. Call the complement directly.
+
+import frontend.ast.{Loc(..), Expr(..), Decl(..)}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import tools.printer.{exprToString}
+import support.util.{anyList}
+import tools.lint_core.{
+  Applicability(..),
+  Category(..),
+  Ctx(..),
+  FileFacts,
+  Finding(..),
+  Fix,
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  Visitor,
+  mkVisitorRule,
+}
+import tools.lint_shared.{
+  rebinds,
+  exprRuleEditVisitors,
+  notArgOf,
+  replaceNodeFix,
+  ruleNameComplementPredicate,
+  unwrapLoc,
+}
+
+export
+rule : Rule
+rule =
+  mkVisitorRule
+    RuleMeta {
+      name = ruleNameComplementPredicate,
+      summary =
+        "`not (p x)` where `p` has a defined complement predicate (`isEmptyL`/`isSome`/`isOk` & inverses). Call the complement directly",
+      doc =
+        "Negating a predicate that has a defined complement (`isEmptyL`/`isSome`/`isOk` and their inverses) is clearer as a call to the complement.\n\nBefore:\n  not (isSome x)\nAfter:\n  isNone x",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = FixableUnsafe,
+      needs = [NeedsScopes, NeedsWildIndex],
+    }
+    ruleComplementPredicate
+    None
+
+-- `not (p args…)` where `p` is a registered predicate with a defined complement
+-- `q`, rewritten to `q args…` (the args carried verbatim).  Curated BIDIRECTIONAL
+-- pairs only — the complement must actually exist:
+--   isEmptyL ↔ isNonEmptyL   (compiler `support/util.mdk`)
+--   isEmptyList ↔ isNonEmptyList  (a List helper pair some modules define locally)
+--   isSome ↔ isNone          (prelude `core.mdk`)
+--   isOk ↔ isErr             (prelude `core.mdk`)
+-- Matches the `not` prelude-fn form only (see `notArgOf`).  Purely syntactic —
+-- only the exact registered names fire; anything else (`not (isEmptyL x && …)`,
+-- `not (someOtherPred x)`) is left alone.  Excludes the complement helpers' OWN
+-- definitions (`isNonEmptyL xs = not (isEmptyL xs)`) — their bodies ARE this idiom,
+-- so rewriting would produce `isNonEmptyL xs = isNonEmptyL xs`.
+complementExcl : String -> Bool
+complementExcl name = name == "isNonEmptyL" || name == "isNonEmptyList"
+
+complementOf : String -> Option String
+complementOf "isEmptyL" = Some "isNonEmptyL"
+complementOf "isNonEmptyL" = Some "isEmptyL"
+complementOf "isEmptyList" = Some "isNonEmptyList"
+complementOf "isNonEmptyList" = Some "isEmptyList"
+complementOf "isSome" = Some "isNone"
+complementOf "isNone" = Some "isSome"
+complementOf "isOk" = Some "isErr"
+complementOf "isErr" = Some "isOk"
+complementOf _ = None
+
+-- head var name of a (possibly curried multi-arg) application spine.
+appSpineHead : Expr -> Option String
+appSpineHead e = match unwrapLoc e
+  EVar n => Some n
+  EApp hd _ => appSpineHead (unwrapLoc hd)
+  _ => None
+
+-- rebuild the spine, renaming only the head var; every arg carried verbatim.
+renameSpineHead : String -> Expr -> Expr
+renameSpineHead newName e = match unwrapLoc e
+  EVar _ => EVar newName
+  EApp hd arg => EApp (renameSpineHead newName hd) arg
+  _ => e
+
+complementPredOf : Expr -> Option Expr
+complementPredOf e = do
+  inner <- notArgOf e
+  name <- appSpineHead (unwrapLoc inner)
+  comp <- complementOf name
+  Some (renameSpineHead comp (unwrapLoc inner))
+
+ruleComplementPredicate : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Visitor
+ruleComplementPredicate idx _ facts _ _ =
+  exprRuleEditVisitors
+    complementExcl
+    complementPredOf
+    (complementPredicateFix idx facts)
+    complementPredicateFinding
+
+complementPredicateFinding : Option Loc -> Expr -> Option Fix -> Finding
+complementPredicateFinding loc rewritten fix = Finding {
+  rule = ruleNameComplementPredicate,
+  message = "negated predicate. Rewrite as '" ++ exprToString rewritten ++ "'",
+  severity = SevWarning,
+  loc = loc,
+  fix = fix,
+}
+
+-- The rewrite drops a `not`, reads the predicate, and calls the complement.  A
+-- binding of any of those names in the file withholds the fix.
+complementPredicateFix : StdlibIndex ->
+  FileFacts ->
+  Ctx ->
+  Expr ->
+  Expr ->
+  Option Fix
+complementPredicateFix idx facts ctx e rewritten =
+  if anyList (rebinds idx facts ctx) (complementNames e rewritten) then
+    None
+  else
+    replaceNodeFix Unsafe "call the complement" ctx e rewritten
+
+-- the names the rewrite of `not (p args…)` to `q args…` reads or writes
+complementNames : Expr -> Expr -> List String
+complementNames e rewritten = match notArgOf e
+  Some inner => "not" :: spineName (unwrapLoc inner) ++ spineName rewritten
+  None => []
+
+spineName : Expr -> List String
+spineName e = match appSpineHead e
+  Some n => [n]
+  None => []

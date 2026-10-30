@@ -1,0 +1,9 @@
+-- User code in a directory named `stdlib`, run by absolute path: the helper is
+-- still the program's own frame, so the refusal is located there.
+listDir : Unit -> <IO> Unit
+listDir _ = match runCommand "ls" []
+  Ok _ => println "listed"
+  Err e => println e
+
+main : <IO> Unit
+main = if False then listDir () else println "done"

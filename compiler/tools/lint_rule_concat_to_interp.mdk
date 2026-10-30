@@ -1,0 +1,223 @@
+-- lint rule rule-concat-to-interp: a `++` chain mixing string literals and expressions. Prefer string interpolation.
+
+-- ── rule: concat-to-interp ────────────────────────────────────────────────────
+-- An `++` spine that mixes string LITERALS and expressions is string concat that
+-- reads better as an interpolated string: `"  " ++ r ++ " = " ++ v` → `"  \{r} = \{v}"`.
+--
+-- SOUNDNESS.  `\{e}` auto-stringifies its hole; for a String-typed operand `\{s}`
+-- renders `s` VERBATIM (identity, no quotes).  In a `++` chain that contains a
+-- string LITERAL, `++` forces every operand to `String`, so mapping each
+-- non-literal operand `e` → `\{e}` verbatim (preserving any `debug`/`show`
+-- wrapper inside the hole) is exactly equivalent.  The printer escapes an
+-- `InterpStr` part with the SAME `escSOne` it uses for a plain string literal, so
+-- the literal text round-trips byte-for-byte.  Hence the self-compile fixpoint
+-- stays byte-identical (interp desugars to the same concat).
+--
+-- FIRING CONDITION: the `++` spine has ≥1 string-literal operand (confirms String
+-- concat, not list `++`) AND ≥2 non-literal operands (≥2 holes — the clear wins;
+-- single-hole `"prefix: " ++ x` chains are left alone).  A chain whose literal
+-- text already contains a `\{` sequence is SKIPPED (would collide with the
+-- interpolation syntax).
+--
+-- `++` is left-associative, so a chain nests leftward and a sub-chain
+-- would fire again under the shared bottom-up driver; this rule therefore uses a
+-- bespoke TOP-DOWN rewrite that fires once at the maximal chain and descends only
+-- into hole operands (`rewriteConcatExpr`).
+
+import frontend.ast.{Loc(..), Lit(..), InterpPart(..), Expr(..), Decl(..)}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import support.util.{listLen, anyList, isNonEmptyL}
+import tools.printer.{exprToString}
+import tools.lint_core.{
+  Applicability(..),
+  Category(..),
+  Ctx(..),
+  FileFacts(..),
+  Finding(..),
+  Fix,
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  Visitor(..),
+  mkVisitorRule,
+}
+import tools.lint_shared.{
+  bindingOf,
+  rebinds,
+  declHeadHits,
+  mapChildExprs,
+  replaceFix,
+  ruleNameConcatToInterp,
+  tightSpan,
+  unwrapLoc,
+}
+
+export
+rule : Rule
+rule =
+  mkVisitorRule
+    RuleMeta {
+      name = ruleNameConcatToInterp,
+      summary =
+        "`++` chain mixing string literals and expressions. Prefer string interpolation `\"…\\{e}…\"` (hlint 'use interpolation')",
+      doc =
+        "A `++` chain mixing string literals with expressions reads better as string interpolation.\n\nBefore:\n  \"n = \" ++ show n ++ \"!\"\nAfter:\n  \"n = \\{show n}!\"",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [NeedsScopes, NeedsWildIndex],
+    }
+    ruleConcatToInterp
+    None
+
+-- flatten a `++` spine into its operands, left-to-right (each still ELoc-wrapped).
+concatOperands : Expr -> List Expr
+concatOperands e = match unwrapLoc e
+  EBinOp "++" l r _ => concatOperands l ++ [r]
+  _ => [e]
+
+-- an operand that is a string literal (possibly under ELoc); the decoded value.
+strLitValueOf : Expr -> Option String
+strLitValueOf e = match unwrapLoc e
+  ELit (LString s) => Some s
+  _ => None
+
+isStrLitOperand : Expr -> Bool
+isStrLitOperand e = match strLitValueOf e
+  Some _ => True
+  None => False
+
+-- decoded literal value contains the 2-char sequence `\{` (would open an interp
+-- hole) — such a literal is unsafe to inline into an interpolated string.
+hasBackslashBrace : String -> Bool
+hasBackslashBrace s =
+  let cs = stringToChars s
+  backslashBraceGo cs (arrayLength cs) 0
+
+backslashBraceGo : Array Char -> Int -> Int -> Bool
+backslashBraceGo cs n i
+  | i + 1 >= n = False
+  | arrayGetUnsafe i cs == '\\' && arrayGetUnsafe (i + 1) cs == '{' = True
+  | otherwise = backslashBraceGo cs n (i + 1)
+
+-- the chain qualifies: ≥1 literal, ≥2 non-literals, no literal already holds `\{`.
+concatChainQualifies : List Expr -> Bool
+concatChainQualifies ops =
+  let lits = filterExprs isStrLitOperand ops
+  let holes = filterExprs (e => not (isStrLitOperand e)) ops
+  isNonEmptyL lits
+    && listLen holes >= 2
+    && not (anyList litHasBackslashBrace lits)
+
+litHasBackslashBrace : Expr -> Bool
+litHasBackslashBrace e = match strLitValueOf e
+  Some s => hasBackslashBrace s
+  None => False
+
+filterExprs : (Expr -> Bool) -> List Expr -> List Expr
+filterExprs p es = filter p es
+
+-- build the interpolated-string parts, merging adjacent literal text.  A literal
+-- operand contributes its decoded text; a non-literal operand `e` becomes the hole
+-- `\{e}` with `e` recursively rewritten (so a nested chain inside a hole is fixed).
+buildInterpParts : List Expr -> List InterpPart
+buildInterpParts ops = mergeInterpStr (map operandToInterp ops)
+
+operandToInterp : Expr -> InterpPart
+operandToInterp e = match strLitValueOf e
+  Some s => InterpStr s
+  None => InterpExpr (rewriteConcatExpr e)
+
+-- coalesce consecutive `InterpStr` parts into one (cosmetic + matches how the
+-- lexer would re-tokenise the emitted string).
+mergeInterpStr : List InterpPart -> List InterpPart
+mergeInterpStr [] = []
+mergeInterpStr ((InterpStr a) :: (InterpStr b) :: rest) =
+  mergeInterpStr (InterpStr (a ++ b) :: rest)
+mergeInterpStr (p :: rest) = p :: mergeInterpStr rest
+
+-- fire on the RAW node only when it is a qualifying `++` chain top; return the
+-- interpolated-string node.
+concatChainOf : Expr -> Option Expr
+concatChainOf (EBinOp "++" l r rf) =
+  let ops = concatOperands (EBinOp "++" l r rf)
+  if concatChainQualifies ops then
+    Some (EStringInterp (buildInterpParts ops))
+  else
+    None
+concatChainOf _ = None
+
+-- top-down rewrite: fire once at the maximal chain, else descend into children.
+rewriteConcatExpr : Expr -> Expr
+rewriteConcatExpr e = match concatChainOf e
+  Some e2 => e2
+  None => mapChildExprs rewriteConcatExpr e
+
+-- One rewritten node per maximal chain, with the chain's span: the search continues
+-- into the hole operands, not the consumed `++` spine.
+concatChainPick : Expr -> Option ((Expr, Option Loc), List Expr)
+concatChainPick e =
+  map (e2 => ((e2, tightSpan e), concatOperands e)) (concatChainOf e)
+
+ruleConcatToInterp : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Visitor
+ruleConcatToInterp idx _ facts _ _ = [OnDecl (concatToInterpAt idx facts)]
+
+concatToInterpAt : StdlibIndex -> FileFacts -> Ctx -> Decl -> List Finding
+concatToInterpAt idx facts ctx d =
+  map (concatToInterpHit idx facts ctx) (declHeadHits concatChainPick d)
+
+concatToInterpHit : StdlibIndex ->
+  FileFacts ->
+  Ctx ->
+  (Expr, Option Loc) ->
+  Finding
+concatToInterpHit idx facts ctx (rewritten, span) =
+  concatToInterpFinding
+    ctx.ctxSpan
+    rewritten
+    (concatToInterpFix idx facts ctx span rewritten)
+
+concatToInterpFinding : Option Loc -> Expr -> Option Fix -> Finding
+concatToInterpFinding loc rewritten fix = Finding {
+  rule = ruleNameConcatToInterp,
+  message =
+    "`++` chain of string literals and expressions. Rewrite as an interpolated string '"
+      ++ exprToString rewritten
+      ++ "'",
+  severity = SevWarning,
+  loc = loc,
+  fix = fix,
+}
+
+-- The fix replaces the chain's span with the interpolated string.  An interpolation
+-- hole desugars to a call of `display`, so the fix is withheld where the file binds
+-- `display`: that binding would capture the new call.
+concatToInterpFix : StdlibIndex ->
+  FileFacts ->
+  Ctx ->
+  Option Loc ->
+  Expr ->
+  Option Fix
+concatToInterpFix idx facts ctx span rewritten =
+  if rebinds idx facts ctx "display" then
+    None
+  else
+    replaceFix
+      Safe
+      "interpolate the string"
+      span
+      (bindingOf rewritten)
+      ctx
+      (exprToString rewritten)

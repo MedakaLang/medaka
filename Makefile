@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census alloc-census retain-census doc-census bytes-census
+.PHONY: engines-doc medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census alloc-census retain-census doc-census bytes-census
 
 ## medaka  — build the native `medaka` CLI.
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -240,6 +240,11 @@ inlang-support-hooks-check:
 inlang-backend-extern-catalog-test:
 	./medaka test compiler/backend/extern_catalog_test.mdk
 
+## The per-extern engine matrix and its drift guard (an effectful extern the
+## oracle binds that `run` does not); no entry imports the module or its sibling.
+inlang-tools-engine-table-test:
+	./medaka test --native compiler/tools/engine_table_test.mdk
+
 ## No entry imports a `_test.mdk` sibling, so the extern check's own tests
 ## run only from here.
 inlang-backend-core-validate-test:
@@ -456,6 +461,28 @@ inlang-tools-lint-baseline-test:
 inlang-tools-lint-test:
 	./medaka test --native compiler/tools/lint_test.mdk
 
+## compiler/tools/lint_scope_test.mdk is a `*_test.mdk` sibling outside every
+## entry's import closure ([W-MODULE-BLIND]): the scope model's precision cases.
+inlang-tools-lint-scope-test:
+	./medaka test compiler/tools/lint_scope_test.mdk
+
+## compiler/tools/lint_fix_test.mdk is a `*_test.mdk` sibling outside every
+## entry's import closure ([W-MODULE-BLIND]): the span-edit fix driver.
+inlang-tools-lint-fix-test:
+	./medaka test compiler/tools/lint_fix_test.mdk
+
+## The `medaka lint` behaviors only the built binary shows: what the working
+## directory and the flag combinations do. compiler/tools/lint_cli_test.mdk is
+## outside every entry's import closure ([W-MODULE-BLIND]).
+inlang-tools-lint-cli-test:
+	./medaka test compiler/tools/lint_cli_test.mdk
+
+## compiler/tools/lint_rule_fixtures_test.mdk is outside every entry's import
+## closure ([W-MODULE-BLIND]): the per-rule fixture harness over
+## test/lint_rule_fixtures. `--native`: it reads the fixture files.
+inlang-tools-lint-rule-fixtures-test:
+	./medaka test --native compiler/tools/lint_rule_fixtures_test.mdk
+
 ## S-two-way-draws-are-random (#2344): compiler/tools/prop_runner_test.mdk
 ## is outside every entry's import closure ([W-MODULE-BLIND]), so without
 ## this step its `rngNextLocal` distribution regression (both Bool values
@@ -531,6 +558,12 @@ inlang-frontend-parser-test:
 ## step runs its own sibling test by name.
 inlang-frontend-ast-codec-test:
 	./medaka test compiler/frontend/ast_codec_test.mdk
+
+## compiler/frontend/ast_walk_test.mdk is a `*_test.mdk` sibling, outside every
+## entry's import closure ([W-MODULE-BLIND]): it is what turns a constructor
+## missing from ast_walk's enumerations into a failure.
+inlang-frontend-ast-walk-test:
+	./medaka test compiler/frontend/ast_walk_test.mdk
 
 ## compiler/types/prelude_elab.mdk is imported by types.typecheck and
 ## driver.build_cmd; this step runs its own sibling test by name.
@@ -611,6 +644,12 @@ docs-links:
 ##           touched). POSIX sh, Linux + macOS. Would need no build.
 pr-helper-test:
 	sh test/pr_helper_test.sh
+
+## engines-doc — regenerate docs/stdlib/ENGINES.md from the engine tables
+##           (compiler/tools/engine_table.mdk). GENERATED; the test in
+##           engine_table_test.mdk fails when the committed page drifts.
+engines-doc: medaka
+	ENGINES_BLESS=1 ./medaka test --native compiler/tools/engine_table_test.mdk
 
 ## docs-index — regenerate docs/README.md (THE doc index) from every doc's H1
 ##           + `**Status:**` banner. GENERATED file — never hand-edit it; run

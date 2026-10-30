@@ -1,0 +1,20 @@
+-- fixture-path: fixture_test.mdk
+-- Fixture for rule-test-prelude-shadow (#3235), POSITIVE half.
+--
+-- The `_test.mdk` FILENAME SUFFIX is load-bearing: the rule is scoped to it, so
+-- the first line gives this fixture a `_test.mdk` virtual path.  The negative
+-- half, the same declarations under a name without the suffix, which must
+-- produce no finding, is the harness's own `test` block for this rule.
+
+-- POSITIVE: all four names stdlib/core.mdk (the auto-prelude) already exports.
+-- expect-next-line rule-test-prelude-shadow
+isOk r = r == 0
+-- expect-next-line rule-test-prelude-shadow
+isErr r = r /= 0
+-- expect-next-line rule-test-prelude-shadow
+isSome o = o == 1
+-- expect-next-line rule-test-prelude-shadow
+isNone o = o /= 1
+
+-- NEGATIVE: a name the prelude does not export is this file's own to declare.
+isPending x = x == 2

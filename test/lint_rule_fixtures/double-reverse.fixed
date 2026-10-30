@@ -1,0 +1,45 @@
+-- Fixture for rule-double-reverse: `reverse (reverse x)` → `x`.
+
+-- POSITIVE: the double reversal.
+-- expect-next-line rule-double-reverse
+dbl xs = xs
+
+-- POSITIVE: inner argument is an arbitrary expression.
+-- expect-next-line rule-double-reverse
+dblApp f xs = f xs
+
+-- POSITIVE: as an argument, the application keeps its own brackets.
+-- expect-next-line rule-double-reverse
+argApp f xs = h (f xs)
+
+-- POSITIVE: as an argument, an operator expression gets brackets.
+-- expect-next-line rule-double-reverse
+argOp a b = h (a ++ b)
+
+-- POSITIVE: as a list element, no brackets.
+-- expect-next-line rule-double-reverse
+listEl xs = [xs, xs]
+
+-- POSITIVE: a comment above the body, inside the declaration, survives the fix.
+-- expect-next-line rule-double-reverse
+commentOut xs =
+  -- keep this note
+  xs
+
+-- POSITIVE, unfixed: a comment inside the matched span withholds the fix.
+-- expect-next-line rule-double-reverse unfixed
+commentIn xs = reverse (reverse {- keep -} xs)
+
+-- POSITIVE, unfixed: a parameter named `reverse` is not the prelude's.
+-- expect-next-line rule-double-reverse unfixed
+reboundParam reverse xs = reverse (reverse xs)
+
+-- NEGATIVE: a directive suppresses the finding.
+-- lint-disable-next-line rule-double-reverse
+quietDbl xs = reverse (reverse xs)
+
+-- NEGATIVE: a single reverse is not a no-op.
+single xs = reverse xs
+
+-- NEGATIVE: not two reverses.
+mapped f xs = reverse (map f xs)

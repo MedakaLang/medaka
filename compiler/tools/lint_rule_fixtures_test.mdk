@@ -1,0 +1,467 @@
+-- Per-rule fixture harness for `medaka lint`.
+--
+-- A rule's fixture is `test/lint_rule_fixtures/<name>.mdk`, where `<name>` is
+-- the rule's name without its `rule-` prefix.  The harness runs ONLY that rule,
+-- in process, over the fixture and asserts that the set of lines it flags
+-- equals the annotated multiset.
+--
+-- Marker grammar.  A positive is the line immediately below a comment line
+--
+--   -- expect-next-line <rule-name>
+--   -- expect-next-line <rule-name> unfixed
+--
+-- (leading whitespace allowed; exactly one space after `line`).  Every other
+-- line is a negative.  A marker naming a different rule is ignored, so a
+-- fixture can carry positives of a neighbouring rule.  A marker naming a rule
+-- the registry does not know fails the run.  Lines, not messages, are compared:
+-- a message may be reworded without moving a fixture.
+--
+-- Lines are compared as multisets: a line carrying two findings of the rule is
+-- marked with a count suffix, `-- expect-next-line <rule-name> x2`, and a line
+-- that gains or loses a finding no longer matches.  The count may be followed
+-- by `unfixed`.
+--
+-- A rule whose finding sits on a comment line (`rule-directive-reason` flags the
+-- directive itself, and a marker above it would join the directive's comment
+-- block and count as its reason) is annotated out of band instead:
+--
+--   -- expect-at-line <N> <rule-name>
+--
+-- where N is the 1-based line of the finding; the count and `unfixed` suffixes
+-- apply.  The line is wherever the comment sits.
+--
+-- Optional `<name>.fixed` is the exact `--fix` output of the fixture under that
+-- one rule, through `fixSource`, the path `medaka lint --fix` takes.  The harness
+-- applies the fix, compares to the file, re-parses the result, and requires the
+-- re-lint to flag nothing of the rule, except the positives marked `unfixed`
+-- (findings the fix leaves: a body the fixer does not reach, or a fix withheld
+-- by a rebound name or a comment inside its span); those lines must still be
+-- flagged, so a fixer that grows to reach them fails the fixture until the
+-- marker is dropped.  A fixture with `unfixed` markers must
+-- keep its line count under the fix.
+--
+-- Directive suppression, which the CLI
+-- applies after the rules run, is applied here the same way (`applySuppressions`),
+-- so a fixture can pin a directive silencing a finding.  The roster is closed
+-- against the registry: every registered rule has a fixture file, a roster row
+-- and a `test` block.
+--
+-- Optional first line `-- fixture-path: <name>` is the virtual path the fixture
+-- is linted under (default `fixture.mdk`), for rules scoped by file name such as
+-- `rule-test-prelude-shadow`, which fires only under a `_test.mdk` name.
+--
+-- A rule whose metadata needs the stdlib index (`rule-stdlib-reimpl`) is linted
+-- with the index the CLI builds, built once per test process by that rule's
+-- `test` block; every other rule sees `emptyStdlibIndex`.
+--
+-- Internal-scope rules need no activation here: the scope filter lives in the
+-- CLI, and this harness selects the rule by name.
+--
+-- Files are located through `MEDAKA_ROOT`, so the test runs as a native gate:
+-- `medaka test --native compiler/tools/lint_rule_fixtures_test.mdk`.
+
+import test.{
+  Expectation,
+  expectAll,
+  expectEqual,
+  expectFalse,
+  fail,
+  labelFail,
+  pass,
+}
+import test_process.{mdkModuleStem, underRoot, unrosteredUnits}
+import list.{sort, nub, indexed, replicate}
+import string.{lines, words, unwords, trim, stripPrefix, toInt}
+import frontend.ast.{Loc(..)}
+import tools.lint.{
+  Finding(..),
+  Rule(..),
+  RuleMeta(..),
+  StdlibIndex(..),
+  allRuleNames,
+  Applicability(..),
+  FixRun(..),
+  fixSource,
+  indexForRules,
+  runParts,
+  applySuppressions,
+  emptyStdlibIndex,
+  lintParseSource,
+  lintProgram,
+  maxApplicability,
+  selectRules,
+}
+
+-- The rules that have a fixture, named without their `rule-` prefix; one
+-- `test` block per name below.
+fixtureNames : List String
+fixtureNames = [
+  "andthen-pure-map",
+  "bind-chain-to-do",
+  "bind-then-destructure",
+  "bool-simplify",
+  "clause-map",
+  "clone-type",
+  "complement-predicate",
+  "concat-to-interp",
+  "dead-code",
+  "destructure-in-param",
+  "directive-reason",
+  "double-reverse",
+  "duplicate-body",
+  "hand-rolled-derivable",
+  "if-max-min",
+  "lambda-section",
+  "match-on-param",
+  "match-to-map",
+  "missing-signature",
+  "not-eq",
+  "orelse-staircase",
+  "prefer-assign-op",
+  "promissory-reader",
+  "regex-literal",
+  "rem-parity",
+  "self-shadow-extern",
+  "stdlib-reimpl",
+  "test-bool-literal-equal",
+  "test-equal-in-true",
+  "test-prelude-shadow",
+  "when-unless",
+]
+
+fixtureDir : <Env "MEDAKA_ROOT"> String
+fixtureDir = underRoot "test/lint_rule_fixtures"
+
+markerPrefix : String
+markerPrefix = "-- expect-next-line "
+
+atLinePrefix : String
+atLinePrefix = "-- expect-at-line "
+
+-- One annotated positive: the 1-based line, the rule, whether the rule's fixer
+-- leaves it, and how many findings the line carries.
+data Marker = Marker { line : Int, rule : String, unfixed : Bool, count : Int }
+
+-- The marker on the line at 0-based index `i`, if the line is one.
+markerAt : (Int, String) -> List Marker
+markerAt (i, text) = match stripPrefix markerPrefix (trim text)
+  Some rest => markerSpec (i + 2) (words rest)
+  None => match stripPrefix atLinePrefix (trim text)
+    Some rest => atLineMarker (trim rest)
+    None => []
+
+atLineMarker : String -> List Marker
+atLineMarker rest = match words rest
+  n :: spec => match toInt n
+    Some line => markerSpec line spec
+    None => []
+  [] => []
+
+-- `<rule>`, `<rule> unfixed`, `<rule> xN` or `<rule> xN unfixed`.  Any other
+-- trailing words make the whole text a rule name that cannot exist, so
+-- `unknownMarkers` reports it.
+markerSpec : Int -> List String -> List Marker
+markerSpec line [rule] =
+  [Marker { line = line, rule = rule, unfixed = False, count = 1 }]
+markerSpec line [rule, "unfixed"] =
+  [Marker { line = line, rule = rule, unfixed = True, count = 1 }]
+markerSpec line [rule, n]
+  | isCount n =
+    [Marker { line = line, rule = rule, unfixed = False, count = countOf n }]
+markerSpec line [rule, n, "unfixed"]
+  | isCount n =
+    [Marker { line = line, rule = rule, unfixed = True, count = countOf n }]
+markerSpec line spec =
+  [Marker { line = line, rule = unwords spec, unfixed = False, count = 1 }]
+
+isCount : String -> Bool
+isCount w = match stripPrefix "x" w
+  Some n => isSome (toInt n)
+  None => False
+
+countOf : String -> Int
+countOf w = match stripPrefix "x" w
+  Some n => optionOr 1 (toInt n)
+  None => 1
+
+-- Every marker in the source.
+markers : String -> List Marker
+markers src = flatMap markerAt (indexed (lines src))
+
+-- The lines the markers of `rule` annotate (those `keep` admits), once per
+-- finding the marker declares.
+markedLines : (Bool -> Bool) -> String -> String -> List Int
+markedLines keep rule src = sort (flatMap (markedLine keep rule) (markers src))
+
+markedLine : (Bool -> Bool) -> String -> Marker -> List Int
+markedLine keep rule m
+  | m.rule == rule && keep m.unfixed = replicate m.count m.line
+  | otherwise = []
+
+expectedLines : String -> String -> List Int
+expectedLines = markedLines (_ => True)
+
+unfixedLines : String -> String -> List Int
+unfixedLines = markedLines (unfixed => unfixed)
+
+flaggedLines : List Finding -> List Int
+flaggedLines findings = sort (flatMap findingLine findings)
+
+findingLine : Finding -> List Int
+findingLine f = match f.loc
+  Some (Loc _ line _ _ _) => [line]
+  None => []
+
+pathPrefix : String
+pathPrefix = "-- fixture-path: "
+
+-- The virtual path a fixture is linted under: its header line, else `fixture.mdk`.
+fixturePath : String -> String
+fixturePath src = match lines src
+  first :: _ => match stripPrefix pathPrefix first
+    Some p => trim p
+    None => "fixture.mdk"
+  [] => "fixture.mdk"
+
+-- The lines `rule` flags in `src` under `path` with `idx`, or the parse failure.
+lintLinesAt : StdlibIndex ->
+  String ->
+  String ->
+  String ->
+  Result String (List Int)
+lintLinesAt idx path rule src = match lintParseSource src
+  Err _ => Err "the source does not parse"
+  Ok (decls, pos) =>
+    Ok
+      (flaggedLines
+        (applySuppressions
+          src
+          (lintProgram idx (selectRules [rule] []) path src pos decls)))
+
+lintLines : String -> String -> Result String (List Int)
+lintLines rule src = lintLinesAt emptyStdlibIndex (fixturePath src) rule src
+
+readOr : String -> <FileRead> Result String String
+readOr path = match readFile path
+  Ok s => Ok s
+  Err _ => Err "cannot read \{path}"
+
+unknownMarkers : String -> List String
+unknownMarkers src =
+  filter (r => not (elem r allRuleNames)) (nub (map markedRule (markers src)))
+
+-- The flagged lines equal the annotated lines.
+flaggedMatchesMarked : String -> <IO, Env "MEDAKA_ROOT", FileRead> Expectation
+flaggedMatchesMarked name = match readOr "\{fixtureDir}/\{name}.mdk"
+  Err e => fail e
+  Ok src =>
+    let rule = "rule-\{name}"
+    match (unknownMarkers src, indexForRules [rule])
+      (_ :: _, _) =>
+        fail "markers name unregistered rules: \{unknownMarkers src}"
+      (_, Err e) => fail e
+      ([], Ok idx) => match lintLinesAt idx (fixturePath src) rule src
+        Err e => fail e
+        Ok flagged => expectEqual (expectedLines rule src) flagged
+
+-- Applying the rule's fix reproduces the `.fixed` file, which still parses and
+-- is clean of the rule.
+fixMatchesFixed : String -> <IO, Env "MEDAKA_ROOT", FileRead> Expectation
+fixMatchesFixed name =
+  let fixedPath = "\{fixtureDir}/\{name}.fixed"
+  if not (fileExists fixedPath) then
+    pass
+  else match (readOr "\{fixtureDir}/\{name}.mdk", readOr fixedPath)
+    (Ok src, Ok expected) => match indexForRules ["rule-\{name}"]
+      Err e => fail e
+      Ok idx => fixOutcome idx "rule-\{name}" src expected
+    (Err e, _) => fail e
+    (_, Err e) => fail e
+
+-- The `.fixed` file is the output at the rule's own ceiling.  A rule whose
+-- ceiling is `Unsafe` also leaves the source as it is under plain `--fix`.
+fixOutcome : StdlibIndex -> String -> String -> String -> Expectation
+fixOutcome idx rule src expected =
+  match fixSource idx (ruleCeiling rule) [rule] [] (fixturePath src) src
+    Err e => fail "the fix: \{e}"
+    Ok run =>
+      let fixed = fst (runParts run)
+      match lintLines rule fixed
+        Err e => fail "the fixed source: \{e}"
+        Ok remaining => expectAll [
+          labelFail "fix output" (expectEqual expected fixed),
+          labelFail
+            "findings left after the fix"
+            (expectEqual (unfixedLines rule src) remaining),
+          labelFail "plain --fix" (plainFixOutcome idx rule src),
+        ]
+
+-- The most the rule's fixes may be trusted, `Safe` for a rule with no ceiling.
+ruleCeiling : String -> Applicability
+ruleCeiling rule = match selectRules [rule] []
+  r :: _ => optionOr Safe (maxApplicability r.meta.fixability)
+  [] => Safe
+
+-- Plain `--fix` applies a rule whose ceiling is `Safe` as the `.fixed` says,
+-- and leaves the source alone for any other.
+plainFixOutcome : StdlibIndex -> String -> String -> Expectation
+plainFixOutcome idx rule src = match ruleCeiling rule
+  Safe => pass
+  _ => match fixSource idx Safe [rule] [] (fixturePath src) src
+    Err e => fail "the plain fix: \{e}"
+    Ok run => expectEqual src (fst (runParts run))
+
+-- Every fixture file in the directory has a roster row, and the reverse; and
+-- the roster names exactly the registered rules, so a rule added without a
+-- fixture fails here.
+rosterIsClosed : <Env "MEDAKA_ROOT", FileRead> Expectation
+rosterIsClosed = match listDir fixtureDir
+  Err _ => fail "cannot list \{fixtureDir}"
+  Ok entries => expectAll [
+    labelFail
+      "fixture files vs roster"
+      (expectEqual [] (unrosteredUnits mdkModuleStem fixtureNames entries)),
+    labelFail
+      "registry vs roster"
+      (expectEqual
+        (sort (map (n => optionOr n (stripPrefix "rule-" n)) allRuleNames))
+        (sort fixtureNames)),
+  ]
+
+-- One rule's whole fixture: a positive exists, the flagged lines match the
+-- markers, and the fix (when there is a `.fixed`) is clean.
+fixtureHolds : String -> <IO, Env "MEDAKA_ROOT", FileRead> Expectation
+fixtureHolds name = expectAll [
+  labelFail "marks a positive" (hasPositive name),
+  labelFail "flagged lines" (flaggedMatchesMarked name),
+  labelFail "fix" (fixMatchesFixed name),
+]
+
+hasPositive : String -> <Env "MEDAKA_ROOT", FileRead> Expectation
+hasPositive name = match readOr "\{fixtureDir}/\{name}.mdk"
+  Err e => fail e
+  Ok src => expectFalse (isEmpty (expectedLines "rule-\{name}" src))
+
+test "rule-andthen-pure-map fixture" = fixtureHolds "andthen-pure-map"
+
+test "rule-bind-chain-to-do fixture" = fixtureHolds "bind-chain-to-do"
+
+test "rule-bind-then-destructure fixture" = fixtureHolds "bind-then-destructure"
+
+test "rule-bool-simplify fixture" = fixtureHolds "bool-simplify"
+
+test "rule-clause-map fixture" = fixtureHolds "clause-map"
+
+test "rule-clone-type fixture" = fixtureHolds "clone-type"
+
+test "rule-complement-predicate fixture" = fixtureHolds "complement-predicate"
+
+test "rule-concat-to-interp fixture" = fixtureHolds "concat-to-interp"
+
+test "rule-dead-code fixture" = fixtureHolds "dead-code"
+
+test "rule-destructure-in-param fixture" = fixtureHolds "destructure-in-param"
+
+test "rule-directive-reason fixture" = fixtureHolds "directive-reason"
+
+test "rule-double-reverse fixture" = fixtureHolds "double-reverse"
+
+test "rule-duplicate-body fixture" = fixtureHolds "duplicate-body"
+
+test "rule-hand-rolled-derivable fixture" = fixtureHolds "hand-rolled-derivable"
+
+test "rule-if-max-min fixture" = fixtureHolds "if-max-min"
+
+test "rule-lambda-section fixture" = fixtureHolds "lambda-section"
+
+test "rule-match-on-param fixture" = fixtureHolds "match-on-param"
+
+test "rule-match-to-map fixture" = fixtureHolds "match-to-map"
+
+test "rule-missing-signature fixture" = fixtureHolds "missing-signature"
+
+test "rule-not-eq fixture" = fixtureHolds "not-eq"
+
+test "rule-orelse-staircase fixture" = fixtureHolds "orelse-staircase"
+
+test "rule-prefer-assign-op fixture" = fixtureHolds "prefer-assign-op"
+
+test "rule-promissory-reader fixture" = fixtureHolds "promissory-reader"
+
+test "rule-regex-literal fixture" = fixtureHolds "regex-literal"
+
+test "rule-rem-parity fixture" = fixtureHolds "rem-parity"
+
+test "rule-self-shadow-extern fixture" = fixtureHolds "self-shadow-extern"
+
+test "rule-stdlib-reimpl fixture" = fixtureHolds "stdlib-reimpl"
+
+test "rule-test-bool-literal-equal fixture" =
+  fixtureHolds "test-bool-literal-equal"
+
+test "rule-test-equal-in-true fixture" = fixtureHolds "test-equal-in-true"
+
+test "rule-test-prelude-shadow fixture" = fixtureHolds "test-prelude-shadow"
+
+test "rule-when-unless fixture" = fixtureHolds "when-unless"
+
+-- The same declarations are silent outside a `_test.mdk` path, so the header
+-- path is what makes the rule fire.
+test "rule-test-prelude-shadow is silent under a non-test path" =
+  match readOr "\{fixtureDir}/test-prelude-shadow.mdk"
+    Err e => fail e
+    Ok src =>
+      match (lintLinesAt
+        emptyStdlibIndex
+        "fixture.mdk"
+        "rule-test-prelude-shadow"
+        src)
+        Err e => fail e
+        Ok flagged => expectEqual [] flagged
+
+test "every fixture file is on the roster" = rosterIsClosed
+
+markedRule : Marker -> String
+markedRule m = m.rule
+
+-- A rule whose rewrite can change meaning or fail to compile on types lint
+-- cannot see is `Unsafe`: plain `--fix` leaves the source, `--unsafe-fixes`
+-- applies it.  An `I64` operand is not `isEven`'s `Int`, and `isNonEmptyL` is
+-- only in scope with its own import.
+unsafeCases : List (String, String, String)
+unsafeCases = [
+  (
+    "rule-rem-parity",
+    "import i64.{I64}\n\nev : I64 -> Bool\nev n = n % 2 == 0\n",
+    "import i64.{I64}\n\nev : I64 -> Bool\nev n = isEven n\n",
+  ),
+  (
+    "rule-complement-predicate",
+    "f xs = not (isEmptyL xs)\n",
+    "f xs = isNonEmptyL xs\n",
+  ),
+  (
+    "rule-if-max-min",
+    "pickGt a b = if a > b then a else b\n",
+    "pickGt a b = max a b\n",
+  ),
+]
+
+test "an unsafe rule is left alone by --fix and applied by --unsafe-fixes" =
+  expectAll (map unsafeCase unsafeCases)
+
+unsafeCase : (String, String, String) -> <IO> Expectation
+unsafeCase (rule, src, fixed) = labelFail rule (match indexForRules [rule]
+  Err e => fail e
+  Ok idx => expectAll [
+    labelFail
+      "plain --fix"
+      (expectEqual
+        (Ok (Settled src 0))
+        (fixSource idx Safe [rule] [] "ev.mdk" src)),
+    labelFail
+      "--unsafe-fixes"
+      (expectEqual
+        (Ok (Settled fixed 1))
+        (fixSource idx Unsafe [rule] [] "ev.mdk" src)),
+  ])

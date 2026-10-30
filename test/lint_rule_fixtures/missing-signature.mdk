@@ -1,0 +1,112 @@
+-- Fixture for rule-missing-signature.  The line below each `expect-next-line`
+-- marker is the line the rule reports: the first clause of an unsigned
+-- top-level binding.
+
+signed : Int -> Int
+signed x = x + 1
+
+-- expect-next-line rule-missing-signature
+unsigned x = x + 1
+
+-- expect-next-line rule-missing-signature
+unsignedValue = 42
+
+twoClauses : Int -> Int
+twoClauses 0 = 1
+twoClauses n = n
+
+-- expect-next-line rule-missing-signature
+unsignedTwoClauses 0 = 1
+unsignedTwoClauses n = n
+
+main = signed 1
+
+-- A test and a prop body carry their own names, not a top-level binding.
+test "a test needs no signature" = expectTrue (signed 1 == 2)
+
+prop "a prop needs no signature" (n : Int) = signed n == n + 1
+
+-- expect-next-line rule-missing-signature
+helperNextToTests n = n * 2
+
+-- A local binding needs no signature of its own.
+scoped : Int -> Int
+scoped n =
+  let local = n + 1
+  local * 2
+
+interface Shape a where
+  area : a -> Int
+  describe : a -> String
+  describe x = "shape of area \{area x}"
+
+-- Fixture for rule-missing-signature (Haskell -Wmissing-signatures).
+-- A top-level value/function binding with no sibling `name : Type` fires;
+-- a signed binding, `main`, impl methods, multi-clause-with-one-sig, and
+-- data/prop declarations stay silent.
+
+-- FIRES: no signature.
+unsigned x = x + 1
+
+-- SILENT: has a signature.
+signed : Int -> Int
+signed x = x + 1
+
+-- SILENT: `main` is exempt (entry-point boilerplate).
+main = println (signed (unsigned 0))
+
+-- SILENT: multi-clause function with ONE signature covers all clauses.
+classify : Int -> String
+classify 0 = "zero"
+classify _ = "other"
+
+-- SILENT: a value binding that is signed.
+answer : Int
+answer = 42
+
+-- SILENT: data/interface/impl/prop are not top-level value bindings.
+data Color = Red | Green | Blue
+
+interface Shrink a where
+  shrink : a -> a
+
+impl Shrink Int where
+  -- SILENT: impl method bodies are typed by the interface, never flagged.
+  shrink n = n - 1
+
+prop "reflexive" (x : Int) = x == x
+
+-- Fixture for rule-missing-signature (Haskell -Wmissing-signatures).
+-- A top-level value/function binding with no sibling `name : Type` fires;
+-- a signed binding, `main`, impl methods, multi-clause-with-one-sig, and
+-- data/prop declarations stay silent.
+
+-- FIRES: no signature.
+-- expect-next-line rule-missing-signature
+unsignedOld x = x + 1
+
+-- SILENT: has a signature.
+signedOld : Int -> Int
+signedOld x = x + 1
+
+
+-- SILENT: multi-clause function with ONE signature covers all clauses.
+classify : Int -> String
+classify 0 = "zero"
+classify _ = "other"
+
+-- SILENT: a value binding that is signed.
+answer : Int
+answer = 42
+
+-- SILENT: data/interface/impl/prop are not top-level value bindings.
+data Color = Red | Green | Blue
+
+interface Shrink a where
+  shrink : a -> a
+
+impl Shrink Int where
+  -- SILENT: impl method bodies are typed by the interface, never flagged.
+  shrink n = n - 1
+
+prop "reflexive" (x : Int) = x == x

@@ -1,0 +1,274 @@
+# META
+source_lines=192
+stages=DESUGAR,MARK
+# SOURCE
+-- lint rule rule-bind-chain-to-do: a deep (>=3) Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only).
+
+-- ── rule: bind-chain-to-do (SUGGEST-ONLY, no autofix) ─────────────────────────
+-- Flag a DEEP (≥3) manual monadic-bind pyramid over Result/Option written as
+-- nested `match`, where every level is a verbatim failure-passthrough bind:
+--   Result:  match <scrut> { Err v => Err v; Ok <pat> => <cont> }
+--   Option:  match <scrut> { None => None;  Some <pat> => <cont> }
+-- and `<cont>` continues the chain (another such match, possibly after one or
+-- more interspersed `let` bindings that parse as an `EBlock` of `DoLet`s), never
+-- a same-ctor re-wrap (`Ok x => Ok (f x)` is a `map` — `rule-match-to-map` owns
+-- it, and it is excluded here via the same `matchToMapTransform` linchpin).  The
+-- innermost continuation may be a functor `map f m` terminal (which IS the final
+-- bind — `do { x <- m; pure (f x) }`) so it counts toward the depth.  The chain
+-- must be monad-consistent (all Result OR all Option — a mixed level breaks it).
+-- This IS an `EMatch`-recursion recognizer, not the `EApp`-shaped rules; `fix =
+-- None` — the conversion to `do` is done by hand.
+
+import frontend.ast.{
+  Loc(..),
+  Pat(..),
+  Arm(..),
+  DoStmt(..),
+  Expr(..),
+  Decl(..),
+}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import support.util.{isEmptyL, reverseL}
+import hash_map.{has}
+import tools.lint_core.{
+  Category(..),
+  Ctx(..),
+  FileFacts(..),
+  Finding(..),
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex(..),
+  Visitor(..),
+  mkVisitorRule,
+}
+import tools.lint_shared.{
+  declHeadHits,
+  isEVarNamed,
+  isNilPCon,
+  matchScrutOf,
+  matchToMapErrPassthru,
+  matchToMapTransform,
+  ruleNameBindChainToDo,
+  stmtExprs,
+  unwrapLoc,
+}
+
+export
+rule : Rule
+rule =
+  mkVisitorRule
+    RuleMeta {
+      name = ruleNameBindChainToDo,
+      summary =
+        "deep (≥3) nested Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only)",
+      doc =
+        "Three or more nested `match` arms that each pass a `Result` or `Option` failure straight through form a pyramid. A `do` block flattens it. The rule only suggests; it has no fixer.\n\nBefore:\n  match a\n    Ok x => match b x\n      Ok y => match c y\n        Ok z => Ok z\n        Err e => Err e\n      Err e => Err e\n    Err e => Err e\nAfter:\n  do\n    x <- a\n    y <- b x\n    c y",
+      category = Complexity,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleBindChainToDo
+    None
+
+-- number of passthrough binds in the chain rooted at `e` for the chosen monad
+-- (`isResult`), 0 if `e` is not a bind head.  A terminal `map f m` counts as one.
+bindChainDepth : Bool -> Expr -> Int
+bindChainDepth isResult e =
+  let (_, core) = bindChainSplit e
+  match bindChainHead isResult core
+    Some body => 1 + bindChainDepth isResult body
+    None => if bindChainIsTermMap core then 1 else 0
+
+-- strip an `EBlock`'s leading `let`/statements down to its final continuation
+-- expression; returns (interspersed-statement exprs, the core continuation).
+bindChainSplit : Expr -> (List Expr, Expr)
+bindChainSplit e = match unwrapLoc e
+  EBlock stmts => match reverseL stmts
+    (DoExpr lastE) :: revInit => (flatMap stmtExprs (reverseL revInit), lastE)
+    _ => ([], EBlock stmts)
+  other => ([], other)
+
+-- a two-arm passthrough-bind `match`; returns the success-arm body (the
+-- continuation).  Tries both arm orders (the failure arm may come first or last).
+bindChainHead : Bool -> Expr -> Option Expr
+bindChainHead isResult e = match unwrapLoc e
+  EMatch _ arms => match arms
+    [a1, a2] => match bindChainTry isResult a1 a2
+      Some b => Some b
+      None => bindChainTry isResult a2 a1
+    _ => None
+  _ => None
+
+bindChainTry : Bool -> Arm -> Arm -> Option Expr
+bindChainTry isResult failArm (Arm okP okGs okBody)
+  | bindChainFailPassthru isResult failArm
+    && isEmptyL okGs
+    && bindChainOkPat isResult okP
+    && not (bindChainRewrap isResult okP okBody) = Some okBody
+  | otherwise = None
+
+-- failure arm is a verbatim passthrough: `Err v => Err v` / `None => None`.
+bindChainFailPassthru : Bool -> Arm -> Bool
+bindChainFailPassthru isResult (Arm p gs body) =
+  isEmptyL gs
+    && (if isResult then
+      matchToMapErrPassthru p body
+    else
+      isNilPCon "None" p && isEVarNamed "None" body)
+
+bindChainOkPat : Bool -> Pat -> Bool
+bindChainOkPat isResult (PCon c [_]) = c == (if isResult then "Ok" else "Some")
+bindChainOkPat _ _ = False
+
+-- success arm re-wraps with the SAME ctor (`Ok x => Ok (f x)`) — that's a `map`,
+-- excluded here (owned by `rule-match-to-map`).  Reuses the same linchpin.
+bindChainRewrap : Bool -> Pat -> Expr -> Bool
+bindChainRewrap isResult p body =
+  match matchToMapTransform (if isResult then "Ok" else "Some") p body
+    Some _ => True
+    None => False
+
+bindChainIsTermMap : Expr -> Bool
+bindChainIsTermMap e = match unwrapLoc e
+  EApp inner _ => match unwrapLoc inner
+    EApp hd _ => isEVarNamed "map" hd
+    _ => False
+  _ => False
+
+-- off-chain sub-exprs of a chain (scrutinees, let RHSs, terminal `map` parts, or
+-- a plain terminal) — everything EXCEPT the continuation matches, which are
+-- consumed by the recursion.  These are re-scanned for INDEPENDENT nested chains
+-- so the chain's own sub-levels are never re-reported as separate heads.
+bindChainOffChain : Bool -> Expr -> List Expr
+bindChainOffChain isResult e =
+  let (lets, core) = bindChainSplit e
+  match bindChainHead isResult core
+    Some body => lets ++ (matchScrutOf core :: bindChainOffChain isResult body)
+    None =>
+      if bindChainIsTermMap core then
+        lets ++ bindChainTermMapParts core
+      else
+        lets ++ [core]
+
+bindChainTermMapParts : Expr -> List Expr
+bindChainTermMapParts e = match unwrapLoc e
+  EApp inner scrut => match unwrapLoc inner
+    EApp _ f => [f, scrut]
+    _ => [e]
+  _ => [e]
+
+-- A node is a chain HEAD iff its depth (in whichever monad) is >= 3; the chain
+-- is then consumed (only its off-chain parts are searched further) so the
+-- sub-levels of one pyramid never fire.
+bindChainPick : Expr -> Option (Expr, List Expr)
+bindChainPick e =
+  let rd = bindChainDepth True e
+  let od = bindChainDepth False e
+  if rd >= 3 || od >= 3 then Some (e, bindChainOffChain (rd >= od) e) else None
+
+ruleBindChainToDo : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Visitor
+ruleBindChainToDo _ _ _ _ _ = [OnDecl bindChainAt]
+
+bindChainAt : Ctx -> Decl -> List Finding
+bindChainAt ctx d =
+  map (bindChainFinding ctx.ctxSpan) (declHeadHits bindChainPick d)
+
+bindChainFinding : Option Loc -> Expr -> Finding
+bindChainFinding loc _ = Finding {
+  rule = ruleNameBindChainToDo,
+  message =
+    "deep nested Result/Option passthrough-bind `match` chain (≥3 binds). Rewrite as a `do` block",
+  severity = SevWarning,
+  loc = loc,
+  fix = None,
+}
+# DESUGAR
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
+(DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("hash_map") ((mem "has" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "declHeadHits" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "matchToMapErrPassthru" false) (mem "matchToMapTransform" false) (mem "ruleNameBindChainToDo" false) (mem "stmtExprs" false) (mem "unwrapLoc" false))))
+(DTypeSig true "rule" (TyCon "Rule"))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameBindChainToDo")) (fa "summary" (ELit (LString "deep (≥3) nested Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only)"))) (fa "doc" (ELit (LString "Three or more nested `match` arms that each pass a `Result` or `Option` failure straight through form a pyramid. A `do` block flattens it. The rule only suggests; it has no fixer.\n\nBefore:\n  match a\n    Ok x => match b x\n      Ok y => match c y\n        Ok z => Ok z\n        Err e => Err e\n      Err e => Err e\n    Err e => Err e\nAfter:\n  do\n    x <- a\n    y <- b x\n    c y"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleBindChainToDo")) (EVar "None")))
+(DTypeSig false "bindChainDepth" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyCon "Int"))))
+(DFunDef false "bindChainDepth" ((PVar "isResult") (PVar "e")) (EBlock (DoLet false false (PTuple PWild (PVar "core")) (EApp (EVar "bindChainSplit") (EVar "e"))) (DoExpr (EMatch (EApp (EApp (EVar "bindChainHead") (EVar "isResult")) (EVar "core")) (arm (PCon "Some" (PVar "body")) () (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "bindChainDepth") (EVar "isResult")) (EVar "body")))) (arm (PCon "None") () (EIf (EApp (EVar "bindChainIsTermMap") (EVar "core")) (ELit (LInt 1)) (ELit (LInt 0))))))))
+(DTypeSig false "bindChainSplit" (TyFun (TyCon "Expr") (TyTuple (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Expr"))))
+(DFunDef false "bindChainSplit" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBlock" (PVar "stmts")) () (EMatch (EApp (EVar "reverseL") (EVar "stmts")) (arm (PCons (PCon "DoExpr" (PVar "lastE")) (PVar "revInit")) () (ETuple (EApp (EApp (EVar "flatMap") (EVar "stmtExprs")) (EApp (EVar "reverseL") (EVar "revInit"))) (EVar "lastE"))) (arm PWild () (ETuple (EListLit) (EApp (EVar "EBlock") (EVar "stmts")))))) (arm (PVar "other") () (ETuple (EListLit) (EVar "other")))))
+(DTypeSig false "bindChainHead" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
+(DFunDef false "bindChainHead" ((PVar "isResult") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EMatch" PWild (PVar "arms")) () (EMatch (EVar "arms") (arm (PList (PVar "a1") (PVar "a2")) () (EMatch (EApp (EApp (EApp (EVar "bindChainTry") (EVar "isResult")) (EVar "a1")) (EVar "a2")) (arm (PCon "Some" (PVar "b")) () (EApp (EVar "Some") (EVar "b"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "bindChainTry") (EVar "isResult")) (EVar "a2")) (EVar "a1"))))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
+(DTypeSig false "bindChainTry" (TyFun (TyCon "Bool") (TyFun (TyCon "Arm") (TyFun (TyCon "Arm") (TyApp (TyCon "Option") (TyCon "Expr"))))))
+(DFunDef false "bindChainTry" ((PVar "isResult") (PVar "failArm") (PCon "Arm" (PVar "okP") (PVar "okGs") (PVar "okBody"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "bindChainFailPassthru") (EVar "isResult")) (EVar "failArm")) (EApp (EVar "isEmptyL") (EVar "okGs"))) (EApp (EApp (EVar "bindChainOkPat") (EVar "isResult")) (EVar "okP"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "bindChainRewrap") (EVar "isResult")) (EVar "okP")) (EVar "okBody")))) (EApp (EVar "Some") (EVar "okBody")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "bindChainFailPassthru" (TyFun (TyCon "Bool") (TyFun (TyCon "Arm") (TyCon "Bool"))))
+(DFunDef false "bindChainFailPassthru" ((PVar "isResult") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "gs")) (EIf (EVar "isResult") (EApp (EApp (EVar "matchToMapErrPassthru") (EVar "p")) (EVar "body")) (EBinOp "&&" (EApp (EApp (EVar "isNilPCon") (ELit (LString "None"))) (EVar "p")) (EApp (EApp (EVar "isEVarNamed") (ELit (LString "None"))) (EVar "body"))))))
+(DTypeSig false "bindChainOkPat" (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyCon "Bool"))))
+(DFunDef false "bindChainOkPat" ((PVar "isResult") (PCon "PCon" (PVar "c") (PList PWild))) (EBinOp "==" (EVar "c") (EIf (EVar "isResult") (ELit (LString "Ok")) (ELit (LString "Some")))))
+(DFunDef false "bindChainOkPat" (PWild PWild) (EVar "False"))
+(DTypeSig false "bindChainRewrap" (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Bool")))))
+(DFunDef false "bindChainRewrap" ((PVar "isResult") (PVar "p") (PVar "body")) (EMatch (EApp (EApp (EApp (EVar "matchToMapTransform") (EIf (EVar "isResult") (ELit (LString "Ok")) (ELit (LString "Some")))) (EVar "p")) (EVar "body")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig false "bindChainIsTermMap" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "bindChainIsTermMap" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "inner") PWild) () (EMatch (EApp (EVar "unwrapLoc") (EVar "inner")) (arm (PCon "EApp" (PVar "hd") PWild) () (EApp (EApp (EVar "isEVarNamed") (ELit (LString "map"))) (EVar "hd"))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
+(DTypeSig false "bindChainOffChain" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr")))))
+(DFunDef false "bindChainOffChain" ((PVar "isResult") (PVar "e")) (EBlock (DoLet false false (PTuple (PVar "lets") (PVar "core")) (EApp (EVar "bindChainSplit") (EVar "e"))) (DoExpr (EMatch (EApp (EApp (EVar "bindChainHead") (EVar "isResult")) (EVar "core")) (arm (PCon "Some" (PVar "body")) () (EBinOp "++" (EVar "lets") (EBinOp "::" (EApp (EVar "matchScrutOf") (EVar "core")) (EApp (EApp (EVar "bindChainOffChain") (EVar "isResult")) (EVar "body"))))) (arm (PCon "None") () (EIf (EApp (EVar "bindChainIsTermMap") (EVar "core")) (EBinOp "++" (EVar "lets") (EApp (EVar "bindChainTermMapParts") (EVar "core"))) (EBinOp "++" (EVar "lets") (EListLit (EVar "core")))))))))
+(DTypeSig false "bindChainTermMapParts" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
+(DFunDef false "bindChainTermMapParts" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "inner") (PVar "scrut")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "inner")) (arm (PCon "EApp" PWild (PVar "f")) () (EListLit (EVar "f") (EVar "scrut"))) (arm PWild () (EListLit (EVar "e"))))) (arm PWild () (EListLit (EVar "e")))))
+(DTypeSig false "bindChainPick" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
+(DFunDef false "bindChainPick" ((PVar "e")) (EBlock (DoLet false false (PVar "rd") (EApp (EApp (EVar "bindChainDepth") (EVar "True")) (EVar "e"))) (DoLet false false (PVar "od") (EApp (EApp (EVar "bindChainDepth") (EVar "False")) (EVar "e"))) (DoExpr (EIf (EBinOp "||" (EBinOp ">=" (EVar "rd") (ELit (LInt 3))) (EBinOp ">=" (EVar "od") (ELit (LInt 3)))) (EApp (EVar "Some") (ETuple (EVar "e") (EApp (EApp (EVar "bindChainOffChain") (EBinOp ">=" (EVar "rd") (EVar "od"))) (EVar "e")))) (EVar "None")))))
+(DTypeSig false "ruleBindChainToDo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
+(DFunDef false "ruleBindChainToDo" (PWild PWild PWild PWild PWild) (EListLit (EApp (EVar "OnDecl") (EVar "bindChainAt"))))
+(DTypeSig false "bindChainAt" (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding")))))
+(DFunDef false "bindChainAt" ((PVar "ctx") (PVar "d")) (EApp (EApp (EVar "map") (EApp (EVar "bindChainFinding") (EFieldAccess (EVar "ctx") "ctxSpan"))) (EApp (EApp (EVar "declHeadHits") (EVar "bindChainPick")) (EVar "d"))))
+(DTypeSig false "bindChainFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
+(DFunDef false "bindChainFinding" ((PVar "loc") PWild) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindChainToDo")) (fa "message" (ELit (LString "deep nested Result/Option passthrough-bind `match` chain (≥3 binds). Rewrite as a `do` block"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+# MARK
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
+(DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("hash_map") ((mem "has" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "declHeadHits" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "matchToMapErrPassthru" false) (mem "matchToMapTransform" false) (mem "ruleNameBindChainToDo" false) (mem "stmtExprs" false) (mem "unwrapLoc" false))))
+(DTypeSig true "rule" (TyCon "Rule"))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameBindChainToDo")) (fa "summary" (ELit (LString "deep (≥3) nested Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only)"))) (fa "doc" (ELit (LString "Three or more nested `match` arms that each pass a `Result` or `Option` failure straight through form a pyramid. A `do` block flattens it. The rule only suggests; it has no fixer.\n\nBefore:\n  match a\n    Ok x => match b x\n      Ok y => match c y\n        Ok z => Ok z\n        Err e => Err e\n      Err e => Err e\n    Err e => Err e\nAfter:\n  do\n    x <- a\n    y <- b x\n    c y"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleBindChainToDo")) (EVar "None")))
+(DTypeSig false "bindChainDepth" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyCon "Int"))))
+(DFunDef false "bindChainDepth" ((PVar "isResult") (PVar "e")) (EBlock (DoLet false false (PTuple PWild (PVar "core")) (EApp (EVar "bindChainSplit") (EVar "e"))) (DoExpr (EMatch (EApp (EApp (EVar "bindChainHead") (EVar "isResult")) (EVar "core")) (arm (PCon "Some" (PVar "body")) () (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "bindChainDepth") (EVar "isResult")) (EVar "body")))) (arm (PCon "None") () (EIf (EApp (EVar "bindChainIsTermMap") (EVar "core")) (ELit (LInt 1)) (ELit (LInt 0))))))))
+(DTypeSig false "bindChainSplit" (TyFun (TyCon "Expr") (TyTuple (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Expr"))))
+(DFunDef false "bindChainSplit" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBlock" (PVar "stmts")) () (EMatch (EApp (EVar "reverseL") (EVar "stmts")) (arm (PCons (PCon "DoExpr" (PVar "lastE")) (PVar "revInit")) () (ETuple (EApp (EApp (EDictApp "flatMap") (EVar "stmtExprs")) (EApp (EVar "reverseL") (EVar "revInit"))) (EVar "lastE"))) (arm PWild () (ETuple (EListLit) (EApp (EVar "EBlock") (EVar "stmts")))))) (arm (PVar "other") () (ETuple (EListLit) (EVar "other")))))
+(DTypeSig false "bindChainHead" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
+(DFunDef false "bindChainHead" ((PVar "isResult") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EMatch" PWild (PVar "arms")) () (EMatch (EVar "arms") (arm (PList (PVar "a1") (PVar "a2")) () (EMatch (EApp (EApp (EApp (EVar "bindChainTry") (EVar "isResult")) (EVar "a1")) (EVar "a2")) (arm (PCon "Some" (PVar "b")) () (EApp (EVar "Some") (EVar "b"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "bindChainTry") (EVar "isResult")) (EVar "a2")) (EVar "a1"))))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
+(DTypeSig false "bindChainTry" (TyFun (TyCon "Bool") (TyFun (TyCon "Arm") (TyFun (TyCon "Arm") (TyApp (TyCon "Option") (TyCon "Expr"))))))
+(DFunDef false "bindChainTry" ((PVar "isResult") (PVar "failArm") (PCon "Arm" (PVar "okP") (PVar "okGs") (PVar "okBody"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "bindChainFailPassthru") (EVar "isResult")) (EVar "failArm")) (EApp (EVar "isEmptyL") (EVar "okGs"))) (EApp (EApp (EVar "bindChainOkPat") (EVar "isResult")) (EVar "okP"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "bindChainRewrap") (EVar "isResult")) (EVar "okP")) (EVar "okBody")))) (EApp (EVar "Some") (EVar "okBody")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "bindChainFailPassthru" (TyFun (TyCon "Bool") (TyFun (TyCon "Arm") (TyCon "Bool"))))
+(DFunDef false "bindChainFailPassthru" ((PVar "isResult") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "gs")) (EIf (EVar "isResult") (EApp (EApp (EVar "matchToMapErrPassthru") (EVar "p")) (EVar "body")) (EBinOp "&&" (EApp (EApp (EVar "isNilPCon") (ELit (LString "None"))) (EVar "p")) (EApp (EApp (EVar "isEVarNamed") (ELit (LString "None"))) (EVar "body"))))))
+(DTypeSig false "bindChainOkPat" (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyCon "Bool"))))
+(DFunDef false "bindChainOkPat" ((PVar "isResult") (PCon "PCon" (PVar "c") (PList PWild))) (EBinOp "==" (EVar "c") (EIf (EVar "isResult") (ELit (LString "Ok")) (ELit (LString "Some")))))
+(DFunDef false "bindChainOkPat" (PWild PWild) (EVar "False"))
+(DTypeSig false "bindChainRewrap" (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Bool")))))
+(DFunDef false "bindChainRewrap" ((PVar "isResult") (PVar "p") (PVar "body")) (EMatch (EApp (EApp (EApp (EVar "matchToMapTransform") (EIf (EVar "isResult") (ELit (LString "Ok")) (ELit (LString "Some")))) (EVar "p")) (EVar "body")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig false "bindChainIsTermMap" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "bindChainIsTermMap" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "inner") PWild) () (EMatch (EApp (EVar "unwrapLoc") (EVar "inner")) (arm (PCon "EApp" (PVar "hd") PWild) () (EApp (EApp (EVar "isEVarNamed") (ELit (LString "map"))) (EVar "hd"))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
+(DTypeSig false "bindChainOffChain" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr")))))
+(DFunDef false "bindChainOffChain" ((PVar "isResult") (PVar "e")) (EBlock (DoLet false false (PTuple (PVar "lets") (PVar "core")) (EApp (EVar "bindChainSplit") (EVar "e"))) (DoExpr (EMatch (EApp (EApp (EVar "bindChainHead") (EVar "isResult")) (EVar "core")) (arm (PCon "Some" (PVar "body")) () (EBinOp "++" (EVar "lets") (EBinOp "::" (EApp (EVar "matchScrutOf") (EVar "core")) (EApp (EApp (EVar "bindChainOffChain") (EVar "isResult")) (EVar "body"))))) (arm (PCon "None") () (EIf (EApp (EVar "bindChainIsTermMap") (EVar "core")) (EBinOp "++" (EVar "lets") (EApp (EVar "bindChainTermMapParts") (EVar "core"))) (EBinOp "++" (EVar "lets") (EListLit (EVar "core")))))))))
+(DTypeSig false "bindChainTermMapParts" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
+(DFunDef false "bindChainTermMapParts" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "inner") (PVar "scrut")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "inner")) (arm (PCon "EApp" PWild (PVar "f")) () (EListLit (EVar "f") (EVar "scrut"))) (arm PWild () (EListLit (EVar "e"))))) (arm PWild () (EListLit (EVar "e")))))
+(DTypeSig false "bindChainPick" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
+(DFunDef false "bindChainPick" ((PVar "e")) (EBlock (DoLet false false (PVar "rd") (EApp (EApp (EVar "bindChainDepth") (EVar "True")) (EVar "e"))) (DoLet false false (PVar "od") (EApp (EApp (EVar "bindChainDepth") (EVar "False")) (EVar "e"))) (DoExpr (EIf (EBinOp "||" (EBinOp ">=" (EVar "rd") (ELit (LInt 3))) (EBinOp ">=" (EVar "od") (ELit (LInt 3)))) (EApp (EVar "Some") (ETuple (EVar "e") (EApp (EApp (EVar "bindChainOffChain") (EBinOp ">=" (EVar "rd") (EVar "od"))) (EVar "e")))) (EVar "None")))))
+(DTypeSig false "ruleBindChainToDo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
+(DFunDef false "ruleBindChainToDo" (PWild PWild PWild PWild PWild) (EListLit (EApp (EVar "OnDecl") (EVar "bindChainAt"))))
+(DTypeSig false "bindChainAt" (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding")))))
+(DFunDef false "bindChainAt" ((PVar "ctx") (PVar "d")) (EApp (EApp (EMethodRef "map") (EApp (EVar "bindChainFinding") (EFieldAccess (EVar "ctx") "ctxSpan"))) (EApp (EApp (EVar "declHeadHits") (EVar "bindChainPick")) (EVar "d"))))
+(DTypeSig false "bindChainFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
+(DFunDef false "bindChainFinding" ((PVar "loc") PWild) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindChainToDo")) (fa "message" (ELit (LString "deep nested Result/Option passthrough-bind `match` chain (≥3 binds). Rewrite as a `do` block"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))

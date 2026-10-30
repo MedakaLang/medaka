@@ -357,7 +357,7 @@ The spike *used to* compute top-level **non-function** bindings as `@main`-local
 a function body referencing one (`emitVar` → not ctor / not known-fn / not a param)
 was unbound. The compiler is full of these: global mutable `Ref` state
 (`typeErrors`, `curEffect`, `tjLow/tjIndex/tjStack` Tarjan state, `pendingSites`,
-`recordsRef`, `outputRef`, the `argMeasureEnabled`/`emitArgStampPasses` flags…) and
+`recordsRef`, `outputChunks`, the `argMeasureEnabled`/`emitArgStampPasses` flags…) and
 point-free combinator **value** bindings (`parseExpr`, `parseLam`, `parsePipe`,
 `advance`, `peekP`, …).
 - **Emitter gap (structural) — CLOSED (E1b).** Each top-level non-`main` non-fn

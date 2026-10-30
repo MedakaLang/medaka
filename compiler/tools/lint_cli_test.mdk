@@ -1,0 +1,325 @@
+-- Sibling test module for the `medaka lint` command line: the behaviors that
+-- depend on the process's working directory or on how the verb parses its
+-- flags, so they can only be observed through the built binary.
+--
+-- A scratch tree holds two projects: `p4` has a manifest with
+-- `[lint] internal = true`, `p5` has none.  Every case runs the binary from a
+-- chosen directory and reads the exit code and the merged output.
+import test.{Expectation, expectEach, expectEqual, expectTrue, fail}
+import test_process.{boundedVerb, medakaBin, withScratchDir}
+import string.{concat, contains, split, unwords}
+import list.{replicate}
+
+-- `f` matches on a bare parameter: `rule-match-on-param`, an internal rule.
+fixtureSrc : String
+fixtureSrc =
+  "f : Option Int -> Int\nf x = match x\n  Some n => n\n  None => 0\n"
+
+manifestOn : String
+manifestOn = "[lint]\ninternal = true\n"
+
+-- The tree under [dir]: p4/{medaka.toml, own.mdk, sub/own.mdk}, p5/user.mdk.
+stage : String -> <Exec, IO, FileRead, FileWrite> Result String Unit
+stage dir = do
+  _ <- boundedVerb "mkdir" ["-p", "\{dir}/p4/sub", "\{dir}/p5"]
+  _ <- writeFile "\{dir}/p4/medaka.toml" manifestOn
+  _ <- writeFile "\{dir}/p4/own.mdk" fixtureSrc
+  _ <- writeFile "\{dir}/p4/sub/own.mdk" fixtureSrc
+  writeFile "\{dir}/p5/user.mdk" fixtureSrc
+
+-- Run `medaka lint ARGS` from [dir]; exit code and stdout+stderr.
+lintIn : String ->
+  List String ->
+  <Exec, Env "MEDAKA_ROOT", Env "MEDAKA", FileRead> Result String (Int, String)
+lintIn dir args =
+  let bin = canonicalizePath medakaBin
+  let cmd = "cd \{dir} && exec \{bin} lint \{unwords args} 2>&1"
+  map ((code, out, _) => (code, out)) (boundedVerb "sh" ["-c", cmd])
+
+-- Grade one run: the exit code must be [code] and the output must satisfy [ok].
+graded : Int -> (String -> Bool) -> Result String (Int, String) -> Expectation
+graded _ _ (Err e) = fail "could not run the binary: \{e}"
+graded code ok (Ok (got, out)) =
+  if got == code && ok out then
+    expectTrue True
+  else
+    fail
+      "expected exit \{intToString code}, got \{intToString got}; output:\n\{out}"
+
+reportsMatchOnParam : String -> Bool
+reportsMatchOnParam out = contains "[rule-match-on-param]" out
+
+-- Internal activation is the target's own project, not the working
+-- directory's: from inside `p4/sub` a plain relative target is linted by `p4`'s
+-- rules, and from `p4` a target in the manifest-less `p5` is not.
+test "internal activation follows the target's project, not the working directory" = withScratchDir
+  (dir => match stage dir
+    Err e => fail "could not stage the scratch tree: \{e}"
+    Ok _ => expectEach [
+      (
+        "a bare file name from a subdirectory of the manifest project",
+        graded 0 reportsMatchOnParam (lintIn "\{dir}/p4/sub" ["own.mdk"]),
+      ),
+      (
+        "a dot-relative file name from the same subdirectory",
+        graded 0 reportsMatchOnParam (lintIn "\{dir}/p4/sub" ["./own.mdk"]),
+      ),
+      (
+        "a manifest-less sibling project linted from the manifest project",
+        graded
+          0
+          (out => not (reportsMatchOnParam out))
+          (lintIn "\{dir}/p4" ["../p5/user.mdk"]),
+      ),
+      (
+        "the same file from its own project",
+        graded
+          0
+          (out => not (reportsMatchOnParam out))
+          (lintIn "\{dir}/p5" ["user.mdk"]),
+      ),
+    ])
+
+-- `--only`/`--deny` naming an internal rule where internal is off would match
+-- nothing and exit 0 like a clean file.
+test "naming an internal rule where internal is off is an error, not a clean run" = withScratchDir
+  (dir => match stage dir
+    Err e => fail "could not stage the scratch tree: \{e}"
+    Ok _ => expectEach [
+      (
+        "--only without internal",
+        graded
+          1
+          (contains "--internal")
+          (lintIn "\{dir}/p5" ["--only=rule-match-on-param", "user.mdk"]),
+      ),
+      (
+        "--deny without internal",
+        graded
+          1
+          (contains "--internal")
+          (lintIn "\{dir}/p5" ["--deny=rule-match-on-param", "user.mdk"]),
+      ),
+      (
+        "--only with --internal reports the rule",
+        graded
+          0
+          reportsMatchOnParam
+          (lintIn "\{dir}/p5" [
+            "--internal", "--only=rule-match-on-param", "user.mdk"
+          ]),
+      ),
+      (
+        "--only in the manifest project reports the rule",
+        graded
+          0
+          reportsMatchOnParam
+          (lintIn "\{dir}/p4" ["--only=rule-match-on-param", "own.mdk"]),
+      ),
+    ])
+
+-- `--explain` and `--list-rules` print the registry and read no files, so a flag
+-- or target that means nothing to them is a usage error.
+test "the registry views reject flags and targets they would ignore" = withScratchDir
+  (dir => match stage dir
+    Err e => fail "could not stage the scratch tree: \{e}"
+    Ok _ =>
+      let reject label args want =
+        (label, graded 1 (contains want) (lintIn "\{dir}/p5" args))
+      expectEach [
+        reject
+          "--explain with a target"
+          ["--explain", "rule-not-eq", "user.mdk"]
+          "no target paths",
+        reject
+          "--explain with --json"
+          ["--explain", "rule-not-eq", "--json"]
+          "--json",
+        reject
+          "--explain with an empty name"
+          ["--explain", "''"]
+          "needs a rule name",
+        reject
+          "--list-rules with a target"
+          ["--list-rules", "user.mdk"]
+          "no target paths",
+        reject "--list-rules with --fix" ["--list-rules", "--fix"] "--fix",
+        reject
+          "--list-rules with --internal"
+          ["--list-rules", "--internal"]
+          "--internal",
+        reject
+          "--markdown with a filter"
+          ["--list-rules", "--markdown", "--scope=internal"]
+          "--scope",
+        (
+          "--explain alone still works",
+          graded
+            0
+            (contains "rule-not-eq")
+            (lintIn "\{dir}/p5" ["--explain", "rule-not-eq"]),
+        ),
+        (
+          "--list-rules --names with a filter still works",
+          graded
+            0
+            (contains "rule-match-on-param")
+            (lintIn "\{dir}/p5" ["--list-rules", "--names", "--scope=internal"]),
+        ),
+      ])
+
+-- The three registered fix ceilings, as `--list-rules --json` prints them: a
+-- `Safe` rule, an `Unsafe` one, and a rule with no fix.
+test "--list-rules --json prints each rule's maxApplicability" = withScratchDir
+  (dir => match stage dir
+    Err e => fail "could not stage the scratch tree: \{e}"
+    Ok _ =>
+      let listed = lintIn "\{dir}/p5" ["--list-rules", "--json"]
+      expectEach [
+        ruleCeilingIs listed "rule-not-eq" "\"safe\"",
+        ruleCeilingIs listed "rule-if-max-min" "\"unsafe\"",
+        ruleCeilingIs listed "rule-hand-rolled-derivable" "null",
+      ])
+
+-- The row for `rule` ends with its `maxApplicability` before `needs`.
+ruleCeilingIs : Result String (Int, String) ->
+  String ->
+  String ->
+  (String, Expectation)
+ruleCeilingIs listed rule want = (
+  "\{rule} has maxApplicability \{want}",
+  graded
+    0
+    (out =>
+      contains "\"name\":\"\{rule}\"" out
+        && contains "\"maxApplicability\":\{want},\"needs\"" (rowOf rule out))
+    listed,
+)
+
+-- The text from `rule`'s name to the end of its own row.
+rowOf : String -> String -> String
+rowOf rule out = match split "\"name\":\"\{rule}\"" out
+  _ :: rest :: _ => match split "\"tiers\"" rest
+    row :: _ => row
+    [] => ""
+  _ => ""
+
+test "--unsafe-fixes needs --fix and is not a registry-view flag" = withScratchDir
+  (dir => match stage dir
+    Err e => fail "could not stage the scratch tree: \{e}"
+    Ok _ =>
+      let reject label args want =
+        (label, graded 1 (contains want) (lintIn "\{dir}/p5" args))
+      expectEach [
+        reject
+          "without --fix"
+          ["--unsafe-fixes", "user.mdk"]
+          "--unsafe-fixes requires --fix",
+        reject
+          "with --list-rules"
+          ["--unsafe-fixes", "--fix", "--list-rules"]
+          "--unsafe-fixes cannot be combined with --list-rules",
+        reject
+          "with --explain"
+          ["--unsafe-fixes", "--fix", "--explain", "rule-not-eq"]
+          "--unsafe-fixes cannot be combined with --explain",
+      ])
+
+-- `if a > b then a else b` is `max a b` only for a total order, so the rule is
+-- `Unsafe`: plain `--fix` leaves the file, `--unsafe-fixes` rewrites it.
+test "--unsafe-fixes applies an unsafe fix that plain --fix leaves" = withScratchDir
+  (dir => match stage dir
+    Err e => fail "could not stage the scratch tree: \{e}"
+    Ok _ =>
+      match (writeFile
+        "\{dir}/p5/pick.mdk"
+        "pickGt a b = if a > b then a else b\n")
+        Err e => fail "could not write the probe: \{e}"
+        Ok _ => expectEach [
+          (
+            "plain --fix exits clean",
+            graded
+              0
+              (contains "fixed 0")
+              (lintIn "\{dir}/p5" ["--fix", "pick.mdk"]),
+          ),
+          (
+            "plain --fix leaves the file",
+            expectEqual
+              (Ok "pickGt a b = if a > b then a else b\n")
+              (readFile "\{dir}/p5/pick.mdk"),
+          ),
+          (
+            "--unsafe-fixes reports a fix",
+            graded
+              0
+              (contains "fixed 1")
+              (lintIn "\{dir}/p5" ["--fix", "--unsafe-fixes", "pick.mdk"]),
+          ),
+          (
+            "--unsafe-fixes rewrites the file",
+            expectEqual
+              (Ok "pickGt a b = max a b\n")
+              (readFile "\{dir}/p5/pick.mdk"),
+          ),
+        ])
+
+-- `lint --json` and `--fix` agree on what is safe: an edit over a comment is a
+-- suggestion in the report and is left alone by `--fix`.
+test "lint --json reports the applicability --fix acts on" = withScratchDir
+  (dir => match stage dir
+    Err e => fail "could not stage the scratch tree: \{e}"
+    Ok _ => match writeFile "\{dir}/p5/com.mdk" "h a b = not ({- c -} a == b)\n"
+      Err e => fail "could not write the probe: \{e}"
+      Ok _ => expectEach [
+        (
+          "the reported fix is a suggestion",
+          graded
+            0
+            (contains "\"applicability\":\"suggest\"")
+            (lintIn "\{dir}/p5" ["--json", "--only=rule-not-eq", "com.mdk"]),
+        ),
+        (
+          "the report names no safe fix",
+          graded
+            0
+            (out => not (contains "\"applicability\":\"safe\"" out))
+            (lintIn "\{dir}/p5" ["--json", "--only=rule-not-eq", "com.mdk"]),
+        ),
+      ])
+
+-- A chain deeper than the pass limit is written as far as it got, says so on
+-- stderr, and exits 1 (C3: anything but clean); a second run finishes it.
+test "--fix past the pass limit says so and exits non-zero" = withScratchDir
+  (dir => match stage dir
+    Err e => fail "could not stage the scratch tree: \{e}"
+    Ok _ => match writeFile "\{dir}/p5/deep.mdk" (deepChain 40)
+      Err e => fail "could not write the probe: \{e}"
+      Ok _ => expectEach [
+        (
+          "the first run stops and names the file and the limit",
+          graded
+            1
+            (contains "deep.mdk: stopped after 32 passes; run again")
+            (lintIn "\{dir}/p5" [
+              "--fix", "--only=rule-bool-simplify", "deep.mdk"
+            ]),
+        ),
+        (
+          "the second run finishes",
+          graded
+            0
+            (contains "fixed 8")
+            (lintIn "\{dir}/p5" [
+              "--fix", "--only=rule-bool-simplify", "deep.mdk"
+            ]),
+        ),
+        (
+          "the file is settled",
+          expectEqual (Ok "deep x = x\n") (readFile "\{dir}/p5/deep.mdk"),
+        ),
+      ])
+
+-- `deep x = x == True == ... == True` with `n` comparisons.
+deepChain : Int -> String
+deepChain n = "deep x = x" ++ concat (replicate n " == True") ++ "\n"

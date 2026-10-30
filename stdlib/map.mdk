@@ -1102,10 +1102,8 @@ prop "set on duplicate keys builds the same tree shape as the balance-only body"
 
 prop "insertWith builds the same tree shape as the balance-only body" (xs : List (Int, Int)) =
   let ys = modKeys xs
-  let got = foldInserts (k v m => insertWith (a b => a + b) k v m) ys Tip
-  sameShape
-      got
-      (foldInserts (k v m => insertWithOld (a b => a + b) k v m) ys Tip)
+  let got = foldInserts (k v m => insertWith (+) k v m) ys Tip
+  sameShape got (foldInserts (k v m => insertWithOld (+) k v m) ys Tip)
     && wellFormed got
 
 prop "insertMin and insertMax match the balance-only body shape" (xs : List (Int, Int)) =
@@ -1267,10 +1265,10 @@ prop "union and unionWith keep the first map's key on a shared key" (j : Int) =
   let sameSize = fromList (map (i => (Tagged i 1, i)) [0..=63])
   eq (taggedAt n (union small big)) [1]
     && eq (taggedAt n (union big small)) [0]
-    && eq (taggedAt n (unionWith (x y => x + y) small big)) [1]
-    && eq (taggedAt n (unionWith (x y => x + y) big small)) [0]
+    && eq (taggedAt n (unionWith (+) small big)) [1]
+    && eq (taggedAt n (unionWith (+) big small)) [0]
     && eq (taggedAt n (union sameSize big)) [1]
-    && eq (taggedAt n (unionWith (x y => x + y) sameSize big)) [1]
+    && eq (taggedAt n (unionWith (+) sameSize big)) [1]
 
 prop "union keys stay strictly ascending" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   ascending (keys (union (fromList xs) (fromList ys)))
@@ -1278,9 +1276,8 @@ prop "union keys stay strictly ascending" (xs : List (Int, Int)) (ys : List (Int
 prop "unionWith agrees with naive and stays well-formed" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   let a = fromList xs
   let b = fromList ys
-  let got = unionWith (x y => x + y) a b
-  eq (entries got) (entries (naiveUnionWith (x y => x + y) a b))
-    && wellFormed got
+  let got = unionWith (+) a b
+  eq (entries got) (entries (naiveUnionWith (+) a b)) && wellFormed got
 
 prop "difference agrees with naive and stays well-formed" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   let a = fromList xs
@@ -1291,9 +1288,8 @@ prop "difference agrees with naive and stays well-formed" (xs : List (Int, Int))
 prop "intersectionWith agrees with naive and stays well-formed" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   let a = fromList xs
   let b = fromList ys
-  let got = intersectionWith (x y => x + y) a b
-  eq (entries got) (entries (naiveIntersectionWith (x y => x + y) a b))
-    && wellFormed got
+  let got = intersectionWith (+) a b
+  eq (entries got) (entries (naiveIntersectionWith (+) a b)) && wellFormed got
 
 -- LAW: `intersection` is exactly the left-biased `intersectionWith`, and its
 -- key set is the set intersection of the two key sets — the same relationship
@@ -1311,7 +1307,7 @@ prop "intersection keeps exactly the shared keys, with the left value" (xs : Lis
   -- every surviving key is in both inputs and carries the LEFT value ...
   all (k => isSome (get k b) && get k got == get k a) (keys got)
     -- ... and every key shared by both inputs survives.
-    && all (k => not (isSome (get k b)) || isSome (get k got)) (keys a)
+    && all (k => isNone (get k b) || isSome (get k got)) (keys a)
 
 -- LAW (Filterable): `filterMap Some` is the identity, `filter` agrees with the
 -- key-aware `filterWithKey` that ignores its key, and the result is still a
@@ -1323,7 +1319,7 @@ prop "Filterable: filterMap Some is the identity" (xs : List (Int, Int)) =
 
 prop "Filterable: filter agrees with filterWithKey ignoring the key" (xs : List (Int, Int)) =
   let m = fromList xs
-  let got = filter (v => v > 0) m
+  let got = filter (> 0) m
   eq (entries got) (entries (filterWithKey (_ v => v > 0) m)) && wellFormed got
 
 prop "filterWithKey agrees with naive and stays well-formed" (xs : List (Int, Int)) =

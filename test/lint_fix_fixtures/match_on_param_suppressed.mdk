@@ -1,0 +1,8 @@
+-- NEGATIVE: a directive over the declaration keeps rule-match-on-param from rewriting it.
+greet : String -> String
+-- lint-disable-next-line rule-match-on-param
+greet x = match x
+  "Alice" => "Hello Alice!"
+  _ => "Hi there!"
+
+main = println (greet "Bob")

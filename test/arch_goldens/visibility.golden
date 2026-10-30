@@ -7,7 +7,8 @@ visibility.frontend.visibility	15
 visibility.ir.sexp	3
 visibility.tools.doc	7
 visibility.tools.fmt	2
-visibility.tools.lint	4
+visibility.tools.lint_rule_dead_code	2
+visibility.tools.lint_walk	2
 visibility.tools.printer	3
 visibility.tools.prop_plan	3
 visibility.tools.refindex	8

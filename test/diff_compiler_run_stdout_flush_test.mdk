@@ -9,17 +9,19 @@
    `println` sentinel before the suspect expression and look for it — because
    the sentinel was invisible whether the program ran or not, and the exit
    code was 1 either way. #40 was nearly closed as not reproducible on
-   exactly that basis. The fix arms a flush from `run`'s own driver, snapshots
-   the buffer on every print, and flushes it from every abort path in
-   `runtime/medaka_rt.c` before that path prints its own diagnostic.
+   exactly that basis. The fix arms a flush from `run`'s own driver, hands
+   the runtime each non-empty printed chunk, and flushes the chunks from
+   every abort path in `runtime/medaka_rt.c` before that path prints its own
+   diagnostic.
 
    A compiled binary has the same bug in libc's shape: `println` writes
    through buffered stdout, which every coded abort gets flushed for free by
    `exit()`, but the fault handler must use `_exit()` — `fflush` is not
    async-signal-safe — which skips it. `stack_overflow_build` pins that half.
 
-   Every fixture prints the literal line `SENTINEL` and then dies, and every
-   row pins that engine's stdout as exactly those bytes, newline included.
+   Every fixture but `panic_after_empty_chunk` prints the literal line
+   `SENTINEL` and then dies; every row pins that engine's stdout as exactly
+   the bytes the fixture printed, newline included.
    Byte equality is the whole assertion: a substring test passes on output
    that lost its newline or gained a duplicate, and the defect this gate
    exists to catch is precisely bytes going missing. stdout and stderr are
@@ -70,7 +72,7 @@ sentinel = "SENTINEL\n"
 -- | The size of the corpus, written down so that a corpus which silently
 -- shrank is red. Growing it is expected: add the row and raise this.
 declaredFixtureCount : Int
-declaredFixtureCount = 7
+declaredFixtureCount = 8
 
 -- Both engines reach the same coded abort and must both still show the
 -- sentinel.
@@ -81,6 +83,11 @@ rows : List (String, RuntimeOutcome)
 rows = [
   ("index_oob", bothDie "E-INDEX-OOB"),
   ("panic", bothDie "E-PANIC"),
+  -- Chunks before an empty `putStr ""` survive the abort flush.
+  (
+    "panic_after_empty_chunk",
+    Dies (Coded "E-PANIC") (Coded "E-PANIC") "line 1\nline 2\nline 3\n",
+  ),
   ("nonexhaustive_match", bothDie "E-NONEXHAUSTIVE-MATCH"),
   -- #2848's silent wrongness: a reserved-spelling collision made the emitter
   -- drop the default arm, so only `run` aborted at all.
@@ -110,14 +117,15 @@ test "run and build+exec agree with every fixture's pinned outcome" =
 --
 -- `medaka run` writes a byte block to stdout itself rather than through its
 -- String buffer, so the text before the block, the block, and the text after
--- it reach stdout by two routes.  Every way the program can end must still
--- print them in program order.  Each program prints `A`, the one-byte block
+-- it reach stdout by two routes.  An empty `putStr` sits between `A` and the
+-- block: it must not erase `A` from an abort flush.  Every way the program
+-- can end must still print them in program order.  Each program prints `A`, the one-byte block
 -- `B`, then `C`, and ends as its row says; both engines owe exactly `ABC` on
 -- stdout and the row's exit code.
 
 orderSource : String -> String
 orderSource ending =
-  "import bytes.{writeStdoutBytes, fromArrayAssumeByteDomain}\n\nmain =\n  let _ = putStr \"A\"\n  let _ = writeStdoutBytes (fromArrayAssumeByteDomain [|66|])\n  let _ = putStr \"C\"\n  \{ending}\n"
+  "import bytes.{writeStdoutBytes, fromArrayAssumeByteDomain}\n\nmain =\n  let _ = putStr \"A\"\n  let _ = putStr \"\"\n  let _ = writeStdoutBytes (fromArrayAssumeByteDomain [|66|])\n  let _ = putStr \"C\"\n  \{ending}\n"
 
 orderRows : List (String, String, Int)
 orderRows = [

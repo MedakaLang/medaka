@@ -2269,6 +2269,9 @@ public export data TcEnv = TcEnv {
 --     "do requires a monad" at the block's span.  The one Ref in the record is
 --     minted by the `EDoOrigin` arm and set by the first such report, so a later
 --     mismatch in the same chain is plain; a nested chain mints its own.
+--   dcCallee — while unifying one argument or result of an application, the
+--     spelling of the application's head when that head is not a body-local
+--     binder; a mismatch there can name a selectively imported head as the cause.
 --   dcMethodMismatch — while unifying an interface default body against its
 --     declared type: a leaf mismatch names the method.
 --   dcGroup — inside the inference of a top-level binding group: that group's
@@ -2307,6 +2310,7 @@ public export data DynCtx = DynCtx {
   dcShadowHeadCtx : Bool,
   dcDo : Option DoCtx,
   dcMethodMismatch : Option String,
+  dcCallee : Option String,
   dcGroup : Option GroupCtx,
   dcPerformSites : Option (Ref (List (Ref Effvar, Option Loc))),
   dcModule : ModuleCtx,
@@ -2323,6 +2327,7 @@ dynFor mctx = DynCtx {
   dcShadowHeadCtx = False,
   dcDo = None,
   dcMethodMismatch = None,
+  dcCallee = None,
   dcGroup = None,
   dcPerformSites = None,
   dcModule = mctx,

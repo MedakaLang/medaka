@@ -1,0 +1,116 @@
+-- Fixture for rule-bool-simplify.  The line below each `expect-next-line`
+-- marker is the line the rule reports.  The rule reports the line of the
+-- declaration that holds the expression, so each positive is a one-line
+-- declaration; a finding inside an interface default is reported at the
+-- interface header.
+
+-- expect-next-line rule-bool-simplify
+ifTrueFalse c = c
+
+-- expect-next-line rule-bool-simplify
+ifFalseTrue c = not c
+
+-- expect-next-line rule-bool-simplify
+eqTrue x = x
+
+-- expect-next-line rule-bool-simplify
+eqFalse x = not x
+
+-- expect-next-line rule-bool-simplify
+neTrue x = not x
+
+-- expect-next-line rule-bool-simplify
+doubleNot x = x
+
+-- expect-next-line rule-bool-simplify
+test "redundant if in a test body" = expectTrue (1 < 2)
+
+-- expect-next-line rule-bool-simplify
+prop "redundant comparison in a prop body" (b : Bool) = b == b
+
+-- expect-next-line rule-bool-simplify
+let rec loop b = b
+
+-- expect-next-line rule-bool-simplify
+interface Flag a where
+  flag : a -> Bool
+  both : a -> Bool
+  both x = flag x
+
+nearMisses c x =
+  [ if c then True else c
+  , if c then x else False
+  , x == c
+  , True == True
+  , not x
+  , not (f x)
+  ]
+
+f x = x
+
+test "plain if in a test body" = expectTrue (if 1 < 2 then 3 else 4 == 3)
+
+prop "plain not in a prop body" (b : Bool) = not b /= b
+
+interface Plain a where
+  plain : a -> Bool
+  plain x = not (not' x)
+
+-- Fixture for rule-bool-simplify: redundant boolean shapes.
+
+-- POSITIVE: if selecting the two bool literals.
+-- expect-next-line rule-bool-simplify
+ifTF c = c
+-- expect-next-line rule-bool-simplify
+ifFT c = not c
+
+-- POSITIVE: comparison against a bool literal (either side).
+-- expect-next-line rule-bool-simplify
+eqT x = x
+-- expect-next-line rule-bool-simplify
+eqF x = not x
+-- expect-next-line rule-bool-simplify
+neT x = not x
+-- expect-next-line rule-bool-simplify
+neF x = x
+-- expect-next-line rule-bool-simplify
+tEq x = x
+
+-- POSITIVE: double negation (`not` only — `!` is Ref-deref since #1739 half A,
+-- so `!!x` below is a NEGATIVE case).
+-- expect-next-line rule-bool-simplify
+notNot x = x
+bangBang x = !!x
+
+-- NEGATIVE: `if c then True else e` (e not a literal) — excluded (short-circuit).
+negOrShape c e = if c then True else e
+
+-- NEGATIVE: only ONE branch is a literal.
+negOneLit c t = if c then t else False
+
+-- NEGATIVE: comparison of two bool literals is left alone.
+negBothLit = True == False
+
+-- NEGATIVE: single negation is not redundant.
+negSingle x = not x
+
+-- A rewrite that reads or writes `not` is withheld where the file binds `not`
+-- anywhere (#4662): the call it introduces could land inside that binding.
+-- See test/lint_fix_fixtures/bool_simplify_local_not.mdk.
+
+-- The replacement is bracketed where its parent would regroup it.
+-- expect-next-line rule-bool-simplify
+inArgument x = pick (not x) x
+
+-- expect-next-line rule-bool-simplify
+inChain x y = y && not x && y
+
+-- A comment inside the span being replaced would be lost, so the fix is only
+-- suggested; a comment elsewhere in the declaration does not stand in its way.
+-- expect-next-line rule-bool-simplify unfixed
+commentInside c = if c then {- kept -} True else False
+
+commentOutside c =
+  -- explains the choice
+  -- expect-next-line rule-bool-simplify
+  c

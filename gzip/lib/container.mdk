@@ -428,8 +428,7 @@ prop "emitGzipHeader/parseGzipHeader round-trips (numeric fields)" (mtimeIn : In
    string containing a NUL would truncate at the first one, which is a fact
    about NUL-terminated encoding, not a bug in this module). -}
 prop "emitGzipHeader/parseGzipHeader round-trips FNAME" (nameIn : String) =
-  let clean =
-    fromUtf8 (arrayFromList (filter (b => b /= 0) (toList (toUtf8 nameIn))))
+  let clean = fromUtf8 (arrayFromList (filter (/= 0) (toList (toUtf8 nameIn))))
   let h = GzipHeader {
     mtime = 0,
     name = Some clean,
