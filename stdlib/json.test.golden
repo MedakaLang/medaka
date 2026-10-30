@@ -1,48 +1,58 @@
 running doctests in stdlib/json.mdk
-  ok   stdlib/json.mdk:50: stringify (jArray [JInt 1, JInt 2, JInt 3])
-  ok   stdlib/json.mdk:56: stringify (jArray [])
-  ok   stdlib/json.mdk:62: stringify (jObject [("a", JInt 1), ("b", JBool True)])
-  ok   stdlib/json.mdk:68: stringify (jObject [])
-  ok   stdlib/json.mdk:166: stringify (jObject [("a", JInt 1), ("b", JString "hi")])
-  ok   stdlib/json.mdk:168: stringify (JFloat 1000.0)
-  ok   stdlib/json.mdk:170: stringify (jObject [("a", jArray [JInt 1, jObject []]), ("b", JNull)])
-  ok   stdlib/json.mdk:176: stringify JNull
-  ok   stdlib/json.mdk:178: stringify (JArray (arrayFromList [JInt 1, JBool True]))
-  ok   stdlib/json.mdk:534: parse "[1, 2, 3]"
-  ok   stdlib/json.mdk:536: parse "nope"
-  ok   stdlib/json.mdk:542: parse "null"
-  ok   stdlib/json.mdk:544: parse "  {\"k\": true}  "
-  ok   stdlib/json.mdk:546: parse "\"a\\u0041b\""
-  ok   stdlib/json.mdk:548: parse "\"\\uD834\\uDD1E\""
-  ok   stdlib/json.mdk:550: parse "\"\\uD834\""
-  ok   stdlib/json.mdk:552: parse "\"\\uDC00\""
-  ok   stdlib/json.mdk:554: parse "1e+5"
-  ok   stdlib/json.mdk:556: parse "6.022e+23" == Ok (JFloat 6.022e23)
-  ok   stdlib/json.mdk:558: parse (stringify (JFloat 1000000000000.0)) == Ok (JFloat 1000000000000.0)
-  ok   stdlib/json.mdk:560: parse "1e+"
-  ok   stdlib/json.mdk:562: parse "1e"
-  ok   stdlib/json.mdk:582: get "b" (jObject [("a", JInt 1), ("b", JInt 2)])
-  ok   stdlib/json.mdk:584: get "z" (jObject [("a", JInt 1)])
-  ok   stdlib/json.mdk:600: at 1 (jArray [JInt 10, JInt 20, JInt 30])
-  ok   stdlib/json.mdk:602: at 5 (jArray [JInt 10])
-  ok   stdlib/json.mdk:611: at 0 (JInt 1)
-  ok   stdlib/json.mdk:616: asString (JString "hi")
-  ok   stdlib/json.mdk:618: asString (JInt 1)
-  ok   stdlib/json.mdk:627: asInt (JInt 7)
-  ok   stdlib/json.mdk:629: asInt JNull
-  ok   stdlib/json.mdk:638: asFloat (JFloat 1.5)
-  ok   stdlib/json.mdk:640: asFloat (JInt 1)
-  ok   stdlib/json.mdk:649: asBool (JBool True)
-  ok   stdlib/json.mdk:651: asBool JNull
-  ok   stdlib/json.mdk:660: map arrayLength (asArray (jArray [JInt 1, JInt 2]))
-  ok   stdlib/json.mdk:662: asArray (JInt 1) == None
-  ok   stdlib/json.mdk:669: map JArray (asArray (jArray [JInt 1, JInt 2])) == Some (jArray [JInt 1, JInt 2])
-  ok   stdlib/json.mdk:675: map arrayLength (asObject (jObject [("a", JInt 1)]))
-  ok   stdlib/json.mdk:677: asObject (JInt 1) == None
-  ok   stdlib/json.mdk:684: map JObject (asObject (jObject [("a", JInt 1)])) == Some (jObject [("a", JInt 1)])
-  ok   stdlib/json.mdk:707: eq (parse "[1, 2]") (Ok (jArray [JInt 1, JInt 2]))
+  ok   stdlib/json.mdk:51: stringify (jArray [JInt 1, JInt 2, JInt 3])
+  ok   stdlib/json.mdk:57: stringify (jArray [])
+  ok   stdlib/json.mdk:63: stringify (jObject [("a", JInt 1), ("b", JBool True)])
+  ok   stdlib/json.mdk:69: stringify (jObject [])
+  ok   stdlib/json.mdk:167: stringify (jObject [("a", JInt 1), ("b", JString "hi")])
+  ok   stdlib/json.mdk:169: stringify (JFloat 1000.0)
+  ok   stdlib/json.mdk:171: stringify (jObject [("a", jArray [JInt 1, jObject []]), ("b", JNull)])
+  ok   stdlib/json.mdk:177: stringify JNull
+  ok   stdlib/json.mdk:179: stringify (JArray (arrayFromList [JInt 1, JBool True]))
+  ok   stdlib/json.mdk:539: parse "[1, 2, 3]"
+  ok   stdlib/json.mdk:541: parse "nope"
+  ok   stdlib/json.mdk:547: parse "null"
+  ok   stdlib/json.mdk:549: parse "  {\"k\": true}  "
+  ok   stdlib/json.mdk:551: parse "\"a\\u0041b\""
+  ok   stdlib/json.mdk:553: parse "\"\\uD834\\uDD1E\""
+  ok   stdlib/json.mdk:555: parse "\"\\uD834\""
+  ok   stdlib/json.mdk:557: parse "\"\\uDC00\""
+  ok   stdlib/json.mdk:559: parse "1e+5"
+  ok   stdlib/json.mdk:561: parse "6.022e+23" == Ok (JFloat 6.022e23)
+  ok   stdlib/json.mdk:563: parse (stringify (JFloat 1000000000000.0)) == Ok (JFloat 1000000000000.0)
+  ok   stdlib/json.mdk:565: parse "1e+"
+  ok   stdlib/json.mdk:567: parse "1e"
+  ok   stdlib/json.mdk:587: get "b" (jObject [("a", JInt 1), ("b", JInt 2)])
+  ok   stdlib/json.mdk:589: get "z" (jObject [("a", JInt 1)])
+  ok   stdlib/json.mdk:605: at 1 (jArray [JInt 10, JInt 20, JInt 30])
+  ok   stdlib/json.mdk:607: at 5 (jArray [JInt 10])
+  ok   stdlib/json.mdk:616: at 0 (JInt 1)
+  ok   stdlib/json.mdk:621: asString (JString "hi")
+  ok   stdlib/json.mdk:623: asString (JInt 1)
+  ok   stdlib/json.mdk:632: asInt (JInt 7)
+  ok   stdlib/json.mdk:634: asInt JNull
+  ok   stdlib/json.mdk:643: asFloat (JFloat 1.5)
+  ok   stdlib/json.mdk:645: asFloat (JInt 1)
+  ok   stdlib/json.mdk:654: asBool (JBool True)
+  ok   stdlib/json.mdk:656: asBool JNull
+  ok   stdlib/json.mdk:665: map arrayLength (asArray (jArray [JInt 1, JInt 2]))
+  ok   stdlib/json.mdk:667: asArray (JInt 1) == None
+  ok   stdlib/json.mdk:674: map JArray (asArray (jArray [JInt 1, JInt 2])) == Some (jArray [JInt 1, JInt 2])
+  ok   stdlib/json.mdk:680: map arrayLength (asObject (jObject [("a", JInt 1)]))
+  ok   stdlib/json.mdk:682: asObject (JInt 1) == None
+  ok   stdlib/json.mdk:689: map JObject (asObject (jObject [("a", JInt 1)])) == Some (jObject [("a", JInt 1)])
+  ok   stdlib/json.mdk:698: asNumber (JInt 3)
+  ok   stdlib/json.mdk:700: asNumber (JFloat 1.5)
+  ok   stdlib/json.mdk:702: asNumber (JString "3")
+  ok   stdlib/json.mdk:785: atPath ["a", "items", "1"] (jObject [("a", jObject [("items", jArray [JInt 7, JInt 8])])])
+  ok   stdlib/json.mdk:787: atPath ["a", "items", "5"] (jObject [("a", jObject [("items", jArray [JInt 7])])])
+  ok   stdlib/json.mdk:789: atPath ["a", "b"] (jObject [("a", jObject [])])
+  ok   stdlib/json.mdk:791: atPath ["a", "b"] (jObject [("a", JString "x")])
+  ok   stdlib/json.mdk:848: pretty 2 (jObject [("a", jArray [JInt 1, JInt 2]), ("b", jObject [])])
+  ok   stdlib/json.mdk:897: parseLines "{\"a\": 1}\n\n[2,\n"
+  ok   stdlib/json.mdk:906: stringifyLines [JInt 1, jArray [JNull]]
+  ok   stdlib/json.mdk:933: eq (parse "[1, 2]") (Ok (jArray [JInt 1, JInt 2]))
 
-stdlib/json.mdk: 42/42 passed
+stdlib/json.mdk: 52/52 passed
 Testing "parse-then-stringify round-trips a JInt" [eval] ... OK (100 tests passed)
 Testing "parse-then-stringify round-trips a JString (exercises escaping)" [eval] ... OK (100 tests passed)
 Testing "parse-then-stringify round-trips a JBool" [eval] ... OK (100 tests passed)

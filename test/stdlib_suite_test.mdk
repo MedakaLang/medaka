@@ -204,7 +204,8 @@ suites = [
   ("i32", (32, EvalAndNative)),
   ("i64", (31, EvalAndNative)),
   ("io", (8, NativeCapability)),
-  ("json", (55, EvalAndNative)),
+  ("json", (66, EvalAndNative)),
+  ("json_test", (27, EvalAndNative)),
   ("list", (158, EvalAndNative)),
   ("list_test", (7, EvalAndNative)),
   ("map_test", (5, EvalAndNative)),
@@ -487,7 +488,10 @@ test "stdlib/i64.mdk executed >= 31 assertions" = floorExpectation "i64"
 
 test "stdlib/io.mdk executed >= 8 assertions" = floorExpectation "io"
 
-test "stdlib/json.mdk executed >= 55 assertions" = floorExpectation "json"
+test "stdlib/json.mdk executed >= 66 assertions" = floorExpectation "json"
+
+test "stdlib/json_test.mdk executed >= 27 assertions" =
+  floorExpectation "json_test"
 
 test "stdlib/list.mdk executed >= 158 assertions" = floorExpectation "list"
 

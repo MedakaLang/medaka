@@ -1,0 +1,243 @@
+-- Tests for the path, pretty-printing and line readers in `stdlib/json.mdk`,
+-- and for the strict number and string grammar of `parse`.
+
+import json.{
+  Json(..),
+  atPath,
+  asNumber,
+  jArray,
+  jObject,
+  parse,
+  parseLines,
+  pretty,
+  stringify,
+  stringifyLines,
+}
+import string.{join}
+import test.{
+  Expectation,
+  expectAll,
+  expectEqual,
+  expectEqualText,
+  expectErrContains,
+  expectOkThen,
+}
+
+sample : Json
+sample = jObject [
+  (
+    "a",
+    jObject [("items", jArray [JInt 10, JInt 20, JInt 30]), ("s", JString "x")],
+  ),
+  ("7", JBool True),
+  ("n", JNull),
+  ("i", JInt 1),
+  ("f", JFloat 1.5),
+  ("b", JBool False),
+]
+
+pathErr : List String -> Result String Json
+pathErr steps = atPath steps sample
+
+test "atPath of an empty path is the root" =
+  expectEqual (Ok sample) (atPath [] sample)
+
+test "atPath follows keys and indexes" =
+  expectEqual (Ok (JInt 20)) (atPath ["a", "items", "1"] sample)
+
+test "atPath takes a digit key on an object as a key" =
+  expectEqual (Ok (JBool True)) (atPath ["7"] sample)
+
+test "atPath names a missing key" =
+  expectEqual (Err "at a: no key \"b\"") (pathErr ["a", "b"])
+
+test "atPath names an index out of range" =
+  expectEqual
+    (Err "at a.items: index 5 out of range (3 elements)")
+    (pathErr ["a", "items", "5"])
+
+test "atPath names a step into a string" =
+  expectEqual
+    (Err "at a.s: expected object or array, found string")
+    (pathErr ["a", "s", "z"])
+
+test "atPath names a step into each scalar" = expectAll [
+  expectEqual
+    (Err "at n: expected object or array, found null")
+    (pathErr ["n", "z"]),
+  expectEqual
+    (Err "at b: expected object or array, found bool")
+    (pathErr ["b", "z"]),
+  expectEqual
+    (Err "at i: expected object or array, found int")
+    (pathErr ["i", "z"]),
+  expectEqual
+    (Err "at f: expected object or array, found float")
+    (pathErr ["f", "z"]),
+]
+
+test "atPath names the root when the first step fails" = expectAll [
+  expectEqual (Err "at <root>: no key \"zz\"") (pathErr ["zz"]),
+  expectEqual
+    (Err "at <root>: expected object or array, found int")
+    (atPath ["x"] (JInt 1)),
+]
+
+test "atPath refuses a signed or zero-padded index" = expectAll [
+  expectErrContains
+    "at a.items: invalid array index \"-1\""
+    (pathErr ["a", "items", "-1"]),
+  expectErrContains
+    "at a.items: invalid array index \"01\""
+    (pathErr ["a", "items", "01"]),
+  expectErrContains
+    "at a.items: invalid array index \"\""
+    (pathErr ["a", "items", ""]),
+  expectErrContains
+    "at a.items: invalid array index \"x\""
+    (pathErr ["a", "items", "x"]),
+]
+
+test "atPath accepts index zero" =
+  expectEqual (Ok (JInt 10)) (atPath ["a", "items", "0"] sample)
+
+test "asNumber converts an int and keeps a float" = expectAll [
+  expectEqual (Some 1.0) (asNumber (JInt 1)),
+  expectEqual (Some 1.5) (asNumber (JFloat 1.5)),
+  expectEqual None (asNumber (JString "1")),
+  expectEqual None (asNumber JNull),
+]
+
+-- The expected texts below are the output of Python's
+-- `json.dumps(v, indent=n, ensure_ascii=False)` for the same document.
+prettySource : String
+prettySource =
+  "{\"name\":\"caf\\u00e9 \\u65e5\\u672c\",\"empty_a\":[],\"empty_o\":{},\"nested\":[[],{\"k\":[1,null,true,false]},-5],\"floats\":[1.0,0.1,1e20,-0.0,1.5e-7,0.0001],\"ctl\":\"a\\nb\\t\\\"q\\\"\\\\ \\u0001 \\u001f\",\"k\":{\"x\":{\"y\":[]}}}"
+
+withDoc : (Json -> Expectation) -> Expectation
+withDoc k = expectOkThen k (parse prettySource)
+
+test "pretty 2 matches Python indent=2" = withDoc (j =>
+  expectEqualText
+    (join "\n" [
+      "{", "  \"name\": \"café 日本\",", "  \"empty_a\": [],",
+      "  \"empty_o\": {},", "  \"nested\": [", "    [],", "    {",
+      "      \"k\": [", "        1,", "        null,", "        true,",
+      "        false", "      ]", "    },", "    -5", "  ],", "  \"floats\": [",
+      "    1.0,", "    0.1,", "    1e+20,", "    -0.0,", "    1.5e-07,",
+      "    0.0001", "  ],",
+      "  \"ctl\": \"a\\nb\\t\\\"q\\\"\\\\ \\u0001 \\u001f\",", "  \"k\": {",
+      "    \"x\": {", "      \"y\": []", "    }", "  }", "}"
+    ])
+    (pretty 2 j))
+
+test "pretty 4 matches Python indent=4" = withDoc (j =>
+  expectEqualText
+    (join "\n" [
+      "{", "    \"name\": \"café 日本\",", "    \"empty_a\": [],",
+      "    \"empty_o\": {},", "    \"nested\": [", "        [],", "        {",
+      "            \"k\": [", "                1,", "                null,",
+      "                true,", "                false", "            ]",
+      "        },", "        -5", "    ],", "    \"floats\": [", "        1.0,",
+      "        0.1,", "        1e+20,", "        -0.0,", "        1.5e-07,",
+      "        0.0001", "    ],",
+      "    \"ctl\": \"a\\nb\\t\\\"q\\\"\\\\ \\u0001 \\u001f\",", "    \"k\": {",
+      "        \"x\": {", "            \"y\": []", "        }", "    }", "}"
+    ])
+    (pretty 4 j))
+
+test "pretty 0 breaks lines without indentation, as Python indent=0" = withDoc
+  (j =>
+    expectEqualText
+      (join "\n" [
+        "{", "\"name\": \"café 日本\",", "\"empty_a\": [],", "\"empty_o\": {},",
+        "\"nested\": [", "[],", "{", "\"k\": [", "1,", "null,", "true,",
+        "false", "]", "},", "-5", "],", "\"floats\": [", "1.0,", "0.1,",
+        "1e+20,", "-0.0,", "1.5e-07,", "0.0001", "],",
+        "\"ctl\": \"a\\nb\\t\\\"q\\\"\\\\ \\u0001 \\u001f\",", "\"k\": {",
+        "\"x\": {", "\"y\": []", "}", "}", "}"
+      ])
+      (pretty 0 j))
+
+test "pretty keeps empty containers inline and ends without a newline" = expectAll
+  [
+    expectEqual "[]" (pretty 2 (jArray [])),
+    expectEqual "{}" (pretty 2 (jObject [])),
+    expectEqual "[\n  1\n]" (pretty 2 (jArray [JInt 1])),
+  ]
+
+test "parse reads back what pretty writes" = withDoc (j => expectAll [
+  expectEqual (Ok j) (parse (pretty 2 j)),
+  expectEqual (Ok j) (parse (pretty 0 j)),
+  expectEqual (Ok j) (parse (pretty 8 j)),
+])
+
+test "parseLines numbers lines over the input, blank lines included" =
+  expectEqual
+    [Ok (JInt 1), Ok (JInt 2), Err "line 5: unexpected end of input"]
+    (parseLines "1\n\n  \n2\n[3,")
+
+test "parseLines reads CRLF lines" =
+  expectEqual
+    [Ok (jObject [("a", JInt 1)]), Ok (jArray [JInt 2])]
+    (parseLines "{\"a\":1}\r\n\r\n[2]\r\n")
+
+test "parseLines returns a bad line as an Err and goes on" =
+  expectEqual
+    [Err "line 1: unexpected character 'x'", Ok (JInt 2)]
+    (parseLines "x\n2\n")
+
+test "parseLines of nothing is empty" = expectAll [
+  expectEqual [] (parseLines ""),
+  expectEqual [] (parseLines "\n \n\n"),
+]
+
+test "parseLines keeps a last line without a newline" =
+  expectEqual [Ok (JInt 1), Ok (JInt 2)] (parseLines "1\n2")
+
+test "stringifyLines ends each value with a newline" = expectAll [
+  expectEqual "" (stringifyLines []),
+  expectEqual "1\n\"a\"\n" (stringifyLines [JInt 1, JString "a"]),
+]
+
+test "stringifyLines round-trips through parseLines" =
+  let js = [
+    JNull,
+    JInt 3,
+    JString "a\nb",
+    jArray [JBool True],
+    jObject [("k", JFloat 2.5)],
+  ]
+  expectEqual (map Ok js) (parseLines (stringifyLines js))
+
+test "parse rejects a leading zero before a digit" = expectAll [
+  expectErrContains "leading zero" (parse "01"),
+  expectErrContains "leading zero" (parse "-01"),
+  expectErrContains "leading zero" (parse "00"),
+  expectErrContains "leading zero" (parse "01.5"),
+  expectErrContains "leading zero" (parse "[1, 007]"),
+  expectErrContains "leading zero" (parse "{\"a\": 01700000060}"),
+]
+
+test "parse still reads zero in its valid forms" = expectAll [
+  expectEqual (Ok (JInt 0)) (parse "0"),
+  expectEqual (Ok (JInt 0)) (parse "-0"),
+  expectEqual (Ok (JFloat 0.5)) (parse "0.5"),
+  expectEqual (Ok (JFloat 0.0)) (parse "0e1"),
+  expectEqual (Ok (JFloat (-0.5))) (parse "-0.5"),
+]
+
+test "parse rejects an unescaped control character in a string" = expectAll [
+  expectErrContains "control character" (parse "\"a\tb\""),
+  expectErrContains "control character" (parse "\"a\nb\""),
+  expectErrContains "control character" (parse "\"a\rb\""),
+  expectErrContains "control character" (parse "\"a\0b\""),
+  expectErrContains "control character" (parse "\"a\u{1f}b\""),
+  expectErrContains "control character" (parse "{\"k\t\": 1}"),
+]
+
+test "parse still reads escaped control characters and a space" = expectAll [
+  expectEqual (Ok (JString "a\tb")) (parse "\"a\\tb\""),
+  expectEqual (Ok (JString "a\u{01}b")) (parse "\"a\\u0001b\""),
+  expectEqual (Ok (JString "a b")) (parse "\"a b\""),
+]

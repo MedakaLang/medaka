@@ -102,7 +102,8 @@ is not valid JSON.
 
 Whitespace around the value is allowed. Anything after the value is an
 error. Unicode escapes, including surrogate pairs, are decoded; a lone
-surrogate is an error.
+surrogate is an error. A number with a leading zero and a string holding
+an unescaped control character (below U+0020) are errors, as in ECMA-404.
 
 ```medaka
 > parse "[1, 2, 3]"
@@ -238,6 +239,111 @@ other value.
 Some 1
 > asObject (JInt 1) == None
 True
+```
+
+## Paths and numbers
+
+### `asNumber`
+
+```
+asNumber : Json -> Option Float
+```
+
+The float inside a `JFloat` or `JInt`, or `None` for any other value.
+
+An integer is converted to a float.
+
+```medaka
+> asNumber (JInt 3)
+Some 3.0
+> asNumber (JFloat 1.5)
+Some 1.5
+> asNumber (JString "3")
+None
+```
+
+### `atPath`
+
+```
+atPath : List String -> Json -> Result String Json
+atPath steps j
+```
+
+The value reached by following `steps` from the root, or `Err` saying
+which step failed.
+
+A step means what the node it lands on says: on an object it is a key
+(the first member with that name), on an array it is a decimal index.
+An index has no sign and no leading zero, so `"-1"` and `"01"` are
+errors. An empty path is the value itself.
+
+The error names the path walked so far, then the failure.
+
+```medaka
+> atPath ["a", "items", "1"] (jObject [("a", jObject [("items", jArray [JInt 7, JInt 8])])])
+Ok 8
+> atPath ["a", "items", "5"] (jObject [("a", jObject [("items", jArray [JInt 7])])])
+Err "at a.items: index 5 out of range (1 elements)"
+> atPath ["a", "b"] (jObject [("a", jObject [])])
+Err "at a: no key \"b\""
+> atPath ["a", "b"] (jObject [("a", JString "x")])
+Err "at a: expected object or array, found string"
+```
+
+## Pretty printing
+
+### `pretty`
+
+```
+pretty : Int -> Json -> String
+pretty n j
+```
+
+The value as JSON text spread over lines, indented `n` spaces per level.
+
+Members keep their stored order, `": "` separates a key from its value,
+and empty arrays and objects stay on one line. The text has no trailing
+newline. An `n` of 0 still breaks lines, with no indentation. The text
+parses back to the same value.
+
+```medaka
+> pretty 2 (jObject [("a", jArray [JInt 1, JInt 2]), ("b", jObject [])])
+"{\n  \"a\": [\n    1,\n    2\n  ],\n  \"b\": {}\n}"
+```
+
+## Lines of JSON
+
+### `parseLines`
+
+```
+parseLines : String -> List (Result String Json)
+parseLines s
+```
+
+One result per non-blank line of `s`, in order: the value on that line,
+or `Err` with the line number (counting from 1, blank lines included).
+
+A line ending `\r\n` is read like one ending `\n`. A last line cut short
+gives an `Err`, not a missing row.
+
+```medaka
+> parseLines "{\"a\": 1}\n\n[2,\n"
+[Ok {"a":1}, Err "line 3: unexpected end of input"]
+```
+
+### `stringifyLines`
+
+```
+stringifyLines : List Json -> String
+stringifyLines js
+```
+
+The values as compact JSON, each followed by a newline. The empty list
+gives `""`. `parseLines` reads the text back.
+
+```medaka
+> stringifyLines [JInt 1, jArray [JNull]]
+"1\n[null]\n"
 ```
 
 ## Instances

@@ -567,6 +567,11 @@ A JSON value type with a parser and a serializer.
 - [`asBool`](json.md#asbool)
 - [`asArray`](json.md#asarray)
 - [`asObject`](json.md#asobject)
+- [`asNumber`](json.md#asnumber)
+- [`atPath`](json.md#atpath)
+- [`pretty`](json.md#pretty)
+- [`parseLines`](json.md#parselines)
+- [`stringifyLines`](json.md#stringifylines)
 
 ## [`list`](list.md)
 
