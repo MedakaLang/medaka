@@ -103,9 +103,9 @@ doctestChecks : String -> <Exec, IO, FileRead> Expectation
 doctestChecks dir = match prebuild dir
   Err e => fail "prebuild failed: \{e}"
   Ok _ => expectEach [
-    ("string", doctestRow dir "stdlib/string.mdk" "79"),
-    ("list", doctestRow dir "stdlib/list.mdk" "147"),
-    ("map", doctestRow dir "stdlib/map.mdk" "55"),
+    ("string", doctestRow dir "stdlib/string.mdk" "99"),
+    ("list", doctestRow dir "stdlib/list.mdk" "150"),
+    ("map", doctestRow dir "stdlib/map.mdk" "59"),
   ]
 
 -- Checks 1-3: each module's doctests pass under both engines with the pinned count.
