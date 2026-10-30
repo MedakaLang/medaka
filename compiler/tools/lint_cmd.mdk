@@ -20,6 +20,7 @@
 
 import support.util.{anyList, contains, joinNl, joinWith, lookupAssoc}
 import support.path.{dirOf}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
 import string as Str
 import json.{Json(..), jArray, jObject, stringify}
 import frontend.ast.{Decl, Loc(..)}
@@ -442,7 +443,8 @@ runLintJsonCmd idx internalFlag disableNames onlyNames denyNames baseCtx files =
       baseCtx
       files
   let triples = map dropQuadParse quads
-  let cross = crossFileJsonFindings disableNames onlyNames denyNames quads
+  let cross =
+    crossFileJsonFindings internalFlag disableNames onlyNames denyNames quads
   let merged = mergeCrossFileIntoTriples cross triples
   let _ = putStr (cjAllToJson merged)
   if anyList cjLintTripleHasErr merged then stageExit 1
@@ -457,15 +459,17 @@ runLintJsonCmd idx internalFlag disableNames onlyNames denyNames baseCtx files =
 -- `compiler/tools/lint_test.mdk`'s renderer-parity property can call the SAME
 -- function `runLintJsonCmd` calls, rather than a reimplementation.
 export
-crossFileJsonFindings : List String ->
+crossFileJsonFindings : Bool ->
+  List String ->
   List String ->
   List String ->
   List (String, String, List Diag, Positions, List Decl) ->
-  List Finding
-crossFileJsonFindings disableNames onlyNames denyNames quads =
+  <IO> List Finding
+crossFileJsonFindings internalFlag disableNames onlyNames denyNames quads =
   let parsedTriples = map quadToParseTriple quads
   let raw = runCrossFileRules onlyNames disableNames parsedTriples
-  let suppressed = applySuppressionsMulti (map quadToSrc quads) raw
+  let active = dropInactiveInternalCross allCrossFileRules internalFlag raw
+  let suppressed = applySuppressionsMulti (map quadToSrc quads) active
   applyFindingDeny denyNames suppressed
 
 export
@@ -587,14 +591,19 @@ baselineFileCodes cwd (path, _, diags) =
 -- applied here (mirrors the per-file path).  Returns whether any finding is an
 -- error severity (feeds the exit code).
 export
-runCrossFileReport : List String ->
+runCrossFileReport : Bool ->
+  List String ->
   List String ->
   List String ->
   List (String, String, Positions, List Decl) ->
   <IO> Bool
-runCrossFileReport disableNames onlyNames denyNames parsed =
+runCrossFileReport internalFlag disableNames onlyNames denyNames parsed =
   let triples = map parsedToTriple parsed
-  let raw = runCrossFileRules onlyNames disableNames triples
+  let raw =
+    dropInactiveInternalCross
+      allCrossFileRules
+      internalFlag
+      (runCrossFileRules onlyNames disableNames triples)
   -- Honor inline `-- lint-disable-*` directives on cross-file findings too:
   -- each finding anchors to its own file, so filter against that file's own
   -- directives (recovered from its source) before the CLI flag filters.
@@ -618,14 +627,21 @@ runCrossFileReport disableNames onlyNames denyNames parsed =
 -- anyone who tries it.  Callers must have checked `crossFileCacheSound`
 -- (`lintCacheCtx` does).
 export
-runCrossFileReportCached : List String ->
+runCrossFileReportCached : Bool ->
+  List String ->
   List String ->
   List String ->
   List LintEntry ->
   <IO> Bool
-runCrossFileReportCached disableNames onlyNames denyNames entries =
+runCrossFileReportCached internalFlag disableNames onlyNames denyNames entries =
   let raw =
-    runCrossFileRulesFromOccs onlyNames disableNames (flatMap entryOccs entries)
+    dropInactiveInternalCross
+      allCrossFileRules
+      internalFlag
+      (runCrossFileRulesFromOccs
+        onlyNames
+        disableNames
+        (flatMap entryOccs entries))
   let suppressed = applySuppressionsMultiDirs (map entryDirTable entries) raw
   reportCrossFindings (applyFindingDeny denyNames suppressed)
 
@@ -710,10 +726,108 @@ isInternalScope Universal = False
 -- for it.
 export
 internalDisabledFor : Bool -> String -> <IO> List String
-internalDisabledFor True _ = []
-internalDisabledFor False target = match findProjectRoot (dirOf target)
-  Some root => if manifestLintInternal root then [] else internalRuleNames
-  None => internalRuleNames
+internalDisabledFor internalFlag target =
+  if internalActiveFor internalFlag target then [] else internalRuleNames
+
+export
+internalActiveFor : Bool -> String -> <IO> Bool
+internalActiveFor True _ = True
+internalActiveFor False target =
+  internalActiveForDir (canonicalizePath (dirOf target))
+
+-- CLI-CONFORMANCE §5f: `--only`/`--deny` naming an internal rule where internal
+-- rules are not active matches nothing and would exit 0 like a clean file.
+-- The message for the first target it cannot reach, or `None`.
+export
+inactiveInternalRuleUse : Bool ->
+  List String ->
+  List String ->
+  <IO> Option String
+inactiveInternalRuleUse internalFlag names files =
+  let named = filter (n => contains n internalRuleNames) names
+  if internalFlag || named == [] then
+    None
+  else
+    firstInactiveTarget (joinWith ", " named) files
+
+firstInactiveTarget : String -> List String -> <IO> Option String
+firstInactiveTarget _ [] = None
+firstInactiveTarget named (f :: rest) =
+  if internalActiveFor False f then
+    firstInactiveTarget named rest
+  else
+    Some
+      "internal rule \{named} is not active for `\{f}`; pass --internal or set `[lint] internal = true` in the project's medaka.toml"
+
+-- The cross-file tier sees every target at once, so its internal-scope rules
+-- cannot be switched off by a per-file disable list.  Their findings are
+-- filtered instead, by whether internal rules are active for the file each
+-- finding lands in.
+export
+dropInactiveInternalCross : List CrossFileRule ->
+  Bool ->
+  List Finding ->
+  <IO> List Finding
+dropInactiveInternalCross _ _ [] = []
+dropInactiveInternalCross rules internalFlag (f :: rest) =
+  let keep =
+    if isInternalCrossRule rules f.rule then
+      findingInActiveProject internalFlag f
+    else
+      True
+  let kept = dropInactiveInternalCross rules internalFlag rest
+  if keep then f :: kept else kept
+
+isInternalCrossRule : List CrossFileRule -> String -> Bool
+isInternalCrossRule rules name = anyList (isInternalCrossNamed name) rules
+
+isInternalCrossNamed : String -> CrossFileRule -> Bool
+isInternalCrossNamed name r = r.name == name && isInternalScope r.meta.scope
+
+findingInActiveProject : Bool -> Finding -> <IO> Bool
+findingInActiveProject internalFlag f = match f.loc
+  Some (Loc file _ _ _ _) => internalActiveFor internalFlag file
+  None => True
+
+-- Activation is a property of the target's project, so the manifest walk starts
+-- from the target's ABSOLUTE directory (a relative start would read whichever
+-- manifest the cwd sits under).  Both answers are memoized for the process, in
+-- one cell keyed `dir <path>` / `root <path>`: a directory resolves to its root
+-- once, and a root's manifest is read and scanned once, instead of once per
+-- target file.
+internalActivationMemo : Ref (OrdMap Bool)
+internalActivationMemo = Ref omEmpty
+
+internalActiveForDir : String -> <IO> Bool
+internalActiveForDir dir = match memoLookup "dir \{dir}"
+  Some active => active
+  None =>
+    let active = match findProjectRoot dir
+      Some root => internalActiveForRoot root
+      None => False
+    memoStore "dir \{dir}" active
+
+internalActiveForRoot : String -> <IO> Bool
+internalActiveForRoot root = match memoLookup "root \{root}"
+  Some active => active
+  None => memoStore "root \{root}" (manifestLintInternal root)
+
+memoLookup : String -> Option Bool
+memoLookup key = omLookup key !internalActivationMemo
+
+memoStore : String -> Bool -> Bool
+memoStore key active =
+  internalActivationMemo := omInsert key active !internalActivationMemo
+  active
+
+-- How one `medaka lint` run treats its files: `--internal` forces the
+-- internal-scope rules on, `--fix` rewrites instead of reporting, and
+-- `lrMulti` (more than one target) adds the per-file "path:" header.
+public export data LintRun = LintRun {
+  lrInternal : Bool,
+  lrFix : Bool,
+  lrMulti : Bool,
+}
 
 -- Fold over file list, running lint on each.  acc = whether any SevError seen.
 -- Returns (anyError, entries, parsedFiles).
@@ -733,9 +847,7 @@ internalDisabledFor False target = match findProjectRoot (dirOf target)
 -- (strictly) before the recursion.
 export
 lintFilesGo : StdlibIndex ->
-  Bool ->
-  Bool ->
-  Bool ->
+  LintRun ->
   List String ->
   List String ->
   List String ->
@@ -744,16 +856,14 @@ lintFilesGo : StdlibIndex ->
   List String ->
   Bool ->
   <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
-lintFilesGo _ _ _ _ _ _ _ _ _ [] acc = (acc, [], [])
-lintFilesGo idx internalFlag fixMode multiFile disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest) acc =
-  let fileDisable = disableNames ++ internalDisabledFor internalFlag f
-  if fixMode then
+lintFilesGo _ _ _ _ _ _ _ [] acc = (acc, [], [])
+lintFilesGo idx run disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest) acc =
+  let fileDisable = disableNames ++ internalDisabledFor run.lrInternal f
+  if run.lrFix then
     let hadErr = lintOneFileFix onlyNames fileDisable f
     lintFilesGo
       idx
-      internalFlag
-      fixMode
-      multiFile
+      run
       disableNames
       onlyNames
       denyNames
@@ -765,7 +875,7 @@ lintFilesGo idx internalFlag fixMode multiFile disableNames onlyNames denyNames 
     let (hadErr, entries, parsed) =
       lintOneFileReport
         idx
-        multiFile
+        run.lrMulti
         fileDisable
         onlyNames
         denyNames
@@ -775,9 +885,7 @@ lintFilesGo idx internalFlag fixMode multiFile disableNames onlyNames denyNames 
     let (restErr, restEntries, restParsed) =
       lintFilesGo
         idx
-        internalFlag
-        fixMode
-        multiFile
+        run
         disableNames
         onlyNames
         denyNames

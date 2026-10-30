@@ -275,7 +275,7 @@ baselineFileHeader = stringConcat [
   "# below its count freely; exceeding it is an error, and so is having\n",
   "# findings for a rule with no row here at all.\n",
   "#\n",
-  "# Enforced by .githooks/pre-commit (BASELINED_LINT_RULES, per staged file)\n",
+  "# Enforced by .githooks/pre-commit (every baselined rule the registry lists, per staged file)\n",
   "# and by test/diff_compiler_lint_baseline.sh (whole tree, so --no-verify\n",
   "# cannot smuggle an increase past the hook).\n",
   "#\n",

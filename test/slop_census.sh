@@ -58,7 +58,7 @@ comment-register-census|test/comment_register_census.sh|0|sh test/comment_regist
 arch-census|test/arch_census.sh|0|sh test/arch_census.sh
 fmt-clean-census|test/fmt_clean_census.sh|1|sh test/fmt_clean_census.sh
 cli-conformance-census|test/cli_conformance_census.sh|1|sh test/cli_conformance_census.sh
-rule-stdlib-reimpl|compiler/tools/lint.mdk|1|"$MEDAKA" lint --only=rule-stdlib-reimpl compiler stdlib pds
+rule-stdlib-reimpl|compiler/tools/lint_shared.mdk|1|"$MEDAKA" lint --only=rule-stdlib-reimpl compiler stdlib pds
 diag-census (leg 8, #2446)|test/diag_census.sh|1|sh test/diag_census.sh
 doc-disposition (#2300)|test/doc_census.sh|0|sh test/doc_census.sh
 doctest-shape (leg 5)|test/doctest_shape_census.sh|0|sh test/doctest_shape_census.sh
@@ -69,9 +69,9 @@ dup-suppression (legs 1+2, #2861)|test/dup_suppression_census.sh|1|sh test/dup_s
 # packet: "do not create a .sh wrapper unless the invocation genuinely needs
 # one") — its presence is not "does a script exist" but "is the lint rule
 # wired into the built binary." We probe that via the rule name appearing in
-# compiler/tools/lint.mdk, which is the one Medaka source file that can ever
-# make the invocation succeed.
-RULE_STDLIB_REIMPL_SRC="$ROOT/compiler/tools/lint.mdk"
+# compiler/tools/lint_shared.mdk, which holds the rule-name constant and is
+# the one Medaka source file that can ever make the invocation succeed.
+RULE_STDLIB_REIMPL_SRC="$ROOT/compiler/tools/lint_shared.mdk"
 
 n_total=0
 n_present=0

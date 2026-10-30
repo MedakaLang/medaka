@@ -1,5 +1,5 @@
 # META
-source_lines=2105
+source_lines=2115
 stages=DESUGAR,MARK
 # SOURCE
 import tools.source_snapshot.{
@@ -89,7 +89,12 @@ import tools.lsp.{
   methodOf,
   unit,
 }
-import tools.lint_cmd.{internalDisabledFor, quadToParseTriple, quadToSrc}
+import tools.lint_cmd.{
+  dropInactiveInternalCross,
+  internalDisabledFor,
+  quadToParseTriple,
+  quadToSrc,
+}
 import frontend.ast.{Decl, Loc(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{
@@ -104,6 +109,7 @@ import frontend.lexer.{tokenizeWithOffsetPairs}
 import tools.fmt.{formatSourceChecked}
 import tools.lint.{
   Finding,
+  allCrossFileRules,
   lintFileDiagTripleParsed,
   mergeCrossFileIntoTriples,
   runCrossFileRules,
@@ -1521,10 +1527,14 @@ crossFileMcpFindings : List String ->
   List String ->
   List String ->
   List (String, String, List Diag, Positions, List Decl) ->
-  List Finding
+  <IO> List Finding
 crossFileMcpFindings disable only deny quads =
   let parsedTriples = map quadToParseTriple quads
-  let raw = runCrossFileRules only disable parsedTriples
+  let raw =
+    dropInactiveInternalCross
+      allCrossFileRules
+      False
+      (runCrossFileRules only disable parsedTriples)
   let suppressed = applySuppressionsMulti (map quadToSrc quads) raw
   applyFindingDeny deny suppressed
 
@@ -2121,13 +2131,13 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false) (mem "clampSourcePositionToOffset" false) (mem "sourceEndUtf16Position" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "stdlibExportsReader" false) (mem "checkJsonSingle" false) (mem "checkJsonFile" false) (mem "cjAllToJson" false) (mem "cjFileEntry" false) (mem "parseErrDiag" false) (mem "diagIsError" false) (mem "Diag" true))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "typeAtPointsWithIndex" false) (mem "documentSymbols" false) (mem "structuralParsed" false) (mem "definitionResultParsed" false) (mem "definitionResultsParsed" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false) (mem "responseMsg" false) (mem "fieldOr" false) (mem "fieldStr" false) (mem "methodOf" false) (mem "unit" false))))
-(DUse false (UseGroup ("tools" "lint_cmd") ((mem "internalDisabledFor" false) (mem "quadToParseTriple" false) (mem "quadToSrc" false))))
+(DUse false (UseGroup ("tools" "lint_cmd") ((mem "dropInactiveInternalCross" false) (mem "internalDisabledFor" false) (mem "quadToParseTriple" false) (mem "quadToSrc" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "parseResult" false) (mem "parseWithPositionsOpt" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
-(DUse false (UseGroup ("tools" "lint") ((mem "Finding" false) (mem "lintFileDiagTripleParsed" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "applySuppressionsMulti" false) (mem "applyFindingDeny" false) (mem "splitLintNames" false) (mem "buildStdlibIndexResult" false) (mem "StdlibIndexError" true) (mem "emptyStdlibIndex" false) (mem "stdlibIndexNeeded" false) (mem "StdlibIndex" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "Finding" false) (mem "allCrossFileRules" false) (mem "lintFileDiagTripleParsed" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "applySuppressionsMulti" false) (mem "applyFindingDeny" false) (mem "splitLintNames" false) (mem "buildStdlibIndexResult" false) (mem "StdlibIndexError" true) (mem "emptyStdlibIndex" false) (mem "stdlibIndexNeeded" false) (mem "StdlibIndex" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestGradedReportParts" false) (mem "TestReportError" true))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "lastPreludeStaleLine" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
@@ -2304,8 +2314,8 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DFunDef false "lintNameListArg" ((PVar "key") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (EVar "key")) (EVar "args")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PLit (LString ""))) () (EListLit)) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "splitLintNames") (EVar "s")))))
 (DTypeSig true "lintPathsToDiagQuads" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
 (DFunDef false "lintPathsToDiagQuads" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "paths")) (EApp (EApp (EVar "map") (ELam ((PVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "lintFileDiagTripleParsed") (EVar "idx")) (EBinOp "++" (EVar "disable") (EApp (EApp (EVar "internalDisabledFor") (EVar "False")) (EVar "f")))) (EVar "only")) (EVar "deny")) (EVar "f")))) (EVar "paths")))
-(DTypeSig true "crossFileMcpFindings" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "crossFileMcpFindings" ((PVar "disable") (PVar "only") (PVar "deny") (PVar "quads")) (EBlock (DoLet false false (PVar "parsedTriples") (EApp (EApp (EVar "map") (EVar "quadToParseTriple")) (EVar "quads"))) (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "runCrossFileRules") (EVar "only")) (EVar "disable")) (EVar "parsedTriples"))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMulti") (EApp (EApp (EVar "map") (EVar "quadToSrc")) (EVar "quads"))) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "applyFindingDeny") (EVar "deny")) (EVar "suppressed")))))
+(DTypeSig true "crossFileMcpFindings" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "crossFileMcpFindings" ((PVar "disable") (PVar "only") (PVar "deny") (PVar "quads")) (EBlock (DoLet false false (PVar "parsedTriples") (EApp (EApp (EVar "map") (EVar "quadToParseTriple")) (EVar "quads"))) (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "dropInactiveInternalCross") (EVar "allCrossFileRules")) (EVar "False")) (EApp (EApp (EApp (EVar "runCrossFileRules") (EVar "only")) (EVar "disable")) (EVar "parsedTriples")))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMulti") (EApp (EApp (EVar "map") (EVar "quadToSrc")) (EVar "quads"))) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "applyFindingDeny") (EVar "deny")) (EVar "suppressed")))))
 (DTypeSig false "dropQuadParse" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "dropQuadParse" ((PTuple (PVar "path") (PVar "src") (PVar "diags") PWild PWild)) (ETuple (EVar "path") (EVar "src") (EVar "diags")))
 (DTypeSig false "anyTripleHasErr" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Bool")))
@@ -2408,13 +2418,13 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false) (mem "clampSourcePositionToOffset" false) (mem "sourceEndUtf16Position" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "stdlibExportsReader" false) (mem "checkJsonSingle" false) (mem "checkJsonFile" false) (mem "cjAllToJson" false) (mem "cjFileEntry" false) (mem "parseErrDiag" false) (mem "diagIsError" false) (mem "Diag" true))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "typeAtPointsWithIndex" false) (mem "documentSymbols" false) (mem "structuralParsed" false) (mem "definitionResultParsed" false) (mem "definitionResultsParsed" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false) (mem "responseMsg" false) (mem "fieldOr" false) (mem "fieldStr" false) (mem "methodOf" false) (mem "unit" false))))
-(DUse false (UseGroup ("tools" "lint_cmd") ((mem "internalDisabledFor" false) (mem "quadToParseTriple" false) (mem "quadToSrc" false))))
+(DUse false (UseGroup ("tools" "lint_cmd") ((mem "dropInactiveInternalCross" false) (mem "internalDisabledFor" false) (mem "quadToParseTriple" false) (mem "quadToSrc" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "parseResult" false) (mem "parseWithPositionsOpt" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
-(DUse false (UseGroup ("tools" "lint") ((mem "Finding" false) (mem "lintFileDiagTripleParsed" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "applySuppressionsMulti" false) (mem "applyFindingDeny" false) (mem "splitLintNames" false) (mem "buildStdlibIndexResult" false) (mem "StdlibIndexError" true) (mem "emptyStdlibIndex" false) (mem "stdlibIndexNeeded" false) (mem "StdlibIndex" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "Finding" false) (mem "allCrossFileRules" false) (mem "lintFileDiagTripleParsed" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "applySuppressionsMulti" false) (mem "applyFindingDeny" false) (mem "splitLintNames" false) (mem "buildStdlibIndexResult" false) (mem "StdlibIndexError" true) (mem "emptyStdlibIndex" false) (mem "stdlibIndexNeeded" false) (mem "StdlibIndex" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestGradedReportParts" false) (mem "TestReportError" true))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "lastPreludeStaleLine" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
@@ -2591,8 +2601,8 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DFunDef false "lintNameListArg" ((PVar "key") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (EVar "key")) (EVar "args")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PLit (LString ""))) () (EListLit)) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "splitLintNames") (EVar "s")))))
 (DTypeSig true "lintPathsToDiagQuads" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
 (DFunDef false "lintPathsToDiagQuads" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "paths")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "lintFileDiagTripleParsed") (EVar "idx")) (EBinOp "++" (EVar "disable") (EApp (EApp (EVar "internalDisabledFor") (EVar "False")) (EVar "f")))) (EVar "only")) (EVar "deny")) (EVar "f")))) (EVar "paths")))
-(DTypeSig true "crossFileMcpFindings" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "crossFileMcpFindings" ((PVar "disable") (PVar "only") (PVar "deny") (PVar "quads")) (EBlock (DoLet false false (PVar "parsedTriples") (EApp (EApp (EMethodRef "map") (EVar "quadToParseTriple")) (EVar "quads"))) (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "runCrossFileRules") (EVar "only")) (EVar "disable")) (EVar "parsedTriples"))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMulti") (EApp (EApp (EMethodRef "map") (EVar "quadToSrc")) (EVar "quads"))) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "applyFindingDeny") (EVar "deny")) (EVar "suppressed")))))
+(DTypeSig true "crossFileMcpFindings" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "crossFileMcpFindings" ((PVar "disable") (PVar "only") (PVar "deny") (PVar "quads")) (EBlock (DoLet false false (PVar "parsedTriples") (EApp (EApp (EMethodRef "map") (EVar "quadToParseTriple")) (EVar "quads"))) (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "dropInactiveInternalCross") (EVar "allCrossFileRules")) (EVar "False")) (EApp (EApp (EApp (EVar "runCrossFileRules") (EVar "only")) (EVar "disable")) (EVar "parsedTriples")))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMulti") (EApp (EApp (EMethodRef "map") (EVar "quadToSrc")) (EVar "quads"))) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "applyFindingDeny") (EVar "deny")) (EVar "suppressed")))))
 (DTypeSig false "dropQuadParse" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "dropQuadParse" ((PTuple (PVar "path") (PVar "src") (PVar "diags") PWild PWild)) (ETuple (EVar "path") (EVar "src") (EVar "diags")))
 (DTypeSig false "anyTripleHasErr" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Bool")))

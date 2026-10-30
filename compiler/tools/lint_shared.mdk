@@ -353,11 +353,9 @@ patIsWild PWild = True
 patIsWild _ = False
 
 -- position of the first bare-`PVar p` parameter
-export
 paramIndex : String -> List Pat -> Option Int
 paramIndex p pats = paramIndexGo p pats 0
 
-export
 paramIndexGo : String -> List Pat -> Int -> Option Int
 paramIndexGo _ [] _ = None
 paramIndexGo p (pat :: rest) i
@@ -379,7 +377,6 @@ armToClause vis name p pats k (Arm pat _ body) =
       pat
   DFunDef vis name (replaceAt k cpat pats) body noDeclLoc noBinderId
 
-export
 replaceAt : Int -> a -> List a -> List a
 replaceAt _ _ [] = []
 replaceAt 0 x (_ :: rest) = x :: rest
@@ -399,7 +396,6 @@ export
 wholeWordIn : String -> String -> Bool
 wholeWordIn name s = isMatch (mustCompile (wholeWordPattern name)) s
 
-export
 wholeWordPattern : String -> String
 wholeWordPattern name =
   "(?:^|[^A-Za-z0-9_'])" ++ escape name ++ "(?:$|[^A-Za-z0-9_'])"
@@ -455,7 +451,6 @@ export
 appSpineOf : Expr -> (Expr, List Expr)
 appSpineOf e = appSpineGo e []
 
-export
 appSpineGo : Expr -> List Expr -> (Expr, List Expr)
 appSpineGo e acc = match stripELoc e
   EApp f a => appSpineGo f (a :: acc)
@@ -520,11 +515,9 @@ childExprs (EAsPat _ e) = [e]
 childExprs (EOrPat es) = es
 childExprs _ = []
 
-export
 armExprs : Arm -> List Expr
 armExprs (Arm _ gs body) = flatMap guardExprs gs ++ [body]
 
-export
 guardExprs : Guard -> List Expr
 guardExprs (GBool e) = [e]
 guardExprs (GBind _ e) = [e]
@@ -537,34 +530,27 @@ stmtExprs (DoLet _ _ _ e _) = [e]
 stmtExprs (DoAssign _ e) = [e]
 stmtExprs (DoFieldAssign _ _ e) = [e]
 
-export
 letBindExprs : LetBind -> List Expr
 letBindExprs (LetBind _ clauses _ _) = flatMap funClauseExprs clauses
 
-export
 funClauseExprs : FunClause -> List Expr
 funClauseExprs (FunClause _ body) = [body]
 
-export
 sectionExprs : Section -> List Expr
 sectionExprs (SecBare _) = []
 sectionExprs (SecRight _ e) = [e]
 sectionExprs (SecLeft e _) = [e]
 
-export
 interpPartExprs : InterpPart -> List Expr
 interpPartExprs (InterpStr _) = []
 interpPartExprs (InterpExpr e) = [e]
 
-export
 guardArmExprs : GuardArm -> List Expr
 guardArmExprs (GuardArm gs body) = flatMap guardExprs gs ++ [body]
 
-export
 fieldAssignExpr : FieldAssign -> Expr
 fieldAssignExpr (FieldAssign _ e) = e
 
-export
 kvExprs : (Expr, Expr) -> List Expr
 kvExprs (k, v) = [k, v]
 
@@ -587,7 +573,6 @@ export
 implMethodsBodyKey : List ImplMethod -> String
 implMethodsBodyKey ms = joinNl (map implMethodBodySexp ms)
 
-export
 implMethodBodySexp : ImplMethod -> String
 implMethodBodySexp (ImplMethod _ _ body) = exprSexp body
 
@@ -659,7 +644,6 @@ exprRuleFindings : (String -> Bool) ->
 exprRuleFindings excl det mkFinding pos prog =
   flatMap (exprRuleDeclL excl det mkFinding) (declLocList pos prog)
 
-export
 exprRuleDeclL : (String -> Bool) ->
   (Expr -> Option Expr) ->
   (Option Loc -> Expr -> Finding) ->
@@ -668,7 +652,6 @@ exprRuleDeclL : (String -> Bool) ->
 exprRuleDeclL excl det mkFinding (d, loc) =
   map ((hitLoc, hit) => mkFinding hitLoc hit) (declRewriteHits excl det loc d)
 
-export
 declRewriteHits : (String -> Bool) ->
   (Expr -> Option Expr) ->
   Option Loc ->
@@ -682,7 +665,6 @@ declRewriteHits _ det loc (DImpl { methods, ... }) =
 declRewriteHits excl det loc (DAttrib _ d) = declRewriteHits excl det loc d
 declRewriteHits _ _ _ _ = []
 
-export
 implMethodRewriteHits : Option Loc ->
   (Expr -> Option Expr) ->
   ImplMethod ->
@@ -708,7 +690,6 @@ collectRewrites curLoc det e =
   optExprToLocList curLoc (det e)
     ++ flatMap (collectRewrites curLoc det) (childExprs e)
 
-export
 optExprToLocList : Option Loc -> Option Expr -> List (Option Loc, Expr)
 optExprToLocList _ None = []
 optExprToLocList loc (Some x) = [(loc, x)]
@@ -739,7 +720,6 @@ exprRuleFix _ f (d@(DImpl { implOrigin = _, methods })) =
     Some [DImpl { d | methods = methods2 }]
 exprRuleFix _ _ _ = None
 
-export
 fixImplMethodWith : (Expr -> Expr) -> ImplMethod -> ImplMethod
 fixImplMethodWith f (ImplMethod nm ps body) =
   ImplMethod nm ps (rewriteExprBU f body)
@@ -777,7 +757,6 @@ exprRuleFindingsInTests : (String -> Bool) ->
 exprRuleFindingsInTests excl det mkFinding pos prog =
   flatMap (exprRuleDeclLInTests excl det mkFinding) (declLocList pos prog)
 
-export
 exprRuleDeclLInTests : (String -> Bool) ->
   (Expr -> Option Expr) ->
   (Option Loc -> Expr -> Finding) ->
@@ -788,7 +767,6 @@ exprRuleDeclLInTests excl det mkFinding (d, loc) =
     ((hitLoc, hit) => mkFinding hitLoc hit)
     (declRewriteHitsInTests excl det loc d)
 
-export
 declRewriteHitsInTests : (String -> Bool) ->
   (Expr -> Option Expr) ->
   Option Loc ->
@@ -822,7 +800,6 @@ exprRuleFixInTests excl f d = exprRuleFix excl f d
 -- replacement only when the location-stripped sexp changed — the same
 -- change-detection `exprRuleFix`'s own `DFunDef` arm uses. `rebuild` is the
 -- constructor with everything but the body already applied.
-export
 testDeclFix : (Expr -> Decl) -> (Expr -> Expr) -> Expr -> Option (List Decl)
 testDeclFix rebuild f body =
   let body2 = rewriteExprBU f body
@@ -947,7 +924,6 @@ commentBlocks (c :: rest) codeLines =
     (lastLine, text, rest2) =>
       CommentBlock line lastLine False text :: commentBlocks rest2 codeLines
 
-export
 commentBlockExtend : List Comment ->
   Array String ->
   Int ->
@@ -975,7 +951,6 @@ nameSetOf names =
   let _ = nameSetInto names s
   s
 
-export
 nameSetInto : List String -> HashMap String Unit -> Unit
 nameSetInto [] _ = ()
 nameSetInto (n :: rest) s =

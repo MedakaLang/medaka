@@ -85,7 +85,12 @@ import tools.lsp.{
   methodOf,
   unit,
 }
-import tools.lint_cmd.{internalDisabledFor, quadToParseTriple, quadToSrc}
+import tools.lint_cmd.{
+  dropInactiveInternalCross,
+  internalDisabledFor,
+  quadToParseTriple,
+  quadToSrc,
+}
 import frontend.ast.{Decl, Loc(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{
@@ -100,6 +105,7 @@ import frontend.lexer.{tokenizeWithOffsetPairs}
 import tools.fmt.{formatSourceChecked}
 import tools.lint.{
   Finding,
+  allCrossFileRules,
   lintFileDiagTripleParsed,
   mergeCrossFileIntoTriples,
   runCrossFileRules,
@@ -1517,10 +1523,14 @@ crossFileMcpFindings : List String ->
   List String ->
   List String ->
   List (String, String, List Diag, Positions, List Decl) ->
-  List Finding
+  <IO> List Finding
 crossFileMcpFindings disable only deny quads =
   let parsedTriples = map quadToParseTriple quads
-  let raw = runCrossFileRules only disable parsedTriples
+  let raw =
+    dropInactiveInternalCross
+      allCrossFileRules
+      False
+      (runCrossFileRules only disable parsedTriples)
   let suppressed = applySuppressionsMulti (map quadToSrc quads) raw
   applyFindingDeny deny suppressed
 

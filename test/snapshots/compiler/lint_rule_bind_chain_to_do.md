@@ -2,7 +2,7 @@
 source_lines=202
 stages=DESUGAR,MARK
 # SOURCE
--- lint rule bind-chain-to-do: a deep (>=3) Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only).
+-- lint rule rule-bind-chain-to-do: a deep (>=3) Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only).
 
 -- ── rule: bind-chain-to-do (SUGGEST-ONLY, no autofix) ─────────────────────────
 -- Flag a DEEP (≥3) manual monadic-bind pyramid over Result/Option written as

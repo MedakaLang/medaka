@@ -498,7 +498,10 @@ The rule lists these print come from the registry (`compiler/tools/lint_registry
 | `--ratchet=gated\|baselined` | with `--list-rules`: keeps one ratchet; any other value is rejected, rc 1 | conforming |
 | `--tier=file\|cross` | with `--list-rules`: keeps one rule tier; any other value is rejected, rc 1 | conforming |
 | `--markdown` | with `--list-rules`: renders the page committed as `docs/ops/LINT-RULES.md` | conforming |
-| `--internal` | runs the internal-scope rules on every target; without it they run only under a manifest whose `[lint]` section says `internal = true` (CLI and `medaka_lint` over MCP alike) | conforming |
+| `--internal` | runs the internal-scope rules on every target; without it they run only under a manifest whose `[lint]` section says `internal = true`, found from the target's own directory, never the working directory's (CLI and `medaka_lint` over MCP alike) | conforming |
+| `--only=` / `--deny=` naming an internal rule | where internal rules are not active for a target the rule would match nothing and the run would read as clean, so it is rejected, rc 1, naming the rule and telling to pass `--internal` or set `[lint] internal = true` | conforming |
+| `--list-rules` / `--explain` with a target, `--fix`, `--cache`, `--internal`, `--disable`, `--only`, `--deny`, `--baseline` or `--write-baseline` (and `--explain` with `--json` or a list filter, `--markdown` with a filter or `--json`) | the view prints the registry and reads nothing else, so the flag would be accepted and ignored; rejected, rc 1 | conforming |
+| `--explain ''` | an empty rule name is rejected, rc 1, rather than matched to the nearest rule | conforming |
 
 ### 5g. What is now GATED, and what still is not
 

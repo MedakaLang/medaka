@@ -26,6 +26,7 @@ export import tools.lint_registry.{
   allCrossFileRules,
   allRuleNames,
   allRules,
+  crossFileMetaProblems,
   crossFileSelected,
   selectRules,
 }

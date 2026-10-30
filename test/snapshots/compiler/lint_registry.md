@@ -1,5 +1,5 @@
 # META
-source_lines=145
+source_lines=160
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_registry.mdk — THE REGISTRY: `allRules`, the cross-file
@@ -8,7 +8,7 @@ stages=DESUGAR,MARK
 -- `allRules`.
 
 import support.util.{contains, anyList, filterList, isEmptyL}
-import tools.lint_core.{CrossFileRule(..), Rule(..)}
+import tools.lint_core.{CrossFileRule(..), Ratchet(..), Rule(..), RuleMeta(..)}
 import tools.lint_rule_internal_match_on_param as MatchOnParam
 import tools.lint_rule_stdlib_reimpl as StdlibReimpl
 import tools.lint_rule_not_eq as NotEq
@@ -88,6 +88,21 @@ export
 allCrossFileRules : List CrossFileRule
 allCrossFileRules = [DuplicateBody.rule]
 
+-- Metadata a cross-file rule may not carry.  A `Baselined` ratchet is enforced by
+-- a per-file count row, and a cross-file finding has no file row to count
+-- against, so such a rule would be enforced by nothing.  (`Internal` scope is
+-- fine: the runner filters the tier's findings by the file they land in.)
+export
+crossFileMetaProblems : List CrossFileRule -> List String
+crossFileMetaProblems rules = flatMap crossFileRuleProblems rules
+
+crossFileRuleProblems : CrossFileRule -> List String
+crossFileRuleProblems r = match r.meta.ratchet
+  Baselined => [
+    "cross-file rule `\{r.name}` is Baselined; only a per-file rule can be (no count row exists for a cross-file finding), so it would be enforced by nothing",
+  ]
+  Gated => []
+
 -- Every registered rule name, per-file and cross-file, as plain Strings.
 -- CLI-CONFORMANCE.md §5f: `medaka lint --only=nosuchrule` would otherwise be
 -- accepted silently — a typo'd rule name filters EVERY finding away and the run
@@ -149,7 +164,7 @@ crossRuleActive only disable r =
 -- sorted by (file, line).
 # DESUGAR
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false) (mem "isEmptyL" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Rule" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true))))
 (DUse false (UseAlias ("tools" "lint_rule_internal_match_on_param") "MatchOnParam"))
 (DUse false (UseAlias ("tools" "lint_rule_stdlib_reimpl") "StdlibReimpl"))
 (DUse false (UseAlias ("tools" "lint_rule_not_eq") "NotEq"))
@@ -186,6 +201,10 @@ crossRuleActive only disable r =
 (DFunDef false "allRules" () (EListLit (EVar "MatchOnParam.rule") (EVar "HandRolledDerivable.rule") (EVar "StdlibReimpl.rule") (EVar "BindThenDestructure.rule") (EVar "LambdaSection.rule") (EVar "IfMaxMin.rule") (EVar "AndThenPureMap.rule") (EVar "DestructureInParam.rule") (EVar "MissingSignature.rule") (EVar "NotEq.rule") (EVar "BoolSimplify.rule") (EVar "RemParity.rule") (EVar "DoubleReverse.rule") (EVar "WhenUnless.rule") (EVar "ComplementPredicate.rule") (EVar "MatchToMap.rule") (EVar "BindChainToDo.rule") (EVar "DeadCode.rule") (EVar "ConcatToInterp.rule") (EVar "SelfShadowExtern.rule") (EVar "PreferAssignOp.rule") (EVar "PromissoryReader.rule") (EVar "OrElseStaircase.rule") (EVar "CloneType.rule") (EVar "ClauseMap.rule") (EVar "DuplicateBodySameFile.rule") (EVar "DirectiveReason.rule") (EVar "RegexLiteral.rule") (EVar "TestBoolLiteralEqual.rule") (EVar "TestEqualInTrue.rule") (EVar "TestPreludeShadow.rule")))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
 (DFunDef false "allCrossFileRules" () (EListLit (EVar "DuplicateBody.rule")))
+(DTypeSig true "crossFileMetaProblems" (TyFun (TyApp (TyCon "List") (TyCon "CrossFileRule")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "crossFileMetaProblems" ((PVar "rules")) (EApp (EApp (EVar "flatMap") (EVar "crossFileRuleProblems")) (EVar "rules")))
+(DTypeSig false "crossFileRuleProblems" (TyFun (TyCon "CrossFileRule") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "crossFileRuleProblems" ((PVar "r")) (EMatch (EFieldAccess (EFieldAccess (EVar "r") "meta") "ratchet") (arm (PCon "Baselined") () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "cross-file rule `")) (EApp (EVar "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "` is Baselined; only a per-file rule can be (no count row exists for a cross-file finding), so it would be enforced by nothing"))))) (arm (PCon "Gated") () (EListLit))))
 (DTypeSig true "allRuleNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "allRuleNames" () (EBlock (DoLet false false (PVar "perFile") (EApp (EApp (EVar "map") (EVar "ruleNameOf")) (EVar "allRules"))) (DoExpr (EBinOp "++" (EVar "perFile") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "perFile"))))) (EApp (EApp (EVar "map") (EVar "crossRuleNameOf")) (EVar "allCrossFileRules")))))))
 (DTypeSig false "ruleNameOf" (TyFun (TyCon "Rule") (TyCon "String")))
@@ -202,7 +221,7 @@ crossRuleActive only disable r =
 (DFunDef false "crossRuleActive" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EFieldAccess (EVar "r") "enabled") (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
 # MARK
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false) (mem "isEmptyL" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Rule" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true))))
 (DUse false (UseAlias ("tools" "lint_rule_internal_match_on_param") "MatchOnParam"))
 (DUse false (UseAlias ("tools" "lint_rule_stdlib_reimpl") "StdlibReimpl"))
 (DUse false (UseAlias ("tools" "lint_rule_not_eq") "NotEq"))
@@ -239,6 +258,10 @@ crossRuleActive only disable r =
 (DFunDef false "allRules" () (EListLit (EVar "MatchOnParam.rule") (EVar "HandRolledDerivable.rule") (EVar "StdlibReimpl.rule") (EVar "BindThenDestructure.rule") (EVar "LambdaSection.rule") (EVar "IfMaxMin.rule") (EVar "AndThenPureMap.rule") (EVar "DestructureInParam.rule") (EVar "MissingSignature.rule") (EVar "NotEq.rule") (EVar "BoolSimplify.rule") (EVar "RemParity.rule") (EVar "DoubleReverse.rule") (EVar "WhenUnless.rule") (EVar "ComplementPredicate.rule") (EVar "MatchToMap.rule") (EVar "BindChainToDo.rule") (EVar "DeadCode.rule") (EVar "ConcatToInterp.rule") (EVar "SelfShadowExtern.rule") (EVar "PreferAssignOp.rule") (EVar "PromissoryReader.rule") (EVar "OrElseStaircase.rule") (EVar "CloneType.rule") (EVar "ClauseMap.rule") (EVar "DuplicateBodySameFile.rule") (EVar "DirectiveReason.rule") (EVar "RegexLiteral.rule") (EVar "TestBoolLiteralEqual.rule") (EVar "TestEqualInTrue.rule") (EVar "TestPreludeShadow.rule")))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
 (DFunDef false "allCrossFileRules" () (EListLit (EVar "DuplicateBody.rule")))
+(DTypeSig true "crossFileMetaProblems" (TyFun (TyApp (TyCon "List") (TyCon "CrossFileRule")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "crossFileMetaProblems" ((PVar "rules")) (EApp (EApp (EDictApp "flatMap") (EVar "crossFileRuleProblems")) (EVar "rules")))
+(DTypeSig false "crossFileRuleProblems" (TyFun (TyCon "CrossFileRule") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "crossFileRuleProblems" ((PVar "r")) (EMatch (EFieldAccess (EFieldAccess (EVar "r") "meta") "ratchet") (arm (PCon "Baselined") () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "cross-file rule `")) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "` is Baselined; only a per-file rule can be (no count row exists for a cross-file finding), so it would be enforced by nothing"))))) (arm (PCon "Gated") () (EListLit))))
 (DTypeSig true "allRuleNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "allRuleNames" () (EBlock (DoLet false false (PVar "perFile") (EApp (EApp (EMethodRef "map") (EVar "ruleNameOf")) (EVar "allRules"))) (DoExpr (EBinOp "++" (EVar "perFile") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "perFile"))))) (EApp (EApp (EMethodRef "map") (EVar "crossRuleNameOf")) (EVar "allCrossFileRules")))))))
 (DTypeSig false "ruleNameOf" (TyFun (TyCon "Rule") (TyCon "String")))

@@ -2,7 +2,7 @@
 source_lines=175
 stages=DESUGAR,MARK
 # SOURCE
--- lint rule duplicate-body (same-file arm): two top-level functions in one file with structurally identical bodies.
+-- lint rule rule-duplicate-body (same-file arm): two top-level functions in one file with structurally identical bodies.
 
 import frontend.ast.{Loc(..), Expr(..), Decl(..)}
 import frontend.parser.{Positions(..)}

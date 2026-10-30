@@ -112,7 +112,7 @@ multi-clause definition), hand-written `Eq`/`Ord`/`Debug` (to `deriving`), and
 re-implemented stdlib functions; a cross-file rule flags structurally duplicated
 function bodies across modules. Rules are warnings by default (exit 0); `--deny`
 promotes a rule to an error. Adding a rule is one function plus one registry
-entry in `compiler/tools/lint.mdk`.
+entry in `compiler/tools/lint_registry.mdk`.
 
 `--cache` (opt-in) reuses the previous run's results for every file whose
 content is unchanged. Results are keyed on a hash of the file's contents (never

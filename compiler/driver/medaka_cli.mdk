@@ -346,6 +346,8 @@ import tools.lint_cmd.{
   runCrossFileReportCached,
   resolveLintTargets,
   lintFilesGo,
+  LintRun(..),
+  inactiveInternalRuleUse,
 }
 import support.cli_targets.{lintTargetExists, expandLintTarget}
 import tools.check_policy.{
@@ -3901,12 +3903,65 @@ runLintCmd : List String -> <IO> Unit
 runLintCmd argv0 =
   let a = requireArgs lintArgSpec argv0
   if flag "--list-rules" a then
+    let _ = assertRegistryViewFlags "--list-rules" listRulesBannedFlags a
     runLintListRules a
   else if isSome (flagValue "--explain" a) then
+    let _ = assertRegistryViewFlags "--explain" explainBannedFlags a
     runLintExplain a
   else
     let _ = assertNoListOnlyFlags a
     runLintTargets a
+
+-- Flags that mean nothing to a registry view are rejected rather than accepted
+-- and ignored.  `--json` is meaningful to `--list-rules` only, and `--markdown`
+-- is the page renderer, so it takes no filter or format flag.
+lintRunFlags : List String
+lintRunFlags = [
+  "--fix",
+  "--cache",
+  "--internal",
+  "--disable",
+  "--only",
+  "--deny",
+  "--baseline",
+  "--write-baseline",
+]
+
+listRulesBannedFlags : List String
+listRulesBannedFlags = "--explain" :: lintRunFlags
+
+explainBannedFlags : List String
+explainBannedFlags =
+  [
+      "--json",
+      "--markdown",
+      "--names",
+      "--scope",
+      "--ratchet",
+      "--tier",
+    ]
+    ++ lintRunFlags
+
+flagGiven : Args -> String -> Bool
+flagGiven a n = flag n a || isSome (flagValue n a)
+
+assertRegistryViewFlags : String -> List String -> Args -> <IO> Unit
+assertRegistryViewFlags mode banned a =
+  let bad = filter (flagGiven a) banned
+  if a.positionals /= [] then
+    dieMsg "medaka lint: \{mode} takes no target paths"
+  else if bad /= [] then
+    dieMsg "medaka lint: \{joinWith ", " bad} cannot be combined with \{mode}"
+  else if mode == "--list-rules" && flag "--markdown" a then
+    assertMarkdownTakesNoFilter a
+
+assertMarkdownTakesNoFilter : Args -> <IO> Unit
+assertMarkdownTakesNoFilter a =
+  let bad =
+    filter (flagGiven a) ["--json", "--names", "--scope", "--ratchet", "--tier"]
+  if bad /= [] then
+    dieMsg
+      "medaka lint: \{joinWith ", " bad} cannot be combined with --markdown"
 
 -- `--list-rules` and `--explain` print the registry and read no files; a
 -- list-only filter given without `--list-rules` would otherwise be accepted
@@ -3942,9 +3997,11 @@ runLintListRules a =
           putStr (renderRuleRowsText rows)
 
 runLintExplain : Args -> <IO> Unit
-runLintExplain a = match explainRule (optDefault (flagValue "--explain" a) "")
-  Err msg => dieMsg "medaka lint: \{msg}"
-  Ok text => putStrLn text
+runLintExplain a = match optDefault (flagValue "--explain" a) ""
+  "" => dieMsg "medaka lint: --explain needs a rule name"
+  name => match explainRule name
+    Err msg => dieMsg "medaka lint: \{msg}"
+    Ok text => putStrLn text
 
 runLintTargets : Args -> <IO> Unit
 runLintTargets a =
@@ -3981,6 +4038,11 @@ runLintTargets a =
   -- that its target set was empty too, and an error on stderr leaves stdout's
   -- one-JSON-document rule intact (C4).
   let _ = assertLintTargetsNonEmpty files
+  let _ =
+    assertInternalRulesReachable
+      (flag "--internal" a)
+      (onlyNames ++ denyNames)
+      files
   -- The stdlib reference index: every exported stdlib name with its DECLARED
   -- signature, for the rules that ask what the stdlib actually provides.  Built
   -- at most ONCE per `medaka lint` invocation and threaded down — a rule's
@@ -4072,12 +4134,15 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
     -- It is EMPTY whenever `crossFileCacheSound` holds, with or without --cache:
     -- the tier is then reached through the entries' occurrences instead (see
     -- runCrossFileReportCached).
+    let run = LintRun {
+      lrInternal = internalFlag,
+      lrFix = fixMode,
+      lrMulti = multiFile,
+    }
     let (perFileErr, entries, parsed) =
       lintFilesGo
         stdlibIdx
-        internalFlag
-        fixMode
-        multiFile
+        run
         disableNames
         onlyNames
         denyNames
@@ -4092,12 +4157,27 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
         False
       else match cacheCtx
         Some _ =>
-          runCrossFileReportCached disableNames onlyNames denyNames entries
+          runCrossFileReportCached
+            internalFlag
+            disableNames
+            onlyNames
+            denyNames
+            entries
         None =>
           if crossFileCacheSound then
-            runCrossFileReportCached disableNames onlyNames denyNames entries
+            runCrossFileReportCached
+              internalFlag
+              disableNames
+              onlyNames
+              denyNames
+              entries
           else
-            runCrossFileReport disableNames onlyNames denyNames parsed
+            runCrossFileReport
+              internalFlag
+              disableNames
+              onlyNames
+              denyNames
+              parsed
     -- Persist AFTER reporting: the cache is an optimisation, so a failure to
     -- write one must never change what a run says or whether it exits 0.
     let _ = match cacheCtx
@@ -4222,6 +4302,12 @@ assertLintRuleNames names =
       ePutStrLn
         "medaka lint: unknown rule \{joinWith ", " bad} (known: \{joinWith ", " allRuleNames})"
     stageExit 1
+
+assertInternalRulesReachable : Bool -> List String -> List String -> <IO> Unit
+assertInternalRulesReachable internalFlag names files =
+  match inactiveInternalRuleUse internalFlag names files
+    Some msg => dieMsg "medaka lint: \{msg}"
+    None => ()
 
 -- C3's "found nothing is a failure" arm for `lint`, mirroring `fmt`'s and
 -- `codemod`'s wording exactly so the three verbs answer the empty case with one
