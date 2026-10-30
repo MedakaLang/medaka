@@ -1,5 +1,5 @@
 # META
-source_lines=2703
+source_lines=2706
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_symbol_names as WN
@@ -1953,12 +1953,13 @@ helperManifest _ "stderrRuntimeLines" =
 helperManifest _ "rngRuntimeLines" =
   HelperManifest
     [
+      ("mdk_rng_ensure", 0),
       ("mdk_next_u64", 0),
       ("mdk_random_int", 2),
       ("mdk_random_bool", 0),
       ("mdk_random_char", 0),
     ]
-    []
+    ["mdk_rng_seed"]
 helperManifest _ "hashRuntimeLines" =
   HelperManifest
     [("mdk_hash_mix64", 1), ("mdk_hash_int", 1), ("mdk_hash_bool", 1)]
@@ -2357,6 +2358,7 @@ helperHostKeys "ioWriteFileModeLines" =
   ["mdk_write_file_mode", "mdk_write_file_push", "mdk_write_file_reset"]
 helperHostKeys "jsffiArrayLines" = ["mdk_path_push", "mdk_result_byte"]
 helperHostKeys "jsffiResultStrLines" = ["mdk_result_byte", "mdk_result_len"]
+helperHostKeys "rngRuntimeLines" = ["mdk_rng_seed"]
 helperHostKeys "osEntropyLines" =
   ["mdk_os_entropy", "mdk_result_byte", "mdk_result_len"]
 helperHostKeys "readFileBytesLines" =
@@ -2524,6 +2526,7 @@ hostImportSigOf "mdk_read_line" = Some " (result i32)"
 hostImportSigOf "mdk_read_all" = Some ""
 hostImportSigOf "mdk_read_exactly" = Some " (param i64) (result i32)"
 hostImportSigOf "mdk_os_entropy" = Some " (param i64) (result i32)"
+hostImportSigOf "mdk_rng_seed" = Some " (result i64)"
 hostImportSigOf "mdk_executable_path" = Some " (result i32)"
 hostImportSigOf "mdk_args_count" = Some " (result i32)"
 hostImportSigOf "mdk_arg_len" = Some " (param i32) (result i32)"
@@ -3212,7 +3215,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "helperManifest" (PWild (PLit (LString "u64RuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_u64_shl")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_u64_shr")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_u64_mulhi")) (ELit (LInt 2))))) (EListLit)))
 (DFunDef false "helperManifest" (PWild (PLit (LString "i64RuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_i64_div")) (ELit (LInt 2))))) (EListLit)))
 (DFunDef false "helperManifest" (PWild (PLit (LString "stderrRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_eprint_str")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_eprint_strln")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_write_err_byte")))))
-(DFunDef false "helperManifest" (PWild (PLit (LString "rngRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_next_u64")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_random_int")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_random_bool")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_random_char")) (ELit (LInt 0))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "rngRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_rng_ensure")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_next_u64")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_random_int")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_random_bool")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_random_char")) (ELit (LInt 0))))) (EListLit (ELit (LString "mdk_rng_seed")))))
 (DFunDef false "helperManifest" (PWild (PLit (LString "hashRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_hash_mix64")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_hash_int")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_hash_bool")) (ELit (LInt 1))))) (EListLit)))
 (DFunDef false "helperManifest" (PWild (PLit (LString "hashStringRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_hash_string")) (ELit (LInt 1))))) (EListLit)))
 (DFunDef false "helperManifest" (PWild (PLit (LString "floatRemRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_float_rem")) (ELit (LInt 2))))) (EListLit)))
@@ -3359,6 +3362,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "helperHostKeys" ((PLit (LString "ioWriteFileModeLines"))) (EListLit (ELit (LString "mdk_write_file_mode")) (ELit (LString "mdk_write_file_push")) (ELit (LString "mdk_write_file_reset"))))
 (DFunDef false "helperHostKeys" ((PLit (LString "jsffiArrayLines"))) (EListLit (ELit (LString "mdk_path_push")) (ELit (LString "mdk_result_byte"))))
 (DFunDef false "helperHostKeys" ((PLit (LString "jsffiResultStrLines"))) (EListLit (ELit (LString "mdk_result_byte")) (ELit (LString "mdk_result_len"))))
+(DFunDef false "helperHostKeys" ((PLit (LString "rngRuntimeLines"))) (EListLit (ELit (LString "mdk_rng_seed"))))
 (DFunDef false "helperHostKeys" ((PLit (LString "osEntropyLines"))) (EListLit (ELit (LString "mdk_os_entropy")) (ELit (LString "mdk_result_byte")) (ELit (LString "mdk_result_len"))))
 (DFunDef false "helperHostKeys" ((PLit (LString "readFileBytesLines"))) (EListLit (ELit (LString "mdk_read_file")) (ELit (LString "mdk_result_byte")) (ELit (LString "mdk_result_len"))))
 (DFunDef false "helperHostKeys" ((PLit (LString "stderrByteImportLines"))) (EListLit (ELit (LString "mdk_write_err_byte"))))
@@ -3467,6 +3471,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_all"))) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_exactly"))) (EApp (EVar "Some") (ELit (LString " (param i64) (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_os_entropy"))) (EApp (EVar "Some") (ELit (LString " (param i64) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_rng_seed"))) (EApp (EVar "Some") (ELit (LString " (result i64)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_executable_path"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_args_count"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_arg_len"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
@@ -4043,7 +4048,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "helperManifest" (PWild (PLit (LString "u64RuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_u64_shl")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_u64_shr")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_u64_mulhi")) (ELit (LInt 2))))) (EListLit)))
 (DFunDef false "helperManifest" (PWild (PLit (LString "i64RuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_i64_div")) (ELit (LInt 2))))) (EListLit)))
 (DFunDef false "helperManifest" (PWild (PLit (LString "stderrRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_eprint_str")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_eprint_strln")) (ELit (LInt 1))))) (EListLit (ELit (LString "mdk_write_err_byte")))))
-(DFunDef false "helperManifest" (PWild (PLit (LString "rngRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_next_u64")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_random_int")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_random_bool")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_random_char")) (ELit (LInt 0))))) (EListLit)))
+(DFunDef false "helperManifest" (PWild (PLit (LString "rngRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_rng_ensure")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_next_u64")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_random_int")) (ELit (LInt 2))) (ETuple (ELit (LString "mdk_random_bool")) (ELit (LInt 0))) (ETuple (ELit (LString "mdk_random_char")) (ELit (LInt 0))))) (EListLit (ELit (LString "mdk_rng_seed")))))
 (DFunDef false "helperManifest" (PWild (PLit (LString "hashRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_hash_mix64")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_hash_int")) (ELit (LInt 1))) (ETuple (ELit (LString "mdk_hash_bool")) (ELit (LInt 1))))) (EListLit)))
 (DFunDef false "helperManifest" (PWild (PLit (LString "hashStringRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_hash_string")) (ELit (LInt 1))))) (EListLit)))
 (DFunDef false "helperManifest" (PWild (PLit (LString "floatRemRuntimeLines"))) (EApp (EApp (EVar "HelperManifest") (EListLit (ETuple (ELit (LString "mdk_float_rem")) (ELit (LInt 2))))) (EListLit)))
@@ -4190,6 +4195,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "helperHostKeys" ((PLit (LString "ioWriteFileModeLines"))) (EListLit (ELit (LString "mdk_write_file_mode")) (ELit (LString "mdk_write_file_push")) (ELit (LString "mdk_write_file_reset"))))
 (DFunDef false "helperHostKeys" ((PLit (LString "jsffiArrayLines"))) (EListLit (ELit (LString "mdk_path_push")) (ELit (LString "mdk_result_byte"))))
 (DFunDef false "helperHostKeys" ((PLit (LString "jsffiResultStrLines"))) (EListLit (ELit (LString "mdk_result_byte")) (ELit (LString "mdk_result_len"))))
+(DFunDef false "helperHostKeys" ((PLit (LString "rngRuntimeLines"))) (EListLit (ELit (LString "mdk_rng_seed"))))
 (DFunDef false "helperHostKeys" ((PLit (LString "osEntropyLines"))) (EListLit (ELit (LString "mdk_os_entropy")) (ELit (LString "mdk_result_byte")) (ELit (LString "mdk_result_len"))))
 (DFunDef false "helperHostKeys" ((PLit (LString "readFileBytesLines"))) (EListLit (ELit (LString "mdk_read_file")) (ELit (LString "mdk_result_byte")) (ELit (LString "mdk_result_len"))))
 (DFunDef false "helperHostKeys" ((PLit (LString "stderrByteImportLines"))) (EListLit (ELit (LString "mdk_write_err_byte"))))
@@ -4298,6 +4304,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_all"))) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_exactly"))) (EApp (EVar "Some") (ELit (LString " (param i64) (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_os_entropy"))) (EApp (EVar "Some") (ELit (LString " (param i64) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_rng_seed"))) (EApp (EVar "Some") (ELit (LString " (result i64)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_executable_path"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_args_count"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_arg_len"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))

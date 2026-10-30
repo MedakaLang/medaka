@@ -143,9 +143,11 @@ MODULES_BYTES_CEIL=3190000   # measured 3183683 B locally; rounded up to the nex
 MODULES_FUNCS_CEIL=6717   # measured, exact
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
-# Plain bytes grew from 494342 to 508888 with 3685 functions unchanged.
+# Descriptor migration measured 508888 plain bytes and 3685 functions; the
+# merged corpus measures 509264 bytes and 3689 functions. Four RNG fixtures
+# add one mdk_rng_ensure each; absolute paths also affect emitted bytes.
 PLAIN_BYTES_CEIL=510000
-PLAIN_FUNCS_CEIL=3689   # four RNG fixtures each add mdk_rng_ensure
+PLAIN_FUNCS_CEIL=3689   # measured, exact
 
 TYPED_BYTES_CEIL=23500
 TYPED_FUNCS_CEIL=145
