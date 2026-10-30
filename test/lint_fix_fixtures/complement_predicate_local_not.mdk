@@ -1,0 +1,7 @@
+-- Fixture for rule-complement-predicate autofix when the file binds `not`: the
+-- `not` the fix removes, or the call it introduces, could resolve to that
+-- binding, so the fix is withheld and both findings stay.
+
+localNot not xs = not (isEmptyL xs)
+
+argNot xs = g (not (isSome xs))

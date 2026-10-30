@@ -9,6 +9,7 @@ bind_then_destructure_interior_comment rule-bind-then-destructure
 bool_simplify rule-bool-simplify
 bool_simplify_local_not rule-bool-simplify
 complement_predicate rule-complement-predicate
+complement_predicate_local_not rule-complement-predicate
 concat_to_interp rule-concat-to-interp
 destructure_in_param rule-destructure-in-param
 double_reverse rule-double-reverse
@@ -23,6 +24,7 @@ match_on_param_wild_rebind rule-match-on-param
 match_to_map rule-match-to-map
 not_eq rule-not-eq
 rem_parity rule-rem-parity
+rem_parity_brackets rule-rem-parity
 rem_parity_excl_kinds rule-rem-parity
 test_bool_literal_equal rule-test-bool-literal-equal
 test_equal_in_true rule-test-equal-in-true
@@ -48,3 +50,4 @@ test_verb_resolves_to_import rule-test-equal-in-true,rule-test-bool-literal-equa
 test_verb_where_bound_introduced rule-test-equal-in-true,rule-test-bool-literal-equal
 test_verb_where_bound_swapped rule-test-equal-in-true,rule-test-bool-literal-equal
 when_unless rule-when-unless
+when_unless_brackets rule-when-unless

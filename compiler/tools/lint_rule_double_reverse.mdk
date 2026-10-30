@@ -4,12 +4,14 @@ import frontend.ast.{Loc(..), Expr(..), Decl(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
-import frontend.exhaust.{Oracle}
 import tools.lint_core.{
   Category(..),
+  Ctx(..),
   FileFacts(..),
   Finding(..),
+  Fix,
   Fixability(..),
+  Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
@@ -19,13 +21,15 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_shared.{
-  detApply,
-  exprRuleVisitors,
-  exprRuleFix,
+  bindingOf,
+  exprRuleEditVisitors,
   isEVarNamed,
+  nodeSpan,
   noExcl,
+  replaceFix,
   ruleNameDoubleReverse,
   unwrapLoc,
+  usesPreludeName,
 }
 
 export
@@ -42,10 +46,10 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [],
+      needs = [NeedsScopes],
     }
     ruleDoubleReverse
-    (Some doubleReverseFix)
+    None
 
 -- ── rule: double-reverse ──────────────────────────────────────────────────────
 -- `reverse (reverse x)` → `x` (`reverse` is an involution).
@@ -62,11 +66,15 @@ ruleDoubleReverse : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleDoubleReverse _ _ _ _ _ =
-  exprRuleVisitors noExcl doubleReverseOf doubleReverseFinding
+ruleDoubleReverse _ _ facts _ _ =
+  exprRuleEditVisitors
+    noExcl
+    doubleReverseOf
+    (doubleReverseFix facts)
+    doubleReverseFinding
 
-doubleReverseFinding : Option Loc -> Expr -> Finding
-doubleReverseFinding loc rewritten = Finding {
+doubleReverseFinding : Option Loc -> Expr -> Option Fix -> Finding
+doubleReverseFinding loc rewritten fix = Finding {
   rule = ruleNameDoubleReverse,
   message =
     "`reverse (reverse …)` is a no-op. Rewrite as '"
@@ -74,8 +82,27 @@ doubleReverseFinding loc rewritten = Finding {
       ++ "'",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = fix,
 }
 
-doubleReverseFix : Oracle -> Decl -> Option (List Decl)
-doubleReverseFix _ d = exprRuleFix noExcl (detApply doubleReverseOf) d
+-- The rewrite drops both `reverse` calls, so each must be the one the file
+-- resolves to the prelude's: a `reverse` the file binds is not the list
+-- involution the rule knows, and its fix is withheld.
+doubleReverseFix : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+doubleReverseFix facts ctx e rewritten =
+  if reversesArePrelude facts e then
+    replaceFix
+      "drop the double reversal"
+      (nodeSpan ctx e)
+      (bindingOf rewritten)
+      ctx
+      (exprToString rewritten)
+  else
+    None
+
+-- Both `reverse` heads of the matched pair resolve to the prelude's.
+reversesArePrelude : FileFacts -> Expr -> Bool
+reversesArePrelude facts (EApp hd1 arg1) = match unwrapLoc arg1
+  EApp hd2 _ => usesPreludeName facts hd1 && usesPreludeName facts hd2
+  _ => False
+reversesArePrelude _ _ = False
