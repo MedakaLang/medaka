@@ -64,7 +64,7 @@ import frontend.ast.{
 import support.ordmap.{OrdMap, omEmpty}
 import ir.extern_types.{ExternDeclFact}
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
-import support.util.{reverseL}
+import support.util.{reverseL, startsWith}
 
 -- ── expressions ────────────────────────────────────────────────────────────
 public export data CExpr =
@@ -246,6 +246,15 @@ mkApp f args = CApp f args undecidedCall
 
 undecidedCall : CallSite
 undecidedCall = CallSite CallDynamic False
+
+-- the leading `$dict_*` parameters dict-passing prepended to a default's clause.
+-- Lives here, not in `core_ir_lower`, so an analysis that only counts them does
+-- not import the lowering and, through it, the interpreter.
+export
+leadingDictParams : List Pat -> Int
+leadingDictParams ((PVar x _ _) :: rest) =
+  if startsWith "$dict" x then 1 + leadingDictParams rest else 0
+leadingDictParams _ = 0
 
 -- a record field assignment `field = expr`: label, declared ordinal (-1 = unstamped), expr
 public export data CField = CField String Int CExpr

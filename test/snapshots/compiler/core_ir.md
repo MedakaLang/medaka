@@ -1,5 +1,5 @@
 # META
-source_lines=724
+source_lines=733
 stages=DESUGAR,MARK
 # SOURCE
 import types.capability_manifest.{CapabilityManifest}
@@ -68,7 +68,7 @@ import frontend.ast.{
 import support.ordmap.{OrdMap, omEmpty}
 import ir.extern_types.{ExternDeclFact}
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
-import support.util.{reverseL}
+import support.util.{reverseL, startsWith}
 
 -- ── expressions ────────────────────────────────────────────────────────────
 public export data CExpr =
@@ -250,6 +250,15 @@ mkApp f args = CApp f args undecidedCall
 
 undecidedCall : CallSite
 undecidedCall = CallSite CallDynamic False
+
+-- the leading `$dict_*` parameters dict-passing prepended to a default's clause.
+-- Lives here, not in `core_ir_lower`, so an analysis that only counts them does
+-- not import the lowering and, through it, the interpreter.
+export
+leadingDictParams : List Pat -> Int
+leadingDictParams ((PVar x _ _) :: rest) =
+  if startsWith "$dict" x then 1 + leadingDictParams rest else 0
+leadingDictParams _ = 0
 
 -- a record field assignment `field = expr`: label, declared ordinal (-1 = unstamped), expr
 public export data CField = CField String Int CExpr
@@ -732,7 +741,7 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "startsWith" false))))
 (DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallSite"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CStringIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CStringSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CListIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CListSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "MethodEvidence"))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "MethodEvidence" () ((variant "MethodEvidence" (ConNamed (field "meIface" (TyCon "String")) (field "meArity" (TyCon "Int")) (field "meDispatch" (TyCon "Route")) (field "mePrereqs" (TyApp (TyCon "List") (TyCon "Route"))) (field "meContext" (TyApp (TyCon "List") (TyCon "Route")))))) ())
 (DTypeSig true "givenNames" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
@@ -765,6 +774,9 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DFunDef false "mkApp" ((PVar "f") (PVar "args")) (EApp (EApp (EApp (EVar "CApp") (EVar "f")) (EVar "args")) (EVar "undecidedCall")))
 (DTypeSig false "undecidedCall" (TyCon "CallSite"))
 (DFunDef false "undecidedCall" () (EApp (EApp (EVar "CallSite") (EVar "CallDynamic")) (EVar "False")))
+(DTypeSig true "leadingDictParams" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
+(DFunDef false "leadingDictParams" ((PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingDictParams") (EVar "rest"))) (ELit (LInt 0))))
+(DFunDef false "leadingDictParams" (PWild) (ELit (LInt 0)))
 (DData Public "CField" () ((variant "CField" (ConPos (TyCon "String") (TyCon "Int") (TyCon "CExpr")))) ())
 (DData Public "CArm" () ((variant "CArm" (ConPos (TyCon "Pat") (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "CExpr"))) (variant "CArmAlt" (ConPos (TyCon "Pat") (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Int")))) ())
 (DData Public "CGuard" () ((variant "CGBool" (ConPos (TyCon "CExpr"))) (variant "CGBind" (ConPos (TyCon "Pat") (TyCon "CExpr")))) ())
@@ -891,7 +903,7 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "startsWith" false))))
 (DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallSite"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CStringIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CStringSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CListIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CListSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "MethodEvidence"))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "MethodEvidence" () ((variant "MethodEvidence" (ConNamed (field "meIface" (TyCon "String")) (field "meArity" (TyCon "Int")) (field "meDispatch" (TyCon "Route")) (field "mePrereqs" (TyApp (TyCon "List") (TyCon "Route"))) (field "meContext" (TyApp (TyCon "List") (TyCon "Route")))))) ())
 (DTypeSig true "givenNames" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
@@ -924,6 +936,9 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DFunDef false "mkApp" ((PVar "f") (PVar "args")) (EApp (EApp (EApp (EVar "CApp") (EVar "f")) (EVar "args")) (EVar "undecidedCall")))
 (DTypeSig false "undecidedCall" (TyCon "CallSite"))
 (DFunDef false "undecidedCall" () (EApp (EApp (EVar "CallSite") (EVar "CallDynamic")) (EVar "False")))
+(DTypeSig true "leadingDictParams" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
+(DFunDef false "leadingDictParams" ((PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingDictParams") (EVar "rest"))) (ELit (LInt 0))))
+(DFunDef false "leadingDictParams" (PWild) (ELit (LInt 0)))
 (DData Public "CField" () ((variant "CField" (ConPos (TyCon "String") (TyCon "Int") (TyCon "CExpr")))) ())
 (DData Public "CArm" () ((variant "CArm" (ConPos (TyCon "Pat") (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "CExpr"))) (variant "CArmAlt" (ConPos (TyCon "Pat") (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Int")))) ())
 (DData Public "CGuard" () ((variant "CGBool" (ConPos (TyCon "CExpr"))) (variant "CGBind" (ConPos (TyCon "Pat") (TyCon "CExpr")))) ())

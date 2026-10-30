@@ -1,5 +1,5 @@
 # META
-source_lines=4115
+source_lines=4109
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -90,6 +90,7 @@ import ir.core_ir.{
   CallMode(..),
   CallSite(..),
   mkApp,
+  leadingDictParams,
   CTree(..),
   CTBranch(..),
   CHead(..),
@@ -3612,13 +3613,6 @@ declaredArityOr arities ifaceWord mname pats =
     Some n => n
     None => listLen pats - leadingDictParams pats
 
--- the leading `$dict_*` parameters dict-passing prepended to a default's clause
-export
-leadingDictParams : List Pat -> Int
-leadingDictParams ((PVar x _ _) :: rest) =
-  if startsWith "$dict" x then 1 + leadingDictParams rest else 0
-leadingDictParams _ = 0
-
 -- Declaration-derived results and callback positions, keyed by the qualified
 -- interface word. A method result uses only the head parameter; callbacks keep
 -- the signature's full parameter set, including non-head element parameters.
@@ -4121,7 +4115,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "lowerExterns" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "externRowCons" false) (mem "hostRows" false) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false) (mem "patHasOr" false) (mem "orCandidates" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "evSiteHeadIn" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "leadingDictParams" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "freshBinderId" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false) (mem "binderRowIn" false) (mem "BinderTypeTable" false))))
 (DUse false (UseAlias ("map") "BM"))
@@ -5299,9 +5293,6 @@ nodeTag _ = "?"
 (DFunDef false "declaredArityRow" ((PTuple (PVar "mname") (PTuple PWild (PVar "ifaceWord") (PVar "arity")))) (ETuple (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "ifaceWord")) (EVar "mname")) (EVar "arity")))
 (DTypeSig false "declaredArityOr" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
 (DFunDef false "declaredArityOr" ((PVar "arities") (PVar "ifaceWord") (PVar "mname") (PVar "pats")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "ifaceWord")) (EVar "mname"))) (EVar "arities")) (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (EBinOp "-" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "leadingDictParams") (EVar "pats"))))))
-(DTypeSig true "leadingDictParams" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
-(DFunDef false "leadingDictParams" ((PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingDictParams") (EVar "rest"))) (ELit (LInt 0))))
-(DFunDef false "leadingDictParams" (PWild) (ELit (LInt 0)))
 (DTypeSig true "methodResultFacts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "MethodResultFact"))))
 (DFunDef false "methodResultFacts" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ifaceMethodResultFacts")) (EVar "prog")))
 (DTypeSig false "ifaceMethodResultFacts" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "MethodResultFact"))))
@@ -5502,7 +5493,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "lowerExterns" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "externRowCons" false) (mem "hostRows" false) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false) (mem "patHasOr" false) (mem "orCandidates" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "evSiteHeadIn" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "leadingDictParams" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "freshBinderId" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false) (mem "binderRowIn" false) (mem "BinderTypeTable" false))))
 (DUse false (UseAlias ("map") "BM"))
@@ -6680,9 +6671,6 @@ nodeTag _ = "?"
 (DFunDef false "declaredArityRow" ((PTuple (PVar "mname") (PTuple PWild (PVar "ifaceWord") (PVar "arity")))) (ETuple (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "ifaceWord")) (EVar "mname")) (EVar "arity")))
 (DTypeSig false "declaredArityOr" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
 (DFunDef false "declaredArityOr" ((PVar "arities") (PVar "ifaceWord") (PVar "mname") (PVar "pats")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "ifaceWord")) (EVar "mname"))) (EVar "arities")) (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (EBinOp "-" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "leadingDictParams") (EVar "pats"))))))
-(DTypeSig true "leadingDictParams" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
-(DFunDef false "leadingDictParams" ((PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingDictParams") (EVar "rest"))) (ELit (LInt 0))))
-(DFunDef false "leadingDictParams" (PWild) (ELit (LInt 0)))
 (DTypeSig true "methodResultFacts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "MethodResultFact"))))
 (DFunDef false "methodResultFacts" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceMethodResultFacts")) (EVar "prog")))
 (DTypeSig false "ifaceMethodResultFacts" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "MethodResultFact"))))
