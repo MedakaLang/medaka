@@ -60,6 +60,7 @@ implDeclWithReqs	Decl	2/14
 implHeadGround	Decl	2/14
 implHeadNormalDecl	Decl	1/14
 implHeadParametric	Decl	2/14
+importDeclNames	Decl	2/14
 importLocOf	Decl	1/14
 importLocReaching	Decl	1/14
 importOverlayDecls	Decl	2/14

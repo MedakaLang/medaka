@@ -1,0 +1,6 @@
+import list.{take}
+
+f : List String -> List String
+f xs = take 1 xs
+
+main = f ["a", "b"]

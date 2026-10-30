@@ -19,7 +19,7 @@
    source files, neither of which the interpreter binds. -}
 
 import fs.{expectUnitCount, fixtureFiles}
-import list.{dropWhile, takeWhile}
+import list.{dropWhile, nub, takeWhile}
 import string.{contains, endsWith, lines, startsWith, unlines}
 import compiler_cli_test_support.{inFreshDirOf, wasmBuildArgv}
 import test.{Expectation, expectAll, fail, pass}
@@ -78,9 +78,9 @@ freshSpawnsIndependent tag a (bc, bo, be) =
     else
       pass
 
-test "os_entropy: exactly 3 fixtures on disk" = match fixtureFiles corpus
+test "os_entropy: exactly 5 fixtures on disk" = match fixtureFiles corpus
   Err e => fail "\{corpus}: \{e}"
-  Ok paths => match expectUnitCount 3 (filter (endsWith ".mdk") paths)
+  Ok paths => match expectUnitCount 5 (filter (endsWith ".mdk") paths)
     Err e => fail "\{corpus}: \{e}"
     Ok _ => pass
 
@@ -129,6 +129,17 @@ builtOnce scratch name fixture =
       else match boundedVerb binPath []
         Err e => Err "\{name}: exec: \{e}"
         Ok r => Ok r
+
+-- `fixture` built into `scratch` as `name`; the binary's path.
+buildOnly : String -> String -> String -> <Exec, IO> Result String String
+buildOnly scratch name fixture =
+  let binPath = "\{scratch}/\{name}"
+  match strictSpawn 60 ["build", fixture, "-o", binPath]
+    Err e => Err "medaka build \{name}: \{e}"
+    Ok (0, _, _) => Ok binPath
+    Ok (code, bo, be) =>
+      Err
+        "medaka build \{name} failed: exit=\{intToString code} \{debug (bo ++ be)}"
 
 -- `fixture`, built once into `scratch` under `name` and executed TWICE:
 -- both runs must be well-shaped and must differ from each other.
@@ -245,6 +256,142 @@ test "os_entropy: build+exec — positive is independent, negative and too-large
     ])
     (msg => fail msg)
 
+-- # MEDAKA_SEED: the first draw of an unseeded program seeds from the
+-- environment, on `run`, a built binary and a wasm module alike (#4621).
+
+seedDrawFixture : <IO> String
+seedDrawFixture = "\{corpus}/seed_draw.mdk"
+
+seedSetFixture : <IO> String
+seedSetFixture = "\{corpus}/seed_set.mdk"
+
+-- A program on one engine: the command and arguments that run it.
+runEngine : String -> <IO> (String, List String)
+runEngine fixture = ("env", ["MEDAKA_STRICT=1", medakaBin, "run", fixture])
+
+binEngine : String -> (String, List String)
+binEngine bin = (bin, [])
+
+wasmEngine : String -> <IO> (String, List String)
+wasmEngine bin = ("node", ["\{medakaRoot}/test/wasm/run.js", bin])
+
+-- The stdout of a clean run of `engine` under `MEDAKA_SEED=seed` (any
+-- environment when `seed` is `None`), else the reason it was not one.
+drawOf : String ->
+  Option String ->
+  (String, List String) ->
+  <Exec, IO> Result String String
+drawOf tag seed (cmd, argv) =
+  let argv2 = match seed
+    Some v => ["MEDAKA_SEED=\{v}", cmd] ++ argv
+    None => cmd :: argv
+  match boundedVerbSeconds 60 "env" argv2
+    Err e => Err "\{tag}: \{e}"
+    Ok (0, out, _) => Ok out
+    Ok (code, out, err) => Err (spawnSummary tag (code, out, err))
+
+-- Every draw clean and no two alike.
+allDistinctDraws : String -> List (Result String String) -> Expectation
+allDistinctDraws tag runs = match allOk runs
+  Err e => fail e
+  Ok outs =>
+    if length (nub outs) == length outs then
+      pass
+    else
+      fail "\{tag}: unseeded runs repeated a draw: \{debug outs}"
+
+-- `Ok` of every element, or the first `Err`.
+allOk : List (Result String a) -> Result String (List a)
+allOk [] = Ok []
+allOk ((Err e) :: _) = Err e
+allOk ((Ok x) :: rest) = map (x :: _) (allOk rest)
+
+-- The two programs drew the same clean answer.
+sameDraw : String -> Result String String -> Result String String -> Expectation
+sameDraw tag (Ok x) (Ok y) =
+  if x == y then
+    pass
+  else
+    fail "\{tag}: MEDAKA_SEED=42 drew \{debug x}, setSeed 42 drew \{debug y}"
+sameDraw _ (Err e) _ = fail e
+sameDraw _ _ (Err e) = fail e
+
+-- A seed the engine must refuse: nonzero exit and the message on stderr.
+refusesSeed : String ->
+  String ->
+  (String, List String) ->
+  <Exec, IO> Expectation
+refusesSeed tag seed (cmd, argv) =
+  match boundedVerbSeconds 60 "env" (["MEDAKA_SEED=\{seed}", cmd] ++ argv)
+    Err e => fail "\{tag} MEDAKA_SEED=\{debug seed}: \{e}"
+    Ok (0, out, _) =>
+      fail "\{tag}: MEDAKA_SEED=\{debug seed} was accepted: stdout=\{debug out}"
+    Ok (_, _, err) =>
+      if contains "MEDAKA_SEED must be a decimal integer" err then
+        pass
+      else
+        fail "\{tag}: MEDAKA_SEED=\{debug seed}: stderr \{debug err}"
+
+badSeeds : List String
+badSeeds = ["abc", "", " 42", "42 "]
+
+test "os_entropy: unseeded draws differ across runs on `run` and a built binary" =
+  inFreshDirOf
+    (scratch => match buildOnly scratch "seed_draw" seedDrawFixture
+      Err e => fail e
+      Ok bin => expectAll [
+        allDistinctDraws
+          "run"
+          (map (_ => drawOf "run" None (runEngine seedDrawFixture)) [1, 2, 3]),
+        allDistinctDraws
+          "native"
+          (map (_ => drawOf "native" None (binEngine bin)) [1, 2, 3]),
+      ])
+    (msg => fail msg)
+
+test "os_entropy: MEDAKA_SEED=42 equals a leading setSeed 42 on run, native and wasm" =
+  inFreshDirOf
+    (scratch => match buildOnly scratch "seed_draw" seedDrawFixture
+      Err e => fail e
+      Ok draw => match buildOnly scratch "seed_set" seedSetFixture
+        Err e => fail e
+        Ok set => match wasmBuild scratch "seed_draw" seedDrawFixture
+          Err e => fail e
+          Ok wdraw => match wasmBuild scratch "seed_set" seedSetFixture
+            Err e => fail e
+            Ok wset => expectAll [
+              sameDraw
+                "run"
+                (drawOf "run" (Some "42") (runEngine seedDrawFixture))
+                (drawOf "run" (Some "42") (runEngine seedSetFixture)),
+              sameDraw
+                "native"
+                (drawOf "native" (Some "42") (binEngine draw))
+                (drawOf "native" (Some "42") (binEngine set)),
+              sameDraw
+                "wasm"
+                (drawOf "wasm" (Some "42") (wasmEngine wdraw))
+                (drawOf "wasm" (Some "42") (wasmEngine wset)),
+            ])
+    (msg => fail msg)
+
+test "os_entropy: a malformed MEDAKA_SEED fails loudly on run, native and wasm" =
+  inFreshDirOf
+    (scratch => match buildOnly scratch "seed_draw" seedDrawFixture
+      Err e => fail e
+      Ok draw => match wasmBuild scratch "seed_draw" seedDrawFixture
+        Err e => fail e
+        Ok wdraw =>
+          expectAll
+            (flatMap
+              (seed => [
+                refusesSeed "run" seed (runEngine seedDrawFixture),
+                refusesSeed "native" seed (binEngine draw),
+                refusesSeed "wasm" seed (wasmEngine wdraw),
+              ])
+              badSeeds))
+    (msg => fail msg)
+
 -- # Structural anti-rot checks — none of these touch a spawn
 
 -- The lines of `allLines` strictly after the first line starting with
@@ -327,13 +474,13 @@ test "os_entropy: the C runtime helper has no deterministic SplitMix fallback" =
 -- A shrinking count here is the same silent-wrongness signal
 -- `rosterAgreement`'s doc comment names for a fixture roster: written down
 -- so a corpus that lost a check reads red instead of a quieter suite.
-test "os_entropy: exactly 10 `os_entropy:` checks are declared" =
+test "os_entropy: exactly 13 `os_entropy:` checks are declared" =
   let path = "\{medakaRoot}/test/diff_compiler_os_entropy_test.mdk"
   match readFile path
     Err e => fail "\{path}: \{e}"
     Ok src =>
       let n = length (filter (startsWith "test \"os_entropy:") (lines src))
-      if n == 10 then
+      if n == 13 then
         pass
       else
-        fail "\{path}: expected 10 `os_entropy:` checks, found \{intToString n}"
+        fail "\{path}: expected 13 `os_entropy:` checks, found \{intToString n}"

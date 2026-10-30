@@ -1738,6 +1738,17 @@ if grep -q '^test/lint_internal_fixtures/' "$CHANGED_PATHS"; then
   done
 fi
 
+# The interpreter's extern tables are graded by in-language tests no gate runs
+# (the catalog's interpreter column, #3913; the engine matrix's drift guard): a
+# change under compiler/eval/, to the runtime extern declarations or to the
+# catalog's rows (the matrix's native and wasm columns) re-runs both.
+if grep -q -e '^compiler/eval/' -e '^stdlib/runtime\.mdk$' -e '^compiler/backend/extern_catalog\.mdk$' "$CHANGED_PATHS"; then
+  for _if in $inlang_files; do
+    case "$_if" in compiler/backend/extern_catalog_test.mdk|compiler/tools/engine_table_test.mdk) ;; *) continue ;; esac
+    case " $inlang_run " in *" $_if "*) ;; *) inlang_run="$inlang_run $_if" ;; esac
+  done
+fi
+
 # ── resolve gates → the ORACLES they actually need ───────────────────────────
 #
 # ⚠️ A PATTERN THAT MATCHES ZERO GATES IS AN ERROR, NOT AN EMPTY SET.

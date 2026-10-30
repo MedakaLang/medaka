@@ -76,6 +76,7 @@ import support.util.{
 }
 import string.{toLower}
 import list.{replicate}
+import support.ordmap.{omKeys}
 
 -- ── policy args ──────────────────────────────────────────────────────────
 public export data PolicyArgs = PolicyArgs (Option String) String String
@@ -339,6 +340,7 @@ public export data TargetInputs = TargetInputs {
   tiModules : List (String, List Decl),
   tiRuntime : List Decl,
   tiOutputs : DriveOutputs,
+  tiStdlibOwned : List String,
 }
 
 public export data EntryAnalysis = EntryAnalysis {
@@ -394,6 +396,7 @@ analyzeProgramReport inputs valueMain executes rtD coreD modsD =
         tiModules = modsD,
         tiRuntime = rtD,
         tiOutputs = outputs,
+        tiStdlibOwned = omKeys inputs.diStdlibOwned,
       },
     },
     report,

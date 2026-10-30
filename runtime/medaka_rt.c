@@ -3518,15 +3518,46 @@ long long mdk_read_all(long long u) {
   long long r = mdk_str_lossy(buf, (long long)len); free(buf); return r;
 }
 
-/* ── RNG — deterministic SplitMix64 (native extern catalog, Tier D) ───────────
- * The SAME algorithm runs in the tree-walker oracle (lib/eval.ml splitmix64_next),
- * seeded identically, so random* output is byte-identical per seed and stable
- * across backends (project decision 2026-06-07). State is a uint64; default 0;
- * mdk_set_seed sets it. Range semantics preserved from the old oracle: randomInt
- * INCLUSIVE [lo,hi]; randomFloat in [-1,1); randomChar ASCII [32,126]. */
+/* ── RNG — SplitMix64 (native extern catalog, Tier D) ─────────────────────────
+ * The SAME algorithm runs in the evaluator and the wasm preamble, so for a given
+ * seed random* output is byte-identical across engines (setSeed n, or
+ * MEDAKA_SEED=n, reproduces a stream anywhere).  The state is a uint64.  Until
+ * the program seeds it (setSeed / restoreRandomState), the first draw seeds it
+ * from the OS entropy source, or from MEDAKA_SEED when that is set; a malformed
+ * MEDAKA_SEED or an unavailable entropy source is a loud failure, never a
+ * predictable default.  Range semantics: randomInt INCLUSIVE [lo,hi]; randomFloat
+ * in [-1,1); randomChar ASCII [32,126]. */
 static unsigned long long mdk_rng_state = 0;
+static int mdk_rng_seeded = 0;
+
+static void mdk_rng_ensure(void) {
+  if (mdk_rng_seeded) return;
+  const char *env = getenv("MEDAKA_SEED");
+  if (env != NULL) {
+    char *end = NULL;
+    errno = 0;
+    long long v = strtoll(env, &end, 10);
+    /* 63-bit Int range, so the seed equals the `setSeed n` it stands for. */
+    /* Decimal digits with an optional sign, as run and wasm read it: strtoll
+     * alone would skip leading whitespace. */
+    int lead = env[0] == '+' || env[0] == '-' || (env[0] >= '0' && env[0] <= '9');
+    if (!lead || *end != '\0' || errno != 0 ||
+        v < -(1LL << 62) || v > (1LL << 62) - 1)
+      mdk_panic(mdk_str_cstr("MEDAKA_SEED must be a decimal integer"));
+    mdk_rng_state = (unsigned long long)v;
+  } else {
+    unsigned char b[8];
+    if (getentropy(b, sizeof b) != 0)
+      mdk_panic(mdk_str_cstr("random: operating system entropy source failed"));
+    unsigned long long v = 0;
+    for (int i = 0; i < 8; i++) v = (v << 8) | b[i];
+    mdk_rng_state = v;
+  }
+  mdk_rng_seeded = 1;
+}
 
 static unsigned long long mdk_next_u64(void) {
+  mdk_rng_ensure();
   mdk_rng_state += 0x9E3779B97F4A7C15ULL;
   unsigned long long z = mdk_rng_state;
   z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
@@ -3536,13 +3567,16 @@ static unsigned long long mdk_next_u64(void) {
 
 void mdk_set_seed(long long tagged) {        /* setSeed : Int -> Unit */
   mdk_rng_state = (unsigned long long)(tagged >> 1);
+  mdk_rng_seeded = 1;
 }
 long long mdk_random_state(long long unit) {
   (void)unit;
+  mdk_rng_ensure();
   return mdk_box_u64(mdk_rng_state);
 }
 void mdk_restore_random_state(long long state) {
   mdk_rng_state = mdk_u64_payload(state);
+  mdk_rng_seeded = 1;
 }
 /* randomInt : Int -> Int -> Int (INCLUSIVE).  Returns a RAW int — the emitter tags it. */
 /* The span hi - lo + 1 is computed unsigned: for the full Int range it is

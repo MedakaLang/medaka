@@ -1,0 +1,1 @@
+main = let _ = setSeed 42 in println (intToString (randomInt 0 1000000000))

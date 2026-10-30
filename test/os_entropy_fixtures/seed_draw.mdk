@@ -1,0 +1,1 @@
+main = println (intToString (randomInt 0 1000000000))

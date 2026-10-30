@@ -1541,20 +1541,29 @@ valueCmpNumRuntimeLines w =
 
 -- ── W8 RNG — deterministic SplitMix64 (RUNTIME-DESIGN §5 RNG) ─────────────────
 -- Byte-identical to medaka_rt.c's shared SplitMix64 (the same algorithm the OCaml
--- oracle runs), so seeded streams match exactly.  Seed lives in a mutable i64 global
--- (default 0).  All arithmetic is i64, all shifts LOGICAL (i64.shr_u), wrapping on
+-- oracle runs), so seeded streams match exactly.  Seed lives in a mutable i64 global;
+-- until `setSeed` / `restoreRandomState` sets $mdk_rng_seeded, the first draw takes
+-- its seed from the host's `mdk_rng_seed` (MEDAKA_SEED where the host has an
+-- environment, else the platform CSPRNG).  All arithmetic is i64, all shifts LOGICAL (i64.shr_u), wrapping on
 -- overflow (i64 ops wrap naturally).  Emitted when the program uses any RNG extern.
 --   randomInt lo hi : INCLUSIVE [lo,hi]; randomBool : LSB; randomChar : ASCII [32,126].
 -- randomFloat is DEFERRED (W8b) with the Float-formatting work.
 export
 rngStateGlobalLines : List String
-rngStateGlobalLines = ["  (global $mdk_rng_state (mut i64) (i64.const 0))"]
+rngStateGlobalLines = [
+  "  (global $mdk_rng_state (mut i64) (i64.const 0))",
+  "  (global $mdk_rng_seeded (mut i32) (i32.const 0))",
+]
 
 export
 rngRuntimeLines : List String
 rngRuntimeLines = [
   "  ;; ── W8 SplitMix64 RNG (byte-identical to medaka_rt.c) ──",
+  "  (func $mdk_rng_ensure", "    (if (i32.eqz (global.get $mdk_rng_seeded))",
+  "      (then", "        (global.set $mdk_rng_state (call $mdk_rng_seed))",
+  "        (global.set $mdk_rng_seeded (i32.const 1)))))",
   "  (func $mdk_next_u64 (result i64)", "    (local $z i64)",
+  "    (call $mdk_rng_ensure)",
   "    (global.set $mdk_rng_state (i64.add (global.get $mdk_rng_state) (i64.const 0x9E3779B97F4A7C15)))",
   "    (local.set $z (global.get $mdk_rng_state))",
   "    (local.set $z (i64.mul (i64.xor (local.get $z) (i64.shr_u (local.get $z) (i64.const 30))) (i64.const 0xBF58476D1CE4E5B9)))",
@@ -1788,6 +1797,7 @@ hostImportSigOf "mdk_read_line" = Some " (result i32)"
 hostImportSigOf "mdk_read_all" = Some ""
 hostImportSigOf "mdk_read_exactly" = Some " (param i64) (result i32)"
 hostImportSigOf "mdk_os_entropy" = Some " (param i64) (result i32)"
+hostImportSigOf "mdk_rng_seed" = Some " (result i64)"
 hostImportSigOf "mdk_executable_path" = Some " (result i32)"
 hostImportSigOf "mdk_args_count" = Some " (result i32)"
 hostImportSigOf "mdk_arg_len" = Some " (param i32) (result i32)"

@@ -152,6 +152,7 @@ What's in the standard library, what's planned, module-by-module status.
 
 | Doc | What it is | Status |
 |-----|------------|--------|
+| [`ENGINES.md`](stdlib/ENGINES.md) | Engines | — |
 | [`FP-STDLIB-DESIGN.md`](stdlib/FP-STDLIB-DESIGN.md) | FP Standard Library — Typeclasses, Combinators & Error Handling | IMPLEMENTED |
 | [`P1-STDLIB-DESIGN.md`](stdlib/P1-STDLIB-DESIGN.md) | P1 Standard Library — Design & Prioritization | PARTIAL |
 | [`STDLIB.md`](stdlib/STDLIB.md) | Medaka Standard Library — Design Notes & Roadmap | — |
