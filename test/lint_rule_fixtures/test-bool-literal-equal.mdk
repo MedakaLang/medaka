@@ -15,7 +15,7 @@ eqTrueRight a = expectEqual (a == 1) True
 eqFalseRight a = expectEqual (a == 1) False
 
 -- POSITIVE: over a plain Bool subject, nested anywhere in a body.
--- expect-next-line rule-test-bool-literal-equal
+-- expect-next-line rule-test-bool-literal-equal x2
 nestedEq flag = if flag then expectEqual True flag else expectEqual flag False
 
 -- NEGATIVE: a literal on BOTH sides names no subject under test, so there is no

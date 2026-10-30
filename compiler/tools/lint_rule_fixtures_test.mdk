@@ -3,7 +3,7 @@
 -- A rule's fixture is `test/lint_rule_fixtures/<name>.mdk`, where `<name>` is
 -- the rule's name without its `rule-` prefix.  The harness runs ONLY that rule,
 -- in process, over the fixture and asserts that the set of lines it flags
--- equals the annotated set.
+-- equals the annotated multiset.
 --
 -- Marker grammar.  A positive is the line immediately below a comment line
 --
@@ -16,6 +16,20 @@
 -- the registry does not know fails the run.  Lines, not messages, are compared:
 -- a message may be reworded without moving a fixture.
 --
+-- Lines are compared as multisets: a line carrying two findings of the rule is
+-- marked with a count suffix, `-- expect-next-line <rule-name> x2`, and a line
+-- that gains or loses a finding no longer matches.  The count may be followed
+-- by `unfixed`.
+--
+-- A rule whose finding sits on a comment line (`rule-directive-reason` flags the
+-- directive itself, and a marker above it would join the directive's comment
+-- block and count as its reason) is annotated out of band instead:
+--
+--   -- expect-at-line <N> <rule-name>
+--
+-- where N is the 1-based line of the finding; the count and `unfixed` suffixes
+-- apply.  The line is wherever the comment sits.
+--
 -- Optional `<name>.fixed` is the exact `--fix` output of the fixture under that
 -- one rule.  The harness applies the fix, compares to the file, re-parses the
 -- result, and requires the re-lint to flag nothing of the rule, except the
@@ -23,6 +37,12 @@
 -- lines must still be flagged, so a fixer that grows to reach them fails the
 -- fixture until the marker is dropped.  A fixture with `unfixed` markers must
 -- keep its line count under the fix.
+--
+-- Directive suppression, which the CLI
+-- applies after the rules run, is applied here the same way (`applySuppressions`),
+-- so a fixture can pin a directive silencing a finding.  The roster is closed
+-- against the registry: every registered rule has a fixture file, a roster row
+-- and a `test` block.
 --
 -- Optional first line `-- fixture-path: <name>` is the virtual path the fixture
 -- is linted under (default `fixture.mdk`), for rules scoped by file name such as
@@ -41,7 +61,6 @@
 import test.{
   Expectation,
   expectAll,
-  expectEach,
   expectEqual,
   expectFalse,
   fail,
@@ -49,14 +68,15 @@ import test.{
   pass,
 }
 import test_process.{mdkModuleStem, underRoot, unrosteredUnits}
-import list.{sort, nub, indexed}
-import string.{lines, words, trim, stripPrefix}
+import list.{sort, nub, indexed, replicate}
+import string.{lines, words, unwords, trim, stripPrefix, toInt}
 import frontend.ast.{Loc(..)}
 import tools.lint.{
   Finding(..),
   StdlibIndex(..),
   allRuleNames,
   applyFixes,
+  applySuppressions,
   buildStdlibIndexResult,
   emptyStdlibIndex,
   lintParseSource,
@@ -79,7 +99,9 @@ fixtureNames = [
   "concat-to-interp",
   "dead-code",
   "destructure-in-param",
+  "directive-reason",
   "double-reverse",
+  "duplicate-body",
   "hand-rolled-derivable",
   "if-max-min",
   "lambda-section",
@@ -88,6 +110,7 @@ fixtureNames = [
   "missing-signature",
   "not-eq",
   "orelse-staircase",
+  "prefer-assign-op",
   "promissory-reader",
   "regex-literal",
   "rem-parity",
@@ -105,33 +128,67 @@ fixtureDir = underRoot "test/lint_rule_fixtures"
 markerPrefix : String
 markerPrefix = "-- expect-next-line "
 
--- The rule a line's marker names and whether it is marked `unfixed`, if the
--- line is a marker.  A marker with trailing words other than `unfixed` names a
--- rule that cannot exist, so `unknownMarkers` reports it.
-markerRule : String -> Option (String, Bool)
-markerRule line = match map trim (stripPrefix markerPrefix (trim line))
-  Some rest => match words rest
-    [rule, "unfixed"] => Some (rule, True)
-    _ => Some (rest, False)
-  None => None
+atLinePrefix : String
+atLinePrefix = "-- expect-at-line "
 
--- Every marker in the source as (1-based line the marker annotates, rule,
--- unfixed).
-markers : String -> List (Int, String, Bool)
+-- One annotated positive: the 1-based line, the rule, whether the rule's fixer
+-- leaves it, and how many findings the line carries.
+data Marker = Marker { line : Int, rule : String, unfixed : Bool, count : Int }
+
+-- The marker on the line at 0-based index `i`, if the line is one.
+markerAt : (Int, String) -> List Marker
+markerAt (i, text) = match stripPrefix markerPrefix (trim text)
+  Some rest => markerSpec (i + 2) (words rest)
+  None => match stripPrefix atLinePrefix (trim text)
+    Some rest => atLineMarker (trim rest)
+    None => []
+
+atLineMarker : String -> List Marker
+atLineMarker rest = match words rest
+  n :: spec => match toInt n
+    Some line => markerSpec line spec
+    None => []
+  [] => []
+
+-- `<rule>`, `<rule> unfixed`, `<rule> xN` or `<rule> xN unfixed`.  Any other
+-- trailing words make the whole text a rule name that cannot exist, so
+-- `unknownMarkers` reports it.
+markerSpec : Int -> List String -> List Marker
+markerSpec line [rule] =
+  [Marker { line = line, rule = rule, unfixed = False, count = 1 }]
+markerSpec line [rule, "unfixed"] =
+  [Marker { line = line, rule = rule, unfixed = True, count = 1 }]
+markerSpec line [rule, n]
+  | isCount n =
+    [Marker { line = line, rule = rule, unfixed = False, count = countOf n }]
+markerSpec line [rule, n, "unfixed"]
+  | isCount n =
+    [Marker { line = line, rule = rule, unfixed = True, count = countOf n }]
+markerSpec line spec =
+  [Marker { line = line, rule = unwords spec, unfixed = False, count = 1 }]
+
+isCount : String -> Bool
+isCount w = match stripPrefix "x" w
+  Some n => isSome (toInt n)
+  None => False
+
+countOf : String -> Int
+countOf w = match stripPrefix "x" w
+  Some n => optionOr 1 (toInt n)
+  None => 1
+
+-- Every marker in the source.
+markers : String -> List Marker
 markers src = flatMap markerAt (indexed (lines src))
 
-markerAt : (Int, String) -> List (Int, String, Bool)
-markerAt (i, line) = match markerRule line
-  Some (rule, unfixed) => [(i + 2, rule, unfixed)]
-  None => []
-
+-- The lines the markers of `rule` annotate (those `keep` admits), once per
+-- finding the marker declares.
 markedLines : (Bool -> Bool) -> String -> String -> List Int
-markedLines keep rule src =
-  sort (nub (flatMap (markedLine keep rule) (markers src)))
+markedLines keep rule src = sort (flatMap (markedLine keep rule) (markers src))
 
-markedLine : (Bool -> Bool) -> String -> (Int, String, Bool) -> List Int
-markedLine keep rule (line, r, unfixed)
-  | r == rule && keep unfixed = [line]
+markedLine : (Bool -> Bool) -> String -> Marker -> List Int
+markedLine keep rule m
+  | m.rule == rule && keep m.unfixed = replicate m.count m.line
   | otherwise = []
 
 expectedLines : String -> String -> List Int
@@ -141,7 +198,7 @@ unfixedLines : String -> String -> List Int
 unfixedLines = markedLines (unfixed => unfixed)
 
 flaggedLines : List Finding -> List Int
-flaggedLines findings = sort (nub (flatMap findingLine findings))
+flaggedLines findings = sort (flatMap findingLine findings)
 
 findingLine : Finding -> List Int
 findingLine f = match f.loc
@@ -170,7 +227,9 @@ lintLinesAt idx path rule src = match lintParseSource src
   Ok (decls, pos) =>
     Ok
       (flaggedLines
-        (lintProgram idx (selectRules [rule] []) path src pos decls))
+        (applySuppressions
+          src
+          (lintProgram idx (selectRules [rule] []) path src pos decls)))
 
 lintLines : String -> String -> Result String (List Int)
 lintLines rule src = lintLinesAt emptyStdlibIndex (fixturePath src) rule src
@@ -233,12 +292,22 @@ fixOutcome rule src expected = match lintParseSource src
           (expectEqual (unfixedLines rule src) remaining),
       ]
 
--- Every fixture file in the directory has a roster row, and the reverse.
+-- Every fixture file in the directory has a roster row, and the reverse; and
+-- the roster names exactly the registered rules, so a rule added without a
+-- fixture fails here.
 rosterIsClosed : <Env "MEDAKA_ROOT", FileRead> Expectation
 rosterIsClosed = match listDir fixtureDir
   Err _ => fail "cannot list \{fixtureDir}"
-  Ok entries =>
-    expectEqual [] (unrosteredUnits mdkModuleStem fixtureNames entries)
+  Ok entries => expectAll [
+    labelFail
+      "fixture files vs roster"
+      (expectEqual [] (unrosteredUnits mdkModuleStem fixtureNames entries)),
+    labelFail
+      "registry vs roster"
+      (expectEqual
+        (sort (map (n => optionOr n (stripPrefix "rule-" n)) allRuleNames))
+        (sort fixtureNames)),
+  ]
 
 -- One rule's whole fixture: a positive exists, the flagged lines match the
 -- markers, and the fix (when there is a `.fixed`) is clean.
@@ -274,7 +343,11 @@ test "rule-dead-code fixture" = fixtureHolds "dead-code"
 
 test "rule-destructure-in-param fixture" = fixtureHolds "destructure-in-param"
 
+test "rule-directive-reason fixture" = fixtureHolds "directive-reason"
+
 test "rule-double-reverse fixture" = fixtureHolds "double-reverse"
+
+test "rule-duplicate-body fixture" = fixtureHolds "duplicate-body"
 
 test "rule-hand-rolled-derivable fixture" = fixtureHolds "hand-rolled-derivable"
 
@@ -291,6 +364,8 @@ test "rule-missing-signature fixture" = fixtureHolds "missing-signature"
 test "rule-not-eq fixture" = fixtureHolds "not-eq"
 
 test "rule-orelse-staircase fixture" = fixtureHolds "orelse-staircase"
+
+test "rule-prefer-assign-op fixture" = fixtureHolds "prefer-assign-op"
 
 test "rule-promissory-reader fixture" = fixtureHolds "promissory-reader"
 
@@ -327,5 +402,5 @@ test "rule-test-prelude-shadow is silent under a non-test path" =
 
 test "every fixture file is on the roster" = rosterIsClosed
 
-markedRule : (Int, String, Bool) -> String
-markedRule (_, rule, _) = rule
+markedRule : Marker -> String
+markedRule m = m.rule

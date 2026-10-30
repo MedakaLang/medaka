@@ -1,0 +1,17 @@
+-- `setRef r v` and a `:=` write bound to a wildcard `let _ =` are flagged, at the
+-- declaration; a bare `:=` statement is not.
+bump : Ref Int -> Unit
+-- expect-next-line rule-prefer-assign-op
+bump r =
+  let _ = 0
+  setRef r 1
+
+stamp : Ref Int -> Unit
+-- expect-next-line rule-prefer-assign-op
+stamp r =
+  let _ = r := 2
+  ()
+
+plain : Ref Int -> Unit
+plain r =
+  r := 3
