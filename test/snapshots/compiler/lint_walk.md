@@ -1,5 +1,5 @@
 # META
-source_lines=1222
+source_lines=1229
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_walk.mdk — the lint runner: `lintProgram*` and the one
@@ -222,7 +222,8 @@ runVisitors sets decls =
   let hits = reverseL (walkDecls exprHooks declHooks [] decls)
   map (t => findingsTagged (fst t) hits) tagged
 
-data ExprHook = ExprHook Int (List ExprKind) (Ctx -> Expr -> List Finding)
+data ExprHook =
+  ExprHook Int (Option (List ExprKind)) (Ctx -> Expr -> List Finding)
 
 data DeclHook = DeclHook Int (Ctx -> Decl -> List Finding)
 
@@ -241,7 +242,8 @@ exprHooksOf : (Int, List Visitor) -> List ExprHook
 exprHooksOf (i, vs) = flatMap (exprHookOf i) vs
 
 exprHookOf : Int -> Visitor -> List ExprHook
-exprHookOf i (OnExpr kinds cb) = [ExprHook i kinds cb]
+exprHookOf i (OnExpr kinds cb) = [ExprHook i (Some kinds) cb]
+exprHookOf i (OnAnyExpr cb) = [ExprHook i None cb]
 exprHookOf _ (OnDecl _) = []
 
 declHooksOf : (Int, List Visitor) -> List DeclHook
@@ -249,6 +251,7 @@ declHooksOf (i, vs) = flatMap (declHookOf i) vs
 
 declHookOf : Int -> Visitor -> List DeclHook
 declHookOf _ (OnExpr _ _) = []
+declHookOf _ (OnAnyExpr _) = []
 declHookOf i (OnDecl cb) = [DeclHook i cb]
 
 findingsTagged : Int -> List (Int, Finding) -> List Finding
@@ -362,7 +365,7 @@ visitHooks : BodyScope ->
   List (Int, Finding)
 visitHooks _ _ _ _ _ acc [] = acc
 visitHooks scope parent span k e acc ((ExprHook i kinds cb) :: rest)
-  | kindIn k kinds =
+  | hookWants k kinds =
     visitHooks
       scope
       parent
@@ -372,6 +375,10 @@ visitHooks scope parent span k e acc ((ExprHook i kinds cb) :: rest)
       (pushTagged i (cb (scopeCtx scope parent span) e) acc)
       rest
   | otherwise = visitHooks scope parent span k e acc rest
+
+hookWants : ExprKind -> Option (List ExprKind) -> Bool
+hookWants _ None = True
+hookWants k (Some kinds) = kindIn k kinds
 
 kindIn : ExprKind -> List ExprKind -> Bool
 kindIn _ [] = False
@@ -932,7 +939,7 @@ findingToDiag f =
 -- helper `checkJsonFile` uses), so an unreadable path parses as empty source
 -- and yields `(path, "", [], <positions of "">, [])` — total, no crash, and
 -- consistent with `check --json`'s own file-variant behaviour on a missing
--- target. A `Finding` at a nested sub-expression (`exprRuleFindings`)
+-- target. A `Finding` at a nested sub-expression (`exprRuleVisitors`)
 -- carries THAT expression's own location,
 -- not the enclosing decl's.
 -- `idx` is the stdlib reference index.  It is a PARAMETER rather than something
@@ -1261,7 +1268,7 @@ runCrossRuleFromOccs only disable occs r
 (DFunDef false "ruleFindings" ((PVar "idx") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog") (PCons (PVar "r") (PVar "rs")) (PVar "walked")) (EMatch (EFieldAccess (EVar "r") "check") (arm (PCon "WholeFile" (PVar "check")) () (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "restampSeverity") (EFieldAccess (EVar "r") "severity"))) (EApp (EApp (EApp (EApp (EApp (EVar "check") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EVar "walked")))) (arm (PCon "Visits" PWild) () (EMatch (EVar "walked") (arm (PCons (PVar "hits") (PVar "rest")) () (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "restampSeverity") (EFieldAccess (EVar "r") "severity"))) (EVar "hits")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EVar "rest")))) (arm (PList) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EListLit)))))))
 (DTypeSig true "runVisitors" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Visitor"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Finding"))))))
 (DFunDef false "runVisitors" ((PVar "sets") (PVar "decls")) (EBlock (DoLet false false (PVar "tagged") (EApp (EVar "zipWithIndex") (EVar "sets"))) (DoLet false false (PVar "exprHooks") (EApp (EApp (EVar "flatMap") (EVar "exprHooksOf")) (EVar "tagged"))) (DoLet false false (PVar "declHooks") (EApp (EApp (EVar "flatMap") (EVar "declHooksOf")) (EVar "tagged"))) (DoLet false false (PVar "hits") (EApp (EVar "reverseL") (EApp (EApp (EApp (EApp (EVar "walkDecls") (EVar "exprHooks")) (EVar "declHooks")) (EListLit)) (EVar "decls")))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EApp (EApp (EVar "findingsTagged") (EApp (EVar "fst") (EVar "t"))) (EVar "hits")))) (EVar "tagged")))))
-(DData Private "ExprHook" () ((variant "ExprHook" (ConPos (TyCon "Int") (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
+(DData Private "ExprHook" () ((variant "ExprHook" (ConPos (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExprKind"))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Private "DeclHook" () ((variant "DeclHook" (ConPos (TyCon "Int") (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Private "BodyScope" () ((variant "BodyScope" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool")))) ())
 (DTypeSig false "zipWithIndex" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyVar "a")))))
@@ -1272,12 +1279,14 @@ runCrossRuleFromOccs only disable occs r
 (DTypeSig false "exprHooksOf" (TyFun (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Visitor"))) (TyApp (TyCon "List") (TyCon "ExprHook"))))
 (DFunDef false "exprHooksOf" ((PTuple (PVar "i") (PVar "vs"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "exprHookOf") (EVar "i"))) (EVar "vs")))
 (DTypeSig false "exprHookOf" (TyFun (TyCon "Int") (TyFun (TyCon "Visitor") (TyApp (TyCon "List") (TyCon "ExprHook")))))
-(DFunDef false "exprHookOf" ((PVar "i") (PCon "OnExpr" (PVar "kinds") (PVar "cb"))) (EListLit (EApp (EApp (EApp (EVar "ExprHook") (EVar "i")) (EVar "kinds")) (EVar "cb"))))
+(DFunDef false "exprHookOf" ((PVar "i") (PCon "OnExpr" (PVar "kinds") (PVar "cb"))) (EListLit (EApp (EApp (EApp (EVar "ExprHook") (EVar "i")) (EApp (EVar "Some") (EVar "kinds"))) (EVar "cb"))))
+(DFunDef false "exprHookOf" ((PVar "i") (PCon "OnAnyExpr" (PVar "cb"))) (EListLit (EApp (EApp (EApp (EVar "ExprHook") (EVar "i")) (EVar "None")) (EVar "cb"))))
 (DFunDef false "exprHookOf" (PWild (PCon "OnDecl" PWild)) (EListLit))
 (DTypeSig false "declHooksOf" (TyFun (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Visitor"))) (TyApp (TyCon "List") (TyCon "DeclHook"))))
 (DFunDef false "declHooksOf" ((PTuple (PVar "i") (PVar "vs"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "declHookOf") (EVar "i"))) (EVar "vs")))
 (DTypeSig false "declHookOf" (TyFun (TyCon "Int") (TyFun (TyCon "Visitor") (TyApp (TyCon "List") (TyCon "DeclHook")))))
 (DFunDef false "declHookOf" (PWild (PCon "OnExpr" PWild PWild)) (EListLit))
+(DFunDef false "declHookOf" (PWild (PCon "OnAnyExpr" PWild)) (EListLit))
 (DFunDef false "declHookOf" ((PVar "i") (PCon "OnDecl" (PVar "cb"))) (EListLit (EApp (EApp (EVar "DeclHook") (EVar "i")) (EVar "cb"))))
 (DTypeSig false "findingsTagged" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "findingsTagged" ((PVar "i") (PVar "hits")) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EVar "filterList") (ELam ((PVar "h")) (EBinOp "==" (EApp (EVar "fst") (EVar "h")) (EVar "i")))) (EVar "hits"))))
@@ -1313,7 +1322,10 @@ runCrossRuleFromOccs only disable occs r
 (DFunDef false "walkKids" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "span") (PVar "acc") (PCons (PVar "c") (PVar "cs"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EVar "scope")) (EVar "parent")) (EVar "span")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "hooks")) (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "acc")) (EVar "c"))) (EVar "cs")))
 (DTypeSig false "visitHooks" (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ExprKind") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))))))
 (DFunDef false "visitHooks" (PWild PWild PWild PWild PWild (PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "visitHooks" ((PVar "scope") (PVar "parent") (PVar "span") (PVar "k") (PVar "e") (PVar "acc") (PCons (PCon "ExprHook" (PVar "i") (PVar "kinds") (PVar "cb")) (PVar "rest"))) (EIf (EApp (EApp (EVar "kindIn") (EVar "k")) (EVar "kinds")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "k")) (EVar "e")) (EApp (EApp (EApp (EVar "pushTagged") (EVar "i")) (EApp (EApp (EVar "cb") (EApp (EApp (EApp (EVar "scopeCtx") (EVar "scope")) (EVar "parent")) (EVar "span"))) (EVar "e"))) (EVar "acc"))) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "visitHooks" ((PVar "scope") (PVar "parent") (PVar "span") (PVar "k") (PVar "e") (PVar "acc") (PCons (PCon "ExprHook" (PVar "i") (PVar "kinds") (PVar "cb")) (PVar "rest"))) (EIf (EApp (EApp (EVar "hookWants") (EVar "k")) (EVar "kinds")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "k")) (EVar "e")) (EApp (EApp (EApp (EVar "pushTagged") (EVar "i")) (EApp (EApp (EVar "cb") (EApp (EApp (EApp (EVar "scopeCtx") (EVar "scope")) (EVar "parent")) (EVar "span"))) (EVar "e"))) (EVar "acc"))) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "hookWants" (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExprKind"))) (TyCon "Bool"))))
+(DFunDef false "hookWants" (PWild (PCon "None")) (EVar "True"))
+(DFunDef false "hookWants" ((PVar "k") (PCon "Some" (PVar "kinds"))) (EApp (EApp (EVar "kindIn") (EVar "k")) (EVar "kinds")))
 (DTypeSig false "kindIn" (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "List") (TyCon "ExprKind")) (TyCon "Bool"))))
 (DFunDef false "kindIn" (PWild (PList)) (EVar "False"))
 (DFunDef false "kindIn" ((PVar "k") (PCons (PVar "x") (PVar "xs"))) (EBinOp "||" (EBinOp "==" (EVar "k") (EVar "x")) (EApp (EApp (EVar "kindIn") (EVar "k")) (EVar "xs"))))
@@ -1553,7 +1565,7 @@ runCrossRuleFromOccs only disable occs r
 (DFunDef false "ruleFindings" ((PVar "idx") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog") (PCons (PVar "r") (PVar "rs")) (PVar "walked")) (EMatch (EFieldAccess (EVar "r") "check") (arm (PCon "WholeFile" (PVar "check")) () (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "restampSeverity") (EFieldAccess (EVar "r") "severity"))) (EApp (EApp (EApp (EApp (EApp (EVar "check") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EVar "walked")))) (arm (PCon "Visits" PWild) () (EMatch (EVar "walked") (arm (PCons (PVar "hits") (PVar "rest")) () (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "restampSeverity") (EFieldAccess (EVar "r") "severity"))) (EVar "hits")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EVar "rest")))) (arm (PList) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "rs")) (EListLit)))))))
 (DTypeSig true "runVisitors" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Visitor"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Finding"))))))
 (DFunDef false "runVisitors" ((PVar "sets") (PVar "decls")) (EBlock (DoLet false false (PVar "tagged") (EApp (EVar "zipWithIndex") (EVar "sets"))) (DoLet false false (PVar "exprHooks") (EApp (EApp (EDictApp "flatMap") (EVar "exprHooksOf")) (EVar "tagged"))) (DoLet false false (PVar "declHooks") (EApp (EApp (EDictApp "flatMap") (EVar "declHooksOf")) (EVar "tagged"))) (DoLet false false (PVar "hits") (EApp (EVar "reverseL") (EApp (EApp (EApp (EApp (EVar "walkDecls") (EVar "exprHooks")) (EVar "declHooks")) (EListLit)) (EVar "decls")))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EApp (EApp (EVar "findingsTagged") (EApp (EVar "fst") (EVar "t"))) (EVar "hits")))) (EVar "tagged")))))
-(DData Private "ExprHook" () ((variant "ExprHook" (ConPos (TyCon "Int") (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
+(DData Private "ExprHook" () ((variant "ExprHook" (ConPos (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExprKind"))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Private "DeclHook" () ((variant "DeclHook" (ConPos (TyCon "Int") (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Private "BodyScope" () ((variant "BodyScope" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool")))) ())
 (DTypeSig false "zipWithIndex" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyVar "a")))))
@@ -1564,12 +1576,14 @@ runCrossRuleFromOccs only disable occs r
 (DTypeSig false "exprHooksOf" (TyFun (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Visitor"))) (TyApp (TyCon "List") (TyCon "ExprHook"))))
 (DFunDef false "exprHooksOf" ((PTuple (PVar "i") (PVar "vs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "exprHookOf") (EVar "i"))) (EVar "vs")))
 (DTypeSig false "exprHookOf" (TyFun (TyCon "Int") (TyFun (TyCon "Visitor") (TyApp (TyCon "List") (TyCon "ExprHook")))))
-(DFunDef false "exprHookOf" ((PVar "i") (PCon "OnExpr" (PVar "kinds") (PVar "cb"))) (EListLit (EApp (EApp (EApp (EVar "ExprHook") (EVar "i")) (EVar "kinds")) (EVar "cb"))))
+(DFunDef false "exprHookOf" ((PVar "i") (PCon "OnExpr" (PVar "kinds") (PVar "cb"))) (EListLit (EApp (EApp (EApp (EVar "ExprHook") (EVar "i")) (EApp (EVar "Some") (EVar "kinds"))) (EVar "cb"))))
+(DFunDef false "exprHookOf" ((PVar "i") (PCon "OnAnyExpr" (PVar "cb"))) (EListLit (EApp (EApp (EApp (EVar "ExprHook") (EVar "i")) (EVar "None")) (EVar "cb"))))
 (DFunDef false "exprHookOf" (PWild (PCon "OnDecl" PWild)) (EListLit))
 (DTypeSig false "declHooksOf" (TyFun (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Visitor"))) (TyApp (TyCon "List") (TyCon "DeclHook"))))
 (DFunDef false "declHooksOf" ((PTuple (PVar "i") (PVar "vs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "declHookOf") (EVar "i"))) (EVar "vs")))
 (DTypeSig false "declHookOf" (TyFun (TyCon "Int") (TyFun (TyCon "Visitor") (TyApp (TyCon "List") (TyCon "DeclHook")))))
 (DFunDef false "declHookOf" (PWild (PCon "OnExpr" PWild PWild)) (EListLit))
+(DFunDef false "declHookOf" (PWild (PCon "OnAnyExpr" PWild)) (EListLit))
 (DFunDef false "declHookOf" ((PVar "i") (PCon "OnDecl" (PVar "cb"))) (EListLit (EApp (EApp (EVar "DeclHook") (EVar "i")) (EVar "cb"))))
 (DTypeSig false "findingsTagged" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "findingsTagged" ((PVar "i") (PVar "hits")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EApp (EVar "filterList") (ELam ((PVar "h")) (EBinOp "==" (EApp (EVar "fst") (EVar "h")) (EVar "i")))) (EVar "hits"))))
@@ -1605,7 +1619,10 @@ runCrossRuleFromOccs only disable occs r
 (DFunDef false "walkKids" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "span") (PVar "acc") (PCons (PVar "c") (PVar "cs"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EVar "scope")) (EVar "parent")) (EVar "span")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "hooks")) (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "acc")) (EVar "c"))) (EVar "cs")))
 (DTypeSig false "visitHooks" (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ExprKind") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))))))
 (DFunDef false "visitHooks" (PWild PWild PWild PWild PWild (PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "visitHooks" ((PVar "scope") (PVar "parent") (PVar "span") (PVar "k") (PVar "e") (PVar "acc") (PCons (PCon "ExprHook" (PVar "i") (PVar "kinds") (PVar "cb")) (PVar "rest"))) (EIf (EApp (EApp (EVar "kindIn") (EVar "k")) (EVar "kinds")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "k")) (EVar "e")) (EApp (EApp (EApp (EVar "pushTagged") (EVar "i")) (EApp (EApp (EVar "cb") (EApp (EApp (EApp (EVar "scopeCtx") (EVar "scope")) (EVar "parent")) (EVar "span"))) (EVar "e"))) (EVar "acc"))) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "visitHooks" ((PVar "scope") (PVar "parent") (PVar "span") (PVar "k") (PVar "e") (PVar "acc") (PCons (PCon "ExprHook" (PVar "i") (PVar "kinds") (PVar "cb")) (PVar "rest"))) (EIf (EApp (EApp (EVar "hookWants") (EVar "k")) (EVar "kinds")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "k")) (EVar "e")) (EApp (EApp (EApp (EVar "pushTagged") (EVar "i")) (EApp (EApp (EVar "cb") (EApp (EApp (EApp (EVar "scopeCtx") (EVar "scope")) (EVar "parent")) (EVar "span"))) (EVar "e"))) (EVar "acc"))) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "hookWants" (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExprKind"))) (TyCon "Bool"))))
+(DFunDef false "hookWants" (PWild (PCon "None")) (EVar "True"))
+(DFunDef false "hookWants" ((PVar "k") (PCon "Some" (PVar "kinds"))) (EApp (EApp (EVar "kindIn") (EVar "k")) (EVar "kinds")))
 (DTypeSig false "kindIn" (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "List") (TyCon "ExprKind")) (TyCon "Bool"))))
 (DFunDef false "kindIn" (PWild (PList)) (EVar "False"))
 (DFunDef false "kindIn" ((PVar "k") (PCons (PVar "x") (PVar "xs"))) (EBinOp "||" (EBinOp "==" (EVar "k") (EVar "x")) (EApp (EApp (EVar "kindIn") (EVar "k")) (EVar "xs"))))

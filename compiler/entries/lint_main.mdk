@@ -37,7 +37,7 @@ withTarget targetPath = match readFile targetPath
   Ok targetSrc =>
     -- `parseWithPositionsLocated` (#649): findings print location-STRIPPED
     -- here, but inline `-- lint-disable-line`/`-next-line` suppression still
-    -- keys off each Finding's real location, so a nested exprRuleFindings hit
+    -- keys off each Finding's real location, so a nested detector hit
     -- needs its own span rather than the enclosing decl's to suppress right.
     let (decls, pos) = parseWithPositionsLocated targetSrc
     -- The stdlib reference index, built ONCE here (a rule's `check` is pure, so

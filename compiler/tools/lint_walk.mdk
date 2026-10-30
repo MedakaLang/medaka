@@ -218,7 +218,8 @@ runVisitors sets decls =
   let hits = reverseL (walkDecls exprHooks declHooks [] decls)
   map (t => findingsTagged (fst t) hits) tagged
 
-data ExprHook = ExprHook Int (List ExprKind) (Ctx -> Expr -> List Finding)
+data ExprHook =
+  ExprHook Int (Option (List ExprKind)) (Ctx -> Expr -> List Finding)
 
 data DeclHook = DeclHook Int (Ctx -> Decl -> List Finding)
 
@@ -237,7 +238,8 @@ exprHooksOf : (Int, List Visitor) -> List ExprHook
 exprHooksOf (i, vs) = flatMap (exprHookOf i) vs
 
 exprHookOf : Int -> Visitor -> List ExprHook
-exprHookOf i (OnExpr kinds cb) = [ExprHook i kinds cb]
+exprHookOf i (OnExpr kinds cb) = [ExprHook i (Some kinds) cb]
+exprHookOf i (OnAnyExpr cb) = [ExprHook i None cb]
 exprHookOf _ (OnDecl _) = []
 
 declHooksOf : (Int, List Visitor) -> List DeclHook
@@ -245,6 +247,7 @@ declHooksOf (i, vs) = flatMap (declHookOf i) vs
 
 declHookOf : Int -> Visitor -> List DeclHook
 declHookOf _ (OnExpr _ _) = []
+declHookOf _ (OnAnyExpr _) = []
 declHookOf i (OnDecl cb) = [DeclHook i cb]
 
 findingsTagged : Int -> List (Int, Finding) -> List Finding
@@ -358,7 +361,7 @@ visitHooks : BodyScope ->
   List (Int, Finding)
 visitHooks _ _ _ _ _ acc [] = acc
 visitHooks scope parent span k e acc ((ExprHook i kinds cb) :: rest)
-  | kindIn k kinds =
+  | hookWants k kinds =
     visitHooks
       scope
       parent
@@ -368,6 +371,10 @@ visitHooks scope parent span k e acc ((ExprHook i kinds cb) :: rest)
       (pushTagged i (cb (scopeCtx scope parent span) e) acc)
       rest
   | otherwise = visitHooks scope parent span k e acc rest
+
+hookWants : ExprKind -> Option (List ExprKind) -> Bool
+hookWants _ None = True
+hookWants k (Some kinds) = kindIn k kinds
 
 kindIn : ExprKind -> List ExprKind -> Bool
 kindIn _ [] = False
@@ -928,7 +935,7 @@ findingToDiag f =
 -- helper `checkJsonFile` uses), so an unreadable path parses as empty source
 -- and yields `(path, "", [], <positions of "">, [])` — total, no crash, and
 -- consistent with `check --json`'s own file-variant behaviour on a missing
--- target. A `Finding` at a nested sub-expression (`exprRuleFindings`)
+-- target. A `Finding` at a nested sub-expression (`exprRuleVisitors`)
 -- carries THAT expression's own location,
 -- not the enclosing decl's.
 -- `idx` is the stdlib reference index.  It is a PARAMETER rather than something

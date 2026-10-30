@@ -15,12 +15,13 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor,
+  mkVisitorRule,
 }
 import tools.lint_shared.{
   detApply,
-  exprRuleFindingsInTests,
-  exprRuleFixInTests,
+  exprRuleVisitors,
+  exprRuleFixTestDecls,
   isEVarNamed,
   noExcl,
   ruleNameTestEqualInTrue,
@@ -30,7 +31,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameTestEqualInTrue,
       summary =
@@ -87,9 +88,9 @@ ruleTestEqualInTrue : StdlibIndex ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleTestEqualInTrue _ _ _ pos prog =
-  exprRuleFindingsInTests noExcl testEqInTrueOf testEqInTrueFinding pos prog
+  List Visitor
+ruleTestEqualInTrue _ _ _ _ _ =
+  exprRuleVisitors noExcl testEqInTrueOf testEqInTrueFinding
 
 testEqInTrueFinding : Option Loc -> Expr -> Finding
 testEqInTrueFinding loc rewritten = Finding {
@@ -101,4 +102,4 @@ testEqInTrueFinding loc rewritten = Finding {
 }
 
 testEqualInTrueFix : Oracle -> Decl -> Option (List Decl)
-testEqualInTrueFix _ d = exprRuleFixInTests noExcl (detApply testEqInTrueOf) d
+testEqualInTrueFix _ d = exprRuleFixTestDecls noExcl (detApply testEqInTrueOf) d

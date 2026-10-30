@@ -1,5 +1,5 @@
 # META
-source_lines=114
+source_lines=115
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-bool-simplify: a redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`). Simplify.
@@ -19,11 +19,12 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor,
+  mkVisitorRule,
 }
 import tools.lint_shared.{
   detApply,
-  exprRuleFindings,
+  exprRuleVisitors,
   exprRuleFix,
   isBoolLit,
   isFalseLit,
@@ -37,7 +38,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameBoolSimplify,
       summary =
@@ -99,9 +100,9 @@ ruleBoolSimplify : StdlibIndex ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleBoolSimplify _ _ _ pos prog =
-  exprRuleFindings noExcl boolSimplifyOf boolSimplifyFinding pos prog
+  List Visitor
+ruleBoolSimplify _ _ _ _ _ =
+  exprRuleVisitors noExcl boolSimplifyOf boolSimplifyFinding
 
 boolSimplifyFinding : Option Loc -> Expr -> Finding
 boolSimplifyFinding loc rewritten = Finding {
@@ -122,10 +123,10 @@ boolSimplifyFix _ d = exprRuleFix noExcl (detApply boolSimplifyOf) d
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "detApply" false) (mem "exprRuleFindings" false) (mem "exprRuleFix" false) (mem "isBoolLit" false) (mem "isFalseLit" false) (mem "isTrueLit" false) (mem "noExcl" false) (mem "notArgOf" false) (mem "ruleNameBoolSimplify" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "detApply" false) (mem "exprRuleVisitors" false) (mem "exprRuleFix" false) (mem "isBoolLit" false) (mem "isFalseLit" false) (mem "isTrueLit" false) (mem "noExcl" false) (mem "notArgOf" false) (mem "ruleNameBoolSimplify" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameBoolSimplify")) (fa "summary" (ELit (LString "redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`, …). Simplify"))) (fa "doc" (ELit (LString "A boolean expression with a redundant shape: `if c then True else False`, `x == True`, `not (not x)`. Each simplifies to a shorter equivalent.\n\nBefore:\n  if ok then True else False\nAfter:\n  ok"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleBoolSimplify")) (EApp (EVar "Some") (EVar "boolSimplifyFix"))))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameBoolSimplify")) (fa "summary" (ELit (LString "redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`, …). Simplify"))) (fa "doc" (ELit (LString "A boolean expression with a redundant shape: `if c then True else False`, `x == True`, `not (not x)`. Each simplifies to a shorter equivalent.\n\nBefore:\n  if ok then True else False\nAfter:\n  ok"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleBoolSimplify")) (EApp (EVar "Some") (EVar "boolSimplifyFix"))))
 (DTypeSig false "mkNot" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "mkNot" ((PVar "e")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "not")))) (EVar "e")))
 (DTypeSig false "boolSimplifyOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
@@ -138,8 +139,8 @@ boolSimplifyFix _ d = exprRuleFix noExcl (detApply boolSimplifyOf) d
 (DFunDef false "boolSimplifyEq" ((PVar "op") (PVar "a") (PVar "b")) (EIf (EBinOp "&&" (EApp (EVar "isBoolLit") (EVar "a")) (EApp (EVar "isBoolLit") (EVar "b"))) (EVar "None") (EIf (EApp (EVar "isTrueLit") (EVar "b")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "a")) (EVar "True"))) (EIf (EApp (EVar "isFalseLit") (EVar "b")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "a")) (EVar "False"))) (EIf (EApp (EVar "isTrueLit") (EVar "a")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "b")) (EVar "True"))) (EIf (EApp (EVar "isFalseLit") (EVar "a")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "b")) (EVar "False"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "boolEqResult" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Bool") (TyCon "Expr")))))
 (DFunDef false "boolEqResult" ((PVar "op") (PVar "v") (PVar "constIsTrue")) (EIf (EBinOp "==" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EVar "constIsTrue")) (EVar "v") (EApp (EVar "mkNot") (EVar "v"))))
-(DTypeSig false "ruleBoolSimplify" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleBoolSimplify" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "boolSimplifyOf")) (EVar "boolSimplifyFinding")) (EVar "pos")) (EVar "prog")))
+(DTypeSig false "ruleBoolSimplify" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
+(DFunDef false "ruleBoolSimplify" (PWild PWild PWild PWild PWild) (EApp (EApp (EApp (EVar "exprRuleVisitors") (EVar "noExcl")) (EVar "boolSimplifyOf")) (EVar "boolSimplifyFinding")))
 (DTypeSig false "boolSimplifyFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "boolSimplifyFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBoolSimplify")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "redundant boolean expression — rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
 (DTypeSig false "boolSimplifyFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
@@ -150,10 +151,10 @@ boolSimplifyFix _ d = exprRuleFix noExcl (detApply boolSimplifyOf) d
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "detApply" false) (mem "exprRuleFindings" false) (mem "exprRuleFix" false) (mem "isBoolLit" false) (mem "isFalseLit" false) (mem "isTrueLit" false) (mem "noExcl" false) (mem "notArgOf" false) (mem "ruleNameBoolSimplify" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "detApply" false) (mem "exprRuleVisitors" false) (mem "exprRuleFix" false) (mem "isBoolLit" false) (mem "isFalseLit" false) (mem "isTrueLit" false) (mem "noExcl" false) (mem "notArgOf" false) (mem "ruleNameBoolSimplify" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameBoolSimplify")) (fa "summary" (ELit (LString "redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`, …). Simplify"))) (fa "doc" (ELit (LString "A boolean expression with a redundant shape: `if c then True else False`, `x == True`, `not (not x)`. Each simplifies to a shorter equivalent.\n\nBefore:\n  if ok then True else False\nAfter:\n  ok"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleBoolSimplify")) (EApp (EVar "Some") (EVar "boolSimplifyFix"))))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameBoolSimplify")) (fa "summary" (ELit (LString "redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`, …). Simplify"))) (fa "doc" (ELit (LString "A boolean expression with a redundant shape: `if c then True else False`, `x == True`, `not (not x)`. Each simplifies to a shorter equivalent.\n\nBefore:\n  if ok then True else False\nAfter:\n  ok"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleBoolSimplify")) (EApp (EVar "Some") (EVar "boolSimplifyFix"))))
 (DTypeSig false "mkNot" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "mkNot" ((PVar "e")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "not")))) (EVar "e")))
 (DTypeSig false "boolSimplifyOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
@@ -166,8 +167,8 @@ boolSimplifyFix _ d = exprRuleFix noExcl (detApply boolSimplifyOf) d
 (DFunDef false "boolSimplifyEq" ((PVar "op") (PVar "a") (PVar "b")) (EIf (EBinOp "&&" (EApp (EVar "isBoolLit") (EVar "a")) (EApp (EVar "isBoolLit") (EVar "b"))) (EVar "None") (EIf (EApp (EVar "isTrueLit") (EVar "b")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "a")) (EVar "True"))) (EIf (EApp (EVar "isFalseLit") (EVar "b")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "a")) (EVar "False"))) (EIf (EApp (EVar "isTrueLit") (EVar "a")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "b")) (EVar "True"))) (EIf (EApp (EVar "isFalseLit") (EVar "a")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "b")) (EVar "False"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "boolEqResult" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Bool") (TyCon "Expr")))))
 (DFunDef false "boolEqResult" ((PVar "op") (PVar "v") (PVar "constIsTrue")) (EIf (EBinOp "==" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EVar "constIsTrue")) (EVar "v") (EApp (EVar "mkNot") (EVar "v"))))
-(DTypeSig false "ruleBoolSimplify" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleBoolSimplify" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "boolSimplifyOf")) (EVar "boolSimplifyFinding")) (EVar "pos")) (EVar "prog")))
+(DTypeSig false "ruleBoolSimplify" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
+(DFunDef false "ruleBoolSimplify" (PWild PWild PWild PWild PWild) (EApp (EApp (EApp (EVar "exprRuleVisitors") (EVar "noExcl")) (EVar "boolSimplifyOf")) (EVar "boolSimplifyFinding")))
 (DTypeSig false "boolSimplifyFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "boolSimplifyFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBoolSimplify")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "redundant boolean expression — rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
 (DTypeSig false "boolSimplifyFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))

@@ -15,11 +15,12 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor,
+  mkVisitorRule,
 }
 import tools.lint_shared.{
   detApply,
-  exprRuleFindings,
+  exprRuleVisitors,
   exprRuleFix,
   isEVarNamed,
   noExcl,
@@ -30,7 +31,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameDoubleReverse,
       summary = "`reverse (reverse x)` is `x`. Drop the double reversal",
@@ -60,9 +61,9 @@ ruleDoubleReverse : StdlibIndex ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleDoubleReverse _ _ _ pos prog =
-  exprRuleFindings noExcl doubleReverseOf doubleReverseFinding pos prog
+  List Visitor
+ruleDoubleReverse _ _ _ _ _ =
+  exprRuleVisitors noExcl doubleReverseOf doubleReverseFinding
 
 doubleReverseFinding : Option Loc -> Expr -> Finding
 doubleReverseFinding loc rewritten = Finding {

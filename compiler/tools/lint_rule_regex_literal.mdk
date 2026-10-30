@@ -18,10 +18,11 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor,
+  mkVisitorRule,
 }
 import tools.lint_shared.{
-  exprRuleFindings,
+  exprRuleVisitors,
   lastSegOf,
   memberLocalIfOrigin,
   noExcl,
@@ -32,7 +33,7 @@ import tools.lint_shared.{
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameRegexLiteral,
       summary =
@@ -99,14 +100,12 @@ ruleRegexLiteral : StdlibIndex ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleRegexLiteral _ _ _ pos prog =
-  exprRuleFindings
+  List Visitor
+ruleRegexLiteral _ _ _ _ prog =
+  exprRuleVisitors
     noExcl
     (regexLiteralOf (regexLiteralCallNames ++ regexImportedCallNames prog))
     regexLiteralFinding
-    pos
-    prog
 
 -- The parser ELoc-wraps every expr, callee and argument included, so both
 -- must be peeled (`stripELoc`) before the shape match.
