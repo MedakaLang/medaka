@@ -5294,7 +5294,7 @@ evalModulesOutputFacts facts preludeDecls modules = withFacts facts (_ =>
 -- frozen constants were the ONLY implementation, so `medaka run` silently reported
 -- every elapsed interval as 0.0 and silently discarded every byte of stderr.
 --
--- STDERR IS UNBUFFERED, STDOUT IS NOT.  putStr/putStrLn append to `outputChunks` and
+-- Stderr is unbuffered, stdout is not.  putStr/putStrLn append to `outputChunks` and
 -- the CLI prints the buffer after `main` returns; ePutStr/ePutStrLn below write
 -- through to the host stderr IMMEDIATELY.  Streaming is the right call for a
 -- diagnostic channel: a log line that only appears after the program finishes is
