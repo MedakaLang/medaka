@@ -236,7 +236,7 @@ cannot be read is an `Err`, unlike Python's `glob`, which returns `[]`.
 ```medaka
 > glob "stdlib/no-such-glob-doctest-dir/*.mdk"
 Err "No such file or directory"
-> glob "stdlib/no-such-glob-doctest-file.mdk"
+> glob "no-such-glob-doctest-file"
 Ok []
 ```
 
