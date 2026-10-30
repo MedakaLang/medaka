@@ -1,5 +1,5 @@
 # META
-source_lines=1054
+source_lines=1056
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -272,17 +272,19 @@ extern sliceError : Int -> Int -> a
 
 -- Internal `medaka run` plumbing ("run drops stdout on panic" fix). `run`'s
 -- tree-walking interpreter buffers a program's stdout in an in-language
--- Ref<String> (eval.mdk's outputRef) and writes it out only after `main`
--- returns normally, so a panicking program's buffered stdout would otherwise be
--- silently discarded (Medaka panics are not catchable; there is no unwind
--- path back to that final write). These two internal-only externs let
+-- Ref (List String) (eval.mdk's outputChunks, newest first) and writes it out
+-- only after `main` returns normally, so a panicking program's buffered stdout
+-- would otherwise be silently discarded (Medaka panics are not catchable;
+-- there is no unwind path back to that final write). These two internal-only externs let
 -- eval.mdk register the buffer with the native runtime so every abort path
 -- (panic / index-OOB / non-exhaustive-match / stack-overflow / a fatal
 -- signal) can flush it before dying; see runtime/medaka_rt.c's
--- mdk_flush_run_stdout_on_abort. Not for general use: `stashRunStdout` takes
--- an O(1) pointer+length snapshot (no allocation, no observable effect by
--- itself) and `enableRunStdoutFlush` is called exactly once, only by the
--- real `medaka run` CLI driver, never by the pure differential-oracle eval
+-- mdk_flush_run_stdout_on_abort. Not for general use: `stashRunStdout` appends
+-- one chunk as an amortized O(1) pointer+length record, no observable effect
+-- by itself.  The empty string CLEARS the list instead, so only eval.mdk's
+-- resetOutput passes it and appendOutput never stashes an empty chunk.
+-- `enableRunStdoutFlush` is called exactly once, only by the real
+-- `medaka run` CLI driver, never by the pure differential-oracle eval
 -- probes, which share this same source but never call it, so their captured
 -- output is unaffected.
 extern stashRunStdout : String -> Unit

@@ -21,8 +21,8 @@ import frontend.ast.{
   Ty(..),
 }
 import eval.eval.{
-  Value(..), EvalEnv(..), apply, eval, extendEnv, force, lookupEnv,
-  lookupRuntimeBinding, ppValue
+  Value(..), EvalEnv(..), EnvFrame(..), apply, eval, extendEnv, envFrameCells,
+  force, lookupEnv, lookupRuntimeBinding, ppValue
 }
 import support.util.{listLen, lookupAssoc, isEmptyL, filterList, anyList}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
@@ -244,7 +244,7 @@ runProp genEnv evalEnv (DProp _ name params body) maxTests target propLines =
   -- value via `--seed` reproduces this prop's draws byte-for-byte regardless
   -- of what ran before it, so it is the number to print on failure.
   let seedAtStart = !propRngStateRef
-  let rootEnv = extendEnv (EvalEnv [[]]) evalEnv
+  let rootEnv = extendEnv (EvalEnv [ScanFrame []]) evalEnv
   match planPropParams (genEnvPlan genEnv) name params
     Err e =>
       let _ = putStrLn ("ERROR: " ++ planErrorText e)
@@ -452,7 +452,7 @@ helperFailureCustoms ge names (custom :: rest) =
 -- This deliberately records names only: validating helpers must observe the
 -- caller's original cells without forcing or rebuilding its root environment.
 envBindingNames : EvalEnv (Value e) -> OrdMap Unit
-envBindingNames (EvalEnv frames) = bindingNamesFrames frames omEmpty
+envBindingNames env = bindingNamesFrames (envFrameCells env) omEmpty
 
 bindingNamesFrames : List (List (String, Ref (Value e))) ->
   OrdMap Unit ->
@@ -1159,7 +1159,7 @@ runAllPropsResults : Int ->
   <e> List PropResult
 runAllPropsResults cases filterOpt propLines evalEnv program allDecls =
   let props = filterPropsByName filterOpt (filterProps program)
-  let rootEnv = extendEnv (EvalEnv [[]]) evalEnv
+  let rootEnv = extendEnv (EvalEnv [ScanFrame []]) evalEnv
   if isEmptyL props then
     []
   else
@@ -1340,7 +1340,7 @@ runPropRequests : List PropRequest ->
   List Decl ->
   <e> List PropResult
 runPropRequests requests propLines genEnv evalEnv props =
-  let rootEnv = extendEnv (EvalEnv [[]]) evalEnv
+  let rootEnv = extendEnv (EvalEnv [ScanFrame []]) evalEnv
   runPropRequestsChecked
     requests
     requests

@@ -5009,6 +5009,385 @@ else
 fi
 
 fi   # end PERF_ONLY unit: matchlits
+
+if want findall; then   # PERF_ONLY unit: findall
+# ── findall — `regex.findAll` under `medaka run`, the tree-walker over a stdlib loop (#4627) ──
+#
+# Every other unit profiles a COMPILER stage. This one grades the INTERPRETER on a real
+# stdlib workload: `R.findAll` over N and 2N lines of text, run by `$MEDAKA run`, the
+# binary under test. The fixture times and measures its own `findAll` call (allocBytes
+# and the monotonic clock taken around it), so load, check and interpreter setup are
+# outside both figures and nothing needs netting out.
+#
+# What it grades: findAll's GROWTH on `run`. The Pike VM is linear in the subject, so a
+# correct interpreter reads ~2.0x per doubling. The per-PR arm is ALLOCATION (the
+# interpreter's allocation is a function of the program, so one run per size); the TIME
+# arm (min-of-K, heap pinned, under TIME_FLOOR it SKIPs) runs where TIME_ARM=1.
+#
+# What it cannot grade: a CONSTANT factor. A by-name scan of the global and runtime
+# frames on every reference (#4627; eval.mdk's `EnvFrame` index is the fix) costs the
+# same multiple at every size, so it reads linear here; a ratio row cannot see it come
+# back. The output count is asserted, so a wrong answer or a dead run is a failure,
+# never a pass.
+FINDALL_N="${PERF_FINDALL_N:-250}"
+fan1="$FINDALL_N"; fan2=$((FINDALL_N * 2))
+gen_findall() {
+  {
+    printf 'import regex as R\nimport time as T\nimport string.{repeat}\n\n'
+    printf 'main =\n'
+    printf '  let s = repeat %s "let foo = bar E1234 baz\\n"\n' "$1"
+    printf '  let re = R.mustCompile "E[0-9]+"\n'
+    printf '  let a0 = allocBytes ()\n'
+    printf '  let t0 = T.monotonic ()\n'
+    printf '  let n = length (R.findAll re s)\n'
+    printf '  let secs = T.elapsedSince t0\n'
+    printf '  let mb = (allocBytes () - a0) / 1048576.0\n'
+    printf '  println "findall \\{display n} \\{display mb} \\{display secs}"\n'
+  } > "$2"
+}
+faf1="$WORK/findall_$fan1.mdk"; faf2="$WORK/findall_$fan2.mdk"
+gen_findall "$fan1" "$faf1"; gen_findall "$fan2" "$faf2"
+FAMEDAKA="${MEDAKA:-$ROOT/medaka}"
+if [ "$TIME_ARM" = "1" ]; then fak="$PERF_K"; else fak=1; fi
+# findall_runs <fixture> <out>: <out> gets one `findall <count> <MB> <secs>` line per run.
+findall_runs() {
+  : > "$2"
+  _i=0
+  while [ "$_i" -lt "$fak" ]; do
+    GC_INITIAL_HEAP_SIZE="$TIME_HEAP" "$FAMEDAKA" run "$1" 2>/dev/null | grep '^findall ' >> "$2"
+    _i=$((_i+1))
+  done
+}
+FAR1="$WORK/findall_r1"; FAR2="$WORK/findall_r2"
+findall_runs "$faf1" "$FAR1"; findall_runs "$faf2" "$FAR2"
+fac1="$(awk 'NR==1{print $2}' "$FAR1")"; fac2="$(awk 'NR==1{print $2}' "$FAR2")"
+faa1="$(awk 'NR==1{printf "%.1f", $3}' "$FAR1")"; faa2="$(awk 'NR==1{printf "%.1f", $3}' "$FAR2")"
+fat1="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$FAR1")"
+fat2="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$FAR2")"
+fa_bad=0
+for _v in "$faa1" "$faa2" "$fat1" "$fat2"; do
+  case "$_v" in ''|*[!0-9.]*) fa_bad=1 ;; esac
+done
+if [ ! -x "$FAMEDAKA" ]; then
+  fail=$((fail+1))
+  printf '%-12s %8s  ** NO BINARY: %s is not built (make medaka) **\n' findall "$fan1" "$FAMEDAKA"
+elif [ "$fa_bad" = "1" ] || [ "$fac1" != "$fan1" ] || [ "$fac2" != "$fan2" ]; then
+  # A missing line or a wrong count is a failure, never a silent pass.
+  fail=$((fail+1))
+  printf '%-12s %8s  ** BAD RUN: want counts %s/%s, got [%s]/[%s] (alloc [%s]/[%s] MB, secs [%s]/[%s]) **\n' \
+    findall "$fan1" "$fan1" "$fan2" "$fac1" "$fac2" "$faa1" "$faa2" "$fat1" "$fat2"
+else
+  far="$(awk -v a="$faa1" -v b="$faa2" 'BEGIN{printf "%.2f", b/a}')"
+  fa_small="$(awk -v a="$faa1" 'BEGIN{print (a+0 < 1.0) ? 1 : 0}')"
+  fa_over="$(awk -v r="$far" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')"
+  if [ "$fa_small" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** N TOO SMALL — raise PERF_FINDALL_N (findAll alloc %s MB < 1.0) **\n' findall "$fan1" "$faa1"
+  elif [ "$fa_over" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** SUPERLINEAR (run-alloc) ** findAll %s -> %s MB  r=%s (> %s, band N=%s->%s) — findAll allocation outgrew its subject (compiler/eval/eval.mdk or stdlib/regex.mdk) **\n' \
+      findall "$fan1" "$faa1" "$faa2" "$far" "$THRESH" "$fan1" "$fan2"
+  else
+    pass=$((pass+1))
+    printf '%-12s %8s  run-alloc findAll %s -> %s MB  r=%s  (LINEAR; band N=%s->%s)\n' \
+      findall "$fan1" "$faa1" "$faa2" "$far" "$fan1" "$fan2"
+  fi
+  if [ "$TIME_ARM" = "1" ]; then
+    fat_below="$(awk -v v="$fat2" -v f="$TIME_FLOOR" 'BEGIN{print (v+0 < f+0) ? 1 : 0}')"
+    if [ "$fat_below" = "1" ]; then
+      printf '             time run: SKIP — too small to time-gate: %ss at N=%s < %ss floor\n' "$fat2" "$fan2" "$TIME_FLOOR"
+    else
+      fatr="$(awk -v a="$fat1" -v b="$fat2" 'BEGIN{printf "%.2f", b/a}')"
+      if [ "$(awk -v r="$fatr" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')" = "1" ]; then
+        fail=$((fail+1))
+        printf '%-12s %8s  ** SUPERLINEAR (run-TIME) ** findAll %ss -> %ss  r=%s (> %s, min-of-%s, band N=%s->%s)\n' \
+          findall "$fan1" "$fat1" "$fat2" "$fatr" "$THRESH" "$fak" "$fan1" "$fan2"
+      else
+        printf '             time run: findAll %ss -> %ss  r=%s  (min-of-%s, heap pinned)\n' "$fat1" "$fat2" "$fatr" "$fak"
+      fi
+    fi
+  fi
+fi
+
+fi   # end PERF_ONLY unit: findall
+
+if want walkdir; then   # PERF_ONLY unit: walkdir
+# ── walkdir — `fs.walkDir` under `medaka run`, over one flat directory of N files (#4629) ──
+#
+# What it grades: walkDir's GROWTH on `run`. A linear walk reads ~2.0x per doubling.
+# The per-PR arm is ALLOCATION (one run per size); the TIME arm (min-of-K, heap pinned,
+# under TIME_FLOOR it SKIPs) runs where TIME_ARM=1. The count is asserted, so a wrong
+# answer or a dead run is a failure, never a pass.
+# N=1000 reads 2.70x on the old code, under the 3.0x threshold: at that size the linear
+# per-entry cost still dominates the quadratic copy. N=4000 reads 3.37x on the old code.
+WALKDIR_N="${PERF_WALKDIR_N:-4000}"
+wd1="$WALKDIR_N"; wd2=$((WALKDIR_N * 2))
+# walkdir_tree <dir> <n>: <n> empty files directly under <dir>.
+walkdir_tree() {
+  rm -rf "$1"; mkdir -p "$1"
+  _i=0
+  while [ "$_i" -lt "$2" ]; do : > "$1/f$_i"; _i=$((_i+1)); done
+}
+gen_walkdir() {
+  {
+    printf 'import fs.{walkDir}\nimport time as T\n\n'
+    printf 'countWalk : String -> <FileRead> Int\n'
+    printf 'countWalk dir = match walkDir dir\n  Ok xs => length xs\n  Err _ => 0 - 1\n\n'
+    printf 'main =\n'
+    printf '  let a0 = allocBytes ()\n'
+    printf '  let t0 = T.monotonic ()\n'
+    printf '  let n = countWalk "%s"\n' "$1"
+    printf '  let secs = T.elapsedSince t0\n'
+    printf '  let mb = (allocBytes () - a0) / 1048576.0\n'
+    printf '  println "walkdir \\{display n} \\{display mb} \\{display secs}"\n'
+  } > "$2"
+}
+wdt1="$WORK/walkdir_tree_$wd1"; wdt2="$WORK/walkdir_tree_$wd2"
+walkdir_tree "$wdt1" "$wd1"; walkdir_tree "$wdt2" "$wd2"
+wdf1="$WORK/walkdir_$wd1.mdk"; wdf2="$WORK/walkdir_$wd2.mdk"
+gen_walkdir "$wdt1" "$wdf1"; gen_walkdir "$wdt2" "$wdf2"
+WDMEDAKA="${MEDAKA:-$ROOT/medaka}"
+if [ "$TIME_ARM" = "1" ]; then wdk="$PERF_K"; else wdk=1; fi
+# walkdir_runs <fixture> <out>: <out> gets one `walkdir <count> <MB> <secs>` line per run.
+walkdir_runs() {
+  : > "$2"
+  _i=0
+  while [ "$_i" -lt "$wdk" ]; do
+    GC_INITIAL_HEAP_SIZE="$TIME_HEAP" "$WDMEDAKA" run "$1" 2>/dev/null | grep '^walkdir ' >> "$2"
+    _i=$((_i+1))
+  done
+}
+WDR1="$WORK/walkdir_r1"; WDR2="$WORK/walkdir_r2"
+walkdir_runs "$wdf1" "$WDR1"; walkdir_runs "$wdf2" "$WDR2"
+wdc1="$(awk 'NR==1{print $2}' "$WDR1")"; wdc2="$(awk 'NR==1{print $2}' "$WDR2")"
+wda1="$(awk 'NR==1{printf "%.1f", $3}' "$WDR1")"; wda2="$(awk 'NR==1{printf "%.1f", $3}' "$WDR2")"
+wdt_1="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$WDR1")"
+wdt_2="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$WDR2")"
+wd_bad=0
+for _v in "$wda1" "$wda2" "$wdt_1" "$wdt_2"; do
+  case "$_v" in ''|*[!0-9.]*) wd_bad=1 ;; esac
+done
+if [ ! -x "$WDMEDAKA" ]; then
+  fail=$((fail+1))
+  printf '%-12s %8s  ** NO BINARY: %s is not built (make medaka) **\n' walkdir "$wd1" "$WDMEDAKA"
+elif [ "$wd_bad" = "1" ] || [ "$wdc1" != "$wd1" ] || [ "$wdc2" != "$wd2" ]; then
+  # A missing line or a wrong count is a failure, never a silent pass.
+  fail=$((fail+1))
+  printf '%-12s %8s  ** BAD RUN: want counts %s/%s, got [%s]/[%s] (alloc [%s]/[%s] MB, secs [%s]/[%s]) **\n' \
+    walkdir "$wd1" "$wd1" "$wd2" "$wdc1" "$wdc2" "$wda1" "$wda2" "$wdt_1" "$wdt_2"
+else
+  wdr="$(awk -v a="$wda1" -v b="$wda2" 'BEGIN{printf "%.2f", b/a}')"
+  wd_small="$(awk -v a="$wda1" 'BEGIN{print (a+0 < 1.0) ? 1 : 0}')"
+  wd_over="$(awk -v r="$wdr" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')"
+  if [ "$wd_small" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** N TOO SMALL — raise PERF_WALKDIR_N (walkDir alloc %s MB < 1.0) **\n' walkdir "$wd1" "$wda1"
+  elif [ "$wd_over" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** SUPERLINEAR (run-alloc) ** walkDir %s -> %s MB  r=%s (> %s, band N=%s->%s) — walkDir allocation outgrew its entry count (stdlib/fs.mdk walkEntries) **\n' \
+      walkdir "$wd1" "$wda1" "$wda2" "$wdr" "$THRESH" "$wd1" "$wd2"
+  else
+    pass=$((pass+1))
+    printf '%-12s %8s  run-alloc walkDir %s -> %s MB  r=%s  (LINEAR; band N=%s->%s)\n' \
+      walkdir "$wd1" "$wda1" "$wda2" "$wdr" "$wd1" "$wd2"
+  fi
+  # The TIME arm is opt-in (PERF_WALKDIR_TIME=1): list accumulation is superlinear in
+  # TIME under `run` on the old code too (evaluator cost), so the alloc arm is the verdict.
+  if [ "$TIME_ARM" = "1" ] && [ "${PERF_WALKDIR_TIME:-0}" = "1" ]; then
+    wdt_below="$(awk -v v="$wdt_2" -v f="$TIME_FLOOR" 'BEGIN{print (v+0 < f+0) ? 1 : 0}')"
+    if [ "$wdt_below" = "1" ]; then
+      printf '             time run: SKIP — too small to time-gate: %ss at N=%s < %ss floor\n' "$wdt_2" "$wd2" "$TIME_FLOOR"
+    else
+      wdtr="$(awk -v a="$wdt_1" -v b="$wdt_2" 'BEGIN{printf "%.2f", b/a}')"
+      if [ "$(awk -v r="$wdtr" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')" = "1" ]; then
+        fail=$((fail+1))
+        printf '%-12s %8s  ** SUPERLINEAR (run-TIME) ** walkDir %ss -> %ss  r=%s (> %s, min-of-%s, band N=%s->%s)\n' \
+          walkdir "$wd1" "$wdt_1" "$wdt_2" "$wdtr" "$THRESH" "$wdk" "$wd1" "$wd2"
+      else
+        printf '             time run: walkDir %ss -> %ss  r=%s  (min-of-%s, heap pinned)\n' "$wdt_1" "$wdt_2" "$wdtr" "$wdk"
+      fi
+    fi
+  fi
+fi
+fi   # end PERF_ONLY unit: walkdir
+if want tomlent; then   # PERF_ONLY unit: tomlent
+# ── tomlent — `toml.tableEntries` under `medaka run`, over a document of N `[[gate]]` entries (#4628) ──
+#
+# What it grades: tableEntries' GROWTH on `run`. It reads the document's pairs once, so
+# a correct implementation is ~2.0x per doubling; an index loop over `tableEntry` scans
+# every pair per entry and reads ~4x. The fixture parses the document first and times
+# only the `tableEntries` call (allocBytes and the monotonic clock taken around it), so
+# `parse` is outside both figures. The per-PR arm is ALLOCATION (one run per size); the
+# TIME arm (min-of-K, heap pinned, under TIME_FLOOR it SKIPs) runs where TIME_ARM=1. The
+# entry count is asserted, so a wrong answer or a dead run is a failure, never a pass.
+TOMLENT_N="${PERF_TOMLENT_N:-500}"
+ten1="$TOMLENT_N"; ten2=$((TOMLENT_N * 2))
+gen_tomlent() {
+  {
+    printf 'import toml as TM\nimport time as T\nimport string.{join}\n\n'
+    printf 'entryText : Int -> String\n'
+    printf 'entryText i = "[[gate]]\\nname = \\"g\\{display i}\\"\\nshard = \\{display i}\\nowner = \\"o\\"\\nkind = \\"k\\"\\nlive = true"\n\n'
+    printf 'main =\n'
+    printf '  match TM.parse (join "\\n" (map entryText [0..%s]))\n' "$1"
+    printf '    Err e => println e\n'
+    printf '    Ok doc =>\n'
+    printf '      let a0 = allocBytes ()\n'
+    printf '      let t0 = T.monotonic ()\n'
+    printf '      let es = TM.tableEntries "gate" doc\n'
+    printf '      let n = length es\n'
+    printf '      let secs = T.elapsedSince t0\n'
+    printf '      let mb = (allocBytes () - a0) / 1048576.0\n'
+    printf '      println "tomlent \\{display n} \\{display mb} \\{display secs}"\n'
+  } > "$2"
+}
+tef1="$WORK/tomlent_$ten1.mdk"; tef2="$WORK/tomlent_$ten2.mdk"
+gen_tomlent "$ten1" "$tef1"; gen_tomlent "$ten2" "$tef2"
+TEMEDAKA="${MEDAKA:-$ROOT/medaka}"
+if [ "$TIME_ARM" = "1" ]; then tek="$PERF_K"; else tek=1; fi
+# tomlent_runs <fixture> <out>: <out> gets one `tomlent <count> <MB> <secs>` line per run.
+tomlent_runs() {
+  : > "$2"
+  _i=0
+  while [ "$_i" -lt "$tek" ]; do
+    GC_INITIAL_HEAP_SIZE="$TIME_HEAP" "$TEMEDAKA" run "$1" 2>/dev/null | grep '^tomlent ' >> "$2"
+    _i=$((_i+1))
+  done
+}
+TER1="$WORK/tomlent_r1"; TER2="$WORK/tomlent_r2"
+tomlent_runs "$tef1" "$TER1"; tomlent_runs "$tef2" "$TER2"
+tec1="$(awk 'NR==1{print $2}' "$TER1")"; tec2="$(awk 'NR==1{print $2}' "$TER2")"
+tea1="$(awk 'NR==1{printf "%.1f", $3}' "$TER1")"; tea2="$(awk 'NR==1{printf "%.1f", $3}' "$TER2")"
+tet1="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$TER1")"
+tet2="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$TER2")"
+te_bad=0
+for _v in "$tea1" "$tea2" "$tet1" "$tet2"; do
+  case "$_v" in ''|*[!0-9.]*) te_bad=1 ;; esac
+done
+if [ ! -x "$TEMEDAKA" ]; then
+  fail=$((fail+1))
+  printf '%-12s %8s  ** NO BINARY: %s is not built (make medaka) **\n' tomlent "$ten1" "$TEMEDAKA"
+elif [ "$te_bad" = "1" ] || [ "$tec1" != "$ten1" ] || [ "$tec2" != "$ten2" ]; then
+  # A missing line or a wrong count is a failure, never a silent pass.
+  fail=$((fail+1))
+  printf '%-12s %8s  ** BAD RUN: want counts %s/%s, got [%s]/[%s] (alloc [%s]/[%s] MB, secs [%s]/[%s]) **\n' \
+    tomlent "$ten1" "$ten1" "$ten2" "$tec1" "$tec2" "$tea1" "$tea2" "$tet1" "$tet2"
+else
+  ter="$(awk -v a="$tea1" -v b="$tea2" 'BEGIN{printf "%.2f", b/a}')"
+  te_small="$(awk -v a="$tea1" 'BEGIN{print (a+0 < 1.0) ? 1 : 0}')"
+  te_over="$(awk -v r="$ter" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')"
+  if [ "$te_small" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** N TOO SMALL — raise PERF_FINDALL_N (tableEntries alloc %s MB < 1.0) **\n' tomlent "$ten1" "$tea1"
+  elif [ "$te_over" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** SUPERLINEAR (run-alloc) ** tableEntries %s -> %s MB  r=%s (> %s, band N=%s->%s) — tableEntries allocation outgrew its document (stdlib/toml.mdk) **\n' \
+      tomlent "$ten1" "$tea1" "$tea2" "$ter" "$THRESH" "$ten1" "$ten2"
+  else
+    pass=$((pass+1))
+    printf '%-12s %8s  run-alloc tableEntries %s -> %s MB  r=%s  (LINEAR; band N=%s->%s)\n' \
+      tomlent "$ten1" "$tea1" "$tea2" "$ter" "$ten1" "$ten2"
+  fi
+  if [ "$TIME_ARM" = "1" ]; then
+    tet_below="$(awk -v v="$tet2" -v f="$TIME_FLOOR" 'BEGIN{print (v+0 < f+0) ? 1 : 0}')"
+    if [ "$tet_below" = "1" ]; then
+      printf '             time run: SKIP — too small to time-gate: %ss at N=%s < %ss floor\n' "$tet2" "$ten2" "$TIME_FLOOR"
+    else
+      tetr="$(awk -v a="$tet1" -v b="$tet2" 'BEGIN{printf "%.2f", b/a}')"
+      if [ "$(awk -v r="$tetr" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')" = "1" ]; then
+        fail=$((fail+1))
+        printf '%-12s %8s  ** SUPERLINEAR (run-TIME) ** tableEntries %ss -> %ss  r=%s (> %s, min-of-%s, band N=%s->%s)\n' \
+          tomlent "$ten1" "$tet1" "$tet2" "$tetr" "$THRESH" "$tek" "$ten1" "$ten2"
+      else
+        printf '             time run: tableEntries %ss -> %ss  r=%s  (min-of-%s, heap pinned)\n' "$tet1" "$tet2" "$tetr" "$tek"
+      fi
+    fi
+  fi
+fi
+
+fi   # end PERF_ONLY unit: tomlent
+if want stdout; then   # PERF_ONLY unit: stdout
+# ── stdout — N `putStrLn` calls under `medaka run`, which buffers the output (#4491) ──
+#
+# What it grades: the GROWTH of run's captured-stdout buffer. A linear buffer reads ~2.0x per
+# doubling; re-copying the whole buffer per print reads ~4x. The per-PR arm is ALLOCATION (one
+# run per size); the TIME arm (min-of-K, heap pinned, under TIME_FLOOR it SKIPs) runs where
+# TIME_ARM=1. The printed line count is asserted by the program's own counter.
+STDOUT_N="${PERF_STDOUT_N:-4000}"
+so1="$STDOUT_N"; so2=$((STDOUT_N * 2))
+gen_stdout() {
+  {
+    printf 'import time as T\n\nmain =\n'
+    printf '  let a0 = allocBytes ()\n'
+    printf '  let t0 = T.monotonic ()\n'
+    printf '  each (_ => putStrLn "0123456789012345678901234567890123456789") [1..=%s]\n' "$1"
+    printf '  let secs = T.elapsedSince t0\n'
+    printf '  let mb = (allocBytes () - a0) / 1048576.0\n'
+    printf '  println "stdout %s \\{display mb} \\{display secs}"\n' "$1"
+  } > "$2"
+}
+sof1="$WORK/stdout_$so1.mdk"; sof2="$WORK/stdout_$so2.mdk"
+gen_stdout "$so1" "$sof1"; gen_stdout "$so2" "$sof2"
+SOMEDAKA="${MEDAKA:-$ROOT/medaka}"
+if [ "$TIME_ARM" = "1" ]; then sok="$PERF_K"; else sok=1; fi
+# stdout_runs <fixture> <out>: <out> gets one `stdout <count> <MB> <secs>` line per run.
+stdout_runs() {
+  : > "$2"
+  _i=0
+  while [ "$_i" -lt "$sok" ]; do
+    GC_INITIAL_HEAP_SIZE="$TIME_HEAP" "$SOMEDAKA" run "$1" 2>/dev/null | grep '^stdout ' >> "$2"
+    _i=$((_i+1))
+  done
+}
+SOR1="$WORK/stdout_r1"; SOR2="$WORK/stdout_r2"
+stdout_runs "$sof1" "$SOR1"; stdout_runs "$sof2" "$SOR2"
+soc1="$(awk 'NR==1{print $2}' "$SOR1")"; soc2="$(awk 'NR==1{print $2}' "$SOR2")"
+soa1="$(awk 'NR==1{printf "%.1f", $3}' "$SOR1")"; soa2="$(awk 'NR==1{printf "%.1f", $3}' "$SOR2")"
+sot_1="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$SOR1")"
+sot_2="$(awk 'NR==1||$4<m{m=$4} END{if (NR) printf "%.3f", m}' "$SOR2")"
+so_bad=0
+for _v in "$soa1" "$soa2" "$sot_1" "$sot_2"; do
+  case "$_v" in ''|*[!0-9.]*) so_bad=1 ;; esac
+done
+if [ ! -x "$SOMEDAKA" ]; then
+  fail=$((fail+1))
+  printf '%-12s %8s  ** NO BINARY: %s is not built (make medaka) **\n' stdout "$so1" "$SOMEDAKA"
+elif [ "$so_bad" = "1" ] || [ "$soc1" != "$so1" ] || [ "$soc2" != "$so2" ]; then
+  fail=$((fail+1))
+  printf '%-12s %8s  ** BAD RUN: want counts %s/%s, got [%s]/[%s] (alloc [%s]/[%s] MB, secs [%s]/[%s]) **\n' \
+    stdout "$so1" "$so1" "$so2" "$soc1" "$soc2" "$soa1" "$soa2" "$sot_1" "$sot_2"
+else
+  sor="$(awk -v a="$soa1" -v b="$soa2" 'BEGIN{printf "%.2f", b/a}')"
+  so_small="$(awk -v a="$soa1" 'BEGIN{print (a+0 < 1.0) ? 1 : 0}')"
+  so_over="$(awk -v r="$sor" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')"
+  if [ "$so_small" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** N TOO SMALL — raise PERF_STDOUT_N (stdout alloc %s MB < 1.0) **\n' stdout "$so1" "$soa1"
+  elif [ "$so_over" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** SUPERLINEAR (run-alloc) ** stdout %s -> %s MB  r=%s (> %s, band N=%s->%s) — the run stdout buffer outgrew its print count (compiler/eval/eval.mdk appendOutput) **\n' \
+      stdout "$so1" "$soa1" "$soa2" "$sor" "$THRESH" "$so1" "$so2"
+  else
+    pass=$((pass+1))
+    printf '%-12s %8s  run-alloc stdout %s -> %s MB  r=%s  (LINEAR; band N=%s->%s)\n' \
+      stdout "$so1" "$soa1" "$soa2" "$sor" "$so1" "$so2"
+  fi
+  if [ "$TIME_ARM" = "1" ]; then
+    sot_below="$(awk -v v="$sot_2" -v f="$TIME_FLOOR" 'BEGIN{print (v+0 < f+0) ? 1 : 0}')"
+    if [ "$sot_below" = "1" ]; then
+      printf '             time run: SKIP — too small to time-gate: %ss at N=%s < %ss floor\n' "$sot_2" "$so2" "$TIME_FLOOR"
+    else
+      sotr="$(awk -v a="$sot_1" -v b="$sot_2" 'BEGIN{printf "%.2f", b/a}')"
+      if [ "$(awk -v r="$sotr" -v th="$THRESH" 'BEGIN{print (r+0 > th+0) ? 1 : 0}')" = "1" ]; then
+        fail=$((fail+1))
+        printf '%-12s %8s  ** SUPERLINEAR (run-TIME) ** stdout %ss -> %ss  r=%s (> %s, min-of-%s, band N=%s->%s)\n' \
+          stdout "$so1" "$sot_1" "$sot_2" "$sotr" "$THRESH" "$sok" "$so1" "$so2"
+      else
+        printf '             time run: stdout %ss -> %ss  r=%s  (min-of-%s, heap pinned)\n' "$sot_1" "$sot_2" "$sotr" "$sok"
+      fi
+    fi
+  fi
+fi
+fi   # end PERF_ONLY unit: stdout
 printf -- '---------------------------------------------------------------------\n'
 printf '%d ok, %d known-superlinear (ledgered), %d regressed (threshold %sx per doubling)\n' "$pass" "$known" "$fail" "$THRESH"
 

@@ -172,6 +172,25 @@ Some "b"
 None
 ```
 
+### `tableEntries`
+
+```
+tableEntries : String -> Toml -> List Toml
+tableEntries name _
+```
+
+Every `[[name]]` entry in the document, in document order.
+
+Entry `i` is what `tableEntry name i` returns, but the document is read
+once for all of them. The list is empty when there are no entries.
+
+```medaka
+> map (getString "name") (tableEntries "gate" (Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")]))
+[Some "a", Some "b"]
+> tableEntries "gate" (Toml [("package.name", TString "x")])
+[]
+```
+
 ## Instances
 
 ### `Display TomlValue`
