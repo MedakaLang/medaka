@@ -287,6 +287,53 @@ Some 3.5
 None
 ```
 
+### `toFixed`
+
+```
+toFixed : Int -> Float -> String
+toFixed digits x
+```
+
+`x` written with `digits` places after the decimal point, the digit count
+first.
+
+The text is rounded from the exact binary value of `x`, not from its
+shortest decimal form, and an exact tie goes to the even digit, as in C
+and Python. A negative `digits` counts as `0` and one above `100` as `100`.
+`NaN` and the infinities print as `floatToString` prints them, and a
+negative value that rounds to zero keeps its `-`.
+
+```medaka
+> toFixed 2 12.3456
+"12.35"
+> toFixed 2 2.675
+"2.67"
+> toFixed 0 2.5
+"2"
+> toFixed (-3) 7.5
+"8"
+```
+
+### `groupThousands`
+
+```
+groupThousands : Int -> String
+groupThousands n
+```
+
+`n` written in decimal, with a comma before each group of three digits.
+
+The groups count from the last digit, and a leading minus sign stays in
+front. An `n` of magnitude below `1000` is written unchanged. The grouping
+works on the written digits, so the most negative `Int` groups correctly.
+
+```medaka
+> groupThousands 1234567
+"1,234,567"
+> groupThousands (-1234)
+"-1,234"
+```
+
 ## Searching
 
 ### `startsWith`
@@ -607,6 +654,57 @@ Unchanged when `old` is absent or empty.
 ```medaka
 > replace "l" "L" "hello"
 "heLlo"
+```
+
+### `replaceOnce`
+
+```
+replaceOnce : String -> String -> String -> Result String String
+replaceOnce old new s
+```
+
+The string with `old` replaced by `new`, provided `old` occurs exactly
+once.
+
+`Err` when `old` occurs no times, more than once, or is empty. The
+message names the first line of `old` (cut at 60 characters) and the
+number of occurrences found. Occurrences are counted as
+`countOccurrences` counts them.
+
+```medaka
+> replaceOnce "l" "L" "help"
+Ok "heLp"
+> replaceOnce "z" "Z" "hello"
+Err "expected 1 occurrence of `z…`, found 0"
+> replaceOnce "l" "L" "hello"
+Err "expected 1 occurrence of `l…`, found 2"
+> replaceOnce "" "x" "hello"
+Err "expected 1 occurrence of `…`, found 0"
+```
+
+### `cutBetween`
+
+```
+cutBetween : String -> String -> String -> Result String (String, String, String)
+cutBetween start end s
+```
+
+Splits `s` at the first `start` and the first `end` after it, giving
+the text before `start`, the text between the two, and the text after
+`end`. Neither anchor appears in the result.
+
+`Err` names the anchor that is missing: `start` anywhere in `s`, or
+`end` after `start`.
+
+```medaka
+> cutBetween "[" "]" "a[b]c"
+Ok ("a", "b", "c")
+> cutBetween "[" "]" "a[]c"
+Ok ("a", "", "c")
+> cutBetween "[" "]" "abc"
+Err "start anchor `[` not found"
+> cutBetween "[" "]" "a]b[c"
+Err "end anchor `]` not found after start"
 ```
 
 ### `replaceAll`

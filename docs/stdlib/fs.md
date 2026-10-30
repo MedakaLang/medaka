@@ -7,7 +7,8 @@ The primitives are in scope without an import: `readFile`, `writeFile`,
 `makeDir`, `removeFile`, `rename`, `removeDir`, `statFile`, and
 `canonicalizePath`. This module adds a `FileStat` record over
 `statFile`'s tuple and the composed operations `copyFile`,
-`replaceDurably`, `mkdirAll`, `mkdirAllDurably`, `walkDir`, `isDir`,
+`replaceDurably`, `mkdirAll`, `mkdirAllDurably`, `walkDir`, `walkFiles`, `walkFilesSkipping`,
+`glob`, `isDir`,
 `isFile`, and `fileSize`.
 
 Every operation returns `Result String a`, with the host's error message
@@ -82,6 +83,20 @@ copyFile src dst
 Copies the bytes of `src` to `dst`, replacing any existing `dst`.
 
 A read failure is reported before anything is written.
+
+### `editFile`
+
+```
+editFile : (path : String) -> (String -> Result String String) -> <FileRead path, FileWrite path> Result String Unit
+editFile path f
+```
+
+Rewrites the file at `path` with the result of `f` applied to its text.
+
+`Err` from `f` writes nothing and is returned as `Err "<path>: <e>"`, as
+is a failure to read or to write. The file is written only when the new text differs
+from what was read, so an unchanged edit leaves the modification time
+alone. The write is a plain `writeFile`, not a durable replace.
 
 ### `replaceDurably`
 
@@ -161,6 +176,71 @@ first.
 
 Each result is the full path, joined onto `root`. `Err` on the first
 directory that cannot be read or entry that cannot be examined.
+
+### `walkFiles`
+
+```
+walkFiles : String -> <FileRead> Result String (List String)
+walkFiles root
+```
+
+Every regular file under `root`, in plain string order.
+
+Each result is the full path, joined onto `root`; directories are not
+listed, and `Ok []` means there are no files. `Err` on the first
+directory that cannot be read or entry that cannot be examined. The order
+does not depend on the host's `listDir` order, so the result is stable.
+Symbolic links are followed through `stat`, as `walkDir` does, so a link
+to a directory is walked and a link loop reports an `Err`. An `Err` names
+the path that failed, as `"<path>: <e>"`.
+
+```medaka
+> walkFiles "stdlib/no-such-walk-doctest-dir"
+Err "stdlib/no-such-walk-doctest-dir: No such file or directory"
+```
+
+### `walkFilesSkipping`
+
+```
+walkFilesSkipping : (String -> Bool) -> String -> <FileRead> Result String (List String)
+walkFilesSkipping skip root
+```
+
+`walkFiles`, but a directory whose path satisfies `skip` is not entered.
+
+The path the predicate sees is the one `walkFiles` would report for that
+directory, joined onto `root`. `root` itself is never tested, so a
+predicate that holds for it still walks it.
+
+```medaka
+> walkFilesSkipping (_ => True) "stdlib/no-such-walk-doctest-dir"
+Err "stdlib/no-such-walk-doctest-dir: No such file or directory"
+```
+
+### `glob`
+
+```
+glob : String -> <FileRead> Result String (List String)
+glob pattern
+```
+
+The files whose paths match the glob `pattern`, in plain string order.
+
+The pattern is read as by `path.matchGlob`. The walk starts at the
+longest directory prefix of the pattern that has no `*` or `?`, and a
+result reads as the pattern does: `*.mdk` finds `a.mdk`, not `./a.mdk`.
+A pattern with no wildcard names one path, which is returned when it is a
+file and is otherwise `Ok []`. A prefix directory that is missing or
+cannot be read is an `Err` naming it, unlike Python's `glob`, which returns
+`[]`. Unless the pattern has a `**` segment the walk goes no deeper than
+the pattern's segments, so entries below that depth are never examined.
+
+```medaka
+> glob "stdlib/no-such-glob-doctest-dir/*.mdk"
+Err "stdlib/no-such-glob-doctest-dir: No such file or directory"
+> glob "no-such-glob-doctest-file"
+Ok []
+```
 
 ### `fixtureFiles`
 

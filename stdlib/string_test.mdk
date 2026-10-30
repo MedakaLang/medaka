@@ -4,11 +4,12 @@
 -- byte offset would show.
 
 import string.{
-  StrCursor, byteLength, center, countOccurrences, drop, endsWith, fromChars,
-  indexOf, join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll,
-  reverse, nextChar, sliceBetween, startCursor, splitAt, startsWith,
-  stripPrefix, stripSuffix, take, toInt, toLower, toUpper, trim, trimLeft,
-  trimRight, unlines, unwords, utf8ByteLength
+  StrCursor, byteLength, center, countOccurrences, cutBetween, drop, endsWith,
+  fromChars, groupThousands, repeat, replaceOnce, indexOf, join, lastIndexOf,
+  lines, padLeft, padRight, replace, replaceAll, reverse, nextChar,
+  sliceBetween, startCursor, splitAt, startsWith, stripPrefix, stripSuffix,
+  take, toInt, toLower, toUpper, toFixed, trim, trimLeft, trimRight, unlines,
+  unwords, utf8ByteLength
 }
 import test.{expectEqual, expectFalse, expectTrue}
 
@@ -943,3 +944,61 @@ test "sliceBetween keeps the codepoint count of the slice" =
 test "a cursor from another string that bounds a valid range slices" =
   let other = advance 1 (startCursor "xy")
   expectEqual "h" (sliceBetween (startCursor "héllo") other)
+
+-- # replaceOnce and cutBetween
+
+test "replaceOnce names only the first line of a long multi-line old text" =
+  expectEqual
+    (Err "expected 1 occurrence of `\{take 60 (repeat 70 "a")}…`, found 0")
+    (replaceOnce "\{repeat 70 "a"}\nsecond" "x" "nothing")
+
+test "replaceOnce counts non-overlapping occurrences" =
+  expectEqual (Ok "baa") (replaceOnce "aaa" "b" "aaaaa")
+
+test "cutBetween counts codepoints, not bytes" =
+  expectEqual (Ok ("é", "ü", "ö")) (cutBetween "<" ">" "é<ü>ö")
+
+-- # toFixed
+
+test "toFixed rounds the exact binary value, so 2.675 gives 2.67" =
+  expectEqual "2.67" (toFixed 2 2.675)
+
+test "toFixed sends exact ties to the even digit" =
+  expectEqual
+    ["0.12", "0.38", "0.62"]
+    [toFixed 2 0.125, toFixed 2 0.375, toFixed 2 0.625]
+
+test "toFixed keeps the sign of negative zero and of a value that rounds to zero" =
+  expectEqual ["-0.00", "-0"] [toFixed 2 (-0.0), toFixed 0 (-0.4)]
+
+test "toFixed treats a negative digit count as 0" =
+  expectEqual "2" (toFixed (-1) 1.5)
+
+test "toFixed clamps the digit count to 100" =
+  expectEqual ("1.5" ++ repeat 99 "0") (toFixed 120 1.5)
+
+test "toFixed prints NaN and the infinities as floatToString does" =
+  expectEqual
+    ["nan", "inf", "-inf"]
+    [toFixed 2 (0.0 / 0.0), toFixed 2 (1.0 / 0.0), toFixed 2 (-1.0 / 0.0)]
+
+-- # Digit grouping
+
+test "groupThousands groups the digits in threes from the right" =
+  expectEqual "1,234,567" (groupThousands 1234567)
+
+test "groupThousands leaves values under 1000 in magnitude unchanged" =
+  expectEqual
+    ["0", "999", "-999"]
+    [groupThousands 0, groupThousands 999, groupThousands (-999)]
+
+test "groupThousands keeps the minus sign in front of the groups" =
+  expectEqual "-1,234,567" (groupThousands (-1234567))
+
+test "groupThousands puts a comma at each group boundary" =
+  expectEqual
+    ["1,000,000", "10,000"]
+    [groupThousands 1000000, groupThousands 10000]
+
+test "groupThousands writes the most negative Int from its digits" =
+  expectEqual "-4,611,686,018,427,387,904" (groupThousands intMinBound)

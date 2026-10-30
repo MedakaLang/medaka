@@ -126,6 +126,102 @@ True
 False
 ```
 
+## Statistics
+
+### `mean`
+
+```
+mean : List Float -> Option Float
+mean xs
+```
+
+The arithmetic mean of a list, or `None` for an empty list.
+
+The elements are added in floating point, so the last digits can differ
+from Python's statistics module, which sums exactly.
+
+```medaka
+> mean [1.0, 2.0, 3.0, 6.0]
+Some 3.0
+> mean []
+None
+```
+
+### `median`
+
+```
+median : List Float -> Option Float
+median xs
+```
+
+The median of a list, or `None` for an empty list.
+
+For an odd length it is the middle value, and for an even length the mean
+of the two middle values. A NaN in the list gives an unspecified result.
+
+For an even length the result can differ in the last digit from
+`percentile 50.0`, which interpolates instead of averaging.
+
+```medaka
+> median [3.0, 1.0, 2.0]
+Some 2.0
+> median [4.0, 1.0, 3.0, 2.0]
+Some 2.5
+> median [1.0, 2.0, 1.0 / 0.0]
+Some 2.0
+```
+
+### `stdev`
+
+```
+stdev : List Float -> Option Float
+stdev xs
+```
+
+The sample standard deviation, dividing by `n - 1` as Python's
+statistics module does, or `None` for fewer than two values.
+
+The sums are taken in floating point, so the last digits can differ from
+Python's statistics module, which sums exactly. A NaN in the list gives an
+unspecified result.
+
+```medaka
+> stdev [1.0, 3.0]
+Some 1.4142135623730951
+> stdev [1.0]
+None
+```
+
+### `percentile`
+
+```
+percentile : Float -> List Float -> Option Float
+percentile p xs
+```
+
+The `p`th percentile of a list, for `p` from 0 to 100, or `None` for an
+empty list or a `p` outside that range.
+
+It interpolates linearly between the closest ranks of the sorted list, as
+numpy's default and Excel's inclusive percentile do, and an exact rank gives
+that element itself. A NaN in the list gives an unspecified result.
+
+For an odd length `percentile 50.0 xs` equals `median xs`; for an even
+length the two can differ in the last digit.
+
+```medaka
+> percentile 0.0 [4.0, 1.0, 3.0, 2.0]
+Some 1.0
+> percentile 50.0 [4.0, 1.0, 3.0, 2.0]
+Some 2.5
+> percentile 100.0 [4.0, 1.0, 3.0, 2.0]
+Some 4.0
+> percentile 100.0 [1.0, 1.0 / 0.0]
+Some inf
+> percentile 101.0 [1.0]
+None
+```
+
 ## Logarithms
 
 ### `logBase`
@@ -143,6 +239,65 @@ exactly `3.0`.
 ```medaka
 > logBase 2.0 8.0
 3.0
+```
+
+## Rounding to integers
+
+### `roundInt`
+
+```
+roundInt : Float -> Int
+roundInt x
+```
+
+The integer nearest to `x`, with a half rounded away from zero.
+
+Values outside the `Int` range saturate to the nearest bound, and `NaN`
+gives `0`.
+
+```medaka
+> roundInt 2.5
+3
+> roundInt (-2.5)
+-3
+```
+
+### `floorInt`
+
+```
+floorInt : Float -> Int
+floorInt x
+```
+
+The greatest integer not above `x`.
+
+Values outside the `Int` range saturate to the nearest bound, and `NaN`
+gives `0`.
+
+```medaka
+> floorInt 3.7
+3
+> floorInt (-0.5)
+-1
+```
+
+### `ceilInt`
+
+```
+ceilInt : Float -> Int
+ceilInt x
+```
+
+The least integer not below `x`.
+
+Values outside the `Int` range saturate to the nearest bound, and `NaN`
+gives `0`.
+
+```medaka
+> ceilInt 3.2
+4
+> ceilInt (-0.5)
+0
 ```
 
 ## Integers

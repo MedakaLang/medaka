@@ -6164,6 +6164,18 @@ emitStrExternRef prog env d "floatToString" [a] =
     ]
 emitStrExternRef prog env d "floatToString" _ =
   gapLP prog "wasm W8b: floatToString takes exactly one argument"
+-- floatToFixed digits x : an i31 Int and a boxed $float -> $mdk_float_to_fixed.
+emitStrExternRef prog env d "floatToFixed" [n, a] =
+  emitRefExpr prog env d n
+    ++ ["ref.cast (ref i31)", "i31.get_s"]
+    ++ emitRefExpr prog env d a
+    ++ [
+      "ref.cast (ref $float)",
+      "struct.get $float 0",
+      rtCallW prog "mdk_float_to_fixed" 2,
+    ]
+emitStrExternRef prog env d "floatToFixed" _ =
+  gapLP prog "wasm: floatToFixed takes exactly two arguments"
 -- W8b: stringIndexOf needle hay : two $str → Option Int (ref eq).  The runtime fn
 -- builds the Some/None result directly (Some idx / None), so no inline ctor here.
 emitStrExternRef prog env d "stringIndexOf" [needle, hay] =

@@ -1,0 +1,24 @@
+-- Tests for `countBy` and `groupByKey` in `stdlib/map.mdk`.
+
+import map.{countBy, entries, groupByKey}
+import test.{expectEqual}
+
+test "countBy of an empty list is empty" =
+  expectEqual [] (entries (countBy (x => x) ([] : List Int)))
+
+test "countBy counts each key" =
+  expectEqual [(0, 2), (1, 3)] (entries (countBy (x => x % 2) [1, 2, 3, 4, 5]))
+
+test "groupByKey of an empty list is empty" =
+  expectEqual [] (entries (groupByKey (x => x) ([] : List Int)))
+
+test "groupByKey keeps input order inside a group" =
+  expectEqual
+    [(0, [4, 2, 6]), (1, [5, 1, 3])]
+    (entries (groupByKey (x => x % 2) [5, 4, 1, 2, 3, 6]))
+
+test "groupByKey on a long list stays linear and ordered" =
+  let xs = [1..=20000]
+  expectEqual
+    [(0, 10000), (1, 10000)]
+    (entries (map length (groupByKey (x => x % 2) xs)))

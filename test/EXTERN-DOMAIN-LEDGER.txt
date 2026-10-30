@@ -217,6 +217,7 @@ debugCharLit	TOTAL	total: source-literal render of any Char
 debugStringLit	TOTAL	total: source-literal render of any String
 # Bit<->Float reinterpretation that is total in the value it produces.
 floatToBytes64	TOTAL	total: IEEE-754 byte decomposition of any Float
+floatToFixed	TOTAL	total: every digit count and Float (NaN and the infinities print as text) yields one string; pinned across engines by test/engine_fixtures/to_fixed.mdk
 #
 # ── EXEMPT: not a value-comparable function ───────────────────────────────────
 Ref	EXEMPT	mutable-cell constructor — reference identity, not a comparable value

@@ -54,8 +54,12 @@ running doctests in stdlib/map.mdk
   ok   stdlib/map.mdk:865: display (fromList [(1, 10), (2, 20)])
   ok   stdlib/map.mdk:867: display (empty : Map Int Int)
   ok   stdlib/map.mdk:887: isEmpty (empty : Map Int Int)
+  ok   stdlib/map.mdk:898: countBy (x => x % 2) [1, 2, 3, 5]
+  ok   stdlib/map.mdk:900: countBy (x => x) ([] : List Int)
+  ok   stdlib/map.mdk:910: groupByKey (x => x % 2) [1, 2, 3, 4, 5]
+  ok   stdlib/map.mdk:912: groupByKey (x => x) ([] : List Int)
 
-stdlib/map.mdk: 55/55 passed
+stdlib/map.mdk: 59/59 passed
 Testing "fromList builds a well-formed tree" [eval] ... OK (100 tests passed)
 Testing "keys come out strictly ascending" [eval] ... OK (100 tests passed)
 Testing "insert then lookup returns the inserted value" [eval] ... OK (100 tests passed)

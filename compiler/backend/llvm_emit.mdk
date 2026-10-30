@@ -2402,6 +2402,15 @@ emitNumExtern e env "floatToString" args = match emitArgs e env args
     let _ = emit e (rtLine e r "i64" "mdk_float_to_string" [("double", d)])
     (r, LTStr)
   _ => panic "llvm: floatToString takes exactly one argument"
+emitNumExtern e env "floatToFixed" args = match emitArgs e env args
+  [n, a] =>
+    let k = untagInt e n
+    let d = unboxFloat e a
+    let r = freshReg e
+    let _ =
+      emit e (rtLine e r "i64" "mdk_float_to_fixed" [("i64", k), ("double", d)])
+    (r, LTStr)
+  _ => panic "llvm: floatToFixed takes exactly two arguments"
 emitNumExtern e env "intBitsToFloat" args = match emitArgs e env args
   [a] =>
     let i = untagInt e a

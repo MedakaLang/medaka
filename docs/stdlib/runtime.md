@@ -207,7 +207,8 @@ listDir : (path : String) -> <FileRead path> Result String (List String)
 
 The names of the entries in a directory. A name whose bytes are not
 valid UTF-8 reads with U+FFFD in their place, so two such names can read
-alike and a returned name may not open the entry it came from.
+alike and a returned name may not open the entry it came from. The order
+of the names is unspecified; sort them, or walk with fs.walkFiles, for a stable one.
 
 ### `makeDir`
 
@@ -1119,6 +1120,18 @@ floatToString : Float -> String
 ```
 
 A float in decimal.
+
+### `floatToFixed`
+
+```
+floatToFixed : Int -> Float -> String
+```
+
+A float with a fixed number of digits after the point, the digit count
+first. The text is rounded from the float's exact binary value, with exact
+ties going to the even digit, and a value that rounds to zero keeps its sign.
+`NaN` and the infinities print as `floatToString` prints them. It is only
+ever called with `0` to `100` digits, by `string.toFixed`.
 
 ## Arrays
 
