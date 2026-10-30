@@ -58,6 +58,7 @@ nextIsComment : Array Char -> Int -> Int -> Bool
 numFinish : ScanCursor -> Array Char -> Int -> Int -> Int -> Int -> LexFrame -> RawTok
 openBrace : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 opensByteLiteral : Array Char -> Int -> Int -> Bool
+opensRawLiteral : Array Char -> Int -> Int -> Bool
 parseIntFrom : Array Char -> Int -> Int -> Int -> Int
 parseIntNeg : Array Char -> Int -> Int -> Int -> Int
 parseRadix : Array Char -> Int -> Int -> Int -> Int -> Int
@@ -89,6 +90,7 @@ scanOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Char -> Ra
 scanRadix : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanRaw : String -> List RawTok
 scanRawChars : Array Char -> List RawTok
+scanRawLiteral : ScanCursor -> Array Char -> Int -> Int -> LexFrame -> RawTok
 scanRawUndedentedChars : Array Char -> List RawTok
 scanTwoOp : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> Char -> Char -> Token -> Int -> RawTok
 scanUpper : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok

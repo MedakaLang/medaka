@@ -40,9 +40,12 @@ minIndentGo : List String -> Int -> Int
 normalizeMin : Int -> Int
 parseHex : Array Char -> Int -> Int -> Int -> Int
 plainRunEnd : Array Char -> Int -> Int -> Int
+rawLineGo : Array Char -> Int -> Int -> Int -> Result LexError (String, Int)
+rawTripleGo : Array Char -> Int -> Int -> Int -> Result LexError (String, Int)
 readByteLiteral : Array Char -> Int -> Result LexError (Int, Int)
 readCharacter : Array Char -> Int -> Result LexError (String, Int)
 readLiteral : Array Char -> LiteralCursor -> Result LexError LiteralRead
+readRawLiteral : Array Char -> Int -> Result LexError (String, Int)
 splitInterpGroup : List RawTok -> (List String, List RawTok, List RawTok)
 splitLines : Array Char -> Int -> Int -> List String
 splitRange : Array Char -> Int -> Int -> Int -> List String

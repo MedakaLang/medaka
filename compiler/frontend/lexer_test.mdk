@@ -391,3 +391,72 @@ test "shebang elsewhere than offset 0 stays a lex error" =
 isLexError : Token -> Bool
 isLexError (TLexError _) = True
 isLexError _ = False
+
+-- Raw literals: the TString bodies of a source, and the first literal's span.
+rawBodies : String -> List String
+rawBodies src =
+  filterMap
+    (t => match t
+      TString s => Some s
+      _ => None)
+    (tokenize src)
+
+rawSpan : String -> Option (Int, Int)
+rawSpan src =
+  let (tokens, spans) = tokenizeWithOffsetPairs src
+  let found =
+    filterMap
+      ((t, sp) => match t
+        TString _ => Some sp
+        _ => None)
+      (zip tokens spans)
+  match found
+    sp :: _ => Some sp
+    [] => None
+
+unterminatedAt : String -> Option (Int, Int)
+unterminatedAt src =
+  let (tokens, spans) = tokenizeWithOffsetPairs src
+  let found =
+    filterMap
+      ((t, sp) => match t
+        TLexError UnterminatedString => Some sp
+        _ => None)
+      (zip tokens spans)
+  match found
+    sp :: _ => Some sp
+    [] => None
+
+test "raw literals keep every character" = expectAll [
+  expectEqual ["\\d+"] (rawBodies "r\"\\d+\""),
+  expectEqual ["a\\nb"] (rawBodies "r\"a\\nb\""),
+  expectEqual ["\\{x}"] (rawBodies "r\"\\{x}\""),
+  expectEqual ["\\"] (rawBodies "r\"\\\""),
+  expectEqual [""] (rawBodies "r\"\""),
+  expectEqual ["a\"b"] (rawBodies "r\"\"\"a\"b\"\"\""),
+  expectEqual
+    ["\n  line1\\nline2\n  s = \"\\{x}\"\n"]
+    (rawBodies "r\"\"\"\n  line1\\nline2\n  s = \"\\{x}\"\n\"\"\""),
+]
+
+test "raw literal span starts at the r" = expectAll [
+  expectEqual (Some (4, 9)) (rawSpan "x = r\"ab\""),
+  expectEqual (Some (0, 9)) (rawSpan "r\"\"\"ab\"\"\""),
+]
+
+test "raw prefix needs a token start and an adjacent quote" = expectAll [
+  expectEqual ["IDENT \"r\"", "STRING \"x\""] (take 2 (tokensOf "r \"x\"")),
+  expectEqual ["IDENT \"xr\""] (take 1 (tokensOf "xr\"a\"")),
+  expectEqual ["IDENT \"bar\""] (take 1 (tokensOf "bar\"x\"")),
+  expectEqual ["a"] (rawBodies "xr\"a\""),
+  expectEqual ["x"] (rawBodies "bar\"x\""),
+  expectEqual ["x"] (rawBodies "r \"x\""),
+]
+
+test "unterminated raw literals are located at the r" = expectAll [
+  expectEqual (Some (4, 11)) (unterminatedAt "x = r\"\"\"abc"),
+  expectEqual (Some (4, 9)) (unterminatedAt "x = r\"abc"),
+  expectEqual (Some (4, 11)) (unterminatedAt "x = r\"ab\nc\""),
+  expectEqual (Some (4, 8)) (unterminatedAt "x = r\"\"\""),
+  expectEqual None (unterminatedAt "x = r"),
+]

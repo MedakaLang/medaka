@@ -1,0 +1,5 @@
+-- raw string literal `r"…"` keeps its backslash: the pattern is `\d+`, so the
+-- matches of "a1b22" are "1" and "22" on every engine.
+import regex as R
+
+main = println (map (m => (m : R.Match).text) (R.findAll (R.mustCompile r"\d+") "a1b22"))

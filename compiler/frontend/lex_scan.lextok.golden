@@ -66,6 +66,8 @@ IDENT "readCharacter"
 COMMA
 IDENT "readByteLiteral"
 COMMA
+IDENT "readRawLiteral"
+COMMA
 IDENT "copyCharRange"
 COMMA
 IDENT "dedentSegments"
@@ -1276,6 +1278,26 @@ IDENT "len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
+NEWLINE
+PIPE
+IDENT "c"
+EQ_EQ
+CHAR "r"
+AND
+IDENT "opensRawLiteral"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+EQUAL
+INDENT
+IDENT "scanRawLiteral"
+IDENT "ctx"
+IDENT "src"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "isLower"
@@ -4374,6 +4396,117 @@ PLUS
 INT 2
 RPAREN
 RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "opensRawLiteral"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "opensRawLiteral"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+EQUAL
+INDENT
+IDENT "pos"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "isQuote"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "pos"
+PLUS
+INT 1
+RPAREN
+RPAREN
+AND
+IDENT "not"
+LPAREN
+IDENT "afterIdentChar"
+IDENT "src"
+IDENT "pos"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanRawLiteral"
+COLON
+UPPER "ScanCursor"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "LexFrame"
+ARROW
+UPPER "RawTok"
+NEWLINE
+IDENT "scanRawLiteral"
+IDENT "ctx"
+IDENT "src"
+IDENT "pos"
+IDENT "depth"
+IDENT "frame"
+EQUAL
+MATCH
+IDENT "readRawLiteral"
+IDENT "src"
+IDENT "pos"
+INDENT
+UPPER "Ok"
+LPAREN
+IDENT "value"
+COMMA
+IDENT "next"
+RPAREN
+FAT_ARROW
+INDENT
+IDENT "emitOne"
+IDENT "ctx"
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TString"
+IDENT "value"
+RPAREN
+IDENT "pos"
+IDENT "next"
+RPAREN
+IDENT "next"
+IDENT "depth"
+IDENT "frame"
+NEWLINE
+DEDENT
+NEWLINE
+UPPER "Err"
+LPAREN
+UPPER "LexError"
+IDENT "kind"
+IDENT "start"
+IDENT "end"
+RPAREN
+FAT_ARROW
+IDENT "lexErrorTok"
+IDENT "ctx"
+IDENT "start"
+IDENT "end"
+IDENT "kind"
 NEWLINE
 DEDENT
 NEWLINE

@@ -571,3 +571,29 @@ isPlain _ = False
 isInitial : LiteralPart -> Bool
 isInitial InitialLiteral = True
 isInitial _ = False
+
+-- `pos` is the offset of the `r` of `r"…"` / `r"""…"""`; returns the body
+-- verbatim and the offset just past the closing delimiter.  A one-line body
+-- stops at the first `"` and may not cross a line break; a triple body stops
+-- at the first `"""`.  Failure is located at the opening `r`.
+export
+readRawLiteral : Array Char -> Int -> Result LexError (String, Int)
+readRawLiteral src pos =
+  let len = arrayLength src
+  if isTripleAt src len (pos + 1) then
+    rawTripleGo src len pos (pos + 4)
+  else
+    rawLineGo src len pos (pos + 2)
+
+rawLineGo : Array Char -> Int -> Int -> Int -> Result LexError (String, Int)
+rawLineGo src len open p
+  | p >= len || isNL (at src p) || isCR (at src p) =
+    lexFailure open len UnterminatedString
+  | isQuote (at src p) = Ok (copyCharRange src (open + 2) p, p + 1)
+  | otherwise = rawLineGo src len open (p + 1)
+
+rawTripleGo : Array Char -> Int -> Int -> Int -> Result LexError (String, Int)
+rawTripleGo src len open p
+  | p >= len = lexFailure open len UnterminatedString
+  | isTripleAt src len p = Ok (copyCharRange src (open + 4) p, p + 3)
+  | otherwise = rawTripleGo src len open (p + 1)

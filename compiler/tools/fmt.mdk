@@ -771,6 +771,10 @@ formatSourceChecked src toks pairs = match prescanErrorPairs src toks pairs
 isTripleStringAt : String -> Int -> Bool
 isTripleStringAt src pos = stringSlice pos (pos + 3) src == "\"\"\""
 
+-- A raw literal's span starts at its `r`; no other literal does.
+isRawStringAt : String -> Int -> Bool
+isRawStringAt src pos = stringSlice pos (pos + 2) src == "r\""
+
 -- Each string literal in source order as (start, end).  A plain literal is one
 -- `TString` token.  An interpolated literal is the run from its opening quote
 -- to the `TInterpEnd` that closes it, nested interpolations included.  Its
@@ -841,12 +845,12 @@ blockCommentEnd src pos depth =
   else
     blockCommentEnd src (pos + 1) depth
 
--- Whether each literal is triple-quoted, paired with its source text (empty
--- for a plain literal, which is never restored).
+-- Whether each literal is triple-quoted or raw, paired with its source text
+-- (empty for any other literal, which is never restored).
 tripleLitInfo : String -> List (Int, Int) -> List (Bool, String)
 tripleLitInfo _ [] = []
 tripleLitInfo src ((s, e) :: ls) =
-  let triple = isTripleStringAt src s
+  let triple = isTripleStringAt src s || isRawStringAt src s
   (triple, if triple then stringSlice s e src else "") :: tripleLitInfo src ls
 
 -- Zip the original literal order against the formatted output's literal
@@ -877,12 +881,16 @@ applyTripleGo [] out cursor acc =
 applyTripleGo ((s, e, raw) :: rest) out cursor acc =
   applyTripleGo rest out e (raw :: stringSlice cursor s out :: acc)
 
--- A source with no `"""` substring has no triple-quoted token, so there is
--- nothing to restore and both tokenizations are skipped.
+mayHaveRestorable : String -> Bool
+mayHaveRestorable src =
+  isSome (stringIndexOf "\"\"\"" src) || isSome (stringIndexOf "r\"" src)
+
+-- A source with no `"""` or `r"` substring has no triple-quoted or raw token,
+-- so there is nothing to restore and both tokenizations are skipped.
 restoreTripleQuotedStrings : String -> String -> String
-restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
-  None => formatted
-  Some _ => match tokenizeWithOffsetPairs src
+restoreTripleQuotedStrings src formatted = match mayHaveRestorable src
+  False => formatted
+  True => match tokenizeWithOffsetPairs src
     (origToks, origSpans) => match tokenizeWithOffsetPairs formatted
       (fmtToks, fmtSpans) =>
         let origInfo = tripleLitInfo src (stringLitSpans src origToks origSpans)
