@@ -1,0 +1,6 @@
+-- Fixture for rule-double-reverse autofix.
+-- NEGATIVE: `import list.*` exports its own `reverse`, so the fix is withheld.
+
+import list.*
+
+dbl xs = reverse (reverse xs)

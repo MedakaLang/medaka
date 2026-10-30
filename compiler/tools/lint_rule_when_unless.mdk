@@ -5,6 +5,7 @@ import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
   Ctx(..),
   FileFacts(..),
@@ -22,7 +23,7 @@ import tools.lint_core.{
 }
 import tools.lint_shared.{
   bindingOf,
-  bindsName,
+  rebinds,
   exprRuleEditVisitors,
   isEVarNamed,
   nodeSpan,
@@ -46,7 +47,7 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [NeedsScopes],
+      needs = [NeedsScopes, NeedsStdlibIndex],
     }
     ruleWhenUnless
     None
@@ -81,11 +82,11 @@ ruleWhenUnless : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleWhenUnless _ _ facts _ _ =
+ruleWhenUnless idx _ facts _ _ =
   exprRuleEditVisitors
     whenUnlessExcl
     whenUnlessOf
-    (whenUnlessFix facts)
+    (whenUnlessFix idx facts)
     whenUnlessFinding
 
 whenUnlessFinding : Option Loc -> Expr -> Option Fix -> Finding
@@ -102,14 +103,15 @@ whenUnlessFinding loc rewritten fix = Finding {
 
 -- The rewrite reads `pure` (the dropped `pure ()`) and calls `when` or `unless`.
 -- A binding of any of the three names in the file withholds the fix.
-whenUnlessFix : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
-whenUnlessFix facts ctx e rewritten =
-  if bindsName facts "pure"
-    || bindsName facts "when"
-    || bindsName facts "unless" then
+whenUnlessFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+whenUnlessFix idx facts ctx e rewritten =
+  if rebinds idx facts ctx "pure"
+    || rebinds idx facts ctx "when"
+    || rebinds idx facts ctx "unless" then
     None
   else
     replaceFix
+      Safe
       "use when / unless"
       (nodeSpan ctx e)
       (bindingOf rewritten)

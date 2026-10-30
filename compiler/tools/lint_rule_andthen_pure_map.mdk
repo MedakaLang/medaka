@@ -6,6 +6,7 @@ import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
   Ctx(..),
   FileFacts(..),
@@ -24,7 +25,7 @@ import tools.lint_core.{
 import tools.lint_shared.{
   andThenEtaFn,
   bindingOf,
-  bindsName,
+  rebinds,
   childExprs,
   isEVarNamed,
   nodeSpan,
@@ -49,7 +50,7 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [NeedsScopes],
+      needs = [NeedsScopes, NeedsStdlibIndex],
     }
     ruleAndThenPureMap
     None
@@ -130,15 +131,16 @@ ruleAndThenPureMap : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleAndThenPureMap _ _ facts _ _ = [OnExpr [KApp] (andThenPureMapAt facts)]
+ruleAndThenPureMap idx _ facts _ _ =
+  [OnExpr [KApp] (andThenPureMapAt idx facts)]
 
-andThenPureMapAt : FileFacts -> Ctx -> Expr -> List Finding
-andThenPureMapAt facts ctx e = match andThenPureMapOf e
+andThenPureMapAt : StdlibIndex -> FileFacts -> Ctx -> Expr -> List Finding
+andThenPureMapAt idx facts ctx e = match andThenPureMapOf e
   Some rewritten => [
     andThenPureMapFinding
       ctx.ctxDeclLoc
       rewritten
-      (andThenPureMapFix facts ctx e rewritten),
+      (andThenPureMapFix idx facts ctx e rewritten),
   ]
   None => []
 
@@ -158,10 +160,17 @@ andThenPureMapFinding loc rewritten fix = Finding {
 -- The fix replaces the bind's own span.  It is withheld where the bind's `andThen`
 -- or `pure` is a file binding (the call is then not the prelude's), and where the
 -- file binds `map`: the replacement calls `map`, which such a binding would capture.
-andThenPureMapFix : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
-andThenPureMapFix facts ctx e rewritten =
-  if andThenPureMapUsesPrelude facts e && not (bindsName facts "map") then
+andThenPureMapFix : StdlibIndex ->
+  FileFacts ->
+  Ctx ->
+  Expr ->
+  Expr ->
+  Option Fix
+andThenPureMapFix idx facts ctx e rewritten =
+  if andThenPureMapUsesPrelude idx facts e
+    && not (rebinds idx facts ctx "map") then
     replaceFix
+      Safe
       "rewrite the bind as a map"
       (nodeSpan ctx e)
       (bindingOf rewritten)
@@ -170,10 +179,10 @@ andThenPureMapFix facts ctx e rewritten =
   else
     None
 
-andThenPureMapUsesPrelude : FileFacts -> Expr -> Bool
-andThenPureMapUsesPrelude facts e = match andThenPureHeads e
+andThenPureMapUsesPrelude : StdlibIndex -> FileFacts -> Expr -> Bool
+andThenPureMapUsesPrelude idx facts e = match andThenPureHeads e
   Some (andHd, pureHd) =>
-    usesPreludeName facts andHd && usesPreludeName facts pureHd
+    usesPreludeName idx facts andHd && usesPreludeName idx facts pureHd
   None => False
 
 -- The `andThen` head and the `pure` head of a bind `andThen m (x => pure …)`, the

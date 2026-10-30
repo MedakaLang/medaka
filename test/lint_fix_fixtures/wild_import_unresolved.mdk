@@ -1,0 +1,8 @@
+-- Fixture for the wildcard-import guard of the span-edit fixes.
+-- NEGATIVE: the stdlib index cannot vouch for `app.helpers`, so every fix is withheld.
+
+import app.helpers.*
+
+notEq a b = not (a == b)
+dbl xs = reverse (reverse xs)
+whenShape b act = if b then act else pure ()

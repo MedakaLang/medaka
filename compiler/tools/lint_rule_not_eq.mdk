@@ -7,6 +7,7 @@ import tools.lint_fix.{Binding(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
   Ctx(..),
   FileFacts(..),
@@ -46,7 +47,7 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [NeedsScopes],
+      needs = [NeedsScopes, NeedsStdlibIndex],
     }
     notEqVisitors
     None
@@ -65,6 +66,12 @@ notEqOf e = match notArgOf e
     _ => None
   None => None
 
+-- Inside the definition of `==` or `/=` the written operator would be the
+-- method calling itself.
+definesEquality : Ctx -> Bool
+definesEquality ctx =
+  not ctx.ctxInTest && (ctx.ctxDeclName == "==" || ctx.ctxDeclName == "/=")
+
 -- `notArgOf` matches an application only, so only `EApp` nodes are visited.
 -- The fix is withheld where the file rebinds `not`: the call is then the
 -- file's own, and the rewrite would change what it computes.
@@ -74,12 +81,12 @@ notEqVisitors : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-notEqVisitors _ _ facts _ _ = [OnExpr [KApp] (notEqAt facts)]
+notEqVisitors idx _ facts _ _ = [OnExpr [KApp] (notEqAt idx facts)]
 
-notEqAt : FileFacts -> Ctx -> Expr -> List Finding
-notEqAt facts ctx e = match (notEqOf e, e)
+notEqAt : StdlibIndex -> FileFacts -> Ctx -> Expr -> List Finding
+notEqAt idx facts ctx e = match (notEqOf e, e)
   (Some rewritten, EApp hd _) =>
-    [notEqFinding ctx.ctxSpan rewritten (notEqFix facts ctx e hd rewritten)]
+    [notEqFinding ctx.ctxSpan rewritten (notEqFix idx facts ctx e hd rewritten)]
   _ => []
 
 notEqFinding : Option Loc -> Expr -> Option Fix -> Finding
@@ -91,10 +98,11 @@ notEqFinding loc rewritten fix = Finding {
   fix = fix,
 }
 
-notEqFix : FileFacts -> Ctx -> Expr -> Expr -> Expr -> Option Fix
-notEqFix facts ctx e hd rewritten =
-  if usesPreludeName facts hd then
+notEqFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Expr -> Option Fix
+notEqFix idx facts ctx e hd rewritten =
+  if usesPreludeName idx facts hd && not (definesEquality ctx) then
     replaceFix
+      Safe
       "use the operator"
       (nodeSpan ctx e)
       Open

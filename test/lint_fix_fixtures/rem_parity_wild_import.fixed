@@ -1,0 +1,6 @@
+-- Fixture for rule-rem-parity autofix.
+-- NEGATIVE: `import core.*` may bring its own `isEven` into scope, so the fix is withheld.
+
+import core.*
+
+isEvenWild n = n % 2 == 0

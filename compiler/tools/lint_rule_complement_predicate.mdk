@@ -6,6 +6,7 @@ import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
 import support.util.{anyList}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
   Ctx(..),
   FileFacts,
@@ -23,7 +24,7 @@ import tools.lint_core.{
 }
 import tools.lint_shared.{
   bindingOf,
-  bindsName,
+  rebinds,
   exprRuleEditVisitors,
   nodeSpan,
   notArgOf,
@@ -46,8 +47,8 @@ rule =
       scope = Universal,
       ratchet = Gated,
       defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [NeedsScopes],
+      fixability = FixableUnsafe,
+      needs = [NeedsScopes, NeedsStdlibIndex],
     }
     ruleComplementPredicate
     None
@@ -105,11 +106,11 @@ ruleComplementPredicate : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleComplementPredicate _ _ facts _ _ =
+ruleComplementPredicate idx _ facts _ _ =
   exprRuleEditVisitors
     complementExcl
     complementPredOf
-    (complementPredicateFix facts)
+    (complementPredicateFix idx facts)
     complementPredicateFinding
 
 complementPredicateFinding : Option Loc -> Expr -> Option Fix -> Finding
@@ -123,12 +124,18 @@ complementPredicateFinding loc rewritten fix = Finding {
 
 -- The rewrite drops a `not`, reads the predicate, and calls the complement.  A
 -- binding of any of those names in the file withholds the fix.
-complementPredicateFix : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
-complementPredicateFix facts ctx e rewritten =
-  if anyList (bindsName facts) (complementNames e rewritten) then
+complementPredicateFix : StdlibIndex ->
+  FileFacts ->
+  Ctx ->
+  Expr ->
+  Expr ->
+  Option Fix
+complementPredicateFix idx facts ctx e rewritten =
+  if anyList (rebinds idx facts ctx) (complementNames e rewritten) then
     None
   else
     replaceFix
+      Unsafe
       "call the complement"
       (nodeSpan ctx e)
       (bindingOf rewritten)

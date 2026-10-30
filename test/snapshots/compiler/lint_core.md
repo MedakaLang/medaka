@@ -1,5 +1,5 @@
 # META
-source_lines=457
+source_lines=472
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -141,6 +141,15 @@ maxApplicability Fixable = Some Safe
 maxApplicability FixableUnsafe = Some Unsafe
 maxApplicability SuggestOnly = Some Suggest
 maxApplicability NotFixable = None
+
+-- The lower of two trusts: a fix is applied no further than its rule's ceiling.
+export
+clampApplicability : Applicability -> Applicability -> Applicability
+clampApplicability Suggest _ = Suggest
+clampApplicability _ Suggest = Suggest
+clampApplicability Unsafe _ = Unsafe
+clampApplicability _ Unsafe = Unsafe
+clampApplicability Safe Safe = Safe
 
 -- An input a rule's `check` reads beyond the file itself; the runner builds
 -- only what some active rule needs.
@@ -350,7 +359,7 @@ mkCrossFileRule m check = CrossFileRule {
 -- POSITIONAL, not a named-field record, and read ONLY through the helpers
 -- below.
 public export data StdlibIndex =
-  StdlibIndex (HashMap String (List (String, Ty))) (List String)
+  StdlibIndex (HashMap String (List (String, Ty))) (List String) (List String)
 
 -- The degraded index.  Also what a caller passes when it deliberately wants no
 -- stdlib knowledge: `medaka_cli.mdk`'s `runLintCmd` and `mcp.mdk`'s
@@ -361,21 +370,21 @@ public export data StdlibIndex =
 -- choices, so it must never be populated from a degraded index.
 export
 emptyStdlibIndex : StdlibIndex
-emptyStdlibIndex = StdlibIndex (new ()) []
+emptyStdlibIndex = StdlibIndex (new ()) [] []
 
 -- How many distinct exported NAMES the index carries (not declarations — a name
 -- declared in two modules counts once).  0 means degraded, or an empty stdlib;
 -- it is the number an entry point prints to say what it actually got.
 export
 stdlibIndexSize : StdlibIndex -> Int
-stdlibIndexSize (StdlibIndex m _) = size m
+stdlibIndexSize (StdlibIndex m _ _) = size m
 
 -- Every stdlib module declaring `name`, with the type each one declares, in
 -- stdlib-file order.  `[]` = not a stdlib export (or the index is degraded);
 -- more than one element = the name is ambiguous and the CALLER must decide.
 export
 stdlibEntriesOf : StdlibIndex -> String -> List (String, Ty)
-stdlibEntriesOf (StdlibIndex m _) name = findWithDefault [] name m
+stdlibEntriesOf (StdlibIndex m _ _) name = findWithDefault [] name m
 
 -- The type `<module>.<name>` declares, e.g. `stdlibSigIn idx "list" "reverse"`
 -- = `List a -> List a`.  The unambiguous accessor: it names the module, so it
@@ -396,7 +405,13 @@ stdlibSigTextIn idx modName name = map ppTy (stdlibSigIn idx modName name)
 -- stdlib the way a hand-written list does (#2248 Miss 2).
 export
 stdlibIndexNames : StdlibIndex -> List String
-stdlibIndexNames (StdlibIndex _ names) = names
+stdlibIndexNames (StdlibIndex _ names _) = names
+
+-- Whether the index read `modName` (a dotted path, `crypto.hmac`) at all.  A
+-- module it did not read exports nothing the index can vouch for.
+export
+stdlibKnowsModule : StdlibIndex -> String -> Bool
+stdlibKnowsModule (StdlibIndex _ _ mods) modName = elem modName mods
 
 -- The names declared by more than one stdlib module, sorted.  Exported because
 -- it is the set every consumer has to have an answer for — a rule that treats a
@@ -507,6 +522,12 @@ public export data DupClause = DupClause {
 (DFunDef false "maxApplicability" ((PCon "FixableUnsafe")) (EApp (EVar "Some") (EVar "Unsafe")))
 (DFunDef false "maxApplicability" ((PCon "SuggestOnly")) (EApp (EVar "Some") (EVar "Suggest")))
 (DFunDef false "maxApplicability" ((PCon "NotFixable")) (EVar "None"))
+(DTypeSig true "clampApplicability" (TyFun (TyCon "Applicability") (TyFun (TyCon "Applicability") (TyCon "Applicability"))))
+(DFunDef false "clampApplicability" ((PCon "Suggest") PWild) (EVar "Suggest"))
+(DFunDef false "clampApplicability" (PWild (PCon "Suggest")) (EVar "Suggest"))
+(DFunDef false "clampApplicability" ((PCon "Unsafe") PWild) (EVar "Unsafe"))
+(DFunDef false "clampApplicability" (PWild (PCon "Unsafe")) (EVar "Unsafe"))
+(DFunDef false "clampApplicability" ((PCon "Safe") (PCon "Safe")) (EVar "Safe"))
 (DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos)) (variant "NeedsScopes" (ConPos))) ())
 (DData Public "RuleMeta" () ((variant "RuleMeta" (ConNamed (field "name" (TyCon "String")) (field "summary" (TyCon "String")) (field "doc" (TyCon "String")) (field "category" (TyCon "Category")) (field "scope" (TyCon "Scope")) (field "ratchet" (TyCon "Ratchet")) (field "defaultSeverity" (TyCon "Severity")) (field "fixability" (TyCon "Fixability")) (field "needs" (TyApp (TyCon "List") (TyCon "Need")))))) ())
 (DTypeSig true "ruleMetaName" (TyFun (TyCon "RuleMeta") (TyCon "String")))
@@ -534,19 +555,21 @@ public export data DupClause = DupClause {
 (DFunDef false "ruleOf" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "FixableUnsafe") () (EVar "None")) (arm (PCon "SuggestOnly") () (EVar "None")) (arm (PCon "NotFixable") () (EVar "None")))))))
 (DTypeSig true "mkCrossFileRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))) (TyCon "CrossFileRule"))))
 (DFunDef false "mkCrossFileRule" ((PVar "m") (PVar "check")) (ERecordCreate "CrossFileRule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")))))
-(DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyApp (TyCon "List") (TyCon "String"))))) ())
+(DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig true "emptyStdlibIndex" (TyCon "StdlibIndex"))
-(DFunDef false "emptyStdlibIndex" () (EApp (EApp (EVar "StdlibIndex") (EApp (EVar "new") (ELit LUnit))) (EListLit)))
+(DFunDef false "emptyStdlibIndex" () (EApp (EApp (EApp (EVar "StdlibIndex") (EApp (EVar "new") (ELit LUnit))) (EListLit)) (EListLit)))
 (DTypeSig true "stdlibIndexSize" (TyFun (TyCon "StdlibIndex") (TyCon "Int")))
-(DFunDef false "stdlibIndexSize" ((PCon "StdlibIndex" (PVar "m") PWild)) (EApp (EVar "size") (EVar "m")))
+(DFunDef false "stdlibIndexSize" ((PCon "StdlibIndex" (PVar "m") PWild PWild)) (EApp (EVar "size") (EVar "m")))
 (DTypeSig true "stdlibEntriesOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))))
-(DFunDef false "stdlibEntriesOf" ((PCon "StdlibIndex" (PVar "m") PWild) (PVar "name")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "name")) (EVar "m")))
+(DFunDef false "stdlibEntriesOf" ((PCon "StdlibIndex" (PVar "m") PWild PWild) (PVar "name")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "name")) (EVar "m")))
 (DTypeSig true "stdlibSigIn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty"))))))
 (DFunDef false "stdlibSigIn" ((PVar "idx") (PVar "modName") (PVar "name")) (EApp (EApp (EVar "lookupAssoc") (EVar "modName")) (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "name"))))
 (DTypeSig true "stdlibSigTextIn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "stdlibSigTextIn" ((PVar "idx") (PVar "modName") (PVar "name")) (EApp (EApp (EVar "map") (EVar "ppTy")) (EApp (EApp (EApp (EVar "stdlibSigIn") (EVar "idx")) (EVar "modName")) (EVar "name"))))
 (DTypeSig true "stdlibIndexNames" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "stdlibIndexNames" ((PCon "StdlibIndex" PWild (PVar "names"))) (EVar "names"))
+(DFunDef false "stdlibIndexNames" ((PCon "StdlibIndex" PWild (PVar "names") PWild)) (EVar "names"))
+(DTypeSig true "stdlibKnowsModule" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "stdlibKnowsModule" ((PCon "StdlibIndex" PWild PWild (PVar "mods")) (PVar "modName")) (EApp (EApp (EVar "elem") (EVar "modName")) (EVar "mods")))
 (DTypeSig true "stdlibAmbiguousNames" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "stdlibAmbiguousNames" ((PVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "n"))) (ELit (LInt 1))))) (EApp (EVar "stdlibIndexNames") (EVar "idx"))))
 (DData Public "StdlibIndexError" () ((variant "StdlibIndexError" (ConNamed (field "path" (TyCon "String")) (field "source" (TyCon "String")) (field "diagnostic" (TyCon "Diag"))))) ())
@@ -601,6 +624,12 @@ public export data DupClause = DupClause {
 (DFunDef false "maxApplicability" ((PCon "FixableUnsafe")) (EApp (EVar "Some") (EVar "Unsafe")))
 (DFunDef false "maxApplicability" ((PCon "SuggestOnly")) (EApp (EVar "Some") (EVar "Suggest")))
 (DFunDef false "maxApplicability" ((PCon "NotFixable")) (EVar "None"))
+(DTypeSig true "clampApplicability" (TyFun (TyCon "Applicability") (TyFun (TyCon "Applicability") (TyCon "Applicability"))))
+(DFunDef false "clampApplicability" ((PCon "Suggest") PWild) (EVar "Suggest"))
+(DFunDef false "clampApplicability" (PWild (PCon "Suggest")) (EVar "Suggest"))
+(DFunDef false "clampApplicability" ((PCon "Unsafe") PWild) (EVar "Unsafe"))
+(DFunDef false "clampApplicability" (PWild (PCon "Unsafe")) (EVar "Unsafe"))
+(DFunDef false "clampApplicability" ((PCon "Safe") (PCon "Safe")) (EVar "Safe"))
 (DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos)) (variant "NeedsScopes" (ConPos))) ())
 (DData Public "RuleMeta" () ((variant "RuleMeta" (ConNamed (field "name" (TyCon "String")) (field "summary" (TyCon "String")) (field "doc" (TyCon "String")) (field "category" (TyCon "Category")) (field "scope" (TyCon "Scope")) (field "ratchet" (TyCon "Ratchet")) (field "defaultSeverity" (TyCon "Severity")) (field "fixability" (TyCon "Fixability")) (field "needs" (TyApp (TyCon "List") (TyCon "Need")))))) ())
 (DTypeSig true "ruleMetaName" (TyFun (TyCon "RuleMeta") (TyCon "String")))
@@ -628,19 +657,21 @@ public export data DupClause = DupClause {
 (DFunDef false "ruleOf" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "FixableUnsafe") () (EVar "None")) (arm (PCon "SuggestOnly") () (EVar "None")) (arm (PCon "NotFixable") () (EVar "None")))))))
 (DTypeSig true "mkCrossFileRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))) (TyCon "CrossFileRule"))))
 (DFunDef false "mkCrossFileRule" ((PVar "m") (PVar "check")) (ERecordCreate "CrossFileRule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")))))
-(DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyApp (TyCon "List") (TyCon "String"))))) ())
+(DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig true "emptyStdlibIndex" (TyCon "StdlibIndex"))
-(DFunDef false "emptyStdlibIndex" () (EApp (EApp (EVar "StdlibIndex") (EApp (EVar "new") (ELit LUnit))) (EListLit)))
+(DFunDef false "emptyStdlibIndex" () (EApp (EApp (EApp (EVar "StdlibIndex") (EApp (EVar "new") (ELit LUnit))) (EListLit)) (EListLit)))
 (DTypeSig true "stdlibIndexSize" (TyFun (TyCon "StdlibIndex") (TyCon "Int")))
-(DFunDef false "stdlibIndexSize" ((PCon "StdlibIndex" (PVar "m") PWild)) (EApp (EVar "size") (EVar "m")))
+(DFunDef false "stdlibIndexSize" ((PCon "StdlibIndex" (PVar "m") PWild PWild)) (EApp (EVar "size") (EVar "m")))
 (DTypeSig true "stdlibEntriesOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))))
-(DFunDef false "stdlibEntriesOf" ((PCon "StdlibIndex" (PVar "m") PWild) (PVar "name")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "name")) (EVar "m")))
+(DFunDef false "stdlibEntriesOf" ((PCon "StdlibIndex" (PVar "m") PWild PWild) (PVar "name")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "name")) (EVar "m")))
 (DTypeSig true "stdlibSigIn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty"))))))
 (DFunDef false "stdlibSigIn" ((PVar "idx") (PVar "modName") (PVar "name")) (EApp (EApp (EVar "lookupAssoc") (EVar "modName")) (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "name"))))
 (DTypeSig true "stdlibSigTextIn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "stdlibSigTextIn" ((PVar "idx") (PVar "modName") (PVar "name")) (EApp (EApp (EMethodRef "map") (EVar "ppTy")) (EApp (EApp (EApp (EVar "stdlibSigIn") (EVar "idx")) (EVar "modName")) (EVar "name"))))
 (DTypeSig true "stdlibIndexNames" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "stdlibIndexNames" ((PCon "StdlibIndex" PWild (PVar "names"))) (EVar "names"))
+(DFunDef false "stdlibIndexNames" ((PCon "StdlibIndex" PWild (PVar "names") PWild)) (EVar "names"))
+(DTypeSig true "stdlibKnowsModule" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "stdlibKnowsModule" ((PCon "StdlibIndex" PWild PWild (PVar "mods")) (PVar "modName")) (EApp (EApp (EDictApp "elem") (EVar "modName")) (EVar "mods")))
 (DTypeSig true "stdlibAmbiguousNames" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "stdlibAmbiguousNames" ((PVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "n"))) (ELit (LInt 1))))) (EApp (EVar "stdlibIndexNames") (EVar "idx"))))
 (DData Public "StdlibIndexError" () ((variant "StdlibIndexError" (ConNamed (field "path" (TyCon "String")) (field "source" (TyCon "String")) (field "diagnostic" (TyCon "Diag"))))) ())

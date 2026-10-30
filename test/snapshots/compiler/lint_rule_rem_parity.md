@@ -1,5 +1,5 @@
 # META
-source_lines=124
+source_lines=126
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-rem-parity: `n % 2 == 0` and `n % 2 /= 0` parity tests. Prefer `isEven n` / `isOdd n`.
@@ -9,6 +9,7 @@ import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
   Ctx(..),
   FileFacts,
@@ -26,7 +27,7 @@ import tools.lint_core.{
 }
 import tools.lint_shared.{
   bindingOf,
-  bindsName,
+  rebinds,
   exprRuleEditVisitors,
   nodeSpan,
   replaceFix,
@@ -48,8 +49,8 @@ rule =
       scope = Universal,
       ratchet = Gated,
       defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [NeedsScopes],
+      fixability = FixableUnsafe,
+      needs = [NeedsScopes, NeedsStdlibIndex],
     }
     ruleRemParity
     None
@@ -96,11 +97,11 @@ ruleRemParity : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleRemParity _ _ facts _ _ =
+ruleRemParity idx _ facts _ _ =
   exprRuleEditVisitors
     remParityExcl
     remParityOf
-    (remParityFix facts)
+    (remParityFix idx facts)
     remParityFinding
 
 remParityFinding : Option Loc -> Expr -> Option Fix -> Finding
@@ -115,12 +116,13 @@ remParityFinding loc rewritten fix = Finding {
 -- The rewrite calls `isEven` or `isOdd` by name.  A binding of either name
 -- anywhere in the file would capture the call, so the fix is withheld there
 -- (the finding stays).  The prelude's pair is `core.mdk`'s `isEven`/`isOdd`.
-remParityFix : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
-remParityFix facts ctx e rewritten =
-  if bindsName facts "isEven" || bindsName facts "isOdd" then
+remParityFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+remParityFix idx facts ctx e rewritten =
+  if rebinds idx facts ctx "isEven" || rebinds idx facts ctx "isOdd" then
     None
   else
     replaceFix
+      Unsafe
       "use the parity predicate"
       (nodeSpan ctx e)
       (bindingOf rewritten)
@@ -131,10 +133,10 @@ remParityFix facts ctx e rewritten =
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "bindsName" false) (mem "exprRuleEditVisitors" false) (mem "nodeSpan" false) (mem "replaceFix" false) (mem "ruleNameRemParity" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "rebinds" false) (mem "exprRuleEditVisitors" false) (mem "nodeSpan" false) (mem "replaceFix" false) (mem "ruleNameRemParity" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameRemParity")) (fa "summary" (ELit (LString "`n % 2 == 0` / `n % 2 /= 0` parity test. Prefer `isEven n` / `isOdd n`"))) (fa "doc" (ELit (LString "A remainder-by-two comparison against zero is a parity test; the prelude names it.\n\nBefore:\n  n % 2 == 0\nAfter:\n  isEven n"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleRemParity")) (EVar "None")))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameRemParity")) (fa "summary" (ELit (LString "`n % 2 == 0` / `n % 2 /= 0` parity test. Prefer `isEven n` / `isOdd n`"))) (fa "doc" (ELit (LString "A remainder-by-two comparison against zero is a parity test; the prelude names it.\n\nBefore:\n  n % 2 == 0\nAfter:\n  isEven n"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "FixableUnsafe")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsStdlibIndex")))))) (EVar "ruleRemParity")) (EVar "None")))
 (DTypeSig false "isIntLit" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isIntLit" ((PVar "k") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" (PCon "LInt" (PVar "n"))) () (EBinOp "==" (EVar "n") (EVar "k"))) (arm (PCon "ENumLit" (PVar "n") PWild PWild) () (EBinOp "==" (EVar "n") (EVar "k"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "remParityExcl" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -148,20 +150,20 @@ remParityFix facts ctx e rewritten =
 (DTypeSig false "parityFn" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "parityFn" ((PVar "op")) (EIf (EBinOp "==" (EVar "op") (ELit (LString "=="))) (ELit (LString "isEven")) (ELit (LString "isOdd"))))
 (DTypeSig false "ruleRemParity" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
-(DFunDef false "ruleRemParity" (PWild PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "remParityExcl")) (EVar "remParityOf")) (EApp (EVar "remParityFix") (EVar "facts"))) (EVar "remParityFinding")))
+(DFunDef false "ruleRemParity" ((PVar "idx") PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "remParityExcl")) (EVar "remParityOf")) (EApp (EApp (EVar "remParityFix") (EVar "idx")) (EVar "facts"))) (EVar "remParityFinding")))
 (DTypeSig false "remParityFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
 (DFunDef false "remParityFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRemParity")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "parity test. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
-(DTypeSig false "remParityFix" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix")))))))
-(DFunDef false "remParityFix" ((PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "||" (EApp (EApp (EVar "bindsName") (EVar "facts")) (ELit (LString "isEven"))) (EApp (EApp (EVar "bindsName") (EVar "facts")) (ELit (LString "isOdd")))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (ELit (LString "use the parity predicate"))) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
+(DTypeSig false "remParityFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
+(DFunDef false "remParityFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "isEven"))) (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "isOdd")))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Unsafe")) (ELit (LString "use the parity predicate"))) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "bindsName" false) (mem "exprRuleEditVisitors" false) (mem "nodeSpan" false) (mem "replaceFix" false) (mem "ruleNameRemParity" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "rebinds" false) (mem "exprRuleEditVisitors" false) (mem "nodeSpan" false) (mem "replaceFix" false) (mem "ruleNameRemParity" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameRemParity")) (fa "summary" (ELit (LString "`n % 2 == 0` / `n % 2 /= 0` parity test. Prefer `isEven n` / `isOdd n`"))) (fa "doc" (ELit (LString "A remainder-by-two comparison against zero is a parity test; the prelude names it.\n\nBefore:\n  n % 2 == 0\nAfter:\n  isEven n"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleRemParity")) (EVar "None")))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameRemParity")) (fa "summary" (ELit (LString "`n % 2 == 0` / `n % 2 /= 0` parity test. Prefer `isEven n` / `isOdd n`"))) (fa "doc" (ELit (LString "A remainder-by-two comparison against zero is a parity test; the prelude names it.\n\nBefore:\n  n % 2 == 0\nAfter:\n  isEven n"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "FixableUnsafe")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsStdlibIndex")))))) (EVar "ruleRemParity")) (EVar "None")))
 (DTypeSig false "isIntLit" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isIntLit" ((PVar "k") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" (PCon "LInt" (PVar "n"))) () (EBinOp "==" (EVar "n") (EVar "k"))) (arm (PCon "ENumLit" (PVar "n") PWild PWild) () (EBinOp "==" (EVar "n") (EVar "k"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "remParityExcl" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -175,8 +177,8 @@ remParityFix facts ctx e rewritten =
 (DTypeSig false "parityFn" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "parityFn" ((PVar "op")) (EIf (EBinOp "==" (EVar "op") (ELit (LString "=="))) (ELit (LString "isEven")) (ELit (LString "isOdd"))))
 (DTypeSig false "ruleRemParity" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
-(DFunDef false "ruleRemParity" (PWild PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "remParityExcl")) (EVar "remParityOf")) (EApp (EVar "remParityFix") (EVar "facts"))) (EVar "remParityFinding")))
+(DFunDef false "ruleRemParity" ((PVar "idx") PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "remParityExcl")) (EVar "remParityOf")) (EApp (EApp (EVar "remParityFix") (EVar "idx")) (EVar "facts"))) (EVar "remParityFinding")))
 (DTypeSig false "remParityFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
 (DFunDef false "remParityFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRemParity")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "parity test. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
-(DTypeSig false "remParityFix" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix")))))))
-(DFunDef false "remParityFix" ((PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "||" (EApp (EApp (EVar "bindsName") (EVar "facts")) (ELit (LString "isEven"))) (EApp (EApp (EVar "bindsName") (EVar "facts")) (ELit (LString "isOdd")))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (ELit (LString "use the parity predicate"))) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
+(DTypeSig false "remParityFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
+(DFunDef false "remParityFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "isEven"))) (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "isOdd")))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Unsafe")) (ELit (LString "use the parity predicate"))) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))

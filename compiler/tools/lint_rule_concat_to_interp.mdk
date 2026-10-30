@@ -30,6 +30,7 @@ import driver.diagnostics.{Severity(..)}
 import support.util.{listLen, anyList, isNonEmptyL}
 import tools.printer.{exprToString}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
   Ctx(..),
   FileFacts(..),
@@ -47,7 +48,7 @@ import tools.lint_core.{
 }
 import tools.lint_shared.{
   bindingOf,
-  bindsName,
+  rebinds,
   declHeadHits,
   mapChildExprs,
   replaceFix,
@@ -71,7 +72,7 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [NeedsScopes],
+      needs = [NeedsScopes, NeedsStdlibIndex],
     }
     ruleConcatToInterp
     None
@@ -171,18 +172,22 @@ ruleConcatToInterp : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleConcatToInterp _ _ facts _ _ = [OnDecl (concatToInterpAt facts)]
+ruleConcatToInterp idx _ facts _ _ = [OnDecl (concatToInterpAt idx facts)]
 
-concatToInterpAt : FileFacts -> Ctx -> Decl -> List Finding
-concatToInterpAt facts ctx d =
-  map (concatToInterpHit facts ctx) (declHeadHits concatChainPick d)
+concatToInterpAt : StdlibIndex -> FileFacts -> Ctx -> Decl -> List Finding
+concatToInterpAt idx facts ctx d =
+  map (concatToInterpHit idx facts ctx) (declHeadHits concatChainPick d)
 
-concatToInterpHit : FileFacts -> Ctx -> (Expr, Option Loc) -> Finding
-concatToInterpHit facts ctx (rewritten, span) =
+concatToInterpHit : StdlibIndex ->
+  FileFacts ->
+  Ctx ->
+  (Expr, Option Loc) ->
+  Finding
+concatToInterpHit idx facts ctx (rewritten, span) =
   concatToInterpFinding
     ctx.ctxSpan
     rewritten
-    (concatToInterpFix facts ctx span rewritten)
+    (concatToInterpFix idx facts ctx span rewritten)
 
 concatToInterpFinding : Option Loc -> Expr -> Option Fix -> Finding
 concatToInterpFinding loc rewritten fix = Finding {
@@ -199,12 +204,18 @@ concatToInterpFinding loc rewritten fix = Finding {
 -- The fix replaces the chain's span with the interpolated string.  An interpolation
 -- hole desugars to a call of `display`, so the fix is withheld where the file binds
 -- `display`: that binding would capture the new call.
-concatToInterpFix : FileFacts -> Ctx -> Option Loc -> Expr -> Option Fix
-concatToInterpFix facts ctx span rewritten =
-  if bindsName facts "display" then
+concatToInterpFix : StdlibIndex ->
+  FileFacts ->
+  Ctx ->
+  Option Loc ->
+  Expr ->
+  Option Fix
+concatToInterpFix idx facts ctx span rewritten =
+  if rebinds idx facts ctx "display" then
     None
   else
     replaceFix
+      Safe
       "interpolate the string"
       span
       (bindingOf rewritten)

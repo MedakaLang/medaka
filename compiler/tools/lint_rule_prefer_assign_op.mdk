@@ -14,6 +14,7 @@ import tools.printer.{exprToString}
 import ir.sexp.{exprSexp}
 import tools.lint_core.{
   Applicability(..),
+  Applicability(..),
   Category(..),
   Ctx(..),
   FileFacts,
@@ -58,7 +59,7 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [NeedsScopes],
+      needs = [NeedsScopes, NeedsStdlibIndex],
     }
     ruleForPreferAssign
     None
@@ -144,11 +145,11 @@ ruleForPreferAssign : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleForPreferAssign _ _ facts _ _ =
+ruleForPreferAssign idx _ facts _ _ =
   exprRuleEditVisitors
     noExcl
     preferAssignOf
-    (preferAssignFix facts)
+    (preferAssignFix idx facts)
     preferAssignFinding
 
 -- The message is shape-directed: a `setRef` hit renders its `:=` replacement (the
@@ -175,15 +176,16 @@ preferAssignMessage rewritten =
 -- A `setRef` rewrite reads the prelude's `setRef`, so it is withheld where the
 -- file binds that name: the call it matched would then be the file's own.  The
 -- collapse reads no name (`:=` is grammar).
-preferAssignFix : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
-preferAssignFix _ _ (EBlock stmts) _ = collapseFix stmts
-preferAssignFix facts ctx e rewritten = setRefFix facts ctx e rewritten
+preferAssignFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+preferAssignFix _ _ _ (EBlock stmts) _ = collapseFix stmts
+preferAssignFix idx facts ctx e rewritten = setRefFix idx facts ctx e rewritten
 
-setRefFix : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
-setRefFix facts ctx (e@(EApp fn _)) rewritten = match unwrapLoc fn
+setRefFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+setRefFix idx facts ctx (e@(EApp fn _)) rewritten = match unwrapLoc fn
   EApp hd _ =>
-    if usesPreludeName facts hd then
+    if usesPreludeName idx facts hd then
       replaceFix
+        Safe
         "use the `:=` write operator"
         (nodeSpan ctx e)
         (bindingOf rewritten)
@@ -192,7 +194,7 @@ setRefFix facts ctx (e@(EApp fn _)) rewritten = match unwrapLoc fn
     else
       None
   _ => None
-setRefFix _ _ _ _ = None
+setRefFix _ _ _ _ _ = None
 
 -- One edit per `let _ = <write>` statement, deleting the text from the `let`
 -- keyword to the write.  The statement's `Loc` is the `let` keyword's span; a

@@ -11,6 +11,7 @@ import string.{stripSuffix, trimRight, unwords}
 import tools.printer.{exprToString}
 import tools.lint_fix.{Binding(..)}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
   Ctx(..),
   FileFacts(..),
@@ -170,6 +171,7 @@ lambdaSectionFinding loc s fix = Finding {
 lambdaSectionFix : FileFacts -> Ctx -> List Pat -> Section -> Option Fix
 lambdaSectionFix facts ctx pats sec =
   replaceFix
+    Safe
     "use the operator section"
     (lambdaSpan facts ctx pats)
     Closed

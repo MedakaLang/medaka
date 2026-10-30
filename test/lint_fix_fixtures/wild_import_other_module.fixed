@@ -1,0 +1,8 @@
+-- Fixture for the wildcard-import guard of the span-edit fixes.
+-- `import hash_map.*` exports none of `not`, `reverse` or `when`, so each fix applies.
+
+import hash_map.*
+
+notEq a b = a /= b
+dbl xs = xs
+whenShape b act = when b act

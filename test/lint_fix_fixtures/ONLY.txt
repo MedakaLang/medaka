@@ -55,3 +55,15 @@ test_verb_where_bound_introduced rule-test-equal-in-true,rule-test-bool-literal-
 test_verb_where_bound_swapped rule-test-equal-in-true,rule-test-bool-literal-equal
 when_unless rule-when-unless
 when_unless_brackets rule-when-unless
+not_eq_wild_import rule-not-eq
+rem_parity_wild_import rule-rem-parity
+when_unless_wild_import rule-when-unless
+double_reverse_wild_import rule-double-reverse
+wild_import_unresolved rule-not-eq,rule-double-reverse,rule-when-unless
+wild_import_other_module rule-not-eq,rule-double-reverse,rule-when-unless
+match_on_param_suppressed rule-match-on-param
+destructure_in_param_suppressed rule-destructure-in-param
+bind_then_destructure_suppressed rule-bind-then-destructure
+test_equal_in_true_suppressed rule-test-equal-in-true
+test_bool_literal_equal_suppressed rule-test-bool-literal-equal
+impl_method_self_call rule-andthen-pure-map,rule-match-to-map,rule-concat-to-interp,rule-if-max-min,rule-when-unless

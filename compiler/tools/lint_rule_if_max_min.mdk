@@ -7,6 +7,7 @@ import ir.sexp.{exprSexp}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
   Ctx(..),
   FileFacts(..),
@@ -24,7 +25,7 @@ import tools.lint_core.{
 }
 import tools.lint_shared.{
   bindingOf,
-  bindsName,
+  rebinds,
   declLocList,
   nodeSpan,
   replaceFix,
@@ -46,8 +47,8 @@ rule =
       scope = Universal,
       ratchet = Gated,
       defaultSeverity = SevWarning,
-      fixability = Fixable,
-      needs = [NeedsScopes],
+      fixability = FixableUnsafe,
+      needs = [NeedsScopes, NeedsStdlibIndex],
     }
     ruleIfMaxMin
     None
@@ -130,15 +131,20 @@ ruleIfMaxMin : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleIfMaxMin _ _ facts pos decls =
-  [OnExpr [KIf] (ifMaxMinAt (ordImplLocs pos decls) facts)]
+ruleIfMaxMin idx _ facts pos decls =
+  [OnExpr [KIf] (ifMaxMinAt idx (ordImplLocs pos decls) facts)]
 
-ifMaxMinAt : List Loc -> FileFacts -> Ctx -> Expr -> List Finding
-ifMaxMinAt ordLocs facts ctx (e@(EIf cond t el)) = match ifMaxMinOf cond t el
-  Some hit =>
-    [ifMaxMinFinding ctx.ctxDeclLoc hit (ifMaxMinFix ordLocs facts ctx e hit)]
-  None => []
-ifMaxMinAt _ _ _ _ = []
+ifMaxMinAt : StdlibIndex -> List Loc -> FileFacts -> Ctx -> Expr -> List Finding
+ifMaxMinAt idx ordLocs facts ctx (e@(EIf cond t el)) =
+  match ifMaxMinOf cond t el
+    Some hit => [
+      ifMaxMinFinding
+        ctx.ctxDeclLoc
+        hit
+        (ifMaxMinFix idx ordLocs facts ctx e hit),
+    ]
+    None => []
+ifMaxMinAt _ _ _ _ _ = []
 
 ifMaxMinFinding : Option Loc -> (String, Expr, Expr) -> Option Fix -> Finding
 ifMaxMinFinding loc (fn, a, b) fix = Finding {
@@ -157,18 +163,20 @@ ifMaxMinFinding loc (fn, a, b) fix = Finding {
 --     so `min a b = if a <= b then a else b` would become `min a b = min a b`;
 --   * where the file binds the called name, since the call is then not the prelude's.
 -- A `lint-disable-next-line` over the site drops the finding, so its fix with it.
-ifMaxMinFix : List Loc ->
+ifMaxMinFix : StdlibIndex ->
+  List Loc ->
   FileFacts ->
   Ctx ->
   Expr ->
   (String, Expr, Expr) ->
   Option Fix
-ifMaxMinFix ordLocs facts ctx e (fn, a, b) =
-  if inOrdImpl ctx.ctxDeclLoc ordLocs || bindsName facts fn then
+ifMaxMinFix idx ordLocs facts ctx e (fn, a, b) =
+  if inOrdImpl ctx.ctxDeclLoc ordLocs || rebinds idx facts ctx fn then
     None
   else
     let call = EApp (EApp (EVar fn) a) b
     replaceFix
+      Unsafe
       ("select with " ++ fn)
       (nodeSpan ctx e)
       (bindingOf call)

@@ -5,6 +5,7 @@ import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import tools.printer.{exprToString}
 import tools.lint_core.{
+  Applicability(..),
   Category(..),
   Ctx(..),
   FileFacts(..),
@@ -46,7 +47,7 @@ rule =
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = Fixable,
-      needs = [NeedsScopes],
+      needs = [NeedsScopes, NeedsStdlibIndex],
     }
     ruleDoubleReverse
     None
@@ -66,11 +67,11 @@ ruleDoubleReverse : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleDoubleReverse _ _ facts _ _ =
+ruleDoubleReverse idx _ facts _ _ =
   exprRuleEditVisitors
     noExcl
     doubleReverseOf
-    (doubleReverseFix facts)
+    (doubleReverseFix idx facts)
     doubleReverseFinding
 
 doubleReverseFinding : Option Loc -> Expr -> Option Fix -> Finding
@@ -88,10 +89,11 @@ doubleReverseFinding loc rewritten fix = Finding {
 -- The rewrite drops both `reverse` calls, so each must be the one the file
 -- resolves to the prelude's: a `reverse` the file binds is not the list
 -- involution the rule knows, and its fix is withheld.
-doubleReverseFix : FileFacts -> Ctx -> Expr -> Expr -> Option Fix
-doubleReverseFix facts ctx e rewritten =
-  if reversesArePrelude facts e then
+doubleReverseFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+doubleReverseFix idx facts ctx e rewritten =
+  if reversesArePrelude idx facts e then
     replaceFix
+      Safe
       "drop the double reversal"
       (nodeSpan ctx e)
       (bindingOf rewritten)
@@ -101,8 +103,8 @@ doubleReverseFix facts ctx e rewritten =
     None
 
 -- Both `reverse` heads of the matched pair resolve to the prelude's.
-reversesArePrelude : FileFacts -> Expr -> Bool
-reversesArePrelude facts (EApp hd1 arg1) = match unwrapLoc arg1
-  EApp hd2 _ => usesPreludeName facts hd1 && usesPreludeName facts hd2
+reversesArePrelude : StdlibIndex -> FileFacts -> Expr -> Bool
+reversesArePrelude idx facts (EApp hd1 arg1) = match unwrapLoc arg1
+  EApp hd2 _ => usesPreludeName idx facts hd1 && usesPreludeName idx facts hd2
   _ => False
-reversesArePrelude _ _ = False
+reversesArePrelude _ _ _ = False
