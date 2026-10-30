@@ -1639,9 +1639,8 @@ applyGetBlob account store params = do
       Err
         (blobNotFound "No blob with CID '\{cidText}' is stored on this server")
     Some bytes =>
-      let mimeType = match storeBlobMimeType cid store
-        None => "application/octet-stream"
-        Some declared => declared
+      let mimeType =
+        optionOr "application/octet-stream" (storeBlobMimeType cid store)
       Ok (blobOkResponse mimeType bytes)
 
 -- ── com.atproto.sync.listBlobs ──────────────────────────────────────────────

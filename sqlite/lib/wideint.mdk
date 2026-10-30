@@ -140,9 +140,7 @@ truncFloat r
 
 -- A value already known to fit `Int` (a half above).
 small : I64 -> Int
-small x = match I64.toInt x
-  Some n => n
-  None => 0
+small x = optionOr 0 (I64.toInt x)
 
 -- | A decimal integer (an optional sign, then one or more digits) as an `I64`,
 --   or `None` when it is anything else or outside 64 bits.  The magnitude is

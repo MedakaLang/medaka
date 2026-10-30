@@ -200,11 +200,7 @@ errorMessage bytes = match jsonBody bytes
    literal readback of the successor store, not a claim: an unconfigured store
    has no repository and no blobs, and no route here may create either. -}
 storeIsEmpty : Store -> Bool
-storeIsEmpty store =
-  storeSize store == 0
-    && (match storeRepo store
-      None => True
-      Some _ => False)
+storeIsEmpty store = storeSize store == 0 && isNone (storeRepo store)
 
 check : String -> Bool -> String -> <IO> Int
 check label ok detail =

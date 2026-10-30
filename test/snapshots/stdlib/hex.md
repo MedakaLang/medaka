@@ -1,5 +1,5 @@
 # META
-source_lines=165
+source_lines=162
 stages=DESUGAR,MARK
 # SOURCE
 {- | Hexadecimal encoding and decoding.
@@ -30,9 +30,7 @@ import u8 as U8
 -- the `None` arm is unreachable; this just avoids the internal-only
 -- `arrayGetUnsafe` primitive.
 charAt : Int -> Array Char -> Char
-charAt i arr = match arrGet i arr
-  Some c => c
-  None => panic "hex: index out of bounds"
+charAt i arr = optionOrPanic "hex: index out of bounds" (arrGet i arr)
 
 -- # Encoding
 
@@ -41,9 +39,8 @@ digitChar n upper =
   if upper then match toDigit n
     Some c => charToUpper c
     None => '?'
-  else match toDigit n
-    Some c => c
-    None => '?'
+  else
+    optionOr '?' (toDigit n)
 
 byteToHexChars : Int -> Bool -> (Char, Char)
 byteToHexChars b upper =
@@ -175,9 +172,9 @@ prop "hex encode length is 2x byte length" (xs : List Int) =
 (DUse false (UseGroup ("string") ((mem "fromDigit" false) (mem "toDigit" false) (mem "toUtf8" false) (mem "fromUtf8" false) (mem "toChars" false))))
 (DUse false (UseAlias ("u8") "U8"))
 (DTypeSig false "charAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Char"))))
-(DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EMatch (EApp (EApp (EVar "arrGet") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "hex: index out of bounds"))))))
+(DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "hex: index out of bounds"))) (EApp (EApp (EVar "arrGet") (EVar "i")) (EVar "arr"))))
 (DTypeSig false "digitChar" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Char"))))
-(DFunDef false "digitChar" ((PVar "n") (PVar "upper")) (EIf (EVar "upper") (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "charToUpper") (EVar "c"))) (arm (PCon "None") () (ELit (LChar "?")))) (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar "?"))))))
+(DFunDef false "digitChar" ((PVar "n") (PVar "upper")) (EIf (EVar "upper") (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "charToUpper") (EVar "c"))) (arm (PCon "None") () (ELit (LChar "?")))) (EApp (EApp (EVar "optionOr") (ELit (LChar "?"))) (EApp (EVar "toDigit") (EVar "n")))))
 (DTypeSig false "byteToHexChars" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyTuple (TyCon "Char") (TyCon "Char")))))
 (DFunDef false "byteToHexChars" ((PVar "b") (PVar "upper")) (EBlock (DoLet false false (PVar "masked") (EApp (EApp (EVar "bitAnd") (EVar "b")) (ELit (LInt 255)))) (DoLet false false (PVar "hi") (EApp (EApp (EVar "shiftRight") (EVar "masked")) (ELit (LInt 4)))) (DoLet false false (PVar "lo") (EApp (EApp (EVar "bitAnd") (EVar "masked")) (ELit (LInt 15)))) (DoExpr (ETuple (EApp (EApp (EVar "digitChar") (EVar "hi")) (EVar "upper")) (EApp (EApp (EVar "digitChar") (EVar "lo")) (EVar "upper"))))))
 (DTypeSig false "encodeGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyCon "Char")))))))
@@ -208,9 +205,9 @@ prop "hex encode length is 2x byte length" (xs : List Int) =
 (DUse false (UseGroup ("string") ((mem "fromDigit" false) (mem "toDigit" false) (mem "toUtf8" false) (mem "fromUtf8" false) (mem "toChars" false))))
 (DUse false (UseAlias ("u8") "U8"))
 (DTypeSig false "charAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Char"))))
-(DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EMatch (EApp (EApp (EVar "arrGet") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "hex: index out of bounds"))))))
+(DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "hex: index out of bounds"))) (EApp (EApp (EVar "arrGet") (EVar "i")) (EVar "arr"))))
 (DTypeSig false "digitChar" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Char"))))
-(DFunDef false "digitChar" ((PVar "n") (PVar "upper")) (EIf (EVar "upper") (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "charToUpper") (EVar "c"))) (arm (PCon "None") () (ELit (LChar "?")))) (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar "?"))))))
+(DFunDef false "digitChar" ((PVar "n") (PVar "upper")) (EIf (EVar "upper") (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "charToUpper") (EVar "c"))) (arm (PCon "None") () (ELit (LChar "?")))) (EApp (EApp (EVar "optionOr") (ELit (LChar "?"))) (EApp (EVar "toDigit") (EVar "n")))))
 (DTypeSig false "byteToHexChars" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyTuple (TyCon "Char") (TyCon "Char")))))
 (DFunDef false "byteToHexChars" ((PVar "b") (PVar "upper")) (EBlock (DoLet false false (PVar "masked") (EApp (EApp (EVar "bitAnd") (EVar "b")) (ELit (LInt 255)))) (DoLet false false (PVar "hi") (EApp (EApp (EVar "shiftRight") (EVar "masked")) (ELit (LInt 4)))) (DoLet false false (PVar "lo") (EApp (EApp (EVar "bitAnd") (EVar "masked")) (ELit (LInt 15)))) (DoExpr (ETuple (EApp (EApp (EVar "digitChar") (EVar "hi")) (EVar "upper")) (EApp (EApp (EVar "digitChar") (EVar "lo")) (EVar "upper"))))))
 (DTypeSig false "encodeGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyCon "Char")))))))

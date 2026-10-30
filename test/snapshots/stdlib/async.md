@@ -1,5 +1,5 @@
 # META
-source_lines=539
+source_lines=537
 stages=DESUGAR,MARK
 # SOURCE
 -- async.mdk — Medaka's cooperative-concurrency layer: the `Async` type, its
@@ -272,9 +272,7 @@ runAsync prog =
   let back = Ref []
   let parked = Ref []
   let _ = schedule front back parked 1
-  match !cell
-    Some a => a
-    None => panic "async: the program finished without producing a value"
+  optionOrPanic "async: the program finished without producing a value" !cell
 
 {- | `runAsync` for a program whose value is `Unit`.
 
@@ -603,7 +601,7 @@ isWriteOf _ _ = False
 (DFunDef false "awaitAll" ((PVar "acc") (PList)) (EApp (EVar "Done") (EApp (EVar "reverse") (EVar "acc"))))
 (DFunDef false "awaitAll" ((PVar "acc") (PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "deferThen") (EApp (EVar "await") (EVar "t"))) (ELam ((PVar "a")) (EApp (EApp (EVar "awaitAll") (EBinOp "::" (EVar "a") (EVar "acc"))) (EVar "rest")))))
 (DTypeSig true "runAsync" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")) (TyEffect () (Some "e") (TyVar "a"))))
-(DFunDef false "runAsync" ((PVar "prog")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "front") (EApp (EVar "Ref") (EListLit (EApp (EApp (EVar "deferThen") (EVar "prog")) (ELam ((PVar "a")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "storeResult") (EVar "cell")) (EVar "a"))))))))) (DoLet false false (PVar "back") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parked") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (ELit (LInt 1)))) (DoExpr (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "async: the program finished without producing a value"))))))))
+(DFunDef false "runAsync" ((PVar "prog")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "front") (EApp (EVar "Ref") (EListLit (EApp (EApp (EVar "deferThen") (EVar "prog")) (ELam ((PVar "a")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "storeResult") (EVar "cell")) (EVar "a"))))))))) (DoLet false false (PVar "back") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parked") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (ELit (LInt 1)))) (DoExpr (EApp (EApp (EVar "optionOrPanic") (ELit (LString "async: the program finished without producing a value"))) (EUnOp "!" (EVar "cell"))))))
 (DTypeSig true "runAsyncMain" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyEffect () (Some "e") (TyCon "Unit"))))
 (DFunDef false "runAsyncMain" ((PVar "prog")) (EApp (EVar "runAsync") (EVar "prog")))
 (DTypeSig false "storeResult" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyVar "a") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))
@@ -757,7 +755,7 @@ isWriteOf _ _ = False
 (DFunDef false "awaitAll" ((PVar "acc") (PList)) (EApp (EVar "Done") (EApp (EVar "reverse") (EVar "acc"))))
 (DFunDef false "awaitAll" ((PVar "acc") (PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "await") (EVar "t"))) (ELam ((PVar "a")) (EApp (EApp (EVar "awaitAll") (EBinOp "::" (EVar "a") (EVar "acc"))) (EVar "rest")))))
 (DTypeSig true "runAsync" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")) (TyEffect () (Some "e") (TyVar "a"))))
-(DFunDef false "runAsync" ((PVar "prog")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "front") (EApp (EVar "Ref") (EListLit (EApp (EApp (EMethodRef "deferThen") (EVar "prog")) (ELam ((PVar "a")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "storeResult") (EVar "cell")) (EVar "a"))))))))) (DoLet false false (PVar "back") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parked") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (ELit (LInt 1)))) (DoExpr (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "async: the program finished without producing a value"))))))))
+(DFunDef false "runAsync" ((PVar "prog")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "front") (EApp (EVar "Ref") (EListLit (EApp (EApp (EMethodRef "deferThen") (EVar "prog")) (ELam ((PVar "a")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "storeResult") (EVar "cell")) (EVar "a"))))))))) (DoLet false false (PVar "back") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parked") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (ELit (LInt 1)))) (DoExpr (EApp (EApp (EVar "optionOrPanic") (ELit (LString "async: the program finished without producing a value"))) (EUnOp "!" (EVar "cell"))))))
 (DTypeSig true "runAsyncMain" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyEffect () (Some "e") (TyCon "Unit"))))
 (DFunDef false "runAsyncMain" ((PVar "prog")) (EApp (EVar "runAsync") (EVar "prog")))
 (DTypeSig false "storeResult" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyVar "a") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))

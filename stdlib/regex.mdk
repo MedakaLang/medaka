@@ -274,9 +274,7 @@ advance : PState -> Unit
 advance st = st.pos := !st.pos + 1
 
 hasErr : PState -> Bool
-hasErr st = match !st.perr
-  Some _ => True
-  None => False
+hasErr st = isSome !st.perr
 
 -- The first failure is the reported one: a parser that keeps walking after
 -- an error would otherwise overwrite the useful position with a later one.
@@ -919,9 +917,7 @@ resetThreads list =
   list.gen := !list.gen + 1
 
 foundYet : Vm -> Bool
-foundYet vm = match !vm.found
-  Some _ => True
-  None => False
+foundYet vm = isSome !vm.found
 
 addThread : Vm -> ThreadList -> Int -> Int -> Array Int -> Unit
 addThread vm list pc pos slots =
@@ -1320,9 +1316,7 @@ isMeta c =
    False -}
 export
 isMatch : Regex -> String -> Bool
-isMatch re s = match searchFrom re (codesOf s) 0 False False (Ref 0)
-  Some _ => True
-  None => False
+isMatch re s = isSome (searchFrom re (codesOf s) 0 False False (Ref 0))
 
 {- | Whether the pattern matches the whole subject.
 
@@ -1335,9 +1329,7 @@ isMatch re s = match searchFrom re (codesOf s) 0 False False (Ref 0)
    False -}
 export
 isFullMatch : Regex -> String -> Bool
-isFullMatch re s = match searchFrom re (codesOf s) 0 True True (Ref 0)
-  Some _ => True
-  None => False
+isFullMatch re s = isSome (searchFrom re (codesOf s) 0 True True (Ref 0))
 
 {- | The leftmost match, or `None` when the pattern does not match.
 
@@ -1462,9 +1454,7 @@ export
 isFullMatchBytes : Regex -> Bytes -> Int -> Int -> Bool
 isFullMatchBytes re bytes start end =
   let (_, codes) = windowCodes bytes start end
-  match searchWindow re codes (0, arrayLength codes) 0 True True (Ref 0)
-    Some _ => True
-    None => False
+  isSome (searchWindow re codes (0, arrayLength codes) 0 True True (Ref 0))
 
 -- An out-of-range window is shorter, never a panic, and an empty one matches
 -- only a pattern that can match nothing.

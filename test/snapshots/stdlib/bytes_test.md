@@ -1,5 +1,5 @@
 # META
-source_lines=154
+source_lines=152
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for `stdlib/bytes.mdk`'s UTF-8 decoding, and for `string.fromUtf8`,
@@ -81,9 +81,7 @@ refFold raw i end acc =
     refFold raw (i + 1) end (acc * 64 + refByte raw i % 64)
 
 refChar : Int -> Char
-refChar cp = match charFromCode cp
-  Some c => c
-  None => '�'
+refChar cp = optionOr '�' (charFromCode cp)
 
 -- The characters `raw` reads as.
 refChars : Array Int -> List Char
@@ -174,7 +172,7 @@ test "split sees U+FFFD, not a 0xFF lead swallowing the comma after it" =
 (DTypeSig false "refFold" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "refFold" ((PVar "raw") (PVar "i") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "end")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "refFold") (EVar "raw")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "end")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 64))) (EBinOp "%" (EApp (EApp (EVar "refByte") (EVar "raw")) (EVar "i")) (ELit (LInt 64)))))))
 (DTypeSig false "refChar" (TyFun (TyCon "Int") (TyCon "Char")))
-(DFunDef false "refChar" ((PVar "cp")) (EMatch (EApp (EVar "charFromCode") (EVar "cp")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar "�")))))
+(DFunDef false "refChar" ((PVar "cp")) (EApp (EApp (EVar "optionOr") (ELit (LChar "�"))) (EApp (EVar "charFromCode") (EVar "cp"))))
 (DTypeSig false "refChars" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Char"))))
 (DFunDef false "refChars" ((PVar "raw")) (EApp (EApp (EApp (EVar "refCharsFrom") (EVar "raw")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "raw"))))
 (DTypeSig false "refCharsFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Char"))))))
@@ -210,7 +208,7 @@ test "split sees U+FFFD, not a 0xFF lead swallowing the comma after it" =
 (DTypeSig false "refFold" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "refFold" ((PVar "raw") (PVar "i") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "end")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "refFold") (EVar "raw")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "end")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 64))) (EBinOp "%" (EApp (EApp (EVar "refByte") (EVar "raw")) (EVar "i")) (ELit (LInt 64)))))))
 (DTypeSig false "refChar" (TyFun (TyCon "Int") (TyCon "Char")))
-(DFunDef false "refChar" ((PVar "cp")) (EMatch (EApp (EVar "charFromCode") (EVar "cp")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar "�")))))
+(DFunDef false "refChar" ((PVar "cp")) (EApp (EApp (EVar "optionOr") (ELit (LChar "�"))) (EApp (EVar "charFromCode") (EVar "cp"))))
 (DTypeSig false "refChars" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Char"))))
 (DFunDef false "refChars" ((PVar "raw")) (EApp (EApp (EApp (EVar "refCharsFrom") (EVar "raw")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "raw"))))
 (DTypeSig false "refCharsFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Char"))))))

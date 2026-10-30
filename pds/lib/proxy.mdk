@@ -534,9 +534,8 @@ jsonContentType =
 
 relayedContentType : Option Bytes -> Header
 relayedContentType None = jsonContentType
-relayedContentType (Some value) = match makeHeader "content-type" value
-  Ok header => header
-  Err _ => jsonContentType
+relayedContentType (Some value) =
+  resultOr jsonContentType (makeHeader "content-type" value)
 
 -- A field the upstream sent in a shape `makeHeader` will not build is dropped,
 -- not fatal: it is negotiation the client can do without, and refusing the

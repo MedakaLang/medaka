@@ -327,9 +327,7 @@ okCount l = match indexOf " ok," l
 
 export
 lastLineOf : String -> String
-lastLineOf out = match last (filter (/= "") (lines out))
-  None => ""
-  Some l => l
+lastLineOf out = optionOr "" (last (filter (/= "") (lines out)))
 
 {- | A spawn's stdout and findings, with `a`'s floor, substrings and last
    line graded only when the spawn itself ran clean: a spawn that failed

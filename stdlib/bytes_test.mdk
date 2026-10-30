@@ -77,9 +77,7 @@ refFold raw i end acc =
     refFold raw (i + 1) end (acc * 64 + refByte raw i % 64)
 
 refChar : Int -> Char
-refChar cp = match charFromCode cp
-  Some c => c
-  None => '�'
+refChar cp = optionOr '�' (charFromCode cp)
 
 -- The characters `raw` reads as.
 refChars : Array Int -> List Char
