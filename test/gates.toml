@@ -2211,6 +2211,22 @@ toolchain = []
 link = "production"
 
 [[gate]]
+name = "diff_compiler_lint_rule_fixtures"
+area = "tools"
+shard = "gates_5"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "native"
+migration = "done"
+run = "compiler/tools/lint_rule_fixtures_test.mdk"
+oracles = []
+sources = ["compiler/frontend/ast_walk.mdk", "compiler/tools/lint*.mdk", "compiler/tools/printer.mdk"]
+corpus = ["test/lint_rule_fixtures"]
+toolchain = []
+link = "production"
+
+[[gate]]
 name = "diff_compiler_lint_baseline"
 area = "tooling"
 shard = "gates_6"

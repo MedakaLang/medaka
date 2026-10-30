@@ -1,0 +1,57 @@
+-- Fixture for rule-bool-simplify.  The line below each `expect-next-line`
+-- marker is the line the rule reports.  The rule reports the line of the
+-- declaration that holds the expression, so each positive is a one-line
+-- declaration; a finding inside an interface default is reported at the
+-- interface header.
+
+-- expect-next-line rule-bool-simplify
+ifTrueFalse c = c
+
+-- expect-next-line rule-bool-simplify
+ifFalseTrue c = not c
+
+-- expect-next-line rule-bool-simplify
+eqTrue x = x
+
+-- expect-next-line rule-bool-simplify
+eqFalse x = not x
+
+-- expect-next-line rule-bool-simplify
+neTrue x = not x
+
+-- expect-next-line rule-bool-simplify
+doubleNot x = x
+
+-- expect-next-line rule-bool-simplify unfixed
+test "redundant if in a test body" = expectTrue (if 1 < 2 then True else False)
+
+-- expect-next-line rule-bool-simplify unfixed
+prop "redundant comparison in a prop body" (b : Bool) = (b == True) == b
+
+-- expect-next-line rule-bool-simplify unfixed
+let rec loop b = not (not b)
+
+-- expect-next-line rule-bool-simplify unfixed
+interface Flag a where
+  flag : a -> Bool
+  both : a -> Bool
+  both x = flag x == True
+
+nearMisses c x =
+  [ if c then True else c
+  , if c then x else False
+  , x == c
+  , True == True
+  , not x
+  , not (f x)
+  ]
+
+f x = x
+
+test "plain if in a test body" = expectTrue (if 1 < 2 then 3 else 4 == 3)
+
+prop "plain not in a prop body" (b : Bool) = not b /= b
+
+interface Plain a where
+  plain : a -> Bool
+  plain x = not (not' x)

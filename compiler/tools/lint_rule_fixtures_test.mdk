@@ -1,0 +1,213 @@
+-- Per-rule fixture harness for `medaka lint`.
+--
+-- A rule's fixture is `test/lint_rule_fixtures/<name>.mdk`, where `<name>` is
+-- the rule's name without its `rule-` prefix.  The harness runs ONLY that rule,
+-- in process, over the fixture and asserts that the set of lines it flags
+-- equals the annotated set.
+--
+-- Marker grammar.  A positive is the line immediately below a comment line
+--
+--   -- expect-next-line <rule-name>
+--   -- expect-next-line <rule-name> unfixed
+--
+-- (leading whitespace allowed; exactly one space after `line`).  Every other
+-- line is a negative.  A marker naming a different rule is ignored, so a
+-- fixture can carry positives of a neighbouring rule.  A marker naming a rule
+-- the registry does not know fails the run.  Lines, not messages, are compared:
+-- a message may be reworded without moving a fixture.
+--
+-- Optional `<name>.fixed` is the exact `--fix` output of the fixture under that
+-- one rule.  The harness applies the fix, compares to the file, re-parses the
+-- result, and requires the re-lint to flag nothing of the rule, except the
+-- positives marked `unfixed` (bodies the rule's fixer does not reach); those
+-- lines must still be flagged, so a fixer that grows to reach them fails the
+-- fixture until the marker is dropped.  A fixture with `unfixed` markers must
+-- keep its line count under the fix.
+--
+-- Internal-scope rules need no activation here: the scope filter lives in the
+-- CLI, and this harness selects the rule by name.
+--
+-- Files are located through `MEDAKA_ROOT`, so the test runs as a native gate:
+-- `medaka test --native compiler/tools/lint_rule_fixtures_test.mdk`.
+
+import test.{
+  Expectation,
+  expectAll,
+  expectEach,
+  expectEqual,
+  expectFalse,
+  fail,
+  labelFail,
+  pass,
+}
+import test_process.{mdkModuleStem, underRoot, unrosteredUnits}
+import list.{sort, nub, indexed}
+import string.{lines, words, trim, stripPrefix}
+import frontend.ast.{Loc(..)}
+import tools.lint.{
+  Finding(..),
+  allRuleNames,
+  applyFixes,
+  emptyStdlibIndex,
+  lintParseSource,
+  lintProgram,
+  selectRules,
+}
+
+-- The rules that have a fixture, named without their `rule-` prefix; one
+-- `test` block per name below.
+fixtureNames : List String
+fixtureNames = [
+  "bool-simplify",
+  "lambda-section",
+  "missing-signature",
+  "not-eq",
+  "test-equal-in-true",
+]
+
+fixtureDir : <Env "MEDAKA_ROOT"> String
+fixtureDir = underRoot "test/lint_rule_fixtures"
+
+markerPrefix : String
+markerPrefix = "-- expect-next-line "
+
+-- The rule a line's marker names and whether it is marked `unfixed`, if the
+-- line is a marker.  A marker with trailing words other than `unfixed` names a
+-- rule that cannot exist, so `unknownMarkers` reports it.
+markerRule : String -> Option (String, Bool)
+markerRule line = match map trim (stripPrefix markerPrefix (trim line))
+  Some rest => match words rest
+    [rule, "unfixed"] => Some (rule, True)
+    _ => Some (rest, False)
+  None => None
+
+-- Every marker in the source as (1-based line the marker annotates, rule,
+-- unfixed).
+markers : String -> List (Int, String, Bool)
+markers src = flatMap markerAt (indexed (lines src))
+
+markerAt : (Int, String) -> List (Int, String, Bool)
+markerAt (i, line) = match markerRule line
+  Some (rule, unfixed) => [(i + 2, rule, unfixed)]
+  None => []
+
+markedLines : (Bool -> Bool) -> String -> String -> List Int
+markedLines keep rule src =
+  sort (nub (flatMap (markedLine keep rule) (markers src)))
+
+markedLine : (Bool -> Bool) -> String -> (Int, String, Bool) -> List Int
+markedLine keep rule (line, r, unfixed)
+  | r == rule && keep unfixed = [line]
+  | otherwise = []
+
+expectedLines : String -> String -> List Int
+expectedLines = markedLines (_ => True)
+
+unfixedLines : String -> String -> List Int
+unfixedLines = markedLines (unfixed => unfixed)
+
+flaggedLines : List Finding -> List Int
+flaggedLines findings = sort (nub (flatMap findingLine findings))
+
+findingLine : Finding -> List Int
+findingLine f = match f.loc
+  Some (Loc _ line _ _ _) => [line]
+  None => []
+
+-- The lines `rule` flags in `src`, or the parse failure.
+lintLines : String -> String -> Result String (List Int)
+lintLines rule src = match lintParseSource src
+  Err _ => Err "the source does not parse"
+  Ok (decls, pos) =>
+    Ok
+      (flaggedLines
+        (lintProgram
+          emptyStdlibIndex
+          (selectRules [rule] [])
+          "fixture.mdk"
+          src
+          pos
+          decls))
+
+readOr : String -> <FileRead> Result String String
+readOr path = match readFile path
+  Ok s => Ok s
+  Err _ => Err "cannot read \{path}"
+
+unknownMarkers : String -> List String
+unknownMarkers src =
+  filter (r => not (elem r allRuleNames)) (nub (map markedRule (markers src)))
+
+-- The flagged lines equal the annotated lines.
+flaggedMatchesMarked : String -> <Env "MEDAKA_ROOT", FileRead> Expectation
+flaggedMatchesMarked name = match readOr "\{fixtureDir}/\{name}.mdk"
+  Err e => fail e
+  Ok src =>
+    let rule = "rule-\{name}"
+    match unknownMarkers src
+      [] => match lintLines rule src
+        Err e => fail e
+        Ok flagged => expectEqual (expectedLines rule src) flagged
+      unknown => fail "markers name unregistered rules: \{unknown}"
+
+-- Applying the rule's fix reproduces the `.fixed` file, which still parses and
+-- is clean of the rule.
+fixMatchesFixed : String -> <Env "MEDAKA_ROOT", FileRead> Expectation
+fixMatchesFixed name =
+  let fixedPath = "\{fixtureDir}/\{name}.fixed"
+  if not (fileExists fixedPath) then
+    pass
+  else match (readOr "\{fixtureDir}/\{name}.mdk", readOr fixedPath)
+    (Ok src, Ok expected) => fixOutcome "rule-\{name}" src expected
+    (Err e, _) => fail e
+    (_, Err e) => fail e
+
+fixOutcome : String -> String -> String -> Expectation
+fixOutcome rule src expected = match lintParseSource src
+  Err _ => fail "the fixture does not parse"
+  Ok (decls, pos) =>
+    let fixed = fst (applyFixes [rule] [] src decls pos)
+    match lintLines rule fixed
+      Err e => fail "the fixed source: \{e}"
+      Ok remaining => expectAll [
+        labelFail "fix output" (expectEqual expected fixed),
+        labelFail
+          "findings left after the fix"
+          (expectEqual (unfixedLines rule src) remaining),
+      ]
+
+-- Every fixture file in the directory has a roster row, and the reverse.
+rosterIsClosed : <Env "MEDAKA_ROOT", FileRead> Expectation
+rosterIsClosed = match listDir fixtureDir
+  Err _ => fail "cannot list \{fixtureDir}"
+  Ok entries =>
+    expectEqual [] (unrosteredUnits mdkModuleStem fixtureNames entries)
+
+-- One rule's whole fixture: a positive exists, the flagged lines match the
+-- markers, and the fix (when there is a `.fixed`) is clean.
+fixtureHolds : String -> <Env "MEDAKA_ROOT", FileRead> Expectation
+fixtureHolds name = expectAll [
+  labelFail "marks a positive" (hasPositive name),
+  labelFail "flagged lines" (flaggedMatchesMarked name),
+  labelFail "fix" (fixMatchesFixed name),
+]
+
+hasPositive : String -> <Env "MEDAKA_ROOT", FileRead> Expectation
+hasPositive name = match readOr "\{fixtureDir}/\{name}.mdk"
+  Err e => fail e
+  Ok src => expectFalse (isEmpty (expectedLines "rule-\{name}" src))
+
+test "rule-bool-simplify fixture" = fixtureHolds "bool-simplify"
+
+test "rule-lambda-section fixture" = fixtureHolds "lambda-section"
+
+test "rule-missing-signature fixture" = fixtureHolds "missing-signature"
+
+test "rule-not-eq fixture" = fixtureHolds "not-eq"
+
+test "rule-test-equal-in-true fixture" = fixtureHolds "test-equal-in-true"
+
+test "every fixture file is on the roster" = rosterIsClosed
+
+markedRule : (Int, String, Bool) -> String
+markedRule (_, rule, _) = rule

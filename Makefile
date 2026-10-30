@@ -466,6 +466,12 @@ inlang-tools-lint-scope-test:
 inlang-tools-lint-cli-test:
 	./medaka test compiler/tools/lint_cli_test.mdk
 
+## compiler/tools/lint_rule_fixtures_test.mdk is outside every entry's import
+## closure ([W-MODULE-BLIND]): the per-rule fixture harness over
+## test/lint_rule_fixtures. `--native`: it reads the fixture files.
+inlang-tools-lint-rule-fixtures-test:
+	./medaka test --native compiler/tools/lint_rule_fixtures_test.mdk
+
 ## S-two-way-draws-are-random (#2344): compiler/tools/prop_runner_test.mdk
 ## is outside every entry's import closure ([W-MODULE-BLIND]), so without
 ## this step its `rngNextLocal` distribution regression (both Bool values
