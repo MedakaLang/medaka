@@ -1,5 +1,5 @@
 # META
-source_lines=984
+source_lines=983
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -12,7 +12,6 @@ import frontend.ast.{
   InterpPart(..), GuardArm(..), FieldAssign(..), LetBind(..), FunClause(..)
 }
 import frontend.parser.{Positions(..), DeclPos, positionsDecls, declPosLine}
-import driver.diagnostics.{Severity(..), Diag(..), DiagId(..)}
 import support.util.{
   contains, filterList, splitOnChar, joinWith, startsWith, listLen, anyList,
   joinNl, dedupBy
@@ -331,7 +330,7 @@ zipDeclLoc (d :: ds) (p :: ps) = (d, Some (declPosToLoc p)) :: zipDeclLoc ds ps
 declPosToLoc : DeclPos -> Loc
 declPosToLoc p = let l = declPosLine p in Loc "" l 1 l 1
 
--- ── helpers shared by several rules (hoisted from the per-rule modules) ─────────
+-- ── helpers used by two or more rules ───────────────────────────────────────────
 
 export
 isBareParam : String -> Pat -> Bool
@@ -838,7 +837,7 @@ testDeclFix rebuild f body =
 -- `e` is a logical negation `not X`; return the negated operand `X`.  `not` parses
 -- to `EApp (EVar "not") X`.
 --
--- ⚠️ The `EUnOp "!"` arm is GONE (#1739 half A) and must not come back: `!x` is now
+-- The `EUnOp "!"` arm is GONE (#1739 half A) and must not come back: `!x` is now
 -- Ref-DEREFERENCE, so reading it as a negation would make every rule below rewrite a
 -- cell read into boolean logic — `!r` would "simplify" to something that no longer
 -- reads the Ref at all.  That is a silent-wrongness rewrite, and `--fix` would apply
@@ -989,7 +988,6 @@ nameSetInto (n :: rest) s =
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "DiagId" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "listLen" false) (mem "anyList" false) (mem "joinNl" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false))))
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
@@ -1345,7 +1343,6 @@ nameSetInto (n :: rest) s =
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "DiagId" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "listLen" false) (mem "anyList" false) (mem "joinNl" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false))))
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))

@@ -34,11 +34,11 @@ import test.{
   Expectation, expectEqual, expectFalse, expectTrue, expectEach, fail
 }
 import tools.lint_cache.{decodeEntry, LintEntry}
-import string.{replace}
+import string.{replace, lines}
 import support.util.{anyList, listLen, sortUniqS}
 import driver.diagnostics.{Diag(..), diagIdText}
 import tools.lint.{
-  StdlibIndex, buildStdlibIndexResult, mergeCrossFileIntoTriples
+  StdlibIndex, allRuleNames, buildStdlibIndexResult, mergeCrossFileIntoTriples
 }
 import tools.lint_cmd.{
   allRuleRows,
@@ -46,6 +46,8 @@ import tools.lint_cmd.{
   internalDisabledFor,
   internalRuleNames,
   lintFilesToDiagTriples,
+  RuleRow,
+  renderRuleRowsNames,
   rulesPageMarkdown,
   selectRuleRows,
   lintFilesToDiagQuads,
@@ -162,29 +164,53 @@ test "docs/ops/LINT-RULES.md matches the registry" =
     Err e => fail "cannot read docs/ops/LINT-RULES.md: \{e}"
     Ok page => expectEqual rulesPageMarkdown page
 
-test "the registry lists 31 distinct rules and filters narrow it" =
-  let count scope ratchet tier = match selectRuleRows scope ratchet tier
-    Ok rows => listLen rows
-    Err _ => -1
+-- One rule name per row, in registry order.
+rowNames : List RuleRow -> List String
+rowNames rows = filter (/= "") (lines (renderRuleRowsNames rows))
+
+-- The listing is the registry's distinct names, and each filter pair partitions
+-- it, so a new rule needs no count bumped here.
+test "the registry rows are the distinct registered rule names and filters partition them" =
+  let names scope ratchet tier = match selectRuleRows scope ratchet tier
+    Ok rows => Some (rowNames rows)
+    Err _ => None
+  let count scope ratchet tier = match names scope ratchet tier
+    Some ns => listLen ns
+    None => -1
+  let total = listLen allRuleRows
   expectEach [
-    ("all", expectEqual 31 (listLen allRuleRows)),
-    ("internal", expectEqual 6 (count (Some "internal") None None)),
-    ("baselined", expectEqual 4 (count None (Some "baselined") None)),
-    ("cross", expectEqual 1 (count None None (Some "cross"))),
-    ("bad value", expectEqual (-1) (count (Some "nope") None None)),
+    (
+      "rows are the registered names",
+      expectEqual (Some allRuleNames) (names None None None),
+    ),
+    (
+      "scope partitions",
+      expectEqual
+        total
+        (count (Some "internal") None None + count (Some "universal") None None),
+    ),
+    (
+      "ratchet partitions",
+      expectEqual
+        total
+        (count None (Some "gated") None + count None (Some "baselined") None),
+    ),
+    (
+      "duplicate-body is in the cross tier",
+      expectTrue (match names None None (Some "cross")
+        Some ns => elem "rule-duplicate-body" ns
+        None => False),
+    ),
+    ("bad value", expectEqual None (names (Some "nope") None None)),
   ]
 
 test "--explain names a known rule and rejects an unknown one" = expectEach [
   (
     "known",
-    expectTrue (isOkText (explainRule "rule-lambda-section")),
+    expectTrue (isOk (explainRule "rule-lambda-section")),
   ),
-  ("unknown", expectFalse (isOkText (explainRule "nope"))),
+  ("unknown", expectFalse (isOk (explainRule "nope"))),
 ]
-
-isOkText : Result String String -> Bool
-isOkText (Ok _) = True
-isOkText (Err _) = False
 
 -- ── 5. #3837 stopgap: reported, never auto-fixed ────────────────────────────
 -- The two test-verb rules still report, and `--fix` leaves the source alone.
@@ -207,14 +233,11 @@ reportsTestVerbRule : List (String, String, List Diag) ->
   (String, Expectation)
 reportsTestVerbRule triples path = (
   path,
-  expectTrue
-    (anyList
-      (t => fst3 t == path && anyList isTestVerbDiag (tripleDiags t))
-      triples),
+  expectTrue (anyList isTestVerbDiag (flatMap (diagsOfFile path) triples)),
 )
 
-fst3 : (String, String, List Diag) -> String
-fst3 (a, _, _) = a
+diagsOfFile : String -> (String, String, List Diag) -> List Diag
+diagsOfFile path (p, _, diags) = if p == path then diags else []
 
 isTestVerbDiag : Diag -> Bool
 isTestVerbDiag d =
@@ -270,10 +293,9 @@ test "internal rules are off unless a manifest or --internal turns them on" = ex
   ]
 
 test "the internal-rule list is exactly the internal-scope registry rows" =
-  let rows = match selectRuleRows (Some "internal") None None
-    Ok rs => rs
-    Err _ => []
-  expectEqual (listLen rows) (listLen internalRuleNames)
+  match selectRuleRows (Some "internal") None None
+    Ok rows => expectEqual internalRuleNames (rowNames rows)
+    Err e => fail "selectRuleRows rejected --scope internal: \{e}"
 
 -- With activation off the test-verb rules (scope Internal) are silent on
 -- fixtures that trip them; the `--internal` run above reports them.
@@ -288,19 +310,23 @@ test "an internal rule is silent on a manifest-less project" =
 -- The MCP entry applies the same activation as the CLI: `rule-directive-reason`
 -- (scope Internal) is silent under a manifest without `[lint] internal = true`
 -- and fires under one that has it.
-mcpDirectiveReasonFires : String -> <IO> Bool
+mcpDirectiveReasonFires : String -> <IO> Result String Bool
 mcpDirectiveReasonFires path = match buildStdlibIndexResult
-  Err _ => False
+  Err _ => Err "could not build stdlib index"
   Ok idx =>
     let quads = lintPathsToDiagQuads idx [] ["rule-directive-reason"] [] [path]
-    anyList
-      (t =>
-        anyList (d => diagCode d == "rule-directive-reason") (tripleDiags t))
-      (map dropQuadParse quads)
+    Ok
+      (anyList
+        (t =>
+          anyList (d => diagCode d == "rule-directive-reason") (tripleDiags t))
+        (map dropQuadParse quads))
 
 test "the MCP lint entry keeps internal rules off without the manifest key" =
-  expectFalse
-    (mcpDirectiveReasonFires "test/lint_internal_fixtures/no_key/leak.mdk")
+  match mcpDirectiveReasonFires "test/lint_internal_fixtures/no_key/leak.mdk"
+    Err e => fail e
+    Ok fired => expectFalse fired
 
 test "the MCP lint entry runs internal rules under [lint] internal = true" =
-  expectTrue (mcpDirectiveReasonFires "test/lint_internal_fixtures/on/leak.mdk")
+  match mcpDirectiveReasonFires "test/lint_internal_fixtures/on/leak.mdk"
+    Err e => fail e
+    Ok fired => expectTrue fired

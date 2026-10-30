@@ -5,11 +5,10 @@
 
 import frontend.ast.{Loc(..), Ty(..), Decl(..)}
 import frontend.parser.{Positions(..)}
-import driver.diagnostics.{Severity(..), Diag(..), DiagId(..)}
+import driver.diagnostics.{Severity(..), Diag(..)}
 import support.util.{listLen, filterList, lookupAssoc}
 import hash_map.{HashMap, new, size, findWithDefault}
 import tools.printer.{ppTy}
-import regex.{RegexError(..)}
 import frontend.exhaust.{Oracle}
 import frontend.lexer.{Comment}
 
@@ -73,11 +72,11 @@ public export data Category =
 
 -- Whether a rule is meaningful in any Medaka program (`Universal`) or enforces
 -- this repository's own conventions or compiler-private code (`Internal`).
-public export data Scope = Universal | Internal
+public export data Scope = Universal | Internal deriving (Eq)
 
 -- How the repository enforces a rule: zero findings (`Gated`) or a per-file
 -- count that may only fall (`Baselined`).
-public export data Ratchet = Gated | Baselined
+public export data Ratchet = Gated | Baselined deriving (Eq)
 
 -- Whether `--fix` may rewrite the findings of a rule.
 public export data Fixability = Fixable | NotFixable
@@ -193,7 +192,7 @@ mkCrossFileRule m check = CrossFileRule {
 -- is no inferred scheme to read), and what a hand-rolled user binding has to be
 -- compared against is what the stdlib author WROTE.
 --
--- 🚨 A STDLIB NAME IS NOT UNIQUE, so the index maps a name to a LIST of
+-- A stdlib name is not unique, so the index maps a name to a LIST of
 -- (module, type), never to one type.  Measured on this tree: 55 of the 396
 -- exported names are declared in more than one stdlib module, and `reverse` is
 -- declared in THREE — `array.reverse : Array a -> Array a`,
@@ -210,7 +209,7 @@ mkCrossFileRule m check = CrossFileRule {
 -- because for 55 names there is no such thing.  `stdlibAmbiguousNames` is that
 -- set, derived — never a list written down here.
 --
--- ⚠️ `Rule.check` is PURE and reading the stdlib needs `<IO>`, so the index is
+-- `Rule.check` is PURE and reading the stdlib needs `<IO>`, so the index is
 -- never built inside a rule.  Each IO entry point builds it ONCE and passes it
 -- down through `lintProgram` as `check`'s first argument.
 --
@@ -272,7 +271,7 @@ export
 stdlibIndexNames : StdlibIndex -> List String
 stdlibIndexNames (StdlibIndex _ names) = names
 
--- The names declared by MORE THAN ONE stdlib module, sorted.  Exported because
+-- The names declared by more than one stdlib module, sorted.  Exported because
 -- it is the set every consumer has to have an answer for — a rule that treats a
 -- stdlib name as having one signature is wrong for exactly these.
 export

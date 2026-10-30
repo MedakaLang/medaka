@@ -1,19 +1,10 @@
 -- compiler/tools/lint_registry.mdk — THE REGISTRY: `allRules`, the cross-file
--- registry, and rule-name selection.  Adding a rule = write one
--- `List Decl -> List Finding` function and append one `Rule { … }` entry here.
+-- registry, and rule-name selection.  Adding a rule = write a `lint_rule_<name>`
+-- module exporting `rule`, import it here `as Alias` and append `Alias.rule,` to
+-- `allRules`.
 
-import frontend.ast.{Decl(..)}
-import frontend.parser.{Positions(..)}
-import driver.diagnostics.{Diag(..), DiagId(..)}
-import support.util.{contains, anyList, filterList, isEmptyL, isSome}
-import hash_map.{has}
-import regex.{RegexError(..), compile, mustCompile}
-import tools.lint_core.{
-  CrossFileRule(..),
-  Need(..),
-  Rule(..),
-  mkCrossFileRule,
-}
+import support.util.{contains, anyList, filterList, isEmptyL}
+import tools.lint_core.{CrossFileRule(..), Rule(..)}
 import tools.lint_rule_internal_match_on_param as MatchOnParam
 import tools.lint_rule_stdlib_reimpl as StdlibReimpl
 import tools.lint_rule_not_eq as NotEq
@@ -48,11 +39,8 @@ import tools.lint_rule_regex_literal as RegexLiteral
 import tools.lint_rule_internal_test_equal_in_true as TestEqualInTrue
 
 -- ── the registry ─────────────────────────────────────────────────────────────
--- Each Rule is its own top-level binding (rather than an inline element of the
--- `allRules` list literal) so the LLVM emitter's record-field scanner — which
--- traverses binding bodies but not into list-literal elements — registers the
--- `Rule` field layout.  Adding a rule = write its `check` fn + one `Rule` binding
--- + append it to `allRules`.
+-- The list position is the output order of findings.  Each entry is the `rule`
+-- binding of one `lint_rule_*` module.
 export
 allRules : List Rule
 allRules = [
@@ -90,8 +78,8 @@ allRules = [
 ]
 
 -- ── the cross-file registry ───────────────────────────────────────────────────
--- Each CrossFileRule is its own top-level binding.  Adding a cross-file rule =
--- write its `check` fn + one binding here + append it to `allCrossFileRules`.
+-- Adding a cross-file rule = a `lint_rule_*` module exporting `rule : CrossFileRule`
+-- plus an `Alias.rule,` entry in `allCrossFileRules`.
 export
 allCrossFileRules : List CrossFileRule
 allCrossFileRules = [DuplicateBody.rule]

@@ -12,12 +12,14 @@
 -- `medaka_cli.mdk` in their `sources`.  `lintHelpText` lives here, with the
 -- `--list-rules`/`--explain` views of the registry.
 --
--- Rule implementations are not here either: they live in `tools/lint.mdk`
--- (`Rule`/`CrossFileRule`), the cache format in `tools/lint_cache.mdk`, and
--- the count baseline in `tools/lint_baseline.mdk`.  This module only sequences
--- them.
+-- Rule implementations are not here either: the `Rule`/`CrossFileRule` types
+-- live in `tools/lint_core.mdk`, the rules in the `tools/lint_rule_*` modules
+-- listed by `tools/lint_registry.mdk`, the per-file runner in
+-- `tools/lint_walk.mdk`, the cache format in `tools/lint_cache.mdk`, and the
+-- count baseline in `tools/lint_baseline.mdk`.  This module only sequences them.
 
-import support.util.{anyList, contains, joinNl, joinWith}
+import support.util.{anyList, contains, joinNl, joinWith, lookupAssoc}
+import support.path.{dirOf}
 import string as Str
 import json.{Json(..), jArray, jObject, stringify}
 import frontend.ast.{Decl, Loc(..)}
@@ -139,7 +141,15 @@ lintHelpText = stringConcat [
 -- One distinct rule name with the tiers it is registered in.  `rule-duplicate-body`
 -- is registered twice (a same-file `Rule` and the `CrossFileRule`) under one name
 -- and appears once here, with both tiers; its per-file metadata is the row's.
-export data RuleRow = RuleRow { rrMeta : RuleMeta, rrTiers : List String }
+export data RuleRow = RuleRow { rrMeta : RuleMeta, rrTiers : List Tier }
+
+-- Which registry a rule is registered in: the per-file `allRules`, the
+-- cross-file `allCrossFileRules`, or both.
+export data Tier = TierFile | TierCross deriving (Eq)
+
+tierText : Tier -> String
+tierText TierFile = "file"
+tierText TierCross = "cross"
 
 export
 allRuleRows : List RuleRow
@@ -151,7 +161,7 @@ allRuleRows =
   let crossOnly =
     filter (m => not (contains (ruleMetaName m) fileNames)) crossMetas
   map (m => mkRow m (tiersOf (ruleMetaName m) crossNames)) fileMetas
-    ++ map (m => mkRow m ["cross"]) crossOnly
+    ++ map (m => mkRow m [TierCross]) crossOnly
 
 ruleMetaOf : Rule -> RuleMeta
 ruleMetaOf r = r.meta
@@ -159,16 +169,19 @@ ruleMetaOf r = r.meta
 crossMetaOf : CrossFileRule -> RuleMeta
 crossMetaOf r = r.meta
 
-mkRow : RuleMeta -> List String -> RuleRow
+mkRow : RuleMeta -> List Tier -> RuleRow
 mkRow m tiers = RuleRow { rrMeta = m, rrTiers = tiers }
 
 rowName : RuleRow -> String
 rowName row = ruleMetaName row.rrMeta
 
-tiersOf : String -> List String -> List String
+tiersText : List Tier -> String
+tiersText tiers = joinWith "," (map tierText tiers)
+
+tiersOf : String -> List String -> List Tier
 tiersOf n crossNames
-  | contains n crossNames = ["file", "cross"]
-  | otherwise = ["file"]
+  | contains n crossNames = [TierFile, TierCross]
+  | otherwise = [TierFile]
 
 scopeText : Scope -> String
 scopeText Universal = "universal"
@@ -200,30 +213,37 @@ selectRuleRows : Option String ->
   Option String ->
   Result String (List RuleRow)
 selectRuleRows scope ratchet tier = do
-  s <- checkChoice "--scope" ["universal", "internal"] scope
-  r <- checkChoice "--ratchet" ["gated", "baselined"] ratchet
-  t <- checkChoice "--tier" ["file", "cross"] tier
+  s <- checkChoice "--scope" (choicesOf scopeText [Universal, Internal]) scope
+  r <- checkChoice
+    "--ratchet"
+    (choicesOf ratchetText [Gated, Baselined])
+    ratchet
+  t <- checkChoice "--tier" (choicesOf tierText [TierFile, TierCross]) tier
   Ok (filter (rowMatches s r t) allRuleRows)
 
-checkChoice : String ->
-  List String ->
-  Option String ->
-  Result String (Option String)
-checkChoice _ _ None = Ok None
-checkChoice flagName choices (Some v)
-  | anyList (== v) choices = Ok (Some v)
-  | otherwise =
-    Err "\{flagName} must be one of \{joinWith ", " choices}, got `\{v}`"
+choicesOf : (a -> String) -> List a -> List (String, a)
+choicesOf render values = map (v => (render v, v)) values
 
-rowMatches : Option String -> Option String -> Option String -> RuleRow -> Bool
+checkChoice : String ->
+  List (String, a) ->
+  Option String ->
+  Result String (Option a)
+checkChoice _ _ None = Ok None
+checkChoice flagName choices (Some v) = match lookupAssoc v choices
+  Some value => Ok (Some value)
+  None =>
+    Err
+      "\{flagName} must be one of \{joinWith ", " (map fst choices)}, got `\{v}`"
+
+rowMatches : Option Scope -> Option Ratchet -> Option Tier -> RuleRow -> Bool
 rowMatches s r t row =
-  optMatches s (scopeText row.rrMeta.scope)
-    && optMatches r (ratchetText row.rrMeta.ratchet)
+  optMatches s row.rrMeta.scope
+    && optMatches r row.rrMeta.ratchet
     && (match t
       None => True
-      Some v => anyList (== v) row.rrTiers)
+      Some v => elem v row.rrTiers)
 
-optMatches : Option String -> String -> Bool
+optMatches : Eq a => Option a -> a -> Bool
 optMatches None _ = True
 optMatches (Some v) actual = v == actual
 
@@ -247,7 +267,7 @@ ruleRowLine row =
     categoryText m.category,
     ratchetText m.ratchet,
     fixabilityText m.fixability,
-    joinWith "," row.rrTiers,
+    tiersText row.rrTiers,
     m.summary,
   ]
 
@@ -269,7 +289,7 @@ ruleRowJson row =
     ("severity", JString (ppSeverity m.defaultSeverity)),
     ("fixability", JString (fixabilityText m.fixability)),
     ("needs", jArray (map (n => JString (needText n)) m.needs)),
-    ("tiers", jArray (map JString row.rrTiers)),
+    ("tiers", jArray (map (t => JString (tierText t)) row.rrTiers)),
   ]
 
 -- `--explain <rule>`: the summary, the documentation, then the classification.
@@ -295,11 +315,12 @@ explainText row =
     "",
     m.doc,
     "",
-    "scope: \{scopeText m.scope}  category: \{categoryText m.category}  ratchet: \{ratchetText m.ratchet}  fixability: \{fixabilityText m.fixability}  tiers: \{joinWith "," row.rrTiers}",
+    "scope: \{scopeText m.scope}  category: \{categoryText m.category}  ratchet: \{ratchetText m.ratchet}  fixability: \{fixabilityText m.fixability}  tiers: \{tiersText row.rrTiers}",
   ]
 
--- The generated page `docs/ops/LINT-RULES.md`.  `test/lint_rules_page_test` style
--- drift check: `lint_test.mdk` compares the checked-in page with this text.
+-- The generated page `docs/ops/LINT-RULES.md`.  The `lint_test.mdk` test
+-- "docs/ops/LINT-RULES.md matches the registry" compares the checked-in page
+-- with this text.
 export
 rulesPageMarkdown : String
 rulesPageMarkdown =
@@ -321,7 +342,7 @@ rulesPageMarkdown =
 rulesPageTableRow : RuleRow -> String
 rulesPageTableRow row =
   let m = row.rrMeta
-  "| [`\{m.name}`](#\{m.name}) | \{scopeText m.scope} | \{categoryText m.category} | \{ratchetText m.ratchet} | \{fixabilityText m.fixability} | \{joinWith ", " row.rrTiers} |"
+  "| [`\{m.name}`](#\{m.name}) | \{scopeText m.scope} | \{categoryText m.category} | \{ratchetText m.ratchet} | \{fixabilityText m.fixability} | \{joinWith ", " (map tierText row.rrTiers)} |"
 
 rulesPageSection : RuleRow -> List String
 rulesPageSection row =
@@ -344,7 +365,7 @@ docBody doc = match Str.indexOf "\n\nBefore:" doc
 --     Combining --cache with either is a silent no-op, not an error.
 --   * `crossFileCacheSound` is False — someone added a second cross-file rule,
 --     whose per-file inputs nothing caches.  Under --cache that rule would
---     SILENTLY NOT RUN.  So --cache turns itself off instead, costing a slower
+--     silently not run.  So --cache turns itself off instead, costing a slower
 --     lint rather than a wrong one.  (No warning: this is a correct, quiet
 --     fallback, and a lint that prints compiler-internal chatter to stdout would
 --     break every caller that diffs its output.)
@@ -357,7 +378,7 @@ docBody doc = match Str.indexOf "\n\nBefore:" doc
 -- misses, never wrong answers.
 --
 -- The stamp folds in `stdlib.stdlibFingerprint` alongside `ruleSetStamp`
--- (#2327): `rule-stdlib-reimpl` reads the STDLIB SOURCE TREE from disk at
+-- (#2327): `rule-stdlib-reimpl` reads the stdlib source tree from disk at
 -- runtime (`buildStdlibIndexResult`), content `ruleSetStamp`'s binary hash never
 -- observes. Without this, editing `stdlib/list.mdk` would leave every OTHER
 -- file's cached findings silently answering with the pre-edit stdlib —
@@ -589,7 +610,7 @@ runCrossFileReport disableNames onlyNames denyNames parsed =
 --   * directives are the entries' own (already parsed, cached or fresh) rather
 --     than re-lexed from source.
 --
--- THE JOIN RUNS EVERY TIME, over ALL files.  Only its per-file INPUTS are
+-- the join runs every time, over ALL files.  Only its per-file INPUTS are
 -- cached.  A duplicate-body finding names file A because of file B, so caching
 -- these findings would leave A's finding standing after B stopped duplicating
 -- it — A is unchanged, so A hits.  Scenario 3 of
@@ -690,14 +711,9 @@ isInternalScope Universal = False
 export
 internalDisabledFor : Bool -> String -> <IO> List String
 internalDisabledFor True _ = []
-internalDisabledFor False target = match findProjectRoot (dirOfPath target)
+internalDisabledFor False target = match findProjectRoot (dirOf target)
   Some root => if manifestLintInternal root then [] else internalRuleNames
   None => internalRuleNames
-
-dirOfPath : String -> String
-dirOfPath path = match Str.lastIndexOf "/" path
-  Some i => Str.take i path
-  None => "."
 
 -- Fold over file list, running lint on each.  acc = whether any SevError seen.
 -- Returns (anyError, entries, parsedFiles).

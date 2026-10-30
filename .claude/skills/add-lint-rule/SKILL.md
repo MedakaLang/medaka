@@ -19,7 +19,7 @@ exactly `rule : Rule`, built with `mkRule`:
 ```
 export
 rule : Rule
-rule = mkRule RuleMeta { name = ruleNameX, summary = "...", doc = "...\n\nBefore:\n  ...\nAfter:\n  ...",
+rule = mkRule RuleMeta { name = "rule-name", summary = "...", doc = "...\n\nBefore:\n  ...\nAfter:\n  ...",
   category = Style, scope = Universal, ratchet = Gated, defaultSeverity = SevWarning,
   fixability = NotFixable, needs = [] } checkFn None
 ```
@@ -27,7 +27,7 @@ rule = mkRule RuleMeta { name = ruleNameX, summary = "...", doc = "...\n\nBefore
 Import limits: a rule module imports `lint_core`, `lint_shared` (and `lint_dup` if it reads
 duplicate facts) plus frontend/support modules. It may NOT import another rule module, the
 registry or the runner (`lint_walk`). A helper two rules need moves to `lint_shared`.
-Rule-name constants (`ruleNameX`) live in `lint_shared`. Reach for `stdlib/` and
+Rule-name constants live in `lint_shared.mdk`. Reach for `stdlib/` and
 `compiler/support/` helpers before writing one (`docs/stdlib/index.md`).
 
 ## 2. The registry line
@@ -36,7 +36,7 @@ In `lint_registry.mdk` add `import tools.lint_rule_<name> as Alias` and one `Ali
 `allRules`. The list position IS the output order of findings; place the entry where its output
 should sort. Cross-file rules go in the cross-file registry instead.
 
-## 3. Classify (SERIES C-U / C-I)
+## 3. Classify
 
 - `Universal`: the pattern is worse in any Medaka program, whatever the project.
 - `Internal`: this repository's taste, convention or compiler-private code. It runs only under
@@ -53,7 +53,9 @@ should sort. Cross-file rules go in the cross-file registry instead.
 + `.fixed` for fixable ones. Include a case that must NOT fire (the false-positive guard). Capture
 with `sh test/capture_goldens.sh --frozen lint_fix` only after deciding the expected output from
 the rule's doc; a golden records what the engine did. Native tests go in
-`compiler/tools/lint_test.mdk` (`expectEqual`, `expectTrue`).
+`compiler/tools/lint_test.mdk` (`expectEqual`, `expectTrue`). Its registry test derives its counts
+from the registry (the listing equals `allRuleNames`; scope and ratchet filters partition it), so a
+new rule bumps no number there.
 
 ## 5. Ratchet and drain (same PR)
 
@@ -76,8 +78,9 @@ GC_MARKERS=1 valgrind --tool=callgrind --callgrind-out-file=$P/B.out \
 # cached path: $W/medaka lint --cache compiler stdlib sqlite  (run once to fill, then measure)  (arm D)
 ```
 
-The full protocol is `/var/tmp/medaka-sprints/lint-series/perf.sh <worktree> <outdir>` (arms A-D:
-wall time, frontend Ir, tiny-file Ir, cached Ir). Share per-file facts through `FileFacts`
+Wall time for the whole tree is the fourth arm: three runs of
+`/usr/bin/time -f "%U+%S" $W/medaka lint $W/compiler $W/stdlib $W/sqlite` with
+`GC_INITIAL_HEAP_SIZE=2147483648`. Share per-file facts through `FileFacts`
 (`factComments`, `factOracle`, ...) rather than re-walking the AST.
 
 ## 7. Generated page, goldens, snapshots

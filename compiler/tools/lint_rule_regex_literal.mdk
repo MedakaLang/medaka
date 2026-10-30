@@ -53,7 +53,7 @@ rule =
 -- A string literal passed directly to `compile`/`mustCompile` (bare, or
 -- reached through any of THIS FILE's own `import regex` forms -- a module
 -- alias's dotted spelling, or a group import's renamed member) is run through
--- `regex.compile` AT LINT TIME; a bad pattern becomes one located finding
+-- `regex.compile` at lint time; a bad pattern becomes one located finding
 -- instead of a `mustCompile` panic the FIRST time the line runs.
 regexLiteralCallNames : List String
 regexLiteralCallNames = ["compile", "mustCompile"]

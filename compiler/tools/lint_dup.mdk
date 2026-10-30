@@ -107,7 +107,7 @@ isUpperFirst s =
 -- callers run THIS function, so a cached run's cross-file findings are computed
 -- by the identical code an uncached one runs.
 --
--- ⚠️ This split is the whole correctness story of the lint cache.  A cache MUST
+-- This split is the whole correctness story of the lint cache.  A cache MUST
 -- store the per-file INPUTS to this join (`fileDupOccs`) and re-run it every
 -- time — never the findings it returns.  A finding here names file A *because
 -- of* file B, so a cached A-finding survives an edit to B that should have
@@ -117,7 +117,7 @@ isUpperFirst s =
 -- no efficiency argument for caching its output either.  Scenario 3 of
 -- test/diff_compiler_lint_cache.sh exists to fail loudly if someone ever tries.
 --
--- ⚠️ PERFORMANCE, and a debunking that was itself half-wrong.  This join used to
+-- PERFORMANCE, and a debunking that was itself half-wrong.  This join used to
 -- read:
 --
 --     let keys = sortUniqS (map occKey occs)
@@ -319,7 +319,7 @@ dupAggregateOcc path (c :: cs)
 -- A suppression directive is matched against the reported line, so moving an
 -- anchor silently un-suppresses a duplicate someone has already adjudicated —
 -- and this tree carries over a hundred such directives.  So the anchor is the
--- first clause that clears the floor ON ITS OWN, which is exactly the clause the
+-- first clause that clears the floor on its own, which is exactly the clause the
 -- per-clause rule reports and therefore exactly the clause every existing
 -- directive was placed above.  Aggregation then only ADDS findings; it moves
 -- none.  A function that fires only in aggregate has no such clause and no

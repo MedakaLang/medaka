@@ -1,5 +1,5 @@
 # META
-source_lines=992
+source_lines=1008
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cmd.mdk — the `medaka lint` engine.
@@ -16,12 +16,14 @@ stages=DESUGAR,MARK
 -- `medaka_cli.mdk` in their `sources`.  `lintHelpText` lives here, with the
 -- `--list-rules`/`--explain` views of the registry.
 --
--- Rule implementations are not here either: they live in `tools/lint.mdk`
--- (`Rule`/`CrossFileRule`), the cache format in `tools/lint_cache.mdk`, and
--- the count baseline in `tools/lint_baseline.mdk`.  This module only sequences
--- them.
+-- Rule implementations are not here either: the `Rule`/`CrossFileRule` types
+-- live in `tools/lint_core.mdk`, the rules in the `tools/lint_rule_*` modules
+-- listed by `tools/lint_registry.mdk`, the per-file runner in
+-- `tools/lint_walk.mdk`, the cache format in `tools/lint_cache.mdk`, and the
+-- count baseline in `tools/lint_baseline.mdk`.  This module only sequences them.
 
-import support.util.{anyList, contains, joinNl, joinWith}
+import support.util.{anyList, contains, joinNl, joinWith, lookupAssoc}
+import support.path.{dirOf}
 import string as Str
 import json.{Json(..), jArray, jObject, stringify}
 import frontend.ast.{Decl, Loc(..)}
@@ -143,7 +145,15 @@ lintHelpText = stringConcat [
 -- One distinct rule name with the tiers it is registered in.  `rule-duplicate-body`
 -- is registered twice (a same-file `Rule` and the `CrossFileRule`) under one name
 -- and appears once here, with both tiers; its per-file metadata is the row's.
-export data RuleRow = RuleRow { rrMeta : RuleMeta, rrTiers : List String }
+export data RuleRow = RuleRow { rrMeta : RuleMeta, rrTiers : List Tier }
+
+-- Which registry a rule is registered in: the per-file `allRules`, the
+-- cross-file `allCrossFileRules`, or both.
+export data Tier = TierFile | TierCross deriving (Eq)
+
+tierText : Tier -> String
+tierText TierFile = "file"
+tierText TierCross = "cross"
 
 export
 allRuleRows : List RuleRow
@@ -155,7 +165,7 @@ allRuleRows =
   let crossOnly =
     filter (m => not (contains (ruleMetaName m) fileNames)) crossMetas
   map (m => mkRow m (tiersOf (ruleMetaName m) crossNames)) fileMetas
-    ++ map (m => mkRow m ["cross"]) crossOnly
+    ++ map (m => mkRow m [TierCross]) crossOnly
 
 ruleMetaOf : Rule -> RuleMeta
 ruleMetaOf r = r.meta
@@ -163,16 +173,19 @@ ruleMetaOf r = r.meta
 crossMetaOf : CrossFileRule -> RuleMeta
 crossMetaOf r = r.meta
 
-mkRow : RuleMeta -> List String -> RuleRow
+mkRow : RuleMeta -> List Tier -> RuleRow
 mkRow m tiers = RuleRow { rrMeta = m, rrTiers = tiers }
 
 rowName : RuleRow -> String
 rowName row = ruleMetaName row.rrMeta
 
-tiersOf : String -> List String -> List String
+tiersText : List Tier -> String
+tiersText tiers = joinWith "," (map tierText tiers)
+
+tiersOf : String -> List String -> List Tier
 tiersOf n crossNames
-  | contains n crossNames = ["file", "cross"]
-  | otherwise = ["file"]
+  | contains n crossNames = [TierFile, TierCross]
+  | otherwise = [TierFile]
 
 scopeText : Scope -> String
 scopeText Universal = "universal"
@@ -204,30 +217,37 @@ selectRuleRows : Option String ->
   Option String ->
   Result String (List RuleRow)
 selectRuleRows scope ratchet tier = do
-  s <- checkChoice "--scope" ["universal", "internal"] scope
-  r <- checkChoice "--ratchet" ["gated", "baselined"] ratchet
-  t <- checkChoice "--tier" ["file", "cross"] tier
+  s <- checkChoice "--scope" (choicesOf scopeText [Universal, Internal]) scope
+  r <- checkChoice
+    "--ratchet"
+    (choicesOf ratchetText [Gated, Baselined])
+    ratchet
+  t <- checkChoice "--tier" (choicesOf tierText [TierFile, TierCross]) tier
   Ok (filter (rowMatches s r t) allRuleRows)
 
-checkChoice : String ->
-  List String ->
-  Option String ->
-  Result String (Option String)
-checkChoice _ _ None = Ok None
-checkChoice flagName choices (Some v)
-  | anyList (== v) choices = Ok (Some v)
-  | otherwise =
-    Err "\{flagName} must be one of \{joinWith ", " choices}, got `\{v}`"
+choicesOf : (a -> String) -> List a -> List (String, a)
+choicesOf render values = map (v => (render v, v)) values
 
-rowMatches : Option String -> Option String -> Option String -> RuleRow -> Bool
+checkChoice : String ->
+  List (String, a) ->
+  Option String ->
+  Result String (Option a)
+checkChoice _ _ None = Ok None
+checkChoice flagName choices (Some v) = match lookupAssoc v choices
+  Some value => Ok (Some value)
+  None =>
+    Err
+      "\{flagName} must be one of \{joinWith ", " (map fst choices)}, got `\{v}`"
+
+rowMatches : Option Scope -> Option Ratchet -> Option Tier -> RuleRow -> Bool
 rowMatches s r t row =
-  optMatches s (scopeText row.rrMeta.scope)
-    && optMatches r (ratchetText row.rrMeta.ratchet)
+  optMatches s row.rrMeta.scope
+    && optMatches r row.rrMeta.ratchet
     && (match t
       None => True
-      Some v => anyList (== v) row.rrTiers)
+      Some v => elem v row.rrTiers)
 
-optMatches : Option String -> String -> Bool
+optMatches : Eq a => Option a -> a -> Bool
 optMatches None _ = True
 optMatches (Some v) actual = v == actual
 
@@ -251,7 +271,7 @@ ruleRowLine row =
     categoryText m.category,
     ratchetText m.ratchet,
     fixabilityText m.fixability,
-    joinWith "," row.rrTiers,
+    tiersText row.rrTiers,
     m.summary,
   ]
 
@@ -273,7 +293,7 @@ ruleRowJson row =
     ("severity", JString (ppSeverity m.defaultSeverity)),
     ("fixability", JString (fixabilityText m.fixability)),
     ("needs", jArray (map (n => JString (needText n)) m.needs)),
-    ("tiers", jArray (map JString row.rrTiers)),
+    ("tiers", jArray (map (t => JString (tierText t)) row.rrTiers)),
   ]
 
 -- `--explain <rule>`: the summary, the documentation, then the classification.
@@ -299,11 +319,12 @@ explainText row =
     "",
     m.doc,
     "",
-    "scope: \{scopeText m.scope}  category: \{categoryText m.category}  ratchet: \{ratchetText m.ratchet}  fixability: \{fixabilityText m.fixability}  tiers: \{joinWith "," row.rrTiers}",
+    "scope: \{scopeText m.scope}  category: \{categoryText m.category}  ratchet: \{ratchetText m.ratchet}  fixability: \{fixabilityText m.fixability}  tiers: \{tiersText row.rrTiers}",
   ]
 
--- The generated page `docs/ops/LINT-RULES.md`.  `test/lint_rules_page_test` style
--- drift check: `lint_test.mdk` compares the checked-in page with this text.
+-- The generated page `docs/ops/LINT-RULES.md`.  The `lint_test.mdk` test
+-- "docs/ops/LINT-RULES.md matches the registry" compares the checked-in page
+-- with this text.
 export
 rulesPageMarkdown : String
 rulesPageMarkdown =
@@ -325,7 +346,7 @@ rulesPageMarkdown =
 rulesPageTableRow : RuleRow -> String
 rulesPageTableRow row =
   let m = row.rrMeta
-  "| [`\{m.name}`](#\{m.name}) | \{scopeText m.scope} | \{categoryText m.category} | \{ratchetText m.ratchet} | \{fixabilityText m.fixability} | \{joinWith ", " row.rrTiers} |"
+  "| [`\{m.name}`](#\{m.name}) | \{scopeText m.scope} | \{categoryText m.category} | \{ratchetText m.ratchet} | \{fixabilityText m.fixability} | \{joinWith ", " (map tierText row.rrTiers)} |"
 
 rulesPageSection : RuleRow -> List String
 rulesPageSection row =
@@ -348,7 +369,7 @@ docBody doc = match Str.indexOf "\n\nBefore:" doc
 --     Combining --cache with either is a silent no-op, not an error.
 --   * `crossFileCacheSound` is False — someone added a second cross-file rule,
 --     whose per-file inputs nothing caches.  Under --cache that rule would
---     SILENTLY NOT RUN.  So --cache turns itself off instead, costing a slower
+--     silently not run.  So --cache turns itself off instead, costing a slower
 --     lint rather than a wrong one.  (No warning: this is a correct, quiet
 --     fallback, and a lint that prints compiler-internal chatter to stdout would
 --     break every caller that diffs its output.)
@@ -361,7 +382,7 @@ docBody doc = match Str.indexOf "\n\nBefore:" doc
 -- misses, never wrong answers.
 --
 -- The stamp folds in `stdlib.stdlibFingerprint` alongside `ruleSetStamp`
--- (#2327): `rule-stdlib-reimpl` reads the STDLIB SOURCE TREE from disk at
+-- (#2327): `rule-stdlib-reimpl` reads the stdlib source tree from disk at
 -- runtime (`buildStdlibIndexResult`), content `ruleSetStamp`'s binary hash never
 -- observes. Without this, editing `stdlib/list.mdk` would leave every OTHER
 -- file's cached findings silently answering with the pre-edit stdlib —
@@ -593,7 +614,7 @@ runCrossFileReport disableNames onlyNames denyNames parsed =
 --   * directives are the entries' own (already parsed, cached or fresh) rather
 --     than re-lexed from source.
 --
--- THE JOIN RUNS EVERY TIME, over ALL files.  Only its per-file INPUTS are
+-- the join runs every time, over ALL files.  Only its per-file INPUTS are
 -- cached.  A duplicate-body finding names file A because of file B, so caching
 -- these findings would leave A's finding standing after B stopped duplicating
 -- it — A is unchanged, so A hits.  Scenario 3 of
@@ -694,14 +715,9 @@ isInternalScope Universal = False
 export
 internalDisabledFor : Bool -> String -> <IO> List String
 internalDisabledFor True _ = []
-internalDisabledFor False target = match findProjectRoot (dirOfPath target)
+internalDisabledFor False target = match findProjectRoot (dirOf target)
   Some root => if manifestLintInternal root then [] else internalRuleNames
   None => internalRuleNames
-
-dirOfPath : String -> String
-dirOfPath path = match Str.lastIndexOf "/" path
-  Some i => Str.take i path
-  None => "."
 
 -- Fold over file list, running lint on each.  acc = whether any SevError seen.
 -- Returns (anyError, entries, parsedFiles).
@@ -995,7 +1011,8 @@ lintFixParsed onlyNames disableNames target src (decls, pos) =
       let _ = putStrLn "fixed \{intToString n} finding(s) in \{target}"
       False
 # DESUGAR
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinNl" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseAlias ("string") "Str"))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
@@ -1009,19 +1026,26 @@ lintFixParsed onlyNames disableNames target src (decls, pos) =
 (DUse false (UseGroup ("tools" "lint_baseline") ((mem "LintBaseline" false) (mem "applyBaselineToDiags" false) (mem "applyBaselineToFindings" false) (mem "baselineDiagViolations" false) (mem "baselineKeyOf" false) (mem "baselineViolationLine" false) (mem "baselineViolations" false) (mem "diagCodeOf" false) (mem "findingRuleOf" false))))
 (DTypeSig true "lintHelpText" (TyCon "String"))
 (DFunDef false "lintHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka lint — Lint files/dirs against style rules\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka lint [paths...] [flags]\n")) (ELit (LString "  medaka lint --list-rules [filters] [--json|--markdown]\n")) (ELit (LString "  medaka lint --explain <rule>\n")) (ELit (LString "\n")) (ELit (LString "  --fix                 rewrite fixable findings in-place\n")) (ELit (LString "  --json                emit the {\"files\":[...]} structured-diagnostics\n")) (ELit (LString "                       envelope instead of human text (--fix is ignored)\n")) (ELit (LString "  --cache                reuse per-file results for files whose content is\n")) (ELit (LString "                       unchanged (opt-in, like ESLint's --cache)\n")) (ELit (LString "  --disable=r1,r2,...    suppress findings from the named rules\n")) (ELit (LString "  --only=r1,...          keep only findings from the named rules\n")) (ELit (LString "  --deny=r1,...          promote findings from the named rules to error\n")) (ELit (LString "  --baseline=<file>      error only where a file's per-rule finding count\n")) (ELit (LString "                       exceeds its row in <file> (counts may fall freely)\n")) (ELit (LString "  --write-baseline=<f>   regenerate <f> from this run instead of reporting\n")) (ELit (LString "  --list-rules           list every rule with its metadata (--json for the\n")) (ELit (LString "                       machine form, --markdown for docs/ops/LINT-RULES.md)\n")) (ELit (LString "  --scope=universal|internal     with --list-rules: keep one scope\n")) (ELit (LString "  --ratchet=gated|baselined      with --list-rules: keep one ratchet\n")) (ELit (LString "  --tier=file|cross              with --list-rules: keep one rule tier\n")) (ELit (LString "  --names                with --list-rules: print only the names, one per line\n")) (ELit (LString "  --explain <rule>       print a rule's summary and documentation\n")) (ELit (LString "  --internal             run the internal-scope rules on every target (they are\n")) (ELit (LString "                       otherwise on only under a manifest with [lint] internal = true)\n")) (ELit (LString "\n")) (ELit (LString "Target resolution: explicit file args are linted in order; a single\n")) (ELit (LString "directory arg lints its top-level .mdk files (not recursive); no args\n")) (ELit (LString "finds the medaka.toml project root and lints its top-level .mdk files.\n")) (ELit (LString "Exit 0 unless a SevError finding exists.\n")))))
-(DData Abstract "RuleRow" () ((variant "RuleRow" (ConNamed (field "rrMeta" (TyCon "RuleMeta")) (field "rrTiers" (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DData Abstract "RuleRow" () ((variant "RuleRow" (ConNamed (field "rrMeta" (TyCon "RuleMeta")) (field "rrTiers" (TyApp (TyCon "List") (TyCon "Tier")))))) ())
+(DData Abstract "Tier" () ((variant "TierFile" (ConPos)) (variant "TierCross" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Tier")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TierFile") (PCon "TierFile")) () (EVar "True")) (arm (PTuple (PCon "TierCross") (PCon "TierCross")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DTypeSig false "tierText" (TyFun (TyCon "Tier") (TyCon "String")))
+(DFunDef false "tierText" ((PCon "TierFile")) (ELit (LString "file")))
+(DFunDef false "tierText" ((PCon "TierCross")) (ELit (LString "cross")))
 (DTypeSig true "allRuleRows" (TyApp (TyCon "List") (TyCon "RuleRow")))
-(DFunDef false "allRuleRows" () (EBlock (DoLet false false (PVar "fileMetas") (EApp (EApp (EVar "map") (EVar "ruleMetaOf")) (EVar "allRules"))) (DoLet false false (PVar "crossMetas") (EApp (EApp (EVar "map") (EVar "crossMetaOf")) (EVar "allCrossFileRules"))) (DoLet false false (PVar "fileNames") (EApp (EApp (EVar "map") (EVar "ruleMetaName")) (EVar "fileMetas"))) (DoLet false false (PVar "crossNames") (EApp (EApp (EVar "map") (EVar "ruleMetaName")) (EVar "crossMetas"))) (DoLet false false (PVar "crossOnly") (EApp (EApp (EVar "filter") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "fileNames"))))) (EVar "crossMetas"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EApp (EApp (EVar "tiersOf") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "crossNames"))))) (EVar "fileMetas")) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EListLit (ELit (LString "cross")))))) (EVar "crossOnly"))))))
+(DFunDef false "allRuleRows" () (EBlock (DoLet false false (PVar "fileMetas") (EApp (EApp (EVar "map") (EVar "ruleMetaOf")) (EVar "allRules"))) (DoLet false false (PVar "crossMetas") (EApp (EApp (EVar "map") (EVar "crossMetaOf")) (EVar "allCrossFileRules"))) (DoLet false false (PVar "fileNames") (EApp (EApp (EVar "map") (EVar "ruleMetaName")) (EVar "fileMetas"))) (DoLet false false (PVar "crossNames") (EApp (EApp (EVar "map") (EVar "ruleMetaName")) (EVar "crossMetas"))) (DoLet false false (PVar "crossOnly") (EApp (EApp (EVar "filter") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "fileNames"))))) (EVar "crossMetas"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EApp (EApp (EVar "tiersOf") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "crossNames"))))) (EVar "fileMetas")) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EListLit (EVar "TierCross"))))) (EVar "crossOnly"))))))
 (DTypeSig false "ruleMetaOf" (TyFun (TyCon "Rule") (TyCon "RuleMeta")))
 (DFunDef false "ruleMetaOf" ((PVar "r")) (EFieldAccess (EVar "r") "meta"))
 (DTypeSig false "crossMetaOf" (TyFun (TyCon "CrossFileRule") (TyCon "RuleMeta")))
 (DFunDef false "crossMetaOf" ((PVar "r")) (EFieldAccess (EVar "r") "meta"))
-(DTypeSig false "mkRow" (TyFun (TyCon "RuleMeta") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "RuleRow"))))
+(DTypeSig false "mkRow" (TyFun (TyCon "RuleMeta") (TyFun (TyApp (TyCon "List") (TyCon "Tier")) (TyCon "RuleRow"))))
 (DFunDef false "mkRow" ((PVar "m") (PVar "tiers")) (ERecordCreate "RuleRow" ((fa "rrMeta" (EVar "m")) (fa "rrTiers" (EVar "tiers")))))
 (DTypeSig false "rowName" (TyFun (TyCon "RuleRow") (TyCon "String")))
 (DFunDef false "rowName" ((PVar "row")) (EApp (EVar "ruleMetaName") (EFieldAccess (EVar "row") "rrMeta")))
-(DTypeSig false "tiersOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "tiersOf" ((PVar "n") (PVar "crossNames")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "crossNames")) (EListLit (ELit (LString "file")) (ELit (LString "cross"))) (EIf (EVar "otherwise") (EListLit (ELit (LString "file"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "tiersText" (TyFun (TyApp (TyCon "List") (TyCon "Tier")) (TyCon "String")))
+(DFunDef false "tiersText" ((PVar "tiers")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "tierText")) (EVar "tiers"))))
+(DTypeSig false "tiersOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Tier")))))
+(DFunDef false "tiersOf" ((PVar "n") (PVar "crossNames")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "crossNames")) (EListLit (EVar "TierFile") (EVar "TierCross")) (EIf (EVar "otherwise") (EListLit (EVar "TierFile")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "scopeText" (TyFun (TyCon "Scope") (TyCon "String")))
 (DFunDef false "scopeText" ((PCon "Universal")) (ELit (LString "universal")))
 (DFunDef false "scopeText" ((PCon "Internal")) (ELit (LString "internal")))
@@ -1040,13 +1064,15 @@ lintFixParsed onlyNames disableNames target src (decls, pos) =
 (DTypeSig false "needText" (TyFun (TyCon "Need") (TyCon "String")))
 (DFunDef false "needText" ((PCon "NeedsStdlibIndex")) (ELit (LString "stdlib-index")))
 (DTypeSig true "selectRuleRows" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "RuleRow")))))))
-(DFunDef false "selectRuleRows" ((PVar "scope") (PVar "ratchet") (PVar "tier")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--scope"))) (EListLit (ELit (LString "universal")) (ELit (LString "internal")))) (EVar "scope"))) (ELam ((PVar "s")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--ratchet"))) (EListLit (ELit (LString "gated")) (ELit (LString "baselined")))) (EVar "ratchet"))) (ELam ((PVar "r")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--tier"))) (EListLit (ELit (LString "file")) (ELit (LString "cross")))) (EVar "tier"))) (ELam ((PVar "t")) (EApp (EVar "Ok") (EApp (EApp (EVar "filter") (EApp (EApp (EApp (EVar "rowMatches") (EVar "s")) (EVar "r")) (EVar "t"))) (EVar "allRuleRows"))))))))))
-(DTypeSig false "checkChoice" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "selectRuleRows" ((PVar "scope") (PVar "ratchet") (PVar "tier")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--scope"))) (EApp (EApp (EVar "choicesOf") (EVar "scopeText")) (EListLit (EVar "Universal") (EVar "Internal")))) (EVar "scope"))) (ELam ((PVar "s")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--ratchet"))) (EApp (EApp (EVar "choicesOf") (EVar "ratchetText")) (EListLit (EVar "Gated") (EVar "Baselined")))) (EVar "ratchet"))) (ELam ((PVar "r")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--tier"))) (EApp (EApp (EVar "choicesOf") (EVar "tierText")) (EListLit (EVar "TierFile") (EVar "TierCross")))) (EVar "tier"))) (ELam ((PVar "t")) (EApp (EVar "Ok") (EApp (EApp (EVar "filter") (EApp (EApp (EApp (EVar "rowMatches") (EVar "s")) (EVar "r")) (EVar "t"))) (EVar "allRuleRows"))))))))))
+(DTypeSig false "choicesOf" (TyFun (TyFun (TyVar "a") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
+(DFunDef false "choicesOf" ((PVar "render") (PVar "values")) (EApp (EApp (EVar "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "render") (EVar "v")) (EVar "v")))) (EVar "values")))
+(DTypeSig false "checkChoice" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyVar "a")))))))
 (DFunDef false "checkChoice" (PWild PWild (PCon "None")) (EApp (EVar "Ok") (EVar "None")))
-(DFunDef false "checkChoice" ((PVar "flagName") (PVar "choices") (PCon "Some" (PVar "v"))) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "v")))) (EVar "choices")) (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "v"))) (EIf (EVar "otherwise") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "flagName"))) (ELit (LString " must be one of "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "choices")))) (ELit (LString ", got `"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "`")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "rowMatches" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "RuleRow") (TyCon "Bool"))))))
-(DFunDef false "rowMatches" ((PVar "s") (PVar "r") (PVar "t") (PVar "row")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "optMatches") (EVar "s")) (EApp (EVar "scopeText") (EFieldAccess (EFieldAccess (EVar "row") "rrMeta") "scope"))) (EApp (EApp (EVar "optMatches") (EVar "r")) (EApp (EVar "ratchetText") (EFieldAccess (EFieldAccess (EVar "row") "rrMeta") "ratchet")))) (EMatch (EVar "t") (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "v")))) (EFieldAccess (EVar "row") "rrTiers"))))))
-(DTypeSig false "optMatches" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "checkChoice" ((PVar "flagName") (PVar "choices") (PCon "Some" (PVar "v"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "v")) (EVar "choices")) (arm (PCon "Some" (PVar "value")) () (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "value")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "flagName"))) (ELit (LString " must be one of "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "choices"))))) (ELit (LString ", got `"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "`")))))))
+(DTypeSig false "rowMatches" (TyFun (TyApp (TyCon "Option") (TyCon "Scope")) (TyFun (TyApp (TyCon "Option") (TyCon "Ratchet")) (TyFun (TyApp (TyCon "Option") (TyCon "Tier")) (TyFun (TyCon "RuleRow") (TyCon "Bool"))))))
+(DFunDef false "rowMatches" ((PVar "s") (PVar "r") (PVar "t") (PVar "row")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "optMatches") (EVar "s")) (EFieldAccess (EFieldAccess (EVar "row") "rrMeta") "scope")) (EApp (EApp (EVar "optMatches") (EVar "r")) (EFieldAccess (EFieldAccess (EVar "row") "rrMeta") "ratchet"))) (EMatch (EVar "t") (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "elem") (EVar "v")) (EFieldAccess (EVar "row") "rrTiers"))))))
+(DTypeSig false "optMatches" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyFun (TyVar "a") (TyCon "Bool")))))
 (DFunDef false "optMatches" ((PCon "None") PWild) (EVar "True"))
 (DFunDef false "optMatches" ((PCon "Some" (PVar "v")) (PVar "actual")) (EBinOp "==" (EVar "v") (EVar "actual")))
 (DTypeSig true "renderRuleRowsNames" (TyFun (TyApp (TyCon "List") (TyCon "RuleRow")) (TyCon "String")))
@@ -1054,19 +1080,19 @@ lintFixParsed onlyNames disableNames target src (decls, pos) =
 (DTypeSig true "renderRuleRowsText" (TyFun (TyApp (TyCon "List") (TyCon "RuleRow")) (TyCon "String")))
 (DFunDef false "renderRuleRowsText" ((PVar "rows")) (EBinOp "++" (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EVar "ruleRowLine")) (EVar "rows"))) (ELit (LString "\n"))))
 (DTypeSig false "ruleRowLine" (TyFun (TyCon "RuleRow") (TyCon "String")))
-(DFunDef false "ruleRowLine" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString "\t"))) (EListLit (EFieldAccess (EVar "m") "name") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")) (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")) (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")) (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "row") "rrTiers")) (EFieldAccess (EVar "m") "summary"))))))
+(DFunDef false "ruleRowLine" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString "\t"))) (EListLit (EFieldAccess (EVar "m") "name") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")) (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")) (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")) (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")) (EApp (EVar "tiersText") (EFieldAccess (EVar "row") "rrTiers")) (EFieldAccess (EVar "m") "summary"))))))
 (DTypeSig true "renderRuleRowsJson" (TyFun (TyApp (TyCon "List") (TyCon "RuleRow")) (TyCon "String")))
 (DFunDef false "renderRuleRowsJson" ((PVar "rows")) (EBinOp "++" (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "rules")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "ruleRowJson")) (EVar "rows"))))))) (ELit (LString "\n"))))
 (DTypeSig false "ruleRowJson" (TyFun (TyCon "RuleRow") (TyCon "Json")))
-(DFunDef false "ruleRowJson" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EFieldAccess (EVar "m") "name"))) (ETuple (ELit (LString "summary")) (EApp (EVar "JString") (EFieldAccess (EVar "m") "summary"))) (ETuple (ELit (LString "doc")) (EApp (EVar "JString") (EFieldAccess (EVar "m") "doc"))) (ETuple (ELit (LString "category")) (EApp (EVar "JString") (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")))) (ETuple (ELit (LString "scope")) (EApp (EVar "JString") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")))) (ETuple (ELit (LString "ratchet")) (EApp (EVar "JString") (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")))) (ETuple (ELit (LString "severity")) (EApp (EVar "JString") (EApp (EVar "ppSeverity") (EFieldAccess (EVar "m") "defaultSeverity")))) (ETuple (ELit (LString "fixability")) (EApp (EVar "JString") (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")))) (ETuple (ELit (LString "needs")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EVar "JString") (EApp (EVar "needText") (EVar "n"))))) (EFieldAccess (EVar "m") "needs")))) (ETuple (ELit (LString "tiers")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JString")) (EFieldAccess (EVar "row") "rrTiers")))))))))
+(DFunDef false "ruleRowJson" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EFieldAccess (EVar "m") "name"))) (ETuple (ELit (LString "summary")) (EApp (EVar "JString") (EFieldAccess (EVar "m") "summary"))) (ETuple (ELit (LString "doc")) (EApp (EVar "JString") (EFieldAccess (EVar "m") "doc"))) (ETuple (ELit (LString "category")) (EApp (EVar "JString") (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")))) (ETuple (ELit (LString "scope")) (EApp (EVar "JString") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")))) (ETuple (ELit (LString "ratchet")) (EApp (EVar "JString") (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")))) (ETuple (ELit (LString "severity")) (EApp (EVar "JString") (EApp (EVar "ppSeverity") (EFieldAccess (EVar "m") "defaultSeverity")))) (ETuple (ELit (LString "fixability")) (EApp (EVar "JString") (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")))) (ETuple (ELit (LString "needs")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EVar "JString") (EApp (EVar "needText") (EVar "n"))))) (EFieldAccess (EVar "m") "needs")))) (ETuple (ELit (LString "tiers")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EApp (EVar "JString") (EApp (EVar "tierText") (EVar "t"))))) (EFieldAccess (EVar "row") "rrTiers")))))))))
 (DTypeSig true "explainRule" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "explainRule" ((PVar "q")) (EMatch (EApp (EApp (EVar "filter") (ELam ((PVar "row")) (EBinOp "==" (EApp (EVar "rowName") (EVar "row")) (EVar "q")))) (EVar "allRuleRows")) (arm (PCons (PVar "row") PWild) () (EApp (EVar "Ok") (EApp (EVar "explainText") (EVar "row")))) (arm (PList) () (EBlock (DoLet false false (PVar "near") (EApp (EApp (EVar "filter") (ELam ((PVar "row")) (EApp (EApp (EVar "Str.contains") (EVar "q")) (EApp (EVar "rowName") (EVar "row"))))) (EVar "allRuleRows"))) (DoExpr (EMatch (EVar "near") (arm (PCons (PVar "row") PWild) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "unknown rule `")) (EApp (EVar "display") (EVar "q"))) (ELit (LString "` (did you mean `"))) (EApp (EVar "display") (EApp (EVar "rowName") (EVar "row")))) (ELit (LString "`?)"))))) (arm (PList) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown rule `")) (EApp (EVar "display") (EVar "q"))) (ELit (LString "` (see `medaka lint --list-rules`)")))))))))))
 (DTypeSig false "explainText" (TyFun (TyCon "RuleRow") (TyCon "String")))
-(DFunDef false "explainText" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EApp (EVar "joinNl") (EListLit (EFieldAccess (EVar "m") "name") (ELit (LString "")) (EFieldAccess (EVar "m") "summary") (ELit (LString "")) (EFieldAccess (EVar "m") "doc") (ELit (LString "")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "scope: ")) (EApp (EVar "display") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")))) (ELit (LString "  category: "))) (EApp (EVar "display") (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")))) (ELit (LString "  ratchet: "))) (EApp (EVar "display") (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")))) (ELit (LString "  fixability: "))) (EApp (EVar "display") (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")))) (ELit (LString "  tiers: "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "row") "rrTiers")))) (ELit (LString ""))))))))
+(DFunDef false "explainText" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EApp (EVar "joinNl") (EListLit (EFieldAccess (EVar "m") "name") (ELit (LString "")) (EFieldAccess (EVar "m") "summary") (ELit (LString "")) (EFieldAccess (EVar "m") "doc") (ELit (LString "")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "scope: ")) (EApp (EVar "display") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")))) (ELit (LString "  category: "))) (EApp (EVar "display") (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")))) (ELit (LString "  ratchet: "))) (EApp (EVar "display") (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")))) (ELit (LString "  fixability: "))) (EApp (EVar "display") (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")))) (ELit (LString "  tiers: "))) (EApp (EVar "display") (EApp (EVar "tiersText") (EFieldAccess (EVar "row") "rrTiers")))) (ELit (LString ""))))))))
 (DTypeSig true "rulesPageMarkdown" (TyCon "String"))
 (DFunDef false "rulesPageMarkdown" () (EBinOp "++" (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "# Lint rules")) (ELit (LString "")) (ELit (LString "<!-- Generated by `medaka lint --list-rules --markdown`. Do not edit by hand. -->")) (ELit (LString "")) (ELit (LString "Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka program; `internal` rules enforce this repository's own conventions. `gated` rules must have zero findings across the enforced tree; `baselined` rules may only fall (`docs/ops/CLI-CONFORMANCE.md`, `.githooks/pre-commit`). Per-rule detail: `medaka lint --explain <rule>`.")) (ELit (LString "")) (ELit (LString "| Rule | Scope | Category | Ratchet | Fix | Tiers |")) (ELit (LString "|---|---|---|---|---|---|"))) (EApp (EApp (EVar "map") (EVar "rulesPageTableRow")) (EVar "allRuleRows"))) (EApp (EApp (EVar "flatMap") (EVar "rulesPageSection")) (EVar "allRuleRows")))) (ELit (LString "\n"))))
 (DTypeSig false "rulesPageTableRow" (TyFun (TyCon "RuleRow") (TyCon "String")))
-(DFunDef false "rulesPageTableRow" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "| [`")) (EApp (EVar "display") (EFieldAccess (EVar "m") "name"))) (ELit (LString "`](#"))) (EApp (EVar "display") (EFieldAccess (EVar "m") "name"))) (ELit (LString ") | "))) (EApp (EVar "display") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")))) (ELit (LString " | "))) (EApp (EVar "display") (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")))) (ELit (LString " | "))) (EApp (EVar "display") (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")))) (ELit (LString " | "))) (EApp (EVar "display") (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")))) (ELit (LString " | "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EFieldAccess (EVar "row") "rrTiers")))) (ELit (LString " |"))))))
+(DFunDef false "rulesPageTableRow" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "| [`")) (EApp (EVar "display") (EFieldAccess (EVar "m") "name"))) (ELit (LString "`](#"))) (EApp (EVar "display") (EFieldAccess (EVar "m") "name"))) (ELit (LString ") | "))) (EApp (EVar "display") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")))) (ELit (LString " | "))) (EApp (EVar "display") (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")))) (ELit (LString " | "))) (EApp (EVar "display") (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")))) (ELit (LString " | "))) (EApp (EVar "display") (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")))) (ELit (LString " | "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "tierText")) (EFieldAccess (EVar "row") "rrTiers"))))) (ELit (LString " |"))))))
 (DTypeSig false "rulesPageSection" (TyFun (TyCon "RuleRow") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "rulesPageSection" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EBinOp "++" (EListLit (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "## ")) (EApp (EVar "display") (EFieldAccess (EVar "m") "name"))) (ELit (LString ""))) (ELit (LString "")) (EFieldAccess (EVar "m") "summary") (ELit (LString ""))) (EApp (EVar "docBody") (EFieldAccess (EVar "m") "doc"))))))
 (DTypeSig false "docBody" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
@@ -1137,9 +1163,7 @@ lintFixParsed onlyNames disableNames target src (decls, pos) =
 (DFunDef false "isInternalScope" ((PCon "Universal")) (EVar "False"))
 (DTypeSig true "internalDisabledFor" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "internalDisabledFor" ((PCon "True") PWild) (EListLit))
-(DFunDef false "internalDisabledFor" ((PCon "False") (PVar "target")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "dirOfPath") (EVar "target"))) (arm (PCon "Some" (PVar "root")) () (EIf (EApp (EVar "manifestLintInternal") (EVar "root")) (EListLit) (EVar "internalRuleNames"))) (arm (PCon "None") () (EVar "internalRuleNames"))))
-(DTypeSig false "dirOfPath" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "dirOfPath" ((PVar "path")) (EMatch (EApp (EApp (EVar "Str.lastIndexOf") (ELit (LString "/"))) (EVar "path")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EVar "Str.take") (EVar "i")) (EVar "path"))) (arm (PCon "None") () (ELit (LString ".")))))
+(DFunDef false "internalDisabledFor" ((PCon "False") (PVar "target")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "dirOf") (EVar "target"))) (arm (PCon "Some" (PVar "root")) () (EIf (EApp (EVar "manifestLintInternal") (EVar "root")) (EListLit) (EVar "internalRuleNames"))) (arm (PCon "None") () (EVar "internalRuleNames"))))
 (DTypeSig true "lintFilesGo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))))))))
 (DFunDef false "lintFilesGo" (PWild PWild PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (ETuple (EVar "acc") (EListLit) (EListLit)))
 (DFunDef false "lintFilesGo" ((PVar "idx") (PVar "internalFlag") (PVar "fixMode") (PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "fileDisable") (EBinOp "++" (EVar "disableNames") (EApp (EApp (EVar "internalDisabledFor") (EVar "internalFlag")) (EVar "f")))) (DoExpr (EIf (EVar "fixMode") (EBlock (DoLet false false (PVar "hadErr") (EApp (EApp (EApp (EVar "lintOneFileFix") (EVar "onlyNames")) (EVar "fileDisable")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "internalFlag")) (EVar "fixMode")) (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr"))))) (EBlock (DoLet false false (PTuple (PVar "hadErr") (PVar "entries") (PVar "parsed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileReport") (EVar "idx")) (EVar "multiFile")) (EVar "fileDisable")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "f"))) (DoLet false false (PTuple (PVar "restErr") (PVar "restEntries") (PVar "restParsed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "internalFlag")) (EVar "fixMode")) (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr")))) (DoExpr (ETuple (EVar "restErr") (EBinOp "++" (EVar "entries") (EVar "restEntries")) (EBinOp "++" (EVar "parsed") (EVar "restParsed")))))))))
@@ -1159,7 +1183,8 @@ lintFixParsed onlyNames disableNames target src (decls, pos) =
 (DTypeSig false "lintFixParsed" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyCon "Bool"))))))))
 (DFunDef false "lintFixParsed" ((PVar "onlyNames") (PVar "disableNames") (PVar "target") (PVar "src") (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PTuple (PVar "newSrc") (PVar "n")) (EApp (EApp (EApp (EApp (EApp (EVar "applyFixes") (EVar "onlyNames")) (EVar "disableNames")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoExpr (EIf (EBinOp "==" (EVar "newSrc") (EVar "src")) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "fixed 0 finding(s) in ")) (EVar "target")))) (DoExpr (EVar "False"))) (EMatch (EApp (EApp (EVar "writeFile") (EVar "target")) (EVar "newSrc")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EVar "True")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "fixed ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " finding(s) in "))) (EApp (EVar "display") (EVar "target"))) (ELit (LString ""))))) (DoExpr (EVar "False")))))))))
 # MARK
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinNl" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseAlias ("string") "Str"))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
@@ -1173,19 +1198,26 @@ lintFixParsed onlyNames disableNames target src (decls, pos) =
 (DUse false (UseGroup ("tools" "lint_baseline") ((mem "LintBaseline" false) (mem "applyBaselineToDiags" false) (mem "applyBaselineToFindings" false) (mem "baselineDiagViolations" false) (mem "baselineKeyOf" false) (mem "baselineViolationLine" false) (mem "baselineViolations" false) (mem "diagCodeOf" false) (mem "findingRuleOf" false))))
 (DTypeSig true "lintHelpText" (TyCon "String"))
 (DFunDef false "lintHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka lint — Lint files/dirs against style rules\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka lint [paths...] [flags]\n")) (ELit (LString "  medaka lint --list-rules [filters] [--json|--markdown]\n")) (ELit (LString "  medaka lint --explain <rule>\n")) (ELit (LString "\n")) (ELit (LString "  --fix                 rewrite fixable findings in-place\n")) (ELit (LString "  --json                emit the {\"files\":[...]} structured-diagnostics\n")) (ELit (LString "                       envelope instead of human text (--fix is ignored)\n")) (ELit (LString "  --cache                reuse per-file results for files whose content is\n")) (ELit (LString "                       unchanged (opt-in, like ESLint's --cache)\n")) (ELit (LString "  --disable=r1,r2,...    suppress findings from the named rules\n")) (ELit (LString "  --only=r1,...          keep only findings from the named rules\n")) (ELit (LString "  --deny=r1,...          promote findings from the named rules to error\n")) (ELit (LString "  --baseline=<file>      error only where a file's per-rule finding count\n")) (ELit (LString "                       exceeds its row in <file> (counts may fall freely)\n")) (ELit (LString "  --write-baseline=<f>   regenerate <f> from this run instead of reporting\n")) (ELit (LString "  --list-rules           list every rule with its metadata (--json for the\n")) (ELit (LString "                       machine form, --markdown for docs/ops/LINT-RULES.md)\n")) (ELit (LString "  --scope=universal|internal     with --list-rules: keep one scope\n")) (ELit (LString "  --ratchet=gated|baselined      with --list-rules: keep one ratchet\n")) (ELit (LString "  --tier=file|cross              with --list-rules: keep one rule tier\n")) (ELit (LString "  --names                with --list-rules: print only the names, one per line\n")) (ELit (LString "  --explain <rule>       print a rule's summary and documentation\n")) (ELit (LString "  --internal             run the internal-scope rules on every target (they are\n")) (ELit (LString "                       otherwise on only under a manifest with [lint] internal = true)\n")) (ELit (LString "\n")) (ELit (LString "Target resolution: explicit file args are linted in order; a single\n")) (ELit (LString "directory arg lints its top-level .mdk files (not recursive); no args\n")) (ELit (LString "finds the medaka.toml project root and lints its top-level .mdk files.\n")) (ELit (LString "Exit 0 unless a SevError finding exists.\n")))))
-(DData Abstract "RuleRow" () ((variant "RuleRow" (ConNamed (field "rrMeta" (TyCon "RuleMeta")) (field "rrTiers" (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DData Abstract "RuleRow" () ((variant "RuleRow" (ConNamed (field "rrMeta" (TyCon "RuleMeta")) (field "rrTiers" (TyApp (TyCon "List") (TyCon "Tier")))))) ())
+(DData Abstract "Tier" () ((variant "TierFile" (ConPos)) (variant "TierCross" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Tier")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TierFile") (PCon "TierFile")) () (EVar "True")) (arm (PTuple (PCon "TierCross") (PCon "TierCross")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DTypeSig false "tierText" (TyFun (TyCon "Tier") (TyCon "String")))
+(DFunDef false "tierText" ((PCon "TierFile")) (ELit (LString "file")))
+(DFunDef false "tierText" ((PCon "TierCross")) (ELit (LString "cross")))
 (DTypeSig true "allRuleRows" (TyApp (TyCon "List") (TyCon "RuleRow")))
-(DFunDef false "allRuleRows" () (EBlock (DoLet false false (PVar "fileMetas") (EApp (EApp (EMethodRef "map") (EVar "ruleMetaOf")) (EVar "allRules"))) (DoLet false false (PVar "crossMetas") (EApp (EApp (EMethodRef "map") (EVar "crossMetaOf")) (EVar "allCrossFileRules"))) (DoLet false false (PVar "fileNames") (EApp (EApp (EMethodRef "map") (EVar "ruleMetaName")) (EVar "fileMetas"))) (DoLet false false (PVar "crossNames") (EApp (EApp (EMethodRef "map") (EVar "ruleMetaName")) (EVar "crossMetas"))) (DoLet false false (PVar "crossOnly") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "fileNames"))))) (EVar "crossMetas"))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EApp (EApp (EVar "tiersOf") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "crossNames"))))) (EVar "fileMetas")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EListLit (ELit (LString "cross")))))) (EVar "crossOnly"))))))
+(DFunDef false "allRuleRows" () (EBlock (DoLet false false (PVar "fileMetas") (EApp (EApp (EMethodRef "map") (EVar "ruleMetaOf")) (EVar "allRules"))) (DoLet false false (PVar "crossMetas") (EApp (EApp (EMethodRef "map") (EVar "crossMetaOf")) (EVar "allCrossFileRules"))) (DoLet false false (PVar "fileNames") (EApp (EApp (EMethodRef "map") (EVar "ruleMetaName")) (EVar "fileMetas"))) (DoLet false false (PVar "crossNames") (EApp (EApp (EMethodRef "map") (EVar "ruleMetaName")) (EVar "crossMetas"))) (DoLet false false (PVar "crossOnly") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "fileNames"))))) (EVar "crossMetas"))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EApp (EApp (EVar "tiersOf") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "crossNames"))))) (EVar "fileMetas")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EListLit (EVar "TierCross"))))) (EVar "crossOnly"))))))
 (DTypeSig false "ruleMetaOf" (TyFun (TyCon "Rule") (TyCon "RuleMeta")))
 (DFunDef false "ruleMetaOf" ((PVar "r")) (EFieldAccess (EVar "r") "meta"))
 (DTypeSig false "crossMetaOf" (TyFun (TyCon "CrossFileRule") (TyCon "RuleMeta")))
 (DFunDef false "crossMetaOf" ((PVar "r")) (EFieldAccess (EVar "r") "meta"))
-(DTypeSig false "mkRow" (TyFun (TyCon "RuleMeta") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "RuleRow"))))
+(DTypeSig false "mkRow" (TyFun (TyCon "RuleMeta") (TyFun (TyApp (TyCon "List") (TyCon "Tier")) (TyCon "RuleRow"))))
 (DFunDef false "mkRow" ((PVar "m") (PVar "tiers")) (ERecordCreate "RuleRow" ((fa "rrMeta" (EVar "m")) (fa "rrTiers" (EVar "tiers")))))
 (DTypeSig false "rowName" (TyFun (TyCon "RuleRow") (TyCon "String")))
 (DFunDef false "rowName" ((PVar "row")) (EApp (EVar "ruleMetaName") (EFieldAccess (EVar "row") "rrMeta")))
-(DTypeSig false "tiersOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "tiersOf" ((PVar "n") (PVar "crossNames")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "crossNames")) (EListLit (ELit (LString "file")) (ELit (LString "cross"))) (EIf (EVar "otherwise") (EListLit (ELit (LString "file"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "tiersText" (TyFun (TyApp (TyCon "List") (TyCon "Tier")) (TyCon "String")))
+(DFunDef false "tiersText" ((PVar "tiers")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "tierText")) (EVar "tiers"))))
+(DTypeSig false "tiersOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Tier")))))
+(DFunDef false "tiersOf" ((PVar "n") (PVar "crossNames")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "crossNames")) (EListLit (EVar "TierFile") (EVar "TierCross")) (EIf (EVar "otherwise") (EListLit (EVar "TierFile")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "scopeText" (TyFun (TyCon "Scope") (TyCon "String")))
 (DFunDef false "scopeText" ((PCon "Universal")) (ELit (LString "universal")))
 (DFunDef false "scopeText" ((PCon "Internal")) (ELit (LString "internal")))
@@ -1204,13 +1236,15 @@ lintFixParsed onlyNames disableNames target src (decls, pos) =
 (DTypeSig false "needText" (TyFun (TyCon "Need") (TyCon "String")))
 (DFunDef false "needText" ((PCon "NeedsStdlibIndex")) (ELit (LString "stdlib-index")))
 (DTypeSig true "selectRuleRows" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "RuleRow")))))))
-(DFunDef false "selectRuleRows" ((PVar "scope") (PVar "ratchet") (PVar "tier")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--scope"))) (EListLit (ELit (LString "universal")) (ELit (LString "internal")))) (EVar "scope"))) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--ratchet"))) (EListLit (ELit (LString "gated")) (ELit (LString "baselined")))) (EVar "ratchet"))) (ELam ((PVar "r")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--tier"))) (EListLit (ELit (LString "file")) (ELit (LString "cross")))) (EVar "tier"))) (ELam ((PVar "t")) (EApp (EVar "Ok") (EApp (EApp (EMethodRef "filter") (EApp (EApp (EApp (EVar "rowMatches") (EVar "s")) (EVar "r")) (EVar "t"))) (EVar "allRuleRows"))))))))))
-(DTypeSig false "checkChoice" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "selectRuleRows" ((PVar "scope") (PVar "ratchet") (PVar "tier")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--scope"))) (EApp (EApp (EVar "choicesOf") (EVar "scopeText")) (EListLit (EVar "Universal") (EVar "Internal")))) (EVar "scope"))) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--ratchet"))) (EApp (EApp (EVar "choicesOf") (EVar "ratchetText")) (EListLit (EVar "Gated") (EVar "Baselined")))) (EVar "ratchet"))) (ELam ((PVar "r")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "checkChoice") (ELit (LString "--tier"))) (EApp (EApp (EVar "choicesOf") (EVar "tierText")) (EListLit (EVar "TierFile") (EVar "TierCross")))) (EVar "tier"))) (ELam ((PVar "t")) (EApp (EVar "Ok") (EApp (EApp (EMethodRef "filter") (EApp (EApp (EApp (EVar "rowMatches") (EVar "s")) (EVar "r")) (EVar "t"))) (EVar "allRuleRows"))))))))))
+(DTypeSig false "choicesOf" (TyFun (TyFun (TyVar "a") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
+(DFunDef false "choicesOf" ((PVar "render") (PVar "values")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "render") (EVar "v")) (EVar "v")))) (EVar "values")))
+(DTypeSig false "checkChoice" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyVar "a")))))))
 (DFunDef false "checkChoice" (PWild PWild (PCon "None")) (EApp (EVar "Ok") (EVar "None")))
-(DFunDef false "checkChoice" ((PVar "flagName") (PVar "choices") (PCon "Some" (PVar "v"))) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "v")))) (EVar "choices")) (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "v"))) (EIf (EVar "otherwise") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "flagName"))) (ELit (LString " must be one of "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "choices")))) (ELit (LString ", got `"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "`")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "rowMatches" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "RuleRow") (TyCon "Bool"))))))
-(DFunDef false "rowMatches" ((PVar "s") (PVar "r") (PVar "t") (PVar "row")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "optMatches") (EVar "s")) (EApp (EVar "scopeText") (EFieldAccess (EFieldAccess (EVar "row") "rrMeta") "scope"))) (EApp (EApp (EVar "optMatches") (EVar "r")) (EApp (EVar "ratchetText") (EFieldAccess (EFieldAccess (EVar "row") "rrMeta") "ratchet")))) (EMatch (EVar "t") (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "v")))) (EFieldAccess (EVar "row") "rrTiers"))))))
-(DTypeSig false "optMatches" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "checkChoice" ((PVar "flagName") (PVar "choices") (PCon "Some" (PVar "v"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "v")) (EVar "choices")) (arm (PCon "Some" (PVar "value")) () (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "value")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "flagName"))) (ELit (LString " must be one of "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "choices"))))) (ELit (LString ", got `"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "`")))))))
+(DTypeSig false "rowMatches" (TyFun (TyApp (TyCon "Option") (TyCon "Scope")) (TyFun (TyApp (TyCon "Option") (TyCon "Ratchet")) (TyFun (TyApp (TyCon "Option") (TyCon "Tier")) (TyFun (TyCon "RuleRow") (TyCon "Bool"))))))
+(DFunDef false "rowMatches" ((PVar "s") (PVar "r") (PVar "t") (PVar "row")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EDictApp "optMatches") (EVar "s")) (EFieldAccess (EFieldAccess (EVar "row") "rrMeta") "scope")) (EApp (EApp (EDictApp "optMatches") (EVar "r")) (EFieldAccess (EFieldAccess (EVar "row") "rrMeta") "ratchet"))) (EMatch (EVar "t") (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EDictApp "elem") (EVar "v")) (EFieldAccess (EVar "row") "rrTiers"))))))
+(DTypeSig false "optMatches" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyFun (TyVar "a") (TyCon "Bool")))))
 (DFunDef false "optMatches" ((PCon "None") PWild) (EVar "True"))
 (DFunDef false "optMatches" ((PCon "Some" (PVar "v")) (PVar "actual")) (EBinOp "==" (EVar "v") (EVar "actual")))
 (DTypeSig true "renderRuleRowsNames" (TyFun (TyApp (TyCon "List") (TyCon "RuleRow")) (TyCon "String")))
@@ -1218,19 +1252,19 @@ lintFixParsed onlyNames disableNames target src (decls, pos) =
 (DTypeSig true "renderRuleRowsText" (TyFun (TyApp (TyCon "List") (TyCon "RuleRow")) (TyCon "String")))
 (DFunDef false "renderRuleRowsText" ((PVar "rows")) (EBinOp "++" (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EVar "ruleRowLine")) (EVar "rows"))) (ELit (LString "\n"))))
 (DTypeSig false "ruleRowLine" (TyFun (TyCon "RuleRow") (TyCon "String")))
-(DFunDef false "ruleRowLine" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString "\t"))) (EListLit (EFieldAccess (EVar "m") "name") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")) (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")) (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")) (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "row") "rrTiers")) (EFieldAccess (EVar "m") "summary"))))))
+(DFunDef false "ruleRowLine" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString "\t"))) (EListLit (EFieldAccess (EVar "m") "name") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")) (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")) (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")) (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")) (EApp (EVar "tiersText") (EFieldAccess (EVar "row") "rrTiers")) (EFieldAccess (EVar "m") "summary"))))))
 (DTypeSig true "renderRuleRowsJson" (TyFun (TyApp (TyCon "List") (TyCon "RuleRow")) (TyCon "String")))
 (DFunDef false "renderRuleRowsJson" ((PVar "rows")) (EBinOp "++" (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "rules")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "ruleRowJson")) (EVar "rows"))))))) (ELit (LString "\n"))))
 (DTypeSig false "ruleRowJson" (TyFun (TyCon "RuleRow") (TyCon "Json")))
-(DFunDef false "ruleRowJson" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EFieldAccess (EVar "m") "name"))) (ETuple (ELit (LString "summary")) (EApp (EVar "JString") (EFieldAccess (EVar "m") "summary"))) (ETuple (ELit (LString "doc")) (EApp (EVar "JString") (EFieldAccess (EVar "m") "doc"))) (ETuple (ELit (LString "category")) (EApp (EVar "JString") (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")))) (ETuple (ELit (LString "scope")) (EApp (EVar "JString") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")))) (ETuple (ELit (LString "ratchet")) (EApp (EVar "JString") (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")))) (ETuple (ELit (LString "severity")) (EApp (EVar "JString") (EApp (EVar "ppSeverity") (EFieldAccess (EVar "m") "defaultSeverity")))) (ETuple (ELit (LString "fixability")) (EApp (EVar "JString") (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")))) (ETuple (ELit (LString "needs")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EVar "JString") (EApp (EVar "needText") (EVar "n"))))) (EFieldAccess (EVar "m") "needs")))) (ETuple (ELit (LString "tiers")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JString")) (EFieldAccess (EVar "row") "rrTiers")))))))))
+(DFunDef false "ruleRowJson" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EFieldAccess (EVar "m") "name"))) (ETuple (ELit (LString "summary")) (EApp (EVar "JString") (EFieldAccess (EVar "m") "summary"))) (ETuple (ELit (LString "doc")) (EApp (EVar "JString") (EFieldAccess (EVar "m") "doc"))) (ETuple (ELit (LString "category")) (EApp (EVar "JString") (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")))) (ETuple (ELit (LString "scope")) (EApp (EVar "JString") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")))) (ETuple (ELit (LString "ratchet")) (EApp (EVar "JString") (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")))) (ETuple (ELit (LString "severity")) (EApp (EVar "JString") (EApp (EVar "ppSeverity") (EFieldAccess (EVar "m") "defaultSeverity")))) (ETuple (ELit (LString "fixability")) (EApp (EVar "JString") (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")))) (ETuple (ELit (LString "needs")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EVar "JString") (EApp (EVar "needText") (EVar "n"))))) (EFieldAccess (EVar "m") "needs")))) (ETuple (ELit (LString "tiers")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EApp (EVar "JString") (EApp (EVar "tierText") (EVar "t"))))) (EFieldAccess (EVar "row") "rrTiers")))))))))
 (DTypeSig true "explainRule" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "explainRule" ((PVar "q")) (EMatch (EApp (EApp (EMethodRef "filter") (ELam ((PVar "row")) (EBinOp "==" (EApp (EVar "rowName") (EVar "row")) (EVar "q")))) (EVar "allRuleRows")) (arm (PCons (PVar "row") PWild) () (EApp (EVar "Ok") (EApp (EVar "explainText") (EVar "row")))) (arm (PList) () (EBlock (DoLet false false (PVar "near") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "row")) (EApp (EApp (EVar "Str.contains") (EVar "q")) (EApp (EVar "rowName") (EVar "row"))))) (EVar "allRuleRows"))) (DoExpr (EMatch (EVar "near") (arm (PCons (PVar "row") PWild) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "unknown rule `")) (EApp (EMethodRef "display") (EVar "q"))) (ELit (LString "` (did you mean `"))) (EApp (EMethodRef "display") (EApp (EVar "rowName") (EVar "row")))) (ELit (LString "`?)"))))) (arm (PList) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown rule `")) (EApp (EMethodRef "display") (EVar "q"))) (ELit (LString "` (see `medaka lint --list-rules`)")))))))))))
 (DTypeSig false "explainText" (TyFun (TyCon "RuleRow") (TyCon "String")))
-(DFunDef false "explainText" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EApp (EVar "joinNl") (EListLit (EFieldAccess (EVar "m") "name") (ELit (LString "")) (EFieldAccess (EVar "m") "summary") (ELit (LString "")) (EFieldAccess (EVar "m") "doc") (ELit (LString "")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "scope: ")) (EApp (EMethodRef "display") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")))) (ELit (LString "  category: "))) (EApp (EMethodRef "display") (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")))) (ELit (LString "  ratchet: "))) (EApp (EMethodRef "display") (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")))) (ELit (LString "  fixability: "))) (EApp (EMethodRef "display") (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")))) (ELit (LString "  tiers: "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "row") "rrTiers")))) (ELit (LString ""))))))))
+(DFunDef false "explainText" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EApp (EVar "joinNl") (EListLit (EFieldAccess (EVar "m") "name") (ELit (LString "")) (EFieldAccess (EVar "m") "summary") (ELit (LString "")) (EFieldAccess (EVar "m") "doc") (ELit (LString "")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "scope: ")) (EApp (EMethodRef "display") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")))) (ELit (LString "  category: "))) (EApp (EMethodRef "display") (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")))) (ELit (LString "  ratchet: "))) (EApp (EMethodRef "display") (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")))) (ELit (LString "  fixability: "))) (EApp (EMethodRef "display") (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")))) (ELit (LString "  tiers: "))) (EApp (EMethodRef "display") (EApp (EVar "tiersText") (EFieldAccess (EVar "row") "rrTiers")))) (ELit (LString ""))))))))
 (DTypeSig true "rulesPageMarkdown" (TyCon "String"))
 (DFunDef false "rulesPageMarkdown" () (EBinOp "++" (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "# Lint rules")) (ELit (LString "")) (ELit (LString "<!-- Generated by `medaka lint --list-rules --markdown`. Do not edit by hand. -->")) (ELit (LString "")) (ELit (LString "Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka program; `internal` rules enforce this repository's own conventions. `gated` rules must have zero findings across the enforced tree; `baselined` rules may only fall (`docs/ops/CLI-CONFORMANCE.md`, `.githooks/pre-commit`). Per-rule detail: `medaka lint --explain <rule>`.")) (ELit (LString "")) (ELit (LString "| Rule | Scope | Category | Ratchet | Fix | Tiers |")) (ELit (LString "|---|---|---|---|---|---|"))) (EApp (EApp (EMethodRef "map") (EVar "rulesPageTableRow")) (EVar "allRuleRows"))) (EApp (EApp (EDictApp "flatMap") (EVar "rulesPageSection")) (EVar "allRuleRows")))) (ELit (LString "\n"))))
 (DTypeSig false "rulesPageTableRow" (TyFun (TyCon "RuleRow") (TyCon "String")))
-(DFunDef false "rulesPageTableRow" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "| [`")) (EApp (EMethodRef "display") (EFieldAccess (EVar "m") "name"))) (ELit (LString "`](#"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "m") "name"))) (ELit (LString ") | "))) (EApp (EMethodRef "display") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EFieldAccess (EVar "row") "rrTiers")))) (ELit (LString " |"))))))
+(DFunDef false "rulesPageTableRow" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "| [`")) (EApp (EMethodRef "display") (EFieldAccess (EVar "m") "name"))) (ELit (LString "`](#"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "m") "name"))) (ELit (LString ") | "))) (EApp (EMethodRef "display") (EApp (EVar "scopeText") (EFieldAccess (EVar "m") "scope")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EApp (EVar "categoryText") (EFieldAccess (EVar "m") "category")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EApp (EVar "ratchetText") (EFieldAccess (EVar "m") "ratchet")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EApp (EVar "fixabilityText") (EFieldAccess (EVar "m") "fixability")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "tierText")) (EFieldAccess (EVar "row") "rrTiers"))))) (ELit (LString " |"))))))
 (DTypeSig false "rulesPageSection" (TyFun (TyCon "RuleRow") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "rulesPageSection" ((PVar "row")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "row") "rrMeta")) (DoExpr (EBinOp "++" (EListLit (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "## ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "m") "name"))) (ELit (LString ""))) (ELit (LString "")) (EFieldAccess (EVar "m") "summary") (ELit (LString ""))) (EApp (EVar "docBody") (EFieldAccess (EVar "m") "doc"))))))
 (DTypeSig false "docBody" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
@@ -1301,9 +1335,7 @@ lintFixParsed onlyNames disableNames target src (decls, pos) =
 (DFunDef false "isInternalScope" ((PCon "Universal")) (EVar "False"))
 (DTypeSig true "internalDisabledFor" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "internalDisabledFor" ((PCon "True") PWild) (EListLit))
-(DFunDef false "internalDisabledFor" ((PCon "False") (PVar "target")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "dirOfPath") (EVar "target"))) (arm (PCon "Some" (PVar "root")) () (EIf (EApp (EVar "manifestLintInternal") (EVar "root")) (EListLit) (EVar "internalRuleNames"))) (arm (PCon "None") () (EVar "internalRuleNames"))))
-(DTypeSig false "dirOfPath" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "dirOfPath" ((PVar "path")) (EMatch (EApp (EApp (EVar "Str.lastIndexOf") (ELit (LString "/"))) (EVar "path")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EVar "Str.take") (EVar "i")) (EVar "path"))) (arm (PCon "None") () (ELit (LString ".")))))
+(DFunDef false "internalDisabledFor" ((PCon "False") (PVar "target")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "dirOf") (EVar "target"))) (arm (PCon "Some" (PVar "root")) () (EIf (EApp (EVar "manifestLintInternal") (EVar "root")) (EListLit) (EVar "internalRuleNames"))) (arm (PCon "None") () (EVar "internalRuleNames"))))
 (DTypeSig true "lintFilesGo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))))))))
 (DFunDef false "lintFilesGo" (PWild PWild PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (ETuple (EVar "acc") (EListLit) (EListLit)))
 (DFunDef false "lintFilesGo" ((PVar "idx") (PVar "internalFlag") (PVar "fixMode") (PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "fileDisable") (EBinOp "++" (EVar "disableNames") (EApp (EApp (EVar "internalDisabledFor") (EVar "internalFlag")) (EVar "f")))) (DoExpr (EIf (EVar "fixMode") (EBlock (DoLet false false (PVar "hadErr") (EApp (EApp (EApp (EVar "lintOneFileFix") (EVar "onlyNames")) (EVar "fileDisable")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "internalFlag")) (EVar "fixMode")) (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr"))))) (EBlock (DoLet false false (PTuple (PVar "hadErr") (PVar "entries") (PVar "parsed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileReport") (EVar "idx")) (EVar "multiFile")) (EVar "fileDisable")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "f"))) (DoLet false false (PTuple (PVar "restErr") (PVar "restEntries") (PVar "restParsed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "internalFlag")) (EVar "fixMode")) (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr")))) (DoExpr (ETuple (EVar "restErr") (EBinOp "++" (EVar "entries") (EVar "restEntries")) (EBinOp "++" (EVar "parsed") (EVar "restParsed")))))))))

@@ -12,8 +12,9 @@
 #      per-staged-file pass cannot do; `--cache` makes them a replay). Which rules
 #      are checked, and how, is read from the binary's own registry
 #      (`medaka lint --list-rules --names --ratchet=... --tier=...`), never listed
-#      here (`--internal` also switches on the internal-scope rules, which a
-#      manifest without `[lint] internal = true` leaves off): a GATED rule may never fire at all (any NEW finding fails the commit);
+#      here. `--internal` also switches on the internal-scope rules, which a
+#      manifest without `[lint] internal = true` leaves off. A GATED rule may
+#      never fire at all (any NEW finding fails the commit);
 #      a BASELINED rule's per-file count, pinned in test/lint_baseline.toml, may
 #      only fall (a file with findings but no row fails too). A genuine intentional
 #      exception is silenced inline with an ESLint-style directive comment

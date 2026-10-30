@@ -410,109 +410,19 @@ class = "shout"
 count = 2
 
 [[entry]]
-file = "compiler/tools/lint_baseline.mdk"
-class = "shout"
-count = 1
-
-[[entry]]
 file = "compiler/tools/lint_baseline_test.mdk"
 class = "shout"
 count = 1
 
 [[entry]]
-file = "compiler/tools/lint_cache.mdk"
-class = "emoji"
-count = 1
-
-[[entry]]
-file = "compiler/tools/lint_cache.mdk"
-class = "shout"
-count = 3
-
-[[entry]]
-file = "compiler/tools/lint_cmd.mdk"
-class = "shout"
-count = 3
-
-[[entry]]
-file = "compiler/tools/lint_core.mdk"
-class = "emoji"
-count = 2
-
-[[entry]]
-file = "compiler/tools/lint_core.mdk"
-class = "shout"
-count = 2
-
-[[entry]]
 file = "compiler/tools/lint_dup.mdk"
 class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/tools/lint_dup.mdk"
-class = "emoji"
-count = 2
-
-[[entry]]
-file = "compiler/tools/lint_dup.mdk"
-class = "shout"
-count = 1
-
-[[entry]]
-file = "compiler/tools/lint_rule_andthen_pure_map.mdk"
-class = "shout"
-count = 1
-
-[[entry]]
-file = "compiler/tools/lint_rule_hand_rolled_derivable.mdk"
-class = "emoji"
-count = 1
-
-[[entry]]
-file = "compiler/tools/lint_rule_internal_match_on_param.mdk"
-class = "shout"
-count = 1
-
-[[entry]]
-file = "compiler/tools/lint_rule_prefer_assign_op.mdk"
-class = "emoji"
-count = 1
-
-[[entry]]
-file = "compiler/tools/lint_rule_regex_literal.mdk"
-class = "shout"
-count = 1
-
-[[entry]]
-file = "compiler/tools/lint_rule_stdlib_reimpl.mdk"
-class = "emoji"
-count = 4
-
-[[entry]]
-file = "compiler/tools/lint_rule_stdlib_reimpl.mdk"
-class = "shout"
 count = 1
 
 [[entry]]
 file = "compiler/tools/lint_shared.mdk"
 class = "history"
 count = 1
-
-[[entry]]
-file = "compiler/tools/lint_shared.mdk"
-class = "emoji"
-count = 1
-
-[[entry]]
-file = "compiler/tools/lint_walk.mdk"
-class = "emoji"
-count = 1
-
-[[entry]]
-file = "compiler/tools/lint_walk.mdk"
-class = "shout"
-count = 2
 
 [[entry]]
 file = "compiler/tools/lsp.mdk"

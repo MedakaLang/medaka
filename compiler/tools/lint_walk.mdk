@@ -55,7 +55,6 @@ import hash_map.{HashMap, new, get, setInPlace, has, keys, findWithDefault}
 import list.{take, drop}
 import tools.printer.{declToString}
 import support.path.{dirOf, stripMdk}
-import regex.{RegexError(..)}
 import frontend.marker.{declRefs, localBoundNames}
 import frontend.exhaust.{Oracle, buildOracle}
 import support.stage_count.{stageBump}
@@ -961,11 +960,11 @@ appendIfPath file diag (path, src, diags) =
 -- PARSE of every target, which is exactly what `--cache` skips.  So a cached run
 -- reaches the tier through the occurrence lists it persisted per file instead.
 --
--- ⚠️ THE SOUNDNESS SEAM.  `fileDupOccs` is the per-file input of ONE rule.  This
+-- The soundness seam.  `fileDupOccs` is the per-file input of ONE rule.  This
 -- entry point is therefore only equivalent to `runCrossFileRules` while
 -- `allCrossFileRules` is exactly `[duplicateBodyRule]` — a second cross-file
 -- rule would have its own per-file inputs, which nothing here caches or feeds
--- it, and it would SILENTLY NOT RUN under `--cache`.  That is a whole rule
+-- it, and it would silently not run under `--cache`.  That is a whole rule
 -- reporting nothing while exiting 0: this repo's defining failure mode.
 --
 -- Rather than trust a future agent to read this comment, `crossFileCacheSound`

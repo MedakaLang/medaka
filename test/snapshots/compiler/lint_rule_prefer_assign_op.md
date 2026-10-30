@@ -91,7 +91,7 @@ rule =
 -- be BUILT at all, `E-PANIC: empty block`. That is a bug this rule happens to route
 -- around, not a reason this rule is correct.)
 --
--- ⚠️ Fires ONLY on a SATURATED two-argument `setRef`.  A bare `setRef` passed as a
+-- Fires ONLY on a SATURATED two-argument `setRef`.  A bare `setRef` passed as a
 -- value, or a partially-applied `setRef r`, has NO `:=` spelling — the operator is
 -- grammar, not a function — and both shapes are real in this tree, so narrowing to
 -- the saturated form is load-bearing, not defensive.

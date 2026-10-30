@@ -81,12 +81,12 @@ rule =
 --   `initList : List a -> List a` relaxes onto `list.init`, whose real signature
 --   is `List a -> Option (List a)`, and only the filter keeps that quiet.
 --
--- 🚨 The CONVERSE — signature equality as the CANDIDATE GENERATOR, with no name
+-- The CONVERSE — signature equality as the CANDIDATE GENERATOR, with no name
 -- relation at all — is MEASURED FALSE and must not be built here (it is what
 -- `TYPE-AWARE-LINT-DESIGN.md` §7c describes): 940 net-new findings, 650 of them
 -- ambiguous.  The signature is a FILTER on a name-relaxed set, never the set.
 --
--- 🚨 Compare DECLARED signatures on both sides, never rendered SCHEMES.
+-- Compare DECLARED signatures on both sides, never rendered SCHEMES.
 -- `ppScheme` erases effect rows (32 of `stdlib/list.mdk`'s own 77 signatures
 -- differ under it), and lint has no type environment to infer a scheme from in
 -- any case.  Both sides here come from the same place — a source `DTypeSig`'s
@@ -160,7 +160,7 @@ ruleStdlibReimpl idx path _ pos prog =
 -- signature comparison happens.  It is a PRE-FILTER; `tyCanon` itself is
 -- untouched.
 --
--- ⚠️ Audit the three namespaces as a SET, not one member: `tyCanon` emits a bare
+-- Audit the three namespaces as a SET, not one member: `tyCanon` emits a bare
 -- name in exactly three places — `#n` for a `TyCon`, `[h …]` for a constraint
 -- HEAD, and a row atom for an effect LABEL.  So a local declaration in ANY of
 -- the three namespaces can shadow a stdlib name inside a canonical string, and
@@ -245,7 +245,7 @@ reimplHit idx ownMod names sigs locals prog (name, loc) = match get name sigs
 -- A delegation (`take n xs = List.take n xs`) reimplements nothing — it is a
 -- one-line forwarding wrapper, and the rule exists to flag DUPLICATED logic.
 -- Exempt iff `name`'s SOLE `DFunDef` clause applies a name this file imports
--- from `modName` under `stdName` to the clause's own parameters, IN THE SAME
+-- from `modName` under `stdName` to the clause's own parameters, in the same
 -- ORDER they were declared — or the clause is a bare zero-param alias
 -- (`f = m.g`).  A multi-clause def is pattern-matching, not forwarding, so it
 -- never qualifies; an argument reorder (`f a b = g b a`) is deliberately NOT
@@ -431,7 +431,7 @@ stdlibFinding name modName stdName loc = Finding {
 -- CONSTRAINT list likewise.  Everything else — argument order, application
 -- spine shape, tuple arity — is structural and preserved exactly.
 --
--- ⚠️ This is a canonicaliser, NOT a printer: its output is never shown to anyone,
+-- This is a canonicaliser, NOT a printer: its output is never shown to anyone,
 -- so it is free to be unambiguous rather than pretty.  Every constructor gets
 -- its own bracketed head so no two distinct shapes can render to one string —
 -- do not "simplify" it into something that reads like source, which is exactly
