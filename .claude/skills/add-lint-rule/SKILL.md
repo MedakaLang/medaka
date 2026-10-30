@@ -62,7 +62,7 @@ three things follow:
   which `test/diff_compiler_lint_baseline.sh` lints. `Baselined` (a per-file count that may only
   fall) needs Val's ruling; so does an advisory severity.
 
-`fixability = Fixable` only with a `fix` that is a pure AST rewrite; the printer re-renders it.
+`fixability` caps what `--fix` may apply, and the fix itself is a span edit: see § 8.
 
 ## 4. Fixtures
 
@@ -122,3 +122,76 @@ Wall time for the whole tree is the fourth arm: three runs of
 
 Before pushing, drain the whole tree the way the hook and the CI twin do: `lint --internal` over
 every top-level directory, not only `compiler stdlib sqlite`.
+
+## 8. Fixes
+
+A fix is a span edit. The visitor attaches a `Fix` (`fixApplicability`, `fixEdits : List FixEdit`,
+`fixMessage`) to each finding; `fixSource` in `tools/lint.mdk` runs the edit loop over the rules that
+emit edits, then the decl-rewrite adapter. `compiler/tools/lint_fix.mdk` validates every edit against
+the source snapshot, applies a non-overlapping subset, re-parses, and repeats for at most eight passes.
+A rule whose fix cannot be expressed as span edits stays on the decl-rewrite adapter (`exprRuleFix`
+in `lint_shared.mdk`).
+
+**Ceiling.** `fixability` caps what `--fix` may apply: `Fixable` is `Safe`, `FixableUnsafe` is
+`Unsafe` (applied only under `--unsafe-fixes`), `SuggestOnly` is `Suggest` (never applied).
+`grep -ln 'FixableUnsafe\|SuggestOnly' compiler/tools/lint_rule_*.mdk` lists the rules that use the
+last two.
+
+**Build the fix.** In the visitor, with the detector's rewritten node `rewritten` and the node `e`:
+
+```
+replaceFix "<one-line message>" (nodeSpan ctx e) (bindingOf rewritten) ctx (exprToString rewritten)
+```
+
+- `nodeSpan ctx e` is the node's own `ELoc`, brackets included, else `tightSpan e` (the operands'
+  extent). It is `None` when an operand is a prefix or field node whose tokens no `ELoc` covers, so
+  the fix is withheld rather than placed wrong.
+- `bindingOf` grades the rewritten text: `Closed` (an atom), `Applied` (a call), `Open` (an operator,
+  `if`, lambda, `match`). `parenIfNeeded` (`lint_fix.mdk`) brackets it for the parent kind in `ctx`.
+- `replaceFix` returns `None` for text spanning more than one line: the printer does not know the
+  indentation the text lands in.
+- A lambda's `ELoc` starts at its arrow and its parameters carry no `Loc`. Write a span function like
+  `lambdaSpan` (`lint_rule_lambda_section.mdk`) or return `None`.
+- A `Fix` may hold several edits; they must not overlap each other, or the whole fix is dropped.
+- `exprRuleEditVisitors` skips test and prop bodies (`not ctxInTest`). A rule that must reach them
+  builds its own visitors, as `notEqVisitors` does in `lint_rule_not_eq.mdk`.
+
+**Choose the applicability.**
+
+- `Safe` only when the rewrite cannot change meaning. Guard what it reads or writes, and set
+  `needs = [NeedsScopes]` in the meta:
+  - a prelude name the rewrite consumes from a matched call: `usesPreludeName facts hd`, per use;
+  - a prelude name the rewrite introduces: `bindsName facts "<name>"`, file-wide, because a binder
+    carries no extent to test a use against;
+  - an instance method the introduced call could resolve to: `rule-if-max-min` withholds inside an
+    `impl Ord` (`inOrdImpl`), where the call would resolve to the method being defined.
+- `Unsafe`: the rewrite may change behaviour, and the author accepts it under `--unsafe-fixes`.
+- `Suggest`: never applied. The driver demotes to `Suggest` any fix whose edit overlaps a comment,
+  so a rule need not declare it for that.
+
+**Fixtures.** On top of § 4, a fixable rule's `.fixed` fixture carries:
+
+- a rebound-name case, marked `unfixed`, for each guarded name;
+- one bracket case per parent kind the output can meet: an argument, an operator operand, a chain;
+- a comment inside the replaced span (`unfixed`) and a comment outside it (fixed, comment kept);
+- a `-- lint-disable-next-line <rule>` case.
+
+Place each marker on the line the finding reports. Read that line from `medaka lint --json` on the
+fixture rather than guessing: a bare application at the root of a multi-line declaration reports on
+the declaration's line. Regenerate `.fixed` with `medaka lint --fix --only=<rule>` on a copy, read
+the diff against the `.mdk` line by line, and classify every moved line:
+
+- **E1** a pinned line that does not move;
+- **E2** a newly fixed site whose comment lies outside the span (the old adapter bailed on any
+  comment in the declaration);
+- **E3** a newly reached body (test, prop, `let rec`, interface default) the old fixer never rewrote,
+  if the rule's visitor admits it;
+- **E4** a pinned positive now withheld by a guard;
+- **D** a site a directive suppresses that the old adapter rewrote; the edit path honours directives.
+
+**Stays on the adapter.** A rule stays when its fix reshapes a pattern: `rule-bind-then-destructure`
+changes a bind's pattern and splices an arm body into the block. A fix that also edits an import
+can be one multi-edit `Fix` when the import edit depends on that finding alone. When the import is a
+union over the file's other findings, as the test-verb import widen is for `rule-test-equal-in-true`
+and `rule-test-bool-literal-equal`, the rule stays on the adapter until the driver can compute the
+union.
