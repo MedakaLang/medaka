@@ -99,6 +99,9 @@ approxEq a b eps = abs (a - b) <= eps
 
 {- | The arithmetic mean of a list, or `None` for an empty list.
 
+   The elements are added in floating point, so the last digits can differ
+   from Python's statistics module, which sums exactly.
+
    > mean [1.0, 2.0, 3.0, 6.0]
    Some 3.0
    > mean []
@@ -106,25 +109,45 @@ approxEq a b eps = abs (a - b) <= eps
 export
 mean : List Float -> Option Float
 mean [] = None
-mean xs = Some (sum xs / intToFloat (length xs))
+mean xs = Some (meanOf xs)
+
+-- The mean of a non-empty list.
+meanOf : List Float -> Float
+meanOf xs = sum xs / intToFloat (length xs)
 
 {- | The median of a list, or `None` for an empty list.
 
-   For an even length it is the mean of the two middle values. A NaN in
-   the list gives an unspecified result.
+   For an odd length it is the middle value, and for an even length the mean
+   of the two middle values. A NaN in the list gives an unspecified result.
+
+   For an even length the result can differ in the last digit from
+   `percentile 50.0`, which interpolates instead of averaging.
 
    > median [3.0, 1.0, 2.0]
    Some 2.0
    > median [4.0, 1.0, 3.0, 2.0]
-   Some 2.5 -}
+   Some 2.5
+   > median [1.0, 2.0, 1.0 / 0.0]
+   Some 2.0 -}
 export
 median : List Float -> Option Float
-median xs = percentile 50.0 xs
+median xs = medianSorted (length xs) (sort xs)
+
+medianSorted : Int -> List Float -> Option Float
+medianSorted 0 _ = None
+medianSorted n sorted =
+  let half = n / 2
+  match drop (if isEven n then half - 1 else half) sorted
+    a :: b :: _ => Some (if isEven n then (a + b) / 2.0 else a)
+    a :: _ => Some a
+    [] => None
 
 {- | The sample standard deviation, dividing by `n - 1` as Python's
    statistics module does, or `None` for fewer than two values.
 
-   A NaN in the list gives an unspecified result.
+   The sums are taken in floating point, so the last digits can differ from
+   Python's statistics module, which sums exactly. A NaN in the list gives an
+   unspecified result.
 
    > stdev [1.0, 3.0]
    Some 1.4142135623730951
@@ -135,7 +158,7 @@ stdev : List Float -> Option Float
 stdev xs
   | length xs < 2 = None
   | otherwise =
-    let m = sum xs / intToFloat (length xs)
+    let m = meanOf xs
     let squares = sum (map (x => (x - m) * (x - m)) xs)
     Some (sqrt (squares / intToFloat (length xs - 1)))
 
@@ -143,8 +166,11 @@ stdev xs
    empty list or a `p` outside that range.
 
    It interpolates linearly between the closest ranks of the sorted list, as
-   numpy's default and Excel's inclusive percentile do. A NaN in the list gives
-   an unspecified result.
+   numpy's default and Excel's inclusive percentile do, and an exact rank gives
+   that element itself. A NaN in the list gives an unspecified result.
+
+   For an odd length `percentile 50.0 xs` equals `median xs`; for an even
+   length the two can differ in the last digit.
 
    > percentile 0.0 [4.0, 1.0, 3.0, 2.0]
    Some 1.0
@@ -152,6 +178,8 @@ stdev xs
    Some 2.5
    > percentile 100.0 [4.0, 1.0, 3.0, 2.0]
    Some 4.0
+   > percentile 100.0 [1.0, 1.0 / 0.0]
+   Some inf
    > percentile 101.0 [1.0]
    None -}
 export
@@ -160,14 +188,23 @@ percentile p xs
   | isNaN p || p < 0.0 || p > 100.0 = None
   | otherwise = interpolateRank (p / 100.0) (sort xs)
 
+-- numpy's interpolation: exact at both ends. At `t == 0.0` it is `a` without reading
+-- `b`, which may be infinite.
+rankLerp : Float -> Float -> Float -> Float
+rankLerp a b t
+  | t == 0.0 = a
+  | t >= 0.5 = b - (b - a) * (1.0 - t)
+  | otherwise = a + (b - a) * t
+
 -- `sorted` is ascending; the rank `q * (n - 1)` falls between two neighbours.
 interpolateRank : Float -> List Float -> Option Float
 interpolateRank _ [] = None
 interpolateRank q sorted =
   let rank = q * intToFloat (length sorted - 1)
   let lo = floatToInt (floor rank)
+  let t = rank - intToFloat lo
   match drop lo sorted
-    a :: b :: _ => Some (a + (b - a) * (rank - intToFloat lo))
+    a :: b :: _ => Some (rankLerp a b t)
     a :: _ => Some a
     [] => None
 

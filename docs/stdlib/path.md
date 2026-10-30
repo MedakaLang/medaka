@@ -233,6 +233,8 @@ True
 True
 > matchGlob "" "a"
 False
+> matchGlob "*a*a*a*a*a*a*b" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+False
 ```
 
 ## Predicates

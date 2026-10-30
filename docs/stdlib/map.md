@@ -515,7 +515,7 @@ The keys present in both maps, each with the first map's value.
 ### `countBy`
 
 ```
-countBy : Ord k => (a -> <e> k) -> List a -> <e> Map k Int
+countBy : Ord k => (a -> k) -> List a -> Map k Int
 countBy key xs
 ```
 
@@ -533,7 +533,7 @@ fromList []
 ### `groupByKey`
 
 ```
-groupByKey : Ord k => (a -> <e> k) -> List a -> <e> Map k (List a)
+groupByKey : Ord k => (a -> k) -> List a -> Map k (List a)
 groupByKey key xs
 ```
 

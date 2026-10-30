@@ -1,5 +1,5 @@
 # META
-source_lines=987
+source_lines=986
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -34,6 +34,7 @@ stages=DESUGAR,MARK
 -- List/Array duals: `arrayFromList` and `array.toList` convert in one call.
 
 import core.{Ordering(..), Ord, Debug, Foldable, Mappable, Option}
+import list.{head}
 
 -- `Debug String`/`Debug Char` and the other primitive instances live in the
 -- prelude (`core.mdk`), so they resolve without importing `string`.
@@ -620,9 +621,7 @@ replaceOnce old new s = match countOccurrences old s
   n => Err "expected 1 occurrence of `\{take 60 (firstLine old)}…`, found \{n}"
 
 firstLine : String -> String
-firstLine s = match lines s
-  [] => ""
-  l :: _ => l
+firstLine s = optionOr "" (head (lines s))
 
 {- | Splits `s` at the first `start` and the first `end` after it, giving
    the text before `start`, the text between the two, and the text after
@@ -991,6 +990,7 @@ sliceBetween : StrCursor -> StrCursor -> String
 sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false))))
+(DUse false (UseGroup ("list") ((mem "head" false))))
 (DTypeSig true "isDigit" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isDigit" ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 48))) (EBinOp "<=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 57)))))
 (DTypeSig true "isAlpha" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -1098,7 +1098,7 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DTypeSig true "replaceOnce" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
 (DFunDef false "replaceOnce" ((PVar "old") (PVar "new") (PVar "s")) (EMatch (EApp (EApp (EVar "countOccurrences") (EVar "old")) (EVar "s")) (arm (PLit (LInt 1)) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "replaceFirst") (EVar "old")) (EVar "new")) (EVar "s")))) (arm (PVar "n") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EVar "display") (EApp (EApp (EVar "take") (ELit (LInt 60))) (EApp (EVar "firstLine") (EVar "old"))))) (ELit (LString "…`, found "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "")))))))
 (DTypeSig false "firstLine" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "firstLine" ((PVar "s")) (EMatch (EApp (EVar "lines") (EVar "s")) (arm (PList) () (ELit (LString ""))) (arm (PCons (PVar "l") PWild) () (EVar "l"))))
+(DFunDef false "firstLine" ((PVar "s")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "head") (EApp (EVar "lines") (EVar "s")))))
 (DTypeSig true "cutBetween" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))))
 (DFunDef false "cutBetween" ((PVar "start") (PVar "end") (PVar "s")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "start")) (EVar "s")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "start anchor `")) (EApp (EVar "display") (EVar "start"))) (ELit (LString "` not found"))))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "afterStart") (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "start")))) (EVar "s"))) (DoExpr (EMatch (EApp (EApp (EVar "indexOf") (EVar "end")) (EVar "afterStart")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "end anchor `")) (EApp (EVar "display") (EVar "end"))) (ELit (LString "` not found after start"))))) (arm (PCon "Some" (PVar "j")) () (EApp (EVar "Ok") (ETuple (EApp (EApp (EVar "take") (EVar "i")) (EVar "s")) (EApp (EApp (EVar "take") (EVar "j")) (EVar "afterStart")) (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "j") (EApp (EVar "stringLength") (EVar "end")))) (EVar "afterStart")))))))))))
 (DTypeSig true "replaceAll" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
@@ -1172,6 +1172,7 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DFunDef false "sliceBetween" ((PCon "StrCursor" (PVar "s") (PVar "a")) (PCon "StrCursor" PWild (PVar "b"))) (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "a")) (EVar "b")) (EVar "s")))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false))))
+(DUse false (UseGroup ("list") ((mem "head" false))))
 (DTypeSig true "isDigit" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isDigit" ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 48))) (EBinOp "<=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 57)))))
 (DTypeSig true "isAlpha" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -1279,7 +1280,7 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DTypeSig true "replaceOnce" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
 (DFunDef false "replaceOnce" ((PVar "old") (PVar "new") (PVar "s")) (EMatch (EApp (EApp (EVar "countOccurrences") (EVar "old")) (EVar "s")) (arm (PLit (LInt 1)) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "replaceFirst") (EVar "old")) (EVar "new")) (EVar "s")))) (arm (PVar "n") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EMethodRef "display") (EApp (EApp (EVar "take") (ELit (LInt 60))) (EApp (EVar "firstLine") (EVar "old"))))) (ELit (LString "…`, found "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "")))))))
 (DTypeSig false "firstLine" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "firstLine" ((PVar "s")) (EMatch (EApp (EVar "lines") (EVar "s")) (arm (PList) () (ELit (LString ""))) (arm (PCons (PVar "l") PWild) () (EVar "l"))))
+(DFunDef false "firstLine" ((PVar "s")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "head") (EApp (EVar "lines") (EVar "s")))))
 (DTypeSig true "cutBetween" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))))
 (DFunDef false "cutBetween" ((PVar "start") (PVar "end") (PVar "s")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "start")) (EVar "s")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "start anchor `")) (EApp (EMethodRef "display") (EVar "start"))) (ELit (LString "` not found"))))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "afterStart") (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "start")))) (EVar "s"))) (DoExpr (EMatch (EApp (EApp (EVar "indexOf") (EVar "end")) (EVar "afterStart")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "end anchor `")) (EApp (EMethodRef "display") (EVar "end"))) (ELit (LString "` not found after start"))))) (arm (PCon "Some" (PVar "j")) () (EApp (EVar "Ok") (ETuple (EApp (EApp (EVar "take") (EVar "i")) (EVar "s")) (EApp (EApp (EVar "take") (EVar "j")) (EVar "afterStart")) (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "j") (EApp (EVar "stringLength") (EVar "end")))) (EVar "afterStart")))))))))))
 (DTypeSig true "replaceAll" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))

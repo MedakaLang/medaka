@@ -94,7 +94,7 @@ editFile path f
 Rewrites the file at `path` with the result of `f` applied to its text.
 
 `Err` from `f` writes nothing and is returned as `Err "<path>: <e>"`, as
-is a failure to read. The file is written only when the new text differs
+is a failure to read or to write. The file is written only when the new text differs
 from what was read, so an unchanged edit leaves the modification time
 alone. The write is a plain `writeFile`, not a durable replace.
 
@@ -191,12 +191,12 @@ listed, and `Ok []` means there are no files. `Err` on the first
 directory that cannot be read or entry that cannot be examined. The order
 does not depend on the host's `listDir` order, so the result is stable.
 Symbolic links are followed through `stat`, as `walkDir` does, so a link
-to a directory is walked and a cycle of links is not detected; that waits
-on a stat that does not follow links.
+to a directory is walked and a link loop reports an `Err`. An `Err` names
+the path that failed, as `"<path>: <e>"`.
 
 ```medaka
 > walkFiles "stdlib/no-such-walk-doctest-dir"
-Err "No such file or directory"
+Err "stdlib/no-such-walk-doctest-dir: No such file or directory"
 ```
 
 ### `walkFilesSkipping`
@@ -214,7 +214,7 @@ predicate that holds for it still walks it.
 
 ```medaka
 > walkFilesSkipping (_ => True) "stdlib/no-such-walk-doctest-dir"
-Err "No such file or directory"
+Err "stdlib/no-such-walk-doctest-dir: No such file or directory"
 ```
 
 ### `glob`
@@ -231,11 +231,13 @@ longest directory prefix of the pattern that has no `*` or `?`, and a
 result reads as the pattern does: `*.mdk` finds `a.mdk`, not `./a.mdk`.
 A pattern with no wildcard names one path, which is returned when it is a
 file and is otherwise `Ok []`. A prefix directory that is missing or
-cannot be read is an `Err`, unlike Python's `glob`, which returns `[]`.
+cannot be read is an `Err` naming it, unlike Python's `glob`, which returns
+`[]`. Unless the pattern has a `**` segment the walk goes no deeper than
+the pattern's segments, so entries below that depth are never examined.
 
 ```medaka
 > glob "stdlib/no-such-glob-doctest-dir/*.mdk"
-Err "No such file or directory"
+Err "stdlib/no-such-glob-doctest-dir: No such file or directory"
 > glob "no-such-glob-doctest-file"
 Ok []
 ```

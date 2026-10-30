@@ -137,6 +137,9 @@ mean xs
 
 The arithmetic mean of a list, or `None` for an empty list.
 
+The elements are added in floating point, so the last digits can differ
+from Python's statistics module, which sums exactly.
+
 ```medaka
 > mean [1.0, 2.0, 3.0, 6.0]
 Some 3.0
@@ -153,14 +156,19 @@ median xs
 
 The median of a list, or `None` for an empty list.
 
-For an even length it is the mean of the two middle values. A NaN in
-the list gives an unspecified result.
+For an odd length it is the middle value, and for an even length the mean
+of the two middle values. A NaN in the list gives an unspecified result.
+
+For an even length the result can differ in the last digit from
+`percentile 50.0`, which interpolates instead of averaging.
 
 ```medaka
 > median [3.0, 1.0, 2.0]
 Some 2.0
 > median [4.0, 1.0, 3.0, 2.0]
 Some 2.5
+> median [1.0, 2.0, 1.0 / 0.0]
+Some 2.0
 ```
 
 ### `stdev`
@@ -173,7 +181,9 @@ stdev xs
 The sample standard deviation, dividing by `n - 1` as Python's
 statistics module does, or `None` for fewer than two values.
 
-A NaN in the list gives an unspecified result.
+The sums are taken in floating point, so the last digits can differ from
+Python's statistics module, which sums exactly. A NaN in the list gives an
+unspecified result.
 
 ```medaka
 > stdev [1.0, 3.0]
@@ -193,8 +203,11 @@ The `p`th percentile of a list, for `p` from 0 to 100, or `None` for an
 empty list or a `p` outside that range.
 
 It interpolates linearly between the closest ranks of the sorted list, as
-numpy's default and Excel's inclusive percentile do. A NaN in the list gives
-an unspecified result.
+numpy's default and Excel's inclusive percentile do, and an exact rank gives
+that element itself. A NaN in the list gives an unspecified result.
+
+For an odd length `percentile 50.0 xs` equals `median xs`; for an even
+length the two can differ in the last digit.
 
 ```medaka
 > percentile 0.0 [4.0, 1.0, 3.0, 2.0]
@@ -203,6 +216,8 @@ Some 1.0
 Some 2.5
 > percentile 100.0 [4.0, 1.0, 3.0, 2.0]
 Some 4.0
+> percentile 100.0 [1.0, 1.0 / 0.0]
+Some inf
 > percentile 101.0 [1.0]
 None
 ```

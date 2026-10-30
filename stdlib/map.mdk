@@ -900,7 +900,7 @@ export impl Monoid (Map k v) requires Ord k where
    > countBy (x => x) ([] : List Int)
    fromList [] -}
 export
-countBy : Ord k => (a -> <e> k) -> List a -> <e> Map k Int
+countBy : Ord k => (a -> k) -> List a -> Map k Int
 countBy key xs = fold (m x => insertWith (+) (key x) 1 m) Tip xs
 
 {- | The elements of the list collected under the key each maps to.
@@ -912,7 +912,7 @@ countBy key xs = fold (m x => insertWith (+) (key x) 1 m) Tip xs
    > groupByKey (x => x) ([] : List Int)
    fromList [] -}
 export
-groupByKey : Ord k => (a -> <e> k) -> List a -> <e> Map k (List a)
+groupByKey : Ord k => (a -> k) -> List a -> Map k (List a)
 groupByKey key xs =
   let reversed = fold (m x => insertWith (++) (key x) [x] m) Tip xs
   map reverse reversed

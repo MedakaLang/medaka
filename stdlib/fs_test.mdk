@@ -7,7 +7,7 @@ import fs.{
 import list.{sort}
 import string.{contains}
 import path.{joinPath}
-import test.{Expectation, expectEqual, expectErrContains, fail}
+import test.{Expectation, expectEqual, expectErrContains, fail, pass}
 import io.{runVerb}
 import test_process.{scratchDir, withScratchDir}
 
@@ -93,16 +93,20 @@ buildWide root dirs files
         Err e => Err e
         Ok _ => buildWide root (dirs - 1) files
 
-wideWalkCheck : String -> <Exec, IO, FileRead, FileWrite> Expectation
-wideWalkCheck dir = match buildWide dir 30 1000
+-- `walk` over a fresh tree of 30 directories of 1000 files: `count` results.
+wideCheck : Int ->
+  (String -> <FileRead> Result String (List String)) ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+wideCheck count walk dir = match buildWide dir 30 1000
   Err e => fail "could not build the tree: \{e}"
-  Ok _ => expectEqual (Ok 30030) (map length (walkDir dir))
+  Ok _ => expectEqual (Ok count) (map length (walk dir))
 
 -- A result wider than the interpreter's recursion cap (25000): under `medaka
 -- run`, which has no tail calls, any pass whose depth is the entry count
 -- overflows.  This test runs natively, so it pins only the count.
 test "walkDir returns every entry of a tree of 30030 entries" =
-  withScratchDir wideWalkCheck
+  withScratchDir (wideCheck 30030 walkDir)
 
 -- # editFile
 
@@ -145,6 +149,29 @@ test "editFile writes when the text changes" = withScratchDir
     Err e => fail "setup failed: \{e}"
     Ok ((t0, m0), (t1, m1), r) =>
       expectEqual ("abc", "abcd", True, Ok ()) (t0, t1, m1 > m0, r))
+
+test "editFile of a file that is not UTF-8 names the path once" = withScratchDir
+  (dir =>
+    let path = joinPath dir "not-utf8.bin"
+    let _ = writeFileBytes path [|0x61, 0xc0, 0xae|]
+    expectEqual (map (_ => ()) (readFile path)) (editFile path Ok))
+
+-- A read-only file refuses the write open, except for root, which ignores
+-- the mode, so the test passes without asserting when it runs as root. The
+-- write extern discards some other write failures, which are not testable.
+test "editFile on a write failure names the path" = withScratchDir (dir =>
+  let path = joinPath dir "readonly.txt"
+  match (
+    writeFile path "abc",
+    runVerb "chmod" ["444", path],
+    runVerb "id" ["-u"],
+  )
+    (Ok _, Ok _, Ok (0, uid, _)) =>
+      if uid == "0\n" then
+        pass
+      else
+        expectErrContains "\{path}: " (editFile path (_ => Ok "x"))
+    _ => fail "setup failed")
 
 test "editFile on a missing file is an Err naming the path" = withScratchDir
   (dir =>
@@ -191,8 +218,15 @@ test "walkFiles lists only files, in sorted order" = withGlobTree (dir =>
 test "walkFiles of a directory with no files is Ok []" =
   withGlobTree (dir => expectEqual (Ok []) (walkFiles (joinPath dir "empty")))
 
-test "walkFiles of a missing root is an Err naming the host's message" = withGlobTree
-  (dir => expectErrContains "No such file" (walkFiles (joinPath dir "absent")))
+test "walkFiles of a missing root is an Err naming the root and the host's message" = withGlobTree
+  (dir =>
+    let root = joinPath dir "absent"
+    expectErrContains "\{root}: " (walkFiles root))
+
+test "walkFilesSkipping of a missing root is an Err naming the root" = withGlobTree
+  (dir =>
+    let root = joinPath dir "absent"
+    expectErrContains "\{root}: " (walkFilesSkipping (_ => False) root))
 
 test "walkFilesSkipping does not enter a directory the predicate accepts" = withGlobTree
   (dir =>
@@ -223,8 +257,44 @@ test "glob of a missing path without a wildcard is Ok []" =
 test "glob of a directory path without a wildcard is Ok []" =
   withGlobTree (dir => expectEqual (Ok []) (glob (joinPath dir "sub")))
 
-test "glob under a missing prefix directory is an Err" = withGlobTree (dir =>
-  expectErrContains "No such file" (glob (joinPath dir "absent/*.mdk")))
+test "glob under a missing prefix directory is an Err naming it" = withGlobTree
+  (dir =>
+    let prefix = joinPath dir "absent"
+    expectErrContains "\{prefix}: " (glob (joinPath prefix "*.mdk")))
+
+-- `dang/top.txt`, and `dang/deep/broken`, a link to a file that does not exist.
+buildDangling : String -> <Exec, IO, FileRead, FileWrite> Result String Unit
+buildDangling root = do
+  () <- mkdirAll (joinPath root "dang/deep")
+  () <- writeFile (joinPath root "dang/top.txt") "t"
+  _ <- runVerb "ln" ["-s", "nowhere", joinPath root "dang/deep/broken"]
+  Ok ()
+
+withDangling : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withDangling check = withScratchDir (dir => match buildDangling dir
+  Err e => fail "could not build the tree: \{e}"
+  Ok _ => check dir)
+
+-- The dangling link lies below the depth the pattern can reach, so a walk
+-- that examined it would be an `Err`.
+test "glob does not examine entries below the depth its pattern reaches" = withDangling
+  (dir =>
+    expectEqual
+      (Ok [joinPath dir "dang/top.txt"])
+      (glob (joinPath dir "dang/*.txt")))
+
+test "glob with a ** segment walks the whole tree and meets the dangling link" = withDangling
+  (dir =>
+    expectErrContains
+      (joinPath dir "dang/deep/broken: ")
+      (glob (joinPath dir "dang/**/*.txt")))
+
+test "walkFiles names the entry that failed" = withDangling (dir =>
+  expectErrContains (joinPath dir "dang/deep/broken: ") (walkFiles dir))
+
+test "glob of two segments reaches exactly two levels" = withGlobTree (dir =>
+  expectEqual (Ok (rooted dir ["sub/b.txt"])) (glob (joinPath dir "sub/*.txt")))
 
 -- The files of `dir` by name, sorted: the answer `glob "*"` must read as.
 topFiles : List String -> <FileRead> Result String (List String)
@@ -239,13 +309,8 @@ test "glob with an empty prefix reads as the pattern does, without ./" =
     Err e => fail "listDir failed: \{e}"
     Ok names => expectEqual (map sort (topFiles names)) (glob "*")
 
-wideFilesCheck : String -> <Exec, IO, FileRead, FileWrite> Expectation
-wideFilesCheck dir = match buildWide dir 30 1000
-  Err e => fail "could not build the tree: \{e}"
-  Ok _ => expectEqual (Ok 30000) (map length (walkFiles dir))
-
 test "walkFiles returns every file of a tree of 30030 entries" =
-  withScratchDir wideFilesCheck
+  withScratchDir (wideCheck 30000 walkFiles)
 
 -- A name that sorts before `/` ("a b", "a-d", "a.c") comes before the contents
 -- of the directory `a`, as plain string order on the full paths says.
