@@ -7,7 +7,8 @@ The primitives are in scope without an import: `readFile`, `writeFile`,
 `makeDir`, `removeFile`, `rename`, `removeDir`, `statFile`, and
 `canonicalizePath`. This module adds a `FileStat` record over
 `statFile`'s tuple and the composed operations `copyFile`,
-`replaceDurably`, `mkdirAll`, `mkdirAllDurably`, `walkDir`, `isDir`,
+`replaceDurably`, `mkdirAll`, `mkdirAllDurably`, `walkDir`, `walkFiles`, `walkFilesSkipping`,
+`glob`, `isDir`,
 `isFile`, and `fileSize`.
 
 Every operation returns `Result String a`, with the host's error message
@@ -175,6 +176,69 @@ first.
 
 Each result is the full path, joined onto `root`. `Err` on the first
 directory that cannot be read or entry that cannot be examined.
+
+### `walkFiles`
+
+```
+walkFiles : String -> <FileRead> Result String (List String)
+walkFiles root
+```
+
+Every regular file under `root`, in plain string order.
+
+Each result is the full path, joined onto `root`; directories are not
+listed, and `Ok []` means there are no files. `Err` on the first
+directory that cannot be read or entry that cannot be examined. The order
+does not depend on the host's `listDir` order, so the result is stable.
+Symbolic links are followed through `stat`, as `walkDir` does, so a link
+to a directory is walked and a cycle of links is not detected; that waits
+on a stat that does not follow links.
+
+```medaka
+> walkFiles "stdlib/no-such-walk-doctest-dir"
+Err "No such file or directory"
+```
+
+### `walkFilesSkipping`
+
+```
+walkFilesSkipping : (String -> Bool) -> String -> <FileRead> Result String (List String)
+walkFilesSkipping skip root
+```
+
+`walkFiles`, but a directory whose path satisfies `skip` is not entered.
+
+The path the predicate sees is the one `walkFiles` would report for that
+directory, joined onto `root`. `root` itself is never tested, so a
+predicate that holds for it still walks it.
+
+```medaka
+> walkFilesSkipping (_ => True) "stdlib/no-such-walk-doctest-dir"
+Err "No such file or directory"
+```
+
+### `glob`
+
+```
+glob : String -> <FileRead> Result String (List String)
+glob pattern
+```
+
+The files whose paths match the glob `pattern`, in plain string order.
+
+The pattern is read as by `path.matchGlob`. The walk starts at the
+longest directory prefix of the pattern that has no `*` or `?`, and a
+result reads as the pattern does: `*.mdk` finds `a.mdk`, not `./a.mdk`.
+A pattern with no wildcard names one path, which is returned when it is a
+file and is otherwise `Ok []`. A prefix directory that is missing or
+cannot be read is an `Err`, unlike Python's `glob`, which returns `[]`.
+
+```medaka
+> glob "stdlib/no-such-glob-doctest-dir/*.mdk"
+Err "No such file or directory"
+> glob "stdlib/no-such-glob-doctest-file.mdk"
+Ok []
+```
 
 ### `fixtureFiles`
 

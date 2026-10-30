@@ -207,7 +207,8 @@ listDir : (path : String) -> <FileRead path> Result String (List String)
 
 The names of the entries in a directory. A name whose bytes are not
 valid UTF-8 reads with U+FFFD in their place, so two such names can read
-alike and a returned name may not open the entry it came from.
+alike and a returned name may not open the entry it came from. The order
+of the names is unspecified; sort them, or walk with fs.walkFiles, for a stable one.
 
 ### `makeDir`
 

@@ -1,6 +1,11 @@
 -- Tests for the file primitives `stdlib/fs.mdk` builds on.
 
-import fs.{editFile, isDir, mkdirAll, stat, walkDir}
+import fs.{
+  editFile, glob, isDir, isFile, mkdirAll, stat, walkDir, walkFiles,
+  walkFilesSkipping
+}
+import list.{sort}
+import string.{contains}
 import path.{joinPath}
 import test.{Expectation, expectEqual, expectErrContains, fail}
 import io.{runVerb}
@@ -146,3 +151,117 @@ test "editFile on a missing file is an Err naming the path" = withScratchDir
     expectErrContains
       (joinPath dir "absent.txt")
       (editFile (joinPath dir "absent.txt") Ok))
+
+-- # walkFiles, walkFilesSkipping, glob
+
+-- Files `a.txt`, `m.mdk`, `sub/b.txt`, `sub/x.mdk`, `sub/deep/d.mdk`,
+-- `zed/e.txt`, and an `empty/inner` directory holding no file.
+buildGlobTree : String -> <FileWrite> Result String Unit
+buildGlobTree root = do
+  () <- mkdirAll (joinPath root "sub/deep")
+  () <- mkdirAll (joinPath root "zed")
+  () <- mkdirAll (joinPath root "empty/inner")
+  () <- writeFile (joinPath root "zed/e.txt") "e"
+  () <- writeFile (joinPath root "sub/deep/d.mdk") "d"
+  () <- writeFile (joinPath root "sub/x.mdk") "x"
+  () <- writeFile (joinPath root "sub/b.txt") "b"
+  () <- writeFile (joinPath root "m.mdk") "m"
+  () <- writeFile (joinPath root "a.txt") "a"
+  Ok ()
+
+-- Runs `check` on a fresh tree under a scratch directory.
+withGlobTree : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withGlobTree check = withScratchDir (dir => match buildGlobTree dir
+  Err e => fail "could not build the tree: \{e}"
+  Ok _ => check dir)
+
+rooted : String -> List String -> List String
+rooted dir names = map (joinPath dir) names
+
+test "walkFiles lists only files, in sorted order" = withGlobTree (dir =>
+  expectEqual
+    (Ok
+      (rooted dir [
+        "a.txt", "m.mdk", "sub/b.txt", "sub/deep/d.mdk", "sub/x.mdk",
+        "zed/e.txt"
+      ]))
+    (walkFiles dir))
+
+test "walkFiles of a directory with no files is Ok []" =
+  withGlobTree (dir => expectEqual (Ok []) (walkFiles (joinPath dir "empty")))
+
+test "walkFiles of a missing root is an Err naming the host's message" = withGlobTree
+  (dir => expectErrContains "No such file" (walkFiles (joinPath dir "absent")))
+
+test "walkFilesSkipping does not enter a directory the predicate accepts" = withGlobTree
+  (dir =>
+    expectEqual
+      (Ok (rooted dir ["a.txt", "m.mdk", "zed/e.txt"]))
+      (walkFilesSkipping (contains "/sub") dir))
+
+test "walkFilesSkipping never tests the root itself" = withGlobTree (dir =>
+  let sub = joinPath dir "sub"
+  expectEqual
+    (Ok (rooted dir ["sub/b.txt", "sub/deep/d.mdk", "sub/x.mdk"]))
+    (walkFilesSkipping (== sub) sub))
+
+test "glob matches within one directory with *" = withGlobTree (dir =>
+  expectEqual (Ok (rooted dir ["m.mdk"])) (glob (joinPath dir "*.mdk")))
+
+test "glob with ** crosses directories, zero included" = withGlobTree (dir =>
+  expectEqual
+    (Ok (rooted dir ["sub/deep/d.mdk", "sub/x.mdk"]))
+    (glob (joinPath dir "sub/**/*.mdk")))
+
+test "glob of a path without a wildcard names that file" = withGlobTree (dir =>
+  expectEqual (Ok [joinPath dir "m.mdk"]) (glob (joinPath dir "m.mdk")))
+
+test "glob of a missing path without a wildcard is Ok []" =
+  withGlobTree (dir => expectEqual (Ok []) (glob (joinPath dir "nope.mdk")))
+
+test "glob of a directory path without a wildcard is Ok []" =
+  withGlobTree (dir => expectEqual (Ok []) (glob (joinPath dir "sub")))
+
+test "glob under a missing prefix directory is an Err" = withGlobTree (dir =>
+  expectErrContains "No such file" (glob (joinPath dir "absent/*.mdk")))
+
+-- The files of `dir` by name, sorted: the answer `glob "*"` must read as.
+topFiles : List String -> <FileRead> Result String (List String)
+topFiles [] = Ok []
+topFiles (n :: rest) = match isFile n
+  Err e => Err e
+  Ok True => map (n :: _) (topFiles rest)
+  Ok False => topFiles rest
+
+test "glob with an empty prefix reads as the pattern does, without ./" =
+  match listDir "."
+    Err e => fail "listDir failed: \{e}"
+    Ok names => expectEqual (map sort (topFiles names)) (glob "*")
+
+wideFilesCheck : String -> <Exec, IO, FileRead, FileWrite> Expectation
+wideFilesCheck dir = match buildWide dir 30 1000
+  Err e => fail "could not build the tree: \{e}"
+  Ok _ => expectEqual (Ok 30000) (map length (walkFiles dir))
+
+test "walkFiles returns every file of a tree of 30030 entries" =
+  withScratchDir wideFilesCheck
+
+-- A name that sorts before `/` ("a b", "a-d", "a.c") comes before the contents
+-- of the directory `a`, as plain string order on the full paths says.
+test "walkFiles orders by whole path when a name sorts before the slash" = withScratchDir
+  (dir => match buildTricky dir
+    Err e => fail "setup failed: \{e}"
+    Ok _ =>
+      expectEqual
+        (Ok (rooted dir ["a b", "a-d", "a.c", "a/x"]))
+        (walkFiles dir))
+
+buildTricky : String -> <FileWrite> Result String Unit
+buildTricky dir = do
+  () <- mkdirAll (joinPath dir "a")
+  () <- writeFile (joinPath dir "a/x") ""
+  () <- writeFile (joinPath dir "a b") ""
+  () <- writeFile (joinPath dir "a-d") ""
+  () <- writeFile (joinPath dir "a.c") ""
+  Ok ()
