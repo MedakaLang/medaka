@@ -27,7 +27,13 @@ import tools.prop_runner.{
   runPreparedPropRequestsResults,
 }
 import eval.eval.{
-  EvalEnv(..), Value(..), lookupEnv, lookupRuntimeBinding, runtimeCellsOf
+  EvalEnv(..),
+  EnvFrame(..),
+  Value(..),
+  indexedFrame,
+  lookupEnv,
+  lookupRuntimeBinding,
+  runtimeCellsOf,
 }
 import list.{nub}
 import support.ordmap.{omEmpty}
@@ -353,7 +359,7 @@ missingHelperResults (CustomPlan key carrier word) =
     [PropHelper word "__missing_prop_generator" "__missing_prop_shrinker"]
     rows
     []
-    (EvalEnv [[]])
+    (EvalEnv [ScanFrame []])
     []
 
 missingHelperIsRuntimeResult : Bool
@@ -375,12 +381,12 @@ runtimeShadowResults =
     ("setSeed", VInt 29),
   ]
   let env = EvalEnv [
-    [
+    ScanFrame [
       ("randomState", Ref (VInt 7)),
       ("restoreRandomState", Ref (VInt 11)),
       ("setSeed", Ref (VInt 13)),
     ],
-    canonical,
+    indexedFrame canonical,
   ]
   let local = (
     match lookupEnv env "randomState"
@@ -507,7 +513,9 @@ drawsFor source ty =
     Ok plan =>
       let _ = seedPropRng 20261009
       let ge = GenEnv env omEmpty
-      map (_ => showValue (genFromPlan ge (EvalEnv [[]]) 0 plan)) [1, 2, 3, 4]
+      map
+        (_ => showValue (genFromPlan ge (EvalEnv [ScanFrame []]) 0 plan))
+        [1, 2, 3, 4]
     Err e => [planErrorText e]
 
 shapeSource : String

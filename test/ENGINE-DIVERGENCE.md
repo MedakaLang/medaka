@@ -417,7 +417,7 @@ runtime error [E-PANIC]: unbound identifier: args
 
 Those probes only work as *compiled* `test/bin/*` binaries.
 
-It may well be **deliberate**: eval's `putStr`/`putStrLn` buffer into `outputRef` so
+It may well be **deliberate**: eval's `putStr`/`putStrLn` buffer into `outputChunks` so
 the evaluator stays `<Mut>`-only rather than `<IO>`, and real file I/O would force an
 `<IO>` effect into the evaluator. If so, it is an undocumented design limit that
 surfaces to users as an internal `E-PANIC`, which is still a bug — either implement

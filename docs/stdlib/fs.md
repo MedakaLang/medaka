@@ -11,8 +11,7 @@ The primitives are in scope without an import: `readFile`, `writeFile`,
 `isFile`, and `fileSize`.
 
 Every operation returns `Result String a`, with the host's error message
-in `Err`. File operations run only in a built program, not under the
-interpreter.
+in `Err`.
 
 ## Metadata
 

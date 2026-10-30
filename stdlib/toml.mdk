@@ -18,6 +18,7 @@
 -- `compiler/support/manifest.mdk`.
 
 import list.{reverse}
+import map.{Map(..), get, insertWith}
 import string.{trim, lines, toInt, startsWith, drop, indexOf, contains}
 import core.{Display}
 import regex.{Regex, mustCompile, find as reFind}
@@ -535,14 +536,29 @@ export
 tableCount : String -> Toml -> Int
 tableCount name (Toml kvs) = tableCountGo (stringConcat [name, "."]) kvs 0
 
-stripTablePrefix : String ->
+-- One scan of `kvs` for entry `i`: the entry's pairs with the prefix removed
+-- (reversed) and the largest index + 1 seen over all keys, as `tableCount`
+-- counts it, so an out-of-range `i` is told apart from an entry with no keys.
+tableEntryGo : String ->
+  String ->
   List (String, TomlValue) ->
-  List (String, TomlValue)
-stripTablePrefix _ [] = []
-stripTablePrefix prefix ((k, v) :: rest)
-  | startsWith prefix k =
-    (drop (stringLength prefix) k, v) :: stripTablePrefix prefix rest
-  | otherwise = stripTablePrefix prefix rest
+  Int ->
+  List (String, TomlValue) ->
+  (Int, List (String, TomlValue))
+tableEntryGo _ _ [] best acc = (best, acc)
+tableEntryGo prefix entryPrefix ((k, v) :: rest) best acc =
+  let best2 = match tableIdxOf prefix k
+    None => best
+    Some j => max (j + 1) best
+  if startsWith entryPrefix k then
+    tableEntryGo
+      prefix
+      entryPrefix
+      rest
+      best2
+      ((drop (stringLength entryPrefix) k, v) :: acc)
+  else
+    tableEntryGo prefix entryPrefix rest best2 acc
 
 {- | The `i`-th `[[name]]` entry, counting from `0`, as a document of its
    own, or `None` when `i` is out of range.
@@ -556,13 +572,53 @@ stripTablePrefix prefix ((k, v) :: rest)
    None -}
 export
 tableEntry : String -> Int -> Toml -> Option Toml
-tableEntry name i (Toml kvs) =
-  if i < 0 || i >= tableCount name (Toml kvs) then
-    None
-  else
-    Some
-      (Toml
-        (stripTablePrefix (stringConcat [name, ".", intToString i, "."]) kvs))
+tableEntry name i (Toml kvs)
+  | i < 0 = None
+  | otherwise =
+    let entryPrefix = stringConcat [name, ".", intToString i, "."]
+    let (count, entry) =
+      tableEntryGo (stringConcat [name, "."]) entryPrefix kvs 0 []
+    if i >= count then None else Some (Toml (reverse entry))
+
+-- The entry index and unqualified key of `k` when it belongs to an entry of
+-- `prefix`, spelled the way `tableEntry` spells it.
+entryKeyOf : String -> String -> Option (Int, String)
+entryKeyOf prefix k = match tableIdxOf prefix k
+  Some i if i >= 0 =>
+    let entryPrefix = stringConcat [prefix, intToString i, "."]
+    if startsWith entryPrefix k then
+      Some (i, drop (stringLength entryPrefix) k)
+    else
+      None
+  _ => None
+
+-- Groups the pairs of `kvs` by entry index, document order within an entry.
+-- Folds from the right so each cons lands in front of the later pairs.
+groupEntries : String ->
+  List (String, TomlValue) ->
+  Map Int (List (String, TomlValue))
+groupEntries _ [] = Tip
+groupEntries prefix ((k, v) :: rest) =
+  let groups = groupEntries prefix rest
+  match entryKeyOf prefix k
+    None => groups
+    Some (i, key) => insertWith (++) i [(key, v)] groups
+
+{- | Every `[[name]]` entry in the document, in document order.
+
+   Entry `i` is what `tableEntry name i` returns, but the document is read
+   once for all of them. The list is empty when there are no entries.
+
+   > map (getString "name") (tableEntries "gate" (Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")]))
+   [Some "a", Some "b"]
+   > tableEntries "gate" (Toml [("package.name", TString "x")])
+   [] -}
+export
+tableEntries : String -> Toml -> List Toml
+tableEntries name (Toml kvs) =
+  let prefix = stringConcat [name, "."]
+  let groups = groupEntries prefix kvs
+  map (i => Toml (optionOr [] (get i groups))) [0..tableCountGo prefix kvs 0]
 
 -- ── Eq and Debug instances ──────────────────────────────────────────────────
 

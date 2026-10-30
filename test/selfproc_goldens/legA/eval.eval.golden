@@ -35,7 +35,7 @@ buildCtorFieldOrders : List Decl -> List (String, List String)
 buildCtorToType : List Decl -> List (String, String)
 buildIfaceDispatch : List Decl -> List ((String, String, String), List Int)
 buildMethodReqCounts : Option DispositionTable -> List Decl -> List ((String, String), Int)
-buildModInfos : List (String, Ref (Value a)) -> List (String, Ref (Value a)) -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
+buildModInfos : EnvFrame (Value a) -> EnvFrame (Value a) -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
 buildRootModuleStateWith : ProgramFacts -> List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> (List (ModInfo (Value a)), List (String, Ref (Value a)))
 buildStampExterns : Unit -> List (String, Value a)
 buildWith : Value a -> Int -> Int -> <a> List (Value a)
@@ -44,7 +44,7 @@ bytesBEToU64 : Array Int -> U64
 candIface : Value a -> String
 candIfaceKey : Value a -> (String, String)
 candKey : Value a -> String
-candOfIface : String -> Value a -> Bool
+candOfIface : Bool -> String -> String -> Value a -> Bool
 canonFrom : Bool -> List String -> Int -> <FileRead | a> Option String
 canonHashFloat : Float -> Float
 canonNaN : Float
@@ -99,6 +99,7 @@ dropShadowed : List String -> List Decl -> List Decl
 dropShadowedExp : List String -> List Decl -> List Decl
 elementAdmits : String -> String -> <FileRead | a> Bool
 entryPresent : String -> String -> <FileRead | a> Bool
+envFrameCells : EvalEnv a -> List (List (String, Ref a))
 eval : EvalEnv (Value a) -> Expr -> <a> Value a
 evalAnd : EvalEnv (Value a) -> Value a -> Expr -> <a> Value a
 evalApp : EvalEnv (Value a) -> Expr -> <a> Value a
@@ -170,13 +171,14 @@ force : Value a -> <a> Value a
 forceCell : Ref (Value a) -> String -> <a> Value a
 forceMemo : Ref (Value a) -> String -> (Unit -> <a> Value a) -> <a> Value a
 forceMemoCell : Ref (Option (Value a)) -> EvalEnv (Value a) -> Expr -> <a> Value a
-frameAtDepth : List (List (String, Ref (Value a))) -> Int -> String -> List (String, Ref (Value a))
+frameAtDepth : List (EnvFrame (Value a)) -> Int -> String -> EnvFrame (Value a)
+frameCells : EnvFrame a -> List (String, Ref a)
 funClauseToClause : Loc -> FunClause -> (List Pat, Expr, Loc)
 funDefs : List Decl -> List (String, (List Pat, Expr, Loc))
 funGroupNames : List (String, (List Pat, Expr, Loc)) -> List String -> List String
 funNamesOf : List Decl -> List String
 getByte64 : Int -> Array (Value a) -> Int -> Int
-globalFramesWith : List (String, Ref (Value a)) -> List (String, Ref (Value a)) -> List (List (String, Ref (Value a)))
+globalFramesWith : List (String, Ref (Value a)) -> EnvFrame (Value a) -> List (EnvFrame (Value a))
 granted1 : Bool -> Confine -> (Value <IO> -> <IO> Value <IO>) -> Value <IO>
 granted2 : (Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
 granted3 : (Value <IO> -> Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
@@ -206,6 +208,7 @@ implMethodValue : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> Value a
 importFrameOf : ModExports (Value a) -> List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
 inCharRange : String -> String -> String -> Bool -> Bool
 inIntRange : Int -> Int -> Int -> Bool -> Bool
+indexedFrame : List (String, Ref a) -> EnvFrame a
 inheritedDefaultEntries : EvalEnv (Value a) -> List ((String, String, String), List Int) -> DispositionTable -> TyConOrigin -> String -> IfaceMethod -> List (String, (Int, Value a))
 inheritedDefaultReqCounts : DispositionTable -> String -> IfaceMethod -> List ((String, String), Int)
 inheritedEntryRef : Ref (Map String (Map String Int))
@@ -243,17 +246,18 @@ listSliceGo : List (Value a) -> Int -> Int -> Int -> List (Value a)
 listSliceV : List (Value a) -> Int -> Int -> List (Value a)
 lookupAtAddr : EvalEnv (Value a) -> String -> Addr -> <a> Value a
 lookupBinding : String -> List (String, Value a) -> Option (Value a)
+lookupCells : List (String, Ref (Value a)) -> String -> Option (Ref (Value a))
 lookupEnv : EvalEnv (Value a) -> String -> <a> Value a
 lookupEnvOpt : EvalEnv (Value a) -> String -> <a> Option (Value a)
-lookupFrameCell : List (String, Ref (Value a)) -> String -> Option (Ref (Value a))
-lookupFrames : List (List (String, Ref (Value a))) -> String -> <a> Value a
-lookupFramesOpt : List (List (String, Ref (Value a))) -> String -> <a> Option (Value a)
+lookupFrameCell : EnvFrame (Value a) -> String -> Option (Ref (Value a))
+lookupFrames : List (EnvFrame (Value a)) -> String -> <a> Value a
+lookupFramesOpt : List (EnvFrame (Value a)) -> String -> <a> Option (Value a)
 lookupMethod : EvalEnv (Value a) -> String -> <a> Value a
-lookupMethodFrames : List (List (String, Ref (Value a))) -> List (List (String, Ref (Value a))) -> String -> <a> Value a
+lookupMethodFrames : List (EnvFrame (Value a)) -> List (EnvFrame (Value a)) -> String -> <a> Value a
 lookupMethodReqCountOpt : String -> String -> Option Int
 lookupPositions : String -> String -> String -> List ((String, String, String), List Int) -> List Int
 lookupRuntimeBinding : EvalEnv (Value a) -> String -> <a> Value a
-lookupRuntimeBindingFrames : List (List (String, Ref (Value a))) -> String -> Option (Ref (Value a)) -> <a> Value a
+lookupRuntimeBindingFrames : List (EnvFrame (Value a)) -> String -> Option (Ref (Value a)) -> <a> Value a
 lowByte : Int -> Int
 makeCtor : String -> Int -> Value a
 makeCtorGo : String -> Int -> List (Value a) -> Value a
@@ -303,7 +307,7 @@ ordGt : Ordering -> Bool
 ordLt : Ordering -> Bool
 orderBinds : List String -> List (String, Value a) -> List (String, Value a)
 orderingToValue : Ordering -> Value a
-outputRef : Ref String
+outputChunks : Ref (List String)
 overflowOperand : Int -> String
 overflowOperands : String -> Int -> Int -> String
 pAcos : Value a -> <a> Value a
@@ -494,12 +498,14 @@ qualifyCell : String -> (String, Ref (Value a)) -> (String, Ref (Value a))
 rangeArrayMk : List Int -> Value a
 rangeListMk : List Int -> Value a
 reTag : String -> String -> List Int -> Int -> Value a -> Value a
+readOutput : Unit -> <a> String
 receiverOf : EvalEnv (Value a) -> Route -> List Route -> <a> Value a
 receiverParam : List String -> List String
 recordCreateVals : String -> List String -> List (String, Value a) -> List (Value a)
 reexport : ModExports (Value a) -> List (String, ModExports (Value a)) -> Decl -> List (String, Ref (Value a))
 reportIfUndecidable : String -> List (Value a) -> Unit
 requireMethodRoute : String -> String -> Route -> Route
+resetOutput : Unit -> <a> Unit
 resolveMembers : UsePath -> ModExports (Value a) -> List (String, Ref (Value a))
 resolvePath : String -> <FileRead | a> Option String
 resultToValue : Result String (Value a) -> Value a

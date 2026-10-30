@@ -981,8 +981,8 @@ void mdk_print_unit(void)       { printf("()\n"); }
 
 /* ---------------------------------------------------------------------------
  * "run drops stdout on panic" fix.  `medaka run`'s tree-walking interpreter
- * buffers a program's stdout in an in-language Ref<String> (eval.mdk's
- * outputRef) and only writes it to real stdout via ONE final `putStr` call
+ * buffers a program's stdout in an in-language list of chunks (eval.mdk's
+ * outputChunks) and only writes it to real stdout via ONE final `putStr` call
  * after `main` returns NORMALLY (medaka_cli.mdk's `runProgramOutput`).
  * Medaka panics are NOT catchable (no exception handling, no unwind), so a
  * panicking program's buffered stdout used to be silently discarded — the
@@ -991,10 +991,9 @@ void mdk_print_unit(void)       { printf("()\n"); }
  * a sentinel, then check whether it appears) blind: both `run`'s stdout AND
  * its exit code look identical whether the program ran or not.
  *
- * mdk_stash_run_stdout lets eval.mdk register the buffer's raw bytes (a
+ * mdk_stash_run_stdout lets eval.mdk register each printed chunk's raw bytes (a
  * pointer + length into an already-allocated, GC-owned, IMMUTABLE string
- * cell -- storing the pointer performs no allocation and no observable
- * effect) after every print.  mdk_enable_run_stdout_flush is called exactly
+ * cell; see the chunk list below) after every print.  mdk_enable_run_stdout_flush is called exactly
  * once, only by the real `medaka run` CLI driver (evalModulesOutputRunFacts /
  * evalModulesOutputAsync) -- never by the pure differential-oracle eval
  * probes, which share this exact source but never call it, so their
@@ -1014,8 +1013,19 @@ void mdk_print_unit(void)       { printf("()\n"); }
  * already flushes automatically), so the flag stays 0 and every check below
  * is a no-op for it.
  */
-static const char *volatile mdk_run_stdout_bytes = NULL;
-static volatile long long mdk_run_stdout_len = 0;
+/* The stash is a chunk list, oldest first: each non-empty call appends the
+   string's bytes (pointer+length into a GC-owned, immutable cell kept alive by
+   eval.mdk's outputChunks).  The empty string clears the list, so the caller
+   never stashes an empty chunk; only resetOutput clears.  Appending is
+   amortized O(1), so printing stays linear in total output.  The array lives
+   in plain malloc memory, which the abort path may read without allocating. */
+typedef struct { const char *bytes; long long len; } mdk_run_chunk;
+static mdk_run_chunk *volatile mdk_run_chunks = NULL;
+static volatile long long mdk_run_chunk_count = 0;
+static long long mdk_run_chunk_cap = 0;
+/* Set when the array cannot grow: later chunks are then not stashed, so an
+   abort flushes a prefix of the output and never skips a chunk in the middle. */
+static int mdk_run_chunks_full = 0;
 
 void mdk_enable_run_stdout_flush(long long w) {
   (void)w;
@@ -1025,8 +1035,22 @@ void mdk_enable_run_stdout_flush(long long w) {
 void mdk_stash_run_stdout(long long w) {
   const char *cell = (const char *)w;
   long long byte_len = ((const long long *)cell)[1];
-  mdk_run_stdout_bytes = cell + 24;
-  mdk_run_stdout_len = byte_len;
+  if (byte_len == 0) {
+    mdk_run_chunk_count = 0;
+    mdk_run_chunks_full = 0;
+    return;
+  }
+  if (mdk_run_chunks_full) return;
+  if (mdk_run_chunk_count == mdk_run_chunk_cap) {
+    long long cap = mdk_run_chunk_cap ? mdk_run_chunk_cap * 2 : 256;
+    mdk_run_chunk *grown = realloc(mdk_run_chunks, (size_t)cap * sizeof *grown);
+    if (!grown) { mdk_run_chunks_full = 1; return; }
+    mdk_run_chunks = grown;
+    mdk_run_chunk_cap = cap;
+  }
+  mdk_run_chunks[mdk_run_chunk_count].bytes = cell + 24;
+  mdk_run_chunks[mdk_run_chunk_count].len = byte_len;
+  mdk_run_chunk_count++;
 }
 
 /* Async-signal-safe: only word-sized reads and write(2), no allocation, no
@@ -1035,15 +1059,18 @@ void mdk_stash_run_stdout(long long w) {
    can't double-print. */
 static void mdk_flush_run_stdout_on_abort(void) {
   if (!mdk_run_stdout_flush_enabled) return;
-  const char *bytes = mdk_run_stdout_bytes;
-  long long len = mdk_run_stdout_len;
-  mdk_run_stdout_bytes = NULL;
-  mdk_run_stdout_len = 0;
-  while (len > 0) {
-    ssize_t n = write(1, bytes, (size_t)len);
-    if (n <= 0) break;
-    bytes += n;
-    len -= n;
+  mdk_run_chunk *chunks = mdk_run_chunks;
+  long long count = mdk_run_chunk_count;
+  mdk_run_chunk_count = 0;
+  for (long long i = 0; i < count; i++) {
+    const char *bytes = chunks[i].bytes;
+    long long len = chunks[i].len;
+    while (len > 0) {
+      ssize_t n = write(1, bytes, (size_t)len);
+      if (n <= 0) return;
+      bytes += n;
+      len -= n;
+    }
   }
 }
 
@@ -1268,7 +1295,7 @@ noreturn void mdk_panic_at(long long w, unsigned long long site) {
 /* User `exit n`. Unlike the other abort paths above this carries no diagnostic
    -- it is a silent, coded-free process termination -- but it still needs the
    SAME mdk_flush_run_stdout_on_abort() call they all make: under `medaka run`
-   stdout is buffered in the interpreter's outputRef and normally only printed
+   stdout is buffered in the interpreter's outputChunks and normally only printed
    by the CLI driver AFTER `main` returns, so a mid-`main` `exit` call would
    otherwise silently drop everything printed before it (the same class of bug
    as "run drops stdout on panic", just for a clean exit instead of a crash).

@@ -1170,6 +1170,7 @@ A reader for a subset of TOML.
 - [`getBool`](toml.md#getbool)
 - [`tableCount`](toml.md#tablecount)
 - [`tableEntry`](toml.md#tableentry)
+- [`tableEntries`](toml.md#tableentries)
 
 ## [`u16`](u16.md)
 
