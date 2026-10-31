@@ -321,7 +321,7 @@ export
 firstTupleCallHint : ModuleCtx ->
   List Mono ->
   Option (String, Option (Loc, String))
-firstTupleCallHint mctx [] = None
+firstTupleCallHint _mctx [] = None
 firstTupleCallHint mctx (m :: rest) = match tupleCallHintFor mctx m
   Some hf => Some hf
   None => firstTupleCallHint mctx rest
@@ -361,7 +361,7 @@ noImplHint mctx iface [arg] = match headTyconNameMono arg
     else
       noImplHintFor mctx iface n
   None => None
-noImplHint mctx _ _ = None
+noImplHint _mctx _ _ = None
 
 -- A type declared in a stdlib-owned module cannot take `deriving`, and an
 -- `impl` of a core interface for it would be an orphan (docs/spec/language-design.md

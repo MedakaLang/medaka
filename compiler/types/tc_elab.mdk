@@ -224,7 +224,7 @@ rewriteLocalDictExpr gctx (ELetGroup binds body) =
   ELetGroup (map (rewriteLocalLetBind gctx) binds) body
 rewriteLocalDictExpr gctx (EBlock stmts) =
   EBlock (map (rewriteLocalDoStmt gctx) stmts)
-rewriteLocalDictExpr gctx e = e
+rewriteLocalDictExpr _gctx e = e
 
 rewriteLocalLetBind : GraphCtx -> LetBind -> LetBind
 rewriteLocalLetBind gctx (LetBind n clauses site bid) = match localAbsFor gctx n
@@ -242,7 +242,7 @@ rewriteLocalDoStmt gctx (DoLet m r (PVar x xloc bid) e site) =
     Some la =>
       DoLet m r (PVar x xloc bid) (prependLocalDicts la.laParams e) site
     None => DoLet m r (PVar x xloc bid) e site
-rewriteLocalDoStmt gctx stmt = stmt
+rewriteLocalDoStmt _gctx stmt = stmt
 
 prependLocalDicts : List String -> Expr -> Expr
 prependLocalDicts params (ELoc l e) = ELoc l (prependLocalDicts params e)
@@ -361,7 +361,7 @@ builtinClassOfMethod m
 -- still-unsolved free type variable → left RNone (the emitter arg-tag-dispatches).
 export
 resolveArgStamps : SiteCtx -> List PendingEntry -> Unit
-resolveArgStamps sx [] = ()
+resolveArgStamps _sx [] = ()
 resolveArgStamps sx ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
   let sx = { sx | sxSite = loc }
   match kind
@@ -400,7 +400,7 @@ resolveArgStamp : SiteCtx ->
   Option Loc ->
   ScopeId ->
   Unit
-resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
+resolveArgStamp sx name tagRef implRef am fullMono omitted encl _origin scope =
   let (route, routes) = entail sx name am encl scope (EKArg fullMono omitted)
   match route
     RNone => ()
@@ -452,7 +452,7 @@ resolveSite : SiteCtx ->
 -- EKReturn `entail` yields RNone ONLY from its fallback (assum→RDict/RDictFwd, inst→RKey),
 -- so guarding the stamp on RNone reproduces that do-nothing None arm exactly and never
 -- clobbers an RLocal seed.  implRef is []-seeded everywhere, so []-over-[] needs no guard.
-resolveSite sx rpNames name tagRef implRef resultMono fullMono encl origin scope =
+resolveSite sx rpNames name tagRef implRef resultMono fullMono encl _origin scope =
   let (route, routes) =
     entail
       sx
@@ -625,7 +625,7 @@ resolvePredicateOpSite sx isBinop method tagRef operandMono inImpl predicate enc
 -- the caller's dict.  Mirrors resolveDictApps; runs after inference.
 export
 resolveMethodDicts : SiteCtx -> List PendingMethodDict -> Unit
-resolveMethodDicts sx [] = ()
+resolveMethodDicts _sx [] = ()
 resolveMethodDicts sx (pending :: rest) =
   pending.pmdRoutesRef :=
     methodPredicateRoutes sx pending.pmdEncl pending.pmdScope pending.pmdSlots
@@ -636,7 +636,7 @@ resolveMethodDicts sx (pending :: rest) =
 -- constrained call) → RDict; otherwise RNone.
 export
 resolveDictApps : SiteCtx -> List PendingDictApp -> Unit
-resolveDictApps sx [] = ()
+resolveDictApps _sx [] = ()
 resolveDictApps sx (app :: rest) =
   let sx = { sx | sxSite = app.pdaLoc }
   let routes =
@@ -656,7 +656,7 @@ resolveDictApps sx (app :: rest) =
 -- fully populated.
 export
 realizeRecDictApps : SiteCtx -> List RecDictApp -> Unit
-realizeRecDictApps sx [] = ()
+realizeRecDictApps _sx [] = ()
 realizeRecDictApps sx ((RecDictApp routesRef callee encl mono scope _) :: rest) =
   let slots =
     optionOr
@@ -762,7 +762,7 @@ grantDecl gctx pe _ (DTest pub name body) =
 grantDecl gctx pe mid (DAttrib attrs d) =
   DAttrib attrs (grantDecl gctx pe mid d)
 -- a declaration with no expression body (data, signatures, imports, externs)
-grantDecl gctx _ _ d = d
+grantDecl _gctx _ _ d = d
 
 -- A method that takes grants declares them after its value arguments, so the
 -- arity every backend reads off the declaration counts them.
@@ -1211,7 +1211,7 @@ grantVarParams : GraphCtx ->
   List (Ref Authvar) ->
   List String ->
   Option (List String)
-grantVarParams gctx _ [] acc = Some (reverse acc)
+grantVarParams _gctx _ [] acc = Some (reverse acc)
 grantVarParams gctx chain (v :: rest) acc =
   match grantParamFor gctx chain (authvarId v)
     Some p => grantVarParams gctx chain rest (p :: acc)
@@ -1236,7 +1236,7 @@ grantIdTerm gctx chain i = match grantParamFor gctx chain i
 
 -- The parameter of the innermost enclosing binder that quantifies authority [i].
 grantParamFor : GraphCtx -> List GrantBinder -> Int -> Option String
-grantParamFor gctx [] _ = None
+grantParamFor _gctx [] _ = None
 grantParamFor gctx (b :: rest) i =
   let (name, ids) = match b
     TopGrantBinder mid n => (n, topGrantIds gctx mid n)
@@ -1331,11 +1331,11 @@ rewriteBinopExpr mctx pe (EUnOp op e ev) = match evSiteRouteIn (passIndex pe) ev
 -- at any other type, so a program that reaches eval/emit only has it at those).
 -- At `I64` the halves are the pattern of the magnitude; a `-` around it is the
 -- wrapping negation that makes `-2^63` `minBound`.
-rewriteBinopExpr mctx pe (EWideLit hi lo ev _) =
+rewriteBinopExpr _mctx pe (EWideLit hi lo ev _) =
   match evSiteRouteIn (passIndex pe) ev
     RKey word _ _ if isI64Head (literalRouteHead word) => ELit (LI64 hi lo)
     _ => ELit (LU64 hi lo)
-rewriteBinopExpr mctx _ e = e
+rewriteBinopExpr _mctx _ e = e
 
 -- `-N` at `I32` is the constant `-N`: `-2147483648` is the one literal whose
 -- magnitude alone does not fit, so negating `fromInt 2147483648` would panic
@@ -1479,11 +1479,11 @@ dictPassDecl mctx pe _ _ (d@(DImpl { iface, implOrigin, reqs, methods, ... })) =
 -- one leading `$dict_<method>_<slot>` param per constraint on its DEFAULT body, so a
 -- caller can supply the dictionary the body's `empty`/… reads (routed RDict by
 -- inferDefaultMethod).
-dictPassDecl mctx _ _ _ (d@(DInterface { typarams, methods, ... })) =
+dictPassDecl _mctx _ _ _ (d@(DInterface { typarams, methods, ... })) =
   DInterface { d | methods = map (ifaceDictPassMethod typarams) methods }
 dictPassDecl mctx pe names ret (DAttrib attrs d) =
   DAttrib attrs (dictPassDecl mctx pe names ret d)
-dictPassDecl mctx _ _ _ d = d
+dictPassDecl _mctx _ _ _ d = d
 
 -- DLetGroup binding dict-pass: prepend the member's dict params to every clause.
 -- `dictArityOf n` is 0 for an unconstrained member (no change), matching the
@@ -1830,7 +1830,7 @@ dictPassModulesScoped : ModuleCtx ->
   List (String, List Decl) ->
   List (String, List Decl) ->
   List (String, List Decl)
-dictPassModulesScoped mctx _ _ _ _ _ _ [] = []
+dictPassModulesScoped _mctx _ _ _ _ _ _ [] = []
 dictPassModulesScoped mctx idx dictNames promotedQ importerReach core2 allModules ((mid, prog) :: rest) =
   let importers = transitiveImporters importerReach mid allModules
   let importerDecls = flatMap snd importers

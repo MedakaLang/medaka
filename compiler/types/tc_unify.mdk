@@ -304,7 +304,7 @@ performEffect mctx cur eff =
 -- is one tail variable), and those cost nothing here: the key is built only
 -- for an atom that is present.
 recordEffectSites : ModuleCtx -> EffRow -> Unit
-recordEffectSites mctx (EffRow [] _) = ()
+recordEffectSites _mctx (EffRow [] _) = ()
 recordEffectSites mctx eff =
   fold
     (_ atom =>
@@ -761,7 +761,7 @@ indexOpenClosed mctx lOpen v lClosed =
 -- obligation, so a variable is solved and a mismatch reads as an atom the
 -- bound does not cover (`wantIndexCovered`).
 indexAtomsCovered : ModuleCtx -> List Atom -> List Atom -> List Atom
-indexAtomsCovered mctx [] _ = []
+indexAtomsCovered _mctx [] _ = []
 indexAtomsCovered mctx (x :: rest) bound = match findAtom (atomKey x) bound
   Some y =>
     wantIndexCovered mctx (atomAuth x) (atomAuth y)
@@ -786,7 +786,7 @@ indexRowEqCheck : ModuleCtx ->
   List Atom ->
   List Atom ->
   Unit
-indexRowEqCheck mctx [] [] _ _ = ()
+indexRowEqCheck _mctx [] [] _ _ = ()
 indexRowEqCheck mctx _ _ l1 l2 =
   pushTypeError mctx TEffectIndexMismatch (indexRowMismatchMsg l1 l2)
 
@@ -795,7 +795,7 @@ indexRowEqCheck mctx _ _ l1 l2 =
 -- not exceed the bound, else they escape.  [escaping] = open labels \ bound.
 export
 effectLeakCheck : ModuleCtx -> List Atom -> List Atom -> Unit
-effectLeakCheck mctx [] bound = ()
+effectLeakCheck _mctx [] _bound = ()
 effectLeakCheck mctx escaping bound =
   pushTypeError mctx TEffectLeak (effectLeakMsg mctx.mcGraph bound escaping)
 
@@ -939,7 +939,7 @@ recordOblAt mctx p originId prov loc scope = wPush
 -- empty diff) pushes NOTHING and allocates nothing.  Records the cell Ref, not
 -- effvarId (see AbsorptionEvent), and snapshots the enclosing construct's span.
 recordAbsorptions : ModuleCtx -> List Atom -> Ref Effvar -> Unit
-recordAbsorptions mctx [] _ = ()
+recordAbsorptions _mctx [] _ = ()
 recordAbsorptions mctx (a :: rest) cell =
   wPush mctx.mcCells.absorptions AbsorptionEvent {
     atom = a,
@@ -1419,7 +1419,7 @@ solvedUpper mctx (Some (AVar cell)) = match !cell
   ALink _ _ _ =>
     not (IdMap.has (authvarId cell) mctx.mcCells.indexSubstitutedRef.value)
   AUnbound _ _ _ _ _ => False
-solvedUpper mctx _ = False
+solvedUpper _mctx _ = False
 
 -- ── #1119 D-2: the per-parameter VARIANCE gate (#1098, #1121) ─────────────
 -- The arrow-row unifier's closed~closed arm demands equality, and a seam that
@@ -1521,7 +1521,7 @@ joinResultIs id pj = match normalize pj.pjResult
   _ => False
 
 settleShapedJoins : DynCtx -> List PendingJoin -> Unit
-settleShapedJoins dyn [] = ()
+settleShapedJoins _dyn [] = ()
 settleShapedJoins dyn shaped =
   fold
     (_ pj =>
@@ -1821,7 +1821,7 @@ freshAuthSubstOpening : ModuleCtx ->
   List Int ->
   Mono ->
   (List (Int, Authority), List (Ref Authvar))
-freshAuthSubstOpening mctx [] _ = ([], [])
+freshAuthSubstOpening _mctx [] _ = ([], [])
 freshAuthSubstOpening mctx ids body =
   freshAuthSubstOpeningIn mctx ids (authCellsIn body Tip)
 
@@ -1832,7 +1832,7 @@ freshAuthSubstOpeningIn : ModuleCtx ->
   List Int ->
   Map Int (Ref Authvar) ->
   (List (Int, Authority), List (Ref Authvar))
-freshAuthSubstOpeningIn mctx [] _ = ([], [])
+freshAuthSubstOpeningIn _mctx [] _ = ([], [])
 freshAuthSubstOpeningIn mctx ids cells =
   let pairs =
     map
@@ -1860,7 +1860,7 @@ freshAuthSubstOpeningIn mctx ids cells =
 
 export
 freshSubst : ModuleCtx -> List Int -> List (Int, Mono)
-freshSubst mctx [] = []
+freshSubst _mctx [] = []
 freshSubst mctx (id :: rest) =
   let v = freshVar mctx ()
   if id == ambiguousImportTyvarId then poisonMismatchVars mctx v v
@@ -1876,7 +1876,7 @@ ambiguousImportTyvarId = 0 - 1
 
 export
 freshEffSubst : ModuleCtx -> List Int -> List (Int, Ref Effvar)
-freshEffSubst mctx [] = []
+freshEffSubst _mctx [] = []
 freshEffSubst mctx (id :: rest) =
   let cell = freshInferenceEffvar mctx ()
   (id, cell) :: freshEffSubst mctx rest
@@ -1889,7 +1889,7 @@ freshAuthSubstFor : ModuleCtx ->
   Mono ->
   EffRow ->
   List (Int, Authority)
-freshAuthSubstFor mctx [] _ _ = []
+freshAuthSubstFor _mctx [] _ _ = []
 freshAuthSubstFor mctx ids body force =
   let cells = authCellsIn body (authRowCells force Tip)
   map
@@ -1975,12 +1975,12 @@ lowerAuthLevels level q =
 
 export
 freshTvMap : ModuleCtx -> List String -> List (String, Mono)
-freshTvMap mctx [] = []
+freshTvMap _mctx [] = []
 freshTvMap mctx (n :: rest) = (n, freshVar mctx ()) :: freshTvMap mctx rest
 
 export
 freshEffMap : ModuleCtx -> List String -> List (String, Ref Effvar)
-freshEffMap mctx [] = []
+freshEffMap _mctx [] = []
 freshEffMap mctx (n :: rest) = (n, freshEffvar mctx ()) :: freshEffMap mctx rest
 
 export
@@ -2037,7 +2037,7 @@ authSlotNamesIn mctx readSlots (TyConstrained _ t) =
 authSlotNamesIn mctx readSlots (TyNamed _ t _) =
   authSlotNamesIn mctx readSlots t
 authSlotNamesIn mctx readSlots (TyQual t _ _) = authSlotNamesIn mctx readSlots t
-authSlotNamesIn mctx _ _ = []
+authSlotNamesIn _mctx _ _ = []
 
 -- What [readAtom] reads off every effect atom a written type holds.
 export
@@ -2067,7 +2067,7 @@ defaultDeferredPatLitsIn dyn lvl t =
     deferred => defaultPatLitVarsIn dyn (freeGenVars lvl t) deferred
 
 defaultPatLitVarsIn : DynCtx -> List Int -> List (Mono, Int, Option Loc) -> Unit
-defaultPatLitVarsIn dyn _ [] = ()
+defaultPatLitVarsIn _dyn _ [] = ()
 defaultPatLitVarsIn dyn quantified ((a, _, _) :: rest) =
   match normalize a
     TVar cell =>
@@ -2078,7 +2078,7 @@ defaultPatLitVarsIn dyn quantified ((a, _, _) :: rest) =
 
 export
 unifyAll : DynCtx -> Mono -> List Mono -> Unit
-unifyAll dyn _ [] = ()
+unifyAll _dyn _ [] = ()
 unifyAll dyn t (x :: xs) =
   unifyIn dyn t x
   unifyAll dyn t xs
@@ -2262,7 +2262,7 @@ tagAllLitLocs mctx v kind = match normalize v
   _ => ()
 
 tagLitLocsWithRoot : ModuleCtx -> Int -> JoinContext -> List (Mono, Loc) -> Unit
-tagLitLocsWithRoot mctx _ _ [] = ()
+tagLitLocsWithRoot _mctx _ _ [] = ()
 tagLitLocsWithRoot mctx id kind ((mv, l) :: rest) =
   if sameRootId id mv then
     mctx.mcCells.numlitCtxTags := (l, kind) :: mctx.mcCells.numlitCtxTags.value
@@ -2456,7 +2456,7 @@ recordSchemeCallObligations : ModuleCtx ->
   List VecObl ->
   List (Int, Mono) ->
   Unit
-recordSchemeCallObligations mctx _ [] _ = ()
+recordSchemeCallObligations _mctx _ [] _ = ()
 recordSchemeCallObligations mctx originId (o :: rest) subst =
   match substVecOblArgs o subst
     Some monos =>
@@ -2518,7 +2518,7 @@ unifySpineProbe dyn ft args =
   wRestore dyn.dcModule.mcCells.fileValueFlows saved
 
 unifySpineProbeGo : DynCtx -> Mono -> List Mono -> Unit
-unifySpineProbeGo dyn _ [] = ()
+unifySpineProbeGo _dyn _ [] = ()
 unifySpineProbeGo dyn ft (a :: rest) =
   let r = freshVar dyn.dcModule ()
   let _ = applicationRowTyped dyn ft a r
@@ -2671,7 +2671,7 @@ rowInto dyn _ er ar = unifyRowN dyn er ar
 -- atoms the actual's parameter row [la] does not, so a caller could hand the
 -- actual an argument it would run under too small a row.
 contraRowCheck : ModuleCtx -> List Atom -> List Atom -> List Atom -> Unit
-contraRowCheck mctx [] _ _ = ()
+contraRowCheck _mctx [] _ _ = ()
 contraRowCheck mctx extras le la =
   pushTypeError mctx TEffectLeak (contraRowMsg le la extras)
 
@@ -2703,7 +2703,7 @@ unifyParamsExpected : DynCtx -> List Mono -> List Mono -> Unit
 unifyParamsExpected dyn (p :: ps) (e :: es) =
   bindFrom dyn p e
   unifyParamsExpected dyn ps es
-unifyParamsExpected dyn _ _ = ()
+unifyParamsExpected _dyn _ _ = ()
 
 -- The same judgment where only the argument's type is at hand (a pipe, a
 -- composition, a dispatch spine): the type's own qualifier or the top.
@@ -2915,7 +2915,7 @@ collectAuthAllowance mctx lowers =
 export
 optionOrFresh : ModuleCtx -> Option Mono -> Mono
 optionOrFresh mctx None = freshVar mctx ()
-optionOrFresh mctx (Some value) = value
+optionOrFresh _mctx (Some value) = value
 
 joinValueEqual : DynCtx -> JoinContext -> Option Loc -> Mono -> Mono -> Unit
 joinValueEqual outer context loc left right =
@@ -3010,4 +3010,4 @@ zipBindFrom : DynCtx -> List Mono -> List Mono -> Unit
 zipBindFrom dyn (p :: ps) (q :: qs) =
   bindFrom dyn p q
   zipBindFrom dyn ps qs
-zipBindFrom dyn _ _ = ()
+zipBindFrom _dyn _ _ = ()

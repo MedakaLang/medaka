@@ -71,5 +71,5 @@ test "the default fetch logs non-empty stderr and answers stdout only" = withPro
   ])
 
 hasLiteral : String -> Option String -> Expectation
-hasLiteral needle None = expectEqual "a loader" "none"
+hasLiteral _needle None = expectEqual "a loader" "none"
 hasLiteral needle (Some t) = expectTrue (contains needle t)
