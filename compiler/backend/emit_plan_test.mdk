@@ -360,6 +360,35 @@ test "wasm_emit writes a direct call only through callInstrW" = withBackendCode
   "wasm_emit.mdk"
   (code => expectEqual [] (uncheckedWasmCalls code))
 
+-- These names identify the retired recursive wrapper-demand scanner in
+-- wasm_emit. The plan owns the set now; this is a source-shape ratchet.
+legacyWasmValueScanners : List String
+legacyWasmValueScanners = [
+  "scanFnValueUses",
+  "scanImplValueUses",
+  "scanImplEntryValueUses",
+  "scanBindValueUses",
+  "scanExprValueUses",
+  "scanArmValueUses",
+  "scanGuardValueUses",
+  "scanBlockValueUses",
+]
+
+legacyWasmValueScannersIn : List String -> List String
+legacyWasmValueScannersIn code =
+  filter (name => any (contains name) code) legacyWasmValueScanners
+
+test "wasm_emit has no duplicate function-value scanner" = withBackendCode
+  "wasm_emit.mdk"
+  (code => expectAll
+    [
+      expectEqual [] (legacyWasmValueScannersIn code),
+      -- A restored producer spelling is the positive control for this ratchet.
+      expectEqual
+        ["scanExprValueUses"]
+        (legacyWasmValueScannersIn ["scanExprValueUses fnNames ctorArs"]),
+    ])
+
 test "no emitter derives declares from emitted text" =
   expectAll
     (map
