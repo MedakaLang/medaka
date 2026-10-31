@@ -1,3 +1,4 @@
+import backend.llvm_symbol_names as LN
 -- Shared helpers for the `llvm_emit_*_test.mdk` siblings that read emitted LLVM IR
 -- ([P-TEST-SIBLING]); it holds no tests of its own.
 
@@ -39,7 +40,8 @@ llOf src =
 -- closing `}`
 export
 funcBlock : String -> String -> List String
-funcBlock name ll = blockFrom ("@mdk_" ++ name ++ "(") (lines ll)
+funcBlock name ll =
+  blockFrom ("@" ++ LN.llvmName (LN.LUserFunction name) ++ "(") (lines ll)
 
 blockFrom : String -> List String -> List String
 blockFrom _ [] = []

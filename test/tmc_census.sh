@@ -93,7 +93,7 @@ extract_wat() {
     sed -n 's/^ *;; tmc: //p' "$1"
   else
     { awk '/\(func \$/{fn=$0; sub(/.*\(func \$/,"",fn); sub(/[ )].*/,"",fn); cur=fn}
-           /\$tmcloop/{print cur " trmc"}' "$1"
+           /\$l[.]tmcloop[.]0/{print cur " trmc"}' "$1"
       grep -o '(func \$[A-Za-z0-9_]*__disploop' "$1" \
         | sed 's/(func \$//; s/__disploop//; s/$/ group-root/'; }
   fi | sed 's/^mdk_//' | sort -u

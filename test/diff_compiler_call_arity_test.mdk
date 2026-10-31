@@ -252,10 +252,11 @@ dictStem : String
 dictStem = "dict_call_arity_conformance"
 
 dictPrefix : String
-dictPrefix = "mdk_dict_call_arity_conformance__"
+dictPrefix =
+  "mdk.user.6d3634363936333734356636333631366336633566363137323639373437393566363336663665363636663732366436313665363336355f5f"
 
 adderCall : String
-adderCall = "call i64 @\{dictPrefix}adder3("
+adderCall = "call i64 @\{dictPrefix}616464657233("
 
 -- The body lines of the first `define internal i64 @sym(` header, up to its closing "}".
 bodyLines : String -> List String -> Option String
@@ -270,9 +271,17 @@ untilClose : List String -> List String
 untilClose [] = []
 untilClose (l :: r) = if l == "}" then [] else l :: untilClose r
 
+dictSuffix : String -> String
+dictSuffix "underPrefix" = "756e646572507265666978"
+dictSuffix "exactPrefix" = "6578616374507265666978"
+dictSuffix "cross" = "63726f7373"
+dictSuffix "nonTail" = "6e6f6e5461696c"
+dictSuffix "tail" = "7461696c"
+dictSuffix _ = "!"
+
 bodyOf : String -> String -> Result String String
-bodyOf name ir = match bodyLines "\{dictPrefix}\{name}" (S.lines ir)
-  None => Err "missing define @\{dictPrefix}\{name}"
+bodyOf name ir = match bodyLines "\{dictPrefix}\{dictSuffix name}" (S.lines ir)
+  None => Err "missing define for \{name}"
   Some b => Ok b
 
 shapeRow : String -> String -> (String -> Bool) -> String -> Expectation
@@ -282,7 +291,8 @@ shapeRow name ir ok msg = match bodyOf name ir
 
 -- adder3's define: the dictionary and `a`; `b => c => …` is its returned lambda.
 adderDefine : String
-adderDefine = "define internal i64 @\{dictPrefix}adder3(i64 %arg0, i64 %arg1) {"
+adderDefine =
+  "define internal i64 @\{dictPrefix}616464657233(i64 %arg0, i64 %arg1) {"
 
 defineOk : String -> Expectation
 defineOk ir =
@@ -305,11 +315,11 @@ noMusttail b = not (S.contains "musttail call" b)
 
 nonTailOk : String -> Bool
 nonTailOk b =
-  S.contains "call i64 @\{dictPrefix}nonTail(" b
-    && not (S.contains "musttail call i64 @\{dictPrefix}nonTail(" b)
+  S.contains "call i64 @\{dictPrefix}6e6f6e5461696c(" b
+    && not (S.contains "musttail call i64 @\{dictPrefix}6e6f6e5461696c(" b)
 
 tailOk : String -> Bool
-tailOk b = S.contains "musttail call i64 @\{dictPrefix}tail(" b
+tailOk b = S.contains "musttail call i64 @\{dictPrefix}7461696c(" b
 
 -- The CDict fixture is built ONCE per process: three tests below read the same
 -- IR. The build goes into a directory that is removed as soon as its IR text
@@ -425,3 +435,9 @@ test "diff_compiler_call_arity: the skew scanner flags a define=2 call=1 text (p
         pass
       else
         fail "the skew scanner flagged the wrong thing: \{S.join "; " skews}"
+
+test "diff_compiler_call_arity: encoded descriptor wrong-arity control" =
+  let name = dictPrefix ++ "616464657233"
+  let ir =
+    "define i64 @\{name}(i64 %a, i64 %b) {\n  %r = call i64 @\{name}(i64 1)\n  ret i64 %r\n}\n"
+  expectAtLeast 1 (length (irSkews ir))

@@ -32,6 +32,7 @@ declare i64 @mdk_str_lit(ptr, i64)
 declare void @mdk_print_str(i64)
 declare i64 @mdk_int_to_string(i64)
 declare i64 @mdk_float_to_string(double)
+declare i64 @mdk_float_to_fixed(i64, double)
 declare i64 @llvm.fptosi.sat.i64.f64(double)
 declare double @llvm.arithmetic.fence.f64(double)
 declare i64 @mdk_string_concat(i64)
@@ -236,13 +237,13 @@ entry:
   %t10 = getelementptr i8, ptr %t8, i64 16
   store i64 %t7, ptr %t10
   %t11 = ptrtoint ptr %t8 to i64
-  %t12 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_hash(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 %t11)
+  %t12 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.68617368(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..0 to i64), i64 %t11)
   %t13 = ashr i64 %t12, 1
   call void @mdk_print_int(i64 %t13)
   ret i32 0
 }
-; mdk-module program
-define internal i64 @mdk___user____hashListItems(i64 %arg0, i64 %arg1, i64 %arg2) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f686173684c6973744974656d73(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg2, 562949953421315
@@ -295,7 +296,7 @@ intovf38:
   unreachable
 intok38:
   %t41 = or i64 %t36, 1
-  %t42 = call i64 @mdk_disp_hash_0_1(i64 %arg0, i64 %t29)
+  %t42 = call i64 @mdk.dispatch..68617368.0.1.1(i64 %arg0, i64 %t29)
   %t43 = sub i64 %t42, 1
   %t44 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t41, i64 %t43)
   %t45 = extractvalue { i64, i1 } %t44, 0
@@ -307,7 +308,7 @@ intovf47:
   call void @mdk_int_overflow(i64 0, i64 %t48, i64 %t49)
   unreachable
 intok47:
-  %t50 = musttail call i64 @mdk___user____hashListItems(i64 %arg0, i64 %t45, i64 %t32)
+  %t50 = musttail call i64 @mdk.user.6d356635663735373336353732356635665f5f686173684c6973744974656d73(i64 %arg0, i64 %t45, i64 %t32)
   ret i64 %t50
 connext20:
   call void @mdk_nonexhaustive_match()
@@ -317,25 +318,25 @@ decend1:
   ret i64 %t51
 }
 
-; mdk-module impl:Int_hash
-define internal i64 @mdk_impl_Int_hash(i64 %arg0) {
+; mdk-module impl.5f5f757365725f5f3a3a4861736861626c657c496e747c.68617368
+define internal i64 @mdk.impl.496e74.68617368(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
-; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_MyList_hash
-define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_hash(i64 %arg0, i64 %arg1) {
+; mdk-module impl.5f5f757365725f5f3a3a4861736861626c657c285f5f757365725f5f2e4d794c6973742061297c.68617368
+define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.68617368(i64 %arg0, i64 %arg1) {
 entry:
-  %t0 = call i64 @mdk___user____hashListItems(i64 %arg0, i64 1, i64 %arg1)
+  %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f686173684c6973744974656d73(i64 %arg0, i64 1, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_dc.program.0 = internal constant [1 x i64] [i64 -3372419640350782897]
+@mdk.gen.dictcell.70726f6772616d..0 = internal constant [1 x i64] [i64 -3372419640350782897]
 ; mdk-module program
-define internal i64 @mdk_disp_hash_0_1(i64 %dict, i64 %arg0) {
+define internal i64 @mdk.dispatch..68617368.0.1.1(i64 %dict, i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %dict to ptr
   %t1 = load i64, ptr %t0
@@ -343,7 +344,7 @@ entry:
   %t4 = icmp eq i64 %t1, -3372419640350782897
   br i1 %t4, label %dispyes5, label %dispnext5
 dispyes5:
-  %t6 = call i64 @mdk_impl_Int_hash(i64 %arg0)
+  %t6 = call i64 @mdk.impl.496e74.68617368(i64 %arg0)
   store i64 %t6, ptr %t2
   br label %dispend3
 dispnext5:
@@ -353,7 +354,7 @@ dispyes8:
   %t9 = inttoptr i64 %dict to ptr
   %t10 = getelementptr i8, ptr %t9, i64 8
   %t11 = load i64, ptr %t10
-  %t12 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_hash(i64 %t11, i64 %arg0)
+  %t12 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.68617368(i64 %t11, i64 %arg0)
   store i64 %t12, ptr %t2
   br label %dispend3
 dispnext8:

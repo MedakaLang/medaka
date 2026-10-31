@@ -32,6 +32,7 @@ declare i64 @mdk_str_lit(ptr, i64)
 declare void @mdk_print_str(i64)
 declare i64 @mdk_int_to_string(i64)
 declare i64 @mdk_float_to_string(double)
+declare i64 @mdk_float_to_fixed(i64, double)
 declare i64 @llvm.fptosi.sat.i64.f64(double)
 declare double @llvm.arithmetic.fence.f64(double)
 declare i64 @mdk_string_concat(i64)
@@ -215,7 +216,7 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Flag_eq(i64 1, i64 1)
+  %t0 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f466c6167.6571(i64 1, i64 1)
   %t1 = ashr i64 %t0, 1
   %t2 = icmp ne i64 %t1, 0
   %t4 = alloca i64
@@ -232,8 +233,8 @@ end3:
   call void @mdk_print_int(i64 %t6)
   ret i32 0
 }
-; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Flag_eq
-define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Flag_eq(i64 %arg0, i64 %arg1) {
+; mdk-module impl.5f5f757365725f5f3a3a45717c5f5f757365725f5f2e466c61677c.6571
+define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f466c6167.6571(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 1

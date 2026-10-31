@@ -252,7 +252,7 @@ for required in \
   'let imports = plannedImportLines physical.imports' \
   'let _ = forEachU (registerW emit) (declarePlannedHelpers physical)' \
   'let _ = seedDemandW emit physical.representation' \
-  'emitDivZeroGuard (progEmit prog) op (if rawProgramW prog then "$__sdivr" else divrLocal prog d) site' \
+  'emitDivZeroGuard (progEmit prog) op (if rawProgramW prog then "\{syntheticLocalName WN.WScalarDivr 0}" else divrLocal prog d) site' \
   'wasmTrap emit ENonexhaustiveMatch "non-exhaustive match"' \
   'wasmTrapBytes (progEmit prog) "runtime error [\{EPanic}]: "'; do
   has_wasm_pin "$required" || {
@@ -360,7 +360,7 @@ fi
 }
 has_wasm_pin 'patName emit binding _ =' &&
   has_wasm_pin '++ binding ++ "]")' &&
-  has_wasm_pin 'map (patName (progEmit prog) name) pats' || {
+  has_wasm_pin 'map (p => WSource (patName (progEmit prog) name p)) pats' || {
   echo "FAIL H2B5-PATNAME-STRUCTURAL: patName fallback is not routed through the explicit binding name"
   exit 1
 }
@@ -485,11 +485,12 @@ run_impl_self_check() {
     impl_self_tag="${impl_self_rest%% *}"
     impl_self_expected="${impl_self_rest#* }"
     impl_self_wat="$INPUT_WORK/impl-self-$impl_self_name.wat"
-    [ "$(grep -F "return_call \$mdk_impl_${impl_self_tag}_walk" "$impl_self_wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    impl_self_hex="$(printf %s "$impl_self_tag" | od -An -tx1 | tr -d " \n")"
+    [ "$(grep -F "return_call \$f.impl.${impl_self_hex}.77616c6b" "$impl_self_wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
       echo "FAIL wasm typed impl-self-state lifecycle: $impl_self_name recursive return_call changed"
       exit 1
     }
-    [ "$(grep -F "call \$mdk_impl_${impl_self_tag}_walk" "$impl_self_wat" | grep -v 'return_call' | wc -l | tr -d '[:space:]')" -eq 0 ] || {
+    [ "$(grep -F "call \$f.impl.${impl_self_hex}.77616c6b" "$impl_self_wat" | grep -v 'return_call' | wc -l | tr -d '[:space:]')" -eq 0 ] || {
       echo "FAIL wasm typed impl-self-state lifecycle: $impl_self_name gained plain recursive call"
       exit 1
     }
@@ -572,7 +573,7 @@ run_trmc_state_check() {
     echo "FAIL H2B6-WTRMC-P-SHAPE: P/U positive control did not differ"
     exit 1
   }
-  for trmc_spec in "p1 pTrmc 17" "u uTrmc 29" "p2 pTrmc 17"; do
+  for trmc_spec in "p1 f.user.7054726d63 17" "u f.user.7554726d63 29" "p2 f.user.7054726d63 17"; do
     trmc_name="${trmc_spec%% *}"
     trmc_rest="${trmc_spec#* }"
     trmc_fn="${trmc_rest%% *}"
@@ -582,8 +583,8 @@ run_trmc_state_check() {
       echo "FAIL H2B6-WTRMC-P-SHAPE: $trmc_name missing function"
       exit 1
     }
-    grep -F 'loop $tmcloop' "$trmc_wat" >/dev/null &&
-      grep -F 'br $tmcloop' "$trmc_wat" >/dev/null || {
+    grep -F 'loop $l.tmcloop.0' "$trmc_wat" >/dev/null &&
+      grep -F 'br $l.tmcloop.0' "$trmc_wat" >/dev/null || {
         echo "FAIL H2B6-WTRMC-P-SHAPE: $trmc_name missing TMC loop markers"
         exit 1
       }
@@ -650,7 +651,7 @@ done
 # path as a supplied method.
 for required in \
   'implEntrySymW : String -> CImplEntry -> String' \
-  'implEntrySymW method (CImplEntry _ _ _ (CImplDefault _ _ _ (ImplSym _ ifaceTag keyTag) _ _ _)) = "mdk_default_\{ifaceTag}_\{gname method}_\{keyTag}"' \
+  'implEntrySymW method (CImplEntry _ _ _ (CImplDefault _ _ _ (ImplSym _ ifaceTag keyTag) _ _ _)) = WN.wasmName (WN.WDefaultMethod ifaceTag method keyTag)' \
   'implBodyExprW (CImplDefault _ _ _ _ _ _ e) = e'; do
   has_wasm_pin "$required" || {
     case "$required" in
@@ -793,7 +794,7 @@ feature_exact_capture() {
   [ "$begins" -eq 1 ] && [ "$ends" -eq 1 ] || return 1
   feature_capture "$begin" "$end" "$file"
 }
-# Prints each W7 scratch local ($__divr0, $__rub1, ...) that a function declares
+# Prints each W7 scratch local ($s.divr.0, $__rub1, ...) that a function declares
 # without referencing, or references without declaring. A function declares exactly
 # the W7 locals its body names (#3882), so the output is empty.
 w7_decl_mismatches() {
@@ -806,8 +807,8 @@ w7_decl_mismatches() {
     /^  \(func / { flush(); fn = $2; next }
     {
       line = $0
-      isDecl = (line ~ /^ *\(local \$__/)
-      while (match(line, /\$__(rlacc|rli|rllo|raarr|rai|ralo|racnt|ixarr|ixi|slsrc|sldst|sllo|sllen|aexi|aexn|aexarr|aexlst|aexf|aexv|aexbits|rub|divr)[0-9]+/)) {
+      isDecl = (line ~ /^ *\(local \$s[.]/)
+      while (match(line, /\$s[.](rlacc|rli|rllo|raarr|rai|ralo|racnt|ixarr|ixi|slsrc|sldst|sllo|sllen|aexi|aexn|aexarr|aexlst|aexf|aexv|aexbits|rub|divr)[.][0-9]+/)) {
         name = substr(line, RSTART, RLENGTH)
         if (isDecl) decl[name] = 1; else used[name] = 1
         line = substr(line, RSTART + RLENGTH)
@@ -1108,7 +1109,7 @@ for feature_p in feature-p1.wat feature-p2.wat feature-u.wat feature-float-div.w
   }
 done
 for feature_p in feature-p1.wat feature-p2.wat; do
-  grep -F '(local $__rub0 (ref eq))' "$INPUT_WORK/$feature_p" >/dev/null || {
+  grep -F '(local $s.rub.0 (ref eq))' "$INPUT_WORK/$feature_p" >/dev/null || {
     echo "FAIL H2B9-RECUPDATE-LOCAL: missing record-update local in $feature_p"
     exit 1
   }
@@ -1126,11 +1127,11 @@ if grep -F '$mdk_eprint_str' "$INPUT_WORK/feature-u.wat" >/dev/null ||
   echo "FAIL H2B9-EPUT-U-ABSENCE: inert control emitted ePut stderr runtime/import"
   exit 1
 fi
-if grep -F '(local $__divr0 i64)' "$INPUT_WORK/feature-u.wat" >/dev/null; then
+if grep -F '(local $s.divr.0 i64)' "$INPUT_WORK/feature-u.wat" >/dev/null; then
   echo "FAIL H2B9-DIV-U-ABSENCE: inert control declared ref divisor local"
   exit 1
 fi
-if grep -F '(local $__rub0 (ref eq))' "$INPUT_WORK/feature-u.wat" >/dev/null; then
+if grep -F '(local $s.rub.0 (ref eq))' "$INPUT_WORK/feature-u.wat" >/dev/null; then
   echo "FAIL H2B9-RECUPDATE-U-ABSENCE: inert control declared record-update local"
   exit 1
 fi
@@ -1164,8 +1165,8 @@ if grep -F '$mdk_hash_mix64' "$INPUT_WORK/feature-u.wat" >/dev/null ||
   echo "FAIL H2B9-HASH-U-ABSENCE: inert control emitted hash runtime"
   exit 1
 fi
-! grep -F '(local $__divr0 i64)' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
-  grep -F '(func $featureFloatDiv (param $x (ref eq)) (result (ref eq))' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
+! grep -F '(local $s.divr.0 i64)' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
+  grep -F '(func $f.user.66656174757265466c6f6174446976 (param $u.78 (ref eq)) (result (ref eq))' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
   grep -F 'f64.div' "$INPUT_WORK/feature-float-div.wat" >/dev/null || {
   echo "FAIL H2B9-DIV-FLOAT: Float-only division declared the Int divisor local, or lost its f64.div shape"
   exit 1
@@ -1445,13 +1446,13 @@ cmp -s "$INPUT_WORK/char-from-code-p1.wat" "$INPUT_WORK/char-from-code-u.wat" &&
 for char_from_code_p in char-from-code-p1.wat char-from-code-p2.wat; do
   [ "$(grep -F '(func $mdk_char_from_code' "$INPUT_WORK/$char_from_code_p" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
     [ "$(grep -F 'call $mdk_char_from_code' "$INPUT_WORK/$char_from_code_p" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-    [ "$(grep -F '(func $mdk_ext_zZ_24_extern_24_r12_3a_charFromCode' "$INPUT_WORK/$char_from_code_p" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    [ "$(grep -F '(func $f.gen.externeta.2465787465726e247231323a6368617246726f6d436f6465.0' "$INPUT_WORK/$char_from_code_p" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
       echo "FAIL H2B11-CHAR-FROM-CODE-P-PRESENCE: helper/direct-call/eta wrapper in $char_from_code_p"
       exit 1
     }
 done
 if grep -F '$mdk_char_from_code' "$INPUT_WORK/char-from-code-u.wat" >/dev/null ||
-   grep -F '$mdk_ext_zZ_24_extern_24_r12_3a_charFromCode' "$INPUT_WORK/char-from-code-u.wat" >/dev/null; then
+   grep -F '$f.gen.externeta.2465787465726e247231323a6368617246726f6d436f6465.0' "$INPUT_WORK/char-from-code-u.wat" >/dev/null; then
   echo "FAIL H2B11-CHAR-FROM-CODE-U-ABSENCE: nearest miss emitted selected helper"
   exit 1
 fi
@@ -1858,7 +1859,7 @@ require_fn_arity() {
 }
 require_ctor_fields() {
   awk -v want="$2" '
-    /\(type \$C___user____SharedCtor / {
+    /\(type \$t[.]ctor[.]6d356635663735373336353732356635665f5f53686172656443746f72 / {
       n = gsub(/\(field /, "&")
       if (n == want) found = 1
     }
@@ -1872,7 +1873,7 @@ require_ctor_ordinal() {
       sub(/^[[:space:]]+/, "", line)
       sub(/[[:space:]]+$/, "", line)
       if (line == "i32.const 0" || line == "i32.const 1") last = line
-      if (line == "struct.new $C___user____SharedCtor") {
+      if (line == "struct.new $t.ctor.6d356635663735373336353732356635665f5f53686172656443746f72") {
         found = 1
         if (last != "i32.const " want) mismatch = 1
       }
@@ -1888,58 +1889,58 @@ U_WAT="$INPUT_WORK/u.wat"
 # unit id this entry elaborates its single source under.  A data type is named
 # by its dispatch tag `<mid>.<name>` (#1397), which both its WAT type name and
 # its impl symbol spell through `injectiveIdent`
-# (`$T_zZ_5f__5f_user_5f__5f__2e_PSubject`,
-# `$mdk_impl_zZ_5f__5f_user_5f__5f__2e_PSubject_mark`). The qualifier is
+# (`$t.user.5f5f757365725f5f2e505375626a656374`,
+# `$f.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f505375626a656374.6d61726b`). The qualifier is
 # identical on both halves, so it can neither create nor erase a P/U distinction:
 # each name below still differs between the two only where its source name does.
-require_wat fn-names "$P1_WAT" 'call $__user____pOnlyFn'
-forbid_wat fn-names "$P1_WAT" 'call $__user____uOnlyFn'
-require_wat fn-names "$U_WAT" 'call $__user____uOnlyFn'
-forbid_wat fn-names "$U_WAT" 'call $__user____pOnlyFn'
-require_wat value-names "$P1_WAT" 'global.get $__user____pOnlyValue'
-forbid_wat value-names "$P1_WAT" 'global.get $__user____uOnlyValue'
-require_wat value-names "$U_WAT" 'global.get $__user____uOnlyValue'
-forbid_wat value-names "$U_WAT" 'global.get $__user____pOnlyValue'
-require_fn_arity fn-arity __user____sharedArity 1 "$P1_WAT"
-require_wat fn-arity "$P1_WAT" 'call $__user____sharedArity'
-require_fn_arity fn-arity __user____sharedArity 2 "$U_WAT"
-require_wat fn-arity "$U_WAT" 'call $__user____sharedArity'
-require_wat impl-buckets "$P1_WAT" '(func $mdk_impl_zZ_5f__5f_user_5f__5f__2e_PSubject_mark'
-require_wat impl-buckets "$P1_WAT" 'call $mdk_impl_zZ_5f__5f_user_5f__5f__2e_PSubject_mark'
-require_wat impl-buckets "$U_WAT" '(func $mdk_impl_zZ_5f__5f_user_5f__5f__2e_USubject_mark'
-require_wat impl-buckets "$U_WAT" 'call $mdk_impl_zZ_5f__5f_user_5f__5f__2e_USubject_mark'
-require_wat lazy-globals "$P1_WAT" '(global $gs___user____pLazy'
-require_wat lazy-globals "$P1_WAT" '(func $force___user____pLazy'
-require_wat lazy-globals "$P1_WAT" 'call $force___user____pLazy'
-require_wat lazy-globals "$U_WAT" '(global $gs___user____uLazy'
-require_wat lazy-globals "$U_WAT" '(func $force___user____uLazy'
-require_wat lazy-globals "$U_WAT" 'call $force___user____uLazy'
-require_wat record-fallback-field-slots "$P1_WAT" 'struct.get $C___user____SharedRecord 2'
-require_wat record-fallback-field-slots "$U_WAT" 'struct.get $C___user____SharedRecord 1'
-require_wat function-value-wrappers "$P1_WAT" '(func $mdk_w___user____sharedArity'
-require_wat function-value-wrappers "$P1_WAT" 'ref.func $mdk_w___user____sharedArity'
-require_wat function-value-wrappers "$U_WAT" '(func $mdk_w___user____sharedArity'
-require_wat function-value-wrappers "$U_WAT" 'ref.func $mdk_w___user____sharedArity'
-require_wat function-value-wrappers "$P1_WAT" '(func $mdk_w___user____sharedValueFn'
-require_wat function-value-wrappers "$P1_WAT" 'ref.func $mdk_w___user____sharedValueFn'
-forbid_wat function-value-wrappers "$U_WAT" '(func $mdk_w___user____sharedValueFn'
-require_wat function-value-wrappers "$U_WAT" 'call $__user____sharedValueFn'
+require_wat fn-names "$P1_WAT" 'call $f.user.6d356635663735373336353732356635665f5f704f6e6c79466e'
+forbid_wat fn-names "$P1_WAT" 'call $f.user.6d356635663735373336353732356635665f5f754f6e6c79466e'
+require_wat fn-names "$U_WAT" 'call $f.user.6d356635663735373336353732356635665f5f754f6e6c79466e'
+forbid_wat fn-names "$U_WAT" 'call $f.user.6d356635663735373336353732356635665f5f704f6e6c79466e'
+require_wat value-names "$P1_WAT" 'global.get $g.user.6d356635663735373336353732356635665f5f704f6e6c7956616c7565'
+forbid_wat value-names "$P1_WAT" 'global.get $g.user.6d356635663735373336353732356635665f5f754f6e6c7956616c7565'
+require_wat value-names "$U_WAT" 'global.get $g.user.6d356635663735373336353732356635665f5f754f6e6c7956616c7565'
+forbid_wat value-names "$U_WAT" 'global.get $g.user.6d356635663735373336353732356635665f5f704f6e6c7956616c7565'
+require_fn_arity fn-arity f[.]user[.]6d356635663735373336353732356635665f5f7368617265644172697479 1 "$P1_WAT"
+require_wat fn-arity "$P1_WAT" 'call $f.user.6d356635663735373336353732356635665f5f7368617265644172697479'
+require_fn_arity fn-arity f[.]user[.]6d356635663735373336353732356635665f5f7368617265644172697479 2 "$U_WAT"
+require_wat fn-arity "$U_WAT" 'call $f.user.6d356635663735373336353732356635665f5f7368617265644172697479'
+require_wat impl-buckets "$P1_WAT" '(func $f.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f505375626a656374.6d61726b'
+require_wat impl-buckets "$P1_WAT" 'call $f.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f505375626a656374.6d61726b'
+require_wat impl-buckets "$U_WAT" '(func $f.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f555375626a656374.6d61726b'
+require_wat impl-buckets "$U_WAT" 'call $f.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f555375626a656374.6d61726b'
+require_wat lazy-globals "$P1_WAT" '(global $g.state.6d356635663735373336353732356635665f5f704c617a79'
+require_wat lazy-globals "$P1_WAT" '(func $f.force.6d356635663735373336353732356635665f5f704c617a79'
+require_wat lazy-globals "$P1_WAT" 'call $f.force.6d356635663735373336353732356635665f5f704c617a79'
+require_wat lazy-globals "$U_WAT" '(global $g.state.6d356635663735373336353732356635665f5f754c617a79'
+require_wat lazy-globals "$U_WAT" '(func $f.force.6d356635663735373336353732356635665f5f754c617a79'
+require_wat lazy-globals "$U_WAT" 'call $f.force.6d356635663735373336353732356635665f5f754c617a79'
+require_wat record-fallback-field-slots "$P1_WAT" 'struct.get $t.ctor.6d356635663735373336353732356635665f5f5368617265645265636f7264 2'
+require_wat record-fallback-field-slots "$U_WAT" 'struct.get $t.ctor.6d356635663735373336353732356635665f5f5368617265645265636f7264 1'
+require_wat function-value-wrappers "$P1_WAT" '(func $f.gen.wrapper.6d356635663735373336353732356635665f5f7368617265644172697479.0'
+require_wat function-value-wrappers "$P1_WAT" 'ref.func $f.gen.wrapper.6d356635663735373336353732356635665f5f7368617265644172697479.0'
+require_wat function-value-wrappers "$U_WAT" '(func $f.gen.wrapper.6d356635663735373336353732356635665f5f7368617265644172697479.0'
+require_wat function-value-wrappers "$U_WAT" 'ref.func $f.gen.wrapper.6d356635663735373336353732356635665f5f7368617265644172697479.0'
+require_wat function-value-wrappers "$P1_WAT" '(func $f.gen.wrapper.6d356635663735373336353732356635665f5f73686172656456616c7565466e.0'
+require_wat function-value-wrappers "$P1_WAT" 'ref.func $f.gen.wrapper.6d356635663735373336353732356635665f5f73686172656456616c7565466e.0'
+forbid_wat function-value-wrappers "$U_WAT" '(func $f.gen.wrapper.6d356635663735373336353732356635665f5f73686172656456616c7565466e.0'
+require_wat function-value-wrappers "$U_WAT" 'call $f.user.6d356635663735373336353732356635665f5f73686172656456616c7565466e'
 require_ctor_fields ctor-arity 2 "$P1_WAT"
-require_wat ctor-arity "$P1_WAT" 'struct.new $C___user____SharedCtor'
+require_wat ctor-arity "$P1_WAT" 'struct.new $t.ctor.6d356635663735373336353732356635665f5f53686172656443746f72'
 require_ctor_fields ctor-arity 3 "$U_WAT"
-require_wat ctor-arity "$U_WAT" 'struct.new $C___user____SharedCtor'
-require_wat ctor-owner-type "$P1_WAT" '(type $C___user____SharedCtor (sub $T_zZ_5f__5f_user_5f__5f__2e_PSubject'
-require_wat ctor-owner-type "$P1_WAT" 'ref.cast (ref $T_zZ_5f__5f_user_5f__5f__2e_PSubject)'
-require_wat ctor-owner-type "$U_WAT" '(type $C___user____SharedCtor (sub $T_zZ_5f__5f_user_5f__5f__2e_USubject'
-require_wat ctor-owner-type "$U_WAT" 'ref.cast (ref $T_zZ_5f__5f_user_5f__5f__2e_USubject)'
+require_wat ctor-arity "$U_WAT" 'struct.new $t.ctor.6d356635663735373336353732356635665f5f53686172656443746f72'
+require_wat ctor-owner-type "$P1_WAT" '(type $t.ctor.6d356635663735373336353732356635665f5f53686172656443746f72 (sub $t.user.5f5f757365725f5f2e505375626a656374'
+require_wat ctor-owner-type "$P1_WAT" 'ref.cast (ref $t.user.5f5f757365725f5f2e505375626a656374)'
+require_wat ctor-owner-type "$U_WAT" '(type $t.ctor.6d356635663735373336353732356635665f5f53686172656443746f72 (sub $t.user.5f5f757365725f5f2e555375626a656374'
+require_wat ctor-owner-type "$U_WAT" 'ref.cast (ref $t.user.5f5f757365725f5f2e555375626a656374)'
 require_ctor_ordinal ctor-ordinal 1 "$P1_WAT"
 require_ctor_ordinal ctor-ordinal 0 "$U_WAT"
-require_wat type-to-ctors "$P1_WAT" '(type $T_zZ_5f__5f_user_5f__5f__2e_PSubject (sub (struct (field i32)))'
-forbid_wat type-to-ctors "$P1_WAT" '(type $T_zZ_5f__5f_user_5f__5f__2e_USubject (sub (struct (field i32)))'
-require_wat type-to-ctors "$P1_WAT" 'ref.cast (ref $T_zZ_5f__5f_user_5f__5f__2e_PSubject)'
-require_wat type-to-ctors "$U_WAT" '(type $T_zZ_5f__5f_user_5f__5f__2e_USubject (sub (struct (field i32)))'
-forbid_wat type-to-ctors "$U_WAT" '(type $T_zZ_5f__5f_user_5f__5f__2e_PSubject (sub (struct (field i32)))'
-require_wat type-to-ctors "$U_WAT" 'ref.cast (ref $T_zZ_5f__5f_user_5f__5f__2e_USubject)'
+require_wat type-to-ctors "$P1_WAT" '(type $t.user.5f5f757365725f5f2e505375626a656374 (sub (struct (field i32)))'
+forbid_wat type-to-ctors "$P1_WAT" '(type $t.user.5f5f757365725f5f2e555375626a656374 (sub (struct (field i32)))'
+require_wat type-to-ctors "$P1_WAT" 'ref.cast (ref $t.user.5f5f757365725f5f2e505375626a656374)'
+require_wat type-to-ctors "$U_WAT" '(type $t.user.5f5f757365725f5f2e555375626a656374 (sub (struct (field i32)))'
+forbid_wat type-to-ctors "$U_WAT" '(type $t.user.5f5f757365725f5f2e505375626a656374 (sub (struct (field i32)))'
+require_wat type-to-ctors "$U_WAT" 'ref.cast (ref $t.user.5f5f757365725f5f2e555375626a656374)'
 
 run_impl_self_check
 run_trmc_state_check
@@ -2091,7 +2092,7 @@ for ref_trap_spec in 'p1 17 present' 'u 29 absent' 'p2 17 present'; do
   ref_trap_result="${ref_trap_rest%% *}"
   ref_trap_import="${ref_trap_rest#* }"
   ref_trap_wat="$INPUT_WORK/ref-trap-$ref_trap_name.wat"
-  grep -F '(type $T_TrapToken' "$ref_trap_wat" >/dev/null || {
+  grep -F '(type $t.user.54726170546f6b656e' "$ref_trap_wat" >/dev/null || {
     echo "FAIL H2B8-REF-TRAP-MODE: $ref_trap_name did not force ref mode"
     exit 1
   }
@@ -2182,8 +2183,8 @@ for lambda_spec in 'p1 17 1' 'u 29 2' 'p2 17 1'; do
   lambda_result="${lambda_rest%% *}"
   lambda_count="${lambda_rest#* }"
   lambda_wat="$INPUT_WORK/lambda-$lambda_name.wat"
-  [ "$(grep -E '^  \(func \$mdk_lam[0-9]+' "$lambda_wat" | wc -l | tr -d '[:space:]')" -eq "$lambda_count" ] &&
-    [ "$(grep -E '^  \(elem declare func .*\$mdk_lam0' "$lambda_wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  [ "$(grep -E '^  \(func \$f[.]gen[.]lambda[.][.][0-9]+' "$lambda_wat" | wc -l | tr -d '[:space:]')" -eq "$lambda_count" ] &&
+    [ "$(grep -E '^  \(elem declare func .*\$f.gen.lambda..0' "$lambda_wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
       echo "FAIL H2B7-LAMBDA-LIFECYCLE: $lambda_name lambda definition/ref declaration changed"
       exit 1
     }
@@ -2205,18 +2206,18 @@ for lambda_spec in 'p1 17 1' 'u 29 2' 'p2 17 1'; do
     exit 1
   }
 done
-[ "$(grep -E '^  \(func \$mdk_wctor_Pair ' "$INPUT_WORK/lambda-p1.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -E '^  \(func \$mdk_wctor_Pair ' "$INPUT_WORK/lambda-u.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -E '^  \(func \$mdk_wctor_Pair ' "$INPUT_WORK/lambda-p2.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+[ "$(grep -E '^  \(func \$f.gen.ctoreta.50616972.0 ' "$INPUT_WORK/lambda-p1.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -E '^  \(func \$f.gen.ctoreta.50616972.0 ' "$INPUT_WORK/lambda-u.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -E '^  \(func \$f.gen.ctoreta.50616972.0 ' "$INPUT_WORK/lambda-p2.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
   echo "FAIL H2B7-NAMED-WRAPPER-DEDUPE: duplicate Pair uses must define one wrapper"
   exit 1
 }
 lambda_elem_declare() {
   grep -E '^  \(elem declare func ' "$1"
 }
-[ "$(lambda_elem_declare "$INPUT_WORK/lambda-p1.wat")" = '  (elem declare func $mdk_pap $mdk_wctor_Pair $mdk_lam0)' ] &&
-  [ "$(lambda_elem_declare "$INPUT_WORK/lambda-u.wat")" = '  (elem declare func $mdk_pap $mdk_wctor_Pair $mdk_lam0 $mdk_lam1)' ] &&
-  [ "$(lambda_elem_declare "$INPUT_WORK/lambda-p2.wat")" = '  (elem declare func $mdk_pap $mdk_wctor_Pair $mdk_lam0)' ] || {
+[ "$(lambda_elem_declare "$INPUT_WORK/lambda-p1.wat")" = '  (elem declare func $mdk_pap $f.gen.ctoreta.50616972.0 $f.gen.lambda..0)' ] &&
+  [ "$(lambda_elem_declare "$INPUT_WORK/lambda-u.wat")" = '  (elem declare func $mdk_pap $f.gen.ctoreta.50616972.0 $f.gen.lambda..0 $f.gen.lambda..1)' ] &&
+  [ "$(lambda_elem_declare "$INPUT_WORK/lambda-p2.wat")" = '  (elem declare func $mdk_pap $f.gen.ctoreta.50616972.0 $f.gen.lambda..0)' ] || {
   echo "FAIL H2B7-ELEM-DECLARE-ORDER: exact function-reference membership/order changed"
   exit 1
 }
@@ -2441,7 +2442,9 @@ for default_spec in "p1 PDefault 17" "u UDefault 29" "p2 PDefault 17"; do
   default_tag="${default_rest%% *}"
   default_constant="${default_rest#* }"
   default_wat="$WORK/default-$default_name.wat"
-  default_symbol="mdk_default_DefaultFace_synthDefault_zZDefaultFace_7c_${default_tag}_7c_"
+  default_key="zZDefaultFace_7c_${default_tag}_7c_"
+  default_hex="$(printf %s "$default_key" | od -An -tx1 | tr -d " \n")"
+  default_symbol="f.default.44656661756c7446616365.73796e746844656661756c74.${default_hex}"
   [ "$(grep -F "(func \$$default_symbol" "$default_wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
     echo "FAIL H2B4-DEFAULT-NAMES: $default_name must contain exactly one named synthesized default"
     exit 1

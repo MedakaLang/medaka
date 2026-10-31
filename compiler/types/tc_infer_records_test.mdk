@@ -82,7 +82,7 @@ test "a record's stamped head is its owner module's name for it, or its own name
   "P"
   (m ri =>
     expectEqual
-      ("m__P", "P")
+      ("m6d__P", "P")
       (
         stampedRecordHead "P" ri,
         stampedRecordHead "P" (RecordInfo [] [] (tconUnresolved "P") [] omEmpty),

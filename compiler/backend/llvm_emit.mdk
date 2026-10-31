@@ -1,3 +1,8 @@
+import types.symbol_origins.{CoreSymbolOrigins}
+import types.symbol_origins as SO
+import backend.llvm_symbol_names as LN
+import support.symbol_encoding.{encodeComponent}
+import support.symbol_encoding.{encodePair}
 import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
 --
@@ -861,6 +866,8 @@ data TailDefine = TailDefine String Int Bool
 
 data Emit = Emit {
   input : EmitInput,
+  implNames : Ref (OrdMap (OrdMap String)),
+  defaultNames : Ref (OrdMap (OrdMap (OrdMap String))),
   -- the gensym id every per-scope counter starts from (`EmitStateConfig.counter0`
   -- — 0 for the prelude half, `programHalfIdBase` for the program half).
   counter0 : Int,
@@ -878,6 +885,7 @@ data Emit = Emit {
   -- what every binder of the program holds (`DeclFacts.factBinders`), keyed by
   -- the ordinal of the row's id
   binderRows : BM.Map Int BinderRow,
+  symbolOrigins : Option CoreSymbolOrigins,
   externFacts : OrdMap ExternDeclFact,
   nativePrototypes : List ExternDeclFact,
   -- the super count of each interface word (`DeclFacts.factSupers`); a word
@@ -1023,33 +1031,14 @@ freshId e =
 -- group's key (`impl:List_eq`), and `:` is not in LLVM's unquoted-identifier set,
 -- so the NAME form maps it to `_` while the marker keeps the readable spelling.
 scopeWord : Emit -> String
-scopeWord e = scopeWordOf !e.curModule
+scopeWord e = !e.curModule
 
-scopeWordOf : String -> String
-scopeWordOf s = match stringIndexOf ":" s
-  Some i => "\{stringSlice 0 i s}_\{stringSlice (i + 1) (stringLength s) s}"
-  None => s
+generatedName : Emit -> LN.GeneratedFamily -> String -> String
+generatedName e family subject =
+  LN.llvmName (LN.LGeneratedName family (scopeWord e) subject (freshId e))
 
--- THE gensym spelling, in one place: the `.<scope>.<id>` tail every minted name
--- ends with (parse rule + why `.`: the `freshId` header above).
-mangleScoped : Emit -> String
-mangleScoped e = ".\{scopeWord e}.\{intToString (freshId e)}"
-
--- ── scope attribution (#2726) ───────────────────────────────────────────────
--- The module id of a top-level bind: the text before its FIRST `__`, the
--- universal per-module mangling every bind name carries
--- (`mdk_types_typecheck__foo`, `@mdk_g_frontend_parser__peekP`).  A name with no
--- `__` at all comes from a SINGLE-module emission, where the driver mangles
--- nothing and there is no module to name — those fall to `program`, which is
--- exactly the one-counter behaviour such a program had before this change.
 scopeProgram : String
 scopeProgram = "program"
-
-moduleIdOf : String -> String
-moduleIdOf name = match stringIndexOf "__" name
-  Some 0 => scopeProgram
-  Some i => stringSlice 0 i name
-  None => scopeProgram
 
 setScope : Emit -> String -> Unit
 setScope e s = e.curModule := s
@@ -1069,7 +1058,13 @@ withProgramScope e act =
 
 -- attribute what follows to the module that owns `bindName`.
 setScopeOfBind : Emit -> String -> Unit
-setScopeOfBind e bind = setScope e (moduleIdOf bind)
+setScopeOfBind e bind = match e.symbolOrigins
+  None => setScope e scopeProgram
+  Some origins => match omLookup bind origins.functions
+    Some (SO.ModuleOrigin mid _) =>
+      setScope e ("module." ++ encodeComponent mid)
+    Some _ => setScope e scopeProgram
+    None => panic ("llvm: missing symbol origin for " ++ bind)
 
 -- The marker line that precedes every TOP-LEVEL entity, naming the scope its
 -- gensyms were drawn from.  `;` is LLVM's line comment, so it is inert IR and a
@@ -1329,7 +1324,7 @@ canonFnName e name =
   if isKnownFn e name then
     name
   else
-    let mangled = "core__" ++ name
+    let mangled = encodePair "core" name
     if isKnownFn e mangled then mangled else name
 
 -- O(log n) lookup into the program's signature index (`installSigMap`, built
@@ -1512,10 +1507,10 @@ implEntryAnswers word entry = implEntryKey entry == word
 -- share one.  The encoded interface and key words are the entry's stamp.
 implDefaultFnName : ImplSym -> String -> String
 implDefaultFnName (ImplSym _ ifaceTag keyTag) method =
-  "\{defaultFnPrefix}\{ifaceTag}_\{method}_\{keyTag}"
+  LN.llvmName (LN.LDefaultMethod ifaceTag method keyTag)
 
 defaultFnPrefix : String
-defaultFnPrefix = "mdk_default_"
+defaultFnPrefix = "mdk.default."
 
 -- the lifted LLVM name of a tagged impl method: `mdk_impl_<symTag>_<method>`.
 -- [tag] is the entry's stamped symbol tag, already a legal identifier, and method
@@ -1523,7 +1518,7 @@ defaultFnPrefix = "mdk_default_"
 -- method name here), so the concatenation is a legal LLVM symbol -- clang would
 -- reject it loudly otherwise, which the gate catches.
 implFnName : String -> String -> String
-implFnName tag method = "mdk_impl_\{tag}_\{method}"
+implFnName tag method = LN.llvmName (LN.LImplMethod tag method)
 
 -- The exact impl symbols exported by a standalone prelude object: the stamps of
 -- the prelude lowered on its own.  A later program can add a same-(method, head)
@@ -1575,11 +1570,34 @@ preludeImplPairKey method identity = "\{method}\n\{identity}"
 -- the lifted define an entry's calls target: `mdk_impl_<symTag>_<method>` for a
 -- supplied method, `mdk_default_...` for an inherited default's per-instance body.
 -- Both read the entry's stamp.
-implEntryFnName : String -> CImplEntry -> String
-implEntryFnName method (CImplEntry _ _ _ (CImplTagged _ _ _ (ImplSym tag _ _) _ _ _)) =
-  implFnName tag method
-implEntryFnName method (CImplEntry _ _ _ (CImplDefault _ _ _ sym _ _ _)) =
-  implDefaultFnName sym method
+implEntryFnName : Emit -> String -> CImplEntry -> String
+implEntryFnName e method (CImplEntry _ _ _ (CImplTagged _ _ _ (ImplSym tag _ _) _ _ _)) =
+  let byMethod = match omLookup tag !e.implNames
+    Some m => m
+    None => omEmpty
+  match omLookup method byMethod
+    Some name => name
+    None =>
+      let name = implFnName tag method
+      e.implNames := omInsert tag (omInsert method name byMethod) !e.implNames
+      name
+implEntryFnName e method (CImplEntry _ _ _ (CImplDefault _ _ _ (sym@(ImplSym _ iface key)) _ _ _)) =
+  let byMethod = match omLookup iface !e.defaultNames
+    Some m => m
+    None => omEmpty
+  let byKey = match omLookup method byMethod
+    Some m => m
+    None => omEmpty
+  match omLookup key byKey
+    Some name => name
+    None =>
+      let name = implDefaultFnName sym method
+      e.defaultNames :=
+        omInsert
+          iface
+          (omInsert method (omInsert key name byKey) byMethod)
+          !e.defaultNames
+      name
 
 -- the stamped symbol tag of an entry of either kind
 implEntrySymTag : CImplEntry -> String
@@ -2027,19 +2045,19 @@ lookupVarG e env x = match omLookup x env
   None =>
     if isLazyGlobal e x then
       let r = freshReg e
-      let forcer = "mdk_force_" ++ x
+      let forcer = LN.llvmName (LN.LGlobalForcer x)
       let _ = checkWordCall e forcer []
       let _ = emit e "  \{r} = call i64 @\{forcer}()"
       (r, LTInt)
     else match lookupAssoc x (globalsRegRef e).value
       Some (True, ty) =>
         let r = freshReg e
-        let g = symRef e ("mdk_g_" ++ x)
+        let g = symRef e (LN.llvmName (LN.LUserGlobal x))
         let _ = emit e "  \{r} = load i64, ptr @\{g}"
         (r, ty)
       Some (False, _) =>
         let r = freshReg e
-        let g = symRef e ("mdk_g_" ++ x)
+        let g = symRef e (LN.llvmName (LN.LUserGlobal x))
         let _ = emit e "  \{r} = load i64, ptr @\{g}"
         (r, LTInt)
       None =>
@@ -2127,7 +2145,7 @@ emitLit e (LString s) =
       let bytes = strBytes s
       let n = lengthS bytes
       let cpc = arrayLength (stringToChars s)
-      let gid = ".strc" ++ mangleScoped e
+      let gid = generatedName e LN.GenString ""
       let ty = "{ i64, i64, i64, [\{intToString (n + 1)} x i8] }"
       let _ = registerGlobal e False gid ty
       let _ =
@@ -2145,7 +2163,8 @@ emitLit e _ = gapE e "non-Int/Float/Bool/String/Char/Unit literal"
 -- a 64-bit cell constant under header `tag`, as a word.
 emitCell64Lit : Emit -> String -> Int -> Int -> Int -> String
 emitCell64Lit e prefix tag hi lo =
-  let gid = prefix ++ mangleScoped e
+  let family = if prefix == ".u64c" then LN.GenU64 else LN.GenI64
+  let gid = generatedName e family ""
   let _ = registerGlobal e False gid "{ i64, i64 }"
   let _ =
     emitGlobal
@@ -2383,6 +2402,15 @@ emitNumExtern e env "floatToString" args = match emitArgs e env args
     let _ = emit e (rtLine e r "i64" "mdk_float_to_string" [("double", d)])
     (r, LTStr)
   _ => panic "llvm: floatToString takes exactly one argument"
+emitNumExtern e env "floatToFixed" args = match emitArgs e env args
+  [n, a] =>
+    let k = untagInt e n
+    let d = unboxFloat e a
+    let r = freshReg e
+    let _ =
+      emit e (rtLine e r "i64" "mdk_float_to_fixed" [("i64", k), ("double", d)])
+    (r, LTStr)
+  _ => panic "llvm: floatToFixed takes exactly two arguments"
 emitNumExtern e env "intBitsToFloat" args = match emitArgs e env args
   [a] =>
     let i = untagInt e a
@@ -3640,7 +3668,7 @@ rawWorkerCall e f n =
   match omLookup name !e.rawWorkers
     Some (RawWorker ar ks r) =>
       if ar == n then
-        Some ("mdk_" ++ name ++ "__rw", RawWorker ar ks r)
+        Some (LN.llvmName (LN.LRawWorker name), RawWorker ar ks r)
       else
         None
     None => None
@@ -4482,7 +4510,7 @@ intLitOf _ = None
 -- a guard's `| otherwise = e` arm, which lowers to `if otherwise then e else …`.
 skipOtherwise : CExpr -> CExpr
 skipOtherwise (CIf (CVar o _) b _)
-  | o == "otherwise" || o == "core__otherwise" = b
+  | o == "otherwise" || o == encodePair "core" "otherwise" = b
 skipOtherwise ex = ex
 
 -- `body` is a kernel applied to exactly the parameters `ps`, in order.
@@ -5568,7 +5596,8 @@ emitFloatLeafN e env ex = match flattenApp ex []
     True =>
       let ops = emitWorkerArgs e env (floatFwFp e f) 0 args
       let r = freshReg e
-      let call = directCall e (Generated ("mdk_" ++ f ++ "__fw")) "double" ops
+      let call =
+        directCall e (Generated (LN.llvmName (LN.LFloatWorker f))) "double" ops
       let _ = emit e "  \{r} = \{call}"
       r
     False => emitFloatLeafVar e env ex
@@ -6633,7 +6662,7 @@ anyInList (x :: xs) ys = if contains x ys then True else anyInList xs ys
 -- way, and the flag only registers it as a direct-call target (`e.directFn`).
 emitGroupBind : Emit -> OrdMap (String, LTy) -> CBind -> Bool -> (String, LTy)
 emitGroupBind e env (CBind name clauses site _) direct =
-  let lamName = "mdk_lam" ++ mangleScoped e
+  let lamName = generatedName e LN.GenLambda ""
   let arity = clauseArity (clauseList clauses)
   let captured =
     keepInEnv env (removeStr name (dedupS (clausesFreeVars name clauses)))
@@ -6900,7 +6929,7 @@ knotAlloc : Emit ->
   (List KnotCell, OrdMap (String, LTy))
 knotAlloc _ env _ [] = ([], env)
 knotAlloc e env cellEnv ((CBind name clauses site _) :: rest) =
-  let lamName = "mdk_lam" ++ mangleScoped e
+  let lamName = generatedName e LN.GenLambda ""
   let arity = clauseArity (clauseList clauses)
   let captured =
     keepInEnv cellEnv (removeStr name (dedupS (clausesFreeVars name clauses)))
@@ -7238,7 +7267,13 @@ emitKnownFnCall : Emit ->
   (String, LTy)
 emitKnownFnCall e env fname args mode =
   let argOps = emitArgs e env args
-  let res = emitCallMode e ("mdk_" ++ fname) argOps mode (fnRetTy e fname)
+  let res =
+    emitCallMode
+      e
+      (LN.llvmName (LN.LUserFunction fname))
+      argOps
+      mode
+      (fnRetTy e fname)
   let _ = recordFloatClosureResult e fname mode res
   res
 
@@ -7461,7 +7496,7 @@ emitMethod e env name iface siteArity (route@(RKey tag _ _)) implRoutes methRout
       -- call that passes them too
       emitCallMode
         e
-        (implEntryFnName name entry)
+        (implEntryFnName e name entry)
         (dictWords ++ argOps)
         mode
         resTy
@@ -7499,7 +7534,12 @@ emitMethod e env name _ _ (RLocal sym dicts) implRoutes methRoutes argOps mode =
   if isEmpty argOps && not (isKnownFn e target) then
     lookupVarG e env target
   else if isEmpty dicts then
-    emitCallMode e ("mdk_" ++ target) argOps mode (fnRetTy e target)
+    emitCallMode
+      e
+      (LN.llvmName (LN.LUserFunction target))
+      argOps
+      mode
+      (fnRetTy e target)
   else
     emitDictApp e env target dicts argOps mode
 -- native backend: a method whose RESULT mentions the interface/self
@@ -7579,7 +7619,7 @@ emitMethodValue e env name iface siteArity route implRoutes methRoutes =
     let capNames =
       dedupS (flatMap givenNames (route :: implRoutes ++ methRoutes))
     let capWords = capDictWords e env capNames
-    let lamName = "mdk_methval_\{name}\{mangleScoped e}"
+    let lamName = generatedName e LN.GenMethodValue name
     let _ =
       emitMethodValDefine
         e
@@ -7704,7 +7744,7 @@ emitDictValue e env name routes =
       emitDictApp e env name routes [] CallExact
     else
       let dictWords = dictWordsOf e env routes
-      let lamName = "mdk_dictval_\{name}\{mangleScoped e}"
+      let lamName = generatedName e LN.GenDictValue name
       let _ = emitDictValDefine e lamName name (lengthS dictWords) valArity
       emitClosureAlloc e lamName valArity dictWords
   else
@@ -7728,8 +7768,13 @@ emitDictValDefine e lamName name nDicts valArity =
   let dictOps = loadPapCaptures e nDicts 0
   let synArgs = dictOps ++ etaArgOps valArity 0
   let r = freshReg e
-  let _ = checkWordCall e ("mdk_" ++ name) synArgs
-  let _ = emit e "  \{r} = call i64 @mdk_\{name}(\{argDecls synArgs})"
+  let call =
+    directCall
+      e
+      (Generated (LN.llvmName (LN.LUserFunction name)))
+      "i64"
+      (i64Ops synArgs)
+  let _ = emit e "  \{r} = \{call}"
   let _ = emit e ("  ret i64 " ++ r)
   let _ = emit e "}"
   let _ = emit e ""
@@ -7885,7 +7930,7 @@ emitPapClosure : Emit -> String -> List String -> Int -> (String, LTy)
 emitPapClosure e fname argOps arity =
   let supplied = lengthS argOps
   let remaining = arity - supplied
-  let papName = "mdk_pap_\{fname}\{mangleScoped e}"
+  let papName = generatedName e LN.GenNamedPap fname
   let _ = emitPapDefine e papName fname supplied remaining
   emitClosureAlloc e papName remaining argOps
 
@@ -7931,7 +7976,7 @@ emitPapClosureIndirect : Emit -> String -> List String -> Int -> (String, LTy)
 emitPapClosureIndirect e cw argOps arity =
   let supplied = lengthS argOps
   let remaining = arity - supplied
-  let papName = "mdk_pap_ind" ++ mangleScoped e
+  let papName = generatedName e LN.GenIndirectPap ""
   let _ = emitPapDefineIndirect e papName supplied remaining
   emitClosureAlloc e papName remaining (cw :: argOps)
 
@@ -7996,7 +8041,7 @@ emitMethodDispatch e env name iface siteArity dict methRoutes argOps =
       -- F10: saturate against the impl's own parameters (see emitDispatchArmBody).
       emitArityCall
         e
-        (implEntryFnName name ent)
+        (implEntryFnName e name ent)
         argOps
         (implSrcValueArity ent)
         LTInt
@@ -8236,17 +8281,17 @@ emitMethodDispatchChain e env name iface siteArity dict methRoutes argOps =
   let methWords = dictWordsOf e env methRoutes
   let nmw = lengthS methWords
   let nargs = lengthS argOps
-  let fname = dispFnName (dispMethodWord e name iface) nmw nargs siteArity
+  let fname =
+    dispFnName (dispInterfaceWord e name iface) name nmw nargs siteArity
   let _ = ensureDispatcherEmitted e fname name iface nmw nargs siteArity
   emitImplCall e fname (dictPtr :: methWords ++ argOps) LTInt
 
 -- the shared dispatcher's symbol: `mdk_disp_<method word>_<nmw>_<nargs>`.  Method
 -- names are plain identifiers here (an operator is a `CBinPrim`, never a method
 -- name — same assumption `implFnName` already makes).
-dispFnName : String -> Int -> Int -> Int -> String
-dispFnName methodWord nmw nargs siteArity =
-  let base = "mdk_disp_\{methodWord}_\{intToString nmw}_\{intToString nargs}"
-  if siteArity == nargs then base else "\{base}_a\{intToString siteArity}"
+dispFnName : String -> String -> Int -> Int -> Int -> String
+dispFnName iface name nmw nargs siteArity =
+  LN.llvmName (LN.LDispatcher iface name nmw nargs siteArity)
 
 -- A dispatcher's arm set is its interface's alone (`siteImpls`), so a method two
 -- interfaces declare needs one dispatcher per interface: its symbol carries the
@@ -8255,14 +8300,14 @@ dispFnName methodWord nmw nargs siteArity =
 -- case — a prelude body's dispatcher symbol must not depend on what the program
 -- declares (the `prelude.o` precondition), and the prelude's own interfaces never
 -- share a method spelling.
-dispMethodWord : Emit -> String -> String -> String
-dispMethodWord e name iface =
+dispInterfaceWord : Emit -> String -> String -> String
+dispInterfaceWord e name iface =
   if iface /= ""
     && not (startsWith "core::" iface)
     && omHasKey name e.input.sharedMethodNames then
-    "\{injectiveIdent iface}_\{name}"
+    iface
   else
-    name
+    ""
 
 -- the dispatchers emitted so far, by symbol, scoped to this emission.
 
@@ -8349,7 +8394,7 @@ emitDispatcherBody e name iface nmw nargs siteArity =
       -- impl parameter count can still differ from the occurrence arity.
       emitArityCall
         e
-        (implEntryFnName name ent)
+        (implEntryFnName e name ent)
         (dispWordNames "%arg" nargs 0)
         (implSrcValueArity ent)
         LTInt
@@ -8559,7 +8604,7 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     && implEntryMemoisable ent
     && isLazyGlobal e (memoGlobalName symTag name) then
     let rv = freshReg e
-    let memoForcer = "mdk_force_" ++ memoGlobalName symTag name
+    let memoForcer = LN.llvmName (LN.LGlobalForcer (memoGlobalName symTag name))
     let _ = checkWordCall e memoForcer []
     let _ = emit e "  \{rv} = call i64 @\{memoForcer}()"
     let _ = emit e "  store i64 \{rv}, ptr \{slot}"
@@ -8594,7 +8639,7 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     let (rv, _) =
       emitArityCall
         e
-        (implEntryFnName name ent)
+        (implEntryFnName e name ent)
         (methWords ++ cellDicts ++ argOps)
         armArity
         LTInt
@@ -8849,7 +8894,7 @@ filterGroupsForEntries : Emit ->
 filterGroupsForEntries _ _ _ [] = []
 filterGroupsForEntries e method entries (g :: rest) =
   if anyList
-    (entry => implEntryFnName method entry == groupFnName g)
+    (entry => implEntryFnName e method entry == groupFnName g)
     entries then
     g :: filterGroupsForEntries e method entries rest
   else
@@ -8936,7 +8981,13 @@ emitDictApp e env name routes argOps mode =
     -- dictionary words count on both sides of the mode.
     match mode
       CallDynamic => emitDictAppDirect e name allWords
-      _ => emitCallMode e ("mdk_" ++ name) allWords mode (fnRetTy e name)
+      _ =>
+        emitCallMode
+          e
+          (LN.llvmName (LN.LUserFunction name))
+          allWords
+          mode
+          (fnRetTy e name)
   else
     gapE e ("CDict head '" ++ name ++ "' is not a known top-level function")
 
@@ -8959,8 +9010,13 @@ emitLocalDictApp e env name routes argOps mode =
 emitDictAppDirect : Emit -> String -> List String -> (String, LTy)
 emitDictAppDirect e name allWords =
   let r = freshReg e
-  let _ = checkWordCall e ("mdk_" ++ name) allWords
-  let _ = emit e "  \{r} = call i64 @mdk_\{name}(\{argDecls allWords})"
+  let call =
+    directCall
+      e
+      (Generated (LN.llvmName (LN.LUserFunction name)))
+      "i64"
+      (i64Ops allWords)
+  let _ = emit e "  \{r} = \{call}"
   (r, fnRetTy e name)
 
 -- the dict witness words for a constrained-function call's routes (note (j)).
@@ -9057,7 +9113,7 @@ emitConstDictCell e headTag reqWords =
   match lookupAssoc key !e.dictConstCache
     Some gname => "ptrtoint (ptr @" ++ symRef e gname ++ " to i64)"
     None =>
-      let gname = "mdk_dc" ++ mangleScoped e
+      let gname = generatedName e LN.GenDictCell ""
       let _ = registerGlobal e False gname ty
       let _ = emitGlobal e "@\{gname} = internal constant \{initBody}"
       e.dictConstCache := (key, gname) :: !e.dictConstCache
@@ -9122,8 +9178,8 @@ data ImplGroup =
 -- the marker reads as what it is (`impl:List_eq`) and can never be confused with
 -- a module id.  `scopeWordOf` maps the `:` out again for the LLVM name form.
 implGroupScope : ImplGroup -> String
-implGroupScope (ImplGroup method _ _ symTag _ _ _ _) =
-  "impl:\{symTag}_\{method}"
+implGroupScope (ImplGroup method _ key _ _ _ _ _) =
+  "impl.\{encodeComponent key}.\{encodeComponent method}"
 
 emitImpls : Emit -> List CImplEntry -> Unit
 emitImpls e entries = emitGroups e (groupImpls e entries)
@@ -9560,7 +9616,7 @@ gatherGroup e entries (method, key) =
         positions
         (clauseArity cls)
         cls
-        (implEntryFnName method ent)
+        (implEntryFnName e method ent)
     None => panic "llvm: impl group without an entry (internal error)"
 
 -- the head tycon tag of the impl whose (method, key) matches (the first such entry).
@@ -9688,7 +9744,7 @@ emitConstClosureCell e lamName arity =
   match lookupAssoc key !e.closConstCache
     Some gname => "ptrtoint (ptr @" ++ symRef e gname ++ " to i64)"
     None =>
-      let gname = "mdk_cc" ++ mangleScoped e
+      let gname = generatedName e LN.GenCtorCell ""
       let _ = registerGlobal e False gname "[2 x i64]"
       let _ = emitGlobal e "@\{gname} = internal constant \{initBody}"
       e.closConstCache := (key, gname) :: !e.closConstCache
@@ -9715,7 +9771,7 @@ emitLam e env pats body =
 
 emitLamGo : Emit -> OrdMap (String, LTy) -> List Pat -> CExpr -> (String, LTy)
 emitLamGo e env pats body =
-  let lamName = "mdk_lam" ++ mangleScoped e
+  let lamName = generatedName e LN.GenLambda ""
   let pnames = patVarNames pats
   let captured = keepInEnv env (dedupS (freeVars pnames body))
   let captureWords = capWords e env captured
@@ -9732,7 +9788,7 @@ emitLamGo e env pats body =
 
 emitLamPat : Emit -> OrdMap (String, LTy) -> List Pat -> CExpr -> (String, LTy)
 emitLamPat e env pats body =
-  let lamName = "mdk_lam" ++ mangleScoped e
+  let lamName = generatedName e LN.GenLambda ""
   let pnames = patVarNames pats
   let captured = keepInEnv env (dedupS (freeVars pnames body))
   let captureWords = capWords e env captured
@@ -9767,7 +9823,7 @@ emitRecLamGo : Emit ->
   CExpr ->
   (String, LTy)
 emitRecLamGo e env f pats body =
-  let lamName = "mdk_lam" ++ mangleScoped e
+  let lamName = generatedName e LN.GenLambda ""
   let pnames = patVarNames pats
   let captured = keepInEnv env (removeStr f (dedupS (freeVars pnames body)))
   let captureWords = capWords e env captured
@@ -9787,7 +9843,7 @@ emitRecLamPat : Emit ->
   CExpr ->
   (String, LTy)
 emitRecLamPat e env f pats body =
-  let lamName = "mdk_lam" ++ mangleScoped e
+  let lamName = generatedName e LN.GenLambda ""
   let pnames = patVarNames pats
   let captured = keepInEnv env (removeStr f (dedupS (freeVars pnames body)))
   let captureWords = capWords e env captured
@@ -9896,7 +9952,7 @@ removeStr x (y :: ys) = if x == y then removeStr x ys else y :: removeStr x ys
 emitEtaClosure : Emit -> String -> (String, LTy)
 emitEtaClosure e fname =
   let arity = optionOr 0 (definedArity e (CVar fname AGlobal))
-  let lamName = "mdk_eta_\{fname}\{mangleScoped e}"
+  let lamName = generatedName e LN.GenEta fname
   let _ = emitEtaDefine e lamName fname arity
   emitConstClosure e lamName arity
 
@@ -9941,7 +9997,7 @@ emitCtorApp e name argOps arity
 emitCtorPap : Emit -> String -> List String -> Int -> (String, LTy)
 emitCtorPap e name argOps arity =
   let remaining = arity - lengthS argOps
-  let lamName = "mdk_ctorpap_\{name}\{mangleScoped e}"
+  let lamName = generatedName e LN.GenCtorPap name
   let _ = emitCtorPapDefine e lamName name arity (lengthS argOps)
   emitClosureAlloc e lamName remaining argOps
 
@@ -9980,7 +10036,7 @@ emitCtorPapDefine e lamName name arity supplied =
 emitCtorEtaClosure : Emit -> String -> (String, LTy)
 emitCtorEtaClosure e name =
   let arity = ctorArity e name
-  let lamName = "mdk_etac_\{name}\{mangleScoped e}"
+  let lamName = generatedName e LN.GenCtorEta name
   let _ = emitCtorEtaDefine e lamName name arity
   emitConstClosure e lamName arity
 
@@ -10049,9 +10105,13 @@ emitEtaDefine e lamName fname arity =
   let _ = defineHeader e LiftedDefine lamName (wordProto (etaParamDecls arity))
   let _ = emit e "entry:"
   let r = freshReg e
-  let _ = checkWordCall e ("mdk_" ++ fname) (argNames arity 0)
-  let _ =
-    emit e "  \{r} = call i64 @mdk_\{fname}(\{argDecls (argNames arity 0)})"
+  let call =
+    directCall
+      e
+      (Generated (LN.llvmName (LN.LUserFunction fname)))
+      "i64"
+      (i64Ops (argNames arity 0))
+  let _ = emit e "  \{r} = \{call}"
   let _ = emit e ("  ret i64 " ++ r)
   let _ = emit e "}"
   let _ = emit e ""
@@ -10073,7 +10133,7 @@ emitEtaDefine e lamName fname arity =
 -- per-family arity is hardcoded.
 emitExternEtaClosure : Emit -> String -> (String, LTy)
 emitExternEtaClosure e name =
-  let lamName = "mdk_eta_\{injectiveIdent name}\{mangleScoped e}"
+  let lamName = generatedName e LN.GenExternEta name
   let _ = emitExternEtaDefine e lamName name (externArity e name)
   emitConstClosure e lamName (externArity e name)
 
@@ -10087,7 +10147,7 @@ emitExternEtaClosure e name =
 -- arity (`bareMethodDeclaredArity`).
 emitMethodEtaClosure : Emit -> String -> (String, LTy)
 emitMethodEtaClosure e name =
-  let lamName = "mdk_eta_\{name}\{mangleScoped e}"
+  let lamName = generatedName e LN.GenEta name
   let arity = bareMethodDeclaredArity e name
   let _ = emitMethodEtaDefine e lamName name arity
   emitConstClosure e lamName arity
@@ -10154,7 +10214,7 @@ emitFfiEtaClosure : Emit -> String -> (String, LTy)
 emitFfiEtaClosure e name =
   -- `injectiveIdent`: a `bind c` extern's Medaka name is not its C symbol, so it
   -- may hold a character an unquoted LLVM name cannot (`f'`).
-  let lamName = "mdk_eta_\{injectiveIdent name}\{mangleScoped e}"
+  let lamName = generatedName e LN.GenExternEta name
   let _ = emitFfiEtaDefine e lamName name (ffiExternArity e name)
   emitConstClosure e lamName (ffiExternArity e name)
 
@@ -11924,7 +11984,8 @@ emitFn e (CBind name (c :: rest) site _) = match dispGroupOf !e.gDispGroups name
       emitMultiClauseFn e name clauses site
 emitFn e (CBind name [] _ _) =
   -- in record mode the gap stands in for this function's define
-  e.symbols := excuseSymbol (Generated ("mdk_" ++ name)) !e.symbols
+  e.symbols :=
+    excuseSymbol (Generated (LN.llvmName (LN.LUserFunction name))) !e.symbols
   gapU e "top-level function with no clauses"
 
 -- a single-clause function with no raw U64 worker.
@@ -11988,14 +12049,14 @@ emitMultiClauseFn e name clauses site =
     defineHeader
       e
       TopLevelDefine
-      ("mdk_" ++ name)
+      (LN.llvmName (LN.LUserFunction name))
       (FuncProto "i64" (implParamDecls arity 0) (fnAttrs e name))
   let _ = emit e "entry:"
   let _ =
     emitTailClauseTree
       e
       env
-      (TailDefine ("mdk_" ++ name) arity False)
+      (TailDefine (LN.llvmName (LN.LUserFunction name)) arity False)
       arity
       clauses
       site
@@ -12028,7 +12089,12 @@ clausePairs ((CClause pats body) :: rest) = (pats, body) :: clausePairs rest
 tmcMarker : Emit -> String -> String -> Unit
 tmcMarker e sym mode =
   let name =
-    if startsWith "mdk_" sym then stringSlice 4 (stringLength sym) sym else sym
+    if startsWith "mdk.impl." sym then
+      "impl." ++ stringSlice 9 (stringLength sym) sym
+    else if startsWith "mdk.default." sym then
+      "default." ++ stringSlice 12 (stringLength sym) sym
+    else
+      sym
   emit e "; tmc: \{name} \{mode}"
 
 tmcGroupMarkers : Emit -> String -> List String -> Unit
@@ -12053,7 +12119,12 @@ emitTrmcFn : Emit ->
   Unit
 emitTrmcFn e name arity ptys clauses single singlePats singleBody site =
   let _ = tmcMarker e name "trmc"
-  let _ = emitTrmcHeader e ("mdk_" ++ name) arity (fnAttrs e name)
+  let _ =
+    emitTrmcHeader
+      e
+      (LN.llvmName (LN.LUserFunction name))
+      arity
+      (fnAttrs e name)
   let _ =
     emitTrmcLoopBody
       e
@@ -12466,7 +12537,12 @@ emitGDispGroup e grp =
   let rootArity = gDispFnArity e root
   let u = gDispMaxArity e members 0
   let _ = tmcGroupMarkers e root members
-  let _ = emitTrmcHeader e ("mdk_" ++ root) rootArity (fnAttrs e root)
+  let _ =
+    emitTrmcHeader
+      e
+      (LN.llvmName (LN.LUserFunction root))
+      rootArity
+      (fnAttrs e root)
   let uslots = gDispEmitSlots e u rootArity 0
   let hole = freshReg e
   let _ = emit e ("  " ++ hole ++ " = alloca i64")
@@ -12981,7 +13057,7 @@ emitTailLeafD e env self worker fp arity _ (CVar f0 _, args)
   | f0 == self && lengthS args == arity =
     let ops = emitWorkerArgs e env fp 0 args
     let r = freshReg e
-    let call = directCall e (Generated ("mdk_" ++ worker)) "double" ops
+    let call = directCall e (Generated worker) "double" ops
     let _ = emit e "  \{r} = musttail \{call}"
     emit e ("  ret double " ++ r)
 emitTailLeafD e env _ _ _ _ other _ =
@@ -13004,14 +13080,14 @@ emitFloatFwOnly : Emit -> String -> List Pat -> List LTy -> CExpr -> Unit
 emitFloatFwOnly e name pats ptys body =
   let fp = floatPositions ptys 0
   let arity = lengthS pats
-  let worker = name ++ "__fw"
+  let worker = LN.llvmName (LN.LFloatWorker name)
   let wenv = paramEnvD pats ptys fp 0
   let _ = beginDefine e
   let _ =
     defineHeader
       e
       TopLevelDefine
-      ("mdk_" ++ worker)
+      worker
       (FuncProto "double" (paramDeclsD pats fp 0) (fnAttrs e name))
   let _ = emit e "entry:"
   let _ = emitFnBodyD e wenv name worker fp arity body
@@ -13021,7 +13097,7 @@ emitFloatFwOnly e name pats ptys body =
 emitFloatWorkerFn : Emit -> String -> List Pat -> List LTy -> CExpr -> Unit
 emitFloatWorkerFn e name pats ptys body =
   let fp = floatPositions ptys 0
-  let worker = name ++ "__fw"
+  let worker = LN.llvmName (LN.LFloatWorker name)
   -- worker ($fw): float params as doubles, body emitted double-returning
   let _ = emitFloatFwOnly e name pats ptys body
   -- wrapper: original i64 ABI; unbox float params, call worker, box the result
@@ -13030,12 +13106,12 @@ emitFloatWorkerFn e name pats ptys body =
     defineHeader
       e
       TopLevelDefine
-      ("mdk_" ++ name)
+      (LN.llvmName (LN.LUserFunction name))
       (FuncProto "i64" (paramDecls pats 0) (fnAttrs e name))
   let _ = emit e "entry:"
   let callArgs = wrapperCallArgs e fp 0 pats
   let r = freshReg e
-  let call = directCall e (Generated ("mdk_" ++ worker)) "double" callArgs
+  let call = directCall e (Generated worker) "double" callArgs
   let _ = emit e "  \{r} = \{call}"
   let b = boxFloat e r
   let _ = emit e ("  ret i64 " ++ b)
@@ -13206,7 +13282,7 @@ emitRawWorkerFn e name pats body (RawWorker arity ks rk) =
   let ptys = match sigLookup e name
     Some (FnSig ts _) => ts
     None => allInt pats
-  let worker = "mdk_" ++ name ++ "__rw"
+  let worker = LN.llvmName (LN.LRawWorker name)
   let rty = rawKindTy rk
   let wenv = paramEnvRaw pats ptys ks 0
   let _ = beginDefine e
@@ -13226,7 +13302,7 @@ emitRawWorkerFn e name pats body (RawWorker arity ks rk) =
     defineHeader
       e
       TopLevelDefine
-      ("mdk_" ++ name)
+      (LN.llvmName (LN.LUserFunction name))
       (FuncProto "i64" (paramDecls pats 0) (fnAttrs e name))
   let _ = emit e "entry:"
   let ops = rawWrapperArgs e ks 0
@@ -13384,11 +13460,15 @@ emitFnClauseW e name pats ptys body =
     defineHeader
       e
       TopLevelDefine
-      ("mdk_" ++ name)
+      (LN.llvmName (LN.LUserFunction name))
       (FuncProto "i64" (paramDecls pats 0) (fnAttrs e name))
   let _ = emit e "entry:"
   let _ =
-    emitFnBody e env (TailDefine ("mdk_" ++ name) (listLen pats) False) body
+    emitFnBody
+      e
+      env
+      (TailDefine (LN.llvmName (LN.LUserFunction name)) (listLen pats) False)
+      body
   let _ = emit e "}"
   emit e ""
 
@@ -13581,13 +13661,16 @@ directCallOperands e env ex =
         && hasArgs args
         && isNone (u64KernelAlias e fname0 args)
         && isNone (rawWorkerCall e fname (lengthS args)) then
-        Some ("mdk_" ++ fname, emitArgs e env args)
+        Some (LN.llvmName (LN.LUserFunction fname), emitArgs e env args)
       else
         None
     CDict fname routes =>
       if isKnownFn e fname && listLen routes + lengthS args > 0 then
         let dictWords = dictWordsOf e env routes
-        Some ("mdk_" ++ fname, dictWords ++ emitArgs e env args)
+        Some (
+          LN.llvmName (LN.LUserFunction fname),
+          dictWords ++ emitArgs e env args,
+        )
       else
         None
     CMethod name (MethodEvidence iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes) =>
@@ -13603,7 +13686,7 @@ directCallOperands e env ex =
               ent
               (MethodEvidence iface siteArity route implRoutes methRoutes)
           let dictWords = dictWordsOf e env dictRoutes
-          Some (implEntryFnName name ent, dictWords ++ argOps)
+          Some (implEntryFnName e name ent, dictWords ++ argOps)
         None => None
       else
         None
@@ -13743,12 +13826,12 @@ emitGlobalDecls e ((CBind name _ site _) :: rest) =
   -- source order, INITIALISED) by `@mdk_program_main`, which lives in the program
   -- half — so prelude.o only declares it.  Defining it in both halves would be a
   -- duplicate symbol.
-  let _ = registerGlobal e external ("mdk_g_" ++ name) "i64"
+  let _ = registerGlobal e external (LN.llvmName (LN.LUserGlobal name)) "i64"
   let line =
     if external then
-      "@mdk_g_" ++ name ++ " = external global i64"
+      "@" ++ LN.llvmName (LN.LUserGlobal name) ++ " = external global i64"
     else
-      "@mdk_g_" ++ name ++ " = global i64 0"
+      "@" ++ LN.llvmName (LN.LUserGlobal name) ++ " = global i64 0"
   let _ = emitGlobal e line
   -- #561 PR-A: a LAZY global also carries a per-global state flag @mdk_gs_<name>
   -- (0 UNFORCED / 1 FORCING / 2 FORCED).  The value cell stays a uniform i64.  In
@@ -13756,17 +13839,25 @@ emitGlobalDecls e ((CBind name _ site _) :: rest) =
   -- alongside @mdk_g_*) and the force fn is declared so a prelude body can call it.
   let _ =
     if isLazyGlobal e name then
-      let _ = registerGlobal e external ("mdk_gs_" ++ name) "i8"
+      let _ =
+        registerGlobal e external (LN.llvmName (LN.LGlobalState name)) "i8"
       if external then
-        let _ = emitGlobal e "@mdk_gs_\{name} = external global i8"
-        let forcer = "mdk_force_" ++ name
+        let _ =
+          emitGlobal
+            e
+            ("@"
+              ++ LN.llvmName (LN.LGlobalState name)
+              ++ " = external global i8")
+        let forcer = LN.llvmName (LN.LGlobalForcer name)
         let _ =
           registerL
             e
             (declareSymbol (Generated forcer) (wordProto []) !e.symOrigin)
         emitGlobal e ("declare " ++ prototypeText forcer (wordProto []))
       else
-        emitGlobal e "@mdk_gs_\{name} = global i8 0"
+        emitGlobal
+          e
+          ("@" ++ LN.llvmName (LN.LGlobalState name) ++ " = global i8 0")
   emitGlobalDecls e rest
 
 -- Register the value global `@<sym>` of LLVM type [ty]: declared when the other
@@ -14990,6 +15081,8 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   let rows = binderRowsOf facts.factBinders
   let e = Emit {
     input = input,
+    implNames = Ref omEmpty,
+    defaultNames = Ref omEmpty,
     counter0 = cfg.counter0,
     trmc = cfg.trmc,
     methodResults = cfg.methodResults,
@@ -14998,6 +15091,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     buf = Ref [],
     fnNames = Ref (collectFns groups),
     binderRows = rows,
+    symbolOrigins = facts.factSymbolOrigins,
     externFacts = requirementFacts cfg.externRequirements,
     nativePrototypes = cfg.externRequirements.nativePrototypes,
     superCounts = omFromPairs facts.factSupers omEmpty,
@@ -15257,7 +15351,7 @@ emitTopGlobals e ((CBind name [CClause [] body] _ _) :: rest) =
   -- renumbers all of them) and costs no locality at all, because every one of
   -- them already lived or died with this single partition.
   let (v, ty) = emitExpr e omEmpty body
-  let g = symRef e ("mdk_g_" ++ name)
+  let g = symRef e (LN.llvmName (LN.LUserGlobal name))
   let _ = emit e "  store i64 \{v}, ptr @\{g}"
   let _ = markGlobalInit e name ty
   emitTopGlobals e rest
@@ -15300,7 +15394,7 @@ emitForceFn e name body =
   -- module-scope name constant for the E-CYCLIC-VALUE message.
   let nbytes = strBytes name
   let nlen = lengthS nbytes
-  let gnid = ".gname." ++ name
+  let gnid = generatedName e LN.GenGlobalName name
   let nty = "[\{intToString (nlen + 1)} x i8]"
   let _ = registerGlobal e False gnid nty
   let _ =
@@ -15308,10 +15402,15 @@ emitForceFn e name body =
       e
       "@\{gnid} = private unnamed_addr constant \{nty} c\"\{escBytes nbytes}\\00\""
   let _ = beginDefine e
-  let _ = defineHeader e TopLevelDefine ("mdk_force_" ++ name) (wordProto [])
+  let _ =
+    defineHeader
+      e
+      TopLevelDefine
+      (LN.llvmName (LN.LGlobalForcer name))
+      (wordProto [])
   let _ = emit e "entry:"
-  let gs = symRef e ("mdk_gs_" ++ name)
-  let g = symRef e ("mdk_g_" ++ name)
+  let gs = symRef e (LN.llvmName (LN.LGlobalState name))
+  let g = symRef e (LN.llvmName (LN.LUserGlobal name))
   let s = freshReg e
   let _ = emit e "  \{s} = load i8, ptr @\{gs}"
   let _ =

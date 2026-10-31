@@ -1,5 +1,5 @@
 # META
-source_lines=1360
+source_lines=1388
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable map from keys to values, ordered by key.
@@ -893,6 +893,34 @@ export impl FromEntries (Map k v) (k, v) requires Ord k where
 export impl Monoid (Map k v) requires Ord k where
   empty = Tip
 
+-- # Grouping
+
+{- | How many elements of the list map to each key.
+
+   Only keys that occur are present.
+
+   > countBy (x => x % 2) [1, 2, 3, 5]
+   fromList [(0, 1), (1, 3)]
+   > countBy (x => x) ([] : List Int)
+   fromList [] -}
+export
+countBy : Ord k => (a -> k) -> List a -> Map k Int
+countBy key xs = fold (m x => insertWith (+) (key x) 1 m) Tip xs
+
+{- | The elements of the list collected under the key each maps to.
+
+   Within a group the elements keep their order in the input.
+
+   > groupByKey (x => x % 2) [1, 2, 3, 4, 5]
+   fromList [(0, [2, 4]), (1, [1, 3, 5])]
+   > groupByKey (x => x) ([] : List Int)
+   fromList [] -}
+export
+groupByKey : Ord k => (a -> k) -> List a -> Map k (List a)
+groupByKey key xs =
+  let reversed = fold (m x => insertWith (++) (key x) [x] m) Tip xs
+  map reverse reversed
+
 -- # Invariants
 
 {- | Whether the map's internal tree satisfies its invariants: keys in
@@ -1581,6 +1609,10 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DImpl true "Semigroup" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Ord" ((TyVar "k")))) ((im "append" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "union") (EVar "a")) (EVar "b")))))
 (DImpl true "FromEntries" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyTuple (TyVar "k") (TyVar "v"))) ((req "Ord" ((TyVar "k")))) ((im "fromEntries" ((PVar "es")) (EApp (EVar "fromList") (EVar "es")))))
 (DImpl true "Monoid" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Ord" ((TyVar "k")))) ((im "empty" () (EVar "Tip"))))
+(DTypeSig true "countBy" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "a") (TyVar "k")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyCon "Int"))))))
+(DFunDef false "countBy" ((PVar "key") (PVar "xs")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "x")) (EApp (EApp (EApp (EApp (EVar "insertWith") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "+" (EVar "_a") (EVar "_b")))) (EApp (EVar "key") (EVar "x"))) (ELit (LInt 1))) (EVar "m")))) (EVar "Tip")) (EVar "xs")))
+(DTypeSig true "groupByKey" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "a") (TyVar "k")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyApp (TyCon "List") (TyVar "a")))))))
+(DFunDef false "groupByKey" ((PVar "key") (PVar "xs")) (EBlock (DoLet false false (PVar "reversed") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "x")) (EApp (EApp (EApp (EApp (EVar "insertWith") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "++" (EVar "_a") (EVar "_b")))) (EApp (EVar "key") (EVar "x"))) (EListLit (EVar "x"))) (EVar "m")))) (EVar "Tip")) (EVar "xs"))) (DoExpr (EApp (EApp (EVar "map") (EVar "reverse")) (EVar "reversed")))))
 (DTypeSig true "wellFormed" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyCon "Bool"))))
 (DFunDef false "wellFormed" ((PCon "Tip")) (EVar "True"))
 (DFunDef false "wellFormed" ((PCon "Bin" (PVar "s") (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EBlock (DoLet false false (PVar "sizeOk") (EBinOp "==" (EBinOp "+" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1))) (EVar "s"))) (DoLet false false (PVar "orderOk") (EBinOp "&&" (EApp (EApp (EVar "allKeys") (ELam ((PVar "lk")) (EApp (EApp (EVar "lt") (EVar "lk")) (EVar "k")))) (EVar "l")) (EApp (EApp (EVar "allKeys") (ELam ((PVar "gk")) (EApp (EApp (EVar "gt") (EVar "gk")) (EVar "k")))) (EVar "r")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EVar "sizeOk") (EApp (EApp (EVar "balancedAt") (EVar "l")) (EVar "r"))) (EVar "orderOk")) (EApp (EVar "wellFormed") (EVar "l"))) (EApp (EVar "wellFormed") (EVar "r"))))))
@@ -1940,6 +1972,10 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DImpl true "Semigroup" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Ord" ((TyVar "k")))) ((im "append" ((PVar "a") (PVar "b")) (EApp (EApp (EDictApp "union") (EVar "a")) (EVar "b")))))
 (DImpl true "FromEntries" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyTuple (TyVar "k") (TyVar "v"))) ((req "Ord" ((TyVar "k")))) ((im "fromEntries" ((PVar "es")) (EApp (EDictApp "fromList") (EVar "es")))))
 (DImpl true "Monoid" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Ord" ((TyVar "k")))) ((im "empty" () (EVar "Tip"))))
+(DTypeSig true "countBy" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "a") (TyVar "k")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyCon "Int"))))))
+(DFunDef false "countBy" ((PVar "key") (PVar "xs")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "x")) (EApp (EApp (EApp (EApp (EDictApp "insertWith") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "+" (EVar "_a") (EVar "_b")))) (EApp (EVar "key") (EVar "x"))) (ELit (LInt 1))) (EVar "m")))) (EVar "Tip")) (EVar "xs")))
+(DTypeSig true "groupByKey" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "a") (TyVar "k")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyApp (TyCon "List") (TyVar "a")))))))
+(DFunDef false "groupByKey" ((PVar "key") (PVar "xs")) (EBlock (DoLet false false (PVar "reversed") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "x")) (EApp (EApp (EApp (EApp (EDictApp "insertWith") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "++" (EVar "_a") (EVar "_b")))) (EApp (EVar "key") (EVar "x"))) (EListLit (EVar "x"))) (EVar "m")))) (EVar "Tip")) (EVar "xs"))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "reverse")) (EVar "reversed")))))
 (DTypeSig true "wellFormed" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyCon "Bool"))))
 (DFunDef false "wellFormed" ((PCon "Tip")) (EVar "True"))
 (DFunDef false "wellFormed" ((PCon "Bin" (PVar "s") (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EBlock (DoLet false false (PVar "sizeOk") (EBinOp "==" (EBinOp "+" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1))) (EVar "s"))) (DoLet false false (PVar "orderOk") (EBinOp "&&" (EApp (EApp (EVar "allKeys") (ELam ((PVar "lk")) (EApp (EApp (EMethodRef "lt") (EVar "lk")) (EVar "k")))) (EVar "l")) (EApp (EApp (EVar "allKeys") (ELam ((PVar "gk")) (EApp (EApp (EMethodRef "gt") (EVar "gk")) (EVar "k")))) (EVar "r")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EVar "sizeOk") (EApp (EApp (EVar "balancedAt") (EVar "l")) (EVar "r"))) (EVar "orderOk")) (EApp (EDictApp "wellFormed") (EVar "l"))) (EApp (EDictApp "wellFormed") (EVar "r"))))))

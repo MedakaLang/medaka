@@ -510,6 +510,44 @@ The keys present in both maps, each with the first map's value.
 [(2, 20)]
 ```
 
+## Grouping
+
+### `countBy`
+
+```
+countBy : Ord k => (a -> k) -> List a -> Map k Int
+countBy key xs
+```
+
+How many elements of the list map to each key.
+
+Only keys that occur are present.
+
+```medaka
+> countBy (x => x % 2) [1, 2, 3, 5]
+fromList [(0, 1), (1, 3)]
+> countBy (x => x) ([] : List Int)
+fromList []
+```
+
+### `groupByKey`
+
+```
+groupByKey : Ord k => (a -> k) -> List a -> Map k (List a)
+groupByKey key xs
+```
+
+The elements of the list collected under the key each maps to.
+
+Within a group the elements keep their order in the input.
+
+```medaka
+> groupByKey (x => x % 2) [1, 2, 3, 4, 5]
+fromList [(0, [2, 4]), (1, [1, 3, 5])]
+> groupByKey (x => x) ([] : List Int)
+fromList []
+```
+
 ## Invariants
 
 ### `wellFormed`

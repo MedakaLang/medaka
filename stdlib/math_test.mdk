@@ -1,0 +1,77 @@
+-- Tests for the statistics functions in `stdlib/math.mdk`.
+
+import math.{mean, median, percentile, stdev}
+import string.{toFixed}
+import test.{expectAll, expectEqual, expectNone, expectWithin, fail}
+
+test "mean of an empty list is None" = expectNone (mean [])
+
+test "mean averages the elements" =
+  expectEqual (Some 3.0) (mean [1.0, 2.0, 3.0, 6.0])
+
+test "median of an empty list is None" = expectNone (median [])
+
+test "median of an odd length is the middle value" =
+  expectEqual (Some 3.0) (median [9.0, 1.0, 3.0])
+
+test "median of an even length averages the middle two" =
+  expectEqual (Some 2.5) (median [4.0, 1.0, 3.0, 2.0])
+
+test "stdev of one element is None" = expectNone (stdev [5.0])
+
+test "stdev of an empty list is None" = expectNone (stdev [])
+
+test "stdev is the sample deviation" =
+  match stdev [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]
+    Some s => expectWithin 2.138089935299395 s 1e-09
+    None => expectEqual 0.0 1.0
+
+test "percentile 0 and 100 are the extremes" =
+  expectEqual
+    (Some 1.0, Some 9.0)
+    (percentile 0.0 [9.0, 1.0, 4.0], percentile 100.0 [9.0, 1.0, 4.0])
+
+test "percentile 50 equals median for odd lengths and None for empty" =
+  expectEqual
+    [median [], median [7.0], median [5.0, 1.0, 3.0, 8.0, 2.0]]
+    (map (xs => percentile 50.0 xs) [[], [7.0], [5.0, 1.0, 3.0, 8.0, 2.0]])
+
+test "percentile 50 matches median for an even length within rounding" = match (
+  percentile 50.0 [76.38, 25.51],
+  median [76.38, 25.51],
+)
+  (Some a, Some b) => expectWithin b a 1e-12
+  _ => fail "expected both to be Some"
+
+test "median of an exact middle does not read an infinite neighbour" =
+  expectEqual (Some 2.0) (median [1.0, 2.0, 1.0 / 0.0])
+
+test "median of an odd length ignores overflowing extremes" =
+  expectEqual (Some (-1.7e+308)) (median [-1.7e+308, -1.7e+308, 1.7e+308])
+
+test "median of two floats is their mean, not an interpolation" = expectAll [
+  expectEqual (mean [76.38, 25.51]) (median [76.38, 25.51]),
+  expectEqual (Some "50.95") (map (toFixed 2) (median [76.38, 25.51])),
+]
+
+test "percentile at an exact rank does not read the next element" =
+  expectEqual
+    (Some 1.0, Some (1.0 / 0.0))
+    (percentile 0.0 [1.0, 1.0 / 0.0], percentile 100.0 [1.0, 1.0 / 0.0])
+
+test "percentile interpolates between ranks" =
+  expectEqual (Some 3.25) (percentile 75.0 [1.0, 2.0, 3.0, 4.0])
+
+test "percentile of a single element is that element" =
+  expectEqual (Some 4.0) (percentile 37.0 [4.0])
+
+test "percentile outside 0 to 100 is None" =
+  expectEqual
+    [None, None, None]
+    [
+      percentile 101.0 [1.0],
+      percentile (0.0 - 1.0) [1.0],
+      percentile (0.0 / 0.0) [1.0],
+    ]
+
+test "percentile of an empty list is None" = expectNone (percentile 50.0 [])

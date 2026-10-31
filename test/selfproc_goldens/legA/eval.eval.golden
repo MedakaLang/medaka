@@ -372,6 +372,7 @@ pFileMode : Value a -> <FileRead | a> Value a
 pFixedToInt : Value a -> <a> Value a
 pFloatRem : Value a -> Value a -> <a> Value a
 pFloatToBytes64 : Value a -> <a> Value a
+pFloatToFixed : Value a -> Value a -> <a> Value a
 pFloatToInt : Value a -> <a> Value a
 pFloatToString : Value a -> <a> Value a
 pFloor : Value a -> <a> Value a

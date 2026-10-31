@@ -1,0 +1,31 @@
+import array.{get as arrGet}
+import string.{toDigit, toUtf8}
+
+digitChar : Int -> Char
+digitChar n = optionOr '?' (toDigit n)
+
+byteChars : Int -> (Char, Char)
+byteChars b =
+  let byte = bitAnd b 255
+  (digitChar (shiftRight byte 4), digitChar (bitAnd byte 15))
+
+encodeGo : Array Int -> Int -> List Char -> List Char
+encodeGo bytes i acc
+  | i < 0 = acc
+  | otherwise = match arrGet i bytes
+    None => acc
+    Some b =>
+      let (hi, lo) = byteChars b
+      encodeGo bytes (i - 1) (hi :: lo :: acc)
+
+export
+encodeComponent : String -> String
+encodeComponent s = encodeBytes (toUtf8 s)
+
+encodeBytes : Array Int -> String
+encodeBytes bytes =
+  stringFromChars (arrayFromList (encodeGo bytes (arrayLength bytes - 1) []))
+
+export
+encodePair : String -> String -> String
+encodePair mid name = "m\{encodeComponent mid}__\{name}"

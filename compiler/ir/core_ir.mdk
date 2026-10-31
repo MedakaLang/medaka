@@ -1,3 +1,4 @@
+import types.symbol_origins.{CoreSymbolOrigins}
 import types.capability_manifest.{CapabilityManifest}
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
 -- representation lowered from the elaborated (desugared + typed + dict-routed)
@@ -461,6 +462,7 @@ public export data EntryFact = EntryFact {
 }
 
 public export data DeclFacts = DeclFacts {
+  factSymbolOrigins : Option CoreSymbolOrigins,
   factManifests : List CapabilityManifest,
   factRequires : List (String, Int),
   factSupers : List (String, Int),
@@ -473,6 +475,7 @@ public export data DeclFacts = DeclFacts {
 export
 noDeclFacts : DeclFacts
 noDeclFacts = DeclFacts {
+  factSymbolOrigins = None,
   factRequires = [],
   factSupers = [],
   factBinders = [],
@@ -556,6 +559,7 @@ withBinderRows rows (CProgram groups ctorArs ctorTypes impls mctx facts) = CProg
   impls
   mctx
   DeclFacts {
+    factSymbolOrigins = facts.factSymbolOrigins,
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
     factBinders = rows,

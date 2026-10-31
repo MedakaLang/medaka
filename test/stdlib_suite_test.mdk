@@ -206,7 +206,10 @@ suites = [
   ("io", (8, NativeCapability)),
   ("json", (55, EvalAndNative)),
   ("list", (158, EvalAndNative)),
+  ("list_test", (7, EvalAndNative)),
+  ("map_test", (5, EvalAndNative)),
   ("math", (61, EvalAndNative)),
+  ("math_test", (19, EvalAndNative)),
   ("mut_bytes", (16, EvalAndNative)),
   ("net", (3, EvalAndNative)),
   ("nonempty", (15, EvalAndNative)),
@@ -488,7 +491,16 @@ test "stdlib/json.mdk executed >= 55 assertions" = floorExpectation "json"
 
 test "stdlib/list.mdk executed >= 158 assertions" = floorExpectation "list"
 
+test "stdlib/list_test.mdk executed >= 7 assertions" =
+  floorExpectation "list_test"
+
+test "stdlib/map_test.mdk executed >= 5 assertions" =
+  floorExpectation "map_test"
+
 test "stdlib/math.mdk executed >= 61 assertions" = floorExpectation "math"
+
+test "stdlib/math_test.mdk executed >= 19 assertions" =
+  floorExpectation "math_test"
 
 test "stdlib/mut_bytes.mdk executed >= 16 assertions" =
   floorExpectation "mut_bytes"

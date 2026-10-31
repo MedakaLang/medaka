@@ -7,6 +7,7 @@ backend.trmc_analysis
 backend.wasm_demand
 backend.wasm_names
 backend.wasm_reach
+backend.wasm_symbol_names
 frontend.ast
 frontend.exhaust
 frontend.visibility
@@ -20,6 +21,7 @@ support.ordmap
 support.path
 support.scc
 support.stage_count
+support.symbol_encoding
 support.symbol_origin
 support.util
 types.capability_manifest
@@ -50,5 +52,6 @@ types.runtime_grants
 types.runtime_types
 types.scopes
 types.solver_contract
+types.symbol_origins
 types.target_profile
 types.tc_types

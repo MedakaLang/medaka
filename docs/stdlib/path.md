@@ -180,6 +180,63 @@ The non-empty components of a path, split on `/`.
 ["a", "b"]
 ```
 
+## Glob patterns
+
+### `matchGlob`
+
+```
+matchGlob : String -> String -> Bool
+matchGlob pattern path
+```
+
+Whether `path` matches the glob `pattern`.
+
+Both are split into segments on `/`, so repeated and trailing slashes do
+not matter, but a leading `/` must be on both or on neither. Within one
+segment `*` matches any run of characters and `?` exactly one character;
+neither crosses a `/`, and a leading `.` is matched like any other
+character. A segment that is exactly `**` matches any number of whole
+segments, none included, so `a/**/b` matches `a/b`. `**` inside a longer
+segment acts as `*`. There are no braces, character classes or escapes.
+The empty pattern matches only the empty path.
+
+```medaka
+> matchGlob "*.mdk" "a.mdk"
+True
+> matchGlob "*.mdk" "sub/a.mdk"
+False
+> matchGlob "a/**/b" "a/b"
+True
+> matchGlob "a/**/b" "a/x/y/b"
+True
+> matchGlob "a/**" "a/x/y"
+True
+> matchGlob "?.txt" "a.txt"
+True
+> matchGlob "?.txt" "ab.txt"
+False
+> matchGlob "a/b.txt" "a/b.txt"
+True
+> matchGlob "a**b" "axyb"
+True
+> matchGlob "a**b" "ax/yb"
+False
+> matchGlob "*" ".hidden"
+True
+> matchGlob "/a/*" "/a/b"
+True
+> matchGlob "/a/*" "a/b"
+False
+> matchGlob "a/*" "a/b/"
+True
+> matchGlob "" ""
+True
+> matchGlob "" "a"
+False
+> matchGlob "*a*a*a*a*a*a*b" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+False
+```
+
 ## Predicates
 
 ### `isAbsolute`

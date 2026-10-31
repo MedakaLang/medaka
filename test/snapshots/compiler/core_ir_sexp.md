@@ -1,7 +1,8 @@
 # META
-source_lines=595
+source_lines=644
 stages=DESUGAR,MARK
 # SOURCE
+import types.symbol_origins.{SymbolOrigin(..), CoreSymbolOrigins(..)}
 import types.capability_manifest.{
   EntryKey(..),
   ManifestRequest(..),
@@ -27,7 +28,7 @@ import frontend.ast.{TyConOrigin(..)}
 import ir.extern_types.{ExternDeclFact(..)}
 import types.extern_source.{ExternBindingKind(..), ExternProvenance(..)}
 import types.runtime_abi_types.{CallableShape(..)}
-import support.ordmap.{omKeys, omLookup}
+import support.ordmap.{OrdMap, omKeys, omLookup}
 import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..)}
 import ir.core_ir.{
   CExpr(..),
@@ -383,15 +384,18 @@ tablesSexp rows facts None = match (
   facts.factEntryOutcome,
   omKeys facts.factExterns,
   facts.factManifests,
+  facts.factSymbolOrigins,
 )
-  ([], [], [], [], None, [], []) => []
-  (_, [], [], [], None, [], []) => [slist (map methodContextPairSexp rows)]
+  ([], [], [], [], None, [], [], None) => []
+  (_, [], [], [], None, [], [], None) =>
+    [slist (map methodContextPairSexp rows)]
   _ => [slist (map methodContextPairSexp rows), declFactsSexp facts]
 
 declFactsSexp : DeclFacts -> String
 declFactsSexp facts =
   if not (isEmpty (omKeys facts.factExterns))
-    || not (isEmpty facts.factManifests) then
+    || not (isEmpty facts.factManifests)
+    || isSome facts.factSymbolOrigins then
     node
       "facts"
       ([
@@ -407,10 +411,14 @@ declFactsSexp facts =
                 None => panic "extern inventory lost a row")
               (omKeys facts.factExterns)),
         ]
-        ++ (if isEmpty facts.factManifests then
+        ++ (if isEmpty facts.factManifests
+          && isNone facts.factSymbolOrigins then
           []
         else
-          [node "manifests" (map manifestSexp facts.factManifests)]))
+          [node "manifests" (map manifestSexp facts.factManifests)])
+        ++ (match facts.factSymbolOrigins
+          None => []
+          Some origins => [originsSexp origins]))
   else
     node
       "facts"
@@ -426,6 +434,47 @@ declFactsSexp facts =
         ++ (match facts.factEntryOutcome
           Some outcome => [entryOutcomeSexp outcome]
           None => []))
+
+originSexp : SymbolOrigin -> String
+originSexp (ModuleOrigin mid name) = node "module" [escStr mid, escStr name]
+originSexp (SingleOrigin name) = node "single" [escStr name]
+originSexp (GeneratedOrigin family parts) =
+  node "generated" [escStr family, slist (map escStr parts)]
+originSexp (BuiltinOrigin tag) = node "builtin" [escStr tag]
+
+originsSexp : CoreSymbolOrigins -> String
+originsSexp origins = node "origins" [
+  slist
+    (map
+      (name => node "function" [
+        escStr name,
+        originSexp (originAt name origins.functions),
+      ])
+      (omKeys origins.functions)),
+  slist
+    (map
+      (owner => node "owner" [
+        escStr owner,
+        slist
+          (map
+            (name => node "constructor" [
+              escStr name,
+              originSexp (originAt name (ownerAt owner origins.constructors)),
+            ])
+            (omKeys (ownerAt owner origins.constructors))),
+      ])
+      (omKeys origins.constructors)),
+]
+
+originAt : String -> OrdMap SymbolOrigin -> SymbolOrigin
+originAt name rows = match omLookup name rows
+  Some origin => origin
+  None => panic "symbol origin: missing serialized row"
+
+ownerAt : String -> OrdMap (OrdMap SymbolOrigin) -> OrdMap SymbolOrigin
+ownerAt owner rows = match omLookup owner rows
+  Some names => names
+  None => panic "symbol origin: missing serialized owner"
 
 entryOutcomeSexp : EntryFact -> String
 entryOutcomeSexp outcome = node "entry" [
@@ -598,13 +647,14 @@ manifestParamSexp (PProduct axes) =
 manifestStringSexp : Option String -> String
 manifestStringSexp = option "none" (value => node "some" [escStr value])
 # DESUGAR
+(DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigin" true) (mem "CoreSymbolOrigins" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true) (mem "ManifestRequest" true) (mem "InvocationProtocol" true) (mem "CapabilityManifest" true) (mem "FrozenAtom" true) (mem "FrozenAuthority" true) (mem "FrozenVariable" true))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true) (mem "ExternProvenance" true))))
 (DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "omKeys" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "programBinderIds" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true))))
@@ -714,9 +764,20 @@ manifestStringSexp = option "none" (value => node "some" [escStr value])
 (DFunDef false "cprogramToSexpWith" ((PVar "m") (PAs "prog" (PCon "CProgram" (PVar "binds") (PVar "ctorArities") (PVar "ctorToType") (PVar "impls") (PVar "mctx") (PVar "facts")))) (EApp (EApp (EVar "node") (ELit (LString "CProgram"))) (EBinOp "++" (EListLit (EApp (EApp (EVar "bindsSexp") (EVar "m")) (EVar "binds")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "ctorArityPairSexp")) (EVar "ctorArities"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "ctorTypePairSexp")) (EVar "ctorToType"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "cimplEntrySexp") (EVar "m"))) (EVar "impls")))) (EApp (EApp (EApp (EVar "tablesSexp") (EVar "mctx")) (EVar "facts")) (EApp (EVar "binderTypesSexp") (EVar "prog"))))))
 (DTypeSig false "tablesSexp" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "DeclFacts") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "tablesSexp" ((PVar "rows") (PVar "facts") (PCon "Some" (PVar "binders"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "methodContextPairSexp")) (EVar "rows"))) (EApp (EVar "declFactsSexp") (EVar "facts")) (EVar "binders")))
-(DFunDef false "tablesSexp" ((PVar "rows") (PVar "facts") (PCon "None")) (EMatch (ETuple (EVar "rows") (EFieldAccess (EVar "facts") "factRequires") (EFieldAccess (EVar "facts") "factSupers") (EFieldAccess (EVar "facts") "factMethodResults") (EFieldAccess (EVar "facts") "factEntryOutcome") (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns")) (EFieldAccess (EVar "facts") "factManifests")) (arm (PTuple (PList) (PList) (PList) (PList) (PCon "None") (PList) (PList)) () (EListLit)) (arm (PTuple PWild (PList) (PList) (PList) (PCon "None") (PList) (PList)) () (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "methodContextPairSexp")) (EVar "rows"))))) (arm PWild () (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "methodContextPairSexp")) (EVar "rows"))) (EApp (EVar "declFactsSexp") (EVar "facts"))))))
+(DFunDef false "tablesSexp" ((PVar "rows") (PVar "facts") (PCon "None")) (EMatch (ETuple (EVar "rows") (EFieldAccess (EVar "facts") "factRequires") (EFieldAccess (EVar "facts") "factSupers") (EFieldAccess (EVar "facts") "factMethodResults") (EFieldAccess (EVar "facts") "factEntryOutcome") (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns")) (EFieldAccess (EVar "facts") "factManifests") (EFieldAccess (EVar "facts") "factSymbolOrigins")) (arm (PTuple (PList) (PList) (PList) (PList) (PCon "None") (PList) (PList) (PCon "None")) () (EListLit)) (arm (PTuple PWild (PList) (PList) (PList) (PCon "None") (PList) (PList) (PCon "None")) () (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "methodContextPairSexp")) (EVar "rows"))))) (arm PWild () (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "methodContextPairSexp")) (EVar "rows"))) (EApp (EVar "declFactsSexp") (EVar "facts"))))))
 (DTypeSig false "declFactsSexp" (TyFun (TyCon "DeclFacts") (TyCon "String")))
-(DFunDef false "declFactsSexp" ((PVar "facts")) (EIf (EBinOp "||" (EApp (EVar "not") (EApp (EVar "isEmpty") (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns")))) (EApp (EVar "not") (EApp (EVar "isEmpty") (EFieldAccess (EVar "facts") "factManifests")))) (EApp (EApp (EVar "node") (ELit (LString "facts"))) (EBinOp "++" (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "factPairSexp") (ELit (LString "rq")))) (EFieldAccess (EVar "facts") "factRequires"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "factPairSexp") (ELit (LString "sp")))) (EFieldAccess (EVar "facts") "factSupers"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "methodResultSexp")) (EFieldAccess (EVar "facts") "factMethodResults"))) (EApp (EApp (EVar "optionOr") (ELit (LString "none"))) (EApp (EApp (EVar "map") (EVar "entryOutcomeSexp")) (EFieldAccess (EVar "facts") "factEntryOutcome"))) (EApp (EApp (EVar "node") (ELit (LString "externs"))) (EApp (EApp (EVar "map") (ELam ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "facts") "factExterns")) (arm (PCon "Some" (PVar "fact")) () (EApp (EVar "externSexp") (EVar "fact"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "extern inventory lost a row"))))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns"))))) (EIf (EApp (EVar "isEmpty") (EFieldAccess (EVar "facts") "factManifests")) (EListLit) (EListLit (EApp (EApp (EVar "node") (ELit (LString "manifests"))) (EApp (EApp (EVar "map") (EVar "manifestSexp")) (EFieldAccess (EVar "facts") "factManifests"))))))) (EApp (EApp (EVar "node") (ELit (LString "facts"))) (EBinOp "++" (EBinOp "++" (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "factPairSexp") (ELit (LString "rq")))) (EFieldAccess (EVar "facts") "factRequires"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "factPairSexp") (ELit (LString "sp")))) (EFieldAccess (EVar "facts") "factSupers")))) (EIf (EBinOp "&&" (EApp (EVar "isEmpty") (EFieldAccess (EVar "facts") "factMethodResults")) (EApp (EVar "isNone") (EFieldAccess (EVar "facts") "factEntryOutcome"))) (EListLit) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "methodResultSexp")) (EFieldAccess (EVar "facts") "factMethodResults")))))) (EMatch (EFieldAccess (EVar "facts") "factEntryOutcome") (arm (PCon "Some" (PVar "outcome")) () (EListLit (EApp (EVar "entryOutcomeSexp") (EVar "outcome")))) (arm (PCon "None") () (EListLit)))))))
+(DFunDef false "declFactsSexp" ((PVar "facts")) (EIf (EBinOp "||" (EBinOp "||" (EApp (EVar "not") (EApp (EVar "isEmpty") (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns")))) (EApp (EVar "not") (EApp (EVar "isEmpty") (EFieldAccess (EVar "facts") "factManifests")))) (EApp (EVar "isSome") (EFieldAccess (EVar "facts") "factSymbolOrigins"))) (EApp (EApp (EVar "node") (ELit (LString "facts"))) (EBinOp "++" (EBinOp "++" (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "factPairSexp") (ELit (LString "rq")))) (EFieldAccess (EVar "facts") "factRequires"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "factPairSexp") (ELit (LString "sp")))) (EFieldAccess (EVar "facts") "factSupers"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "methodResultSexp")) (EFieldAccess (EVar "facts") "factMethodResults"))) (EApp (EApp (EVar "optionOr") (ELit (LString "none"))) (EApp (EApp (EVar "map") (EVar "entryOutcomeSexp")) (EFieldAccess (EVar "facts") "factEntryOutcome"))) (EApp (EApp (EVar "node") (ELit (LString "externs"))) (EApp (EApp (EVar "map") (ELam ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "facts") "factExterns")) (arm (PCon "Some" (PVar "fact")) () (EApp (EVar "externSexp") (EVar "fact"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "extern inventory lost a row"))))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns"))))) (EIf (EBinOp "&&" (EApp (EVar "isEmpty") (EFieldAccess (EVar "facts") "factManifests")) (EApp (EVar "isNone") (EFieldAccess (EVar "facts") "factSymbolOrigins"))) (EListLit) (EListLit (EApp (EApp (EVar "node") (ELit (LString "manifests"))) (EApp (EApp (EVar "map") (EVar "manifestSexp")) (EFieldAccess (EVar "facts") "factManifests")))))) (EMatch (EFieldAccess (EVar "facts") "factSymbolOrigins") (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "origins")) () (EListLit (EApp (EVar "originsSexp") (EVar "origins"))))))) (EApp (EApp (EVar "node") (ELit (LString "facts"))) (EBinOp "++" (EBinOp "++" (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "factPairSexp") (ELit (LString "rq")))) (EFieldAccess (EVar "facts") "factRequires"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "factPairSexp") (ELit (LString "sp")))) (EFieldAccess (EVar "facts") "factSupers")))) (EIf (EBinOp "&&" (EApp (EVar "isEmpty") (EFieldAccess (EVar "facts") "factMethodResults")) (EApp (EVar "isNone") (EFieldAccess (EVar "facts") "factEntryOutcome"))) (EListLit) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "methodResultSexp")) (EFieldAccess (EVar "facts") "factMethodResults")))))) (EMatch (EFieldAccess (EVar "facts") "factEntryOutcome") (arm (PCon "Some" (PVar "outcome")) () (EListLit (EApp (EVar "entryOutcomeSexp") (EVar "outcome")))) (arm (PCon "None") () (EListLit)))))))
+(DTypeSig false "originSexp" (TyFun (TyCon "SymbolOrigin") (TyCon "String")))
+(DFunDef false "originSexp" ((PCon "ModuleOrigin" (PVar "mid") (PVar "name"))) (EApp (EApp (EVar "node") (ELit (LString "module"))) (EListLit (EApp (EVar "escStr") (EVar "mid")) (EApp (EVar "escStr") (EVar "name")))))
+(DFunDef false "originSexp" ((PCon "SingleOrigin" (PVar "name"))) (EApp (EApp (EVar "node") (ELit (LString "single"))) (EListLit (EApp (EVar "escStr") (EVar "name")))))
+(DFunDef false "originSexp" ((PCon "GeneratedOrigin" (PVar "family") (PVar "parts"))) (EApp (EApp (EVar "node") (ELit (LString "generated"))) (EListLit (EApp (EVar "escStr") (EVar "family")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "escStr")) (EVar "parts"))))))
+(DFunDef false "originSexp" ((PCon "BuiltinOrigin" (PVar "tag"))) (EApp (EApp (EVar "node") (ELit (LString "builtin"))) (EListLit (EApp (EVar "escStr") (EVar "tag")))))
+(DTypeSig false "originsSexp" (TyFun (TyCon "CoreSymbolOrigins") (TyCon "String")))
+(DFunDef false "originsSexp" ((PVar "origins")) (EApp (EApp (EVar "node") (ELit (LString "origins"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (ELam ((PVar "name")) (EApp (EApp (EVar "node") (ELit (LString "function"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "originSexp") (EApp (EApp (EVar "originAt") (EVar "name")) (EFieldAccess (EVar "origins") "functions"))))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "origins") "functions")))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (ELam ((PVar "owner")) (EApp (EApp (EVar "node") (ELit (LString "owner"))) (EListLit (EApp (EVar "escStr") (EVar "owner")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (ELam ((PVar "name")) (EApp (EApp (EVar "node") (ELit (LString "constructor"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "originSexp") (EApp (EApp (EVar "originAt") (EVar "name")) (EApp (EApp (EVar "ownerAt") (EVar "owner")) (EFieldAccess (EVar "origins") "constructors")))))))) (EApp (EVar "omKeys") (EApp (EApp (EVar "ownerAt") (EVar "owner")) (EFieldAccess (EVar "origins") "constructors"))))))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "origins") "constructors")))))))
+(DTypeSig false "originAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin")) (TyCon "SymbolOrigin"))))
+(DFunDef false "originAt" ((PVar "name") (PVar "rows")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "rows")) (arm (PCon "Some" (PVar "origin")) () (EVar "origin")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "symbol origin: missing serialized row"))))))
+(DTypeSig false "ownerAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin"))) (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin")))))
+(DFunDef false "ownerAt" ((PVar "owner") (PVar "rows")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "owner")) (EVar "rows")) (arm (PCon "Some" (PVar "names")) () (EVar "names")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "symbol origin: missing serialized owner"))))))
 (DTypeSig false "entryOutcomeSexp" (TyFun (TyCon "EntryFact") (TyCon "String")))
 (DFunDef false "entryOutcomeSexp" ((PVar "outcome")) (EApp (EApp (EVar "node") (ELit (LString "entry"))) (EListLit (EApp (EVar "boolStr") (EFieldAccess (EVar "outcome") "entryMainIsUnit")) (EApp (EVar "boolStr") (EFieldAccess (EVar "outcome") "entryMainIsFloat")))))
 (DTypeSig false "methodResultSexp" (TyFun (TyCon "MethodResultFact") (TyCon "String")))
@@ -757,13 +818,14 @@ manifestStringSexp = option "none" (value => node "some" [escStr value])
 (DTypeSig false "manifestStringSexp" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))
 (DFunDef false "manifestStringSexp" () (EApp (EApp (EVar "option") (ELit (LString "none"))) (ELam ((PVar "value")) (EApp (EApp (EVar "node") (ELit (LString "some"))) (EListLit (EApp (EVar "escStr") (EVar "value")))))))
 # MARK
+(DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigin" true) (mem "CoreSymbolOrigins" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true) (mem "ManifestRequest" true) (mem "InvocationProtocol" true) (mem "CapabilityManifest" true) (mem "FrozenAtom" true) (mem "FrozenAuthority" true) (mem "FrozenVariable" true))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true) (mem "ExternProvenance" true))))
 (DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "omKeys" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "programBinderIds" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true))))
@@ -873,9 +935,20 @@ manifestStringSexp = option "none" (value => node "some" [escStr value])
 (DFunDef false "cprogramToSexpWith" ((PVar "m") (PAs "prog" (PCon "CProgram" (PVar "binds") (PVar "ctorArities") (PVar "ctorToType") (PVar "impls") (PVar "mctx") (PVar "facts")))) (EApp (EApp (EVar "node") (ELit (LString "CProgram"))) (EBinOp "++" (EListLit (EApp (EApp (EVar "bindsSexp") (EVar "m")) (EVar "binds")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "ctorArityPairSexp")) (EVar "ctorArities"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "ctorTypePairSexp")) (EVar "ctorToType"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "cimplEntrySexp") (EVar "m"))) (EVar "impls")))) (EApp (EApp (EApp (EVar "tablesSexp") (EVar "mctx")) (EVar "facts")) (EApp (EVar "binderTypesSexp") (EVar "prog"))))))
 (DTypeSig false "tablesSexp" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "DeclFacts") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "tablesSexp" ((PVar "rows") (PVar "facts") (PCon "Some" (PVar "binders"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "methodContextPairSexp")) (EVar "rows"))) (EApp (EVar "declFactsSexp") (EVar "facts")) (EVar "binders")))
-(DFunDef false "tablesSexp" ((PVar "rows") (PVar "facts") (PCon "None")) (EMatch (ETuple (EVar "rows") (EFieldAccess (EVar "facts") "factRequires") (EFieldAccess (EVar "facts") "factSupers") (EFieldAccess (EVar "facts") "factMethodResults") (EFieldAccess (EVar "facts") "factEntryOutcome") (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns")) (EFieldAccess (EVar "facts") "factManifests")) (arm (PTuple (PList) (PList) (PList) (PList) (PCon "None") (PList) (PList)) () (EListLit)) (arm (PTuple PWild (PList) (PList) (PList) (PCon "None") (PList) (PList)) () (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "methodContextPairSexp")) (EVar "rows"))))) (arm PWild () (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "methodContextPairSexp")) (EVar "rows"))) (EApp (EVar "declFactsSexp") (EVar "facts"))))))
+(DFunDef false "tablesSexp" ((PVar "rows") (PVar "facts") (PCon "None")) (EMatch (ETuple (EVar "rows") (EFieldAccess (EVar "facts") "factRequires") (EFieldAccess (EVar "facts") "factSupers") (EFieldAccess (EVar "facts") "factMethodResults") (EFieldAccess (EVar "facts") "factEntryOutcome") (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns")) (EFieldAccess (EVar "facts") "factManifests") (EFieldAccess (EVar "facts") "factSymbolOrigins")) (arm (PTuple (PList) (PList) (PList) (PList) (PCon "None") (PList) (PList) (PCon "None")) () (EListLit)) (arm (PTuple PWild (PList) (PList) (PList) (PCon "None") (PList) (PList) (PCon "None")) () (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "methodContextPairSexp")) (EVar "rows"))))) (arm PWild () (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "methodContextPairSexp")) (EVar "rows"))) (EApp (EVar "declFactsSexp") (EVar "facts"))))))
 (DTypeSig false "declFactsSexp" (TyFun (TyCon "DeclFacts") (TyCon "String")))
-(DFunDef false "declFactsSexp" ((PVar "facts")) (EIf (EBinOp "||" (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns")))) (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EFieldAccess (EVar "facts") "factManifests")))) (EApp (EApp (EVar "node") (ELit (LString "facts"))) (EBinOp "++" (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "factPairSexp") (ELit (LString "rq")))) (EFieldAccess (EVar "facts") "factRequires"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "factPairSexp") (ELit (LString "sp")))) (EFieldAccess (EVar "facts") "factSupers"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "methodResultSexp")) (EFieldAccess (EVar "facts") "factMethodResults"))) (EApp (EApp (EVar "optionOr") (ELit (LString "none"))) (EApp (EApp (EMethodRef "map") (EVar "entryOutcomeSexp")) (EFieldAccess (EVar "facts") "factEntryOutcome"))) (EApp (EApp (EVar "node") (ELit (LString "externs"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "facts") "factExterns")) (arm (PCon "Some" (PVar "fact")) () (EApp (EVar "externSexp") (EVar "fact"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "extern inventory lost a row"))))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns"))))) (EIf (EApp (EMethodRef "isEmpty") (EFieldAccess (EVar "facts") "factManifests")) (EListLit) (EListLit (EApp (EApp (EVar "node") (ELit (LString "manifests"))) (EApp (EApp (EMethodRef "map") (EVar "manifestSexp")) (EFieldAccess (EVar "facts") "factManifests"))))))) (EApp (EApp (EVar "node") (ELit (LString "facts"))) (EBinOp "++" (EBinOp "++" (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "factPairSexp") (ELit (LString "rq")))) (EFieldAccess (EVar "facts") "factRequires"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "factPairSexp") (ELit (LString "sp")))) (EFieldAccess (EVar "facts") "factSupers")))) (EIf (EBinOp "&&" (EApp (EMethodRef "isEmpty") (EFieldAccess (EVar "facts") "factMethodResults")) (EApp (EVar "isNone") (EFieldAccess (EVar "facts") "factEntryOutcome"))) (EListLit) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "methodResultSexp")) (EFieldAccess (EVar "facts") "factMethodResults")))))) (EMatch (EFieldAccess (EVar "facts") "factEntryOutcome") (arm (PCon "Some" (PVar "outcome")) () (EListLit (EApp (EVar "entryOutcomeSexp") (EVar "outcome")))) (arm (PCon "None") () (EListLit)))))))
+(DFunDef false "declFactsSexp" ((PVar "facts")) (EIf (EBinOp "||" (EBinOp "||" (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns")))) (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EFieldAccess (EVar "facts") "factManifests")))) (EApp (EVar "isSome") (EFieldAccess (EVar "facts") "factSymbolOrigins"))) (EApp (EApp (EVar "node") (ELit (LString "facts"))) (EBinOp "++" (EBinOp "++" (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "factPairSexp") (ELit (LString "rq")))) (EFieldAccess (EVar "facts") "factRequires"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "factPairSexp") (ELit (LString "sp")))) (EFieldAccess (EVar "facts") "factSupers"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "methodResultSexp")) (EFieldAccess (EVar "facts") "factMethodResults"))) (EApp (EApp (EVar "optionOr") (ELit (LString "none"))) (EApp (EApp (EMethodRef "map") (EVar "entryOutcomeSexp")) (EFieldAccess (EVar "facts") "factEntryOutcome"))) (EApp (EApp (EVar "node") (ELit (LString "externs"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "facts") "factExterns")) (arm (PCon "Some" (PVar "fact")) () (EApp (EVar "externSexp") (EVar "fact"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "extern inventory lost a row"))))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns"))))) (EIf (EBinOp "&&" (EApp (EMethodRef "isEmpty") (EFieldAccess (EVar "facts") "factManifests")) (EApp (EVar "isNone") (EFieldAccess (EVar "facts") "factSymbolOrigins"))) (EListLit) (EListLit (EApp (EApp (EVar "node") (ELit (LString "manifests"))) (EApp (EApp (EMethodRef "map") (EVar "manifestSexp")) (EFieldAccess (EVar "facts") "factManifests")))))) (EMatch (EFieldAccess (EVar "facts") "factSymbolOrigins") (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "origins")) () (EListLit (EApp (EVar "originsSexp") (EVar "origins"))))))) (EApp (EApp (EVar "node") (ELit (LString "facts"))) (EBinOp "++" (EBinOp "++" (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "factPairSexp") (ELit (LString "rq")))) (EFieldAccess (EVar "facts") "factRequires"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "factPairSexp") (ELit (LString "sp")))) (EFieldAccess (EVar "facts") "factSupers")))) (EIf (EBinOp "&&" (EApp (EMethodRef "isEmpty") (EFieldAccess (EVar "facts") "factMethodResults")) (EApp (EVar "isNone") (EFieldAccess (EVar "facts") "factEntryOutcome"))) (EListLit) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "methodResultSexp")) (EFieldAccess (EVar "facts") "factMethodResults")))))) (EMatch (EFieldAccess (EVar "facts") "factEntryOutcome") (arm (PCon "Some" (PVar "outcome")) () (EListLit (EApp (EVar "entryOutcomeSexp") (EVar "outcome")))) (arm (PCon "None") () (EListLit)))))))
+(DTypeSig false "originSexp" (TyFun (TyCon "SymbolOrigin") (TyCon "String")))
+(DFunDef false "originSexp" ((PCon "ModuleOrigin" (PVar "mid") (PVar "name"))) (EApp (EApp (EVar "node") (ELit (LString "module"))) (EListLit (EApp (EVar "escStr") (EVar "mid")) (EApp (EVar "escStr") (EVar "name")))))
+(DFunDef false "originSexp" ((PCon "SingleOrigin" (PVar "name"))) (EApp (EApp (EVar "node") (ELit (LString "single"))) (EListLit (EApp (EVar "escStr") (EVar "name")))))
+(DFunDef false "originSexp" ((PCon "GeneratedOrigin" (PVar "family") (PVar "parts"))) (EApp (EApp (EVar "node") (ELit (LString "generated"))) (EListLit (EApp (EVar "escStr") (EVar "family")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "escStr")) (EVar "parts"))))))
+(DFunDef false "originSexp" ((PCon "BuiltinOrigin" (PVar "tag"))) (EApp (EApp (EVar "node") (ELit (LString "builtin"))) (EListLit (EApp (EVar "escStr") (EVar "tag")))))
+(DTypeSig false "originsSexp" (TyFun (TyCon "CoreSymbolOrigins") (TyCon "String")))
+(DFunDef false "originsSexp" ((PVar "origins")) (EApp (EApp (EVar "node") (ELit (LString "origins"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (ELam ((PVar "name")) (EApp (EApp (EVar "node") (ELit (LString "function"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "originSexp") (EApp (EApp (EVar "originAt") (EVar "name")) (EFieldAccess (EVar "origins") "functions"))))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "origins") "functions")))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (ELam ((PVar "owner")) (EApp (EApp (EVar "node") (ELit (LString "owner"))) (EListLit (EApp (EVar "escStr") (EVar "owner")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (ELam ((PVar "name")) (EApp (EApp (EVar "node") (ELit (LString "constructor"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "originSexp") (EApp (EApp (EVar "originAt") (EVar "name")) (EApp (EApp (EVar "ownerAt") (EVar "owner")) (EFieldAccess (EVar "origins") "constructors")))))))) (EApp (EVar "omKeys") (EApp (EApp (EVar "ownerAt") (EVar "owner")) (EFieldAccess (EVar "origins") "constructors"))))))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "origins") "constructors")))))))
+(DTypeSig false "originAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin")) (TyCon "SymbolOrigin"))))
+(DFunDef false "originAt" ((PVar "name") (PVar "rows")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "rows")) (arm (PCon "Some" (PVar "origin")) () (EVar "origin")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "symbol origin: missing serialized row"))))))
+(DTypeSig false "ownerAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin"))) (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin")))))
+(DFunDef false "ownerAt" ((PVar "owner") (PVar "rows")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "owner")) (EVar "rows")) (arm (PCon "Some" (PVar "names")) () (EVar "names")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "symbol origin: missing serialized owner"))))))
 (DTypeSig false "entryOutcomeSexp" (TyFun (TyCon "EntryFact") (TyCon "String")))
 (DFunDef false "entryOutcomeSexp" ((PVar "outcome")) (EApp (EApp (EVar "node") (ELit (LString "entry"))) (EListLit (EApp (EVar "boolStr") (EFieldAccess (EVar "outcome") "entryMainIsUnit")) (EApp (EVar "boolStr") (EFieldAccess (EVar "outcome") "entryMainIsFloat")))))
 (DTypeSig false "methodResultSexp" (TyFun (TyCon "MethodResultFact") (TyCon "String")))

@@ -1,7 +1,8 @@
 # META
-source_lines=3616
+source_lines=3636
 stages=DESUGAR,MARK
 # SOURCE
+import backend.wasm_symbol_names as WN
 import support.diag_codes.{DiagCode(..)}
 import backend.wasm_demand.{
   WasmDemandPlan, PlannedImport, HelperManifest(..), helperManifest,
@@ -54,7 +55,6 @@ import support.symbol_origin.{SymbolOrigin(..)}
 -- deliberately leaves the `(module` paren OPEN.
 
 import support.util.{anyList, contains, filterList, joinWith}
-import types.private_mangle.{injectiveIdent}
 
 export
 preambleHeadLines : List String
@@ -1811,6 +1811,8 @@ hostImportSigOf "mdk_result_byte" = Some " (param i32) (result i32)"
 hostImportSigOf "mdk_write_file_reset" = Some ""
 hostImportSigOf "mdk_write_file_push" = Some " (param i32)"
 hostImportSigOf "mdk_write_file_commit" = Some " (result i32)"
+hostImportSigOf "mdk_float_fixed" = Some " (param i32) (param f64) (result i32)"
+hostImportSigOf "mdk_float_fixed_byte" = Some " (param i32) (result i32)"
 hostImportSigOf "mdk_str_to_float" = Some " (result f64)"
 hostImportSigOf "mdk_str_to_float_ok" = Some " (result i32)"
 hostImportSigOf "mdk_grant_reset" = Some ""
@@ -1875,6 +1877,23 @@ floatStrLines = [
   "      (then (ref.i31 (i32.const 1)))",
   "      (else (struct.new $C_Some (i32.const 0) (struct.new $float (local.get $d)))))",
   "  )"
+]
+
+-- floatToFixed : the host formats into its own cache (the digit count first, the
+-- double second, the byte length back); the bytes are copied into a fresh $str.
+-- Gated on the plan's `mdk_float_fixed` host key.
+floatFixedLines : List String
+floatFixedLines = [
+  "  ;; floatToFixed : the host formats exactly (ties to even) into a cache; copy the bytes.",
+  "  (func $mdk_float_to_fixed (param $k i32) (param $d f64) (result (ref $str))",
+  "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))",
+  "    (local.set $n (call $mdk_float_fixed (local.get $k) (local.get $d)))",
+  "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_float_fixed_byte (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (struct.new $str (local.get $n) (local.get $buf)))"
 ]
 
 -- the Float runtime (RUNTIME-DESIGN §5).  intToFloat/floatToInt are INTRINSIC (the
@@ -2246,11 +2265,11 @@ jsffiImportLine imp =
 -- program defines under its own name can share either.
 export
 jsffiImportId : String -> String
-jsffiImportId name = "jsffi.import.\{injectiveIdent name}"
+jsffiImportId name = WN.wasmName (WN.WJSImport name)
 
 export
 jsffiWrapperId : String -> String
-jsffiWrapperId name = "jsffi.wrap.\{injectiveIdent name}"
+jsffiWrapperId name = WN.wasmName (WN.WJSWrapper name)
 
 -- `<jsName>:<P1>,...,<Pn>-><R>`, each head as declared.
 export
@@ -3569,6 +3588,7 @@ plannedHelperBlock plan files "hashFloatRuntimeLines" = hashFloatRuntimeLines
 plannedHelperBlock plan files "randomFloatRuntimeLines" =
   randomFloatRuntimeLines
 plannedHelperBlock plan files "floatStrLines" = floatStrLines
+plannedHelperBlock plan files "floatFixedLines" = floatFixedLines
 plannedHelperBlock plan files "strSearchRuntimeLines" = strSearchRuntimeLines
 plannedHelperBlock plan files "strToIntRuntimeLines" = strToIntRuntimeLines
 plannedHelperBlock plan files "strReverseRuntimeLines" = strReverseRuntimeLines
@@ -3619,13 +3639,13 @@ plannedHelperBlock plan files "siteRuntimeLines" =
 plannedHelperBlock _ _ name =
   panic ("internal error: unplanned-wasm-helper: " ++ name)
 # DESUGAR
+(DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "HelperManifest" true) (mem "helperManifest" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false) (mem "unaryF64Sig" false) (mem "binaryF64Sig" false))))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "WasmShape" true) (mem "WasmSymbol" true) (mem "checkRef" false) (mem "defineSymbol" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "joinWith" false))))
-(DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
 (DTypeSig true "importLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -3808,6 +3828,8 @@ plannedHelperBlock _ _ name =
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_push"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_commit"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_float_fixed"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param f64) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_float_fixed_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_str_to_float"))) (EApp (EVar "Some") (ELit (LString " (result f64)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_str_to_float_ok"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_grant_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
@@ -3832,6 +3854,8 @@ plannedHelperBlock _ _ name =
 (DFunDef false "floatStrRuntimeLines" ((PVar "keys")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_str_to_float"))) (EVar "keys")) (EVar "floatStrLines")))
 (DTypeSig false "floatStrLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "floatStrLines" () (EListLit (ELit (LString "  ;; stringToFloat : $str -> Option Float (ref eq).")) (ELit (LString "  (func $mdk_string_to_float (param $s (ref $str)) (result (ref eq))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32) (local $d f64)")) (ELit (LString "    (call $mdk_path_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $done (loop $loop")) (ELit (LString "      (br_if $done (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1)))")) (ELit (LString "      (br $loop)))")) (ELit (LString "    (local.set $d (call $mdk_str_to_float))")) (ELit (LString "    ;; #370: the host latched an ok flag during that call; ask it, rather than")) (ELit (LString "    ;; testing $d for NaN — strtod(\"nan\") legitimately yields Some(NaN), and")) (ELit (LString "    ;; strtod(\"\")/strtod(\"1.5 \") legitimately FAIL with a non-NaN value.")) (ELit (LString "    (if (result (ref eq)) (i32.eqz (call $mdk_str_to_float_ok))")) (ELit (LString "      (then (ref.i31 (i32.const 1)))")) (ELit (LString "      (else (struct.new $C_Some (i32.const 0) (struct.new $float (local.get $d)))))")) (ELit (LString "  )"))))
+(DTypeSig false "floatFixedLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "floatFixedLines" () (EListLit (ELit (LString "  ;; floatToFixed : the host formats exactly (ties to even) into a cache; copy the bytes.")) (ELit (LString "  (func $mdk_float_to_fixed (param $k i32) (param $d f64) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (call $mdk_float_fixed (local.get $k) (local.get $d)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_float_fixed_byte (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (struct.new $str (local.get $n) (local.get $buf)))"))))
 (DTypeSig true "floatRemRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "floatRemRuntimeLines" () (EListLit (ELit (LString "  (func $mdk_float_rem (param $a f64) (param $b f64) (result f64)")) (ELit (LString "    (local $x f64) (local $y f64) (local $t f64)")) (ELit (LString "    (local.set $y (f64.abs (local.get $b)))")) (ELit (LString "    (if (result f64)")) (ELit (LString "      (i32.or (i32.or")) (ELit (LString "        (f64.ne (f64.sub (local.get $a) (local.get $a)) (f64.const 0))")) (ELit (LString "        (f64.ne (local.get $b) (local.get $b)))")) (ELit (LString "        (f64.eq (local.get $y) (f64.const 0)))")) (ELit (LString "      ;; #672: the NaN result must carry the HOST's NaN SIGN, not WAT `nan`.  WAT")) (ELit (LString "      ;; `(f64.const nan)` is the FIXED canonical +NaN (0x7FF8..), but eval")) (ELit (LString "      ;; (`floatRem`=fmod) and native (`mdk_float_rem`=fmod) yield the host's NaN")) (ELit (LString "      ;; -- -NaN (0xFFF8..) on x86 -- and under the sign-dependent totalOrder (N6)")) (ELit (LString "      ;; a +NaN sorts/compares/hashes OPPOSITELY, so a fixed +NaN here made every")) (ELit (LString "      ;; `%`-NaN (e.g. `x % 0.0`) disagree with the other two engines on x86.")) (ELit (LString "      ;; `f64.div 0/0` is computed at RUNTIME by V8 (same as the `/` path), so it")) (ELit (LString "      ;; yields whatever NaN this box's hardware does -- matching eval/native and")) (ELit (LString "      ;; the wasm `f64.div` NaN on every platform (#509-safe: host-following, not")) (ELit (LString "      ;; a baked sign).")) (ELit (LString "      (then (f64.div (f64.const 0) (f64.const 0)))")) (ELit (LString "      (else")) (ELit (LString "        (local.set $x (f64.abs (local.get $a)))")) (ELit (LString "        (local.set $t (local.get $y))")) (ELit (LString "        (block $up (loop $ul")) (ELit (LString "          (br_if $up (f64.gt (f64.add (local.get $t) (local.get $t)) (local.get $x)))")) (ELit (LString "          (local.set $t (f64.add (local.get $t) (local.get $t)))")) (ELit (LString "          (br $ul)))")) (ELit (LString "        (block $dn (loop $dl")) (ELit (LString "          (if (f64.ge (local.get $x) (local.get $t))")) (ELit (LString "            (then (local.set $x (f64.sub (local.get $x) (local.get $t)))))")) (ELit (LString "          (br_if $dn (f64.eq (local.get $t) (local.get $y)))")) (ELit (LString "          (local.set $t (f64.mul (local.get $t) (f64.const 0.5)))")) (ELit (LString "          (br $dl)))")) (ELit (LString "        (f64.copysign (local.get $x) (local.get $a)))))"))))
 (DTypeSig true "floatRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -3869,9 +3893,9 @@ plannedHelperBlock _ _ name =
 (DTypeSig false "jsffiImportLine" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsffiImportLine" ((PVar "imp")) (EBlock (DoLet false false (PVar "params") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (EVar "jsWireParam")) (EFieldAccess (EVar "imp") "params")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"jsffi\" \"")) (EApp (EVar "display") (EApp (EVar "jsImportField") (EVar "imp")))) (ELit (LString "\" (func $"))) (EApp (EVar "display") (EApp (EVar "jsffiImportId") (EFieldAccess (EVar "imp") "medakaName")))) (ELit (LString ""))) (EApp (EVar "display") (EVar "params"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))) (ELit (LString "))"))))))
 (DTypeSig true "jsffiImportId" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsffiImportId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.import.")) (EApp (EVar "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
+(DFunDef false "jsffiImportId" ((PVar "name")) (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WJSImport") (EVar "name"))))
 (DTypeSig true "jsffiWrapperId" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsffiWrapperId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.wrap.")) (EApp (EVar "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
+(DFunDef false "jsffiWrapperId" ((PVar "name")) (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WJSWrapper") (EVar "name"))))
 (DTypeSig true "jsImportField" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsImportField" ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString ""))))
 (DTypeSig false "jsWireTy" (TyFun (TyCon "String") (TyCon "String")))
@@ -4022,6 +4046,7 @@ plannedHelperBlock _ _ name =
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "hashFloatRuntimeLines"))) (EVar "hashFloatRuntimeLines"))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "randomFloatRuntimeLines"))) (EVar "randomFloatRuntimeLines"))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatStrLines"))) (EVar "floatStrLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatFixedLines"))) (EVar "floatFixedLines"))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strSearchRuntimeLines"))) (EVar "strSearchRuntimeLines"))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strToIntRuntimeLines"))) (EVar "strToIntRuntimeLines"))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strReverseRuntimeLines"))) (EVar "strReverseRuntimeLines"))
@@ -4068,13 +4093,13 @@ plannedHelperBlock _ _ name =
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "siteRuntimeLines"))) (EApp (EApp (EVar "siteRuntimeLines") (EVar "files")) (EFieldAccess (EVar "plan") "nonexhaustiveRuntime")))
 (DFunDef false "plannedHelperBlock" (PWild PWild (PVar "name")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "internal error: unplanned-wasm-helper: ")) (EVar "name"))))
 # MARK
+(DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "HelperManifest" true) (mem "helperManifest" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false) (mem "unaryF64Sig" false) (mem "binaryF64Sig" false))))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "WasmShape" true) (mem "WasmSymbol" true) (mem "checkRef" false) (mem "defineSymbol" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "joinWith" false))))
-(DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
 (DTypeSig true "importLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -4257,6 +4282,8 @@ plannedHelperBlock _ _ name =
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_push"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_commit"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_float_fixed"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param f64) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_float_fixed_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_str_to_float"))) (EApp (EVar "Some") (ELit (LString " (result f64)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_str_to_float_ok"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_grant_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
@@ -4281,6 +4308,8 @@ plannedHelperBlock _ _ name =
 (DFunDef false "floatStrRuntimeLines" ((PVar "keys")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_str_to_float"))) (EVar "keys")) (EVar "floatStrLines")))
 (DTypeSig false "floatStrLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "floatStrLines" () (EListLit (ELit (LString "  ;; stringToFloat : $str -> Option Float (ref eq).")) (ELit (LString "  (func $mdk_string_to_float (param $s (ref $str)) (result (ref eq))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32) (local $d f64)")) (ELit (LString "    (call $mdk_path_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $done (loop $loop")) (ELit (LString "      (br_if $done (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1)))")) (ELit (LString "      (br $loop)))")) (ELit (LString "    (local.set $d (call $mdk_str_to_float))")) (ELit (LString "    ;; #370: the host latched an ok flag during that call; ask it, rather than")) (ELit (LString "    ;; testing $d for NaN — strtod(\"nan\") legitimately yields Some(NaN), and")) (ELit (LString "    ;; strtod(\"\")/strtod(\"1.5 \") legitimately FAIL with a non-NaN value.")) (ELit (LString "    (if (result (ref eq)) (i32.eqz (call $mdk_str_to_float_ok))")) (ELit (LString "      (then (ref.i31 (i32.const 1)))")) (ELit (LString "      (else (struct.new $C_Some (i32.const 0) (struct.new $float (local.get $d)))))")) (ELit (LString "  )"))))
+(DTypeSig false "floatFixedLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "floatFixedLines" () (EListLit (ELit (LString "  ;; floatToFixed : the host formats exactly (ties to even) into a cache; copy the bytes.")) (ELit (LString "  (func $mdk_float_to_fixed (param $k i32) (param $d f64) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (call $mdk_float_fixed (local.get $k) (local.get $d)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_float_fixed_byte (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (struct.new $str (local.get $n) (local.get $buf)))"))))
 (DTypeSig true "floatRemRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "floatRemRuntimeLines" () (EListLit (ELit (LString "  (func $mdk_float_rem (param $a f64) (param $b f64) (result f64)")) (ELit (LString "    (local $x f64) (local $y f64) (local $t f64)")) (ELit (LString "    (local.set $y (f64.abs (local.get $b)))")) (ELit (LString "    (if (result f64)")) (ELit (LString "      (i32.or (i32.or")) (ELit (LString "        (f64.ne (f64.sub (local.get $a) (local.get $a)) (f64.const 0))")) (ELit (LString "        (f64.ne (local.get $b) (local.get $b)))")) (ELit (LString "        (f64.eq (local.get $y) (f64.const 0)))")) (ELit (LString "      ;; #672: the NaN result must carry the HOST's NaN SIGN, not WAT `nan`.  WAT")) (ELit (LString "      ;; `(f64.const nan)` is the FIXED canonical +NaN (0x7FF8..), but eval")) (ELit (LString "      ;; (`floatRem`=fmod) and native (`mdk_float_rem`=fmod) yield the host's NaN")) (ELit (LString "      ;; -- -NaN (0xFFF8..) on x86 -- and under the sign-dependent totalOrder (N6)")) (ELit (LString "      ;; a +NaN sorts/compares/hashes OPPOSITELY, so a fixed +NaN here made every")) (ELit (LString "      ;; `%`-NaN (e.g. `x % 0.0`) disagree with the other two engines on x86.")) (ELit (LString "      ;; `f64.div 0/0` is computed at RUNTIME by V8 (same as the `/` path), so it")) (ELit (LString "      ;; yields whatever NaN this box's hardware does -- matching eval/native and")) (ELit (LString "      ;; the wasm `f64.div` NaN on every platform (#509-safe: host-following, not")) (ELit (LString "      ;; a baked sign).")) (ELit (LString "      (then (f64.div (f64.const 0) (f64.const 0)))")) (ELit (LString "      (else")) (ELit (LString "        (local.set $x (f64.abs (local.get $a)))")) (ELit (LString "        (local.set $t (local.get $y))")) (ELit (LString "        (block $up (loop $ul")) (ELit (LString "          (br_if $up (f64.gt (f64.add (local.get $t) (local.get $t)) (local.get $x)))")) (ELit (LString "          (local.set $t (f64.add (local.get $t) (local.get $t)))")) (ELit (LString "          (br $ul)))")) (ELit (LString "        (block $dn (loop $dl")) (ELit (LString "          (if (f64.ge (local.get $x) (local.get $t))")) (ELit (LString "            (then (local.set $x (f64.sub (local.get $x) (local.get $t)))))")) (ELit (LString "          (br_if $dn (f64.eq (local.get $t) (local.get $y)))")) (ELit (LString "          (local.set $t (f64.mul (local.get $t) (f64.const 0.5)))")) (ELit (LString "          (br $dl)))")) (ELit (LString "        (f64.copysign (local.get $x) (local.get $a)))))"))))
 (DTypeSig true "floatRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -4318,9 +4347,9 @@ plannedHelperBlock _ _ name =
 (DTypeSig false "jsffiImportLine" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsffiImportLine" ((PVar "imp")) (EBlock (DoLet false false (PVar "params") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (EVar "jsWireParam")) (EFieldAccess (EVar "imp") "params")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"jsffi\" \"")) (EApp (EMethodRef "display") (EApp (EVar "jsImportField") (EVar "imp")))) (ELit (LString "\" (func $"))) (EApp (EMethodRef "display") (EApp (EVar "jsffiImportId") (EFieldAccess (EVar "imp") "medakaName")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "params"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))) (ELit (LString "))"))))))
 (DTypeSig true "jsffiImportId" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsffiImportId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.import.")) (EApp (EMethodRef "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
+(DFunDef false "jsffiImportId" ((PVar "name")) (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WJSImport") (EVar "name"))))
 (DTypeSig true "jsffiWrapperId" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsffiWrapperId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.wrap.")) (EApp (EMethodRef "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
+(DFunDef false "jsffiWrapperId" ((PVar "name")) (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WJSWrapper") (EVar "name"))))
 (DTypeSig true "jsImportField" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsImportField" ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString ""))))
 (DTypeSig false "jsWireTy" (TyFun (TyCon "String") (TyCon "String")))
@@ -4471,6 +4500,7 @@ plannedHelperBlock _ _ name =
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "hashFloatRuntimeLines"))) (EVar "hashFloatRuntimeLines"))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "randomFloatRuntimeLines"))) (EVar "randomFloatRuntimeLines"))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatStrLines"))) (EVar "floatStrLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatFixedLines"))) (EVar "floatFixedLines"))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strSearchRuntimeLines"))) (EVar "strSearchRuntimeLines"))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strToIntRuntimeLines"))) (EVar "strToIntRuntimeLines"))
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strReverseRuntimeLines"))) (EVar "strReverseRuntimeLines"))

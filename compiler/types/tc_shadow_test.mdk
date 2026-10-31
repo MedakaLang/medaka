@@ -166,8 +166,8 @@ test "a module that defines the standalone spells the shadow bare" =
 test "a prelude symbol spells its own bare name and no other method's" =
   let sc = spellOf [] noBare
   expectAll [
-    expectTrue (moduleSpellsShadowBare sc "core__not" "not"),
-    expectFalse (moduleSpellsShadowBare sc "core__not" "size"),
+    expectTrue (moduleSpellsShadowBare sc "m636f7265__not" "not"),
+    expectFalse (moduleSpellsShadowBare sc "m636f7265__not" "size"),
   ]
 
 test "a module spells a shadow bare when an import binds the bare local, by list or by wildcard" =

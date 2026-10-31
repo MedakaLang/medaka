@@ -1,3 +1,6 @@
+import types.symbol_origins.{SymbolOrigin(..), CoreSymbolOrigins(..)}
+import support.ordmap.{omEmpty, omInsert}
+import types.program_facts.{withSymbolOrigins}
 import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- Sibling test module for `compiler/ir/core_ir_sexp.mdk` and
 -- `compiler/ir/core_ir_sexp_parse.mdk` ([P-TEST-SIBLING]).
@@ -358,6 +361,7 @@ test "two occurrences of one binder id stay one binder" =
       []
       []
       DeclFacts {
+        factSymbolOrigins = None,
         factMethodResults = [
           MethodResultFact {
             iface = "left::I",
@@ -481,10 +485,11 @@ loweredEntry runtimeDecls coreDecls entry roots =
       let evTable = elab.erEvidence
       let externFacts =
         factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
-      let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
+      let (coreD, modules2, evTableM, origins) =
+        mangleUnitsEv evTable coreE modulesE
       Ok
         (lowerProgramEmitWith
-          (factsWithEvidence evTableM externFacts)
+          (withSymbolOrigins origins (factsWithEvidence evTableM externFacts))
           (dceFilter (coreD ++ flatMap snd modules2)))
 
 -- Each binder occurrence's row, in the binder walk's order, as text: what an
@@ -612,3 +617,57 @@ test "Core IR round-trip preserves method occurrence arity" =
     CProgram [CBind "main" [CClause [] (CMethod "probe" (MethodEvidence "" arity RNone [] []))] _ _] _ _ _ _ _ =>
       expectEqual 7 arity
     _ => fail "expected the round-tripped CProgram to keep the same shape"
+
+test "origin codec retains owner rows and generated component lists" =
+  let origins = CoreSymbolOrigins {
+    functions =
+      omInsert
+        "memo0"
+        (GeneratedOrigin "nullary-memo" [])
+        (omInsert
+          "memo1"
+          (GeneratedOrigin "nullary-memo" [""])
+          (omInsert "main" (SingleOrigin "main") omEmpty)),
+    constructors =
+      omInsert
+        "A"
+        (omInsert
+          "Cons"
+          (ModuleOrigin "a" "Cons")
+          (omInsert "Nil" (BuiltinOrigin "Nil") omEmpty))
+        (omInsert
+          "B"
+          (omInsert
+            "Cons"
+            (ModuleOrigin "b" "Cons")
+            (omInsert "Nil" (ModuleOrigin "b" "Nil") omEmpty))
+          omEmpty),
+  }
+  let prog =
+    CProgram [] [] [] [] [] { noDeclFacts | factSymbolOrigins = Some origins }
+  let encoded = cprogramToSexp prog
+  expectEqual encoded (cprogramToSexp (parseCProgram encoded))
+
+memoOriginRoundTrip : <IO, FileRead> Result String Expectation
+memoOriginRoundTrip = do
+  rsrc <- readFile (underRoot "stdlib/runtime.mdk")
+  csrc <- readFile (underRoot "stdlib/core.mdk")
+  let dir = underRoot "test/llvm_fixtures_typed"
+  prog <- loweredEntry (desugar (parse rsrc)) (desugar
+    (parse csrc)) "\{dir}/disp_single.mdk" [
+    dir,
+    underRoot "stdlib",
+  ]
+  let text = cprogramToSexp prog
+  Ok
+    (expectAll [
+      expectTextContainsAll
+        ["$memo_Int_def", "(generated \"nullary-memo\" (\"Int\" \"def\"))"]
+        text,
+      expectEqual text (cprogramToSexp (parseCProgram text)),
+    ])
+
+test "lowered nullary memo origin survives the codec" =
+  match memoOriginRoundTrip
+    Ok verdict => verdict
+    Err e => fail e

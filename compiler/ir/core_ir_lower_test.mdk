@@ -1,3 +1,6 @@
+import types.symbol_origins.{SymbolOrigin(..)}
+import ir.core_ir_lower.{OriginClause(..), groupOriginClauses}
+import frontend.ast.{BinderId(..)}
 -- `noInlineFnNames` is the whole route from a `@noinline` attribute to the LLVM
 -- emitter's `noinline` function attribute: the build driver hands its result to
 -- `withNoInlineFns`.  A name it misses is a helper LLVM may inline away, which is
@@ -404,3 +407,44 @@ n c = match c
   expectEqual
     [["arm", "arm"]]
     (map (c => armShapes (clauseBody c)) (orClauses "n" (orLowered source)))
+
+originGroupShape : (SymbolOrigin, CBind) -> (SymbolOrigin, String, List Int)
+originGroupShape (origin, CBind name clauses _ _) = (
+  origin,
+  name,
+  map
+    (c => match c
+      CClause _ (CLit (LInt n)) => n
+      _ => -1)
+    clauses,
+)
+
+test "explicit origins group clauses in order without merging equal names" =
+  let a = ModuleOrigin "a" "f"
+  let b = ModuleOrigin "b" "f"
+  let pin = ModuleOrigin "a" "0autoprintln"
+  let shared = BinderId "a" 5
+  let rows = [
+    OriginClause a "same" (CClause [] (CLit (LInt 1))) noDeclLoc shared,
+    OriginClause
+      b
+      "same"
+      (CClause [] (CLit (LInt 2)))
+      noDeclLoc
+      (BinderId "b" 6),
+    OriginClause
+      a
+      "same"
+      (CClause [] (CLit (LInt 3)))
+      noDeclLoc
+      (BinderId "a" 7),
+    OriginClause
+      pin
+      "0autoprintln"
+      (CClause [] (CLit (LInt 4)))
+      noDeclLoc
+      shared,
+  ]
+  expectEqual
+    [(a, "same", [1, 3]), (b, "same", [2]), (pin, "0autoprintln", [4])]
+    (map originGroupShape (groupOriginClauses rows))

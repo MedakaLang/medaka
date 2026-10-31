@@ -32,6 +32,7 @@ declare i64 @mdk_str_lit(ptr, i64)
 declare void @mdk_print_str(i64)
 declare i64 @mdk_int_to_string(i64)
 declare i64 @mdk_float_to_string(double)
+declare i64 @mdk_float_to_fixed(i64, double)
 declare i64 @llvm.fptosi.sat.i64.f64(double)
 declare double @llvm.arithmetic.fence.f64(double)
 declare i64 @mdk_string_concat(i64)
@@ -243,7 +244,7 @@ entry:
   %t14 = getelementptr i8, ptr %t12, i64 16
   store i64 %t11, ptr %t14
   %t15 = ptrtoint ptr %t12 to i64
-  %t16 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_compare(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 %t7, i64 %t15)
+  %t16 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.636f6d70617265(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..0 to i64), i64 %t7, i64 %t15)
   %t17 = alloca i64
   %t19 = icmp eq i64 %t16, 1
   br i1 %t19, label %conyes20, label %connext20
@@ -271,8 +272,8 @@ decend18:
   call void @mdk_print_int(i64 %t26)
   ret i32 0
 }
-; mdk-module impl:Int_compare
-define internal i64 @mdk_impl_Int_compare(i64 %arg0, i64 %arg1) {
+; mdk-module impl.5f5f757365725f5f3a3a4f72647c496e747c.636f6d70617265
+define internal i64 @mdk.impl.496e74.636f6d70617265(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = icmp slt i64 %arg0, %arg1
   %t1 = zext i1 %t0 to i64
@@ -297,8 +298,8 @@ else13:
   ret i64 3
 }
 
-; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_MyList_compare
-define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_compare(i64 %arg0, i64 %arg1, i64 %arg2) {
+; mdk-module impl.5f5f757365725f5f3a3a4f72647c285f5f757365725f5f2e4d794c6973742061297c.636f6d70617265
+define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.636f6d70617265(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg1, 562949953421315
@@ -402,11 +403,11 @@ conyes64:
   %t80 = inttoptr i64 %arg2 to ptr
   %t81 = getelementptr i8, ptr %t80, i64 16
   %t82 = load i64, ptr %t81
-  %t83 = call i64 @mdk_disp_compare_0_2(i64 %arg0, i64 %t73, i64 %t79)
+  %t83 = call i64 @mdk.dispatch..636f6d70617265.0.2.2(i64 %arg0, i64 %t73, i64 %t79)
   %t84 = icmp eq i64 %t83, 3
   br i1 %t84, label %conyes85, label %connext85
 conyes85:
-  %t86 = musttail call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_compare(i64 %arg0, i64 %t76, i64 %t82)
+  %t86 = musttail call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.636f6d70617265(i64 %arg0, i64 %t76, i64 %t82)
   ret i64 %t86
 connext85:
   store i64 %t83, ptr %t0
@@ -425,9 +426,9 @@ decend1:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_dc.program.0 = internal constant [1 x i64] [i64 -54051695436414980]
+@mdk.gen.dictcell.70726f6772616d..0 = internal constant [1 x i64] [i64 -54051695436414980]
 ; mdk-module program
-define internal i64 @mdk_disp_compare_0_2(i64 %dict, i64 %arg0, i64 %arg1) {
+define internal i64 @mdk.dispatch..636f6d70617265.0.2.2(i64 %dict, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = inttoptr i64 %dict to ptr
   %t1 = load i64, ptr %t0
@@ -435,7 +436,7 @@ entry:
   %t4 = icmp eq i64 %t1, -54051695436414980
   br i1 %t4, label %dispyes5, label %dispnext5
 dispyes5:
-  %t6 = call i64 @mdk_impl_Int_compare(i64 %arg0, i64 %arg1)
+  %t6 = call i64 @mdk.impl.496e74.636f6d70617265(i64 %arg0, i64 %arg1)
   store i64 %t6, ptr %t2
   br label %dispend3
 dispnext5:
@@ -445,7 +446,7 @@ dispyes8:
   %t9 = inttoptr i64 %dict to ptr
   %t10 = getelementptr i8, ptr %t9, i64 8
   %t11 = load i64, ptr %t10
-  %t12 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_compare(i64 %t11, i64 %arg0, i64 %arg1)
+  %t12 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.636f6d70617265(i64 %t11, i64 %arg0, i64 %arg1)
   store i64 %t12, ptr %t2
   br label %dispend3
 dispnext8:

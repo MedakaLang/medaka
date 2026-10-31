@@ -1,0 +1,68 @@
+import support.symbol_encoding.{encodeComponent}
+
+public export data GeneratedFamily =
+  | GenString
+  | GenTrap
+  | GenLambda
+  | GenMethodValue
+  | GenDictValue
+  | GenNamedPap
+  | GenIndirectPap
+  | GenDictCell
+  | GenCtorCell
+  | GenEta
+  | GenCtorPap
+  | GenCtorEta
+  | GenExternEta
+  | GenU64
+  | GenI64
+  | GenGlobalName
+
+public export data LlvmName =
+  | LUserFunction String
+  | LUserGlobal String
+  | LGlobalState String
+  | LGlobalForcer String
+  | LRawWorker String
+  | LFloatWorker String
+  | LImplMethod String String
+  | LDefaultMethod String String String
+  | LDispatcher String String Int Int Int
+  | LConstructor String
+  | LGeneratedName GeneratedFamily String String Int
+
+familyTag : GeneratedFamily -> String
+familyTag GenString = "string"
+familyTag GenTrap = "trap"
+familyTag GenLambda = "lambda"
+familyTag GenMethodValue = "methodvalue"
+familyTag GenDictValue = "dictvalue"
+familyTag GenNamedPap = "namedpap"
+familyTag GenIndirectPap = "indirectpap"
+familyTag GenDictCell = "dictcell"
+familyTag GenCtorCell = "ctorcell"
+familyTag GenEta = "eta"
+familyTag GenCtorPap = "ctorpap"
+familyTag GenCtorEta = "ctoreta"
+familyTag GenExternEta = "externeta"
+familyTag GenU64 = "u64"
+familyTag GenI64 = "i64"
+familyTag GenGlobalName = "globalname"
+
+export
+llvmName : LlvmName -> String
+llvmName (LUserFunction name) = "mdk.user." ++ encodeComponent name
+llvmName (LUserGlobal name) = "mdk.global." ++ encodeComponent name
+llvmName (LGlobalState name) = "mdk.state." ++ encodeComponent name
+llvmName (LGlobalForcer name) = "mdk.force." ++ encodeComponent name
+llvmName (LRawWorker name) = "mdk.worker.raw." ++ encodeComponent name
+llvmName (LFloatWorker name) = "mdk.worker.float." ++ encodeComponent name
+llvmName (LImplMethod tag method) =
+  "mdk.impl.\{encodeComponent tag}.\{encodeComponent method}"
+llvmName (LDefaultMethod iface method key) =
+  "mdk.default.\{encodeComponent iface}.\{encodeComponent method}.\{encodeComponent key}"
+llvmName (LDispatcher iface method dicts args arity) =
+  "mdk.dispatch.\{encodeComponent iface}.\{encodeComponent method}.\{intToString dicts}.\{intToString args}.\{intToString arity}"
+llvmName (LConstructor name) = "mdk.ctor." ++ encodeComponent name
+llvmName (LGeneratedName family scope subject ordinal) =
+  "mdk.gen.\{familyTag family}.\{encodeComponent scope}.\{encodeComponent subject}.\{intToString ordinal}"

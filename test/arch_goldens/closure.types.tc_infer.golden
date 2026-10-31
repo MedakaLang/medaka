@@ -11,6 +11,7 @@ support.ordmap
 support.path
 support.scc
 support.stage_count
+support.symbol_encoding
 support.util
 types.capability_manifest
 types.chain_key
@@ -47,6 +48,7 @@ types.runtime_types
 types.scopes
 types.solver_contract
 types.superclass
+types.symbol_origins
 types.target_profile
 types.tc_decls
 types.tc_decls_types
