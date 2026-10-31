@@ -1,5 +1,5 @@
 # META
-source_lines=627
+source_lines=629
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -20,6 +20,7 @@ import tools.lint_index.{
   RowKind(..),
   Ns(..),
   ProjectIndex,
+  Answer,
   rowSig,
   emptyProjectIndex,
   mkProjectIndexWith,
@@ -310,8 +311,9 @@ public export data RuleCheck =
 
 -- What one project rule keeps of one file.  The type is closed on purpose: the
 -- shard codec (`tools/lint_cache.mdk`) matches it with no wildcard arm, so a new
--- summary kind does not compile until its codec arm exists, and a summary that
--- cannot be cached cannot be registered.
+-- summary kind makes the encoder warn non-exhaustive and fail on the first
+-- store; the decoder is not checked, so a missing decode arm makes every shard
+-- holding that summary a miss.  `lint_test.mdk` round-trips every kind.
 public export data Summary =
   DupOccs (List (Int, String, String))
   deriving (Eq, Debug)
@@ -508,12 +510,12 @@ localModOfQuestion = localModOfKey
 -- What the rules handed a recording index asked, with the digest of each
 -- answer.
 export
-stdlibRecorded : StdlibIndex -> List (String, String)
+stdlibRecorded : StdlibIndex -> List Answer
 stdlibRecorded (StdlibIndex ix) = recordedAnswers ix
 
 -- Whether this index answers every recorded question as it was answered then.
 export
-stdlibAnswersHold : StdlibIndex -> List (String, String) -> Bool
+stdlibAnswersHold : StdlibIndex -> List Answer -> Bool
 stdlibAnswersHold (StdlibIndex ix) recorded = answersHold ix recorded
 
 -- How many distinct exported NAMES the index carries (not declarations — a name
@@ -637,7 +639,7 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseAlias ("driver" "diagnostic_value") "DV"))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "anyList" false))))
-(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndexWith" false) (mem "indexFingerprint" false) (mem "recording" false) (mem "recordedAnswers" false) (mem "answersHold" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibHasValueModule" false) (mem "withLocalModStates" false) (mem "localModAsked" false) (mem "localModOfKey" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "Answer" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndexWith" false) (mem "indexFingerprint" false) (mem "recording" false) (mem "recordedAnswers" false) (mem "answersHold" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibHasValueModule" false) (mem "withLocalModStates" false) (mem "localModAsked" false) (mem "localModOfKey" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
@@ -757,9 +759,9 @@ public export data DupClause = DupClause {
 (DFunDef false "stdlibLocalModAsked" ((PCon "StdlibIndex" (PVar "ix")) (PVar "modId")) (EApp (EApp (EVar "localModAsked") (EVar "ix")) (EVar "modId")))
 (DTypeSig true "localModOfQuestion" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "localModOfQuestion" () (EVar "localModOfKey"))
-(DTypeSig true "stdlibRecorded" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DTypeSig true "stdlibRecorded" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "Answer"))))
 (DFunDef false "stdlibRecorded" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "recordedAnswers") (EVar "ix")))
-(DTypeSig true "stdlibAnswersHold" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
+(DTypeSig true "stdlibAnswersHold" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Answer")) (TyCon "Bool"))))
 (DFunDef false "stdlibAnswersHold" ((PCon "StdlibIndex" (PVar "ix")) (PVar "recorded")) (EApp (EApp (EVar "answersHold") (EVar "ix")) (EVar "recorded")))
 (DTypeSig true "stdlibIndexSize" (TyFun (TyCon "StdlibIndex") (TyCon "Int")))
 (DFunDef false "stdlibIndexSize" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "listLen") (EApp (EVar "stdlibValueNames") (EVar "ix"))))
@@ -793,7 +795,7 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseAlias ("driver" "diagnostic_value") "DV"))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "anyList" false))))
-(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndexWith" false) (mem "indexFingerprint" false) (mem "recording" false) (mem "recordedAnswers" false) (mem "answersHold" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibHasValueModule" false) (mem "withLocalModStates" false) (mem "localModAsked" false) (mem "localModOfKey" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "Answer" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndexWith" false) (mem "indexFingerprint" false) (mem "recording" false) (mem "recordedAnswers" false) (mem "answersHold" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibHasValueModule" false) (mem "withLocalModStates" false) (mem "localModAsked" false) (mem "localModOfKey" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
@@ -913,9 +915,9 @@ public export data DupClause = DupClause {
 (DFunDef false "stdlibLocalModAsked" ((PCon "StdlibIndex" (PVar "ix")) (PVar "modId")) (EApp (EApp (EVar "localModAsked") (EVar "ix")) (EVar "modId")))
 (DTypeSig true "localModOfQuestion" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "localModOfQuestion" () (EVar "localModOfKey"))
-(DTypeSig true "stdlibRecorded" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DTypeSig true "stdlibRecorded" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "Answer"))))
 (DFunDef false "stdlibRecorded" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "recordedAnswers") (EVar "ix")))
-(DTypeSig true "stdlibAnswersHold" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
+(DTypeSig true "stdlibAnswersHold" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Answer")) (TyCon "Bool"))))
 (DFunDef false "stdlibAnswersHold" ((PCon "StdlibIndex" (PVar "ix")) (PVar "recorded")) (EApp (EApp (EVar "answersHold") (EVar "ix")) (EVar "recorded")))
 (DTypeSig true "stdlibIndexSize" (TyFun (TyCon "StdlibIndex") (TyCon "Int")))
 (DFunDef false "stdlibIndexSize" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "listLen") (EApp (EVar "stdlibValueNames") (EVar "ix"))))

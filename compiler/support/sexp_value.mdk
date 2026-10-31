@@ -81,6 +81,11 @@ renderAtom s
     textOf ([byteQuote] ++ flatMap escapeByte (bytesOf s) ++ [byteQuote])
   | otherwise = s
 
+-- One atom as the writer spells it: bare when it can be, quoted otherwise.
+export
+atomText : String -> String
+atomText s = renderAtom s
+
 export
 renderSExp : SExp -> String
 renderSExp (SAtom s) = renderAtom s

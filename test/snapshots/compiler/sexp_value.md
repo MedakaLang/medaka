@@ -1,5 +1,5 @@
 # META
-source_lines=500
+source_lines=505
 stages=DESUGAR,MARK
 # SOURCE
 -- S-expression values with one canonical rendering and a fail-closed reader.
@@ -84,6 +84,11 @@ renderAtom s
   | needsQuote s =
     textOf ([byteQuote] ++ flatMap escapeByte (bytesOf s) ++ [byteQuote])
   | otherwise = s
+
+-- One atom as the writer spells it: bare when it can be, quoted otherwise.
+export
+atomText : String -> String
+atomText s = renderAtom s
 
 export
 renderSExp : SExp -> String
@@ -541,6 +546,8 @@ skipNodeAt b n p depth inQ
 (DFunDef false "escapeByte" ((PVar "b")) (EIf (EApp (EVar "isBackslashByte") (EVar "b")) (EListLit (EVar "byteBackslash") (EVar "byteBackslash")) (EIf (EApp (EVar "isQuoteByte") (EVar "b")) (EListLit (EVar "byteBackslash") (EVar "byteQuote")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookup") (EVar "b")) (EVar "letterEscapes")) (arm (PCon "Some" (PVar "letter")) () (EListLit (EVar "byteBackslash") (EVar "letter"))) (arm (PCon "None") () (EListLit (EVar "b")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "renderAtom" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "renderAtom" ((PVar "s")) (EIf (EApp (EVar "needsQuote") (EVar "s")) (EApp (EVar "textOf") (EBinOp "++" (EBinOp "++" (EListLit (EVar "byteQuote")) (EApp (EApp (EVar "flatMap") (EVar "escapeByte")) (EApp (EVar "bytesOf") (EVar "s")))) (EListLit (EVar "byteQuote")))) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "atomText" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "atomText" ((PVar "s")) (EApp (EVar "renderAtom") (EVar "s")))
 (DTypeSig true "renderSExp" (TyFun (TyCon "SExp") (TyCon "String")))
 (DFunDef false "renderSExp" ((PCon "SAtom" (PVar "s"))) (EApp (EVar "renderAtom") (EVar "s")))
 (DFunDef false "renderSExp" ((PCon "SList" (PVar "items"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "stringJoin") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "renderSExp")) (EVar "items")))) (ELit (LString ")"))))
@@ -662,6 +669,8 @@ skipNodeAt b n p depth inQ
 (DFunDef false "escapeByte" ((PVar "b")) (EIf (EApp (EVar "isBackslashByte") (EVar "b")) (EListLit (EVar "byteBackslash") (EVar "byteBackslash")) (EIf (EApp (EVar "isQuoteByte") (EVar "b")) (EListLit (EVar "byteBackslash") (EVar "byteQuote")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookup") (EVar "b")) (EVar "letterEscapes")) (arm (PCon "Some" (PVar "letter")) () (EListLit (EVar "byteBackslash") (EVar "letter"))) (arm (PCon "None") () (EListLit (EVar "b")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "renderAtom" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "renderAtom" ((PVar "s")) (EIf (EApp (EVar "needsQuote") (EVar "s")) (EApp (EVar "textOf") (EBinOp "++" (EBinOp "++" (EListLit (EVar "byteQuote")) (EApp (EApp (EDictApp "flatMap") (EVar "escapeByte")) (EApp (EVar "bytesOf") (EVar "s")))) (EListLit (EVar "byteQuote")))) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "atomText" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "atomText" ((PVar "s")) (EApp (EVar "renderAtom") (EVar "s")))
 (DTypeSig true "renderSExp" (TyFun (TyCon "SExp") (TyCon "String")))
 (DFunDef false "renderSExp" ((PCon "SAtom" (PVar "s"))) (EApp (EVar "renderAtom") (EVar "s")))
 (DFunDef false "renderSExp" ((PCon "SList" (PVar "items"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "stringJoin") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "renderSExp")) (EVar "items")))) (ELit (LString ")"))))

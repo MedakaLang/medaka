@@ -253,29 +253,45 @@ probeLine projSig stdSig = "b.f : \{projSig}; list.singleton : \{stdSig}"
 -- Each takes the run function, so the same assertions grade the real key and
 -- the key without the fingerprint.
 
--- (a) A signature edit in B re-lints A, and A's finding shows the new signature.
-scenarioA : (Env -> <IO, FileRead, FileWrite, Exec> Option Run) ->
+put : String -> String -> <IO, FileRead, FileWrite, Exec> Unit
+put path text =
+  let _ = writeFile path text
+  ()
+
+-- Populate the cache with a run, apply `edit`, run again, and grade the two.
+afterEdit : (Env -> <IO, FileRead, FileWrite, Exec> Option Run) ->
   String ->
+  (Env -> <IO, FileRead, FileWrite, Exec> Unit) ->
+  (Run -> Run -> Expectation) ->
   <IO, FileRead, FileWrite, Exec> Expectation
-scenarioA go dir =
+afterEdit go dir edit grade =
   let e = mkEnv dir
   let _ = setup e
   match go e
     None => fail "the populate run did not complete"
     Some cold =>
-      let _ = writeFile (bPath e) (bSource "Int -> String" "intToString x")
+      let _ = edit e
       match go e
         None => fail "the run after the edit did not complete"
-        Some after => expectEach [
-          ("cold run lints both files", expectEqual 2 (misses cold)),
-          ("the edit re-lints B and A", expectEqual 2 (misses after)),
-          (
-            "A reports the new signature",
-            expectEqual
-              [probeLine "Int -> String" "a -> List a"]
-              after.fileA.texts,
-          ),
-        ]
+        Some after => grade cold after
+
+-- (a) A signature edit in B re-lints A, and A's finding shows the new signature.
+scenarioA : (Env -> <IO, FileRead, FileWrite, Exec> Option Run) ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Expectation
+scenarioA go dir =
+  afterEdit
+    go
+    dir
+    (e => put (bPath e) (bSource "Int -> String" "intToString x"))
+    (cold after => expectEach [
+      ("cold run lints both files", expectEqual 2 (misses cold)),
+      ("the edit re-lints B and A", expectEqual 2 (misses after)),
+      (
+        "A reports the new signature",
+        expectEqual [probeLine "Int -> String" "a -> List a"] after.fileA.texts,
+      ),
+    ])
 
 -- (b) A body-only edit in B, with a line inserted above, re-lints B alone and
 -- leaves A's finding as it was.
@@ -283,72 +299,55 @@ scenarioB : (Env -> <IO, FileRead, FileWrite, Exec> Option Run) ->
   String ->
   <IO, FileRead, FileWrite, Exec> Expectation
 scenarioB go dir =
-  let e = mkEnv dir
-  let _ = setup e
-  match go e
-    None => fail "the populate run did not complete"
-    Some _ =>
-      let _ =
-        writeFile
-          (bPath e)
-          ("-- moved down a line\n" ++ bSource "Int -> Int" "x + 2")
-      match go e
-        None => fail "the run after the edit did not complete"
-        Some after => expectEach [
-          ("only B is re-linted", expectEqual 1 (misses after)),
-          (
-            "A is served from the cache",
-            expectFalse after.fileA.relinted,
-          ),
-          (
-            "A's finding is unchanged",
-            expectEqual [probeLine "Int -> Int" "a -> List a"] after.fileA.texts,
-          ),
-        ]
+  afterEdit
+    go
+    dir
+    (e =>
+      put (bPath e) ("-- moved down a line\n" ++ bSource "Int -> Int" "x + 2"))
+    (_ after => expectEach [
+      ("only B is re-linted", expectEqual 1 (misses after)),
+      ("A is served from the cache", expectFalse after.fileA.relinted),
+      (
+        "A's finding is unchanged",
+        expectEqual [probeLine "Int -> Int" "a -> List a"] after.fileA.texts,
+      ),
+    ])
 
 -- (c) A signature edit in a stdlib file re-lints A, and A's finding shows it.
 scenarioC : (Env -> <IO, FileRead, FileWrite, Exec> Option Run) ->
   String ->
   <IO, FileRead, FileWrite, Exec> Expectation
 scenarioC go dir =
-  let e = mkEnv dir
-  let _ = setup e
-  match go e
-    None => fail "the populate run did not complete"
-    Some _ =>
-      let _ = writeFile (stdPath e) (stdSource "a -> List (List a)" "[[a]]")
-      match go e
-        None => fail "the run after the edit did not complete"
-        Some after => expectEach [
-          ("both files are re-linted", expectEqual 2 (misses after)),
-          (
-            "A reports the new stdlib signature",
-            expectEqual
-              [probeLine "Int -> Int" "a -> List (List a)"]
-              after.fileA.texts,
-          ),
-        ]
+  afterEdit
+    go
+    dir
+    (e => put (stdPath e) (stdSource "a -> List (List a)" "[[a]]"))
+    (_ after => expectEach [
+      ("both files are re-linted", expectEqual 2 (misses after)),
+      (
+        "A reports the new stdlib signature",
+        expectEqual
+          [probeLine "Int -> Int" "a -> List (List a)"]
+          after.fileA.texts,
+      ),
+    ])
 
 -- (c') A body-only edit in a stdlib file invalidates nothing.
 scenarioC2 : (Env -> <IO, FileRead, FileWrite, Exec> Option Run) ->
   String ->
   <IO, FileRead, FileWrite, Exec> Expectation
 scenarioC2 go dir =
-  let e = mkEnv dir
-  let _ = setup e
-  match go e
-    None => fail "the populate run did not complete"
-    Some _ =>
-      let _ = writeFile (stdPath e) (stdSource "a -> List a" "a :: []")
-      match go e
-        None => fail "the run after the edit did not complete"
-        Some after => expectEach [
-          ("nothing is re-linted", expectEqual 0 (misses after)),
-          (
-            "A's finding is unchanged",
-            expectEqual [probeLine "Int -> Int" "a -> List a"] after.fileA.texts,
-          ),
-        ]
+  afterEdit
+    go
+    dir
+    (e => put (stdPath e) (stdSource "a -> List a" "a :: []"))
+    (_ after => expectEach [
+      ("nothing is re-linted", expectEqual 0 (misses after)),
+      (
+        "A's finding is unchanged",
+        expectEqual [probeLine "Int -> Int" "a -> List a"] after.fileA.texts,
+      ),
+    ])
 
 isFail : Expectation -> Bool
 isFail (Fail _ _ _) = True
@@ -422,15 +421,11 @@ test "(d) a signature edit re-lints only B for the blind rule, and A stays warm"
 
 blindRunCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 blindRunCase dir =
-  let e = mkEnv dir
-  let _ = setup e
-  match runBlind e
-    None => fail "the populate run did not complete"
-    Some _ =>
-      let _ = writeFile (bPath e) (bSource "Int -> String" "intToString x")
-      match runBlind e
-        None => fail "the run after the edit did not complete"
-        Some after => expectEqual 1 (misses after)
+  afterEdit
+    runBlind
+    dir
+    (e => put (bPath e) (bSource "Int -> String" "intToString x"))
+    (_ after => expectEqual 1 (misses after))
 
 test "(d) a rule that reads the index undeclared sees it empty on every run" =
   withScratchDir blindSeesNothingCase

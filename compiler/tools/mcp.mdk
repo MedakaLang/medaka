@@ -90,6 +90,7 @@ import tools.lint_cmd.{
   internalDisabledFor,
   quadSummaries,
   quadToSrc,
+  dropQuadParse,
 }
 import frontend.ast.{Decl, Loc(..)}
 import frontend.desugar.{desugar}
@@ -1529,10 +1530,6 @@ projectMcpFindings idx disable only deny quads =
       (runProjectRules only disable idx summaries)
   let suppressed = applySuppressionsMulti (map quadToSrc quads) raw
   applyFindingDeny deny suppressed
-
-dropQuadParse : (String, String, List Diag, Positions, List Decl) ->
-  (String, String, List Diag)
-dropQuadParse (path, src, diags, _, _) = (path, src, diags)
 
 anyTripleHasErr : List (String, String, List Diag) -> Bool
 anyTripleHasErr [] = False

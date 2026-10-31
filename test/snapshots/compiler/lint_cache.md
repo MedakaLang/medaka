@@ -1,5 +1,5 @@
 # META
-source_lines=532
+source_lines=508
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cache.mdk — the on-disk cache behind `medaka lint --cache` (#395).
@@ -28,8 +28,8 @@ stages=DESUGAR,MARK
 -- of* file B.  Cache A's findings and B's edit cannot retract them: A is
 -- unchanged, so A cache-hits, and A's stale finding survives.  So every project
 -- rule's `prEvaluate` re-runs from scratch on every run, over summaries that
--- are pure functions of one file each.  Scenario 3 of
--- test/diff_compiler_lint_cache.sh fails loudly if anyone "optimises" this away.
+-- are pure functions of one file each.  `lint_cache_test.mdk` fails if a
+-- project rule's join is cached.
 -- Every registered project rule's summary is stored, so a second project rule
 -- keeps the cache sound with no further work here.
 --
@@ -60,15 +60,15 @@ stages=DESUGAR,MARK
 
 import frontend.ast.{Loc(..)}
 import driver.diagnostics.{Severity(..)}
-import io.{runVerb}
+import path.{dirname}
 import u64 as U64
 import tools.lint_core.{Finding(..), Directive(..), DirScope(..), Summary(..)}
-import support.util.{joinWith, listLen, filterList, splitOnChar, stringTrim}
+import tools.lint_index.{Answer(..), makeStagingDir, stageAndRename}
+import support.util.{joinWith, listLen, filterList}
 import support.char.{isAlnum}
 import support.sexp_value.{
-  SExp(..),
   SexpCursor,
-  renderSExp,
+  atomText,
   cursorOf,
   cursorFailed,
   cursorAtEnd,
@@ -101,7 +101,7 @@ public export data LintEntry = LintEntry {
   freeFindings : List (Int, Finding),
   indexFindings : List (Int, Finding),
   indexKey : String,
-  indexAnswers : List (String, String),
+  indexAnswers : List Answer,
   summaries : List (String, Summary),
   directives : List Directive,
   dirty : Bool,
@@ -206,8 +206,8 @@ sanitizeChar c
 -- ── encode ───────────────────────────────────────────────────────────────────
 -- A shard is one s-expression:
 --   (version "stamp" "path" "hash" "indexKey" (answers) (free) (index) (summaries) (directives))
--- A shard from before `answers` was stored has one list fewer, so its last
--- read fails and it is a miss under the same version.
+-- An older-format shard has a different list count, so its last read fails
+-- and it is a miss.
 -- read by the cursor reader of `support/sexp_value`, which records the first
 -- refusal and hands every later read a neutral value; the decoder checks it once
 -- at the end.
@@ -215,20 +215,17 @@ sanitizeChar c
 export
 encodeEntry : String -> LintEntry -> String
 encodeEntry stamp e =
-  "(\{intToString cacheFormatVersion} \{atom stamp} \{atom e.path} \{atom e.contentHash} \{atom e.indexKey} \{listText encAnswer e.indexAnswers} \{listText encRanked e.freeFindings} \{listText encRanked e.indexFindings} \{listText encNamedSummary e.summaries} \{listText encDirective e.directives})"
-
-atom : String -> String
-atom s = renderSExp (SAtom s)
+  "(\{intToString cacheFormatVersion} \{atomText stamp} \{atomText e.path} \{atomText e.contentHash} \{atomText e.indexKey} \{listText encAnswer e.indexAnswers} \{listText encRanked e.freeFindings} \{listText encRanked e.indexFindings} \{listText encNamedSummary e.summaries} \{listText encDirective e.directives})"
 
 listText : (a -> String) -> List a -> String
 listText f xs = "(" ++ joinWith " " (map f xs) ++ ")"
 
-encAnswer : (String, String) -> String
-encAnswer (question, digest) = "(\{atom question} \{atom digest})"
+encAnswer : Answer -> String
+encAnswer a = "(\{atomText a.ansQuestion} \{atomText a.ansDigest})"
 
 encRanked : (Int, Finding) -> String
 encRanked (rank, f) =
-  "(\{intToString rank} \{atom f.rule} \{atom f.message} \{encSeverity f.severity} \{encLoc f.loc})"
+  "(\{intToString rank} \{atomText f.rule} \{atomText f.message} \{encSeverity f.severity} \{encLoc f.loc})"
 
 encSeverity : Severity -> String
 encSeverity SevError = "e"
@@ -237,12 +234,16 @@ encSeverity SevWarning = "w"
 encLoc : Option Loc -> String
 encLoc None = "()"
 encLoc (Some (Loc file l c el ec)) =
-  "(\{atom file} \{intToString l} \{intToString c} \{intToString el} \{intToString ec})"
+  "(\{atomText file} \{intToString l} \{intToString c} \{intToString el} \{intToString ec})"
 
--- Every `Summary` constructor has an arm here and in `summaryTag`, with no
--- wildcard, so a new summary kind does not compile until it can be stored.
+-- `encSummary` and `summaryTag` have no wildcard arm, so a missing arm for a
+-- new summary kind is a non-exhaustive warning from `medaka check` and a
+-- runtime failure on the first store; `readSummary` falls through to a cursor
+-- failure, so a missing decode arm makes every shard holding that summary a
+-- miss.  The `lint_test.mdk` round trip of every `Summary` constructor pins
+-- both.
 encNamedSummary : (String, Summary) -> String
-encNamedSummary (rule, summary) = "(\{atom rule} \{encSummary summary})"
+encNamedSummary (rule, summary) = "(\{atomText rule} \{encSummary summary})"
 
 encSummary : Summary -> String
 encSummary (DupOccs occs) =
@@ -252,11 +253,12 @@ summaryTag : Summary -> String
 summaryTag (DupOccs _) = "d"
 
 encOcc : (Int, String, String) -> String
-encOcc (line, name, key) = "(\{intToString line} \{atom name} \{atom key})"
+encOcc (line, name, key) =
+  "(\{intToString line} \{atomText name} \{atomText key})"
 
 encDirective : Directive -> String
 encDirective (Directive scope names) =
-  "(\{encScope scope} \{listText atom names})"
+  "(\{encScope scope} \{listText atomText names})"
 
 encScope : DirScope -> String
 encScope DScopeFile = "f"
@@ -276,7 +278,7 @@ encScope (DScopeLine l) = "l \{intToString l}"
 export
 decodeEntry : String ->
   String ->
-  (List (String, String) -> Bool) ->
+  (List Answer -> Bool) ->
   String ->
   String ->
   String ->
@@ -331,13 +333,13 @@ staleShard indexKey entry = ShardStale ({ entry |
   indexAnswers = [],
 })
 
-readAnswer : SexpCursor -> (String, String)
+readAnswer : SexpCursor -> Answer
 readAnswer cur =
   let _ = cursorOpen cur
   let question = cursorAtom cur
   let digest = cursorAtom cur
   let _ = cursorClose cur
-  (question, digest)
+  Answer { ansQuestion = question, ansDigest = digest }
 
 readRanked : SexpCursor -> (Int, Finding)
 readRanked cur =
@@ -438,7 +440,7 @@ export
 loadEntry : String ->
   String ->
   String ->
-  (List (String, String) -> Bool) ->
+  (List Answer -> Bool) ->
   String ->
   String ->
   <IO> ShardLoad
@@ -498,52 +500,27 @@ storeGo cacheDir tmp stamp (e :: rest) =
 -- deliberate: the invariant is about never being WRONG, not never leaking.
 storeOne : String -> String -> String -> LintEntry -> <IO> Unit
 storeOne cacheDir tmp stamp e =
-  let staged = "\{tmp}/shard.sx"
-  match writeFile staged (encodeEntry stamp e)
-    Err _ => ()
-    Ok _ => match rename staged (shardPathOf cacheDir e.path)
-      Err _ =>
-        let _ = removeFile staged
-        ()
-      Ok _ => ()
+  stageAndRename tmp (shardPathOf cacheDir e.path) (encodeEntry stamp e)
 
 -- `mkdir -p` for the two-level cache dir (`<root>/.medaka/lint-cache`).  An
 -- already-existing dir makes `makeDir` fail (EEXIST), which is success here, so
 -- the result is judged by `fileExists`, not by makeDir's own status.
 ensureCacheDir : String -> <IO> Result String Unit
 ensureCacheDir cacheDir =
-  let _ = makeDir (parentOfCacheDir cacheDir)
+  let _ = makeDir (dirname cacheDir)
   let _ = makeDir cacheDir
   if fileExists cacheDir then Ok () else Err "cannot create \{cacheDir}"
-
-parentOfCacheDir : String -> String
-parentOfCacheDir cacheDir =
-  joinWith "/" (dropLastSeg (splitOnChar '/' cacheDir))
-
-dropLastSeg : List String -> List String
-dropLastSeg [] = []
-dropLastSeg [_] = []
-dropLastSeg (x :: rest) = x :: dropLastSeg rest
-
--- A staging dir unique to THIS process, inside the cache dir (see storeEntries).
-makeStagingDir : String -> <IO> Result String String
-makeStagingDir cacheDir =
-  match runVerb "mktemp" ["-d", "\{cacheDir}/.staging_XXXXXX"]
-    Err e => Err e
-    Ok (0, out, _) =>
-      let dir = stringTrim out
-      if dir == "" then Err "mktemp -d printed no path" else Ok dir
-    Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("io") ((mem "runVerb" false))))
+(DUse false (UseGroup ("path") ((mem "dirname" false))))
 (DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true) (mem "Summary" true))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "Answer" true) (mem "makeStagingDir" false) (mem "stageAndRename" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
-(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "renderSExp" false) (mem "cursorOf" false) (mem "cursorFailed" false) (mem "cursorAtEnd" false) (mem "cursorOpen" false) (mem "cursorClose" false) (mem "cursorInt" false) (mem "cursorAtom" false) (mem "cursorChar" false) (mem "cursorList" false) (mem "cursorPeek" false) (mem "cursorAdvance" false) (mem "cursorFail" false) (mem "isCloseByte" false))))
-(DData Public "LintEntry" () ((variant "LintEntry" (ConNamed (field "path" (TyCon "String")) (field "contentHash" (TyCon "String")) (field "freeFindings" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))) (field "indexFindings" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))) (field "indexKey" (TyCon "String")) (field "indexAnswers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "summaries" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Summary")))) (field "directives" (TyApp (TyCon "List") (TyCon "Directive"))) (field "dirty" (TyCon "Bool"))))) ())
+(DUse false (UseGroup ("support" "sexp_value") ((mem "SexpCursor" false) (mem "atomText" false) (mem "cursorOf" false) (mem "cursorFailed" false) (mem "cursorAtEnd" false) (mem "cursorOpen" false) (mem "cursorClose" false) (mem "cursorInt" false) (mem "cursorAtom" false) (mem "cursorChar" false) (mem "cursorList" false) (mem "cursorPeek" false) (mem "cursorAdvance" false) (mem "cursorFail" false) (mem "isCloseByte" false))))
+(DData Public "LintEntry" () ((variant "LintEntry" (ConNamed (field "path" (TyCon "String")) (field "contentHash" (TyCon "String")) (field "freeFindings" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))) (field "indexFindings" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))) (field "indexKey" (TyCon "String")) (field "indexAnswers" (TyApp (TyCon "List") (TyCon "Answer"))) (field "summaries" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Summary")))) (field "directives" (TyApp (TyCon "List") (TyCon "Directive"))) (field "dirty" (TyCon "Bool"))))) ())
 (DData Public "ShardLoad" () ((variant "ShardHit" (ConPos (TyCon "LintEntry"))) (variant "ShardStale" (ConPos (TyCon "LintEntry"))) (variant "ShardMiss" (ConPos))) ())
 (DTypeSig true "entryFindings" (TyFun (TyCon "LintEntry") (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "entryFindings" ((PVar "e")) (EMatch (EFieldAccess (EVar "e") "indexFindings") (arm (PList) () (EApp (EApp (EVar "map") (EVar "snd")) (EFieldAccess (EVar "e") "freeFindings"))) (arm PWild () (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EVar "mergeRanked") (EFieldAccess (EVar "e") "freeFindings")) (EFieldAccess (EVar "e") "indexFindings"))))))
@@ -568,40 +545,38 @@ makeStagingDir cacheDir =
 (DTypeSig false "sanitizeChar" (TyFun (TyCon "Char") (TyCon "Char")))
 (DFunDef false "sanitizeChar" ((PVar "c")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isAlnum") (EVar "c")) (EBinOp "==" (EVar "c") (ELit (LChar ".")))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EBinOp "==" (EVar "c") (ELit (LChar "-")))) (EVar "c") (EIf (EVar "otherwise") (ELit (LChar "_")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "encodeEntry" (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyCon "String"))))
-(DFunDef false "encodeEntry" ((PVar "stamp") (PVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "cacheFormatVersion")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atom") (EVar "stamp")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atom") (EFieldAccess (EVar "e") "path")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atom") (EFieldAccess (EVar "e") "contentHash")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atom") (EFieldAccess (EVar "e") "indexKey")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "listText") (EVar "encAnswer")) (EFieldAccess (EVar "e") "indexAnswers")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "listText") (EVar "encRanked")) (EFieldAccess (EVar "e") "freeFindings")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "listText") (EVar "encRanked")) (EFieldAccess (EVar "e") "indexFindings")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "listText") (EVar "encNamedSummary")) (EFieldAccess (EVar "e") "summaries")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "listText") (EVar "encDirective")) (EFieldAccess (EVar "e") "directives")))) (ELit (LString ")"))))
-(DTypeSig false "atom" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "atom" ((PVar "s")) (EApp (EVar "renderSExp") (EApp (EVar "SAtom") (EVar "s"))))
+(DFunDef false "encodeEntry" ((PVar "stamp") (PVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "cacheFormatVersion")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atomText") (EVar "stamp")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atomText") (EFieldAccess (EVar "e") "path")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atomText") (EFieldAccess (EVar "e") "contentHash")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atomText") (EFieldAccess (EVar "e") "indexKey")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "listText") (EVar "encAnswer")) (EFieldAccess (EVar "e") "indexAnswers")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "listText") (EVar "encRanked")) (EFieldAccess (EVar "e") "freeFindings")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "listText") (EVar "encRanked")) (EFieldAccess (EVar "e") "indexFindings")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "listText") (EVar "encNamedSummary")) (EFieldAccess (EVar "e") "summaries")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "listText") (EVar "encDirective")) (EFieldAccess (EVar "e") "directives")))) (ELit (LString ")"))))
 (DTypeSig false "listText" (TyFun (TyFun (TyVar "a") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
 (DFunDef false "listText" ((PVar "f") (PVar "xs")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "f")) (EVar "xs")))) (ELit (LString ")"))))
-(DTypeSig false "encAnswer" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))
-(DFunDef false "encAnswer" ((PTuple (PVar "question") (PVar "digest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "atom") (EVar "question")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atom") (EVar "digest")))) (ELit (LString ")"))))
+(DTypeSig false "encAnswer" (TyFun (TyCon "Answer") (TyCon "String")))
+(DFunDef false "encAnswer" ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "atomText") (EFieldAccess (EVar "a") "ansQuestion")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atomText") (EFieldAccess (EVar "a") "ansDigest")))) (ELit (LString ")"))))
 (DTypeSig false "encRanked" (TyFun (TyTuple (TyCon "Int") (TyCon "Finding")) (TyCon "String")))
-(DFunDef false "encRanked" ((PTuple (PVar "rank") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "rank")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atom") (EFieldAccess (EVar "f") "rule")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atom") (EFieldAccess (EVar "f") "message")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "encSeverity") (EFieldAccess (EVar "f") "severity")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "encLoc") (EFieldAccess (EVar "f") "loc")))) (ELit (LString ")"))))
+(DFunDef false "encRanked" ((PTuple (PVar "rank") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "rank")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atomText") (EFieldAccess (EVar "f") "rule")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atomText") (EFieldAccess (EVar "f") "message")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "encSeverity") (EFieldAccess (EVar "f") "severity")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "encLoc") (EFieldAccess (EVar "f") "loc")))) (ELit (LString ")"))))
 (DTypeSig false "encSeverity" (TyFun (TyCon "Severity") (TyCon "String")))
 (DFunDef false "encSeverity" ((PCon "SevError")) (ELit (LString "e")))
 (DFunDef false "encSeverity" ((PCon "SevWarning")) (ELit (LString "w")))
 (DTypeSig false "encLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "encLoc" ((PCon "None")) (ELit (LString "()")))
-(DFunDef false "encLoc" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "l") (PVar "c") (PVar "el") (PVar "ec")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "atom") (EVar "file")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "l")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "c")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "el")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ec")))) (ELit (LString ")"))))
+(DFunDef false "encLoc" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "l") (PVar "c") (PVar "el") (PVar "ec")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "atomText") (EVar "file")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "l")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "c")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "el")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ec")))) (ELit (LString ")"))))
 (DTypeSig false "encNamedSummary" (TyFun (TyTuple (TyCon "String") (TyCon "Summary")) (TyCon "String")))
-(DFunDef false "encNamedSummary" ((PTuple (PVar "rule") (PVar "summary"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "atom") (EVar "rule")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "encSummary") (EVar "summary")))) (ELit (LString ")"))))
+(DFunDef false "encNamedSummary" ((PTuple (PVar "rule") (PVar "summary"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "atomText") (EVar "rule")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "encSummary") (EVar "summary")))) (ELit (LString ")"))))
 (DTypeSig false "encSummary" (TyFun (TyCon "Summary") (TyCon "String")))
 (DFunDef false "encSummary" ((PCon "DupOccs" (PVar "occs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "summaryTag") (EApp (EVar "DupOccs") (EVar "occs"))))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "listText") (EVar "encOcc")) (EVar "occs")))) (ELit (LString ")"))))
 (DTypeSig false "summaryTag" (TyFun (TyCon "Summary") (TyCon "String")))
 (DFunDef false "summaryTag" ((PCon "DupOccs" PWild)) (ELit (LString "d")))
 (DTypeSig false "encOcc" (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")) (TyCon "String")))
-(DFunDef false "encOcc" ((PTuple (PVar "line") (PVar "name") (PVar "key"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atom") (EVar "name")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atom") (EVar "key")))) (ELit (LString ")"))))
+(DFunDef false "encOcc" ((PTuple (PVar "line") (PVar "name") (PVar "key"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atomText") (EVar "name")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atomText") (EVar "key")))) (ELit (LString ")"))))
 (DTypeSig false "encDirective" (TyFun (TyCon "Directive") (TyCon "String")))
-(DFunDef false "encDirective" ((PCon "Directive" (PVar "scope") (PVar "names"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "encScope") (EVar "scope")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "listText") (EVar "atom")) (EVar "names")))) (ELit (LString ")"))))
+(DFunDef false "encDirective" ((PCon "Directive" (PVar "scope") (PVar "names"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "encScope") (EVar "scope")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "listText") (EVar "atomText")) (EVar "names")))) (ELit (LString ")"))))
 (DTypeSig false "encScope" (TyFun (TyCon "DirScope") (TyCon "String")))
 (DFunDef false "encScope" ((PCon "DScopeFile")) (ELit (LString "f")))
 (DFunDef false "encScope" ((PCon "DScopeLine" (PVar "l"))) (EBinOp "++" (EBinOp "++" (ELit (LString "l ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "l")))) (ELit (LString ""))))
-(DTypeSig true "decodeEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "ShardLoad"))))))))
+(DTypeSig true "decodeEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Answer")) (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "ShardLoad"))))))))
 (DFunDef false "decodeEntry" ((PVar "stamp") (PVar "indexKey") (PVar "answersHold") (PVar "path") (PVar "hash") (PVar "text")) (EBlock (DoLet false false (PVar "cur") (EApp (EVar "cursorOf") (EVar "text"))) (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "st") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "p") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "h") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "cursorFailed") (EVar "cur")) (EBinOp "/=" (EVar "v") (EVar "cacheFormatVersion"))) (EBinOp "/=" (EVar "st") (EVar "stamp"))) (EBinOp "/=" (EVar "p") (EVar "path"))) (EBinOp "/=" (EVar "h") (EVar "hash"))) (EVar "ShardMiss") (EBlock (DoLet false false (PVar "key") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "answers") (EApp (EApp (EVar "cursorList") (EVar "readAnswer")) (EVar "cur"))) (DoLet false false (PVar "free") (EApp (EApp (EVar "cursorList") (EVar "readRanked")) (EVar "cur"))) (DoLet false false (PVar "indexed") (EApp (EApp (EVar "cursorList") (EVar "readRanked")) (EVar "cur"))) (DoLet false false (PVar "sums") (EApp (EApp (EVar "cursorList") (EVar "readNamedSummary")) (EVar "cur"))) (DoLet false false (PVar "dirs") (EApp (EApp (EVar "cursorList") (EVar "readDirective")) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "cursorFailed") (EVar "cur")) (EApp (EVar "not") (EApp (EVar "cursorAtEnd") (EVar "cur")))) (EVar "ShardMiss") (EBlock (DoLet false false (PVar "entry") (ERecordCreate "LintEntry" ((fa "path" (EVar "path")) (fa "contentHash" (EVar "hash")) (fa "freeFindings" (EVar "free")) (fa "indexFindings" (EVar "indexed")) (fa "indexKey" (EVar "key")) (fa "indexAnswers" (EVar "answers")) (fa "summaries" (EVar "sums")) (fa "directives" (EVar "dirs")) (fa "dirty" (EVar "False"))))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "key") (EVar "indexKey")) (EApp (EVar "answersHold") (EVar "answers"))) (EApp (EVar "ShardHit") (EVar "entry")) (EApp (EApp (EVar "staleShard") (EVar "indexKey")) (EVar "entry"))))))))))))
 (DTypeSig true "staleShard" (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyCon "ShardLoad"))))
 (DFunDef false "staleShard" ((PVar "indexKey") (PVar "entry")) (EApp (EVar "ShardStale") (ERecordUpdate (EVar "entry") ((fa "indexFindings" (EListLit)) (fa "indexKey" (EVar "indexKey")) (fa "indexAnswers" (EListLit))))))
-(DTypeSig false "readAnswer" (TyFun (TyCon "SexpCursor") (TyTuple (TyCon "String") (TyCon "String"))))
-(DFunDef false "readAnswer" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "question") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "digest") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "question") (EVar "digest")))))
+(DTypeSig false "readAnswer" (TyFun (TyCon "SexpCursor") (TyCon "Answer")))
+(DFunDef false "readAnswer" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "question") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "digest") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ERecordCreate "Answer" ((fa "ansQuestion" (EVar "question")) (fa "ansDigest" (EVar "digest")))))))
 (DTypeSig false "readRanked" (TyFun (TyCon "SexpCursor") (TyTuple (TyCon "Int") (TyCon "Finding"))))
 (DFunDef false "readRanked" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "rank") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "rule") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "message") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "sev") (EApp (EVar "readSeverity") (EVar "cur"))) (DoLet false false (PVar "loc") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "rank") (ERecordCreate "Finding" ((fa "rule" (EVar "rule")) (fa "message" (EVar "message")) (fa "severity" (EVar "sev")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))))))
 (DTypeSig false "readSeverity" (TyFun (TyCon "SexpCursor") (TyCon "Severity")))
@@ -616,7 +591,7 @@ makeStagingDir cacheDir =
 (DFunDef false "readOcc" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "line") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "name") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "key") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "line") (EVar "name") (EVar "key")))))
 (DTypeSig false "readDirective" (TyFun (TyCon "SexpCursor") (TyCon "Directive")))
 (DFunDef false "readDirective" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "tag") (EApp (EVar "cursorChar") (EVar "cur"))) (DoLet false false (PVar "scope") (EIf (EBinOp "==" (EVar "tag") (ELit (LInt 102))) (EVar "DScopeFile") (EIf (EBinOp "==" (EVar "tag") (ELit (LInt 108))) (EApp (EVar "DScopeLine") (EApp (EVar "cursorInt") (EVar "cur"))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "DScopeFile"))))) (DoLet false false (PVar "names") (EApp (EApp (EVar "cursorList") (EVar "cursorAtom")) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "Directive") (EVar "scope")) (EVar "names")))))
-(DTypeSig true "loadEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ShardLoad")))))))))
+(DTypeSig true "loadEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Answer")) (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ShardLoad")))))))))
 (DFunDef false "loadEntry" ((PVar "cacheDir") (PVar "stamp") (PVar "indexKey") (PVar "answersHold") (PVar "path") (PVar "hash")) (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "shardPathOf") (EVar "cacheDir")) (EVar "path"))) (arm (PCon "Err" PWild) () (EVar "ShardMiss")) (arm (PCon "Ok" (PVar "text")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "decodeEntry") (EVar "stamp")) (EVar "indexKey")) (EVar "answersHold")) (EVar "path")) (EVar "hash")) (EVar "text")))))
 (DTypeSig true "storeEntries" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "LintEntry")) (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "storeEntries" ((PVar "cacheDir") (PVar "stamp") (PVar "entries")) (EBlock (DoLet false false (PVar "dirty") (EApp (EApp (EVar "filterList") (EVar "entryDirty")) (EVar "entries"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "dirty")) (ELit (LInt 0))) (ELit LUnit) (EMatch (EApp (EVar "ensureCacheDir") (EVar "cacheDir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EVar "makeStagingDir") (EVar "cacheDir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "tmp")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "storeGo") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "dirty"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "tmp"))) (DoExpr (ELit LUnit)))))))))))
@@ -626,27 +601,20 @@ makeStagingDir cacheDir =
 (DFunDef false "storeGo" (PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "storeGo" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PCons (PVar "e") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "storeOne") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeGo") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "rest")))))
 (DTypeSig false "storeOne" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyEffect ("IO") None (TyCon "Unit")))))))
-(DFunDef false "storeOne" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PVar "e")) (EBlock (DoLet false false (PVar "staged") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "tmp"))) (ELit (LString "/shard.sx")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "staged")) (EApp (EApp (EVar "encodeEntry") (EVar "stamp")) (EVar "e"))) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "rename") (EVar "staged")) (EApp (EApp (EVar "shardPathOf") (EVar "cacheDir")) (EFieldAccess (EVar "e") "path"))) (arm (PCon "Err" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EVar "staged"))) (DoExpr (ELit LUnit)))) (arm (PCon "Ok" PWild) () (ELit LUnit))))))))
+(DFunDef false "storeOne" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PVar "e")) (EApp (EApp (EApp (EVar "stageAndRename") (EVar "tmp")) (EApp (EApp (EVar "shardPathOf") (EVar "cacheDir")) (EFieldAccess (EVar "e") "path"))) (EApp (EApp (EVar "encodeEntry") (EVar "stamp")) (EVar "e"))))
 (DTypeSig false "ensureCacheDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "ensureCacheDir" ((PVar "cacheDir")) (EBlock (DoLet false false PWild (EApp (EVar "makeDir") (EApp (EVar "parentOfCacheDir") (EVar "cacheDir")))) (DoLet false false PWild (EApp (EVar "makeDir") (EVar "cacheDir"))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "cacheDir")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "cannot create ")) (EApp (EVar "display") (EVar "cacheDir"))) (ELit (LString ""))))))))
-(DTypeSig false "parentOfCacheDir" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "parentOfCacheDir" ((PVar "cacheDir")) (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EApp (EVar "dropLastSeg") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "cacheDir")))))
-(DTypeSig false "dropLastSeg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "dropLastSeg" ((PList)) (EListLit))
-(DFunDef false "dropLastSeg" ((PList PWild)) (EListLit))
-(DFunDef false "dropLastSeg" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "dropLastSeg") (EVar "rest"))))
-(DTypeSig false "makeStagingDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "makeStagingDir" ((PVar "cacheDir")) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "cacheDir"))) (ELit (LString "/.staging_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir")))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString "")))))))
+(DFunDef false "ensureCacheDir" ((PVar "cacheDir")) (EBlock (DoLet false false PWild (EApp (EVar "makeDir") (EApp (EVar "dirname") (EVar "cacheDir")))) (DoLet false false PWild (EApp (EVar "makeDir") (EVar "cacheDir"))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "cacheDir")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "cannot create ")) (EApp (EVar "display") (EVar "cacheDir"))) (ELit (LString ""))))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("io") ((mem "runVerb" false))))
+(DUse false (UseGroup ("path") ((mem "dirname" false))))
 (DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true) (mem "Summary" true))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "Answer" true) (mem "makeStagingDir" false) (mem "stageAndRename" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
-(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "renderSExp" false) (mem "cursorOf" false) (mem "cursorFailed" false) (mem "cursorAtEnd" false) (mem "cursorOpen" false) (mem "cursorClose" false) (mem "cursorInt" false) (mem "cursorAtom" false) (mem "cursorChar" false) (mem "cursorList" false) (mem "cursorPeek" false) (mem "cursorAdvance" false) (mem "cursorFail" false) (mem "isCloseByte" false))))
-(DData Public "LintEntry" () ((variant "LintEntry" (ConNamed (field "path" (TyCon "String")) (field "contentHash" (TyCon "String")) (field "freeFindings" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))) (field "indexFindings" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))) (field "indexKey" (TyCon "String")) (field "indexAnswers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "summaries" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Summary")))) (field "directives" (TyApp (TyCon "List") (TyCon "Directive"))) (field "dirty" (TyCon "Bool"))))) ())
+(DUse false (UseGroup ("support" "sexp_value") ((mem "SexpCursor" false) (mem "atomText" false) (mem "cursorOf" false) (mem "cursorFailed" false) (mem "cursorAtEnd" false) (mem "cursorOpen" false) (mem "cursorClose" false) (mem "cursorInt" false) (mem "cursorAtom" false) (mem "cursorChar" false) (mem "cursorList" false) (mem "cursorPeek" false) (mem "cursorAdvance" false) (mem "cursorFail" false) (mem "isCloseByte" false))))
+(DData Public "LintEntry" () ((variant "LintEntry" (ConNamed (field "path" (TyCon "String")) (field "contentHash" (TyCon "String")) (field "freeFindings" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))) (field "indexFindings" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))) (field "indexKey" (TyCon "String")) (field "indexAnswers" (TyApp (TyCon "List") (TyCon "Answer"))) (field "summaries" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Summary")))) (field "directives" (TyApp (TyCon "List") (TyCon "Directive"))) (field "dirty" (TyCon "Bool"))))) ())
 (DData Public "ShardLoad" () ((variant "ShardHit" (ConPos (TyCon "LintEntry"))) (variant "ShardStale" (ConPos (TyCon "LintEntry"))) (variant "ShardMiss" (ConPos))) ())
 (DTypeSig true "entryFindings" (TyFun (TyCon "LintEntry") (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "entryFindings" ((PVar "e")) (EMatch (EFieldAccess (EVar "e") "indexFindings") (arm (PList) () (EApp (EApp (EMethodRef "map") (EVar "snd")) (EFieldAccess (EVar "e") "freeFindings"))) (arm PWild () (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EApp (EVar "mergeRanked") (EFieldAccess (EVar "e") "freeFindings")) (EFieldAccess (EVar "e") "indexFindings"))))))
@@ -671,40 +639,38 @@ makeStagingDir cacheDir =
 (DTypeSig false "sanitizeChar" (TyFun (TyCon "Char") (TyCon "Char")))
 (DFunDef false "sanitizeChar" ((PVar "c")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isAlnum") (EVar "c")) (EBinOp "==" (EVar "c") (ELit (LChar ".")))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EBinOp "==" (EVar "c") (ELit (LChar "-")))) (EVar "c") (EIf (EVar "otherwise") (ELit (LChar "_")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "encodeEntry" (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyCon "String"))))
-(DFunDef false "encodeEntry" ((PVar "stamp") (PVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "cacheFormatVersion")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atom") (EVar "stamp")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atom") (EFieldAccess (EVar "e") "path")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atom") (EFieldAccess (EVar "e") "contentHash")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atom") (EFieldAccess (EVar "e") "indexKey")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "listText") (EVar "encAnswer")) (EFieldAccess (EVar "e") "indexAnswers")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "listText") (EVar "encRanked")) (EFieldAccess (EVar "e") "freeFindings")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "listText") (EVar "encRanked")) (EFieldAccess (EVar "e") "indexFindings")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "listText") (EVar "encNamedSummary")) (EFieldAccess (EVar "e") "summaries")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "listText") (EVar "encDirective")) (EFieldAccess (EVar "e") "directives")))) (ELit (LString ")"))))
-(DTypeSig false "atom" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "atom" ((PVar "s")) (EApp (EVar "renderSExp") (EApp (EVar "SAtom") (EVar "s"))))
+(DFunDef false "encodeEntry" ((PVar "stamp") (PVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "cacheFormatVersion")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atomText") (EVar "stamp")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atomText") (EFieldAccess (EVar "e") "path")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atomText") (EFieldAccess (EVar "e") "contentHash")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atomText") (EFieldAccess (EVar "e") "indexKey")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "listText") (EVar "encAnswer")) (EFieldAccess (EVar "e") "indexAnswers")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "listText") (EVar "encRanked")) (EFieldAccess (EVar "e") "freeFindings")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "listText") (EVar "encRanked")) (EFieldAccess (EVar "e") "indexFindings")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "listText") (EVar "encNamedSummary")) (EFieldAccess (EVar "e") "summaries")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "listText") (EVar "encDirective")) (EFieldAccess (EVar "e") "directives")))) (ELit (LString ")"))))
 (DTypeSig false "listText" (TyFun (TyFun (TyVar "a") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
 (DFunDef false "listText" ((PVar "f") (PVar "xs")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "f")) (EVar "xs")))) (ELit (LString ")"))))
-(DTypeSig false "encAnswer" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))
-(DFunDef false "encAnswer" ((PTuple (PVar "question") (PVar "digest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "atom") (EVar "question")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atom") (EVar "digest")))) (ELit (LString ")"))))
+(DTypeSig false "encAnswer" (TyFun (TyCon "Answer") (TyCon "String")))
+(DFunDef false "encAnswer" ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "atomText") (EFieldAccess (EVar "a") "ansQuestion")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atomText") (EFieldAccess (EVar "a") "ansDigest")))) (ELit (LString ")"))))
 (DTypeSig false "encRanked" (TyFun (TyTuple (TyCon "Int") (TyCon "Finding")) (TyCon "String")))
-(DFunDef false "encRanked" ((PTuple (PVar "rank") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "rank")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atom") (EFieldAccess (EVar "f") "rule")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atom") (EFieldAccess (EVar "f") "message")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "encSeverity") (EFieldAccess (EVar "f") "severity")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "encLoc") (EFieldAccess (EVar "f") "loc")))) (ELit (LString ")"))))
+(DFunDef false "encRanked" ((PTuple (PVar "rank") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "rank")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atomText") (EFieldAccess (EVar "f") "rule")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atomText") (EFieldAccess (EVar "f") "message")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "encSeverity") (EFieldAccess (EVar "f") "severity")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "encLoc") (EFieldAccess (EVar "f") "loc")))) (ELit (LString ")"))))
 (DTypeSig false "encSeverity" (TyFun (TyCon "Severity") (TyCon "String")))
 (DFunDef false "encSeverity" ((PCon "SevError")) (ELit (LString "e")))
 (DFunDef false "encSeverity" ((PCon "SevWarning")) (ELit (LString "w")))
 (DTypeSig false "encLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "encLoc" ((PCon "None")) (ELit (LString "()")))
-(DFunDef false "encLoc" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "l") (PVar "c") (PVar "el") (PVar "ec")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "atom") (EVar "file")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "l")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "c")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "el")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ec")))) (ELit (LString ")"))))
+(DFunDef false "encLoc" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "l") (PVar "c") (PVar "el") (PVar "ec")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "atomText") (EVar "file")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "l")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "c")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "el")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ec")))) (ELit (LString ")"))))
 (DTypeSig false "encNamedSummary" (TyFun (TyTuple (TyCon "String") (TyCon "Summary")) (TyCon "String")))
-(DFunDef false "encNamedSummary" ((PTuple (PVar "rule") (PVar "summary"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "atom") (EVar "rule")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "encSummary") (EVar "summary")))) (ELit (LString ")"))))
+(DFunDef false "encNamedSummary" ((PTuple (PVar "rule") (PVar "summary"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "atomText") (EVar "rule")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "encSummary") (EVar "summary")))) (ELit (LString ")"))))
 (DTypeSig false "encSummary" (TyFun (TyCon "Summary") (TyCon "String")))
 (DFunDef false "encSummary" ((PCon "DupOccs" (PVar "occs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "summaryTag") (EApp (EVar "DupOccs") (EVar "occs"))))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "listText") (EVar "encOcc")) (EVar "occs")))) (ELit (LString ")"))))
 (DTypeSig false "summaryTag" (TyFun (TyCon "Summary") (TyCon "String")))
 (DFunDef false "summaryTag" ((PCon "DupOccs" PWild)) (ELit (LString "d")))
 (DTypeSig false "encOcc" (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")) (TyCon "String")))
-(DFunDef false "encOcc" ((PTuple (PVar "line") (PVar "name") (PVar "key"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atom") (EVar "name")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atom") (EVar "key")))) (ELit (LString ")"))))
+(DFunDef false "encOcc" ((PTuple (PVar "line") (PVar "name") (PVar "key"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atomText") (EVar "name")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atomText") (EVar "key")))) (ELit (LString ")"))))
 (DTypeSig false "encDirective" (TyFun (TyCon "Directive") (TyCon "String")))
-(DFunDef false "encDirective" ((PCon "Directive" (PVar "scope") (PVar "names"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "encScope") (EVar "scope")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "listText") (EVar "atom")) (EVar "names")))) (ELit (LString ")"))))
+(DFunDef false "encDirective" ((PCon "Directive" (PVar "scope") (PVar "names"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "encScope") (EVar "scope")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "listText") (EVar "atomText")) (EVar "names")))) (ELit (LString ")"))))
 (DTypeSig false "encScope" (TyFun (TyCon "DirScope") (TyCon "String")))
 (DFunDef false "encScope" ((PCon "DScopeFile")) (ELit (LString "f")))
 (DFunDef false "encScope" ((PCon "DScopeLine" (PVar "l"))) (EBinOp "++" (EBinOp "++" (ELit (LString "l ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "l")))) (ELit (LString ""))))
-(DTypeSig true "decodeEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "ShardLoad"))))))))
+(DTypeSig true "decodeEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Answer")) (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "ShardLoad"))))))))
 (DFunDef false "decodeEntry" ((PVar "stamp") (PVar "indexKey") (PVar "answersHold") (PVar "path") (PVar "hash") (PVar "text")) (EBlock (DoLet false false (PVar "cur") (EApp (EVar "cursorOf") (EVar "text"))) (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "st") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "p") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "h") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "cursorFailed") (EVar "cur")) (EBinOp "/=" (EVar "v") (EVar "cacheFormatVersion"))) (EBinOp "/=" (EVar "st") (EVar "stamp"))) (EBinOp "/=" (EVar "p") (EVar "path"))) (EBinOp "/=" (EVar "h") (EMethodRef "hash"))) (EVar "ShardMiss") (EBlock (DoLet false false (PVar "key") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "answers") (EApp (EApp (EVar "cursorList") (EVar "readAnswer")) (EVar "cur"))) (DoLet false false (PVar "free") (EApp (EApp (EVar "cursorList") (EVar "readRanked")) (EVar "cur"))) (DoLet false false (PVar "indexed") (EApp (EApp (EVar "cursorList") (EVar "readRanked")) (EVar "cur"))) (DoLet false false (PVar "sums") (EApp (EApp (EVar "cursorList") (EVar "readNamedSummary")) (EVar "cur"))) (DoLet false false (PVar "dirs") (EApp (EApp (EVar "cursorList") (EVar "readDirective")) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "cursorFailed") (EVar "cur")) (EApp (EVar "not") (EApp (EVar "cursorAtEnd") (EVar "cur")))) (EVar "ShardMiss") (EBlock (DoLet false false (PVar "entry") (ERecordCreate "LintEntry" ((fa "path" (EVar "path")) (fa "contentHash" (EMethodRef "hash")) (fa "freeFindings" (EVar "free")) (fa "indexFindings" (EVar "indexed")) (fa "indexKey" (EVar "key")) (fa "indexAnswers" (EVar "answers")) (fa "summaries" (EVar "sums")) (fa "directives" (EVar "dirs")) (fa "dirty" (EVar "False"))))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "key") (EVar "indexKey")) (EApp (EVar "answersHold") (EVar "answers"))) (EApp (EVar "ShardHit") (EVar "entry")) (EApp (EApp (EVar "staleShard") (EVar "indexKey")) (EVar "entry"))))))))))))
 (DTypeSig true "staleShard" (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyCon "ShardLoad"))))
 (DFunDef false "staleShard" ((PVar "indexKey") (PVar "entry")) (EApp (EVar "ShardStale") (ERecordUpdate (EVar "entry") ((fa "indexFindings" (EListLit)) (fa "indexKey" (EVar "indexKey")) (fa "indexAnswers" (EListLit))))))
-(DTypeSig false "readAnswer" (TyFun (TyCon "SexpCursor") (TyTuple (TyCon "String") (TyCon "String"))))
-(DFunDef false "readAnswer" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "question") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "digest") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "question") (EVar "digest")))))
+(DTypeSig false "readAnswer" (TyFun (TyCon "SexpCursor") (TyCon "Answer")))
+(DFunDef false "readAnswer" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "question") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "digest") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ERecordCreate "Answer" ((fa "ansQuestion" (EVar "question")) (fa "ansDigest" (EVar "digest")))))))
 (DTypeSig false "readRanked" (TyFun (TyCon "SexpCursor") (TyTuple (TyCon "Int") (TyCon "Finding"))))
 (DFunDef false "readRanked" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "rank") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "rule") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "message") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "sev") (EApp (EVar "readSeverity") (EVar "cur"))) (DoLet false false (PVar "loc") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "rank") (ERecordCreate "Finding" ((fa "rule" (EVar "rule")) (fa "message" (EVar "message")) (fa "severity" (EVar "sev")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))))))
 (DTypeSig false "readSeverity" (TyFun (TyCon "SexpCursor") (TyCon "Severity")))
@@ -719,7 +685,7 @@ makeStagingDir cacheDir =
 (DFunDef false "readOcc" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "line") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "name") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "key") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "line") (EVar "name") (EVar "key")))))
 (DTypeSig false "readDirective" (TyFun (TyCon "SexpCursor") (TyCon "Directive")))
 (DFunDef false "readDirective" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "tag") (EApp (EVar "cursorChar") (EVar "cur"))) (DoLet false false (PVar "scope") (EIf (EBinOp "==" (EVar "tag") (ELit (LInt 102))) (EVar "DScopeFile") (EIf (EBinOp "==" (EVar "tag") (ELit (LInt 108))) (EApp (EVar "DScopeLine") (EApp (EVar "cursorInt") (EVar "cur"))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "DScopeFile"))))) (DoLet false false (PVar "names") (EApp (EApp (EVar "cursorList") (EVar "cursorAtom")) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "Directive") (EVar "scope")) (EVar "names")))))
-(DTypeSig true "loadEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ShardLoad")))))))))
+(DTypeSig true "loadEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Answer")) (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ShardLoad")))))))))
 (DFunDef false "loadEntry" ((PVar "cacheDir") (PVar "stamp") (PVar "indexKey") (PVar "answersHold") (PVar "path") (PVar "hash")) (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "shardPathOf") (EVar "cacheDir")) (EVar "path"))) (arm (PCon "Err" PWild) () (EVar "ShardMiss")) (arm (PCon "Ok" (PVar "text")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "decodeEntry") (EVar "stamp")) (EVar "indexKey")) (EVar "answersHold")) (EVar "path")) (EMethodRef "hash")) (EVar "text")))))
 (DTypeSig true "storeEntries" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "LintEntry")) (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "storeEntries" ((PVar "cacheDir") (PVar "stamp") (PVar "entries")) (EBlock (DoLet false false (PVar "dirty") (EApp (EApp (EVar "filterList") (EVar "entryDirty")) (EVar "entries"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "dirty")) (ELit (LInt 0))) (ELit LUnit) (EMatch (EApp (EVar "ensureCacheDir") (EVar "cacheDir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EVar "makeStagingDir") (EVar "cacheDir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "tmp")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "storeGo") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "dirty"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "tmp"))) (DoExpr (ELit LUnit)))))))))))
@@ -729,14 +695,6 @@ makeStagingDir cacheDir =
 (DFunDef false "storeGo" (PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "storeGo" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PCons (PVar "e") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "storeOne") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeGo") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "rest")))))
 (DTypeSig false "storeOne" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyEffect ("IO") None (TyCon "Unit")))))))
-(DFunDef false "storeOne" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PVar "e")) (EBlock (DoLet false false (PVar "staged") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "tmp"))) (ELit (LString "/shard.sx")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "staged")) (EApp (EApp (EVar "encodeEntry") (EVar "stamp")) (EVar "e"))) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "rename") (EVar "staged")) (EApp (EApp (EVar "shardPathOf") (EVar "cacheDir")) (EFieldAccess (EVar "e") "path"))) (arm (PCon "Err" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EVar "staged"))) (DoExpr (ELit LUnit)))) (arm (PCon "Ok" PWild) () (ELit LUnit))))))))
+(DFunDef false "storeOne" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PVar "e")) (EApp (EApp (EApp (EVar "stageAndRename") (EVar "tmp")) (EApp (EApp (EVar "shardPathOf") (EVar "cacheDir")) (EFieldAccess (EVar "e") "path"))) (EApp (EApp (EVar "encodeEntry") (EVar "stamp")) (EVar "e"))))
 (DTypeSig false "ensureCacheDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "ensureCacheDir" ((PVar "cacheDir")) (EBlock (DoLet false false PWild (EApp (EVar "makeDir") (EApp (EVar "parentOfCacheDir") (EVar "cacheDir")))) (DoLet false false PWild (EApp (EVar "makeDir") (EVar "cacheDir"))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "cacheDir")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "cannot create ")) (EApp (EMethodRef "display") (EVar "cacheDir"))) (ELit (LString ""))))))))
-(DTypeSig false "parentOfCacheDir" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "parentOfCacheDir" ((PVar "cacheDir")) (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EApp (EVar "dropLastSeg") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "cacheDir")))))
-(DTypeSig false "dropLastSeg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "dropLastSeg" ((PList)) (EListLit))
-(DFunDef false "dropLastSeg" ((PList PWild)) (EListLit))
-(DFunDef false "dropLastSeg" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "dropLastSeg") (EVar "rest"))))
-(DTypeSig false "makeStagingDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "makeStagingDir" ((PVar "cacheDir")) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "cacheDir"))) (ELit (LString "/.staging_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir")))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString "")))))))
+(DFunDef false "ensureCacheDir" ((PVar "cacheDir")) (EBlock (DoLet false false PWild (EApp (EVar "makeDir") (EApp (EVar "dirname") (EVar "cacheDir")))) (DoLet false false PWild (EApp (EVar "makeDir") (EVar "cacheDir"))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "cacheDir")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "cannot create ")) (EApp (EMethodRef "display") (EVar "cacheDir"))) (ELit (LString ""))))))))
