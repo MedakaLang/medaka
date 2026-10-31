@@ -70,7 +70,7 @@ reachableStandaloneSig : List (String, List Decl) -> Int -> List Decl -> String 
 reachableStandaloneSigGo : List (String, List Decl) -> Int -> List (String, String) -> Option (Option Ty)
 recoveredShadowSym : String -> Ref Route -> String
 reexportedOrigins : List Decl -> String -> List (String, String)
-reexportedOriginsOf : Decl -> String -> List (String, String)
+reexportedOriginsOf : UsePath -> String -> List (String, String)
 rejectAdmittedValueOccurrence : ModuleCtx -> String -> Unit
 resolveRLocalSite : SiteCtx -> String -> Ref Route -> Mono -> String -> ScopeId -> String -> List Mono -> List IfaceRef -> List (List Mono) -> Unit
 sameWrittenAtoms : List EffAtomTy -> List EffAtomTy -> Bool

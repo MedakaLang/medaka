@@ -213,7 +213,7 @@ import support.util.{
 }
 import list.{elemIndex, findMap, head}
 import types.registry.{spFloor}
-import frontend.visibility.{useModId}
+import frontend.visibility.{useModId, pubUsePaths, directIn, nsValues}
 import frontend.resolve.{stampGraphTyOrigins}
 import map as IdMap
 
@@ -2320,21 +2320,19 @@ ctorIdentRow tyName o cn = match mkIdent NsCtor o cn
 reexportedCtorIdents : OrdMap (List (String, String, Ident)) ->
   List Decl ->
   List (String, String, Ident)
-reexportedCtorIdents acc decls = flatMap (reexportedCtorIdentsOf acc) decls
+reexportedCtorIdents acc decls =
+  flatMap (reexportedCtorIdentsOf acc) (pubUsePaths decls)
 
 reexportedCtorIdentsOf : OrdMap (List (String, String, Ident)) ->
-  Decl ->
+  UsePath ->
   List (String, String, Ident)
-reexportedCtorIdentsOf acc (DAttrib _ d) = reexportedCtorIdentsOf acc d
-reexportedCtorIdentsOf acc (DUse True path _) =
-  match omLookup (useModId path) acc
-    None => []
-    Some src => match path
-      -- `export import src.*` re-exports every one of src's constructors
-      UseWild _ => src
-      UseGroup _ ms => flatMap (m => reexportCtorMember m src) ms
-      _ => []
-reexportedCtorIdentsOf _ _ = []
+reexportedCtorIdentsOf acc path = match omLookup (useModId path) acc
+  None => []
+  Some src => match path
+    -- `export import src.*` re-exports every one of src's constructors
+    UseWild _ => src
+    UseGroup _ ms => flatMap (m => reexportCtorMember m src) ms
+    _ => []
 
 reexportCtorMember : UseMember ->
   List (String, String, Ident) ->
@@ -2580,23 +2578,20 @@ modulePubDefiners before mid decls =
   map (n => (n, (mid, n))) (pubTopFnNames decls)
     ++ reexportDefiners before decls
 
--- the rows a module's `export import` decls (`DUse True` — the same filter resolve's
--- `pubUsePaths` and `reexportSeed` use) add to its own export table.  A plain `import`
--- is not re-exported and contributes nothing downstream.
+-- the rows a module's `export import` decls (`pubUsePaths`) add to its own export
+-- table.  A plain `import` is not re-exported and contributes nothing downstream.
 reexportDefiners : OrdMap (List (String, (String, String))) ->
   List Decl ->
   List (String, (String, String))
-reexportDefiners _ [] = []
-reexportDefiners before ((DAttrib _ d) :: rest) =
-  reexportDefiners before [d] ++ reexportDefiners before rest
-reexportDefiners before ((DUse True path _) :: rest) =
+reexportDefiners before decls =
+  flatMap (reexportDefinersOf before) (pubUsePaths decls)
+
+reexportDefinersOf : OrdMap (List (String, (String, String))) ->
+  UsePath ->
+  List (String, (String, String))
+reexportDefinersOf before path =
   let depId = useModId path
-  if depId == "core" then
-    reexportDefiners before rest
-  else
-    importFormRows path (definersIn before depId)
-      ++ reexportDefiners before rest
-reexportDefiners before (_ :: rest) = reexportDefiners before rest
+  if depId == "core" then [] else importFormRows path (definersIn before depId)
 
 -- `declTopFnNames` restricted to the EXPORTED bindings — what a wildcard import can
 -- actually bind.  A private binding must not enter the definer map: it is unreachable
@@ -2610,17 +2605,7 @@ export
 pubTopFnNames : List Decl -> List String
 pubTopFnNames decls =
   let fns = namesToSet (declTopFnNames decls) omEmpty
-  filterList (n => omHasKey n fns) (publicStandaloneNames decls)
-
-publicStandaloneNames : List Decl -> List String
-publicStandaloneNames [] = []
-publicStandaloneNames ((DAttrib _ d) :: rest) =
-  publicStandaloneNames [d] ++ publicStandaloneNames rest
-publicStandaloneNames ((DFunDef True n _ _ _ _) :: rest) =
-  n :: publicStandaloneNames rest
-publicStandaloneNames ((DTypeSig True n _ _) :: rest) =
-  n :: publicStandaloneNames rest
-publicStandaloneNames (_ :: rest) = publicStandaloneNames rest
+  filterList (n => omHasKey n fns) (directIn nsValues decls)
 
 -- test-only observation: declarations whose only callers are tests and probes.
 
