@@ -620,14 +620,16 @@ data IndexScope = IndexScope {
   ixsDigest : String,
 }
 
--- The stdlib's rows and the project's, and, on an index a file's rules are
--- handed under `--cache`, the log of what they asked (`recording`).  A project
+-- The stdlib's rows and the project's, which of one file's wildcard-imported
+-- modules are files of the project (`withLocalModStates`), and, on an index a
+-- file's rules are handed under `--cache`, the log of what they asked
+-- (`recording`).  A project
 -- index holds both scopes, and a rule that wants the stdlib alone asks the
 -- stdlib scope.  The type is abstract: the accessors below are the only way to
 -- read it, and each one goes through `asked`, so nothing a rule learns from the
 -- index escapes the log.
 export data ProjectIndex =
-  ProjectIndex IndexScope IndexScope (Option (HashMap String String))
+  ProjectIndex IndexScope IndexScope (List (String, Bool)) (Option (HashMap String String))
 
 emptyScope : IndexScope
 emptyScope = IndexScope {
@@ -640,7 +642,7 @@ emptyScope = IndexScope {
 
 export
 emptyProjectIndex : ProjectIndex
-emptyProjectIndex = ProjectIndex emptyScope emptyScope None
+emptyProjectIndex = ProjectIndex emptyScope emptyScope [] None
 
 -- The index of the stdlib's rows and the project's rows.
 export
@@ -660,6 +662,7 @@ mkProjectIndexWith stdDigest projDigest stdlibRows projectRows =
   ProjectIndex
     (mkScope stdDigest stdlibRows)
     (mkScope projDigest projectRows)
+    []
     None
 
 -- One digest for a list of per-file row digests, in file order.  It moves when
@@ -733,8 +736,8 @@ scopeNamed s ns name =
 
 -- The project scope (`True`) or the stdlib's.
 scopeOf : ProjectIndex -> Bool -> IndexScope
-scopeOf (ProjectIndex _ proj _) True = proj
-scopeOf (ProjectIndex std _ _) False = std
+scopeOf (ProjectIndex _ proj _ _) True = proj
+scopeOf (ProjectIndex std _ _ _) False = std
 
 scopeDigestOf : ProjectIndex -> Bool -> String
 scopeDigestOf ix inProject =
@@ -746,12 +749,15 @@ scopeDigestOf ix inProject =
 -- Every question a rule can ask, in the project scope (`True`) or the
 -- stdlib's: the rows named `name` in `ns`; every row of a scope; whether any
 -- row of either scope is in a module; whether a stdlib module exports a signed
--- value.  Each accessor below asks one or two of these and nothing else.
+-- value; whether a module the file imports with `*` is a file of the project
+-- (`QLocalMod`, answered from the states `withLocalModStates` was given).  Each
+-- accessor below asks one or two of these and nothing else.
 data Query =
   | QNamed Bool Ns String
   | QScope Bool
   | QKnows String
   | QValueModule String
+  | QLocalMod String
 
 -- The two constructors are two kinds of answer, not failure and success.
 -- lint-disable-next-line rule-clone-type
@@ -771,6 +777,17 @@ answerOf ix (QKnows modId) =
 answerOf ix (QValueModule modId) =
   let std = scopeOf ix False
   AYes (elem modId std.ixsModules)
+answerOf ix (QLocalMod modId) = AYes (localModState ix modId == Some True)
+
+-- Whether `modId` is a file of the project, where the file's states say; `None`
+-- for a module they do not cover.
+localModState : ProjectIndex -> String -> Option Bool
+localModState (ProjectIndex _ _ states _) modId = lookupState modId states
+
+lookupState : String -> List (String, Bool) -> Option Bool
+lookupState _ [] = None
+lookupState modId ((m, present) :: rest) =
+  if m == modId then Some present else lookupState modId rest
 
 -- What an answer is compared by when a cached finding is checked against
 -- today's index.  Rows are digested in the order returned, every field but the
@@ -779,6 +796,10 @@ answerOf ix (QValueModule modId) =
 -- whole scope is its digest.
 answerDigest : ProjectIndex -> Query -> Answer -> String
 answerDigest ix (QScope inProject) _ = scopeDigestOf ix inProject
+answerDigest ix (QLocalMod modId) _ = match localModState ix modId
+  Some True => "t"
+  Some False => "f"
+  None => "?"
 answerDigest _ _ (ARows rows) = rowsDigest rows
 answerDigest _ _ (AYes yes) = if yes then "t" else "f"
 
@@ -789,6 +810,7 @@ queryKey (QNamed inProject ns name) =
 queryKey (QScope inProject) = "a\{scopeTag inProject}"
 queryKey (QKnows modId) = "k:\{modId}"
 queryKey (QValueModule modId) = "m:\{modId}"
+queryKey (QLocalMod modId) = "l:\{modId}"
 
 scopeTag : Bool -> String
 scopeTag True = "p"
@@ -817,6 +839,8 @@ readQuery key =
     Some (QKnows (stringSlice 2 n key))
   else if tag == "m" && n >= 2 && stringSlice 1 2 key == ":" then
     Some (QValueModule (stringSlice 2 n key))
+  else if tag == "l" && n >= 2 && stringSlice 1 2 key == ":" then
+    Some (QLocalMod (stringSlice 2 n key))
   else
     None
 
@@ -835,6 +859,7 @@ scopesOf (QNamed inProject _ _) = [inProject]
 scopesOf (QScope _) = []
 scopesOf (QKnows _) = [True, False]
 scopesOf (QValueModule _) = [False]
+scopesOf (QLocalMod _) = []
 
 -- The one way any accessor reads the index: answers `q`, and on a recording
 -- index logs the question with the digest of its answer.
@@ -842,8 +867,8 @@ asked : ProjectIndex -> Query -> Answer
 asked ix q =
   let a = answerOf ix q
   let _ = match ix
-    ProjectIndex _ _ (Some log) => logAnswer log ix q a
-    ProjectIndex _ _ None => ()
+    ProjectIndex _ _ _ (Some log) => logAnswer log ix q a
+    ProjectIndex _ _ _ None => ()
   a
 
 logAnswer : HashMap String String -> ProjectIndex -> Query -> Answer -> Unit
@@ -873,15 +898,16 @@ yesAsked ix q = match asked ix q
 -- The same index with an empty log, for one file's rules.
 export
 recording : ProjectIndex -> ProjectIndex
-recording (ProjectIndex std proj _) = ProjectIndex std proj (Some (new ()))
+recording (ProjectIndex std proj locals _) =
+  ProjectIndex std proj locals (Some (new ()))
 
 -- What the rules handed `ix` asked, each question with the digest of its
 -- answer, sorted by question.  A question a later whole-scope question covers
 -- is dropped.  Empty on an index that is not recording.
 export
 recordedAnswers : ProjectIndex -> List (String, String)
-recordedAnswers (ProjectIndex _ _ None) = []
-recordedAnswers (ProjectIndex _ _ (Some log)) =
+recordedAnswers (ProjectIndex _ _ _ None) = []
+recordedAnswers (ProjectIndex _ _ _ (Some log)) =
   sortBy
     (x y => stringCompare (fst x) (fst y))
     (filterList (kv => not (keyCovered log (fst kv))) (entries log))
@@ -972,3 +998,24 @@ stdlibHasValueModule ix modId = yesAsked ix (QValueModule modId)
 export
 indexKnowsModule : ProjectIndex -> String -> Bool
 indexKnowsModule ix modId = yesAsked ix (QKnows modId)
+
+-- The same index told which modules a file imports with `*` are files of the
+-- project (`True`) and which are not.  A module the states do not name answers
+-- `?`, which no recorded answer equals.
+export
+withLocalModStates : List (String, Bool) -> ProjectIndex -> ProjectIndex
+withLocalModStates states (ProjectIndex std proj _ log) =
+  ProjectIndex std proj states log
+
+-- Whether `modId` is a file of the project, asked as one question so a
+-- recording index logs the answer, present or absent.
+export
+localModAsked : ProjectIndex -> String -> Bool
+localModAsked ix modId = yesAsked ix (QLocalMod modId)
+
+-- The module a recorded question asks about, when it is a `QLocalMod`.
+export
+localModOfKey : String -> Option String
+localModOfKey key = match readQuery key
+  Some (QLocalMod modId) => Some modId
+  _ => None

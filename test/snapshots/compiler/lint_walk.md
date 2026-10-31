@@ -1,5 +1,5 @@
 # META
-source_lines=1644
+source_lines=1678
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_walk.mdk — the lint runner: `lintProgram*` and the one
@@ -82,6 +82,7 @@ import support.util.{
   startsWith,
   endsWith,
   dedup,
+  stringTrim,
   isSome,
   lookupAssoc,
 }
@@ -128,6 +129,8 @@ import tools.lint_core.{
   mkStdlibIndex,
   projectIndexOf,
   stdlibIndexFingerprint,
+  stdlibLocalModAsked,
+  withStdlibLocalMods,
   needsProjectIndex,
   needsScopes,
   needsStdlibIndex,
@@ -175,9 +178,23 @@ mkFileFacts src prog pos = FileFacts {
 -- of the same name, so its exports are unknown to the stdlib index.
 export
 projectWildMods : String -> List Decl -> <IO> List String
-projectWildMods path prog = match flatMap wildPathsOf prog
+projectWildMods path prog = match wildModsOf prog
   [] => []
-  wild => localModsIn (entrySearchRoots (dirOf path)) (map (joinWith ".") wild)
+  wild => localModsIn (entrySearchRoots (dirOf path)) wild
+
+-- The dotted names of the program's `import m.*` modules, once each.
+export
+wildModsOf : List Decl -> List String
+wildModsOf prog = dedup (map (joinWith ".") (flatMap wildPathsOf prog))
+
+-- For each of `mods`, whether it is a file of the project as seen from the file
+-- at `path`.
+export
+localModStates : String -> List String -> <IO> List (String, Bool)
+localModStates _ [] = []
+localModStates path mods =
+  let roots = entrySearchRoots (dirOf path)
+  map (m => (m, hasModuleFile roots m)) mods
 
 localModsIn : List String -> List String -> <IO> List String
 localModsIn _ [] = []
@@ -205,6 +222,23 @@ export
 mkFileFactsAt : String -> String -> List Decl -> Positions -> <IO> FileFacts
 mkFileFactsAt path src prog pos =
   withLocalMods (projectWildMods path prog) (mkFileFacts src prog pos)
+
+-- `mkFileFactsAt` for a file whose rules are handed `idx`: the filesystem says
+-- which wildcard imports are the project's modules, and the index is asked
+-- about each one, so a recording index logs the answer, absent as well as
+-- present.  Returns the index the file's rules must be handed.
+export
+mkFileFactsIn : StdlibIndex ->
+  String ->
+  String ->
+  List Decl ->
+  Positions ->
+  <IO> (StdlibIndex, FileFacts)
+mkFileFactsIn idx path src prog pos =
+  let wild = wildModsOf prog
+  let idxHere = withStdlibLocalMods (localModStates path wild) idx
+  let local = filterList (stdlibLocalModAsked idxHere) wild
+  (idxHere, withLocalMods local (mkFileFacts src prog pos))
 
 -- The file's inline-suppression directives, off the shared comment channel.
 export
@@ -1655,7 +1689,7 @@ appendIfPath file diag (path, src, diags) =
 (DUse false (UseGroup ("tools" "lint_cache") ((mem "ruleSetStamp" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" false) (mem "ProjectIndex" false) (mem "combineDigests" false) (mem "emptyProjectIndex" false) (mem "fileRows" false) (mem "stdlibShardDir" false) (mem "projectShardDir" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "DiagId" true) (mem "ppSeverity" false) (mem "readFileSafe" false) (mem "parseErrDiag" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "endsWith" false) (mem "dedup" false) (mem "isSome" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "endsWith" false) (mem "dedup" false) (mem "stringTrim" false) (mem "isSome" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false) (mem "keys" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false) (mem "indexed" false))))
 (DUse false (UseGroup ("string") ((mem "indexOf" false) (mem "lines" false))))
@@ -1666,7 +1700,7 @@ appendIfPath file diag (path, src, diags) =
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "ProjectRule" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "RuleMeta" false) (mem "StdlibIndex" true) (mem "Summary" false) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "fixToDiagFix" false) (mem "factDupClauses" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoNew" false) (mem "mkStdlibIndex" false) (mem "projectIndexOf" false) (mem "stdlibIndexFingerprint" false) (mem "needsProjectIndex" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false) (mem "needsWildIndex" false) (mem "readsIndex" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "ProjectRule" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "RuleMeta" false) (mem "StdlibIndex" true) (mem "Summary" false) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "fixToDiagFix" false) (mem "factDupClauses" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoNew" false) (mem "mkStdlibIndex" false) (mem "projectIndexOf" false) (mem "stdlibIndexFingerprint" false) (mem "stdlibLocalModAsked" false) (mem "withStdlibLocalMods" false) (mem "needsProjectIndex" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false) (mem "needsWildIndex" false) (mem "readsIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "Use" true) (mem "bindersNamed" false) (mem "bindersNamedIn" false) (mem "buildScopes" false) (mem "usesNamedIn" false) (mem "wildImports" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false) (mem "declLocList" false) (mem "sortUniqS" false) (mem "zipDeclPos" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "demoteOverComments" false))))
@@ -1675,7 +1709,12 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig true "mkFileFacts" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyCon "FileFacts")))))
 (DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))) (fa "ffScopes" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildScopes") (EVar "prog"))))) (fa "ffLines" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EVar "lines") (EVar "src")))))) (fa "ffLocalMods" (EListLit)))))
 (DTypeSig true "projectWildMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "projectWildMods" ((PVar "path") (PVar "prog")) (EMatch (EApp (EApp (EVar "flatMap") (EVar "wildPathsOf")) (EVar "prog")) (arm (PList) () (EListLit)) (arm (PVar "wild") () (EApp (EApp (EVar "localModsIn") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "path")))) (EApp (EApp (EVar "map") (EApp (EVar "joinWith") (ELit (LString ".")))) (EVar "wild"))))))
+(DFunDef false "projectWildMods" ((PVar "path") (PVar "prog")) (EMatch (EApp (EVar "wildModsOf") (EVar "prog")) (arm (PList) () (EListLit)) (arm (PVar "wild") () (EApp (EApp (EVar "localModsIn") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "path")))) (EVar "wild")))))
+(DTypeSig true "wildModsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "wildModsOf" ((PVar "prog")) (EApp (EVar "dedup") (EApp (EApp (EVar "map") (EApp (EVar "joinWith") (ELit (LString ".")))) (EApp (EApp (EVar "flatMap") (EVar "wildPathsOf")) (EVar "prog")))))
+(DTypeSig true "localModStates" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))))))
+(DFunDef false "localModStates" (PWild (PList)) (EListLit))
+(DFunDef false "localModStates" ((PVar "path") (PVar "mods")) (EBlock (DoLet false false (PVar "roots") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "path")))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EVar "m") (EApp (EApp (EVar "hasModuleFile") (EVar "roots")) (EVar "m"))))) (EVar "mods")))))
 (DTypeSig false "localModsIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "localModsIn" (PWild (PList)) (EListLit))
 (DFunDef false "localModsIn" ((PVar "roots") (PCons (PVar "m") (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "localModsIn") (EVar "roots")) (EVar "rest"))) (DoExpr (EIf (EApp (EApp (EVar "hasModuleFile") (EVar "roots")) (EVar "m")) (EBinOp "::" (EVar "m") (EVar "others")) (EVar "others")))))
@@ -1689,6 +1728,8 @@ appendIfPath file diag (path, src, diags) =
 (DFunDef false "withLocalMods" ((PVar "mods") (PVar "ff")) (ERecordUpdate (EVar "ff") ((fa "ffLocalMods" (EVar "mods")))))
 (DTypeSig true "mkFileFactsAt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyCon "FileFacts")))))))
 (DFunDef false "mkFileFactsAt" ((PVar "path") (PVar "src") (PVar "prog") (PVar "pos")) (EApp (EApp (EVar "withLocalMods") (EApp (EApp (EVar "projectWildMods") (EVar "path")) (EVar "prog"))) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos"))))
+(DTypeSig true "mkFileFactsIn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyTuple (TyCon "StdlibIndex") (TyCon "FileFacts")))))))))
+(DFunDef false "mkFileFactsIn" ((PVar "idx") (PVar "path") (PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "wild") (EApp (EVar "wildModsOf") (EVar "prog"))) (DoLet false false (PVar "idxHere") (EApp (EApp (EVar "withStdlibLocalMods") (EApp (EApp (EVar "localModStates") (EVar "path")) (EVar "wild"))) (EVar "idx"))) (DoLet false false (PVar "local") (EApp (EApp (EVar "filterList") (EApp (EVar "stdlibLocalModAsked") (EVar "idxHere"))) (EVar "wild"))) (DoExpr (ETuple (EVar "idxHere") (EApp (EApp (EVar "withLocalMods") (EVar "local")) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos")))))))
 (DTypeSig true "factDirectives" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Directive"))))
 (DFunDef false "factDirectives" ((PVar "ff")) (EApp (EVar "collectDirectives") (EApp (EVar "factComments") (EVar "ff"))))
 (DTypeSig true "lintProgram" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))))
@@ -2035,7 +2076,7 @@ appendIfPath file diag (path, src, diags) =
 (DUse false (UseGroup ("tools" "lint_cache") ((mem "ruleSetStamp" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" false) (mem "ProjectIndex" false) (mem "combineDigests" false) (mem "emptyProjectIndex" false) (mem "fileRows" false) (mem "stdlibShardDir" false) (mem "projectShardDir" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "DiagId" true) (mem "ppSeverity" false) (mem "readFileSafe" false) (mem "parseErrDiag" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "endsWith" false) (mem "dedup" false) (mem "isSome" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "endsWith" false) (mem "dedup" false) (mem "stringTrim" false) (mem "isSome" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false) (mem "keys" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false) (mem "indexed" false))))
 (DUse false (UseGroup ("string") ((mem "indexOf" false) (mem "lines" false))))
@@ -2046,7 +2087,7 @@ appendIfPath file diag (path, src, diags) =
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "ProjectRule" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "RuleMeta" false) (mem "StdlibIndex" true) (mem "Summary" false) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "fixToDiagFix" false) (mem "factDupClauses" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoNew" false) (mem "mkStdlibIndex" false) (mem "projectIndexOf" false) (mem "stdlibIndexFingerprint" false) (mem "needsProjectIndex" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false) (mem "needsWildIndex" false) (mem "readsIndex" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "ProjectRule" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "RuleMeta" false) (mem "StdlibIndex" true) (mem "Summary" false) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "fixToDiagFix" false) (mem "factDupClauses" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoNew" false) (mem "mkStdlibIndex" false) (mem "projectIndexOf" false) (mem "stdlibIndexFingerprint" false) (mem "stdlibLocalModAsked" false) (mem "withStdlibLocalMods" false) (mem "needsProjectIndex" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false) (mem "needsWildIndex" false) (mem "readsIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "Use" true) (mem "bindersNamed" false) (mem "bindersNamedIn" false) (mem "buildScopes" false) (mem "usesNamedIn" false) (mem "wildImports" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false) (mem "declLocList" false) (mem "sortUniqS" false) (mem "zipDeclPos" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "demoteOverComments" false))))
@@ -2055,7 +2096,12 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig true "mkFileFacts" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyCon "FileFacts")))))
 (DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EDictApp "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))) (fa "ffScopes" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildScopes") (EVar "prog"))))) (fa "ffLines" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EVar "lines") (EVar "src")))))) (fa "ffLocalMods" (EListLit)))))
 (DTypeSig true "projectWildMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "projectWildMods" ((PVar "path") (PVar "prog")) (EMatch (EApp (EApp (EDictApp "flatMap") (EVar "wildPathsOf")) (EVar "prog")) (arm (PList) () (EListLit)) (arm (PVar "wild") () (EApp (EApp (EVar "localModsIn") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "path")))) (EApp (EApp (EMethodRef "map") (EApp (EVar "joinWith") (ELit (LString ".")))) (EVar "wild"))))))
+(DFunDef false "projectWildMods" ((PVar "path") (PVar "prog")) (EMatch (EApp (EVar "wildModsOf") (EVar "prog")) (arm (PList) () (EListLit)) (arm (PVar "wild") () (EApp (EApp (EVar "localModsIn") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "path")))) (EVar "wild")))))
+(DTypeSig true "wildModsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "wildModsOf" ((PVar "prog")) (EApp (EVar "dedup") (EApp (EApp (EMethodRef "map") (EApp (EVar "joinWith") (ELit (LString ".")))) (EApp (EApp (EDictApp "flatMap") (EVar "wildPathsOf")) (EVar "prog")))))
+(DTypeSig true "localModStates" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))))))
+(DFunDef false "localModStates" (PWild (PList)) (EListLit))
+(DFunDef false "localModStates" ((PVar "path") (PVar "mods")) (EBlock (DoLet false false (PVar "roots") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "path")))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EVar "m") (EApp (EApp (EVar "hasModuleFile") (EVar "roots")) (EVar "m"))))) (EVar "mods")))))
 (DTypeSig false "localModsIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "localModsIn" (PWild (PList)) (EListLit))
 (DFunDef false "localModsIn" ((PVar "roots") (PCons (PVar "m") (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "localModsIn") (EVar "roots")) (EVar "rest"))) (DoExpr (EIf (EApp (EApp (EVar "hasModuleFile") (EVar "roots")) (EVar "m")) (EBinOp "::" (EVar "m") (EVar "others")) (EVar "others")))))
@@ -2069,6 +2115,8 @@ appendIfPath file diag (path, src, diags) =
 (DFunDef false "withLocalMods" ((PVar "mods") (PVar "ff")) (ERecordUpdate (EVar "ff") ((fa "ffLocalMods" (EVar "mods")))))
 (DTypeSig true "mkFileFactsAt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyCon "FileFacts")))))))
 (DFunDef false "mkFileFactsAt" ((PVar "path") (PVar "src") (PVar "prog") (PVar "pos")) (EApp (EApp (EVar "withLocalMods") (EApp (EApp (EVar "projectWildMods") (EVar "path")) (EVar "prog"))) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos"))))
+(DTypeSig true "mkFileFactsIn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyTuple (TyCon "StdlibIndex") (TyCon "FileFacts")))))))))
+(DFunDef false "mkFileFactsIn" ((PVar "idx") (PVar "path") (PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "wild") (EApp (EVar "wildModsOf") (EVar "prog"))) (DoLet false false (PVar "idxHere") (EApp (EApp (EVar "withStdlibLocalMods") (EApp (EApp (EVar "localModStates") (EVar "path")) (EVar "wild"))) (EVar "idx"))) (DoLet false false (PVar "local") (EApp (EApp (EVar "filterList") (EApp (EVar "stdlibLocalModAsked") (EVar "idxHere"))) (EVar "wild"))) (DoExpr (ETuple (EVar "idxHere") (EApp (EApp (EVar "withLocalMods") (EVar "local")) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos")))))))
 (DTypeSig true "factDirectives" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Directive"))))
 (DFunDef false "factDirectives" ((PVar "ff")) (EApp (EVar "collectDirectives") (EApp (EVar "factComments") (EVar "ff"))))
 (DTypeSig true "lintProgram" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))))

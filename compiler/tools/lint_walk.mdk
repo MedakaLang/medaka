@@ -78,6 +78,7 @@ import support.util.{
   startsWith,
   endsWith,
   dedup,
+  stringTrim,
   isSome,
   lookupAssoc,
 }
@@ -124,6 +125,8 @@ import tools.lint_core.{
   mkStdlibIndex,
   projectIndexOf,
   stdlibIndexFingerprint,
+  stdlibLocalModAsked,
+  withStdlibLocalMods,
   needsProjectIndex,
   needsScopes,
   needsStdlibIndex,
@@ -171,9 +174,23 @@ mkFileFacts src prog pos = FileFacts {
 -- of the same name, so its exports are unknown to the stdlib index.
 export
 projectWildMods : String -> List Decl -> <IO> List String
-projectWildMods path prog = match flatMap wildPathsOf prog
+projectWildMods path prog = match wildModsOf prog
   [] => []
-  wild => localModsIn (entrySearchRoots (dirOf path)) (map (joinWith ".") wild)
+  wild => localModsIn (entrySearchRoots (dirOf path)) wild
+
+-- The dotted names of the program's `import m.*` modules, once each.
+export
+wildModsOf : List Decl -> List String
+wildModsOf prog = dedup (map (joinWith ".") (flatMap wildPathsOf prog))
+
+-- For each of `mods`, whether it is a file of the project as seen from the file
+-- at `path`.
+export
+localModStates : String -> List String -> <IO> List (String, Bool)
+localModStates _ [] = []
+localModStates path mods =
+  let roots = entrySearchRoots (dirOf path)
+  map (m => (m, hasModuleFile roots m)) mods
 
 localModsIn : List String -> List String -> <IO> List String
 localModsIn _ [] = []
@@ -201,6 +218,23 @@ export
 mkFileFactsAt : String -> String -> List Decl -> Positions -> <IO> FileFacts
 mkFileFactsAt path src prog pos =
   withLocalMods (projectWildMods path prog) (mkFileFacts src prog pos)
+
+-- `mkFileFactsAt` for a file whose rules are handed `idx`: the filesystem says
+-- which wildcard imports are the project's modules, and the index is asked
+-- about each one, so a recording index logs the answer, absent as well as
+-- present.  Returns the index the file's rules must be handed.
+export
+mkFileFactsIn : StdlibIndex ->
+  String ->
+  String ->
+  List Decl ->
+  Positions ->
+  <IO> (StdlibIndex, FileFacts)
+mkFileFactsIn idx path src prog pos =
+  let wild = wildModsOf prog
+  let idxHere = withStdlibLocalMods (localModStates path wild) idx
+  let local = filterList (stdlibLocalModAsked idxHere) wild
+  (idxHere, withLocalMods local (mkFileFacts src prog pos))
 
 -- The file's inline-suppression directives, off the shared comment channel.
 export

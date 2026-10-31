@@ -363,11 +363,17 @@ decodeEntry stamp indexKey answersHold path hash text =
       if key == indexKey || answersHold answers then
         ShardHit entry
       else
-        ShardStale ({ entry |
-          indexFindings = [],
-          indexKey = indexKey,
-          indexAnswers = [],
-        })
+        staleShard indexKey entry
+
+-- A shard kept for its index-free findings, summaries and directives alone: the
+-- index-reading findings and the answers they were made against are dropped.
+export
+staleShard : String -> LintEntry -> ShardLoad
+staleShard indexKey entry = ShardStale ({ entry |
+  indexFindings = [],
+  indexKey = indexKey,
+  indexAnswers = [],
+})
 
 readAnswer : SexpCursor -> (String, String)
 readAnswer cur =

@@ -12,6 +12,8 @@ import tools.lint_walk.{
   lintProgramFacts,
   mkFileFacts,
   mkFileFactsAt,
+  mkFileFactsIn,
+  localModStates,
   withLocalMods,
 }
 import tools.lint_registry.{selectRules}
@@ -78,6 +80,8 @@ export import tools.lint_walk.{
   mergeProjectIntoTriples,
   mkFileFacts,
   mkFileFactsAt,
+  mkFileFactsIn,
+  localModStates,
   projectIndexNeeded,
   projectWildMods,
   ranked,

@@ -18,7 +18,15 @@
 -- `tools/lint_walk.mdk`, the cache format in `tools/lint_cache.mdk`, and the
 -- count baseline in `tools/lint_baseline.mdk`.  This module only sequences them.
 
-import support.util.{anyList, contains, joinNl, joinWith, lookupAssoc}
+import support.util.{
+  anyList,
+  contains,
+  filterList,
+  isSome,
+  joinNl,
+  joinWith,
+  lookupAssoc,
+}
 import support.path.{dirOf}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
 import string as Str
@@ -84,6 +92,8 @@ import tools.lint.{
   splitByIndex,
   mkFileFacts,
   mkFileFactsAt,
+  mkFileFactsIn,
+  localModStates,
   projectWildMods,
   projectRuleSelected,
   ranked,
@@ -93,6 +103,8 @@ import tools.lint.{
 }
 import tools.lint_core.{
   recordingStdlibIndex,
+  withStdlibLocalMods,
+  localModOfQuestion,
   stdlibRecorded,
   stdlibAnswersHold,
 }
@@ -104,6 +116,7 @@ import tools.lint_cache.{
   entryFindings,
   loadEntry,
   ruleSetStamp,
+  staleShard,
 }
 import tools.lint_baseline.{
   LintBaseline,
@@ -999,9 +1012,15 @@ cachedEntryWith : (StdlibIndex -> StdlibIndex) ->
 cachedEntryWith view roster keyOf idx cacheDir stamp target src =
   let hash = contentHashOf src
   let key = keyOf roster idx
-  match loadEntry cacheDir stamp key (stdlibAnswersHold idx) target hash
+  let loaded =
+    localAnswersChecked
+      idx
+      key
+      target
+      (loadEntry cacheDir stamp key (indexAnswersHold idx) target hash)
+  match loaded
     ShardHit hit => Ok hit
-    loaded =>
+    _ =>
       map
         ((decls, pos) =>
           cachedEntryFrom
@@ -1015,6 +1034,38 @@ cachedEntryWith view roster keyOf idx cacheDir stamp target src =
             decls
             pos)
         (lintParseSource src)
+
+-- A hit is served only if every project file that the file's wildcard imports
+-- were checked against is still there or still absent as recorded.  Those
+-- answers come from the filesystem, which neither the shard's coarse key nor the
+-- index fingerprint covers, so they are re-asked even when the key matches.
+localAnswersChecked : StdlibIndex ->
+  String ->
+  String ->
+  ShardLoad ->
+  <IO> ShardLoad
+localAnswersChecked idx key target (ShardHit hit) =
+  let asked = filterList isLocalAnswer hit.indexAnswers
+  let states = localModStates target (flatMap localModOf asked)
+  if stdlibAnswersHold (withStdlibLocalMods states idx) asked then
+    ShardHit hit
+  else
+    staleShard key hit
+localAnswersChecked _ _ _ other = other
+
+-- The recorded questions the index itself answers; those about project files
+-- are `localAnswersChecked`'s.
+indexAnswersHold : StdlibIndex -> List (String, String) -> Bool
+indexAnswersHold idx answers =
+  stdlibAnswersHold idx (filterList (a => not (isLocalAnswer a)) answers)
+
+isLocalAnswer : (String, String) -> Bool
+isLocalAnswer (question, _) = isSome (localModOfQuestion question)
+
+localModOf : (String, String) -> List String
+localModOf (question, _) = match localModOfQuestion question
+  Some modId => [modId]
+  None => []
 
 -- Uncached, the excluded rules are skipped outright (their findings would be
 -- filtered anyway).
@@ -1062,8 +1113,8 @@ cachedEntryFrom : List Rule ->
   List Decl ->
   Positions ->
   <IO> LintEntry
-cachedEntryFrom roster _ idx (ShardStale stale) target src _ decls pos =
-  let facts = mkFileFactsAt target src decls pos
+cachedEntryFrom roster _ view (ShardStale stale) target src _ decls pos =
+  let (idx, facts) = mkFileFactsIn view target src decls pos
   let indexed =
     lintProgramRanked idx (rankedIndexRules roster) target facts pos decls
   { stale |
@@ -1071,8 +1122,8 @@ cachedEntryFrom roster _ idx (ShardStale stale) target src _ decls pos =
     indexAnswers = stdlibRecorded idx,
     dirty = True,
   }
-cachedEntryFrom roster key idx _ target src hash decls pos =
-  let facts = mkFileFactsAt target src decls pos
+cachedEntryFrom roster key view _ target src hash decls pos =
+  let (idx, facts) = mkFileFactsIn view target src decls pos
   let all = lintProgramRanked idx (ranked 0 roster) target facts pos decls
   let (free, indexed) = splitByIndex roster all
   LintEntry {

@@ -57,11 +57,17 @@ import tools.lint.{
 }
 import tools.lint_core.{
   mkRule,
-  FileFacts,
+  FileFacts(..),
   stdlibSigTextIn,
   recordingStdlibIndex,
 }
-import tools.lint_walk.{indexForRosterIn, indexKeyFor, indexKeyWith}
+import tools.lint_walk.{
+  indexForRosterIn,
+  indexKeyFor,
+  indexKeyWith,
+  mkFileFactsAt,
+  lintProgramFacts,
+}
 import tools.lint_cmd.{cachedEntryOf, cachedEntryWith}
 import tools.lint_cache.{
   LintEntry(..),
@@ -956,3 +962,121 @@ test "deleting a file A asked nothing about keeps A warm" = withScratchDir
         cBase
         [Edit cPath None]
         dir))
+
+-- ── the wildcard-import existence key ───────────────────────────────────────
+-- A file that imports `m.*` is linted differently according to whether `m` is a
+-- file of the project (`ffLocalMods`).  The probe reports the facts' local
+-- modules.  A shard records the answer to "is `m` a project file", present or
+-- absent, so creating or deleting `m.mdk` re-lints A and nothing else does.
+-- The project index covers the same files here, but the question is answered
+-- from the loader's search roots, not from the index's rows.  A project `m`
+-- shadows a stdlib module of the same name, as the loader resolves it.
+
+localRule : Rule
+localRule = mkRule (probeMeta "probe-local" [NeedsProjectIndex]) localCheck None
+
+localCheck : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+localCheck _ _ facts _ _ = [
+  Finding {
+    rule = "probe-local",
+    message = "local: \{joinWith "," facts.ffLocalMods}",
+    severity = SevWarning,
+    loc = None,
+    fix = None,
+  },
+]
+
+wildSource : String
+wildSource = "import m.*\n\ng : Int -> Int\ng x = x\n"
+
+mSource : String
+mSource = "export\nk : Int\nk = 1\n"
+
+mPath : Env -> String
+mPath e = "\{e.proj}/m.mdk"
+
+-- What an uncached lint of A as it now is on disk says.
+wildTruth : Env -> StdlibIndex -> <IO, FileRead, FileWrite, Exec> List String
+wildTruth e idx = match readFile (aPath e)
+  Err _ => ["<unreadable>"]
+  Ok src => match lintParseSource src
+    Err _ => ["<parse error>"]
+    Ok (decls, pos) =>
+      let facts = mkFileFactsAt (aPath e) src decls pos
+      map
+        findingText
+        (lintProgramFacts idx [localRule] (aPath e) facts pos decls)
+
+-- A imports `m.*`; `m.mdk` is there at the start when `mStart` says so.  Two
+-- runs under `--cache` with `edits` between them; A's second run is graded.
+wildCase : (StdlibIndex -> StdlibIndex) ->
+  Option String ->
+  List Edit ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Option Outcome
+wildCase view mStart edits dir =
+  let e = mkEnv dir
+  let _ = setup e
+  let _ = writeFile (aPath e) wildSource
+  let _ = match mStart
+    Some text => writeFile (mPath e) text
+    None => Ok ()
+  match runAsk view localRule e
+    None => None
+    Some _ =>
+      let _ = applyEdits e edits
+      match (runAsk view localRule e, indexOf [localRule] e)
+        (Some warm, Some fresh) => Some Outcome {
+          warmA = warm,
+          truth = wildTruth e fresh,
+        }
+        _ => None
+
+test "(w1) creating the project module A imports with * re-lints A" = withScratchDir
+  (dir => graded True (wildCase recorded None [Edit mPath (Some mSource)] dir))
+
+test "(w1) the finding set changes when the module appears" = withScratchDir
+  (dir => match wildCase recorded None [Edit mPath (Some mSource)] dir
+    None => fail "a run did not complete"
+    Some o => expectEqual ["local: m"] o.warmA.texts)
+
+test "(w2) deleting the project module A imports with * re-lints A" = withScratchDir
+  (dir => graded True (wildCase recorded (Some mSource) [Edit mPath None] dir))
+
+test "(w2) the finding set changes when the module disappears" = withScratchDir
+  (dir => match wildCase recorded (Some mSource) [Edit mPath None] dir
+    None => fail "a run did not complete"
+    Some o => expectEqual ["local: "] o.warmA.texts)
+
+test "(w3) creating an unrelated file keeps A warm" = withScratchDir (dir =>
+  graded False (wildCase recorded None [Edit cPath (Some cBase)] dir))
+
+test "(w3) an edit to the module's body keeps A warm" = withScratchDir (dir =>
+  graded
+    False
+    (wildCase
+      recorded
+      (Some mSource)
+      [Edit mPath (Some "export\nk : Int\nk = 2\n")]
+      dir))
+
+test "(w4) without recording, a created module is served stale" = withScratchDir
+  (dir =>
+    expectTrue
+      (isFail
+        (graded
+          True
+          (wildCase unrecorded None [Edit mPath (Some mSource)] dir))))
+
+test "(w4) without recording, a deleted module is served stale" = withScratchDir
+  (dir =>
+    expectTrue
+      (isFail
+        (graded
+          True
+          (wildCase unrecorded (Some mSource) [Edit mPath None] dir))))

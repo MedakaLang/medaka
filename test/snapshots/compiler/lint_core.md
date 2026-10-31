@@ -1,5 +1,5 @@
 # META
-source_lines=605
+source_lines=627
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -30,6 +30,9 @@ import tools.lint_index.{
   stdlibRowsNamed,
   stdlibValueNames,
   stdlibHasValueModule,
+  withLocalModStates,
+  localModAsked,
+  localModOfKey,
 }
 import tools.printer.{ppTy}
 import frontend.exhaust.{Oracle}
@@ -483,6 +486,25 @@ export
 recordingStdlibIndex : StdlibIndex -> StdlibIndex
 recordingStdlibIndex (StdlibIndex ix) = StdlibIndex (recording ix)
 
+-- The same index told which of one file's wildcard-imported modules are files
+-- of the project.
+export
+withStdlibLocalMods : List (String, Bool) -> StdlibIndex -> StdlibIndex
+withStdlibLocalMods states (StdlibIndex ix) =
+  StdlibIndex (withLocalModStates states ix)
+
+-- Whether a wildcard-imported module is a file of the project; a recording
+-- index logs the answer.
+export
+stdlibLocalModAsked : StdlibIndex -> String -> Bool
+stdlibLocalModAsked (StdlibIndex ix) modId = localModAsked ix modId
+
+-- The module a recorded question asks the project file's existence of, if it is
+-- such a question.
+export
+localModOfQuestion : String -> Option String
+localModOfQuestion = localModOfKey
+
 -- What the rules handed a recording index asked, with the digest of each
 -- answer.
 export
@@ -615,7 +637,7 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseAlias ("driver" "diagnostic_value") "DV"))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "anyList" false))))
-(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndexWith" false) (mem "indexFingerprint" false) (mem "recording" false) (mem "recordedAnswers" false) (mem "answersHold" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibHasValueModule" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndexWith" false) (mem "indexFingerprint" false) (mem "recording" false) (mem "recordedAnswers" false) (mem "answersHold" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibHasValueModule" false) (mem "withLocalModStates" false) (mem "localModAsked" false) (mem "localModOfKey" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
@@ -729,6 +751,12 @@ public export data DupClause = DupClause {
 (DFunDef false "projectIndexOf" ((PCon "StdlibIndex" (PVar "ix"))) (EVar "ix"))
 (DTypeSig true "recordingStdlibIndex" (TyFun (TyCon "StdlibIndex") (TyCon "StdlibIndex")))
 (DFunDef false "recordingStdlibIndex" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "StdlibIndex") (EApp (EVar "recording") (EVar "ix"))))
+(DTypeSig true "withStdlibLocalMods" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))) (TyFun (TyCon "StdlibIndex") (TyCon "StdlibIndex"))))
+(DFunDef false "withStdlibLocalMods" ((PVar "states") (PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "StdlibIndex") (EApp (EApp (EVar "withLocalModStates") (EVar "states")) (EVar "ix"))))
+(DTypeSig true "stdlibLocalModAsked" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "stdlibLocalModAsked" ((PCon "StdlibIndex" (PVar "ix")) (PVar "modId")) (EApp (EApp (EVar "localModAsked") (EVar "ix")) (EVar "modId")))
+(DTypeSig true "localModOfQuestion" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "localModOfQuestion" () (EVar "localModOfKey"))
 (DTypeSig true "stdlibRecorded" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "stdlibRecorded" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "recordedAnswers") (EVar "ix")))
 (DTypeSig true "stdlibAnswersHold" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
@@ -765,7 +793,7 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseAlias ("driver" "diagnostic_value") "DV"))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "anyList" false))))
-(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndexWith" false) (mem "indexFingerprint" false) (mem "recording" false) (mem "recordedAnswers" false) (mem "answersHold" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibHasValueModule" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndexWith" false) (mem "indexFingerprint" false) (mem "recording" false) (mem "recordedAnswers" false) (mem "answersHold" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibHasValueModule" false) (mem "withLocalModStates" false) (mem "localModAsked" false) (mem "localModOfKey" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
@@ -879,6 +907,12 @@ public export data DupClause = DupClause {
 (DFunDef false "projectIndexOf" ((PCon "StdlibIndex" (PVar "ix"))) (EVar "ix"))
 (DTypeSig true "recordingStdlibIndex" (TyFun (TyCon "StdlibIndex") (TyCon "StdlibIndex")))
 (DFunDef false "recordingStdlibIndex" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "StdlibIndex") (EApp (EVar "recording") (EVar "ix"))))
+(DTypeSig true "withStdlibLocalMods" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))) (TyFun (TyCon "StdlibIndex") (TyCon "StdlibIndex"))))
+(DFunDef false "withStdlibLocalMods" ((PVar "states") (PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "StdlibIndex") (EApp (EApp (EVar "withLocalModStates") (EVar "states")) (EVar "ix"))))
+(DTypeSig true "stdlibLocalModAsked" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "stdlibLocalModAsked" ((PCon "StdlibIndex" (PVar "ix")) (PVar "modId")) (EApp (EApp (EVar "localModAsked") (EVar "ix")) (EVar "modId")))
+(DTypeSig true "localModOfQuestion" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "localModOfQuestion" () (EVar "localModOfKey"))
 (DTypeSig true "stdlibRecorded" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "stdlibRecorded" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "recordedAnswers") (EVar "ix")))
 (DTypeSig true "stdlibAnswersHold" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
