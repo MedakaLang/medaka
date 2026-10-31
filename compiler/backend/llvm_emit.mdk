@@ -1566,9 +1566,7 @@ preludeImplPairKey method identity = "\{method}\n\{identity}"
 -- Both read the entry's stamp.
 implEntryFnName : Emit -> String -> CImplEntry -> String
 implEntryFnName e method (CImplEntry _ _ _ (CImplTagged _ _ _ (ImplSym tag _ _) _ _ _)) =
-  let byMethod = match omLookup tag !e.implNames
-    Some m => m
-    None => omEmpty
+  let byMethod = optionOr omEmpty (omLookup tag !e.implNames)
   match omLookup method byMethod
     Some name => name
     None =>
@@ -1576,12 +1574,8 @@ implEntryFnName e method (CImplEntry _ _ _ (CImplTagged _ _ _ (ImplSym tag _ _) 
       e.implNames := omInsert tag (omInsert method name byMethod) !e.implNames
       name
 implEntryFnName e method (CImplEntry _ _ _ (CImplDefault _ _ _ (sym@(ImplSym _ iface key)) _ _ _)) =
-  let byMethod = match omLookup iface !e.defaultNames
-    Some m => m
-    None => omEmpty
-  let byKey = match omLookup method byMethod
-    Some m => m
-    None => omEmpty
+  let byMethod = optionOr omEmpty (omLookup iface !e.defaultNames)
+  let byKey = optionOr omEmpty (omLookup method byMethod)
   match omLookup key byKey
     Some name => name
     None =>

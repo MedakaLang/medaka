@@ -1315,12 +1315,14 @@ projectOrigins origins groups constructors = CoreSymbolOrigins {
   constructors =
     fold
       (acc (name, owner) =>
-        let sourceRows = match omLookup owner origins.constructors
-          Some rows => rows
-          None => panic "symbol origin: missing constructor owner"
-        let origin = match omLookup name sourceRows
-          Some value => value
-          None => panic "symbol origin: missing constructor"
+        let sourceRows =
+          optionOrPanic
+            "symbol origin: missing constructor owner"
+            (omLookup owner origins.constructors)
+        let origin =
+          optionOrPanic
+            "symbol origin: missing constructor"
+            (omLookup name sourceRows)
         let rows = optionOr omEmpty (omLookup owner acc)
         match omLookup name rows
           Some old =>
