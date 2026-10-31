@@ -1,3 +1,4 @@
+import ir.constructor_facts.{validateConstructorFacts}
 import backend.llvm_symbol_names as LN
 import backend.wasm_symbol_names as WN
 import support.symbol_encoding.{encodePair}
@@ -222,6 +223,7 @@ emissionDefects backend domain requirement plan cp =
       Some message => [CoreDefect message]
       None => firstShapeDefect [
         () => validateManifestCarriage requirement plan cp,
+        () => validateConstructorFacts cp plan.constructorFacts,
         () => validateExternMetadata cp,
         () =>
           validateExternRequirements backend domain cp plan.externRequirements,
@@ -1760,6 +1762,7 @@ validatePhysicalDemand WasmBackend plan cp = match plan.wasmPhysical
   None => ["missing-wasm-demand-plan"]
   Some physical =>
     validateWasmDemand
+        plan.constructorFacts
         { plan.wasmInputs |
           lazyGlobals = plan.lazyGlobals,
           globalInit = plan.globalInit,

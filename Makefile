@@ -205,6 +205,7 @@ inlang-support-diag-codes-doc-test:
 
 inlang-ir-dce-test:
 	./medaka test compiler/ir/dce_test.mdk
+	./medaka test compiler/ir/constructor_facts_test.mdk
 
 ## The Core s-expression printer and parser round-trip a call's mode and tail
 ## flag, record ordinals, float literals and the binder-type section; no entry
@@ -563,6 +564,7 @@ inlang-frontend-lexer-test:
 ## the furthest-failure choice would otherwise never run.
 inlang-frontend-parser-test:
 	./medaka test compiler/frontend/parser_test.mdk
+	./medaka test compiler/frontend/runtime_constructors_test.mdk
 	./medaka test compiler/frontend/parse_hints_test.mdk
 	./medaka test compiler/frontend/parse_engine_test.mdk
 	./medaka test compiler/frontend/parse_diagnostic_test.mdk

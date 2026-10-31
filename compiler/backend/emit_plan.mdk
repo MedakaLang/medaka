@@ -1,3 +1,4 @@
+import ir.constructor_facts.{ConstructorFacts, planConstructors}
 import support.symbol_encoding.{encodePair}
 import backend.wasm_demand.{
   JsImport(..), WasmDemand(..), WasmDemandInputs(..), WasmDemandPlan,
@@ -100,6 +101,7 @@ public export data EmitPlan = EmitPlan {
   externRequirements : ExternRequirements,
   entryOutcome : Option EntryFact,
   methodResults : OrdMap (OrdMap MethodResultFact),
+  constructorFacts : ConstructorFacts,
   wasmOnlyReach : Option ReachUnits,
   lazyGlobals : List String,
   eagerReach : OrdMap (List String),
@@ -156,9 +158,9 @@ planOver : Backend ->
   CProgram ->
   EmitPlan
 planOver target domain reach ctorFields prog =
-  let (CProgram groups ctorArs _ impls _ facts) = prog
-  -- first entry wins on a repeated constructor name, as in both emitters' tables
-  let ctors = omFromPairs (reverseL ctorArs) omEmpty
+  let (CProgram groups _ _ impls _ facts) = prog
+  let constructors = planConstructors prog
+  let ctors = constructors.arities
   let fns = filterList isTopFn groups
   let requirements = planExterns target domain prog
   let lazy = lazyGlobalNames groups
@@ -180,7 +182,7 @@ planOver target domain reach ctorFields prog =
     dispatchGroups = dispatch,
   }
   let physical = match target
-    WasmBackend => Some (planWasmDemand inputs prog requirements)
+    WasmBackend => Some (planWasmDemand constructors inputs prog requirements)
     _ => None
   EmitPlan {
     manifestIndex =
@@ -189,6 +191,7 @@ planOver target domain reach ctorFields prog =
     externRequirements = requirements,
     entryOutcome = facts.factEntryOutcome,
     methodResults = indexMethodResults facts.factMethodResults,
+    constructorFacts = constructors,
     wasmOnlyReach = reach,
     lazyGlobals = lazy,
     eagerReach = eager,

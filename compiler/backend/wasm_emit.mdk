@@ -1,3 +1,10 @@
+import ir.constructor_facts.{
+  ConstructorFacts, declaredCtorArity, declaredCtorOwner, declaredCtorOrdinal
+}
+import frontend.runtime_constructors.{
+  RuntimeOwner(..), RuntimeCtorId(..), namedRuntimeCtor, runtimeCtorFact,
+  runtimeRoster, runtimeCtorName, runtimeOwnerWord
+}
 import backend.wasm_symbol_names as WN
 import support.symbol_encoding.{encodePair}
 import support.diag_codes.{DiagCode(..)}
@@ -679,13 +686,6 @@ data WasmFnImplIndex = WasmFnImplIndex {
 
 data WasmRecordValueIndex = WasmRecordValueIndex { fnValues : OrdMap Unit }
 
-data WasmCtorIndex = WasmCtorIndex {
-  arities : OrdMap Int,
-  types : OrdMap String,
-  ordinals : OrdMap Int,
-  typeCtors : OrdMap (List String),
-}
-
 -- The program's binder table (`DeclFacts.factBinders`): every row by the
 -- ordinal of its id (printed, so an env entry can name a row without parsing),
 -- and the row of each top-level binding by its name.
@@ -697,7 +697,7 @@ data WasmStamps = WasmStamps {
 data WasmProgramIndex = WasmProgramIndex {
   fnImpl : WasmFnImplIndex,
   recordValue : WasmRecordValueIndex,
-  ctor : WasmCtorIndex,
+  ctor : ConstructorFacts,
   stamps : WasmStamps,
   typeContext : WasmTypeContext,
 }
@@ -837,15 +837,6 @@ indexFnsUsedAsValuesW index = index.recordValue.fnValues
 
 indexCtorAritiesW : WasmProgramIndex -> OrdMap Int
 indexCtorAritiesW index = index.ctor.arities
-
-indexCtorTypesW : WasmProgramIndex -> OrdMap String
-indexCtorTypesW index = index.ctor.types
-
-indexCtorOrdinalsW : WasmProgramIndex -> OrdMap Int
-indexCtorOrdinalsW index = index.ctor.ordinals
-
-indexTypeCtorsW : WasmProgramIndex -> OrdMap (List String)
-indexTypeCtorsW index = index.ctor.typeCtors
 
 -- ── declaration-derived semantic input readers ────────────────────────────────
 -- the DECLARATION word of the interface an impl entry implements (mirror of
@@ -1082,6 +1073,7 @@ makeWasmProgramIndex : EmitPlan ->
   WasmProgramIndex
 makeWasmProgramIndex plan facts groups ctorArs ctorTypes impls fnNames valNames =
   makeWasmProgramIndexWithLazy
+    plan.constructorFacts
     plan.wasmInputs.ctorFloatFields
     facts
     groups
@@ -1093,7 +1085,8 @@ makeWasmProgramIndex plan facts groups ctorArs ctorTypes impls fnNames valNames 
     plan.lazyGlobals
     plan.trmc
 
-makeWasmProgramIndexGaps : OrdMap (List Int) ->
+makeWasmProgramIndexGaps : ConstructorFacts ->
+  OrdMap (List Int) ->
   TrmcVerdicts ->
   DeclFacts ->
   List CBind ->
@@ -1103,8 +1096,9 @@ makeWasmProgramIndexGaps : OrdMap (List Int) ->
   List String ->
   List String ->
   WasmProgramIndex
-makeWasmProgramIndexGaps ctorFields trmc facts groups ctorArs ctorTypes impls fnNames valNames =
+makeWasmProgramIndexGaps constructors ctorFields trmc facts groups ctorArs ctorTypes impls fnNames valNames =
   makeWasmProgramIndexWithLazy
+    constructors
     ctorFields
     facts
     groups
@@ -1116,7 +1110,8 @@ makeWasmProgramIndexGaps ctorFields trmc facts groups ctorArs ctorTypes impls fn
     []
     trmc
 
-makeWasmProgramIndexWithLazy : OrdMap (List Int) ->
+makeWasmProgramIndexWithLazy : ConstructorFacts ->
+  OrdMap (List Int) ->
   DeclFacts ->
   List CBind ->
   List (String, Int) ->
@@ -1127,14 +1122,9 @@ makeWasmProgramIndexWithLazy : OrdMap (List Int) ->
   List String ->
   TrmcVerdicts ->
   WasmProgramIndex
-makeWasmProgramIndexWithLazy ctorFields facts groups ctorArs ctorTypes impls fnNames valNames lazyNames trmc =
+makeWasmProgramIndexWithLazy constructors ctorFields facts groups ctorArs ctorTypes impls fnNames valNames lazyNames trmc =
   let fnIndex = omFromNames fnNames omEmpty
   let valIndex = omFromNames valNames omEmpty
-  let ctorArIndex = omFromPairs (reverseL ctorArs) omEmpty
-  let ctorTyIndex = omFromPairs (reverseL ctorTypes) omEmpty
-  let typeCtors = typeCtorsOfW (reverseL ctorTypes) omEmpty
-  let ctorOrds =
-    ctorOrdsOfW (distinctTypeNames ctorTypes) ctorTyIndex typeCtors omEmpty
   let usedFns =
     scanFnValueUses fnIndex ctorArs groups
       ++ scanImplValueUses fnIndex ctorArs impls
@@ -1152,12 +1142,7 @@ makeWasmProgramIndexWithLazy ctorFields facts groups ctorArs ctorTypes impls fnN
     recordValue = WasmRecordValueIndex {
       fnValues = omFromNames usedFns omEmpty,
     },
-    ctor = WasmCtorIndex {
-      arities = ctorArIndex,
-      types = ctorTyIndex,
-      ordinals = ctorOrds,
-      typeCtors = typeCtors,
-    },
+    ctor = constructors,
     stamps = makeWasmStamps groups facts.factBinders,
     typeContext =
       wasmTypeContext
@@ -1803,7 +1788,7 @@ emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _
       valNames
   let useClos = physical.useClos
   let useRef = physical.useRef
-  let typeNames = distinctTypeNames ctorTypes
+  let typeNames = plan.constructorFacts.typeOrder
   let prog =
     Prog index typeNames valNames useClos impls input emit (freshFnCtx ())
   emitRefProgram prog plan groups
@@ -1980,6 +1965,7 @@ emitProgramGaps input plan cp0 =
   let valNames = collectValNames groups
   let index =
     makeWasmProgramIndexGaps
+      plan.constructorFacts
       plan.wasmInputs.ctorFloatFields
       plan.trmc
       facts
@@ -1991,7 +1977,7 @@ emitProgramGaps input plan cp0 =
       valNames
   let useClos = (physicalPlanW plan).useClos
   -- force the ref path: the census measures the full (ref eq) emitter surface.
-  let typeNames = distinctTypeNames ctorTypes
+  let typeNames = plan.constructorFacts.typeOrder
   let prog =
     Prog index typeNames valNames useClos impls input emit (freshFnCtx ())
   let _ = emitFnsGapsW prog (userFnBinds groups)
@@ -2794,9 +2780,18 @@ emitCtorStruct prog ty ctor =
 -- lists USER ctors — so always-declare is the simple correct choice for this slice.
 emitReservedStructs : Prog -> List String
 emitReservedStructs prog =
-  reservedTypeStructs prog "Option" ["Some", "None"]
-    ++ reservedTypeStructs prog "Result" ["Ok", "Err"]
-    ++ reservedTypeStructs prog "Ordering" ["Lt", "Eq", "Gt"]
+  reservedTypeStructs
+      prog
+      "Option"
+      (filterMap runtimeCtorName (runtimeRoster RuntimeOption))
+    ++ reservedTypeStructs
+      prog
+      "Result"
+      (filterMap runtimeCtorName (runtimeRoster RuntimeResult))
+    ++ reservedTypeStructs
+      prog
+      "Ordering"
+      (filterMap runtimeCtorName (runtimeRoster RuntimeOrdering))
 
 reservedTypeStructs : Prog -> String -> List String -> List String
 reservedTypeStructs prog ty ctors =
@@ -10948,7 +10943,13 @@ isCtor prog name =
     || isSyntheticCtor name
 
 isReservedCtor : String -> Bool
-isReservedCtor name = isSome (reservedCtorOrdinal name)
+isReservedCtor name = match namedRuntimeCtor name
+  Some id => match (runtimeCtorFact id).owner
+    RuntimeOption => True
+    RuntimeResult => True
+    RuntimeOrdering => True
+    _ => False
+  None => False
 
 -- ── W7 synthetic ctors (List Cons/Nil, tuple Tup<n>) ─────────────────────────
 -- These are not in the user ctor table; they share the W3 ctor machinery so the
@@ -10956,12 +10957,12 @@ isReservedCtor name = isSome (reservedCtorOrdinal name)
 -- "Tup<n>" (its own single-ctor synthetic type "$Tuple<n>").  List = Cons/Nil under
 -- type "List".
 isSyntheticCtor : String -> Bool
-isSyntheticCtor name =
-  name == "Cons"
-    || name == "Nil"
-    || name == "True"
-    || name == "False"
-    || isTupleCtorName name
+isSyntheticCtor name = match namedRuntimeCtor name
+  Some id => match (runtimeCtorFact id).owner
+    RuntimeList => True
+    RuntimeBool => True
+    _ => False
+  None => isTupleCtorName name
 
 tupleCtorName : Int -> String
 tupleCtorName n = "Tup" ++ intToString n
@@ -10970,157 +10971,58 @@ isTupleCtorName : String -> Bool
 isTupleCtorName name =
   startsWith "Tup" name && allDigitsFrom (stringToChars name) 3
 
--- the synthetic type a synthetic ctor belongs to.
+-- Tuple words below are physical Wasm names; tuple semantics use arity identity.
 syntheticCtorType : String -> String
-syntheticCtorType "Cons" = "List"
-syntheticCtorType "Nil" = "List"
--- W9: with the REAL prelude, `Bool` is a builtin (not a `data` decl), so its ctors
--- True/False are not in the ctor table.  Treat them as synthetic Bool ctors:
--- type "Bool", ordinals False=0/True=1, nullary, rep = i31 (same as emitVarRef's
--- True/False fast path and emitLitRef LBool), so discrimReadOf's i31 branch reads
--- the ordinal directly.
-syntheticCtorType "True" = "Bool"
-syntheticCtorType "False" = "Bool"
-syntheticCtorType name = "$Tuple" ++ intToString (trailingIntOf name)
+syntheticCtorType name = match namedRuntimeCtor name
+  Some id => optionOr "" (runtimeOwnerWord (runtimeCtorFact id).owner)
+  None => "$Tuple" ++ intToString (trailingIntOf name)
 
 syntheticCtorOrdinal : String -> Int
-syntheticCtorOrdinal "Cons" = 0
-syntheticCtorOrdinal "Nil" = 1
-syntheticCtorOrdinal "False" = 0
-syntheticCtorOrdinal "True" = 1
-syntheticCtorOrdinal _ = 0
+syntheticCtorOrdinal name =
+  optionOr 0 (map (id => (runtimeCtorFact id).ordinal) (namedRuntimeCtor name))
 
 syntheticCtorArity : String -> Int
-syntheticCtorArity "Cons" = 2
-syntheticCtorArity "Nil" = 0
-syntheticCtorArity "True" = 0
-syntheticCtorArity "False" = 0
-syntheticCtorArity name = trailingIntOf name
+syntheticCtorArity name = match namedRuntimeCtor name
+  Some id => (runtimeCtorFact id).arity
+  None => (runtimeCtorFact (RuntimeTupleCtor (trailingIntOf name))).arity
 
--- typeName → its ctor list in DECLARATION order.  Walks the ctor→type table
--- REVERSED and PREPENDS, so each type's list comes out in forward declaration
--- order — the same order `ctorsOfTypeUser`'s filter+map produced, duplicates and
--- all.
-typeCtorsOfW : List (String, String) ->
-  OrdMap (List String) ->
-  OrdMap (List String)
-typeCtorsOfW [] m = m
-typeCtorsOfW ((c, t) :: rest) m =
-  typeCtorsOfW rest (omInsert t (c :: optionOr [] (omLookup t m)) m)
-
--- ctorName → dense per-type ordinal, for the USER path of `ctorOrdinal` only.
--- Reproduces that path's formula
---   orZeroIdx (indexOfL name (ctorsOfType prog (ctorTypeName prog name)))
--- exactly, but in O(ctors · log ctors) instead of O(ctors) per call:
---   * types are walked in DECLARATION order (`distinctTypeNames`);
---   * a ctor is indexed only under the type `ctorTypeName` would name for it (its
---     FIRST type, per `tym`) — so a name shared by two types still takes its
---     ordinal from the first one, as `lookupAssoc` + `indexOfL` did;
---   * the `omHasKey` guard keeps the FIRST index on a name repeated within one
---     type, matching `indexOfL`'s first-match.
--- A ctor absent from the map is not a user ctor, so `userCtorOrdinalW` returns None
--- and `ctorOrdinal` falls through to the reserved/synthetic ordinal (#712/S0).
-ctorOrdsOfW : List String ->
-  OrdMap String ->
-  OrdMap (List String) ->
-  OrdMap Int ->
-  OrdMap Int
-ctorOrdsOfW [] _ _ m = m
-ctorOrdsOfW (ty :: rest) tym tcm m =
-  ctorOrdsOfW rest tym tcm (indexCtorsW tym ty (ctorsOfTypeIxW tcm ty) 0 m)
-
-indexCtorsW : OrdMap String ->
-  String ->
-  List String ->
-  Int ->
-  OrdMap Int ->
-  OrdMap Int
-indexCtorsW _ _ [] _ m = m
-indexCtorsW tym ty (c :: cs) i m = indexCtorsW tym ty cs (i + 1) (if omHasKey
-  c
-  m then
-  m
-else if firstTyIsW tym c ty then
-  omInsert c i m
-else
-  m)
-
-firstTyIsW : OrdMap String -> String -> String -> Bool
-firstTyIsW tym c ty = match omLookup c tym
-  Some t => eqStr t ty
-  None => False
-
--- the shared 5-branch ctor-list dispatch used by BOTH `ctorsOfTypeIxW` (memo-only,
--- called before the `Prog` exists) and `ctorsOfType` (Prog-based). Parameterized
--- over the fallback for a plain user type, so each caller supplies its own way to
--- resolve that case (a direct memo lookup vs `ctorsOfTypeUser`) while the
--- reserved/List/Bool/tuple branches — and their order — exist exactly once, so
--- the two can no longer drift apart.
-ctorsOfTypeDispatchW : (String -> List String) -> String -> List String
-ctorsOfTypeDispatchW userFallback ty =
-  if isReservedType ty then
-    reservedCtorsOfType ty
-  else if ty == "List" then
-    ["Cons", "Nil"]
-  else if ty == "Bool" then
-    ["False", "True"]
-  else if isTupleType ty then
-    [tupleCtorName (tupleTypeArity ty)]
-  else
-    userFallback ty
-
--- `ctorsOfType`'s dispatch, off the memo and without a `Prog` (the indices are built
--- before the Prog exists). Shares its branches with `ctorsOfType` via
--- `ctorsOfTypeDispatchW` — nothing left to keep in lockstep by hand.
-ctorsOfTypeIxW : OrdMap (List String) -> String -> List String
-ctorsOfTypeIxW tcm ty =
-  ctorsOfTypeDispatchW (t => optionOr [] (omLookup t tcm)) ty
+runtimeCtorsOfTypeW : String -> List String
+runtimeCtorsOfTypeW ty =
+  flatMap
+    (owner =>
+      if runtimeOwnerWord owner == Some ty then
+        filterMap runtimeCtorName (runtimeRoster owner)
+      else
+        [])
+    [RuntimeList, RuntimeOption, RuntimeResult, RuntimeOrdering, RuntimeBool]
 
 ctorArity : Prog -> String -> Int
-ctorArity prog name = match omLookup name (indexCtorAritiesW (progIndex prog))
-  Some a => a
+ctorArity prog name = match declaredCtorArity (progIndex prog).ctor name
+  Some arity => arity
   None =>
     if isSyntheticCtor name then
       syntheticCtorArity name
     else
       reservedCtorArity name
 
--- a ctor's owning type name (user types via the ctor→type map; reserved ctors map
--- to their fixed type names; W7 synthetic ctors to their synthetic types).
 ctorTypeName : Prog -> String -> String
-ctorTypeName prog name = match omLookup name (indexCtorTypesW (progIndex prog))
+ctorTypeName prog name = match declaredCtorOwner (progIndex prog).ctor name
   Some ty => ty
-  None =>
-    if isSyntheticCtor name then
-      syntheticCtorType name
-    else
-      reservedTypeOf prog name
+  None => match namedRuntimeCtor name
+    Some id => optionOr "" (runtimeOwnerWord (runtimeCtorFact id).owner)
+    None =>
+      if isTupleCtorName name then
+        syntheticCtorType name
+      else
+        gapSP prog ("ref-mode: unknown constructor '" ++ name ++ "'")
 
--- the per-type dense ordinal of a ctor (0-based index in its type's declaration
--- order).  Reserved ctors have fixed ordinals.
---
--- #712/S0: a USER ctor is looked up in the ctor TABLE **before** the name-based
--- `syntheticCtorOrdinal` short-circuit — mirroring `ctorArity`/`ctorTypeName` (both
--- table-first) and native `llvm_emit.mdk`'s `ctorOrdinal`.  Taking the
--- synthetic short-circuit FIRST instead gives a user ctor named `Cons`/`Nil` the
--- built-in list ordinal (Cons=0/Nil=1) instead of its DECLARATION-ORDER index.  In a
--- ≥3-ctor ADT like `data T = Extra | Cons Int T | Nil` that collides the user `Cons`
--- (wrongly 0) with `Extra` (legitimately 0) → wasm `br_table` sent `Cons` to `Extra`'s
--- arm = SILENT wrong dispatch. The private ctor-ordinal index holds only USER ctors, so a genuine
--- built-in list ctor (absent) still falls through to `syntheticCtorOrdinal`; a user
--- ctor and the built-in list are told apart at CALL sites via the CHead / tail expr
--- (see `ordinalOfHead`, `emitWDispCell`, the TRMC `isBuiltinList` flag, `emitListRef`),
--- the same discipline the struct-id fix uses.
 ctorOrdinal : Prog -> String -> Int
 ctorOrdinal prog name =
-  optionOrElse
-    (_ => syntheticCtorOrdinal name)
-    (orElse (reservedCtorOrdinal name) (userCtorOrdinalW prog name))
-
--- the DECLARATION-ORDER ordinal of a name IFF it is a user-declared ctor (present in
--- the ctor table), else None so the caller falls back to a synthetic/reserved ordinal.
-userCtorOrdinalW : Prog -> String -> Option Int
-userCtorOrdinalW prog name = omLookup name (indexCtorOrdinalsW (progIndex prog))
+  if isReservedCtor name then
+    syntheticCtorOrdinal name
+  else match declaredCtorOrdinal (progIndex prog).ctor name
+    Some ordinal => ordinal
+    None => syntheticCtorOrdinal name
 
 -- the ordinal to discriminate a decision-tree switch HEAD against.  Built-in list
 -- heads keep their reserved ordinal (Cons=0/Nil=1) regardless of a poisoning user
@@ -11132,18 +11034,14 @@ ordinalOfHead _ HCons = syntheticCtorOrdinal "Cons"
 ordinalOfHead _ HNil = syntheticCtorOrdinal "Nil"
 ordinalOfHead prog h = ctorOrdinal prog (fstConHead prog h)
 
--- the declaration-ordered ctor list of a user type (the ctor→type map lists each
--- type's ctors consecutively in declaration order — filter to this type).
--- Bool's ctors are SYNTHETIC (registered via syntheticCtor* helpers, not in the
--- program's ctorTypes table), so `ctorsOfTypeUser` would return [] → a 0-slot
--- br_table tower → both arms dropped → fall-through `unreachable` if it weren't
--- special-cased in the shared dispatch below. A genuine `match <Bool> { True =>
--- …; False => … }` (a CDecision switch, not a lowered CIf) hits this.
--- Index-aligned to syntheticCtorOrdinal: False=0, True=1.
--- Shares its branches with `ctorsOfTypeIxW` via `ctorsOfTypeDispatchW` — nothing
--- left to keep in lockstep by hand.
 ctorsOfType : Prog -> String -> List String
-ctorsOfType prog ty = ctorsOfTypeDispatchW (ctorsOfTypeUser prog) ty
+ctorsOfType prog ty = match omLookup ty (progIndex prog).ctor.rosters
+  Some roster => roster
+  None =>
+    if isTupleType ty then
+      [tupleCtorName (tupleTypeArity ty)]
+    else
+      runtimeCtorsOfTypeW ty
 
 -- a synthetic tuple type name "$Tuple<n>" and its arity.
 isTupleType : String -> Bool
@@ -11151,10 +11049,6 @@ isTupleType ty = startsWith "$Tuple" ty
 
 tupleTypeArity : String -> Int
 tupleTypeArity ty = trailingIntOf ty
-
-ctorsOfTypeUser : Prog -> String -> List String
-ctorsOfTypeUser prog ty =
-  optionOr [] (omLookup ty (indexTypeCtorsW (progIndex prog)))
 
 -- the number of ctors a type has (the br_table's slot count).
 typeCtorCount : Prog -> String -> Int
@@ -11222,44 +11116,14 @@ conHeadInfoUnsafe prog h = match conHeadInfo h
 -- The lowering names Ordering's ctors `Lt`/`Eq`/`Gt` (capitalized — see
 -- llvm_emit.reservedTag).
 isReservedType : String -> Bool
-isReservedType ty = contains ty ["Option", "Result", "Ordering"]
-
-reservedCtorsOfType : String -> List String
-reservedCtorsOfType "Option" = ["Some", "None"]
-reservedCtorsOfType "Result" = ["Ok", "Err"]
-reservedCtorsOfType "Ordering" = ["Lt", "Eq", "Gt"]
-reservedCtorsOfType _ = []
-
-reservedTypeOf : Prog -> String -> String
-reservedTypeOf prog name =
-  if contains name ["Some", "None"] then
-    "Option"
-  else if contains name ["Ok", "Err"] then
-    "Result"
-  else if contains name ["Lt", "Eq", "Gt"] then
-    "Ordering"
-  else
-    gapSP
-      prog
-      ("ref-mode: unknown constructor '"
-        ++ name
-        ++ "' (not in the ctor table, not reserved)")
-
-reservedCtorOrdinal : String -> Option Int
-reservedCtorOrdinal "Some" = Some 0
-reservedCtorOrdinal "None" = Some 1
-reservedCtorOrdinal "Ok" = Some 0
-reservedCtorOrdinal "Err" = Some 1
-reservedCtorOrdinal "Lt" = Some 0
-reservedCtorOrdinal "Eq" = Some 1
-reservedCtorOrdinal "Gt" = Some 2
-reservedCtorOrdinal _ = None
+isReservedType ty =
+  any
+    (owner => runtimeOwnerWord owner == Some ty)
+    [RuntimeOption, RuntimeResult, RuntimeOrdering]
 
 reservedCtorArity : String -> Int
-reservedCtorArity "Some" = 1
-reservedCtorArity "Ok" = 1
-reservedCtorArity "Err" = 1
-reservedCtorArity _ = 0
+reservedCtorArity name =
+  optionOr 0 (map (id => (runtimeCtorFact id).arity) (namedRuntimeCtor name))
 
 -- ── WAT type-name mangling ───────────────────────────────────────────────────
 -- a per-type root struct type name and a per-ctor struct type name.  Prefixed to
@@ -11321,12 +11185,6 @@ fstConHead prog h = match conHeadInfo h
     gapSP
       prog
       "ref-mode: non-constructor head where a ctor struct id was needed"
-
--- ── distinct type names (declaration order) ──────────────────────────────────
--- the ctor→type map lists each type's ctors consecutively, so dedup-preserving-
--- order over the type column gives declaration order.
-distinctTypeNames : List (String, String) -> List String
-distinctTypeNames ctorTypes = dedupKeep (map sndPair ctorTypes)
 
 -- ── scratch locals for match scrutinee/focus stashes ─────────────────────────
 -- a CDecision/CTSwitch at nesting depth d stashes its value into `$__rf<d>`.  The
@@ -11595,9 +11453,6 @@ dedupGo (x :: xs) seen acc =
 
 fst : (a, b) -> a
 fst (x, _) = x
-
-sndPair : (String, String) -> String
-sndPair (_, y) = y
 
 isSome : Option a -> Bool
 isSome (Some _) = True

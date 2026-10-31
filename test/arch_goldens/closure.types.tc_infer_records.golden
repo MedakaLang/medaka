@@ -1,5 +1,6 @@
 frontend.ast
 frontend.exhaust
+frontend.runtime_constructors
 frontend.visibility
 support.diag_codes
 support.opcount

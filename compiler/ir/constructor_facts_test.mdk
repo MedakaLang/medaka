@@ -1,0 +1,239 @@
+import ir.core_ir.{CProgram(..), noDeclFacts}
+import ir.constructor_facts.{
+  ConstructorFacts(..), planConstructors, declaredCtorArity, declaredCtorOwner,
+  declaredCtorOrdinal, declaredTypeCtors, validateConstructorFacts
+}
+import frontend.runtime_constructors.{
+  RuntimeCtorId(..), namedRuntimeCtor, runtimeCtorFact
+}
+import support.ordmap.{omInsert}
+import test.{expectEach, expectEqual, expectFindings}
+
+program : List (String, Int) -> List (String, String) -> CProgram
+program ars tys = CProgram [] ars tys [] [] noDeclFacts
+
+test "constructor facts preserve declaration order, repeated rows and first arity" =
+  let cp =
+    program
+      [("Third", 0), ("First", 1), ("Second", 2), ("First", 9), ("UserId", 1)]
+      [
+        ("Third", "T"),
+        ("UserId", "UserId"),
+        ("First", "T"),
+        ("Second", "T"),
+        ("First", "T"),
+      ]
+  let facts = planConstructors cp
+  expectEach [
+    ("type order", expectEqual ["T", "UserId"] facts.typeOrder),
+    (
+      "roster",
+      expectEqual
+        ["Third", "First", "Second", "First"]
+        (declaredTypeCtors facts "T"),
+    ),
+    (
+      "arities",
+      expectEqual
+        [Some 0, Some 1, Some 2, Some 1]
+        (map (declaredCtorArity facts) ["Third", "First", "Second", "UserId"]),
+    ),
+    (
+      "ordinals",
+      expectEqual
+        [Some 0, Some 1, Some 2, Some 0]
+        (map (declaredCtorOrdinal facts) ["Third", "First", "Second", "UserId"]),
+    ),
+    ("owner", expectEqual (Some "T") (declaredCtorOwner facts "First")),
+    ("valid", expectEqual [] (validateConstructorFacts cp facts)),
+  ]
+
+test "noncontiguous owners keep the first owner and reject incompatible positions" =
+  let cp = program [("X", 0), ("C", 1)] [("X", "A"), ("C", "B"), ("C", "A")]
+  let facts = planConstructors cp
+  let neighbor = program [] [("X", "A"), ("C", "A"), ("C", "B")]
+  expectEach [
+    ("first owner", expectEqual (Some "B") (declaredCtorOwner facts "C")),
+    (
+      "first owner's position",
+      expectEqual (Some 0) (declaredCtorOrdinal facts "C"),
+    ),
+    ("earlier roster", expectEqual ["X", "C"] (declaredTypeCtors facts "A")),
+    (
+      "ambiguity",
+      expectEqual
+        ["constructor-fact: ambiguous owner ordinal for C"]
+        (validateConstructorFacts cp facts),
+    ),
+    (
+      "later owner is harmless",
+      expectEqual
+        []
+        (validateConstructorFacts neighbor (planConstructors neighbor)),
+    ),
+  ]
+
+test "declaration permutations and unrelated tables do not leak between plans" =
+  let p =
+    program
+      [("Cons", 1), ("Nil", 0)]
+      [("Extra", "User"), ("Cons", "User"), ("Nil", "User")]
+  let u = program [("Cons", 2)] [("Nil", "Other"), ("Cons", "Other")]
+  let connected =
+    program
+      [("Cons", 1), ("Nil", 0)]
+      [
+        ("Socket", "Unrelated"),
+        ("Extra", "User"),
+        ("Cons", "User"),
+        ("Nil", "User"),
+      ]
+  let permuted =
+    program [] [("Nil", "User"), ("Extra", "User"), ("Cons", "User")]
+  expectEach [
+    (
+      "P",
+      expectEqual
+        [Some 0, Some 1, Some 2]
+        (map (declaredCtorOrdinal (planConstructors p)) [
+          "Extra", "Cons", "Nil"
+        ]),
+    ),
+    (
+      "U",
+      expectEqual
+        [Some 0, Some 1]
+        (map (declaredCtorOrdinal (planConstructors u)) ["Nil", "Cons"]),
+    ),
+    (
+      "P again",
+      expectEqual
+        [Some 0, Some 1, Some 2]
+        (map (declaredCtorOrdinal (planConstructors p)) [
+          "Extra", "Cons", "Nil"
+        ]),
+    ),
+    (
+      "connected U",
+      expectEqual
+        [Some 0, Some 1, Some 2]
+        (map (declaredCtorOrdinal (planConstructors connected)) [
+          "Extra", "Cons", "Nil"
+        ]),
+    ),
+    (
+      "permutation",
+      expectEqual
+        [Some 0, Some 1, Some 2]
+        (map (declaredCtorOrdinal (planConstructors permuted)) [
+          "Nil", "Extra", "Cons"
+        ]),
+    ),
+    (
+      "declared list words",
+      expectEqual [] (validateConstructorFacts p (planConstructors p)),
+    ),
+  ]
+
+test "tuple arity identity remains distinct from a declared Tup2 word and list words" =
+  let facts = planConstructors (program [("Tup2", 1)] [("Tup2", "User")])
+  expectEach [
+    (
+      "declared Tup2",
+      expectEqual (Some "User") (declaredCtorOwner facts "Tup2"),
+    ),
+    ("no named tuple", expectEqual None (namedRuntimeCtor "Tup2")),
+    (
+      "tuple arities",
+      expectEqual
+        [2, 3]
+        (map (n => (runtimeCtorFact (RuntimeTupleCtor n)).arity) [2, 3]),
+    ),
+    (
+      "tuple ordinals",
+      expectEqual
+        [0, 0]
+        (map (n => (runtimeCtorFact (RuntimeTupleCtor n)).ordinal) [2, 3]),
+    ),
+    (
+      "runtime list ordinals",
+      expectEqual
+        [0, 1]
+        (map (id => (runtimeCtorFact id).ordinal) [RuntimeCons, RuntimeNil]),
+    ),
+  ]
+
+test "each carried projection is validated independently" =
+  let cp = program [("A", 0), ("B", 1)] [("A", "T"), ("B", "T")]
+  let facts = planConstructors cp
+  let mutations = [
+    ("arity", { facts | arities = omInsert "B" 2 facts.arities }),
+    ("owner", { facts | owners = omInsert "B" "Other" facts.owners }),
+    ("ordinal", { facts | ordinals = omInsert "B" (-1) facts.ordinals }),
+    ("roster", { facts | rosters = omInsert "T" ["B", "A"] facts.rosters }),
+  ]
+  expectEach
+    (map
+        ((field, bad) => (
+          field,
+          expectEqual
+            ["constructor-fact: " ++ field ++ " projection disagrees with Core"]
+            (validateConstructorFacts cp bad),
+        ))
+        mutations
+      ++ [
+        (
+          "type order",
+          expectEqual
+            ["constructor-fact: type order disagrees with Core"]
+            (validateConstructorFacts cp { facts | typeOrder = ["Other", "T"] }),
+        ),
+      ])
+
+test "qualified declaration owners do not claim bare runtime roster order" =
+  let ars = [
+    ("Some", 1),
+    ("None", 0),
+    ("Ok", 1),
+    ("Err", 1),
+    ("Lt", 0),
+    ("Eq", 0),
+    ("Gt", 0),
+  ]
+  let rows = [
+    ("None", "__user__.Option"),
+    ("Some", "__user__.Option"),
+    ("Err", "__user__.Result"),
+    ("Ok", "__user__.Result"),
+    ("Gt", "__user__.Ordering"),
+    ("Eq", "__user__.Ordering"),
+    ("Lt", "__user__.Ordering"),
+  ]
+  let cp = program ars rows
+  let bare = program [("Some", 1)] [("Some", "User")]
+  let wrongArity =
+    program
+      [("Some", 2), ("None", 0)]
+      [("Some", "__user__.Option"), ("None", "__user__.Option")]
+  expectEach [
+    (
+      "qualified reverse order",
+      expectEqual [] (validateConstructorFacts cp (planConstructors cp)),
+    ),
+    (
+      "declared ordinal stays logical",
+      expectEqual (Some 0) (declaredCtorOrdinal (planConstructors cp) "None"),
+    ),
+    (
+      "bare wrong owner",
+      expectFindings
+        "runtime owner"
+        (Ok (validateConstructorFacts bare (planConstructors bare))),
+    ),
+    (
+      "physical runtime arity",
+      expectFindings
+        "runtime arity"
+        (Ok (validateConstructorFacts wrongArity (planConstructors wrongArity))),
+    ),
+  ]
