@@ -2,6 +2,7 @@ frontend.ast
 frontend.desugar
 frontend.exhaust
 frontend.marker
+frontend.runtime_constructors
 frontend.visibility
 ir.core_ir
 ir.extern_lower
