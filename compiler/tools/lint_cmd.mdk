@@ -81,7 +81,8 @@ import tools.lint.{
   lintFileDiagTripleParsed,
   lintParseSource,
   lintProgramFacts,
-  mkFileFacts,
+  mkFileFactsAt,
+  projectWildMods,
   crossFileSelected,
   selectRules,
   mergeCrossFileIntoTriples,
@@ -1088,7 +1089,7 @@ lintFileFresh : StdlibIndex ->
   (List Decl, Positions) ->
   <IO> (LintEntry, Positions, List Decl)
 lintFileFresh idx rules target src hash wantOccs (decls, pos) =
-  let facts = mkFileFacts src decls pos
+  let facts = mkFileFactsAt target src decls pos
   (
     LintEntry {
       path = target,
@@ -1116,7 +1117,10 @@ lintOneFileFix idx unsafeMode onlyNames disableNames target =
       True
     Ok src =>
       let limit = if unsafeMode then Unsafe else Safe
-      match fixSource idx limit onlyNames disableNames target src
+      let localMods = match lintParseSource src
+        Ok (decls, _) => projectWildMods target decls
+        Err _ => []
+      match fixSource idx limit onlyNames disableNames localMods target src
         Err msg =>
           let _ = ePutStrLn msg
           True

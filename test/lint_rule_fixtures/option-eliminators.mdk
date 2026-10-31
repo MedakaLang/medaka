@@ -1,7 +1,7 @@
 -- Fixture for rule-option-eliminators: a 2-arm `match` the prelude names.  The
--- default must be ATOMIC (a literal, a variable or a nullary constructor): a call
--- default is left alone, because `optionOr d o` evaluates `d` even when `o` is
--- `Some`.  The scrutinee text moves into the call exactly once.  Rebinding,
+-- default must be a literal, a nullary constructor or a locally bound variable:
+-- a call default is left alone, because `optionOr d o` evaluates `d` even when
+-- `o` is `Some`, and so is a top-level value, which `run` forces on first use.  The scrutinee text moves into the call exactly once.  Rebinding,
 -- wildcard-import and impl-method guards are pinned in
 -- `test/lint_fix_fixtures/option_eliminators_*.mdk`, since each is file-wide; a
 -- comment inside the span is pinned there too.
@@ -18,6 +18,20 @@ describe _ = "none"
 
 probe : Int -> String -> Option String
 probe k m = if k > 0 then Some m else None
+
+-- POSITIVE: panic with a literal message.  The fix is Unsafe: the native engine
+-- reports a panic through `optionOrPanic` without the call site's location, so
+-- plain `--fix` leaves the match.
+-- expect-next-line rule-option-eliminators unfixed
+panicLit o = match o
+  Some x => x
+  None => panic "no value"
+
+-- POSITIVE: panic with a variable message.
+-- expect-next-line rule-option-eliminators unfixed
+panicVar msg o = match o
+  Some x => x
+  None => panic msg
 
 -- POSITIVE: Some payload or a literal.
 -- expect-next-line rule-option-eliminators
@@ -60,18 +74,6 @@ resultDefault r = match r
 resultFirst r = match r
   Err _ => False
   Ok b => b
-
--- POSITIVE: panic with a literal message.
--- expect-next-line rule-option-eliminators
-panicLit o = match o
-  Some x => x
-  None => panic "no value"
-
--- POSITIVE: panic with a variable message.
--- expect-next-line rule-option-eliminators
-panicVar msg o = match o
-  Some x => x
-  None => panic msg
 
 -- POSITIVE: presence tests, both polarities and both orders.
 -- expect-next-line rule-option-eliminators
@@ -123,6 +125,28 @@ commentAbove o =
 callDefault o = match o
   Some x => x
   None => expensive 1
+
+-- NEGATIVE: a top-level value default.  `run` forces a top-level value on first
+-- use, so `optionOr fallbackValue o` would force it on every call.
+fallbackValue : Int
+fallbackValue = panic "fallback forced"
+
+topValueDefault o = match o
+  Some x => x
+  None => fallbackValue
+
+-- NEGATIVE: an imported value default, for the same reason.
+importedDefault o = match o
+  Some x => x
+  None => maxBound
+
+-- NEGATIVE: a top-level value as the panic message.
+topValueMessage o = match o
+  Some x => x
+  None => panic fallbackMessage
+
+fallbackMessage : String
+fallbackMessage = "no value"
 
 -- NEGATIVE: an operator expression is a computation, not an atom.
 computedDefault o n = match o

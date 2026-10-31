@@ -281,9 +281,9 @@ After:
 
 ## rule-option-eliminators
 
-2-arm `match` on an Option/Result that unwraps with an atomic default, panics with a message, or answers whether it is `Some`. The prelude names these: `optionOr`, `optionOrPanic`, `isSome`, `isNone`, `resultOr`
+2-arm `match` on an Option/Result that unwraps with a literal, constructor or local-variable default, panics with a message, or answers whether it is `Some`. The prelude names these: `optionOr`, `optionOrPanic`, `isSome`, `isNone`, `resultOr`
 
-A two-arm `match` that returns the payload of `Some`/`Ok` and otherwise a literal, a variable or a nullary constructor is `optionOr`/`resultOr`; one that otherwise panics with a message is `optionOrPanic`; one that only answers `True`/`False` is `isSome`/`isNone`. A default that is a call is left alone: the function form evaluates it eagerly.
+A two-arm `match` that returns the payload of `Some`/`Ok` and otherwise a literal, a nullary constructor or a local variable is `optionOr`/`resultOr`; one that otherwise panics with a message is `optionOrPanic`; one that only answers `True`/`False` is `isSome`/`isNone`. A default that is a call or a top-level value is left alone: the function form evaluates it eagerly. The `optionOrPanic` fix needs `--unsafe-fixes`, because a native panic through it loses the call site's location.
 
 ```
 Before:
@@ -298,7 +298,7 @@ After:
 
 a call passed as the default of `optionOr`/`resultOr`, or as the argument of `whenL False`: it runs although its result is discarded. Use `optionOrElse`/`resultOrElse`
 
-`optionOr d o` and `resultOr d r` are ordinary calls, so `d` is evaluated before the call even when `o` is `Some` or `r` is `Ok`. A default that is a call is wasted work on every hit, and an effect or a panic in it happens anyway. `optionOrElse` and `resultOrElse` take a function that runs on the miss only. A literal, a variable, a tuple, an operator expression or a constructor application is not reported.
+`optionOr d o` and `resultOr d r` are ordinary calls, so `d` is evaluated before the call even when `o` is `Some` or `r` is `Ok`. A default that is a call is wasted work on every hit, and an effect or a panic in it happens anyway. `optionOrElse` and `resultOrElse` take a function that runs on the miss only. A literal, a variable, a tuple, an operator expression or a constructor application is not reported, and neither is a partial application such as `map (optionOr d) xs`, which the lazy form would run once per miss.
 
 `whenL False (f x)` is reported without a fix: its argument is evaluated although the guard is `False`.
 

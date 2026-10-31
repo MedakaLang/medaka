@@ -101,3 +101,13 @@ negSelfRecursive k = match lookupA k
   None => match lookupB k
     Some v => Some v
     None => negSelfRecursive (k - 1)
+
+-- NEGATIVE: the last probe is the recursion of a where-bound helper of the
+-- enclosing function.
+negWhereRecursive k0 = go k0
+  where
+    go k = match lookupA k
+      Some v => Some v
+      None => match lookupB k
+        Some v => Some v
+        None => go (k - 1)
