@@ -1,13 +1,20 @@
 # META
-source_lines=165
+source_lines=172
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for `stdlib/csv.mdk`: the reading rules, the writing rules, and the
 -- round trip between them.
 
 import csv.{parse, parseWith, render, renderWith}
-import string.{concat, repeat, take, contains}
-import test.{expectEqual, expectErrContains, expectTrue, expectEach}
+import string.{concat, repeat, take}
+import test.{
+  Expectation,
+  expectEach,
+  expectEqual,
+  expectErrContains,
+  expectTextContainsAll,
+  pass,
+}
 
 -- # Reading
 
@@ -160,17 +167,17 @@ test "the round trip holds on the awkward rows named outright" =
 mixed : String
 mixed = take 200 (repeat 30 "a,\"b\"\"\r\n ,")
 
-prefixOk : Int -> Bool
+prefixOk : Int -> Expectation
 prefixOk k = match parse (take k mixed)
-  Ok _ => True
-  Err e => contains "unterminated quoted field" e
+  Ok _ => pass
+  Err e => expectTextContainsAll ["unterminated quoted field"] e
 
 test "every prefix of a 200-character mixed input reads or is unterminated" =
-  expectTrue (all prefixOk [0..=200])
+  expectEach (map (k => ("prefix \{k}", prefixOk k)) [0..=200])
 # DESUGAR
 (DUse false (UseGroup ("csv") ((mem "parse" false) (mem "parseWith" false) (mem "render" false) (mem "renderWith" false))))
-(DUse false (UseGroup ("string") ((mem "concat" false) (mem "repeat" false) (mem "take" false) (mem "contains" false))))
-(DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectErrContains" false) (mem "expectTrue" false) (mem "expectEach" false))))
+(DUse false (UseGroup ("string") ((mem "concat" false) (mem "repeat" false) (mem "take" false))))
+(DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEach" false) (mem "expectEqual" false) (mem "expectErrContains" false) (mem "expectTextContainsAll" false) (mem "pass" false))))
 (DTest false "plain rows" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "a")) (ELit (LString "b"))) (EListLit (ELit (LString "1")) (ELit (LString "2")))))) (EApp (EVar "parse") (ELit (LString "a,b\n1,2\n")))))
 (DTest false "empty fields are kept" (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "middle")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "a")) (ELit (LString "")) (ELit (LString "b")))))) (EApp (EVar "parse") (ELit (LString "a,,b\n"))))) (ETuple (ELit (LString "only a delimiter")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "")) (ELit (LString "")))))) (EApp (EVar "parse") (ELit (LString ",\n"))))) (ETuple (ELit (LString "trailing delimiter")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "a")) (ELit (LString "")))))) (EApp (EVar "parse") (ELit (LString "a,\n"))))))))
 (DTest false "quoted fields hold the delimiter, doubled quotes and line breaks" (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "delimiter")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "a,b")) (ELit (LString "c")))))) (EApp (EVar "parse") (ELit (LString "\"a,b\",c\n"))))) (ETuple (ELit (LString "doubled quote")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "say \"hi\"")))))) (EApp (EVar "parse") (ELit (LString "\"say \"\"hi\"\"\"\n"))))) (ETuple (ELit (LString "LF kept")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "a\nb")) (ELit (LString "c")))))) (EApp (EVar "parse") (ELit (LString "\"a\nb\",c\n"))))) (ETuple (ELit (LString "CRLF kept")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "a\r\nb")) (ELit (LString "c")))))) (EApp (EVar "parse") (ELit (LString "\"a\r\nb\",c\r\n"))))) (ETuple (ELit (LString "empty line inside")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "a\n\nb")))))) (EApp (EVar "parse") (ELit (LString "\"a\n\nb\"\n"))))))))
@@ -194,13 +201,13 @@ test "every prefix of a 200-character mixed input reads or is unterminated" =
 (DTest false "the round trip holds on the awkward rows named outright" (EBlock (DoLet false false (PVar "rows") (EListLit (EListLit) (EListLit (ELit (LString ""))) (EListLit (ELit (LString "")) (ELit (LString ""))) (EListLit (ELit (LString "\""))) (EListLit (ELit (LString "a,\"b\"\r\nc"))) (EListLit (ELit (LString "\n"))) (EListLit))) (DoExpr (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EVar "rows"))) (EApp (EVar "parse") (EApp (EVar "render") (EVar "rows")))))))
 (DTypeSig false "mixed" (TyCon "String"))
 (DFunDef false "mixed" () (EApp (EApp (EVar "take") (ELit (LInt 200))) (EApp (EApp (EVar "repeat") (ELit (LInt 30))) (ELit (LString "a,\"b\"\"\r\n ,")))))
-(DTypeSig false "prefixOk" (TyFun (TyCon "Int") (TyCon "Bool")))
-(DFunDef false "prefixOk" ((PVar "k")) (EMatch (EApp (EVar "parse") (EApp (EApp (EVar "take") (EVar "k")) (EVar "mixed"))) (arm (PCon "Ok" PWild) () (EVar "True")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EVar "contains") (ELit (LString "unterminated quoted field"))) (EVar "e")))))
-(DTest false "every prefix of a 200-character mixed input reads or is unterminated" (EApp (EVar "expectTrue") (EApp (EApp (EVar "all") (EVar "prefixOk")) (ERangeList (ELit (LInt 0)) (ELit (LInt 200)) true))))
+(DTypeSig false "prefixOk" (TyFun (TyCon "Int") (TyCon "Expectation")))
+(DFunDef false "prefixOk" ((PVar "k")) (EMatch (EApp (EVar "parse") (EApp (EApp (EVar "take") (EVar "k")) (EVar "mixed"))) (arm (PCon "Ok" PWild) () (EVar "pass")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EVar "expectTextContainsAll") (EListLit (ELit (LString "unterminated quoted field")))) (EVar "e")))))
+(DTest false "every prefix of a 200-character mixed input reads or is unterminated" (EApp (EVar "expectEach") (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ETuple (EBinOp "++" (EBinOp "++" (ELit (LString "prefix ")) (EApp (EVar "display") (EVar "k"))) (ELit (LString ""))) (EApp (EVar "prefixOk") (EVar "k"))))) (ERangeList (ELit (LInt 0)) (ELit (LInt 200)) true))))
 # MARK
 (DUse false (UseGroup ("csv") ((mem "parse" false) (mem "parseWith" false) (mem "render" false) (mem "renderWith" false))))
-(DUse false (UseGroup ("string") ((mem "concat" false) (mem "repeat" false) (mem "take" false) (mem "contains" false))))
-(DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectErrContains" false) (mem "expectTrue" false) (mem "expectEach" false))))
+(DUse false (UseGroup ("string") ((mem "concat" false) (mem "repeat" false) (mem "take" false))))
+(DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEach" false) (mem "expectEqual" false) (mem "expectErrContains" false) (mem "expectTextContainsAll" false) (mem "pass" false))))
 (DTest false "plain rows" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "a")) (ELit (LString "b"))) (EListLit (ELit (LString "1")) (ELit (LString "2")))))) (EApp (EVar "parse") (ELit (LString "a,b\n1,2\n")))))
 (DTest false "empty fields are kept" (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "middle")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "a")) (ELit (LString "")) (ELit (LString "b")))))) (EApp (EVar "parse") (ELit (LString "a,,b\n"))))) (ETuple (ELit (LString "only a delimiter")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "")) (ELit (LString "")))))) (EApp (EVar "parse") (ELit (LString ",\n"))))) (ETuple (ELit (LString "trailing delimiter")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "a")) (ELit (LString "")))))) (EApp (EVar "parse") (ELit (LString "a,\n"))))))))
 (DTest false "quoted fields hold the delimiter, doubled quotes and line breaks" (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "delimiter")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "a,b")) (ELit (LString "c")))))) (EApp (EVar "parse") (ELit (LString "\"a,b\",c\n"))))) (ETuple (ELit (LString "doubled quote")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "say \"hi\"")))))) (EApp (EVar "parse") (ELit (LString "\"say \"\"hi\"\"\"\n"))))) (ETuple (ELit (LString "LF kept")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "a\nb")) (ELit (LString "c")))))) (EApp (EVar "parse") (ELit (LString "\"a\nb\",c\n"))))) (ETuple (ELit (LString "CRLF kept")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "a\r\nb")) (ELit (LString "c")))))) (EApp (EVar "parse") (ELit (LString "\"a\r\nb\",c\r\n"))))) (ETuple (ELit (LString "empty line inside")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EListLit (ELit (LString "a\n\nb")))))) (EApp (EVar "parse") (ELit (LString "\"a\n\nb\"\n"))))))))
@@ -224,6 +231,6 @@ test "every prefix of a 200-character mixed input reads or is unterminated" =
 (DTest false "the round trip holds on the awkward rows named outright" (EBlock (DoLet false false (PVar "rows") (EListLit (EListLit) (EListLit (ELit (LString ""))) (EListLit (ELit (LString "")) (ELit (LString ""))) (EListLit (ELit (LString "\""))) (EListLit (ELit (LString "a,\"b\"\r\nc"))) (EListLit (ELit (LString "\n"))) (EListLit))) (DoExpr (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EVar "rows"))) (EApp (EVar "parse") (EApp (EVar "render") (EVar "rows")))))))
 (DTypeSig false "mixed" (TyCon "String"))
 (DFunDef false "mixed" () (EApp (EApp (EVar "take") (ELit (LInt 200))) (EApp (EApp (EVar "repeat") (ELit (LInt 30))) (ELit (LString "a,\"b\"\"\r\n ,")))))
-(DTypeSig false "prefixOk" (TyFun (TyCon "Int") (TyCon "Bool")))
-(DFunDef false "prefixOk" ((PVar "k")) (EMatch (EApp (EVar "parse") (EApp (EApp (EVar "take") (EVar "k")) (EVar "mixed"))) (arm (PCon "Ok" PWild) () (EVar "True")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EVar "contains") (ELit (LString "unterminated quoted field"))) (EVar "e")))))
-(DTest false "every prefix of a 200-character mixed input reads or is unterminated" (EApp (EVar "expectTrue") (EApp (EApp (EDictApp "all") (EVar "prefixOk")) (ERangeList (ELit (LInt 0)) (ELit (LInt 200)) true))))
+(DTypeSig false "prefixOk" (TyFun (TyCon "Int") (TyCon "Expectation")))
+(DFunDef false "prefixOk" ((PVar "k")) (EMatch (EApp (EVar "parse") (EApp (EApp (EVar "take") (EVar "k")) (EVar "mixed"))) (arm (PCon "Ok" PWild) () (EVar "pass")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EVar "expectTextContainsAll") (EListLit (ELit (LString "unterminated quoted field")))) (EVar "e")))))
+(DTest false "every prefix of a 200-character mixed input reads or is unterminated" (EApp (EVar "expectEach") (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (ETuple (EBinOp "++" (EBinOp "++" (ELit (LString "prefix ")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString ""))) (EApp (EVar "prefixOk") (EVar "k"))))) (ERangeList (ELit (LInt 0)) (ELit (LInt 200)) true))))

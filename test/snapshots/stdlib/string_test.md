@@ -1,5 +1,5 @@
 # META
-source_lines=1088
+source_lines=1108
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -15,7 +15,7 @@ import string.{
   stripSuffix, take, toInt, toLower, toUpper, toFixed, trim, trimLeft,
   trimRight, unlines, unwords, utf8ByteLength
 }
-import test.{expectEqual, expectFalse, expectTrue}
+import test.{expectEach, expectEqual, expectFalse, expectTrue}
 
 -- # Fixed cases
 
@@ -1082,6 +1082,26 @@ test "indent leaves a tab-only line exactly as it is" =
 test "indent keeps the line endings and adds none to a last line" =
   expectEqual ["> a\n", "> a"] [indent "> " "a\n", indent "> " "a"]
 
+-- Python: textwrap.indent("a\r\n\r\nb\r\n", "> ") gives "> a\r\n\r\n> b\r\n".
+test "indent leaves a CRLF blank line alone" =
+  expectEqual "> a\r\n\r\n> b\r\n" (indent "> " "a\r\n\r\nb\r\n")
+
+-- Python: textwrap.indent("a\rb", "> ") gives "> a\r> b".
+test "indent ends a line at a lone CR" =
+  expectEqual "> a\r> b" (indent "> " "a\rb")
+
+test "indent treats Unicode whitespace-only lines as blank" =
+  expectEqual "> a\n \n　\n> b" (indent "> " "a\n \n　\nb")
+
+test "indent ends a line at each separator Python splits on" = expectEach [
+  ("vt", expectEqual "> a\u{0b}> b" (indent "> " "a\u{0b}b")),
+  ("ff", expectEqual "> a\u{0c}> b" (indent "> " "a\u{0c}b")),
+  ("fs", expectEqual "> a\u{1c}> b" (indent "> " "a\u{1c}b")),
+  ("nel", expectEqual "> a> b" (indent "> " "ab")),
+  ("ls", expectEqual "> a > b" (indent "> " "a b")),
+  ("ps", expectEqual "> a > b" (indent "> " "a b")),
+]
+
 test "indent of an empty string is empty" = expectEqual "" (indent "> " "")
 
 -- Python: textwrap.indent("x\n\n\ty\n", "    ") gives "    x\n\n    \ty\n".
@@ -1092,7 +1112,7 @@ test "indent with an empty prefix leaves the text alone" =
   expectEqual "a\n b" (indent "" "a\n b")
 # DESUGAR
 (DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "dedent" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "groupThousands" false) (mem "indent" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
-(DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
+(DUse false (UseGroup ("test") ((mem "expectEach" false) (mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
 (DTest false "lastIndexOf of an empty needle is the end of the string" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 5)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString ""))) (ELit (LString "héllo")))))
@@ -1369,12 +1389,16 @@ test "indent with an empty prefix leaves the text alone" =
 (DTest false "indent leaves blank and whitespace-only lines exactly as they are" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\n\n  \n> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\n\n  \nb")))))
 (DTest false "indent leaves a tab-only line exactly as it is" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\n\t\n> b\n"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\n\t\nb\n")))))
 (DTest false "indent keeps the line endings and adds none to a last line" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "> a\n")) (ELit (LString "> a")))) (EListLit (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\n"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a"))))))
+(DTest false "indent leaves a CRLF blank line alone" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\r\n\r\n> b\r\n"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\r\n\r\nb\r\n")))))
+(DTest false "indent ends a line at a lone CR" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\r> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\rb")))))
+(DTest false "indent treats Unicode whitespace-only lines as blank" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\n \n　\n> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\n \n　\nb")))))
+(DTest false "indent ends a line at each separator Python splits on" (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "vt")) (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\u{0b}> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\u{0b}b"))))) (ETuple (ELit (LString "ff")) (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\u{0c}> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\u{0c}b"))))) (ETuple (ELit (LString "fs")) (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\u{1c}> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\u{1c}b"))))) (ETuple (ELit (LString "nel")) (EApp (EApp (EVar "expectEqual") (ELit (LString "> a> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "ab"))))) (ETuple (ELit (LString "ls")) (EApp (EApp (EVar "expectEqual") (ELit (LString "> a > b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a b"))))) (ETuple (ELit (LString "ps")) (EApp (EApp (EVar "expectEqual") (ELit (LString "> a > b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a b"))))))))
 (DTest false "indent of an empty string is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "")))))
 (DTest false "indent prefixes a line that starts with a tab" (EApp (EApp (EVar "expectEqual") (ELit (LString "    x\n\n    \ty\n"))) (EApp (EApp (EVar "indent") (ELit (LString "    "))) (ELit (LString "x\n\n\ty\n")))))
 (DTest false "indent with an empty prefix leaves the text alone" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\n b"))) (EApp (EApp (EVar "indent") (ELit (LString ""))) (ELit (LString "a\n b")))))
 # MARK
 (DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "dedent" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "groupThousands" false) (mem "indent" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
-(DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
+(DUse false (UseGroup ("test") ((mem "expectEach" false) (mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
 (DTest false "lastIndexOf of an empty needle is the end of the string" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 5)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString ""))) (ELit (LString "héllo")))))
@@ -1651,6 +1675,10 @@ test "indent with an empty prefix leaves the text alone" =
 (DTest false "indent leaves blank and whitespace-only lines exactly as they are" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\n\n  \n> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\n\n  \nb")))))
 (DTest false "indent leaves a tab-only line exactly as it is" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\n\t\n> b\n"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\n\t\nb\n")))))
 (DTest false "indent keeps the line endings and adds none to a last line" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "> a\n")) (ELit (LString "> a")))) (EListLit (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\n"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a"))))))
+(DTest false "indent leaves a CRLF blank line alone" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\r\n\r\n> b\r\n"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\r\n\r\nb\r\n")))))
+(DTest false "indent ends a line at a lone CR" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\r> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\rb")))))
+(DTest false "indent treats Unicode whitespace-only lines as blank" (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\n \n　\n> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\n \n　\nb")))))
+(DTest false "indent ends a line at each separator Python splits on" (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "vt")) (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\u{0b}> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\u{0b}b"))))) (ETuple (ELit (LString "ff")) (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\u{0c}> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\u{0c}b"))))) (ETuple (ELit (LString "fs")) (EApp (EApp (EVar "expectEqual") (ELit (LString "> a\u{1c}> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a\u{1c}b"))))) (ETuple (ELit (LString "nel")) (EApp (EApp (EVar "expectEqual") (ELit (LString "> a> b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "ab"))))) (ETuple (ELit (LString "ls")) (EApp (EApp (EVar "expectEqual") (ELit (LString "> a > b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a b"))))) (ETuple (ELit (LString "ps")) (EApp (EApp (EVar "expectEqual") (ELit (LString "> a > b"))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "a b"))))))))
 (DTest false "indent of an empty string is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EApp (EVar "indent") (ELit (LString "> "))) (ELit (LString "")))))
 (DTest false "indent prefixes a line that starts with a tab" (EApp (EApp (EVar "expectEqual") (ELit (LString "    x\n\n    \ty\n"))) (EApp (EApp (EVar "indent") (ELit (LString "    "))) (ELit (LString "x\n\n\ty\n")))))
 (DTest false "indent with an empty prefix leaves the text alone" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\n b"))) (EApp (EApp (EVar "indent") (ELit (LString ""))) (ELit (LString "a\n b")))))

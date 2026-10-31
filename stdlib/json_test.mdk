@@ -10,7 +10,6 @@ import json.{
   parse,
   parseLines,
   pretty,
-  stringify,
   stringifyLines,
 }
 import string.{join}
@@ -218,6 +217,34 @@ test "parse rejects a leading zero before a digit" = expectAll [
   expectErrContains "leading zero" (parse "[1, 007]"),
   expectErrContains "leading zero" (parse "{\"a\": 01700000060}"),
 ]
+
+test "parse rejects a fraction with no digits" = expectAll [
+  expectErrContains "no digits after decimal point" (parse "1."),
+  expectErrContains "no digits after decimal point" (parse "-2."),
+  expectErrContains "no digits after decimal point" (parse "[1.e5]"),
+  expectErrContains "no digits after decimal point" (parse "{\"a\": 1.}"),
+]
+
+test "parse still reads a fraction with digits" = expectAll [
+  expectEqual (Ok (JFloat 1.5)) (parse "1.5"),
+  expectEqual (Ok (JFloat 100000.0)) (parse "1e5"),
+  expectEqual (Ok (JFloat 100000.0)) (parse "1.0e5"),
+]
+
+test "atPath tells a dotted key from two steps" =
+  expectEqual
+    (Err "at \"x.y\": no key \"q\"")
+    (atPath ["x.y", "q"] (jObject [("x.y", jObject [])]))
+
+test "atPath tells an empty key from the root" =
+  expectEqual
+    (Err "at \"\": no key \"q\"")
+    (atPath ["", "q"] (jObject [("", jObject [])]))
+
+test "atPath prints plain steps unquoted" =
+  expectEqual
+    (Err "at x.y: no key \"q\"")
+    (atPath ["x", "y", "q"] (jObject [("x", jObject [("y", jObject [])])]))
 
 test "parse still reads zero in its valid forms" = expectAll [
   expectEqual (Ok (JInt 0)) (parse "0"),

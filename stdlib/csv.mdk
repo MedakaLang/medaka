@@ -17,10 +17,12 @@
    field is kept. A quote inside an unquoted field is an ordinary character.
    Text after the closing quote of a quoted field joins the field, so a quoted
    "a" followed directly by b reads as the one field "ab". A lone CR is an
-   ordinary character. The one error is a
-   quoted field that never closes. -}
+   ordinary character, except a CR that ends the input, which ends the
+   row as it does in Python. The one error is a quoted field that never
+   closes. -}
 
 import core.{Result(..), Option(..)}
+import list.{reverse}
 import string.{
   split, fromChar, startsWith, drop, contains, replaceAll, join, concat, stripCR
 }
@@ -71,7 +73,7 @@ data St = St (List (List String)) (List String) (Option (String, Int)) Int
 
 parseRows : String -> List String -> Result String (List (List String))
 parseRows dl ls = match fold (stepLine dl) (St [] [] None 0) ls
-  St rows _ None _ => Ok (revList rows)
+  St rows _ None _ => Ok (reverse rows)
   St _ _ (Some (_, n)) _ => Err "line \{n}: unterminated quoted field"
 
 stepLine : String -> St -> String -> St
@@ -91,7 +93,7 @@ finishLine : String ->
   String ->
   St
 finishLine dl rows fs pend n line = match scan dl n fs pend (split dl line)
-  (fs2, None) => St (revList fs2 :: rows) [] None n
+  (fs2, None) => St (reverse fs2 :: rows) [] None n
   (fs2, p) => St rows fs2 p n
 
 -- Walks the delimiter-separated pieces of one line. A piece that opens a
@@ -135,13 +137,6 @@ quoted [] _ = None
 quoted [_] _ = None
 quoted (s :: "" :: more@(_ :: _)) acc = quoted more "\{acc}\{s}\""
 quoted (s :: tail) acc = Some (acc ++ s ++ join "\"" tail)
-
-revList : List a -> List a
-revList xs = revOnto xs []
-
-revOnto : List a -> List a -> List a
-revOnto [] acc = acc
-revOnto (x :: xs) acc = revOnto xs (x :: acc)
 
 -- # Writing
 

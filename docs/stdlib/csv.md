@@ -19,8 +19,9 @@ Reading is lenient in the way Python's csv reader is. Whitespace around a
 field is kept. A quote inside an unquoted field is an ordinary character.
 Text after the closing quote of a quoted field joins the field, so a quoted
 "a" followed directly by b reads as the one field "ab". A lone CR is an
-ordinary character. The one error is a
-quoted field that never closes.
+ordinary character, except a CR that ends the input, which ends the
+row as it does in Python. The one error is a quoted field that never
+closes.
 
 ## Reading
 

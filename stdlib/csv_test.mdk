@@ -2,8 +2,15 @@
 -- round trip between them.
 
 import csv.{parse, parseWith, render, renderWith}
-import string.{concat, repeat, take, contains}
-import test.{expectEqual, expectErrContains, expectTrue, expectEach}
+import string.{concat, repeat, take}
+import test.{
+  Expectation,
+  expectEach,
+  expectEqual,
+  expectErrContains,
+  expectTextContainsAll,
+  pass,
+}
 
 -- # Reading
 
@@ -156,10 +163,10 @@ test "the round trip holds on the awkward rows named outright" =
 mixed : String
 mixed = take 200 (repeat 30 "a,\"b\"\"\r\n ,")
 
-prefixOk : Int -> Bool
+prefixOk : Int -> Expectation
 prefixOk k = match parse (take k mixed)
-  Ok _ => True
-  Err e => contains "unterminated quoted field" e
+  Ok _ => pass
+  Err e => expectTextContainsAll ["unterminated quoted field"] e
 
 test "every prefix of a 200-character mixed input reads or is unterminated" =
-  expectTrue (all prefixOk [0..=200])
+  expectEach (map (k => ("prefix \{k}", prefixOk k)) [0..=200])

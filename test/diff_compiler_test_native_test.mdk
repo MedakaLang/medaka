@@ -103,7 +103,7 @@ doctestChecks : String -> <Exec, IO, FileRead> Expectation
 doctestChecks dir = match prebuild dir
   Err e => fail "prebuild failed: \{e}"
   Ok _ => expectEach [
-    ("string", doctestRow dir "stdlib/string.mdk" "101"),
+    ("string", doctestRow dir "stdlib/string.mdk" "103"),
     ("list", doctestRow dir "stdlib/list.mdk" "150"),
     ("map", doctestRow dir "stdlib/map.mdk" "59"),
   ]

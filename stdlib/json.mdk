@@ -19,15 +19,16 @@
 -- the `Array` fields without an `Eq (Array a)` dependency.
 --
 -- Enforced as ECMA-404 requires: a number with a leading zero before another
--- digit (`01`, `-01`) is an error, and so is an unescaped code point below
--- U+0020 inside a string.  `\uXXXX` surrogate pairs ARE handled: a valid high/low
+-- digit (`01`, `-01`) is an error, a `.` or an exponent marker must be followed
+-- by at least one digit (`1.`, `1.e5`, `1e` are errors), and so is an
+-- unescaped code point below U+0020 inside a string.  `\uXXXX` surrogate pairs ARE handled: a valid high/low
 -- pair decodes to its astral scalar value, and a lone surrogate is a parse
 -- error, not silent corruption.
 
 import core.{Ordering(..), Debug, Display, Option, Result, Thenable, map}
 import list.{reverse}
 import array
-import string.{fromChars, isDigit, toInt}
+import string.{contains, fromChars, isDigit, join, repeat, toInt}
 
 -- # The Json type
 
@@ -365,9 +366,7 @@ isExpChar : Char -> Bool
 isExpChar c = c == 'e' || c == 'E'
 
 subString : Array Char -> Int -> Int -> String
-subString arr start end =
-  stringFromChars
-    (arrayMakeWith (end - start) (k => arrayGetUnsafe (start + k) arr))
+subString arr start end = stringFromChars (sliceChars arr start end)
 
 parseNumber : Array Char -> Int -> Result String (Json, Int)
 parseNumber arr start =
@@ -375,21 +374,34 @@ parseNumber arr start =
   let afterInt = skipDigits arr afterSign
   let fracR = skipFrac arr afterInt
   let expR = skipExp arr (fst fracR)
-  finishNumber arr start afterSign afterInt (fst expR) (snd fracR || snd expR)
+  finishNumber
+    arr
+    start
+    afterSign
+    afterInt
+    (fst fracR)
+    (fst expR)
+    (snd fracR || snd expR)
 
 finishNumber : Array Char ->
   Int ->
   Int ->
   Int ->
   Int ->
+  Int ->
   Bool ->
   Result String (Json, Int)
-finishNumber arr start afterSign afterInt end isFloat
+finishNumber arr start afterSign afterInt afterFrac end isFloat
   | afterInt == afterSign = Err "invalid number: no digits"
+  | afterFrac == afterInt + 1 && hasDot arr afterInt =
+    Err "invalid number: no digits after decimal point"
   | afterInt - afterSign > 1 && arrayGetUnsafe afterSign arr == '0' =
     Err "invalid number: leading zero"
   | isFloat = finishFloat (subString arr start end) end
   | otherwise = finishInt (subString arr start end) end
+
+hasDot : Array Char -> Int -> Bool
+hasDot arr i = i < arrayLength arr && arrayGetUnsafe i arr == '.'
 
 finishInt : String -> Int -> Result String (Json, Int)
 finishInt tok end = match toInt tok
@@ -756,15 +768,17 @@ indexInto k arr
         " elements)",
       ])
 
--- The walked steps (reversed) as the dotted path of an error message.
+-- The walked steps (reversed) as the dotted path of an error message. A step
+-- that is empty or holds a `.` is quoted, so two different paths never print
+-- the same text.
 walkedPath : List String -> String
 walkedPath [] = "<root>"
-walkedPath steps = joinDots (reverse steps)
+walkedPath steps = join "." (map pathStep (reverse steps))
 
-joinDots : List String -> String
-joinDots [] = ""
-joinDots [x] = x
-joinDots (x :: xs) = stringConcat [x, ".", joinDots xs]
+pathStep : String -> String
+pathStep step
+  | step == "" || contains "." step = escapeString step
+  | otherwise = step
 
 atPathGo : List String -> List String -> Json -> Result String Json
 atPathGo _ [] j = Ok j
@@ -780,7 +794,8 @@ atPathGo walked (step :: rest) j = match stepInto step j
    An index has no sign and no leading zero, so `"-1"` and `"01"` are
    errors. An empty path is the value itself.
 
-   The error names the path walked so far, then the failure.
+   The error names the path walked so far, then the failure. A step that is
+   empty or contains a `.` is written in quotes in that path.
 
    > atPath ["a", "items", "1"] (jObject [("a", jObject [("items", jArray [JInt 7, JInt 8])])])
    Ok 8
@@ -789,7 +804,11 @@ atPathGo walked (step :: rest) j = match stepInto step j
    > atPath ["a", "b"] (jObject [("a", jObject [])])
    Err "at a: no key \"b\""
    > atPath ["a", "b"] (jObject [("a", JString "x")])
-   Err "at a: expected object or array, found string" -}
+   Err "at a: expected object or array, found string"
+   > atPath ["a.b", "c"] (jObject [("a.b", jObject [])])
+   Err "at \"a.b\": no key \"c\""
+   > atPath ["", "c"] (jObject [("", jObject [])])
+   Err "at \"\": no key \"c\"" -}
 export
 atPath : List String -> Json -> Result String Json
 atPath steps j = atPathGo [] steps j
@@ -798,8 +817,7 @@ atPath steps j = atPathGo [] steps j
 
 -- A newline and `n * level` spaces.
 newlineAt : Int -> Int -> String
-newlineAt n level =
-  stringConcat ["\n", stringFromChars (arrayMakeWith (n * level) (_ => ' '))]
+newlineAt n level = stringConcat ["\n", repeat (n * level) " "]
 
 prettyInto : Int -> Int -> Json -> List String -> List String
 prettyInto n level (JArray arr) acc
@@ -842,8 +860,11 @@ prettyMembers n level pairs i acc
 
    Members keep their stored order, `": "` separates a key from its value,
    and empty arrays and objects stay on one line. The text has no trailing
-   newline. An `n` of 0 still breaks lines, with no indentation. The text
-   parses back to the same value.
+   newline. An `n` of 0 still breaks lines, with no indentation. A non-finite
+   float is written as the word inf, -inf or nan, as `stringify` writes it, and
+   that text is not JSON. A float of magnitude `1e12` up to but not including
+   `1e16` prints in exponent form (`1e+12`, `1.5e+13`) where Python prints
+   `1000000000000.0`; `123456789012.0` and `999999999999.0` stay plain.
 
    > pretty 2 (jObject [("a", jArray [JInt 1, JInt 2]), ("b", jObject [])])
    "{\n  \"a\": [\n    1,\n    2\n  ],\n  \"b\": {}\n}" -}

@@ -920,17 +920,79 @@ dedent s =
 
 {- | `s` with `prefix` in front of each line that is not blank.
 
-   A blank line holds spaces and tabs only, or nothing. It is left exactly as
-   it is, so no trailing spaces are added to it. Line endings are kept, and a
-   last line without one stays without one.
+   A line ends after `\n`, `\r\n`, `\r`, a vertical tab, a form feed, the
+   separators U+001C to U+001E, U+0085, U+2028 or U+2029, as Python cuts
+   lines, and `\r\n` is one ending. A line is blank when it is empty or
+   holds only whitespace, as Python counts whitespace, so a line of just
+   `\r` or a no-break space is blank too. A blank line is left exactly as
+   it is, so no trailing spaces are added to it. Line endings are kept, and
+   a last line without one stays without one.
 
    > indent "> " "a\n\n  \nb"
-   "> a\n\n  \n> b" -}
+   "> a\n\n  \n> b"
+   > indent "> " "a\r\n\r\nb\r\n"
+   "> a\r\n\r\n> b\r\n"
+   > indent "> " "a\rb"
+   "> a\r> b" -}
 export
 indent : String -> String -> String
 indent prefix s =
-  let ls = split "\n" s
-  join "\n" (map (l => if isBlankLine l then l else prepend prefix l) ls)
+  let a = toChars s
+  stringConcat (indentFrom prefix a (arrayLength a) 0)
+
+indentFrom : String -> Array Char -> Int -> Int -> List String
+indentFrom prefix a n start
+  | start >= n = []
+  | otherwise =
+    let e = afterLineEnd a n start
+    let piece = subChars a start e
+    let out = if allSpace a start e then piece else prefix ++ piece
+    out :: indentFrom prefix a n e
+
+-- Whether every character of `[i, e)` is whitespace, so the line is blank.
+allSpace : Array Char -> Int -> Int -> Bool
+allSpace a i e
+  | i >= e = True
+  | otherwise = isStripSpace (arrayGetUnsafe i a) && allSpace a (i + 1) e
+
+-- The characters Python's `str.strip` removes. `isSpace` and `trim` know the
+-- ASCII ones only.
+isStripSpace : Char -> Bool
+isStripSpace c =
+  let k = charCode c
+  k >= 9 && k <= 13
+    || k >= 28 && k <= 32
+    || k == 133
+    || k == 160
+    || k == 5760
+    || k >= 8192 && k <= 8202
+    || k == 8232
+    || k == 8233
+    || k == 8239
+    || k == 8287
+    || k == 12288
+
+-- The index just past the line ending of the line that starts at `i`, or `n`
+-- when the last line has none.
+afterLineEnd : Array Char -> Int -> Int -> Int
+afterLineEnd a n i
+  | i >= n = n
+  | arrayGetUnsafe i a == '\r' =
+    if i + 1 < n && arrayGetUnsafe (i + 1) a == '\n' then i + 2 else i + 1
+  | isLineBreak (arrayGetUnsafe i a) = i + 1
+  | otherwise = afterLineEnd a n (i + 1)
+
+-- A character that ends a line other than `\r`: Python's `splitlines` set.
+isLineBreak : Char -> Bool
+isLineBreak c =
+  let k = charCode c
+  k == 10
+    || k == 11
+    || k == 12
+    || k >= 28 && k <= 30
+    || k == 133
+    || k == 8232
+    || k == 8233
 
 -- Drops one leading newline, so a raw block may open on its own line.
 dropOneNewline : String -> String

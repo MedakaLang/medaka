@@ -1,5 +1,5 @@
 # META
-source_lines=243
+source_lines=270
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the path, pretty-printing and line readers in `stdlib/json.mdk`,
@@ -14,7 +14,6 @@ import json.{
   parse,
   parseLines,
   pretty,
-  stringify,
   stringifyLines,
 }
 import string.{join}
@@ -223,6 +222,34 @@ test "parse rejects a leading zero before a digit" = expectAll [
   expectErrContains "leading zero" (parse "{\"a\": 01700000060}"),
 ]
 
+test "parse rejects a fraction with no digits" = expectAll [
+  expectErrContains "no digits after decimal point" (parse "1."),
+  expectErrContains "no digits after decimal point" (parse "-2."),
+  expectErrContains "no digits after decimal point" (parse "[1.e5]"),
+  expectErrContains "no digits after decimal point" (parse "{\"a\": 1.}"),
+]
+
+test "parse still reads a fraction with digits" = expectAll [
+  expectEqual (Ok (JFloat 1.5)) (parse "1.5"),
+  expectEqual (Ok (JFloat 100000.0)) (parse "1e5"),
+  expectEqual (Ok (JFloat 100000.0)) (parse "1.0e5"),
+]
+
+test "atPath tells a dotted key from two steps" =
+  expectEqual
+    (Err "at \"x.y\": no key \"q\"")
+    (atPath ["x.y", "q"] (jObject [("x.y", jObject [])]))
+
+test "atPath tells an empty key from the root" =
+  expectEqual
+    (Err "at \"\": no key \"q\"")
+    (atPath ["", "q"] (jObject [("", jObject [])]))
+
+test "atPath prints plain steps unquoted" =
+  expectEqual
+    (Err "at x.y: no key \"q\"")
+    (atPath ["x", "y", "q"] (jObject [("x", jObject [("y", jObject [])])]))
+
 test "parse still reads zero in its valid forms" = expectAll [
   expectEqual (Ok (JInt 0)) (parse "0"),
   expectEqual (Ok (JInt 0)) (parse "-0"),
@@ -246,7 +273,7 @@ test "parse still reads escaped control characters and a space" = expectAll [
   expectEqual (Ok (JString "a b")) (parse "\"a b\""),
 ]
 # DESUGAR
-(DUse false (UseGroup ("json") ((mem "Json" true) (mem "atPath" false) (mem "asNumber" false) (mem "jArray" false) (mem "jObject" false) (mem "parse" false) (mem "parseLines" false) (mem "pretty" false) (mem "stringify" false) (mem "stringifyLines" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "atPath" false) (mem "asNumber" false) (mem "jArray" false) (mem "jObject" false) (mem "parse" false) (mem "parseLines" false) (mem "pretty" false) (mem "stringifyLines" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectAll" false) (mem "expectEqual" false) (mem "expectEqualText" false) (mem "expectErrContains" false) (mem "expectOkThen" false))))
 (DTypeSig false "sample" (TyCon "Json"))
@@ -281,11 +308,16 @@ test "parse still reads escaped control characters and a space" = expectAll [
 (DTest false "stringifyLines ends each value with a newline" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "stringifyLines") (EListLit))) (EApp (EApp (EVar "expectEqual") (ELit (LString "1\n\"a\"\n"))) (EApp (EVar "stringifyLines") (EListLit (EApp (EVar "JInt") (ELit (LInt 1))) (EApp (EVar "JString") (ELit (LString "a")))))))))
 (DTest false "stringifyLines round-trips through parseLines" (EBlock (DoLet false false (PVar "js") (EListLit (EVar "JNull") (EApp (EVar "JInt") (ELit (LInt 3))) (EApp (EVar "JString") (ELit (LString "a\nb"))) (EApp (EVar "jArray") (EListLit (EApp (EVar "JBool") (EVar "True")))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "k")) (EApp (EVar "JFloat") (ELit (LFloat 2.5)))))))) (DoExpr (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "map") (EVar "Ok")) (EVar "js"))) (EApp (EVar "parseLines") (EApp (EVar "stringifyLines") (EVar "js")))))))
 (DTest false "parse rejects a leading zero before a digit" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectErrContains") (ELit (LString "leading zero"))) (EApp (EVar "parse") (ELit (LString "01")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "leading zero"))) (EApp (EVar "parse") (ELit (LString "-01")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "leading zero"))) (EApp (EVar "parse") (ELit (LString "00")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "leading zero"))) (EApp (EVar "parse") (ELit (LString "01.5")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "leading zero"))) (EApp (EVar "parse") (ELit (LString "[1, 007]")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "leading zero"))) (EApp (EVar "parse") (ELit (LString "{\"a\": 01700000060}")))))))
+(DTest false "parse rejects a fraction with no digits" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectErrContains") (ELit (LString "no digits after decimal point"))) (EApp (EVar "parse") (ELit (LString "1.")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "no digits after decimal point"))) (EApp (EVar "parse") (ELit (LString "-2.")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "no digits after decimal point"))) (EApp (EVar "parse") (ELit (LString "[1.e5]")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "no digits after decimal point"))) (EApp (EVar "parse") (ELit (LString "{\"a\": 1.}")))))))
+(DTest false "parse still reads a fraction with digits" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JFloat") (ELit (LFloat 1.5))))) (EApp (EVar "parse") (ELit (LString "1.5")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JFloat") (ELit (LFloat 100000.0))))) (EApp (EVar "parse") (ELit (LString "1e5")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JFloat") (ELit (LFloat 100000.0))))) (EApp (EVar "parse") (ELit (LString "1.0e5")))))))
+(DTest false "atPath tells a dotted key from two steps" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "at \"x.y\": no key \"q\"")))) (EApp (EApp (EVar "atPath") (EListLit (ELit (LString "x.y")) (ELit (LString "q")))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "x.y")) (EApp (EVar "jObject") (EListLit))))))))
+(DTest false "atPath tells an empty key from the root" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "at \"\": no key \"q\"")))) (EApp (EApp (EVar "atPath") (EListLit (ELit (LString "")) (ELit (LString "q")))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "")) (EApp (EVar "jObject") (EListLit))))))))
+(DTest false "atPath prints plain steps unquoted" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "at x.y: no key \"q\"")))) (EApp (EApp (EVar "atPath") (EListLit (ELit (LString "x")) (ELit (LString "y")) (ELit (LString "q")))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "x")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "y")) (EApp (EVar "jObject") (EListLit)))))))))))
 (DTest false "parse still reads zero in its valid forms" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JInt") (ELit (LInt 0))))) (EApp (EVar "parse") (ELit (LString "0")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JInt") (ELit (LInt 0))))) (EApp (EVar "parse") (ELit (LString "-0")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JFloat") (ELit (LFloat 0.5))))) (EApp (EVar "parse") (ELit (LString "0.5")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JFloat") (ELit (LFloat 0.0))))) (EApp (EVar "parse") (ELit (LString "0e1")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JFloat") (EUnOp "-" (ELit (LFloat 0.5)))))) (EApp (EVar "parse") (ELit (LString "-0.5")))))))
 (DTest false "parse rejects an unescaped control character in a string" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "\"a\tb\"")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "\"a\nb\"")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "\"a\rb\"")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "\"a\0b\"")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "\"a\u{1f}b\"")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "{\"k\t\": 1}")))))))
 (DTest false "parse still reads escaped control characters and a space" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JString") (ELit (LString "a\tb"))))) (EApp (EVar "parse") (ELit (LString "\"a\\tb\"")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JString") (ELit (LString "a\u{01}b"))))) (EApp (EVar "parse") (ELit (LString "\"a\\u0001b\"")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JString") (ELit (LString "a b"))))) (EApp (EVar "parse") (ELit (LString "\"a b\"")))))))
 # MARK
-(DUse false (UseGroup ("json") ((mem "Json" true) (mem "atPath" false) (mem "asNumber" false) (mem "jArray" false) (mem "jObject" false) (mem "parse" false) (mem "parseLines" false) (mem "pretty" false) (mem "stringify" false) (mem "stringifyLines" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "atPath" false) (mem "asNumber" false) (mem "jArray" false) (mem "jObject" false) (mem "parse" false) (mem "parseLines" false) (mem "pretty" false) (mem "stringifyLines" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectAll" false) (mem "expectEqual" false) (mem "expectEqualText" false) (mem "expectErrContains" false) (mem "expectOkThen" false))))
 (DTypeSig false "sample" (TyCon "Json"))
@@ -320,6 +352,11 @@ test "parse still reads escaped control characters and a space" = expectAll [
 (DTest false "stringifyLines ends each value with a newline" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "stringifyLines") (EListLit))) (EApp (EApp (EVar "expectEqual") (ELit (LString "1\n\"a\"\n"))) (EApp (EVar "stringifyLines") (EListLit (EApp (EVar "JInt") (ELit (LInt 1))) (EApp (EVar "JString") (ELit (LString "a")))))))))
 (DTest false "stringifyLines round-trips through parseLines" (EBlock (DoLet false false (PVar "js") (EListLit (EVar "JNull") (EApp (EVar "JInt") (ELit (LInt 3))) (EApp (EVar "JString") (ELit (LString "a\nb"))) (EApp (EVar "jArray") (EListLit (EApp (EVar "JBool") (EVar "True")))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "k")) (EApp (EVar "JFloat") (ELit (LFloat 2.5)))))))) (DoExpr (EApp (EApp (EVar "expectEqual") (EApp (EApp (EMethodRef "map") (EVar "Ok")) (EVar "js"))) (EApp (EVar "parseLines") (EApp (EVar "stringifyLines") (EVar "js")))))))
 (DTest false "parse rejects a leading zero before a digit" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectErrContains") (ELit (LString "leading zero"))) (EApp (EVar "parse") (ELit (LString "01")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "leading zero"))) (EApp (EVar "parse") (ELit (LString "-01")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "leading zero"))) (EApp (EVar "parse") (ELit (LString "00")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "leading zero"))) (EApp (EVar "parse") (ELit (LString "01.5")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "leading zero"))) (EApp (EVar "parse") (ELit (LString "[1, 007]")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "leading zero"))) (EApp (EVar "parse") (ELit (LString "{\"a\": 01700000060}")))))))
+(DTest false "parse rejects a fraction with no digits" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectErrContains") (ELit (LString "no digits after decimal point"))) (EApp (EVar "parse") (ELit (LString "1.")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "no digits after decimal point"))) (EApp (EVar "parse") (ELit (LString "-2.")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "no digits after decimal point"))) (EApp (EVar "parse") (ELit (LString "[1.e5]")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "no digits after decimal point"))) (EApp (EVar "parse") (ELit (LString "{\"a\": 1.}")))))))
+(DTest false "parse still reads a fraction with digits" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JFloat") (ELit (LFloat 1.5))))) (EApp (EVar "parse") (ELit (LString "1.5")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JFloat") (ELit (LFloat 100000.0))))) (EApp (EVar "parse") (ELit (LString "1e5")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JFloat") (ELit (LFloat 100000.0))))) (EApp (EVar "parse") (ELit (LString "1.0e5")))))))
+(DTest false "atPath tells a dotted key from two steps" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "at \"x.y\": no key \"q\"")))) (EApp (EApp (EVar "atPath") (EListLit (ELit (LString "x.y")) (ELit (LString "q")))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "x.y")) (EApp (EVar "jObject") (EListLit))))))))
+(DTest false "atPath tells an empty key from the root" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "at \"\": no key \"q\"")))) (EApp (EApp (EVar "atPath") (EListLit (ELit (LString "")) (ELit (LString "q")))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "")) (EApp (EVar "jObject") (EListLit))))))))
+(DTest false "atPath prints plain steps unquoted" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "at x.y: no key \"q\"")))) (EApp (EApp (EVar "atPath") (EListLit (ELit (LString "x")) (ELit (LString "y")) (ELit (LString "q")))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "x")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "y")) (EApp (EVar "jObject") (EListLit)))))))))))
 (DTest false "parse still reads zero in its valid forms" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JInt") (ELit (LInt 0))))) (EApp (EVar "parse") (ELit (LString "0")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JInt") (ELit (LInt 0))))) (EApp (EVar "parse") (ELit (LString "-0")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JFloat") (ELit (LFloat 0.5))))) (EApp (EVar "parse") (ELit (LString "0.5")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JFloat") (ELit (LFloat 0.0))))) (EApp (EVar "parse") (ELit (LString "0e1")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JFloat") (EUnOp "-" (ELit (LFloat 0.5)))))) (EApp (EVar "parse") (ELit (LString "-0.5")))))))
 (DTest false "parse rejects an unescaped control character in a string" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "\"a\tb\"")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "\"a\nb\"")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "\"a\rb\"")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "\"a\0b\"")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "\"a\u{1f}b\"")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "{\"k\t\": 1}")))))))
 (DTest false "parse still reads escaped control characters and a space" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JString") (ELit (LString "a\tb"))))) (EApp (EVar "parse") (ELit (LString "\"a\\tb\"")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JString") (ELit (LString "a\u{01}b"))))) (EApp (EVar "parse") (ELit (LString "\"a\\u0001b\"")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JString") (ELit (LString "a b"))))) (EApp (EVar "parse") (ELit (LString "\"a b\"")))))))

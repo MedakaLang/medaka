@@ -11,7 +11,7 @@ import string.{
   stripSuffix, take, toInt, toLower, toUpper, toFixed, trim, trimLeft,
   trimRight, unlines, unwords, utf8ByteLength
 }
-import test.{expectEqual, expectFalse, expectTrue}
+import test.{expectEach, expectEqual, expectFalse, expectTrue}
 
 -- # Fixed cases
 
@@ -1077,6 +1077,26 @@ test "indent leaves a tab-only line exactly as it is" =
 -- Python: textwrap.indent gives "> a\n" for "a\n" and "> a" for "a".
 test "indent keeps the line endings and adds none to a last line" =
   expectEqual ["> a\n", "> a"] [indent "> " "a\n", indent "> " "a"]
+
+-- Python: textwrap.indent("a\r\n\r\nb\r\n", "> ") gives "> a\r\n\r\n> b\r\n".
+test "indent leaves a CRLF blank line alone" =
+  expectEqual "> a\r\n\r\n> b\r\n" (indent "> " "a\r\n\r\nb\r\n")
+
+-- Python: textwrap.indent("a\rb", "> ") gives "> a\r> b".
+test "indent ends a line at a lone CR" =
+  expectEqual "> a\r> b" (indent "> " "a\rb")
+
+test "indent treats Unicode whitespace-only lines as blank" =
+  expectEqual "> a\n \n　\n> b" (indent "> " "a\n \n　\nb")
+
+test "indent ends a line at each separator Python splits on" = expectEach [
+  ("vt", expectEqual "> a\u{0b}> b" (indent "> " "a\u{0b}b")),
+  ("ff", expectEqual "> a\u{0c}> b" (indent "> " "a\u{0c}b")),
+  ("fs", expectEqual "> a\u{1c}> b" (indent "> " "a\u{1c}b")),
+  ("nel", expectEqual "> a> b" (indent "> " "ab")),
+  ("ls", expectEqual "> a > b" (indent "> " "a b")),
+  ("ps", expectEqual "> a > b" (indent "> " "a b")),
+]
 
 test "indent of an empty string is empty" = expectEqual "" (indent "> " "")
 

@@ -32,9 +32,15 @@ NEWLINE
 IMPORT
 IDENT "string"
 DOT_LBRACE
+IDENT "contains"
+COMMA
 IDENT "fromChars"
 COMMA
 IDENT "isDigit"
+COMMA
+IDENT "join"
+COMMA
+IDENT "repeat"
 COMMA
 IDENT "toInt"
 RBRACE
@@ -2124,29 +2130,13 @@ IDENT "arr"
 IDENT "start"
 IDENT "end"
 EQUAL
-INDENT
 IDENT "stringFromChars"
 LPAREN
-IDENT "arrayMakeWith"
-LPAREN
-IDENT "end"
-MINUS
-IDENT "start"
-RPAREN
-LPAREN
-IDENT "k"
-FAT_ARROW
-IDENT "arrayGetUnsafe"
-LPAREN
-IDENT "start"
-PLUS
-IDENT "k"
-RPAREN
+IDENT "sliceChars"
 IDENT "arr"
+IDENT "start"
+IDENT "end"
 RPAREN
-RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "parseNumber"
 COLON
@@ -2206,6 +2196,10 @@ IDENT "afterSign"
 IDENT "afterInt"
 LPAREN
 IDENT "fst"
+IDENT "fracR"
+RPAREN
+LPAREN
+IDENT "fst"
 IDENT "expR"
 RPAREN
 LPAREN
@@ -2236,6 +2230,9 @@ NEWLINE
 UPPER "Int"
 ARROW
 NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
 NEWLINE
@@ -2254,6 +2251,7 @@ IDENT "arr"
 IDENT "start"
 IDENT "afterSign"
 IDENT "afterInt"
+IDENT "afterFrac"
 IDENT "end"
 IDENT "isFloat"
 INDENT
@@ -2264,6 +2262,23 @@ IDENT "afterSign"
 EQUAL
 UPPER "Err"
 STRING "invalid number: no digits"
+NEWLINE
+PIPE
+IDENT "afterFrac"
+EQ_EQ
+IDENT "afterInt"
+PLUS
+INT 1
+AND
+IDENT "hasDot"
+IDENT "arr"
+IDENT "afterInt"
+EQUAL
+INDENT
+UPPER "Err"
+STRING "invalid number: no digits after decimal point"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "afterInt"
@@ -2309,6 +2324,30 @@ RPAREN
 IDENT "end"
 NEWLINE
 DEDENT
+NEWLINE
+IDENT "hasDot"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "hasDot"
+IDENT "arr"
+IDENT "i"
+EQUAL
+IDENT "i"
+LT
+IDENT "arrayLength"
+IDENT "arr"
+AND
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "."
 NEWLINE
 IDENT "finishInt"
 COLON
@@ -4233,48 +4272,44 @@ NEWLINE
 IDENT "walkedPath"
 IDENT "steps"
 EQUAL
-IDENT "joinDots"
+IDENT "join"
+STRING "."
+LPAREN
+IDENT "map"
+IDENT "pathStep"
 LPAREN
 IDENT "reverse"
 IDENT "steps"
 RPAREN
+RPAREN
 NEWLINE
-IDENT "joinDots"
+IDENT "pathStep"
 COLON
-UPPER "List"
 UPPER "String"
 ARROW
 UPPER "String"
 NEWLINE
-IDENT "joinDots"
-LBRACKET
-RBRACKET
-EQUAL
+IDENT "pathStep"
+IDENT "step"
+INDENT
+PIPE
+IDENT "step"
+EQ_EQ
 STRING ""
-NEWLINE
-IDENT "joinDots"
-LBRACKET
-IDENT "x"
-RBRACKET
-EQUAL
-IDENT "x"
-NEWLINE
-IDENT "joinDots"
-LPAREN
-IDENT "x"
-CONS
-IDENT "xs"
-RPAREN
-EQUAL
-IDENT "stringConcat"
-LBRACKET
-IDENT "x"
-COMMA
+OR
+IDENT "contains"
 STRING "."
-COMMA
-IDENT "joinDots"
-IDENT "xs"
-RBRACKET
+IDENT "step"
+EQUAL
+IDENT "escapeString"
+IDENT "step"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "step"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "atPathGo"
 COLON
@@ -4380,28 +4415,18 @@ IDENT "newlineAt"
 IDENT "n"
 IDENT "level"
 EQUAL
-INDENT
 IDENT "stringConcat"
 LBRACKET
 STRING "\n"
 COMMA
-IDENT "stringFromChars"
-LPAREN
-IDENT "arrayMakeWith"
+IDENT "repeat"
 LPAREN
 IDENT "n"
 STAR
 IDENT "level"
 RPAREN
-LPAREN
-UNDERSCORE
-FAT_ARROW
-CHAR " "
-RPAREN
-RPAREN
+STRING " "
 RBRACKET
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "prettyInto"
 COLON

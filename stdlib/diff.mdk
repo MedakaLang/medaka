@@ -13,7 +13,7 @@
    CR is part of its line, and a final line without its LF differs from the
    same line with one. -}
 
-import core.{Eq, Debug, Option(..)}
+import core.{Eq, Debug}
 import list.{reverse, take, groupBy}
 import string.{split, concat, endsWith}
 
@@ -29,7 +29,9 @@ public export data Edit a = Keep a | Insert a | Delete a deriving (Eq, Debug)
 
    Runs in time proportional to the combined length of the two lists times
    the number of insertions and deletions in the script, so similar inputs
-   are cheap.
+   are cheap. Memory grows with the square of the edit distance: two
+   completely different texts of 8,000 lines use about 2 GB, while similar
+   texts stay small.
 
    > editScript [1, 2, 3] [1, 3, 4]
    [Keep 1, Delete 2, Keep 3, Insert 4]
@@ -197,6 +199,7 @@ data Entry = Entry (Edit String) Int Int
 -- with one, as it does for `diff`. `string.lines` drops the LF and a CR, which
 -- would hide that difference.
 splitLines : String -> List String
+-- Keeps each LF, which string.lines drops.
 -- lint-disable-next-line rule-stdlib-reimpl
 splitLines text = terminate (split "\n" text) []
 

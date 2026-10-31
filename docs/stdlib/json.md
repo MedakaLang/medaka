@@ -277,7 +277,8 @@ A step means what the node it lands on says: on an object it is a key
 An index has no sign and no leading zero, so `"-1"` and `"01"` are
 errors. An empty path is the value itself.
 
-The error names the path walked so far, then the failure.
+The error names the path walked so far, then the failure. A step that is
+empty or contains a `.` is written in quotes in that path.
 
 ```medaka
 > atPath ["a", "items", "1"] (jObject [("a", jObject [("items", jArray [JInt 7, JInt 8])])])
@@ -288,6 +289,10 @@ Err "at a.items: index 5 out of range (1 elements)"
 Err "at a: no key \"b\""
 > atPath ["a", "b"] (jObject [("a", JString "x")])
 Err "at a: expected object or array, found string"
+> atPath ["a.b", "c"] (jObject [("a.b", jObject [])])
+Err "at \"a.b\": no key \"c\""
+> atPath ["", "c"] (jObject [("", jObject [])])
+Err "at \"\": no key \"c\""
 ```
 
 ## Pretty printing
@@ -303,8 +308,11 @@ The value as JSON text spread over lines, indented `n` spaces per level.
 
 Members keep their stored order, `": "` separates a key from its value,
 and empty arrays and objects stay on one line. The text has no trailing
-newline. An `n` of 0 still breaks lines, with no indentation. The text
-parses back to the same value.
+newline. An `n` of 0 still breaks lines, with no indentation. A non-finite
+float is written as the word inf, -inf or nan, as `stringify` writes it, and
+that text is not JSON. A float of magnitude `1e12` up to but not including
+`1e16` prints in exponent form (`1e+12`, `1.5e+13`) where Python prints
+`1000000000000.0`; `123456789012.0` and `999999999999.0` stay plain.
 
 ```medaka
 > pretty 2 (jObject [("a", jArray [JInt 1, JInt 2]), ("b", jObject [])])

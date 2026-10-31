@@ -46,7 +46,9 @@ A shortest edit script turning the first list into the second.
 
 Runs in time proportional to the combined length of the two lists times
 the number of insertions and deletions in the script, so similar inputs
-are cheap.
+are cheap. Memory grows with the square of the edit distance: two
+completely different texts of 8,000 lines use about 2 GB, while similar
+texts stay small.
 
 ```medaka
 > editScript [1, 2, 3] [1, 3, 4]

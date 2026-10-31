@@ -1,5 +1,5 @@
 # META
-source_lines=301
+source_lines=304
 stages=DESUGAR,MARK
 # SOURCE
 {- | Differences between two sequences, and between two texts in the unified
@@ -17,7 +17,7 @@ stages=DESUGAR,MARK
    CR is part of its line, and a final line without its LF differs from the
    same line with one. -}
 
-import core.{Eq, Debug, Option(..)}
+import core.{Eq, Debug}
 import list.{reverse, take, groupBy}
 import string.{split, concat, endsWith}
 
@@ -33,7 +33,9 @@ public export data Edit a = Keep a | Insert a | Delete a deriving (Eq, Debug)
 
    Runs in time proportional to the combined length of the two lists times
    the number of insertions and deletions in the script, so similar inputs
-   are cheap.
+   are cheap. Memory grows with the square of the edit distance: two
+   completely different texts of 8,000 lines use about 2 GB, while similar
+   texts stay small.
 
    > editScript [1, 2, 3] [1, 3, 4]
    [Keep 1, Delete 2, Keep 3, Insert 4]
@@ -201,6 +203,7 @@ data Entry = Entry (Edit String) Int Int
 -- with one, as it does for `diff`. `string.lines` drops the LF and a CR, which
 -- would hide that difference.
 splitLines : String -> List String
+-- Keeps each LF, which string.lines drops.
 -- lint-disable-next-line rule-stdlib-reimpl
 splitLines text = terminate (split "\n" text) []
 
@@ -304,7 +307,7 @@ renderLine sign l =
   else
     "\{sign}\{l}\n\\ No newline at end of file\n"
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false) (mem "Option" true))))
+(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false) (mem "take" false) (mem "groupBy" false))))
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "concat" false) (mem "endsWith" false))))
 (DData Public "Edit" ("a") ((variant "Keep" (ConPos (TyVar "a"))) (variant "Insert" (ConPos (TyVar "a"))) (variant "Delete" (ConPos (TyVar "a")))) ())
@@ -385,7 +388,7 @@ renderLine sign l =
 (DTypeSig false "renderLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "renderLine" ((PVar "sign") (PVar "l")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "\n"))) (EVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "sign"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "l"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "sign"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "l"))) (ELit (LString "\n\\ No newline at end of file\n")))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false) (mem "Option" true))))
+(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false) (mem "take" false) (mem "groupBy" false))))
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "concat" false) (mem "endsWith" false))))
 (DData Public "Edit" ("a") ((variant "Keep" (ConPos (TyVar "a"))) (variant "Insert" (ConPos (TyVar "a"))) (variant "Delete" (ConPos (TyVar "a")))) ())

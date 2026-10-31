@@ -920,13 +920,21 @@ indent prefix s
 
 `s` with `prefix` in front of each line that is not blank.
 
-A blank line holds spaces and tabs only, or nothing. It is left exactly as
-it is, so no trailing spaces are added to it. Line endings are kept, and a
-last line without one stays without one.
+A line ends after `\n`, `\r\n`, `\r`, a vertical tab, a form feed, the
+separators U+001C to U+001E, U+0085, U+2028 or U+2029, as Python cuts
+lines, and `\r\n` is one ending. A line is blank when it is empty or
+holds only whitespace, as Python counts whitespace, so a line of just
+`\r` or a no-break space is blank too. A blank line is left exactly as
+it is, so no trailing spaces are added to it. Line endings are kept, and
+a last line without one stays without one.
 
 ```medaka
 > indent "> " "a\n\n  \nb"
 "> a\n\n  \n> b"
+> indent "> " "a\r\n\r\nb\r\n"
+"> a\r\n\r\n> b\r\n"
+> indent "> " "a\rb"
+"> a\r> b"
 ```
 
 ## Padding

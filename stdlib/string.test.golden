@@ -94,11 +94,13 @@ running doctests in stdlib/string.mdk
   ok   stdlib/string.mdk:872: unlines ["a", "b"]
   ok   stdlib/string.mdk:889: unwords ["a", "b", "c"]
   ok   stdlib/string.mdk:912: dedent "\n    foo = 1\n    bar = 2\n"
-  ok   stdlib/string.mdk:927: indent "> " "a\n\n  \nb"
-  ok   stdlib/string.mdk:993: padLeft 5 '.' "ab"
-  ok   stdlib/string.mdk:1007: padRight 5 '.' "ab"
-  ok   stdlib/string.mdk:1022: center 5 '.' "ab"
-  ok   stdlib/string.mdk:1051: isNone (nextChar (startCursor ""))
-  ok   stdlib/string.mdk:1078: sliceBetween (startCursor "héllo") (startCursor "héllo")
+  ok   stdlib/string.mdk:931: indent "> " "a\n\n  \nb"
+  ok   stdlib/string.mdk:933: indent "> " "a\r\n\r\nb\r\n"
+  ok   stdlib/string.mdk:935: indent "> " "a\rb"
+  ok   stdlib/string.mdk:1055: padLeft 5 '.' "ab"
+  ok   stdlib/string.mdk:1069: padRight 5 '.' "ab"
+  ok   stdlib/string.mdk:1084: center 5 '.' "ab"
+  ok   stdlib/string.mdk:1113: isNone (nextChar (startCursor ""))
+  ok   stdlib/string.mdk:1140: sliceBetween (startCursor "héllo") (startCursor "héllo")
 
-stdlib/string.mdk: 101/101 passed
+stdlib/string.mdk: 103/103 passed
