@@ -229,6 +229,7 @@ import ir.core_ir.{
   CallMode(..),
   CallSite(..),
   siteSentinelName,
+  leadingDictParams,
 }
 import ir.core_ir_lower.{
   ArityEnv,
@@ -236,7 +237,6 @@ import ir.core_ir_lower.{
   compileTree,
   canonPat,
   definedArityOf,
-  leadingDictParams,
   ifaceWordOfKey,
   programArities,
 }

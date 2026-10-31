@@ -103,6 +103,7 @@ import ir.core_ir.{
   mapProgramBinders,
   BinderSite(..),
   litRuntimeType,
+  leadingDictParams,
 }
 import types.runtime_types.{
   BinderRow(..),
@@ -124,7 +125,6 @@ import ir.core_ir_lower.{
   programArities,
   ifaceMethodArityKey,
   ifaceWordOfKey,
-  leadingDictParams,
 }
 import ir.core_ir_sexp.{callModeSexp}
 import frontend.ast.{
@@ -1788,10 +1788,10 @@ validatePhysicalDemand _ _ _ = []
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true) (mem "ExternUse" true))))
 (DUse false (UseGroup ("ir" "extern_uses") ((mem "collectExternUses" false))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "MethodResultFact" true) (mem "CallMode" true) (mem "CallSite" true) (mem "noDeclFacts" false) (mem "givenNames" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "litRuntimeType" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "MethodResultFact" true) (mem "CallMode" true) (mem "CallSite" true) (mem "noDeclFacts" false) (mem "givenNames" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "litRuntimeType" false) (mem "leadingDictParams" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false) (mem "runtimeTypeName" false))))
 (DUse false (UseAlias ("map") "BM"))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false) (mem "leadingDictParams" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Lit" true) (mem "BinderId" true) (mem "isFixedIntHead" false) (mem "isBoxed64Head" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))
@@ -2285,10 +2285,10 @@ validatePhysicalDemand _ _ _ = []
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true) (mem "ExternUse" true))))
 (DUse false (UseGroup ("ir" "extern_uses") ((mem "collectExternUses" false))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "MethodResultFact" true) (mem "CallMode" true) (mem "CallSite" true) (mem "noDeclFacts" false) (mem "givenNames" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "litRuntimeType" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "MethodResultFact" true) (mem "CallMode" true) (mem "CallSite" true) (mem "noDeclFacts" false) (mem "givenNames" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "litRuntimeType" false) (mem "leadingDictParams" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false) (mem "runtimeTypeName" false))))
 (DUse false (UseAlias ("map") "BM"))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false) (mem "leadingDictParams" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Lit" true) (mem "BinderId" true) (mem "isFixedIntHead" false) (mem "isBoxed64Head" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))

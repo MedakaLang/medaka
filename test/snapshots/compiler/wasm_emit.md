@@ -238,6 +238,7 @@ import ir.core_ir.{
   CStmt(..),
   CArm(..),
   CGuard(..),
+  leadingDictParams,
   CTree(..),
   CTBranch(..),
   CHead(..),
@@ -301,7 +302,6 @@ import ir.core_ir_lower.{
   callModeFor,
   isPartialMode,
   definedArityOf,
-  leadingDictParams,
   programArities,
 }
 import backend.trmc_analysis.{
@@ -11707,14 +11707,14 @@ hasFamilyW prog symbol tag =
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
 (DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "litRuntimeType" false) (mem "noDeclFacts" false) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "instanceWord" false) (mem "receiverEvidence" false) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CField" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "litRuntimeType" false) (mem "noDeclFacts" false) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "instanceWord" false) (mem "receiverEvidence" false) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "leadingDictParams" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CField" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" false) (mem "WasmFamily" true) (mem "WasmUse" true) (mem "isWasmExternFamily" false) (mem "wasmFamily" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "unrefusedExternMessage" false) (mem "validateForEmission" false) (mem "coreDefectMessage" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false) (mem "isEmptyL" false) (mem "eqStr" false))))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "leadingDictParams" false) (mem "programArities" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "programArities" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "freeGivens" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
@@ -13880,14 +13880,14 @@ hasFamilyW prog symbol tag =
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
 (DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "litRuntimeType" false) (mem "noDeclFacts" false) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "instanceWord" false) (mem "receiverEvidence" false) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CField" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "litRuntimeType" false) (mem "noDeclFacts" false) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "instanceWord" false) (mem "receiverEvidence" false) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "leadingDictParams" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CField" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" false) (mem "WasmFamily" true) (mem "WasmUse" true) (mem "isWasmExternFamily" false) (mem "wasmFamily" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "unrefusedExternMessage" false) (mem "validateForEmission" false) (mem "coreDefectMessage" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false) (mem "isEmptyL" false) (mem "eqStr" false))))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "leadingDictParams" false) (mem "programArities" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "programArities" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "freeGivens" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
