@@ -139,8 +139,8 @@ callModeSexp CallDynamic = "CallDynamic"
 
 export
 cexprSexp : SexpMode -> CExpr -> String
-cexprSexp m (CLit l) = node "CLit" [litSexp l]
-cexprSexp m (CVar x addr) = node "CVar" [escStr x, addrSexp addr]
+cexprSexp _m (CLit l) = node "CLit" [litSexp l]
+cexprSexp _m (CVar x addr) = node "CVar" [escStr x, addrSexp addr]
 cexprSexp m (CApp f args (CallSite mode tailPos)) = node "CApp" [
   cexprSexp m f,
   slist (map (cexprSexp m) args),
@@ -683,8 +683,8 @@ manifestStringSexp = option "none" (value => node "some" [escStr value])
 (DFunDef false "callModeSexp" ((PCon "CallOver" (PVar "n"))) (EApp (EApp (EVar "node") (ELit (LString "CallOver"))) (EListLit (EApp (EVar "intToString") (EVar "n")))))
 (DFunDef false "callModeSexp" ((PCon "CallDynamic")) (ELit (LString "CallDynamic")))
 (DTypeSig true "cexprSexp" (TyFun (TyCon "SexpMode") (TyFun (TyCon "CExpr") (TyCon "String"))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CLit" (PVar "l"))) (EApp (EApp (EVar "node") (ELit (LString "CLit"))) (EListLit (EApp (EVar "litSexp") (EVar "l")))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "node") (ELit (LString "CVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")) (EApp (EVar "addrSexp") (EVar "addr")))))
+(DFunDef false "cexprSexp" ((PVar "_m") (PCon "CLit" (PVar "l"))) (EApp (EApp (EVar "node") (ELit (LString "CLit"))) (EListLit (EApp (EVar "litSexp") (EVar "l")))))
+(DFunDef false "cexprSexp" ((PVar "_m") (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "node") (ELit (LString "CVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")) (EApp (EVar "addrSexp") (EVar "addr")))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CApp" (PVar "f") (PVar "args") (PCon "CallSite" (PVar "mode") (PVar "tailPos")))) (EApp (EApp (EVar "node") (ELit (LString "CApp"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "f")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "cexprSexp") (EVar "m"))) (EVar "args"))) (EApp (EVar "callModeSexp") (EVar "mode")) (EApp (EVar "boolStr") (EVar "tailPos")))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "CLam"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "patSexp")) (EVar "pats"))) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "body")))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CLet" (PVar "isRec") (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EVar "node") (ELit (LString "CLet"))) (EListLit (EApp (EVar "boolStr") (EVar "isRec")) (EApp (EVar "patSexp") (EVar "pat")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "e1")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "e2")))))
@@ -854,8 +854,8 @@ manifestStringSexp = option "none" (value => node "some" [escStr value])
 (DFunDef false "callModeSexp" ((PCon "CallOver" (PVar "n"))) (EApp (EApp (EVar "node") (ELit (LString "CallOver"))) (EListLit (EApp (EVar "intToString") (EVar "n")))))
 (DFunDef false "callModeSexp" ((PCon "CallDynamic")) (ELit (LString "CallDynamic")))
 (DTypeSig true "cexprSexp" (TyFun (TyCon "SexpMode") (TyFun (TyCon "CExpr") (TyCon "String"))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CLit" (PVar "l"))) (EApp (EApp (EVar "node") (ELit (LString "CLit"))) (EListLit (EApp (EVar "litSexp") (EVar "l")))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "node") (ELit (LString "CVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")) (EApp (EVar "addrSexp") (EVar "addr")))))
+(DFunDef false "cexprSexp" ((PVar "_m") (PCon "CLit" (PVar "l"))) (EApp (EApp (EVar "node") (ELit (LString "CLit"))) (EListLit (EApp (EVar "litSexp") (EVar "l")))))
+(DFunDef false "cexprSexp" ((PVar "_m") (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "node") (ELit (LString "CVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")) (EApp (EVar "addrSexp") (EVar "addr")))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CApp" (PVar "f") (PVar "args") (PCon "CallSite" (PVar "mode") (PVar "tailPos")))) (EApp (EApp (EVar "node") (ELit (LString "CApp"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "f")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "cexprSexp") (EVar "m"))) (EVar "args"))) (EApp (EVar "callModeSexp") (EVar "mode")) (EApp (EVar "boolStr") (EVar "tailPos")))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "CLam"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "patSexp")) (EVar "pats"))) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "body")))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CLet" (PVar "isRec") (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EVar "node") (ELit (LString "CLet"))) (EListLit (EApp (EVar "boolStr") (EVar "isRec")) (EApp (EVar "patSexp") (EVar "pat")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "e1")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "e2")))))

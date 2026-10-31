@@ -1334,7 +1334,7 @@ spliceLines lines s e txt = take (s - 1) lines ++ splitNl txt ++ drop e lines
 -- Parse --prefix=v1,v2,... from argv; returns [] if not present.
 export
 parseLintFlagList : String -> List String -> List String
-parseLintFlagList prefix [] = []
+parseLintFlagList _prefix [] = []
 parseLintFlagList prefix (x :: rest)
   | startsWith prefix x =
     splitLintNames (stringSlice (stringLength prefix) (stringLength x) x)

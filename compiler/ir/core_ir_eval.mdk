@@ -350,7 +350,7 @@ cevalSwitch : EvalEnv (Value e) ->
   List CTBranch ->
   CTree ->
   <e> Value e
-cevalSwitch env root arms [] branches dft = cevalTree env root arms [] dft
+cevalSwitch env root arms [] _branches dft = cevalTree env root arms [] dft
 cevalSwitch env root arms (v :: rest) branches dft =
   cevalSwitchOn env root arms v rest branches dft
 

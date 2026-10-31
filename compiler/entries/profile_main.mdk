@@ -508,7 +508,7 @@ wasmStage : Bool ->
   String ->
   <IO> Unit
 wasmStage _ False _ _ _ _ _ = ()
-wasmStage on True outputs runtimeDecls live cprog declsOp =
+wasmStage on True _outputs runtimeDecls live cprog declsOp =
   let input =
     makeWasmEmitInput
       RawUnchecked

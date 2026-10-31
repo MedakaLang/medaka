@@ -119,7 +119,7 @@ isBareSelf name (EVar w) = name == w
 isBareSelf _ _ = False
 
 isHeadSelfApp : String -> Expr -> Bool
-isHeadSelfApp name (EApp f a) = isBareSelf name (appHead (stripWrap f))
+isHeadSelfApp name (EApp f _a) = isBareSelf name (appHead (stripWrap f))
 isHeadSelfApp _ _ = False
 
 appHead : Expr -> Expr

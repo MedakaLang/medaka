@@ -35,7 +35,7 @@ oracleMain : Unit -> <IO> Unit
 oracleMain () = driveParseSources renderAll
 
 renderAll : List Decl -> List Decl -> List (String, String) -> String
-renderAll runtimeP coreP [] = ""
+renderAll _runtimeP _coreP [] = ""
 renderAll runtimeP coreP (pr :: rest) =
   renderOne runtimeP coreP pr ++ renderAll runtimeP coreP rest
 

@@ -883,7 +883,7 @@ fieldVerdict cur env owner fname [] =
     [AbstractFieldAccess owner fname cur]
   else
     [UnknownField fname cur]
-fieldVerdict cur env owner fname owners =
+fieldVerdict cur _env owner fname owners =
   if contains owner owners then [] else [FieldNotInRecord fname owner cur]
 
 -- does `owner` own ANY field in the field-owner multimap?
@@ -2935,13 +2935,13 @@ ppResError (PrivateNameAccess n m _ s) = match s
   None => "module `\{m}` has no export `\{n}`"
 ppResError (NoExportedConstructors n m _) =
   "`\{n}` exports no constructors from module `\{m}`, which exports it abstractly; remove `(..)` or declare `\{n}` a `public export data` in `\{m}`"
-ppResError (NewtypeCtorNotExported n m _) =
+ppResError (NewtypeCtorNotExported n _m _) =
   "`\{n}` exports no constructors: a `newtype` constructor is always module-private; expose it with an accessor function"
 ppResError (BareCtorImport n t _) =
   "`\{n}` is a constructor of `\{t}`; import it as `\{t}(..)`"
 ppResError (AbstractCtorImport n t m _) =
   "`\{n}` is a constructor of `\{t}`, which module `\{m}` exports abstractly; declare `\{t}` a `public export data` in `\{m}`"
-ppResError (EffectLabelNoMembers n m _) =
+ppResError (EffectLabelNoMembers n _m _) =
   "`\{n}` is an effect label, not a type, and has no constructors; remove `(..)`"
 ppResError (AbstractFieldAccess t f _) =
   "`\{t}` is exported abstractly, so its field `\{f}` is not accessible; declare it `public export` to expose its fields"

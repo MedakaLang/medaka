@@ -1338,7 +1338,7 @@ spliceLines lines s e txt = take (s - 1) lines ++ splitNl txt ++ drop e lines
 -- Parse --prefix=v1,v2,... from argv; returns [] if not present.
 export
 parseLintFlagList : String -> List String -> List String
-parseLintFlagList prefix [] = []
+parseLintFlagList _prefix [] = []
 parseLintFlagList prefix (x :: rest)
   | startsWith prefix x =
     splitLintNames (stringSlice (stringLength prefix) (stringLength x) x)
@@ -2057,7 +2057,7 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig false "spliceLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "spliceLines" ((PVar "lines") (PVar "s") (PVar "e") (PVar "txt")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "take") (EBinOp "-" (EVar "s") (ELit (LInt 1)))) (EVar "lines")) (EApp (EVar "splitNl") (EVar "txt"))) (EApp (EApp (EVar "drop") (EVar "e")) (EVar "lines"))))
 (DTypeSig true "parseLintFlagList" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "parseLintFlagList" ((PVar "prefix") (PList)) (EListLit))
+(DFunDef false "parseLintFlagList" ((PVar "_prefix") (PList)) (EListLit))
 (DFunDef false "parseLintFlagList" ((PVar "prefix") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "x")) (EApp (EVar "splitLintNames") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "x"))) (EVar "x"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "parseLintFlagList") (EVar "prefix")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "splitLintNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "splitLintNames" ((PVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "splitLintNamesGo") (EApp (EVar "stringToChars") (EVar "s"))) (EVar "s")) (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))))
@@ -2458,7 +2458,7 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig false "spliceLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "spliceLines" ((PVar "lines") (PVar "s") (PVar "e") (PVar "txt")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "take") (EBinOp "-" (EVar "s") (ELit (LInt 1)))) (EVar "lines")) (EApp (EVar "splitNl") (EVar "txt"))) (EApp (EApp (EVar "drop") (EVar "e")) (EVar "lines"))))
 (DTypeSig true "parseLintFlagList" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "parseLintFlagList" ((PVar "prefix") (PList)) (EListLit))
+(DFunDef false "parseLintFlagList" ((PVar "_prefix") (PList)) (EListLit))
 (DFunDef false "parseLintFlagList" ((PVar "prefix") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "x")) (EApp (EVar "splitLintNames") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "x"))) (EVar "x"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "parseLintFlagList") (EVar "prefix")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "splitLintNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "splitLintNames" ((PVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "splitLintNamesGo") (EApp (EVar "stringToChars") (EVar "s"))) (EVar "s")) (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))))

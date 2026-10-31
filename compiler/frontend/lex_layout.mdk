@@ -137,8 +137,9 @@ layoutWith : (Token -> Int -> Int -> a) ->
   Token ->
   Bool ->
   List a
-layoutWith project [] stack frames prev opener = closeAllPairs project stack 0
-layoutWith project ((RTok t s e) :: rest) stack frames prev opener
+layoutWith project [] stack _frames _prev _opener =
+  closeAllPairs project stack 0
+layoutWith project ((RTok t s e) :: rest) stack frames _prev opener
   | bracketOpener t =
     project t s e
       :: layoutWith
@@ -172,7 +173,7 @@ clauseOpenPairs : (Token -> Int -> Int -> a) ->
   List BracketFrame ->
   Bool ->
   List a
-clauseOpenPairs project col off base rest [] frames opener =
+clauseOpenPairs project col off _base rest [] frames opener =
   applyNlPairs project col off rest [] frames TNewline opener
 clauseOpenPairs project col off base rest (top :: tl) frames opener
   | top > base =
@@ -240,7 +241,7 @@ flushClosePairsGo : (Token -> Int -> Int -> a) ->
   List BracketFrame ->
   Bool ->
   List a
-flushClosePairsGo project t s e rest [] f fs opener =
+flushClosePairsGo project t s e rest [] _f fs opener =
   project t s e :: layoutWith project rest [] fs t (opener || isOpener t)
 flushClosePairsGo project t s e rest (top :: tl) f fs opener
   | f <= 0 =
@@ -260,7 +261,7 @@ applyNlPairs : (Token -> Int -> Int -> a) ->
   Token ->
   Bool ->
   List a
-applyNlPairs project col off rest [] frames prev opener =
+applyNlPairs project _col off rest [] frames _prev _opener =
   project TNewline off off :: layoutWith project rest [] frames TNewline False
 applyNlPairs project col off rest (top :: tl) frames prev opener =
   applyNlFramePairs project col off top (top :: tl) rest frames prev opener
@@ -355,7 +356,7 @@ resolveContPairs : (Token -> Int -> Int -> a) ->
   Token ->
   Bool ->
   List a
-resolveContPairs project col off stack ((RTok t toff tend) :: more) frames prev opener
+resolveContPairs project col _off stack ((RTok t toff tend) :: more) frames prev opener
   | canStartAtom t =
     layoutWith project (RTok t toff tend :: more) stack frames prev opener
   | isThenTok t =
@@ -371,7 +372,7 @@ resolveContPairs project col off stack ((RTok t toff tend) :: more) frames prev 
         (bumpFrame frames)
         TNewline
         False
-resolveContPairs project col off stack rest frames prev opener =
+resolveContPairs project _col _off stack rest frames _prev _opener =
   layoutWith project rest stack frames TNewline False
 
 popDedentsPairs : (Token -> Int -> Int -> a) ->
@@ -381,7 +382,7 @@ popDedentsPairs : (Token -> Int -> Int -> a) ->
   List RawTok ->
   List BracketFrame ->
   List a
-popDedentsPairs project col off [] rest frames =
+popDedentsPairs project _col _off [] rest frames =
   layoutWith project rest [] frames TNewline False
 popDedentsPairs project col off (top :: tl) rest frames
   | top > col =
