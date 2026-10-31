@@ -459,28 +459,24 @@ ioJoinAtoms domains grants =
         (lookupAssoc l grants))
     hostLabels
 
--- The names of all `VisAbstract` data decls.  Harvesting positional ADTs too is
--- harmless: their fields never exist, so a field access cannot reach the abstract branch.
-collectAbstractRecordTypes : List Decl -> List String
-collectAbstractRecordTypes decls = directIn nsAbstractData decls
-
--- seed abstractRecordTypesRef from every module's decls (the per-module progs plus
--- the prelude/core decls), once, before checking begins.  Keyed by the type
--- word (`typeTagOf`), so a program's own type that shares an abstract export's
--- name is not mistaken for it.
+-- seed abstractRecordTypesRef from the `VisAbstract` data decls of every module (the
+-- per-module progs plus the prelude/core decls), once, before checking begins.  Keyed
+-- by the type word (`typeTagOf`), so a program's own type that shares an abstract
+-- export's name is not mistaken for it.  Positional ADTs are harvested too, harmlessly:
+-- their fields never exist, so a field access cannot reach the abstract branch.
 seedAbstractRecordTypes : GraphCtx ->
   List Decl ->
   List (String, List Decl) ->
   Unit
 seedAbstractRecordTypes gctx coreDecls modules =
   let abstracts =
-    collectAbstractRecordTypes coreDecls
+    directIn nsAbstractData coreDecls
       ++ flatMap (m => abstractTypeWords (fst m) (snd m)) modules
   gctx.abstractRecordTypesRef := namesToSet abstracts omEmpty
 
 abstractTypeWords : String -> List Decl -> List String
 abstractTypeWords mid decls =
-  map (n => typeTagOf (OriginModule mid) n) (collectAbstractRecordTypes decls)
+  map (n => typeTagOf (OriginModule mid) n) (directIn nsAbstractData decls)
 
 -- Test-only observation (R5): read by `typecheck_test.mdk`, no production caller.
 --
