@@ -18,7 +18,6 @@ applyTyped : String -> String -> List Int -> Int -> Value a -> Value a -> <a> Op
 applyValue : Value a -> Value a -> <a> Value a
 applyValues : Value a -> List (Value a) -> <a> Value a
 applyVariantUpdates : List (String, Value a) -> List String -> List (Value a) -> List (Value a)
-argsOfTy : Ty -> List Ty
 arrayToListG : Array a -> List a
 arrayToListGo : Array a -> Int -> Int -> List a
 awaitsArgs : Value a -> Bool
@@ -32,8 +31,6 @@ boolEq : Bool -> Bool -> Bool
 boolSeeds : List (String, Value a)
 boolToInt : Bool -> Int
 buildCtorFieldOrders : List Decl -> List (String, List String)
-buildCtorToType : List Decl -> List (String, String)
-buildIfaceDispatch : List Decl -> List ((String, String, String), List Int)
 buildMethodReqCounts : Option DispositionTable -> List Decl -> List ((String, String), Int)
 buildModInfos : EnvFrame (Value a) -> EnvFrame (Value a) -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
 buildRootModuleStateWith : ProgramFacts -> List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> (List (ModInfo (Value a)), List (String, Ref (Value a)))
@@ -77,14 +74,12 @@ consVal : Value a -> Value a -> Value a
 containsInt : Int -> List Int -> Bool
 coreAliasCells : UsePath -> ModExports (Value a) -> List (String, Ref (Value a))
 coreImportExports : List (String, Ref (Value a)) -> List (String, Ref (Value a)) -> List Decl -> ModExports (Value a)
-countTyvars : Ty -> Int
 ctorEntry : Variant -> (String, Value a)
 ctorFieldOrderEntries : Decl -> List (String, List String)
 ctorFieldOrderFor : String -> List String
 ctorFieldOrdersRef : Ref (List (String, List String))
 ctorNamesOfDecl : Decl -> List (String, List String)
 ctorToTypeRef : Ref (List (String, String))
-ctorTypeEntries : Decl -> List (String, String)
 ctorsByTypeOf : List Decl -> List (String, List String)
 ctorsOfDecl : Decl -> List (String, Value a)
 currentEvalFile : Ref String
@@ -92,7 +87,6 @@ currentEvalLoc : Ref Loc
 declImplEntries : Option DispositionTable -> EvalEnv (Value a) -> List ((String, String, String), List Int) -> Decl -> List (String, (Int, Value a))
 defaultNamesOf : IfaceMethod -> List String
 dictOfRoute : EvalEnv (Value a) -> Route -> <a> Value a
-dispatchPositionsOf : Ty -> List String -> List Int
 displayCtorName : String -> String
 doSetRef : Ref (Value a) -> Value a -> <a> Value a
 dropShadowed : List String -> List Decl -> List Decl
@@ -149,7 +143,6 @@ evalSpineArgs : EvalEnv (Value a) -> List Expr -> <a> List (Value a)
 evalUnop : String -> Value a -> Value a
 evalValueField : Value a -> Value a
 evalVariantUpdate : String -> Value a -> List (String, Value a) -> Value a
-exprStartLoc : Expr -> Loc
 extendAbsent : String -> List String -> <FileRead | a> Option String
 extendEnv : EvalEnv (Value a) -> List (String, Value a) -> EvalEnv (Value a)
 externBindings : Unit -> List (String, Value a)
@@ -161,7 +154,6 @@ fieldOr : List (String, Value a) -> String -> Value a
 fileBounds : Ref (List (Bool, List String))
 filterByTag : List (Value a) -> Value a -> List (Value a)
 filterByTagT : List (Value a) -> Option String -> List (Value a)
-filterMentions : Int -> List Ty -> List String -> List Int
 findCell : List (String, Ref (Value a)) -> String -> Ref (Value a)
 firstOrEmpty : List String -> String
 flattenEnv : EvalEnv (Value a) -> <a> List (String, Value a)
@@ -192,11 +184,7 @@ groupsOf : List Decl -> List (String, List (List Pat, Expr, Loc))
 hasFunSite : Value a -> Bool
 hasKey : String -> Value a -> Bool
 hasLaterSlot : Value a -> Bool
-headTycon : Ty -> Option String
-headTyconHead : List Ty -> Option String
 i64Value : (Int, Int) -> Value a
-ifaceDispatchEntries : Decl -> List ((String, String, String), List Int)
-ifaceMethodEntry : String -> String -> List String -> IfaceMethod -> ((String, String, String), List Int)
 ifaceMethodNmE : IfaceMethod -> String
 ifaceRivalSeen : (String, String) -> List (String, String) -> Bool
 implDeclNames : Decl -> List String
@@ -230,7 +218,6 @@ isClauseGroup : List (Value a) -> Bool
 isDispatching : Value a -> Bool
 isInheritedEntry : String -> String -> Bool
 isMethodBinding : Value a -> Bool
-isNoLoc : Loc -> Bool
 isNullary : List Pat -> Bool
 isPartial : Value a -> Bool
 joinComponents : Bool -> List String -> String
@@ -297,7 +284,6 @@ narrowedWord : EvalEnv (Value a) -> Route -> Value a -> <a> String
 negFloatIEEE : Float -> Float
 noCandidateMatched : List (Value a) -> Option (Value a)
 noMainMsg : String
-noTrapLoc : Loc
 oneOrMulti : List (Value a) -> Value a
 oneOrMultiV : List (Value a) -> List (Value a) -> Value a
 optionToValue : Option (Value a) -> Value a
@@ -502,7 +488,6 @@ rangeListMk : List Int -> Value a
 reTag : String -> String -> List Int -> Int -> Value a -> Value a
 readOutput : Unit -> <a> String
 receiverOf : EvalEnv (Value a) -> Route -> List Route -> <a> Value a
-receiverParam : List String -> List String
 recordCreateVals : String -> List String -> List (String, Value a) -> List (Value a)
 reexport : ModExports (Value a) -> List (String, ModExports (Value a)) -> Decl -> List (String, Ref (Value a))
 reportIfUndecidable : String -> List (Value a) -> Unit
@@ -542,7 +527,6 @@ sliceArray : Array (Value a) -> Int -> Int -> Value a
 sortByScore : List (Int, Value a) -> List (Int, Value a)
 sortGo : List (Int, Value a) -> List (Int, Value a) -> List (Int, Value a)
 stampDefiningFile : EvalEnv (Value a) -> <a> Unit
-startOrNext : Loc -> Expr -> Loc
 startsWithAt : String -> Bool
 statTuple : (Int, Bool, Bool, Float) -> Value a
 storeMemo : Ref (Option (Value a)) -> Value a -> <a> Value a
@@ -551,15 +535,11 @@ stripBody : Value a -> Value a -> <a> Value a
 stripModPrefix : String -> Int -> Int -> String
 stripResolved : Value a -> <a> Value a
 subClampZero : Int -> Int -> Int
-sumInts : List Int -> Int
 takeN : Int -> List a -> List a
 testCapableExterns : Unit -> List (String, Value <IO>)
 topClausesValue : EvalEnv (Value a) -> List (List Pat, Expr, Loc) -> Value a
 topGroupValue : EvalEnv (Value a) -> List (List Pat, Expr, Loc) -> Value a
-tupleHeadTag : Int -> String
 twoDistinctKeys : List (Value a) -> List (String, String) -> Bool
-tyMentions : Ty -> List String -> Bool
-tyvarsInArgs : List Ty -> Int
 u64Finalize : U64 -> U64
 u64Golden : U64
 u64Low30 : U64 -> Int

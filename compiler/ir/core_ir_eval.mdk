@@ -56,6 +56,7 @@ import types.program_facts.{ProgramFacts(..), emptyFacts, withFacts}
 import support.util.{isEmptyL, dedup, contains, filterList}
 import support.ordmap.{OrdMap}
 import types.private_mangle.{mangleCtorCollisions}
+import types.dispatch_keys.{buildCtorToType}
 import eval.eval.{
   Value(..),
   EvalEnv(..),
@@ -96,7 +97,6 @@ import eval.eval.{
   applyDicts,
   applyMethodDicts,
   coalesceImpls,
-  buildCtorToType,
   collectCtors,
   installDispatchTables,
   implMethodNames,
@@ -501,7 +501,9 @@ cClauseClosure env (CClause pats body) = VClosureF env pats (e => ceval e body)
 -- Mirror of eval.mdk's evalProgram, but installs Core IR groups.  A nullary
 -- top-level binding becomes a deferred VThunk (forced on first lookup) so
 -- point-free defs can reference values installed later, in any order.
-export
+-- Not exported: it installs no dispatch tables, so a caller would silently run
+-- without the method reqCounts.  `cevalMainOf`, `cevalOutputOf` and `cevalModules`
+-- are the ways in.
 cevalProgram : CProgram -> <e> List (String, Value e)
 cevalProgram (CProgram groups ctorArs ctorToType implEntries _ _) =
   ctorToTypeRef := ctorToType
@@ -596,7 +598,6 @@ cTopGroupValue env [CClause pats body]
 cTopGroupValue env clauses = VMulti (map (cClauseClosure env) clauses)
 
 -- ── entry point (pure-value path, diffed via pp_value of `main`) ───────────
-export
 cevalMain : CProgram -> String
 cevalMain prog = match lookupBinding "main" (cevalProgram prog)
   Some v => ppValue (force v)
@@ -606,7 +607,6 @@ cevalMain prog = match lookupBinding "main" (cevalProgram prog)
 -- append to eval.mdk's outputChunks) and return the captured stdout — the Core-IR
 -- analog of eval.mdk's evalOutput, for the typed / run corpora that diff stdout
 -- (=== EVAL === goldens) rather than pp_value of `main`.
-export
 cevalOutput : CProgram -> String
 cevalOutput prog =
   resetOutput ()
@@ -620,25 +620,36 @@ cRunMainForEffect binds = match lookupBinding "main" binds
   None => VUnit
 
 -- ── the single-program driver seam (#1954) ────────────────────────────────────
--- `ctorFieldOrdersRef` is INTERPRETER state, not lowering state: only the
--- tree-walking record machinery reads it (the backends read
--- `declaredRecordFieldOrders` instead), so lowering has no business seeding it.
--- `cevalModules` already seeds it for the multi-module path; these two wrappers
--- are the single-program analog, so every `ceval*` entry point gets the table
--- from an INTERPRETER driver rather than as a side effect of lowering.
--- Callers pass the SAME decl list they lowered — for the elaborated corpora that
--- is the post-`annotateProgram` / post-`elaborate*` list, not the raw parameters.
+-- `ctorFieldOrdersRef` and the method reqCount tables are INTERPRETER state, not
+-- lowering state: only the tree-walking record machinery and `applyMethodDicts`
+-- read them (the backends read `declaredRecordFieldOrders` and carry their own
+-- counts), so lowering has no business installing them.  `cevalModules` already
+-- seeds them for the multi-module path; these two wrappers are the single-program
+-- analog, so every `ceval*` entry point gets the tables from an INTERPRETER driver
+-- rather than as a side effect of lowering.  Without the reqCount tables every
+-- reqCount lookup answers None and the dict-forwarding fix of #413 is inert (`impl S
+-- (List a) requires S a where s _ = 2` panics "applied non-function: 2").
+-- Callers pass the SAME facts and decl list they lowered — the post-`elaborate*` list
+-- for the elaborated corpora and the post-`annotateProgram` list for the untyped
+-- ones, not the raw parameters.
 export
-cevalMainOf : List Decl -> CProgram -> String
-cevalMainOf decls prog =
+cevalMainOf : ProgramFacts -> List Decl -> CProgram -> String
+cevalMainOf facts decls prog =
   ctorFieldOrdersRef := buildCtorFieldOrders decls
+  installMethodTables facts decls
   cevalMain prog
 
 export
-cevalOutputOf : List Decl -> CProgram -> String
-cevalOutputOf decls prog =
+cevalOutputOf : ProgramFacts -> List Decl -> CProgram -> String
+cevalOutputOf facts decls prog =
   ctorFieldOrdersRef := buildCtorFieldOrders decls
+  installMethodTables facts decls
   cevalOutput prog
+
+installMethodTables : ProgramFacts -> List Decl -> Unit
+installMethodTables facts decls =
+  let _ = installDispatchTables facts.pfDispositions decls
+  ()
 
 -- ── multi-module evaluation (per-module Core-IR frames over a shared global) ──
 -- The Core-IR analog of eval.mdk's evalModulesWith — the loader-driven path that runs
