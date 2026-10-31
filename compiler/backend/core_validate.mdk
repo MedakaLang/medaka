@@ -1,3 +1,4 @@
+import backend.impl_groups.{validateImplGroups}
 import ir.constructor_facts.{validateConstructorFacts}
 import backend.llvm_symbol_names as LN
 import backend.wasm_symbol_names as WN
@@ -224,6 +225,7 @@ emissionDefects backend domain requirement plan cp =
       None => firstShapeDefect [
         () => validateManifestCarriage requirement plan cp,
         () => validateConstructorFacts cp plan.constructorFacts,
+        () => validatePlanImplGroups cp plan,
         () => validateExternMetadata cp,
         () =>
           validateExternRequirements backend domain cp plan.externRequirements,
@@ -242,6 +244,10 @@ emissionDefects backend domain requirement plan cp =
             ++ validateMethodResults plan cp,
         () => validateTails cp,
       ]
+
+validatePlanImplGroups : CProgram -> EmitPlan -> List String
+validatePlanImplGroups (CProgram _ _ _ impls _ _) plan =
+  validateImplGroups impls plan.implGroups
 
 validateManifestCarriage : ManifestRequirement ->
   EmitPlan ->

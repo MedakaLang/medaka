@@ -1,3 +1,4 @@
+import backend.impl_groups.{ImplClauseGroup(..)}
 import backend.wasm_emit_test_support_test.{funcBlock, linesWith}
 import ir.constructor_facts.{ConstructorFacts(..)}
 import types.symbol_origins.{CoreSymbolOrigins(..), SymbolOrigin(..)}
@@ -118,7 +119,9 @@ import backend.wasm_demand.{WasmDemandPlan, PlannedImport}
 import backend.global_plan.{GlobalInitPlan(..)}
 
 import types.target_profile.{lookupProfile}
-import test_process.{underRoot, boundedVerbSeconds, withScratchDir}
+import test_process.{
+  underRoot, boundedVerbSeconds, withScratchDir, expectSpawnFailsAll
+}
 import string.{contains, split, stripPrefix}
 import types.tc_elab.{grantWholeDomain}
 
@@ -2082,6 +2085,13 @@ replaceMain body (CProgram [CBind n _ loc bid] cs ts is ms fs) =
 replaceMain _ cp = cp
 
 emissionVictim : String -> CProgram
+emissionVictim "group-valid" = typedLowered "" mixedGroupSrc
+emissionVictim "group-missing" = typedLowered "" mixedGroupSrc
+emissionVictim "group-duplicate" = typedLowered "" mixedGroupSrc
+emissionVictim "group-reordered" = typedLowered "" mixedGroupSrc
+emissionVictim "group-range" = typedLowered "" mixedGroupSrc
+emissionVictim "group-key" = typedLowered "" mixedGroupSrc
+emissionVictim "group-method" = typedLowered "" mixedGroupSrc
 emissionVictim "F1" =
   replaceMain (CRecord "P" [CField "a" (-1) zero]) emissionControl
 emissionVictim "F2" =
@@ -2315,6 +2325,12 @@ manifestVictims = [
 ]
 
 emissionNeedle : String -> String
+emissionNeedle "group-missing" = "impl groups: emit plan partition"
+emissionNeedle "group-duplicate" = "impl groups: emit plan partition"
+emissionNeedle "group-reordered" = "impl groups: emit plan partition"
+emissionNeedle "group-range" = "impl groups: emit plan partition"
+emissionNeedle "group-key" = "impl groups: emit plan partition"
+emissionNeedle "group-method" = "impl groups: emit plan partition"
 emissionNeedle "ctor-owner" = "constructor-fact: owner projection"
 emissionNeedle "ctor-arity" = "constructor-fact: arity projection"
 emissionNeedle "ctor-ordinal" = "constructor-fact: ordinal projection"
@@ -2533,7 +2549,7 @@ emissionText route victim =
               (if victim == "target" then other else target)
               domain
               cp))))
-  let plan = corruptConstructorPlan victim original
+  let plan = corruptGroupPlan victim (corruptConstructorPlan victim original)
   let requirement = manifestRequirement victim
   let li = makeEmitInput requirement domain [] [] 0 [] [] ""
   let wi = makeWasmEmitInput requirement domain []
@@ -3305,3 +3321,448 @@ test "qualified Ordering keeps runtime physical ordinals under declaration rever
           (linesWith ("i32.const " ++ intToString ordinal) (funcBlock name wat)),
       ))
       [("getLt", 0), ("getEq", 1), ("getGt", 2)])
+
+corruptGroupPlan : String -> EmitPlan -> EmitPlan
+corruptGroupPlan victim plan =
+  let groups = plan.implGroups
+  let changed = match groups
+    [] => []
+    g :: rest => match victim
+      "group-missing" => rest
+      "group-duplicate" => g :: groups
+      "group-reordered" => { g | indices = reverseL g.indices } :: rest
+      "group-range" => { g | indices = [999999] } :: rest
+      "group-key" => { g | key = "wrong-key" } :: rest
+      "group-method" => { g | method = "wrong-method" } :: rest
+      _ => groups
+  { plan | implGroups = changed }
+
+test "impl partition mutations refuse before output on both renderers" =
+  match getEnv emissionProbeVar
+    Some _ => pass
+    None =>
+      expectEach
+        (flatMap
+          (route =>
+            map
+              (victim => ("\{route}/\{victim}", emissionRefused route victim))
+              [
+                "group-missing", "group-duplicate", "group-reordered",
+                "group-range", "group-key", "group-method"
+              ])
+          emissionRoutes)
+
+test "impl partition passing neighbor emits on both renderers" =
+  match getEnv emissionProbeVar
+    Some _ => pass
+    None =>
+      expectEach
+        (map
+          (route => (
+            route,
+            if contains "census" route then
+              expectEqual "" (emissionText route "group-valid")
+            else
+              expectTextContainsAll
+                [
+                  if contains "llvm" route then
+                    "define i32 @mdk_program_main"
+                  else
+                    "(module",
+                ]
+                (emissionText route "group-valid"),
+          ))
+          emissionRoutes)
+
+test "emitters have no duplicate impl partition producers" = match (
+  readFile (underRoot "compiler/backend/llvm_emit.mdk"),
+  readFile (underRoot "compiler/backend/wasm_emit.mdk"),
+)
+  (Ok llvm, Ok wasm) => expectEach [
+    ("llvm distinct keys", expectFalse (contains "distinctImplKeys :" llvm)),
+    ("llvm gather", expectFalse (contains "gatherGroup :" llvm)),
+    ("wasm distinct keys", expectFalse (contains "distinctImplKeys :" wasm)),
+    ("wasm gather", expectFalse (contains "gatherImplGroup :" wasm)),
+  ]
+  (Err e, _) => fail e
+  (_, Err e) => fail e
+
+test "impl partition P U P and wrong-program plan" =
+  let p = typedLowered "" mixedGroupSrc
+  let u = typedLowered "" (defaultSrc "M" "N")
+  let check backend cp plan =
+    map
+      coreDefectMessage
+      (validateForEmission
+        backend
+        PreludeFreeRuntime
+        RawUnchecked
+        plan
+        cp).defects
+  let render backend cp plan =
+    if backendName backend == "llvm" then
+      llvmStrict
+        (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
+        plan
+        cp
+    else
+      wasmStrict (makeWasmEmitInput RawUnchecked PreludeFreeRuntime []) plan cp
+  expectEach
+    (map
+      (backend =>
+        let pp = buildEmitPlan backend PreludeFreeRuntime p
+        let up = buildEmitPlan backend PreludeFreeRuntime u
+        let before = render backend p pp
+        let unrelated = render backend u up
+        let after = render backend p pp
+        (
+          backendName backend,
+          expectEach [
+            ("P text", expectNotEqual "" before),
+            ("U text", expectNotEqual "" unrelated),
+            ("P text again", expectEqual before after),
+            ("P", expectEqual [] (check backend p pp)),
+            ("U", expectEqual [] (check backend u up)),
+            ("P again", expectEqual [] (check backend p pp)),
+            (
+              "wrong program",
+              expectTextContainsAll
+                ["impl groups: emit plan partition"]
+                (joinNl (check backend p { pp | implGroups = up.implGroups })),
+            ),
+          ],
+        ))
+      [LlvmBackend, WasmBackend])
+
+-- The values and symbols here are independently chosen Core inputs. The second
+-- clause deliberately carries different provenance so only the first may name a group.
+groupTagged : String -> String -> String -> String -> Int -> Int -> CImplEntry
+groupTagged method key tag symbol pattern value =
+  CImplEntry
+    method
+    0
+    1
+    (CImplTagged
+      tag
+      key
+      "I"
+      (ImplSym symbol "" "")
+      [0]
+      [PLit (LInt pattern)]
+      (CLit (LInt value)))
+
+groupDefault : String -> String -> Int -> Int -> CImplEntry
+groupDefault tag symbol pattern value =
+  CImplEntry
+    "n"
+    0
+    1
+    (CImplDefault
+      "I"
+      tag
+      "I|Default|"
+      (ImplSym symbol "Iface" symbol)
+      [0]
+      [PVar "$dict_n_0" noDeclLoc (BinderId "" 98765), PLit (LInt pattern)]
+      (CLit (LInt value)))
+
+groupProgram : List CImplEntry -> CProgram
+groupProgram entries = match emissionControl
+  CProgram bs ars tys _ contexts facts => CProgram
+    bs
+    ars
+    tys
+    entries
+    contexts
+    { facts |
+      factMethodResults = [
+        MethodResultFact {
+          iface = "I",
+          method = "m",
+          returnsHead = False,
+          callbackPositions = [],
+          valueArity = 1,
+        },
+        MethodResultFact {
+          iface = "I",
+          method = "mX",
+          returnsHead = False,
+          callbackPositions = [],
+          valueArity = 1,
+        },
+        MethodResultFact {
+          iface = "XI",
+          method = "m",
+          returnsHead = False,
+          callbackPositions = [],
+          valueArity = 1,
+        },
+        MethodResultFact {
+          iface = "I",
+          method = "n",
+          returnsHead = False,
+          callbackPositions = [],
+          valueArity = 1,
+        },
+      ],
+      factBinders =
+        BinderRow {
+            brId = BinderId "" 98765,
+            brName = "$dict_n_0",
+            brType = RTValue,
+            brReturns = None,
+            brSigned = False,
+          }
+          :: facts.factBinders,
+    }
+
+test "physical groups preserve interleaved clauses and first symbol in both emitters" =
+  let a = groupTagged "m" "I|Box Int|" "Box" "first" 0 11
+  let b = groupTagged "m" "I|Box Int|" "Other" "unused" 1 22
+  let c = groupTagged "m" "I|Box String|" "Box" "second" 0 55
+  let d = groupDefault "Default" "def-first" 0 33
+  let e = groupDefault "OtherDefault" "def-unused" 1 44
+  let interleaved = groupProgram [a, d, b, c, e]
+  let contiguous = groupProgram [a, b, d, e, c]
+  let permuted = groupProgram [c, a, d, b, e]
+  let permutedContiguous = groupProgram [c, a, b, d, e]
+  let unrelated =
+    groupProgram [groupTagged "m" "I|Unrelated|" "Unrelated" "first" 0 77]
+  let connected = groupProgram [
+    a,
+    d,
+    b,
+    c,
+    e,
+    groupTagged "m" "I|Unrelated|" "Unrelated" "third" 0 77,
+  ]
+  let li = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
+  let wi = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
+  let render target cp =
+    let plan = buildEmitPlan target PreludeFreeRuntime cp
+    if backendName target == "llvm" then
+      llvmStrict li plan cp
+    else
+      wasmStrict wi plan cp
+  expectEach
+    (map
+      (target =>
+        let p = render target interleaved
+        let q = render target contiguous
+        let r = render target permuted
+        let rExpected = render target permutedContiguous
+        let u = render target unrelated
+        let joined = render target connected
+        let after = render target interleaved
+        let llvm = backendName target == "llvm"
+        (
+          backendName target,
+          expectEach [
+            ("interleaving", expectEqual q p),
+            ("permutation preserves groups", expectEqual rExpected r),
+            (
+              "same head distinct symbol",
+              expectTextContainsAll
+                (if llvm then
+                  ["@mdk.impl.6669727374.6d", "@mdk.impl.7365636f6e64.6d"]
+                else
+                  ["$f.impl.6669727374.6d", "$f.impl.7365636f6e64.6d"])
+                p,
+            ),
+            (
+              "later tag is not provenance",
+              expectFalse
+                (contains
+                  (if llvm then
+                    "@mdk.impl.756e75736564.6d"
+                  else
+                    "$f.impl.756e75736564.6d")
+                  p),
+            ),
+            (
+              "first default symbol",
+              expectTextContainsAll
+                [
+                  if llvm then
+                    "@mdk.default.4966616365.6e.6465662d6669727374"
+                  else
+                    "$f.default.4966616365.6e.6465662d6669727374",
+                ]
+                p,
+            ),
+            (
+              "later default is not provenance",
+              expectFalse (contains "6465662d756e75736564" p),
+            ),
+            (
+              "both tagged clauses",
+              expectTextContainsAll
+                (if llvm then
+                  ["i64 23", "i64 45"]
+                else
+                  ["i32.const 11", "i32.const 22"])
+                p,
+            ),
+            (
+              "both default clauses",
+              expectTextContainsAll
+                (if llvm then
+                  ["i64 67", "i64 89"]
+                else
+                  ["i32.const 33", "i32.const 44"])
+                p,
+            ),
+            ("colliding U emits different body", expectNotEqual p u),
+            (
+              "connected U emits",
+              expectTextContainsAll
+                [
+                  if llvm then
+                    "@mdk.impl.7468697264.6d"
+                  else
+                    "$f.impl.7468697264.6d",
+                ]
+                joined,
+            ),
+            ("P after U", expectEqual p after),
+          ],
+        ))
+      [LlvmBackend, WasmBackend])
+
+test "impl groups survive the LLVM prelude and program halves" =
+  let a = groupTagged "m" "I|Box Int|" "Box" "first" 0 11
+  let b = groupTagged "m" "I|Box Int|" "Box" "first" 1 22
+  let c = groupTagged "m" "I|Box String|" "Box" "second" 0 55
+  let cp = groupProgram [a, c, b]
+  let plan = buildEmitPlan LlvmBackend PreludeFreeRuntime cp
+  let render half =
+    llvmStrict
+      (makeEmitInput
+        RawUnchecked
+        PreludeFreeRuntime
+        []
+        []
+        half
+        []
+        [("m", "I|Box Int|", "first")]
+        "")
+      plan
+      cp
+  let whole = render 0
+  let prelude = render 1
+  let program = render 2
+  expectEach [
+    (
+      "whole first",
+      expectTextContainsAll
+        ["define internal i64 @mdk.impl.6669727374.6d"]
+        whole,
+    ),
+    (
+      "prelude first",
+      expectTextContainsAll ["define i64 @mdk.impl.6669727374.6d"] prelude,
+    ),
+    (
+      "program first declared",
+      expectTextContainsAll ["declare i64 @mdk.impl.6669727374.6d"] program,
+    ),
+    (
+      "program second defined",
+      expectTextContainsAll ["define i64 @mdk.impl.7365636f6e64.6d"] program,
+    ),
+    (
+      "no first body in program",
+      expectFalse (contains "define i64 @mdk.impl.6669727374.6d" program),
+    ),
+  ]
+
+isSourceTagged : CImplEntry -> Bool
+isSourceTagged (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ _ _)) = True
+isSourceTagged _ = False
+
+isSourceDefault : CImplEntry -> Bool
+isSourceDefault (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ _ _)) = True
+isSourceDefault _ = False
+
+test "source-derived tagged and inherited clauses render after interleaving" =
+  let source =
+    """
+interface Zn a where
+  zn : a -> String
+  zn _ = "default"
+data M = A | B
+data N = N
+impl Zn M where
+  zn A = "a"
+  zn B = "b"
+impl Zn N
+main = zn B
+"""
+  let original = typedLowered "" source
+  match original
+    CProgram bs ars tys entries contexts facts => match (
+      filter isSourceTagged entries,
+      filter isSourceDefault entries,
+    )
+      ([a, b], [d]) =>
+        let interleaved = CProgram bs ars tys [a, d, b] contexts facts
+        let contiguous = CProgram bs ars tys [a, b, d] contexts facts
+        let li = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
+        let wi = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
+        expectEach
+          (map
+            (target =>
+              let render cp =
+                let plan = buildEmitPlan target PreludeFreeRuntime cp
+                if backendName target == "llvm" then
+                  llvmStrict li plan cp
+                else
+                  wasmStrict wi plan cp
+              let p = render interleaved
+              (
+                backendName target,
+                expectEach [
+                  ("nonempty", expectNotEqual "" p),
+                  ("preserved text", expectEqual (render contiguous) p),
+                  ("P U P", expectEqual p (render interleaved)),
+                ],
+              ))
+            [LlvmBackend, WasmBackend])
+      _ => fail "expected two supplied clauses and one inherited default"
+
+test "physical groups keep concatenation-colliding method and key pairs distinct" =
+  let a = groupTagged "mX" "I|K" "A" "pair-a" 0 71
+  let b =
+    CImplEntry
+      "m"
+      0
+      1
+      (CImplTagged
+        "B"
+        "XI|K"
+        "XI"
+        (ImplSym "pair-b" "" "")
+        [0]
+        [PLit (LInt 0)]
+        (CLit (LInt 72)))
+  let cp = groupProgram [a, b]
+  let li = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
+  let wi = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
+  let l = llvmStrict li (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
+  let w = wasmStrict wi (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp
+  expectEach [
+    (
+      "llvm symbols",
+      expectTextContainsAll
+        ["@mdk.impl.706169722d61.6d58", "@mdk.impl.706169722d62.6d"]
+        l,
+    ),
+    (
+      "wasm symbols",
+      expectTextContainsAll
+        ["$f.impl.706169722d61.6d58", "$f.impl.706169722d62.6d"]
+        w,
+    ),
+    ("llvm bodies", expectTextContainsAll ["i64 143", "i64 145"] l),
+    ("wasm bodies", expectTextContainsAll ["i32.const 71", "i32.const 72"] w),
+  ]

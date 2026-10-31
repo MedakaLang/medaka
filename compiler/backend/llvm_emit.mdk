@@ -343,6 +343,7 @@ import backend.trmc_analysis.{
 }
 import types.private_mangle.{hashName, injectiveIdent}
 import types.route_key.{numIntWord}
+import backend.impl_groups.{ImplClauseGroup(..)}
 import backend.emit_plan.{
   EmitPlan(..),
   lookupMethodResult,
@@ -900,6 +901,7 @@ data Emit = Emit {
   globalTys : OrdMap LTy,
   lams : Ref (List String),
   implEntries : Ref (List CImplEntry),
+  implGroups : Ref (List ImplGroup),
   -- the defined arity of every top-level binding, constructor and impl entry of
   -- the program being emitted (`core_ir_lower.programArities`)
   arities : ArityEnv,
@@ -1346,9 +1348,6 @@ isCtor e name = isSome (declaredCtorArity e.constructorFacts name)
 -- it two ways: `implFor` resolves an RKey-narrowed route to the ONE concrete impl
 -- it names (a direct call to that impl's lifted fn); `implsOf` returns every
 -- tagged impl of a method (the runtime RDict/RDictFwd dispatch-switch arms).
-implEntriesOf : Emit -> List CImplEntry
-implEntriesOf e = !e.implEntries
-
 -- ── impl INDEX by method name (perf #990 — the LLVM twin of #382/#985's wasm scan) ─
 -- Every per-site dispatch scan below reads the WHOLE flat `implEntries` list and FIRST
 -- filters it by the interface METHOD name: `implsOf`/`filterTagged`.  The LLVM
@@ -8328,10 +8327,7 @@ emitDispatchBody : Emit ->
 emitDispatchBody e name iface dictPtr methWords argOps siteArity =
   let headTag = loadTag e dictPtr
   let impls = siteImpls e name iface siteArity
-  -- #1818: mint this ONCE per dispatch body — same set `gatherGroup` built these
-  -- impls' own defines from — and thread it to every arm below, so `armArity`
-  -- there is a lookup into what was already minted, not a fresh `groupImpls`
-  -- walk per arm (which would also be O(program) per arm instead of once here).
+  -- Each dispatch arm reads the arity of the same physical group as its define.
   let groups = implGroupsForMethod e name
   let slot = freshReg e
   let _ = emit e ("  " ++ slot ++ " = alloca i64")
@@ -8522,7 +8518,7 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     -- indirect re-apply.
     --
     -- #1818: `armArity` is READ OFF the group's own define arity (`groupArity`,
-    -- matched by `symTag` -- the identity `gatherGroup` named the define with), not
+    -- matched by `symTag` -- the identity naming the define), not
     -- recomputed.  Every entry reaching this function has exactly one group in
     -- `groups`, so the fallback (the same count, assembled from the entry) is not
     -- expected to fire.
@@ -8771,8 +8767,7 @@ emitTagMatch e tagReg (c :: rest) =
 
 -- the impl groups of one method, in program order.
 implGroupsForMethod : Emit -> String -> List ImplGroup
-implGroupsForMethod e method =
-  filterGroupsByMethod method (groupImpls e (implEntriesOf e))
+implGroupsForMethod e method = filterGroupsByMethod method !e.implGroups
 
 implGroupsForMethodArity : Emit -> String -> String -> Int -> List ImplGroup
 implGroupsForMethodArity e method iface siteArity =
@@ -8819,14 +8814,14 @@ groupMethodOf (ImplGroup m _ _ _ _ _ _ _) = m
 groupPositionsOf : ImplGroup -> List Int
 groupPositionsOf (ImplGroup _ _ _ _ p _ _ _) = p
 
--- #1818: the arity `gatherGroup` MINTED for this group's `define` — the single
+-- #1818: the arity resolved for this group's `define` — the single
 -- number every F10 call site should consult rather than re-derive.  See
 -- `armArityOfEntry` below, the one caller that must not recompute it.
 groupArity : ImplGroup -> Int
 groupArity (ImplGroup _ _ _ _ _ arity _ _) = arity
 
 -- the group among [groups] whose lifted define is `@mdk_impl_<symTag>_<method>` —
--- i.e. the one `gatherGroup` built for the SAME impl an entry-holding call site
+-- i.e. the group for the same impl an entry-holding call site
 -- names.  `symTag` (`implEntrySymTag`) is the entry's stamp, which also names that
 -- define, so this is a same-identity lookup, not a second guess: any hit is THE group whose `arity`
 -- field is what the define was actually emitted to accept.
@@ -9075,7 +9070,7 @@ implGroupScope (ImplGroup method _ key _ _ _ _ _) =
   "impl.\{encodeComponent key}.\{encodeComponent method}"
 
 emitImpls : Emit -> List CImplEntry -> Unit
-emitImpls e entries = emitGroups e (groupImpls e entries)
+emitImpls e _ = emitGroups e !e.implGroups
 
 emitGroups : Emit -> List ImplGroup -> Unit
 emitGroups _ [] = ()
@@ -9457,84 +9452,36 @@ headPat : List Pat -> Pat
 headPat (p :: _) = p
 headPat [] = PWild
 
--- ── impl coalescing ───────────────────────────────────────────────
--- group the per-clause CImplTagged entries by `(method, key)` — the canonical
--- full-type impl key, so two impls sharing a head tycon but differing in type args
--- (C7) land in DISTINCT groups (own body each) while a multi-clause impl (one key)
--- stays coalesced.  Preserves first-seen group order and source clause order within
--- each (the Maranget priority).  CImplDefault entries (interface defaults) are
--- skipped — they are the arg-tag fallback, never a lifted static-dispatch target.
-groupImpls : Emit -> List CImplEntry -> List ImplGroup
-groupImpls e entries = map (gatherGroup e entries) (distinctImplKeys entries [])
+indexImplGroupEntries : List CImplEntry ->
+  Int ->
+  OrdMap CImplEntry ->
+  OrdMap CImplEntry
+indexImplGroupEntries [] _ acc = acc
+indexImplGroupEntries (entry :: rest) i acc =
+  indexImplGroupEntries rest (i + 1) (omInsert (intToString i) entry acc)
 
--- the (method, key) keys of the entries, in first-seen order.
-distinctImplKeys : List CImplEntry ->
-  List (String, String) ->
-  List (String, String)
-distinctImplKeys [] seen = reverseL seen
-distinctImplKeys ((CImplEntry method _ _ body) :: rest) seen =
-  let key = implBodyKey body
-  if keySeen method key seen then
-    distinctImplKeys rest seen
-  else
-    distinctImplKeys rest ((method, key) :: seen)
-
-implBodyKey : CImplBody -> String
-implBodyKey (CImplTagged _ key _ _ _ _ _) = key
-implBodyKey (CImplDefault _ _ key _ _ _ _) = key
-
-keySeen : String -> String -> List (String, String) -> Bool
-keySeen _ _ [] = False
-keySeen m t ((m2, t2) :: rest) =
-  if m == m2 && t == t2 then True else keySeen m t rest
-
--- build the group for one (method, key) key: head tag + symTag + positions + arity
--- from the first matching entry, clauses (pats, body) from all matching entries in
--- order.  The SYMBOL tag (C7) is the head tag when this is the sole impl of the head
--- (byte-identical to the pre-C7 scheme), else the sanitized canonical key.  The
--- define takes exactly its clauses' parameters: a call site's mode was read against
--- that same count, so nothing here may lengthen a clause.
-gatherGroup : Emit -> List CImplEntry -> (String, String) -> ImplGroup
-gatherGroup e entries (method, key) =
-  let tag = headTagForKey method key entries
-  let cls = gatherClauses method key entries
-  let positions = groupPositions method key entries
-  match firstEntryFor method key entries
-    Some ent =>
+resolveImplGroup : Emit -> OrdMap CImplEntry -> ImplClauseGroup -> ImplGroup
+resolveImplGroup e index group =
+  let entries =
+    map
+      (i =>
+        optionOrPanic
+          "llvm: invalid impl group ordinal"
+          (omLookup (intToString i) index))
+      group.indices
+  match entries
+    ent :: _ =>
+      let clauses = map (entry => (implPats entry, implBody entry)) entries
       ImplGroup
-        method
-        tag
-        key
+        group.method
+        (implEntryTag ent)
+        group.key
         (implEntrySymTag ent)
-        positions
-        (clauseArity cls)
-        cls
-        (implEntryFnName e method ent)
-    None => panic "llvm: impl group without an entry (internal error)"
-
--- the head tycon tag of the impl whose (method, key) matches (the first such entry).
-headTagForKey : String -> String -> List CImplEntry -> String
-headTagForKey method key entries = match firstEntryFor method key entries
-  Some ent => implEntryTag ent
-  None => ""
-
-firstEntryFor : String -> String -> List CImplEntry -> Option CImplEntry
-firstEntryFor _ _ [] = None
-firstEntryFor method key (ent :: rest)
-  | implEntryMethodOf ent == method && implEntryKey ent == key = Some ent
-  | otherwise = firstEntryFor method key rest
-
-gatherClauses : String -> String -> List CImplEntry -> List (List Pat, CExpr)
-gatherClauses _ _ [] = []
-gatherClauses method key (ent :: rest)
-  | implEntryMethodOf ent == method && implEntryKey ent == key =
-    (implPats ent, implBody ent) :: gatherClauses method key rest
-  | otherwise = gatherClauses method key rest
-
-groupPositions : String -> String -> List CImplEntry -> List Int
-groupPositions method key entries = match firstEntryFor method key entries
-  Some ent => implEntryPositions ent
-  None => []
+        (implEntryPositions ent)
+        (clauseArity clauses)
+        clauses
+        (implEntryFnName e group.method ent)
+    [] => panic "llvm: empty impl group"
 
 clauseArity : List (List Pat, CExpr) -> Int
 clauseArity ((pats, _) :: _) = lengthS pats
@@ -14747,6 +14694,7 @@ programEmitConfig gapMode input plan groups = EmitStateConfig {
   constructorFacts = plan.constructorFacts,
   externRequirements = plan.externRequirements,
   dispGroups = Some plan.dispGroups,
+  implGroups = plan.implGroups,
 }
 
 -- The Strict-mode emission body, factored out of `emitProgramMode` so
@@ -14863,6 +14811,7 @@ data EmitStateConfig = EmitStateConfig {
   constructorFacts : ConstructorFacts,
   externRequirements : ExternRequirements,
   dispGroups : Option (List DispGroup),
+  implGroups : List ImplClauseGroup,
 }
 
 -- Row #5/#6 (RUN-EMIT-002: one disposition, not two): when the caller routes the
@@ -14927,6 +14876,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     globalTys = globalStampTys rows (filter (b => not (isFnBind b)) groups),
     lams = Ref [],
     implEntries = Ref implEntries,
+    implGroups = Ref [],
     arities =
       programArities
         (CProgram groups ctorArs ctorTypes implEntries [] noDeclFacts),
@@ -14990,6 +14940,8 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   -- O(impls) — byte-identical IR, O(N²)→O(N log N) emit on dispatch-heavy code.
   let _ = installImplIndex e implEntries
   let _ = installImplMethodSet e implEntries
+  let ordinalEntries = indexImplGroupEntries implEntries 0 omEmpty
+  e.implGroups := map (resolveImplGroup e ordinalEntries) cfg.implGroups
   -- a group member must never be ADVERTISED as having a float `__fw` worker (the
   -- group path emits no standalone defines, so a float-context caller would call
   -- a nonexistent symbol; v3/v4 make external float callers impossible anyway —
@@ -15400,6 +15352,7 @@ emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
     constructorFacts = plan.constructorFacts,
     externRequirements = plan.externRequirements,
     dispGroups = None,
+    implGroups = plan.implGroups,
   }
   let found = unprovidedExterns Record input plan cp
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries facts
@@ -15422,7 +15375,7 @@ emitFnsGaps e ((CBind name cs site bid) :: rest) =
   emitFnsGaps e rest
 
 emitImplsGaps : Emit -> List CImplEntry -> Unit
-emitImplsGaps e entries = emitGroupsGaps e (groupImpls e entries)
+emitImplsGaps e _ = emitGroupsGaps e !e.implGroups
 
 emitGroupsGaps : Emit -> List ImplGroup -> Unit
 emitGroupsGaps _ [] = ()

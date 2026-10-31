@@ -1,3 +1,4 @@
+import backend.impl_groups.{ImplClauseGroup}
 import backend.wasm_demand.{JsImport(..)}
 import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 import backend.extern_catalog.{RuntimeExternDomain(..)}
@@ -489,6 +490,17 @@ test "wasm reach keeps a dispatch-only impl and its lazy global, drops the rest"
       (expectEqual "Some (5, 3)" (match plan.wasmOnlyReach
         Some u => "Some (\{u.total}, \{u.kept})"
         None => "None")),
+    labelFail
+      "partition is for reached program"
+      (expectEqual
+        [("m", "Int", [0])]
+        (map
+          (g => (
+            (g : ImplClauseGroup).method,
+            (g : ImplClauseGroup).key,
+            (g : ImplClauseGroup).indices,
+          ))
+          plan.implGroups)),
     labelFail "g is lazy" (expectEqual ["g"] plan.lazyGlobals),
     labelFail
       "reached value order"
@@ -679,6 +691,35 @@ test "an impl group recursing through its own instance word is TRMC-eligible" = 
   [
     labelFail "self word" (expectTrue (implTrmc "K")),
     labelFail "another instance's word" (expectFalse (implTrmc "Other")),
+  ]
+
+test "impl plan groups keep clause order for TRMC and prepared programs" =
+  let first = uptoImpl "K"
+  let second = uptoImpl "K"
+  let (CImplEntry method arity slots (CImplTagged tag key _ sym pos pats body)) =
+    first
+  let inherited =
+    CImplEntry
+      "inherited"
+      arity
+      slots
+      (CImplDefault "I" tag "D" sym pos pats body)
+  let cp = CProgram [] [] [] [first, inherited, second] [] noDeclFacts
+  let plan = buildEmitPlan LlvmBackend PreludeFreeRuntime cp
+  let rows =
+    map
+      (g => (
+        (g : ImplClauseGroup).method,
+        (g : ImplClauseGroup).key,
+        (g : ImplClauseGroup).indices,
+      ))
+      plan.implGroups
+  expectEach [
+    (
+      "partition",
+      expectEqual [(method, key, [0, 2]), ("inherited", "D", [1])] rows,
+    ),
+    ("grouped eligible", expectTrue (isTrmcImpl plan.trmc method key)),
   ]
 
 -- ── host keys ───────────────────────────────────────────────────────────────
