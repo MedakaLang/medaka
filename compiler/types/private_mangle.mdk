@@ -1,3 +1,4 @@
+import frontend.runtime_constructors.{namedRuntimeCtor}
 import support.symbol_encoding.{encodePair}
 import types.symbol_origins.{
   SymbolOrigins, emptyOrigins, unitOrigins, mergeOrigins
@@ -810,18 +811,7 @@ nonReservedCtor n = not (isReservedCtor n)
 
 export
 isReservedCtor : String -> Bool
-isReservedCtor n =
-  n == "Cons"
-    || n == "Nil"
-    || n == "Some"
-    || n == "None"
-    || n == "Ok"
-    || n == "Err"
-    || n == "Lt"
-    || n == "Eq"
-    || n == "Gt"
-    || n == "True"
-    || n == "False"
+isReservedCtor n = isSome (namedRuntimeCtor n)
 
 -- ── the unit's CONSTRUCTOR rename map ─────────────────────────────────────────
 -- local ctors → `<mid>__<ctor>` (local shadows imports), then imported ctors →

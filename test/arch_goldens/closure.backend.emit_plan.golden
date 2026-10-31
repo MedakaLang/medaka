@@ -10,7 +10,9 @@ backend.wasm_reach
 backend.wasm_symbol_names
 frontend.ast
 frontend.exhaust
+frontend.runtime_constructors
 frontend.visibility
+ir.constructor_facts
 ir.core_ir
 ir.extern_lower
 ir.extern_types

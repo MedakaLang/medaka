@@ -902,7 +902,9 @@ fixpoint held byte-for-byte through every fix). Fixtures: `float_annot_nolit.mdk
   to `LTInt` → integer `add` on the Float box → silent garbage on `medaka build`. Exposed (made
   reachable) by feature #11 — bare poly-`Num` fns now typecheck at Float. Fix: seed `LTNum` for any
   unannotated arith-used unanchored param (generalizing the G9 section-lambda special-case) +
-  `reservedCtorsOfType` fallback for the List/Option/Result/Ordering Foldable-dispatch sibling
+  `reservedCtorsOfType` fallback at that time, since built-in constructor rows were separate
+  from the emitter's declared-constructor table. P5.10 replaces those parallel semantic facts with
+  the shared constructor catalog and program facts; the Foldable-dispatch sibling
   (`total xs = fold (+) 0 xs` hard-errored "owns no constructors" because built-in `Cons`/`Nil`
   live in `reservedTag`, not `ctorTypeTable`). Fixpoint C3a/C3b held byte-for-byte.
 - **Genuine Gap C = 4 sites, 2 mechanisms:**
