@@ -40,7 +40,6 @@ import frontend.ast.{
   qualifierSource,
   effAtomSurface,
   binderDomainSurface,
-  authTermSurface,
   ctorBindersSurface,
   DeriveRef(..),
   deriveRefName,

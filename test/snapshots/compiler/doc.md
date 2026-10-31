@@ -1,5 +1,5 @@
 # META
-source_lines=1857
+source_lines=1855
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -30,7 +30,6 @@ import frontend.parser.{
   parseErrorLine,
   parseErrorCol,
   parseErrorMessage,
-  Positions,
   DeclPos,
   positionsDecls,
   declPosLine,
@@ -44,7 +43,6 @@ import frontend.ast.{
   qualifierSource,
   effAtomSurface,
   binderDomainSurface,
-  authTermSurface,
   ctorBindersSource,
   tyParamSources,
   Constraint(..),
@@ -1861,8 +1859,8 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
     Some schemes => pubSchemes schemes
 # DESUGAR
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "KindAnn" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSource" false) (mem "tyParamSources" false) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "DeriveRef" false) (mem "deriveRefName" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "KindAnn" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "ctorBindersSource" false) (mem "tyParamSources" false) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "DeriveRef" false) (mem "deriveRefName" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "ppScheme" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "pubSchemes" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalExterns" false))))
@@ -2317,8 +2315,8 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EVar "omEmpty"))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EVar "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoLet false false PWild (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EApp (EVar "pubSchemes") (EVar "schemes")))))
 # MARK
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "KindAnn" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSource" false) (mem "tyParamSources" false) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "DeriveRef" false) (mem "deriveRefName" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "KindAnn" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "ctorBindersSource" false) (mem "tyParamSources" false) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "DeriveRef" false) (mem "deriveRefName" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "ppScheme" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "pubSchemes" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalExterns" false))))

@@ -265,7 +265,7 @@ import support.util.{
   reverseL,
   splitOnChar,
 }
-import list.{drop, get, head, indexed, reverse, take, zip}
+import list.{drop, get, indexed, reverse, take, zip}
 import string.{join}
 import types.evidence_complete.{innerNone}
 import types.scopes as Scopes
@@ -2531,7 +2531,7 @@ methodReturnMemoCurrentViews gctx =
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "endsWith" false) (mem "eqStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "splitOnChar" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "get" false) (mem "head" false) (mem "indexed" false) (mem "reverse" false) (mem "take" false) (mem "zip" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "get" false) (mem "indexed" false) (mem "reverse" false) (mem "take" false) (mem "zip" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "innerNone" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
@@ -2998,7 +2998,7 @@ methodReturnMemoCurrentViews gctx =
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "endsWith" false) (mem "eqStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "splitOnChar" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "get" false) (mem "head" false) (mem "indexed" false) (mem "reverse" false) (mem "take" false) (mem "zip" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "get" false) (mem "indexed" false) (mem "reverse" false) (mem "take" false) (mem "zip" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "innerNone" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))

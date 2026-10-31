@@ -1,5 +1,5 @@
 # META
-source_lines=11500
+source_lines=11446
 stages=DESUGAR,MARK
 # SOURCE
 import ir.constructor_facts.{
@@ -222,7 +222,6 @@ import frontend.ast.{
   Route(..),
   Loc(..),
   noDeclLoc,
-  ifaceIdMatches,
   isTaggedFixedHead,
   fixedWidthMask,
   hostSymbol,
@@ -234,7 +233,6 @@ import types.private_mangle.{injectiveIdent}
 import ir.core_ir.{
   CProgram(..),
   DeclFacts(..),
-  litRuntimeType,
   noDeclFacts,
   CBind(..),
   CClause(..),
@@ -258,14 +256,13 @@ import ir.core_ir.{
   CallSite(..),
   siteSentinelName,
 }
-import list.{replicate, take, drop}
+import list.{replicate}
 import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import backend.extern_catalog.{
   RuntimeExternDomain,
   WasmFamily(..),
   WasmUse(..),
   isWasmExternFamily,
-  wasmFamily,
 }
 import backend.core_validate.{
   findingBinding, isUnprovidedOn, renderExternFinding, renderExternRefusal,
@@ -290,19 +287,15 @@ import support.util.{
   reverseL,
   contains,
   filterList,
-  anyList,
   allList,
   lookupAssoc,
   listLen,
   maxI,
-  dedupBy,
   startsWith,
-  endsWith,
   splitNl,
   stringTrimLeft,
   u64HalvesHex,
   isEmptyL,
-  eqStr,
 }
 import ir.core_ir_lower.{
   ArityEnv,
@@ -335,7 +328,7 @@ import backend.trmc_analysis.{
   armBody,
   lastStmtExpr,
 }
-import types.private_mangle.{dictTag, hashName, injectiveIdent}
+import types.private_mangle.{dictTag, injectiveIdent}
 import backend.impl_groups.{ImplClauseGroup(..)}
 import backend.emit_plan.{
   EmitPlan(..),
@@ -343,7 +336,6 @@ import backend.emit_plan.{
   planEntryMainIsFloat,
 }
 import backend.emit_support.{
-  bindEagerReach,
   bindNameMap,
   ftPrefix,
   labelFallthrough,
@@ -378,58 +370,12 @@ import backend.wasm_preamble.{
   plannedHelperLines,
   declarePlannedHelpers,
   closTypeLines,
-  closApplyLines,
-  ioByteImportLines,
   strTypeLines,
-  ioRuntimeLines,
-  ioStrRuntimeLines,
-  stderrByteImportLines,
-  stderrByteKey,
-  stderrRuntimeLines,
-  trapIntRuntimeLines,
-  intRuntimeLines,
-  siteRuntimeLines,
-  strLeafRuntimeLines,
-  strConcatRuntimeLines,
-  appendRuntimeLines,
-  valueEqRuntimeLines,
-  valueAddRuntimeLines,
-  valueSubRuntimeLines,
-  valueMulRuntimeLines,
-  valueDivRuntimeLines,
-  valueModRuntimeLines,
-  valueCmpNumRuntimeLines,
   Wide64W(..),
-  u64RuntimeLines,
-  i64RuntimeLines,
   rngStateGlobalLines,
-  rngRuntimeLines,
-  hashRuntimeLines,
-  hashStringRuntimeLines,
-  floatFmtImportLines,
-  hostImportLines,
-  jsffiImportLines,
-  jsffiRuntimeLines,
   jsffiWrapperLines,
   jsffiWrapperId,
   jsCrossableHead,
-  floatRemRuntimeLines,
-  floatRuntimeLines,
-  hashFloatRuntimeLines,
-  randomFloatRuntimeLines,
-  floatStrRuntimeLines,
-  strSearchRuntimeLines,
-  strToIntRuntimeLines,
-  strReverseRuntimeLines,
-  strJoinRuntimeLines,
-  strCodecRuntimeLines,
-  utf8LossyRuntimeLines,
-  byteBlockRuntimeLines,
-  charFromCodeRuntimeLines,
-  charClassRuntimeLines,
-  ioHostRuntimeLines,
-  ioArgsRuntimeLines,
-  fileBytesRuntimeLines,
 }
 
 -- ── static value kind (scalar-mode only; for the auto-print routing) ─────────
@@ -11516,27 +11462,27 @@ hasFamilyW prog symbol tag =
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "requirementFacts" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true))))
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "hostSymbol" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "hostSymbol" false))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
 (DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "litRuntimeType" false) (mem "noDeclFacts" false) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "instanceWord" false) (mem "receiverEvidence" false) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "leadingDictParams" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CField" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
-(DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "noDeclFacts" false) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "instanceWord" false) (mem "receiverEvidence" false) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "leadingDictParams" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CField" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
+(DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
-(DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" false) (mem "WasmFamily" true) (mem "WasmUse" true) (mem "isWasmExternFamily" false) (mem "wasmFamily" false))))
+(DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" false) (mem "WasmFamily" true) (mem "WasmUse" true) (mem "isWasmExternFamily" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "unrefusedExternMessage" false) (mem "validateForEmission" false) (mem "coreDefectMessage" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false) (mem "omDelete" false) (mem "omSize" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false) (mem "isEmptyL" false) (mem "eqStr" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "startsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false) (mem "isEmptyL" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "programArities" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "freeGivens" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
-(DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("backend" "impl_groups") ((mem "ImplClauseGroup" true))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "forEachU" false) (mem "bindingOrigin" false) (mem "guardVars" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "bindNameMap" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "forEachU" false) (mem "bindingOrigin" false) (mem "guardVars" false))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "WasmShape" true) (mem "WasmSymbol" true) (mem "checkCall" false) (mem "checkRef" false) (mem "checkTypeUse" false) (mem "declareSymbol" false) (mem "defineSymbol" false) (mem "elemNames" false) (mem "emptyRegistry" false) (mem "excuseSymbol" false) (mem "unresolved" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
-(DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "plannedImportLines" false) (mem "plannedHelperLines" false) (mem "declarePlannedHelpers" false) (mem "closTypeLines" false) (mem "closApplyLines" false) (mem "ioByteImportLines" false) (mem "strTypeLines" false) (mem "ioRuntimeLines" false) (mem "ioStrRuntimeLines" false) (mem "stderrByteImportLines" false) (mem "stderrByteKey" false) (mem "stderrRuntimeLines" false) (mem "trapIntRuntimeLines" false) (mem "intRuntimeLines" false) (mem "siteRuntimeLines" false) (mem "strLeafRuntimeLines" false) (mem "strConcatRuntimeLines" false) (mem "appendRuntimeLines" false) (mem "valueEqRuntimeLines" false) (mem "valueAddRuntimeLines" false) (mem "valueSubRuntimeLines" false) (mem "valueMulRuntimeLines" false) (mem "valueDivRuntimeLines" false) (mem "valueModRuntimeLines" false) (mem "valueCmpNumRuntimeLines" false) (mem "Wide64W" true) (mem "u64RuntimeLines" false) (mem "i64RuntimeLines" false) (mem "rngStateGlobalLines" false) (mem "rngRuntimeLines" false) (mem "hashRuntimeLines" false) (mem "hashStringRuntimeLines" false) (mem "floatFmtImportLines" false) (mem "hostImportLines" false) (mem "jsffiImportLines" false) (mem "jsffiRuntimeLines" false) (mem "jsffiWrapperLines" false) (mem "jsffiWrapperId" false) (mem "jsCrossableHead" false) (mem "floatRemRuntimeLines" false) (mem "floatRuntimeLines" false) (mem "hashFloatRuntimeLines" false) (mem "randomFloatRuntimeLines" false) (mem "floatStrRuntimeLines" false) (mem "strSearchRuntimeLines" false) (mem "strToIntRuntimeLines" false) (mem "strReverseRuntimeLines" false) (mem "strJoinRuntimeLines" false) (mem "strCodecRuntimeLines" false) (mem "utf8LossyRuntimeLines" false) (mem "byteBlockRuntimeLines" false) (mem "charFromCodeRuntimeLines" false) (mem "charClassRuntimeLines" false) (mem "ioHostRuntimeLines" false) (mem "ioArgsRuntimeLines" false) (mem "fileBytesRuntimeLines" false))))
+(DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "plannedImportLines" false) (mem "plannedHelperLines" false) (mem "declarePlannedHelpers" false) (mem "closTypeLines" false) (mem "strTypeLines" false) (mem "Wide64W" true) (mem "rngStateGlobalLines" false) (mem "jsffiWrapperLines" false) (mem "jsffiWrapperId" false) (mem "jsCrossableHead" false))))
 (DData Private "WTy" () ((variant "WInt" (ConPos)) (variant "WBool" (ConPos)) (variant "WUnit" (ConPos)) (variant "WStr" (ConPos)) (variant "WRef" (ConPos)) (variant "WChar" (ConPos)) (variant "WFloat" (ConPos))) ())
 (DData Private "WGapMode" () ((variant "WGapStrict" (ConPos)) (variant "WGapRecord" (ConPos))) ())
 (DData Private "WTrmcCtx" () ((variant "WTrmcOff" (ConPos)) (variant "WTrmcOn" (ConPos (TyCon "SelfRef") (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "Bool") (TyCon "String") (TyCon "String")))) ())
@@ -13612,27 +13558,27 @@ hasFamilyW prog symbol tag =
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "requirementFacts" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true))))
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "hostSymbol" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "hostSymbol" false))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
 (DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "litRuntimeType" false) (mem "noDeclFacts" false) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "instanceWord" false) (mem "receiverEvidence" false) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "leadingDictParams" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CField" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
-(DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "noDeclFacts" false) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "instanceWord" false) (mem "receiverEvidence" false) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "leadingDictParams" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CField" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
+(DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
-(DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" false) (mem "WasmFamily" true) (mem "WasmUse" true) (mem "isWasmExternFamily" false) (mem "wasmFamily" false))))
+(DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" false) (mem "WasmFamily" true) (mem "WasmUse" true) (mem "isWasmExternFamily" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "unrefusedExternMessage" false) (mem "validateForEmission" false) (mem "coreDefectMessage" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false) (mem "omDelete" false) (mem "omSize" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false) (mem "isEmptyL" false) (mem "eqStr" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "startsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false) (mem "isEmptyL" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "programArities" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "freeGivens" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
-(DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("backend" "impl_groups") ((mem "ImplClauseGroup" true))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "forEachU" false) (mem "bindingOrigin" false) (mem "guardVars" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "bindNameMap" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "forEachU" false) (mem "bindingOrigin" false) (mem "guardVars" false))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "WasmShape" true) (mem "WasmSymbol" true) (mem "checkCall" false) (mem "checkRef" false) (mem "checkTypeUse" false) (mem "declareSymbol" false) (mem "defineSymbol" false) (mem "elemNames" false) (mem "emptyRegistry" false) (mem "excuseSymbol" false) (mem "unresolved" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" true))))
-(DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "plannedImportLines" false) (mem "plannedHelperLines" false) (mem "declarePlannedHelpers" false) (mem "closTypeLines" false) (mem "closApplyLines" false) (mem "ioByteImportLines" false) (mem "strTypeLines" false) (mem "ioRuntimeLines" false) (mem "ioStrRuntimeLines" false) (mem "stderrByteImportLines" false) (mem "stderrByteKey" false) (mem "stderrRuntimeLines" false) (mem "trapIntRuntimeLines" false) (mem "intRuntimeLines" false) (mem "siteRuntimeLines" false) (mem "strLeafRuntimeLines" false) (mem "strConcatRuntimeLines" false) (mem "appendRuntimeLines" false) (mem "valueEqRuntimeLines" false) (mem "valueAddRuntimeLines" false) (mem "valueSubRuntimeLines" false) (mem "valueMulRuntimeLines" false) (mem "valueDivRuntimeLines" false) (mem "valueModRuntimeLines" false) (mem "valueCmpNumRuntimeLines" false) (mem "Wide64W" true) (mem "u64RuntimeLines" false) (mem "i64RuntimeLines" false) (mem "rngStateGlobalLines" false) (mem "rngRuntimeLines" false) (mem "hashRuntimeLines" false) (mem "hashStringRuntimeLines" false) (mem "floatFmtImportLines" false) (mem "hostImportLines" false) (mem "jsffiImportLines" false) (mem "jsffiRuntimeLines" false) (mem "jsffiWrapperLines" false) (mem "jsffiWrapperId" false) (mem "jsCrossableHead" false) (mem "floatRemRuntimeLines" false) (mem "floatRuntimeLines" false) (mem "hashFloatRuntimeLines" false) (mem "randomFloatRuntimeLines" false) (mem "floatStrRuntimeLines" false) (mem "strSearchRuntimeLines" false) (mem "strToIntRuntimeLines" false) (mem "strReverseRuntimeLines" false) (mem "strJoinRuntimeLines" false) (mem "strCodecRuntimeLines" false) (mem "utf8LossyRuntimeLines" false) (mem "byteBlockRuntimeLines" false) (mem "charFromCodeRuntimeLines" false) (mem "charClassRuntimeLines" false) (mem "ioHostRuntimeLines" false) (mem "ioArgsRuntimeLines" false) (mem "fileBytesRuntimeLines" false))))
+(DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "plannedImportLines" false) (mem "plannedHelperLines" false) (mem "declarePlannedHelpers" false) (mem "closTypeLines" false) (mem "strTypeLines" false) (mem "Wide64W" true) (mem "rngStateGlobalLines" false) (mem "jsffiWrapperLines" false) (mem "jsffiWrapperId" false) (mem "jsCrossableHead" false))))
 (DData Private "WTy" () ((variant "WInt" (ConPos)) (variant "WBool" (ConPos)) (variant "WUnit" (ConPos)) (variant "WStr" (ConPos)) (variant "WRef" (ConPos)) (variant "WChar" (ConPos)) (variant "WFloat" (ConPos))) ())
 (DData Private "WGapMode" () ((variant "WGapStrict" (ConPos)) (variant "WGapRecord" (ConPos))) ())
 (DData Private "WTrmcCtx" () ((variant "WTrmcOff" (ConPos)) (variant "WTrmcOn" (ConPos (TyCon "SelfRef") (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "Bool") (TyCon "String") (TyCon "String")))) ())

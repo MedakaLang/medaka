@@ -17,7 +17,6 @@
 import frontend.ast.{
   ifaceMethodName,
   patBindings,
-  recFieldBindings,
   Lit(..),
   Ty(..),
   Constraint(..),
@@ -49,7 +48,7 @@ import frontend.ast.{
   Variant(..),
   Decl(..),
 }
-import frontend.desugar.{mapProg, mapExpr, mapDecl}
+import frontend.desugar.{mapExpr, mapDecl}
 import support.util.{contains}
 import support.ordmap.{OrdMap, omHasKey, omFromNames, omEmpty}
 

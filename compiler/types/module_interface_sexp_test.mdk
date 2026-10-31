@@ -26,15 +26,13 @@ import types.module_interface_test_support.{
 }
 import types.module_interface.{
   ModuleInterface(..), FrozenExport(..), ModuleKey(..), applyModuleInterface,
-  currentModuleInterfaces, moduleKeyText, seedModuleInterfaces
+  moduleKeyText, seedModuleInterfaces
 }
 import types.module_interface_sexp.{
   decodeModuleInterface, decodeModuleInterfaceFor, encodeModuleInterface,
   readModuleKey
 }
-import types.publish.{
-  ModDiags, PubScheme(..), TcDiag(..), TcReport(..), ppPubScheme
-}
+import types.publish.{PubScheme(..), TcDiag(..), TcReport(..)}
 import types.runtime_types.{BinderRow(..), RuntimeType}
 import types.tc_types.{DriveOutputs(..), GraphCtx(..), MethodGrant(..)}
 

@@ -386,7 +386,7 @@ import frontend.exhaust.{
 }
 import frontend.desugar.{exprSpanLoc}
 import types.module_interface.{forgetLocalRows}
-import list.{head, last}
+import list.{last}
 import types.effect_values.{joinProducedEnvelope}
 import types.scopes as Scopes
 import map as IdMap
@@ -3663,7 +3663,7 @@ matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "desugarPat" false) (mem "Oracle" false) (mem "oracleForPats" false) (mem "patHasRange" false) (mem "patUnreachable" false) (mem "renderWitness" false) (mem "useful" false) (mem "usefulWitness" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "exprSpanLoc" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "forgetLocalRows" false))))
-(DUse false (UseGroup ("list") ((mem "head" false) (mem "last" false))))
+(DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("types" "effect_values") ((mem "joinProducedEnvelope" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
 (DUse false (UseAlias ("map") "IdMap"))
@@ -4187,7 +4187,7 @@ matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "desugarPat" false) (mem "Oracle" false) (mem "oracleForPats" false) (mem "patHasRange" false) (mem "patUnreachable" false) (mem "renderWitness" false) (mem "useful" false) (mem "usefulWitness" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "exprSpanLoc" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "forgetLocalRows" false))))
-(DUse false (UseGroup ("list") ((mem "head" false) (mem "last" false))))
+(DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("types" "effect_values") ((mem "joinProducedEnvelope" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
 (DUse false (UseAlias ("map") "IdMap"))

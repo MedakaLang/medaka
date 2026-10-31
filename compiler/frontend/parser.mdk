@@ -98,11 +98,7 @@ import frontend.ast.{
 import frontend.lexer.{
   Token(..),
   tokenize,
-  tokenizeWithOffsets,
   tokenizeWithOffsetPairs,
-  offsetToLineCol,
-  lineStartsOf,
-  offsetToLineColFast,
   isThenTok,
 }
 export import frontend.parse_positions.{
@@ -111,12 +107,7 @@ export import frontend.parse_positions.{
   declPosNameLoc, declPosChildLocs
 }
 import frontend.parse_positions.{positionsFromSpans}
-import frontend.lex_token.{
-  isColonTok, isConsTok, isDedentTok, isDeferTok, isEofTok, isEqualTok,
-  isExportTok, isImplTok, isInTok, isIndentTok, isLBraceTok, isLetTok,
-  isNewlineTok, isOfTok, isPipeTok, isPublicTok, isRBraceTok, isRequiresTok,
-  isStarTok, isOpenDelim, isCloseDelim, isTStringTok, isTUpperTok
-}
+import frontend.lex_token.{isDeferTok, isEofTok, isEqualTok, isCloseDelim}
 import support.util.{reverseL, joinWith}
 import list.{last}
 import support.char.{isUpper}

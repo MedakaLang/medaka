@@ -194,7 +194,7 @@ import types.effect_param_decode.{atomOfLabel}
 import types.solver_contract.{Instantiation(..), Wanted(..)}
 import types.target_profile.{hostLabels}
 import types.disposition.{MethodDisposition(..)}
-import list.{drop, last, replicate}
+import list.{drop, replicate}
 import support.ordmap.{omHasKey, omInsert, omLookup}
 import types.invocation_basis.{paramPolaritiesIn}
 import types.effect_infer.{recordEffect, typeAuthority}

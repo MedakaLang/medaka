@@ -1,5 +1,5 @@
 # META
-source_lines=5080
+source_lines=5071
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_locate.{locateOffset, locateTokenDiagnostic}
@@ -102,11 +102,7 @@ import frontend.ast.{
 import frontend.lexer.{
   Token(..),
   tokenize,
-  tokenizeWithOffsets,
   tokenizeWithOffsetPairs,
-  offsetToLineCol,
-  lineStartsOf,
-  offsetToLineColFast,
   isThenTok,
 }
 export import frontend.parse_positions.{
@@ -115,12 +111,7 @@ export import frontend.parse_positions.{
   declPosNameLoc, declPosChildLocs
 }
 import frontend.parse_positions.{positionsFromSpans}
-import frontend.lex_token.{
-  isColonTok, isConsTok, isDedentTok, isDeferTok, isEofTok, isEqualTok,
-  isExportTok, isImplTok, isInTok, isIndentTok, isLBraceTok, isLetTok,
-  isNewlineTok, isOfTok, isPipeTok, isPublicTok, isRBraceTok, isRequiresTok,
-  isStarTok, isOpenDelim, isCloseDelim, isTStringTok, isTUpperTok
-}
+import frontend.lex_token.{isDeferTok, isEofTok, isEqualTok, isCloseDelim}
 import support.util.{reverseL, joinWith}
 import list.{last}
 import support.char.{isUpper}
@@ -5092,10 +5083,10 @@ parseResultWith mode src tokList offList =
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "unminted" false) (mem "negateLiteral" false) (mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "effAtomAt" false) (mem "effectDeclUnstamped" false) (mem "KindAnn" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "externDataUnresolved" false) (mem "kindAnnSource" false) (mem "kindAuthorityUnstamped" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "setDeclNameLoc" false) (mem "dImplUnresolved" false) (mem "constraintUnresolved" false) (mem "superUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "Route" true))))
-(DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "isThenTok" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsetPairs" false) (mem "isThenTok" false))))
 (DUse true (UseGroup ("frontend" "parse_positions") ((mem "DeclPos" true) (mem "Positions" true) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "positionsChainLines" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "parse_positions") ((mem "positionsFromSpans" false))))
-(DUse false (UseGroup ("frontend" "lex_token") ((mem "isColonTok" false) (mem "isConsTok" false) (mem "isDedentTok" false) (mem "isDeferTok" false) (mem "isEofTok" false) (mem "isEqualTok" false) (mem "isExportTok" false) (mem "isImplTok" false) (mem "isInTok" false) (mem "isIndentTok" false) (mem "isLBraceTok" false) (mem "isLetTok" false) (mem "isNewlineTok" false) (mem "isOfTok" false) (mem "isPipeTok" false) (mem "isPublicTok" false) (mem "isRBraceTok" false) (mem "isRequiresTok" false) (mem "isStarTok" false) (mem "isOpenDelim" false) (mem "isCloseDelim" false) (mem "isTStringTok" false) (mem "isTUpperTok" false))))
+(DUse false (UseGroup ("frontend" "lex_token") ((mem "isDeferTok" false) (mem "isEofTok" false) (mem "isEqualTok" false) (mem "isCloseDelim" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -6593,10 +6584,10 @@ parseResultWith mode src tokList offList =
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "unminted" false) (mem "negateLiteral" false) (mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "effAtomAt" false) (mem "effectDeclUnstamped" false) (mem "KindAnn" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "externDataUnresolved" false) (mem "kindAnnSource" false) (mem "kindAuthorityUnstamped" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "setDeclNameLoc" false) (mem "dImplUnresolved" false) (mem "constraintUnresolved" false) (mem "superUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "Route" true))))
-(DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "isThenTok" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsetPairs" false) (mem "isThenTok" false))))
 (DUse true (UseGroup ("frontend" "parse_positions") ((mem "DeclPos" true) (mem "Positions" true) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "positionsChainLines" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "parse_positions") ((mem "positionsFromSpans" false))))
-(DUse false (UseGroup ("frontend" "lex_token") ((mem "isColonTok" false) (mem "isConsTok" false) (mem "isDedentTok" false) (mem "isDeferTok" false) (mem "isEofTok" false) (mem "isEqualTok" false) (mem "isExportTok" false) (mem "isImplTok" false) (mem "isInTok" false) (mem "isIndentTok" false) (mem "isLBraceTok" false) (mem "isLetTok" false) (mem "isNewlineTok" false) (mem "isOfTok" false) (mem "isPipeTok" false) (mem "isPublicTok" false) (mem "isRBraceTok" false) (mem "isRequiresTok" false) (mem "isStarTok" false) (mem "isOpenDelim" false) (mem "isCloseDelim" false) (mem "isTStringTok" false) (mem "isTUpperTok" false))))
+(DUse false (UseGroup ("frontend" "lex_token") ((mem "isDeferTok" false) (mem "isEofTok" false) (mem "isEqualTok" false) (mem "isCloseDelim" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))

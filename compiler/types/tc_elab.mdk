@@ -169,7 +169,7 @@ import support.util.{
   listLen,
   splitOnChar,
 }
-import list.{drop, elemIndex, head, range, replicate, reverse, take}
+import list.{drop, elemIndex, range, replicate, reverse, take}
 import types.runtime_grants.{fileGrantExterns}
 import types.chain_key.{isConstrainedTy}
 import frontend.desugar.{mapChildren, mapProg}

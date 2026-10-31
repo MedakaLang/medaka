@@ -135,7 +135,7 @@ import support.util.{
   reverseL,
   startsWith,
 }
-import list.{head}
+import list
 import frontend.marker.{localBoundNames}
 import types.private_mangle.{mangledName}
 import frontend.visibility.{useModId}

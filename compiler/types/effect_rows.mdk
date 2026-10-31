@@ -9,8 +9,8 @@ import support.opcount.{opBump}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omKeys}
 import types.effect_domain.{Param}
 import types.effect_authority.{
-  Authority(..), Authvar, authJoin, authSub, authConst, renderAuthority,
-  authvarDefaultName, authNorm, renderAuthorityWith
+  Authority(..), Authvar, authJoin, authSub, authConst, authvarDefaultName,
+  authNorm, renderAuthorityWith
 }
 import frontend.ast.{TyConOrigin(..)}
 import map.{Map(..), has, set}

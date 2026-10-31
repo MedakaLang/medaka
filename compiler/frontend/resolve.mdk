@@ -21,7 +21,6 @@ import support.diag_codes.{DiagCode(..)}
 import support.stage_count.{stageBump}
 import frontend.ast.{
   patBindings,
-  recFieldBindings,
   isHint,
   letBindName,
   declBinderNames,

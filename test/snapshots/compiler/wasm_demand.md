@@ -15,7 +15,7 @@ import ir.core_ir.{
   CProgram(..), DeclFacts(..), EntryFact(..), CBind(..), CClause(..), CExpr(..),
   CField(..), CGuard(..), CImplEntry(..), CImplBody(..), CStmt(..), CArm(..),
   CHead(..), CTree(..), CTBranch(..), CallSite(..), CallMode(..), FailSite(..),
-  litRuntimeType, siteSentinelName
+  litRuntimeType
 }
 import ir.extern_types.{ExternDeclFact(..)}
 import ir.extern_lower.{externRuntimeKey}
@@ -37,7 +37,7 @@ import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import types.private_mangle.{injectiveIdent}
 import support.ordmap.{
   OrdMap, omEmpty, omInsert, omLookup, omHasKey, omKeys, omFromNames,
-  omFromPairs, omDelete, omRestrict
+  omFromPairs, omRestrict
 }
 import support.util.{
   reverseL, filterList, listLen, contains, startsWith, isEmptyL, isNonEmptyL,
@@ -2742,7 +2742,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "BinderId" true) (mem "Loc" true) (mem "isTaggedFixedHead" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CArm" true) (mem "CHead" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CallSite" true) (mem "CallMode" true) (mem "FailSite" true) (mem "litRuntimeType" false) (mem "siteSentinelName" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CArm" true) (mem "CHead" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CallSite" true) (mem "CallMode" true) (mem "FailSite" true) (mem "litRuntimeType" false))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "RequirementBinding" true) (mem "requirementHostRows" false) (mem "requirementFacts" false))))
@@ -2752,7 +2752,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DUse false (UseGroup ("backend" "emit_support") ((mem "appParts" false) (mem "isExactCall" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omDelete" false) (mem "omRestrict" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omRestrict" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "filterList" false) (mem "listLen" false) (mem "contains" false) (mem "startsWith" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "lenKey" false))))
 (DData Public "JsImport" () ((variant "JsImport" (ConNamed (field "medakaName" (TyCon "String")) (field "jsName" (TyCon "String")) (field "params" (TyApp (TyCon "List") (TyCon "String"))) (field "result" (TyCon "String"))))) ())
 (DImpl true "Eq" ((TyCon "JsImport")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "JsImport" ((rf "medakaName" (PVar "__a0")) (rf "jsName" (PVar "__a1")) (rf "params" (PVar "__a2")) (rf "result" (PVar "__a3"))) false) (PRec "JsImport" ((rf "medakaName" (PVar "__b0")) (rf "jsName" (PVar "__b1")) (rf "params" (PVar "__b2")) (rf "result" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))))))))
@@ -3582,7 +3582,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "BinderId" true) (mem "Loc" true) (mem "isTaggedFixedHead" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CArm" true) (mem "CHead" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CallSite" true) (mem "CallMode" true) (mem "FailSite" true) (mem "litRuntimeType" false) (mem "siteSentinelName" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CArm" true) (mem "CHead" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CallSite" true) (mem "CallMode" true) (mem "FailSite" true) (mem "litRuntimeType" false))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "RequirementBinding" true) (mem "requirementHostRows" false) (mem "requirementFacts" false))))
@@ -3592,7 +3592,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DUse false (UseGroup ("backend" "emit_support") ((mem "appParts" false) (mem "isExactCall" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omDelete" false) (mem "omRestrict" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omRestrict" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "filterList" false) (mem "listLen" false) (mem "contains" false) (mem "startsWith" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "lenKey" false))))
 (DData Public "JsImport" () ((variant "JsImport" (ConNamed (field "medakaName" (TyCon "String")) (field "jsName" (TyCon "String")) (field "params" (TyApp (TyCon "List") (TyCon "String"))) (field "result" (TyCon "String"))))) ())
 (DImpl true "Eq" ((TyCon "JsImport")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "JsImport" ((rf "medakaName" (PVar "__a0")) (rf "jsName" (PVar "__a1")) (rf "params" (PVar "__a2")) (rf "result" (PVar "__a3"))) false) (PRec "JsImport" ((rf "medakaName" (PVar "__b0")) (rf "jsName" (PVar "__b1")) (rf "params" (PVar "__b2")) (rf "result" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))))))))

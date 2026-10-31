@@ -261,7 +261,7 @@ import support.util.{
   reverseL,
   splitOnChar,
 }
-import list.{drop, get, head, indexed, reverse, take, zip}
+import list.{drop, get, indexed, reverse, take, zip}
 import string.{join}
 import types.evidence_complete.{innerNone}
 import types.scopes as Scopes

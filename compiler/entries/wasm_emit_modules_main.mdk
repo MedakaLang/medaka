@@ -36,15 +36,12 @@ import frontend.ast.{externDecls}
 import backend.extern_catalog.{runtimeDomain}
 import frontend.ast.{Decl(..)}
 import types.typecheck.{
-  checkedFfiExternTypeNamesModules,
   preludeArgPosDictNames,
   preludeReturnPosDictNames,
 }
 import types.tc_types.{DriveOutputs}
 import ir.core_ir_lower.{
-  declaredRecordFieldOrders,
   lowerProgramEmitWith,
-  methodIfaceTable,
   ctorFieldTypeNames,
   validateFfiExternTypeNames,
 }

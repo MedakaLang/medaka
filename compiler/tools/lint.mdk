@@ -11,9 +11,6 @@ import tools.lint_walk.{
   lintParseSource,
   lintProgramFacts,
   mkFileFacts,
-  mkFileFactsAt,
-  mkFileFactsIn,
-  localModStates,
   withLocalMods,
 }
 import tools.lint_registry.{selectRules}

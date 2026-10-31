@@ -1,5 +1,5 @@
 # META
-source_lines=5521
+source_lines=5520
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -102,7 +102,6 @@ import support.util.{
   dedup,
   startsWith,
   endsWith,
-  zipL,
 }
 import support.ordmap.{
   OrdMap, omEmpty, omFromPairs, omHasKey, omInsert, omLookup
@@ -5531,7 +5530,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("types" "expr_loc") ((mem "noTrapLoc" false) (mem "isNoLoc" false) (mem "exprStartLoc" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "emptyFacts" false) (mem "factsNow" false) (mem "withFacts" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false))))
 (DUse false (UseAlias ("eval" "u64_halves") "H"))
@@ -7333,7 +7332,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("types" "expr_loc") ((mem "noTrapLoc" false) (mem "isNoLoc" false) (mem "exprStartLoc" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "emptyFacts" false) (mem "factsNow" false) (mem "withFacts" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false))))
 (DUse false (UseAlias ("eval" "u64_halves") "H"))

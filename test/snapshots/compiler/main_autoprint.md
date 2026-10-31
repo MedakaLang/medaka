@@ -1,5 +1,5 @@
 # META
-source_lines=440
+source_lines=439
 stages=DESUGAR,MARK
 # SOURCE
 import string.{split}
@@ -36,7 +36,6 @@ import string.{split}
 import frontend.ast.{
   Decl(..),
   Expr(..),
-  EvId,
   Pat,
   Loc(..),
   UsePath(..),
@@ -444,7 +443,7 @@ asyncPinImport driver =
     synthLoc
 # DESUGAR
 (DUse false (UseGroup ("string") ((mem "split" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "EvId" false) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "CheckedProgram" true) (mem "EntryOutcome" true))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true))))
@@ -550,7 +549,7 @@ asyncPinImport driver =
 (DFunDef false "asyncPinImport" ((PVar "driver")) (EApp (EApp (EApp (EVar "DUse") (EVar "False")) (EApp (EApp (EVar "UseGroup") (EApp (EApp (EVar "split") (ELit (LString "."))) (EFieldAccess (EVar "driver") "moduleId"))) (EListLit (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "asyncMainPinName")) (EVar "False")) (EVar "synthLoc")) (EVar "None"))))) (EVar "synthLoc")))
 # MARK
 (DUse false (UseGroup ("string") ((mem "split" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "EvId" false) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "CheckedProgram" true) (mem "EntryOutcome" true))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true))))

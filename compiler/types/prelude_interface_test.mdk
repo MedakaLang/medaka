@@ -1,4 +1,4 @@
-import types.invocation_basis.{publishInvocationView, frozenInvocationView}
+import types.invocation_basis.{publishInvocationView}
 import types.interface_sexp.{invocationViewSExp}
 import support.sexp_value.{renderSExp}
 import types.invocation_basis.{readInvocationView}

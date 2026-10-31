@@ -11,7 +11,7 @@ import backend.emit_target.{Backend(..)}
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{EmitPlan, buildEmitPlan}
 import ir.core_ir.{CProgram}
-import test.{Expectation, expectAll, expectEqual, expectSatisfies, labelFail}
+import test.{expectAll, expectEqual, expectSatisfies, labelFail}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}

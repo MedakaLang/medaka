@@ -60,7 +60,6 @@ import frontend.ast.{
   UsePath(..),
   Variant(..),
   identOriginOf,
-  ifaceIdentity,
   mkIdent,
   orElseLoc,
   sameTyConHead,
@@ -111,9 +110,7 @@ import support.ordmap.{
   omEmpty, omFromNames, omHasKey, omInsert, omLookup, omSize, OrdMap
 }
 import list.{
-  drop,
   findMap,
-  indexed,
   last,
 }
 import support.util.{
@@ -124,7 +121,6 @@ import support.util.{
   isEmptyL,
   isSome,
   listLen,
-  lookupAssoc,
   reverseL,
   selfBinding,
 }

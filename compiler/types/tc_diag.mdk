@@ -29,7 +29,7 @@ import types.tc_types.{
 import map as IdMap
 export import types.publish.{tcCode, TcDiag(..), tcLoc, tcMsg}
 import support.ordmap.{omHasKey, omInsert, omLookup, OrdMap}
-import support.util.{anyList, filterList, isSome, splitOnChar, startsWith}
+import support.util.{anyList, filterList, isSome}
 import types.registry.{HeadKey(..)}
 import types.tc_diag_text.{
   derivableIface,

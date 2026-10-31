@@ -174,7 +174,6 @@ import frontend.marker.{markWithPrelude}
 import ir.sexp.{programToSexp}
 import ir.core_ir.{CProgram}
 import ir.core_ir_lower.{
-  declaredRecordFieldOrders,
   lowerProgramEmitWith,
   lowerProgramWithFacts,
   methodIfaceTable,
@@ -220,7 +219,7 @@ import support.util.{
 }
 import support.path.{chopExt, baseOf}
 import driver.profile_select.{carryProjectProfile}
-import regex.{Regex, Match, Group, mustCompile, isFullMatch, find}
+import regex.{Regex, Group, mustCompile, isFullMatch, find}
 import string.{
   split,
   replaceAll,

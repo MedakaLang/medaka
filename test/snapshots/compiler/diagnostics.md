@@ -1,5 +1,5 @@
 # META
-source_lines=3478
+source_lines=3477
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -41,7 +41,6 @@ import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import frontend.desugar.{desugar, checkDerives}
 import frontend.resolve.{
   ResError,
-  resolveProgram,
   resolveProgramG2,
   internalGuardFor,
   ppResError,
@@ -57,7 +56,7 @@ import frontend.resolve.{
   exportedValueNames,
 }
 import frontend.visibility.{ModuleExports, coreExports, useModuleIds}
-import list.{drop, last}
+import list.{last}
 import support.ordmap.{
   OrdMap,
   omEmpty,
@@ -3490,9 +3489,9 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "checkDerives" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgram" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "resolveModulesErrorsByFile" false) (mem "importedCtorDeclsStep" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "resolveModulesErrorsByFile" false) (mem "importedCtorDeclsStep" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" false) (mem "coreExports" false) (mem "useModuleIds" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "last" false))))
+(DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omRestrict" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
@@ -4012,9 +4011,9 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "checkDerives" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgram" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "resolveModulesErrorsByFile" false) (mem "importedCtorDeclsStep" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "resolveModulesErrorsByFile" false) (mem "importedCtorDeclsStep" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" false) (mem "coreExports" false) (mem "useModuleIds" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "last" false))))
+(DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omRestrict" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))

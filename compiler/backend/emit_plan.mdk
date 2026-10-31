@@ -3,19 +3,17 @@ import ir.constructor_facts.{ConstructorFacts, planConstructors}
 import support.symbol_encoding.{encodePair}
 import backend.wasm_demand.{
   JsImport(..), WasmDemand(..), WasmDemandInputs(..), WasmDemandPlan,
-  planWasmDemand, ctorFloatFieldIndex
+  planWasmDemand
 }
 import backend.wasm_names.{uniqueBinders}
 -- The per-emission plan: facts about the lowered program that both backends read
 -- and neither recomputes.  Built once, right after lowering, from the program an
 -- emitter is about to receive.
 
-import backend.extern_requirements.{
-  ExternRequirements, planExterns, requirementHostRows
-}
+import backend.extern_requirements.{ExternRequirements, planExterns}
 import backend.global_plan.{GlobalInitPlan, planGlobals}
 import backend.emit_target.{Backend(..)}
-import frontend.ast.{Lit(..), Pat(..), hostRows}
+import frontend.ast.{Lit(..), Pat(..)}
 import ir.extern_types.{ExternDeclFact}
 import ir.extern_lower.{externRuntimeKey, externHeadRows}
 import ir.core_ir.{
@@ -38,10 +36,6 @@ import ir.core_ir.{
 import backend.extern_catalog.{
   RuntimeExternDomain,
   WasmUse(..),
-  fileBoundHostKeys,
-  wasmHostKeys,
-  wasmTupleArities,
-  wasmUses,
 }
 
 import support.ordmap.{
@@ -50,7 +44,6 @@ import support.ordmap.{
   omInsert,
   omLookup,
   omHasKey,
-  omKeys,
   omFromNames,
   omFromPairs,
 }
@@ -60,7 +53,6 @@ import backend.emit_support.{eagerReachMap, lazyGlobalNames}
 import backend.trmc_analysis.{
   TrmcVerdicts(..),
   SelfRef(..),
-  flattenApp,
   DispGroup,
   trmcEligible,
   detectDispatchGroups,
@@ -68,7 +60,6 @@ import backend.trmc_analysis.{
   methodSelf,
   clauseArityOf,
   bindName,
-  patVarsList,
 }
 
 -- `wasmOnlyReach` is `Some` only on a plan from `buildEmitPlanReached`: the unit

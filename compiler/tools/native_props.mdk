@@ -14,9 +14,7 @@ import driver.build_cmd.{
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omKeys, omLookup}
-import support.util.{
-  joinNl, joinWith, splitNl, filterList, lookupAssoc, listLen, zipL, reverseL
-}
+import support.util.{joinNl, joinWith, splitNl, listLen, reverseL}
 import string.{toInt}
 import tools.probe_transcript.{
   Chunk(..), Section(..), chunksOf, decodeValue, endTag, firstNonEmptyLine,
@@ -29,17 +27,16 @@ import tools.prop_plan.{
   PlanModule(..), TypeKey(..), CustomPlan(..), PlanEnv(..), GenPlan(..),
   PlanDef(..), PlanCtor(..), PlanField(..), PlanError(..), PlanErrorReason(..),
   PlanVisibility(..), planErrorText, buildPlanEnvModules, planFor, planDef,
-  instantiateCtor, planTy, typeKeyWord, ctorWeights, listLengthBound,
-  listBoundDecays, listLenMax, optionWeights, resultWeights, maxGenDepth,
-  SoftWeight(..), softCtorWeights, intMin, intMax, structuralRngModulus,
+  instantiateCtor, typeKeyWord, ctorWeights, listLengthBound, listBoundDecays,
+  listLenMax, optionWeights, resultWeights, maxGenDepth, SoftWeight(..),
+  softCtorWeights, intMin, intMax, structuralRngModulus,
   structuralRngMultiplier, structuralRngIncrement, structuralRngMixMultiplier1,
   structuralRngMixMultiplier2, structuralRngWordModulus, structuralRngWordHalf,
   ShrinkAction(..), shrinkActions, IntShrinkStep(..), intShrinkSteps
 }
 import tools.prop_runner.{
   PropResult(..), PropStatus(..), PropFailureKind(..), filterProps,
-  filterPropsByName, propSeedValue, PropRequest(..), propRequestName,
-  propRequestSeed, propRequestCases
+  PropRequest(..), propRequestName, propRequestSeed, propRequestCases
 }
 
 sentinelBase : String

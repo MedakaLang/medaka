@@ -28,7 +28,7 @@ import eval.eval.{
   Value(..), EvalEnv(..), EnvFrame(..), apply, eval, extendEnv, envFrameCells,
   force, lookupEnv, lookupRuntimeBinding, ppValue
 }
-import support.util.{listLen, lookupAssoc, isEmptyL, filterList, anyList}
+import support.util.{listLen, lookupAssoc, isEmptyL}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
 import tools.prop_plan.{
   deleteEach,
@@ -1759,7 +1759,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "PropParam" false) (mem "Ty" true))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "EnvFrame" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "envFrameCells" false) (mem "force" false) (mem "lookupEnv" false) (mem "lookupRuntimeBinding" false) (mem "ppValue" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "anyList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "isEmptyL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("tools" "prop_plan") ((mem "deleteEach" false) (mem "prepend" false) (mem "prependBefore" false) (mem "PlanEnv" true) (mem "PlanError" false) (mem "PlanModule" false) (mem "TypeKey" true) (mem "GenPlan" true) (mem "CustomPlan" true) (mem "PlanDef" true) (mem "PlanCtor" true) (mem "PlanVisibility" true) (mem "planFor" false) (mem "planErrorText" false) (mem "planDef" false) (mem "instantiateCtor" false) (mem "buildPlanEnv" false) (mem "buildPlanEnvModules" false) (mem "listLengthBound" false) (mem "ctorWeights" false) (mem "optionWeights" false) (mem "resultWeights" false) (mem "intMin" false) (mem "intMax" false) (mem "structuralRngSeed" false) (mem "structuralRngAdvance" false) (mem "structuralRngMix" false) (mem "structuralRngRange" false) (mem "structuralRngChoose" false) (mem "customPlansReachable" false) (mem "ShrinkAction" true) (mem "shrinkActions" false) (mem "IntShrinkStep" true) (mem "intShrinkSteps" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -2235,7 +2235,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "PropParam" false) (mem "Ty" true))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "EnvFrame" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "envFrameCells" false) (mem "force" false) (mem "lookupEnv" false) (mem "lookupRuntimeBinding" false) (mem "ppValue" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "anyList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "isEmptyL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("tools" "prop_plan") ((mem "deleteEach" false) (mem "prepend" false) (mem "prependBefore" false) (mem "PlanEnv" true) (mem "PlanError" false) (mem "PlanModule" false) (mem "TypeKey" true) (mem "GenPlan" true) (mem "CustomPlan" true) (mem "PlanDef" true) (mem "PlanCtor" true) (mem "PlanVisibility" true) (mem "planFor" false) (mem "planErrorText" false) (mem "planDef" false) (mem "instantiateCtor" false) (mem "buildPlanEnv" false) (mem "buildPlanEnvModules" false) (mem "listLengthBound" false) (mem "ctorWeights" false) (mem "optionWeights" false) (mem "resultWeights" false) (mem "intMin" false) (mem "intMax" false) (mem "structuralRngSeed" false) (mem "structuralRngAdvance" false) (mem "structuralRngMix" false) (mem "structuralRngRange" false) (mem "structuralRngChoose" false) (mem "customPlansReachable" false) (mem "ShrinkAction" true) (mem "shrinkActions" false) (mem "IntShrinkStep" true) (mem "intShrinkSteps" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))

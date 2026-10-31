@@ -1,5 +1,5 @@
 # META
-source_lines=3769
+source_lines=3768
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -67,7 +67,6 @@ import tools.gate_registry.{
   globMatch,
   parseSelector,
   tierPartOf,
-  modePartOf,
   selectGates,
   renderJson,
   renderShardsJson,
@@ -3778,7 +3777,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "Trailing" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "withTrailing" false) (mem "withStrictDash" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "unknownFlagMessage" false) (mem "missingValueMessage" false))))
-(DUse false (UseGroup ("tools" "gate_registry") ((mem "Gate" false) (mem "Shard" false) (mem "Selector" false) (mem "parseRegistry" false) (mem "parseShards" false) (mem "globMatch" false) (mem "parseSelector" false) (mem "tierPartOf" false) (mem "modePartOf" false) (mem "selectGates" false) (mem "renderJson" false) (mem "renderShardsJson" false) (mem "renderShards" false) (mem "renderNames" false) (mem "joinSpace" false))))
+(DUse false (UseGroup ("tools" "gate_registry") ((mem "Gate" false) (mem "Shard" false) (mem "Selector" false) (mem "parseRegistry" false) (mem "parseShards" false) (mem "globMatch" false) (mem "parseSelector" false) (mem "tierPartOf" false) (mem "selectGates" false) (mem "renderJson" false) (mem "renderShardsJson" false) (mem "renderShards" false) (mem "renderNames" false) (mem "joinSpace" false))))
 (DUse false (UseGroup ("tools" "gate_cost") ((mem "baselineKey" false))))
 (DUse false (UseGroup ("tools" "gate_pack") ((mem "balNewText" false) (mem "balOtherJob" false) (mem "budgetOutput" false) (mem "timeoutFor" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "endsWith" false) (mem "escStr" false) (mem "filterList" false) (mem "isSome" false) (mem "joinNl" false) (mem "joinWith" false) (mem "listLen" false) (mem "parseDecChecked" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "stringTrim" false))))
@@ -4559,7 +4558,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "Trailing" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "withTrailing" false) (mem "withStrictDash" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "unknownFlagMessage" false) (mem "missingValueMessage" false))))
-(DUse false (UseGroup ("tools" "gate_registry") ((mem "Gate" false) (mem "Shard" false) (mem "Selector" false) (mem "parseRegistry" false) (mem "parseShards" false) (mem "globMatch" false) (mem "parseSelector" false) (mem "tierPartOf" false) (mem "modePartOf" false) (mem "selectGates" false) (mem "renderJson" false) (mem "renderShardsJson" false) (mem "renderShards" false) (mem "renderNames" false) (mem "joinSpace" false))))
+(DUse false (UseGroup ("tools" "gate_registry") ((mem "Gate" false) (mem "Shard" false) (mem "Selector" false) (mem "parseRegistry" false) (mem "parseShards" false) (mem "globMatch" false) (mem "parseSelector" false) (mem "tierPartOf" false) (mem "selectGates" false) (mem "renderJson" false) (mem "renderShardsJson" false) (mem "renderShards" false) (mem "renderNames" false) (mem "joinSpace" false))))
 (DUse false (UseGroup ("tools" "gate_cost") ((mem "baselineKey" false))))
 (DUse false (UseGroup ("tools" "gate_pack") ((mem "balNewText" false) (mem "balOtherJob" false) (mem "budgetOutput" false) (mem "timeoutFor" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "endsWith" false) (mem "escStr" false) (mem "filterList" false) (mem "isSome" false) (mem "joinNl" false) (mem "joinWith" false) (mem "listLen" false) (mem "parseDecChecked" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "stringTrim" false))))

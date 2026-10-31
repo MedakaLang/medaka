@@ -5,7 +5,6 @@
 -- rules and hands them in, so this module knows nothing about flags.
 
 import frontend.ast.{
-  letBindName,
   Loc(..),
   Ty(..),
   UsePath(..),
@@ -78,11 +77,9 @@ import support.util.{
   startsWith,
   endsWith,
   dedup,
-  stringTrim,
   isSome,
-  lookupAssoc,
 }
-import hash_map.{HashMap, new, get, setInPlace, has, keys, findWithDefault}
+import hash_map.{HashMap, new, get, setInPlace, has}
 import list.{take, drop, indexed, nub}
 import string.{indexOf, lines}
 import array.{fromList}
@@ -116,7 +113,6 @@ import tools.lint_core.{
   Visitor(..),
   factComments,
   fixToDiagFix,
-  factDupClauses,
   factScopes,
   clampApplicability,
   emptyStdlibIndex,

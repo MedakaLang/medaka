@@ -198,7 +198,7 @@ import types.effect_param_decode.{atomOfLabel}
 import types.solver_contract.{Instantiation(..), Wanted(..)}
 import types.target_profile.{hostLabels}
 import types.disposition.{MethodDisposition(..)}
-import list.{drop, last, replicate}
+import list.{drop, replicate}
 import support.ordmap.{omHasKey, omInsert, omLookup}
 import types.invocation_basis.{paramPolaritiesIn}
 import types.effect_infer.{recordEffect, typeAuthority}
@@ -3038,7 +3038,7 @@ zipBindFrom dyn _ _ = ()
 (DUse false (UseGroup ("types" "solver_contract") ((mem "Instantiation" true) (mem "Wanted" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "hostLabels" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "last" false) (mem "replicate" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "replicate" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "paramPolaritiesIn" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "recordEffect" false) (mem "typeAuthority" false))))
@@ -3596,7 +3596,7 @@ zipBindFrom dyn _ _ = ()
 (DUse false (UseGroup ("types" "solver_contract") ((mem "Instantiation" true) (mem "Wanted" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "hostLabels" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "last" false) (mem "replicate" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "replicate" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "paramPolaritiesIn" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "recordEffect" false) (mem "typeAuthority" false))))

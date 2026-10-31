@@ -1,5 +1,5 @@
 # META
-source_lines=403
+source_lines=394
 stages=DESUGAR,MARK
 # SOURCE
 import backend.impl_groups.{ImplClauseGroup, groupImplEntries}
@@ -7,19 +7,17 @@ import ir.constructor_facts.{ConstructorFacts, planConstructors}
 import support.symbol_encoding.{encodePair}
 import backend.wasm_demand.{
   JsImport(..), WasmDemand(..), WasmDemandInputs(..), WasmDemandPlan,
-  planWasmDemand, ctorFloatFieldIndex
+  planWasmDemand
 }
 import backend.wasm_names.{uniqueBinders}
 -- The per-emission plan: facts about the lowered program that both backends read
 -- and neither recomputes.  Built once, right after lowering, from the program an
 -- emitter is about to receive.
 
-import backend.extern_requirements.{
-  ExternRequirements, planExterns, requirementHostRows
-}
+import backend.extern_requirements.{ExternRequirements, planExterns}
 import backend.global_plan.{GlobalInitPlan, planGlobals}
 import backend.emit_target.{Backend(..)}
-import frontend.ast.{Lit(..), Pat(..), hostRows}
+import frontend.ast.{Lit(..), Pat(..)}
 import ir.extern_types.{ExternDeclFact}
 import ir.extern_lower.{externRuntimeKey, externHeadRows}
 import ir.core_ir.{
@@ -42,10 +40,6 @@ import ir.core_ir.{
 import backend.extern_catalog.{
   RuntimeExternDomain,
   WasmUse(..),
-  fileBoundHostKeys,
-  wasmHostKeys,
-  wasmTupleArities,
-  wasmUses,
 }
 
 import support.ordmap.{
@@ -54,7 +48,6 @@ import support.ordmap.{
   omInsert,
   omLookup,
   omHasKey,
-  omKeys,
   omFromNames,
   omFromPairs,
 }
@@ -64,7 +57,6 @@ import backend.emit_support.{eagerReachMap, lazyGlobalNames}
 import backend.trmc_analysis.{
   TrmcVerdicts(..),
   SelfRef(..),
-  flattenApp,
   DispGroup,
   trmcEligible,
   detectDispatchGroups,
@@ -72,7 +64,6 @@ import backend.trmc_analysis.{
   methodSelf,
   clauseArityOf,
   bindName,
-  patVarsList,
 }
 
 -- `wasmOnlyReach` is `Some` only on a plan from `buildEmitPlanReached`: the unit
@@ -409,21 +400,21 @@ data DemandScope = DemandScope {
 (DUse false (UseGroup ("backend" "impl_groups") ((mem "ImplClauseGroup" false) (mem "groupImplEntries" false))))
 (DUse false (UseGroup ("ir" "constructor_facts") ((mem "ConstructorFacts" false) (mem "planConstructors" false))))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
-(DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true) (mem "WasmDemand" true) (mem "WasmDemandInputs" true) (mem "WasmDemandPlan" false) (mem "planWasmDemand" false) (mem "ctorFloatFieldIndex" false))))
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true) (mem "WasmDemand" true) (mem "WasmDemandInputs" true) (mem "WasmDemandPlan" false) (mem "planWasmDemand" false))))
 (DUse false (UseGroup ("backend" "wasm_names") ((mem "uniqueBinders" false))))
-(DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "planExterns" false) (mem "requirementHostRows" false))))
+(DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "planExterns" false))))
 (DUse false (UseGroup ("backend" "global_plan") ((mem "GlobalInitPlan" false) (mem "planGlobals" false))))
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "hostRows" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" false))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false) (mem "externHeadRows" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true))))
-(DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" false) (mem "WasmUse" true) (mem "fileBoundHostKeys" false) (mem "wasmHostKeys" false) (mem "wasmTupleArities" false) (mem "wasmUses" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
+(DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" false) (mem "WasmUse" true))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false) (mem "listLen" false))))
 (DUse false (UseGroup ("backend" "wasm_reach") ((mem "wasmReachFilter" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "lazyGlobalNames" false))))
-(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" true) (mem "SelfRef" true) (mem "flattenApp" false) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false) (mem "patVarsList" false))))
+(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" true) (mem "SelfRef" true) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "ManifestRequest" false) (mem "CapabilityManifest" false))))
 (DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "manifestIndex" (TyApp (TyCon "List") (TyCon "ManifestRequest"))) (field "target" (TyCon "Backend")) (field "externRequirements" (TyCon "ExternRequirements")) (field "entryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact"))) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "constructorFacts" (TyCon "ConstructorFacts")) (field "wasmOnlyReach" (TyApp (TyCon "Option") (TyCon "ReachUnits"))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "globalInit" (TyCon "GlobalInitPlan")) (field "implGroups" (TyApp (TyCon "List") (TyCon "ImplClauseGroup"))) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup"))) (field "wasmDemand" (TyCon "WasmDemand")) (field "wasmInputs" (TyCon "WasmDemandInputs")) (field "wasmPhysical" (TyApp (TyCon "Option") (TyCon "WasmDemandPlan"))) (field "hostKeys" (TyApp (TyCon "List") (TyCon "String"))) (field "jsImports" (TyApp (TyCon "List") (TyCon "JsImport")))))) ())
 (DData Public "ReachUnits" () ((variant "ReachUnits" (ConNamed (field "total" (TyCon "Int")) (field "kept" (TyCon "Int"))))) ())
@@ -488,21 +479,21 @@ data DemandScope = DemandScope {
 (DUse false (UseGroup ("backend" "impl_groups") ((mem "ImplClauseGroup" false) (mem "groupImplEntries" false))))
 (DUse false (UseGroup ("ir" "constructor_facts") ((mem "ConstructorFacts" false) (mem "planConstructors" false))))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
-(DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true) (mem "WasmDemand" true) (mem "WasmDemandInputs" true) (mem "WasmDemandPlan" false) (mem "planWasmDemand" false) (mem "ctorFloatFieldIndex" false))))
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true) (mem "WasmDemand" true) (mem "WasmDemandInputs" true) (mem "WasmDemandPlan" false) (mem "planWasmDemand" false))))
 (DUse false (UseGroup ("backend" "wasm_names") ((mem "uniqueBinders" false))))
-(DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "planExterns" false) (mem "requirementHostRows" false))))
+(DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "planExterns" false))))
 (DUse false (UseGroup ("backend" "global_plan") ((mem "GlobalInitPlan" false) (mem "planGlobals" false))))
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "hostRows" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" false))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false) (mem "externHeadRows" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true))))
-(DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" false) (mem "WasmUse" true) (mem "fileBoundHostKeys" false) (mem "wasmHostKeys" false) (mem "wasmTupleArities" false) (mem "wasmUses" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
+(DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" false) (mem "WasmUse" true))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false) (mem "listLen" false))))
 (DUse false (UseGroup ("backend" "wasm_reach") ((mem "wasmReachFilter" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "lazyGlobalNames" false))))
-(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" true) (mem "SelfRef" true) (mem "flattenApp" false) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false) (mem "patVarsList" false))))
+(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" true) (mem "SelfRef" true) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "ManifestRequest" false) (mem "CapabilityManifest" false))))
 (DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "manifestIndex" (TyApp (TyCon "List") (TyCon "ManifestRequest"))) (field "target" (TyCon "Backend")) (field "externRequirements" (TyCon "ExternRequirements")) (field "entryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact"))) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "constructorFacts" (TyCon "ConstructorFacts")) (field "wasmOnlyReach" (TyApp (TyCon "Option") (TyCon "ReachUnits"))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "globalInit" (TyCon "GlobalInitPlan")) (field "implGroups" (TyApp (TyCon "List") (TyCon "ImplClauseGroup"))) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup"))) (field "wasmDemand" (TyCon "WasmDemand")) (field "wasmInputs" (TyCon "WasmDemandInputs")) (field "wasmPhysical" (TyApp (TyCon "Option") (TyCon "WasmDemandPlan"))) (field "hostKeys" (TyApp (TyCon "List") (TyCon "String"))) (field "jsImports" (TyApp (TyCon "List") (TyCon "JsImport")))))) ())
 (DData Public "ReachUnits" () ((variant "ReachUnits" (ConNamed (field "total" (TyCon "Int")) (field "kept" (TyCon "Int"))))) ())
