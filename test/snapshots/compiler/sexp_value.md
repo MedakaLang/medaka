@@ -1,5 +1,5 @@
 # META
-source_lines=448
+source_lines=500
 stages=DESUGAR,MARK
 # SOURCE
 -- S-expression values with one canonical rendering and a fail-closed reader.
@@ -450,6 +450,58 @@ expectList arity path (SList items)
   | otherwise =
     shapeError path ("expected a list of " ++ intToString arity ++ " items")
 expectList _ path _ = shapeError path "expected a list"
+
+-- ── skipping ────────────────────────────────────────────────────────────────
+
+-- Steps over one node without building it.  A decoder that stores a sub-tree
+-- for later decoding keeps its text with `cursorSkipText`.
+export
+cursorSkip : SexpCursor -> Unit
+cursorSkip cur =
+  let p = skipWsAt cur.scBytes cur.scLen cur.scPos.value
+  cursorStep cur (skipNodeAt cur.scBytes cur.scLen p 0 False)
+
+-- The text of the next node, which the cursor steps over.  The node is checked
+-- for bracket balance only: decoding the text is what checks the rest.
+export
+cursorSkipText : SexpCursor -> String
+cursorSkipText cur =
+  let p = skipWsAt cur.scBytes cur.scLen cur.scPos.value
+  let e = skipNodeAt cur.scBytes cur.scLen p 0 False
+  let _ = cursorStep cur e
+  if p >= cur.scLen || e <= p then
+    cursorFail cur ""
+  else
+    sliceText cur.scBytes p e
+
+skipNodeAt : ByteBlock -> Int -> Int -> Int -> Bool -> Int
+skipNodeAt b n p depth inQ
+  | p >= n = n
+  | inQ =
+    let c = byteBlockGetUnsafe p b
+    if isBackslashByte c then
+      skipNodeAt b n (p + 2) depth True
+    else if isQuoteByte c then
+      if depth == 0 then p + 1 else skipNodeAt b n (p + 1) depth False
+    else
+      skipNodeAt b n (p + 1) depth True
+  | otherwise =
+    let c = byteBlockGetUnsafe p b
+    if isOpenByte c then
+      skipNodeAt b n (p + 1) (depth + 1) False
+    else if isCloseByte c then
+      if depth == 0 then
+        p
+      else if depth == 1 then
+        p + 1
+      else
+        skipNodeAt b n (p + 1) (depth - 1) False
+    else if isQuoteByte c then
+      skipNodeAt b n (p + 1) depth True
+    else if depth == 0 && isWsByte c then
+      p
+    else
+      skipNodeAt b n (p + 1) depth False
 # DESUGAR
 (DUse false (UseGroup ("array") ((mem "fromList" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false) (mem "lookup" false))))
@@ -565,6 +617,12 @@ expectList _ path _ = shapeError path "expected a list"
 (DTypeSig true "expectList" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "List") (TyCon "SExp")))))))
 (DFunDef false "expectList" ((PVar "arity") (PVar "path") (PCon "SList" (PVar "items"))) (EIf (EBinOp "==" (EApp (EVar "length") (EVar "items")) (EVar "arity")) (EApp (EVar "Ok") (EVar "items")) (EIf (EVar "otherwise") (EApp (EApp (EVar "shapeError") (EVar "path")) (EBinOp "++" (EBinOp "++" (ELit (LString "expected a list of ")) (EApp (EVar "intToString") (EVar "arity"))) (ELit (LString " items")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "expectList" (PWild (PVar "path") PWild) (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected a list"))))
+(DTypeSig true "cursorSkip" (TyFun (TyCon "SexpCursor") (TyCon "Unit")))
+(DFunDef false "cursorSkip" ((PVar "cur")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EFieldAccess (EFieldAccess (EVar "cur") "scPos") "value"))) (DoExpr (EApp (EApp (EVar "cursorStep") (EVar "cur")) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EVar "p")) (ELit (LInt 0))) (EVar "False"))))))
+(DTypeSig true "cursorSkipText" (TyFun (TyCon "SexpCursor") (TyCon "String")))
+(DFunDef false "cursorSkipText" ((PVar "cur")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EFieldAccess (EFieldAccess (EVar "cur") "scPos") "value"))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EVar "p")) (ELit (LInt 0))) (EVar "False"))) (DoLet false false PWild (EApp (EApp (EVar "cursorStep") (EVar "cur")) (EVar "e"))) (DoExpr (EIf (EBinOp "||" (EBinOp ">=" (EVar "p") (EFieldAccess (EVar "cur") "scLen")) (EBinOp "<=" (EVar "e") (EVar "p"))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit (LString ""))) (EApp (EApp (EApp (EVar "sliceText") (EFieldAccess (EVar "cur") "scBytes")) (EVar "p")) (EVar "e"))))))
+(DTypeSig false "skipNodeAt" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Int")))))))
+(DFunDef false "skipNodeAt" ((PVar "b") (PVar "n") (PVar "p") (PVar "depth") (PVar "inQ")) (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EVar "n") (EIf (EVar "inQ") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EVar "True")) (EIf (EApp (EVar "isQuoteByte") (EVar "c")) (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (EVar "False"))) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (EVar "True")))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isOpenByte") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "False")) (EIf (EApp (EVar "isCloseByte") (EVar "c")) (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EVar "p") (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 1))) (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "False")))) (EIf (EApp (EVar "isQuoteByte") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (EVar "True")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "isWsByte") (EVar "c"))) (EVar "p") (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (EVar "False")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 # MARK
 (DUse false (UseGroup ("array") ((mem "fromList" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false) (mem "lookup" false))))
@@ -680,3 +738,9 @@ expectList _ path _ = shapeError path "expected a list"
 (DTypeSig true "expectList" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "List") (TyCon "SExp")))))))
 (DFunDef false "expectList" ((PVar "arity") (PVar "path") (PCon "SList" (PVar "items"))) (EIf (EBinOp "==" (EApp (EMethodRef "length") (EVar "items")) (EVar "arity")) (EApp (EVar "Ok") (EVar "items")) (EIf (EVar "otherwise") (EApp (EApp (EVar "shapeError") (EVar "path")) (EBinOp "++" (EBinOp "++" (ELit (LString "expected a list of ")) (EApp (EVar "intToString") (EVar "arity"))) (ELit (LString " items")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "expectList" (PWild (PVar "path") PWild) (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected a list"))))
+(DTypeSig true "cursorSkip" (TyFun (TyCon "SexpCursor") (TyCon "Unit")))
+(DFunDef false "cursorSkip" ((PVar "cur")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EFieldAccess (EFieldAccess (EVar "cur") "scPos") "value"))) (DoExpr (EApp (EApp (EVar "cursorStep") (EVar "cur")) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EVar "p")) (ELit (LInt 0))) (EVar "False"))))))
+(DTypeSig true "cursorSkipText" (TyFun (TyCon "SexpCursor") (TyCon "String")))
+(DFunDef false "cursorSkipText" ((PVar "cur")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EFieldAccess (EFieldAccess (EVar "cur") "scPos") "value"))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EVar "p")) (ELit (LInt 0))) (EVar "False"))) (DoLet false false PWild (EApp (EApp (EVar "cursorStep") (EVar "cur")) (EVar "e"))) (DoExpr (EIf (EBinOp "||" (EBinOp ">=" (EVar "p") (EFieldAccess (EVar "cur") "scLen")) (EBinOp "<=" (EVar "e") (EVar "p"))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit (LString ""))) (EApp (EApp (EApp (EVar "sliceText") (EFieldAccess (EVar "cur") "scBytes")) (EVar "p")) (EVar "e"))))))
+(DTypeSig false "skipNodeAt" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Int")))))))
+(DFunDef false "skipNodeAt" ((PVar "b") (PVar "n") (PVar "p") (PVar "depth") (PVar "inQ")) (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EVar "n") (EIf (EVar "inQ") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EVar "True")) (EIf (EApp (EVar "isQuoteByte") (EVar "c")) (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (EVar "False"))) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (EVar "True")))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isOpenByte") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "False")) (EIf (EApp (EVar "isCloseByte") (EVar "c")) (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EVar "p") (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 1))) (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "False")))) (EIf (EApp (EVar "isQuoteByte") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (EVar "True")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "isWsByte") (EVar "c"))) (EVar "p") (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (EVar "False")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))

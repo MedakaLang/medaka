@@ -589,6 +589,7 @@ sexpTyConOrigin OriginBuiltin = tagAtom (tagOriginBuiltin ())
 sexpTyConOrigin (OriginModule a0) =
   SList [tagAtom (tagOriginModule ()), sexpString a0]
 
+export
 sexpTy : Ty -> SExp
 sexpTy (TyCon { tyConName = a0, tyConLoc = a1, tyConOrigin = a2 }) = SList [
   tagAtom (tagTyCon ()),
@@ -1211,6 +1212,7 @@ readTyConOriginTagged t cur
     OriginModule a0
   | otherwise = cursorFail cur dfltTyConOrigin
 
+export
 readTy : SexpCursor -> Ty
 readTy cur = readTagged readTyTagged (refuse dfltTy) cur
 

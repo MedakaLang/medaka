@@ -112,10 +112,8 @@ import tools.lint.{
   applySuppressionsMulti,
   applyFindingDeny,
   splitLintNames,
-  buildStdlibIndexResult,
   StdlibIndexError(..),
-  emptyStdlibIndex,
-  stdlibIndexNeededFor,
+  indexForRun,
   StdlibIndex,
 }
 import tools.test_cmd.{runTestGradedReportParts, TestReportError(..)}
@@ -1569,13 +1567,9 @@ runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
     let only = lintNameListArg "only" args
     let deny = lintNameListArg "deny" args
     -- at most once per REQUEST, not per path (see lintPathsToDiagQuads) — and
-    -- not at all when no `StdlibIndex` reader is active for these paths (see
-    -- `stdlibIndexNeededFor`).
-    let indexResult =
-      if stdlibIndexNeededFor only disable paths then
-        buildStdlibIndexResult
-      else
-        Ok emptyStdlibIndex
+    -- not at all when no index reader is active for these paths (see
+    -- `indexForRun`).
+    let indexResult = indexForRun False only disable paths
     match indexResult
       Err (StdlibIndexError { path, source, diagnostic }) =>
         toolTextResult (cjAllToJson [(path, source, [diagnostic])]) True

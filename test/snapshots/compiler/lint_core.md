@@ -1,5 +1,5 @@
 # META
-source_lines=493
+source_lines=559
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -15,7 +15,18 @@ import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..), Diag(..)}
 import driver.diagnostic_value as DV
 import support.util.{listLen, filterList, lookupAssoc, anyList}
-import hash_map.{HashMap, new, size, findWithDefault}
+import tools.lint_index.{
+  IndexRow(..),
+  RowKind(..),
+  Ns(..),
+  ProjectIndex,
+  rowSig,
+  emptyProjectIndex,
+  mkProjectIndex,
+  stdlibRowsNamed,
+  stdlibValueNames,
+  stdlibValueModules,
+}
 import tools.printer.{ppTy}
 import frontend.exhaust.{Oracle}
 import frontend.lexer.{Comment}
@@ -161,8 +172,14 @@ clampApplicability _ Unsafe = Unsafe
 clampApplicability Safe Safe = Safe
 
 -- An input a rule's `check` reads beyond the file itself; the runner builds
--- only what some active rule needs.
-public export data Need = NeedsStdlibIndex | NeedsWildIndex | NeedsScopes
+-- only what some active rule needs.  `NeedsStdlibIndex` is the stdlib's index
+-- rows; `NeedsProjectIndex` is the project's rows as well as the stdlib's.  A
+-- rule that does not declare an index need is handed the empty index.
+public export data Need =
+  | NeedsStdlibIndex
+  | NeedsProjectIndex
+  | NeedsWildIndex
+  | NeedsScopes
 
 -- Everything the CLI, the rules page and the runner know about a rule besides
 -- its `check`.  `doc` states what the rule flags, why, and a before -> after
@@ -183,9 +200,20 @@ export
 ruleMetaName : RuleMeta -> String
 ruleMetaName m = m.name
 
+-- Whether the rule reads stdlib rows: it declares either index need, since the
+-- project index carries the stdlib's rows too.
 export
 needsStdlibIndex : RuleMeta -> Bool
 needsStdlibIndex m = anyList isStdlibIndexNeed m.needs
+
+export
+needsProjectIndex : RuleMeta -> Bool
+needsProjectIndex m = anyList isProjectIndexNeed m.needs
+
+-- Whether the runner hands the rule the real index rather than the empty one.
+export
+readsIndex : RuleMeta -> Bool
+readsIndex m = anyList isAnyIndexNeed m.needs
 
 export
 needsScopes : RuleMeta -> Bool
@@ -193,8 +221,21 @@ needsScopes m = anyList isScopesNeed m.needs
 
 isStdlibIndexNeed : Need -> Bool
 isStdlibIndexNeed NeedsStdlibIndex = True
+isStdlibIndexNeed NeedsProjectIndex = True
 isStdlibIndexNeed NeedsWildIndex = False
 isStdlibIndexNeed NeedsScopes = False
+
+isProjectIndexNeed : Need -> Bool
+isProjectIndexNeed NeedsProjectIndex = True
+isProjectIndexNeed NeedsStdlibIndex = False
+isProjectIndexNeed NeedsWildIndex = False
+isProjectIndexNeed NeedsScopes = False
+
+isAnyIndexNeed : Need -> Bool
+isAnyIndexNeed NeedsScopes = False
+isAnyIndexNeed NeedsStdlibIndex = True
+isAnyIndexNeed NeedsProjectIndex = True
+isAnyIndexNeed NeedsWildIndex = True
 
 -- A rule whose name guards read the index only to resolve an `import m.*`.
 export
@@ -204,11 +245,13 @@ needsWildIndex m = anyList isWildIndexNeed m.needs
 isWildIndexNeed : Need -> Bool
 isWildIndexNeed NeedsWildIndex = True
 isWildIndexNeed NeedsStdlibIndex = False
+isWildIndexNeed NeedsProjectIndex = False
 isWildIndexNeed NeedsScopes = False
 
 isScopesNeed : Need -> Bool
 isScopesNeed NeedsScopes = True
 isScopesNeed NeedsStdlibIndex = False
+isScopesNeed NeedsProjectIndex = False
 isScopesNeed NeedsWildIndex = False
 
 -- Where a visited node sits.  `ctxDeclName` and `ctxParams` name the body's
@@ -379,33 +422,55 @@ mkCrossFileRule m check = CrossFileRule {
 --
 -- POSITIONAL, not a named-field record, and read ONLY through the helpers
 -- below.
-public export data StdlibIndex =
-  StdlibIndex (HashMap String (List (String, Ty))) (List String) (List String)
+public export data StdlibIndex = StdlibIndex ProjectIndex
 
 -- The degraded index.  Also what a caller passes when it deliberately wants no
 -- stdlib knowledge: `medaka_cli.mdk`'s `runLintCmd` and `mcp.mdk`'s
--- `runLintTool` both pass this when `stdlibIndexNeeded` says the active
--- `--only`/`--disable` set never reads it.  `runLintCmd` additionally forces
--- the real index whenever `--cache` is active, regardless of
--- `stdlibIndexNeeded`'s answer — a cache entry outlives this process's flag
--- choices, so it must never be populated from a degraded index.
+-- `runLintTool` both pass this when `indexForRun` says the active
+-- `--only`/`--disable` set never reads it, and what the runner hands a rule
+-- that declares no index need.  `runLintCmd` additionally forces the real
+-- index whenever `--cache` is active, regardless of the flags — a cache entry
+-- outlives this process's flag choices, so it must never be populated from a
+-- degraded index.
 export
 emptyStdlibIndex : StdlibIndex
-emptyStdlibIndex = StdlibIndex (new ()) [] []
+emptyStdlibIndex = StdlibIndex emptyProjectIndex
+
+-- The index over rows: the stdlib's, then the project's (empty when no active
+-- rule reads project rows).
+export
+mkStdlibIndex : List IndexRow -> List IndexRow -> StdlibIndex
+mkStdlibIndex stdlibRows projectRows =
+  StdlibIndex (mkProjectIndex stdlibRows projectRows)
+
+-- The row index behind the handle, for a rule that declares `NeedsProjectIndex`.
+export
+projectIndexOf : StdlibIndex -> ProjectIndex
+projectIndexOf (StdlibIndex ix) = ix
 
 -- How many distinct exported NAMES the index carries (not declarations — a name
 -- declared in two modules counts once).  0 means degraded, or an empty stdlib;
 -- it is the number an entry point prints to say what it actually got.
 export
 stdlibIndexSize : StdlibIndex -> Int
-stdlibIndexSize (StdlibIndex m _ _) = size m
+stdlibIndexSize (StdlibIndex ix) = listLen (stdlibValueNames ix)
 
 -- Every stdlib module declaring `name`, with the type each one declares, in
 -- stdlib-file order.  `[]` = not a stdlib export (or the index is degraded);
 -- more than one element = the name is ambiguous and the CALLER must decide.
+-- The types are decoded here, on the lookup, not when the index was built.
 export
 stdlibEntriesOf : StdlibIndex -> String -> List (String, Ty)
-stdlibEntriesOf (StdlibIndex m _ _) name = findWithDefault [] name m
+stdlibEntriesOf (StdlibIndex ix) name =
+  flatMap exportedSigEntry (stdlibRowsNamed ix NsValue name)
+
+exportedSigEntry : IndexRow -> List (String, Ty)
+exportedSigEntry r =
+  if r.ixrKind == RkValue && r.ixrExported then match rowSig r
+    Some t => [(r.ixrModule, t)]
+    None => []
+  else
+    []
 
 -- The type `<module>.<name>` declares, e.g. `stdlibSigIn idx "list" "reverse"`
 -- = `List a -> List a`.  The unambiguous accessor: it names the module, so it
@@ -426,13 +491,14 @@ stdlibSigTextIn idx modName name = map ppTy (stdlibSigIn idx modName name)
 -- stdlib the way a hand-written list does (#2248 Miss 2).
 export
 stdlibIndexNames : StdlibIndex -> List String
-stdlibIndexNames (StdlibIndex _ names _) = names
+stdlibIndexNames (StdlibIndex ix) = stdlibValueNames ix
 
 -- Whether the index read `modName` (a dotted path, `crypto.hmac`) at all.  A
 -- module it did not read exports nothing the index can vouch for.
 export
 stdlibKnowsModule : StdlibIndex -> String -> Bool
-stdlibKnowsModule (StdlibIndex _ _ mods) modName = elem modName mods
+stdlibKnowsModule (StdlibIndex ix) modName =
+  elem modName (stdlibValueModules ix)
 
 -- The names declared by more than one stdlib module, sorted.  Exported because
 -- it is the set every consumer has to have an answer for — a rule that treats a
@@ -503,7 +569,7 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseAlias ("driver" "diagnostic_value") "DV"))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "anyList" false))))
-(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "size" false) (mem "findWithDefault" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndex" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibValueModules" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
@@ -551,27 +617,44 @@ public export data DupClause = DupClause {
 (DFunDef false "clampApplicability" ((PCon "Unsafe") PWild) (EVar "Unsafe"))
 (DFunDef false "clampApplicability" (PWild (PCon "Unsafe")) (EVar "Unsafe"))
 (DFunDef false "clampApplicability" ((PCon "Safe") (PCon "Safe")) (EVar "Safe"))
-(DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos)) (variant "NeedsWildIndex" (ConPos)) (variant "NeedsScopes" (ConPos))) ())
+(DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos)) (variant "NeedsProjectIndex" (ConPos)) (variant "NeedsWildIndex" (ConPos)) (variant "NeedsScopes" (ConPos))) ())
 (DData Public "RuleMeta" () ((variant "RuleMeta" (ConNamed (field "name" (TyCon "String")) (field "summary" (TyCon "String")) (field "doc" (TyCon "String")) (field "category" (TyCon "Category")) (field "scope" (TyCon "Scope")) (field "ratchet" (TyCon "Ratchet")) (field "defaultSeverity" (TyCon "Severity")) (field "fixability" (TyCon "Fixability")) (field "needs" (TyApp (TyCon "List") (TyCon "Need")))))) ())
 (DTypeSig true "ruleMetaName" (TyFun (TyCon "RuleMeta") (TyCon "String")))
 (DFunDef false "ruleMetaName" ((PVar "m")) (EFieldAccess (EVar "m") "name"))
 (DTypeSig true "needsStdlibIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
 (DFunDef false "needsStdlibIndex" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isStdlibIndexNeed")) (EFieldAccess (EVar "m") "needs")))
+(DTypeSig true "needsProjectIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
+(DFunDef false "needsProjectIndex" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isProjectIndexNeed")) (EFieldAccess (EVar "m") "needs")))
+(DTypeSig true "readsIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
+(DFunDef false "readsIndex" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isAnyIndexNeed")) (EFieldAccess (EVar "m") "needs")))
 (DTypeSig true "needsScopes" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
 (DFunDef false "needsScopes" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isScopesNeed")) (EFieldAccess (EVar "m") "needs")))
 (DTypeSig false "isStdlibIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
 (DFunDef false "isStdlibIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "True"))
+(DFunDef false "isStdlibIndexNeed" ((PCon "NeedsProjectIndex")) (EVar "True"))
 (DFunDef false "isStdlibIndexNeed" ((PCon "NeedsWildIndex")) (EVar "False"))
 (DFunDef false "isStdlibIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))
+(DTypeSig false "isProjectIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
+(DFunDef false "isProjectIndexNeed" ((PCon "NeedsProjectIndex")) (EVar "True"))
+(DFunDef false "isProjectIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "False"))
+(DFunDef false "isProjectIndexNeed" ((PCon "NeedsWildIndex")) (EVar "False"))
+(DFunDef false "isProjectIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))
+(DTypeSig false "isAnyIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
+(DFunDef false "isAnyIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))
+(DFunDef false "isAnyIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "True"))
+(DFunDef false "isAnyIndexNeed" ((PCon "NeedsProjectIndex")) (EVar "True"))
+(DFunDef false "isAnyIndexNeed" ((PCon "NeedsWildIndex")) (EVar "True"))
 (DTypeSig true "needsWildIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
 (DFunDef false "needsWildIndex" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isWildIndexNeed")) (EFieldAccess (EVar "m") "needs")))
 (DTypeSig false "isWildIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
 (DFunDef false "isWildIndexNeed" ((PCon "NeedsWildIndex")) (EVar "True"))
 (DFunDef false "isWildIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "False"))
+(DFunDef false "isWildIndexNeed" ((PCon "NeedsProjectIndex")) (EVar "False"))
 (DFunDef false "isWildIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))
 (DTypeSig false "isScopesNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
 (DFunDef false "isScopesNeed" ((PCon "NeedsScopes")) (EVar "True"))
 (DFunDef false "isScopesNeed" ((PCon "NeedsStdlibIndex")) (EVar "False"))
+(DFunDef false "isScopesNeed" ((PCon "NeedsProjectIndex")) (EVar "False"))
 (DFunDef false "isScopesNeed" ((PCon "NeedsWildIndex")) (EVar "False"))
 (DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxOwn" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxDeclLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Public "Visitor" () ((variant "OnExpr" (ConPos (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnAnyExpr" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnDecl" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
@@ -586,21 +669,27 @@ public export data DupClause = DupClause {
 (DFunDef false "ruleOf" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "FixableUnsafe") () (EVar "None")) (arm (PCon "SuggestOnly") () (EVar "None")) (arm (PCon "NotFixable") () (EVar "None")))))))
 (DTypeSig true "mkCrossFileRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))) (TyCon "CrossFileRule"))))
 (DFunDef false "mkCrossFileRule" ((PVar "m") (PVar "check")) (ERecordCreate "CrossFileRule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")))))
-(DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))) ())
+(DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyCon "ProjectIndex")))) ())
 (DTypeSig true "emptyStdlibIndex" (TyCon "StdlibIndex"))
-(DFunDef false "emptyStdlibIndex" () (EApp (EApp (EApp (EVar "StdlibIndex") (EApp (EVar "new") (ELit LUnit))) (EListLit)) (EListLit)))
+(DFunDef false "emptyStdlibIndex" () (EApp (EVar "StdlibIndex") (EVar "emptyProjectIndex")))
+(DTypeSig true "mkStdlibIndex" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "StdlibIndex"))))
+(DFunDef false "mkStdlibIndex" ((PVar "stdlibRows") (PVar "projectRows")) (EApp (EVar "StdlibIndex") (EApp (EApp (EVar "mkProjectIndex") (EVar "stdlibRows")) (EVar "projectRows"))))
+(DTypeSig true "projectIndexOf" (TyFun (TyCon "StdlibIndex") (TyCon "ProjectIndex")))
+(DFunDef false "projectIndexOf" ((PCon "StdlibIndex" (PVar "ix"))) (EVar "ix"))
 (DTypeSig true "stdlibIndexSize" (TyFun (TyCon "StdlibIndex") (TyCon "Int")))
-(DFunDef false "stdlibIndexSize" ((PCon "StdlibIndex" (PVar "m") PWild PWild)) (EApp (EVar "size") (EVar "m")))
+(DFunDef false "stdlibIndexSize" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "listLen") (EApp (EVar "stdlibValueNames") (EVar "ix"))))
 (DTypeSig true "stdlibEntriesOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))))
-(DFunDef false "stdlibEntriesOf" ((PCon "StdlibIndex" (PVar "m") PWild PWild) (PVar "name")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "name")) (EVar "m")))
+(DFunDef false "stdlibEntriesOf" ((PCon "StdlibIndex" (PVar "ix")) (PVar "name")) (EApp (EApp (EVar "flatMap") (EVar "exportedSigEntry")) (EApp (EApp (EApp (EVar "stdlibRowsNamed") (EVar "ix")) (EVar "NsValue")) (EVar "name"))))
+(DTypeSig false "exportedSigEntry" (TyFun (TyCon "IndexRow") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
+(DFunDef false "exportedSigEntry" ((PVar "r")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "ixrKind") (EVar "RkValue")) (EFieldAccess (EVar "r") "ixrExported")) (EMatch (EApp (EVar "rowSig") (EVar "r")) (arm (PCon "Some" (PVar "t")) () (EListLit (ETuple (EFieldAccess (EVar "r") "ixrModule") (EVar "t")))) (arm (PCon "None") () (EListLit))) (EListLit)))
 (DTypeSig true "stdlibSigIn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty"))))))
 (DFunDef false "stdlibSigIn" ((PVar "idx") (PVar "modName") (PVar "name")) (EApp (EApp (EVar "lookupAssoc") (EVar "modName")) (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "name"))))
 (DTypeSig true "stdlibSigTextIn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "stdlibSigTextIn" ((PVar "idx") (PVar "modName") (PVar "name")) (EApp (EApp (EVar "map") (EVar "ppTy")) (EApp (EApp (EApp (EVar "stdlibSigIn") (EVar "idx")) (EVar "modName")) (EVar "name"))))
 (DTypeSig true "stdlibIndexNames" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "stdlibIndexNames" ((PCon "StdlibIndex" PWild (PVar "names") PWild)) (EVar "names"))
+(DFunDef false "stdlibIndexNames" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "stdlibValueNames") (EVar "ix")))
 (DTypeSig true "stdlibKnowsModule" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "stdlibKnowsModule" ((PCon "StdlibIndex" PWild PWild (PVar "mods")) (PVar "modName")) (EApp (EApp (EVar "elem") (EVar "modName")) (EVar "mods")))
+(DFunDef false "stdlibKnowsModule" ((PCon "StdlibIndex" (PVar "ix")) (PVar "modName")) (EApp (EApp (EVar "elem") (EVar "modName")) (EApp (EVar "stdlibValueModules") (EVar "ix"))))
 (DTypeSig true "stdlibAmbiguousNames" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "stdlibAmbiguousNames" ((PVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "n"))) (ELit (LInt 1))))) (EApp (EVar "stdlibIndexNames") (EVar "idx"))))
 (DData Public "StdlibIndexError" () ((variant "StdlibIndexError" (ConNamed (field "path" (TyCon "String")) (field "source" (TyCon "String")) (field "diagnostic" (TyCon "Diag"))))) ())
@@ -615,7 +704,7 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseAlias ("driver" "diagnostic_value") "DV"))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "anyList" false))))
-(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "size" false) (mem "findWithDefault" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndex" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibValueModules" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
@@ -663,27 +752,44 @@ public export data DupClause = DupClause {
 (DFunDef false "clampApplicability" ((PCon "Unsafe") PWild) (EVar "Unsafe"))
 (DFunDef false "clampApplicability" (PWild (PCon "Unsafe")) (EVar "Unsafe"))
 (DFunDef false "clampApplicability" ((PCon "Safe") (PCon "Safe")) (EVar "Safe"))
-(DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos)) (variant "NeedsWildIndex" (ConPos)) (variant "NeedsScopes" (ConPos))) ())
+(DData Public "Need" () ((variant "NeedsStdlibIndex" (ConPos)) (variant "NeedsProjectIndex" (ConPos)) (variant "NeedsWildIndex" (ConPos)) (variant "NeedsScopes" (ConPos))) ())
 (DData Public "RuleMeta" () ((variant "RuleMeta" (ConNamed (field "name" (TyCon "String")) (field "summary" (TyCon "String")) (field "doc" (TyCon "String")) (field "category" (TyCon "Category")) (field "scope" (TyCon "Scope")) (field "ratchet" (TyCon "Ratchet")) (field "defaultSeverity" (TyCon "Severity")) (field "fixability" (TyCon "Fixability")) (field "needs" (TyApp (TyCon "List") (TyCon "Need")))))) ())
 (DTypeSig true "ruleMetaName" (TyFun (TyCon "RuleMeta") (TyCon "String")))
 (DFunDef false "ruleMetaName" ((PVar "m")) (EFieldAccess (EVar "m") "name"))
 (DTypeSig true "needsStdlibIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
 (DFunDef false "needsStdlibIndex" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isStdlibIndexNeed")) (EFieldAccess (EVar "m") "needs")))
+(DTypeSig true "needsProjectIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
+(DFunDef false "needsProjectIndex" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isProjectIndexNeed")) (EFieldAccess (EVar "m") "needs")))
+(DTypeSig true "readsIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
+(DFunDef false "readsIndex" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isAnyIndexNeed")) (EFieldAccess (EVar "m") "needs")))
 (DTypeSig true "needsScopes" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
 (DFunDef false "needsScopes" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isScopesNeed")) (EFieldAccess (EVar "m") "needs")))
 (DTypeSig false "isStdlibIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
 (DFunDef false "isStdlibIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "True"))
+(DFunDef false "isStdlibIndexNeed" ((PCon "NeedsProjectIndex")) (EVar "True"))
 (DFunDef false "isStdlibIndexNeed" ((PCon "NeedsWildIndex")) (EVar "False"))
 (DFunDef false "isStdlibIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))
+(DTypeSig false "isProjectIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
+(DFunDef false "isProjectIndexNeed" ((PCon "NeedsProjectIndex")) (EVar "True"))
+(DFunDef false "isProjectIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "False"))
+(DFunDef false "isProjectIndexNeed" ((PCon "NeedsWildIndex")) (EVar "False"))
+(DFunDef false "isProjectIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))
+(DTypeSig false "isAnyIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
+(DFunDef false "isAnyIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))
+(DFunDef false "isAnyIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "True"))
+(DFunDef false "isAnyIndexNeed" ((PCon "NeedsProjectIndex")) (EVar "True"))
+(DFunDef false "isAnyIndexNeed" ((PCon "NeedsWildIndex")) (EVar "True"))
 (DTypeSig true "needsWildIndex" (TyFun (TyCon "RuleMeta") (TyCon "Bool")))
 (DFunDef false "needsWildIndex" ((PVar "m")) (EApp (EApp (EVar "anyList") (EVar "isWildIndexNeed")) (EFieldAccess (EVar "m") "needs")))
 (DTypeSig false "isWildIndexNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
 (DFunDef false "isWildIndexNeed" ((PCon "NeedsWildIndex")) (EVar "True"))
 (DFunDef false "isWildIndexNeed" ((PCon "NeedsStdlibIndex")) (EVar "False"))
+(DFunDef false "isWildIndexNeed" ((PCon "NeedsProjectIndex")) (EVar "False"))
 (DFunDef false "isWildIndexNeed" ((PCon "NeedsScopes")) (EVar "False"))
 (DTypeSig false "isScopesNeed" (TyFun (TyCon "Need") (TyCon "Bool")))
 (DFunDef false "isScopesNeed" ((PCon "NeedsScopes")) (EVar "True"))
 (DFunDef false "isScopesNeed" ((PCon "NeedsStdlibIndex")) (EVar "False"))
+(DFunDef false "isScopesNeed" ((PCon "NeedsProjectIndex")) (EVar "False"))
 (DFunDef false "isScopesNeed" ((PCon "NeedsWildIndex")) (EVar "False"))
 (DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxOwn" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxDeclLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Public "Visitor" () ((variant "OnExpr" (ConPos (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnAnyExpr" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnDecl" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
@@ -698,21 +804,27 @@ public export data DupClause = DupClause {
 (DFunDef false "ruleOf" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "FixableUnsafe") () (EVar "None")) (arm (PCon "SuggestOnly") () (EVar "None")) (arm (PCon "NotFixable") () (EVar "None")))))))
 (DTypeSig true "mkCrossFileRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))) (TyCon "CrossFileRule"))))
 (DFunDef false "mkCrossFileRule" ((PVar "m") (PVar "check")) (ERecordCreate "CrossFileRule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")))))
-(DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))) ())
+(DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyCon "ProjectIndex")))) ())
 (DTypeSig true "emptyStdlibIndex" (TyCon "StdlibIndex"))
-(DFunDef false "emptyStdlibIndex" () (EApp (EApp (EApp (EVar "StdlibIndex") (EApp (EVar "new") (ELit LUnit))) (EListLit)) (EListLit)))
+(DFunDef false "emptyStdlibIndex" () (EApp (EVar "StdlibIndex") (EVar "emptyProjectIndex")))
+(DTypeSig true "mkStdlibIndex" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "StdlibIndex"))))
+(DFunDef false "mkStdlibIndex" ((PVar "stdlibRows") (PVar "projectRows")) (EApp (EVar "StdlibIndex") (EApp (EApp (EVar "mkProjectIndex") (EVar "stdlibRows")) (EVar "projectRows"))))
+(DTypeSig true "projectIndexOf" (TyFun (TyCon "StdlibIndex") (TyCon "ProjectIndex")))
+(DFunDef false "projectIndexOf" ((PCon "StdlibIndex" (PVar "ix"))) (EVar "ix"))
 (DTypeSig true "stdlibIndexSize" (TyFun (TyCon "StdlibIndex") (TyCon "Int")))
-(DFunDef false "stdlibIndexSize" ((PCon "StdlibIndex" (PVar "m") PWild PWild)) (EApp (EVar "size") (EVar "m")))
+(DFunDef false "stdlibIndexSize" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "listLen") (EApp (EVar "stdlibValueNames") (EVar "ix"))))
 (DTypeSig true "stdlibEntriesOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))))
-(DFunDef false "stdlibEntriesOf" ((PCon "StdlibIndex" (PVar "m") PWild PWild) (PVar "name")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "name")) (EVar "m")))
+(DFunDef false "stdlibEntriesOf" ((PCon "StdlibIndex" (PVar "ix")) (PVar "name")) (EApp (EApp (EDictApp "flatMap") (EVar "exportedSigEntry")) (EApp (EApp (EApp (EVar "stdlibRowsNamed") (EVar "ix")) (EVar "NsValue")) (EVar "name"))))
+(DTypeSig false "exportedSigEntry" (TyFun (TyCon "IndexRow") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
+(DFunDef false "exportedSigEntry" ((PVar "r")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "ixrKind") (EVar "RkValue")) (EFieldAccess (EVar "r") "ixrExported")) (EMatch (EApp (EVar "rowSig") (EVar "r")) (arm (PCon "Some" (PVar "t")) () (EListLit (ETuple (EFieldAccess (EVar "r") "ixrModule") (EVar "t")))) (arm (PCon "None") () (EListLit))) (EListLit)))
 (DTypeSig true "stdlibSigIn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty"))))))
 (DFunDef false "stdlibSigIn" ((PVar "idx") (PVar "modName") (PVar "name")) (EApp (EApp (EVar "lookupAssoc") (EVar "modName")) (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "name"))))
 (DTypeSig true "stdlibSigTextIn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "stdlibSigTextIn" ((PVar "idx") (PVar "modName") (PVar "name")) (EApp (EApp (EMethodRef "map") (EVar "ppTy")) (EApp (EApp (EApp (EVar "stdlibSigIn") (EVar "idx")) (EVar "modName")) (EVar "name"))))
 (DTypeSig true "stdlibIndexNames" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "stdlibIndexNames" ((PCon "StdlibIndex" PWild (PVar "names") PWild)) (EVar "names"))
+(DFunDef false "stdlibIndexNames" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "stdlibValueNames") (EVar "ix")))
 (DTypeSig true "stdlibKnowsModule" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "stdlibKnowsModule" ((PCon "StdlibIndex" PWild PWild (PVar "mods")) (PVar "modName")) (EApp (EApp (EDictApp "elem") (EVar "modName")) (EVar "mods")))
+(DFunDef false "stdlibKnowsModule" ((PCon "StdlibIndex" (PVar "ix")) (PVar "modName")) (EApp (EApp (EDictApp "elem") (EVar "modName")) (EApp (EVar "stdlibValueModules") (EVar "ix"))))
 (DTypeSig true "stdlibAmbiguousNames" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "stdlibAmbiguousNames" ((PVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "n"))) (ELit (LInt 1))))) (EApp (EVar "stdlibIndexNames") (EVar "idx"))))
 (DData Public "StdlibIndexError" () ((variant "StdlibIndexError" (ConNamed (field "path" (TyCon "String")) (field "source" (TyCon "String")) (field "diagnostic" (TyCon "Diag"))))) ())

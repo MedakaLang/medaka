@@ -45,6 +45,7 @@ support.symbol_origin
 support.timer
 support.util
 tools.lint_core
+tools.lint_index
 tools.lint_scope
 tools.printer
 tools.source_edits

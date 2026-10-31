@@ -1,5 +1,5 @@
 # META
-source_lines=1154
+source_lines=1155
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cmd.mdk — the `medaka lint` engine.
@@ -219,6 +219,7 @@ fixabilityText NotFixable = "not-fixable"
 
 needText : Need -> String
 needText NeedsStdlibIndex = "stdlib-index"
+needText NeedsProjectIndex = "project-index"
 needText NeedsWildIndex = "wildcard-index"
 needText NeedsScopes = "scopes"
 
@@ -1212,6 +1213,7 @@ writeFixedSource target src newSrc n =
 (DFunDef false "fixabilityText" ((PCon "NotFixable")) (ELit (LString "not-fixable")))
 (DTypeSig false "needText" (TyFun (TyCon "Need") (TyCon "String")))
 (DFunDef false "needText" ((PCon "NeedsStdlibIndex")) (ELit (LString "stdlib-index")))
+(DFunDef false "needText" ((PCon "NeedsProjectIndex")) (ELit (LString "project-index")))
 (DFunDef false "needText" ((PCon "NeedsWildIndex")) (ELit (LString "wildcard-index")))
 (DFunDef false "needText" ((PCon "NeedsScopes")) (ELit (LString "scopes")))
 (DTypeSig true "selectRuleRows" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "RuleRow")))))))
@@ -1418,6 +1420,7 @@ writeFixedSource target src newSrc n =
 (DFunDef false "fixabilityText" ((PCon "NotFixable")) (ELit (LString "not-fixable")))
 (DTypeSig false "needText" (TyFun (TyCon "Need") (TyCon "String")))
 (DFunDef false "needText" ((PCon "NeedsStdlibIndex")) (ELit (LString "stdlib-index")))
+(DFunDef false "needText" ((PCon "NeedsProjectIndex")) (ELit (LString "project-index")))
 (DFunDef false "needText" ((PCon "NeedsWildIndex")) (ELit (LString "wildcard-index")))
 (DFunDef false "needText" ((PCon "NeedsScopes")) (ELit (LString "scopes")))
 (DTypeSig true "selectRuleRows" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "RuleRow")))))))

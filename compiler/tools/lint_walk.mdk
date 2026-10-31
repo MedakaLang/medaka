@@ -37,7 +37,20 @@ import frontend.parser.{
   prescanErrorPairs,
   ParseError,
 }
-import driver.loader.{entrySearchRoots, fileOfModuleId}
+import driver.loader.{
+  entrySearchRoots,
+  fileOfModuleId,
+  findProjectRootOrSelf,
+  moduleIdOfPath,
+}
+import support.cli_targets.{collectMdkFiles}
+import tools.lint_cache.{ruleSetStamp}
+import tools.lint_index.{
+  IndexRow,
+  fileRows,
+  stdlibShardDir,
+  projectShardDir,
+}
 import driver.diagnostics.{
   Severity(..),
   Diag(..),
@@ -92,6 +105,7 @@ import tools.lint_core.{
   Fixability(..),
   Rule(..),
   RuleCheck(..),
+  RuleMeta,
   StdlibIndex(..),
   StdlibIndexError(..),
   Visitor(..),
@@ -103,9 +117,12 @@ import tools.lint_core.{
   emptyStdlibIndex,
   maxApplicability,
   memoNew,
+  mkStdlibIndex,
+  needsProjectIndex,
   needsScopes,
   needsStdlibIndex,
   needsWildIndex,
+  readsIndex,
 }
 import tools.lint_scope.{
   Binder(..),
@@ -244,7 +261,13 @@ ruleVisitors : StdlibIndex ->
   List (List Visitor)
 ruleVisitors idx path facts pos prog r = match r.check
   WholeFile _ => []
-  Visits visits => [visits idx path facts pos prog]
+  Visits visits => [visits (indexFor r idx) path facts pos prog]
+
+-- The index a rule is handed: the real one only if the rule declares that it
+-- reads it.  An undeclared read then finds nothing on every run, instead of
+-- finding the index on some runs and a stale answer under `--cache`.
+indexFor : Rule -> StdlibIndex -> StdlibIndex
+indexFor r idx = if readsIndex r.meta then idx else emptyStdlibIndex
 
 -- `walked` holds one finding list per visitor rule, in `rules` order.
 ruleFindings : StdlibIndex ->
@@ -258,7 +281,7 @@ ruleFindings : StdlibIndex ->
 ruleFindings _ _ _ _ _ [] _ = []
 ruleFindings idx path facts pos prog (r :: rs) walked = match r.check
   WholeFile check =>
-    map (restampFinding r) (check idx path facts pos prog)
+    map (restampFinding r) (check (indexFor r idx) path facts pos prog)
       ++ ruleFindings idx path facts pos prog rs walked
   Visits _ => match walked
     hits :: rest =>
@@ -514,6 +537,68 @@ stdlibIndexNeededFor only disable paths =
   stdlibIndexNeeded only disable
     || wildIndexNeeded only disable && anyPathWild paths
 
+-- Whether some active rule declares `NeedsProjectIndex`.
+export
+projectIndexNeeded : List String -> List String -> Bool
+projectIndexNeeded only disable =
+  anyActive needsProjectIndex allRules only disable
+
+-- Whether some rule of `roster` that survives `--only`/`--disable` has the
+-- need `declares` tests for.
+anyActive : (RuleMeta -> Bool) ->
+  List Rule ->
+  List String ->
+  List String ->
+  Bool
+anyActive declares roster only disable =
+  anyList (activeWith declares only disable) roster
+
+activeWith : (RuleMeta -> Bool) -> List String -> List String -> Rule -> Bool
+activeWith declares only disable r =
+  declares r.meta
+    && (isEmptyL only || contains r.name only)
+    && not (contains r.name disable)
+
+-- The index one `medaka lint` run needs, built once and only from the needs of
+-- the rules that survive `--only`/`--disable`: empty when none reads it, the
+-- stdlib's rows when a stdlib reader is active, the project's rows too when a
+-- project reader is.  `keepAll` builds for the whole roster, which `--cache`
+-- needs because a shard outlives this run's flags.
+export
+indexForRun : Bool ->
+  List String ->
+  List String ->
+  List String ->
+  <IO> Result StdlibIndexError StdlibIndex
+indexForRun keepAll only disable paths =
+  indexForRoster
+    allRules
+    (findProjectRootOrSelf (canonicalizePath "."))
+    keepAll
+    only
+    disable
+    paths
+
+-- `indexForRun` over a given roster, with the project's rows read from `root`.
+export
+indexForRoster : List Rule ->
+  String ->
+  Bool ->
+  List String ->
+  List String ->
+  List String ->
+  <IO> Result StdlibIndexError StdlibIndex
+indexForRoster roster root keepAll only disable paths =
+  let only2 = if keepAll then [] else only
+  let disable2 = if keepAll then [] else disable
+  if anyActive needsProjectIndex roster only2 disable2 then
+    buildProjectIndexResult root
+  else if anyActive needsStdlibIndex roster only2 disable2
+    || anyActive needsWildIndex roster only2 disable2 && anyPathWild paths then
+    buildStdlibIndexResult
+  else
+    Ok emptyStdlibIndex
+
 anyPathWild : List String -> <IO> Bool
 anyPathWild [] = False
 anyPathWild (p :: rest) =
@@ -549,22 +634,75 @@ ruleNeedsIndex only disable r =
     && (isEmptyL only || contains r.name only)
     && not (contains r.name disable)
 
+-- The stdlib's rows as an index, from the per-file row shards where they answer
+-- for the file's current content and from a parse where they do not.  Every
+-- failure to read the stdlib degrades to an empty or partial index (see
+-- `StdlibIndex`); only a stdlib file that does not PARSE is an error.
 export
 buildStdlibIndexResult : <IO> Result StdlibIndexError StdlibIndex
-buildStdlibIndexResult =
-  map
-    (triples => mkStdlibIndex (groupStdlibSigs triples) triples)
-    (stdlibSigTriplesResult lintStdlibDir)
+buildStdlibIndexResult = map (rows => mkStdlibIndex rows []) stdlibRowsResult
 
--- The sorted name list is computed here, once, not per linted file.
-mkStdlibIndex : HashMap String (List (String, Ty)) ->
-  List (String, String, Ty) ->
-  StdlibIndex
-mkStdlibIndex m triples =
-  StdlibIndex m (sortUniqS (keys m)) (sortUniqS (map fst3 triples))
+-- The stdlib's rows plus the rows of every `.mdk` file under `root`.
+export
+buildProjectIndexResult : String -> <IO> Result StdlibIndexError StdlibIndex
+buildProjectIndexResult root =
+  let prows = projectRowsOf root
+  map (srows => mkStdlibIndex srows prows) stdlibRowsResult
 
-fst3 : (String, String, Ty) -> String
-fst3 (modName, _, _) = modName
+-- The shard stamp: the build fingerprint, or the binary's own hash for a
+-- binary that carries none (a shipped or `medaka build` binary).  Empty when
+-- neither can be had, which turns the cache off for the run.
+indexStamp : Unit -> <IO> String
+indexStamp _ =
+  let fp = buildFingerprint ()
+  if fp == "" then ruleSetStamp () else fp
+
+stdlibRowsResult : <IO> Result StdlibIndexError (List IndexRow)
+stdlibRowsResult =
+  let sdir = lintStdlibDir
+  match stdlibMemberPaths sdir
+    None => Ok []
+    Some rels =>
+      let stamp = indexStamp ()
+      let dir = if stamp == "" then "" else stdlibShardDir ()
+      stdlibRowsGo dir stamp sdir rels
+
+stdlibRowsGo : String ->
+  String ->
+  String ->
+  List String ->
+  <IO> Result StdlibIndexError (List IndexRow)
+stdlibRowsGo _ _ _ [] = Ok []
+stdlibRowsGo dir stamp sdir (rel :: rest) =
+  let path = "\{sdir}/\{rel}"
+  let modId = joinWith "." (splitOnChar '/' (stripMdk rel))
+  match fileRows True lintParseSource dir stamp modId path
+    Err (src, e) => Err StdlibIndexError {
+      path = path,
+      source = src,
+      diagnostic = parseErrDiag path e,
+    }
+    Ok (_, rows) => map (rows ++ _) (stdlibRowsGo dir stamp sdir rest)
+
+-- A project file that does not parse has no rows: the lint pass over that file
+-- reports the parse error, and the index abstains on what it cannot read.
+projectRowsOf : String -> <IO> List IndexRow
+projectRowsOf root =
+  let stamp = indexStamp ()
+  let dir = if stamp == "" then "" else projectShardDir root
+  flatMap (projectFileRows dir stamp root) (collectMdkFiles root)
+
+projectFileRows : String -> String -> String -> String -> <IO> List IndexRow
+projectFileRows dir stamp root path =
+  match (fileRows
+    False
+    lintParseSource
+    dir
+    stamp
+    (moduleIdOfPath [root] path)
+    path)
+    Err _ => []
+    Ok (_, rows) => rows
 
 -- `<MEDAKA_ROOT>/stdlib`, resolved exactly as the CLI resolves it (`envOr
 -- "MEDAKA_ROOT" defaultMedakaRoot`, `driver/build_cmd.mdk`) — an unset or empty
@@ -612,17 +750,6 @@ stdlibFingerprintGo dir (n :: rest) =
   let h = hashString (readFileSafe path)
   "\{n}:\{h};\{stdlibFingerprintGo dir rest}"
 
--- (module, name, declared type) for every exported signature in the stdlib's
--- `.mdk` files.  A directory that will not list yields [] — the
--- degradation path, silent by design (lint printing compiler-internal chatter to
--- stdout would break every caller that diffs its output, exactly as
--- `lintCacheCtx` argues for `--cache`).
-stdlibSigTriplesResult : String ->
-  <IO> Result StdlibIndexError (List (String, String, Ty))
-stdlibSigTriplesResult dir = match stdlibMemberPaths dir
-  None => Ok []
-  Some paths => stdlibSigsGo dir paths
-
 export
 lintParseSource : String -> Result ParseError (List Decl, Positions)
 lintParseSource src =
@@ -637,42 +764,6 @@ lintParseSource src =
           map
             (_ => parseWithPositions src)
             (parseResultPairs src tokens offsets)
-
-stdlibSigsGo : String ->
-  List String ->
-  <IO> Result StdlibIndexError (List (String, String, Ty))
-stdlibSigsGo _ [] = Ok []
-stdlibSigsGo dir (relPath :: rest) =
-  let path = "\{dir}/\{relPath}"
-  let src = readFileSafe path
-  match lintParseSource src
-    Err e => Err StdlibIndexError {
-      path = path,
-      source = src,
-      diagnostic = parseErrDiag path e,
-    }
-    Ok (decls, _) =>
-      let modName = joinWith "." (splitOnChar '/' (stripMdk relPath))
-      let sigs = flatMap (d => stampModule modName (exportedSigPair d)) decls
-      map (sigs ++ _) (stdlibSigsGo dir rest)
-
--- Group the flat triples by NAME, preserving stdlib-file order within a name.
--- Appending rather than overwriting is the whole point: `setInPlace` alone
--- would keep one module's `reverse` and drop the other's without a word.
-groupStdlibSigs : List (String, String, Ty) ->
-  HashMap String (List (String, Ty))
-groupStdlibSigs triples =
-  let m = new ()
-  let _ = groupStdlibSigsInto triples m
-  m
-
-groupStdlibSigsInto : List (String, String, Ty) ->
-  HashMap String (List (String, Ty)) ->
-  Unit
-groupStdlibSigsInto [] _ = ()
-groupStdlibSigsInto ((modName, name, ty) :: rest) m =
-  let _ = setInPlace name (findWithDefault [] name m ++ [(modName, ty)]) m
-  groupStdlibSigsInto rest m
 
 -- The `.mdk` members under `dir` as `dir`-relative paths (`list.mdk`,
 -- `crypto/hmac.mdk`), dot-entries dropped, sorted for determinism.  `None`
@@ -694,21 +785,6 @@ memberPathsGo dir prefix (n :: rest) =
       Err _ => []
       Ok sub => memberPathsGo dir "\{prefix}\{n}/" sub
   here ++ memberPathsGo dir prefix rest
-
-stampModule : String -> List (String, Ty) -> List (String, String, Ty)
-stampModule modName pairs = map (p => (modName, fst p, snd p)) pairs
-
--- Only EXPORTED declarations: an unexported stdlib helper is not a name user
--- code can be reimplementing.  `DExtern` carries a declared type the same way,
--- so an `export extern` counts — today `stdlib/runtime.mdk` writes its externs
--- bare (prelude-global, not `export`-marked), so that arm matches nothing yet;
--- it is here so the index does not silently need a second edit if that changes.
-exportedSigPair : Decl -> List (String, Ty)
-exportedSigPair (DTypeSig True name ty _) = [(name, ty)]
-exportedSigPair (DExtern (ExternDecl { edPub = True, edName = name, edTy = ty, ... })) =
-  [(name, ty)]
-exportedSigPair (DAttrib _ d) = exportedSigPair d
-exportedSigPair _ = []
 
 -- The (rule, line) of every finding of `rules` that no inline directive
 -- suppresses.  A decl fixer runs only where its rule has one of these on the

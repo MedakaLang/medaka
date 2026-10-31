@@ -279,10 +279,8 @@ import tools.lint.{
   allRules,
   lintProgram,
   StdlibIndex,
-  buildStdlibIndexResult,
   StdlibIndexError(..),
-  emptyStdlibIndex,
-  stdlibIndexNeededFor,
+  indexForRun,
   applySuppressions,
   applySuppressionsMulti,
   applySuppressionsDirs,
@@ -4063,31 +4061,18 @@ runLintTargets a =
       (flag "--internal" a)
       (onlyNames ++ denyNames)
       files
-  -- The stdlib reference index: every exported stdlib name with its DECLARED
-  -- signature, for the rules that ask what the stdlib actually provides.  Built
-  -- at most ONCE per `medaka lint` invocation and threaded down — a rule's
-  -- `check` is pure, and rebuilding it per target file would re-parse the whole
-  -- stdlib once per file.  It self-disables to empty when the stdlib cannot be
-  -- read (see `buildStdlibIndexResult`), the same way `lintCacheCtx` declines below.
-  -- `stdlibIndexNeededFor` answers whether a rule that reads it is active
-  -- (`rule-stdlib-reimpl`, or an edit rule while some target has an
-  -- `import m.*`); when it isn't, `emptyStdlibIndex` skips the whole-stdlib parse for free (every other rule ignores its
-  -- `StdlibIndex` argument, and this rule's own findings get discarded by the
-  -- CLI-flag filters below regardless of what index it saw) — but ONLY on the
-  -- uncached path, where that discarding happens in this same process, on this
-  -- same `idx`.  `--cache` persists `lintFileFresh`'s full-roster findings past
-  -- this process's flag choices (under `--cache` `lintFileFresh` runs
-  -- `allRules`, unfiltered), so a populate run under `--disable
-  -- rule-stdlib-reimpl --cache` (or `--only <anything else> --cache`) must
-  -- still build the real index — an `emptyStdlibIndex`-computed entry would
-  -- silently omit that rule's findings for every later `--cache` read, even a
-  -- default-rules one that never named it.
-  let indexResult =
-    if stdlibIndexNeededFor onlyNames disableNames files
-      || flag "--cache" a then
-      buildStdlibIndexResult
-    else
-      Ok emptyStdlibIndex
+  -- The declaration index the rules query: the stdlib's rows, and the
+  -- project's too when a project rule is active.  Built at most ONCE per
+  -- `medaka lint` invocation and threaded down — a rule's `check` is pure, and
+  -- rebuilding it per target file would re-read every shard once per file.
+  -- `indexForRun` builds it from the needs of the rules that survive
+  -- `--only`/`--disable`, and it self-disables to empty when the stdlib cannot
+  -- be read.  `--cache` builds for the whole roster: it persists
+  -- `lintFileFresh`'s full-roster findings past this process's flag choices
+  -- (under `--cache` `lintFileFresh` runs `allRules`, unfiltered), so an entry
+  -- computed from a degraded index would silently omit a rule's findings for
+  -- every later `--cache` read.
+  let indexResult = indexForRun (flag "--cache" a) onlyNames disableNames files
   match indexResult
     Err (StdlibIndexError { path, source, diagnostic }) =>
       if jsonMode then
