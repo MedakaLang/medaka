@@ -10,6 +10,7 @@ import frontend.ast.{
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import support.util.{isEmptyL}
+import list.{findMap}
 import tools.printer.{exprToString}
 import tools.lint_core.{
   Applicability(..),
@@ -33,7 +34,9 @@ import tools.lint_shared.{
   calledName,
   exprRuleEditVisitors,
   isEVarNamed,
+  isFalseLit,
   isNilPCon,
+  isTrueLit,
   matchSpan,
   movableDefault,
   oneLine,
@@ -70,11 +73,6 @@ rule =
 -- locally bound variable (`movableDefault`).  A call is excluded, because
 -- `optionOr d o` evaluates `d` even when `o` is `Some`; so is a top-level value,
 -- which `run` forces on first use.
-isBoolLit : Bool -> Expr -> Bool
-isBoolLit b e = match unwrapLoc e
-  EVar n => n == (if b then "True" else "False")
-  _ => False
-
 call1 : String -> Expr -> Expr -> Expr
 call1 fn arg scrut = EApp (EApp (EVar fn) arg) scrut
 
@@ -101,14 +99,10 @@ elimPair facts scrut (Arm ps gs bs) (Arm pf gf bf)
       map (m => call1 "optionOrPanic" m scrut) (panicMessage facts bf)
   | isIdentityArm "Ok" ps bs && isErrWild pf && movableDefault facts bf =
     Some (call1 "resultOr" bf scrut)
-  | isSomeWild ps
-    && isNilPCon "None" pf
-    && isBoolLit True bs
-    && isBoolLit False bf = Some (EApp (EVar "isSome") scrut)
-  | isSomeWild ps
-    && isNilPCon "None" pf
-    && isBoolLit False bs
-    && isBoolLit True bf = Some (EApp (EVar "isNone") scrut)
+  | isSomeWild ps && isNilPCon "None" pf && isTrueLit bs && isFalseLit bf =
+    Some (EApp (EVar "isSome") scrut)
+  | isSomeWild ps && isNilPCon "None" pf && isFalseLit bs && isTrueLit bf =
+    Some (EApp (EVar "isNone") scrut)
   | otherwise = None
 
 isSomeWild : Pat -> Bool
@@ -153,17 +147,13 @@ optionElimFinding loc rewritten fix = Finding {
 
 -- The `panic` the `optionOrPanic` shape reads, when the arm is one.
 panicHead : Expr -> Option Expr
-panicHead (EMatch _ arms) = firstJust panicArmHead arms
+panicHead (EMatch _ arms) = findMap panicArmHead arms
 panicHead _ = None
 
 panicArmHead : Arm -> Option Expr
 panicArmHead (Arm _ _ body) = match unwrapLoc body
   EApp hd _ => if isEVarNamed "panic" hd then Some hd else None
   _ => None
-
-firstJust : (a -> Option b) -> List a -> Option b
-firstJust _ [] = None
-firstJust f (x :: rest) = orElse (f x) (firstJust f rest)
 
 -- The fix replaces the whole `match` with the call.  The scrutinee text moves
 -- unduplicated, the arms are exactly the eliminator, and the default is movable,

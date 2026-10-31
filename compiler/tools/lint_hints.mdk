@@ -25,7 +25,7 @@
 -- parses one.  A row that does not compile panics there, and
 -- `lint_hints_test.mdk` compiles every registered row.
 
-import frontend.ast.{Expr(..), Decl(..), Loc}
+import frontend.ast.{Expr(..), Decl(..)}
 import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..), parseResult}
 import driver.diagnostics.{Severity(..)}
@@ -51,7 +51,8 @@ import tools.lint_shared.{
 }
 import list.{nub}
 
--- Two kinds of side condition, not failure and success.
+-- A metavariable test and a definition exclusion: two kinds of side condition, so
+-- the shape is not Option's `Some`/`None` and not Result's `Ok`/`Err`.
 -- lint-disable-next-line rule-clone-type
 public export data HintCond = Atomic String | NotInDefOf (List String)
 
@@ -217,7 +218,7 @@ checkBound row kind lhs rhs bound =
     }
 
 condMetas : List HintCond -> List String
-condMetas conds = flatMap (c => toList (condMeta c)) conds
+condMetas conds = filterMap condMeta conds
 
 rowFailure : HintRow -> String -> String
 rowFailure row why = "hint row `\{row.rowText}`: \{why}"
@@ -305,9 +306,7 @@ instantiate : Hint -> Found -> Expr
 instantiate h found = fill found.foundBinds h.hintRhs
 
 fill : List (String, Expr) -> Expr -> Expr
-fill binds (EVar n) = match lookupAssoc n binds
-  Some e => e
-  None => EVar n
+fill binds (EVar n) = optionOr (EVar n) (lookupAssoc n binds)
 fill binds (EApp f x) = EApp (fill binds f) (fill binds x)
 fill binds (EBinOp op a b r) = EBinOp op (fill binds a) (fill binds b) r
 fill _ e = e

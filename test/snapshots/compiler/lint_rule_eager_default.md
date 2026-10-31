@@ -1,5 +1,5 @@
 # META
-source_lines=154
+source_lines=152
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-eager-default: a call passed as an always-evaluated default. `optionOr d o` and `resultOr d r` evaluate `d` even when `o` holds a value; `optionOrElse` and `resultOrElse` take a function and run it only on the miss.
@@ -29,6 +29,7 @@ import tools.lint_shared.{
   calledName,
   exprRuleEditVisitors,
   isCtorName,
+  isFalseLit,
   noExcl,
   oneLine,
   rebinds,
@@ -87,18 +88,13 @@ lazyName "optionOr" = Some "optionOrElse"
 lazyName "resultOr" = Some "resultOrElse"
 lazyName _ = None
 
-isFalse : Expr -> Bool
-isFalse e = match unwrapLoc e
-  EVar "False" => True
-  _ => False
-
 -- `optionOr d o` / `resultOr d o` with a call for `d`: the lazy call that
 -- replaces the function `optionOr d`.  `whenL False d` with a call for `d`: the
 -- node itself, reported with no fix.
 eagerOf : StdlibIndex -> FileFacts -> Expr -> Option Expr
 eagerOf idx facts (EApp f x) = match unwrapLoc f
   EApp hd d => match unwrapLoc hd
-    EVar "whenL" => if isFalse d && isCall x then Some (EApp f x) else None
+    EVar "whenL" => if isFalseLit d && isCall x then Some (EApp f x) else None
     EVar n => match lazyName n
       Some lazy =>
         if isCall d && usesPreludeName idx facts hd then
@@ -114,10 +110,12 @@ eagerOf _ _ _ = None
 -- enclosing method is that name.  The edit replaces the function `optionOr d`
 -- of the call `optionOr d o`, which stands bare in function position and so
 -- takes no brackets.
+isWhenL : Expr -> Bool
+isWhenL e = calledName e == "whenL"
+
 eagerEdit : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
 eagerEdit idx facts ctx (EApp f _) rewritten =
-  if calledName rewritten == "whenL"
-    || rebinds idx facts ctx (calledName rewritten) then
+  if isWhenL rewritten || rebinds idx facts ctx (calledName rewritten) then
     None
   else
     replaceFix
@@ -133,7 +131,7 @@ eagerFinding : Option Loc -> Expr -> Option Fix -> Finding
 eagerFinding loc rewritten fix = Finding {
   rule = ruleNameEagerDefault,
   message =
-    if calledName rewritten == "whenL" then
+    if isWhenL rewritten then
       "the argument of 'whenL False' is evaluated although the guard is False"
     else
       "this default is evaluated even when the value is present — rewrite as '"
@@ -162,7 +160,7 @@ ruleEagerDefault idx _ facts _ _ =
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "calledName" false) (mem "exprRuleEditVisitors" false) (mem "isCtorName" false) (mem "noExcl" false) (mem "oneLine" false) (mem "rebinds" false) (mem "replaceFix" false) (mem "ruleNameEagerDefault" false) (mem "tightSpan" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "calledName" false) (mem "exprRuleEditVisitors" false) (mem "isCtorName" false) (mem "isFalseLit" false) (mem "noExcl" false) (mem "oneLine" false) (mem "rebinds" false) (mem "replaceFix" false) (mem "ruleNameEagerDefault" false) (mem "tightSpan" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameEagerDefault")) (fa "summary" (ELit (LString "a call passed as the default of `optionOr`/`resultOr`, or as the argument of `whenL False`: it runs although its result is discarded. Use `optionOrElse`/`resultOrElse`"))) (fa "doc" (ELit (LString "`optionOr d o` and `resultOr d r` are ordinary calls, so `d` is evaluated before the call even when `o` is `Some` or `r` is `Ok`. A default that is a call is wasted work on every hit, and an effect or a panic in it happens anyway. `optionOrElse` and `resultOrElse` take a function that runs on the miss only. A literal, a variable, a tuple, an operator expression or a constructor application is not reported, and neither is a partial application such as `map (optionOr d) xs`, which the lazy form would run once per miss.\n\n`whenL False (f x)` is reported without a fix: its argument is evaluated although the guard is `False`.\n\nBefore:\n  optionOr (freshVar ctx ()) (lookup n sub)\nAfter:\n  optionOrElse (_ => freshVar ctx ()) (lookup n sub)"))) (fa "category" (EVar "Perf")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "FixableUnsafe")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsWildIndex")))))) (EVar "ruleEagerDefault")) (EVar "None")))
@@ -174,16 +172,16 @@ ruleEagerDefault idx _ facts _ _ =
 (DFunDef false "lazyName" ((PLit (LString "optionOr"))) (EApp (EVar "Some") (ELit (LString "optionOrElse"))))
 (DFunDef false "lazyName" ((PLit (LString "resultOr"))) (EApp (EVar "Some") (ELit (LString "resultOrElse"))))
 (DFunDef false "lazyName" (PWild) (EVar "None"))
-(DTypeSig false "isFalse" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isFalse" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PLit (LString "False"))) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "eagerOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
-(DFunDef false "eagerOf" ((PVar "idx") (PVar "facts") (PCon "EApp" (PVar "f") (PVar "x"))) (EMatch (EApp (EVar "unwrapLoc") (EVar "f")) (arm (PCon "EApp" (PVar "hd") (PVar "d")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PLit (LString "whenL"))) () (EIf (EBinOp "&&" (EApp (EVar "isFalse") (EVar "d")) (EApp (EVar "isCall") (EVar "x"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "None"))) (arm (PCon "EVar" (PVar "n")) () (EMatch (EApp (EVar "lazyName") (EVar "n")) (arm (PCon "Some" (PVar "lazy")) () (EIf (EBinOp "&&" (EApp (EVar "isCall") (EVar "d")) (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "lazy"))) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EVar "d")))) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
+(DFunDef false "eagerOf" ((PVar "idx") (PVar "facts") (PCon "EApp" (PVar "f") (PVar "x"))) (EMatch (EApp (EVar "unwrapLoc") (EVar "f")) (arm (PCon "EApp" (PVar "hd") (PVar "d")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PLit (LString "whenL"))) () (EIf (EBinOp "&&" (EApp (EVar "isFalseLit") (EVar "d")) (EApp (EVar "isCall") (EVar "x"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "None"))) (arm (PCon "EVar" (PVar "n")) () (EMatch (EApp (EVar "lazyName") (EVar "n")) (arm (PCon "Some" (PVar "lazy")) () (EIf (EBinOp "&&" (EApp (EVar "isCall") (EVar "d")) (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "lazy"))) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EVar "d")))) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DFunDef false "eagerOf" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "isWhenL" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isWhenL" ((PVar "e")) (EBinOp "==" (EApp (EVar "calledName") (EVar "e")) (ELit (LString "whenL"))))
 (DTypeSig false "eagerEdit" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
-(DFunDef false "eagerEdit" ((PVar "idx") (PVar "facts") (PVar "ctx") (PCon "EApp" (PVar "f") PWild) (PVar "rewritten")) (EIf (EBinOp "||" (EBinOp "==" (EApp (EVar "calledName") (EVar "rewritten")) (ELit (LString "whenL"))) (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EApp (EVar "calledName") (EVar "rewritten")))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Unsafe")) (ELit (LString "run the default only on a miss"))) (EApp (EVar "tightSpan") (EVar "f"))) (EVar "Closed")) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
+(DFunDef false "eagerEdit" ((PVar "idx") (PVar "facts") (PVar "ctx") (PCon "EApp" (PVar "f") PWild) (PVar "rewritten")) (EIf (EBinOp "||" (EApp (EVar "isWhenL") (EVar "rewritten")) (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EApp (EVar "calledName") (EVar "rewritten")))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Unsafe")) (ELit (LString "run the default only on a miss"))) (EApp (EVar "tightSpan") (EVar "f"))) (EVar "Closed")) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
 (DFunDef false "eagerEdit" (PWild PWild PWild PWild PWild) (EVar "None"))
 (DTypeSig false "eagerFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
-(DFunDef false "eagerFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameEagerDefault")) (fa "message" (EIf (EBinOp "==" (EApp (EVar "calledName") (EVar "rewritten")) (ELit (LString "whenL"))) (ELit (LString "the argument of 'whenL False' is evaluated although the guard is False")) (EBinOp "++" (EBinOp "++" (ELit (LString "this default is evaluated even when the value is present — rewrite as '")) (EApp (EVar "oneLine") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'"))))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
+(DFunDef false "eagerFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameEagerDefault")) (fa "message" (EIf (EApp (EVar "isWhenL") (EVar "rewritten")) (ELit (LString "the argument of 'whenL False' is evaluated although the guard is False")) (EBinOp "++" (EBinOp "++" (ELit (LString "this default is evaluated even when the value is present — rewrite as '")) (EApp (EVar "oneLine") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'"))))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "ruleEagerDefault" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleEagerDefault" ((PVar "idx") PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "noExcl")) (EApp (EApp (EVar "eagerOf") (EVar "idx")) (EVar "facts"))) (EApp (EApp (EVar "eagerEdit") (EVar "idx")) (EVar "facts"))) (EVar "eagerFinding")))
 # MARK
@@ -192,7 +190,7 @@ ruleEagerDefault idx _ facts _ _ =
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "calledName" false) (mem "exprRuleEditVisitors" false) (mem "isCtorName" false) (mem "noExcl" false) (mem "oneLine" false) (mem "rebinds" false) (mem "replaceFix" false) (mem "ruleNameEagerDefault" false) (mem "tightSpan" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "calledName" false) (mem "exprRuleEditVisitors" false) (mem "isCtorName" false) (mem "isFalseLit" false) (mem "noExcl" false) (mem "oneLine" false) (mem "rebinds" false) (mem "replaceFix" false) (mem "ruleNameEagerDefault" false) (mem "tightSpan" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameEagerDefault")) (fa "summary" (ELit (LString "a call passed as the default of `optionOr`/`resultOr`, or as the argument of `whenL False`: it runs although its result is discarded. Use `optionOrElse`/`resultOrElse`"))) (fa "doc" (ELit (LString "`optionOr d o` and `resultOr d r` are ordinary calls, so `d` is evaluated before the call even when `o` is `Some` or `r` is `Ok`. A default that is a call is wasted work on every hit, and an effect or a panic in it happens anyway. `optionOrElse` and `resultOrElse` take a function that runs on the miss only. A literal, a variable, a tuple, an operator expression or a constructor application is not reported, and neither is a partial application such as `map (optionOr d) xs`, which the lazy form would run once per miss.\n\n`whenL False (f x)` is reported without a fix: its argument is evaluated although the guard is `False`.\n\nBefore:\n  optionOr (freshVar ctx ()) (lookup n sub)\nAfter:\n  optionOrElse (_ => freshVar ctx ()) (lookup n sub)"))) (fa "category" (EVar "Perf")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "FixableUnsafe")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsWildIndex")))))) (EVar "ruleEagerDefault")) (EVar "None")))
@@ -204,15 +202,15 @@ ruleEagerDefault idx _ facts _ _ =
 (DFunDef false "lazyName" ((PLit (LString "optionOr"))) (EApp (EVar "Some") (ELit (LString "optionOrElse"))))
 (DFunDef false "lazyName" ((PLit (LString "resultOr"))) (EApp (EVar "Some") (ELit (LString "resultOrElse"))))
 (DFunDef false "lazyName" (PWild) (EVar "None"))
-(DTypeSig false "isFalse" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isFalse" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PLit (LString "False"))) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "eagerOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
-(DFunDef false "eagerOf" ((PVar "idx") (PVar "facts") (PCon "EApp" (PVar "f") (PVar "x"))) (EMatch (EApp (EVar "unwrapLoc") (EVar "f")) (arm (PCon "EApp" (PVar "hd") (PVar "d")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PLit (LString "whenL"))) () (EIf (EBinOp "&&" (EApp (EVar "isFalse") (EVar "d")) (EApp (EVar "isCall") (EVar "x"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "None"))) (arm (PCon "EVar" (PVar "n")) () (EMatch (EApp (EVar "lazyName") (EVar "n")) (arm (PCon "Some" (PVar "lazy")) () (EIf (EBinOp "&&" (EApp (EVar "isCall") (EVar "d")) (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "lazy"))) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EVar "d")))) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
+(DFunDef false "eagerOf" ((PVar "idx") (PVar "facts") (PCon "EApp" (PVar "f") (PVar "x"))) (EMatch (EApp (EVar "unwrapLoc") (EVar "f")) (arm (PCon "EApp" (PVar "hd") (PVar "d")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PLit (LString "whenL"))) () (EIf (EBinOp "&&" (EApp (EVar "isFalseLit") (EVar "d")) (EApp (EVar "isCall") (EVar "x"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "None"))) (arm (PCon "EVar" (PVar "n")) () (EMatch (EApp (EVar "lazyName") (EVar "n")) (arm (PCon "Some" (PVar "lazy")) () (EIf (EBinOp "&&" (EApp (EVar "isCall") (EVar "d")) (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "lazy"))) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EVar "d")))) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DFunDef false "eagerOf" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "isWhenL" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isWhenL" ((PVar "e")) (EBinOp "==" (EApp (EVar "calledName") (EVar "e")) (ELit (LString "whenL"))))
 (DTypeSig false "eagerEdit" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
-(DFunDef false "eagerEdit" ((PVar "idx") (PVar "facts") (PVar "ctx") (PCon "EApp" (PVar "f") PWild) (PVar "rewritten")) (EIf (EBinOp "||" (EBinOp "==" (EApp (EVar "calledName") (EVar "rewritten")) (ELit (LString "whenL"))) (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EApp (EVar "calledName") (EVar "rewritten")))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Unsafe")) (ELit (LString "run the default only on a miss"))) (EApp (EVar "tightSpan") (EVar "f"))) (EVar "Closed")) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
+(DFunDef false "eagerEdit" ((PVar "idx") (PVar "facts") (PVar "ctx") (PCon "EApp" (PVar "f") PWild) (PVar "rewritten")) (EIf (EBinOp "||" (EApp (EVar "isWhenL") (EVar "rewritten")) (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EApp (EVar "calledName") (EVar "rewritten")))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Unsafe")) (ELit (LString "run the default only on a miss"))) (EApp (EVar "tightSpan") (EVar "f"))) (EVar "Closed")) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
 (DFunDef false "eagerEdit" (PWild PWild PWild PWild PWild) (EVar "None"))
 (DTypeSig false "eagerFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
-(DFunDef false "eagerFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameEagerDefault")) (fa "message" (EIf (EBinOp "==" (EApp (EVar "calledName") (EVar "rewritten")) (ELit (LString "whenL"))) (ELit (LString "the argument of 'whenL False' is evaluated although the guard is False")) (EBinOp "++" (EBinOp "++" (ELit (LString "this default is evaluated even when the value is present — rewrite as '")) (EApp (EVar "oneLine") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'"))))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
+(DFunDef false "eagerFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameEagerDefault")) (fa "message" (EIf (EApp (EVar "isWhenL") (EVar "rewritten")) (ELit (LString "the argument of 'whenL False' is evaluated although the guard is False")) (EBinOp "++" (EBinOp "++" (ELit (LString "this default is evaluated even when the value is present — rewrite as '")) (EApp (EVar "oneLine") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'"))))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "ruleEagerDefault" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleEagerDefault" ((PVar "idx") PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "noExcl")) (EApp (EApp (EVar "eagerOf") (EVar "idx")) (EVar "facts"))) (EApp (EApp (EVar "eagerEdit") (EVar "idx")) (EVar "facts"))) (EVar "eagerFinding")))
