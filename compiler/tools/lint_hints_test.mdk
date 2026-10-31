@@ -4,7 +4,7 @@
 import test.{
   expectEach, expectEqual, expectErr, expectOk, expectTrue, expectFalse
 }
-import frontend.ast.{Expr}
+import frontend.ast.{Decl(..), Expr}
 import frontend.parser.{parseResult}
 import tools.lint.{emptyStdlibIndex, lintParseSource, lintProgram}
 import tools.lint_core.{Applicability(..), Ctx(..), Finding(..), Rule}
