@@ -269,8 +269,8 @@ closeHunk cur acc = reverse cur :: acc
 renderHunk : List Entry -> String
 renderHunk [] = ""
 renderHunk (es@((Entry _ i j) :: _)) =
-  let nA = length (filter (e => not (isInsert e)) es)
-  let nB = length (filter (e => not (isDelete e)) es)
+  let nA = count (e => not (isInsert e)) es
+  let nB = count (e => not (isDelete e)) es
   let header = "@@ -\{range i nA} +\{range j nB} @@\n"
   concat (header :: map renderEntry es)
 
