@@ -35,7 +35,8 @@ withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
   Ok targetSrc =>
     let decls = annotateProgram (desugar (parse targetSrc))
-    putStrLn (cevalMainOf decls (lowerProgramWithFacts emptyFacts decls))
+    putStrLn
+      (cevalMainOf emptyFacts decls (lowerProgramWithFacts emptyFacts decls))
   Err msg => ePutStrLn msg
 
 main = oracleMain ()

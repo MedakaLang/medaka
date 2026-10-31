@@ -685,6 +685,9 @@ test "arch_boundaries: backend.trmc_analysis closure matches its golden" =
 test "arch_boundaries: backend.emit_plan closure matches its golden" =
   closurePin "backend.emit_plan"
 
+test "arch_boundaries: ir.core_ir_lower closure matches its golden" =
+  closurePin "ir.core_ir_lower"
+
 test "arch_boundaries: support.diag_codes closure matches its golden" =
   closurePin "support.diag_codes"
 

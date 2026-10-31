@@ -1,0 +1,159 @@
+-- compiler/types/dispatch_keys.mdk — the pure projections of a declaration list
+-- that typeclass dispatch is keyed on: an impl's head tag, an interface method's
+-- dispatch positions, a constructor's type, and how many type variables an impl head
+-- leaves open.
+--
+-- Everything here is a function of the declarations alone.  The interpreter
+-- (`eval/eval.mdk`) and the Core IR lowering (`ir/core_ir_lower.mdk`) both read these
+-- projections, so they live below both: the lowering must not import the interpreter,
+-- and the interpreter's installed tables (`installDispatchTables`) stay in `eval`.
+--
+-- The dict-word mint itself is `types/route_key.mdk`; this module only projects
+-- declarations onto the words it mints.
+
+import frontend.ast.{
+  Ty(..),
+  Decl(..),
+  IfaceMethod(..),
+  variantName,
+  ifaceIdentity,
+}
+import types.route_key.{typeTagOf, funHeadTag}
+import support.util.{contains, listLen, anyList}
+
+-- ── head tags ───────────────────────────────────────────────────────────────
+-- An arity-distinguished tuple tag (`__tuple2__`, `__tuple3__`, …): each tuple
+-- arity gets its own impl group and runtime dispatch tag.  Distinct from
+-- `core_ir_lower`'s match-pattern `tupleName = "__tuple__"`, which stays arity-erased
+-- because a match column is arity-homogeneous.  `types/repr.mdk` mints the same word
+-- as `tupleHeadTagTc`; the two are mirrored, not shared.
+export
+tupleHeadTag : Int -> String
+tupleHeadTag n = "__tuple" ++ intToString n ++ "__"
+
+-- The head tag an impl is filed under.  Every arm has a counterpart in
+-- `typecheck.headTyNode`, which stamps the caller side; an arm missing here files the
+-- impl under `__none__` while its callers look it up under the real tag (#1617).
+-- `funHeadTag` is imported rather than respelled so the two sides cannot drift.
+headTycon : Ty -> Option String
+headTycon (TyCon { tyConName = n, tyConOrigin = o }) = Some (typeTagOf o n)
+headTycon (TyApp a _) = headTycon a
+headTycon (TyConstrained _ t) = headTycon t
+headTycon (TyEffect _ _ t) = headTycon t
+headTycon (TyQual t _ _) = headTycon t
+headTycon (TyTuple ts) = Some (tupleHeadTag (listLen ts))
+headTycon (TyFun _ _) = Some funHeadTag
+headTycon _ = None
+
+export
+headTyconHead : List Ty -> Option String
+headTyconHead [] = None
+headTyconHead (t :: _) = headTycon t
+
+-- ── specificity ─────────────────────────────────────────────────────────────
+countTyvars : Ty -> Int
+countTyvars (TyVar _) = 1
+countTyvars (TyCon { tyConName = _ }) = 0
+countTyvars (TyApp a b) = countTyvars a + countTyvars b
+countTyvars (TyFun a b) = countTyvars a + countTyvars b
+countTyvars (TyTuple ts) = sumInts (map countTyvars ts)
+countTyvars (TyEffect _ _ t) = countTyvars t
+countTyvars (TyConstrained _ t) = countTyvars t
+countTyvars (TyRow _ _ _) = 0
+countTyvars (TyAuth _ _) = 0
+countTyvars (TyNamed _ t _) = countTyvars t
+countTyvars (TyQual t _ _) = countTyvars t
+
+sumInts : List Int -> Int
+sumInts [] = 0
+sumInts (x :: xs) = x + sumInts xs
+
+export
+tyvarsInArgs : List Ty -> Int
+tyvarsInArgs ts = sumInts (map countTyvars ts)
+
+-- ── dispatch positions ──────────────────────────────────────────────────────
+-- Arg positions of a method type that mention an interface type parameter.
+dispatchPositionsOf : Ty -> List String -> List Int
+dispatchPositionsOf mty params = filterMentions 0 (argsOfTy mty) params
+
+argsOfTy : Ty -> List Ty
+argsOfTy (TyConstrained _ t) = argsOfTy t
+argsOfTy (TyEffect _ _ t) = argsOfTy t
+argsOfTy (TyFun (TyNamed _ a _) b) = a :: argsOfTy b
+argsOfTy (TyFun a b) = a :: argsOfTy b
+argsOfTy _ = []
+
+filterMentions : Int -> List Ty -> List String -> List Int
+filterMentions _ [] _ = []
+filterMentions i (t :: ts) params
+  | tyMentions t params = i :: filterMentions (i + 1) ts params
+  | otherwise = filterMentions (i + 1) ts params
+
+tyMentions : Ty -> List String -> Bool
+tyMentions (TyVar n) params = contains n params
+tyMentions (TyCon { tyConName = _ }) _ = False
+tyMentions (TyApp a b) params = tyMentions a params || tyMentions b params
+tyMentions (TyFun a b) params = tyMentions a params || tyMentions b params
+tyMentions (TyTuple ts) params = anyList (t => tyMentions t params) ts
+tyMentions (TyEffect _ _ t) params = tyMentions t params
+tyMentions (TyConstrained _ t) params = tyMentions t params
+tyMentions (TyNamed _ t _) params = tyMentions t params
+tyMentions (TyQual t _ _) params = tyMentions t params
+-- A bare row atom (#997) has no wrapped type, but a bare tail var (`<e>`, no
+-- labels) IS a mention of that name, the way `TyVar` is for an ordinary parameter.
+-- Intentional duplicate of core_ir_lower.mdk's tyMentionsParams TyRow clause: the
+-- untyped and typed-Core-IR projections diverge by design.
+-- lint-disable-next-line rule-duplicate-body
+tyMentions (TyRow _ tail _) params = anyList (v => contains v params) tail
+tyMentions (TyAuth _ _) _ = False
+
+-- ── the dispatch-position table ─────────────────────────────────────────────
+-- One row per interface method: ((interface identity, interface, method), the
+-- argument positions that carry the receiver).  The identity is read off
+-- `ifaceOrigin`, so two modules' same-named interfaces are two rows.
+export
+buildIfaceDispatch : List Decl -> List ((String, String, String), List Int)
+buildIfaceDispatch prog = flatMap ifaceDispatchEntries prog
+
+ifaceDispatchEntries : Decl -> List ((String, String, String), List Int)
+-- An attribute on an `interface` must not delete its dispatch positions (#1037).
+ifaceDispatchEntries (DAttrib _ d) = ifaceDispatchEntries d
+ifaceDispatchEntries (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) =
+  map
+    (ifaceMethodEntry (ifaceIdentity o ifaceName) ifaceName typeParams)
+    methods
+ifaceDispatchEntries _ = []
+
+ifaceMethodEntry : String ->
+  String ->
+  List String ->
+  IfaceMethod ->
+  ((String, String, String), List Int)
+ifaceMethodEntry ifaceId ifaceName typeParams (IfaceMethod mname mty _ _) = (
+  (ifaceId, ifaceName, mname),
+  dispatchPositionsOf mty (receiverParam typeParams),
+)
+
+-- The receiver (dispatch) typaram is the FIRST interface param.  A multi-param
+-- interface (`FromEntries c e`) dispatches on `c`; a trailing element param `e` in
+-- an argument type (`List e`) must not mark that argument as a dispatch position.
+receiverParam : List String -> List String
+receiverParam [] = []
+receiverParam (p :: _) = [p]
+
+-- ── constructor → type ──────────────────────────────────────────────────────
+-- A constructor's type is recorded by its dispatch word (`typeTagOf`), the word its
+-- impls are filed under, so two modules' same-spelled types are two runtime types
+-- (#1397).
+export
+buildCtorToType : List Decl -> List (String, String)
+buildCtorToType prog = flatMap ctorTypeEntries prog
+
+ctorTypeEntries : Decl -> List (String, String)
+ctorTypeEntries (DData { dataName = tyname, dataCtors = variants, dataOrigin = o }) =
+  map (v => (variantName v, typeTagOf o tyname)) variants
+ctorTypeEntries (DNewtype { newtypeName = tyname, newtypeCtor = con, newtypeOrigin = o }) =
+  [(con, typeTagOf o tyname)]
+ctorTypeEntries (DAttrib _ d) = ctorTypeEntries d
+ctorTypeEntries _ = []

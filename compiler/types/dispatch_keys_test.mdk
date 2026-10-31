@@ -1,0 +1,61 @@
+-- Sibling tests for the pure dispatch projections in `dispatch_keys.mdk`.
+
+import test.{expectEqual, expectAll}
+import frontend.ast.{Ty(..), tyConBuiltin}
+import frontend.parser.{parse}
+import types.dispatch_keys.{
+  headTyconHead,
+  tyvarsInArgs,
+  buildCtorToType,
+  buildIfaceDispatch,
+}
+
+con : String -> Ty
+con n = tyConBuiltin n None
+
+test "an impl head is the head of its first type argument" = expectAll [
+  expectEqual None (headTyconHead []),
+  expectEqual (Some "Box") (headTyconHead [con "Box"]),
+  expectEqual (Some "Box") (headTyconHead [TyApp (con "Box") (TyVar "a")]),
+  expectEqual None (headTyconHead [TyVar "a"]),
+]
+
+test "a tuple head carries its arity and an arrow head is the function tag" = expectAll
+  [
+    expectEqual
+      (Some "__tuple2__")
+      (headTyconHead [TyTuple [con "Int", con "Int"]]),
+    expectEqual
+      (Some "__tuple3__")
+      (headTyconHead [TyTuple [con "Int", con "Int", con "Int"]]),
+    expectEqual (Some "__fun__") (headTyconHead [TyFun (con "Int") (con "Int")]),
+  ]
+
+test "specificity counts the open type variables across the arguments" = expectAll
+  [
+    expectEqual 0 (tyvarsInArgs [con "Int"]),
+    expectEqual 2 (tyvarsInArgs [TyApp (con "Box") (TyVar "a"), TyVar "b"]),
+    expectEqual 2 (tyvarsInArgs [TyFun (TyVar "a") (TyVar "b")]),
+  ]
+
+test "a constructor is recorded under its type, newtypes included" =
+  let decls = parse "data Color = Red | Green\nnewtype Wrap = Wrap Int\n"
+  expectEqual
+    [("Red", "Color"), ("Green", "Color"), ("Wrap", "Wrap")]
+    (buildCtorToType decls)
+
+test "dispatch positions are the arguments that mention the receiver" =
+  let decls =
+    parse
+      "interface Pair a where\n  both : a -> a -> String\n  tag : String -> a -> String\n  plain : String -> Int\n"
+  expectEqual
+    [
+      (("", "Pair", "both"), [0, 1]),
+      (("", "Pair", "tag"), [1]),
+      (("", "Pair", "plain"), []),
+    ]
+    (buildIfaceDispatch decls)
+
+test "only the first interface parameter is the receiver" =
+  let decls = parse "interface Conv c e where\n  conv : c -> e -> String\n"
+  expectEqual [(("", "Conv", "conv"), [0])] (buildIfaceDispatch decls)

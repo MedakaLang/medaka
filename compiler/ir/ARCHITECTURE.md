@@ -20,7 +20,7 @@ AST S-expression dump (`sexp.mdk`), kept here with the Core IR dumpers.
 | `sexp.mdk` | Structural S-expression dump of the surface AST | `programToSexp` |
 
 ## Laws that bind it
-- **A1** — ir sits above `types/`; today `core_ir_lower.mdk` and `core_ir_eval.mdk` import `eval.eval`, which are the `ir -> eval` edges in `test/arch_goldens/layering.golden` and may only fall.
+- **A1** — ir sits above `types/`; today only `core_ir_eval.mdk` imports `eval.eval`, the one `ir -> eval` edge in `test/arch_goldens/layering.golden`, and it may only fall. The lowering's closure is pinned free of `eval` (`closure.ir.core_ir_lower.golden`): what it shares with the interpreter lives in `types/dispatch_keys.mdk` and `types/expr_loc.mdk`.
 - **A4** — a fact two backends need (arity, field ordinal, dispatch target) is stamped here once and carried on the IR, then checked by `backend/core_validate.mdk`.
 - **A2** — lowering reads cells out of the AST into values; Core IR itself holds no mutable cell.
 - **A9** — the closure of `core_ir.mdk` is a committed golden.

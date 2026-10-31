@@ -32,6 +32,7 @@ emit preludeDecls userDecls =
   let decls =
     annotateProgram
       (dropShadowedExp (funNamesOf userDecls) preludeDecls ++ userDecls)
-  putStr (cevalOutputOf decls (lowerProgramWithFacts emptyFacts decls))
+  putStr
+    (cevalOutputOf emptyFacts decls (lowerProgramWithFacts emptyFacts decls))
 
 main = oracleMain ()

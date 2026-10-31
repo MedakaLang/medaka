@@ -1,0 +1,34 @@
+-- compiler/types/expr_loc.mdk — where an expression starts, and the placeholder
+-- span that means "no location known".
+--
+-- The parser locates atoms and statement forms only (`ELoc`), so a binary operator,
+-- an application or a desugared index call starts where its leftmost located operand
+-- starts.  The interpreter reads this for the site of a runtime trap, and the Core IR
+-- lowering stores it on an arithmetic node.
+
+import frontend.ast.{Loc(..), Expr(..)}
+
+-- The placeholder span the non-located `parse` gives every token (the prelude is
+-- parsed that way): zero-width, so no real located atom can equal it.
+export
+noTrapLoc : Loc
+noTrapLoc = Loc "" 1 0 1 0
+
+export
+isNoLoc : Loc -> Bool
+isNoLoc (Loc _ sl sc el ec) = sl == 1 && sc == 0 && el == 1 && ec == 0
+
+-- The first located node of an expression in source order.
+export
+exprStartLoc : Expr -> Loc
+exprStartLoc (ELoc l _) = l
+exprStartLoc (EBinOp _ l _ _) = exprStartLoc l
+exprStartLoc (EApp f x) = startOrNext (exprStartLoc f) x
+exprStartLoc (EAnnot e _) = exprStartLoc e
+exprStartLoc (EHeadAnnot e _) = exprStartLoc e
+exprStartLoc _ = noTrapLoc
+
+-- [l] when it is a real location, else the start of [next] (an unlocated head, such
+-- as the `index` method a desugared `xs[i]` applies).
+startOrNext : Loc -> Expr -> Loc
+startOrNext l next = if isNoLoc l then exprStartLoc next else l
