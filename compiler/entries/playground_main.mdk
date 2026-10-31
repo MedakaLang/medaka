@@ -636,7 +636,7 @@ finishClean : Bool ->
 finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
   let executionDriver =
     EntryKey { moduleId = "async", binding = "runAsyncMain" }
-  let (analysis, report, outputs) =
+  let (analysis, _, outputs) =
     analyzeProgramReport
       (executedMainInputs
         (driveInputsFor !selectedProfile False [])

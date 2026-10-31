@@ -1721,7 +1721,6 @@ emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _
       fnNames
       valNames
   let useClos = physical.useClos
-  let useRef = physical.useRef
   let typeNames = plan.constructorFacts.typeOrder
   let prog =
     Prog
@@ -6933,7 +6932,6 @@ emitArrayExternRef prog env d "arrayMake" [n, init] =
 emitArrayExternRef prog _env _d "arrayMake" _ =
   gapLP prog "wasm W10: arrayMake takes exactly two arguments"
 emitArrayExternRef prog env d "arrayCopy" [a] =
-  let sfx = intToString d
   let srcL = w7Local (progEmit prog) WN.W7Aexarr d
   let dstL = w7Local (progEmit prog) WN.W7Raarr d
   let nL = w7Local (progEmit prog) WN.W7Aexn d
@@ -6978,7 +6976,6 @@ emitArrayExternRef prog _env _d "arraySetUnsafe" _ =
 -- size FIRST, f SECOND.  Alloc size slots (init 0), then loop i=0..n-1:
 -- array.set arr i (apply f [i]).  f is applied via the universal $__mdk_apply.
 emitArrayExternRef prog env d "arrayMakeWith" [n, f] =
-  let sfx = intToString d
   let arrL = w7Local (progEmit prog) WN.W7Aexarr d
   let iL = w7Local (progEmit prog) WN.W7Aexi d
   let nL = w7Local (progEmit prog) WN.W7Aexn d
@@ -7023,7 +7020,6 @@ emitArrayExternRef prog _env _d "arrayMakeWith" _ =
 -- count the list (a $C_Cons chain ending in an i31 Nil), alloc that many slots,
 -- walk the chain again filling cells in order.  Two-pass over a $C_Cons cursor.
 emitArrayExternRef prog env d "arrayFromList" [lst] =
-  let sfx = intToString d
   let arrL = w7Local (progEmit prog) WN.W7Aexarr d
   let iL = w7Local (progEmit prog) WN.W7Aexi d
   let nL = w7Local (progEmit prog) WN.W7Aexn d
@@ -7105,7 +7101,6 @@ emitArrayExternRef prog _env _d "arrayBlit" _ =
 -- stage-A: arrayFill val arr — sets every element of arr to val via a loop.
 -- Uses the $__aex* W7 scratch locals (w7Local).
 emitArrayExternRef prog env d "arrayFill" [val, arr] =
-  let sfx = intToString d
   let arrL = w7Local (progEmit prog) WN.W7Aexarr d
   let iL = w7Local (progEmit prog) WN.W7Aexi d
   let nL = w7Local (progEmit prog) WN.W7Aexn d
@@ -7148,7 +7143,6 @@ emitArrayExternRef prog _env _d "arrayFill" _ =
 -- byte 7 = bits&0xFF) into a fresh 8-element $arr, each byte a boxed Int.  Matches
 -- runtime/medaka_rt.c:mdk_float_to_bytes64 exactly (cell[i+1] = byte at (bits>>(8*(7-i)))&0xFF).
 emitArrayExternRef prog env d "floatToBytes64" [f] =
-  let sfx = intToString d
   let arrL = w7Local (progEmit prog) WN.W7Aexarr d
   let bitsL = w7Local (progEmit prog) WN.W7Aexbits d
   emitRefExpr prog env d f
@@ -7174,7 +7168,6 @@ emitArrayExternRef prog _env _d "floatToBytes64" _ =
 -- $arr starting at index `off`, assemble an i64 (byte at off+0 → bits 56..63), then
 -- f64.reinterpret_i64 + box into a $float.  Matches runtime/medaka_rt.c:mdk_bytes_to_float64.
 emitArrayExternRef prog env d "bytesToFloat64" [arr, off] =
-  let sfx = intToString d
   let arrL = w7Local (progEmit prog) WN.W7Aexarr d
   let offL = w7Local (progEmit prog) WN.W7Aexi d
   let bitsL = w7Local (progEmit prog) WN.W7Aexbits d
@@ -8732,7 +8725,6 @@ emitBrTableTowerTail : Prog ->
   Int ->
   List String
 emitBrTableTowerTail prog env arity d root svRead rest arms branches dft ty sd nOrd =
-  let sfx = intToString sd
   let labels = map (labelBranch WN.WSwitchTail sd) (rangeList 0 nOrd)
   let dftLabel = labelName WN.WSwitchTail sd
   let tableInstr = "br_table \{joinWith " " labels} \{dftLabel}"
@@ -9468,7 +9460,6 @@ emitRangeListRef : Prog -> Env -> Int -> CExpr -> CExpr -> Bool -> List String
 emitRangeListRef prog env d lo hi incl =
   let loI = emitRefExpr prog env d lo ++ [unboxIntW prog]
   let hiI = emitRefExpr prog env d hi ++ [unboxIntW prog]
-  let sfx = intToString d
   let accL = w7Local (progEmit prog) WN.W7Rlacc d
   let iL = w7Local (progEmit prog) WN.W7Rli d
   let loL = w7Local (progEmit prog) WN.W7Rllo d
@@ -9517,7 +9508,6 @@ emitRangeArrayRef : Prog -> Env -> Int -> CExpr -> CExpr -> Bool -> List String
 emitRangeArrayRef prog env d lo hi incl =
   let loI = emitRefExpr prog env d lo ++ [unboxIntW prog]
   let hiI = emitRefExpr prog env d hi ++ [unboxIntW prog]
-  let sfx = intToString d
   let arrL = w7Local (progEmit prog) WN.W7Raarr d
   let iL = w7Local (progEmit prog) WN.W7Rai d
   let loL = w7Local (progEmit prog) WN.W7Ralo d
@@ -9589,7 +9579,6 @@ emitRangeArrayRef prog env d lo hi incl =
 -- access aborting the module mirrors the native abort).
 emitIndexRef : Prog -> Env -> Int -> CExpr -> CExpr -> List String
 emitIndexRef prog env d a i =
-  let sfx = intToString d
   let arrL = w7Local (progEmit prog) WN.W7Ixarr d
   let idxL = w7Local (progEmit prog) WN.W7Ixi d
   let arrI =
@@ -9659,7 +9648,6 @@ emitSliceRef : Prog ->
   Bool ->
   List String
 emitSliceRef prog env d a lo hi incl =
-  let sfx = intToString d
   let srcL = w7Local (progEmit prog) WN.W7Slsrc d
   let dstL = w7Local (progEmit prog) WN.W7Sldst d
   let loL = w7Local (progEmit prog) WN.W7Sllo d
@@ -9806,7 +9794,6 @@ emitUpdateCopy : Prog ->
   List CField ->
   List String
 emitUpdateCopy prog env d ctor base fields =
-  let sfx = intToString d
   let bL = w7Local (progEmit prog) WN.W7Rub d
   let baseI =
     emitRefExpr prog env d base
@@ -10250,7 +10237,6 @@ emitBrTableTower : Prog ->
   Int ->
   List String
 emitBrTableTower prog env d decLabel root svRead rest arms branches dft ty sd nOrd =
-  let sfx = intToString sd
   let labels = map (labelBranch WN.WSwitch sd) (rangeList 0 nOrd)
   let tableInstr = "br_table \{joinWith " " labels} \{labelName WN.WSwitch sd}"
   let opens =

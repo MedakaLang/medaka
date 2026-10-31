@@ -2069,8 +2069,6 @@ shrinkTryLine : String ->
   Int ->
   List String
 shrinkTryLine nonce modules graph i ps plans j =
-  let current = slotName nonce i j
-  let plan = nthPlan j plans
   let params = paramSlots nonce i ps
   let after =
     if j + 1 >= listLen ps then

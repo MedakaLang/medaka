@@ -478,7 +478,7 @@ deflateEmitMatch m pos len dist w =
 deflateTryLazy : Matcher -> Int -> Int -> Int -> BitWriter -> Unit
 deflateTryLazy m pos len1 dist1 w =
   if len1 < maxMatch && pos + 1 < m.n && hasHash (pos + 1) m.n then
-    let (len2, dist2) = findMatch m (pos + 1)
+    let (len2, _) = findMatch m (pos + 1)
     if len2 > len1 then
       let _ = encodeLiteral (byteAt m.input pos) w
       deflateScan m (pos + 1) w
@@ -537,7 +537,6 @@ deflateScan m pos w
 -}
 deflateFixedBytes : Bytes -> Bytes
 deflateFixedBytes input =
-  let n = B.length input
   let w = newBitWriter ()
   let _ = putBits 1 1 w
   let _ = putBits btypeFixedHuffman 2 w

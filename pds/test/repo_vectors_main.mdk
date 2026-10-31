@@ -341,7 +341,6 @@ runHostile : String ->
   <IO, Sign "commit"> Int
 runHostile did secret repo path presentRecord =
   let commit = repoLatestCommit repo
-  let publicKey = repoPublicKey repo
   let next = futureTid commit 1
   let missingPath =
     mustHex "6170702e62736b792e666565642e706f73742f6d697373696e67"
