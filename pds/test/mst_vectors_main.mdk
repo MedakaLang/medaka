@@ -5,7 +5,7 @@ import bytes.{Bytes, encodeUtf8, fromU8Array}
 import hex.{decode}
 import io.{readLines}
 import list.{reverse, sortBy}
-import string.{contains, join, split, startsWith, toInt}
+import string.{join, split, startsWith, toInt}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
 import test.vector_support.{rejectContains}

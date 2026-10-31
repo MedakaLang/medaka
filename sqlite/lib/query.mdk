@@ -43,7 +43,7 @@ decodeRows : RowType r ->
   List Row ->
   List r ->
   Result String (List r)
-decodeRows rt keep pkIdx [] acc = Ok (reverse acc)
+decodeRows _rt _keep _pkIdx [] acc = Ok (reverse acc)
 decodeRows rt keep pkIdx (row :: rest) acc = do
   v <- rtDecode rt (rowCellsWithIpk pkIdx row)
   if keep v then

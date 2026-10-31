@@ -13,7 +13,6 @@
 import lib.sqlite.{Db, openDb}
 import lib.select.{
   Select,
-  SqlExpr,
   selectFrom,
   withOrderBy,
   withColumns,

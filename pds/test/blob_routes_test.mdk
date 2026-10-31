@@ -14,7 +14,7 @@ import bytes as B
 import bytes.{Bytes, encodeUtf8, fromU8Array}
 import http.{parseRequestClassified}
 import hex.{decode}
-import json.{Json(..), get, jArray, jObject, parse, stringify}
+import json.{Json(..), get, jArray, jObject, stringify}
 import list.{sort}
 import test.{expectEqual, expectTrue}
 import u8 as U8
@@ -22,7 +22,6 @@ import lib.blob.{blobCid}
 import lib.cid.{cidToString}
 import lib.credential.{
   CredentialRecord,
-  LoginCheck,
   LoginVerdict,
   makeCredential,
   passwordFromText,
@@ -47,7 +46,6 @@ import lib.store.{
 import lib.tid.{tidParse}
 import test.fixture_support.{
   altTestKey,
-  altTestSecret,
   contextAt,
   storeFingerprint,
 }

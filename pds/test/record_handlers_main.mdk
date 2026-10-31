@@ -20,7 +20,7 @@
    `validationStatus: "valid"`. -}
 
 import bytes.{Bytes, decodeUtf8}
-import json.{Json(..), jObject, get, parse, stringify}
+import json.{Json(..), jObject, parse, stringify}
 import hex.{decode}
 import io.{readLines}
 import string.{split, startsWith}
@@ -30,10 +30,7 @@ import lib.handlers.{recordServer}
 import lib.lexjson.{dagCborToLexJson}
 import lib.repo.{
   Repo,
-  repoCommitCid,
   repoInitFromKeyBytes,
-  repoLatestCommit,
-  repoRootCid,
 }
 import lib.server_core.{
   Account,
@@ -46,7 +43,6 @@ import lib.store.{
   Store,
   sessionFingerprint,
   storeFromRepo,
-  storeRepo,
   storeSessionOpen,
   storeWithServerSecret,
 }
@@ -58,7 +54,6 @@ import test.fixture_support.{
   storeFingerprint,
   testKey,
   testNonce,
-  testSecret,
 }
 import test.request_support.{createBody, deleteBody, procedureRequest}
 import test.response_support.{bodyText}

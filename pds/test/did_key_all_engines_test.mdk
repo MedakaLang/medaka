@@ -30,7 +30,7 @@ import test.vector_runner.{
   expectRow,
 }
 import test.did_key_support.{didKeyNeedles}
-import test.{Expectation}
+import test
 import test_process.{medakaRoot}
 
 gate : String

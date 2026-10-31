@@ -31,7 +31,7 @@ import test.vector_runner.{
   wasmBuildEnv,
 }
 import io.{getEnvOr}
-import test.{Expectation, expectNoFindings}
+import test.{expectNoFindings}
 import test_process.{medakaBin, medakaRoot}
 
 gate : String

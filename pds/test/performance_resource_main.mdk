@@ -26,7 +26,6 @@ import lib.mst.{
 }
 import lib.multiformats.{uvarintEncode}
 import lib.repo.{
-  Repo,
   repoCommitDataCid,
   repoExportGraph,
   repoFromBlocks,

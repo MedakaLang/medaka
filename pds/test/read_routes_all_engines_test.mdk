@@ -41,7 +41,7 @@ import test.vector_runner.{
   transcriptArm,
 }
 import test.read_routes_support.{transcript}
-import test.{Expectation}
+import test
 import test_process.{medakaRoot}
 
 gate : String

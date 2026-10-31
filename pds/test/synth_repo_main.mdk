@@ -85,7 +85,7 @@ oneCollectionPath count i =
 -- sorts after any path in the other two shapes, since 'z' (0x7A) is the
 -- highest lowercase-alnum byte a normalized NSID authority may contain.
 lateKeysPath : Int -> Int -> String
-lateKeysPath count i = "zzzzz.zzzzz.zzzzzz/r\{padLeft 7 '0' (intToString i)}"
+lateKeysPath _count i = "zzzzz.zzzzz.zzzzzz/r\{padLeft 7 '0' (intToString i)}"
 
 pathFor : String -> Int -> Int -> String
 pathFor "small-collections" count i = smallCollectionsPath count i

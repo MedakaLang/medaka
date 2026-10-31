@@ -92,7 +92,6 @@ import bytebuilder.{
   emitU16BE,
   emitU32BE,
   emitBytes,
-  emitBeUint,
   buildArray,
 }
 import bytes.{Bytes, fromArray}
@@ -281,7 +280,7 @@ packCells : Array Int ->
   Int ->
   String ->
   Result String Int
-packCells page [] cpStart contentTop floor i errMsg = Ok contentTop
+packCells _page [] _cpStart contentTop _floor _i _errMsg = Ok contentTop
 packCells page (cell :: rest) cpStart contentTop floor i errMsg =
   let clen = arrayLength cell
   let newTop = contentTop - clen
@@ -632,7 +631,7 @@ packLeaves : List (Int, Array Int, Array Int) ->
   List (List (Int, Array Int, Array Int)) ->
   Int ->
   Result String (List (List (Int, Array Int, Array Int)))
-packLeaves [] cur done used = Ok (reverse (reverse cur :: done))
+packLeaves [] cur done _used = Ok (reverse (reverse cur :: done))
 packLeaves (p :: rest) cur done used =
   let clen = arrayLength (prowCell p)
   let need = clen + 2
@@ -684,7 +683,7 @@ buildDatabase : String ->
   Option Int ->
   List (List Cell) ->
   Result String (Array Int)
-buildDatabase name createSql colCount ipkColIdx rows =
+buildDatabase name createSql _colCount ipkColIdx rows =
   buildDatabaseMulti [(name, createSql, ipkColIdx, rows)]
 
 -- ---------------------------------------------------------------------------
@@ -707,7 +706,7 @@ buildDatabase name createSql colCount ipkColIdx rows =
 buildTablePages : Int ->
   List (List (Int, Array Int, Array Int)) ->
   Result String (List (Array Int))
-buildTablePages basePage [single] = do
+buildTablePages _basePage [single] = do
   leaf <- mapErr
     (e => "data page: \{e}")
     (buildLeafPage 0 (map prowCell single))
@@ -898,7 +897,7 @@ buildDatabaseExplicit : String ->
   Option Int ->
   List (Int, List Cell) ->
   Result String (Array Int)
-buildDatabaseExplicit name createSql colCount ipkColIdx rows =
+buildDatabaseExplicit name createSql _colCount ipkColIdx rows =
   buildDatabaseMultiExplicit [(name, createSql, ipkColIdx, rows)]
 
 -- | Like `buildDatabaseMulti` but every table's rows carry an explicit rowid.
