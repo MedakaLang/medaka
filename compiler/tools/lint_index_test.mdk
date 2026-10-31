@@ -28,6 +28,10 @@ import support.util.{joinWith, listLen}
 import tools.printer.{ppTy}
 import tools.lint_index.{
   IndexRow(..),
+  fileRows,
+  makeStagingDir,
+  stageAndRename,
+  stdlibShardDirOf,
   RowKind(..),
   Ns(..),
   SigSlot(..),
@@ -65,7 +69,17 @@ import tools.lint.{
   indexForRoster,
   projectIndexOf,
 }
-import tools.lint_core.{mkRule, FileFacts, stdlibSigTextIn}
+import tools.lint_core.{
+  mkRule,
+  mkProjectRule,
+  ProjectRule,
+  Summary(..),
+  FileFacts,
+  stdlibSigTextIn,
+}
+import tools.lint_walk.{indexForRostersIn, runProjectRulesOver}
+import list.{sortBy}
+import path.{basename}
 
 -- ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -565,3 +579,246 @@ stdlibOnlyCase dir =
   let roster = [probeRule "p-stdlib" [NeedsStdlibIndex]]
   let (std, proj) = indexRows roster dir False [] []
   expectTrue (std > 0 && proj == 0)
+
+-- ── 5. what moves a row digest, and where the shards live ───────────────────
+
+effectfulSource : String
+effectfulSource = joinWith "\n" [
+  "export",
+  "readIt : (path : String) -> <FileRead path> String",
+  "readIt p = readFile p",
+  "",
+  "export",
+  "same : Eq a => a -> a -> Bool",
+  "same x y = x == y",
+  "",
+  "export",
+  "tick : Async <Stdout> Unit -> Int",
+  "tick _ = 1",
+  "",
+]
+
+rowLine : IndexRow -> Int
+rowLine r = match r.ixrLoc
+  Some (Loc _ l _ _ _) => l
+  None => -1
+
+test "a blank line at the top of a module leaves its rows digest alone" =
+  let base = parseRows "m" effectfulSource
+  let shifted = parseRows "m" ("\n\n" ++ effectfulSource)
+  expectEach [
+    ("control: the rows were read", expectEqual 3 (listLen base)),
+    (
+      "control: the locations moved",
+      expectNotEqual (map rowLine base) (map rowLine shifted),
+    ),
+    ("the digest did not", expectEqual (rowsDigest base) (rowsDigest shifted)),
+  ]
+
+test "a relative XDG_CACHE_HOME is ignored, as an unset one is" = expectEach [
+  (
+    "absolute",
+    expectEqual "/x/medaka/lint-index" (stdlibShardDirOf "/x" "/h"),
+  ),
+  (
+    "relative falls back to HOME",
+    expectEqual "/h/.cache/medaka/lint-index" (stdlibShardDirOf "relxdg" "/h"),
+  ),
+  (
+    "unset falls back to HOME",
+    expectEqual "/h/.cache/medaka/lint-index" (stdlibShardDirOf "" "/h"),
+  ),
+  (
+    "relative and no HOME is no cache",
+    expectEqual "" (stdlibShardDirOf "relxdg" ""),
+  ),
+  ("both relative is no cache", expectEqual "" (stdlibShardDirOf "a" "b")),
+]
+
+test "two writers of one shard stage in directories of their own" =
+  withScratchDir stagingCase
+
+stagingCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+stagingCase dir = match (makeStagingDir dir, makeStagingDir dir)
+  (Ok a, Ok b) =>
+    let dest = "\{dir}/shard.sx"
+    let _ = stageAndRename a dest "AAAAAAAA"
+    let afterA = readFile dest
+    let _ = stageAndRename b dest "BB"
+    expectEach [
+      ("distinct staging dirs", expectNotEqual a b),
+      ("the first writer's shard is whole", expectEqual (Ok "AAAAAAAA") afterA),
+      ("the second replaces it whole", expectEqual (Ok "BB") (readFile dest)),
+      ("nothing left in the first", expectEqual (Ok []) (listDir a)),
+      ("nothing left in the second", expectEqual (Ok []) (listDir b)),
+    ]
+  _ => fail "no staging dir"
+
+test "a changed stamp rewrites a path's shard in place" =
+  withScratchDir stampCase
+
+stampCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+stampCase dir =
+  let shards = "\{dir}/idx"
+  let src = "\{dir}/m.mdk"
+  let _ = writeFile src "export\nf : Int -> Int\nf x = x\n"
+  let _ = fileRows True lintParseSource shards "stamp-1" "m" src
+  let _ = fileRows True lintParseSource shards "stamp-2" "m" src
+  let hash = rowContentHash "export\nf : Int -> Int\nf x = x\n"
+  let text = readFile (rowShardPath shards src)
+  expectEach [
+    (
+      "one shard for the path",
+      expectEqual (Ok [basename (rowShardPath shards src)]) (listDir shards),
+    ),
+    (
+      "it answers for the newer stamp",
+      expectTrue (decodesText "stamp-2/x" src hash text),
+    ),
+    (
+      "and no longer for the older",
+      expectFalse (decodesText "stamp-1/x" src hash text),
+    ),
+  ]
+
+decodesText : String -> String -> String -> Result String String -> Bool
+decodesText stamp path hash (Ok text) =
+  isSome (decodeRowShard stamp path hash text)
+decodesText _ _ _ (Err _) = False
+
+test "a shard names its path, so a shard of another path is not served" =
+  let a = "/p/one/m.mdk"
+  let b = "/p/two/m.mdk"
+  let hash = rowContentHash modSource
+  expectEach [
+    (
+      "the name is a function of the directory and the path",
+      expectEqual (rowShardPath "/d" a) (rowShardPath "/d" a),
+    ),
+    (
+      "same file name, other directory, other shard",
+      expectNotEqual (rowShardPath "/d" a) (rowShardPath "/d" b),
+    ),
+    (
+      "a shard of one path does not decode for the other",
+      expectFalse
+        (decodes
+          "stamp"
+          b
+          hash
+          (encodeRowShard "stamp" a hash "m" (rowsOf "m"))),
+    ),
+  ]
+
+-- ── 6. which rules build the index, and which project ─────────────────────
+
+projectProbe : String -> List Need -> ProjectRule
+projectProbe name needs =
+  mkProjectRule
+    (probeMeta name needs)
+    (_ _ _ _ => DupOccs [])
+    (ix _ => [
+      Finding {
+        rule = name,
+        message = intToString (listLen (projectRows ix)),
+        severity = SevWarning,
+        loc = None,
+        fix = None,
+      },
+    ])
+
+-- What each project rule of `projects` sees of the project's rows, for an index
+-- built from `root` (empty: from the project of `paths`) with no stdlib.
+projectRowsSeen : List ProjectRule ->
+  String ->
+  String ->
+  List String ->
+  <IO> List String
+projectRowsSeen projects dir root paths =
+  match (indexForRostersIn
+    "\{dir}/no-stdlib"
+    ""
+    []
+    projects
+    root
+    False
+    []
+    []
+    paths)
+    Err _ => ["<index error>"]
+    Ok idx => map findingMessage (runProjectRulesOver projects [] [] idx [])
+
+test "a project rule's declared index need builds the project index" =
+  withScratchDir projectNeedCase
+
+projectNeedCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+projectNeedCase dir =
+  let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n"
+  expectEach [
+    (
+      "a project need sees the project rows",
+      expectEqual
+        ["1"]
+        (projectRowsSeen
+          [projectProbe "pp-project" [NeedsProjectIndex]]
+          dir
+          dir
+          []),
+    ),
+    (
+      "no declared need sees none",
+      expectEqual ["0"] (projectRowsSeen [projectProbe "pp-none" []] dir dir []),
+    ),
+    (
+      "a stdlib need builds no project rows",
+      expectEqual
+        ["0"]
+        (projectRowsSeen [projectProbe "pp-std" [NeedsStdlibIndex]] dir dir []),
+    ),
+  ]
+
+projectModules : String -> List String -> <IO> List String
+projectModules dir paths =
+  let projects = [projectProbe "pp-project" [NeedsProjectIndex]]
+  let built =
+    indexForRostersIn "\{dir}/no-stdlib" "" [] projects "" False [] [] paths
+  match built
+    Err _ => ["<index error>"]
+    Ok idx =>
+      sortBy
+        stringCompare
+        (map (r => r.ixrModule) (projectRows (projectIndexOf idx)))
+
+test "project rows are those of the linted file's project, not the working directory's" =
+  withScratchDir projectRootCase
+
+projectRootCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+projectRootCase dir =
+  let _ = makeDir "\{dir}/proj"
+  let _ = makeDir "\{dir}/proj/sub"
+  let _ = makeDir "\{dir}/loose"
+  let _ = makeDir "\{dir}/loose/inner"
+  let _ = writeFile "\{dir}/proj/medaka.toml" "[package]\nname = \"p\"\n"
+  let body = "export\nf : Int -> Int\nf x = x\n"
+  let _ = writeFile "\{dir}/proj/sub/b.mdk" body
+  let _ = writeFile "\{dir}/proj/sub/e.mdk" body
+  let _ = writeFile "\{dir}/loose/c.mdk" body
+  let _ = writeFile "\{dir}/loose/inner/d.mdk" body
+  expectEach [
+    (
+      "under a manifest: the manifest's directory, each module once",
+      expectEqual
+        ["sub.b", "sub.e"]
+        (projectModules dir ["\{dir}/proj/sub/b.mdk", "\{dir}/proj/sub/e.mdk"]),
+    ),
+    (
+      "with no manifest above: the file's own directory",
+      expectEqual ["c", "inner.d"] (projectModules dir ["\{dir}/loose/c.mdk"]),
+    ),
+    (
+      "two projects: both, each relative to its own root",
+      expectEqual
+        ["c", "inner.d", "sub.b", "sub.e"]
+        (projectModules dir ["\{dir}/proj/sub/b.mdk", "\{dir}/loose/c.mdk"]),
+    ),
+  ]

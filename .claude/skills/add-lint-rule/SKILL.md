@@ -41,8 +41,11 @@ should sort. Cross-file rules are `ProjectRule`s and go in the project registry 
 - A project rule has a `prSummarize` (one file to a `Summary`, a pure function of that file) and a
   `prEvaluate` (every file's summary to findings, run on every run). Add a `Summary` constructor
   with its codec arms in `lint_cache.mdk` (`encSummary`, `summaryTag`, `readSummary`; the encoder
-  has no wildcard arm, so a missing arm does not compile). Every registered rule's summary is
-  stored in the shard, so `--cache` stays on with no switch to relax.
+  has no wildcard arm, so a missing arm is a non-exhaustive warning from `medaka check` and a
+  failure on the first store; the decoder has no such check, so a missing `readSummary` arm makes
+  every shard holding that summary a miss, and the `lint_test.mdk` round trip of every `Summary`
+  constructor is what catches it). Every registered rule's summary is stored in the shard, so
+  `--cache` stays on with no switch to relax.
 - A project rule may not be `ratchet = Baselined`: a baseline row is per file and a cross-file
   finding has none, so nothing would enforce it. `projectRuleMetaProblems` rejects it and
   `lint_test.mdk` runs that check over `allProjectRules`.

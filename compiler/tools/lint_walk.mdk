@@ -83,7 +83,7 @@ import support.util.{
   lookupAssoc,
 }
 import hash_map.{HashMap, new, get, setInPlace, has, keys, findWithDefault}
-import list.{take, drop, indexed}
+import list.{take, drop, indexed, nub}
 import string.{indexOf, lines}
 import array.{fromList}
 import tools.printer.{declToString}
@@ -596,11 +596,12 @@ stdlibIndexNeededFor only disable paths =
   stdlibIndexNeeded only disable
     || wildIndexNeeded only disable && anyPathWild paths
 
--- Whether some active rule declares `NeedsProjectIndex`.
+-- Whether some active rule, per-file or project, declares `NeedsProjectIndex`.
 export
 projectIndexNeeded : List String -> List String -> Bool
 projectIndexNeeded only disable =
   anyActive needsProjectIndex allRules only disable
+    || anyProjectActive needsProjectIndex allProjectRules only disable
 
 -- Whether some rule of `roster` that survives `--only`/`--disable` has the
 -- need `declares` tests for.
@@ -619,10 +620,12 @@ activeWith declares only disable r =
     && not (contains r.name disable)
 
 -- The index one `medaka lint` run needs, built once and only from the needs of
--- the rules that survive `--only`/`--disable`: empty when none reads it, the
--- stdlib's rows when a stdlib reader is active, the project's rows too when a
--- project reader is.  `keepAll` builds for the whole roster, which `--cache`
--- needs because a shard outlives this run's flags.
+-- the rules that survive `--only`/`--disable`, per-file and project rules
+-- alike: empty when none reads it, the stdlib's rows when a stdlib reader is
+-- active, the project's rows too when a project reader is.  `keepAll` builds
+-- for the whole roster, which `--cache` needs because a shard outlives this
+-- run's flags.  The project's rows are those of the project of each linted
+-- path (`projectRootsOf`).
 export
 indexForRun : Bool ->
   List String ->
@@ -630,15 +633,10 @@ indexForRun : Bool ->
   List String ->
   <IO> Result StdlibIndexError StdlibIndex
 indexForRun keepAll only disable paths =
-  indexForRoster
-    allRules
-    (findProjectRootOrSelf (canonicalizePath "."))
-    keepAll
-    only
-    disable
-    paths
+  indexForRoster allRules "" keepAll only disable paths
 
--- `indexForRun` over a given roster, with the project's rows read from `root`.
+-- `indexForRun` over a given roster, with the project's rows read from `root`
+-- (empty: from the project of each of `paths`).
 export
 indexForRoster : List Rule ->
   String ->
@@ -672,15 +670,75 @@ indexForRosterIn : String ->
   List String ->
   <IO> Result StdlibIndexError StdlibIndex
 indexForRosterIn sdir shardDir roster root keepAll only disable paths =
+  indexForRostersIn
+    sdir
+    shardDir
+    roster
+    allProjectRules
+    root
+    keepAll
+    only
+    disable
+    paths
+
+-- `indexForRosterIn` over a given project-rule roster too: a project rule's
+-- declared need builds the index as a per-file rule's does.
+export
+indexForRostersIn : String ->
+  String ->
+  List Rule ->
+  List ProjectRule ->
+  String ->
+  Bool ->
+  List String ->
+  List String ->
+  List String ->
+  <IO> Result StdlibIndexError StdlibIndex
+indexForRostersIn sdir shardDir roster projects root keepAll only disable paths =
   let only2 = if keepAll then [] else only
   let disable2 = if keepAll then [] else disable
-  if anyActive needsProjectIndex roster only2 disable2 then
-    buildProjectIndexResultIn sdir shardDir root
+  if anyActive needsProjectIndex roster only2 disable2
+    || anyProjectActive needsProjectIndex projects only2 disable2 then
+    buildProjectIndexResultRootsIn sdir shardDir (if root == "" then
+      projectRootsOf paths
+    else
+      [root])
   else if anyActive needsStdlibIndex roster only2 disable2
-    || anyActive needsWildIndex roster only2 disable2 && anyPathWild paths then
+    || anyProjectActive needsStdlibIndex projects only2 disable2
+    || (anyActive needsWildIndex roster only2 disable2
+        || anyProjectActive needsWildIndex projects only2 disable2)
+      && anyPathWild paths then
     buildStdlibIndexResultIn sdir shardDir
   else
     Ok emptyStdlibIndex
+
+-- Whether some project rule that survives `--only`/`--disable` has the need
+-- `declares` tests for.
+anyProjectActive : (RuleMeta -> Bool) ->
+  List ProjectRule ->
+  List String ->
+  List String ->
+  Bool
+anyProjectActive declares projects only disable =
+  anyList (projectActiveWith declares only disable) projects
+
+projectActiveWith : (RuleMeta -> Bool) ->
+  List String ->
+  List String ->
+  ProjectRule ->
+  Bool
+projectActiveWith declares only disable r =
+  declares r.meta && projectRuleActive only disable r
+
+-- The roots of the projects the linted `paths` belong to: the nearest
+-- `medaka.toml` above each file, or the file's own directory when none is
+-- above it, so a run never indexes the working directory it happens to start
+-- in.
+projectRootsOf : List String -> <IO> List String
+projectRootsOf paths = nub (map projectRootOfPath paths)
+
+projectRootOfPath : String -> <IO> String
+projectRootOfPath path = findProjectRootOrSelf (dirOf (canonicalizePath path))
 
 anyPathWild : List String -> <IO> Bool
 anyPathWild [] = False
@@ -747,7 +805,17 @@ buildProjectIndexResultIn : String ->
   String ->
   <IO> Result StdlibIndexError StdlibIndex
 buildProjectIndexResultIn sdir shardDir root =
-  let (pdigests, prows) = projectRowsOf root
+  buildProjectIndexResultRootsIn sdir shardDir [root]
+
+-- The stdlib's rows plus the rows of every `.mdk` file under each of `roots`,
+-- module ids relative to the root the file was found under.
+export
+buildProjectIndexResultRootsIn : String ->
+  String ->
+  List String ->
+  <IO> Result StdlibIndexError StdlibIndex
+buildProjectIndexResultRootsIn sdir shardDir roots =
+  let (pdigests, prows) = projectRowsOfRoots roots
   map
     ((sdigests, srows) =>
       mkStdlibIndex
@@ -797,6 +865,11 @@ stdlibRowsGo dir stamp sdir (rel :: rest) =
 
 -- A project file that does not parse has no rows: the lint pass over that file
 -- reports the parse error, and the index abstains on what it cannot read.
+projectRowsOfRoots : List String -> <IO> (List String, List IndexRow)
+projectRowsOfRoots roots =
+  let perRoot = map projectRowsOf roots
+  (flatMap fst perRoot, flatMap snd perRoot)
+
 projectRowsOf : String -> <IO> (List String, List IndexRow)
 projectRowsOf root =
   let stamp = indexStamp ()

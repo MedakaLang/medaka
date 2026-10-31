@@ -108,6 +108,7 @@ import tools.lint_core.{
   stdlibRecorded,
   stdlibAnswersHold,
 }
+import tools.lint_index.{Answer(..)}
 import tools.lint_cache.{
   LintEntry(..),
   ShardLoad(..),
@@ -509,6 +510,7 @@ quadToSrc : (String, String, List Diag, Positions, List Decl) ->
   (String, String)
 quadToSrc (path, src, _, _, _) = (path, src)
 
+export
 dropQuadParse : (String, String, List Diag, Positions, List Decl) ->
   (String, String, List Diag)
 dropQuadParse (path, src, diags, _, _) = (path, src, diags)
@@ -1055,15 +1057,15 @@ localAnswersChecked _ _ _ other = other
 
 -- The recorded questions the index itself answers; those about project files
 -- are `localAnswersChecked`'s.
-indexAnswersHold : StdlibIndex -> List (String, String) -> Bool
+indexAnswersHold : StdlibIndex -> List Answer -> Bool
 indexAnswersHold idx answers =
   stdlibAnswersHold idx (filterList (a => not (isLocalAnswer a)) answers)
 
-isLocalAnswer : (String, String) -> Bool
-isLocalAnswer (question, _) = isSome (localModOfQuestion question)
+isLocalAnswer : Answer -> Bool
+isLocalAnswer a = isSome (localModOfQuestion a.ansQuestion)
 
-localModOf : (String, String) -> List String
-localModOf (question, _) = match localModOfQuestion question
+localModOf : Answer -> List String
+localModOf a = match localModOfQuestion a.ansQuestion
   Some modId => [modId]
   None => []
 

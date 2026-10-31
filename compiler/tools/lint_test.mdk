@@ -34,6 +34,7 @@ import test.{
   Expectation, expectEqual, expectFalse, expectTrue, expectEach, expectNotEqual,
   fail
 }
+import tools.lint_index.{Answer(..)}
 import tools.lint_cache.{
   LintEntry(..),
   entryFindings,
@@ -90,6 +91,7 @@ import tools.lint_core.{
 }
 import tools.lint_cmd.{
   allRuleRows,
+  dropQuadParse,
   lintCacheCtx,
   explainRule,
   dropInactiveInternalProject,
@@ -141,9 +143,6 @@ tripleKeysOne (path, _, diags) = map (diagKeyOf path) diags
 
 diagKeyOf : String -> Diag -> String
 diagKeyOf path (Diag _ code msg _ _ _) = "\{path}::\{diagIdText code}::\{msg}"
-
-dropQuadParse : (String, String, List Diag, a, b) -> (String, String, List Diag)
-dropQuadParse (path, src, diags, _, _) = (path, src, diags)
 
 -- ── 0. the stdlib index is built only when a reader of it can matter ─────────
 test "the edit rules ask for the index only on a wildcard import" = expectEach [
@@ -237,14 +236,17 @@ sampleEntry = LintEntry {
   freeFindings = [(0, sampleFinding)],
   indexFindings = [(2, { sampleFinding | message = "indexed", loc = None })],
   indexKey = "k",
-  indexAnswers = [("npv:f", "1.2.3"), ("as", "4.5.6")],
+  indexAnswers = [
+    Answer { ansQuestion = "npv:f", ansDigest = "1.2.3" },
+    Answer { ansQuestion = "as", ansDigest = "4.5.6" },
+  ],
   summaries = [("rule-a", DupOccs [(3, "f", "(key)")])],
   directives = [Directive DScopeFile ["rule-a"], Directive (DScopeLine 7) []],
   dirty = True,
 }
 
 -- A shard whose recorded index answers are not re-asked.
-noAnswers : List (String, String) -> Bool
+noAnswers : List Answer -> Bool
 noAnswers _ = False
 
 test "lint cache rejects pre-sexp format and mismatched identity" =
@@ -334,6 +336,36 @@ test "a shard round-trips findings, summaries and directives" =
       ),
     ]
     _ => fail "the shard did not decode"
+
+-- One sample per `Summary` constructor.  `summaryKind` has no wildcard arm, so
+-- a new constructor warns non-exhaustive here until it has a sample below.
+summaryKind : Summary -> String
+summaryKind (DupOccs _) = "dup-occs"
+
+summarySamples : List Summary
+summarySamples = [
+  DupOccs [],
+  DupOccs [
+    (3, "f", "(key)"),
+    (12, "name with space", "has \"quotes\"\nand a newline"),
+  ],
+]
+
+test "every Summary constructor round-trips through the shard codec" =
+  let entryOf =
+    sm => { sampleEntry | summaries = [("rule-a", sm), ("rule-b", sm)] }
+  let roundTrip =
+    sm =>
+      match decodeEntry "s" "k" noAnswers "p" "h" (encodeEntry "s" (entryOf sm))
+        ShardHit e => Some e.summaries
+        _ => None
+  expectEach
+    (map
+      (sm => (
+        summaryKind sm,
+        expectEqual (Some (entryOf sm).summaries) (roundTrip sm),
+      ))
+      summarySamples)
 
 test "a shard made against another index keeps what does not read the index" =
   match decodeEntry "s" "other" noAnswers "p" "h" (encodeEntry "s" sampleEntry)

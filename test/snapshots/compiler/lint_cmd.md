@@ -1,5 +1,5 @@
 # META
-source_lines=1189
+source_lines=1191
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cmd.mdk — the `medaka lint` engine.
@@ -112,6 +112,7 @@ import tools.lint_core.{
   stdlibRecorded,
   stdlibAnswersHold,
 }
+import tools.lint_index.{Answer(..)}
 import tools.lint_cache.{
   LintEntry(..),
   ShardLoad(..),
@@ -513,6 +514,7 @@ quadToSrc : (String, String, List Diag, Positions, List Decl) ->
   (String, String)
 quadToSrc (path, src, _, _, _) = (path, src)
 
+export
 dropQuadParse : (String, String, List Diag, Positions, List Decl) ->
   (String, String, List Diag)
 dropQuadParse (path, src, diags, _, _) = (path, src, diags)
@@ -1059,15 +1061,15 @@ localAnswersChecked _ _ _ other = other
 
 -- The recorded questions the index itself answers; those about project files
 -- are `localAnswersChecked`'s.
-indexAnswersHold : StdlibIndex -> List (String, String) -> Bool
+indexAnswersHold : StdlibIndex -> List Answer -> Bool
 indexAnswersHold idx answers =
   stdlibAnswersHold idx (filterList (a => not (isLocalAnswer a)) answers)
 
-isLocalAnswer : (String, String) -> Bool
-isLocalAnswer (question, _) = isSome (localModOfQuestion question)
+isLocalAnswer : Answer -> Bool
+isLocalAnswer a = isSome (localModOfQuestion a.ansQuestion)
 
-localModOf : (String, String) -> List String
-localModOf (question, _) = match localModOfQuestion question
+localModOf : Answer -> List String
+localModOf a = match localModOfQuestion a.ansQuestion
   Some modId => [modId]
   None => []
 
@@ -1205,6 +1207,7 @@ writeFixedSource target src newSrc n =
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Applicability" true) (mem "Category" true) (mem "ProjectRule" true) (mem "Directive" false) (mem "Finding" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "Summary" false) (mem "applicabilityText" false) (mem "maxApplicability" false) (mem "ruleMetaName" false) (mem "allProjectRules" false) (mem "StdlibIndex" false) (mem "allRules" false) (mem "applyFindingDeny" false) (mem "applyFindingFilters" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsMultiDirs" false) (mem "factDirectives" false) (mem "fileSummaries" false) (mem "findingToDiag" false) (mem "fixPassLimit" false) (mem "fixSource" false) (mem "FixRun" true) (mem "runParts" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "lintFileDiagTripleParsed" false) (mem "lintParseSource" false) (mem "lintProgramRanked" false) (mem "indexKeyFor" false) (mem "rankedIndexRules" false) (mem "splitByIndex" false) (mem "mkFileFacts" false) (mem "mkFileFactsAt" false) (mem "mkFileFactsIn" false) (mem "localModStates" false) (mem "projectWildMods" false) (mem "projectRuleSelected" false) (mem "ranked" false) (mem "selectRules" false) (mem "mergeProjectIntoTriples" false) (mem "runProjectRules" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "recordingStdlibIndex" false) (mem "withStdlibLocalMods" false) (mem "localModOfQuestion" false) (mem "stdlibRecorded" false) (mem "stdlibAnswersHold" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "Answer" true))))
 (DUse false (UseGroup ("tools" "lint_cache") ((mem "LintEntry" true) (mem "ShardLoad" true) (mem "cacheDirOf" false) (mem "contentHashOf" false) (mem "entryFindings" false) (mem "loadEntry" false) (mem "ruleSetStamp" false) (mem "staleShard" false))))
 (DUse false (UseGroup ("tools" "lint_baseline") ((mem "LintBaseline" false) (mem "applyBaselineToDiags" false) (mem "applyBaselineToFindings" false) (mem "baselineDiagViolations" false) (mem "baselineKeyOf" false) (mem "baselineViolationLine" false) (mem "baselineViolations" false) (mem "diagCodeOf" false) (mem "findingRuleOf" false))))
 (DTypeSig true "lintHelpText" (TyCon "String"))
@@ -1297,7 +1300,7 @@ writeFixedSource target src newSrc n =
 (DFunDef false "quadSummaries" ((PVar "only") (PVar "disable") (PTuple (PVar "path") (PVar "src") PWild (PVar "pos") (PVar "decls"))) (ETuple (EVar "path") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EVar "only")) (EVar "disable")) (EVar "path")) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "decls")) (EVar "pos"))) (EVar "pos")) (EVar "decls"))))
 (DTypeSig true "quadToSrc" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "quadToSrc" ((PTuple (PVar "path") (PVar "src") PWild PWild PWild)) (ETuple (EVar "path") (EVar "src")))
-(DTypeSig false "dropQuadParse" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
+(DTypeSig true "dropQuadParse" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "dropQuadParse" ((PTuple (PVar "path") (PVar "src") (PVar "diags") PWild PWild)) (ETuple (EVar "path") (EVar "src") (EVar "diags")))
 (DTypeSig true "lintFilesToDiagQuads" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))))))))))
 (DFunDef false "lintFilesToDiagQuads" (PWild PWild PWild PWild PWild PWild (PList)) (EListLit))
@@ -1390,12 +1393,12 @@ writeFixedSource target src newSrc n =
 (DTypeSig false "localAnswersChecked" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ShardLoad") (TyEffect ("IO") None (TyCon "ShardLoad")))))))
 (DFunDef false "localAnswersChecked" ((PVar "idx") (PVar "key") (PVar "target") (PCon "ShardHit" (PVar "hit"))) (EBlock (DoLet false false (PVar "asked") (EApp (EApp (EVar "filterList") (EVar "isLocalAnswer")) (EFieldAccess (EVar "hit") "indexAnswers"))) (DoLet false false (PVar "states") (EApp (EApp (EVar "localModStates") (EVar "target")) (EApp (EApp (EVar "flatMap") (EVar "localModOf")) (EVar "asked")))) (DoExpr (EIf (EApp (EApp (EVar "stdlibAnswersHold") (EApp (EApp (EVar "withStdlibLocalMods") (EVar "states")) (EVar "idx"))) (EVar "asked")) (EApp (EVar "ShardHit") (EVar "hit")) (EApp (EApp (EVar "staleShard") (EVar "key")) (EVar "hit"))))))
 (DFunDef false "localAnswersChecked" (PWild PWild PWild (PVar "other")) (EVar "other"))
-(DTypeSig false "indexAnswersHold" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
+(DTypeSig false "indexAnswersHold" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Answer")) (TyCon "Bool"))))
 (DFunDef false "indexAnswersHold" ((PVar "idx") (PVar "answers")) (EApp (EApp (EVar "stdlibAnswersHold") (EVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "a")) (EApp (EVar "not") (EApp (EVar "isLocalAnswer") (EVar "a"))))) (EVar "answers"))))
-(DTypeSig false "isLocalAnswer" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool")))
-(DFunDef false "isLocalAnswer" ((PTuple (PVar "question") PWild)) (EApp (EVar "isSome") (EApp (EVar "localModOfQuestion") (EVar "question"))))
-(DTypeSig false "localModOf" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "localModOf" ((PTuple (PVar "question") PWild)) (EMatch (EApp (EVar "localModOfQuestion") (EVar "question")) (arm (PCon "Some" (PVar "modId")) () (EListLit (EVar "modId"))) (arm (PCon "None") () (EListLit))))
+(DTypeSig false "isLocalAnswer" (TyFun (TyCon "Answer") (TyCon "Bool")))
+(DFunDef false "isLocalAnswer" ((PVar "a")) (EApp (EVar "isSome") (EApp (EVar "localModOfQuestion") (EFieldAccess (EVar "a") "ansQuestion"))))
+(DTypeSig false "localModOf" (TyFun (TyCon "Answer") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "localModOf" ((PVar "a")) (EMatch (EApp (EVar "localModOfQuestion") (EFieldAccess (EVar "a") "ansQuestion")) (arm (PCon "Some" (PVar "modId")) () (EListLit (EVar "modId"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "uncachedEntryOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyCon "LintEntry")))))))))))
 (DFunDef false "uncachedEntryOf" ((PVar "idx") (PVar "disableNames") (PVar "onlyNames") (PVar "wantSummaries") (PVar "target") (PVar "src") (PVar "decls") (PVar "pos")) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "rules") (EApp (EApp (EVar "selectRules") (EVar "onlyNames")) (EVar "disableNames"))) (DoExpr (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (ELit (LString ""))) (fa "freeFindings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EApp (EVar "ranked") (ELit (LInt 0))) (EVar "rules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "indexFindings" (EListLit)) (fa "indexKey" (ELit (LString ""))) (fa "indexAnswers" (EListLit)) (fa "summaries" (EIf (EVar "wantSummaries") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls")) (EListLit))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))))))
 (DTypeSig false "cachedEntryFrom" (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "ShardLoad") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyCon "LintEntry"))))))))))))
@@ -1421,6 +1424,7 @@ writeFixedSource target src newSrc n =
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Applicability" true) (mem "Category" true) (mem "ProjectRule" true) (mem "Directive" false) (mem "Finding" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "Summary" false) (mem "applicabilityText" false) (mem "maxApplicability" false) (mem "ruleMetaName" false) (mem "allProjectRules" false) (mem "StdlibIndex" false) (mem "allRules" false) (mem "applyFindingDeny" false) (mem "applyFindingFilters" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsMultiDirs" false) (mem "factDirectives" false) (mem "fileSummaries" false) (mem "findingToDiag" false) (mem "fixPassLimit" false) (mem "fixSource" false) (mem "FixRun" true) (mem "runParts" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "lintFileDiagTripleParsed" false) (mem "lintParseSource" false) (mem "lintProgramRanked" false) (mem "indexKeyFor" false) (mem "rankedIndexRules" false) (mem "splitByIndex" false) (mem "mkFileFacts" false) (mem "mkFileFactsAt" false) (mem "mkFileFactsIn" false) (mem "localModStates" false) (mem "projectWildMods" false) (mem "projectRuleSelected" false) (mem "ranked" false) (mem "selectRules" false) (mem "mergeProjectIntoTriples" false) (mem "runProjectRules" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "recordingStdlibIndex" false) (mem "withStdlibLocalMods" false) (mem "localModOfQuestion" false) (mem "stdlibRecorded" false) (mem "stdlibAnswersHold" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "Answer" true))))
 (DUse false (UseGroup ("tools" "lint_cache") ((mem "LintEntry" true) (mem "ShardLoad" true) (mem "cacheDirOf" false) (mem "contentHashOf" false) (mem "entryFindings" false) (mem "loadEntry" false) (mem "ruleSetStamp" false) (mem "staleShard" false))))
 (DUse false (UseGroup ("tools" "lint_baseline") ((mem "LintBaseline" false) (mem "applyBaselineToDiags" false) (mem "applyBaselineToFindings" false) (mem "baselineDiagViolations" false) (mem "baselineKeyOf" false) (mem "baselineViolationLine" false) (mem "baselineViolations" false) (mem "diagCodeOf" false) (mem "findingRuleOf" false))))
 (DTypeSig true "lintHelpText" (TyCon "String"))
@@ -1513,7 +1517,7 @@ writeFixedSource target src newSrc n =
 (DFunDef false "quadSummaries" ((PVar "only") (PVar "disable") (PTuple (PVar "path") (PVar "src") PWild (PVar "pos") (PVar "decls"))) (ETuple (EVar "path") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EVar "only")) (EVar "disable")) (EVar "path")) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "decls")) (EVar "pos"))) (EVar "pos")) (EVar "decls"))))
 (DTypeSig true "quadToSrc" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "quadToSrc" ((PTuple (PVar "path") (PVar "src") PWild PWild PWild)) (ETuple (EVar "path") (EVar "src")))
-(DTypeSig false "dropQuadParse" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
+(DTypeSig true "dropQuadParse" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "dropQuadParse" ((PTuple (PVar "path") (PVar "src") (PVar "diags") PWild PWild)) (ETuple (EVar "path") (EVar "src") (EVar "diags")))
 (DTypeSig true "lintFilesToDiagQuads" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))))))))))
 (DFunDef false "lintFilesToDiagQuads" (PWild PWild PWild PWild PWild PWild (PList)) (EListLit))
@@ -1606,12 +1610,12 @@ writeFixedSource target src newSrc n =
 (DTypeSig false "localAnswersChecked" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ShardLoad") (TyEffect ("IO") None (TyCon "ShardLoad")))))))
 (DFunDef false "localAnswersChecked" ((PVar "idx") (PVar "key") (PVar "target") (PCon "ShardHit" (PVar "hit"))) (EBlock (DoLet false false (PVar "asked") (EApp (EApp (EVar "filterList") (EVar "isLocalAnswer")) (EFieldAccess (EVar "hit") "indexAnswers"))) (DoLet false false (PVar "states") (EApp (EApp (EVar "localModStates") (EVar "target")) (EApp (EApp (EDictApp "flatMap") (EVar "localModOf")) (EVar "asked")))) (DoExpr (EIf (EApp (EApp (EVar "stdlibAnswersHold") (EApp (EApp (EVar "withStdlibLocalMods") (EVar "states")) (EVar "idx"))) (EVar "asked")) (EApp (EVar "ShardHit") (EVar "hit")) (EApp (EApp (EVar "staleShard") (EVar "key")) (EVar "hit"))))))
 (DFunDef false "localAnswersChecked" (PWild PWild PWild (PVar "other")) (EVar "other"))
-(DTypeSig false "indexAnswersHold" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
+(DTypeSig false "indexAnswersHold" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Answer")) (TyCon "Bool"))))
 (DFunDef false "indexAnswersHold" ((PVar "idx") (PVar "answers")) (EApp (EApp (EVar "stdlibAnswersHold") (EVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "a")) (EApp (EVar "not") (EApp (EVar "isLocalAnswer") (EVar "a"))))) (EVar "answers"))))
-(DTypeSig false "isLocalAnswer" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool")))
-(DFunDef false "isLocalAnswer" ((PTuple (PVar "question") PWild)) (EApp (EVar "isSome") (EApp (EVar "localModOfQuestion") (EVar "question"))))
-(DTypeSig false "localModOf" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "localModOf" ((PTuple (PVar "question") PWild)) (EMatch (EApp (EVar "localModOfQuestion") (EVar "question")) (arm (PCon "Some" (PVar "modId")) () (EListLit (EVar "modId"))) (arm (PCon "None") () (EListLit))))
+(DTypeSig false "isLocalAnswer" (TyFun (TyCon "Answer") (TyCon "Bool")))
+(DFunDef false "isLocalAnswer" ((PVar "a")) (EApp (EVar "isSome") (EApp (EVar "localModOfQuestion") (EFieldAccess (EVar "a") "ansQuestion"))))
+(DTypeSig false "localModOf" (TyFun (TyCon "Answer") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "localModOf" ((PVar "a")) (EMatch (EApp (EVar "localModOfQuestion") (EFieldAccess (EVar "a") "ansQuestion")) (arm (PCon "Some" (PVar "modId")) () (EListLit (EVar "modId"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "uncachedEntryOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyCon "LintEntry")))))))))))
 (DFunDef false "uncachedEntryOf" ((PVar "idx") (PVar "disableNames") (PVar "onlyNames") (PVar "wantSummaries") (PVar "target") (PVar "src") (PVar "decls") (PVar "pos")) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "rules") (EApp (EApp (EVar "selectRules") (EVar "onlyNames")) (EVar "disableNames"))) (DoExpr (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (ELit (LString ""))) (fa "freeFindings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EApp (EVar "ranked") (ELit (LInt 0))) (EVar "rules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "indexFindings" (EListLit)) (fa "indexKey" (ELit (LString ""))) (fa "indexAnswers" (EListLit)) (fa "summaries" (EIf (EVar "wantSummaries") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls")) (EListLit))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))))))
 (DTypeSig false "cachedEntryFrom" (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "ShardLoad") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyCon "LintEntry"))))))))))))

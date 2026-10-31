@@ -16,6 +16,7 @@ import tools.lint_index.{
   RowKind(..),
   Ns(..),
   ProjectIndex,
+  Answer,
   rowSig,
   emptyProjectIndex,
   mkProjectIndexWith,
@@ -306,8 +307,9 @@ public export data RuleCheck =
 
 -- What one project rule keeps of one file.  The type is closed on purpose: the
 -- shard codec (`tools/lint_cache.mdk`) matches it with no wildcard arm, so a new
--- summary kind does not compile until its codec arm exists, and a summary that
--- cannot be cached cannot be registered.
+-- summary kind makes the encoder warn non-exhaustive and fail on the first
+-- store; the decoder is not checked, so a missing decode arm makes every shard
+-- holding that summary a miss.  `lint_test.mdk` round-trips every kind.
 public export data Summary =
   DupOccs (List (Int, String, String))
   deriving (Eq, Debug)
@@ -504,12 +506,12 @@ localModOfQuestion = localModOfKey
 -- What the rules handed a recording index asked, with the digest of each
 -- answer.
 export
-stdlibRecorded : StdlibIndex -> List (String, String)
+stdlibRecorded : StdlibIndex -> List Answer
 stdlibRecorded (StdlibIndex ix) = recordedAnswers ix
 
 -- Whether this index answers every recorded question as it was answered then.
 export
-stdlibAnswersHold : StdlibIndex -> List (String, String) -> Bool
+stdlibAnswersHold : StdlibIndex -> List Answer -> Bool
 stdlibAnswersHold (StdlibIndex ix) recorded = answersHold ix recorded
 
 -- How many distinct exported NAMES the index carries (not declarations — a name

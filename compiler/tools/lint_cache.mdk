@@ -24,8 +24,8 @@
 -- of* file B.  Cache A's findings and B's edit cannot retract them: A is
 -- unchanged, so A cache-hits, and A's stale finding survives.  So every project
 -- rule's `prEvaluate` re-runs from scratch on every run, over summaries that
--- are pure functions of one file each.  Scenario 3 of
--- test/diff_compiler_lint_cache.sh fails loudly if anyone "optimises" this away.
+-- are pure functions of one file each.  `lint_cache_test.mdk` fails if a
+-- project rule's join is cached.
 -- Every registered project rule's summary is stored, so a second project rule
 -- keeps the cache sound with no further work here.
 --
@@ -56,15 +56,15 @@
 
 import frontend.ast.{Loc(..)}
 import driver.diagnostics.{Severity(..)}
-import io.{runVerb}
+import path.{dirname}
 import u64 as U64
 import tools.lint_core.{Finding(..), Directive(..), DirScope(..), Summary(..)}
-import support.util.{joinWith, listLen, filterList, splitOnChar, stringTrim}
+import tools.lint_index.{Answer(..), makeStagingDir, stageAndRename}
+import support.util.{joinWith, listLen, filterList}
 import support.char.{isAlnum}
 import support.sexp_value.{
-  SExp(..),
   SexpCursor,
-  renderSExp,
+  atomText,
   cursorOf,
   cursorFailed,
   cursorAtEnd,
@@ -97,7 +97,7 @@ public export data LintEntry = LintEntry {
   freeFindings : List (Int, Finding),
   indexFindings : List (Int, Finding),
   indexKey : String,
-  indexAnswers : List (String, String),
+  indexAnswers : List Answer,
   summaries : List (String, Summary),
   directives : List Directive,
   dirty : Bool,
@@ -202,8 +202,8 @@ sanitizeChar c
 -- ── encode ───────────────────────────────────────────────────────────────────
 -- A shard is one s-expression:
 --   (version "stamp" "path" "hash" "indexKey" (answers) (free) (index) (summaries) (directives))
--- A shard from before `answers` was stored has one list fewer, so its last
--- read fails and it is a miss under the same version.
+-- An older-format shard has a different list count, so its last read fails
+-- and it is a miss.
 -- read by the cursor reader of `support/sexp_value`, which records the first
 -- refusal and hands every later read a neutral value; the decoder checks it once
 -- at the end.
@@ -211,20 +211,17 @@ sanitizeChar c
 export
 encodeEntry : String -> LintEntry -> String
 encodeEntry stamp e =
-  "(\{intToString cacheFormatVersion} \{atom stamp} \{atom e.path} \{atom e.contentHash} \{atom e.indexKey} \{listText encAnswer e.indexAnswers} \{listText encRanked e.freeFindings} \{listText encRanked e.indexFindings} \{listText encNamedSummary e.summaries} \{listText encDirective e.directives})"
-
-atom : String -> String
-atom s = renderSExp (SAtom s)
+  "(\{intToString cacheFormatVersion} \{atomText stamp} \{atomText e.path} \{atomText e.contentHash} \{atomText e.indexKey} \{listText encAnswer e.indexAnswers} \{listText encRanked e.freeFindings} \{listText encRanked e.indexFindings} \{listText encNamedSummary e.summaries} \{listText encDirective e.directives})"
 
 listText : (a -> String) -> List a -> String
 listText f xs = "(" ++ joinWith " " (map f xs) ++ ")"
 
-encAnswer : (String, String) -> String
-encAnswer (question, digest) = "(\{atom question} \{atom digest})"
+encAnswer : Answer -> String
+encAnswer a = "(\{atomText a.ansQuestion} \{atomText a.ansDigest})"
 
 encRanked : (Int, Finding) -> String
 encRanked (rank, f) =
-  "(\{intToString rank} \{atom f.rule} \{atom f.message} \{encSeverity f.severity} \{encLoc f.loc})"
+  "(\{intToString rank} \{atomText f.rule} \{atomText f.message} \{encSeverity f.severity} \{encLoc f.loc})"
 
 encSeverity : Severity -> String
 encSeverity SevError = "e"
@@ -233,12 +230,16 @@ encSeverity SevWarning = "w"
 encLoc : Option Loc -> String
 encLoc None = "()"
 encLoc (Some (Loc file l c el ec)) =
-  "(\{atom file} \{intToString l} \{intToString c} \{intToString el} \{intToString ec})"
+  "(\{atomText file} \{intToString l} \{intToString c} \{intToString el} \{intToString ec})"
 
--- Every `Summary` constructor has an arm here and in `summaryTag`, with no
--- wildcard, so a new summary kind does not compile until it can be stored.
+-- `encSummary` and `summaryTag` have no wildcard arm, so a missing arm for a
+-- new summary kind is a non-exhaustive warning from `medaka check` and a
+-- runtime failure on the first store; `readSummary` falls through to a cursor
+-- failure, so a missing decode arm makes every shard holding that summary a
+-- miss.  The `lint_test.mdk` round trip of every `Summary` constructor pins
+-- both.
 encNamedSummary : (String, Summary) -> String
-encNamedSummary (rule, summary) = "(\{atom rule} \{encSummary summary})"
+encNamedSummary (rule, summary) = "(\{atomText rule} \{encSummary summary})"
 
 encSummary : Summary -> String
 encSummary (DupOccs occs) =
@@ -248,11 +249,12 @@ summaryTag : Summary -> String
 summaryTag (DupOccs _) = "d"
 
 encOcc : (Int, String, String) -> String
-encOcc (line, name, key) = "(\{intToString line} \{atom name} \{atom key})"
+encOcc (line, name, key) =
+  "(\{intToString line} \{atomText name} \{atomText key})"
 
 encDirective : Directive -> String
 encDirective (Directive scope names) =
-  "(\{encScope scope} \{listText atom names})"
+  "(\{encScope scope} \{listText atomText names})"
 
 encScope : DirScope -> String
 encScope DScopeFile = "f"
@@ -272,7 +274,7 @@ encScope (DScopeLine l) = "l \{intToString l}"
 export
 decodeEntry : String ->
   String ->
-  (List (String, String) -> Bool) ->
+  (List Answer -> Bool) ->
   String ->
   String ->
   String ->
@@ -327,13 +329,13 @@ staleShard indexKey entry = ShardStale ({ entry |
   indexAnswers = [],
 })
 
-readAnswer : SexpCursor -> (String, String)
+readAnswer : SexpCursor -> Answer
 readAnswer cur =
   let _ = cursorOpen cur
   let question = cursorAtom cur
   let digest = cursorAtom cur
   let _ = cursorClose cur
-  (question, digest)
+  Answer { ansQuestion = question, ansDigest = digest }
 
 readRanked : SexpCursor -> (Int, Finding)
 readRanked cur =
@@ -434,7 +436,7 @@ export
 loadEntry : String ->
   String ->
   String ->
-  (List (String, String) -> Bool) ->
+  (List Answer -> Bool) ->
   String ->
   String ->
   <IO> ShardLoad
@@ -494,39 +496,13 @@ storeGo cacheDir tmp stamp (e :: rest) =
 -- deliberate: the invariant is about never being WRONG, not never leaking.
 storeOne : String -> String -> String -> LintEntry -> <IO> Unit
 storeOne cacheDir tmp stamp e =
-  let staged = "\{tmp}/shard.sx"
-  match writeFile staged (encodeEntry stamp e)
-    Err _ => ()
-    Ok _ => match rename staged (shardPathOf cacheDir e.path)
-      Err _ =>
-        let _ = removeFile staged
-        ()
-      Ok _ => ()
+  stageAndRename tmp (shardPathOf cacheDir e.path) (encodeEntry stamp e)
 
 -- `mkdir -p` for the two-level cache dir (`<root>/.medaka/lint-cache`).  An
 -- already-existing dir makes `makeDir` fail (EEXIST), which is success here, so
 -- the result is judged by `fileExists`, not by makeDir's own status.
 ensureCacheDir : String -> <IO> Result String Unit
 ensureCacheDir cacheDir =
-  let _ = makeDir (parentOfCacheDir cacheDir)
+  let _ = makeDir (dirname cacheDir)
   let _ = makeDir cacheDir
   if fileExists cacheDir then Ok () else Err "cannot create \{cacheDir}"
-
-parentOfCacheDir : String -> String
-parentOfCacheDir cacheDir =
-  joinWith "/" (dropLastSeg (splitOnChar '/' cacheDir))
-
-dropLastSeg : List String -> List String
-dropLastSeg [] = []
-dropLastSeg [_] = []
-dropLastSeg (x :: rest) = x :: dropLastSeg rest
-
--- A staging dir unique to THIS process, inside the cache dir (see storeEntries).
-makeStagingDir : String -> <IO> Result String String
-makeStagingDir cacheDir =
-  match runVerb "mktemp" ["-d", "\{cacheDir}/.staging_XXXXXX"]
-    Err e => Err e
-    Ok (0, out, _) =>
-      let dir = stringTrim out
-      if dir == "" then Err "mktemp -d printed no path" else Ok dir
-    Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"

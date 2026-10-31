@@ -33,6 +33,8 @@
 import frontend.ast.{
   Loc(..),
   Ty(..),
+  EffAtomTy(..),
+  Constraint(..),
   Decl(..),
   DataVis(..),
   Variant(..),
@@ -48,6 +50,7 @@ import support.sexp_value.{
   SExp(..),
   SexpCursor,
   renderSExp,
+  atomText,
   cursorOf,
   cursorFailed,
   cursorAtEnd,
@@ -64,10 +67,13 @@ import support.sexp_value.{
   isCloseByte,
 }
 import support.util.{
-  joinWith, splitOnChar, listLen, filterList, anyList, allList
+  joinWith, listLen, filterList, anyList, allList, startsWith, stringTrim
 }
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault, entries}
-import list.{sortBy}
+import list.{sortBy, reverse}
+import path.{basename}
+import fs.{mkdirAll}
+import io.{runVerb}
 import frontend.parser.{Positions, ParseError}
 
 -- ── rows ────────────────────────────────────────────────────────────────────
@@ -294,8 +300,10 @@ unsignedRow m signed seen pub name loc
     [mkRow m name RkValue NoSig "" [] 0 pub (Some loc)]
 
 -- A signature's own spans point into the file that declared it and answer
--- nothing an index query asks, so a row's type carries none.  This keeps a
--- body-only edit that moves lines from changing any row's digest.
+-- nothing an index query asks, so a row's type carries none: every `Loc` in it
+-- is dropped, in type constructors, effect atoms and constraint arguments
+-- alike.  This keeps an edit that only moves lines from changing any row's
+-- digest.
 export
 stripTy : Ty -> Ty
 stripTy (TyCon { tyConName = n, tyConOrigin = o, ... }) =
@@ -304,12 +312,19 @@ stripTy (TyVar v) = TyVar v
 stripTy (TyApp a b) = TyApp (stripTy a) (stripTy b)
 stripTy (TyFun a b) = TyFun (stripTy a) (stripTy b)
 stripTy (TyTuple ts) = TyTuple (map stripTy ts)
-stripTy (TyEffect atoms vs t) = TyEffect atoms vs (stripTy t)
-stripTy (TyConstrained cs t) = TyConstrained cs (stripTy t)
-stripTy (TyNamed n t e) = TyNamed n (stripTy t) e
+stripTy (TyEffect atoms vs t) = TyEffect (map stripAtom atoms) vs (stripTy t)
+stripTy (TyConstrained cs t) =
+  TyConstrained (map stripConstraint cs) (stripTy t)
+stripTy (TyNamed n t e) = TyNamed n (stripTy t) (map stripAtom e)
 stripTy (TyQual t ps _) = TyQual (stripTy t) ps None
-stripTy (TyRow atoms vs _) = TyRow atoms vs None
+stripTy (TyRow atoms vs _) = TyRow (map stripAtom atoms) vs None
 stripTy (TyAuth ps _) = TyAuth ps None
+
+stripAtom : EffAtomTy -> EffAtomTy
+stripAtom a = { a | eatLoc = None }
+
+stripConstraint : Constraint -> Constraint
+stripConstraint c = { c | constraintArgs = map stripTy c.constraintArgs }
 
 -- Rows whose module is visible from outside: the stdlib as a user sees it.
 export
@@ -363,16 +378,14 @@ export
 rowsDigest : List IndexRow -> String
 rowsDigest rows =
   let joined = joinWith "\n" (map rowKeyText rows)
-  let n = stringLength joined
-  let lane2 = if n == 0 then 0 else hashString (stringSlice 1 n joined)
-  "\{hashString joined}.\{lane2}.\{n}"
+  "\{hashStringHex joined}.\{stringLength joined}"
 
 -- ── shard codec ─────────────────────────────────────────────────────────────
 
 -- Bump when the shard schema changes in a way an old shard would decode into
 -- something wrong rather than fail to decode.
 rowFormatVersion : Int
-rowFormatVersion = 3
+rowFormatVersion = 4
 
 sexpOptLoc : Option Loc -> SExp
 sexpOptLoc None = SList []
@@ -408,7 +421,7 @@ encodeRowShard stamp path hash modId rows =
 -- The signature is already text, so it is written into the row verbatim.
 rowText : IndexRow -> String
 rowText r =
-  "(\{quoted r.ixrName} \{kindTag r.ixrKind} \{slotText r.ixrSig} \{quoted r.ixrParent} \{renderSExp (SList (map SAtom r.ixrFields))} \{intToString r.ixrArity} \{if r.ixrExported then "t" else "f"} \{renderSExp (sexpOptLoc r.ixrLoc)})"
+  "(\{atomText r.ixrName} \{kindTag r.ixrKind} \{slotText r.ixrSig} \{atomText r.ixrParent} \{renderSExp (SList (map SAtom r.ixrFields))} \{intToString r.ixrArity} \{if r.ixrExported then "t" else "f"} \{renderSExp (sexpOptLoc r.ixrLoc)})"
 
 renderShard : String ->
   String ->
@@ -418,10 +431,7 @@ renderShard : String ->
   List String ->
   String
 renderShard stamp path hash modId digest rowTexts =
-  "(\{intToString rowFormatVersion} \{quoted stamp} \{quoted path} \{quoted hash} \{quoted modId} \{quoted digest} (\{joinWith " " rowTexts}))"
-
-quoted : String -> String
-quoted s = renderSExp (SAtom s)
+  "(\{intToString rowFormatVersion} \{atomText stamp} \{atomText path} \{atomText hash} \{atomText modId} \{atomText digest} (\{joinWith " " rowTexts}))"
 
 readBoolTF : SexpCursor -> Bool
 readBoolTF cur =
@@ -506,11 +516,20 @@ indexCacheDir = "lint-index"
 export
 stdlibShardDir : Unit -> <IO> String
 stdlibShardDir _ =
-  let xdg = optionOr "" (getEnv "XDG_CACHE_HOME")
-  let home = optionOr "" (getEnv "HOME")
-  if xdg /= "" then
+  stdlibShardDirOf
+    (optionOr "" (getEnv "XDG_CACHE_HOME"))
+    (optionOr "" (getEnv "HOME"))
+
+-- The shard directory for a given `XDG_CACHE_HOME` and `HOME`.  A relative
+-- value is not a directory the XDG base-directory specification allows, and
+-- one would be created under the working directory (or, mis-joined, at the
+-- filesystem root), so it is ignored like an unset one.
+export
+stdlibShardDirOf : String -> String -> String
+stdlibShardDirOf xdg home =
+  if startsWith "/" xdg then
     "\{xdg}/medaka/\{indexCacheDir}"
-  else if home /= "" then
+  else if startsWith "/" home then
     "\{home}/.cache/medaka/\{indexCacheDir}"
   else
     ""
@@ -520,16 +539,14 @@ projectShardDir : String -> String
 projectShardDir root = "\{root}/.medaka/\{indexCacheDir}"
 
 -- The shard of `path` in `dir`.  The name is the file's own name plus a hash
--- of its full path; the path is also stored in the shard and checked on load,
--- so a name collision costs a miss and never a wrong answer.
+-- of its full path and nothing else, so the directory holds one shard per
+-- distinct path however often the stamp or the content changes: a changed
+-- stamp or content rewrites the same file.  The path is also stored in the
+-- shard and checked on load, so a name collision costs a miss and never a
+-- wrong answer.
 export
 rowShardPath : String -> String -> String
-rowShardPath dir path =
-  "\{dir}/\{lastSegment "" (splitOnChar '/' path)}.\{intToString (hashString path)}.sx"
-
-lastSegment : String -> List String -> String
-lastSegment acc [] = acc
-lastSegment _ (x :: rest) = lastSegment x rest
+rowShardPath dir path = "\{dir}/\{basename path}.\{hashStringHex path}.sx"
 
 -- The content key a shard is checked against: the 64-bit digest of the source.
 export
@@ -583,28 +600,41 @@ atPath path r = match r.ixrLoc
 
 writeShard : String -> String -> String -> <IO> Unit
 writeShard dir sp text =
-  let _ = makeDirs dir
-  let tmp = "\{sp}.tmp"
-  match writeFile tmp text
+  let _ = mkdirAll dir
+  match makeStagingDir dir
     Err _ => ()
-    Ok _ => match rename tmp sp
-      Err _ => ()
+    Ok tmp =>
+      let _ = stageAndRename tmp sp text
+      let _ = removeDir tmp
+      ()
+
+-- A staging dir unique to THIS process, inside `dir`: `rename(2)` fails across
+-- filesystems, so it cannot be in /tmp.  `mktemp -d` makes the name because the
+-- RNG is seeded identically per process, so two concurrent runs would draw the
+-- same "random" name.
+export
+makeStagingDir : String -> <IO> Result String String
+makeStagingDir dir = match runVerb "mktemp" ["-d", "\{dir}/.staging_XXXXXX"]
+  Err e => Err e
+  Ok (0, out, _) =>
+    let made = stringTrim out
+    if made == "" then Err "mktemp -d printed no path" else Ok made
+  Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
+
+-- Stage `text` under the staging dir `tmp`, then rename it onto `dest` (same
+-- filesystem, as `tmp` is inside `dest`'s directory), so a reader sees `dest`
+-- whole or not at all.  Best-effort: a failed write leaves nothing at `dest`.
+export
+stageAndRename : String -> String -> String -> <IO> Unit
+stageAndRename tmp dest text =
+  let staged = "\{tmp}/shard.sx"
+  match writeFile staged text
+    Err _ => ()
+    Ok _ => match rename staged dest
+      Err _ =>
+        let _ = removeFile staged
+        ()
       Ok _ => ()
-
--- `mkdir -p`: every missing ancestor of `dir`, then `dir`.
-makeDirs : String -> <IO> Unit
-makeDirs dir =
-  let parts = splitOnChar '/' dir
-  makeDirsGo "" parts
-
-makeDirsGo : String -> List String -> <IO> Unit
-makeDirsGo _ [] = ()
-makeDirsGo acc (p :: rest)
-  | p == "" = makeDirsGo acc rest
-  | otherwise =
-    let next = "\{acc}/\{p}"
-    let _ = makeDir next
-    makeDirsGo next rest
 
 -- ── the index ───────────────────────────────────────────────────────────────
 
@@ -672,9 +702,7 @@ export
 combineDigests : List String -> String
 combineDigests digests =
   let joined = joinWith ";" digests
-  let n = stringLength joined
-  let lane2 = if n == 0 then 0 else hashString (stringSlice 1 n joined)
-  "\{listLen digests}.\{hashString joined}.\{lane2}.\{n}"
+  "\{listLen digests}.\{hashStringHex joined}.\{stringLength joined}"
 
 -- Every row of both scopes in one string: the stdlib scope's digest, then the
 -- project scope's.  Equal fingerprints mean every question has the answer it
@@ -683,14 +711,14 @@ combineDigests digests =
 export
 indexFingerprint : ProjectIndex -> String
 indexFingerprint ix =
-  let _ = asked ix (QScope False)
-  let _ = asked ix (QScope True)
-  "\{scopeDigestOf ix False}/\{scopeDigestOf ix True}"
+  let _ = asked ix (QScope StdlibScope)
+  let _ = asked ix (QScope ProjectScope)
+  "\{scopeDigestOf ix StdlibScope}/\{scopeDigestOf ix ProjectScope}"
 
 mkScope : String -> List IndexRow -> IndexScope
 mkScope digest rows =
   let m = new ()
-  let _ = groupInto (reverseRows rows []) m
+  let _ = groupInto (reverse rows) m
   let signed = filterList isExportedSigValue rows
   IndexScope {
     ixsByName = m,
@@ -708,10 +736,6 @@ rowName r = r.ixrName
 
 rowModule : IndexRow -> String
 rowModule r = r.ixrModule
-
-reverseRows : List IndexRow -> List IndexRow -> List IndexRow
-reverseRows [] acc = acc
-reverseRows (r :: rest) acc = reverseRows rest (r :: acc)
 
 -- Prepending the rows last-first keeps each name's rows in input order.
 groupInto : List IndexRow -> HashMap String (List IndexRow) -> Unit
@@ -734,48 +758,50 @@ scopeNamed : IndexScope -> Ns -> String -> List IndexRow
 scopeNamed s ns name =
   filterList (r => rowNs r.ixrKind == ns) (findWithDefault [] name s.ixsByName)
 
--- The project scope (`True`) or the stdlib's.
-scopeOf : ProjectIndex -> Bool -> IndexScope
-scopeOf (ProjectIndex _ proj _ _) True = proj
-scopeOf (ProjectIndex std _ _ _) False = std
+-- Which of an index's two sets of rows a question is about.
+data Scope = ProjectScope | StdlibScope deriving (Eq)
 
-scopeDigestOf : ProjectIndex -> Bool -> String
-scopeDigestOf ix inProject =
-  let s = scopeOf ix inProject
+scopeOf : ProjectIndex -> Scope -> IndexScope
+scopeOf (ProjectIndex _ proj _ _) ProjectScope = proj
+scopeOf (ProjectIndex std _ _ _) StdlibScope = std
+
+scopeDigestOf : ProjectIndex -> Scope -> String
+scopeDigestOf ix scope =
+  let s = scopeOf ix scope
   s.ixsDigest
 
 -- ── questions and their answers ─────────────────────────────────────────────
 
--- Every question a rule can ask, in the project scope (`True`) or the
--- stdlib's: the rows named `name` in `ns`; every row of a scope; whether any
+-- Every question a rule can ask, in the project scope or the stdlib's: the rows named `name` in `ns`; every row of a scope; whether any
 -- row of either scope is in a module; whether a stdlib module exports a signed
 -- value; whether a module the file imports with `*` is a file of the project
 -- (`QLocalMod`, answered from the states `withLocalModStates` was given).  Each
 -- accessor below asks one or two of these and nothing else.
 data Query =
-  | QNamed Bool Ns String
-  | QScope Bool
+  | QNamed Scope Ns String
+  | QScope Scope
   | QKnows String
   | QValueModule String
   | QLocalMod String
 
--- The two constructors are two kinds of answer, not failure and success.
+-- What the index returns for a `Query`.  The two constructors are two kinds of
+-- reply, not failure and success.
 -- lint-disable-next-line rule-clone-type
-data Answer = ARows (List IndexRow) | AYes Bool
+data Reply = ARows (List IndexRow) | AYes Bool
 
-answerOf : ProjectIndex -> Query -> Answer
-answerOf ix (QNamed inProject ns name) =
-  ARows (scopeNamed (scopeOf ix inProject) ns name)
-answerOf ix (QScope inProject) =
-  let s = scopeOf ix inProject
+answerOf : ProjectIndex -> Query -> Reply
+answerOf ix (QNamed scope ns name) =
+  ARows (scopeNamed (scopeOf ix scope) ns name)
+answerOf ix (QScope scope) =
+  let s = scopeOf ix scope
   ARows s.ixsRows
 answerOf ix (QKnows modId) =
   let inModule = r => r.ixrModule == modId
-  let proj = scopeOf ix True
-  let std = scopeOf ix False
+  let proj = scopeOf ix ProjectScope
+  let std = scopeOf ix StdlibScope
   AYes (anyList inModule proj.ixsRows || anyList inModule std.ixsRows)
 answerOf ix (QValueModule modId) =
-  let std = scopeOf ix False
+  let std = scopeOf ix StdlibScope
   AYes (elem modId std.ixsModules)
 answerOf ix (QLocalMod modId) = AYes (localModState ix modId == Some True)
 
@@ -794,8 +820,8 @@ lookupState modId ((m, present) :: rest) =
 -- location included (`rowKeyText`), so the empty answer, a second candidate, a
 -- moved definition and an export or kind change each digest differently.  A
 -- whole scope is its digest.
-answerDigest : ProjectIndex -> Query -> Answer -> String
-answerDigest ix (QScope inProject) _ = scopeDigestOf ix inProject
+answerDigest : ProjectIndex -> Query -> Reply -> String
+answerDigest ix (QScope scope) _ = scopeDigestOf ix scope
 answerDigest ix (QLocalMod modId) _ = match localModState ix modId
   Some True => "t"
   Some False => "f"
@@ -805,16 +831,15 @@ answerDigest _ _ (AYes yes) = if yes then "t" else "f"
 
 -- A question as stored with the findings that depended on it.
 queryKey : Query -> String
-queryKey (QNamed inProject ns name) =
-  "n\{scopeTag inProject}\{nsTag ns}:\{name}"
-queryKey (QScope inProject) = "a\{scopeTag inProject}"
+queryKey (QNamed scope ns name) = "n\{scopeTag scope}\{nsTag ns}:\{name}"
+queryKey (QScope scope) = "a\{scopeTag scope}"
 queryKey (QKnows modId) = "k:\{modId}"
 queryKey (QValueModule modId) = "m:\{modId}"
 queryKey (QLocalMod modId) = "l:\{modId}"
 
-scopeTag : Bool -> String
-scopeTag True = "p"
-scopeTag False = "s"
+scopeTag : Scope -> String
+scopeTag ProjectScope = "p"
+scopeTag StdlibScope = "s"
 
 nsTag : Ns -> String
 nsTag NsValue = "v"
@@ -830,8 +855,7 @@ readQuery key =
     scopeOfTag (stringSlice 1 2 key),
     nsOfTag (stringSlice 2 3 key),
   )
-    (Some inProject, Some ns) =>
-      Some (QNamed inProject ns (stringSlice 4 n key))
+    (Some scope, Some ns) => Some (QNamed scope ns (stringSlice 4 n key))
     _ => None
   else if tag == "a" && n == 2 then
     map QScope (scopeOfTag (stringSlice 1 2 key))
@@ -844,9 +868,14 @@ readQuery key =
   else
     None
 
-scopeOfTag : String -> Option Bool
+scopeOfTag : String -> Option Scope
 scopeOfTag t =
-  if t == "p" then Some True else if t == "s" then Some False else None
+  if t == "p" then
+    Some ProjectScope
+  else if t == "s" then
+    Some StdlibScope
+  else
+    None
 
 nsOfTag : String -> Option Ns
 nsOfTag t =
@@ -854,16 +883,16 @@ nsOfTag t =
 
 -- The scopes whose digest decides a question's answer: once a rule has asked
 -- for every row of those scopes, the narrower question adds nothing to the log.
-scopesOf : Query -> List Bool
-scopesOf (QNamed inProject _ _) = [inProject]
+scopesOf : Query -> List Scope
+scopesOf (QNamed scope _ _) = [scope]
 scopesOf (QScope _) = []
-scopesOf (QKnows _) = [True, False]
-scopesOf (QValueModule _) = [False]
+scopesOf (QKnows _) = [ProjectScope, StdlibScope]
+scopesOf (QValueModule _) = [StdlibScope]
 scopesOf (QLocalMod _) = []
 
 -- The one way any accessor reads the index: answers `q`, and on a recording
 -- index logs the question with the digest of its answer.
-asked : ProjectIndex -> Query -> Answer
+asked : ProjectIndex -> Query -> Reply
 asked ix q =
   let a = answerOf ix q
   let _ = match ix
@@ -871,7 +900,7 @@ asked ix q =
     ProjectIndex _ _ _ None => ()
   a
 
-logAnswer : HashMap String String -> ProjectIndex -> Query -> Answer -> Unit
+logAnswer : HashMap String String -> ProjectIndex -> Query -> Reply -> Unit
 logAnswer log ix q a =
   if subsumed log q then
     ()
@@ -901,16 +930,24 @@ recording : ProjectIndex -> ProjectIndex
 recording (ProjectIndex std proj locals _) =
   ProjectIndex std proj locals (Some (new ()))
 
+-- A question as stored (`queryKey`) and the digest of the answer it had.
+public export data Answer = Answer {
+  ansQuestion : String,
+  ansDigest : String,
+} deriving (Eq, Debug)
+
 -- What the rules handed `ix` asked, each question with the digest of its
 -- answer, sorted by question.  A question a later whole-scope question covers
 -- is dropped.  Empty on an index that is not recording.
 export
-recordedAnswers : ProjectIndex -> List (String, String)
+recordedAnswers : ProjectIndex -> List Answer
 recordedAnswers (ProjectIndex _ _ _ None) = []
 recordedAnswers (ProjectIndex _ _ _ (Some log)) =
   sortBy
-    (x y => stringCompare (fst x) (fst y))
-    (filterList (kv => not (keyCovered log (fst kv))) (entries log))
+    (x y => stringCompare x.ansQuestion y.ansQuestion)
+    (map
+      ((key, digest) => Answer { ansQuestion = key, ansDigest = digest })
+      (filterList (kv => not (keyCovered log (fst kv))) (entries log)))
 
 keyCovered : HashMap String String -> String -> Bool
 keyCovered log key = match readQuery key
@@ -921,13 +958,13 @@ keyCovered log key = match readQuery key
 -- digest.  A question this binary cannot read does not hold.  The questions
 -- are asked like any other, so on a recording index they are logged too.
 export
-answersHold : ProjectIndex -> List (String, String) -> Bool
+answersHold : ProjectIndex -> List Answer -> Bool
 answersHold ix recorded = allList (answerHolds ix) recorded
 
-answerHolds : ProjectIndex -> (String, String) -> Bool
-answerHolds ix (key, digest) = match readQuery key
+answerHolds : ProjectIndex -> Answer -> Bool
+answerHolds ix a = match readQuery a.ansQuestion
   None => False
-  Some q => answerDigest ix q (asked ix q) == digest
+  Some q => answerDigest ix q (asked ix q) == a.ansDigest
 
 -- ── the accessors ───────────────────────────────────────────────────────────
 
@@ -935,17 +972,18 @@ answerHolds ix (key, digest) = match readQuery key
 export
 rowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
 rowsNamed ix ns name =
-  rowsAsked ix (QNamed True ns name) ++ rowsAsked ix (QNamed False ns name)
+  rowsAsked ix (QNamed ProjectScope ns name)
+    ++ rowsAsked ix (QNamed StdlibScope ns name)
 
 -- The stdlib's candidates alone.
 export
 stdlibRowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
-stdlibRowsNamed ix ns name = rowsAsked ix (QNamed False ns name)
+stdlibRowsNamed ix ns name = rowsAsked ix (QNamed StdlibScope ns name)
 
 -- The project's candidates alone.
 export
 projectRowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
-projectRowsNamed ix ns name = rowsAsked ix (QNamed True ns name)
+projectRowsNamed ix ns name = rowsAsked ix (QNamed ProjectScope ns name)
 
 -- Candidates for `name` declared in module `modId` (still a list: a name can
 -- be a value and a constructor, or be declared twice).
@@ -960,23 +998,23 @@ rowsOfModule : ProjectIndex -> String -> List IndexRow
 rowsOfModule ix modId =
   filterList
     (r => r.ixrModule == modId)
-    (rowsAsked ix (QScope True) ++ rowsAsked ix (QScope False))
+    (rowsAsked ix (QScope ProjectScope) ++ rowsAsked ix (QScope StdlibScope))
 
 -- Every row of a scope, in file order.
 export
 stdlibRows : ProjectIndex -> List IndexRow
-stdlibRows ix = rowsAsked ix (QScope False)
+stdlibRows ix = rowsAsked ix (QScope StdlibScope)
 
 export
 projectRows : ProjectIndex -> List IndexRow
-projectRows ix = rowsAsked ix (QScope True)
+projectRows ix = rowsAsked ix (QScope ProjectScope)
 
 -- The sorted names of the stdlib's exported signed values.
 export
 stdlibValueNames : ProjectIndex -> List String
 stdlibValueNames ix =
-  let _ = asked ix (QScope False)
-  let std = scopeOf ix False
+  let _ = asked ix (QScope StdlibScope)
+  let std = scopeOf ix StdlibScope
   std.ixsNames
 
 -- The stdlib modules that export a signed value; a module outside this list
@@ -984,8 +1022,8 @@ stdlibValueNames ix =
 export
 stdlibValueModules : ProjectIndex -> List String
 stdlibValueModules ix =
-  let _ = asked ix (QScope False)
-  let std = scopeOf ix False
+  let _ = asked ix (QScope StdlibScope)
+  let std = scopeOf ix StdlibScope
   std.ixsModules
 
 -- Whether `modId` is one of `stdlibValueModules`, asked as one question.
