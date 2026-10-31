@@ -27,6 +27,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-eager-default`](#rule-eager-default) | universal | perf | gated | fixable-unsafe | file |
 | [`rule-bind-chain-to-do`](#rule-bind-chain-to-do) | universal | complexity | gated | not-fixable | file |
 | [`rule-dead-code`](#rule-dead-code) | universal | suspicious | gated | not-fixable | file |
+| [`rule-unused-import`](#rule-unused-import) | universal | style | gated | fixable | file |
 | [`rule-concat-to-interp`](#rule-concat-to-interp) | universal | style | gated | fixable | file |
 | [`rule-self-shadow-extern`](#rule-self-shadow-extern) | universal | correctness | gated | not-fixable | file |
 | [`rule-prefer-assign-op`](#rule-prefer-assign-op) | universal | style | gated | fixable | file |
@@ -342,6 +343,21 @@ Before:
   helper x = x + 1   -- never called
 After:
   (binding removed)
+```
+
+## rule-unused-import
+
+an imported name that nothing in the file uses
+
+A name listed in `import m.{…}` that no expression, signature, constraint, pattern, doctest, `test` or `prop` body of the file uses is dead weight and hides which imports matter. `public import` re-exports, `import m.*`, bare `import m` and `import m as A` list no names and are not checked. The fix drops the name and its comma; when no name of the line is used it leaves a bare `import m`, which still brings the module's `impl`s into scope.
+
+```
+Before:
+  import list.{sort, nub}
+  main = sort [2, 1]
+After:
+  import list.{sort}
+  main = sort [2, 1]
 ```
 
 ## rule-concat-to-interp

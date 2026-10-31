@@ -12,7 +12,7 @@ import support.util.{
   contains, filterList, splitOnChar, joinWith, startsWith, listLen, anyList,
   joinNl, dedupBy
 }
-import list.{drop, sortBy, last, reverse}
+import list.{sortBy, last, reverse}
 import array.{get as arrayGet}
 import string.{split, isUpper, words, unwords}
 import support.path.{stripMdk}
@@ -130,6 +130,10 @@ ruleNameConcatToInterp = "rule-concat-to-interp"
 export
 ruleNameSelfShadowExtern : String
 ruleNameSelfShadowExtern = "rule-self-shadow-extern"
+
+export
+ruleNameUnusedImport : String
+ruleNameUnusedImport = "rule-unused-import"
 
 export
 ruleNamePreferAssignOp : String

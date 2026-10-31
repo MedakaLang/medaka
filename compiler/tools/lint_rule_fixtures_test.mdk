@@ -129,6 +129,7 @@ fixtureNames = [
   "test-bool-literal-equal",
   "test-equal-in-true",
   "test-prelude-shadow",
+  "unused-import",
   "when-unless",
 ]
 
@@ -410,6 +411,8 @@ test "rule-test-bool-literal-equal fixture" =
 test "rule-test-equal-in-true fixture" = fixtureHolds "test-equal-in-true"
 
 test "rule-test-prelude-shadow fixture" = fixtureHolds "test-prelude-shadow"
+
+test "rule-unused-import fixture" = fixtureHolds "unused-import"
 
 test "rule-when-unless fixture" = fixtureHolds "when-unless"
 
