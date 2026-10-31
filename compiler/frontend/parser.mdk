@@ -1054,7 +1054,7 @@ dottedGo cur (f :: fs) value =
     cur
     [FieldAssign f (dottedGo (EFieldAccess cur f unminted) fs value)]
     unminted
-dottedGo cur [] value = value
+dottedGo _cur [] value = value
 
 -- interpolated string: INTERP_OPEN <expr> (INTERP_MID <expr>)* INTERP_END,
 -- assembled into alternating InterpStr / InterpExpr parts
@@ -1087,7 +1087,7 @@ interpRestFor e (TInterpMid s) = defer
 interpRestFor e (TInterpEnd s) = defer
   advance
   deferPure [InterpExpr e, InterpStr s]
-interpRestFor e _ = failP "expected interpolation mid/end"
+interpRestFor _ _ = failP "expected interpolation mid/end"
 
 -- Bracket block-expressions (LAYOUT-BRACKETS-DESIGN.md, Gate B).  The locked
 -- herald set is match/do/record/bare-INDENT block.  All of those
@@ -4271,7 +4271,7 @@ parseDefer : Parser Expr
 parseDefer = parseDoBlock TDefer True
 
 parseDoBlock : Token -> Bool -> Parser Expr
-parseDoBlock herald deferred = defer
+parseDoBlock herald _deferred = defer
   expectTok herald
   expectTok TIndent
   p0 <- getPos
@@ -4967,7 +4967,7 @@ trailingArrowLeftoverMsg _ base = base
 -- real fix: put `->` at the end of the previous line instead, where it
 -- heralds the indented continuation the writer wanted.
 leadingIndentMsg : Token -> String -> Int -> String
-leadingIndentMsg TArrow base col =
+leadingIndentMsg TArrow base _col =
   "\{base}; a line cannot start with `->`, so put it at the end of the previous line, as in `f : Int ->` then an indented `Int`"
 leadingIndentMsg _ base col =
   "\{base}; this line is indented to column \{intToString col}, which matches no enclosing block"

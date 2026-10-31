@@ -170,7 +170,7 @@ driveRuntimeArgs (runtimePath :: rest) emit = match splitLast rest
       Err msg => failWith msg
     Err msg => failWith msg
   None => failWith usageRuntime
-driveRuntimeArgs _ emit = failWith usageRuntime
+driveRuntimeArgs _ _emit = failWith usageRuntime
 
 -- CLI shape: <prelude.mdk>... <target.mdk> (no separate runtime).  Calls
 -- `emit preludeDecls userDecls` (which prints).
@@ -505,7 +505,7 @@ elaborateForTarget requirement inputs asyncDriver None _ _ runtimeDecls coreDecl
       coreDecls
       modules
   (elaborated, report, outputs, [])
-elaborateForTarget requirement inputs asyncDriver (Some p) modsWithPath paths runtimeDecls coreDecls modules =
+elaborateForTarget _requirement inputs asyncDriver (Some p) modsWithPath paths runtimeDecls coreDecls modules =
   let (analysis, report, outputs) =
     analyzeProgramReport
       (executedMainInputs inputs asyncDriver modules)
@@ -825,7 +825,7 @@ evalDictString runtimeDecls preludeDecls userDecls =
 -- that table).
 export
 batchLoop : String -> (List Decl -> String) -> List String -> <IO> Unit
-batchLoop sentinel render [] = putStr ""
+batchLoop _sentinel _render [] = putStr ""
 batchLoop sentinel render (path :: rest) = match readFile path
   Err msg =>
     let _ = ePutStrLn msg

@@ -151,7 +151,7 @@ foldTargetDiags entry entrySrc (d :: ds) triples =
 -- withholds.  The entry judged is the one the drivers run: a value `main` they
 -- print performs what the `println` applied to it performs.
 capabilityRefusal : TargetProfile -> TargetInputs -> Scheme -> Option Diag
-capabilityRefusal profile analysis sch =
+capabilityRefusal profile analysis _sch =
   let request = ManifestRequest {
     entry = mainEntryKey analysis.tiModules,
     protocol = ExecutedMain,

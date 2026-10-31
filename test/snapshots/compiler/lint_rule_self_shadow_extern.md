@@ -123,7 +123,7 @@ isBareSelf name (EVar w) = name == w
 isBareSelf _ _ = False
 
 isHeadSelfApp : String -> Expr -> Bool
-isHeadSelfApp name (EApp f a) = isBareSelf name (appHead (stripWrap f))
+isHeadSelfApp name (EApp f _a) = isBareSelf name (appHead (stripWrap f))
 isHeadSelfApp _ _ = False
 
 appHead : Expr -> Expr
@@ -172,7 +172,7 @@ selfShadowFinding (name, loc) = Finding {
 (DFunDef false "isBareSelf" ((PVar "name") (PCon "EVar" (PVar "w"))) (EBinOp "==" (EVar "name") (EVar "w")))
 (DFunDef false "isBareSelf" (PWild PWild) (EVar "False"))
 (DTypeSig false "isHeadSelfApp" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
-(DFunDef false "isHeadSelfApp" ((PVar "name") (PCon "EApp" (PVar "f") (PVar "a"))) (EApp (EApp (EVar "isBareSelf") (EVar "name")) (EApp (EVar "appHead") (EApp (EVar "stripWrap") (EVar "f")))))
+(DFunDef false "isHeadSelfApp" ((PVar "name") (PCon "EApp" (PVar "f") (PVar "_a"))) (EApp (EApp (EVar "isBareSelf") (EVar "name")) (EApp (EVar "appHead") (EApp (EVar "stripWrap") (EVar "f")))))
 (DFunDef false "isHeadSelfApp" (PWild PWild) (EVar "False"))
 (DTypeSig false "appHead" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "appHead" ((PVar "e")) (EMatch (EApp (EVar "stripWrap") (EVar "e")) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "appHead") (EVar "f"))) (arm (PVar "x") () (EVar "x"))))
@@ -210,7 +210,7 @@ selfShadowFinding (name, loc) = Finding {
 (DFunDef false "isBareSelf" ((PVar "name") (PCon "EVar" (PVar "w"))) (EBinOp "==" (EVar "name") (EVar "w")))
 (DFunDef false "isBareSelf" (PWild PWild) (EVar "False"))
 (DTypeSig false "isHeadSelfApp" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
-(DFunDef false "isHeadSelfApp" ((PVar "name") (PCon "EApp" (PVar "f") (PVar "a"))) (EApp (EApp (EVar "isBareSelf") (EVar "name")) (EApp (EVar "appHead") (EApp (EVar "stripWrap") (EVar "f")))))
+(DFunDef false "isHeadSelfApp" ((PVar "name") (PCon "EApp" (PVar "f") (PVar "_a"))) (EApp (EApp (EVar "isBareSelf") (EVar "name")) (EApp (EVar "appHead") (EApp (EVar "stripWrap") (EVar "f")))))
 (DFunDef false "isHeadSelfApp" (PWild PWild) (EVar "False"))
 (DTypeSig false "appHead" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "appHead" ((PVar "e")) (EMatch (EApp (EVar "stripWrap") (EVar "e")) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "appHead") (EVar "f"))) (arm (PVar "x") () (EVar "x"))))

@@ -265,7 +265,7 @@ genScalar ctx GInt depth = genNum ctx GInt depth
 genScalar ctx GFloat depth = genNum ctx GFloat depth
 genScalar ctx GBool depth = genBool ctx depth
 genScalar ctx GString depth = genString ctx depth
-genScalar ctx t depth = genLeaf ctx t
+genScalar ctx t _depth = genLeaf ctx t
 
 genByType : Ctx -> Gty -> Int -> <Rand> Expr
 genByType ctx (GTup ts) depth = ETuple (genTupElems ctx ts depth)
@@ -285,7 +285,7 @@ genExpr ctx t depth =
 genLeaf : Ctx -> Gty -> <Rand> Expr
 genLeaf ctx (GTup ts) = ETuple (genLeafElems ctx ts)
 genLeaf ctx (GData name) = genData ctx name 0
-genLeaf ctx t = litOf t
+genLeaf _ctx t = litOf t
 
 -- numeric expression (Int or Float): literals, arithmetic, if, let.
 genNum : Ctx -> Gty -> Int -> <Rand> Expr
@@ -331,7 +331,7 @@ filterDerived (a :: rest) =
   if adtDerives a then a :: filterDerived rest else filterDerived rest
 
 pickOptype : Ctx -> Bool -> List Gadt -> List Gty -> <Rand> Gty
-pickOptype ctx wantOrd derived ordScalars =
+pickOptype _ctx wantOrd derived ordScalars =
   if not (listEmpty derived) && chance 1 3 then
     GData (adtName (pick derived))
   else if wantOrd then
@@ -389,7 +389,7 @@ genLet ctx t depth =
 
 -- construct an ADT value: pick a variant, fill positional fields.
 applyFields : Ctx -> Int -> Expr -> List Gty -> <Rand> Expr
-applyFields ctx depth acc [] = acc
+applyFields _ctx _depth acc [] = acc
 applyFields ctx depth acc (fty :: rest) =
   applyFields ctx depth (EApp acc (genExpr ctx fty (maxI 0 (depth - 1)))) rest
 
@@ -431,7 +431,7 @@ genMatch ctx scrutAdt t depth =
 
 -- ── ADT declarations ────────────────────────────────────────────────────────
 genVariant : Ctx -> List Gty -> Int -> <Rand> (String, List Gty)
-genVariant ctx fieldTys vi =
+genVariant ctx fieldTys _vi =
   let cname = freshName ctx "C"
   let nf = randBelow 3
   let ftys = listInit nf (fi => pick fieldTys)
@@ -555,13 +555,13 @@ iterExprs (e :: rest) f = let _ = f e in iterExprs rest f
 
 -- append one freshly-generated ADT to ctx.adts
 addAdt : Ctx -> Int -> <Rand> Unit
-addAdt ctx i =
+addAdt ctx _i =
   let a = genAdtDecl ctx
   setAdts ctx (ctxAdts ctx ++ [a])
 
 -- one top-level value binding (populates scope for later reuse)
 genValDecl : Ctx -> Int -> <Rand> Decl
-genValDecl ctx i =
+genValDecl ctx _i =
   let t = randGty ctx 1
   let name = freshName ctx "g"
   let e = genExpr ctx t 3

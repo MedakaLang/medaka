@@ -4477,7 +4477,7 @@ dirOf2 : String -> String
 dirOf2 path = dirGo2 path (stringLength path)
 
 dirGo2 : String -> Int -> String
-dirGo2 path 0 = "."
+dirGo2 _path 0 = "."
 dirGo2 path i =
   if stringSlice (i - 1) i path == "/" then
     stringSlice 0 (i - 1) path

@@ -174,7 +174,7 @@ declNameTokIdxAt toks (DLetGroup _ _) i =
 declNameTokIdxAt toks (DImpl { ... }) i = match implHeadTokIdx toks (i + 2)
   Some headIdx => Some headIdx
   None => Some i  -- fully-parametric head: fall back to the `impl` keyword
-declNameTokIdxAt toks (DUse _ _ _) i = None
+declNameTokIdxAt _toks (DUse _ _ _) _i = None
 declNameTokIdx : Array Token -> Decl -> Int -> Option Int
 declNameTokIdx toks d i = declNameTokIdxAt toks d (skipLeadingModifiers toks i)
 declNameSpanOf : Array Token ->
@@ -368,7 +368,7 @@ isDataDecl : Decl -> Bool
 isDataDecl (DData { dataOrigin = _ }) = True
 isDataDecl _ = False
 allVariantLines : Array Token -> Array Int -> List (Decl, Int, Int) -> List Int
-allVariantLines toks lines [] = []
+allVariantLines _toks _lines [] = []
 allVariantLines toks lines ((d, s, e) :: rest)
   | isDataDecl d =
     variantStartsIn toks lines s e ++ allVariantLines toks lines rest
@@ -497,7 +497,7 @@ allChainLines : Array Token ->
   Array Int ->
   List (Decl, Int, Int) ->
   List (List Int)
-allChainLines toks lines [] = []
+allChainLines _toks _lines [] = []
 allChainLines toks lines ((d, s, e) :: rest) =
   declChainLines toks lines d s e :: allChainLines toks lines rest
 lastContentLineOf : Array Token -> Array Int -> List (Decl, Int, Int) -> Int
@@ -508,8 +508,8 @@ lastContentLineGo : Array Token ->
   List (Decl, Int, Int) ->
   Int ->
   Int
-lastContentLineGo toks lines [] acc = acc
-lastContentLineGo toks lines ((_, s, e) :: rest) acc =
+lastContentLineGo _toks _lines [] acc = acc
+lastContentLineGo toks lines ((_, s, e) :: rest) _acc =
   lastContentLineGo
     toks
     lines
@@ -592,7 +592,7 @@ positionsFromSpans lineStarts toks offs spans =
 (DFunDef false "declNameTokIdxAt" ((PVar "toks") (PRec "DNewtype" ((rf "newtypeOrigin" PWild)) false) (PVar "i")) (EApp (EApp (EVar "tokIdxOrNone") (EVar "toks")) (EApp (EApp (EVar "skipLeadingModifiers") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
 (DFunDef false "declNameTokIdxAt" ((PVar "toks") (PCon "DLetGroup" PWild PWild) (PVar "i")) (EApp (EApp (EVar "tokIdxOrNone") (EVar "toks")) (EApp (EApp (EVar "skipLeadingModifiers") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 2))))))
 (DFunDef false "declNameTokIdxAt" ((PVar "toks") (PRec "DImpl" () true) (PVar "i")) (EMatch (EApp (EApp (EVar "implHeadTokIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (arm (PCon "Some" (PVar "headIdx")) () (EApp (EVar "Some") (EVar "headIdx"))) (arm (PCon "None") () (EApp (EVar "Some") (EVar "i")))))
-(DFunDef false "declNameTokIdxAt" ((PVar "toks") (PCon "DUse" PWild PWild PWild) (PVar "i")) (EVar "None"))
+(DFunDef false "declNameTokIdxAt" ((PVar "_toks") (PCon "DUse" PWild PWild PWild) (PVar "_i")) (EVar "None"))
 (DTypeSig false "declNameTokIdx" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "declNameTokIdx" ((PVar "toks") (PVar "d") (PVar "i")) (EApp (EApp (EApp (EVar "declNameTokIdxAt") (EVar "toks")) (EVar "d")) (EApp (EApp (EVar "skipLeadingModifiers") (EVar "toks")) (EVar "i"))))
 (DTypeSig false "declNameSpanOf" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Loc")))))))
@@ -657,7 +657,7 @@ positionsFromSpans lineStarts toks offs spans =
 (DFunDef false "isDataDecl" ((PRec "DData" ((rf "dataOrigin" PWild)) false)) (EVar "True"))
 (DFunDef false "isDataDecl" (PWild) (EVar "False"))
 (DTypeSig false "allVariantLines" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "allVariantLines" ((PVar "toks") (PVar "lines") (PList)) (EListLit))
+(DFunDef false "allVariantLines" ((PVar "_toks") (PVar "_lines") (PList)) (EListLit))
 (DFunDef false "allVariantLines" ((PVar "toks") (PVar "lines") (PCons (PTuple (PVar "d") (PVar "s") (PVar "e")) (PVar "rest"))) (EIf (EApp (EVar "isDataDecl") (EVar "d")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "variantStartsIn") (EVar "toks")) (EVar "lines")) (EVar "s")) (EVar "e")) (EApp (EApp (EApp (EVar "allVariantLines") (EVar "toks")) (EVar "lines")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "allVariantLines") (EVar "toks")) (EVar "lines")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isContinuationOpStr" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isContinuationOpStr" ((PVar "op")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "|>"))) (EBinOp "==" (EVar "op") (ELit (LString ">>")))) (EBinOp "==" (EVar "op") (ELit (LString "<<")))) (EBinOp "==" (EVar "op") (ELit (LString "&&")))) (EBinOp "==" (EVar "op") (ELit (LString "||")))) (EBinOp "==" (EVar "op") (ELit (LString "++")))))
@@ -707,13 +707,13 @@ positionsFromSpans lineStarts toks offs spans =
 (DTypeSig false "declChainLines" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))))
 (DFunDef false "declChainLines" ((PVar "toks") (PVar "lines") (PVar "d") (PVar "s") (PVar "e")) (EMatch (EApp (EVar "declChainTopOp") (EVar "d")) (arm (PCon "Some" (PVar "op")) () (EApp (EApp (EApp (EApp (EApp (EVar "chainOperandLines") (EVar "toks")) (EVar "lines")) (EVar "op")) (EApp (EApp (EApp (EApp (EVar "rhsStartIdx") (EVar "toks")) (EVar "s")) (EVar "e")) (ELit (LInt 0)))) (EVar "e"))) (arm (PCon "None") () (EIf (EApp (EVar "declBlockRhs") (EVar "d")) (EApp (EApp (EApp (EApp (EVar "blockStmtLines") (EVar "toks")) (EVar "lines")) (EApp (EApp (EApp (EApp (EVar "rhsStartIdx") (EVar "toks")) (EVar "s")) (EVar "e")) (ELit (LInt 0)))) (EVar "e")) (EListLit)))))
 (DTypeSig false "allChainLines" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))))
-(DFunDef false "allChainLines" ((PVar "toks") (PVar "lines") (PList)) (EListLit))
+(DFunDef false "allChainLines" ((PVar "_toks") (PVar "_lines") (PList)) (EListLit))
 (DFunDef false "allChainLines" ((PVar "toks") (PVar "lines") (PCons (PTuple (PVar "d") (PVar "s") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "declChainLines") (EVar "toks")) (EVar "lines")) (EVar "d")) (EVar "s")) (EVar "e")) (EApp (EApp (EApp (EVar "allChainLines") (EVar "toks")) (EVar "lines")) (EVar "rest"))))
 (DTypeSig false "lastContentLineOf" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyCon "Int")))))
 (DFunDef false "lastContentLineOf" ((PVar "toks") (PVar "lines") (PVar "spans")) (EApp (EApp (EApp (EApp (EVar "lastContentLineGo") (EVar "toks")) (EVar "lines")) (EVar "spans")) (ELit (LInt 0))))
 (DTypeSig false "lastContentLineGo" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "lastContentLineGo" ((PVar "toks") (PVar "lines") (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "lastContentLineGo" ((PVar "toks") (PVar "lines") (PCons (PTuple PWild (PVar "s") (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "lastContentLineGo") (EVar "toks")) (EVar "lines")) (EVar "rest")) (EApp (EApp (EVar "lineAt") (EVar "lines")) (EApp (EApp (EApp (EVar "lastContentIdx") (EVar "toks")) (EVar "s")) (EBinOp "-" (EVar "e") (ELit (LInt 1)))))))
+(DFunDef false "lastContentLineGo" ((PVar "_toks") (PVar "_lines") (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "lastContentLineGo" ((PVar "toks") (PVar "lines") (PCons (PTuple PWild (PVar "s") (PVar "e")) (PVar "rest")) (PVar "_acc")) (EApp (EApp (EApp (EApp (EVar "lastContentLineGo") (EVar "toks")) (EVar "lines")) (EVar "rest")) (EApp (EApp (EVar "lineAt") (EVar "lines")) (EApp (EApp (EApp (EVar "lastContentIdx") (EVar "toks")) (EVar "s")) (EBinOp "-" (EVar "e") (ELit (LInt 1)))))))
 (DTypeSig true "positionsFromSpans" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyCon "Positions"))))))
 (DFunDef false "positionsFromSpans" ((PVar "lineStarts") (PVar "toks") (PVar "offs") (PVar "spans")) (EBlock (DoLet false false (PVar "lines") (EApp (EApp (EVar "map") (ELam ((PVar "off")) (EApp (EVar "fst") (EApp (EApp (EVar "offsetToLineColFast") (EVar "lineStarts")) (EApp (EVar "fst") (EVar "off")))))) (EVar "offs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "Positions") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "declPosOf") (EVar "toks")) (EVar "lines")) (EVar "offs")) (EVar "lineStarts"))) (EVar "spans"))) (EApp (EApp (EApp (EVar "allVariantLines") (EVar "toks")) (EVar "lines")) (EVar "spans"))) (EApp (EApp (EApp (EVar "lastContentLineOf") (EVar "toks")) (EVar "lines")) (EVar "spans"))) (EApp (EApp (EApp (EVar "allChainLines") (EVar "toks")) (EVar "lines")) (EVar "spans"))))))
 # MARK
@@ -779,7 +779,7 @@ positionsFromSpans lineStarts toks offs spans =
 (DFunDef false "declNameTokIdxAt" ((PVar "toks") (PRec "DNewtype" ((rf "newtypeOrigin" PWild)) false) (PVar "i")) (EApp (EApp (EVar "tokIdxOrNone") (EVar "toks")) (EApp (EApp (EVar "skipLeadingModifiers") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
 (DFunDef false "declNameTokIdxAt" ((PVar "toks") (PCon "DLetGroup" PWild PWild) (PVar "i")) (EApp (EApp (EVar "tokIdxOrNone") (EVar "toks")) (EApp (EApp (EVar "skipLeadingModifiers") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 2))))))
 (DFunDef false "declNameTokIdxAt" ((PVar "toks") (PRec "DImpl" () true) (PVar "i")) (EMatch (EApp (EApp (EVar "implHeadTokIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (arm (PCon "Some" (PVar "headIdx")) () (EApp (EVar "Some") (EVar "headIdx"))) (arm (PCon "None") () (EApp (EVar "Some") (EVar "i")))))
-(DFunDef false "declNameTokIdxAt" ((PVar "toks") (PCon "DUse" PWild PWild PWild) (PVar "i")) (EVar "None"))
+(DFunDef false "declNameTokIdxAt" ((PVar "_toks") (PCon "DUse" PWild PWild PWild) (PVar "_i")) (EVar "None"))
 (DTypeSig false "declNameTokIdx" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "declNameTokIdx" ((PVar "toks") (PVar "d") (PVar "i")) (EApp (EApp (EApp (EVar "declNameTokIdxAt") (EVar "toks")) (EVar "d")) (EApp (EApp (EVar "skipLeadingModifiers") (EVar "toks")) (EVar "i"))))
 (DTypeSig false "declNameSpanOf" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Loc")))))))
@@ -844,7 +844,7 @@ positionsFromSpans lineStarts toks offs spans =
 (DFunDef false "isDataDecl" ((PRec "DData" ((rf "dataOrigin" PWild)) false)) (EVar "True"))
 (DFunDef false "isDataDecl" (PWild) (EVar "False"))
 (DTypeSig false "allVariantLines" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "allVariantLines" ((PVar "toks") (PVar "lines") (PList)) (EListLit))
+(DFunDef false "allVariantLines" ((PVar "_toks") (PVar "_lines") (PList)) (EListLit))
 (DFunDef false "allVariantLines" ((PVar "toks") (PVar "lines") (PCons (PTuple (PVar "d") (PVar "s") (PVar "e")) (PVar "rest"))) (EIf (EApp (EVar "isDataDecl") (EVar "d")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "variantStartsIn") (EVar "toks")) (EVar "lines")) (EVar "s")) (EVar "e")) (EApp (EApp (EApp (EVar "allVariantLines") (EVar "toks")) (EVar "lines")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "allVariantLines") (EVar "toks")) (EVar "lines")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isContinuationOpStr" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isContinuationOpStr" ((PVar "op")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "|>"))) (EBinOp "==" (EVar "op") (ELit (LString ">>")))) (EBinOp "==" (EVar "op") (ELit (LString "<<")))) (EBinOp "==" (EVar "op") (ELit (LString "&&")))) (EBinOp "==" (EVar "op") (ELit (LString "||")))) (EBinOp "==" (EVar "op") (ELit (LString "++")))))
@@ -894,12 +894,12 @@ positionsFromSpans lineStarts toks offs spans =
 (DTypeSig false "declChainLines" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))))
 (DFunDef false "declChainLines" ((PVar "toks") (PVar "lines") (PVar "d") (PVar "s") (PVar "e")) (EMatch (EApp (EVar "declChainTopOp") (EVar "d")) (arm (PCon "Some" (PVar "op")) () (EApp (EApp (EApp (EApp (EApp (EVar "chainOperandLines") (EVar "toks")) (EVar "lines")) (EVar "op")) (EApp (EApp (EApp (EApp (EVar "rhsStartIdx") (EVar "toks")) (EVar "s")) (EVar "e")) (ELit (LInt 0)))) (EVar "e"))) (arm (PCon "None") () (EIf (EApp (EVar "declBlockRhs") (EVar "d")) (EApp (EApp (EApp (EApp (EVar "blockStmtLines") (EVar "toks")) (EVar "lines")) (EApp (EApp (EApp (EApp (EVar "rhsStartIdx") (EVar "toks")) (EVar "s")) (EVar "e")) (ELit (LInt 0)))) (EVar "e")) (EListLit)))))
 (DTypeSig false "allChainLines" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))))
-(DFunDef false "allChainLines" ((PVar "toks") (PVar "lines") (PList)) (EListLit))
+(DFunDef false "allChainLines" ((PVar "_toks") (PVar "_lines") (PList)) (EListLit))
 (DFunDef false "allChainLines" ((PVar "toks") (PVar "lines") (PCons (PTuple (PVar "d") (PVar "s") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "declChainLines") (EVar "toks")) (EVar "lines")) (EVar "d")) (EVar "s")) (EVar "e")) (EApp (EApp (EApp (EVar "allChainLines") (EVar "toks")) (EVar "lines")) (EVar "rest"))))
 (DTypeSig false "lastContentLineOf" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyCon "Int")))))
 (DFunDef false "lastContentLineOf" ((PVar "toks") (PVar "lines") (PVar "spans")) (EApp (EApp (EApp (EApp (EVar "lastContentLineGo") (EVar "toks")) (EVar "lines")) (EVar "spans")) (ELit (LInt 0))))
 (DTypeSig false "lastContentLineGo" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "lastContentLineGo" ((PVar "toks") (PVar "lines") (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "lastContentLineGo" ((PVar "toks") (PVar "lines") (PCons (PTuple PWild (PVar "s") (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "lastContentLineGo") (EVar "toks")) (EVar "lines")) (EVar "rest")) (EApp (EApp (EVar "lineAt") (EVar "lines")) (EApp (EApp (EApp (EVar "lastContentIdx") (EVar "toks")) (EVar "s")) (EBinOp "-" (EVar "e") (ELit (LInt 1)))))))
+(DFunDef false "lastContentLineGo" ((PVar "_toks") (PVar "_lines") (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "lastContentLineGo" ((PVar "toks") (PVar "lines") (PCons (PTuple PWild (PVar "s") (PVar "e")) (PVar "rest")) (PVar "_acc")) (EApp (EApp (EApp (EApp (EVar "lastContentLineGo") (EVar "toks")) (EVar "lines")) (EVar "rest")) (EApp (EApp (EVar "lineAt") (EVar "lines")) (EApp (EApp (EApp (EVar "lastContentIdx") (EVar "toks")) (EVar "s")) (EBinOp "-" (EVar "e") (ELit (LInt 1)))))))
 (DTypeSig true "positionsFromSpans" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyCon "Positions"))))))
 (DFunDef false "positionsFromSpans" ((PVar "lineStarts") (PVar "toks") (PVar "offs") (PVar "spans")) (EBlock (DoLet false false (PVar "lines") (EApp (EApp (EMethodRef "map") (ELam ((PVar "off")) (EApp (EVar "fst") (EApp (EApp (EVar "offsetToLineColFast") (EVar "lineStarts")) (EApp (EVar "fst") (EVar "off")))))) (EVar "offs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "Positions") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "declPosOf") (EVar "toks")) (EVar "lines")) (EVar "offs")) (EVar "lineStarts"))) (EVar "spans"))) (EApp (EApp (EApp (EVar "allVariantLines") (EVar "toks")) (EVar "lines")) (EVar "spans"))) (EApp (EApp (EApp (EVar "lastContentLineOf") (EVar "toks")) (EVar "lines")) (EVar "spans"))) (EApp (EApp (EApp (EVar "allChainLines") (EVar "toks")) (EVar "lines")) (EVar "spans"))))))

@@ -458,8 +458,8 @@ oneResultOk : Result String String ->
   Result String (List Decl) ->
   Example ->
   ExResult
-oneResultOk _ (Err pmsg) ex = Errored ("parse error: " ++ pmsg)
-oneResultOk (Err msg) (Ok _) ex = Errored msg
+oneResultOk _ (Err pmsg) _ex = Errored ("parse error: " ++ pmsg)
+oneResultOk (Err msg) (Ok _) _ex = Errored msg
 oneResultOk (Ok actual) (Ok _) ex = compareValue ex actual
 
 -- The doctest arm has no message of its own: the two operands ARE the
@@ -649,8 +649,8 @@ isUse _ = False
 (DFunDef false "detailsGoOk" ((PList) PWild (PCons PWild PWild)) (EListLit))
 (DFunDef false "detailsGoOk" (PWild (PList) (PCons PWild PWild)) (EListLit))
 (DTypeSig false "oneResultOk" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "Example") (TyCon "ExResult")))))
-(DFunDef false "oneResultOk" (PWild (PCon "Err" (PVar "pmsg")) (PVar "ex")) (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "parse error: ")) (EVar "pmsg"))))
-(DFunDef false "oneResultOk" ((PCon "Err" (PVar "msg")) (PCon "Ok" PWild) (PVar "ex")) (EApp (EVar "Errored") (EVar "msg")))
+(DFunDef false "oneResultOk" (PWild (PCon "Err" (PVar "pmsg")) (PVar "_ex")) (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "parse error: ")) (EVar "pmsg"))))
+(DFunDef false "oneResultOk" ((PCon "Err" (PVar "msg")) (PCon "Ok" PWild) (PVar "_ex")) (EApp (EVar "Errored") (EVar "msg")))
 (DFunDef false "oneResultOk" ((PCon "Ok" (PVar "actual")) (PCon "Ok" PWild) (PVar "ex")) (EApp (EApp (EVar "compareValue") (EVar "ex")) (EVar "actual")))
 (DTypeSig false "compareValue" (TyFun (TyCon "Example") (TyFun (TyCon "String") (TyCon "ExResult"))))
 (DFunDef false "compareValue" ((PVar "ex") (PVar "actual")) (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "None") () (EApp (EApp (EVar "Pass") (ELit (LString ""))) (EVar "actual"))) (arm (PCon "Some" (PVar "exp")) () (EIf (EBinOp "==" (EVar "actual") (EVar "exp")) (EApp (EApp (EVar "Pass") (EVar "exp")) (EVar "actual")) (EApp (EApp (EApp (EVar "Fail") (ELit (LString ""))) (EVar "exp")) (EVar "actual"))))))
@@ -803,8 +803,8 @@ isUse _ = False
 (DFunDef false "detailsGoOk" ((PList) PWild (PCons PWild PWild)) (EListLit))
 (DFunDef false "detailsGoOk" (PWild (PList) (PCons PWild PWild)) (EListLit))
 (DTypeSig false "oneResultOk" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "Example") (TyCon "ExResult")))))
-(DFunDef false "oneResultOk" (PWild (PCon "Err" (PVar "pmsg")) (PVar "ex")) (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "parse error: ")) (EVar "pmsg"))))
-(DFunDef false "oneResultOk" ((PCon "Err" (PVar "msg")) (PCon "Ok" PWild) (PVar "ex")) (EApp (EVar "Errored") (EVar "msg")))
+(DFunDef false "oneResultOk" (PWild (PCon "Err" (PVar "pmsg")) (PVar "_ex")) (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "parse error: ")) (EVar "pmsg"))))
+(DFunDef false "oneResultOk" ((PCon "Err" (PVar "msg")) (PCon "Ok" PWild) (PVar "_ex")) (EApp (EVar "Errored") (EVar "msg")))
 (DFunDef false "oneResultOk" ((PCon "Ok" (PVar "actual")) (PCon "Ok" PWild) (PVar "ex")) (EApp (EApp (EVar "compareValue") (EVar "ex")) (EVar "actual")))
 (DTypeSig false "compareValue" (TyFun (TyCon "Example") (TyFun (TyCon "String") (TyCon "ExResult"))))
 (DFunDef false "compareValue" ((PVar "ex") (PVar "actual")) (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "None") () (EApp (EApp (EVar "Pass") (ELit (LString ""))) (EVar "actual"))) (arm (PCon "Some" (PVar "exp")) () (EIf (EBinOp "==" (EVar "actual") (EVar "exp")) (EApp (EApp (EVar "Pass") (EVar "exp")) (EVar "actual")) (EApp (EApp (EApp (EVar "Fail") (ELit (LString ""))) (EVar "exp")) (EVar "actual"))))))

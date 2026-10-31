@@ -4481,7 +4481,7 @@ dirOf2 : String -> String
 dirOf2 path = dirGo2 path (stringLength path)
 
 dirGo2 : String -> Int -> String
-dirGo2 path 0 = "."
+dirGo2 _path 0 = "."
 dirGo2 path i =
   if stringSlice (i - 1) i path == "/" then
     stringSlice 0 (i - 1) path
@@ -5181,7 +5181,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "dirOf2" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dirOf2" ((PVar "path")) (EApp (EApp (EVar "dirGo2") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))))
 (DTypeSig false "dirGo2" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "dirGo2" ((PVar "path") (PLit (LInt 0))) (ELit (LString ".")))
+(DFunDef false "dirGo2" ((PVar "_path") (PLit (LInt 0))) (ELit (LString ".")))
 (DFunDef false "dirGo2" ((PVar "path") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "path")) (ELit (LString "/"))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "path")) (EApp (EApp (EVar "dirGo2") (EVar "path")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
 (DTypeSig false "replArgSpec" (TyCon "ArgSpec"))
 (DFunDef false "replArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "repl"))) (EListLit)))
@@ -5737,7 +5737,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "dirOf2" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dirOf2" ((PVar "path")) (EApp (EApp (EVar "dirGo2") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))))
 (DTypeSig false "dirGo2" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "dirGo2" ((PVar "path") (PLit (LInt 0))) (ELit (LString ".")))
+(DFunDef false "dirGo2" ((PVar "_path") (PLit (LInt 0))) (ELit (LString ".")))
 (DFunDef false "dirGo2" ((PVar "path") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "path")) (ELit (LString "/"))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "path")) (EApp (EApp (EVar "dirGo2") (EVar "path")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
 (DTypeSig false "replArgSpec" (TyCon "ArgSpec"))
 (DFunDef false "replArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "repl"))) (EListLit)))

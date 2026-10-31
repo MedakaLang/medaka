@@ -454,8 +454,8 @@ oneResultOk : Result String String ->
   Result String (List Decl) ->
   Example ->
   ExResult
-oneResultOk _ (Err pmsg) ex = Errored ("parse error: " ++ pmsg)
-oneResultOk (Err msg) (Ok _) ex = Errored msg
+oneResultOk _ (Err pmsg) _ex = Errored ("parse error: " ++ pmsg)
+oneResultOk (Err msg) (Ok _) _ex = Errored msg
 oneResultOk (Ok actual) (Ok _) ex = compareValue ex actual
 
 -- The doctest arm has no message of its own: the two operands ARE the

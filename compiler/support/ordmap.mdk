@@ -26,13 +26,13 @@ omInsert k v m = set k v m
 -- Same visit order and same answer as `get`/`has` on `Map String`.
 export
 omLookup : String -> OrdMap a -> Option a
-omLookup k Tip = None
+omLookup _k Tip = None
 omLookup k (Bin _ k2 v l r) =
   if k < k2 then omLookup k l else if k > k2 then omLookup k r else Some v
 
 export
 omHasKey : String -> OrdMap a -> Bool
-omHasKey k Tip = False
+omHasKey _k Tip = False
 omHasKey k (Bin _ k2 _ l r) =
   if k < k2 then omHasKey k l else if k > k2 then omHasKey k r else True
 

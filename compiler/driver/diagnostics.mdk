@@ -1599,18 +1599,18 @@ projectKeyedFromLoad : (List String -> <e> List (String, List String)) ->
   Result LoadError (List (String, String, List Decl)) ->
   <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag))
 -- Dependency errors keep the destination file and the exact located parser error.
-projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadParseFailed mpath _ pe)) =
+projectKeyedFromLoad _exportsFor _allowInternal _trustedMods _entry _roots _runtimeSrc _coreSrc staleRef (Err (LoadParseFailed mpath _ pe)) =
   (None, appendStale staleRef [(mpath, [parseErrDiag mpath pe])])
-projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadMsg e)) = (
+projectKeyedFromLoad _exportsFor _allowInternal _trustedMods entry _roots _runtimeSrc _coreSrc staleRef (Err (LoadMsg e)) = (
   None,
   appendStale staleRef [(entry, [mkDiag SevError RModuleLoad e None])],
 )
 -- A located cycle belongs to the importing module that closes it.
-projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadCycle e cpath (Some (_, loc)))) = (
+projectKeyedFromLoad _exportsFor _allowInternal _trustedMods _entry _roots _runtimeSrc _coreSrc staleRef (Err (LoadCycle e cpath (Some (_, loc)))) = (
   None,
   appendStale staleRef [(cpath, [mkDiag SevError RModuleLoad e (Some loc)])],
 )
-projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadCycle e _ None)) = (
+projectKeyedFromLoad _exportsFor _allowInternal _trustedMods entry _roots _runtimeSrc _coreSrc staleRef (Err (LoadCycle e _ None)) = (
   None,
   appendStale staleRef [(entry, [mkDiag SevError RModuleLoad e None])],
 )
@@ -2616,7 +2616,7 @@ cjRangeOfLoc src (Some (Loc _ sl sc el ec)) =
     (c, d) <- offsetToUtf16Position index end
     Some (cjRange a b c d)
   optionOr JNull positions
-cjRangeOfLoc src None = JNull
+cjRangeOfLoc _src None = JNull
 
 -- Severity code: Error=1, Warning=2.
 cjSevCode : Severity -> Int
