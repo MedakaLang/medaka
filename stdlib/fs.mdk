@@ -20,8 +20,8 @@
 import core.{Result(..)}
 import io.{ownerOnlyMode}
 import list.{sortOn}
-import path.{dirname, joinPath, matchGlob, segments}
-import string.{contains, indexOf, lastIndexOf, startsWith}
+import path.{dirname, globReaches, joinPath, matchGlob, segments}
+import string.{contains, endsWith, indexOf, lastIndexOf, startsWith}
 
 -- # Metadata
 
@@ -223,19 +223,22 @@ export
 walkFilesSkipping : (String -> Bool) ->
   String ->
   <FileRead> Result String (List String)
-walkFilesSkipping skip root = walkFilesTo (-1) skip root
+walkFilesSkipping skip root = walkFilesTo False (-1) skip root
 
 -- The walk of `walkFilesSkipping`, descending at most `levels` directories
 -- below `root` when `levels` is positive and without limit when it is
 -- negative. Files in `root` are one level down, so a bound of 1 stats only
--- `root`'s own entries.
-walkFilesTo : Int ->
+-- `root`'s own entries. With `dirs`, the result lists directories (each as
+-- its path plus a `/`, ahead of its contents) instead of files, and a
+-- directory at the last level is listed without being entered.
+walkFilesTo : Bool ->
+  Int ->
   (String -> Bool) ->
   String ->
   <FileRead> Result String (List String)
-walkFilesTo levels skip root = match listDir root
+walkFilesTo dirs levels skip root = match listDir root
   Err e => Err (namePath root e)
-  Ok names => walkDirSorted levels skip root names
+  Ok names => walkDirSorted dirs levels skip root names
 
 -- A directory's entries, kept when a file or a directory not skipped, each as
 -- (sort key, full path, is a directory). A directory's key ends in `/`, so
@@ -247,60 +250,73 @@ type WalkEntry = (String, String, Bool)
 -- pass as deep as one directory is wide: `run` has no tail calls, and a sort
 -- of the full result would overflow on a large tree.  Each directory's result
 -- is built forward by explicit `match` chains, as in `walkEntries`.
-collectEntries : Int ->
+collectEntries : Bool ->
+  Int ->
   (String -> Bool) ->
   String ->
   List String ->
   <FileRead> Result String (List WalkEntry)
-collectEntries _ _ _ [] = Ok []
+collectEntries _ _ _ _ [] = Ok []
 -- lint-disable-next-line rule-bind-chain-to-do
-collectEntries levels skip root (name :: rest) =
+collectEntries dirs levels skip root (name :: rest) =
   let full = joinPath root name
   match stat full
     Err e => Err (namePath full e)
     Ok st =>
       if st.isDir then
-        if levels == 1 || skip full then
-          collectEntries levels skip root rest
+        if skip full || levels == 1 && not dirs then
+          collectEntries dirs levels skip root rest
         else
           map
             (("\{name}/", full, True) :: _)
-            (collectEntries levels skip root rest)
+            (collectEntries dirs levels skip root rest)
       else if st.isFile then
-        map ((name, full, False) :: _) (collectEntries levels skip root rest)
+        map
+          ((name, full, False) :: _)
+          (collectEntries dirs levels skip root rest)
       else
-        collectEntries levels skip root rest
+        collectEntries dirs levels skip root rest
 
 -- A `do` chain would cost more frames per entry than the explicit `match`
 -- chains here, lowering the widest directory `run` can walk; the pass-through
 -- `Err` arms stay for that reason.
-walkDirSorted : Int ->
+walkDirSorted : Bool ->
+  Int ->
   (String -> Bool) ->
   String ->
   List String ->
   <FileRead> Result String (List String)
 -- lint-disable-next-line rule-bind-chain-to-do
-walkDirSorted levels skip root names =
-  match collectEntries levels skip root names
+walkDirSorted dirs levels skip root names =
+  match collectEntries dirs levels skip root names
     Err e => Err e
-    Ok entries => walkSorted levels skip (sortOn ((key, _, _) => key) entries)
+    Ok entries =>
+      walkSorted dirs levels skip (sortOn ((key, _, _) => key) entries)
 
-walkSorted : Int ->
+walkSorted : Bool ->
+  Int ->
   (String -> Bool) ->
   List WalkEntry ->
   <FileRead> Result String (List String)
-walkSorted _ _ [] = Ok []
+walkSorted _ _ _ [] = Ok []
 -- A `do` chain per entry would cost more frames per entry than this `match`
 -- chain, lowering the widest directory `run` can walk.
 -- lint-disable-next-line rule-bind-chain-to-do
-walkSorted levels skip ((_, full, isDirectory) :: rest) =
-  if isDirectory then match listDir full
-    Err e => Err (namePath full e)
-    Ok subs => match walkDirSorted (belowLevel levels) skip full subs
-      Err e => Err e
-      Ok inner => map (inner ++ _) (walkSorted levels skip rest)
+walkSorted dirs levels skip ((_, full, isDirectory) :: rest) =
+  if isDirectory then
+    if dirs && levels == 1 then
+      map ("\{full}/" :: _) (walkSorted dirs levels skip rest)
+    else match listDir full
+      Err e => Err (namePath full e)
+      Ok subs => match walkDirSorted dirs (belowLevel levels) skip full subs
+        Err e => Err e
+        Ok inner =>
+          let here = if dirs then "\{full}/" :: inner else inner
+          map (here ++ _) (walkSorted dirs levels skip rest)
+  else if dirs then
+    walkSorted dirs levels skip rest
   else
-    map (full :: _) (walkSorted levels skip rest)
+    map (full :: _) (walkSorted dirs levels skip rest)
 
 belowLevel : Int -> Int
 belowLevel levels = if levels < 0 then levels else levels - 1
@@ -316,24 +332,45 @@ belowLevel levels = if levels < 0 then levels else levels - 1
    `[]`. Unless the pattern has a `**` segment the walk goes no deeper than
    the pattern's segments, so entries below that depth are never examined.
 
+   A pattern ending in `/` finds directories instead of files, each reported
+   with a trailing `/` as Python does, and the prefix directory itself is
+   included when the pattern matches it, so `src/**/` finds `src/`. `*`
+   and `?` match dot names, but `**` does not pass through a dot directory
+   and the walk does not enter one the pattern cannot reach; a literal
+   segment such as `.git` does. The result is what `path.matchGlob` accepts
+   among all the files (or directories) under the prefix.
+
    > glob "stdlib/no-such-glob-doctest-dir/*.mdk"
    Err "stdlib/no-such-glob-doctest-dir: No such file or directory"
    > glob "no-such-glob-doctest-file"
    Ok [] -}
 export
 glob : String -> <FileRead> Result String (List String)
-glob pattern = match wildcardIndex pattern
-  None => match stat pattern
-    Ok st => Ok (if st.isFile then [pattern] else [])
-    Err _ => Ok []
-  Some i =>
-    let prefix = dirPrefix (stringSlice 0 i pattern)
-    map
-      (paths => filter (matchGlob pattern) (map (dropDotSlash prefix) paths))
-      (walkFilesTo
-        (globLevels prefix pattern)
-        (_ => False)
-        (if prefix == "" then "." else prefix))
+glob pattern =
+  let dirs = endsWith "/" pattern
+  match wildcardIndex pattern
+    None => match stat pattern
+      Ok st =>
+        Ok (if (if dirs then st.isDir else st.isFile) then [pattern] else [])
+      Err _ => Ok []
+    Some i =>
+      let prefix = dirPrefix (stringSlice 0 i pattern)
+      let prefixDir = if prefix == "/" then "/" else "\{prefix}/"
+      let own =
+        if dirs && prefix /= "" && matchGlob pattern prefixDir then
+          [prefixDir]
+        else
+          []
+      map
+        (paths =>
+          own ++ filter (matchGlob pattern) (map (dropDotSlash prefix) paths))
+        (walkFilesTo dirs (globLevels prefix pattern) (globSkip
+          dirs
+          prefix
+          pattern) (if prefix == "" then
+          "."
+        else
+          prefix))
 
 -- How many directory levels below the prefix a match can lie: the pattern's
 -- segments past the prefix's, or unbounded (-1) when a segment is `**`.
@@ -343,6 +380,20 @@ globLevels prefix pattern =
     -1
   else
     length (segments pattern) - length (segments prefix)
+
+-- A dot directory is left unentered when nothing below it can match, and,
+-- for a directory pattern, when it does not match itself.
+globSkip : Bool -> String -> String -> String -> Bool
+globSkip dirs prefix pattern full =
+  let rel = dropDotSlash prefix full
+  isDotName (segments rel)
+    && not (globReaches pattern rel)
+    && not (dirs && matchGlob pattern "\{rel}/")
+
+isDotName : List String -> Bool
+isDotName [] = False
+isDotName [s] = startsWith "." s
+isDotName (_ :: rest) = isDotName rest
 
 wildcardIndex : String -> Option Int
 wildcardIndex s = match (indexOf "*" s, indexOf "?" s)

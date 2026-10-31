@@ -1,5 +1,5 @@
 # META
-source_lines=332
+source_lines=513
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the file primitives `stdlib/fs.mdk` builds on.
@@ -9,9 +9,11 @@ import fs.{
   walkFilesSkipping
 }
 import list.{sort}
-import string.{contains}
-import path.{joinPath}
-import test.{Expectation, expectEqual, expectErrContains, fail, pass}
+import string.{contains, endsWith}
+import path.{joinPath, matchGlob}
+import test.{
+  Expectation, expectEach, expectEqual, expectErrContains, fail, pass
+}
 import io.{runVerb}
 import test_process.{scratchDir, withScratchDir}
 
@@ -334,12 +336,191 @@ buildTricky dir = do
   () <- writeFile (joinPath dir "a-d") ""
   () <- writeFile (joinPath dir "a.c") ""
   Ok ()
+
+-- # glob and dot directories
+
+-- Files `.env`, `a.mdk`, `.git/config`, `.git/objects/x`, `.git/.hidden/y`,
+-- `.venv/lib/z.mdk`, `sub/b.mdk`, `sub/inner/c.mdk`, `sub/inner/.hid`,
+-- `sub/.dot/d.mdk`, and the directory `empty/nested`, which holds no file.
+buildDotTree : String -> <FileWrite> Result String Unit
+buildDotTree root = do
+  () <- mkdirAll (joinPath root ".git/objects")
+  () <- mkdirAll (joinPath root ".git/.hidden")
+  () <- mkdirAll (joinPath root ".venv/lib")
+  () <- mkdirAll (joinPath root "sub/inner")
+  () <- mkdirAll (joinPath root "sub/.dot")
+  () <- mkdirAll (joinPath root "empty/nested")
+  () <- writeFile (joinPath root ".env") "e"
+  () <- writeFile (joinPath root "a.mdk") "a"
+  () <- writeFile (joinPath root ".git/config") "c"
+  () <- writeFile (joinPath root ".git/objects/x") "x"
+  () <- writeFile (joinPath root ".git/.hidden/y") "y"
+  () <- writeFile (joinPath root ".venv/lib/z.mdk") "z"
+  () <- writeFile (joinPath root "sub/b.mdk") "b"
+  () <- writeFile (joinPath root "sub/inner/c.mdk") "c"
+  () <- writeFile (joinPath root "sub/inner/.hid") "h"
+  () <- writeFile (joinPath root "sub/.dot/d.mdk") "d"
+  Ok ()
+
+withDotTree : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withDotTree check = withScratchDir (dir => match buildDotTree dir
+  Err e => fail "could not build the tree: \{e}"
+  Ok _ => check dir)
+
+-- Every file and every directory under `root` (a directory with a trailing
+-- slash, `root` itself included), as the unpruned walk of `walkDir`.
+everyCandidate : String -> <FileRead> Result String (List String)
+everyCandidate root = match walkDir root
+  Err e => Err e
+  Ok paths => map ("\{root}/" :: _) (slashDirs paths)
+
+slashDirs : List String -> <FileRead> Result String (List String)
+slashDirs [] = Ok []
+slashDirs (p :: rest) = match isDir p
+  Err e => Err e
+  Ok d =>
+    let marked = if d then "\{p}/" else p
+    map (marked :: _) (slashDirs rest)
+
+-- The answer `glob` must give: the candidates `matchGlob` accepts, files for
+-- a pattern without a trailing slash and directories for one with.
+oracle : String -> String -> <FileRead> Result String (List String)
+oracle dir pattern =
+  map
+    (cs =>
+      sort
+        (filter
+          (c => matchGlob pattern c && endsWith "/" c == endsWith "/" pattern)
+          cs))
+    (everyCandidate dir)
+
+globAgrees : String -> String -> <FileRead> (String, Expectation)
+globAgrees dir pattern =
+  let full = joinPath dir pattern
+  (pattern, expectEqual (oracle dir full) (glob full))
+
+test "glob equals the unpruned matchGlob filter on every pattern" = withDotTree
+  (dir =>
+    expectEach
+      (map (globAgrees dir) [
+        "**/*", "**/*.mdk", "*", ".git/**", "sub/*/", "**/", ".*/", ".git/**/",
+        "**/.*", "sub/**/*.mdk", "**/x", ".venv/**/*.mdk", "*/config", "sub/*",
+        "empty/**/"
+      ]))
+
+test "glob with ** skips dot directories but reaches dotfiles" = withDotTree
+  (dir => expectEach [
+    (
+      "**/*",
+      expectEqual
+        (Ok
+          (rooted dir [
+            ".env", "a.mdk", "sub/b.mdk", "sub/inner/.hid", "sub/inner/c.mdk"
+          ]))
+        (glob (joinPath dir "**/*")),
+    ),
+    (
+      "**/*.mdk",
+      expectEqual
+        (Ok (rooted dir ["a.mdk", "sub/b.mdk", "sub/inner/c.mdk"]))
+        (glob (joinPath dir "**/*.mdk")),
+    ),
+    (
+      "**/.*",
+      expectEqual
+        (Ok (rooted dir [".env", "sub/inner/.hid"]))
+        (glob (joinPath dir "**/.*")),
+    ),
+    ("**/x", expectEqual (Ok []) (glob (joinPath dir "**/x"))),
+    (
+      "sub/**/*.mdk",
+      expectEqual
+        (Ok (rooted dir ["sub/b.mdk", "sub/inner/c.mdk"]))
+        (glob (joinPath dir "sub/**/*.mdk")),
+    ),
+  ])
+
+test "glob with * matches dot names, and a literal dot directory is entered" = withDotTree
+  (dir => expectEach [
+    (
+      "*",
+      expectEqual (Ok (rooted dir [".env", "a.mdk"])) (glob (joinPath dir "*")),
+    ),
+    (
+      ".git/**",
+      expectEqual
+        (Ok (rooted dir [".git/config", ".git/objects/x"]))
+        (glob (joinPath dir ".git/**")),
+    ),
+    (
+      "*/config",
+      expectEqual
+        (Ok (rooted dir [".git/config"]))
+        (glob (joinPath dir "*/config")),
+    ),
+    (
+      ".venv/**/*.mdk",
+      expectEqual
+        (Ok (rooted dir [".venv/lib/z.mdk"]))
+        (glob (joinPath dir ".venv/**/*.mdk")),
+    ),
+  ])
+
+test "glob with a trailing slash finds directories, written with the slash" = withDotTree
+  (dir => expectEach [
+    (
+      "sub/*/",
+      expectEqual
+        (Ok (rooted dir ["sub/.dot/", "sub/inner/"]))
+        (glob (joinPath dir "sub/*/")),
+    ),
+    (
+      "**/",
+      expectEqual
+        (Ok
+          ("\{dir}/"
+            :: rooted dir ["empty/", "empty/nested/", "sub/", "sub/inner/"]))
+        (glob (joinPath dir "**/")),
+    ),
+    (
+      ".*/",
+      expectEqual
+        (Ok (rooted dir [".git/", ".venv/"]))
+        (glob (joinPath dir ".*/")),
+    ),
+    (
+      ".git/**/",
+      expectEqual
+        (Ok (rooted dir [".git/", ".git/objects/"]))
+        (glob (joinPath dir ".git/**/")),
+    ),
+    (
+      "sub/",
+      expectEqual (Ok [joinPath dir "sub/"]) (glob (joinPath dir "sub/")),
+    ),
+    ("a.mdk/", expectEqual (Ok []) (glob (joinPath dir "a.mdk/"))),
+  ])
+
+test "glob of a trailing-slash pattern under a missing prefix is an Err" = withDotTree
+  (dir =>
+    let prefix = joinPath dir "absent"
+    expectErrContains "\{prefix}: " (glob (joinPath prefix "*/")))
+
+-- The dangling link sits inside a dot directory the pattern cannot reach, so
+-- a walk that entered it would report an `Err`.
+test "glob does not enter a dot directory its pattern cannot reach" = withDangling
+  (dir =>
+    let _ = runVerb "mv" [joinPath dir "dang/deep", joinPath dir "dang/.deep"]
+    expectEqual
+      (Ok [joinPath dir "dang/top.txt"])
+      (glob (joinPath dir "dang/**/*.txt")))
 # DESUGAR
 (DUse false (UseGroup ("fs") ((mem "editFile" false) (mem "glob" false) (mem "isDir" false) (mem "isFile" false) (mem "mkdirAll" false) (mem "stat" false) (mem "walkDir" false) (mem "walkFiles" false) (mem "walkFilesSkipping" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false))))
-(DUse false (UseGroup ("string") ((mem "contains" false))))
-(DUse false (UseGroup ("path") ((mem "joinPath" false))))
-(DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEqual" false) (mem "expectErrContains" false) (mem "fail" false) (mem "pass" false))))
+(DUse false (UseGroup ("string") ((mem "contains" false) (mem "endsWith" false))))
+(DUse false (UseGroup ("path") ((mem "joinPath" false) (mem "matchGlob" false))))
+(DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEach" false) (mem "expectEqual" false) (mem "expectErrContains" false) (mem "fail" false) (mem "pass" false))))
 (DUse false (UseGroup ("io") ((mem "runVerb" false))))
 (DUse false (UseGroup ("test_process") ((mem "scratchDir" false) (mem "withScratchDir" false))))
 (DTest false "readFile of a file that is not UTF-8 is an Err naming readFileBytes" (EMatch (EVar "scratchDir") (arm (PCon "Err" (PVar "e")) () (EApp (EVar "fail") (EBinOp "++" (EBinOp "++" (ELit (LString "no scratch directory: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "dir")) () (EBlock (DoLet false false (PVar "path") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "not-utf8.bin")))) (DoLet false false PWild (EApp (EApp (EVar "writeFileBytes") (EVar "path")) (EArrayLit (ELit (LInt 97)) (ELit (LInt 192)) (ELit (LInt 174))))) (DoExpr (EApp (EApp (EVar "expectErrContains") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": not valid UTF-8 (use readFileBytes for raw bytes)")))) (EApp (EVar "readFile") (EVar "path"))))))))
@@ -404,12 +585,31 @@ buildTricky dir = do
 (DTest false "walkFiles orders by whole path when a name sorts before the slash" (EApp (EVar "withScratchDir") (ELam ((PVar "dir")) (EMatch (EApp (EVar "buildTricky") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "fail") (EBinOp "++" (EBinOp "++" (ELit (LString "setup failed: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString "a b")) (ELit (LString "a-d")) (ELit (LString "a.c")) (ELit (LString "a/x")))))) (EApp (EVar "walkFiles") (EVar "dir"))))))))
 (DTypeSig false "buildTricky" (TyFun (TyCon "String") (TyEffect ("FileWrite") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "buildTricky" ((PVar "dir")) (EApp (EApp (EVar "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "a"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "a/x")))) (ELit (LString "")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "a b")))) (ELit (LString "")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "a-d")))) (ELit (LString "")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "a.c")))) (ELit (LString "")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (ELit LUnit)))))))))))))))))))))))
+(DTypeSig false "buildDotTree" (TyFun (TyCon "String") (TyEffect ("FileWrite") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "buildDotTree" ((PVar "root")) (EApp (EApp (EVar "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".git/objects"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".git/.hidden"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".venv/lib"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/inner"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/.dot"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "empty/nested"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".env")))) (ELit (LString "e")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "a.mdk")))) (ELit (LString "a")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".git/config")))) (ELit (LString "c")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".git/objects/x")))) (ELit (LString "x")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".git/.hidden/y")))) (ELit (LString "y")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".venv/lib/z.mdk")))) (ELit (LString "z")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/b.mdk")))) (ELit (LString "b")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/inner/c.mdk")))) (ELit (LString "c")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/inner/.hid")))) (ELit (LString "h")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/.dot/d.mdk")))) (ELit (LString "d")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (ELit LUnit)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+(DTypeSig false "withDotTree" (TyFun (TyFun (TyCon "String") (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))) (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))))
+(DFunDef false "withDotTree" ((PVar "check")) (EApp (EVar "withScratchDir") (ELam ((PVar "dir")) (EMatch (EApp (EVar "buildDotTree") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "fail") (EBinOp "++" (EBinOp "++" (ELit (LString "could not build the tree: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EVar "check") (EVar "dir")))))))
+(DTypeSig false "everyCandidate" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "everyCandidate" ((PVar "root")) (EMatch (EApp (EVar "walkDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "paths")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/"))) (EVar "_s")))) (EApp (EVar "slashDirs") (EVar "paths"))))))
+(DTypeSig false "slashDirs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "slashDirs" ((PList)) (EApp (EVar "Ok") (EListLit)))
+(DFunDef false "slashDirs" ((PCons (PVar "p") (PVar "rest"))) (EMatch (EApp (EVar "isDir") (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "d")) () (EBlock (DoLet false false (PVar "marked") (EIf (EVar "d") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "p"))) (ELit (LString "/"))) (EVar "p"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "marked") (EVar "_s")))) (EApp (EVar "slashDirs") (EVar "rest"))))))))
+(DTypeSig false "oracle" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "oracle" ((PVar "dir") (PVar "pattern")) (EApp (EApp (EVar "map") (ELam ((PVar "cs")) (EApp (EVar "sort") (EApp (EApp (EVar "filter") (ELam ((PVar "c")) (EBinOp "&&" (EApp (EApp (EVar "matchGlob") (EVar "pattern")) (EVar "c")) (EBinOp "==" (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "c")) (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "pattern")))))) (EVar "cs"))))) (EApp (EVar "everyCandidate") (EVar "dir"))))
+(DTypeSig false "globAgrees" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyTuple (TyCon "String") (TyCon "Expectation"))))))
+(DFunDef false "globAgrees" ((PVar "dir") (PVar "pattern")) (EBlock (DoLet false false (PVar "full") (EApp (EApp (EVar "joinPath") (EVar "dir")) (EVar "pattern"))) (DoExpr (ETuple (EVar "pattern") (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "oracle") (EVar "dir")) (EVar "full"))) (EApp (EVar "glob") (EVar "full")))))))
+(DTest false "glob equals the unpruned matchGlob filter on every pattern" (EApp (EVar "withDotTree") (ELam ((PVar "dir")) (EApp (EVar "expectEach") (EApp (EApp (EVar "map") (EApp (EVar "globAgrees") (EVar "dir"))) (EListLit (ELit (LString "**/*")) (ELit (LString "**/*.mdk")) (ELit (LString "*")) (ELit (LString ".git/**")) (ELit (LString "sub/*/")) (ELit (LString "**/")) (ELit (LString ".*/")) (ELit (LString ".git/**/")) (ELit (LString "**/.*")) (ELit (LString "sub/**/*.mdk")) (ELit (LString "**/x")) (ELit (LString ".venv/**/*.mdk")) (ELit (LString "*/config")) (ELit (LString "sub/*")) (ELit (LString "empty/**/"))))))))
+(DTest false "glob with ** skips dot directories but reaches dotfiles" (EApp (EVar "withDotTree") (ELam ((PVar "dir")) (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "**/*")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".env")) (ELit (LString "a.mdk")) (ELit (LString "sub/b.mdk")) (ELit (LString "sub/inner/.hid")) (ELit (LString "sub/inner/c.mdk")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "**/*")))))) (ETuple (ELit (LString "**/*.mdk")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString "a.mdk")) (ELit (LString "sub/b.mdk")) (ELit (LString "sub/inner/c.mdk")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "**/*.mdk")))))) (ETuple (ELit (LString "**/.*")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".env")) (ELit (LString "sub/inner/.hid")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "**/.*")))))) (ETuple (ELit (LString "**/x")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "**/x")))))) (ETuple (ELit (LString "sub/**/*.mdk")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString "sub/b.mdk")) (ELit (LString "sub/inner/c.mdk")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "sub/**/*.mdk")))))))))))
+(DTest false "glob with * matches dot names, and a literal dot directory is entered" (EApp (EVar "withDotTree") (ELam ((PVar "dir")) (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "*")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".env")) (ELit (LString "a.mdk")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "*")))))) (ETuple (ELit (LString ".git/**")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".git/config")) (ELit (LString ".git/objects/x")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString ".git/**")))))) (ETuple (ELit (LString "*/config")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".git/config")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "*/config")))))) (ETuple (ELit (LString ".venv/**/*.mdk")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".venv/lib/z.mdk")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString ".venv/**/*.mdk")))))))))))
+(DTest false "glob with a trailing slash finds directories, written with the slash" (EApp (EVar "withDotTree") (ELam ((PVar "dir")) (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "sub/*/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString "sub/.dot/")) (ELit (LString "sub/inner/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "sub/*/")))))) (ETuple (ELit (LString "**/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString "empty/")) (ELit (LString "empty/nested/")) (ELit (LString "sub/")) (ELit (LString "sub/inner/"))))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "**/")))))) (ETuple (ELit (LString ".*/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".git/")) (ELit (LString ".venv/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString ".*/")))))) (ETuple (ELit (LString ".git/**/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".git/")) (ELit (LString ".git/objects/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString ".git/**/")))))) (ETuple (ELit (LString "sub/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "sub/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "sub/")))))) (ETuple (ELit (LString "a.mdk/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "a.mdk/")))))))))))
+(DTest false "glob of a trailing-slash pattern under a missing prefix is an Err" (EApp (EVar "withDotTree") (ELam ((PVar "dir")) (EBlock (DoLet false false (PVar "prefix") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "absent")))) (DoExpr (EApp (EApp (EVar "expectErrContains") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString ": ")))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "*/"))))))))))
+(DTest false "glob does not enter a dot directory its pattern cannot reach" (EApp (EVar "withDangling") (ELam ((PVar "dir")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "runVerb") (ELit (LString "mv"))) (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/deep"))) (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/.deep")))))) (DoExpr (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/top.txt")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/**/*.txt"))))))))))
 # MARK
 (DUse false (UseGroup ("fs") ((mem "editFile" false) (mem "glob" false) (mem "isDir" false) (mem "isFile" false) (mem "mkdirAll" false) (mem "stat" false) (mem "walkDir" false) (mem "walkFiles" false) (mem "walkFilesSkipping" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false))))
-(DUse false (UseGroup ("string") ((mem "contains" false))))
-(DUse false (UseGroup ("path") ((mem "joinPath" false))))
-(DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEqual" false) (mem "expectErrContains" false) (mem "fail" false) (mem "pass" false))))
+(DUse false (UseGroup ("string") ((mem "contains" false) (mem "endsWith" false))))
+(DUse false (UseGroup ("path") ((mem "joinPath" false) (mem "matchGlob" false))))
+(DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEach" false) (mem "expectEqual" false) (mem "expectErrContains" false) (mem "fail" false) (mem "pass" false))))
 (DUse false (UseGroup ("io") ((mem "runVerb" false))))
 (DUse false (UseGroup ("test_process") ((mem "scratchDir" false) (mem "withScratchDir" false))))
 (DTest false "readFile of a file that is not UTF-8 is an Err naming readFileBytes" (EMatch (EVar "scratchDir") (arm (PCon "Err" (PVar "e")) () (EApp (EVar "fail") (EBinOp "++" (EBinOp "++" (ELit (LString "no scratch directory: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "dir")) () (EBlock (DoLet false false (PVar "path") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "not-utf8.bin")))) (DoLet false false PWild (EApp (EApp (EVar "writeFileBytes") (EVar "path")) (EArrayLit (ELit (LInt 97)) (ELit (LInt 192)) (ELit (LInt 174))))) (DoExpr (EApp (EApp (EVar "expectErrContains") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": not valid UTF-8 (use readFileBytes for raw bytes)")))) (EApp (EVar "readFile") (EVar "path"))))))))
@@ -474,3 +674,22 @@ buildTricky dir = do
 (DTest false "walkFiles orders by whole path when a name sorts before the slash" (EApp (EVar "withScratchDir") (ELam ((PVar "dir")) (EMatch (EApp (EVar "buildTricky") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "fail") (EBinOp "++" (EBinOp "++" (ELit (LString "setup failed: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString "a b")) (ELit (LString "a-d")) (ELit (LString "a.c")) (ELit (LString "a/x")))))) (EApp (EVar "walkFiles") (EVar "dir"))))))))
 (DTypeSig false "buildTricky" (TyFun (TyCon "String") (TyEffect ("FileWrite") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "buildTricky" ((PVar "dir")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "a"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "a/x")))) (ELit (LString "")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "a b")))) (ELit (LString "")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "a-d")))) (ELit (LString "")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "a.c")))) (ELit (LString "")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (ELit LUnit)))))))))))))))))))))))
+(DTypeSig false "buildDotTree" (TyFun (TyCon "String") (TyEffect ("FileWrite") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "buildDotTree" ((PVar "root")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".git/objects"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".git/.hidden"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".venv/lib"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/inner"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/.dot"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "empty/nested"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".env")))) (ELit (LString "e")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "a.mdk")))) (ELit (LString "a")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".git/config")))) (ELit (LString "c")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".git/objects/x")))) (ELit (LString "x")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".git/.hidden/y")))) (ELit (LString "y")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString ".venv/lib/z.mdk")))) (ELit (LString "z")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/b.mdk")))) (ELit (LString "b")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/inner/c.mdk")))) (ELit (LString "c")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/inner/.hid")))) (ELit (LString "h")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/.dot/d.mdk")))) (ELit (LString "d")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (ELit LUnit)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+(DTypeSig false "withDotTree" (TyFun (TyFun (TyCon "String") (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))) (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))))
+(DFunDef false "withDotTree" ((PVar "check")) (EApp (EVar "withScratchDir") (ELam ((PVar "dir")) (EMatch (EApp (EVar "buildDotTree") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "fail") (EBinOp "++" (EBinOp "++" (ELit (LString "could not build the tree: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EVar "check") (EVar "dir")))))))
+(DTypeSig false "everyCandidate" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "everyCandidate" ((PVar "root")) (EMatch (EApp (EVar "walkDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "paths")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/"))) (EVar "_s")))) (EApp (EVar "slashDirs") (EVar "paths"))))))
+(DTypeSig false "slashDirs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "slashDirs" ((PList)) (EApp (EVar "Ok") (EListLit)))
+(DFunDef false "slashDirs" ((PCons (PVar "p") (PVar "rest"))) (EMatch (EApp (EVar "isDir") (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "d")) () (EBlock (DoLet false false (PVar "marked") (EIf (EVar "d") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "/"))) (EVar "p"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "marked") (EVar "_s")))) (EApp (EVar "slashDirs") (EVar "rest"))))))))
+(DTypeSig false "oracle" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "oracle" ((PVar "dir") (PVar "pattern")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "cs")) (EApp (EVar "sort") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "c")) (EBinOp "&&" (EApp (EApp (EVar "matchGlob") (EVar "pattern")) (EVar "c")) (EBinOp "==" (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "c")) (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "pattern")))))) (EVar "cs"))))) (EApp (EVar "everyCandidate") (EVar "dir"))))
+(DTypeSig false "globAgrees" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyTuple (TyCon "String") (TyCon "Expectation"))))))
+(DFunDef false "globAgrees" ((PVar "dir") (PVar "pattern")) (EBlock (DoLet false false (PVar "full") (EApp (EApp (EVar "joinPath") (EVar "dir")) (EVar "pattern"))) (DoExpr (ETuple (EVar "pattern") (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "oracle") (EVar "dir")) (EVar "full"))) (EApp (EVar "glob") (EVar "full")))))))
+(DTest false "glob equals the unpruned matchGlob filter on every pattern" (EApp (EVar "withDotTree") (ELam ((PVar "dir")) (EApp (EVar "expectEach") (EApp (EApp (EMethodRef "map") (EApp (EVar "globAgrees") (EVar "dir"))) (EListLit (ELit (LString "**/*")) (ELit (LString "**/*.mdk")) (ELit (LString "*")) (ELit (LString ".git/**")) (ELit (LString "sub/*/")) (ELit (LString "**/")) (ELit (LString ".*/")) (ELit (LString ".git/**/")) (ELit (LString "**/.*")) (ELit (LString "sub/**/*.mdk")) (ELit (LString "**/x")) (ELit (LString ".venv/**/*.mdk")) (ELit (LString "*/config")) (ELit (LString "sub/*")) (ELit (LString "empty/**/"))))))))
+(DTest false "glob with ** skips dot directories but reaches dotfiles" (EApp (EVar "withDotTree") (ELam ((PVar "dir")) (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "**/*")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".env")) (ELit (LString "a.mdk")) (ELit (LString "sub/b.mdk")) (ELit (LString "sub/inner/.hid")) (ELit (LString "sub/inner/c.mdk")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "**/*")))))) (ETuple (ELit (LString "**/*.mdk")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString "a.mdk")) (ELit (LString "sub/b.mdk")) (ELit (LString "sub/inner/c.mdk")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "**/*.mdk")))))) (ETuple (ELit (LString "**/.*")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".env")) (ELit (LString "sub/inner/.hid")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "**/.*")))))) (ETuple (ELit (LString "**/x")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "**/x")))))) (ETuple (ELit (LString "sub/**/*.mdk")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString "sub/b.mdk")) (ELit (LString "sub/inner/c.mdk")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "sub/**/*.mdk")))))))))))
+(DTest false "glob with * matches dot names, and a literal dot directory is entered" (EApp (EVar "withDotTree") (ELam ((PVar "dir")) (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "*")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".env")) (ELit (LString "a.mdk")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "*")))))) (ETuple (ELit (LString ".git/**")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".git/config")) (ELit (LString ".git/objects/x")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString ".git/**")))))) (ETuple (ELit (LString "*/config")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".git/config")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "*/config")))))) (ETuple (ELit (LString ".venv/**/*.mdk")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".venv/lib/z.mdk")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString ".venv/**/*.mdk")))))))))))
+(DTest false "glob with a trailing slash finds directories, written with the slash" (EApp (EVar "withDotTree") (ELam ((PVar "dir")) (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "sub/*/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString "sub/.dot/")) (ELit (LString "sub/inner/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "sub/*/")))))) (ETuple (ELit (LString "**/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString "empty/")) (ELit (LString "empty/nested/")) (ELit (LString "sub/")) (ELit (LString "sub/inner/"))))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "**/")))))) (ETuple (ELit (LString ".*/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".git/")) (ELit (LString ".venv/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString ".*/")))))) (ETuple (ELit (LString ".git/**/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".git/")) (ELit (LString ".git/objects/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString ".git/**/")))))) (ETuple (ELit (LString "sub/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "sub/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "sub/")))))) (ETuple (ELit (LString "a.mdk/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "a.mdk/")))))))))))
+(DTest false "glob of a trailing-slash pattern under a missing prefix is an Err" (EApp (EVar "withDotTree") (ELam ((PVar "dir")) (EBlock (DoLet false false (PVar "prefix") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "absent")))) (DoExpr (EApp (EApp (EVar "expectErrContains") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString ": ")))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "*/"))))))))))
+(DTest false "glob does not enter a dot directory its pattern cannot reach" (EApp (EVar "withDangling") (ELam ((PVar "dir")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "runVerb") (ELit (LString "mv"))) (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/deep"))) (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/.deep")))))) (DoExpr (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/top.txt")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/**/*.txt"))))))))))

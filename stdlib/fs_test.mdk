@@ -5,9 +5,11 @@ import fs.{
   walkFilesSkipping
 }
 import list.{sort}
-import string.{contains}
-import path.{joinPath}
-import test.{Expectation, expectEqual, expectErrContains, fail, pass}
+import string.{contains, endsWith}
+import path.{joinPath, matchGlob}
+import test.{
+  Expectation, expectEach, expectEqual, expectErrContains, fail, pass
+}
 import io.{runVerb}
 import test_process.{scratchDir, withScratchDir}
 
@@ -330,3 +332,182 @@ buildTricky dir = do
   () <- writeFile (joinPath dir "a-d") ""
   () <- writeFile (joinPath dir "a.c") ""
   Ok ()
+
+-- # glob and dot directories
+
+-- Files `.env`, `a.mdk`, `.git/config`, `.git/objects/x`, `.git/.hidden/y`,
+-- `.venv/lib/z.mdk`, `sub/b.mdk`, `sub/inner/c.mdk`, `sub/inner/.hid`,
+-- `sub/.dot/d.mdk`, and the directory `empty/nested`, which holds no file.
+buildDotTree : String -> <FileWrite> Result String Unit
+buildDotTree root = do
+  () <- mkdirAll (joinPath root ".git/objects")
+  () <- mkdirAll (joinPath root ".git/.hidden")
+  () <- mkdirAll (joinPath root ".venv/lib")
+  () <- mkdirAll (joinPath root "sub/inner")
+  () <- mkdirAll (joinPath root "sub/.dot")
+  () <- mkdirAll (joinPath root "empty/nested")
+  () <- writeFile (joinPath root ".env") "e"
+  () <- writeFile (joinPath root "a.mdk") "a"
+  () <- writeFile (joinPath root ".git/config") "c"
+  () <- writeFile (joinPath root ".git/objects/x") "x"
+  () <- writeFile (joinPath root ".git/.hidden/y") "y"
+  () <- writeFile (joinPath root ".venv/lib/z.mdk") "z"
+  () <- writeFile (joinPath root "sub/b.mdk") "b"
+  () <- writeFile (joinPath root "sub/inner/c.mdk") "c"
+  () <- writeFile (joinPath root "sub/inner/.hid") "h"
+  () <- writeFile (joinPath root "sub/.dot/d.mdk") "d"
+  Ok ()
+
+withDotTree : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withDotTree check = withScratchDir (dir => match buildDotTree dir
+  Err e => fail "could not build the tree: \{e}"
+  Ok _ => check dir)
+
+-- Every file and every directory under `root` (a directory with a trailing
+-- slash, `root` itself included), as the unpruned walk of `walkDir`.
+everyCandidate : String -> <FileRead> Result String (List String)
+everyCandidate root = match walkDir root
+  Err e => Err e
+  Ok paths => map ("\{root}/" :: _) (slashDirs paths)
+
+slashDirs : List String -> <FileRead> Result String (List String)
+slashDirs [] = Ok []
+slashDirs (p :: rest) = match isDir p
+  Err e => Err e
+  Ok d =>
+    let marked = if d then "\{p}/" else p
+    map (marked :: _) (slashDirs rest)
+
+-- The answer `glob` must give: the candidates `matchGlob` accepts, files for
+-- a pattern without a trailing slash and directories for one with.
+oracle : String -> String -> <FileRead> Result String (List String)
+oracle dir pattern =
+  map
+    (cs =>
+      sort
+        (filter
+          (c => matchGlob pattern c && endsWith "/" c == endsWith "/" pattern)
+          cs))
+    (everyCandidate dir)
+
+globAgrees : String -> String -> <FileRead> (String, Expectation)
+globAgrees dir pattern =
+  let full = joinPath dir pattern
+  (pattern, expectEqual (oracle dir full) (glob full))
+
+test "glob equals the unpruned matchGlob filter on every pattern" = withDotTree
+  (dir =>
+    expectEach
+      (map (globAgrees dir) [
+        "**/*", "**/*.mdk", "*", ".git/**", "sub/*/", "**/", ".*/", ".git/**/",
+        "**/.*", "sub/**/*.mdk", "**/x", ".venv/**/*.mdk", "*/config", "sub/*",
+        "empty/**/"
+      ]))
+
+test "glob with ** skips dot directories but reaches dotfiles" = withDotTree
+  (dir => expectEach [
+    (
+      "**/*",
+      expectEqual
+        (Ok
+          (rooted dir [
+            ".env", "a.mdk", "sub/b.mdk", "sub/inner/.hid", "sub/inner/c.mdk"
+          ]))
+        (glob (joinPath dir "**/*")),
+    ),
+    (
+      "**/*.mdk",
+      expectEqual
+        (Ok (rooted dir ["a.mdk", "sub/b.mdk", "sub/inner/c.mdk"]))
+        (glob (joinPath dir "**/*.mdk")),
+    ),
+    (
+      "**/.*",
+      expectEqual
+        (Ok (rooted dir [".env", "sub/inner/.hid"]))
+        (glob (joinPath dir "**/.*")),
+    ),
+    ("**/x", expectEqual (Ok []) (glob (joinPath dir "**/x"))),
+    (
+      "sub/**/*.mdk",
+      expectEqual
+        (Ok (rooted dir ["sub/b.mdk", "sub/inner/c.mdk"]))
+        (glob (joinPath dir "sub/**/*.mdk")),
+    ),
+  ])
+
+test "glob with * matches dot names, and a literal dot directory is entered" = withDotTree
+  (dir => expectEach [
+    (
+      "*",
+      expectEqual (Ok (rooted dir [".env", "a.mdk"])) (glob (joinPath dir "*")),
+    ),
+    (
+      ".git/**",
+      expectEqual
+        (Ok (rooted dir [".git/config", ".git/objects/x"]))
+        (glob (joinPath dir ".git/**")),
+    ),
+    (
+      "*/config",
+      expectEqual
+        (Ok (rooted dir [".git/config"]))
+        (glob (joinPath dir "*/config")),
+    ),
+    (
+      ".venv/**/*.mdk",
+      expectEqual
+        (Ok (rooted dir [".venv/lib/z.mdk"]))
+        (glob (joinPath dir ".venv/**/*.mdk")),
+    ),
+  ])
+
+test "glob with a trailing slash finds directories, written with the slash" = withDotTree
+  (dir => expectEach [
+    (
+      "sub/*/",
+      expectEqual
+        (Ok (rooted dir ["sub/.dot/", "sub/inner/"]))
+        (glob (joinPath dir "sub/*/")),
+    ),
+    (
+      "**/",
+      expectEqual
+        (Ok
+          ("\{dir}/"
+            :: rooted dir ["empty/", "empty/nested/", "sub/", "sub/inner/"]))
+        (glob (joinPath dir "**/")),
+    ),
+    (
+      ".*/",
+      expectEqual
+        (Ok (rooted dir [".git/", ".venv/"]))
+        (glob (joinPath dir ".*/")),
+    ),
+    (
+      ".git/**/",
+      expectEqual
+        (Ok (rooted dir [".git/", ".git/objects/"]))
+        (glob (joinPath dir ".git/**/")),
+    ),
+    (
+      "sub/",
+      expectEqual (Ok [joinPath dir "sub/"]) (glob (joinPath dir "sub/")),
+    ),
+    ("a.mdk/", expectEqual (Ok []) (glob (joinPath dir "a.mdk/"))),
+  ])
+
+test "glob of a trailing-slash pattern under a missing prefix is an Err" = withDotTree
+  (dir =>
+    let prefix = joinPath dir "absent"
+    expectErrContains "\{prefix}: " (glob (joinPath prefix "*/")))
+
+-- The dangling link sits inside a dot directory the pattern cannot reach, so
+-- a walk that entered it would report an `Err`.
+test "glob does not enter a dot directory its pattern cannot reach" = withDangling
+  (dir =>
+    let _ = runVerb "mv" [joinPath dir "dang/deep", joinPath dir "dang/.deep"]
+    expectEqual
+      (Ok [joinPath dir "dang/top.txt"])
+      (glob (joinPath dir "dang/**/*.txt")))
