@@ -1,0 +1,15 @@
+import fs.{mkdirAll}
+import string.{trim}
+
+main =
+  let sh script = runCommand "sh" ["-c", script]
+  let stdout (_, out, _) = out
+  let merged (_, out, err) = out ++ err
+  resultOrPanic "setup" (mkdirAll "src")
+  resultOrPanic "setup" (writeFile "src/a.mdk" "")
+  resultOrPanic "setup" (writeFile "src/b.mdk" "")
+  -- cells
+  println (debug (map (trim << stdout) (runCommand "echo" ["hi"])))
+  println (debug (sh "echo out; echo err >&2; exit 2"))
+  println (debug (map merged (sh "echo out; echo err >&2")))
+  println (debug (map stdout (sh "cd src && ls")))

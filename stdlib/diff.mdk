@@ -1,0 +1,304 @@
+{- | Differences between two sequences, and between two texts in the unified
+   format that `diff -u` prints.
+
+   `editScript` compares any two lists and answers with the steps that turn
+   the first into the second: `Keep` an element, `Delete` one of the first
+   list, `Insert` one of the second. The script is a shortest one, so it has
+   as many `Keep`s as the longest common subsequence has elements. Where
+   several shortest scripts exist, the one returned may differ from the one
+   another tool picks. Within a run of changes, deletions come before
+   insertions.
+
+   `unified` compares two texts line by line. Lines are cut on LF alone, so a
+   CR is part of its line, and a final line without its LF differs from the
+   same line with one. -}
+
+import core.{Eq, Debug}
+import list.{reverse, take, groupBy}
+import string.{split, concat, endsWith}
+
+-- # Edit scripts
+
+{- | One step of an edit script.
+
+   > Keep 1
+   Keep 1 -}
+public export data Edit a = Keep a | Insert a | Delete a deriving (Eq, Debug)
+
+{- | A shortest edit script turning the first list into the second.
+
+   Runs in time proportional to the combined length of the two lists times
+   the number of insertions and deletions in the script, so similar inputs
+   are cheap. Memory grows with the square of the edit distance: two
+   completely different texts of 8,000 lines use about 2 GB, while similar
+   texts stay small.
+
+   > editScript [1, 2, 3] [1, 3, 4]
+   [Keep 1, Delete 2, Keep 3, Insert 4]
+   > editScript ['a', 'b'] ['b', 'a']
+   [Delete 'a', Keep 'b', Insert 'a']
+   > editScript [1, 2] ([] : List Int)
+   [Delete 1, Delete 2] -}
+export
+editScript : Eq a => List a -> List a -> List (Edit a)
+editScript a b = deletesFirst (shortest a b)
+
+shortest : Eq a => List a -> List a -> List (Edit a)
+shortest a b =
+  let xs = arrayFromList a
+  let ys = arrayFromList b
+  let n = arrayLength xs
+  let m = arrayLength ys
+  let off = n + m + 1
+  let v = arrayMake (2 * (n + m) + 3) 0
+  let (d, snaps) = forward xs ys n m off v 0 []
+  backtrack xs ys off n m d snaps []
+
+-- Within each run of changes, moves the deletions ahead of the insertions.
+deletesFirst : List (Edit a) -> List (Edit a)
+deletesFirst script = deletesFirstGo script [] [] []
+
+deletesFirstGo : List (Edit a) ->
+  List (Edit a) ->
+  List (Edit a) ->
+  List (Edit a) ->
+  List (Edit a)
+deletesFirstGo [] dels ins acc = reverse (ins ++ dels ++ acc)
+deletesFirstGo ((Delete x) :: rest) dels ins acc =
+  deletesFirstGo rest (Delete x :: dels) ins acc
+deletesFirstGo ((Insert x) :: rest) dels ins acc =
+  deletesFirstGo rest dels (Insert x :: ins) acc
+deletesFirstGo ((Keep x) :: rest) dels ins acc =
+  deletesFirstGo rest [] [] (Keep x :: ins ++ dels ++ acc)
+
+-- The furthest-reaching x on each diagonal k lives in `v[off + k]`. Before
+-- sweeping edit distance `d`, the slice of `v` for diagonals `-d-1..d+1` is saved:
+-- the backtrack reads it to learn which neighbour each diagonal came from.
+forward : Eq a =>
+  Array a ->
+  Array a ->
+  Int ->
+  Int ->
+  Int ->
+  Array Int ->
+  Int ->
+  List (Array Int) ->
+  (Int, List (Array Int))
+forward xs ys n m off v d snaps =
+  let saved =
+    arrayMakeWith (2 * d + 3) (i => arrayGetUnsafe (off - d - 1 + i) v)
+  if sweep xs ys n m off v d (0 - d) then
+    (d, saved :: snaps)
+  else
+    forward xs ys n m off v (d + 1) (saved :: snaps)
+
+sweep : Eq a =>
+  Array a ->
+  Array a ->
+  Int ->
+  Int ->
+  Int ->
+  Array Int ->
+  Int ->
+  Int ->
+  Bool
+sweep xs ys n m off v d k
+  | k > d = False
+  | otherwise =
+    let up = arrayGetUnsafe (off + k + 1) v
+    let left = arrayGetUnsafe (off + k - 1) v
+    let x0 = if comesFromAbove d k left up then up else left + 1
+    let x = snake xs ys n m x0 (x0 - k)
+    let _ = arraySetUnsafe (off + k) x v
+    if x >= n && x - k >= m then True else sweep xs ys n m off v d (k + 2)
+
+-- Diagonal k is reached from diagonal k + 1 by an insertion, or from k - 1 by
+-- a deletion. The edge diagonals have one choice; otherwise the further one
+-- wins, and a tie goes to the deletion.
+comesFromAbove : Int -> Int -> Int -> Int -> Bool
+comesFromAbove d k left up = k == 0 - d || k /= d && left < up
+
+snake : Eq a => Array a -> Array a -> Int -> Int -> Int -> Int -> Int
+snake xs ys n m x y
+  | x < n && y < m && arrayGetUnsafe x xs == arrayGetUnsafe y ys =
+    snake xs ys n m (x + 1) (y + 1)
+  | otherwise = x
+
+-- Walks from (x, y) back to the origin, one edit distance at a time, building
+-- the script front to back.
+backtrack : Array a ->
+  Array a ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  List (Array Int) ->
+  List (Edit a) ->
+  List (Edit a)
+backtrack xs ys off x y d (saved :: rest) acc
+  | d > 0 =
+    let k = x - y
+    let up = arrayGetUnsafe (k + d + 2) saved
+    let left = arrayGetUnsafe (k + d) saved
+    let fromAbove = comesFromAbove d k left up
+    let prevX = if fromAbove then up else left
+    let prevY = prevX - (if fromAbove then k + 1 else k - 1)
+    let midX = if fromAbove then prevX else prevX + 1
+    let edit =
+      if fromAbove then
+        Insert (arrayGetUnsafe prevY ys)
+      else
+        Delete (arrayGetUnsafe prevX xs)
+    backtrack
+      xs
+      ys
+      off
+      prevX
+      prevY
+      (d - 1)
+      rest
+      (edit :: keepsBetween xs midX x acc)
+backtrack xs _ _ x _ _ _ acc = keepsBetween xs 0 x acc
+
+-- Prepends `Keep xs[i]` for each `i` in `[lo, hi)`.
+keepsBetween : Array a -> Int -> Int -> List (Edit a) -> List (Edit a)
+keepsBetween xs lo hi acc =
+  if hi <= lo then
+    acc
+  else
+    keepsBetween xs lo (hi - 1) (Keep (arrayGetUnsafe (hi - 1) xs) :: acc)
+
+-- # Unified format
+
+{- | Compares two texts and prints the difference in unified format, with
+   `ctx` unchanged lines around each change.
+
+   Each text comes with the label that names it in the two header lines. The
+   result is empty when the texts are equal. The format has no timestamps,
+   so the headers are the label alone.
+
+   > unified 1 ("old", "a\nb\nc\n") ("new", "a\nB\nc\n")
+   "--- old\n+++ new\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n"
+   > unified 3 ("old", "same\n") ("new", "same\n")
+   ""
+   > unified 0 ("old", "") ("new", "x\n")
+   "--- old\n+++ new\n@@ -0,0 +1 @@\n+x\n" -}
+export
+unified : Int -> (String, String) -> (String, String) -> String
+unified ctx (labelA, a) (labelB, b)
+  | a == b = ""
+  | otherwise =
+    let script = editScript (splitLines a) (splitLines b)
+    let hs = hunks (if ctx < 0 then 0 else ctx) (runs (annotate script 0 0 []))
+    concat ("--- \{labelA}\n+++ \{labelB}\n" :: map renderHunk hs)
+
+-- An edit with the number of lines of each text that precede it.
+data Entry = Entry (Edit String) Int Int
+
+-- Lines keep their LF, so a last line without one differs from the same line
+-- with one, as it does for `diff`. `string.lines` drops the LF and a CR, which
+-- would hide that difference.
+splitLines : String -> List String
+-- Keeps each LF, which string.lines drops.
+-- lint-disable-next-line rule-stdlib-reimpl
+splitLines text = terminate (split "\n" text) []
+
+terminate : List String -> List String -> List String
+terminate [] acc = reverse acc
+terminate [lastPiece] acc =
+  reverse (if lastPiece == "" then acc else lastPiece :: acc)
+terminate (piece :: rest) acc = terminate rest ("\{piece}\n" :: acc)
+
+annotate : List (Edit String) -> Int -> Int -> List Entry -> List Entry
+annotate [] _ _ acc = reverse acc
+annotate ((e@(Keep _)) :: rest) i j acc =
+  annotate rest (i + 1) (j + 1) (Entry e i j :: acc)
+annotate ((e@(Delete _)) :: rest) i j acc =
+  annotate rest (i + 1) j (Entry e i j :: acc)
+annotate ((e@(Insert _)) :: rest) i j acc =
+  annotate rest i (j + 1) (Entry e i j :: acc)
+
+isKeep : Entry -> Bool
+isKeep (Entry (Keep _) _ _) = True
+isKeep _ = False
+
+runs : List Entry -> List (List Entry)
+runs = groupBy (e1 e2 => isKeep e1 == isKeep e2)
+
+-- Cuts the runs into hunks. `prev` is the unchanged run before the current
+-- change, `cur` the open hunk in reverse, `acc` the finished hunks in reverse.
+-- Unchanged runs of at most `2 * ctx` lines between changes keep the hunk open.
+hunks : Int -> List (List Entry) -> List (List Entry)
+hunks ctx rs = hunksGo ctx rs [] [] []
+
+hunksGo : Int ->
+  List (List Entry) ->
+  List Entry ->
+  List Entry ->
+  List (List Entry) ->
+  List (List Entry)
+hunksGo _ [] _ cur acc = reverse (closeHunk cur acc)
+hunksGo ctx ((run@(entry :: _)) :: rest) prev cur acc
+  | isKeep entry = keepRun ctx run rest cur acc
+hunksGo ctx (run :: rest) prev cur acc =
+  hunksGo ctx rest prev (reverse run ++ opened ctx prev cur) acc
+
+-- The open hunk, or the context that opens one when none is open.
+opened : Int -> List Entry -> List Entry -> List Entry
+opened ctx prev [] = take ctx (reverse prev)
+opened _ _ cur = cur
+
+keepRun : Int ->
+  List Entry ->
+  List (List Entry) ->
+  List Entry ->
+  List (List Entry) ->
+  List (List Entry)
+keepRun ctx run rest [] acc = hunksGo ctx rest run [] acc
+keepRun ctx run [] cur acc =
+  reverse (closeHunk (reverse (take ctx run) ++ cur) acc)
+keepRun ctx run rest cur acc
+  | length run <= 2 * ctx = hunksGo ctx rest run (reverse run ++ cur) acc
+  | otherwise =
+    hunksGo ctx rest run [] (closeHunk (reverse (take ctx run) ++ cur) acc)
+
+closeHunk : List Entry -> List (List Entry) -> List (List Entry)
+closeHunk [] acc = acc
+closeHunk cur acc = reverse cur :: acc
+
+renderHunk : List Entry -> String
+renderHunk [] = ""
+renderHunk (es@((Entry _ i j) :: _)) =
+  let nA = length (filter (e => not (isInsert e)) es)
+  let nB = length (filter (e => not (isDelete e)) es)
+  let header = "@@ -\{range i nA} +\{range j nB} @@\n"
+  concat (header :: map renderEntry es)
+
+-- `start,count`, with the count dropped when it is 1. An empty range starts at
+-- the line before it.
+range : Int -> Int -> String
+range before count
+  | count == 0 = "\{before},0"
+  | count == 1 = "\{before + 1}"
+  | otherwise = "\{before + 1},\{count}"
+
+isInsert : Entry -> Bool
+isInsert (Entry (Insert _) _ _) = True
+isInsert _ = False
+
+isDelete : Entry -> Bool
+isDelete (Entry (Delete _) _ _) = True
+isDelete _ = False
+
+renderEntry : Entry -> String
+renderEntry (Entry e _ _) = match e
+  Keep l => renderLine " " l
+  Delete l => renderLine "-" l
+  Insert l => renderLine "+" l
+
+renderLine : String -> String -> String
+renderLine sign l =
+  if endsWith "\n" l then
+    "\{sign}\{l}"
+  else
+    "\{sign}\{l}\n\\ No newline at end of file\n"

@@ -85,16 +85,21 @@ if grep -E "^($legacy_state)[[:space:]]*:" "$WASM_SRC" >/dev/null ||
   exit 1
 fi
 for sym in \
-  WasmFnImplIndex WasmRecordValueIndex WasmCtorIndex WasmProgramIndex Prog \
+  WasmFnImplIndex WasmRecordValueIndex WasmProgramIndex Prog \
   progIndex makeWasmProgramIndex makeWasmProgramIndexGaps makeWasmProgramIndexWithLazy \
   indexFnNamesW indexValNamesW indexAritiesW indexImplsByMethodW indexLazyGlobalsW \
-  indexFnsUsedAsValuesW indexCtorAritiesW indexCtorTypesW \
-  indexCtorOrdinalsW indexTypeCtorsW; do
+  indexFnsUsedAsValuesW indexCtorAritiesW; do
   grep -E "^$sym[[:space:]]*:|^data $sym" "$WASM_SRC" >/dev/null || {
     echo "FAIL wasm typed index ratchet: missing private carrier/accessor $sym"
     exit 1
   }
 done
+has_wasm_pin 'ctor : ConstructorFacts' &&
+  has_wasm_pin 'ctor = constructors' &&
+  has_wasm_pin 'plan.constructorFacts' || {
+  echo "FAIL wasm typed index ratchet: shared constructor facts must feed the program index"
+  exit 1
+}
 gap_legacy_state='gapRecordEnabledW|gapLogW|curGapBindW'
 gap_legacy_control='enableGapRecordW|resetGapsW|gapEventsW|setGapBindW'
 if grep -E "^($gap_legacy_state)[[:space:]]*:|^export ($gap_legacy_control)[[:space:]]*:" "$WASM_SRC" >/dev/null; then
@@ -233,8 +238,8 @@ has_preamble_pin() {
   grep -F -q -- "$1" "$PREAMBLE_SRC" || printf '%s' "$PREAMBLE_FLAT" | grep -F -q -- "$1"
 }
 for required in \
-  'planWasmDemand : WasmDemandInputs -> CProgram -> ExternRequirements -> WasmDemandPlan' \
-  'validateWasmDemand : WasmDemandInputs -> CProgram -> ExternRequirements -> WasmDemandPlan -> List String' \
+  'planWasmDemand : ConstructorFacts -> WasmDemandInputs -> CProgram -> ExternRequirements -> WasmDemandPlan' \
+  'validateWasmDemand : ConstructorFacts -> WasmDemandInputs -> CProgram -> ExternRequirements -> WasmDemandPlan -> List String' \
   'representationTypes : List String' \
   'let closed = closeHelpers (hasUse source UseI64) roots' \
   'let imports = physicalImports closed hostKeys js' \

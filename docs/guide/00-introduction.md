@@ -87,6 +87,8 @@ The chapters build on each other, so the first time through, read them in order.
    files.
 10. [Tooling & Workflow](10-tooling-and-workflow.md). The `check`, `fmt`, `lint`,
     and `test` loop.
+11. [Writing a script in Medaka](11-writing-scripts.md). Four worked scripts, the
+    mistakes that cost a failed run, and a sheet of Python and shell idioms.
 
 When you have finished, [Advanced Topics](../advanced/00-about.md) goes deeper
 into one feature at a time, starting with effects.

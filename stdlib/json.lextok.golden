@@ -32,9 +32,15 @@ NEWLINE
 IMPORT
 IDENT "string"
 DOT_LBRACE
+IDENT "contains"
+COMMA
 IDENT "fromChars"
 COMMA
 IDENT "isDigit"
+COMMA
+IDENT "join"
+COMMA
+IDENT "repeat"
 COMMA
 IDENT "toInt"
 RBRACE
@@ -925,6 +931,15 @@ PLUS
 INT 1
 RPAREN
 IDENT "acc"
+NEWLINE
+PIPE
+IDENT "charCode"
+IDENT "c"
+LT
+INT 32
+EQUAL
+UPPER "Err"
+STRING "unescaped control character in string"
 NEWLINE
 PIPE
 IDENT "otherwise"
@@ -2115,29 +2130,13 @@ IDENT "arr"
 IDENT "start"
 IDENT "end"
 EQUAL
-INDENT
 IDENT "stringFromChars"
 LPAREN
-IDENT "arrayMakeWith"
-LPAREN
-IDENT "end"
-MINUS
-IDENT "start"
-RPAREN
-LPAREN
-IDENT "k"
-FAT_ARROW
-IDENT "arrayGetUnsafe"
-LPAREN
-IDENT "start"
-PLUS
-IDENT "k"
-RPAREN
+IDENT "sliceChars"
 IDENT "arr"
+IDENT "start"
+IDENT "end"
 RPAREN
-RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "parseNumber"
 COLON
@@ -2197,6 +2196,10 @@ IDENT "afterSign"
 IDENT "afterInt"
 LPAREN
 IDENT "fst"
+IDENT "fracR"
+RPAREN
+LPAREN
+IDENT "fst"
 IDENT "expR"
 RPAREN
 LPAREN
@@ -2227,6 +2230,9 @@ NEWLINE
 UPPER "Int"
 ARROW
 NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
 NEWLINE
@@ -2245,6 +2251,7 @@ IDENT "arr"
 IDENT "start"
 IDENT "afterSign"
 IDENT "afterInt"
+IDENT "afterFrac"
 IDENT "end"
 IDENT "isFloat"
 INDENT
@@ -2255,6 +2262,42 @@ IDENT "afterSign"
 EQUAL
 UPPER "Err"
 STRING "invalid number: no digits"
+NEWLINE
+PIPE
+IDENT "afterFrac"
+EQ_EQ
+IDENT "afterInt"
+PLUS
+INT 1
+AND
+IDENT "hasDot"
+IDENT "arr"
+IDENT "afterInt"
+EQUAL
+INDENT
+UPPER "Err"
+STRING "invalid number: no digits after decimal point"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "afterInt"
+MINUS
+IDENT "afterSign"
+GT
+INT 1
+AND
+IDENT "arrayGetUnsafe"
+IDENT "afterSign"
+IDENT "arr"
+EQ_EQ
+CHAR "0"
+EQUAL
+INDENT
+UPPER "Err"
+STRING "invalid number: leading zero"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "isFloat"
@@ -2281,6 +2324,30 @@ RPAREN
 IDENT "end"
 NEWLINE
 DEDENT
+NEWLINE
+IDENT "hasDot"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "hasDot"
+IDENT "arr"
+IDENT "i"
+EQUAL
+IDENT "i"
+LT
+IDENT "arrayLength"
+IDENT "arr"
+AND
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "."
 NEWLINE
 IDENT "finishInt"
 COLON
@@ -3834,6 +3901,1209 @@ IDENT "asObject"
 UNDERSCORE
 EQUAL
 UPPER "None"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "asNumber"
+COLON
+UPPER "Json"
+ARROW
+UPPER "Option"
+UPPER "Float"
+NEWLINE
+IDENT "asNumber"
+LPAREN
+UPPER "JInt"
+IDENT "n"
+RPAREN
+EQUAL
+UPPER "Some"
+LPAREN
+IDENT "intToFloat"
+IDENT "n"
+RPAREN
+NEWLINE
+IDENT "asNumber"
+LPAREN
+UPPER "JFloat"
+IDENT "f"
+RPAREN
+EQUAL
+UPPER "Some"
+IDENT "f"
+NEWLINE
+IDENT "asNumber"
+UNDERSCORE
+EQUAL
+UPPER "None"
+NEWLINE
+IDENT "indexOfStep"
+COLON
+UPPER "String"
+ARROW
+UPPER "Option"
+UPPER "Int"
+NEWLINE
+IDENT "indexOfStep"
+IDENT "s"
+EQUAL
+INDENT
+LET
+IDENT "cs"
+EQUAL
+IDENT "stringToChars"
+IDENT "s"
+NEWLINE
+LET
+IDENT "n"
+EQUAL
+IDENT "arrayLength"
+IDENT "cs"
+NEWLINE
+IF
+IDENT "n"
+GT
+INT 0
+AND
+IDENT "allDigits"
+IDENT "cs"
+INT 0
+IDENT "n"
+THEN
+INDENT
+IF
+IDENT "n"
+GT
+INT 1
+AND
+IDENT "arrayGetUnsafe"
+INT 0
+IDENT "cs"
+EQ_EQ
+CHAR "0"
+THEN
+UPPER "None"
+ELSE
+IDENT "toInt"
+IDENT "s"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+UPPER "None"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "allDigits"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "allDigits"
+IDENT "cs"
+IDENT "i"
+IDENT "n"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "n"
+EQUAL
+UPPER "True"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "isDigit"
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "cs"
+RPAREN
+AND
+IDENT "allDigits"
+IDENT "cs"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "n"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "kindName"
+COLON
+UPPER "Json"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "kindName"
+UPPER "JNull"
+EQUAL
+STRING "null"
+NEWLINE
+IDENT "kindName"
+LPAREN
+UPPER "JBool"
+UNDERSCORE
+RPAREN
+EQUAL
+STRING "bool"
+NEWLINE
+IDENT "kindName"
+LPAREN
+UPPER "JInt"
+UNDERSCORE
+RPAREN
+EQUAL
+STRING "int"
+NEWLINE
+IDENT "kindName"
+LPAREN
+UPPER "JFloat"
+UNDERSCORE
+RPAREN
+EQUAL
+STRING "float"
+NEWLINE
+IDENT "kindName"
+LPAREN
+UPPER "JString"
+UNDERSCORE
+RPAREN
+EQUAL
+STRING "string"
+NEWLINE
+IDENT "kindName"
+LPAREN
+UPPER "JArray"
+UNDERSCORE
+RPAREN
+EQUAL
+STRING "array"
+NEWLINE
+IDENT "kindName"
+LPAREN
+UPPER "JObject"
+UNDERSCORE
+RPAREN
+EQUAL
+STRING "object"
+NEWLINE
+IDENT "stepInto"
+COLON
+UPPER "String"
+ARROW
+UPPER "Json"
+ARROW
+UPPER "Result"
+UPPER "String"
+UPPER "Json"
+NEWLINE
+IDENT "stepInto"
+IDENT "step"
+LPAREN
+UPPER "JObject"
+IDENT "pairs"
+RPAREN
+EQUAL
+MATCH
+IDENT "lookupGo"
+IDENT "step"
+IDENT "pairs"
+INT 0
+LPAREN
+IDENT "arrayLength"
+IDENT "pairs"
+RPAREN
+INDENT
+UPPER "Some"
+IDENT "v"
+FAT_ARROW
+UPPER "Ok"
+IDENT "v"
+NEWLINE
+UPPER "None"
+FAT_ARROW
+UPPER "Err"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+STRING "no key "
+COMMA
+IDENT "escapeString"
+IDENT "step"
+RBRACKET
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "stepInto"
+IDENT "step"
+LPAREN
+UPPER "JArray"
+IDENT "arr"
+RPAREN
+EQUAL
+MATCH
+IDENT "indexOfStep"
+IDENT "step"
+INDENT
+UPPER "None"
+FAT_ARROW
+UPPER "Err"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+STRING "invalid array index "
+COMMA
+IDENT "escapeString"
+IDENT "step"
+RBRACKET
+RPAREN
+NEWLINE
+UPPER "Some"
+IDENT "k"
+FAT_ARROW
+IDENT "indexInto"
+IDENT "k"
+IDENT "arr"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "stepInto"
+UNDERSCORE
+IDENT "j"
+EQUAL
+INDENT
+UPPER "Err"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+STRING "expected object or array, found "
+COMMA
+IDENT "kindName"
+IDENT "j"
+RBRACKET
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "indexInto"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Array"
+UPPER "Json"
+ARROW
+UPPER "Result"
+UPPER "String"
+UPPER "Json"
+NEWLINE
+IDENT "indexInto"
+IDENT "k"
+IDENT "arr"
+INDENT
+PIPE
+IDENT "k"
+LT
+IDENT "arrayLength"
+IDENT "arr"
+EQUAL
+UPPER "Ok"
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "k"
+IDENT "arr"
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+UPPER "Err"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+STRING "index "
+COMMA
+IDENT "intToString"
+IDENT "k"
+COMMA
+STRING " out of range ("
+COMMA
+IDENT "intToString"
+LPAREN
+IDENT "arrayLength"
+IDENT "arr"
+RPAREN
+COMMA
+STRING " elements)"
+COMMA
+RBRACKET
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "walkedPath"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "walkedPath"
+LBRACKET
+RBRACKET
+EQUAL
+STRING "<root>"
+NEWLINE
+IDENT "walkedPath"
+IDENT "steps"
+EQUAL
+IDENT "join"
+STRING "."
+LPAREN
+IDENT "map"
+IDENT "pathStep"
+LPAREN
+IDENT "reverse"
+IDENT "steps"
+RPAREN
+RPAREN
+NEWLINE
+IDENT "pathStep"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "pathStep"
+IDENT "step"
+INDENT
+PIPE
+IDENT "step"
+EQ_EQ
+STRING ""
+OR
+IDENT "contains"
+STRING "."
+IDENT "step"
+EQUAL
+IDENT "escapeString"
+IDENT "step"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "step"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "atPathGo"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "Json"
+ARROW
+UPPER "Result"
+UPPER "String"
+UPPER "Json"
+NEWLINE
+IDENT "atPathGo"
+UNDERSCORE
+LBRACKET
+RBRACKET
+IDENT "j"
+EQUAL
+UPPER "Ok"
+IDENT "j"
+NEWLINE
+IDENT "atPathGo"
+IDENT "walked"
+LPAREN
+IDENT "step"
+CONS
+IDENT "rest"
+RPAREN
+IDENT "j"
+EQUAL
+MATCH
+IDENT "stepInto"
+IDENT "step"
+IDENT "j"
+INDENT
+UPPER "Ok"
+IDENT "next"
+FAT_ARROW
+IDENT "atPathGo"
+LPAREN
+IDENT "step"
+CONS
+IDENT "walked"
+RPAREN
+IDENT "rest"
+IDENT "next"
+NEWLINE
+UPPER "Err"
+IDENT "why"
+FAT_ARROW
+UPPER "Err"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+STRING "at "
+COMMA
+IDENT "walkedPath"
+IDENT "walked"
+COMMA
+STRING ": "
+COMMA
+IDENT "why"
+RBRACKET
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "atPath"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "Json"
+ARROW
+UPPER "Result"
+UPPER "String"
+UPPER "Json"
+NEWLINE
+IDENT "atPath"
+IDENT "steps"
+IDENT "j"
+EQUAL
+IDENT "atPathGo"
+LBRACKET
+RBRACKET
+IDENT "steps"
+IDENT "j"
+NEWLINE
+IDENT "newlineAt"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "newlineAt"
+IDENT "n"
+IDENT "level"
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+STRING "\n"
+COMMA
+IDENT "repeat"
+LPAREN
+IDENT "n"
+STAR
+IDENT "level"
+RPAREN
+STRING " "
+RBRACKET
+NEWLINE
+IDENT "prettyInto"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Json"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+NEWLINE
+IDENT "prettyInto"
+IDENT "n"
+IDENT "level"
+LPAREN
+UPPER "JArray"
+IDENT "arr"
+RPAREN
+IDENT "acc"
+INDENT
+PIPE
+IDENT "arrayLength"
+IDENT "arr"
+EQ_EQ
+INT 0
+EQUAL
+STRING "[]"
+CONS
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+STRING "]"
+CONS
+IDENT "newlineAt"
+IDENT "n"
+IDENT "level"
+CONS
+IDENT "prettyElems"
+IDENT "n"
+LPAREN
+IDENT "level"
+PLUS
+INT 1
+RPAREN
+IDENT "arr"
+INT 0
+LPAREN
+STRING "["
+CONS
+IDENT "acc"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "prettyInto"
+IDENT "n"
+IDENT "level"
+LPAREN
+UPPER "JObject"
+IDENT "pairs"
+RPAREN
+IDENT "acc"
+INDENT
+PIPE
+IDENT "arrayLength"
+IDENT "pairs"
+EQ_EQ
+INT 0
+EQUAL
+STRING "{}"
+CONS
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+STRING "}"
+CONS
+IDENT "newlineAt"
+IDENT "n"
+IDENT "level"
+CONS
+IDENT "prettyMembers"
+IDENT "n"
+LPAREN
+IDENT "level"
+PLUS
+INT 1
+RPAREN
+IDENT "pairs"
+INT 0
+LPAREN
+STRING "{"
+CONS
+IDENT "acc"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "prettyInto"
+UNDERSCORE
+UNDERSCORE
+IDENT "j"
+IDENT "acc"
+EQUAL
+IDENT "stringifyInto"
+IDENT "j"
+IDENT "acc"
+NEWLINE
+IDENT "prettyElems"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Array"
+UPPER "Json"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+NEWLINE
+IDENT "prettyElems"
+IDENT "n"
+IDENT "level"
+IDENT "arr"
+IDENT "i"
+IDENT "acc"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "arrayLength"
+IDENT "arr"
+EQUAL
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+LET
+IDENT "sep"
+EQUAL
+IF
+IDENT "i"
+EQ_EQ
+INT 0
+THEN
+IDENT "acc"
+ELSE
+STRING ","
+CONS
+IDENT "acc"
+NEWLINE
+IDENT "prettyElems"
+IDENT "n"
+IDENT "level"
+IDENT "arr"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+LPAREN
+IDENT "prettyInto"
+IDENT "n"
+IDENT "level"
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+RPAREN
+LPAREN
+IDENT "newlineAt"
+IDENT "n"
+IDENT "level"
+CONS
+IDENT "sep"
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "prettyMembers"
+COLON
+UPPER "Int"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Array"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "Json"
+RPAREN
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "prettyMembers"
+IDENT "n"
+IDENT "level"
+IDENT "pairs"
+IDENT "i"
+IDENT "acc"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "arrayLength"
+IDENT "pairs"
+EQUAL
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+LET
+IDENT "p"
+EQUAL
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "pairs"
+NEWLINE
+LET
+IDENT "sep"
+EQUAL
+IF
+IDENT "i"
+EQ_EQ
+INT 0
+THEN
+IDENT "acc"
+ELSE
+STRING ","
+CONS
+IDENT "acc"
+NEWLINE
+LET
+IDENT "keyed"
+EQUAL
+STRING ": "
+CONS
+IDENT "escapeString"
+LPAREN
+IDENT "fst"
+IDENT "p"
+RPAREN
+CONS
+IDENT "newlineAt"
+IDENT "n"
+IDENT "level"
+CONS
+IDENT "sep"
+NEWLINE
+IDENT "prettyMembers"
+IDENT "n"
+IDENT "level"
+IDENT "pairs"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+LPAREN
+IDENT "prettyInto"
+IDENT "n"
+IDENT "level"
+LPAREN
+IDENT "snd"
+IDENT "p"
+RPAREN
+IDENT "keyed"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "pretty"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Json"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "pretty"
+IDENT "n"
+IDENT "j"
+EQUAL
+IDENT "stringConcat"
+LPAREN
+IDENT "reverse"
+LPAREN
+IDENT "prettyInto"
+LPAREN
+IDENT "max"
+INT 0
+IDENT "n"
+RPAREN
+INT 0
+IDENT "j"
+LBRACKET
+RBRACKET
+RPAREN
+RPAREN
+NEWLINE
+IDENT "lineEnd"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "lineEnd"
+IDENT "arr"
+IDENT "i"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "arrayLength"
+IDENT "arr"
+OR
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "\n"
+EQUAL
+IDENT "i"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "lineEnd"
+IDENT "arr"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "blankBetween"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "blankBetween"
+IDENT "arr"
+IDENT "i"
+IDENT "e"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "e"
+EQUAL
+UPPER "True"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "isWs"
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+RPAREN
+AND
+IDENT "blankBetween"
+IDENT "arr"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "e"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseLinesGo"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Json"
+RPAREN
+ARROW
+NEWLINE
+UPPER "List"
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Json"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseLinesGo"
+IDENT "arr"
+IDENT "start"
+IDENT "lineNo"
+IDENT "acc"
+INDENT
+PIPE
+IDENT "start"
+GT
+IDENT "arrayLength"
+IDENT "arr"
+EQUAL
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+LET
+IDENT "e"
+EQUAL
+IDENT "lineEnd"
+IDENT "arr"
+IDENT "start"
+NEWLINE
+LET
+IDENT "next"
+EQUAL
+IDENT "parseLinesGo"
+IDENT "arr"
+LPAREN
+IDENT "e"
+PLUS
+INT 1
+RPAREN
+LPAREN
+IDENT "lineNo"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+IF
+IDENT "blankBetween"
+IDENT "arr"
+IDENT "start"
+IDENT "e"
+THEN
+INDENT
+IDENT "next"
+IDENT "acc"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "next"
+LPAREN
+IDENT "lineResult"
+IDENT "lineNo"
+LPAREN
+IDENT "parseTop"
+LPAREN
+IDENT "sliceChars"
+IDENT "arr"
+IDENT "start"
+IDENT "e"
+RPAREN
+RPAREN
+CONS
+IDENT "acc"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "sliceChars"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Array"
+UPPER "Char"
+NEWLINE
+IDENT "sliceChars"
+IDENT "arr"
+IDENT "start"
+IDENT "end"
+EQUAL
+INDENT
+IDENT "arrayMakeWith"
+LPAREN
+IDENT "end"
+MINUS
+IDENT "start"
+RPAREN
+LPAREN
+IDENT "k"
+FAT_ARROW
+IDENT "arrayGetUnsafe"
+LPAREN
+IDENT "start"
+PLUS
+IDENT "k"
+RPAREN
+IDENT "arr"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "lineResult"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Result"
+UPPER "String"
+UPPER "Json"
+ARROW
+UPPER "Result"
+UPPER "String"
+UPPER "Json"
+NEWLINE
+IDENT "lineResult"
+UNDERSCORE
+LPAREN
+UPPER "Ok"
+IDENT "j"
+RPAREN
+EQUAL
+UPPER "Ok"
+IDENT "j"
+NEWLINE
+IDENT "lineResult"
+IDENT "lineNo"
+LPAREN
+UPPER "Err"
+IDENT "e"
+RPAREN
+EQUAL
+INDENT
+UPPER "Err"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+STRING "line "
+COMMA
+IDENT "intToString"
+IDENT "lineNo"
+COMMA
+STRING ": "
+COMMA
+IDENT "e"
+RBRACKET
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "parseLines"
+COLON
+UPPER "String"
+ARROW
+UPPER "List"
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Json"
+RPAREN
+NEWLINE
+IDENT "parseLines"
+IDENT "s"
+EQUAL
+IDENT "reverse"
+LPAREN
+IDENT "parseLinesGo"
+LPAREN
+IDENT "stringToChars"
+IDENT "s"
+RPAREN
+INT 0
+INT 1
+LBRACKET
+RBRACKET
+RPAREN
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "stringifyLines"
+COLON
+UPPER "List"
+UPPER "Json"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "stringifyLines"
+IDENT "js"
+EQUAL
+INDENT
+IDENT "stringConcat"
+LPAREN
+IDENT "map"
+LPAREN
+IDENT "j"
+FAT_ARROW
+IDENT "stringConcat"
+LBRACKET
+IDENT "stringify"
+IDENT "j"
+COMMA
+STRING "\n"
+RBRACKET
+RPAREN
+IDENT "js"
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "arrEqJson"
 COLON

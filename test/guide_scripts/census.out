@@ -1,0 +1,6 @@
+ext         files   share
+.mdk           3   50.0%
+.md            2   33.3%
+(none)         1   16.7%
+6 files, 1,494 lines
+mdk: ["tree/src/a.mdk", "tree/src/b.mdk", "tree/src/sub/c.mdk"]

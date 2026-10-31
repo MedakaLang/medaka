@@ -205,6 +205,7 @@ inlang-support-diag-codes-doc-test:
 
 inlang-ir-dce-test:
 	./medaka test compiler/ir/dce_test.mdk
+	./medaka test compiler/ir/constructor_facts_test.mdk
 
 ## The Core s-expression printer and parser round-trip a call's mode and tail
 ## flag, record ordinals, float literals and the binder-type section; no entry
@@ -247,6 +248,12 @@ inlang-backend-extern-catalog-test:
 ## oracle binds that `run` does not); no entry imports the module or its sibling.
 inlang-tools-engine-table-test:
 	./medaka test --native compiler/tools/engine_table_test.mdk
+
+## The programs on docs/guide/11-writing-scripts.md live under
+## test/guide_scripts/; no entry imports the test that runs them and checks
+## the page against them. Native: it spawns `medaka` and `sh`.
+inlang-guide-scripts-test:
+	./medaka test --native test/guide_scripts_test.mdk
 
 ## No entry imports a `_test.mdk` sibling, so the extern check's own tests
 ## run only from here.
@@ -551,6 +558,7 @@ inlang-frontend-lexer-test:
 ## the furthest-failure choice would otherwise never run.
 inlang-frontend-parser-test:
 	./medaka test compiler/frontend/parser_test.mdk
+	./medaka test compiler/frontend/runtime_constructors_test.mdk
 	./medaka test compiler/frontend/parse_hints_test.mdk
 	./medaka test compiler/frontend/parse_engine_test.mdk
 	./medaka test compiler/frontend/parse_diagnostic_test.mdk

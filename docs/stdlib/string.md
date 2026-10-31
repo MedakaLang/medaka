@@ -882,6 +882,61 @@ The words joined with single spaces.
 "a b c"
 ```
 
+### `dedent`
+
+```
+dedent : String -> String
+dedent s
+```
+
+The text with the indentation its lines share removed.
+
+Drops one leading `\n` first, so a raw block whose text starts on the line
+after its opening quotes reads naturally. Then, as Python's
+`dedent`: a line of spaces and tabs only becomes empty, and the
+longest run of leading spaces and tabs that every other line starts with is
+removed. A tab is not a space, so a margin that mixes the two removes
+nothing. Lines end at `\n` alone, so a `\r` before it is ordinary content.
+
+That leading newline is what lets a raw block be indented under its
+opening quotes:
+
+dedent r"""
+foo = 1
+bar = 2
+"""
+
+```medaka
+> dedent "\n    foo = 1\n    bar = 2\n"
+"foo = 1\nbar = 2\n"
+```
+
+### `indent`
+
+```
+indent : String -> String -> String
+indent prefix s
+```
+
+`s` with `prefix` in front of each line that is not blank.
+
+A line ends after `\n`, `\r\n`, `\r`, a vertical tab, a form feed, the
+separators U+001C to U+001E, U+0085, U+2028 or U+2029, as Python cuts
+lines, and `\r\n` is one ending. A line is blank when it is empty or
+holds only whitespace, as Python counts whitespace, so a line of just
+`\r` or a no-break space is blank too. A blank line is left exactly as
+it is, so no trailing spaces are added to it. Line endings are kept, and
+a last line without one stays without one.
+
+```medaka
+> indent "> " "a\n\n  \nb"
+"> a\n\n  \n> b"
+> indent "> " "a\r\n\r\nb\r\n"
+"> a\r\n\r\n> b\r\n"
+> indent "> " "a\rb"
+"> a\r> b"
+```
+
 ## Padding
 
 ### `padLeft`

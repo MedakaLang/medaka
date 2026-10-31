@@ -1,0 +1,3 @@
+import diff.{unified}
+
+main = print (unified 3 ("A", "c\na\n") ("B", "b\nc\nc\na\na\n"))

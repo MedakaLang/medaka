@@ -1,0 +1,4 @@
+Ok "hi"
+Ok (2, "out\n", "err\n")
+Ok "out\nerr\n"
+Ok "a.mdk\nb.mdk\n"

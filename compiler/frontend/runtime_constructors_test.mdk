@@ -1,0 +1,97 @@
+import types.private_mangle as M
+import backend.wasm_demand as W
+import frontend.runtime_constructors.{
+  RuntimeOwner(..), RuntimeCtorId(..), RuntimeCtorFact(..), namedRuntimeCtor,
+  runtimeCtorFact, runtimeRoster, runtimeCtorName, runtimeOwnerWord
+}
+import test.{expectEqual, expectAll}
+
+test "runtime constructor catalog" =
+  let ids = [
+    RuntimeCons, RuntimeNil, RuntimeSome, RuntimeNone, RuntimeOk, RuntimeErr,
+    RuntimeLt, RuntimeEq, RuntimeGt, RuntimeFalse, RuntimeTrue
+  ]
+  let names = [
+    "Cons", "Nil", "Some", "None", "Ok", "Err", "Lt", "Eq", "Gt", "False",
+    "True"
+  ]
+  expectAll [
+    expectEqual (map Some ids) (map namedRuntimeCtor names),
+    expectEqual (map Some names) (map runtimeCtorName ids),
+    expectEqual
+      [
+        RuntimeList, RuntimeList, RuntimeOption, RuntimeOption, RuntimeResult,
+        RuntimeResult, RuntimeOrdering, RuntimeOrdering, RuntimeOrdering,
+        RuntimeBool, RuntimeBool
+      ]
+      (map (c => (runtimeCtorFact c).owner) ids),
+    expectEqual
+      [2, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0]
+      (map (c => (runtimeCtorFact c).arity) ids),
+    expectEqual
+      [0, 1, 0, 1, 0, 1, 0, 1, 2, 0, 1]
+      (map (c => (runtimeCtorFact c).ordinal) ids),
+    expectEqual
+      [
+        [RuntimeCons, RuntimeNil],
+        [RuntimeSome, RuntimeNone],
+        [RuntimeOk, RuntimeErr],
+        [RuntimeLt, RuntimeEq, RuntimeGt],
+        [RuntimeFalse, RuntimeTrue],
+        [RuntimeTupleCtor 2],
+        [RuntimeTupleCtor 3],
+      ]
+      (map runtimeRoster [
+        RuntimeList,
+        RuntimeOption,
+        RuntimeResult,
+        RuntimeOrdering,
+        RuntimeBool,
+        RuntimeTuple 2,
+        RuntimeTuple 3,
+      ]),
+    expectEqual
+      [
+        Some "List",
+        Some "Option",
+        Some "Result",
+        Some "Ordering",
+        Some "Bool",
+        None,
+      ]
+      (map runtimeOwnerWord [
+        RuntimeList,
+        RuntimeOption,
+        RuntimeResult,
+        RuntimeOrdering,
+        RuntimeBool,
+        RuntimeTuple 2,
+      ]),
+    expectEqual
+      RuntimeCtorFact { owner = RuntimeTuple 3, ordinal = 0, arity = 3 }
+      (runtimeCtorFact (RuntimeTupleCtor 3)),
+    expectEqual None (runtimeCtorName (RuntimeTupleCtor 2)),
+    expectEqual
+      [None, None, None]
+      (map namedRuntimeCtor ["Tup2", "Tuple3", "unknown"]),
+  ]
+
+test "consumer membership projections" =
+  let names = [
+    "Cons", "Nil", "Some", "None", "Ok", "Err", "Lt", "Eq", "Gt", "False",
+    "True", "Tup2", "unknown"
+  ]
+  expectAll [
+    expectEqual
+      [
+        True, True, True, True, True, True, True, True, True, True, True, False,
+        False
+      ]
+      (map M.isReservedCtor names),
+    expectEqual
+      [
+        False, False, True, True, True, True, True, True, True, False, False,
+        False, False
+      ]
+      (map W.isReservedCtor names),
+  ]

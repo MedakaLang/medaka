@@ -892,6 +892,160 @@ export
 unwords : List String -> String
 unwords parts = join " " parts
 
+{- | The text with the indentation its lines share removed.
+
+   Drops one leading `\n` first, so a raw block whose text starts on the line
+   after its opening quotes reads naturally. Then, as Python's
+   `dedent`: a line of spaces and tabs only becomes empty, and the
+   longest run of leading spaces and tabs that every other line starts with is
+   removed. A tab is not a space, so a margin that mixes the two removes
+   nothing. Lines end at `\n` alone, so a `\r` before it is ordinary content.
+
+   That leading newline is what lets a raw block be indented under its
+   opening quotes:
+
+       dedent r"""
+           foo = 1
+           bar = 2
+           """
+
+   > dedent "\n    foo = 1\n    bar = 2\n"
+   "foo = 1\nbar = 2\n" -}
+export
+dedent : String -> String
+dedent s =
+  let ls = map blankIfSpaceOnly (split "\n" (dropOneNewline s))
+  let k = length (commonMargin ls)
+  join "\n" (map (drop k) ls)
+
+{- | `s` with `prefix` in front of each line that is not blank.
+
+   A line ends after `\n`, `\r\n`, `\r`, a vertical tab, a form feed, the
+   separators U+001C to U+001E, U+0085, U+2028 or U+2029, as Python cuts
+   lines, and `\r\n` is one ending. A line is blank when it is empty or
+   holds only whitespace, as Python counts whitespace, so a line of just
+   `\r` or a no-break space is blank too. A blank line is left exactly as
+   it is, so no trailing spaces are added to it. Line endings are kept, and
+   a last line without one stays without one.
+
+   > indent "> " "a\n\n  \nb"
+   "> a\n\n  \n> b"
+   > indent "> " "a\r\n\r\nb\r\n"
+   "> a\r\n\r\n> b\r\n"
+   > indent "> " "a\rb"
+   "> a\r> b" -}
+export
+indent : String -> String -> String
+indent prefix s =
+  let a = toChars s
+  stringConcat (indentFrom prefix a (arrayLength a) 0)
+
+indentFrom : String -> Array Char -> Int -> Int -> List String
+indentFrom prefix a n start
+  | start >= n = []
+  | otherwise =
+    let e = afterLineEnd a n start
+    let piece = subChars a start e
+    let out = if allSpace a start e then piece else prefix ++ piece
+    out :: indentFrom prefix a n e
+
+-- Whether every character of `[i, e)` is whitespace, so the line is blank.
+allSpace : Array Char -> Int -> Int -> Bool
+allSpace a i e
+  | i >= e = True
+  | otherwise = isStripSpace (arrayGetUnsafe i a) && allSpace a (i + 1) e
+
+-- The characters Python's `str.strip` removes. `isSpace` and `trim` know the
+-- ASCII ones only.
+isStripSpace : Char -> Bool
+isStripSpace c =
+  let k = charCode c
+  k >= 9 && k <= 13
+    || k >= 28 && k <= 32
+    || k == 133
+    || k == 160
+    || k == 5760
+    || k >= 8192 && k <= 8202
+    || k == 8232
+    || k == 8233
+    || k == 8239
+    || k == 8287
+    || k == 12288
+
+-- The index just past the line ending of the line that starts at `i`, or `n`
+-- when the last line has none.
+afterLineEnd : Array Char -> Int -> Int -> Int
+afterLineEnd a n i
+  | i >= n = n
+  | arrayGetUnsafe i a == '\r' =
+    if i + 1 < n && arrayGetUnsafe (i + 1) a == '\n' then i + 2 else i + 1
+  | isLineBreak (arrayGetUnsafe i a) = i + 1
+  | otherwise = afterLineEnd a n (i + 1)
+
+-- A character that ends a line other than `\r`: Python's `splitlines` set.
+isLineBreak : Char -> Bool
+isLineBreak c =
+  let k = charCode c
+  k == 10
+    || k == 11
+    || k == 12
+    || k >= 28 && k <= 30
+    || k == 133
+    || k == 8232
+    || k == 8233
+
+-- Drops one leading newline, so a raw block may open on its own line.
+dropOneNewline : String -> String
+dropOneNewline s = if startsWith "\n" s then drop 1 s else s
+
+-- Whether a line is empty or holds spaces and tabs only.
+isBlankLine : String -> Bool
+isBlankLine l = indentRunLength l (length l) 0 == length l
+
+-- A blank line becomes empty; any other line is returned unchanged.
+blankIfSpaceOnly : String -> String
+blankIfSpaceOnly l = if isBlankLine l then "" else l
+
+-- The leading run of spaces and tabs of `l`.
+leadingIndent : String -> String
+leadingIndent l = take (indentRunLength l (length l) 0) l
+
+-- The index of the first character at or after `i` that is neither a space
+-- nor a tab, or `n` when there is none.
+indentRunLength : String -> Int -> Int -> Int
+indentRunLength l n i
+  | i < n && isIndentChar (charAtStr l i) = indentRunLength l n (i + 1)
+  | otherwise = i
+
+isIndentChar : Char -> Bool
+isIndentChar c = c == ' ' || c == '\t'
+
+-- The longest leading indentation that every non-blank line starts with, or ""
+-- when no line is non-blank. Callers pass lines already blanked, so a blank
+-- line is exactly "".
+commonMargin : List String -> String
+commonMargin [] = ""
+commonMargin (l :: ls)
+  | l == "" = commonMargin ls
+  | otherwise = sharedMargin (leadingIndent l) ls
+
+sharedMargin : String -> List String -> String
+sharedMargin m [] = m
+sharedMargin m (l :: ls)
+  | l == "" = sharedMargin m ls
+  | otherwise = sharedMargin (commonPrefix m (leadingIndent l)) ls
+
+-- The longest common leading part of `a` and `b`.
+commonPrefix : String -> String -> String
+commonPrefix a b = take (sharedLength a b 0) a
+
+-- The number of leading characters `a` and `b` share, counting from `i`.
+sharedLength : String -> String -> Int -> Int
+sharedLength a b i
+  | i < length a && i < length b && charAtStr a i == charAtStr b i =
+    sharedLength a b (i + 1)
+  | otherwise = i
+
 -- # Padding
 
 {- | The string padded on the left with `c` to length `n`.

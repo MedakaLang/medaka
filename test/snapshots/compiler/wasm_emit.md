@@ -1,7 +1,14 @@
 # META
-source_lines=11690
+source_lines=11545
 stages=DESUGAR,MARK
 # SOURCE
+import ir.constructor_facts.{
+  ConstructorFacts, declaredCtorArity, declaredCtorOwner, declaredCtorOrdinal
+}
+import frontend.runtime_constructors.{
+  RuntimeOwner(..), RuntimeCtorId(..), namedRuntimeCtor, runtimeCtorFact,
+  runtimeRoster, runtimeCtorName, runtimeOwnerWord
+}
 import backend.wasm_symbol_names as WN
 import support.symbol_encoding.{encodePair}
 import support.diag_codes.{DiagCode(..)}
@@ -685,13 +692,6 @@ data WasmFnImplIndex = WasmFnImplIndex {
 
 data WasmRecordValueIndex = WasmRecordValueIndex { fnValues : OrdMap Unit }
 
-data WasmCtorIndex = WasmCtorIndex {
-  arities : OrdMap Int,
-  types : OrdMap String,
-  ordinals : OrdMap Int,
-  typeCtors : OrdMap (List String),
-}
-
 -- The program's binder table (`DeclFacts.factBinders`): every row by the
 -- ordinal of its id (printed, so an env entry can name a row without parsing),
 -- and the row of each top-level binding by its name.
@@ -703,7 +703,7 @@ data WasmStamps = WasmStamps {
 data WasmProgramIndex = WasmProgramIndex {
   fnImpl : WasmFnImplIndex,
   recordValue : WasmRecordValueIndex,
-  ctor : WasmCtorIndex,
+  ctor : ConstructorFacts,
   stamps : WasmStamps,
   typeContext : WasmTypeContext,
 }
@@ -843,15 +843,6 @@ indexFnsUsedAsValuesW index = index.recordValue.fnValues
 
 indexCtorAritiesW : WasmProgramIndex -> OrdMap Int
 indexCtorAritiesW index = index.ctor.arities
-
-indexCtorTypesW : WasmProgramIndex -> OrdMap String
-indexCtorTypesW index = index.ctor.types
-
-indexCtorOrdinalsW : WasmProgramIndex -> OrdMap Int
-indexCtorOrdinalsW index = index.ctor.ordinals
-
-indexTypeCtorsW : WasmProgramIndex -> OrdMap (List String)
-indexTypeCtorsW index = index.ctor.typeCtors
 
 -- ── declaration-derived semantic input readers ────────────────────────────────
 -- the DECLARATION word of the interface an impl entry implements (mirror of
@@ -1088,6 +1079,7 @@ makeWasmProgramIndex : EmitPlan ->
   WasmProgramIndex
 makeWasmProgramIndex plan facts groups ctorArs ctorTypes impls fnNames valNames =
   makeWasmProgramIndexWithLazy
+    plan.constructorFacts
     plan.wasmInputs.ctorFloatFields
     facts
     groups
@@ -1099,7 +1091,8 @@ makeWasmProgramIndex plan facts groups ctorArs ctorTypes impls fnNames valNames 
     plan.lazyGlobals
     plan.trmc
 
-makeWasmProgramIndexGaps : OrdMap (List Int) ->
+makeWasmProgramIndexGaps : ConstructorFacts ->
+  OrdMap (List Int) ->
   TrmcVerdicts ->
   DeclFacts ->
   List CBind ->
@@ -1109,8 +1102,9 @@ makeWasmProgramIndexGaps : OrdMap (List Int) ->
   List String ->
   List String ->
   WasmProgramIndex
-makeWasmProgramIndexGaps ctorFields trmc facts groups ctorArs ctorTypes impls fnNames valNames =
+makeWasmProgramIndexGaps constructors ctorFields trmc facts groups ctorArs ctorTypes impls fnNames valNames =
   makeWasmProgramIndexWithLazy
+    constructors
     ctorFields
     facts
     groups
@@ -1122,7 +1116,8 @@ makeWasmProgramIndexGaps ctorFields trmc facts groups ctorArs ctorTypes impls fn
     []
     trmc
 
-makeWasmProgramIndexWithLazy : OrdMap (List Int) ->
+makeWasmProgramIndexWithLazy : ConstructorFacts ->
+  OrdMap (List Int) ->
   DeclFacts ->
   List CBind ->
   List (String, Int) ->
@@ -1133,14 +1128,9 @@ makeWasmProgramIndexWithLazy : OrdMap (List Int) ->
   List String ->
   TrmcVerdicts ->
   WasmProgramIndex
-makeWasmProgramIndexWithLazy ctorFields facts groups ctorArs ctorTypes impls fnNames valNames lazyNames trmc =
+makeWasmProgramIndexWithLazy constructors ctorFields facts groups ctorArs ctorTypes impls fnNames valNames lazyNames trmc =
   let fnIndex = omFromNames fnNames omEmpty
   let valIndex = omFromNames valNames omEmpty
-  let ctorArIndex = omFromPairs (reverseL ctorArs) omEmpty
-  let ctorTyIndex = omFromPairs (reverseL ctorTypes) omEmpty
-  let typeCtors = typeCtorsOfW (reverseL ctorTypes) omEmpty
-  let ctorOrds =
-    ctorOrdsOfW (distinctTypeNames ctorTypes) ctorTyIndex typeCtors omEmpty
   let usedFns =
     scanFnValueUses fnIndex ctorArs groups
       ++ scanImplValueUses fnIndex ctorArs impls
@@ -1158,12 +1148,7 @@ makeWasmProgramIndexWithLazy ctorFields facts groups ctorArs ctorTypes impls fnN
     recordValue = WasmRecordValueIndex {
       fnValues = omFromNames usedFns omEmpty,
     },
-    ctor = WasmCtorIndex {
-      arities = ctorArIndex,
-      types = ctorTyIndex,
-      ordinals = ctorOrds,
-      typeCtors = typeCtors,
-    },
+    ctor = constructors,
     stamps = makeWasmStamps groups facts.factBinders,
     typeContext =
       wasmTypeContext
@@ -1809,7 +1794,7 @@ emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _
       valNames
   let useClos = physical.useClos
   let useRef = physical.useRef
-  let typeNames = distinctTypeNames ctorTypes
+  let typeNames = plan.constructorFacts.typeOrder
   let prog =
     Prog index typeNames valNames useClos impls input emit (freshFnCtx ())
   emitRefProgram prog plan groups
@@ -1986,6 +1971,7 @@ emitProgramGaps input plan cp0 =
   let valNames = collectValNames groups
   let index =
     makeWasmProgramIndexGaps
+      plan.constructorFacts
       plan.wasmInputs.ctorFloatFields
       plan.trmc
       facts
@@ -1997,7 +1983,7 @@ emitProgramGaps input plan cp0 =
       valNames
   let useClos = (physicalPlanW plan).useClos
   -- force the ref path: the census measures the full (ref eq) emitter surface.
-  let typeNames = distinctTypeNames ctorTypes
+  let typeNames = plan.constructorFacts.typeOrder
   let prog =
     Prog index typeNames valNames useClos impls input emit (freshFnCtx ())
   let _ = emitFnsGapsW prog (userFnBinds groups)
@@ -2800,9 +2786,18 @@ emitCtorStruct prog ty ctor =
 -- lists USER ctors — so always-declare is the simple correct choice for this slice.
 emitReservedStructs : Prog -> List String
 emitReservedStructs prog =
-  reservedTypeStructs prog "Option" ["Some", "None"]
-    ++ reservedTypeStructs prog "Result" ["Ok", "Err"]
-    ++ reservedTypeStructs prog "Ordering" ["Lt", "Eq", "Gt"]
+  reservedTypeStructs
+      prog
+      "Option"
+      (filterMap runtimeCtorName (runtimeRoster RuntimeOption))
+    ++ reservedTypeStructs
+      prog
+      "Result"
+      (filterMap runtimeCtorName (runtimeRoster RuntimeResult))
+    ++ reservedTypeStructs
+      prog
+      "Ordering"
+      (filterMap runtimeCtorName (runtimeRoster RuntimeOrdering))
 
 reservedTypeStructs : Prog -> String -> List String -> List String
 reservedTypeStructs prog ty ctors =
@@ -10954,7 +10949,13 @@ isCtor prog name =
     || isSyntheticCtor name
 
 isReservedCtor : String -> Bool
-isReservedCtor name = isSome (reservedCtorOrdinal name)
+isReservedCtor name = match namedRuntimeCtor name
+  Some id => match (runtimeCtorFact id).owner
+    RuntimeOption => True
+    RuntimeResult => True
+    RuntimeOrdering => True
+    _ => False
+  None => False
 
 -- ── W7 synthetic ctors (List Cons/Nil, tuple Tup<n>) ─────────────────────────
 -- These are not in the user ctor table; they share the W3 ctor machinery so the
@@ -10962,12 +10963,12 @@ isReservedCtor name = isSome (reservedCtorOrdinal name)
 -- "Tup<n>" (its own single-ctor synthetic type "$Tuple<n>").  List = Cons/Nil under
 -- type "List".
 isSyntheticCtor : String -> Bool
-isSyntheticCtor name =
-  name == "Cons"
-    || name == "Nil"
-    || name == "True"
-    || name == "False"
-    || isTupleCtorName name
+isSyntheticCtor name = match namedRuntimeCtor name
+  Some id => match (runtimeCtorFact id).owner
+    RuntimeList => True
+    RuntimeBool => True
+    _ => False
+  None => isTupleCtorName name
 
 tupleCtorName : Int -> String
 tupleCtorName n = "Tup" ++ intToString n
@@ -10976,157 +10977,58 @@ isTupleCtorName : String -> Bool
 isTupleCtorName name =
   startsWith "Tup" name && allDigitsFrom (stringToChars name) 3
 
--- the synthetic type a synthetic ctor belongs to.
+-- Tuple words below are physical Wasm names; tuple semantics use arity identity.
 syntheticCtorType : String -> String
-syntheticCtorType "Cons" = "List"
-syntheticCtorType "Nil" = "List"
--- W9: with the REAL prelude, `Bool` is a builtin (not a `data` decl), so its ctors
--- True/False are not in the ctor table.  Treat them as synthetic Bool ctors:
--- type "Bool", ordinals False=0/True=1, nullary, rep = i31 (same as emitVarRef's
--- True/False fast path and emitLitRef LBool), so discrimReadOf's i31 branch reads
--- the ordinal directly.
-syntheticCtorType "True" = "Bool"
-syntheticCtorType "False" = "Bool"
-syntheticCtorType name = "$Tuple" ++ intToString (trailingIntOf name)
+syntheticCtorType name = match namedRuntimeCtor name
+  Some id => optionOr "" (runtimeOwnerWord (runtimeCtorFact id).owner)
+  None => "$Tuple" ++ intToString (trailingIntOf name)
 
 syntheticCtorOrdinal : String -> Int
-syntheticCtorOrdinal "Cons" = 0
-syntheticCtorOrdinal "Nil" = 1
-syntheticCtorOrdinal "False" = 0
-syntheticCtorOrdinal "True" = 1
-syntheticCtorOrdinal _ = 0
+syntheticCtorOrdinal name =
+  optionOr 0 (map (id => (runtimeCtorFact id).ordinal) (namedRuntimeCtor name))
 
 syntheticCtorArity : String -> Int
-syntheticCtorArity "Cons" = 2
-syntheticCtorArity "Nil" = 0
-syntheticCtorArity "True" = 0
-syntheticCtorArity "False" = 0
-syntheticCtorArity name = trailingIntOf name
+syntheticCtorArity name = match namedRuntimeCtor name
+  Some id => (runtimeCtorFact id).arity
+  None => (runtimeCtorFact (RuntimeTupleCtor (trailingIntOf name))).arity
 
--- typeName → its ctor list in DECLARATION order.  Walks the ctor→type table
--- REVERSED and PREPENDS, so each type's list comes out in forward declaration
--- order — the same order `ctorsOfTypeUser`'s filter+map produced, duplicates and
--- all.
-typeCtorsOfW : List (String, String) ->
-  OrdMap (List String) ->
-  OrdMap (List String)
-typeCtorsOfW [] m = m
-typeCtorsOfW ((c, t) :: rest) m =
-  typeCtorsOfW rest (omInsert t (c :: optionOr [] (omLookup t m)) m)
-
--- ctorName → dense per-type ordinal, for the USER path of `ctorOrdinal` only.
--- Reproduces that path's formula
---   orZeroIdx (indexOfL name (ctorsOfType prog (ctorTypeName prog name)))
--- exactly, but in O(ctors · log ctors) instead of O(ctors) per call:
---   * types are walked in DECLARATION order (`distinctTypeNames`);
---   * a ctor is indexed only under the type `ctorTypeName` would name for it (its
---     FIRST type, per `tym`) — so a name shared by two types still takes its
---     ordinal from the first one, as `lookupAssoc` + `indexOfL` did;
---   * the `omHasKey` guard keeps the FIRST index on a name repeated within one
---     type, matching `indexOfL`'s first-match.
--- A ctor absent from the map is not a user ctor, so `userCtorOrdinalW` returns None
--- and `ctorOrdinal` falls through to the reserved/synthetic ordinal (#712/S0).
-ctorOrdsOfW : List String ->
-  OrdMap String ->
-  OrdMap (List String) ->
-  OrdMap Int ->
-  OrdMap Int
-ctorOrdsOfW [] _ _ m = m
-ctorOrdsOfW (ty :: rest) tym tcm m =
-  ctorOrdsOfW rest tym tcm (indexCtorsW tym ty (ctorsOfTypeIxW tcm ty) 0 m)
-
-indexCtorsW : OrdMap String ->
-  String ->
-  List String ->
-  Int ->
-  OrdMap Int ->
-  OrdMap Int
-indexCtorsW _ _ [] _ m = m
-indexCtorsW tym ty (c :: cs) i m = indexCtorsW tym ty cs (i + 1) (if omHasKey
-  c
-  m then
-  m
-else if firstTyIsW tym c ty then
-  omInsert c i m
-else
-  m)
-
-firstTyIsW : OrdMap String -> String -> String -> Bool
-firstTyIsW tym c ty = match omLookup c tym
-  Some t => eqStr t ty
-  None => False
-
--- the shared 5-branch ctor-list dispatch used by BOTH `ctorsOfTypeIxW` (memo-only,
--- called before the `Prog` exists) and `ctorsOfType` (Prog-based). Parameterized
--- over the fallback for a plain user type, so each caller supplies its own way to
--- resolve that case (a direct memo lookup vs `ctorsOfTypeUser`) while the
--- reserved/List/Bool/tuple branches — and their order — exist exactly once, so
--- the two can no longer drift apart.
-ctorsOfTypeDispatchW : (String -> List String) -> String -> List String
-ctorsOfTypeDispatchW userFallback ty =
-  if isReservedType ty then
-    reservedCtorsOfType ty
-  else if ty == "List" then
-    ["Cons", "Nil"]
-  else if ty == "Bool" then
-    ["False", "True"]
-  else if isTupleType ty then
-    [tupleCtorName (tupleTypeArity ty)]
-  else
-    userFallback ty
-
--- `ctorsOfType`'s dispatch, off the memo and without a `Prog` (the indices are built
--- before the Prog exists). Shares its branches with `ctorsOfType` via
--- `ctorsOfTypeDispatchW` — nothing left to keep in lockstep by hand.
-ctorsOfTypeIxW : OrdMap (List String) -> String -> List String
-ctorsOfTypeIxW tcm ty =
-  ctorsOfTypeDispatchW (t => optionOr [] (omLookup t tcm)) ty
+runtimeCtorsOfTypeW : String -> List String
+runtimeCtorsOfTypeW ty =
+  flatMap
+    (owner =>
+      if runtimeOwnerWord owner == Some ty then
+        filterMap runtimeCtorName (runtimeRoster owner)
+      else
+        [])
+    [RuntimeList, RuntimeOption, RuntimeResult, RuntimeOrdering, RuntimeBool]
 
 ctorArity : Prog -> String -> Int
-ctorArity prog name = match omLookup name (indexCtorAritiesW (progIndex prog))
-  Some a => a
+ctorArity prog name = match declaredCtorArity (progIndex prog).ctor name
+  Some arity => arity
   None =>
     if isSyntheticCtor name then
       syntheticCtorArity name
     else
       reservedCtorArity name
 
--- a ctor's owning type name (user types via the ctor→type map; reserved ctors map
--- to their fixed type names; W7 synthetic ctors to their synthetic types).
 ctorTypeName : Prog -> String -> String
-ctorTypeName prog name = match omLookup name (indexCtorTypesW (progIndex prog))
+ctorTypeName prog name = match declaredCtorOwner (progIndex prog).ctor name
   Some ty => ty
-  None =>
-    if isSyntheticCtor name then
-      syntheticCtorType name
-    else
-      reservedTypeOf prog name
+  None => match namedRuntimeCtor name
+    Some id => optionOr "" (runtimeOwnerWord (runtimeCtorFact id).owner)
+    None =>
+      if isTupleCtorName name then
+        syntheticCtorType name
+      else
+        gapSP prog ("ref-mode: unknown constructor '" ++ name ++ "'")
 
--- the per-type dense ordinal of a ctor (0-based index in its type's declaration
--- order).  Reserved ctors have fixed ordinals.
---
--- #712/S0: a USER ctor is looked up in the ctor TABLE **before** the name-based
--- `syntheticCtorOrdinal` short-circuit — mirroring `ctorArity`/`ctorTypeName` (both
--- table-first) and native `llvm_emit.mdk`'s `ctorOrdinal`.  Taking the
--- synthetic short-circuit FIRST instead gives a user ctor named `Cons`/`Nil` the
--- built-in list ordinal (Cons=0/Nil=1) instead of its DECLARATION-ORDER index.  In a
--- ≥3-ctor ADT like `data T = Extra | Cons Int T | Nil` that collides the user `Cons`
--- (wrongly 0) with `Extra` (legitimately 0) → wasm `br_table` sent `Cons` to `Extra`'s
--- arm = SILENT wrong dispatch. The private ctor-ordinal index holds only USER ctors, so a genuine
--- built-in list ctor (absent) still falls through to `syntheticCtorOrdinal`; a user
--- ctor and the built-in list are told apart at CALL sites via the CHead / tail expr
--- (see `ordinalOfHead`, `emitWDispCell`, the TRMC `isBuiltinList` flag, `emitListRef`),
--- the same discipline the struct-id fix uses.
 ctorOrdinal : Prog -> String -> Int
 ctorOrdinal prog name =
-  optionOr
-    (syntheticCtorOrdinal name)
-    (orElse (reservedCtorOrdinal name) (userCtorOrdinalW prog name))
-
--- the DECLARATION-ORDER ordinal of a name IFF it is a user-declared ctor (present in
--- the ctor table), else None so the caller falls back to a synthetic/reserved ordinal.
-userCtorOrdinalW : Prog -> String -> Option Int
-userCtorOrdinalW prog name = omLookup name (indexCtorOrdinalsW (progIndex prog))
+  if isReservedCtor name then
+    syntheticCtorOrdinal name
+  else match declaredCtorOrdinal (progIndex prog).ctor name
+    Some ordinal => ordinal
+    None => syntheticCtorOrdinal name
 
 -- the ordinal to discriminate a decision-tree switch HEAD against.  Built-in list
 -- heads keep their reserved ordinal (Cons=0/Nil=1) regardless of a poisoning user
@@ -11138,18 +11040,14 @@ ordinalOfHead _ HCons = syntheticCtorOrdinal "Cons"
 ordinalOfHead _ HNil = syntheticCtorOrdinal "Nil"
 ordinalOfHead prog h = ctorOrdinal prog (fstConHead prog h)
 
--- the declaration-ordered ctor list of a user type (the ctor→type map lists each
--- type's ctors consecutively in declaration order — filter to this type).
--- Bool's ctors are SYNTHETIC (registered via syntheticCtor* helpers, not in the
--- program's ctorTypes table), so `ctorsOfTypeUser` would return [] → a 0-slot
--- br_table tower → both arms dropped → fall-through `unreachable` if it weren't
--- special-cased in the shared dispatch below. A genuine `match <Bool> { True =>
--- …; False => … }` (a CDecision switch, not a lowered CIf) hits this.
--- Index-aligned to syntheticCtorOrdinal: False=0, True=1.
--- Shares its branches with `ctorsOfTypeIxW` via `ctorsOfTypeDispatchW` — nothing
--- left to keep in lockstep by hand.
 ctorsOfType : Prog -> String -> List String
-ctorsOfType prog ty = ctorsOfTypeDispatchW (ctorsOfTypeUser prog) ty
+ctorsOfType prog ty = match omLookup ty (progIndex prog).ctor.rosters
+  Some roster => roster
+  None =>
+    if isTupleType ty then
+      [tupleCtorName (tupleTypeArity ty)]
+    else
+      runtimeCtorsOfTypeW ty
 
 -- a synthetic tuple type name "$Tuple<n>" and its arity.
 isTupleType : String -> Bool
@@ -11157,10 +11055,6 @@ isTupleType ty = startsWith "$Tuple" ty
 
 tupleTypeArity : String -> Int
 tupleTypeArity ty = trailingIntOf ty
-
-ctorsOfTypeUser : Prog -> String -> List String
-ctorsOfTypeUser prog ty =
-  optionOr [] (omLookup ty (indexTypeCtorsW (progIndex prog)))
 
 -- the number of ctors a type has (the br_table's slot count).
 typeCtorCount : Prog -> String -> Int
@@ -11228,44 +11122,14 @@ conHeadInfoUnsafe prog h = match conHeadInfo h
 -- The lowering names Ordering's ctors `Lt`/`Eq`/`Gt` (capitalized — see
 -- llvm_emit.reservedTag).
 isReservedType : String -> Bool
-isReservedType ty = contains ty ["Option", "Result", "Ordering"]
-
-reservedCtorsOfType : String -> List String
-reservedCtorsOfType "Option" = ["Some", "None"]
-reservedCtorsOfType "Result" = ["Ok", "Err"]
-reservedCtorsOfType "Ordering" = ["Lt", "Eq", "Gt"]
-reservedCtorsOfType _ = []
-
-reservedTypeOf : Prog -> String -> String
-reservedTypeOf prog name =
-  if contains name ["Some", "None"] then
-    "Option"
-  else if contains name ["Ok", "Err"] then
-    "Result"
-  else if contains name ["Lt", "Eq", "Gt"] then
-    "Ordering"
-  else
-    gapSP
-      prog
-      ("ref-mode: unknown constructor '"
-        ++ name
-        ++ "' (not in the ctor table, not reserved)")
-
-reservedCtorOrdinal : String -> Option Int
-reservedCtorOrdinal "Some" = Some 0
-reservedCtorOrdinal "None" = Some 1
-reservedCtorOrdinal "Ok" = Some 0
-reservedCtorOrdinal "Err" = Some 1
-reservedCtorOrdinal "Lt" = Some 0
-reservedCtorOrdinal "Eq" = Some 1
-reservedCtorOrdinal "Gt" = Some 2
-reservedCtorOrdinal _ = None
+isReservedType ty =
+  any
+    (owner => runtimeOwnerWord owner == Some ty)
+    [RuntimeOption, RuntimeResult, RuntimeOrdering]
 
 reservedCtorArity : String -> Int
-reservedCtorArity "Some" = 1
-reservedCtorArity "Ok" = 1
-reservedCtorArity "Err" = 1
-reservedCtorArity _ = 0
+reservedCtorArity name =
+  optionOr 0 (map (id => (runtimeCtorFact id).arity) (namedRuntimeCtor name))
 
 -- ── WAT type-name mangling ───────────────────────────────────────────────────
 -- a per-type root struct type name and a per-ctor struct type name.  Prefixed to
@@ -11327,12 +11191,6 @@ fstConHead prog h = match conHeadInfo h
     gapSP
       prog
       "ref-mode: non-constructor head where a ctor struct id was needed"
-
--- ── distinct type names (declaration order) ──────────────────────────────────
--- the ctor→type map lists each type's ctors consecutively, so dedup-preserving-
--- order over the type column gives declaration order.
-distinctTypeNames : List (String, String) -> List String
-distinctTypeNames ctorTypes = dedupKeep (map sndPair ctorTypes)
 
 -- ── scratch locals for match scrutinee/focus stashes ─────────────────────────
 -- a CDecision/CTSwitch at nesting depth d stashes its value into `$__rf<d>`.  The
@@ -11602,9 +11460,6 @@ dedupGo (x :: xs) seen acc =
 fst : (a, b) -> a
 fst (x, _) = x
 
-sndPair : (String, String) -> String
-sndPair (_, y) = y
-
 isSome : Option a -> Bool
 isSome (Some _) = True
 isSome None = False
@@ -11693,6 +11548,8 @@ hasFamilyW prog symbol tag =
     Some family => WD.wasmFamilyTag family == tag
     None => False
 # DESUGAR
+(DUse false (UseGroup ("ir" "constructor_facts") ((mem "ConstructorFacts" false) (mem "declaredCtorArity" false) (mem "declaredCtorOwner" false) (mem "declaredCtorOrdinal" false))))
+(DUse false (UseGroup ("frontend" "runtime_constructors") ((mem "RuntimeOwner" true) (mem "RuntimeCtorId" true) (mem "namedRuntimeCtor" false) (mem "runtimeCtorFact" false) (mem "runtimeRoster" false) (mem "runtimeCtorName" false) (mem "runtimeOwnerWord" false))))
 (DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
@@ -11750,9 +11607,8 @@ hasFamilyW prog symbol tag =
 (DFunDef false "seedPhysicalW" ((PVar "emit") (PVar "physical")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "seedDemandW") (EVar "emit")) (EFieldAccess (EVar "physical") "representation"))) (DoLet false false PWild (EApp (EApp (EVar "forEachU") (ELam ((PTuple (PVar "name") (PVar "cell"))) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EVar "hasWasmHelper") (EVar "physical")) (EVar "name"))))) (EListLit (ETuple (ELit (LString "strLeafRuntimeLines")) (EFieldAccess (EVar "emit") "useStrLeaf")) (ETuple (ELit (LString "strSearchRuntimeLines")) (EFieldAccess (EVar "emit") "useStrSearch")) (ETuple (ELit (LString "valueEqRuntimeLines")) (EFieldAccess (EVar "emit") "useValueCmp")) (ETuple (ELit (LString "valueCmpNumRuntimeLines")) (EFieldAccess (EVar "emit") "useValueCmpNum")) (ETuple (ELit (LString "valueAddRuntimeLines")) (EFieldAccess (EVar "emit") "useValueAdd")) (ETuple (ELit (LString "valueSubRuntimeLines")) (EFieldAccess (EVar "emit") "useValueSub")) (ETuple (ELit (LString "valueMulRuntimeLines")) (EFieldAccess (EVar "emit") "useValueMul")) (ETuple (ELit (LString "valueDivRuntimeLines")) (EFieldAccess (EVar "emit") "useValueDiv")) (ETuple (ELit (LString "valueModRuntimeLines")) (EFieldAccess (EVar "emit") "useValueMod")) (ETuple (ELit (LString "floatRuntimeLines")) (EFieldAccess (EVar "emit") "useFloat")) (ETuple (ELit (LString "stderrByteImportLines")) (EFieldAccess (EVar "emit") "trapImportNeeded")) (ETuple (ELit (LString "trapIntRuntimeLines")) (EFieldAccess (EVar "emit") "trapIntNeeded"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "intRtUsed")) (EFieldAccess (EVar "physical") "intHelpers"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteRtUsed")) (EFieldAccess (EVar "physical") "siteRuntime"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteNonexhUsed")) (EFieldAccess (EVar "physical") "nonexhaustiveRuntime")))))
 (DData Private "WasmFnImplIndex" () ((variant "WasmFnImplIndex" (ConNamed (field "fnNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "valNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "arities" (TyCon "ArityEnv")) (field "implBuckets" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry")))) (field "lazyGlobals" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "superCounts" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "trmc" (TyCon "TrmcVerdicts"))))) ())
 (DData Private "WasmRecordValueIndex" () ((variant "WasmRecordValueIndex" (ConNamed (field "fnValues" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
-(DData Private "WasmCtorIndex" () ((variant "WasmCtorIndex" (ConNamed (field "arities" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "types" (TyApp (TyCon "OrdMap") (TyCon "String"))) (field "ordinals" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "typeCtors" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))) ())
 (DData Private "WasmStamps" () ((variant "WasmStamps" (ConNamed (field "rows" (TyApp (TyCon "OrdMap") (TyCon "BinderRow"))) (field "tops" (TyApp (TyCon "OrdMap") (TyCon "BinderRow")))))) ())
-(DData Private "WasmProgramIndex" () ((variant "WasmProgramIndex" (ConNamed (field "fnImpl" (TyCon "WasmFnImplIndex")) (field "recordValue" (TyCon "WasmRecordValueIndex")) (field "ctor" (TyCon "WasmCtorIndex")) (field "stamps" (TyCon "WasmStamps")) (field "typeContext" (TyCon "WasmTypeContext"))))) ())
+(DData Private "WasmProgramIndex" () ((variant "WasmProgramIndex" (ConNamed (field "fnImpl" (TyCon "WasmFnImplIndex")) (field "recordValue" (TyCon "WasmRecordValueIndex")) (field "ctor" (TyCon "ConstructorFacts")) (field "stamps" (TyCon "WasmStamps")) (field "typeContext" (TyCon "WasmTypeContext"))))) ())
 (DTypeSig false "makeWasmStamps" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "BinderRow")) (TyCon "WasmStamps"))))
 (DFunDef false "makeWasmStamps" ((PVar "groups") (PVar "binderRows")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "intToString") (EApp (EVar "binderOrdinal") (EFieldAccess (EVar "r") "brId"))) (EVar "r")))) (EVar "binderRows")))) (EVar "omEmpty"))) (DoExpr (ERecordCreate "WasmStamps" ((fa "rows" (EVar "rows")) (fa "tops" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "flatMap") (EApp (EVar "topRow") (EVar "rows"))) (EVar "groups")))) (EVar "omEmpty"))))))))
 (DTypeSig false "topRow" (TyFun (TyApp (TyCon "OrdMap") (TyCon "BinderRow")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderRow"))))))
@@ -11803,12 +11659,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "indexFnsUsedAsValuesW" ((PVar "index")) (EFieldAccess (EFieldAccess (EVar "index") "recordValue") "fnValues"))
 (DTypeSig false "indexCtorAritiesW" (TyFun (TyCon "WasmProgramIndex") (TyApp (TyCon "OrdMap") (TyCon "Int"))))
 (DFunDef false "indexCtorAritiesW" ((PVar "index")) (EFieldAccess (EFieldAccess (EVar "index") "ctor") "arities"))
-(DTypeSig false "indexCtorTypesW" (TyFun (TyCon "WasmProgramIndex") (TyApp (TyCon "OrdMap") (TyCon "String"))))
-(DFunDef false "indexCtorTypesW" ((PVar "index")) (EFieldAccess (EFieldAccess (EVar "index") "ctor") "types"))
-(DTypeSig false "indexCtorOrdinalsW" (TyFun (TyCon "WasmProgramIndex") (TyApp (TyCon "OrdMap") (TyCon "Int"))))
-(DFunDef false "indexCtorOrdinalsW" ((PVar "index")) (EFieldAccess (EFieldAccess (EVar "index") "ctor") "ordinals"))
-(DTypeSig false "indexTypeCtorsW" (TyFun (TyCon "WasmProgramIndex") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "indexTypeCtorsW" ((PVar "index")) (EFieldAccess (EFieldAccess (EVar "index") "ctor") "typeCtors"))
 (DTypeSig false "implEntryIfaceWordW" (TyFun (TyCon "CImplEntry") (TyCon "String")))
 (DFunDef false "implEntryIfaceWordW" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild (PVar "iface") PWild PWild PWild PWild))) (EVar "iface"))
 (DFunDef false "implEntryIfaceWordW" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" (PVar "ifaceWord") PWild PWild PWild PWild PWild PWild))) (EVar "ifaceWord"))
@@ -11856,11 +11706,11 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "groupImplsByMethodW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry")))))
 (DFunDef false "groupImplsByMethodW" ((PVar "entries")) (EApp (EApp (EVar "omMapValues") (EVar "reverseL")) (EApp (EApp (EVar "foldImplsByMethodW") (EVar "entries")) (EVar "omEmpty"))))
 (DTypeSig false "makeWasmProgramIndex" (TyFun (TyCon "EmitPlan") (TyFun (TyCon "DeclFacts") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "WasmProgramIndex"))))))))))
-(DFunDef false "makeWasmProgramIndex" ((PVar "plan") (PVar "facts") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "fnNames") (PVar "valNames")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndexWithLazy") (EFieldAccess (EFieldAccess (EVar "plan") "wasmInputs") "ctorFloatFields")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "trmc")))
-(DTypeSig false "makeWasmProgramIndexGaps" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "DeclFacts") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "WasmProgramIndex")))))))))))
-(DFunDef false "makeWasmProgramIndexGaps" ((PVar "ctorFields") (PVar "trmc") (PVar "facts") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "fnNames") (PVar "valNames")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndexWithLazy") (EVar "ctorFields")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames")) (EListLit)) (EVar "trmc")))
-(DTypeSig false "makeWasmProgramIndexWithLazy" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "DeclFacts") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "TrmcVerdicts") (TyCon "WasmProgramIndex"))))))))))))
-(DFunDef false "makeWasmProgramIndexWithLazy" ((PVar "ctorFields") (PVar "facts") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "fnNames") (PVar "valNames") (PVar "lazyNames") (PVar "trmc")) (EBlock (DoLet false false (PVar "fnIndex") (EApp (EApp (EVar "omFromNames") (EVar "fnNames")) (EVar "omEmpty"))) (DoLet false false (PVar "valIndex") (EApp (EApp (EVar "omFromNames") (EVar "valNames")) (EVar "omEmpty"))) (DoLet false false (PVar "ctorArIndex") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorArs"))) (EVar "omEmpty"))) (DoLet false false (PVar "ctorTyIndex") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorTypes"))) (EVar "omEmpty"))) (DoLet false false (PVar "typeCtors") (EApp (EApp (EVar "typeCtorsOfW") (EApp (EVar "reverseL") (EVar "ctorTypes"))) (EVar "omEmpty"))) (DoLet false false (PVar "ctorOrds") (EApp (EApp (EApp (EApp (EVar "ctorOrdsOfW") (EApp (EVar "distinctTypeNames") (EVar "ctorTypes"))) (EVar "ctorTyIndex")) (EVar "typeCtors")) (EVar "omEmpty"))) (DoLet false false (PVar "usedFns") (EBinOp "++" (EApp (EApp (EApp (EVar "scanFnValueUses") (EVar "fnIndex")) (EVar "ctorArs")) (EVar "groups")) (EApp (EApp (EApp (EVar "scanImplValueUses") (EVar "fnIndex")) (EVar "ctorArs")) (EVar "impls")))) (DoExpr (ERecordCreate "WasmProgramIndex" ((fa "fnImpl" (ERecordCreate "WasmFnImplIndex" ((fa "fnNames" (EVar "fnIndex")) (fa "valNames" (EVar "valIndex")) (fa "arities" (EApp (EVar "programArities") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EListLit)) (EVar "noDeclFacts")))) (fa "implBuckets" (EApp (EVar "groupImplsByMethodW") (EVar "impls"))) (fa "lazyGlobals" (EApp (EApp (EVar "omFromNames") (EVar "lazyNames")) (EVar "omEmpty"))) (fa "superCounts" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factSupers")) (EVar "omEmpty"))) (fa "trmc" (EVar "trmc"))))) (fa "recordValue" (ERecordCreate "WasmRecordValueIndex" ((fa "fnValues" (EApp (EApp (EVar "omFromNames") (EVar "usedFns")) (EVar "omEmpty")))))) (fa "ctor" (ERecordCreate "WasmCtorIndex" ((fa "arities" (EVar "ctorArIndex")) (fa "types" (EVar "ctorTyIndex")) (fa "ordinals" (EVar "ctorOrds")) (fa "typeCtors" (EVar "typeCtors"))))) (fa "stamps" (EApp (EApp (EVar "makeWasmStamps") (EVar "groups")) (EFieldAccess (EVar "facts") "factBinders"))) (fa "typeContext" (EApp (EApp (EVar "wasmTypeContext") (EVar "ctorFields")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EListLit)) (EVar "facts")))))))))
+(DFunDef false "makeWasmProgramIndex" ((PVar "plan") (PVar "facts") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "fnNames") (PVar "valNames")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndexWithLazy") (EFieldAccess (EVar "plan") "constructorFacts")) (EFieldAccess (EFieldAccess (EVar "plan") "wasmInputs") "ctorFloatFields")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "trmc")))
+(DTypeSig false "makeWasmProgramIndexGaps" (TyFun (TyCon "ConstructorFacts") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "DeclFacts") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "WasmProgramIndex"))))))))))))
+(DFunDef false "makeWasmProgramIndexGaps" ((PVar "constructors") (PVar "ctorFields") (PVar "trmc") (PVar "facts") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "fnNames") (PVar "valNames")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndexWithLazy") (EVar "constructors")) (EVar "ctorFields")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames")) (EListLit)) (EVar "trmc")))
+(DTypeSig false "makeWasmProgramIndexWithLazy" (TyFun (TyCon "ConstructorFacts") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "DeclFacts") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "TrmcVerdicts") (TyCon "WasmProgramIndex")))))))))))))
+(DFunDef false "makeWasmProgramIndexWithLazy" ((PVar "constructors") (PVar "ctorFields") (PVar "facts") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "fnNames") (PVar "valNames") (PVar "lazyNames") (PVar "trmc")) (EBlock (DoLet false false (PVar "fnIndex") (EApp (EApp (EVar "omFromNames") (EVar "fnNames")) (EVar "omEmpty"))) (DoLet false false (PVar "valIndex") (EApp (EApp (EVar "omFromNames") (EVar "valNames")) (EVar "omEmpty"))) (DoLet false false (PVar "usedFns") (EBinOp "++" (EApp (EApp (EApp (EVar "scanFnValueUses") (EVar "fnIndex")) (EVar "ctorArs")) (EVar "groups")) (EApp (EApp (EApp (EVar "scanImplValueUses") (EVar "fnIndex")) (EVar "ctorArs")) (EVar "impls")))) (DoExpr (ERecordCreate "WasmProgramIndex" ((fa "fnImpl" (ERecordCreate "WasmFnImplIndex" ((fa "fnNames" (EVar "fnIndex")) (fa "valNames" (EVar "valIndex")) (fa "arities" (EApp (EVar "programArities") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EListLit)) (EVar "noDeclFacts")))) (fa "implBuckets" (EApp (EVar "groupImplsByMethodW") (EVar "impls"))) (fa "lazyGlobals" (EApp (EApp (EVar "omFromNames") (EVar "lazyNames")) (EVar "omEmpty"))) (fa "superCounts" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factSupers")) (EVar "omEmpty"))) (fa "trmc" (EVar "trmc"))))) (fa "recordValue" (ERecordCreate "WasmRecordValueIndex" ((fa "fnValues" (EApp (EApp (EVar "omFromNames") (EVar "usedFns")) (EVar "omEmpty")))))) (fa "ctor" (EVar "constructors")) (fa "stamps" (EApp (EApp (EVar "makeWasmStamps") (EVar "groups")) (EFieldAccess (EVar "facts") "factBinders"))) (fa "typeContext" (EApp (EApp (EVar "wasmTypeContext") (EVar "ctorFields")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EListLit)) (EVar "facts")))))))))
 (DTypeSig false "foldImplsByMethodW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry"))))))
 (DFunDef false "foldImplsByMethodW" ((PList) (PVar "m")) (EVar "m"))
 (DFunDef false "foldImplsByMethodW" ((PCons (PVar "e") (PVar "rest")) (PVar "m")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "implEntryMethod") (EVar "e"))) (DoExpr (EApp (EApp (EVar "foldImplsByMethodW") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EBinOp "::" (EVar "e") (EApp (EVar "orEmptyEntriesW") (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "m"))))) (EVar "m"))))))
@@ -11981,7 +11831,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitProgramCore" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyCon "String")))))))
 (DFunDef false "emitProgramCore" ((PVar "emit") (PVar "input") (PVar "plan") (PVar "cp")) (EApp (EApp (EApp (EApp (EVar "emitUniqueProgram") (ERecordUpdate (EVar "emit") ((fa "externFacts" (EApp (EVar "requirementFacts") (EFieldAccess (EVar "plan") "externRequirements"))) (fa "physical" (EFieldAccess (EVar "plan") "wasmPhysical"))))) (EVar "input")) (EVar "plan")) (EVar "cp")))
 (DTypeSig false "emitUniqueProgram" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyCon "String")))))))
-(DFunDef false "emitUniqueProgram" ((PVar "emit") (PVar "input") (PVar "plan") (PAs "cp" (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") PWild (PVar "facts")))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "refuseUnprovidedExternsW") (EVar "emit")) (EVar "input")) (EVar "plan")) (EVar "cp"))) (DoLet false false (PVar "physical") (EApp (EVar "physicalPlanW") (EVar "plan"))) (DoLet false false PWild (EApp (EApp (EVar "seedPhysicalW") (EVar "emit")) (EVar "physical"))) (DoLet false false (PVar "fnNames") (EApp (EVar "collectFnNames") (EVar "groups"))) (DoLet false false (PVar "valNames") (EApp (EVar "collectValNames") (EVar "groups"))) (DoLet false false (PVar "index") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndex") (EVar "plan")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames"))) (DoLet false false (PVar "useClos") (EFieldAccess (EVar "physical") "useClos")) (DoLet false false (PVar "useRef") (EFieldAccess (EVar "physical") "useRef")) (DoLet false false (PVar "typeNames") (EApp (EVar "distinctTypeNames") (EVar "ctorTypes"))) (DoLet false false (PVar "prog") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Prog") (EVar "index")) (EVar "typeNames")) (EVar "valNames")) (EVar "useClos")) (EVar "impls")) (EVar "input")) (EVar "emit")) (EApp (EVar "freshFnCtx") (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EVar "emitRefProgram") (EVar "prog")) (EVar "plan")) (EVar "groups")))))
+(DFunDef false "emitUniqueProgram" ((PVar "emit") (PVar "input") (PVar "plan") (PAs "cp" (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") PWild (PVar "facts")))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "refuseUnprovidedExternsW") (EVar "emit")) (EVar "input")) (EVar "plan")) (EVar "cp"))) (DoLet false false (PVar "physical") (EApp (EVar "physicalPlanW") (EVar "plan"))) (DoLet false false PWild (EApp (EApp (EVar "seedPhysicalW") (EVar "emit")) (EVar "physical"))) (DoLet false false (PVar "fnNames") (EApp (EVar "collectFnNames") (EVar "groups"))) (DoLet false false (PVar "valNames") (EApp (EVar "collectValNames") (EVar "groups"))) (DoLet false false (PVar "index") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndex") (EVar "plan")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames"))) (DoLet false false (PVar "useClos") (EFieldAccess (EVar "physical") "useClos")) (DoLet false false (PVar "useRef") (EFieldAccess (EVar "physical") "useRef")) (DoLet false false (PVar "typeNames") (EFieldAccess (EFieldAccess (EVar "plan") "constructorFacts") "typeOrder")) (DoLet false false (PVar "prog") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Prog") (EVar "index")) (EVar "typeNames")) (EVar "valNames")) (EVar "useClos")) (EVar "impls")) (EVar "input")) (EVar "emit")) (EApp (EVar "freshFnCtx") (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EVar "emitRefProgram") (EVar "prog")) (EVar "plan")) (EVar "groups")))))
 (DTypeSig false "assertEmittedClosureW" (TyFun (TyCon "String") (TyCon "Unit")))
 (DFunDef false "assertEmittedClosureW" ((PVar "text")) (EBlock (DoLet false false (PVar "lines") (EApp (EVar "splitNl") (EVar "text"))) (DoLet false false (PVar "defined") (EApp (EApp (EVar "omFromNames") (EApp (EVar "collectDefinedNamesW") (EVar "lines"))) (EVar "omEmpty"))) (DoLet false false (PVar "called") (EApp (EVar "collectCalledNamesW") (EVar "lines"))) (DoExpr (EApp (EApp (EVar "checkCalledNamesW") (EVar "defined")) (EVar "called")))))
 (DTypeSig false "collectCalledNamesW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -12008,7 +11858,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "checkCalledNamesW" (PWild (PList)) (ELit LUnit))
 (DFunDef false "checkCalledNamesW" ((PVar "defined") (PCons (PVar "name") (PVar "rest"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "defined")) (EApp (EApp (EVar "checkCalledNamesW") (EVar "defined")) (EVar "rest")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "wasm emit: call to undefined/unimported $")) (EVar "name")) (ELit (LString " -- a runtime-line gate is missing this helper's dependency (#392)"))))))
 (DTypeSig true "emitProgramGaps" (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitProgramGaps" ((PVar "input") (PVar "plan") (PVar "cp0")) (EBlock (DoLet false false (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts")) (EVar "cp0")) (DoLet false false (PVar "emit") (EApp (EVar "freshWasmEmit") (EVar "WGapRecord"))) (DoLet false false (PVar "emit") (ERecordUpdate (EVar "emit") ((fa "externFacts" (EApp (EVar "requirementFacts") (EFieldAccess (EVar "plan") "externRequirements"))) (fa "physical" (EFieldAccess (EVar "plan") "wasmPhysical")) (fa "closureChecked" (EVar "False"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "refuseUnprovidedExternsW") (EVar "emit")) (EVar "input")) (EVar "plan")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (EVar "facts")))) (DoLet false false PWild (EApp (EApp (EVar "seedPhysicalW") (EVar "emit")) (EApp (EVar "physicalPlanW") (EVar "plan")))) (DoLet false false (PVar "emit") (ERecordUpdate (EVar "emit") ((fa "physical" (EApp (EVar "Some") (EApp (EVar "WD.censusWasmDemand") (EApp (EVar "physicalPlanW") (EVar "plan")))))))) (DoLet false false (PVar "fnNames") (EApp (EVar "collectFnNames") (EVar "groups"))) (DoLet false false (PVar "valNames") (EApp (EVar "collectValNames") (EVar "groups"))) (DoLet false false (PVar "index") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndexGaps") (EFieldAccess (EFieldAccess (EVar "plan") "wasmInputs") "ctorFloatFields")) (EFieldAccess (EVar "plan") "trmc")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames"))) (DoLet false false (PVar "useClos") (EFieldAccess (EApp (EVar "physicalPlanW") (EVar "plan")) "useClos")) (DoLet false false (PVar "typeNames") (EApp (EVar "distinctTypeNames") (EVar "ctorTypes"))) (DoLet false false (PVar "prog") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Prog") (EVar "index")) (EVar "typeNames")) (EVar "valNames")) (EVar "useClos")) (EVar "impls")) (EVar "input")) (EVar "emit")) (EApp (EVar "freshFnCtx") (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "emitFnsGapsW") (EVar "prog")) (EApp (EVar "userFnBinds") (EVar "groups")))) (DoLet false false PWild (EApp (EApp (EVar "emitImplsGapsW") (EVar "prog")) (EApp (EApp (EVar "implGroups") (EVar "prog")) (EVar "impls")))) (DoLet false false PWild (EApp (EApp (EVar "emitValsGapsW") (EVar "prog")) (EApp (EApp (EVar "filterList") (EVar "isValBind")) (EVar "groups")))) (DoExpr (EMatch (EApp (EVar "symbolDefectsW") (EVar "emit")) (arm (PList) () (EApp (EVar "Ok") (EApp (EVar "gapEventsOfW") (EVar "emit")))) (arm (PVar "defects") () (EApp (EVar "Err") (EVar "defects")))))))
+(DFunDef false "emitProgramGaps" ((PVar "input") (PVar "plan") (PVar "cp0")) (EBlock (DoLet false false (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts")) (EVar "cp0")) (DoLet false false (PVar "emit") (EApp (EVar "freshWasmEmit") (EVar "WGapRecord"))) (DoLet false false (PVar "emit") (ERecordUpdate (EVar "emit") ((fa "externFacts" (EApp (EVar "requirementFacts") (EFieldAccess (EVar "plan") "externRequirements"))) (fa "physical" (EFieldAccess (EVar "plan") "wasmPhysical")) (fa "closureChecked" (EVar "False"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "refuseUnprovidedExternsW") (EVar "emit")) (EVar "input")) (EVar "plan")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (EVar "facts")))) (DoLet false false PWild (EApp (EApp (EVar "seedPhysicalW") (EVar "emit")) (EApp (EVar "physicalPlanW") (EVar "plan")))) (DoLet false false (PVar "emit") (ERecordUpdate (EVar "emit") ((fa "physical" (EApp (EVar "Some") (EApp (EVar "WD.censusWasmDemand") (EApp (EVar "physicalPlanW") (EVar "plan")))))))) (DoLet false false (PVar "fnNames") (EApp (EVar "collectFnNames") (EVar "groups"))) (DoLet false false (PVar "valNames") (EApp (EVar "collectValNames") (EVar "groups"))) (DoLet false false (PVar "index") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndexGaps") (EFieldAccess (EVar "plan") "constructorFacts")) (EFieldAccess (EFieldAccess (EVar "plan") "wasmInputs") "ctorFloatFields")) (EFieldAccess (EVar "plan") "trmc")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames"))) (DoLet false false (PVar "useClos") (EFieldAccess (EApp (EVar "physicalPlanW") (EVar "plan")) "useClos")) (DoLet false false (PVar "typeNames") (EFieldAccess (EFieldAccess (EVar "plan") "constructorFacts") "typeOrder")) (DoLet false false (PVar "prog") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Prog") (EVar "index")) (EVar "typeNames")) (EVar "valNames")) (EVar "useClos")) (EVar "impls")) (EVar "input")) (EVar "emit")) (EApp (EVar "freshFnCtx") (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "emitFnsGapsW") (EVar "prog")) (EApp (EVar "userFnBinds") (EVar "groups")))) (DoLet false false PWild (EApp (EApp (EVar "emitImplsGapsW") (EVar "prog")) (EApp (EApp (EVar "implGroups") (EVar "prog")) (EVar "impls")))) (DoLet false false PWild (EApp (EApp (EVar "emitValsGapsW") (EVar "prog")) (EApp (EApp (EVar "filterList") (EVar "isValBind")) (EVar "groups")))) (DoExpr (EMatch (EApp (EVar "symbolDefectsW") (EVar "emit")) (arm (PList) () (EApp (EVar "Ok") (EApp (EVar "gapEventsOfW") (EVar "emit")))) (arm (PVar "defects") () (EApp (EVar "Err") (EVar "defects")))))))
 (DTypeSig false "emitFnsGapsW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Unit"))))
 (DFunDef false "emitFnsGapsW" (PWild (PList)) (ELit LUnit))
 (DFunDef false "emitFnsGapsW" ((PVar "prog") (PCons (PCon "CBind" (PVar "name") (PVar "cs") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setGapBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "fn ")) (EVar "name")))) (DoLet false false PWild (EApp (EApp (EVar "emitRefFnBind") (EVar "prog")) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "cs")) (EVar "site")) (EVar "bid")))) (DoExpr (EApp (EApp (EVar "emitFnsGapsW") (EVar "prog")) (EVar "rest")))))
@@ -12197,7 +12047,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitCtorStruct" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "emitCtorStruct" ((PVar "prog") (PVar "ty") (PVar "ctor")) (EBlock (DoLet false false (PVar "arity") (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "ctor"))) (DoExpr (EIf (EBinOp "==" (EVar "arity") (ELit (LInt 0))) (EListLit) (EBlock (DoLet false false (PVar "fields") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "replicate") (EVar "arity")) (ELit (LString " (field (mut (ref eq)))"))))) (DoExpr (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "    (type $")) (EApp (EVar "display") (EApp (EVar "ctorStructName") (EVar "ctor")))) (ELit (LString " (sub $"))) (EApp (EVar "display") (EApp (EVar "typeRootName") (EVar "ty")))) (ELit (LString " (struct (field i32)"))) (EApp (EVar "display") (EVar "fields"))) (ELit (LString ")))"))))))))))
 (DTypeSig false "emitReservedStructs" (TyFun (TyCon "Prog") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "emitReservedStructs" ((PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "reservedTypeStructs") (EVar "prog")) (ELit (LString "Option"))) (EListLit (ELit (LString "Some")) (ELit (LString "None")))) (EApp (EApp (EApp (EVar "reservedTypeStructs") (EVar "prog")) (ELit (LString "Result"))) (EListLit (ELit (LString "Ok")) (ELit (LString "Err"))))) (EApp (EApp (EApp (EVar "reservedTypeStructs") (EVar "prog")) (ELit (LString "Ordering"))) (EListLit (ELit (LString "Lt")) (ELit (LString "Eq")) (ELit (LString "Gt"))))))
+(DFunDef false "emitReservedStructs" ((PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "reservedTypeStructs") (EVar "prog")) (ELit (LString "Option"))) (EApp (EApp (EVar "filterMap") (EVar "runtimeCtorName")) (EApp (EVar "runtimeRoster") (EVar "RuntimeOption")))) (EApp (EApp (EApp (EVar "reservedTypeStructs") (EVar "prog")) (ELit (LString "Result"))) (EApp (EApp (EVar "filterMap") (EVar "runtimeCtorName")) (EApp (EVar "runtimeRoster") (EVar "RuntimeResult"))))) (EApp (EApp (EApp (EVar "reservedTypeStructs") (EVar "prog")) (ELit (LString "Ordering"))) (EApp (EApp (EVar "filterMap") (EVar "runtimeCtorName")) (EApp (EVar "runtimeRoster") (EVar "RuntimeOrdering"))))))
 (DTypeSig false "reservedTypeStructs" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "reservedTypeStructs" ((PVar "prog") (PVar "ty") (PVar "ctors")) (EBlock (DoLet false false (PVar "root") (EBinOp "++" (EBinOp "++" (ELit (LString "    (type $")) (EApp (EVar "typeRootName") (EVar "ty"))) (ELit (LString " (sub (struct (field i32))))")))) (DoLet false false (PVar "payloadStructs") (EApp (EApp (EVar "flatMap") (EApp (EVar "emitReservedCtorStruct") (EVar "ty"))) (EVar "ctors"))) (DoExpr (EBinOp "++" (EListLit (EVar "root")) (EVar "payloadStructs")))))
 (DTypeSig false "emitReservedCtorStruct" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
@@ -13584,66 +13434,37 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "isCtor" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isCtor" ((PVar "prog") (PVar "name")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isSome") (EApp (EApp (EVar "omLookup") (EVar "name")) (EApp (EVar "indexCtorAritiesW") (EApp (EVar "progIndex") (EVar "prog"))))) (EApp (EVar "isReservedCtor") (EVar "name"))) (EApp (EVar "isSyntheticCtor") (EVar "name"))))
 (DTypeSig false "isReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isReservedCtor" ((PVar "name")) (EApp (EVar "isSome") (EApp (EVar "reservedCtorOrdinal") (EVar "name"))))
+(DFunDef false "isReservedCtor" ((PVar "name")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EMatch (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner") (arm (PCon "RuntimeOption") () (EVar "True")) (arm (PCon "RuntimeResult") () (EVar "True")) (arm (PCon "RuntimeOrdering") () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "isSyntheticCtor" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isSyntheticCtor" ((PVar "name")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "Cons"))) (EBinOp "==" (EVar "name") (ELit (LString "Nil")))) (EBinOp "==" (EVar "name") (ELit (LString "True")))) (EBinOp "==" (EVar "name") (ELit (LString "False")))) (EApp (EVar "isTupleCtorName") (EVar "name"))))
+(DFunDef false "isSyntheticCtor" ((PVar "name")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EMatch (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner") (arm (PCon "RuntimeList") () (EVar "True")) (arm (PCon "RuntimeBool") () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EApp (EVar "isTupleCtorName") (EVar "name")))))
 (DTypeSig false "tupleCtorName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "tupleCtorName" ((PVar "n")) (EBinOp "++" (ELit (LString "Tup")) (EApp (EVar "intToString") (EVar "n"))))
 (DTypeSig false "isTupleCtorName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isTupleCtorName" ((PVar "name")) (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "Tup"))) (EVar "name")) (EApp (EApp (EVar "allDigitsFrom") (EApp (EVar "stringToChars") (EVar "name"))) (ELit (LInt 3)))))
 (DTypeSig false "syntheticCtorType" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "syntheticCtorType" ((PLit (LString "Cons"))) (ELit (LString "List")))
-(DFunDef false "syntheticCtorType" ((PLit (LString "Nil"))) (ELit (LString "List")))
-(DFunDef false "syntheticCtorType" ((PLit (LString "True"))) (ELit (LString "Bool")))
-(DFunDef false "syntheticCtorType" ((PLit (LString "False"))) (ELit (LString "Bool")))
-(DFunDef false "syntheticCtorType" ((PVar "name")) (EBinOp "++" (ELit (LString "$Tuple")) (EApp (EVar "intToString") (EApp (EVar "trailingIntOf") (EVar "name")))))
+(DFunDef false "syntheticCtorType" ((PVar "name")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "runtimeOwnerWord") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner")))) (arm (PCon "None") () (EBinOp "++" (ELit (LString "$Tuple")) (EApp (EVar "intToString") (EApp (EVar "trailingIntOf") (EVar "name")))))))
 (DTypeSig false "syntheticCtorOrdinal" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "syntheticCtorOrdinal" ((PLit (LString "Cons"))) (ELit (LInt 0)))
-(DFunDef false "syntheticCtorOrdinal" ((PLit (LString "Nil"))) (ELit (LInt 1)))
-(DFunDef false "syntheticCtorOrdinal" ((PLit (LString "False"))) (ELit (LInt 0)))
-(DFunDef false "syntheticCtorOrdinal" ((PLit (LString "True"))) (ELit (LInt 1)))
-(DFunDef false "syntheticCtorOrdinal" (PWild) (ELit (LInt 0)))
+(DFunDef false "syntheticCtorOrdinal" ((PVar "name")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "map") (ELam ((PVar "id")) (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "ordinal"))) (EApp (EVar "namedRuntimeCtor") (EVar "name")))))
 (DTypeSig false "syntheticCtorArity" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "syntheticCtorArity" ((PLit (LString "Cons"))) (ELit (LInt 2)))
-(DFunDef false "syntheticCtorArity" ((PLit (LString "Nil"))) (ELit (LInt 0)))
-(DFunDef false "syntheticCtorArity" ((PLit (LString "True"))) (ELit (LInt 0)))
-(DFunDef false "syntheticCtorArity" ((PLit (LString "False"))) (ELit (LInt 0)))
-(DFunDef false "syntheticCtorArity" ((PVar "name")) (EApp (EVar "trailingIntOf") (EVar "name")))
-(DTypeSig false "typeCtorsOfW" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "typeCtorsOfW" ((PList) (PVar "m")) (EVar "m"))
-(DFunDef false "typeCtorsOfW" ((PCons (PTuple (PVar "c") (PVar "t")) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "typeCtorsOfW") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "t")) (EBinOp "::" (EVar "c") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "t")) (EVar "m"))))) (EVar "m"))))
-(DTypeSig false "ctorOrdsOfW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))))
-(DFunDef false "ctorOrdsOfW" ((PList) PWild PWild (PVar "m")) (EVar "m"))
-(DFunDef false "ctorOrdsOfW" ((PCons (PVar "ty") (PVar "rest")) (PVar "tym") (PVar "tcm") (PVar "m")) (EApp (EApp (EApp (EApp (EVar "ctorOrdsOfW") (EVar "rest")) (EVar "tym")) (EVar "tcm")) (EApp (EApp (EApp (EApp (EApp (EVar "indexCtorsW") (EVar "tym")) (EVar "ty")) (EApp (EApp (EVar "ctorsOfTypeIxW") (EVar "tcm")) (EVar "ty"))) (ELit (LInt 0))) (EVar "m"))))
-(DTypeSig false "indexCtorsW" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))))))
-(DFunDef false "indexCtorsW" (PWild PWild (PList) PWild (PVar "m")) (EVar "m"))
-(DFunDef false "indexCtorsW" ((PVar "tym") (PVar "ty") (PCons (PVar "c") (PVar "cs")) (PVar "i") (PVar "m")) (EApp (EApp (EApp (EApp (EApp (EVar "indexCtorsW") (EVar "tym")) (EVar "ty")) (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "c")) (EVar "m")) (EVar "m") (EIf (EApp (EApp (EApp (EVar "firstTyIsW") (EVar "tym")) (EVar "c")) (EVar "ty")) (EApp (EApp (EApp (EVar "omInsert") (EVar "c")) (EVar "i")) (EVar "m")) (EVar "m")))))
-(DTypeSig false "firstTyIsW" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "firstTyIsW" ((PVar "tym") (PVar "c") (PVar "ty")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "c")) (EVar "tym")) (arm (PCon "Some" (PVar "t")) () (EApp (EApp (EVar "eqStr") (EVar "t")) (EVar "ty"))) (arm (PCon "None") () (EVar "False"))))
-(DTypeSig false "ctorsOfTypeDispatchW" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfTypeDispatchW" ((PVar "userFallback") (PVar "ty")) (EIf (EApp (EVar "isReservedType") (EVar "ty")) (EApp (EVar "reservedCtorsOfType") (EVar "ty")) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "List"))) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil"))) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "Bool"))) (EListLit (ELit (LString "False")) (ELit (LString "True"))) (EIf (EApp (EVar "isTupleType") (EVar "ty")) (EListLit (EApp (EVar "tupleCtorName") (EApp (EVar "tupleTypeArity") (EVar "ty")))) (EApp (EVar "userFallback") (EVar "ty")))))))
-(DTypeSig false "ctorsOfTypeIxW" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfTypeIxW" ((PVar "tcm") (PVar "ty")) (EApp (EApp (EVar "ctorsOfTypeDispatchW") (ELam ((PVar "t")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "t")) (EVar "tcm"))))) (EVar "ty")))
+(DFunDef false "syntheticCtorArity" ((PVar "name")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "arity")) (arm (PCon "None") () (EFieldAccess (EApp (EVar "runtimeCtorFact") (EApp (EVar "RuntimeTupleCtor") (EApp (EVar "trailingIntOf") (EVar "name")))) "arity"))))
+(DTypeSig false "runtimeCtorsOfTypeW" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "runtimeCtorsOfTypeW" ((PVar "ty")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "owner")) (EIf (EBinOp "==" (EApp (EVar "runtimeOwnerWord") (EVar "owner")) (EApp (EVar "Some") (EVar "ty"))) (EApp (EApp (EVar "filterMap") (EVar "runtimeCtorName")) (EApp (EVar "runtimeRoster") (EVar "owner"))) (EListLit)))) (EListLit (EVar "RuntimeList") (EVar "RuntimeOption") (EVar "RuntimeResult") (EVar "RuntimeOrdering") (EVar "RuntimeBool"))))
 (DTypeSig false "ctorArity" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "ctorArity" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EApp (EVar "indexCtorAritiesW") (EApp (EVar "progIndex") (EVar "prog")))) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EIf (EApp (EVar "isSyntheticCtor") (EVar "name")) (EApp (EVar "syntheticCtorArity") (EVar "name")) (EApp (EVar "reservedCtorArity") (EVar "name"))))))
+(DFunDef false "ctorArity" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "declaredCtorArity") (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "ctor")) (EVar "name")) (arm (PCon "Some" (PVar "arity")) () (EVar "arity")) (arm (PCon "None") () (EIf (EApp (EVar "isSyntheticCtor") (EVar "name")) (EApp (EVar "syntheticCtorArity") (EVar "name")) (EApp (EVar "reservedCtorArity") (EVar "name"))))))
 (DTypeSig false "ctorTypeName" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "ctorTypeName" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EApp (EVar "indexCtorTypesW") (EApp (EVar "progIndex") (EVar "prog")))) (arm (PCon "Some" (PVar "ty")) () (EVar "ty")) (arm (PCon "None") () (EIf (EApp (EVar "isSyntheticCtor") (EVar "name")) (EApp (EVar "syntheticCtorType") (EVar "name")) (EApp (EApp (EVar "reservedTypeOf") (EVar "prog")) (EVar "name"))))))
+(DFunDef false "ctorTypeName" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "declaredCtorOwner") (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "ctor")) (EVar "name")) (arm (PCon "Some" (PVar "ty")) () (EVar "ty")) (arm (PCon "None") () (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "runtimeOwnerWord") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner")))) (arm (PCon "None") () (EIf (EApp (EVar "isTupleCtorName") (EVar "name")) (EApp (EVar "syntheticCtorType") (EVar "name")) (EApp (EApp (EVar "gapSP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: unknown constructor '")) (EVar "name")) (ELit (LString "'"))))))))))
 (DTypeSig false "ctorOrdinal" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "ctorOrdinal" ((PVar "prog") (PVar "name")) (EApp (EApp (EVar "optionOr") (EApp (EVar "syntheticCtorOrdinal") (EVar "name"))) (EApp (EApp (EVar "orElse") (EApp (EVar "reservedCtorOrdinal") (EVar "name"))) (EApp (EApp (EVar "userCtorOrdinalW") (EVar "prog")) (EVar "name")))))
-(DTypeSig false "userCtorOrdinalW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "userCtorOrdinalW" ((PVar "prog") (PVar "name")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EApp (EVar "indexCtorOrdinalsW") (EApp (EVar "progIndex") (EVar "prog")))))
+(DFunDef false "ctorOrdinal" ((PVar "prog") (PVar "name")) (EIf (EApp (EVar "isReservedCtor") (EVar "name")) (EApp (EVar "syntheticCtorOrdinal") (EVar "name")) (EMatch (EApp (EApp (EVar "declaredCtorOrdinal") (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "ctor")) (EVar "name")) (arm (PCon "Some" (PVar "ordinal")) () (EVar "ordinal")) (arm (PCon "None") () (EApp (EVar "syntheticCtorOrdinal") (EVar "name"))))))
 (DTypeSig false "ordinalOfHead" (TyFun (TyCon "Prog") (TyFun (TyCon "CHead") (TyCon "Int"))))
 (DFunDef false "ordinalOfHead" (PWild (PCon "HCons")) (EApp (EVar "syntheticCtorOrdinal") (ELit (LString "Cons"))))
 (DFunDef false "ordinalOfHead" (PWild (PCon "HNil")) (EApp (EVar "syntheticCtorOrdinal") (ELit (LString "Nil"))))
 (DFunDef false "ordinalOfHead" ((PVar "prog") (PVar "h")) (EApp (EApp (EVar "ctorOrdinal") (EVar "prog")) (EApp (EApp (EVar "fstConHead") (EVar "prog")) (EVar "h"))))
 (DTypeSig false "ctorsOfType" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfType" ((PVar "prog") (PVar "ty")) (EApp (EApp (EVar "ctorsOfTypeDispatchW") (EApp (EVar "ctorsOfTypeUser") (EVar "prog"))) (EVar "ty")))
+(DFunDef false "ctorsOfType" ((PVar "prog") (PVar "ty")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "ty")) (EFieldAccess (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "ctor") "rosters")) (arm (PCon "Some" (PVar "roster")) () (EVar "roster")) (arm (PCon "None") () (EIf (EApp (EVar "isTupleType") (EVar "ty")) (EListLit (EApp (EVar "tupleCtorName") (EApp (EVar "tupleTypeArity") (EVar "ty")))) (EApp (EVar "runtimeCtorsOfTypeW") (EVar "ty"))))))
 (DTypeSig false "isTupleType" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isTupleType" ((PVar "ty")) (EApp (EApp (EVar "startsWith") (ELit (LString "$Tuple"))) (EVar "ty")))
 (DTypeSig false "tupleTypeArity" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "tupleTypeArity" ((PVar "ty")) (EApp (EVar "trailingIntOf") (EVar "ty")))
-(DTypeSig false "ctorsOfTypeUser" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfTypeUser" ((PVar "prog") (PVar "ty")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "ty")) (EApp (EVar "indexTypeCtorsW") (EApp (EVar "progIndex") (EVar "prog"))))))
 (DTypeSig false "typeCtorCount" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "typeCtorCount" ((PVar "prog") (PVar "ty")) (EApp (EVar "listLen") (EApp (EApp (EVar "ctorsOfType") (EVar "prog")) (EVar "ty"))))
 (DTypeSig false "switchTypeName" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyCon "String"))))
@@ -13667,28 +13488,9 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "conHeadInfoUnsafe" (TyFun (TyCon "Prog") (TyFun (TyCon "CHead") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "conHeadInfoUnsafe" ((PVar "prog") (PVar "h")) (EMatch (EApp (EVar "conHeadInfo") (EVar "h")) (arm (PCon "Some" (PVar "p")) () (EVar "p")) (arm (PCon "None") () (EApp (EApp (EVar "gapSIntP") (EVar "prog")) (ELit (LString "ref-mode: non-constructor head in a constructor switch (HCons/HNil/HTuple are W7)"))))))
 (DTypeSig false "isReservedType" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isReservedType" ((PVar "ty")) (EApp (EApp (EVar "contains") (EVar "ty")) (EListLit (ELit (LString "Option")) (ELit (LString "Result")) (ELit (LString "Ordering")))))
-(DTypeSig false "reservedCtorsOfType" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "reservedCtorsOfType" ((PLit (LString "Option"))) (EListLit (ELit (LString "Some")) (ELit (LString "None"))))
-(DFunDef false "reservedCtorsOfType" ((PLit (LString "Result"))) (EListLit (ELit (LString "Ok")) (ELit (LString "Err"))))
-(DFunDef false "reservedCtorsOfType" ((PLit (LString "Ordering"))) (EListLit (ELit (LString "Lt")) (ELit (LString "Eq")) (ELit (LString "Gt"))))
-(DFunDef false "reservedCtorsOfType" (PWild) (EListLit))
-(DTypeSig false "reservedTypeOf" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "reservedTypeOf" ((PVar "prog") (PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "Some")) (ELit (LString "None")))) (ELit (LString "Option")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "Ok")) (ELit (LString "Err")))) (ELit (LString "Result")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "Lt")) (ELit (LString "Eq")) (ELit (LString "Gt")))) (ELit (LString "Ordering")) (EApp (EApp (EVar "gapSP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: unknown constructor '")) (EVar "name")) (ELit (LString "' (not in the ctor table, not reserved)"))))))))
-(DTypeSig false "reservedCtorOrdinal" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "reservedCtorOrdinal" ((PLit (LString "Some"))) (EApp (EVar "Some") (ELit (LInt 0))))
-(DFunDef false "reservedCtorOrdinal" ((PLit (LString "None"))) (EApp (EVar "Some") (ELit (LInt 1))))
-(DFunDef false "reservedCtorOrdinal" ((PLit (LString "Ok"))) (EApp (EVar "Some") (ELit (LInt 0))))
-(DFunDef false "reservedCtorOrdinal" ((PLit (LString "Err"))) (EApp (EVar "Some") (ELit (LInt 1))))
-(DFunDef false "reservedCtorOrdinal" ((PLit (LString "Lt"))) (EApp (EVar "Some") (ELit (LInt 0))))
-(DFunDef false "reservedCtorOrdinal" ((PLit (LString "Eq"))) (EApp (EVar "Some") (ELit (LInt 1))))
-(DFunDef false "reservedCtorOrdinal" ((PLit (LString "Gt"))) (EApp (EVar "Some") (ELit (LInt 2))))
-(DFunDef false "reservedCtorOrdinal" (PWild) (EVar "None"))
+(DFunDef false "isReservedType" ((PVar "ty")) (EApp (EApp (EVar "any") (ELam ((PVar "owner")) (EBinOp "==" (EApp (EVar "runtimeOwnerWord") (EVar "owner")) (EApp (EVar "Some") (EVar "ty"))))) (EListLit (EVar "RuntimeOption") (EVar "RuntimeResult") (EVar "RuntimeOrdering"))))
 (DTypeSig false "reservedCtorArity" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "reservedCtorArity" ((PLit (LString "Some"))) (ELit (LInt 1)))
-(DFunDef false "reservedCtorArity" ((PLit (LString "Ok"))) (ELit (LInt 1)))
-(DFunDef false "reservedCtorArity" ((PLit (LString "Err"))) (ELit (LInt 1)))
-(DFunDef false "reservedCtorArity" (PWild) (ELit (LInt 0)))
+(DFunDef false "reservedCtorArity" ((PVar "name")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "map") (ELam ((PVar "id")) (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "arity"))) (EApp (EVar "namedRuntimeCtor") (EVar "name")))))
 (DTypeSig false "typeRootName" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "typeRootName" ((PVar "ty")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "ty") (ELit (LString "List"))) (EApp (EVar "isReservedType") (EVar "ty"))) (EApp (EApp (EVar "startsWith") (ELit (LString "$Tuple"))) (EVar "ty"))) (EBinOp "++" (ELit (LString "T_")) (EApp (EVar "injectiveIdent") (EVar "ty"))) (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WUserType") (EVar "ty")))))
 (DTypeSig false "ctorStructName" (TyFun (TyCon "String") (TyCon "String")))
@@ -13699,8 +13501,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "headCtorStructName" ((PVar "prog") (PVar "h")) (EApp (EVar "ctorStructName") (EApp (EApp (EVar "fstConHead") (EVar "prog")) (EVar "h"))))
 (DTypeSig false "fstConHead" (TyFun (TyCon "Prog") (TyFun (TyCon "CHead") (TyCon "String"))))
 (DFunDef false "fstConHead" ((PVar "prog") (PVar "h")) (EMatch (EApp (EVar "conHeadInfo") (EVar "h")) (arm (PCon "Some" (PTuple (PVar "c") PWild)) () (EVar "c")) (arm (PCon "None") () (EApp (EApp (EVar "gapSP") (EVar "prog")) (ELit (LString "ref-mode: non-constructor head where a ctor struct id was needed"))))))
-(DTypeSig false "distinctTypeNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "distinctTypeNames" ((PVar "ctorTypes")) (EApp (EVar "dedupKeep") (EApp (EApp (EVar "map") (EVar "sndPair")) (EVar "ctorTypes"))))
 (DTypeSig false "scratchLocal" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "scratchLocal" ((PVar "d")) (EApp (EVar "WN.wasmName") (EApp (EApp (EVar "WN.WSyntheticLocal") (EVar "WN.WScratch")) (EVar "d"))))
 (DTypeSig false "scratchLocals" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
@@ -13806,8 +13606,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "dedupGo" ((PCons (PVar "x") (PVar "xs")) (PVar "seen") (PVar "acc")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen")) (EApp (EApp (EApp (EVar "dedupGo") (EVar "xs")) (EVar "seen")) (EVar "acc")) (EApp (EApp (EApp (EVar "dedupGo") (EVar "xs")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EVar "x") (EVar "acc")))))
 (DTypeSig false "fst" (TyFun (TyTuple (TyVar "a") (TyVar "b")) (TyVar "a")))
 (DFunDef false "fst" ((PTuple (PVar "x") PWild)) (EVar "x"))
-(DTypeSig false "sndPair" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))
-(DFunDef false "sndPair" ((PTuple PWild (PVar "y"))) (EVar "y"))
 (DTypeSig false "isSome" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "isSome" ((PCon "Some" PWild)) (EVar "True"))
 (DFunDef false "isSome" ((PCon "None")) (EVar "False"))
@@ -13866,6 +13664,8 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "hasFamilyW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "hasFamilyW" ((PVar "prog") (PVar "symbol") (PVar "tag")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EApp (EVar "runtimeNameW") (EVar "prog")) (EVar "symbol"))) (EFieldAccess (EApp (EVar "emitDemandW") (EApp (EVar "progEmit") (EVar "prog"))) "catalogFamilies")) (arm (PCon "Some" (PVar "family")) () (EBinOp "==" (EApp (EVar "WD.wasmFamilyTag") (EVar "family")) (EVar "tag"))) (arm (PCon "None") () (EVar "False"))))
 # MARK
+(DUse false (UseGroup ("ir" "constructor_facts") ((mem "ConstructorFacts" false) (mem "declaredCtorArity" false) (mem "declaredCtorOwner" false) (mem "declaredCtorOrdinal" false))))
+(DUse false (UseGroup ("frontend" "runtime_constructors") ((mem "RuntimeOwner" true) (mem "RuntimeCtorId" true) (mem "namedRuntimeCtor" false) (mem "runtimeCtorFact" false) (mem "runtimeRoster" false) (mem "runtimeCtorName" false) (mem "runtimeOwnerWord" false))))
 (DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
@@ -13923,9 +13723,8 @@ hasFamilyW prog symbol tag =
 (DFunDef false "seedPhysicalW" ((PVar "emit") (PVar "physical")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "seedDemandW") (EVar "emit")) (EFieldAccess (EVar "physical") "representation"))) (DoLet false false PWild (EApp (EApp (EVar "forEachU") (ELam ((PTuple (PVar "name") (PVar "cell"))) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EVar "hasWasmHelper") (EVar "physical")) (EVar "name"))))) (EListLit (ETuple (ELit (LString "strLeafRuntimeLines")) (EFieldAccess (EVar "emit") "useStrLeaf")) (ETuple (ELit (LString "strSearchRuntimeLines")) (EFieldAccess (EVar "emit") "useStrSearch")) (ETuple (ELit (LString "valueEqRuntimeLines")) (EFieldAccess (EVar "emit") "useValueCmp")) (ETuple (ELit (LString "valueCmpNumRuntimeLines")) (EFieldAccess (EVar "emit") "useValueCmpNum")) (ETuple (ELit (LString "valueAddRuntimeLines")) (EFieldAccess (EVar "emit") "useValueAdd")) (ETuple (ELit (LString "valueSubRuntimeLines")) (EFieldAccess (EVar "emit") "useValueSub")) (ETuple (ELit (LString "valueMulRuntimeLines")) (EFieldAccess (EVar "emit") "useValueMul")) (ETuple (ELit (LString "valueDivRuntimeLines")) (EFieldAccess (EVar "emit") "useValueDiv")) (ETuple (ELit (LString "valueModRuntimeLines")) (EFieldAccess (EVar "emit") "useValueMod")) (ETuple (ELit (LString "floatRuntimeLines")) (EFieldAccess (EVar "emit") "useFloat")) (ETuple (ELit (LString "stderrByteImportLines")) (EFieldAccess (EVar "emit") "trapImportNeeded")) (ETuple (ELit (LString "trapIntRuntimeLines")) (EFieldAccess (EVar "emit") "trapIntNeeded"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "intRtUsed")) (EFieldAccess (EVar "physical") "intHelpers"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteRtUsed")) (EFieldAccess (EVar "physical") "siteRuntime"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteNonexhUsed")) (EFieldAccess (EVar "physical") "nonexhaustiveRuntime")))))
 (DData Private "WasmFnImplIndex" () ((variant "WasmFnImplIndex" (ConNamed (field "fnNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "valNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "arities" (TyCon "ArityEnv")) (field "implBuckets" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry")))) (field "lazyGlobals" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "superCounts" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "trmc" (TyCon "TrmcVerdicts"))))) ())
 (DData Private "WasmRecordValueIndex" () ((variant "WasmRecordValueIndex" (ConNamed (field "fnValues" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
-(DData Private "WasmCtorIndex" () ((variant "WasmCtorIndex" (ConNamed (field "arities" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "types" (TyApp (TyCon "OrdMap") (TyCon "String"))) (field "ordinals" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "typeCtors" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))) ())
 (DData Private "WasmStamps" () ((variant "WasmStamps" (ConNamed (field "rows" (TyApp (TyCon "OrdMap") (TyCon "BinderRow"))) (field "tops" (TyApp (TyCon "OrdMap") (TyCon "BinderRow")))))) ())
-(DData Private "WasmProgramIndex" () ((variant "WasmProgramIndex" (ConNamed (field "fnImpl" (TyCon "WasmFnImplIndex")) (field "recordValue" (TyCon "WasmRecordValueIndex")) (field "ctor" (TyCon "WasmCtorIndex")) (field "stamps" (TyCon "WasmStamps")) (field "typeContext" (TyCon "WasmTypeContext"))))) ())
+(DData Private "WasmProgramIndex" () ((variant "WasmProgramIndex" (ConNamed (field "fnImpl" (TyCon "WasmFnImplIndex")) (field "recordValue" (TyCon "WasmRecordValueIndex")) (field "ctor" (TyCon "ConstructorFacts")) (field "stamps" (TyCon "WasmStamps")) (field "typeContext" (TyCon "WasmTypeContext"))))) ())
 (DTypeSig false "makeWasmStamps" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "BinderRow")) (TyCon "WasmStamps"))))
 (DFunDef false "makeWasmStamps" ((PVar "groups") (PVar "binderRows")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "intToString") (EApp (EVar "binderOrdinal") (EFieldAccess (EVar "r") "brId"))) (EVar "r")))) (EVar "binderRows")))) (EVar "omEmpty"))) (DoExpr (ERecordCreate "WasmStamps" ((fa "rows" (EVar "rows")) (fa "tops" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "topRow") (EVar "rows"))) (EVar "groups")))) (EVar "omEmpty"))))))))
 (DTypeSig false "topRow" (TyFun (TyApp (TyCon "OrdMap") (TyCon "BinderRow")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "BinderRow"))))))
@@ -13976,12 +13775,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "indexFnsUsedAsValuesW" ((PVar "index")) (EFieldAccess (EFieldAccess (EMethodRef "index") "recordValue") "fnValues"))
 (DTypeSig false "indexCtorAritiesW" (TyFun (TyCon "WasmProgramIndex") (TyApp (TyCon "OrdMap") (TyCon "Int"))))
 (DFunDef false "indexCtorAritiesW" ((PVar "index")) (EFieldAccess (EFieldAccess (EMethodRef "index") "ctor") "arities"))
-(DTypeSig false "indexCtorTypesW" (TyFun (TyCon "WasmProgramIndex") (TyApp (TyCon "OrdMap") (TyCon "String"))))
-(DFunDef false "indexCtorTypesW" ((PVar "index")) (EFieldAccess (EFieldAccess (EMethodRef "index") "ctor") "types"))
-(DTypeSig false "indexCtorOrdinalsW" (TyFun (TyCon "WasmProgramIndex") (TyApp (TyCon "OrdMap") (TyCon "Int"))))
-(DFunDef false "indexCtorOrdinalsW" ((PVar "index")) (EFieldAccess (EFieldAccess (EMethodRef "index") "ctor") "ordinals"))
-(DTypeSig false "indexTypeCtorsW" (TyFun (TyCon "WasmProgramIndex") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "indexTypeCtorsW" ((PVar "index")) (EFieldAccess (EFieldAccess (EMethodRef "index") "ctor") "typeCtors"))
 (DTypeSig false "implEntryIfaceWordW" (TyFun (TyCon "CImplEntry") (TyCon "String")))
 (DFunDef false "implEntryIfaceWordW" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild (PVar "iface") PWild PWild PWild PWild))) (EVar "iface"))
 (DFunDef false "implEntryIfaceWordW" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" (PVar "ifaceWord") PWild PWild PWild PWild PWild PWild))) (EVar "ifaceWord"))
@@ -14029,11 +13822,11 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "groupImplsByMethodW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry")))))
 (DFunDef false "groupImplsByMethodW" ((PVar "entries")) (EApp (EApp (EVar "omMapValues") (EVar "reverseL")) (EApp (EApp (EVar "foldImplsByMethodW") (EVar "entries")) (EVar "omEmpty"))))
 (DTypeSig false "makeWasmProgramIndex" (TyFun (TyCon "EmitPlan") (TyFun (TyCon "DeclFacts") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "WasmProgramIndex"))))))))))
-(DFunDef false "makeWasmProgramIndex" ((PVar "plan") (PVar "facts") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "fnNames") (PVar "valNames")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndexWithLazy") (EFieldAccess (EFieldAccess (EVar "plan") "wasmInputs") "ctorFloatFields")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "trmc")))
-(DTypeSig false "makeWasmProgramIndexGaps" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "DeclFacts") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "WasmProgramIndex")))))))))))
-(DFunDef false "makeWasmProgramIndexGaps" ((PVar "ctorFields") (PVar "trmc") (PVar "facts") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "fnNames") (PVar "valNames")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndexWithLazy") (EVar "ctorFields")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames")) (EListLit)) (EVar "trmc")))
-(DTypeSig false "makeWasmProgramIndexWithLazy" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "DeclFacts") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "TrmcVerdicts") (TyCon "WasmProgramIndex"))))))))))))
-(DFunDef false "makeWasmProgramIndexWithLazy" ((PVar "ctorFields") (PVar "facts") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "fnNames") (PVar "valNames") (PVar "lazyNames") (PVar "trmc")) (EBlock (DoLet false false (PVar "fnIndex") (EApp (EApp (EVar "omFromNames") (EVar "fnNames")) (EVar "omEmpty"))) (DoLet false false (PVar "valIndex") (EApp (EApp (EVar "omFromNames") (EVar "valNames")) (EVar "omEmpty"))) (DoLet false false (PVar "ctorArIndex") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorArs"))) (EVar "omEmpty"))) (DoLet false false (PVar "ctorTyIndex") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorTypes"))) (EVar "omEmpty"))) (DoLet false false (PVar "typeCtors") (EApp (EApp (EVar "typeCtorsOfW") (EApp (EVar "reverseL") (EVar "ctorTypes"))) (EVar "omEmpty"))) (DoLet false false (PVar "ctorOrds") (EApp (EApp (EApp (EApp (EVar "ctorOrdsOfW") (EApp (EVar "distinctTypeNames") (EVar "ctorTypes"))) (EVar "ctorTyIndex")) (EVar "typeCtors")) (EVar "omEmpty"))) (DoLet false false (PVar "usedFns") (EBinOp "++" (EApp (EApp (EApp (EVar "scanFnValueUses") (EVar "fnIndex")) (EVar "ctorArs")) (EVar "groups")) (EApp (EApp (EApp (EVar "scanImplValueUses") (EVar "fnIndex")) (EVar "ctorArs")) (EVar "impls")))) (DoExpr (ERecordCreate "WasmProgramIndex" ((fa "fnImpl" (ERecordCreate "WasmFnImplIndex" ((fa "fnNames" (EVar "fnIndex")) (fa "valNames" (EVar "valIndex")) (fa "arities" (EApp (EVar "programArities") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EListLit)) (EVar "noDeclFacts")))) (fa "implBuckets" (EApp (EVar "groupImplsByMethodW") (EVar "impls"))) (fa "lazyGlobals" (EApp (EApp (EVar "omFromNames") (EVar "lazyNames")) (EVar "omEmpty"))) (fa "superCounts" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factSupers")) (EVar "omEmpty"))) (fa "trmc" (EVar "trmc"))))) (fa "recordValue" (ERecordCreate "WasmRecordValueIndex" ((fa "fnValues" (EApp (EApp (EVar "omFromNames") (EVar "usedFns")) (EVar "omEmpty")))))) (fa "ctor" (ERecordCreate "WasmCtorIndex" ((fa "arities" (EVar "ctorArIndex")) (fa "types" (EVar "ctorTyIndex")) (fa "ordinals" (EVar "ctorOrds")) (fa "typeCtors" (EVar "typeCtors"))))) (fa "stamps" (EApp (EApp (EVar "makeWasmStamps") (EVar "groups")) (EFieldAccess (EVar "facts") "factBinders"))) (fa "typeContext" (EApp (EApp (EVar "wasmTypeContext") (EVar "ctorFields")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EListLit)) (EVar "facts")))))))))
+(DFunDef false "makeWasmProgramIndex" ((PVar "plan") (PVar "facts") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "fnNames") (PVar "valNames")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndexWithLazy") (EFieldAccess (EVar "plan") "constructorFacts")) (EFieldAccess (EFieldAccess (EVar "plan") "wasmInputs") "ctorFloatFields")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "trmc")))
+(DTypeSig false "makeWasmProgramIndexGaps" (TyFun (TyCon "ConstructorFacts") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "DeclFacts") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "WasmProgramIndex"))))))))))))
+(DFunDef false "makeWasmProgramIndexGaps" ((PVar "constructors") (PVar "ctorFields") (PVar "trmc") (PVar "facts") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "fnNames") (PVar "valNames")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndexWithLazy") (EVar "constructors")) (EVar "ctorFields")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames")) (EListLit)) (EVar "trmc")))
+(DTypeSig false "makeWasmProgramIndexWithLazy" (TyFun (TyCon "ConstructorFacts") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "DeclFacts") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "TrmcVerdicts") (TyCon "WasmProgramIndex")))))))))))))
+(DFunDef false "makeWasmProgramIndexWithLazy" ((PVar "constructors") (PVar "ctorFields") (PVar "facts") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "fnNames") (PVar "valNames") (PVar "lazyNames") (PVar "trmc")) (EBlock (DoLet false false (PVar "fnIndex") (EApp (EApp (EVar "omFromNames") (EVar "fnNames")) (EVar "omEmpty"))) (DoLet false false (PVar "valIndex") (EApp (EApp (EVar "omFromNames") (EVar "valNames")) (EVar "omEmpty"))) (DoLet false false (PVar "usedFns") (EBinOp "++" (EApp (EApp (EApp (EVar "scanFnValueUses") (EVar "fnIndex")) (EVar "ctorArs")) (EVar "groups")) (EApp (EApp (EApp (EVar "scanImplValueUses") (EVar "fnIndex")) (EVar "ctorArs")) (EVar "impls")))) (DoExpr (ERecordCreate "WasmProgramIndex" ((fa "fnImpl" (ERecordCreate "WasmFnImplIndex" ((fa "fnNames" (EVar "fnIndex")) (fa "valNames" (EVar "valIndex")) (fa "arities" (EApp (EVar "programArities") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EListLit)) (EVar "noDeclFacts")))) (fa "implBuckets" (EApp (EVar "groupImplsByMethodW") (EVar "impls"))) (fa "lazyGlobals" (EApp (EApp (EVar "omFromNames") (EVar "lazyNames")) (EVar "omEmpty"))) (fa "superCounts" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factSupers")) (EVar "omEmpty"))) (fa "trmc" (EVar "trmc"))))) (fa "recordValue" (ERecordCreate "WasmRecordValueIndex" ((fa "fnValues" (EApp (EApp (EVar "omFromNames") (EVar "usedFns")) (EVar "omEmpty")))))) (fa "ctor" (EVar "constructors")) (fa "stamps" (EApp (EApp (EVar "makeWasmStamps") (EVar "groups")) (EFieldAccess (EVar "facts") "factBinders"))) (fa "typeContext" (EApp (EApp (EVar "wasmTypeContext") (EVar "ctorFields")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EListLit)) (EVar "facts")))))))))
 (DTypeSig false "foldImplsByMethodW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry"))))))
 (DFunDef false "foldImplsByMethodW" ((PList) (PVar "m")) (EVar "m"))
 (DFunDef false "foldImplsByMethodW" ((PCons (PVar "e") (PVar "rest")) (PVar "m")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "implEntryMethod") (EVar "e"))) (DoExpr (EApp (EApp (EVar "foldImplsByMethodW") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EBinOp "::" (EVar "e") (EApp (EVar "orEmptyEntriesW") (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "m"))))) (EVar "m"))))))
@@ -14154,7 +13947,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitProgramCore" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyCon "String")))))))
 (DFunDef false "emitProgramCore" ((PVar "emit") (PVar "input") (PVar "plan") (PVar "cp")) (EApp (EApp (EApp (EApp (EVar "emitUniqueProgram") (ERecordUpdate (EVar "emit") ((fa "externFacts" (EApp (EVar "requirementFacts") (EFieldAccess (EVar "plan") "externRequirements"))) (fa "physical" (EFieldAccess (EVar "plan") "wasmPhysical"))))) (EVar "input")) (EVar "plan")) (EVar "cp")))
 (DTypeSig false "emitUniqueProgram" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyCon "String")))))))
-(DFunDef false "emitUniqueProgram" ((PVar "emit") (PVar "input") (PVar "plan") (PAs "cp" (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") PWild (PVar "facts")))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "refuseUnprovidedExternsW") (EVar "emit")) (EVar "input")) (EVar "plan")) (EVar "cp"))) (DoLet false false (PVar "physical") (EApp (EVar "physicalPlanW") (EVar "plan"))) (DoLet false false PWild (EApp (EApp (EVar "seedPhysicalW") (EVar "emit")) (EVar "physical"))) (DoLet false false (PVar "fnNames") (EApp (EVar "collectFnNames") (EVar "groups"))) (DoLet false false (PVar "valNames") (EApp (EVar "collectValNames") (EVar "groups"))) (DoLet false false (PVar "index") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndex") (EVar "plan")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames"))) (DoLet false false (PVar "useClos") (EFieldAccess (EVar "physical") "useClos")) (DoLet false false (PVar "useRef") (EFieldAccess (EVar "physical") "useRef")) (DoLet false false (PVar "typeNames") (EApp (EVar "distinctTypeNames") (EVar "ctorTypes"))) (DoLet false false (PVar "prog") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Prog") (EMethodRef "index")) (EVar "typeNames")) (EVar "valNames")) (EVar "useClos")) (EVar "impls")) (EVar "input")) (EVar "emit")) (EApp (EVar "freshFnCtx") (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EVar "emitRefProgram") (EVar "prog")) (EVar "plan")) (EVar "groups")))))
+(DFunDef false "emitUniqueProgram" ((PVar "emit") (PVar "input") (PVar "plan") (PAs "cp" (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") PWild (PVar "facts")))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "refuseUnprovidedExternsW") (EVar "emit")) (EVar "input")) (EVar "plan")) (EVar "cp"))) (DoLet false false (PVar "physical") (EApp (EVar "physicalPlanW") (EVar "plan"))) (DoLet false false PWild (EApp (EApp (EVar "seedPhysicalW") (EVar "emit")) (EVar "physical"))) (DoLet false false (PVar "fnNames") (EApp (EVar "collectFnNames") (EVar "groups"))) (DoLet false false (PVar "valNames") (EApp (EVar "collectValNames") (EVar "groups"))) (DoLet false false (PVar "index") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndex") (EVar "plan")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames"))) (DoLet false false (PVar "useClos") (EFieldAccess (EVar "physical") "useClos")) (DoLet false false (PVar "useRef") (EFieldAccess (EVar "physical") "useRef")) (DoLet false false (PVar "typeNames") (EFieldAccess (EFieldAccess (EVar "plan") "constructorFacts") "typeOrder")) (DoLet false false (PVar "prog") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Prog") (EMethodRef "index")) (EVar "typeNames")) (EVar "valNames")) (EVar "useClos")) (EVar "impls")) (EVar "input")) (EVar "emit")) (EApp (EVar "freshFnCtx") (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EVar "emitRefProgram") (EVar "prog")) (EVar "plan")) (EVar "groups")))))
 (DTypeSig false "assertEmittedClosureW" (TyFun (TyCon "String") (TyCon "Unit")))
 (DFunDef false "assertEmittedClosureW" ((PVar "text")) (EBlock (DoLet false false (PVar "lines") (EApp (EVar "splitNl") (EVar "text"))) (DoLet false false (PVar "defined") (EApp (EApp (EVar "omFromNames") (EApp (EVar "collectDefinedNamesW") (EVar "lines"))) (EVar "omEmpty"))) (DoLet false false (PVar "called") (EApp (EVar "collectCalledNamesW") (EVar "lines"))) (DoExpr (EApp (EApp (EVar "checkCalledNamesW") (EVar "defined")) (EVar "called")))))
 (DTypeSig false "collectCalledNamesW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -14181,7 +13974,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "checkCalledNamesW" (PWild (PList)) (ELit LUnit))
 (DFunDef false "checkCalledNamesW" ((PVar "defined") (PCons (PVar "name") (PVar "rest"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "defined")) (EApp (EApp (EVar "checkCalledNamesW") (EVar "defined")) (EVar "rest")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "wasm emit: call to undefined/unimported $")) (EVar "name")) (ELit (LString " -- a runtime-line gate is missing this helper's dependency (#392)"))))))
 (DTypeSig true "emitProgramGaps" (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitProgramGaps" ((PVar "input") (PVar "plan") (PVar "cp0")) (EBlock (DoLet false false (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts")) (EVar "cp0")) (DoLet false false (PVar "emit") (EApp (EVar "freshWasmEmit") (EVar "WGapRecord"))) (DoLet false false (PVar "emit") (ERecordUpdate (EVar "emit") ((fa "externFacts" (EApp (EVar "requirementFacts") (EFieldAccess (EVar "plan") "externRequirements"))) (fa "physical" (EFieldAccess (EVar "plan") "wasmPhysical")) (fa "closureChecked" (EVar "False"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "refuseUnprovidedExternsW") (EVar "emit")) (EVar "input")) (EVar "plan")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (EVar "facts")))) (DoLet false false PWild (EApp (EApp (EVar "seedPhysicalW") (EVar "emit")) (EApp (EVar "physicalPlanW") (EVar "plan")))) (DoLet false false (PVar "emit") (ERecordUpdate (EVar "emit") ((fa "physical" (EApp (EVar "Some") (EApp (EVar "WD.censusWasmDemand") (EApp (EVar "physicalPlanW") (EVar "plan")))))))) (DoLet false false (PVar "fnNames") (EApp (EVar "collectFnNames") (EVar "groups"))) (DoLet false false (PVar "valNames") (EApp (EVar "collectValNames") (EVar "groups"))) (DoLet false false (PVar "index") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndexGaps") (EFieldAccess (EFieldAccess (EVar "plan") "wasmInputs") "ctorFloatFields")) (EFieldAccess (EVar "plan") "trmc")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames"))) (DoLet false false (PVar "useClos") (EFieldAccess (EApp (EVar "physicalPlanW") (EVar "plan")) "useClos")) (DoLet false false (PVar "typeNames") (EApp (EVar "distinctTypeNames") (EVar "ctorTypes"))) (DoLet false false (PVar "prog") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Prog") (EMethodRef "index")) (EVar "typeNames")) (EVar "valNames")) (EVar "useClos")) (EVar "impls")) (EVar "input")) (EVar "emit")) (EApp (EVar "freshFnCtx") (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "emitFnsGapsW") (EVar "prog")) (EApp (EVar "userFnBinds") (EVar "groups")))) (DoLet false false PWild (EApp (EApp (EVar "emitImplsGapsW") (EVar "prog")) (EApp (EApp (EVar "implGroups") (EVar "prog")) (EVar "impls")))) (DoLet false false PWild (EApp (EApp (EVar "emitValsGapsW") (EVar "prog")) (EApp (EApp (EVar "filterList") (EVar "isValBind")) (EVar "groups")))) (DoExpr (EMatch (EApp (EVar "symbolDefectsW") (EVar "emit")) (arm (PList) () (EApp (EVar "Ok") (EApp (EVar "gapEventsOfW") (EVar "emit")))) (arm (PVar "defects") () (EApp (EVar "Err") (EVar "defects")))))))
+(DFunDef false "emitProgramGaps" ((PVar "input") (PVar "plan") (PVar "cp0")) (EBlock (DoLet false false (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts")) (EVar "cp0")) (DoLet false false (PVar "emit") (EApp (EVar "freshWasmEmit") (EVar "WGapRecord"))) (DoLet false false (PVar "emit") (ERecordUpdate (EVar "emit") ((fa "externFacts" (EApp (EVar "requirementFacts") (EFieldAccess (EVar "plan") "externRequirements"))) (fa "physical" (EFieldAccess (EVar "plan") "wasmPhysical")) (fa "closureChecked" (EVar "False"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "refuseUnprovidedExternsW") (EVar "emit")) (EVar "input")) (EVar "plan")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (EVar "facts")))) (DoLet false false PWild (EApp (EApp (EVar "seedPhysicalW") (EVar "emit")) (EApp (EVar "physicalPlanW") (EVar "plan")))) (DoLet false false (PVar "emit") (ERecordUpdate (EVar "emit") ((fa "physical" (EApp (EVar "Some") (EApp (EVar "WD.censusWasmDemand") (EApp (EVar "physicalPlanW") (EVar "plan")))))))) (DoLet false false (PVar "fnNames") (EApp (EVar "collectFnNames") (EVar "groups"))) (DoLet false false (PVar "valNames") (EApp (EVar "collectValNames") (EVar "groups"))) (DoLet false false (PVar "index") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndexGaps") (EFieldAccess (EVar "plan") "constructorFacts")) (EFieldAccess (EFieldAccess (EVar "plan") "wasmInputs") "ctorFloatFields")) (EFieldAccess (EVar "plan") "trmc")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames"))) (DoLet false false (PVar "useClos") (EFieldAccess (EApp (EVar "physicalPlanW") (EVar "plan")) "useClos")) (DoLet false false (PVar "typeNames") (EFieldAccess (EFieldAccess (EVar "plan") "constructorFacts") "typeOrder")) (DoLet false false (PVar "prog") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Prog") (EMethodRef "index")) (EVar "typeNames")) (EVar "valNames")) (EVar "useClos")) (EVar "impls")) (EVar "input")) (EVar "emit")) (EApp (EVar "freshFnCtx") (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "emitFnsGapsW") (EVar "prog")) (EApp (EVar "userFnBinds") (EVar "groups")))) (DoLet false false PWild (EApp (EApp (EVar "emitImplsGapsW") (EVar "prog")) (EApp (EApp (EVar "implGroups") (EVar "prog")) (EVar "impls")))) (DoLet false false PWild (EApp (EApp (EVar "emitValsGapsW") (EVar "prog")) (EApp (EApp (EVar "filterList") (EVar "isValBind")) (EVar "groups")))) (DoExpr (EMatch (EApp (EVar "symbolDefectsW") (EVar "emit")) (arm (PList) () (EApp (EVar "Ok") (EApp (EVar "gapEventsOfW") (EVar "emit")))) (arm (PVar "defects") () (EApp (EVar "Err") (EVar "defects")))))))
 (DTypeSig false "emitFnsGapsW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Unit"))))
 (DFunDef false "emitFnsGapsW" (PWild (PList)) (ELit LUnit))
 (DFunDef false "emitFnsGapsW" ((PVar "prog") (PCons (PCon "CBind" (PVar "name") (PVar "cs") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setGapBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "fn ")) (EVar "name")))) (DoLet false false PWild (EApp (EApp (EVar "emitRefFnBind") (EVar "prog")) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "cs")) (EVar "site")) (EVar "bid")))) (DoExpr (EApp (EApp (EVar "emitFnsGapsW") (EVar "prog")) (EVar "rest")))))
@@ -14370,7 +14163,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitCtorStruct" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "emitCtorStruct" ((PVar "prog") (PVar "ty") (PVar "ctor")) (EBlock (DoLet false false (PVar "arity") (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "ctor"))) (DoExpr (EIf (EBinOp "==" (EVar "arity") (ELit (LInt 0))) (EListLit) (EBlock (DoLet false false (PVar "fields") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "replicate") (EVar "arity")) (ELit (LString " (field (mut (ref eq)))"))))) (DoExpr (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "    (type $")) (EApp (EMethodRef "display") (EApp (EVar "ctorStructName") (EVar "ctor")))) (ELit (LString " (sub $"))) (EApp (EMethodRef "display") (EApp (EVar "typeRootName") (EVar "ty")))) (ELit (LString " (struct (field i32)"))) (EApp (EMethodRef "display") (EVar "fields"))) (ELit (LString ")))"))))))))))
 (DTypeSig false "emitReservedStructs" (TyFun (TyCon "Prog") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "emitReservedStructs" ((PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "reservedTypeStructs") (EVar "prog")) (ELit (LString "Option"))) (EListLit (ELit (LString "Some")) (ELit (LString "None")))) (EApp (EApp (EApp (EVar "reservedTypeStructs") (EVar "prog")) (ELit (LString "Result"))) (EListLit (ELit (LString "Ok")) (ELit (LString "Err"))))) (EApp (EApp (EApp (EVar "reservedTypeStructs") (EVar "prog")) (ELit (LString "Ordering"))) (EListLit (ELit (LString "Lt")) (ELit (LString "Eq")) (ELit (LString "Gt"))))))
+(DFunDef false "emitReservedStructs" ((PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "reservedTypeStructs") (EVar "prog")) (ELit (LString "Option"))) (EApp (EApp (EMethodRef "filterMap") (EVar "runtimeCtorName")) (EApp (EVar "runtimeRoster") (EVar "RuntimeOption")))) (EApp (EApp (EApp (EVar "reservedTypeStructs") (EVar "prog")) (ELit (LString "Result"))) (EApp (EApp (EMethodRef "filterMap") (EVar "runtimeCtorName")) (EApp (EVar "runtimeRoster") (EVar "RuntimeResult"))))) (EApp (EApp (EApp (EVar "reservedTypeStructs") (EVar "prog")) (ELit (LString "Ordering"))) (EApp (EApp (EMethodRef "filterMap") (EVar "runtimeCtorName")) (EApp (EVar "runtimeRoster") (EVar "RuntimeOrdering"))))))
 (DTypeSig false "reservedTypeStructs" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "reservedTypeStructs" ((PVar "prog") (PVar "ty") (PVar "ctors")) (EBlock (DoLet false false (PVar "root") (EBinOp "++" (EBinOp "++" (ELit (LString "    (type $")) (EApp (EVar "typeRootName") (EVar "ty"))) (ELit (LString " (sub (struct (field i32))))")))) (DoLet false false (PVar "payloadStructs") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "emitReservedCtorStruct") (EVar "ty"))) (EVar "ctors"))) (DoExpr (EBinOp "++" (EListLit (EVar "root")) (EVar "payloadStructs")))))
 (DTypeSig false "emitReservedCtorStruct" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
@@ -15757,66 +15550,37 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "isCtor" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isCtor" ((PVar "prog") (PVar "name")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isSome") (EApp (EApp (EVar "omLookup") (EVar "name")) (EApp (EVar "indexCtorAritiesW") (EApp (EVar "progIndex") (EVar "prog"))))) (EApp (EVar "isReservedCtor") (EVar "name"))) (EApp (EVar "isSyntheticCtor") (EVar "name"))))
 (DTypeSig false "isReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isReservedCtor" ((PVar "name")) (EApp (EVar "isSome") (EApp (EVar "reservedCtorOrdinal") (EVar "name"))))
+(DFunDef false "isReservedCtor" ((PVar "name")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EMatch (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner") (arm (PCon "RuntimeOption") () (EVar "True")) (arm (PCon "RuntimeResult") () (EVar "True")) (arm (PCon "RuntimeOrdering") () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "isSyntheticCtor" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isSyntheticCtor" ((PVar "name")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "Cons"))) (EBinOp "==" (EVar "name") (ELit (LString "Nil")))) (EBinOp "==" (EVar "name") (ELit (LString "True")))) (EBinOp "==" (EVar "name") (ELit (LString "False")))) (EApp (EVar "isTupleCtorName") (EVar "name"))))
+(DFunDef false "isSyntheticCtor" ((PVar "name")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EMatch (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner") (arm (PCon "RuntimeList") () (EVar "True")) (arm (PCon "RuntimeBool") () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EApp (EVar "isTupleCtorName") (EVar "name")))))
 (DTypeSig false "tupleCtorName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "tupleCtorName" ((PVar "n")) (EBinOp "++" (ELit (LString "Tup")) (EApp (EVar "intToString") (EVar "n"))))
 (DTypeSig false "isTupleCtorName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isTupleCtorName" ((PVar "name")) (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "Tup"))) (EVar "name")) (EApp (EApp (EVar "allDigitsFrom") (EApp (EVar "stringToChars") (EVar "name"))) (ELit (LInt 3)))))
 (DTypeSig false "syntheticCtorType" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "syntheticCtorType" ((PLit (LString "Cons"))) (ELit (LString "List")))
-(DFunDef false "syntheticCtorType" ((PLit (LString "Nil"))) (ELit (LString "List")))
-(DFunDef false "syntheticCtorType" ((PLit (LString "True"))) (ELit (LString "Bool")))
-(DFunDef false "syntheticCtorType" ((PLit (LString "False"))) (ELit (LString "Bool")))
-(DFunDef false "syntheticCtorType" ((PVar "name")) (EBinOp "++" (ELit (LString "$Tuple")) (EApp (EVar "intToString") (EApp (EVar "trailingIntOf") (EVar "name")))))
+(DFunDef false "syntheticCtorType" ((PVar "name")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "runtimeOwnerWord") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner")))) (arm (PCon "None") () (EBinOp "++" (ELit (LString "$Tuple")) (EApp (EVar "intToString") (EApp (EVar "trailingIntOf") (EVar "name")))))))
 (DTypeSig false "syntheticCtorOrdinal" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "syntheticCtorOrdinal" ((PLit (LString "Cons"))) (ELit (LInt 0)))
-(DFunDef false "syntheticCtorOrdinal" ((PLit (LString "Nil"))) (ELit (LInt 1)))
-(DFunDef false "syntheticCtorOrdinal" ((PLit (LString "False"))) (ELit (LInt 0)))
-(DFunDef false "syntheticCtorOrdinal" ((PLit (LString "True"))) (ELit (LInt 1)))
-(DFunDef false "syntheticCtorOrdinal" (PWild) (ELit (LInt 0)))
+(DFunDef false "syntheticCtorOrdinal" ((PVar "name")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "ordinal"))) (EApp (EVar "namedRuntimeCtor") (EVar "name")))))
 (DTypeSig false "syntheticCtorArity" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "syntheticCtorArity" ((PLit (LString "Cons"))) (ELit (LInt 2)))
-(DFunDef false "syntheticCtorArity" ((PLit (LString "Nil"))) (ELit (LInt 0)))
-(DFunDef false "syntheticCtorArity" ((PLit (LString "True"))) (ELit (LInt 0)))
-(DFunDef false "syntheticCtorArity" ((PLit (LString "False"))) (ELit (LInt 0)))
-(DFunDef false "syntheticCtorArity" ((PVar "name")) (EApp (EVar "trailingIntOf") (EVar "name")))
-(DTypeSig false "typeCtorsOfW" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "typeCtorsOfW" ((PList) (PVar "m")) (EVar "m"))
-(DFunDef false "typeCtorsOfW" ((PCons (PTuple (PVar "c") (PVar "t")) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "typeCtorsOfW") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "t")) (EBinOp "::" (EVar "c") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "t")) (EVar "m"))))) (EVar "m"))))
-(DTypeSig false "ctorOrdsOfW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))))
-(DFunDef false "ctorOrdsOfW" ((PList) PWild PWild (PVar "m")) (EVar "m"))
-(DFunDef false "ctorOrdsOfW" ((PCons (PVar "ty") (PVar "rest")) (PVar "tym") (PVar "tcm") (PVar "m")) (EApp (EApp (EApp (EApp (EVar "ctorOrdsOfW") (EVar "rest")) (EVar "tym")) (EVar "tcm")) (EApp (EApp (EApp (EApp (EApp (EVar "indexCtorsW") (EVar "tym")) (EVar "ty")) (EApp (EApp (EVar "ctorsOfTypeIxW") (EVar "tcm")) (EVar "ty"))) (ELit (LInt 0))) (EVar "m"))))
-(DTypeSig false "indexCtorsW" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))))))
-(DFunDef false "indexCtorsW" (PWild PWild (PList) PWild (PVar "m")) (EVar "m"))
-(DFunDef false "indexCtorsW" ((PVar "tym") (PVar "ty") (PCons (PVar "c") (PVar "cs")) (PVar "i") (PVar "m")) (EApp (EApp (EApp (EApp (EApp (EVar "indexCtorsW") (EVar "tym")) (EVar "ty")) (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "c")) (EVar "m")) (EVar "m") (EIf (EApp (EApp (EApp (EVar "firstTyIsW") (EVar "tym")) (EVar "c")) (EVar "ty")) (EApp (EApp (EApp (EVar "omInsert") (EVar "c")) (EVar "i")) (EVar "m")) (EVar "m")))))
-(DTypeSig false "firstTyIsW" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "firstTyIsW" ((PVar "tym") (PVar "c") (PVar "ty")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "c")) (EVar "tym")) (arm (PCon "Some" (PVar "t")) () (EApp (EApp (EVar "eqStr") (EVar "t")) (EVar "ty"))) (arm (PCon "None") () (EVar "False"))))
-(DTypeSig false "ctorsOfTypeDispatchW" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfTypeDispatchW" ((PVar "userFallback") (PVar "ty")) (EIf (EApp (EVar "isReservedType") (EVar "ty")) (EApp (EVar "reservedCtorsOfType") (EVar "ty")) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "List"))) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil"))) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "Bool"))) (EListLit (ELit (LString "False")) (ELit (LString "True"))) (EIf (EApp (EVar "isTupleType") (EVar "ty")) (EListLit (EApp (EVar "tupleCtorName") (EApp (EVar "tupleTypeArity") (EVar "ty")))) (EApp (EVar "userFallback") (EVar "ty")))))))
-(DTypeSig false "ctorsOfTypeIxW" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfTypeIxW" ((PVar "tcm") (PVar "ty")) (EApp (EApp (EVar "ctorsOfTypeDispatchW") (ELam ((PVar "t")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "t")) (EVar "tcm"))))) (EVar "ty")))
+(DFunDef false "syntheticCtorArity" ((PVar "name")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "arity")) (arm (PCon "None") () (EFieldAccess (EApp (EVar "runtimeCtorFact") (EApp (EVar "RuntimeTupleCtor") (EApp (EVar "trailingIntOf") (EVar "name")))) "arity"))))
+(DTypeSig false "runtimeCtorsOfTypeW" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "runtimeCtorsOfTypeW" ((PVar "ty")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "owner")) (EIf (EBinOp "==" (EApp (EVar "runtimeOwnerWord") (EVar "owner")) (EApp (EVar "Some") (EVar "ty"))) (EApp (EApp (EMethodRef "filterMap") (EVar "runtimeCtorName")) (EApp (EVar "runtimeRoster") (EVar "owner"))) (EListLit)))) (EListLit (EVar "RuntimeList") (EVar "RuntimeOption") (EVar "RuntimeResult") (EVar "RuntimeOrdering") (EVar "RuntimeBool"))))
 (DTypeSig false "ctorArity" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "ctorArity" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EApp (EVar "indexCtorAritiesW") (EApp (EVar "progIndex") (EVar "prog")))) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EIf (EApp (EVar "isSyntheticCtor") (EVar "name")) (EApp (EVar "syntheticCtorArity") (EVar "name")) (EApp (EVar "reservedCtorArity") (EVar "name"))))))
+(DFunDef false "ctorArity" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "declaredCtorArity") (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "ctor")) (EVar "name")) (arm (PCon "Some" (PVar "arity")) () (EVar "arity")) (arm (PCon "None") () (EIf (EApp (EVar "isSyntheticCtor") (EVar "name")) (EApp (EVar "syntheticCtorArity") (EVar "name")) (EApp (EVar "reservedCtorArity") (EVar "name"))))))
 (DTypeSig false "ctorTypeName" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "ctorTypeName" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EApp (EVar "indexCtorTypesW") (EApp (EVar "progIndex") (EVar "prog")))) (arm (PCon "Some" (PVar "ty")) () (EVar "ty")) (arm (PCon "None") () (EIf (EApp (EVar "isSyntheticCtor") (EVar "name")) (EApp (EVar "syntheticCtorType") (EVar "name")) (EApp (EApp (EVar "reservedTypeOf") (EVar "prog")) (EVar "name"))))))
+(DFunDef false "ctorTypeName" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "declaredCtorOwner") (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "ctor")) (EVar "name")) (arm (PCon "Some" (PVar "ty")) () (EVar "ty")) (arm (PCon "None") () (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "runtimeOwnerWord") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner")))) (arm (PCon "None") () (EIf (EApp (EVar "isTupleCtorName") (EVar "name")) (EApp (EVar "syntheticCtorType") (EVar "name")) (EApp (EApp (EVar "gapSP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: unknown constructor '")) (EVar "name")) (ELit (LString "'"))))))))))
 (DTypeSig false "ctorOrdinal" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "ctorOrdinal" ((PVar "prog") (PVar "name")) (EApp (EApp (EVar "optionOr") (EApp (EVar "syntheticCtorOrdinal") (EVar "name"))) (EApp (EApp (EMethodRef "orElse") (EApp (EVar "reservedCtorOrdinal") (EVar "name"))) (EApp (EApp (EVar "userCtorOrdinalW") (EVar "prog")) (EVar "name")))))
-(DTypeSig false "userCtorOrdinalW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "userCtorOrdinalW" ((PVar "prog") (PVar "name")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EApp (EVar "indexCtorOrdinalsW") (EApp (EVar "progIndex") (EVar "prog")))))
+(DFunDef false "ctorOrdinal" ((PVar "prog") (PVar "name")) (EIf (EApp (EVar "isReservedCtor") (EVar "name")) (EApp (EVar "syntheticCtorOrdinal") (EVar "name")) (EMatch (EApp (EApp (EVar "declaredCtorOrdinal") (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "ctor")) (EVar "name")) (arm (PCon "Some" (PVar "ordinal")) () (EVar "ordinal")) (arm (PCon "None") () (EApp (EVar "syntheticCtorOrdinal") (EVar "name"))))))
 (DTypeSig false "ordinalOfHead" (TyFun (TyCon "Prog") (TyFun (TyCon "CHead") (TyCon "Int"))))
 (DFunDef false "ordinalOfHead" (PWild (PCon "HCons")) (EApp (EVar "syntheticCtorOrdinal") (ELit (LString "Cons"))))
 (DFunDef false "ordinalOfHead" (PWild (PCon "HNil")) (EApp (EVar "syntheticCtorOrdinal") (ELit (LString "Nil"))))
 (DFunDef false "ordinalOfHead" ((PVar "prog") (PVar "h")) (EApp (EApp (EVar "ctorOrdinal") (EVar "prog")) (EApp (EApp (EVar "fstConHead") (EVar "prog")) (EVar "h"))))
 (DTypeSig false "ctorsOfType" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfType" ((PVar "prog") (PVar "ty")) (EApp (EApp (EVar "ctorsOfTypeDispatchW") (EApp (EVar "ctorsOfTypeUser") (EVar "prog"))) (EVar "ty")))
+(DFunDef false "ctorsOfType" ((PVar "prog") (PVar "ty")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "ty")) (EFieldAccess (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "ctor") "rosters")) (arm (PCon "Some" (PVar "roster")) () (EVar "roster")) (arm (PCon "None") () (EIf (EApp (EVar "isTupleType") (EVar "ty")) (EListLit (EApp (EVar "tupleCtorName") (EApp (EVar "tupleTypeArity") (EVar "ty")))) (EApp (EVar "runtimeCtorsOfTypeW") (EVar "ty"))))))
 (DTypeSig false "isTupleType" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isTupleType" ((PVar "ty")) (EApp (EApp (EVar "startsWith") (ELit (LString "$Tuple"))) (EVar "ty")))
 (DTypeSig false "tupleTypeArity" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "tupleTypeArity" ((PVar "ty")) (EApp (EVar "trailingIntOf") (EVar "ty")))
-(DTypeSig false "ctorsOfTypeUser" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfTypeUser" ((PVar "prog") (PVar "ty")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "ty")) (EApp (EVar "indexTypeCtorsW") (EApp (EVar "progIndex") (EVar "prog"))))))
 (DTypeSig false "typeCtorCount" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "typeCtorCount" ((PVar "prog") (PVar "ty")) (EApp (EVar "listLen") (EApp (EApp (EVar "ctorsOfType") (EVar "prog")) (EVar "ty"))))
 (DTypeSig false "switchTypeName" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyCon "String"))))
@@ -15840,28 +15604,9 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "conHeadInfoUnsafe" (TyFun (TyCon "Prog") (TyFun (TyCon "CHead") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "conHeadInfoUnsafe" ((PVar "prog") (PVar "h")) (EMatch (EApp (EVar "conHeadInfo") (EVar "h")) (arm (PCon "Some" (PVar "p")) () (EVar "p")) (arm (PCon "None") () (EApp (EApp (EVar "gapSIntP") (EVar "prog")) (ELit (LString "ref-mode: non-constructor head in a constructor switch (HCons/HNil/HTuple are W7)"))))))
 (DTypeSig false "isReservedType" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isReservedType" ((PVar "ty")) (EApp (EApp (EVar "contains") (EVar "ty")) (EListLit (ELit (LString "Option")) (ELit (LString "Result")) (ELit (LString "Ordering")))))
-(DTypeSig false "reservedCtorsOfType" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "reservedCtorsOfType" ((PLit (LString "Option"))) (EListLit (ELit (LString "Some")) (ELit (LString "None"))))
-(DFunDef false "reservedCtorsOfType" ((PLit (LString "Result"))) (EListLit (ELit (LString "Ok")) (ELit (LString "Err"))))
-(DFunDef false "reservedCtorsOfType" ((PLit (LString "Ordering"))) (EListLit (ELit (LString "Lt")) (ELit (LString "Eq")) (ELit (LString "Gt"))))
-(DFunDef false "reservedCtorsOfType" (PWild) (EListLit))
-(DTypeSig false "reservedTypeOf" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "reservedTypeOf" ((PVar "prog") (PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "Some")) (ELit (LString "None")))) (ELit (LString "Option")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "Ok")) (ELit (LString "Err")))) (ELit (LString "Result")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "Lt")) (ELit (LString "Eq")) (ELit (LString "Gt")))) (ELit (LString "Ordering")) (EApp (EApp (EVar "gapSP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: unknown constructor '")) (EVar "name")) (ELit (LString "' (not in the ctor table, not reserved)"))))))))
-(DTypeSig false "reservedCtorOrdinal" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "reservedCtorOrdinal" ((PLit (LString "Some"))) (EApp (EVar "Some") (ELit (LInt 0))))
-(DFunDef false "reservedCtorOrdinal" ((PLit (LString "None"))) (EApp (EVar "Some") (ELit (LInt 1))))
-(DFunDef false "reservedCtorOrdinal" ((PLit (LString "Ok"))) (EApp (EVar "Some") (ELit (LInt 0))))
-(DFunDef false "reservedCtorOrdinal" ((PLit (LString "Err"))) (EApp (EVar "Some") (ELit (LInt 1))))
-(DFunDef false "reservedCtorOrdinal" ((PLit (LString "Lt"))) (EApp (EVar "Some") (ELit (LInt 0))))
-(DFunDef false "reservedCtorOrdinal" ((PLit (LString "Eq"))) (EApp (EVar "Some") (ELit (LInt 1))))
-(DFunDef false "reservedCtorOrdinal" ((PLit (LString "Gt"))) (EApp (EVar "Some") (ELit (LInt 2))))
-(DFunDef false "reservedCtorOrdinal" (PWild) (EVar "None"))
+(DFunDef false "isReservedType" ((PVar "ty")) (EApp (EApp (EDictApp "any") (ELam ((PVar "owner")) (EBinOp "==" (EApp (EVar "runtimeOwnerWord") (EVar "owner")) (EApp (EVar "Some") (EVar "ty"))))) (EListLit (EVar "RuntimeOption") (EVar "RuntimeResult") (EVar "RuntimeOrdering"))))
 (DTypeSig false "reservedCtorArity" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "reservedCtorArity" ((PLit (LString "Some"))) (ELit (LInt 1)))
-(DFunDef false "reservedCtorArity" ((PLit (LString "Ok"))) (ELit (LInt 1)))
-(DFunDef false "reservedCtorArity" ((PLit (LString "Err"))) (ELit (LInt 1)))
-(DFunDef false "reservedCtorArity" (PWild) (ELit (LInt 0)))
+(DFunDef false "reservedCtorArity" ((PVar "name")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "arity"))) (EApp (EVar "namedRuntimeCtor") (EVar "name")))))
 (DTypeSig false "typeRootName" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "typeRootName" ((PVar "ty")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "ty") (ELit (LString "List"))) (EApp (EVar "isReservedType") (EVar "ty"))) (EApp (EApp (EVar "startsWith") (ELit (LString "$Tuple"))) (EVar "ty"))) (EBinOp "++" (ELit (LString "T_")) (EApp (EVar "injectiveIdent") (EVar "ty"))) (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WUserType") (EVar "ty")))))
 (DTypeSig false "ctorStructName" (TyFun (TyCon "String") (TyCon "String")))
@@ -15872,8 +15617,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "headCtorStructName" ((PVar "prog") (PVar "h")) (EApp (EVar "ctorStructName") (EApp (EApp (EVar "fstConHead") (EVar "prog")) (EVar "h"))))
 (DTypeSig false "fstConHead" (TyFun (TyCon "Prog") (TyFun (TyCon "CHead") (TyCon "String"))))
 (DFunDef false "fstConHead" ((PVar "prog") (PVar "h")) (EMatch (EApp (EVar "conHeadInfo") (EVar "h")) (arm (PCon "Some" (PTuple (PVar "c") PWild)) () (EVar "c")) (arm (PCon "None") () (EApp (EApp (EVar "gapSP") (EVar "prog")) (ELit (LString "ref-mode: non-constructor head where a ctor struct id was needed"))))))
-(DTypeSig false "distinctTypeNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "distinctTypeNames" ((PVar "ctorTypes")) (EApp (EVar "dedupKeep") (EApp (EApp (EMethodRef "map") (EVar "sndPair")) (EVar "ctorTypes"))))
 (DTypeSig false "scratchLocal" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "scratchLocal" ((PVar "d")) (EApp (EVar "WN.wasmName") (EApp (EApp (EVar "WN.WSyntheticLocal") (EVar "WN.WScratch")) (EVar "d"))))
 (DTypeSig false "scratchLocals" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
@@ -15979,8 +15722,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "dedupGo" ((PCons (PVar "x") (PVar "xs")) (PVar "seen") (PVar "acc")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen")) (EApp (EApp (EApp (EVar "dedupGo") (EVar "xs")) (EVar "seen")) (EVar "acc")) (EApp (EApp (EApp (EVar "dedupGo") (EVar "xs")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EVar "x") (EVar "acc")))))
 (DTypeSig false "fst" (TyFun (TyTuple (TyVar "a") (TyVar "b")) (TyVar "a")))
 (DFunDef false "fst" ((PTuple (PVar "x") PWild)) (EVar "x"))
-(DTypeSig false "sndPair" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))
-(DFunDef false "sndPair" ((PTuple PWild (PVar "y"))) (EVar "y"))
 (DTypeSig false "isSome" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "isSome" ((PCon "Some" PWild)) (EVar "True"))
 (DFunDef false "isSome" ((PCon "None")) (EVar "False"))

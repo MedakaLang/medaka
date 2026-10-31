@@ -1,0 +1,8 @@
+import csv as C
+import string.{repeat, toInt}
+
+main =
+  let n = optionOr 1000 (toInt (optionOr "1000" (getEnv "N")))
+  match C.parse (repeat n "a,b,c\n")
+    Ok rows => println "rows: \{length rows}"
+    Err e => println "err \{e}"

@@ -1,0 +1,104 @@
+public export data RuntimeOwner =
+  | RuntimeList
+  | RuntimeOption
+  | RuntimeResult
+  | RuntimeOrdering
+  | RuntimeBool
+  | RuntimeTuple Int
+  deriving (Eq, Debug)
+
+public export data RuntimeCtorId =
+  | RuntimeCons
+  | RuntimeNil
+  | RuntimeSome
+  | RuntimeNone
+  | RuntimeOk
+  | RuntimeErr
+  | RuntimeLt
+  | RuntimeEq
+  | RuntimeGt
+  | RuntimeFalse
+  | RuntimeTrue
+  | RuntimeTupleCtor Int
+  deriving (Eq, Debug)
+
+public export data RuntimeCtorFact = RuntimeCtorFact {
+  owner : RuntimeOwner,
+  ordinal : Int,
+  arity : Int,
+} deriving (Eq, Debug)
+
+export
+namedRuntimeCtor : String -> Option RuntimeCtorId
+namedRuntimeCtor "Cons" = Some RuntimeCons
+namedRuntimeCtor "Nil" = Some RuntimeNil
+namedRuntimeCtor "Some" = Some RuntimeSome
+namedRuntimeCtor "None" = Some RuntimeNone
+namedRuntimeCtor "Ok" = Some RuntimeOk
+namedRuntimeCtor "Err" = Some RuntimeErr
+namedRuntimeCtor "Lt" = Some RuntimeLt
+namedRuntimeCtor "Eq" = Some RuntimeEq
+namedRuntimeCtor "Gt" = Some RuntimeGt
+namedRuntimeCtor "False" = Some RuntimeFalse
+namedRuntimeCtor "True" = Some RuntimeTrue
+namedRuntimeCtor _ = None
+
+export
+runtimeCtorFact : RuntimeCtorId -> RuntimeCtorFact
+runtimeCtorFact RuntimeCons =
+  RuntimeCtorFact { owner = RuntimeList, ordinal = 0, arity = 2 }
+runtimeCtorFact RuntimeNil =
+  RuntimeCtorFact { owner = RuntimeList, ordinal = 1, arity = 0 }
+runtimeCtorFact RuntimeSome =
+  RuntimeCtorFact { owner = RuntimeOption, ordinal = 0, arity = 1 }
+runtimeCtorFact RuntimeNone =
+  RuntimeCtorFact { owner = RuntimeOption, ordinal = 1, arity = 0 }
+runtimeCtorFact RuntimeOk =
+  RuntimeCtorFact { owner = RuntimeResult, ordinal = 0, arity = 1 }
+runtimeCtorFact RuntimeErr =
+  RuntimeCtorFact { owner = RuntimeResult, ordinal = 1, arity = 1 }
+runtimeCtorFact RuntimeLt =
+  RuntimeCtorFact { owner = RuntimeOrdering, ordinal = 0, arity = 0 }
+runtimeCtorFact RuntimeEq =
+  RuntimeCtorFact { owner = RuntimeOrdering, ordinal = 1, arity = 0 }
+runtimeCtorFact RuntimeGt =
+  RuntimeCtorFact { owner = RuntimeOrdering, ordinal = 2, arity = 0 }
+runtimeCtorFact RuntimeFalse =
+  RuntimeCtorFact { owner = RuntimeBool, ordinal = 0, arity = 0 }
+runtimeCtorFact RuntimeTrue =
+  RuntimeCtorFact { owner = RuntimeBool, ordinal = 1, arity = 0 }
+runtimeCtorFact (RuntimeTupleCtor n) =
+  RuntimeCtorFact { owner = RuntimeTuple n, ordinal = 0, arity = n }
+
+export
+runtimeRoster : RuntimeOwner -> List RuntimeCtorId
+runtimeRoster RuntimeList = [RuntimeCons, RuntimeNil]
+runtimeRoster RuntimeOption = [RuntimeSome, RuntimeNone]
+runtimeRoster RuntimeResult = [RuntimeOk, RuntimeErr]
+runtimeRoster RuntimeOrdering = [RuntimeLt, RuntimeEq, RuntimeGt]
+runtimeRoster RuntimeBool = [RuntimeFalse, RuntimeTrue]
+runtimeRoster (RuntimeTuple n) = [RuntimeTupleCtor n]
+
+export
+runtimeCtorName : RuntimeCtorId -> Option String
+runtimeCtorName RuntimeCons = Some "Cons"
+runtimeCtorName RuntimeNil = Some "Nil"
+runtimeCtorName RuntimeSome = Some "Some"
+runtimeCtorName RuntimeNone = Some "None"
+runtimeCtorName RuntimeOk = Some "Ok"
+runtimeCtorName RuntimeErr = Some "Err"
+runtimeCtorName RuntimeLt = Some "Lt"
+runtimeCtorName RuntimeEq = Some "Eq"
+runtimeCtorName RuntimeGt = Some "Gt"
+runtimeCtorName RuntimeFalse = Some "False"
+runtimeCtorName RuntimeTrue = Some "True"
+runtimeCtorName (RuntimeTupleCtor _) = None
+
+export
+runtimeOwnerWord : RuntimeOwner -> Option String
+runtimeOwnerWord RuntimeList = Some "List"
+runtimeOwnerWord RuntimeOption = Some "Option"
+runtimeOwnerWord RuntimeResult = Some "Result"
+runtimeOwnerWord RuntimeOrdering = Some "Ordering"
+runtimeOwnerWord RuntimeBool = Some "Bool"
+runtimeOwnerWord (RuntimeTuple _) = None

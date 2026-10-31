@@ -1,3 +1,5 @@
+import backend.wasm_emit_test_support_test.{funcBlock, linesWith}
+import ir.constructor_facts.{ConstructorFacts(..)}
 import types.symbol_origins.{CoreSymbolOrigins(..), SymbolOrigin(..)}
 import backend.core_validate.{validateSymbolOrigins}
 import support.diag_codes.{codeText}
@@ -2111,7 +2113,9 @@ emissionVictim "not-provided" =
     None => panic "emission control omitted assertSnapshot extern fact"
 emissionVictim "physical-type" = lowered "main = \"type-neighbor\""
 emissionVictim victim =
-  if stringStartsWith "physical-" victim then
+  if contains "ctor-" victim then
+    constructorVictim victim
+  else if stringStartsWith "physical-" victim then
     lowered "main = 12 / 3"
   else if contains "extern-" victim then
     let cp =
@@ -2311,6 +2315,15 @@ manifestVictims = [
 ]
 
 emissionNeedle : String -> String
+emissionNeedle "ctor-owner" = "constructor-fact: owner projection"
+emissionNeedle "ctor-arity" = "constructor-fact: arity projection"
+emissionNeedle "ctor-ordinal" = "constructor-fact: ordinal projection"
+emissionNeedle "ctor-roster" = "constructor-fact: roster projection"
+emissionNeedle "ctor-raw-arity" = "constructor-fact: runtime arity"
+emissionNeedle "ctor-raw-order" = "constructor-fact: runtime roster"
+emissionNeedle "ctor-raw-owner" = "constructor-fact: runtime owner"
+emissionNeedle "ctor-raw-ambiguous" =
+  "constructor-fact: ambiguous owner ordinal"
 emissionNeedle "physical-mode" = "wasm-mode-mismatch"
 emissionNeedle "physical-paired-mode" = "wasm-mode-mismatch"
 emissionNeedle "physical-helper" = "missing-wasm-helper-prerequisite"
@@ -2507,7 +2520,7 @@ emissionText route victim =
       runtimeDomain (externDecls (parse "extern zzEmissionMissingRow : Int"))
     else
       PreludeFreeRuntime
-  let plan =
+  let original =
     corruptPhysicalPlan
       victim
       (corruptManifestPlan
@@ -2520,6 +2533,7 @@ emissionText route victim =
               (if victim == "target" then other else target)
               domain
               cp))))
+  let plan = corruptConstructorPlan victim original
   let requirement = manifestRequirement victim
   let li = makeEmitInput requirement domain [] [] 0 [] [] ""
   let wi = makeWasmEmitInput requirement domain []
@@ -3118,3 +3132,176 @@ test "origin validation checks each constructor owner and function" =
   expectEqual
     ["symbol origin: missing constructor owner B"]
     (validateSymbolOrigins cp)
+
+constructorTables : List (String, Int) ->
+  List (String, String) ->
+  CProgram ->
+  CProgram
+constructorTables ars tys (CProgram bs _ _ impls mc facts) =
+  CProgram bs ars tys impls mc facts
+
+constructorVictim : String -> CProgram
+constructorVictim "ctor-raw-arity" =
+  constructorTables
+    [("Some", 2), ("None", 0)]
+    [("Some", "Option"), ("None", "Option")]
+    (lowered """
+    data Option = Some Int | None
+    main = 42
+    """)
+constructorVictim "ctor-raw-order" =
+  constructorTables
+    [("Some", 1), ("None", 0)]
+    [("None", "Option"), ("Some", "Option")]
+    (lowered """
+    data Option = Some Int | None
+    main = 42
+    """)
+constructorVictim "ctor-raw-owner" =
+  constructorTables
+    [("Some", 1)]
+    [("Some", "User")]
+    (lowered """
+    data User = U
+    data Option = Some Int | None
+    main = 42
+    """)
+constructorVictim "ctor-raw-ambiguous" =
+  constructorTables
+    [("X", 0), ("C", 0)]
+    [("X", "A"), ("C", "B"), ("C", "A")]
+    (lowered """
+    data A = X | C
+    data B = C
+    main = 42
+    """)
+constructorVictim _ = lowered """
+  data T = A | B Int
+  main = 42
+  """
+
+corruptConstructorPlan : String -> EmitPlan -> EmitPlan
+corruptConstructorPlan victim plan =
+  let facts = plan.constructorFacts
+  let changed = match victim
+    "ctor-owner" => { facts | owners = omInsert "B" "Other" facts.owners }
+    "ctor-arity" => { facts | arities = omInsert "B" 2 facts.arities }
+    "ctor-ordinal" => { facts | ordinals = omInsert "B" 0 facts.ordinals }
+    "ctor-roster" => { facts | rosters = omInsert "T" ["B", "A"] facts.rosters }
+    _ => facts
+  { plan | constructorFacts = changed }
+
+test "constructor-fact corruptions refuse before artifacts on every renderer" =
+  match getEnv emissionProbeVar
+    Some _ => pass
+    None =>
+      expectEach
+        (flatMap
+          (route =>
+            map
+              (victim => ("\{route}/\{victim}", emissionRefused route victim))
+              [
+                "ctor-owner", "ctor-arity", "ctor-ordinal", "ctor-roster",
+                "ctor-raw-arity", "ctor-raw-order", "ctor-raw-owner",
+                "ctor-raw-ambiguous"
+              ])
+          emissionRoutes)
+
+test "constructor-fact passing neighbors produce text and empty gap censuses" =
+  match getEnv emissionProbeVar
+    Some _ => pass
+    None =>
+      expectEach
+        (map
+          (route => (
+            route,
+            if contains "census" route then
+              expectEqual "" (emissionText route "ctor-valid")
+            else
+              expectTextContainsAll
+                [
+                  if contains "llvm" route then
+                    "define i32 @mdk_program_main"
+                  else
+                    "(module",
+                ]
+                (emissionText route "ctor-valid"),
+          ))
+          emissionRoutes)
+
+test "constructor-fact renderer P to U to P and connected colliding controls" =
+  let p = lowered """
+    data User = Extra | Cons Int | Nil
+    main = 42
+    """
+  let u = lowered """
+    data Other = Nil | Cons Int Int
+    main = 42
+    """
+  let connected =
+    lowered
+      """
+    data Unrelated = Socket
+    data User = Extra | Cons Int | Nil
+    main = 42
+    """
+  let rendered route cp =
+    let target = if contains "llvm" route then LlvmBackend else WasmBackend
+    let plan = buildEmitPlan target PreludeFreeRuntime cp
+    if contains "llvm" route then
+      llvmStrict
+        (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
+        plan
+        cp
+    else
+      wasmStrict (makeWasmEmitInput RawUnchecked PreludeFreeRuntime []) plan cp
+  expectEach
+    (map
+      (route =>
+        let before = rendered route p
+        let unrelated = rendered route u
+        let after = rendered route p
+        (
+          route,
+          expectEach [
+            ("P nonempty", expectNotEqual "" before),
+            ("unrelated U", expectNotEqual "" unrelated),
+            ("P unchanged", expectEqual before after),
+            ("connected U", expectNotEqual "" (rendered route connected)),
+          ],
+        ))
+      ["llvm", "wasm"])
+
+test "qualified Ordering keeps runtime physical ordinals under declaration reversal" =
+  let raw =
+    constructorTables
+      [("Gt", 0), ("Eq", 0), ("Lt", 0)]
+      [
+        ("Gt", "__user__.Ordering"),
+        ("Eq", "__user__.Ordering"),
+        ("Lt", "__user__.Ordering"),
+      ]
+      (lowered
+        """
+    data Ordering = Gt | Eq | Lt
+    getLt u = Lt
+    getEq u = Eq
+    getGt u = Gt
+    main = 0
+    """)
+  let (CProgram bs ars tys impls mc facts) = raw
+  let cp = CProgram bs ars tys impls mc { facts | factSymbolOrigins = None }
+  let wat =
+    wasmStrict
+      (makeWasmEmitInput RawUnchecked PreludeFreeRuntime [])
+      (buildEmitPlan WasmBackend PreludeFreeRuntime cp)
+      cp
+  expectEach
+    (map
+      ((name, ordinal) => (
+        name,
+        expectEqual
+          1
+          (linesWith ("i32.const " ++ intToString ordinal) (funcBlock name wat)),
+      ))
+      [("getLt", 0), ("getEq", 1), ("getGt", 2)])
