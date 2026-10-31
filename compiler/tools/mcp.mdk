@@ -86,9 +86,9 @@ import tools.lsp.{
   unit,
 }
 import tools.lint_cmd.{
-  dropInactiveInternalCross,
+  dropInactiveInternalProject,
   internalDisabledFor,
-  quadToParseTriple,
+  quadSummaries,
   quadToSrc,
 }
 import frontend.ast.{Decl, Loc(..)}
@@ -105,10 +105,10 @@ import frontend.lexer.{tokenizeWithOffsetPairs}
 import tools.fmt.{formatSourceChecked}
 import tools.lint.{
   Finding,
-  allCrossFileRules,
+  allProjectRules,
   lintFileDiagTripleParsed,
-  mergeCrossFileIntoTriples,
-  runCrossFileRules,
+  mergeProjectIntoTriples,
+  runProjectRules,
   applySuppressionsMulti,
   applyFindingDeny,
   splitLintNames,
@@ -1506,26 +1506,27 @@ lintPathsToDiagQuads idx disable only deny paths =
         f)
     paths
 
--- Run the cross-file tier (`runCrossFileRules`) over the parses `quads`
--- already carries, honoring `only`/`disable` (inside `runCrossFileRules`),
--- inline `-- lint-disable-*` directives (`applySuppressionsMulti`, each
--- finding anchored to its own file), then `deny` promotion — mirroring
--- `lint_cmd.mdk`'s `crossFileJsonFindings` and the human-text
--- `runCrossFileReport` path.  Never renders; the caller folds the result into
--- the JSON triples via `mergeCrossFileIntoTriples`.
+-- Run the project-rule tier (`runProjectRules`) over the summaries of the
+-- parses `quads` already carries, honoring `only`/`disable` (inside
+-- `runProjectRules`), inline `-- lint-disable-*` directives
+-- (`applySuppressionsMulti`, each finding anchored to its own file), then
+-- `deny` promotion — mirroring `lint_cmd.mdk`'s `projectJsonFindings` and the
+-- human-text `runProjectReport` path.  Never renders; the caller folds the
+-- result into the JSON triples via `mergeProjectIntoTriples`.
 export
-crossFileMcpFindings : List String ->
+projectMcpFindings : StdlibIndex ->
+  List String ->
   List String ->
   List String ->
   List (String, String, List Diag, Positions, List Decl) ->
   <IO> List Finding
-crossFileMcpFindings disable only deny quads =
-  let parsedTriples = map quadToParseTriple quads
+projectMcpFindings idx disable only deny quads =
+  let summaries = map (quadSummaries only disable) quads
   let raw =
-    dropInactiveInternalCross
-      allCrossFileRules
+    dropInactiveInternalProject
+      allProjectRules
       False
-      (runCrossFileRules only disable parsedTriples)
+      (runProjectRules only disable idx summaries)
   let suppressed = applySuppressionsMulti (map quadToSrc quads) raw
   applyFindingDeny deny suppressed
 
@@ -1550,8 +1551,8 @@ anyDiagErr (d :: rest) = diagIsError d || anyDiagErr rest
 -- `findingToDiag` (inside `lintFileDiagTripleParsed`), which stamps the lint
 -- RULE NAME into the diagnostic's `code`. Cross-file rules participate too
 -- (#2701 leg 3, parity with `medaka lint --json`): `lintPathsToDiagQuads`
--- keeps each path's parse, `crossFileMcpFindings` runs `runCrossFileRules`
--- over them, and `mergeCrossFileIntoTriples` folds each finding into its own
+-- keeps each path's parse, `projectMcpFindings` runs `runProjectRules`
+-- over their summaries, and `mergeProjectIntoTriples` folds each finding into its own
 -- file's `diagnostics` array — its synthesized-entry fallback for a
 -- duplicate's partner file lying outside `paths` is unreachable here, since
 -- `paths` is exactly the set every cross-file rule runs over. `isError` is
@@ -1576,8 +1577,8 @@ runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
       Ok idx =>
         let quads = lintPathsToDiagQuads idx disable only deny paths
         let triples = map dropQuadParse quads
-        let cross = crossFileMcpFindings disable only deny quads
-        let merged = mergeCrossFileIntoTriples cross triples
+        let cross = projectMcpFindings idx disable only deny quads
+        let merged = mergeProjectIntoTriples cross triples
         toolTextResult (cjAllToJson merged) (anyTripleHasErr merged)
 
 -- ── medaka_test tool ──────────────────────────────────────────────────────────

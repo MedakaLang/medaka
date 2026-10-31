@@ -1,10 +1,10 @@
 # META
-source_lines=559
+source_lines=585
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
 -- suppression `Directive`s, the per-file `FileFacts` cell set, the `Rule` and
--- `CrossFileRule` records, the visitor `Ctx` and `Visitor` a walking rule
+-- `ProjectRule` records, the visitor `Ctx` and `Visitor` a walking rule
 -- registers, and the `StdlibIndex` value with its pure accessors.
 -- Leaf of the lint module family: it imports no rule, registry or runner module.
 
@@ -22,7 +22,8 @@ import tools.lint_index.{
   ProjectIndex,
   rowSig,
   emptyProjectIndex,
-  mkProjectIndex,
+  mkProjectIndexWith,
+  indexFingerprint,
   stdlibRowsNamed,
   stdlibValueNames,
   stdlibValueModules,
@@ -301,6 +302,33 @@ public export data RuleCheck =
   | WholeFile (StdlibIndex -> String -> FileFacts -> Positions -> List Decl -> List Finding)
   | Visits (StdlibIndex -> String -> FileFacts -> Positions -> List Decl -> List Visitor)
 
+-- What one project rule keeps of one file.  The type is closed on purpose: the
+-- shard codec (`tools/lint_cache.mdk`) matches it with no wildcard arm, so a new
+-- summary kind does not compile until its codec arm exists, and a summary that
+-- cannot be cached cannot be registered.
+public export data Summary =
+  DupOccs (List (Int, String, String))
+  deriving (Eq, Debug)
+
+-- A registered PROJECT rule: a relation between files, such as a body repeated
+-- in two of them.  `prSummarize` turns one file into a `Summary`, a pure
+-- function of that file, which is what a shard stores.  `prEvaluate` relates
+-- every file's summary of this rule (`(path, summary)`, file order) and
+-- returns the findings, each stamped with its own file in `loc`.  Evaluation
+-- runs on every run over cached and fresh summaries alike, so a finding that
+-- names file A because of file B is never cached under A.
+-- Adding a project rule = one `Summary` constructor with its codec arms, one
+-- rule module, one `allProjectRules` entry.
+public export data ProjectRule = ProjectRule {
+  meta : RuleMeta,
+  name : String,
+  descr : String,
+  severity : Severity,
+  enabled : Bool,
+  prSummarize : String -> FileFacts -> Positions -> List Decl -> Summary,
+  prEvaluate : ProjectIndex -> List (String, Summary) -> List Finding,
+}
+
 -- A registered rule.  `check` says how it inspects a file.  `fix`, when
 -- `Some f`, is a per-decl autofixer: given the syntactic constructor `Oracle`
 -- (built once from the whole target file's decls — used by the irrefutability
@@ -317,20 +345,6 @@ public export data Rule = Rule {
   enabled : Bool,
   check : RuleCheck,
   fix : Option (Oracle -> Decl -> Option (List Decl)),
-}
-
--- A registered CROSS-FILE rule.  Unlike `Rule` (one file at a time), `check`
--- sees EVERY target file's `(path, Positions, decls)` triple at once, so it can
--- relate definitions across files (e.g. duplicate bodies).  Findings stamp the
--- file path into their `loc`.  Adding a cross-file rule = one `check` fn + one
--- binding + one `allCrossFileRules` entry.
-public export data CrossFileRule = CrossFileRule {
-  meta : RuleMeta,
-  name : String,
-  descr : String,
-  severity : Severity,
-  enabled : Bool,
-  check : List (String, Positions, List Decl) -> List Finding,
 }
 
 -- The constructors of a `Rule`: the record's plain fields are read off the
@@ -369,16 +383,18 @@ ruleOf m check fix = Rule {
 }
 
 export
-mkCrossFileRule : RuleMeta ->
-  (List (String, Positions, List Decl) -> List Finding) ->
-  CrossFileRule
-mkCrossFileRule m check = CrossFileRule {
+mkProjectRule : RuleMeta ->
+  (String -> FileFacts -> Positions -> List Decl -> Summary) ->
+  (ProjectIndex -> List (String, Summary) -> List Finding) ->
+  ProjectRule
+mkProjectRule m summarize evaluate = ProjectRule {
   meta = m,
   name = m.name,
   descr = m.summary,
   severity = m.defaultSeverity,
   enabled = True,
-  check = check,
+  prSummarize = summarize,
+  prEvaluate = evaluate,
 }
 
 -- ── the stdlib reference index ────────────────────────────────────────────────
@@ -416,9 +432,8 @@ mkCrossFileRule m check = CrossFileRule {
 -- DEGRADATION.  Every failure mode — `MEDAKA_ROOT` unset and the exe-relative
 -- fallback wrong, no `stdlib/` directory, an unreadable or unparseable member —
 -- yields an EMPTY index (or one missing that member), never a crash and never a
--- wrong entry.  Same self-disabling shape `lintCacheCtx` uses for
--- `crossFileCacheSound` (`driver/medaka_cli.mdk`): a degraded run costs findings
--- it could have made, never findings it should not have made.
+-- wrong entry.  A degraded run costs findings it could have made, never
+-- findings it should not have made.
 --
 -- POSITIONAL, not a named-field record, and read ONLY through the helpers
 -- below.
@@ -437,11 +452,21 @@ emptyStdlibIndex : StdlibIndex
 emptyStdlibIndex = StdlibIndex emptyProjectIndex
 
 -- The index over rows: the stdlib's, then the project's (empty when no active
--- rule reads project rows).
+-- rule reads project rows), each scope with the digest of its files' row digests.
 export
-mkStdlibIndex : List IndexRow -> List IndexRow -> StdlibIndex
-mkStdlibIndex stdlibRows projectRows =
-  StdlibIndex (mkProjectIndex stdlibRows projectRows)
+mkStdlibIndex : String ->
+  String ->
+  List IndexRow ->
+  List IndexRow ->
+  StdlibIndex
+mkStdlibIndex stdDigest projDigest stdlibRows projectRows =
+  StdlibIndex (mkProjectIndexWith stdDigest projDigest stdlibRows projectRows)
+
+-- What a cached finding that read the index depends on (see
+-- `lint_index.indexFingerprint`).
+export
+stdlibIndexFingerprint : StdlibIndex -> String
+stdlibIndexFingerprint (StdlibIndex ix) = indexFingerprint ix
 
 -- The row index behind the handle, for a rule that declares `NeedsProjectIndex`.
 export
@@ -521,13 +546,15 @@ public export data StdlibIndexError = StdlibIndexError {
 
 -- `public export` (not bare `data`) because a Directive is one of the four
 -- things `medaka lint --cache` persists per file (#395): the cache round-trips
--- these values through JSON, so tools/lint_cache.mdk needs the constructors.
+-- these values through its sexp codec, so tools/lint_cache.mdk needs the constructors.
 -- lint-disable-next-line rule-clone-type
-public export data DirScope = DScopeLine Int | DScopeFile
+public export data DirScope = DScopeLine Int | DScopeFile deriving (Eq, Debug)
 
 -- one parsed directive: which source lines it covers + which rule ids it names
 -- (empty list = all rules).
-public export data Directive = Directive DirScope (List String)
+public export data Directive =
+  Directive DirScope (List String)
+  deriving (Eq, Debug)
 
 -- ── the per-clause floor blind spot (#2651) ────────────────────────────────────
 -- A function written as several pattern clauses is several `DFunDef`s sharing
@@ -550,10 +577,9 @@ public export data Directive = Directive DirScope (List String)
 -- single-clause function's two grains are the same occurrence, so the aggregate
 -- is emitted only for a group of two or more clauses.
 --
--- The occurrence TUPLE is unchanged, which is what keeps the `--cache` path in
--- lockstep for free: `fileDupOccs` is what a cached run persists per file, and
--- the aggregation happens strictly inside it, so `runCrossFileRulesFromOccs`
--- runs the identical join over the identical shape.
+-- The occurrence tuple is what the duplicate-body rule's `DupOccs` summary
+-- stores per file, and the aggregation happens strictly inside it, so a cached
+-- run joins the identical occurrences a fresh run would.
 public export data DupClause = DupClause {
   dcName : String,
   dcLine : Int,
@@ -569,7 +595,7 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseAlias ("driver" "diagnostic_value") "DV"))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "anyList" false))))
-(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndex" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibValueModules" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndexWith" false) (mem "indexFingerprint" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibValueModules" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
@@ -659,21 +685,26 @@ public export data DupClause = DupClause {
 (DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxOwn" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxDeclLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Public "Visitor" () ((variant "OnExpr" (ConPos (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnAnyExpr" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnDecl" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Public "RuleCheck" () ((variant "WholeFile" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))) (variant "Visits" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor")))))))))) ())
+(DData Public "Summary" () ((variant "DupOccs" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))) ())
+(DImpl true "Eq" ((TyCon "Summary")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "DupOccs" (PVar "__a0")) (PCon "DupOccs" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")))))))
+(DImpl true "Debug" ((TyCon "Summary")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "DupOccs" (PVar "__a0")) () (EBinOp "++" (ELit (LString "DupOccs ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))))))))
+(DData Public "ProjectRule" () ((variant "ProjectRule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "prSummarize" (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Summary")))))) (field "prEvaluate" (TyFun (TyCon "ProjectIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Summary"))) (TyApp (TyCon "List") (TyCon "Finding")))))))) ())
 (DData Public "Rule" () ((variant "Rule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyCon "RuleCheck")) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())
-(DData Public "CrossFileRule" () ((variant "CrossFileRule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DTypeSig true "mkRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))) (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
 (DFunDef false "mkRule" ((PVar "m") (PVar "check") (PVar "fix")) (EApp (EApp (EApp (EVar "ruleOf") (EVar "m")) (EApp (EVar "WholeFile") (EVar "check"))) (EVar "fix")))
 (DTypeSig true "mkVisitorRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))) (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
 (DFunDef false "mkVisitorRule" ((PVar "m") (PVar "visits") (PVar "fix")) (EApp (EApp (EApp (EVar "ruleOf") (EVar "m")) (EApp (EVar "Visits") (EVar "visits"))) (EVar "fix")))
 (DTypeSig false "ruleOf" (TyFun (TyCon "RuleMeta") (TyFun (TyCon "RuleCheck") (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
 (DFunDef false "ruleOf" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "FixableUnsafe") () (EVar "None")) (arm (PCon "SuggestOnly") () (EVar "None")) (arm (PCon "NotFixable") () (EVar "None")))))))
-(DTypeSig true "mkCrossFileRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))) (TyCon "CrossFileRule"))))
-(DFunDef false "mkCrossFileRule" ((PVar "m") (PVar "check")) (ERecordCreate "CrossFileRule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")))))
+(DTypeSig true "mkProjectRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Summary"))))) (TyFun (TyFun (TyCon "ProjectIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Summary"))) (TyApp (TyCon "List") (TyCon "Finding")))) (TyCon "ProjectRule")))))
+(DFunDef false "mkProjectRule" ((PVar "m") (PVar "summarize") (PVar "evaluate")) (ERecordCreate "ProjectRule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "prSummarize" (EVar "summarize")) (fa "prEvaluate" (EVar "evaluate")))))
 (DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyCon "ProjectIndex")))) ())
 (DTypeSig true "emptyStdlibIndex" (TyCon "StdlibIndex"))
 (DFunDef false "emptyStdlibIndex" () (EApp (EVar "StdlibIndex") (EVar "emptyProjectIndex")))
-(DTypeSig true "mkStdlibIndex" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "StdlibIndex"))))
-(DFunDef false "mkStdlibIndex" ((PVar "stdlibRows") (PVar "projectRows")) (EApp (EVar "StdlibIndex") (EApp (EApp (EVar "mkProjectIndex") (EVar "stdlibRows")) (EVar "projectRows"))))
+(DTypeSig true "mkStdlibIndex" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "StdlibIndex"))))))
+(DFunDef false "mkStdlibIndex" ((PVar "stdDigest") (PVar "projDigest") (PVar "stdlibRows") (PVar "projectRows")) (EApp (EVar "StdlibIndex") (EApp (EApp (EApp (EApp (EVar "mkProjectIndexWith") (EVar "stdDigest")) (EVar "projDigest")) (EVar "stdlibRows")) (EVar "projectRows"))))
+(DTypeSig true "stdlibIndexFingerprint" (TyFun (TyCon "StdlibIndex") (TyCon "String")))
+(DFunDef false "stdlibIndexFingerprint" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "indexFingerprint") (EVar "ix")))
 (DTypeSig true "projectIndexOf" (TyFun (TyCon "StdlibIndex") (TyCon "ProjectIndex")))
 (DFunDef false "projectIndexOf" ((PCon "StdlibIndex" (PVar "ix"))) (EVar "ix"))
 (DTypeSig true "stdlibIndexSize" (TyFun (TyCon "StdlibIndex") (TyCon "Int")))
@@ -694,7 +725,11 @@ public export data DupClause = DupClause {
 (DFunDef false "stdlibAmbiguousNames" ((PVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "n"))) (ELit (LInt 1))))) (EApp (EVar "stdlibIndexNames") (EVar "idx"))))
 (DData Public "StdlibIndexError" () ((variant "StdlibIndexError" (ConNamed (field "path" (TyCon "String")) (field "source" (TyCon "String")) (field "diagnostic" (TyCon "Diag"))))) ())
 (DData Public "DirScope" () ((variant "DScopeLine" (ConPos (TyCon "Int"))) (variant "DScopeFile" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "DirScope")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "DScopeLine" (PVar "__a0")) (PCon "DScopeLine" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "DScopeFile") (PCon "DScopeFile")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "DirScope")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "DScopeLine" (PVar "__a0")) () (EBinOp "++" (ELit (LString "DScopeLine ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "DScopeFile") () (ELit (LString "DScopeFile")))))))
 (DData Public "Directive" () ((variant "Directive" (ConPos (TyCon "DirScope") (TyApp (TyCon "List") (TyCon "String"))))) ())
+(DImpl true "Eq" ((TyCon "Directive")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Directive" (PVar "__a0") (PVar "__a1")) (PCon "Directive" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))))))))
+(DImpl true "Debug" ((TyCon "Directive")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Directive" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Directive ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))))))))
 (DData Public "DupClause" () ((variant "DupClause" (ConNamed (field "dcName" (TyCon "String")) (field "dcLine" (TyCon "Int")) (field "dcKey" (TyCon "String")) (field "dcCost" (TyCon "Int")) (field "dcPure" (TyCon "Bool"))))) ())
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Decl" true) (mem "Expr" false) (mem "Pat" false))))
@@ -704,7 +739,7 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseAlias ("driver" "diagnostic_value") "DV"))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "anyList" false))))
-(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndex" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibValueModules" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndexWith" false) (mem "indexFingerprint" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibValueModules" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
@@ -794,21 +829,26 @@ public export data DupClause = DupClause {
 (DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxOwn" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxDeclLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Public "Visitor" () ((variant "OnExpr" (ConPos (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnAnyExpr" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnDecl" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Public "RuleCheck" () ((variant "WholeFile" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))) (variant "Visits" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor")))))))))) ())
+(DData Public "Summary" () ((variant "DupOccs" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))) ())
+(DImpl true "Eq" ((TyCon "Summary")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "DupOccs" (PVar "__a0")) (PCon "DupOccs" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")))))))
+(DImpl true "Debug" ((TyCon "Summary")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "DupOccs" (PVar "__a0")) () (EBinOp "++" (ELit (LString "DupOccs ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))))))))
+(DData Public "ProjectRule" () ((variant "ProjectRule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "prSummarize" (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Summary")))))) (field "prEvaluate" (TyFun (TyCon "ProjectIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Summary"))) (TyApp (TyCon "List") (TyCon "Finding")))))))) ())
 (DData Public "Rule" () ((variant "Rule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyCon "RuleCheck")) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())
-(DData Public "CrossFileRule" () ((variant "CrossFileRule" (ConNamed (field "meta" (TyCon "RuleMeta")) (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DTypeSig true "mkRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))) (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
 (DFunDef false "mkRule" ((PVar "m") (PVar "check") (PVar "fix")) (EApp (EApp (EApp (EVar "ruleOf") (EVar "m")) (EApp (EVar "WholeFile") (EVar "check"))) (EVar "fix")))
 (DTypeSig true "mkVisitorRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))) (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
 (DFunDef false "mkVisitorRule" ((PVar "m") (PVar "visits") (PVar "fix")) (EApp (EApp (EApp (EVar "ruleOf") (EVar "m")) (EApp (EVar "Visits") (EVar "visits"))) (EVar "fix")))
 (DTypeSig false "ruleOf" (TyFun (TyCon "RuleMeta") (TyFun (TyCon "RuleCheck") (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "Rule")))))
 (DFunDef false "ruleOf" ((PVar "m") (PVar "check") (PVar "fix")) (ERecordCreate "Rule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")) (fa "fix" (EMatch (EFieldAccess (EVar "m") "fixability") (arm (PCon "Fixable") () (EVar "fix")) (arm (PCon "FixableUnsafe") () (EVar "None")) (arm (PCon "SuggestOnly") () (EVar "None")) (arm (PCon "NotFixable") () (EVar "None")))))))
-(DTypeSig true "mkCrossFileRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))) (TyCon "CrossFileRule"))))
-(DFunDef false "mkCrossFileRule" ((PVar "m") (PVar "check")) (ERecordCreate "CrossFileRule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "check" (EVar "check")))))
+(DTypeSig true "mkProjectRule" (TyFun (TyCon "RuleMeta") (TyFun (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Summary"))))) (TyFun (TyFun (TyCon "ProjectIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Summary"))) (TyApp (TyCon "List") (TyCon "Finding")))) (TyCon "ProjectRule")))))
+(DFunDef false "mkProjectRule" ((PVar "m") (PVar "summarize") (PVar "evaluate")) (ERecordCreate "ProjectRule" ((fa "meta" (EVar "m")) (fa "name" (EFieldAccess (EVar "m") "name")) (fa "descr" (EFieldAccess (EVar "m") "summary")) (fa "severity" (EFieldAccess (EVar "m") "defaultSeverity")) (fa "enabled" (EVar "True")) (fa "prSummarize" (EVar "summarize")) (fa "prEvaluate" (EVar "evaluate")))))
 (DData Public "StdlibIndex" () ((variant "StdlibIndex" (ConPos (TyCon "ProjectIndex")))) ())
 (DTypeSig true "emptyStdlibIndex" (TyCon "StdlibIndex"))
 (DFunDef false "emptyStdlibIndex" () (EApp (EVar "StdlibIndex") (EVar "emptyProjectIndex")))
-(DTypeSig true "mkStdlibIndex" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "StdlibIndex"))))
-(DFunDef false "mkStdlibIndex" ((PVar "stdlibRows") (PVar "projectRows")) (EApp (EVar "StdlibIndex") (EApp (EApp (EVar "mkProjectIndex") (EVar "stdlibRows")) (EVar "projectRows"))))
+(DTypeSig true "mkStdlibIndex" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "StdlibIndex"))))))
+(DFunDef false "mkStdlibIndex" ((PVar "stdDigest") (PVar "projDigest") (PVar "stdlibRows") (PVar "projectRows")) (EApp (EVar "StdlibIndex") (EApp (EApp (EApp (EApp (EVar "mkProjectIndexWith") (EVar "stdDigest")) (EVar "projDigest")) (EVar "stdlibRows")) (EVar "projectRows"))))
+(DTypeSig true "stdlibIndexFingerprint" (TyFun (TyCon "StdlibIndex") (TyCon "String")))
+(DFunDef false "stdlibIndexFingerprint" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "indexFingerprint") (EVar "ix")))
 (DTypeSig true "projectIndexOf" (TyFun (TyCon "StdlibIndex") (TyCon "ProjectIndex")))
 (DFunDef false "projectIndexOf" ((PCon "StdlibIndex" (PVar "ix"))) (EVar "ix"))
 (DTypeSig true "stdlibIndexSize" (TyFun (TyCon "StdlibIndex") (TyCon "Int")))
@@ -829,5 +869,9 @@ public export data DupClause = DupClause {
 (DFunDef false "stdlibAmbiguousNames" ((PVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "n"))) (ELit (LInt 1))))) (EApp (EVar "stdlibIndexNames") (EVar "idx"))))
 (DData Public "StdlibIndexError" () ((variant "StdlibIndexError" (ConNamed (field "path" (TyCon "String")) (field "source" (TyCon "String")) (field "diagnostic" (TyCon "Diag"))))) ())
 (DData Public "DirScope" () ((variant "DScopeLine" (ConPos (TyCon "Int"))) (variant "DScopeFile" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "DirScope")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "DScopeLine" (PVar "__a0")) (PCon "DScopeLine" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "DScopeFile") (PCon "DScopeFile")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "DirScope")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "DScopeLine" (PVar "__a0")) () (EBinOp "++" (ELit (LString "DScopeLine ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "DScopeFile") () (ELit (LString "DScopeFile")))))))
 (DData Public "Directive" () ((variant "Directive" (ConPos (TyCon "DirScope") (TyApp (TyCon "List") (TyCon "String"))))) ())
+(DImpl true "Eq" ((TyCon "Directive")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Directive" (PVar "__a0") (PVar "__a1")) (PCon "Directive" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))))))))
+(DImpl true "Debug" ((TyCon "Directive")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Directive" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Directive ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))))))))
 (DData Public "DupClause" () ((variant "DupClause" (ConNamed (field "dcName" (TyCon "String")) (field "dcLine" (TyCon "Int")) (field "dcKey" (TyCon "String")) (field "dcCost" (TyCon "Int")) (field "dcPure" (TyCon "Bool"))))) ())

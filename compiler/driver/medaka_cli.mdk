@@ -290,26 +290,14 @@ import tools.lint.{
   Finding,
   Directive,
   applyFixes,
-  runCrossFileRules,
-  runCrossFileRulesFromOccs,
-  crossFileCacheSound,
-  fileDupOccs,
   allRuleNames,
   applyFindingFilters,
   applyFindingDeny,
   isFindingError,
   lintFileDiagTriple,
   splitLintNames,
-  stdlibFingerprint,
 }
-import tools.lint_cache.{
-  LintEntry(..),
-  contentHashOf,
-  ruleSetStamp,
-  cacheDirOf,
-  loadEntry,
-  storeEntries,
-}
+import tools.lint_cache.{storeEntries}
 import tools.lint_baseline.{
   LintBaseline,
   readLintBaseline,
@@ -343,8 +331,7 @@ import tools.lint_cmd.{
   runLintJsonCmd,
   lintFilesToDiagTriples,
   baselineFileCodes,
-  runCrossFileReport,
-  runCrossFileReportCached,
+  runProjectReport,
   resolveLintTargets,
   lintFilesGo,
   LintRun(..),
@@ -4068,8 +4055,8 @@ runLintTargets a =
   -- `indexForRun` builds it from the needs of the rules that survive
   -- `--only`/`--disable`, and it self-disables to empty when the stdlib cannot
   -- be read.  `--cache` builds for the whole roster: it persists
-  -- `lintFileFresh`'s full-roster findings past this process's flag choices
-  -- (under `--cache` `lintFileFresh` runs `allRules`, unfiltered), so an entry
+  -- `lintEntryOf`'s full-roster findings past this process's flag choices
+  -- (under `--cache` `lintEntryOf` runs `allRules`, unfiltered), so an entry
   -- computed from a degraded index would silently omit a rule's findings for
   -- every later `--cache` read.
   let indexResult = indexForRun (flag "--cache" a) onlyNames disableNames files
@@ -4135,18 +4122,13 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
       _ :: _ :: _ => True
       _ => False
     let cacheCtx = lintCacheCtx (flag "--cache" a) fixMode
-    -- `parsed` carries each readable target's (path, src, Positions, decls) out of
-    -- the per-file pass, for the parse-based cross-file tier (runCrossFileReport).
-    -- It is EMPTY whenever `crossFileCacheSound` holds, with or without --cache:
-    -- the tier is then reached through the entries' occurrences instead (see
-    -- runCrossFileReportCached).
     let run = LintRun {
       lrInternal = internalFlag,
       lrFix = fixMode,
       lrUnsafe = flag "--unsafe-fixes" a,
       lrMulti = multiFile,
     }
-    let (perFileErr, entries, parsed) =
+    let (perFileErr, entries) =
       lintFilesGo
         stdlibIdx
         run
@@ -4157,34 +4139,19 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
         cacheCtx
         files
         False
-    -- Cross-file rules only run in the multi-file REPORT path; a single target or
+    -- Project rules only run in the multi-file REPORT path; a single target or
     -- --fix produces nothing (need ≥2 files), keeping single-file output identical.
     let crossErr =
-      if not (multiFile && not fixMode) then
+      if multiFile && not fixMode then
+        runProjectReport
+          stdlibIdx
+          internalFlag
+          disableNames
+          onlyNames
+          denyNames
+          entries
+      else
         False
-      else match cacheCtx
-        Some _ =>
-          runCrossFileReportCached
-            internalFlag
-            disableNames
-            onlyNames
-            denyNames
-            entries
-        None =>
-          if crossFileCacheSound then
-            runCrossFileReportCached
-              internalFlag
-              disableNames
-              onlyNames
-              denyNames
-              entries
-          else
-            runCrossFileReport
-              internalFlag
-              disableNames
-              onlyNames
-              denyNames
-              parsed
     -- Persist AFTER reporting: the cache is an optimisation, so a failure to
     -- write one must never change what a run says or whether it exits 0.
     let _ = match cacheCtx

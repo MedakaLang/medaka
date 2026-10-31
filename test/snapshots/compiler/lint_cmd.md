@@ -1,12 +1,12 @@
 # META
-source_lines=1155
+source_lines=1070
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cmd.mdk — the `medaka lint` engine.
 --
 -- Everything the verb does once its flags are already parsed: resolving the
 -- target set, the per-file pass (fresh or from the `--cache` shards), the
--- cross-file tier, baseline promotion at application time, and the `--json`
+-- project-rule tier, baseline promotion at application time, and the `--json`
 -- envelope.  `medaka_cli.mdk` keeps `runLintCmd` and the flag/target
 -- assertions because they call `requireArgs`/`optDefault`/`dieMsg`, which are
 -- defined there and shared with the other verbs; importing them here would
@@ -16,7 +16,7 @@ stages=DESUGAR,MARK
 -- `medaka_cli.mdk` in their `sources`.  `lintHelpText` lives here, with the
 -- `--list-rules`/`--explain` views of the registry.
 --
--- Rule implementations are not here either: the `Rule`/`CrossFileRule` types
+-- Rule implementations are not here either: the `Rule`/`ProjectRule` types
 -- live in `tools/lint_core.mdk`, the rules in the `tools/lint_rule_*` modules
 -- listed by `tools/lint_registry.mdk`, the per-file runner in
 -- `tools/lint_walk.mdk`, the cache format in `tools/lint_cache.mdk`, and the
@@ -52,7 +52,7 @@ import support.stage_count.{stageExit}
 import tools.lint.{
   Applicability(..),
   Category(..),
-  CrossFileRule(..),
+  ProjectRule(..),
   Directive,
   Finding,
   Fixability(..),
@@ -61,10 +61,11 @@ import tools.lint.{
   Rule(..),
   RuleMeta(..),
   Scope(..),
+  Summary,
   applicabilityText,
   maxApplicability,
   ruleMetaName,
-  allCrossFileRules,
+  allProjectRules,
   StdlibIndex,
   allRules,
   applyFindingDeny,
@@ -72,9 +73,8 @@ import tools.lint.{
   applySuppressionsDirs,
   applySuppressionsMulti,
   applySuppressionsMultiDirs,
-  crossFileCacheSound,
   factDirectives,
-  factDupOccs,
+  fileSummaries,
   findingToDiag,
   fixPassLimit,
   fixSource,
@@ -84,20 +84,25 @@ import tools.lint.{
   lintFileDiagTriple,
   lintFileDiagTripleParsed,
   lintParseSource,
-  lintProgramFacts,
+  lintProgramRanked,
+  indexKeyFor,
+  rankedIndexRules,
+  splitByIndex,
+  mkFileFacts,
   mkFileFactsAt,
   projectWildMods,
-  crossFileSelected,
+  projectRuleSelected,
+  ranked,
   selectRules,
-  mergeCrossFileIntoTriples,
-  runCrossFileRules,
-  runCrossFileRulesFromOccs,
-  stdlibFingerprint,
+  mergeProjectIntoTriples,
+  runProjectRules,
 }
 import tools.lint_cache.{
   LintEntry(..),
+  ShardLoad(..),
   cacheDirOf,
   contentHashOf,
+  entryFindings,
   loadEntry,
   ruleSetStamp,
 }
@@ -152,12 +157,12 @@ lintHelpText = stringConcat [
 ]
 
 -- One distinct rule name with the tiers it is registered in.  `rule-duplicate-body`
--- is registered twice (a same-file `Rule` and the `CrossFileRule`) under one name
+-- is registered twice (a same-file `Rule` and the `ProjectRule`) under one name
 -- and appears once here, with both tiers; its per-file metadata is the row's.
 export data RuleRow = RuleRow { rrMeta : RuleMeta, rrTiers : List Tier }
 
 -- Which registry a rule is registered in: the per-file `allRules`, the
--- cross-file `allCrossFileRules`, or both.
+-- project-rule `allProjectRules`, or both.
 export data Tier = TierFile | TierCross deriving (Eq)
 
 tierText : Tier -> String
@@ -168,7 +173,7 @@ export
 allRuleRows : List RuleRow
 allRuleRows =
   let fileMetas = map ruleMetaOf allRules
-  let crossMetas = map crossMetaOf allCrossFileRules
+  let crossMetas = map crossMetaOf allProjectRules
   let fileNames = map ruleMetaName fileMetas
   let crossNames = map ruleMetaName crossMetas
   let crossOnly =
@@ -179,7 +184,7 @@ allRuleRows =
 ruleMetaOf : Rule -> RuleMeta
 ruleMetaOf r = r.meta
 
-crossMetaOf : CrossFileRule -> RuleMeta
+crossMetaOf : ProjectRule -> RuleMeta
 crossMetaOf r = r.meta
 
 mkRow : RuleMeta -> List Tier -> RuleRow
@@ -383,18 +388,10 @@ docBody doc = match Str.indexOf "\n\nBefore:" doc
     [Str.take i doc, "", "```"] ++ Str.lines (Str.drop (i + 2) doc) ++ ["```"]
 
 -- Resolve `--cache` to `Some (cacheDir, ruleSetStamp)`, or `None` to run
--- uncached.  TWO reasons this declines, both deliberate (#395):
---
---   * `--fix` (and `--json`, which never reaches here) is out of v1 scope. --fix
---     REWRITES the files whose content is the cache key, and ESLint's
---     --cache+--fix is a known sharp edge; --json is a separate per-file path.
---     Combining --cache with either is a silent no-op, not an error.
---   * `crossFileCacheSound` is False — someone added a second cross-file rule,
---     whose per-file inputs nothing caches.  Under --cache that rule would
---     silently not run.  So --cache turns itself off instead, costing a slower
---     lint rather than a wrong one.  (No warning: this is a correct, quiet
---     fallback, and a lint that prints compiler-internal chatter to stdout would
---     break every caller that diffs its output.)
+-- uncached.  `--fix` (and `--json`, which never reaches here) is out of v1
+-- scope: --fix REWRITES the files whose content is the cache key, and ESLint's
+-- --cache+--fix is a known sharp edge; --json is a separate per-file path.
+-- Combining --cache with either is a silent no-op, not an error.
 --
 -- The cache dir hangs off the project root — the same `medaka.toml` walk-up the
 -- rest of the CLI uses, which falls back to the cwd when there is no manifest
@@ -403,32 +400,20 @@ docBody doc = match Str.indexOf "\n\nBefore:" doc
 -- pre-commit hook wants).  A cache dir that resolves somewhere unexpected costs
 -- misses, never wrong answers.
 --
--- The stamp folds in `stdlib.stdlibFingerprint` alongside `ruleSetStamp`
--- (#2327): `rule-stdlib-reimpl` reads the stdlib source tree from disk at
--- runtime (`buildStdlibIndexResult`), content `ruleSetStamp`'s binary hash never
--- observes. Without this, editing `stdlib/list.mdk` would leave every OTHER
--- file's cached findings silently answering with the pre-edit stdlib —
--- exactly the "wrong hit" `lint_cache.mdk`'s invariant forbids. Folding it
--- into every shard's stamp (rather than skipping caching only for this one
--- rule) is the smaller fix: shards are per-FILE, not per-rule, so declining
--- caching "for this rule" would mean declining it for every file, which is
--- declining it outright.
+-- The stamp is the binary alone.  What the declaration index contributes is a
+-- separate key on the shard's index-reading findings (`indexKeyFor`), so an
+-- edit to a stdlib file re-runs only the rules that read the index.
 export
 lintCacheCtx : Bool -> Bool -> <IO> Option (String, String)
 lintCacheCtx False _ = None
 lintCacheCtx True True = None
-lintCacheCtx True False
-  | not crossFileCacheSound = None
-  | otherwise =
-    let root = findProjectRootOrSelf (canonicalizePath ".")
-    let binStamp = ruleSetStamp ()
-    -- An empty stamp means the binary could not be read, so the rule set cannot
-    -- be identified — the one input that makes a hit meaningful is missing.
-    -- Decline rather than share a cache across unknown rule sets.
-    if binStamp == "" then
-      None
-    else
-      Some (cacheDirOf root, "\{binStamp}.\{stdlibFingerprint}")
+lintCacheCtx True False =
+  let root = findProjectRootOrSelf (canonicalizePath ".")
+  let binStamp = ruleSetStamp ()
+  -- An empty stamp means the binary could not be read, so the rule set cannot
+  -- be identified — the one input that makes a hit meaningful is missing.
+  -- Decline rather than share a cache across unknown rule sets.
+  if binStamp == "" then None else Some (cacheDirOf root, binStamp)
 
 -- `medaka lint --json`: run the lint pipeline over every resolved target file
 -- and emit the SAME `{"files":[{"file":...,"diagnostics":[...]}]}` envelope
@@ -437,15 +422,15 @@ lintCacheCtx True False
 -- (inside `lintFileDiagTripleParsed`), which stamps the lint RULE NAME into
 -- the diagnostic's `code` field.  Cross-file rules DO participate (#2701
 -- leg 3): the per-file pass already parses every target
--- (`lintFileDiagTripleParsed`), and `--json` runs `runCrossFileRules` over
--- those parses (the human-text path reaches the tier from entries instead,
--- see `runCrossFileReportCached`).  Each
+-- (`lintFileDiagTripleParsed`), and `--json` summarizes those parses and
+-- evaluates the project rules over them (the human-text path reaches the tier
+-- from entries instead, see `runProjectReport`).  Each
 -- resulting `Finding` is folded into its OWN file's `diagnostics` array via
--- `mergeCrossFileIntoTriples` (never a new top-level key).  A duplicate whose
+-- `mergeProjectIntoTriples` (never a new top-level key).  A duplicate whose
 -- partner file lay outside `files` would be folded into a synthesized entry
--- for that file instead — `mergeCrossFileIntoTriples`'s own defensive
+-- for that file instead — `mergeProjectIntoTriples`'s own defensive
 -- fallback, unreachable today since `files` is exactly the set every
--- cross-file rule here runs over.  `--fix` never reaches this function.
+-- project rule here runs over.  `--fix` never reaches this function.
 -- Exit 1 iff any diagnostic is a
 -- hard error (severity 1) — matches `runCheckJsonCmd`'s convention.
 export
@@ -469,38 +454,43 @@ runLintJsonCmd idx internalFlag disableNames onlyNames denyNames baseCtx files =
       files
   let triples = map dropQuadParse quads
   let cross =
-    crossFileJsonFindings internalFlag disableNames onlyNames denyNames quads
-  let merged = mergeCrossFileIntoTriples cross triples
+    projectJsonFindings idx internalFlag disableNames onlyNames denyNames quads
+  let merged = mergeProjectIntoTriples cross triples
   let _ = putStr (cjAllToJson merged)
   if anyList cjLintTripleHasErr merged then stageExit 1
 
--- The cross-file tier's JSON-path inputs, reused from the per-file parses
+-- The project-rule tier's JSON-path inputs, reused from the per-file parses
 -- already sitting in `quads` (#394's no-second-read rule applies here too).
--- Mirrors `runCrossFileReport`: `--only`/`--disable` are honored inside
--- `runCrossFileRules`, inline `-- lint-disable-*` directives are applied via
+-- Mirrors `runProjectReport`: `--only`/`--disable` are honored inside
+-- `runProjectRules`, inline `-- lint-disable-*` directives are applied via
 -- `applySuppressionsMulti` (each finding anchors to its own file), then
 -- `--deny` promotion.  Unlike the text path this never renders — the caller
 -- folds the result into the JSON triples instead.  Exported so
 -- `compiler/tools/lint_test.mdk`'s renderer-parity property can call the SAME
 -- function `runLintJsonCmd` calls, rather than a reimplementation.
 export
-crossFileJsonFindings : Bool ->
+projectJsonFindings : StdlibIndex ->
+  Bool ->
   List String ->
   List String ->
   List String ->
   List (String, String, List Diag, Positions, List Decl) ->
   <IO> List Finding
-crossFileJsonFindings internalFlag disableNames onlyNames denyNames quads =
-  let parsedTriples = map quadToParseTriple quads
-  let raw = runCrossFileRules onlyNames disableNames parsedTriples
-  let active = dropInactiveInternalCross allCrossFileRules internalFlag raw
+projectJsonFindings idx internalFlag disableNames onlyNames denyNames quads =
+  let summaries = map (quadSummaries onlyNames disableNames) quads
+  let raw = runProjectRules onlyNames disableNames idx summaries
+  let active = dropInactiveInternalProject allProjectRules internalFlag raw
   let suppressed = applySuppressionsMulti (map quadToSrc quads) active
   applyFindingDeny denyNames suppressed
 
+-- A parsed file's project-rule summaries, from the parse alone.
 export
-quadToParseTriple : (String, String, List Diag, Positions, List Decl) ->
-  (String, Positions, List Decl)
-quadToParseTriple (path, _, _, pos, decls) = (path, pos, decls)
+quadSummaries : List String ->
+  List String ->
+  (String, String, List Diag, Positions, List Decl) ->
+  (String, List (String, Summary))
+quadSummaries only disable (path, src, _, pos, decls) =
+  (path, fileSummaries only disable path (mkFileFacts src decls pos) pos decls)
 
 export
 quadToSrc : (String, String, List Diag, Positions, List Decl) ->
@@ -516,7 +506,7 @@ dropQuadParse (path, src, diags, _, _) = (path, src, diags)
 -- along untouched — the cross-file tier's input.  Mirrors `lintFilesGo`'s
 -- explicit recursion — this codebase sequences an `<IO>` list traversal by
 -- hand, not via `map` over an effectful function.  Exported for the same
--- reason as `crossFileJsonFindings` above.
+-- reason as `projectJsonFindings` above.
 export
 lintFilesToDiagQuads : StdlibIndex ->
   Bool ->
@@ -607,82 +597,50 @@ baselineFileCodes : String ->
 baselineFileCodes cwd (path, _, diags) =
   (baselineKeyOf cwd path, map diagCodeOf diags)
 
--- Run the cross-file rule tier over the whole set from the parses the per-file
--- pass produced.  This is the fallback route: the human-text path takes it only
--- when `crossFileCacheSound` is False (a registry with a second cross-file rule);
--- otherwise it reaches the tier through `runCrossFileReportCached` over entries.
--- Findings render AFTER the per-file output under a `cross-file:` header.
--- --only/--disable are honored inside `runCrossFileRules`; --deny promotion is
--- applied here (mirrors the per-file path).  Returns whether any finding is an
--- error severity (feeds the exit code).
-export
-runCrossFileReport : Bool ->
-  List String ->
-  List String ->
-  List String ->
-  List (String, String, Positions, List Decl) ->
-  <IO> Bool
-runCrossFileReport internalFlag disableNames onlyNames denyNames parsed =
-  let triples = map parsedToTriple parsed
-  let raw =
-    dropInactiveInternalCross
-      allCrossFileRules
-      internalFlag
-      (runCrossFileRules onlyNames disableNames triples)
-  -- Honor inline `-- lint-disable-*` directives on cross-file findings too:
-  -- each finding anchors to its own file, so filter against that file's own
-  -- directives (recovered from its source) before the CLI flag filters.
-  let suppressed = applySuppressionsMulti (map parsedToSrc parsed) raw
-  reportCrossFindings (applyFindingDeny denyNames suppressed)
-
--- The --cache counterpart of `runCrossFileReport` (#395).  Identical in every
--- observable way; the ONLY difference is its input, because a cache hit has no
--- parse to give the tier:
---   * findings come from `runCrossFileRulesFromOccs` over every file's
---     occurrences — cached ones and freshly-computed ones alike — instead of
---     from `runCrossFileRules` over parses.  Both run the SAME `dupJoin`.
---   * directives are the entries' own (already parsed, cached or fresh) rather
---     than re-lexed from source.
+-- Run the project-rule tier over the whole set from the summaries the per-file
+-- pass produced, cached and fresh alike: a cache hit has no parse to give the
+-- tier, and a summary is all the tier reads.  Findings render AFTER the
+-- per-file output under a `cross-file:` header.  --only/--disable are honored
+-- inside `runProjectRules`; --deny promotion is applied here (mirrors the
+-- per-file path).  Directives are the entries' own (already parsed, cached or
+-- fresh).  Returns whether any finding is an error severity (feeds the exit
+-- code).
 --
--- the join runs every time, over ALL files.  Only its per-file INPUTS are
+-- The evaluation runs every time, over ALL files.  Only its per-file INPUTS are
 -- cached.  A duplicate-body finding names file A because of file B, so caching
 -- these findings would leave A's finding standing after B stopped duplicating
 -- it — A is unchanged, so A hits.  Scenario 3 of
 -- test/diff_compiler_lint_cache.sh is exactly that edit and exists to catch
--- anyone who tries it.  Callers must have checked `crossFileCacheSound`
--- (`lintCacheCtx` does).
+-- anyone who tries it.
 export
-runCrossFileReportCached : Bool ->
+runProjectReport : StdlibIndex ->
+  Bool ->
   List String ->
   List String ->
   List String ->
   List LintEntry ->
   <IO> Bool
-runCrossFileReportCached internalFlag disableNames onlyNames denyNames entries =
+runProjectReport idx internalFlag disableNames onlyNames denyNames entries =
   let raw =
-    dropInactiveInternalCross
-      allCrossFileRules
+    dropInactiveInternalProject
+      allProjectRules
       internalFlag
-      (runCrossFileRulesFromOccs
-        onlyNames
-        disableNames
-        (flatMap entryOccs entries))
+      (runProjectRules onlyNames disableNames idx (map entrySummaries entries))
   let suppressed = applySuppressionsMultiDirs (map entryDirTable entries) raw
-  reportCrossFindings (applyFindingDeny denyNames suppressed)
+  reportProjectFindings (applyFindingDeny denyNames suppressed)
 
-entryOccs : LintEntry -> List (String, Int, String, String)
-entryOccs e = e.dupOccs
+entrySummaries : LintEntry -> (String, List (String, Summary))
+entrySummaries e = (e.path, e.summaries)
 
 entryDirTable : LintEntry -> (String, List Directive)
 entryDirTable e = (e.path, e.directives)
 
--- Shared tail of both cross-file report paths: render (after the per-file
+-- Tail of the project-rule report: render (after the per-file
 -- output, under a `cross-file:` header) and report whether anything was an
--- error.  One renderer, so the cached and uncached paths cannot format
--- differently.
-reportCrossFindings : List Finding -> <IO> Bool
-reportCrossFindings [] = False
-reportCrossFindings findings =
+-- error.
+reportProjectFindings : List Finding -> <IO> Bool
+reportProjectFindings [] = False
+reportProjectFindings findings =
   let _ = putStrLn ""
   let _ = putStrLn "cross-file:"
   let _ = putStrLn (joinNl (map renderCrossFinding findings))
@@ -697,19 +655,6 @@ renderCrossFinding f = ppDiagCliSrc "" (locFileOf f.loc) (findingToDiag f)
 locFileOf : Option Loc -> String
 locFileOf (Some (Loc file _ _ _ _)) = file
 locFileOf None = ""
-
--- Read each readable target's source into `(path, src)` for inline-directive
--- recovery in the cross-file report path.  Unreadable files are skipped.
--- Projections off the threaded (path, src, Positions, decls) quad (#394): the
--- cross-file rule tier wants (path, Positions, decls), and the inline-directive
--- suppression pass wants (path, src).  Both are otherwise re-derived from disk by
--- `parseLintFiles` / `readLintSrcs`, which this replaces.
-parsedToTriple : (String, String, Positions, List Decl) ->
-  (String, Positions, List Decl)
-parsedToTriple (path, _, pos, decls) = (path, pos, decls)
-
-parsedToSrc : (String, String, Positions, List Decl) -> (String, String)
-parsedToSrc (path, src, _, _) = (path, src)
 
 -- Resolve file args to a concrete list of .mdk paths.
 -- Empty args → project root mode (find medaka.toml, list top-level .mdk files).
@@ -784,30 +729,30 @@ firstInactiveTarget named (f :: rest) =
     Some
       "internal rule \{named} is not active for `\{f}`; pass --internal or set `[lint] internal = true` in the project's medaka.toml"
 
--- The cross-file tier sees every target at once, so its internal-scope rules
+-- The project-rule tier sees every target at once, so its internal-scope rules
 -- cannot be switched off by a per-file disable list.  Their findings are
 -- filtered instead, by whether internal rules are active for the file each
 -- finding lands in.
 export
-dropInactiveInternalCross : List CrossFileRule ->
+dropInactiveInternalProject : List ProjectRule ->
   Bool ->
   List Finding ->
   <IO> List Finding
-dropInactiveInternalCross _ _ [] = []
-dropInactiveInternalCross rules internalFlag (f :: rest) =
+dropInactiveInternalProject _ _ [] = []
+dropInactiveInternalProject rules internalFlag (f :: rest) =
   let keep =
-    if isInternalCrossRule rules f.rule then
+    if isInternalProjectRule rules f.rule then
       findingInActiveProject internalFlag f
     else
       True
-  let kept = dropInactiveInternalCross rules internalFlag rest
+  let kept = dropInactiveInternalProject rules internalFlag rest
   if keep then f :: kept else kept
 
-isInternalCrossRule : List CrossFileRule -> String -> Bool
-isInternalCrossRule rules name = anyList (isInternalCrossNamed name) rules
+isInternalProjectRule : List ProjectRule -> String -> Bool
+isInternalProjectRule rules name = anyList (isInternalProjectNamed name) rules
 
-isInternalCrossNamed : String -> CrossFileRule -> Bool
-isInternalCrossNamed name r = r.name == name && isInternalScope r.meta.scope
+isInternalProjectNamed : String -> ProjectRule -> Bool
+isInternalProjectNamed name r = r.name == name && isInternalScope r.meta.scope
 
 findingInActiveProject : Bool -> Finding -> <IO> Bool
 findingInActiveProject internalFlag f = match f.loc
@@ -856,18 +801,13 @@ public export data LintRun = LintRun {
 }
 
 -- Fold over file list, running lint on each.  acc = whether any SevError seen.
--- Returns (anyError, entries, parsedFiles).
+-- Returns (anyError, entries).
 --
 -- `entries` is every readable target's LintEntry — the per-file lint result
--- (findings + duplicate-body occurrences + inline directives), however obtained.
+-- (findings + project-rule summaries + inline directives), however obtained.
 -- Under --cache these are what gets persisted, and the dirty ones are the files
--- that actually had to be linted this run.
---
--- `parsedFiles` feeds the parse-based cross-file tier (`runCrossFileReport`).
--- It is empty whenever `crossFileCacheSound` holds (the tier is reached from
--- `entries` instead, whether or not --cache is on), in --fix mode, which runs
--- no cross-file rules, and under --cache.  Not accumulating it is also why a
--- warm run holds no decls in memory.
+-- that actually had to be linted this run.  The project-rule tier reads the
+-- entries, never a parse, so a warm run holds no decls in memory.
 --
 -- The per-file printing order is unchanged: each file's report is emitted
 -- (strictly) before the recursion.
@@ -881,8 +821,8 @@ lintFilesGo : StdlibIndex ->
   Option (String, String) ->
   List String ->
   Bool ->
-  <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
-lintFilesGo _ _ _ _ _ _ _ [] acc = (acc, [], [])
+  <IO> (Bool, List LintEntry)
+lintFilesGo _ _ _ _ _ _ _ [] acc = (acc, [])
 lintFilesGo idx run disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest) acc =
   let fileDisable = disableNames ++ internalDisabledFor run.lrInternal f
   if run.lrFix then
@@ -898,7 +838,7 @@ lintFilesGo idx run disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest
       rest
       (acc || hadErr)
   else
-    let (hadErr, entries, parsed) =
+    let (hadErr, entries) =
       lintOneFileReport
         idx
         run.lrMulti
@@ -908,7 +848,7 @@ lintFilesGo idx run disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest
         baseCtx
         cacheCtx
         f
-    let (restErr, restEntries, restParsed) =
+    let (restErr, restEntries) =
       lintFilesGo
         idx
         run
@@ -919,16 +859,20 @@ lintFilesGo idx run disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest
         cacheCtx
         rest
         (acc || hadErr)
-    (restErr, entries ++ restEntries, parsed ++ restParsed)
+    (restErr, entries ++ restEntries)
 
 -- Lint a single file in report mode.
 -- multiFile=False: output is byte-for-byte identical to single-file v1 behavior.
 -- multiFile=True: prints "path:" header before findings (only when there are findings).
--- Returns (hadError, parsed) where `parsed` is a 0-or-1 element list carrying this
--- file's (path, src, Positions, decls) for the parse-based cross-file tier
--- (`runCrossFileReport`).  It is empty when the file could not be read, and
--- whenever `crossFileCacheSound` holds, since that tier is then reached from
--- the entries.
+-- Returns (hadError, entries): the 0-or-1 element list carries this file's
+-- LintEntry for the project-rule tier and the shard writer.
+--
+-- The `--cache` decision, in full: a HIT requires the shard to decode, and to
+-- agree on the format version, the rule-set stamp, the path, the content hash
+-- AND the index key.  Agreeing on all but the index key is a partial hit: the
+-- file is parsed and only the index-reading rules re-run.  Anything else is a
+-- miss.  `lint_cache.decodeEntry` owns that check; this function only decides
+-- when to ask.
 lintOneFileReport : StdlibIndex ->
   Bool ->
   List String ->
@@ -937,19 +881,22 @@ lintOneFileReport : StdlibIndex ->
   Option (String, LintBaseline) ->
   Option (String, String) ->
   String ->
-  <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
+  <IO> (Bool, List LintEntry)
 lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCtx target =
   match readSource target
     Err msg =>
       let _ = ePutStrLn msg
-      (True, [], [])
+      (True, [])
     Ok src =>
-      let cached = match cacheCtx
+      let hash = match cacheCtx
+        Some _ => contentHashOf src
+        None => ""
+      let loaded = match cacheCtx
         Some (cacheDir, stamp) =>
-          loadEntry cacheDir stamp target (contentHashOf src)
-        None => None
-      match cached
-        Some hit =>
+          loadEntry cacheDir stamp (indexKeyFor allRules idx) target hash
+        None => ShardMiss
+      match loaded
+        ShardHit hit =>
           lintOneFileRender
             multiFile
             disableNames
@@ -959,56 +906,32 @@ lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCt
             target
             src
             hit
-            []
-        None => match lintParseSource src
+        _ => match lintParseSource src
           Err e =>
             ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
-            (True, [], [])
+            (True, [])
           Ok parsedSource =>
-            lintOneFileParsed
-              idx
+            let entry =
+              lintEntryOf
+                idx
+                cacheCtx
+                loaded
+                disableNames
+                onlyNames
+                (multiFile && projectRuleSelected onlyNames disableNames)
+                target
+                src
+                hash
+                parsedSource
+            lintOneFileRender
               multiFile
               disableNames
               onlyNames
               denyNames
               baseCtx
-              cacheCtx
               target
               src
-              parsedSource
-
-lintOneFileParsed : StdlibIndex ->
-  Bool ->
-  List String ->
-  List String ->
-  List String ->
-  Option (String, LintBaseline) ->
-  Option (String, String) ->
-  String ->
-  String ->
-  (List Decl, Positions) ->
-  <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
-lintOneFileParsed idx multiFile disableNames onlyNames denyNames baseCtx cacheCtx target src parsedSource =
-  -- Uncached, the excluded rules are skipped outright (their findings
-  -- would be filtered below anyway); under --cache the shard must hold the
-  -- full roster, so every rule runs.  The occurrence list is wanted whenever
-  -- the cross-file tier will read it from entries instead of re-walking
-  -- parses.
-  let rules = selectRules onlyNames disableNames
-  let wantOccs =
-    multiFile && crossFileCacheSound && crossFileSelected onlyNames disableNames
-  let (entry, parsed) =
-    lintEntryOf idx cacheCtx rules wantOccs target src parsedSource
-  lintOneFileRender
-    multiFile
-    disableNames
-    onlyNames
-    denyNames
-    baseCtx
-    target
-    src
-    entry
-    parsed
+              entry
 
 lintOneFileRender : Bool ->
   List String ->
@@ -1018,15 +941,14 @@ lintOneFileRender : Bool ->
   String ->
   String ->
   LintEntry ->
-  List (String, String, Positions, List Decl) ->
-  <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
-lintOneFileRender multiFile disableNames onlyNames denyNames baseCtx target src entry parsed =
+  <IO> (Bool, List LintEntry)
+lintOneFileRender multiFile disableNames onlyNames denyNames baseCtx target src entry =
   -- Suppress findings silenced by inline `-- lint-disable-*` directives before
   -- applying the CLI flag filters (--only/--disable/--deny).  Both the cached
   -- and uncached paths render from THIS one expression over the entry, so a
   -- hit and a miss cannot print different things: the only difference between
   -- them is where `entry` came from.
-  let allFindings = applySuppressionsDirs entry.directives entry.findings
+  let allFindings = applySuppressionsDirs entry.directives (entryFindings entry)
   let filtered =
     applyFindingFilters disableNames onlyNames denyNames allFindings
   let findings = applyBaselineFindings baseCtx target filtered
@@ -1042,71 +964,64 @@ lintOneFileRender multiFile disableNames onlyNames denyNames baseCtx target src 
   let hasOutput = stringLength output > 0
   let _ = if multiFile && hasOutput then putStrLn (target ++ ":")
   let _ = if hasOutput then putStrLn output
-  (anyList isFindingError findings, [entry], parsed)
+  (anyList isFindingError findings, [entry])
 
--- One file's lint result, from the cache when it can be trusted and from a real
--- parse otherwise.  Also returns the parse for the parse-based cross-file tier —
--- empty on a cache hit and whenever `crossFileCacheSound`
--- holds, since the tier is then reached from entries.
---
--- The `--cache` decision, in full: a HIT requires the shard to decode, and to
--- agree on the format version, the rule-set stamp, the path, AND the content
--- hash.  Anything else is a miss.  `lint_cache.decodeEntry` owns that check;
--- this function only decides when to ask.
+-- One file's lint result from a real parse, after the cache could not answer in
+-- full.  Uncached, the excluded rules are skipped outright (their findings
+-- would be filtered anyway); under --cache the shard must hold the full roster,
+-- so every rule runs, except that a stale shard (`loaded` is `ShardStale`)
+-- already holds the index-free findings, summaries and directives, and only
+-- the index-reading rules run again.
 lintEntryOf : StdlibIndex ->
   Option (String, String) ->
-  List Rule ->
+  ShardLoad ->
+  List String ->
+  List String ->
   Bool ->
   String ->
   String ->
+  String ->
   (List Decl, Positions) ->
-  <IO> (LintEntry, List (String, String, Positions, List Decl))
-lintEntryOf idx None rules wantOccs target src parsedSource =
-  let (entry, pos, decls) =
-    lintFileFresh idx rules target src "" wantOccs parsedSource
-  (entry, if crossFileCacheSound then [] else [(target, src, pos, decls)])
-lintEntryOf idx (Some (cacheDir, stamp)) _ _ target src parsedSource =
-  let hash = contentHashOf src
-  match loadEntry cacheDir stamp target hash
-    Some hit => (hit, [])
-    None =>
-      let (entry, _, _) =
-        lintFileFresh idx allRules target src hash True parsedSource
-      (entry, [])
-
--- Lint a parsed file for real: the miss path, and the whole of the uncached
--- path.  The returned entry is `dirty` — it is this run's work and its shard (if
--- any) needs writing.
---
--- `wantOccs` exists because Medaka is STRICT: an unconditional occurrence list
--- would compute each body's `structuralKey` for a run that never reads it, and
--- that key is an `exprSexp` of every eligible body, i.e. the single most
--- expensive thing the cross-file tier does.  So the field is filled only when
--- the cross-file tier will consume it via runCrossFileReportCached (--cache, or
--- a multi-file uncached run with `crossFileCacheSound`); the keys come from the same per-clause pass the
--- same-file duplicate-body rule reads, so they are computed once.
-lintFileFresh : StdlibIndex ->
-  List Rule ->
-  String ->
-  String ->
-  String ->
-  Bool ->
-  (List Decl, Positions) ->
-  <IO> (LintEntry, Positions, List Decl)
-lintFileFresh idx rules target src hash wantOccs (decls, pos) =
+  <IO> LintEntry
+lintEntryOf idx None _ disableNames onlyNames wantSummaries target src _ (decls, pos) =
   let facts = mkFileFactsAt target src decls pos
-  (
-    LintEntry {
-      path = target,
-      contentHash = hash,
-      findings = lintProgramFacts idx rules target facts pos decls,
-      dupOccs = if wantOccs then factDupOccs target facts else [],
-      directives = factDirectives facts,
-      dirty = True,
-    },
-    pos,
-    decls,
-  )
+  let rules = selectRules onlyNames disableNames
+  LintEntry {
+    path = target,
+    contentHash = "",
+    freeFindings =
+      lintProgramRanked idx (ranked 0 rules) target facts pos decls,
+    indexFindings = [],
+    indexKey = "",
+    summaries =
+      if wantSummaries then
+        fileSummaries onlyNames disableNames target facts pos decls
+      else
+        [],
+    directives = factDirectives facts,
+    dirty = True,
+  }
+lintEntryOf idx (Some _) (ShardStale stale) _ _ _ target src _ (decls, pos) =
+  let facts = mkFileFactsAt target src decls pos
+  { stale |
+    indexFindings =
+      lintProgramRanked idx (rankedIndexRules allRules) target facts pos decls,
+    dirty = True,
+  }
+lintEntryOf idx (Some _) _ _ _ _ target src hash (decls, pos) =
+  let facts = mkFileFactsAt target src decls pos
+  let all = lintProgramRanked idx (ranked 0 allRules) target facts pos decls
+  let (free, indexed) = splitByIndex allRules all
+  LintEntry {
+    path = target,
+    contentHash = hash,
+    freeFindings = free,
+    indexFindings = indexed,
+    indexKey = indexKeyFor allRules idx,
+    summaries = fileSummaries [] [] target facts pos decls,
+    directives = factDirectives facts,
+    dirty = True,
+  }
 
 -- Fix a single file in-place.  Returns True only on I/O error (write errors exit 1).
 lintOneFileFix : StdlibIndex ->
@@ -1169,8 +1084,8 @@ writeFixedSource target src newSrc n =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "cjAllToJson" false) (mem "ppSeverity" false) (mem "diagIsError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false))))
 (DUse false (UseGroup ("support" "cli_targets") ((mem "collectMdkFiles" false) (mem "expandLintTarget" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
-(DUse false (UseGroup ("tools" "lint") ((mem "Applicability" true) (mem "Category" true) (mem "CrossFileRule" true) (mem "Directive" false) (mem "Finding" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "applicabilityText" false) (mem "maxApplicability" false) (mem "ruleMetaName" false) (mem "allCrossFileRules" false) (mem "StdlibIndex" false) (mem "allRules" false) (mem "applyFindingDeny" false) (mem "applyFindingFilters" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsMultiDirs" false) (mem "crossFileCacheSound" false) (mem "factDirectives" false) (mem "factDupOccs" false) (mem "findingToDiag" false) (mem "fixPassLimit" false) (mem "fixSource" false) (mem "FixRun" true) (mem "runParts" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "lintFileDiagTripleParsed" false) (mem "lintParseSource" false) (mem "lintProgramFacts" false) (mem "mkFileFactsAt" false) (mem "projectWildMods" false) (mem "crossFileSelected" false) (mem "selectRules" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "stdlibFingerprint" false))))
-(DUse false (UseGroup ("tools" "lint_cache") ((mem "LintEntry" true) (mem "cacheDirOf" false) (mem "contentHashOf" false) (mem "loadEntry" false) (mem "ruleSetStamp" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "Applicability" true) (mem "Category" true) (mem "ProjectRule" true) (mem "Directive" false) (mem "Finding" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "Summary" false) (mem "applicabilityText" false) (mem "maxApplicability" false) (mem "ruleMetaName" false) (mem "allProjectRules" false) (mem "StdlibIndex" false) (mem "allRules" false) (mem "applyFindingDeny" false) (mem "applyFindingFilters" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsMultiDirs" false) (mem "factDirectives" false) (mem "fileSummaries" false) (mem "findingToDiag" false) (mem "fixPassLimit" false) (mem "fixSource" false) (mem "FixRun" true) (mem "runParts" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "lintFileDiagTripleParsed" false) (mem "lintParseSource" false) (mem "lintProgramRanked" false) (mem "indexKeyFor" false) (mem "rankedIndexRules" false) (mem "splitByIndex" false) (mem "mkFileFacts" false) (mem "mkFileFactsAt" false) (mem "projectWildMods" false) (mem "projectRuleSelected" false) (mem "ranked" false) (mem "selectRules" false) (mem "mergeProjectIntoTriples" false) (mem "runProjectRules" false))))
+(DUse false (UseGroup ("tools" "lint_cache") ((mem "LintEntry" true) (mem "ShardLoad" true) (mem "cacheDirOf" false) (mem "contentHashOf" false) (mem "entryFindings" false) (mem "loadEntry" false) (mem "ruleSetStamp" false))))
 (DUse false (UseGroup ("tools" "lint_baseline") ((mem "LintBaseline" false) (mem "applyBaselineToDiags" false) (mem "applyBaselineToFindings" false) (mem "baselineDiagViolations" false) (mem "baselineKeyOf" false) (mem "baselineViolationLine" false) (mem "baselineViolations" false) (mem "diagCodeOf" false) (mem "findingRuleOf" false))))
 (DTypeSig true "lintHelpText" (TyCon "String"))
 (DFunDef false "lintHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka lint — Lint files/dirs against style rules\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka lint [paths...] [flags]\n")) (ELit (LString "  medaka lint --list-rules [filters] [--json|--markdown]\n")) (ELit (LString "  medaka lint --explain <rule>\n")) (ELit (LString "\n")) (ELit (LString "  --fix                 rewrite fixable findings in-place\n")) (ELit (LString "  --unsafe-fixes        with --fix: also apply fixes that may change behavior\n")) (ELit (LString "  --json                emit the {\"files\":[...]} structured-diagnostics\n")) (ELit (LString "                       envelope instead of human text (--fix is ignored)\n")) (ELit (LString "  --cache                reuse per-file results for files whose content is\n")) (ELit (LString "                       unchanged (opt-in, like ESLint's --cache)\n")) (ELit (LString "  --disable=r1,r2,...    suppress findings from the named rules\n")) (ELit (LString "  --only=r1,...          keep only findings from the named rules\n")) (ELit (LString "  --deny=r1,...          promote findings from the named rules to error\n")) (ELit (LString "  --baseline=<file>      error only where a file's per-rule finding count\n")) (ELit (LString "                       exceeds its row in <file> (counts may fall freely)\n")) (ELit (LString "  --write-baseline=<f>   regenerate <f> from this run instead of reporting\n")) (ELit (LString "  --list-rules           list every rule with its metadata (--json for the\n")) (ELit (LString "                       machine form, --markdown for docs/ops/LINT-RULES.md)\n")) (ELit (LString "  --scope=universal|internal     with --list-rules: keep one scope\n")) (ELit (LString "  --ratchet=gated|baselined      with --list-rules: keep one ratchet\n")) (ELit (LString "  --tier=file|cross              with --list-rules: keep one rule tier\n")) (ELit (LString "  --names                with --list-rules: print only the names, one per line\n")) (ELit (LString "  --explain <rule>       print a rule's summary and documentation\n")) (ELit (LString "  --internal             run the internal-scope rules on every target (they are\n")) (ELit (LString "                       otherwise on only under a manifest with [lint] internal = true)\n")) (ELit (LString "\n")) (ELit (LString "Target resolution: explicit file args are linted in order; a single\n")) (ELit (LString "directory arg lints its top-level .mdk files (not recursive); no args\n")) (ELit (LString "finds the medaka.toml project root and lints its top-level .mdk files.\n")) (ELit (LString "Exit 0 unless a SevError finding exists.\n")))))
@@ -1181,10 +1096,10 @@ writeFixedSource target src newSrc n =
 (DFunDef false "tierText" ((PCon "TierFile")) (ELit (LString "file")))
 (DFunDef false "tierText" ((PCon "TierCross")) (ELit (LString "cross")))
 (DTypeSig true "allRuleRows" (TyApp (TyCon "List") (TyCon "RuleRow")))
-(DFunDef false "allRuleRows" () (EBlock (DoLet false false (PVar "fileMetas") (EApp (EApp (EVar "map") (EVar "ruleMetaOf")) (EVar "allRules"))) (DoLet false false (PVar "crossMetas") (EApp (EApp (EVar "map") (EVar "crossMetaOf")) (EVar "allCrossFileRules"))) (DoLet false false (PVar "fileNames") (EApp (EApp (EVar "map") (EVar "ruleMetaName")) (EVar "fileMetas"))) (DoLet false false (PVar "crossNames") (EApp (EApp (EVar "map") (EVar "ruleMetaName")) (EVar "crossMetas"))) (DoLet false false (PVar "crossOnly") (EApp (EApp (EVar "filter") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "fileNames"))))) (EVar "crossMetas"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EApp (EApp (EVar "tiersOf") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "crossNames"))))) (EVar "fileMetas")) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EListLit (EVar "TierCross"))))) (EVar "crossOnly"))))))
+(DFunDef false "allRuleRows" () (EBlock (DoLet false false (PVar "fileMetas") (EApp (EApp (EVar "map") (EVar "ruleMetaOf")) (EVar "allRules"))) (DoLet false false (PVar "crossMetas") (EApp (EApp (EVar "map") (EVar "crossMetaOf")) (EVar "allProjectRules"))) (DoLet false false (PVar "fileNames") (EApp (EApp (EVar "map") (EVar "ruleMetaName")) (EVar "fileMetas"))) (DoLet false false (PVar "crossNames") (EApp (EApp (EVar "map") (EVar "ruleMetaName")) (EVar "crossMetas"))) (DoLet false false (PVar "crossOnly") (EApp (EApp (EVar "filter") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "fileNames"))))) (EVar "crossMetas"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EApp (EApp (EVar "tiersOf") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "crossNames"))))) (EVar "fileMetas")) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EListLit (EVar "TierCross"))))) (EVar "crossOnly"))))))
 (DTypeSig false "ruleMetaOf" (TyFun (TyCon "Rule") (TyCon "RuleMeta")))
 (DFunDef false "ruleMetaOf" ((PVar "r")) (EFieldAccess (EVar "r") "meta"))
-(DTypeSig false "crossMetaOf" (TyFun (TyCon "CrossFileRule") (TyCon "RuleMeta")))
+(DTypeSig false "crossMetaOf" (TyFun (TyCon "ProjectRule") (TyCon "RuleMeta")))
 (DFunDef false "crossMetaOf" ((PVar "r")) (EFieldAccess (EVar "r") "meta"))
 (DTypeSig false "mkRow" (TyFun (TyCon "RuleMeta") (TyFun (TyApp (TyCon "List") (TyCon "Tier")) (TyCon "RuleRow"))))
 (DFunDef false "mkRow" ((PVar "m") (PVar "tiers")) (ERecordCreate "RuleRow" ((fa "rrMeta" (EVar "m")) (fa "rrTiers" (EVar "tiers")))))
@@ -1253,13 +1168,13 @@ writeFixedSource target src newSrc n =
 (DTypeSig true "lintCacheCtx" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "lintCacheCtx" ((PCon "False") PWild) (EVar "None"))
 (DFunDef false "lintCacheCtx" ((PCon "True") (PCon "True")) (EVar "None"))
-(DFunDef false "lintCacheCtx" ((PCon "True") (PCon "False")) (EIf (EApp (EVar "not") (EVar "crossFileCacheSound")) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "root") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "canonicalizePath") (ELit (LString "."))))) (DoLet false false (PVar "binStamp") (EApp (EVar "ruleSetStamp") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "binStamp") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (ETuple (EApp (EVar "cacheDirOf") (EVar "root")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "binStamp"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "stdlibFingerprint"))) (ELit (LString "")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lintCacheCtx" ((PCon "True") (PCon "False")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "canonicalizePath") (ELit (LString "."))))) (DoLet false false (PVar "binStamp") (EApp (EVar "ruleSetStamp") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "binStamp") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (ETuple (EApp (EVar "cacheDirOf") (EVar "root")) (EVar "binStamp")))))))
 (DTypeSig true "runLintJsonCmd" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))))))))
-(DFunDef false "runLintJsonCmd" ((PVar "idx") (PVar "internalFlag") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "files")) (EBlock (DoLet false false (PVar "quads") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesToDiagQuads") (EVar "idx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "files"))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "dropQuadParse")) (EVar "quads"))) (DoLet false false (PVar "cross") (EApp (EApp (EApp (EApp (EApp (EVar "crossFileJsonFindings") (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "quads"))) (DoLet false false (PVar "merged") (EApp (EApp (EVar "mergeCrossFileIntoTriples") (EVar "cross")) (EVar "triples"))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EVar "cjAllToJson") (EVar "merged")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "cjLintTripleHasErr")) (EVar "merged")) (EApp (EVar "stageExit") (ELit (LInt 1))) (ELit LUnit)))))
-(DTypeSig true "crossFileJsonFindings" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Finding")))))))))
-(DFunDef false "crossFileJsonFindings" ((PVar "internalFlag") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "quads")) (EBlock (DoLet false false (PVar "parsedTriples") (EApp (EApp (EVar "map") (EVar "quadToParseTriple")) (EVar "quads"))) (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "runCrossFileRules") (EVar "onlyNames")) (EVar "disableNames")) (EVar "parsedTriples"))) (DoLet false false (PVar "active") (EApp (EApp (EApp (EVar "dropInactiveInternalCross") (EVar "allCrossFileRules")) (EVar "internalFlag")) (EVar "raw"))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMulti") (EApp (EApp (EVar "map") (EVar "quadToSrc")) (EVar "quads"))) (EVar "active"))) (DoExpr (EApp (EApp (EVar "applyFindingDeny") (EVar "denyNames")) (EVar "suppressed")))))
-(DTypeSig true "quadToParseTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "quadToParseTriple" ((PTuple (PVar "path") PWild PWild (PVar "pos") (PVar "decls"))) (ETuple (EVar "path") (EVar "pos") (EVar "decls")))
+(DFunDef false "runLintJsonCmd" ((PVar "idx") (PVar "internalFlag") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "files")) (EBlock (DoLet false false (PVar "quads") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesToDiagQuads") (EVar "idx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "files"))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "dropQuadParse")) (EVar "quads"))) (DoLet false false (PVar "cross") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectJsonFindings") (EVar "idx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "quads"))) (DoLet false false (PVar "merged") (EApp (EApp (EVar "mergeProjectIntoTriples") (EVar "cross")) (EVar "triples"))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EVar "cjAllToJson") (EVar "merged")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "cjLintTripleHasErr")) (EVar "merged")) (EApp (EVar "stageExit") (ELit (LInt 1))) (ELit LUnit)))))
+(DTypeSig true "projectJsonFindings" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Finding"))))))))))
+(DFunDef false "projectJsonFindings" ((PVar "idx") (PVar "internalFlag") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "quads")) (EBlock (DoLet false false (PVar "summaries") (EApp (EApp (EVar "map") (EApp (EApp (EVar "quadSummaries") (EVar "onlyNames")) (EVar "disableNames"))) (EVar "quads"))) (DoLet false false (PVar "raw") (EApp (EApp (EApp (EApp (EVar "runProjectRules") (EVar "onlyNames")) (EVar "disableNames")) (EVar "idx")) (EVar "summaries"))) (DoLet false false (PVar "active") (EApp (EApp (EApp (EVar "dropInactiveInternalProject") (EVar "allProjectRules")) (EVar "internalFlag")) (EVar "raw"))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMulti") (EApp (EApp (EVar "map") (EVar "quadToSrc")) (EVar "quads"))) (EVar "active"))) (DoExpr (EApp (EApp (EVar "applyFindingDeny") (EVar "denyNames")) (EVar "suppressed")))))
+(DTypeSig true "quadSummaries" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Summary"))))))))
+(DFunDef false "quadSummaries" ((PVar "only") (PVar "disable") (PTuple (PVar "path") (PVar "src") PWild (PVar "pos") (PVar "decls"))) (ETuple (EVar "path") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EVar "only")) (EVar "disable")) (EVar "path")) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "decls")) (EVar "pos"))) (EVar "pos")) (EVar "decls"))))
 (DTypeSig true "quadToSrc" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "quadToSrc" ((PTuple (PVar "path") (PVar "src") PWild PWild PWild)) (ETuple (EVar "path") (EVar "src")))
 (DTypeSig false "dropQuadParse" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
@@ -1286,26 +1201,20 @@ writeFixedSource target src newSrc n =
 (DFunDef false "reportBaselineViolations" ((PVar "key") (PCons (PVar "v") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka lint: baseline: ")) (EApp (EVar "display") (EApp (EApp (EVar "baselineViolationLine") (EVar "key")) (EVar "v")))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "reportBaselineViolations") (EVar "key")) (EVar "rest")))))
 (DTypeSig true "baselineFileCodes" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "baselineFileCodes" ((PVar "cwd") (PTuple (PVar "path") PWild (PVar "diags"))) (ETuple (EApp (EApp (EVar "baselineKeyOf") (EVar "cwd")) (EVar "path")) (EApp (EApp (EVar "map") (EVar "diagCodeOf")) (EVar "diags"))))
-(DTypeSig true "runCrossFileReport" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "Bool"))))))))
-(DFunDef false "runCrossFileReport" ((PVar "internalFlag") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "parsed")) (EBlock (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "parsedToTriple")) (EVar "parsed"))) (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "dropInactiveInternalCross") (EVar "allCrossFileRules")) (EVar "internalFlag")) (EApp (EApp (EApp (EVar "runCrossFileRules") (EVar "onlyNames")) (EVar "disableNames")) (EVar "triples")))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMulti") (EApp (EApp (EVar "map") (EVar "parsedToSrc")) (EVar "parsed"))) (EVar "raw"))) (DoExpr (EApp (EVar "reportCrossFindings") (EApp (EApp (EVar "applyFindingDeny") (EVar "denyNames")) (EVar "suppressed"))))))
-(DTypeSig true "runCrossFileReportCached" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "LintEntry")) (TyEffect ("IO") None (TyCon "Bool"))))))))
-(DFunDef false "runCrossFileReportCached" ((PVar "internalFlag") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "entries")) (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "dropInactiveInternalCross") (EVar "allCrossFileRules")) (EVar "internalFlag")) (EApp (EApp (EApp (EVar "runCrossFileRulesFromOccs") (EVar "onlyNames")) (EVar "disableNames")) (EApp (EApp (EVar "flatMap") (EVar "entryOccs")) (EVar "entries"))))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMultiDirs") (EApp (EApp (EVar "map") (EVar "entryDirTable")) (EVar "entries"))) (EVar "raw"))) (DoExpr (EApp (EVar "reportCrossFindings") (EApp (EApp (EVar "applyFindingDeny") (EVar "denyNames")) (EVar "suppressed"))))))
-(DTypeSig false "entryOccs" (TyFun (TyCon "LintEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
-(DFunDef false "entryOccs" ((PVar "e")) (EFieldAccess (EVar "e") "dupOccs"))
+(DTypeSig true "runProjectReport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "LintEntry")) (TyEffect ("IO") None (TyCon "Bool")))))))))
+(DFunDef false "runProjectReport" ((PVar "idx") (PVar "internalFlag") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "entries")) (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "dropInactiveInternalProject") (EVar "allProjectRules")) (EVar "internalFlag")) (EApp (EApp (EApp (EApp (EVar "runProjectRules") (EVar "onlyNames")) (EVar "disableNames")) (EVar "idx")) (EApp (EApp (EVar "map") (EVar "entrySummaries")) (EVar "entries"))))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMultiDirs") (EApp (EApp (EVar "map") (EVar "entryDirTable")) (EVar "entries"))) (EVar "raw"))) (DoExpr (EApp (EVar "reportProjectFindings") (EApp (EApp (EVar "applyFindingDeny") (EVar "denyNames")) (EVar "suppressed"))))))
+(DTypeSig false "entrySummaries" (TyFun (TyCon "LintEntry") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Summary"))))))
+(DFunDef false "entrySummaries" ((PVar "e")) (ETuple (EFieldAccess (EVar "e") "path") (EFieldAccess (EVar "e") "summaries")))
 (DTypeSig false "entryDirTable" (TyFun (TyCon "LintEntry") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))))
 (DFunDef false "entryDirTable" ((PVar "e")) (ETuple (EFieldAccess (EVar "e") "path") (EFieldAccess (EVar "e") "directives")))
-(DTypeSig false "reportCrossFindings" (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyEffect ("IO") None (TyCon "Bool"))))
-(DFunDef false "reportCrossFindings" ((PList)) (EVar "False"))
-(DFunDef false "reportCrossFindings" ((PVar "findings")) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "cross-file:")))) (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EVar "renderCrossFinding")) (EVar "findings"))))) (DoExpr (EApp (EApp (EVar "anyList") (EVar "isFindingError")) (EVar "findings")))))
+(DTypeSig false "reportProjectFindings" (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "reportProjectFindings" ((PList)) (EVar "False"))
+(DFunDef false "reportProjectFindings" ((PVar "findings")) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "cross-file:")))) (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EVar "renderCrossFinding")) (EVar "findings"))))) (DoExpr (EApp (EApp (EVar "anyList") (EVar "isFindingError")) (EVar "findings")))))
 (DTypeSig false "renderCrossFinding" (TyFun (TyCon "Finding") (TyCon "String")))
 (DFunDef false "renderCrossFinding" ((PVar "f")) (EApp (EApp (EApp (EVar "ppDiagCliSrc") (ELit (LString ""))) (EApp (EVar "locFileOf") (EFieldAccess (EVar "f") "loc"))) (EApp (EVar "findingToDiag") (EVar "f"))))
 (DTypeSig false "locFileOf" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "locFileOf" ((PCon "Some" (PCon "Loc" (PVar "file") PWild PWild PWild PWild))) (EVar "file"))
 (DFunDef false "locFileOf" ((PCon "None")) (ELit (LString "")))
-(DTypeSig false "parsedToTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "parsedToTriple" ((PTuple (PVar "path") PWild (PVar "pos") (PVar "decls"))) (ETuple (EVar "path") (EVar "pos") (EVar "decls")))
-(DTypeSig false "parsedToSrc" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String"))))
-(DFunDef false "parsedToSrc" ((PTuple (PVar "path") (PVar "src") PWild PWild)) (ETuple (EVar "path") (EVar "src")))
 (DTypeSig true "resolveLintTargets" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "resolveLintTargets" ((PList)) (EBlock (DoLet false false (PVar "cwd") (EApp (EVar "canonicalizePath") (ELit (LString ".")))) (DoExpr (EMatch (EApp (EVar "findProjectRoot") (EVar "cwd")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "medaka lint: no medaka.toml found; run from a project directory or pass file/dir paths")))) (DoLet false false PWild (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "root")) () (EApp (EVar "collectMdkFiles") (EVar "root")))))))
 (DFunDef false "resolveLintTargets" ((PVar "targets")) (EApp (EApp (EVar "flatMap") (EVar "expandLintTarget")) (EVar "targets")))
@@ -1324,13 +1233,13 @@ writeFixedSource target src newSrc n =
 (DTypeSig false "firstInactiveTarget" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "firstInactiveTarget" (PWild (PList)) (EVar "None"))
 (DFunDef false "firstInactiveTarget" ((PVar "named") (PCons (PVar "f") (PVar "rest"))) (EIf (EApp (EApp (EVar "internalActiveFor") (EVar "False")) (EVar "f")) (EApp (EApp (EVar "firstInactiveTarget") (EVar "named")) (EVar "rest")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal rule ")) (EApp (EVar "display") (EVar "named"))) (ELit (LString " is not active for `"))) (EApp (EVar "display") (EVar "f"))) (ELit (LString "`; pass --internal or set `[lint] internal = true` in the project's medaka.toml"))))))
-(DTypeSig true "dropInactiveInternalCross" (TyFun (TyApp (TyCon "List") (TyCon "CrossFileRule")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "dropInactiveInternalCross" (PWild PWild (PList)) (EListLit))
-(DFunDef false "dropInactiveInternalCross" ((PVar "rules") (PVar "internalFlag") (PCons (PVar "f") (PVar "rest"))) (EBlock (DoLet false false (PVar "keep") (EIf (EApp (EApp (EVar "isInternalCrossRule") (EVar "rules")) (EFieldAccess (EVar "f") "rule")) (EApp (EApp (EVar "findingInActiveProject") (EVar "internalFlag")) (EVar "f")) (EVar "True"))) (DoLet false false (PVar "kept") (EApp (EApp (EApp (EVar "dropInactiveInternalCross") (EVar "rules")) (EVar "internalFlag")) (EVar "rest"))) (DoExpr (EIf (EVar "keep") (EBinOp "::" (EVar "f") (EVar "kept")) (EVar "kept")))))
-(DTypeSig false "isInternalCrossRule" (TyFun (TyApp (TyCon "List") (TyCon "CrossFileRule")) (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isInternalCrossRule" ((PVar "rules") (PVar "name")) (EApp (EApp (EVar "anyList") (EApp (EVar "isInternalCrossNamed") (EVar "name"))) (EVar "rules")))
-(DTypeSig false "isInternalCrossNamed" (TyFun (TyCon "String") (TyFun (TyCon "CrossFileRule") (TyCon "Bool"))))
-(DFunDef false "isInternalCrossNamed" ((PVar "name") (PVar "r")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "name") (EVar "name")) (EApp (EVar "isInternalScope") (EFieldAccess (EFieldAccess (EVar "r") "meta") "scope"))))
+(DTypeSig true "dropInactiveInternalProject" (TyFun (TyApp (TyCon "List") (TyCon "ProjectRule")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "dropInactiveInternalProject" (PWild PWild (PList)) (EListLit))
+(DFunDef false "dropInactiveInternalProject" ((PVar "rules") (PVar "internalFlag") (PCons (PVar "f") (PVar "rest"))) (EBlock (DoLet false false (PVar "keep") (EIf (EApp (EApp (EVar "isInternalProjectRule") (EVar "rules")) (EFieldAccess (EVar "f") "rule")) (EApp (EApp (EVar "findingInActiveProject") (EVar "internalFlag")) (EVar "f")) (EVar "True"))) (DoLet false false (PVar "kept") (EApp (EApp (EApp (EVar "dropInactiveInternalProject") (EVar "rules")) (EVar "internalFlag")) (EVar "rest"))) (DoExpr (EIf (EVar "keep") (EBinOp "::" (EVar "f") (EVar "kept")) (EVar "kept")))))
+(DTypeSig false "isInternalProjectRule" (TyFun (TyApp (TyCon "List") (TyCon "ProjectRule")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isInternalProjectRule" ((PVar "rules") (PVar "name")) (EApp (EApp (EVar "anyList") (EApp (EVar "isInternalProjectNamed") (EVar "name"))) (EVar "rules")))
+(DTypeSig false "isInternalProjectNamed" (TyFun (TyCon "String") (TyFun (TyCon "ProjectRule") (TyCon "Bool"))))
+(DFunDef false "isInternalProjectNamed" ((PVar "name") (PVar "r")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "name") (EVar "name")) (EApp (EVar "isInternalScope") (EFieldAccess (EFieldAccess (EVar "r") "meta") "scope"))))
 (DTypeSig false "findingInActiveProject" (TyFun (TyCon "Bool") (TyFun (TyCon "Finding") (TyEffect ("IO") None (TyCon "Bool")))))
 (DFunDef false "findingInActiveProject" ((PVar "internalFlag") (PVar "f")) (EMatch (EFieldAccess (EVar "f") "loc") (arm (PCon "Some" (PCon "Loc" (PVar "file") PWild PWild PWild PWild)) () (EApp (EApp (EVar "internalActiveFor") (EVar "internalFlag")) (EVar "file"))) (arm (PCon "None") () (EVar "True"))))
 (DTypeSig false "internalActivationMemo" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Bool"))))
@@ -1344,20 +1253,17 @@ writeFixedSource target src newSrc n =
 (DTypeSig false "memoStore" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyCon "Bool"))))
 (DFunDef false "memoStore" ((PVar "key") (PVar "active")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "internalActivationMemo")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "active")) (EUnOp "!" (EVar "internalActivationMemo"))))) (DoExpr (EVar "active"))))
 (DData Public "LintRun" () ((variant "LintRun" (ConNamed (field "lrInternal" (TyCon "Bool")) (field "lrFix" (TyCon "Bool")) (field "lrUnsafe" (TyCon "Bool")) (field "lrMulti" (TyCon "Bool"))))) ())
-(DTypeSig true "lintFilesGo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "LintRun") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))))))
-(DFunDef false "lintFilesGo" (PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (ETuple (EVar "acc") (EListLit) (EListLit)))
-(DFunDef false "lintFilesGo" ((PVar "idx") (PVar "run") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "fileDisable") (EBinOp "++" (EVar "disableNames") (EApp (EApp (EVar "internalDisabledFor") (EFieldAccess (EVar "run") "lrInternal")) (EVar "f")))) (DoExpr (EIf (EFieldAccess (EVar "run") "lrFix") (EBlock (DoLet false false (PVar "hadErr") (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileFix") (EVar "idx")) (EFieldAccess (EVar "run") "lrUnsafe")) (EVar "onlyNames")) (EVar "fileDisable")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr"))))) (EBlock (DoLet false false (PTuple (PVar "hadErr") (PVar "entries") (PVar "parsed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileReport") (EVar "idx")) (EFieldAccess (EVar "run") "lrMulti")) (EVar "fileDisable")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "f"))) (DoLet false false (PTuple (PVar "restErr") (PVar "restEntries") (PVar "restParsed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr")))) (DoExpr (ETuple (EVar "restErr") (EBinOp "++" (EVar "entries") (EVar "restEntries")) (EBinOp "++" (EVar "parsed") (EVar "restParsed")))))))))
-(DTypeSig false "lintOneFileReport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))))))))))))
-(DFunDef false "lintOneFileReport" ((PVar "idx") (PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (ETuple (EVar "True") (EListLit) (EListLit))))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "cached") (EMatch (EVar "cacheCtx") (arm (PCon "Some" (PTuple (PVar "cacheDir") (PVar "stamp"))) () (EApp (EApp (EApp (EApp (EVar "loadEntry") (EVar "cacheDir")) (EVar "stamp")) (EVar "target")) (EApp (EVar "contentHashOf") (EVar "src")))) (arm (PCon "None") () (EVar "None")))) (DoExpr (EMatch (EVar "cached") (arm (PCon "Some" (PVar "hit")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileRender") (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "target")) (EVar "src")) (EVar "hit")) (EListLit))) (arm (PCon "None") () (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (ETuple (EVar "True") (EListLit) (EListLit))))) (arm (PCon "Ok" (PVar "parsedSource")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileParsed") (EVar "idx")) (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "target")) (EVar "src")) (EVar "parsedSource")))))))))))
-(DTypeSig false "lintOneFileParsed" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))))))))))))))
-(DFunDef false "lintOneFileParsed" ((PVar "idx") (PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PVar "target") (PVar "src") (PVar "parsedSource")) (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EVar "selectRules") (EVar "onlyNames")) (EVar "disableNames"))) (DoLet false false (PVar "wantOccs") (EBinOp "&&" (EBinOp "&&" (EVar "multiFile") (EVar "crossFileCacheSound")) (EApp (EApp (EVar "crossFileSelected") (EVar "onlyNames")) (EVar "disableNames")))) (DoLet false false (PTuple (PVar "entry") (PVar "parsed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintEntryOf") (EVar "idx")) (EVar "cacheCtx")) (EVar "rules")) (EVar "wantOccs")) (EVar "target")) (EVar "src")) (EVar "parsedSource"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileRender") (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "target")) (EVar "src")) (EVar "entry")) (EVar "parsed")))))
-(DTypeSig false "lintOneFileRender" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))))))
-(DFunDef false "lintOneFileRender" ((PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "target") (PVar "src") (PVar "entry") (PVar "parsed")) (EBlock (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressionsDirs") (EFieldAccess (EVar "entry") "directives")) (EFieldAccess (EVar "entry") "findings"))) (DoLet false false (PVar "filtered") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "allFindings"))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EVar "applyBaselineFindings") (EVar "baseCtx")) (EVar "target")) (EVar "filtered"))) (DoLet false false (PVar "output") (EMatch (EVar "findings") (arm (PList) () (ELit (LString ""))) (arm PWild () (EBlock (DoLet false false (PVar "srcLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (DoExpr (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (ELam ((PVar "f")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EVar "srcLines")) (EVar "target")) (EApp (EVar "findingToDiag") (EVar "f"))))) (EVar "findings")))))))) (DoLet false false (PVar "hasOutput") (EBinOp ">" (EApp (EVar "stringLength") (EVar "output")) (ELit (LInt 0)))) (DoLet false false PWild (EIf (EBinOp "&&" (EVar "multiFile") (EVar "hasOutput")) (EApp (EVar "putStrLn") (EBinOp "++" (EVar "target") (ELit (LString ":")))) (ELit LUnit))) (DoLet false false PWild (EIf (EVar "hasOutput") (EApp (EVar "putStrLn") (EVar "output")) (ELit LUnit))) (DoExpr (ETuple (EApp (EApp (EVar "anyList") (EVar "isFindingError")) (EVar "findings")) (EListLit (EVar "entry")) (EVar "parsed")))))
-(DTypeSig false "lintEntryOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyTuple (TyCon "LintEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))))
-(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "None") (PVar "rules") (PVar "wantOccs") (PVar "target") (PVar "src") (PVar "parsedSource")) (EBlock (DoLet false false (PTuple (PVar "entry") (PVar "pos") (PVar "decls")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFileFresh") (EVar "idx")) (EVar "rules")) (EVar "target")) (EVar "src")) (ELit (LString ""))) (EVar "wantOccs")) (EVar "parsedSource"))) (DoExpr (ETuple (EVar "entry") (EIf (EVar "crossFileCacheSound") (EListLit) (EListLit (ETuple (EVar "target") (EVar "src") (EVar "pos") (EVar "decls"))))))))
-(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "Some" (PTuple (PVar "cacheDir") (PVar "stamp"))) PWild PWild (PVar "target") (PVar "src") (PVar "parsedSource")) (EBlock (DoLet false false (PVar "hash") (EApp (EVar "contentHashOf") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadEntry") (EVar "cacheDir")) (EVar "stamp")) (EVar "target")) (EVar "hash")) (arm (PCon "Some" (PVar "hit")) () (ETuple (EVar "hit") (EListLit))) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "entry") PWild PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFileFresh") (EVar "idx")) (EVar "allRules")) (EVar "target")) (EVar "src")) (EVar "hash")) (EVar "True")) (EVar "parsedSource"))) (DoExpr (ETuple (EVar "entry") (EListLit)))))))))
-(DTypeSig false "lintFileFresh" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyTuple (TyCon "LintEntry") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))
-(DFunDef false "lintFileFresh" ((PVar "idx") (PVar "rules") (PVar "target") (PVar "src") (PVar "hash") (PVar "wantOccs") (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoExpr (ETuple (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (EVar "hash")) (fa "findings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EVar "rules")) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "dupOccs" (EIf (EVar "wantOccs") (EApp (EApp (EVar "factDupOccs") (EVar "target")) (EVar "facts")) (EListLit))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))) (EVar "pos") (EVar "decls")))))
+(DTypeSig true "lintFilesGo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "LintRun") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry"))))))))))))))
+(DFunDef false "lintFilesGo" (PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (ETuple (EVar "acc") (EListLit)))
+(DFunDef false "lintFilesGo" ((PVar "idx") (PVar "run") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "fileDisable") (EBinOp "++" (EVar "disableNames") (EApp (EApp (EVar "internalDisabledFor") (EFieldAccess (EVar "run") "lrInternal")) (EVar "f")))) (DoExpr (EIf (EFieldAccess (EVar "run") "lrFix") (EBlock (DoLet false false (PVar "hadErr") (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileFix") (EVar "idx")) (EFieldAccess (EVar "run") "lrUnsafe")) (EVar "onlyNames")) (EVar "fileDisable")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr"))))) (EBlock (DoLet false false (PTuple (PVar "hadErr") (PVar "entries")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileReport") (EVar "idx")) (EFieldAccess (EVar "run") "lrMulti")) (EVar "fileDisable")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "f"))) (DoLet false false (PTuple (PVar "restErr") (PVar "restEntries")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr")))) (DoExpr (ETuple (EVar "restErr") (EBinOp "++" (EVar "entries") (EVar "restEntries")))))))))
+(DTypeSig false "lintOneFileReport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")))))))))))))
+(DFunDef false "lintOneFileReport" ((PVar "idx") (PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (ETuple (EVar "True") (EListLit))))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "hash") (EMatch (EVar "cacheCtx") (arm (PCon "Some" PWild) () (EApp (EVar "contentHashOf") (EVar "src"))) (arm (PCon "None") () (ELit (LString ""))))) (DoLet false false (PVar "loaded") (EMatch (EVar "cacheCtx") (arm (PCon "Some" (PTuple (PVar "cacheDir") (PVar "stamp"))) () (EApp (EApp (EApp (EApp (EApp (EVar "loadEntry") (EVar "cacheDir")) (EVar "stamp")) (EApp (EApp (EVar "indexKeyFor") (EVar "allRules")) (EVar "idx"))) (EVar "target")) (EVar "hash"))) (arm (PCon "None") () (EVar "ShardMiss")))) (DoExpr (EMatch (EVar "loaded") (arm (PCon "ShardHit" (PVar "hit")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileRender") (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "target")) (EVar "src")) (EVar "hit"))) (arm PWild () (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (ETuple (EVar "True") (EListLit))))) (arm (PCon "Ok" (PVar "parsedSource")) () (EBlock (DoLet false false (PVar "entry") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintEntryOf") (EVar "idx")) (EVar "cacheCtx")) (EVar "loaded")) (EVar "disableNames")) (EVar "onlyNames")) (EBinOp "&&" (EVar "multiFile") (EApp (EApp (EVar "projectRuleSelected") (EVar "onlyNames")) (EVar "disableNames")))) (EVar "target")) (EVar "src")) (EVar "hash")) (EVar "parsedSource"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileRender") (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "target")) (EVar "src")) (EVar "entry")))))))))))))
+(DTypeSig false "lintOneFileRender" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")))))))))))))
+(DFunDef false "lintOneFileRender" ((PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "target") (PVar "src") (PVar "entry")) (EBlock (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressionsDirs") (EFieldAccess (EVar "entry") "directives")) (EApp (EVar "entryFindings") (EVar "entry")))) (DoLet false false (PVar "filtered") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "allFindings"))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EVar "applyBaselineFindings") (EVar "baseCtx")) (EVar "target")) (EVar "filtered"))) (DoLet false false (PVar "output") (EMatch (EVar "findings") (arm (PList) () (ELit (LString ""))) (arm PWild () (EBlock (DoLet false false (PVar "srcLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (DoExpr (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (ELam ((PVar "f")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EVar "srcLines")) (EVar "target")) (EApp (EVar "findingToDiag") (EVar "f"))))) (EVar "findings")))))))) (DoLet false false (PVar "hasOutput") (EBinOp ">" (EApp (EVar "stringLength") (EVar "output")) (ELit (LInt 0)))) (DoLet false false PWild (EIf (EBinOp "&&" (EVar "multiFile") (EVar "hasOutput")) (EApp (EVar "putStrLn") (EBinOp "++" (EVar "target") (ELit (LString ":")))) (ELit LUnit))) (DoLet false false PWild (EIf (EVar "hasOutput") (EApp (EVar "putStrLn") (EVar "output")) (ELit LUnit))) (DoExpr (ETuple (EApp (EApp (EVar "anyList") (EVar "isFindingError")) (EVar "findings")) (EListLit (EVar "entry"))))))
+(DTypeSig false "lintEntryOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "ShardLoad") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyCon "LintEntry")))))))))))))
+(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "None") PWild (PVar "disableNames") (PVar "onlyNames") (PVar "wantSummaries") (PVar "target") (PVar "src") PWild (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "rules") (EApp (EApp (EVar "selectRules") (EVar "onlyNames")) (EVar "disableNames"))) (DoExpr (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (ELit (LString ""))) (fa "freeFindings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EApp (EVar "ranked") (ELit (LInt 0))) (EVar "rules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "indexFindings" (EListLit)) (fa "indexKey" (ELit (LString ""))) (fa "summaries" (EIf (EVar "wantSummaries") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls")) (EListLit))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))))))
+(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "Some" PWild) (PCon "ShardStale" (PVar "stale")) PWild PWild PWild (PVar "target") (PVar "src") PWild (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoExpr (ERecordUpdate (EVar "stale") ((fa "indexFindings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EVar "rankedIndexRules") (EVar "allRules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "dirty" (EVar "True")))))))
+(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "Some" PWild) PWild PWild PWild PWild (PVar "target") (PVar "src") (PVar "hash") (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "all") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EApp (EVar "ranked") (ELit (LInt 0))) (EVar "allRules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (DoLet false false (PTuple (PVar "free") (PVar "indexed")) (EApp (EApp (EVar "splitByIndex") (EVar "allRules")) (EVar "all"))) (DoExpr (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (EVar "hash")) (fa "freeFindings" (EVar "free")) (fa "indexFindings" (EVar "indexed")) (fa "indexKey" (EApp (EApp (EVar "indexKeyFor") (EVar "allRules")) (EVar "idx"))) (fa "summaries" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EListLit)) (EListLit)) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))))))
 (DTypeSig false "lintOneFileFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))))
 (DFunDef false "lintOneFileFix" ((PVar "idx") (PVar "unsafeMode") (PVar "onlyNames") (PVar "disableNames") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "limit") (EIf (EVar "unsafeMode") (EVar "Unsafe") (EVar "Safe"))) (DoLet false false (PVar "localMods") (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Ok" (PTuple (PVar "decls") PWild)) () (EApp (EApp (EVar "projectWildMods") (EVar "target")) (EVar "decls"))) (arm (PCon "Err" PWild) () (EListLit)))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fixSource") (EVar "idx")) (EVar "limit")) (EVar "onlyNames")) (EVar "disableNames")) (EVar "localMods")) (EVar "target")) (EVar "src")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "run")) () (EApp (EApp (EApp (EVar "writeFixed") (EVar "target")) (EVar "src")) (EVar "run")))))))))
 (DTypeSig false "writeFixed" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "FixRun") (TyEffect ("IO") None (TyCon "Bool"))))))
@@ -1376,8 +1282,8 @@ writeFixedSource target src newSrc n =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "cjAllToJson" false) (mem "ppSeverity" false) (mem "diagIsError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false))))
 (DUse false (UseGroup ("support" "cli_targets") ((mem "collectMdkFiles" false) (mem "expandLintTarget" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
-(DUse false (UseGroup ("tools" "lint") ((mem "Applicability" true) (mem "Category" true) (mem "CrossFileRule" true) (mem "Directive" false) (mem "Finding" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "applicabilityText" false) (mem "maxApplicability" false) (mem "ruleMetaName" false) (mem "allCrossFileRules" false) (mem "StdlibIndex" false) (mem "allRules" false) (mem "applyFindingDeny" false) (mem "applyFindingFilters" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsMultiDirs" false) (mem "crossFileCacheSound" false) (mem "factDirectives" false) (mem "factDupOccs" false) (mem "findingToDiag" false) (mem "fixPassLimit" false) (mem "fixSource" false) (mem "FixRun" true) (mem "runParts" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "lintFileDiagTripleParsed" false) (mem "lintParseSource" false) (mem "lintProgramFacts" false) (mem "mkFileFactsAt" false) (mem "projectWildMods" false) (mem "crossFileSelected" false) (mem "selectRules" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "stdlibFingerprint" false))))
-(DUse false (UseGroup ("tools" "lint_cache") ((mem "LintEntry" true) (mem "cacheDirOf" false) (mem "contentHashOf" false) (mem "loadEntry" false) (mem "ruleSetStamp" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "Applicability" true) (mem "Category" true) (mem "ProjectRule" true) (mem "Directive" false) (mem "Finding" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "Summary" false) (mem "applicabilityText" false) (mem "maxApplicability" false) (mem "ruleMetaName" false) (mem "allProjectRules" false) (mem "StdlibIndex" false) (mem "allRules" false) (mem "applyFindingDeny" false) (mem "applyFindingFilters" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsMultiDirs" false) (mem "factDirectives" false) (mem "fileSummaries" false) (mem "findingToDiag" false) (mem "fixPassLimit" false) (mem "fixSource" false) (mem "FixRun" true) (mem "runParts" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "lintFileDiagTripleParsed" false) (mem "lintParseSource" false) (mem "lintProgramRanked" false) (mem "indexKeyFor" false) (mem "rankedIndexRules" false) (mem "splitByIndex" false) (mem "mkFileFacts" false) (mem "mkFileFactsAt" false) (mem "projectWildMods" false) (mem "projectRuleSelected" false) (mem "ranked" false) (mem "selectRules" false) (mem "mergeProjectIntoTriples" false) (mem "runProjectRules" false))))
+(DUse false (UseGroup ("tools" "lint_cache") ((mem "LintEntry" true) (mem "ShardLoad" true) (mem "cacheDirOf" false) (mem "contentHashOf" false) (mem "entryFindings" false) (mem "loadEntry" false) (mem "ruleSetStamp" false))))
 (DUse false (UseGroup ("tools" "lint_baseline") ((mem "LintBaseline" false) (mem "applyBaselineToDiags" false) (mem "applyBaselineToFindings" false) (mem "baselineDiagViolations" false) (mem "baselineKeyOf" false) (mem "baselineViolationLine" false) (mem "baselineViolations" false) (mem "diagCodeOf" false) (mem "findingRuleOf" false))))
 (DTypeSig true "lintHelpText" (TyCon "String"))
 (DFunDef false "lintHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka lint — Lint files/dirs against style rules\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka lint [paths...] [flags]\n")) (ELit (LString "  medaka lint --list-rules [filters] [--json|--markdown]\n")) (ELit (LString "  medaka lint --explain <rule>\n")) (ELit (LString "\n")) (ELit (LString "  --fix                 rewrite fixable findings in-place\n")) (ELit (LString "  --unsafe-fixes        with --fix: also apply fixes that may change behavior\n")) (ELit (LString "  --json                emit the {\"files\":[...]} structured-diagnostics\n")) (ELit (LString "                       envelope instead of human text (--fix is ignored)\n")) (ELit (LString "  --cache                reuse per-file results for files whose content is\n")) (ELit (LString "                       unchanged (opt-in, like ESLint's --cache)\n")) (ELit (LString "  --disable=r1,r2,...    suppress findings from the named rules\n")) (ELit (LString "  --only=r1,...          keep only findings from the named rules\n")) (ELit (LString "  --deny=r1,...          promote findings from the named rules to error\n")) (ELit (LString "  --baseline=<file>      error only where a file's per-rule finding count\n")) (ELit (LString "                       exceeds its row in <file> (counts may fall freely)\n")) (ELit (LString "  --write-baseline=<f>   regenerate <f> from this run instead of reporting\n")) (ELit (LString "  --list-rules           list every rule with its metadata (--json for the\n")) (ELit (LString "                       machine form, --markdown for docs/ops/LINT-RULES.md)\n")) (ELit (LString "  --scope=universal|internal     with --list-rules: keep one scope\n")) (ELit (LString "  --ratchet=gated|baselined      with --list-rules: keep one ratchet\n")) (ELit (LString "  --tier=file|cross              with --list-rules: keep one rule tier\n")) (ELit (LString "  --names                with --list-rules: print only the names, one per line\n")) (ELit (LString "  --explain <rule>       print a rule's summary and documentation\n")) (ELit (LString "  --internal             run the internal-scope rules on every target (they are\n")) (ELit (LString "                       otherwise on only under a manifest with [lint] internal = true)\n")) (ELit (LString "\n")) (ELit (LString "Target resolution: explicit file args are linted in order; a single\n")) (ELit (LString "directory arg lints its top-level .mdk files (not recursive); no args\n")) (ELit (LString "finds the medaka.toml project root and lints its top-level .mdk files.\n")) (ELit (LString "Exit 0 unless a SevError finding exists.\n")))))
@@ -1388,10 +1294,10 @@ writeFixedSource target src newSrc n =
 (DFunDef false "tierText" ((PCon "TierFile")) (ELit (LString "file")))
 (DFunDef false "tierText" ((PCon "TierCross")) (ELit (LString "cross")))
 (DTypeSig true "allRuleRows" (TyApp (TyCon "List") (TyCon "RuleRow")))
-(DFunDef false "allRuleRows" () (EBlock (DoLet false false (PVar "fileMetas") (EApp (EApp (EMethodRef "map") (EVar "ruleMetaOf")) (EVar "allRules"))) (DoLet false false (PVar "crossMetas") (EApp (EApp (EMethodRef "map") (EVar "crossMetaOf")) (EVar "allCrossFileRules"))) (DoLet false false (PVar "fileNames") (EApp (EApp (EMethodRef "map") (EVar "ruleMetaName")) (EVar "fileMetas"))) (DoLet false false (PVar "crossNames") (EApp (EApp (EMethodRef "map") (EVar "ruleMetaName")) (EVar "crossMetas"))) (DoLet false false (PVar "crossOnly") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "fileNames"))))) (EVar "crossMetas"))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EApp (EApp (EVar "tiersOf") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "crossNames"))))) (EVar "fileMetas")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EListLit (EVar "TierCross"))))) (EVar "crossOnly"))))))
+(DFunDef false "allRuleRows" () (EBlock (DoLet false false (PVar "fileMetas") (EApp (EApp (EMethodRef "map") (EVar "ruleMetaOf")) (EVar "allRules"))) (DoLet false false (PVar "crossMetas") (EApp (EApp (EMethodRef "map") (EVar "crossMetaOf")) (EVar "allProjectRules"))) (DoLet false false (PVar "fileNames") (EApp (EApp (EMethodRef "map") (EVar "ruleMetaName")) (EVar "fileMetas"))) (DoLet false false (PVar "crossNames") (EApp (EApp (EMethodRef "map") (EVar "ruleMetaName")) (EVar "crossMetas"))) (DoLet false false (PVar "crossOnly") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "fileNames"))))) (EVar "crossMetas"))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EApp (EApp (EVar "tiersOf") (EApp (EVar "ruleMetaName") (EVar "m"))) (EVar "crossNames"))))) (EVar "fileMetas")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EVar "mkRow") (EVar "m")) (EListLit (EVar "TierCross"))))) (EVar "crossOnly"))))))
 (DTypeSig false "ruleMetaOf" (TyFun (TyCon "Rule") (TyCon "RuleMeta")))
 (DFunDef false "ruleMetaOf" ((PVar "r")) (EFieldAccess (EVar "r") "meta"))
-(DTypeSig false "crossMetaOf" (TyFun (TyCon "CrossFileRule") (TyCon "RuleMeta")))
+(DTypeSig false "crossMetaOf" (TyFun (TyCon "ProjectRule") (TyCon "RuleMeta")))
 (DFunDef false "crossMetaOf" ((PVar "r")) (EFieldAccess (EVar "r") "meta"))
 (DTypeSig false "mkRow" (TyFun (TyCon "RuleMeta") (TyFun (TyApp (TyCon "List") (TyCon "Tier")) (TyCon "RuleRow"))))
 (DFunDef false "mkRow" ((PVar "m") (PVar "tiers")) (ERecordCreate "RuleRow" ((fa "rrMeta" (EVar "m")) (fa "rrTiers" (EVar "tiers")))))
@@ -1460,13 +1366,13 @@ writeFixedSource target src newSrc n =
 (DTypeSig true "lintCacheCtx" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "lintCacheCtx" ((PCon "False") PWild) (EVar "None"))
 (DFunDef false "lintCacheCtx" ((PCon "True") (PCon "True")) (EVar "None"))
-(DFunDef false "lintCacheCtx" ((PCon "True") (PCon "False")) (EIf (EApp (EVar "not") (EVar "crossFileCacheSound")) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "root") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "canonicalizePath") (ELit (LString "."))))) (DoLet false false (PVar "binStamp") (EApp (EVar "ruleSetStamp") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "binStamp") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (ETuple (EApp (EVar "cacheDirOf") (EVar "root")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "binStamp"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "stdlibFingerprint"))) (ELit (LString "")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lintCacheCtx" ((PCon "True") (PCon "False")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "canonicalizePath") (ELit (LString "."))))) (DoLet false false (PVar "binStamp") (EApp (EVar "ruleSetStamp") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "binStamp") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (ETuple (EApp (EVar "cacheDirOf") (EVar "root")) (EVar "binStamp")))))))
 (DTypeSig true "runLintJsonCmd" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))))))))
-(DFunDef false "runLintJsonCmd" ((PVar "idx") (PVar "internalFlag") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "files")) (EBlock (DoLet false false (PVar "quads") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesToDiagQuads") (EVar "idx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "files"))) (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "dropQuadParse")) (EVar "quads"))) (DoLet false false (PVar "cross") (EApp (EApp (EApp (EApp (EApp (EVar "crossFileJsonFindings") (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "quads"))) (DoLet false false (PVar "merged") (EApp (EApp (EVar "mergeCrossFileIntoTriples") (EVar "cross")) (EVar "triples"))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EVar "cjAllToJson") (EVar "merged")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "cjLintTripleHasErr")) (EVar "merged")) (EApp (EVar "stageExit") (ELit (LInt 1))) (ELit LUnit)))))
-(DTypeSig true "crossFileJsonFindings" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Finding")))))))))
-(DFunDef false "crossFileJsonFindings" ((PVar "internalFlag") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "quads")) (EBlock (DoLet false false (PVar "parsedTriples") (EApp (EApp (EMethodRef "map") (EVar "quadToParseTriple")) (EVar "quads"))) (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "runCrossFileRules") (EVar "onlyNames")) (EVar "disableNames")) (EVar "parsedTriples"))) (DoLet false false (PVar "active") (EApp (EApp (EApp (EVar "dropInactiveInternalCross") (EVar "allCrossFileRules")) (EVar "internalFlag")) (EVar "raw"))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMulti") (EApp (EApp (EMethodRef "map") (EVar "quadToSrc")) (EVar "quads"))) (EVar "active"))) (DoExpr (EApp (EApp (EVar "applyFindingDeny") (EVar "denyNames")) (EVar "suppressed")))))
-(DTypeSig true "quadToParseTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "quadToParseTriple" ((PTuple (PVar "path") PWild PWild (PVar "pos") (PVar "decls"))) (ETuple (EVar "path") (EVar "pos") (EVar "decls")))
+(DFunDef false "runLintJsonCmd" ((PVar "idx") (PVar "internalFlag") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "files")) (EBlock (DoLet false false (PVar "quads") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesToDiagQuads") (EVar "idx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "files"))) (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "dropQuadParse")) (EVar "quads"))) (DoLet false false (PVar "cross") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectJsonFindings") (EVar "idx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "quads"))) (DoLet false false (PVar "merged") (EApp (EApp (EVar "mergeProjectIntoTriples") (EVar "cross")) (EVar "triples"))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EVar "cjAllToJson") (EVar "merged")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "cjLintTripleHasErr")) (EVar "merged")) (EApp (EVar "stageExit") (ELit (LInt 1))) (ELit LUnit)))))
+(DTypeSig true "projectJsonFindings" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Finding"))))))))))
+(DFunDef false "projectJsonFindings" ((PVar "idx") (PVar "internalFlag") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "quads")) (EBlock (DoLet false false (PVar "summaries") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "quadSummaries") (EVar "onlyNames")) (EVar "disableNames"))) (EVar "quads"))) (DoLet false false (PVar "raw") (EApp (EApp (EApp (EApp (EVar "runProjectRules") (EVar "onlyNames")) (EVar "disableNames")) (EVar "idx")) (EVar "summaries"))) (DoLet false false (PVar "active") (EApp (EApp (EApp (EVar "dropInactiveInternalProject") (EVar "allProjectRules")) (EVar "internalFlag")) (EVar "raw"))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMulti") (EApp (EApp (EMethodRef "map") (EVar "quadToSrc")) (EVar "quads"))) (EVar "active"))) (DoExpr (EApp (EApp (EVar "applyFindingDeny") (EVar "denyNames")) (EVar "suppressed")))))
+(DTypeSig true "quadSummaries" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Summary"))))))))
+(DFunDef false "quadSummaries" ((PVar "only") (PVar "disable") (PTuple (PVar "path") (PVar "src") PWild (PVar "pos") (PVar "decls"))) (ETuple (EVar "path") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EVar "only")) (EVar "disable")) (EVar "path")) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "decls")) (EVar "pos"))) (EVar "pos")) (EVar "decls"))))
 (DTypeSig true "quadToSrc" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "quadToSrc" ((PTuple (PVar "path") (PVar "src") PWild PWild PWild)) (ETuple (EVar "path") (EVar "src")))
 (DTypeSig false "dropQuadParse" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
@@ -1493,26 +1399,20 @@ writeFixedSource target src newSrc n =
 (DFunDef false "reportBaselineViolations" ((PVar "key") (PCons (PVar "v") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka lint: baseline: ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "baselineViolationLine") (EVar "key")) (EVar "v")))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "reportBaselineViolations") (EVar "key")) (EVar "rest")))))
 (DTypeSig true "baselineFileCodes" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "baselineFileCodes" ((PVar "cwd") (PTuple (PVar "path") PWild (PVar "diags"))) (ETuple (EApp (EApp (EVar "baselineKeyOf") (EVar "cwd")) (EVar "path")) (EApp (EApp (EMethodRef "map") (EVar "diagCodeOf")) (EVar "diags"))))
-(DTypeSig true "runCrossFileReport" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "Bool"))))))))
-(DFunDef false "runCrossFileReport" ((PVar "internalFlag") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "parsed")) (EBlock (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "parsedToTriple")) (EVar "parsed"))) (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "dropInactiveInternalCross") (EVar "allCrossFileRules")) (EVar "internalFlag")) (EApp (EApp (EApp (EVar "runCrossFileRules") (EVar "onlyNames")) (EVar "disableNames")) (EVar "triples")))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMulti") (EApp (EApp (EMethodRef "map") (EVar "parsedToSrc")) (EVar "parsed"))) (EVar "raw"))) (DoExpr (EApp (EVar "reportCrossFindings") (EApp (EApp (EVar "applyFindingDeny") (EVar "denyNames")) (EVar "suppressed"))))))
-(DTypeSig true "runCrossFileReportCached" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "LintEntry")) (TyEffect ("IO") None (TyCon "Bool"))))))))
-(DFunDef false "runCrossFileReportCached" ((PVar "internalFlag") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "entries")) (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "dropInactiveInternalCross") (EVar "allCrossFileRules")) (EVar "internalFlag")) (EApp (EApp (EApp (EVar "runCrossFileRulesFromOccs") (EVar "onlyNames")) (EVar "disableNames")) (EApp (EApp (EDictApp "flatMap") (EVar "entryOccs")) (EVar "entries"))))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMultiDirs") (EApp (EApp (EMethodRef "map") (EVar "entryDirTable")) (EVar "entries"))) (EVar "raw"))) (DoExpr (EApp (EVar "reportCrossFindings") (EApp (EApp (EVar "applyFindingDeny") (EVar "denyNames")) (EVar "suppressed"))))))
-(DTypeSig false "entryOccs" (TyFun (TyCon "LintEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
-(DFunDef false "entryOccs" ((PVar "e")) (EFieldAccess (EVar "e") "dupOccs"))
+(DTypeSig true "runProjectReport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "LintEntry")) (TyEffect ("IO") None (TyCon "Bool")))))))))
+(DFunDef false "runProjectReport" ((PVar "idx") (PVar "internalFlag") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "entries")) (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "dropInactiveInternalProject") (EVar "allProjectRules")) (EVar "internalFlag")) (EApp (EApp (EApp (EApp (EVar "runProjectRules") (EVar "onlyNames")) (EVar "disableNames")) (EVar "idx")) (EApp (EApp (EMethodRef "map") (EVar "entrySummaries")) (EVar "entries"))))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMultiDirs") (EApp (EApp (EMethodRef "map") (EVar "entryDirTable")) (EVar "entries"))) (EVar "raw"))) (DoExpr (EApp (EVar "reportProjectFindings") (EApp (EApp (EVar "applyFindingDeny") (EVar "denyNames")) (EVar "suppressed"))))))
+(DTypeSig false "entrySummaries" (TyFun (TyCon "LintEntry") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Summary"))))))
+(DFunDef false "entrySummaries" ((PVar "e")) (ETuple (EFieldAccess (EVar "e") "path") (EFieldAccess (EVar "e") "summaries")))
 (DTypeSig false "entryDirTable" (TyFun (TyCon "LintEntry") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))))
 (DFunDef false "entryDirTable" ((PVar "e")) (ETuple (EFieldAccess (EVar "e") "path") (EFieldAccess (EVar "e") "directives")))
-(DTypeSig false "reportCrossFindings" (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyEffect ("IO") None (TyCon "Bool"))))
-(DFunDef false "reportCrossFindings" ((PList)) (EVar "False"))
-(DFunDef false "reportCrossFindings" ((PVar "findings")) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "cross-file:")))) (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EVar "renderCrossFinding")) (EVar "findings"))))) (DoExpr (EApp (EApp (EVar "anyList") (EVar "isFindingError")) (EVar "findings")))))
+(DTypeSig false "reportProjectFindings" (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "reportProjectFindings" ((PList)) (EVar "False"))
+(DFunDef false "reportProjectFindings" ((PVar "findings")) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "cross-file:")))) (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EVar "renderCrossFinding")) (EVar "findings"))))) (DoExpr (EApp (EApp (EVar "anyList") (EVar "isFindingError")) (EVar "findings")))))
 (DTypeSig false "renderCrossFinding" (TyFun (TyCon "Finding") (TyCon "String")))
 (DFunDef false "renderCrossFinding" ((PVar "f")) (EApp (EApp (EApp (EVar "ppDiagCliSrc") (ELit (LString ""))) (EApp (EVar "locFileOf") (EFieldAccess (EVar "f") "loc"))) (EApp (EVar "findingToDiag") (EVar "f"))))
 (DTypeSig false "locFileOf" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "locFileOf" ((PCon "Some" (PCon "Loc" (PVar "file") PWild PWild PWild PWild))) (EVar "file"))
 (DFunDef false "locFileOf" ((PCon "None")) (ELit (LString "")))
-(DTypeSig false "parsedToTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "parsedToTriple" ((PTuple (PVar "path") PWild (PVar "pos") (PVar "decls"))) (ETuple (EVar "path") (EVar "pos") (EVar "decls")))
-(DTypeSig false "parsedToSrc" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String"))))
-(DFunDef false "parsedToSrc" ((PTuple (PVar "path") (PVar "src") PWild PWild)) (ETuple (EVar "path") (EVar "src")))
 (DTypeSig true "resolveLintTargets" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "resolveLintTargets" ((PList)) (EBlock (DoLet false false (PVar "cwd") (EApp (EVar "canonicalizePath") (ELit (LString ".")))) (DoExpr (EMatch (EApp (EVar "findProjectRoot") (EVar "cwd")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "medaka lint: no medaka.toml found; run from a project directory or pass file/dir paths")))) (DoLet false false PWild (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "root")) () (EApp (EVar "collectMdkFiles") (EVar "root")))))))
 (DFunDef false "resolveLintTargets" ((PVar "targets")) (EApp (EApp (EDictApp "flatMap") (EVar "expandLintTarget")) (EVar "targets")))
@@ -1531,13 +1431,13 @@ writeFixedSource target src newSrc n =
 (DTypeSig false "firstInactiveTarget" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "firstInactiveTarget" (PWild (PList)) (EVar "None"))
 (DFunDef false "firstInactiveTarget" ((PVar "named") (PCons (PVar "f") (PVar "rest"))) (EIf (EApp (EApp (EVar "internalActiveFor") (EVar "False")) (EVar "f")) (EApp (EApp (EVar "firstInactiveTarget") (EVar "named")) (EVar "rest")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal rule ")) (EApp (EMethodRef "display") (EVar "named"))) (ELit (LString " is not active for `"))) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString "`; pass --internal or set `[lint] internal = true` in the project's medaka.toml"))))))
-(DTypeSig true "dropInactiveInternalCross" (TyFun (TyApp (TyCon "List") (TyCon "CrossFileRule")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "dropInactiveInternalCross" (PWild PWild (PList)) (EListLit))
-(DFunDef false "dropInactiveInternalCross" ((PVar "rules") (PVar "internalFlag") (PCons (PVar "f") (PVar "rest"))) (EBlock (DoLet false false (PVar "keep") (EIf (EApp (EApp (EVar "isInternalCrossRule") (EVar "rules")) (EFieldAccess (EVar "f") "rule")) (EApp (EApp (EVar "findingInActiveProject") (EVar "internalFlag")) (EVar "f")) (EVar "True"))) (DoLet false false (PVar "kept") (EApp (EApp (EApp (EVar "dropInactiveInternalCross") (EVar "rules")) (EVar "internalFlag")) (EVar "rest"))) (DoExpr (EIf (EVar "keep") (EBinOp "::" (EVar "f") (EVar "kept")) (EVar "kept")))))
-(DTypeSig false "isInternalCrossRule" (TyFun (TyApp (TyCon "List") (TyCon "CrossFileRule")) (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isInternalCrossRule" ((PVar "rules") (PVar "name")) (EApp (EApp (EVar "anyList") (EApp (EVar "isInternalCrossNamed") (EVar "name"))) (EVar "rules")))
-(DTypeSig false "isInternalCrossNamed" (TyFun (TyCon "String") (TyFun (TyCon "CrossFileRule") (TyCon "Bool"))))
-(DFunDef false "isInternalCrossNamed" ((PVar "name") (PVar "r")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "name") (EVar "name")) (EApp (EVar "isInternalScope") (EFieldAccess (EFieldAccess (EVar "r") "meta") "scope"))))
+(DTypeSig true "dropInactiveInternalProject" (TyFun (TyApp (TyCon "List") (TyCon "ProjectRule")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "dropInactiveInternalProject" (PWild PWild (PList)) (EListLit))
+(DFunDef false "dropInactiveInternalProject" ((PVar "rules") (PVar "internalFlag") (PCons (PVar "f") (PVar "rest"))) (EBlock (DoLet false false (PVar "keep") (EIf (EApp (EApp (EVar "isInternalProjectRule") (EVar "rules")) (EFieldAccess (EVar "f") "rule")) (EApp (EApp (EVar "findingInActiveProject") (EVar "internalFlag")) (EVar "f")) (EVar "True"))) (DoLet false false (PVar "kept") (EApp (EApp (EApp (EVar "dropInactiveInternalProject") (EVar "rules")) (EVar "internalFlag")) (EVar "rest"))) (DoExpr (EIf (EVar "keep") (EBinOp "::" (EVar "f") (EVar "kept")) (EVar "kept")))))
+(DTypeSig false "isInternalProjectRule" (TyFun (TyApp (TyCon "List") (TyCon "ProjectRule")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isInternalProjectRule" ((PVar "rules") (PVar "name")) (EApp (EApp (EVar "anyList") (EApp (EVar "isInternalProjectNamed") (EVar "name"))) (EVar "rules")))
+(DTypeSig false "isInternalProjectNamed" (TyFun (TyCon "String") (TyFun (TyCon "ProjectRule") (TyCon "Bool"))))
+(DFunDef false "isInternalProjectNamed" ((PVar "name") (PVar "r")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "name") (EVar "name")) (EApp (EVar "isInternalScope") (EFieldAccess (EFieldAccess (EVar "r") "meta") "scope"))))
 (DTypeSig false "findingInActiveProject" (TyFun (TyCon "Bool") (TyFun (TyCon "Finding") (TyEffect ("IO") None (TyCon "Bool")))))
 (DFunDef false "findingInActiveProject" ((PVar "internalFlag") (PVar "f")) (EMatch (EFieldAccess (EVar "f") "loc") (arm (PCon "Some" (PCon "Loc" (PVar "file") PWild PWild PWild PWild)) () (EApp (EApp (EVar "internalActiveFor") (EVar "internalFlag")) (EVar "file"))) (arm (PCon "None") () (EVar "True"))))
 (DTypeSig false "internalActivationMemo" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Bool"))))
@@ -1551,20 +1451,17 @@ writeFixedSource target src newSrc n =
 (DTypeSig false "memoStore" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyCon "Bool"))))
 (DFunDef false "memoStore" ((PVar "key") (PVar "active")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "internalActivationMemo")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "active")) (EUnOp "!" (EVar "internalActivationMemo"))))) (DoExpr (EVar "active"))))
 (DData Public "LintRun" () ((variant "LintRun" (ConNamed (field "lrInternal" (TyCon "Bool")) (field "lrFix" (TyCon "Bool")) (field "lrUnsafe" (TyCon "Bool")) (field "lrMulti" (TyCon "Bool"))))) ())
-(DTypeSig true "lintFilesGo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "LintRun") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))))))
-(DFunDef false "lintFilesGo" (PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (ETuple (EVar "acc") (EListLit) (EListLit)))
-(DFunDef false "lintFilesGo" ((PVar "idx") (PVar "run") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "fileDisable") (EBinOp "++" (EVar "disableNames") (EApp (EApp (EVar "internalDisabledFor") (EFieldAccess (EVar "run") "lrInternal")) (EVar "f")))) (DoExpr (EIf (EFieldAccess (EVar "run") "lrFix") (EBlock (DoLet false false (PVar "hadErr") (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileFix") (EVar "idx")) (EFieldAccess (EVar "run") "lrUnsafe")) (EVar "onlyNames")) (EVar "fileDisable")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr"))))) (EBlock (DoLet false false (PTuple (PVar "hadErr") (PVar "entries") (PVar "parsed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileReport") (EVar "idx")) (EFieldAccess (EVar "run") "lrMulti")) (EVar "fileDisable")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "f"))) (DoLet false false (PTuple (PVar "restErr") (PVar "restEntries") (PVar "restParsed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr")))) (DoExpr (ETuple (EVar "restErr") (EBinOp "++" (EVar "entries") (EVar "restEntries")) (EBinOp "++" (EVar "parsed") (EVar "restParsed")))))))))
-(DTypeSig false "lintOneFileReport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))))))))))))
-(DFunDef false "lintOneFileReport" ((PVar "idx") (PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (ETuple (EVar "True") (EListLit) (EListLit))))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "cached") (EMatch (EVar "cacheCtx") (arm (PCon "Some" (PTuple (PVar "cacheDir") (PVar "stamp"))) () (EApp (EApp (EApp (EApp (EVar "loadEntry") (EVar "cacheDir")) (EVar "stamp")) (EVar "target")) (EApp (EVar "contentHashOf") (EVar "src")))) (arm (PCon "None") () (EVar "None")))) (DoExpr (EMatch (EVar "cached") (arm (PCon "Some" (PVar "hit")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileRender") (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "target")) (EVar "src")) (EVar "hit")) (EListLit))) (arm (PCon "None") () (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (ETuple (EVar "True") (EListLit) (EListLit))))) (arm (PCon "Ok" (PVar "parsedSource")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileParsed") (EVar "idx")) (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "target")) (EVar "src")) (EVar "parsedSource")))))))))))
-(DTypeSig false "lintOneFileParsed" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))))))))))))))
-(DFunDef false "lintOneFileParsed" ((PVar "idx") (PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PVar "target") (PVar "src") (PVar "parsedSource")) (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EVar "selectRules") (EVar "onlyNames")) (EVar "disableNames"))) (DoLet false false (PVar "wantOccs") (EBinOp "&&" (EBinOp "&&" (EVar "multiFile") (EVar "crossFileCacheSound")) (EApp (EApp (EVar "crossFileSelected") (EVar "onlyNames")) (EVar "disableNames")))) (DoLet false false (PTuple (PVar "entry") (PVar "parsed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintEntryOf") (EVar "idx")) (EVar "cacheCtx")) (EVar "rules")) (EVar "wantOccs")) (EVar "target")) (EVar "src")) (EVar "parsedSource"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileRender") (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "target")) (EVar "src")) (EVar "entry")) (EVar "parsed")))))
-(DTypeSig false "lintOneFileRender" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))))))
-(DFunDef false "lintOneFileRender" ((PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "target") (PVar "src") (PVar "entry") (PVar "parsed")) (EBlock (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressionsDirs") (EFieldAccess (EVar "entry") "directives")) (EFieldAccess (EVar "entry") "findings"))) (DoLet false false (PVar "filtered") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "allFindings"))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EVar "applyBaselineFindings") (EVar "baseCtx")) (EVar "target")) (EVar "filtered"))) (DoLet false false (PVar "output") (EMatch (EVar "findings") (arm (PList) () (ELit (LString ""))) (arm PWild () (EBlock (DoLet false false (PVar "srcLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (DoExpr (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (ELam ((PVar "f")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EVar "srcLines")) (EVar "target")) (EApp (EVar "findingToDiag") (EVar "f"))))) (EVar "findings")))))))) (DoLet false false (PVar "hasOutput") (EBinOp ">" (EApp (EVar "stringLength") (EVar "output")) (ELit (LInt 0)))) (DoLet false false PWild (EIf (EBinOp "&&" (EVar "multiFile") (EVar "hasOutput")) (EApp (EVar "putStrLn") (EBinOp "++" (EVar "target") (ELit (LString ":")))) (ELit LUnit))) (DoLet false false PWild (EIf (EVar "hasOutput") (EApp (EVar "putStrLn") (EVar "output")) (ELit LUnit))) (DoExpr (ETuple (EApp (EApp (EVar "anyList") (EVar "isFindingError")) (EVar "findings")) (EListLit (EVar "entry")) (EVar "parsed")))))
-(DTypeSig false "lintEntryOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyTuple (TyCon "LintEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))))
-(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "None") (PVar "rules") (PVar "wantOccs") (PVar "target") (PVar "src") (PVar "parsedSource")) (EBlock (DoLet false false (PTuple (PVar "entry") (PVar "pos") (PVar "decls")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFileFresh") (EVar "idx")) (EVar "rules")) (EVar "target")) (EVar "src")) (ELit (LString ""))) (EVar "wantOccs")) (EVar "parsedSource"))) (DoExpr (ETuple (EVar "entry") (EIf (EVar "crossFileCacheSound") (EListLit) (EListLit (ETuple (EVar "target") (EVar "src") (EVar "pos") (EVar "decls"))))))))
-(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "Some" (PTuple (PVar "cacheDir") (PVar "stamp"))) PWild PWild (PVar "target") (PVar "src") (PVar "parsedSource")) (EBlock (DoLet false false (PVar "hash") (EApp (EVar "contentHashOf") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadEntry") (EVar "cacheDir")) (EVar "stamp")) (EVar "target")) (EMethodRef "hash")) (arm (PCon "Some" (PVar "hit")) () (ETuple (EVar "hit") (EListLit))) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "entry") PWild PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFileFresh") (EVar "idx")) (EVar "allRules")) (EVar "target")) (EVar "src")) (EMethodRef "hash")) (EVar "True")) (EVar "parsedSource"))) (DoExpr (ETuple (EVar "entry") (EListLit)))))))))
-(DTypeSig false "lintFileFresh" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyTuple (TyCon "LintEntry") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))
-(DFunDef false "lintFileFresh" ((PVar "idx") (PVar "rules") (PVar "target") (PVar "src") (PVar "hash") (PVar "wantOccs") (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoExpr (ETuple (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (EMethodRef "hash")) (fa "findings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EVar "rules")) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "dupOccs" (EIf (EVar "wantOccs") (EApp (EApp (EVar "factDupOccs") (EVar "target")) (EVar "facts")) (EListLit))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))) (EVar "pos") (EVar "decls")))))
+(DTypeSig true "lintFilesGo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "LintRun") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry"))))))))))))))
+(DFunDef false "lintFilesGo" (PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (ETuple (EVar "acc") (EListLit)))
+(DFunDef false "lintFilesGo" ((PVar "idx") (PVar "run") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "fileDisable") (EBinOp "++" (EVar "disableNames") (EApp (EApp (EVar "internalDisabledFor") (EFieldAccess (EVar "run") "lrInternal")) (EVar "f")))) (DoExpr (EIf (EFieldAccess (EVar "run") "lrFix") (EBlock (DoLet false false (PVar "hadErr") (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileFix") (EVar "idx")) (EFieldAccess (EVar "run") "lrUnsafe")) (EVar "onlyNames")) (EVar "fileDisable")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr"))))) (EBlock (DoLet false false (PTuple (PVar "hadErr") (PVar "entries")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileReport") (EVar "idx")) (EFieldAccess (EVar "run") "lrMulti")) (EVar "fileDisable")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "f"))) (DoLet false false (PTuple (PVar "restErr") (PVar "restEntries")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr")))) (DoExpr (ETuple (EVar "restErr") (EBinOp "++" (EVar "entries") (EVar "restEntries")))))))))
+(DTypeSig false "lintOneFileReport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")))))))))))))
+(DFunDef false "lintOneFileReport" ((PVar "idx") (PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (ETuple (EVar "True") (EListLit))))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "hash") (EMatch (EVar "cacheCtx") (arm (PCon "Some" PWild) () (EApp (EVar "contentHashOf") (EVar "src"))) (arm (PCon "None") () (ELit (LString ""))))) (DoLet false false (PVar "loaded") (EMatch (EVar "cacheCtx") (arm (PCon "Some" (PTuple (PVar "cacheDir") (PVar "stamp"))) () (EApp (EApp (EApp (EApp (EApp (EVar "loadEntry") (EVar "cacheDir")) (EVar "stamp")) (EApp (EApp (EVar "indexKeyFor") (EVar "allRules")) (EVar "idx"))) (EVar "target")) (EMethodRef "hash"))) (arm (PCon "None") () (EVar "ShardMiss")))) (DoExpr (EMatch (EVar "loaded") (arm (PCon "ShardHit" (PVar "hit")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileRender") (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "target")) (EVar "src")) (EVar "hit"))) (arm PWild () (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (ETuple (EVar "True") (EListLit))))) (arm (PCon "Ok" (PVar "parsedSource")) () (EBlock (DoLet false false (PVar "entry") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintEntryOf") (EVar "idx")) (EVar "cacheCtx")) (EVar "loaded")) (EVar "disableNames")) (EVar "onlyNames")) (EBinOp "&&" (EVar "multiFile") (EApp (EApp (EVar "projectRuleSelected") (EVar "onlyNames")) (EVar "disableNames")))) (EVar "target")) (EVar "src")) (EMethodRef "hash")) (EVar "parsedSource"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileRender") (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "target")) (EVar "src")) (EVar "entry")))))))))))))
+(DTypeSig false "lintOneFileRender" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")))))))))))))
+(DFunDef false "lintOneFileRender" ((PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "target") (PVar "src") (PVar "entry")) (EBlock (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressionsDirs") (EFieldAccess (EVar "entry") "directives")) (EApp (EVar "entryFindings") (EVar "entry")))) (DoLet false false (PVar "filtered") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "allFindings"))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EVar "applyBaselineFindings") (EVar "baseCtx")) (EVar "target")) (EVar "filtered"))) (DoLet false false (PVar "output") (EMatch (EVar "findings") (arm (PList) () (ELit (LString ""))) (arm PWild () (EBlock (DoLet false false (PVar "srcLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (DoExpr (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (ELam ((PVar "f")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EVar "srcLines")) (EVar "target")) (EApp (EVar "findingToDiag") (EVar "f"))))) (EVar "findings")))))))) (DoLet false false (PVar "hasOutput") (EBinOp ">" (EApp (EVar "stringLength") (EVar "output")) (ELit (LInt 0)))) (DoLet false false PWild (EIf (EBinOp "&&" (EVar "multiFile") (EVar "hasOutput")) (EApp (EVar "putStrLn") (EBinOp "++" (EVar "target") (ELit (LString ":")))) (ELit LUnit))) (DoLet false false PWild (EIf (EVar "hasOutput") (EApp (EVar "putStrLn") (EVar "output")) (ELit LUnit))) (DoExpr (ETuple (EApp (EApp (EVar "anyList") (EVar "isFindingError")) (EVar "findings")) (EListLit (EVar "entry"))))))
+(DTypeSig false "lintEntryOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "ShardLoad") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyCon "LintEntry")))))))))))))
+(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "None") PWild (PVar "disableNames") (PVar "onlyNames") (PVar "wantSummaries") (PVar "target") (PVar "src") PWild (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "rules") (EApp (EApp (EVar "selectRules") (EVar "onlyNames")) (EVar "disableNames"))) (DoExpr (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (ELit (LString ""))) (fa "freeFindings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EApp (EVar "ranked") (ELit (LInt 0))) (EVar "rules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "indexFindings" (EListLit)) (fa "indexKey" (ELit (LString ""))) (fa "summaries" (EIf (EVar "wantSummaries") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls")) (EListLit))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))))))
+(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "Some" PWild) (PCon "ShardStale" (PVar "stale")) PWild PWild PWild (PVar "target") (PVar "src") PWild (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoExpr (ERecordUpdate (EVar "stale") ((fa "indexFindings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EVar "rankedIndexRules") (EVar "allRules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "dirty" (EVar "True")))))))
+(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "Some" PWild) PWild PWild PWild PWild (PVar "target") (PVar "src") (PVar "hash") (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "all") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EApp (EVar "ranked") (ELit (LInt 0))) (EVar "allRules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (DoLet false false (PTuple (PVar "free") (PVar "indexed")) (EApp (EApp (EVar "splitByIndex") (EVar "allRules")) (EDictApp "all"))) (DoExpr (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (EMethodRef "hash")) (fa "freeFindings" (EVar "free")) (fa "indexFindings" (EVar "indexed")) (fa "indexKey" (EApp (EApp (EVar "indexKeyFor") (EVar "allRules")) (EVar "idx"))) (fa "summaries" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EListLit)) (EListLit)) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))))))
 (DTypeSig false "lintOneFileFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))))
 (DFunDef false "lintOneFileFix" ((PVar "idx") (PVar "unsafeMode") (PVar "onlyNames") (PVar "disableNames") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "limit") (EIf (EVar "unsafeMode") (EVar "Unsafe") (EVar "Safe"))) (DoLet false false (PVar "localMods") (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Ok" (PTuple (PVar "decls") PWild)) () (EApp (EApp (EVar "projectWildMods") (EVar "target")) (EVar "decls"))) (arm (PCon "Err" PWild) () (EListLit)))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fixSource") (EVar "idx")) (EVar "limit")) (EVar "onlyNames")) (EVar "disableNames")) (EVar "localMods")) (EVar "target")) (EVar "src")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "run")) () (EApp (EApp (EApp (EVar "writeFixed") (EVar "target")) (EVar "src")) (EVar "run")))))))))
 (DTypeSig false "writeFixed" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "FixRun") (TyEffect ("IO") None (TyCon "Bool"))))))

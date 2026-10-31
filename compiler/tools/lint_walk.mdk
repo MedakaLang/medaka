@@ -1,7 +1,7 @@
 -- compiler/tools/lint_walk.mdk — the lint runner: `lintProgram*` and the one
 -- visitor walk per file (`runVisitors`), per-file facts, the autofix driver,
--- finding filters, inline suppressions, the cross-file runner and the
--- stdlib-index builders.  The CLI filters and severity-overrides the registry's
+-- finding filters, inline suppressions, the project-rule runner and the
+-- index builders.  The CLI filters and severity-overrides the registry's
 -- rules and hands them in, so this module knows nothing about flags.
 
 import frontend.ast.{
@@ -47,6 +47,9 @@ import support.cli_targets.{collectMdkFiles}
 import tools.lint_cache.{ruleSetStamp}
 import tools.lint_index.{
   IndexRow,
+  ProjectIndex,
+  combineDigests,
+  emptyProjectIndex,
   fileRows,
   stdlibShardDir,
   projectShardDir,
@@ -95,7 +98,6 @@ import frontend.lexer.{
   commentText,
 }
 import tools.lint_core.{
-  CrossFileRule(..),
   Ctx(..),
   DirScope(..),
   Directive(..),
@@ -103,10 +105,12 @@ import tools.lint_core.{
   Finding(..),
   Fix(..),
   Fixability(..),
+  ProjectRule(..),
   Rule(..),
   RuleCheck(..),
   RuleMeta,
   StdlibIndex(..),
+  Summary,
   StdlibIndexError(..),
   Visitor(..),
   factComments,
@@ -118,6 +122,8 @@ import tools.lint_core.{
   maxApplicability,
   memoNew,
   mkStdlibIndex,
+  projectIndexOf,
+  stdlibIndexFingerprint,
   needsProjectIndex,
   needsScopes,
   needsStdlibIndex,
@@ -138,14 +144,13 @@ import tools.lint_scope.{
 import tools.lint_shared.{
   collectDirectives,
   declLocList,
-  ruleNameDuplicateBody,
   sortUniqS,
   zipDeclPos,
 }
 import tools.lint_fix.{demoteOverComments}
-import tools.lint_dup.{dupClauseOfDecl, dupJoin, dupOccsOfClauses}
+import tools.lint_dup.{dupClauseOfDecl}
 import tools.lint_registry.{
-  allCrossFileRules, allRules, crossRuleActive, selectRules
+  allProjectRules, allRules, projectRuleActive, selectRules
 }
 
 export
@@ -202,12 +207,6 @@ export
 factDirectives : FileFacts -> List Directive
 factDirectives ff = collectDirectives (factComments ff)
 
--- The file's cross-file duplicate-body occurrences (what `--cache` persists),
--- off the clause keys the same-file rule also reads.
-export
-factDupOccs : String -> FileFacts -> List (String, Int, String, String)
-factDupOccs path ff = dupOccsOfClauses path (factDupClauses ff)
-
 -- Run the enabled rules over a program, collecting every finding.  `pos` carries
 -- per-decl source spans so each rule can stamp its finding with the decl's real
 -- location.  Each rule's findings are re-stamped with the rule's (possibly
@@ -240,8 +239,30 @@ lintProgramFacts : StdlibIndex ->
   List Decl ->
   List Finding
 lintProgramFacts idx rules path facts pos prog =
-  let enabled = filterList ruleEnabled rules
-  let visitorSets = flatMap (ruleVisitors idx path facts pos prog) enabled
+  map snd (lintProgramRanked idx (ranked 0 rules) path facts pos prog)
+
+-- A rule's rank is its place in the roster the cache is keyed on, so findings
+-- computed in two runs (index-free rules in one, index-reading rules in a later
+-- one) merge back into the order a single run would have produced.
+export
+ranked : Int -> List Rule -> List (Int, Rule)
+ranked _ [] = []
+ranked i (r :: rest) = (i, r) :: ranked (i + 1) rest
+
+-- `lintProgramFacts` over rules that carry their rank; each finding comes back
+-- with the rank of the rule that made it.
+export
+lintProgramRanked : StdlibIndex ->
+  List (Int, Rule) ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List (Int, Finding)
+lintProgramRanked idx rules path facts pos prog =
+  let enabled = filterList rankedEnabled rules
+  let visitorSets =
+    flatMap (rf => ruleVisitors idx path facts pos prog (snd rf)) enabled
   let walked =
     if isEmptyL visitorSets then
       []
@@ -249,8 +270,8 @@ lintProgramFacts idx rules path facts pos prog =
       runVisitors visitorSets (declLocList pos prog)
   ruleFindings idx path facts pos prog enabled walked
 
-ruleEnabled : Rule -> Bool
-ruleEnabled r = r.enabled
+rankedEnabled : (Int, Rule) -> Bool
+rankedEnabled (_, r) = r.enabled
 
 ruleVisitors : StdlibIndex ->
   String ->
@@ -263,9 +284,11 @@ ruleVisitors idx path facts pos prog r = match r.check
   WholeFile _ => []
   Visits visits => [visits (indexFor r idx) path facts pos prog]
 
--- The index a rule is handed: the real one only if the rule declares that it
--- reads it.  An undeclared read then finds nothing on every run, instead of
--- finding the index on some runs and a stale answer under `--cache`.
+-- THE index access: the index a rule is handed.  The real one only if the rule
+-- declares that it reads it; an undeclared read then finds nothing on every
+-- run, instead of finding the index on some runs and a stale answer under
+-- `--cache`.  Every rule reaches the index through here, which is what lets a
+-- cache key be derived from what was handed out.
 indexFor : Rule -> StdlibIndex -> StdlibIndex
 indexFor r idx = if readsIndex r.meta then idx else emptyStdlibIndex
 
@@ -275,17 +298,19 @@ ruleFindings : StdlibIndex ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Rule ->
+  List (Int, Rule) ->
   List (List Finding) ->
-  List Finding
+  List (Int, Finding)
 ruleFindings _ _ _ _ _ [] _ = []
-ruleFindings idx path facts pos prog (r :: rs) walked = match r.check
+ruleFindings idx path facts pos prog ((rank, r) :: rs) walked = match r.check
   WholeFile check =>
-    map (restampFinding r) (check (indexFor r idx) path facts pos prog)
+    map
+        (f => (rank, restampFinding r f))
+        (check (indexFor r idx) path facts pos prog)
       ++ ruleFindings idx path facts pos prog rs walked
   Visits _ => match walked
     hits :: rest =>
-      map (restampFinding r) hits
+      map (f => (rank, restampFinding r f)) hits
         ++ ruleFindings idx path facts pos prog rs rest
     [] => ruleFindings idx path facts pos prog rs []
 
@@ -640,14 +665,24 @@ ruleNeedsIndex only disable r =
 -- `StdlibIndex`); only a stdlib file that does not PARSE is an error.
 export
 buildStdlibIndexResult : <IO> Result StdlibIndexError StdlibIndex
-buildStdlibIndexResult = map (rows => mkStdlibIndex rows []) stdlibRowsResult
+buildStdlibIndexResult =
+  map
+    ((digests, rows) => mkStdlibIndex (combineDigests digests) "" rows [])
+    stdlibRowsResult
 
 -- The stdlib's rows plus the rows of every `.mdk` file under `root`.
 export
 buildProjectIndexResult : String -> <IO> Result StdlibIndexError StdlibIndex
 buildProjectIndexResult root =
-  let prows = projectRowsOf root
-  map (srows => mkStdlibIndex srows prows) stdlibRowsResult
+  let (pdigests, prows) = projectRowsOf root
+  map
+    ((sdigests, srows) =>
+      mkStdlibIndex
+        (combineDigests sdigests)
+        (combineDigests pdigests)
+        srows
+        prows)
+    stdlibRowsResult
 
 -- The shard stamp: the build fingerprint, or the binary's own hash for a
 -- binary that carries none (a shipped or `medaka build` binary).  Empty when
@@ -657,11 +692,11 @@ indexStamp _ =
   let fp = buildFingerprint ()
   if fp == "" then ruleSetStamp () else fp
 
-stdlibRowsResult : <IO> Result StdlibIndexError (List IndexRow)
+stdlibRowsResult : <IO> Result StdlibIndexError (List String, List IndexRow)
 stdlibRowsResult =
   let sdir = lintStdlibDir
   match stdlibMemberPaths sdir
-    None => Ok []
+    None => Ok ([], [])
     Some rels =>
       let stamp = indexStamp ()
       let dir = if stamp == "" then "" else stdlibShardDir ()
@@ -671,8 +706,8 @@ stdlibRowsGo : String ->
   String ->
   String ->
   List String ->
-  <IO> Result StdlibIndexError (List IndexRow)
-stdlibRowsGo _ _ _ [] = Ok []
+  <IO> Result StdlibIndexError (List String, List IndexRow)
+stdlibRowsGo _ _ _ [] = Ok ([], [])
 stdlibRowsGo dir stamp sdir (rel :: rest) =
   let path = "\{sdir}/\{rel}"
   let modId = joinWith "." (splitOnChar '/' (stripMdk rel))
@@ -682,17 +717,25 @@ stdlibRowsGo dir stamp sdir (rel :: rest) =
       source = src,
       diagnostic = parseErrDiag path e,
     }
-    Ok (_, rows) => map (rows ++ _) (stdlibRowsGo dir stamp sdir rest)
+    Ok (digest, rows) =>
+      map
+        ((ds, rs) => (digest :: ds, rows ++ rs))
+        (stdlibRowsGo dir stamp sdir rest)
 
 -- A project file that does not parse has no rows: the lint pass over that file
 -- reports the parse error, and the index abstains on what it cannot read.
-projectRowsOf : String -> <IO> List IndexRow
+projectRowsOf : String -> <IO> (List String, List IndexRow)
 projectRowsOf root =
   let stamp = indexStamp ()
   let dir = if stamp == "" then "" else projectShardDir root
-  flatMap (projectFileRows dir stamp root) (collectMdkFiles root)
+  let files = map (projectFileRows dir stamp root) (collectMdkFiles root)
+  (map fst files, flatMap snd files)
 
-projectFileRows : String -> String -> String -> String -> <IO> List IndexRow
+projectFileRows : String ->
+  String ->
+  String ->
+  String ->
+  <IO> (String, List IndexRow)
 projectFileRows dir stamp root path =
   match (fileRows
     False
@@ -701,8 +744,8 @@ projectFileRows dir stamp root path =
     stamp
     (moduleIdOfPath [root] path)
     path)
-    Err _ => []
-    Ok (_, rows) => rows
+    Err _ => ("", [])
+    Ok (digest, rows) => (digest, rows)
 
 -- `<MEDAKA_ROOT>/stdlib`, resolved exactly as the CLI resolves it (`envOr
 -- "MEDAKA_ROOT" defaultMedakaRoot`, `driver/build_cmd.mdk`) — an unset or empty
@@ -718,37 +761,46 @@ lintStdlibDir = match getEnv "MEDAKA_ROOT"
 exeStdlibDir : Unit -> <IO> String
 exeStdlibDir _ = "\{dirOf (executablePath ())}/stdlib"
 
--- ── cache-staleness guard for `--cache` ─────────────────────────────────────
--- `rule-stdlib-reimpl` (and only it, among `allRules`) reads content
--- `--cache`'s key never sees: `buildStdlibIndexResult` parses the stdlib source tree
--- from disk at runtime, not the running binary `lint_cache.ruleSetStamp`
--- hashes. Editing `stdlib/list.mdk` changes what this rule reports for an
--- UNCHANGED compiler/sqlite file, so a cached shard for that file would
--- silently keep serving the pre-edit answer forever — a wrong hit, exactly
--- the failure mode `lint_cache.mdk`'s module doc forbids. Folded into the
--- cache stamp by the caller (`lintCacheCtx`, `medaka_cli.mdk`) alongside
--- `ruleSetStamp`, so any stdlib edit invalidates every shard, the same way a
--- rule-logic change does (#2327).
-export
-stdlibFingerprint : <IO> String
-stdlibFingerprint = match stdlibMemberPaths lintStdlibDir
-  None => ""
-  Some names =>
-    let joined = stdlibFingerprintGo lintStdlibDir names
-    -- Hashed down to a fixed-size digest rather than stored raw: this string
-    -- lands in EVERY shard's `stamp` field (`lint_cache.storeEntries`), so
-    -- keeping it compact matters the same way `contentHashOf`'s two-lane
-    -- digest does. `listLen names` guards against the all-files-missing
-    -- degenerate case ("" for both an empty stdlib and a 0-file listDir)
-    -- collapsing into the same fingerprint as a genuinely absent stdlib.
-    "\{hashString joined}.\{listLen names}"
+-- ── what a cached finding that read the index depends on ──────────────────────
+-- A shard holds two finding groups.  The index-free rules' findings are keyed by
+-- the binary alone.  The index-reading rules' findings are also keyed by the
+-- fingerprint of the rows the run's index was built from, so an edit to a
+-- signature in any indexed file re-runs those rules for every file, and an edit
+-- that moves no row (a body, a comment) re-runs nothing.  A roster that reads no
+-- index has no such key, so an index edit never invalidates its shards.
 
-stdlibFingerprintGo : String -> List String -> <IO> String
-stdlibFingerprintGo _ [] = ""
-stdlibFingerprintGo dir (n :: rest) =
-  let path = "\{dir}/\{n}"
-  let h = hashString (readFileSafe path)
-  "\{n}:\{h};\{stdlibFingerprintGo dir rest}"
+-- Whether some rule of `roster` reads the index.
+export
+rosterNeeds : List Rule -> Bool
+rosterNeeds roster = anyList ruleReadsIndex roster
+
+ruleReadsIndex : Rule -> Bool
+ruleReadsIndex r = readsIndex r.meta
+
+-- The roster's index-reading rules with their ranks.
+export
+rankedIndexRules : List Rule -> List (Int, Rule)
+rankedIndexRules roster =
+  filterList (rf => ruleReadsIndex (snd rf)) (ranked 0 roster)
+
+-- A roster's findings, ranked, split into those of the index-free rules and
+-- those of the index-reading rules.
+export
+splitByIndex : List Rule ->
+  List (Int, Finding) ->
+  (List (Int, Finding), List (Int, Finding))
+splitByIndex roster found =
+  let indexRanks = map fst (rankedIndexRules roster)
+  (
+    filterList (rf => not (elem (fst rf) indexRanks)) found,
+    filterList (rf => elem (fst rf) indexRanks) found,
+  )
+
+-- The key an index-reading finding group is stored under for `roster`.
+export
+indexKeyFor : List Rule -> StdlibIndex -> String
+indexKeyFor roster idx =
+  if rosterNeeds roster then stdlibIndexFingerprint idx else ""
 
 export
 lintParseSource : String -> Result ParseError (List Decl, Positions)
@@ -1233,7 +1285,7 @@ findingToDiag f =
 -- then the `--disable`/`--only`/`--deny` CLI-flag-style filters) over ONE file
 -- and return `(path, src, List Diag, Positions, List Decl)` — the per-file
 -- triple `driver.diagnostics.cjAllToJson` expects, PLUS the parse the
--- cross-file tier (`runCrossFileRules`) needs as `(path, Positions, decls)`.
+-- project-rule tier (`runProjectRules`) summarizes.
 -- Shared by `medaka lint --json` (medaka_cli.mdk) and the `medaka_lint` MCP
 -- tool (mcp.mdk) so both surfaces serialize through the SAME envelope
 -- `check --json` uses, with the lint rule name landing in each diagnostic's
@@ -1276,7 +1328,7 @@ lintFileDiagTripleParsed idx disable only deny path =
       )
 
 -- `lintFileDiagTripleParsed`, dropping the parse — the shape every existing
--- caller that does not need the cross-file tier's inputs still wants.
+-- caller that does not need the project-rule tier's inputs still wants.
 export
 lintFileDiagTriple : StdlibIndex ->
   List String ->
@@ -1359,11 +1411,11 @@ applySuppressionsDirs : List Directive -> List Finding -> List Finding
 applySuppressionsDirs dirs findings =
   filterList (f => not (isSuppressed dirs f)) findings
 
--- Cross-file variant: findings anchor to DIFFERENT files, so a single `src`
+-- Project-rule variant: findings anchor to DIFFERENT files, so a single `src`
 -- cannot cover them.  Given each file's source (`(path, src)`), silence every
 -- finding covered by an inline directive in ITS OWN file's comment side channel.
 -- Directives are parsed once per file (not per finding).  General over any
--- cross-file rule; the cross-file report path calls this before flag filters.
+-- project rule; the project-rule report path calls this before flag filters.
 export
 applySuppressionsMulti : List (String, String) -> List Finding -> List Finding
 applySuppressionsMulti srcs findings =
@@ -1427,29 +1479,79 @@ scopeMatches None (DScopeLine _) = False
 findingLineNo : Finding -> Option Int
 findingLineNo f = map ((Loc _ l _ _ _) => l) f.loc
 
--- ── cross-file runner ─────────────────────────────────────────────────────────
--- Run the enabled cross-file rules over every target file, honoring the same
--- --only/--disable name filters the per-file rules use.  --deny promotion is
--- left to the CLI (which already owns it for per-file findings).
-export
-runCrossFileRules : List String ->
-  List String ->
-  List (String, Positions, List Decl) ->
-  List Finding
-runCrossFileRules only disable files =
-  flatMap (runCrossRuleOn only disable files) allCrossFileRules
+-- ── project-rule runner ───────────────────────────────────────────────────────
+-- A project rule's findings relate files, so they come from the rule's
+-- `prEvaluate` over every file's summary, on every run.  What a shard stores is
+-- the summary, which is a function of one file; the findings are never stored.
+-- --only/--disable gate the rules the same way they gate per-file rules.
+-- --deny promotion is left to the CLI (which already owns it for per-file
+-- findings).
 
-runCrossRuleOn : List String ->
+-- The summaries of one file under every selected project rule, `(rule name,
+-- summary)`, in registry order.
+export
+fileSummaries : List String ->
   List String ->
-  List (String, Positions, List Decl) ->
-  CrossFileRule ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List (String, Summary)
+fileSummaries only disable path facts pos prog =
+  map
+    (r => ((r : ProjectRule).name, r.prSummarize path facts pos prog))
+    (filterList (projectRuleActive only disable) allProjectRules)
+
+-- Every active project rule over `files`, each `(path, that file's summaries)`.
+-- A rule sees only the summaries it made.
+export
+runProjectRules : List String ->
+  List String ->
+  StdlibIndex ->
+  List (String, List (String, Summary)) ->
   List Finding
-runCrossRuleOn only disable files r
-  | crossRuleActive only disable r =
-    map (restampSeverity r.severity) (r.check files)
+runProjectRules only disable idx files =
+  runProjectRulesOver allProjectRules only disable idx files
+
+-- `runProjectRules` over a given roster.
+export
+runProjectRulesOver : List ProjectRule ->
+  List String ->
+  List String ->
+  StdlibIndex ->
+  List (String, List (String, Summary)) ->
+  List Finding
+runProjectRulesOver rules only disable idx files =
+  flatMap (runProjectRuleOn only disable idx files) rules
+
+runProjectRuleOn : List String ->
+  List String ->
+  StdlibIndex ->
+  List (String, List (String, Summary)) ->
+  ProjectRule ->
+  List Finding
+runProjectRuleOn only disable idx files r
+  | projectRuleActive only disable r =
+    map
+      (restampSeverity r.severity)
+      (r.prEvaluate (projectIndexFor r idx) (summariesOfRule r.name files))
   | otherwise = []
 
--- Fold cross-file findings into the per-file `(path, src, List Diag)` triples
+-- The index a project rule's `prEvaluate` is handed, by the same declared-need
+-- rule a per-file rule's is.
+projectIndexFor : ProjectRule -> StdlibIndex -> ProjectIndex
+projectIndexFor r idx =
+  if readsIndex r.meta then projectIndexOf idx else emptyProjectIndex
+
+summariesOfRule : String ->
+  List (String, List (String, Summary)) ->
+  List (String, Summary)
+summariesOfRule _ [] = []
+summariesOfRule name ((path, ss) :: rest) =
+  map (s => (path, snd s)) (filterList (s => fst s == name) ss)
+    ++ summariesOfRule name rest
+
+-- Fold project-rule findings into the per-file `(path, src, List Diag)` triples
 -- the JSON envelope (`cjAllToJson`) and the `medaka_lint` MCP tool both
 -- serialize.  Each `Finding` already carries ITS OWN occurrence's file in
 -- `loc` (`emitDupGroup` emits one finding per occurrence), so a finding is
@@ -1458,18 +1560,18 @@ runCrossRuleOn only disable files r
 -- would get a synthesized `(file, "", [diag])` entry appended instead of
 -- being dropped — a defensive fallback, structurally unreachable from both
 -- of today's call sites, since each builds `triples` from exactly the same
--- file list it hands to `runCrossFileRules`, so every finding's file is
+-- file list it hands to `runProjectRules`, so every finding's file is
 -- already present.  Kept for the day a caller passes a narrower path set
--- than its cross-file rules run over.  A `Finding` with no `loc` (only the
--- cross-file rule shape used today always sets one) is skipped: there is no
+-- than its project rules run over.  A `Finding` with no `loc` (only the
+-- project-rule shape used today always sets one) is skipped: there is no
 -- file to attribute it to.
 export
-mergeCrossFileIntoTriples : List Finding ->
+mergeProjectIntoTriples : List Finding ->
   List (String, String, List Diag) ->
   List (String, String, List Diag)
-mergeCrossFileIntoTriples [] triples = triples
-mergeCrossFileIntoTriples (f :: rest) triples =
-  mergeCrossFileIntoTriples rest (mergeOneFinding f triples)
+mergeProjectIntoTriples [] triples = triples
+mergeProjectIntoTriples (f :: rest) triples =
+  mergeProjectIntoTriples rest (mergeOneFinding f triples)
 
 mergeOneFinding : Finding ->
   List (String, String, List Diag) ->
@@ -1491,51 +1593,3 @@ appendIfPath : String ->
   (String, String, List Diag)
 appendIfPath file diag (path, src, diags) =
   if path == file then (path, src, diags ++ [diag]) else (path, src, diags)
-
--- ── the cross-file tier, reached from CACHED per-file inputs (#395) ────────────
--- `runCrossFileRules` needs every file's `(path, Positions, decls)` — i.e. a
--- PARSE of every target, which is exactly what `--cache` skips.  So a cached run
--- reaches the tier through the occurrence lists it persisted per file instead.
---
--- The soundness seam.  `fileDupOccs` is the per-file input of ONE rule.  This
--- entry point is therefore only equivalent to `runCrossFileRules` while
--- `allCrossFileRules` is exactly `[duplicateBodyRule]` — a second cross-file
--- rule would have its own per-file inputs, which nothing here caches or feeds
--- it, and it would silently not run under `--cache`.  That is a whole rule
--- reporting nothing while exiting 0: this repo's defining failure mode.
---
--- Rather than trust a future agent to read this comment, `crossFileCacheSound`
--- DERIVES the answer from the live registry, and the CLI refuses `--cache`
--- (falling back to a full uncached run) when it goes False.  Adding a cross-file
--- rule then costs a slower lint, never a wrong one — the #395 invariant: a miss
--- is always safe, a wrong hit is silent wrongness.
-export
-crossFileCacheSound : Bool
-crossFileCacheSound = match allCrossFileRules
-  [r] => r.name == ruleNameDuplicateBody
-  _ => False
-
--- Cached counterpart of `runCrossFileRules`: same --only/--disable gating, same
--- severity restamp, same join — but fed occurrences instead of parses.  Callers
--- MUST check `crossFileCacheSound` first (see above).
-export
-runCrossFileRulesFromOccs : List String ->
-  List String ->
-  List (String, Int, String, String) ->
-  List Finding
-runCrossFileRulesFromOccs only disable occs =
-  flatMap (runCrossRuleFromOccs only disable occs) allCrossFileRules
-
--- The `r.name == ruleNameDuplicateBody` conjunct is belt-and-braces behind the
--- CLI's `crossFileCacheSound` check: it means a caller that ignores that check
--- still cannot run `dupJoin` under some OTHER rule's name and severity — it just
--- gets the dup rule alone, which is what the guard would have caught anyway.
-runCrossRuleFromOccs : List String ->
-  List String ->
-  List (String, Int, String, String) ->
-  CrossFileRule ->
-  List Finding
-runCrossRuleFromOccs only disable occs r
-  | crossRuleActive only disable r && r.name == ruleNameDuplicateBody =
-    map (restampSeverity r.severity) (dupJoin occs)
-  | otherwise = []

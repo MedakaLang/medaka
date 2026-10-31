@@ -47,6 +47,10 @@ MEDAKA="$ROOT/medaka"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/medaka_lint_cache_XXXXXX")"
 cleanup() { rm -rf "$WORK"; }
+# The declaration-index row shards go under XDG_CACHE_HOME; keep them out of the
+# caller's home so a run here is cold on its own terms.
+XDG_CACHE_HOME="$WORK/xdg"
+export XDG_CACHE_HOME
 trap cleanup EXIT INT TERM
 
 pass=0
@@ -77,7 +81,7 @@ cd "$WORK" || exit 2
 # (-c %Y / -f %m). `ls -i` is POSIX and exact.
 shard_state() {
   if [ -d "$CACHE" ]; then
-    for f in "$CACHE"/*.json; do
+    for f in "$CACHE"/*.sx; do
       [ -f "$f" ] || continue
       printf '%s %s\n' "$(basename "$f")" "$(ls -i "$f" | awk '{print $1}')"
     done | sort
@@ -155,7 +159,7 @@ else
 fi
 
 # A shard per source file, or the cache is not covering the corpus.
-n_shards="$(ls "$CACHE"/*.json 2>/dev/null | wc -l | tr -d ' ')"
+n_shards="$(ls "$CACHE"/*.sx 2>/dev/null | wc -l | tr -d ' ')"
 n_srcs="$(ls "$WORK"/corpus/*.mdk 2>/dev/null | wc -l | tr -d ' ')"
 if [ "$n_shards" -eq "$n_srcs" ]; then
   ok "1d one shard per source file ($n_shards)"
@@ -255,9 +259,10 @@ fi
 # Corrupt the stored content hash of one shard. It must be ignored (a miss), not
 # trusted, and the output must be unaffected.
 lint_cached "$WORK/warm4_pre.txt"
-victim="$(ls "$CACHE"/*.json 2>/dev/null | head -1)"
+victim="$(ls "$CACHE"/*.sx 2>/dev/null | head -1)"
 if [ -n "$victim" ]; then
-  sed 's/"hash":"[^"]*"/"hash":"0.0.0"/' "$victim" > "$victim.tmp" && mv "$victim.tmp" "$victim"
+  # A shard is `(version stamp path hash indexKey ...)`: field 4 is the hash.
+  awk '{ $4 = "0.0.0"; print }' "$victim" > "$victim.tmp" && mv "$victim.tmp" "$victim"
   lint_cached "$WORK/warm4.txt"
   lint_plain "$WORK/cold4.txt"
   if same "$WORK/cold4.txt" "$WORK/warm4.txt"; then
@@ -272,8 +277,10 @@ fi
 # Truncated / garbage shards must be misses too, never a crash or a wrong answer.
 # A truncated shard is what a NON-atomic writer would leave behind mid-write, so
 # this also pins the behaviour the temp+rename staging exists to make impossible.
-printf '{"version":1,"stamp":"x","path":"corpus/clean.mdk","hash":' > "$victim"
-printf 'not json at all' > "$CACHE/zzz_garbage-1.json"
+printf '(3 "x" "corpus/clean.mdk" "' > "$victim"
+printf 'not a shard at all' > "$CACHE/zzz_garbage-1.sx"
+# A shard written by the JSON codec this one replaced must be a clean miss too.
+printf '{"version":2,"stamp":"x","path":"corpus/clean.mdk","hash":"1.1.1","findings":[],"dupOccs":[],"directives":[]}' > "$CACHE/zzz_oldjson-1.sx"
 lint_cached "$WORK/warm4b.txt"
 lint_plain "$WORK/cold4b.txt"
 if same "$WORK/cold4b.txt" "$WORK/warm4b.txt"; then
@@ -324,8 +331,8 @@ fi
 # 5c: and a forged/unknown stamp is a miss rather than a guess — the same check
 # from the shard side, covering a cache written by any compiler we cannot
 # identify.
-for f in "$CACHE"/*.json; do
-  sed 's/"stamp":"[^"]*"/"stamp":"stamp-from-another-compiler"/' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+for f in "$CACHE"/*.sx; do
+  awk '{ $2 = "\"stamp-from-another-compiler\""; print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 done
 before="$WORK/s5c.before"; after="$WORK/s5c.after"
 shard_state > "$before"
@@ -391,7 +398,8 @@ fi
 
 # ── 7. STDLIB EDIT INVALIDATION (#2327) ──────────────────────────────────────
 # `rule-stdlib-reimpl` reads `MEDAKA_ROOT/stdlib` at runtime — content neither
-# `contentHashOf` (per-file) nor the binary-hash half of the stamp observes. A
+# `contentHashOf` (per-file) nor the binary-hash half of the stamp observes. It
+# is covered by the index key on the shard's index-reading findings. A
 # custom MEDAKA_ROOT with a minimal stdlib lets this scenario edit "the stdlib"
 # without touching the repo's own tree, and stays isolated from scenarios 1-6
 # (own cache root, own corpus, own env var).
@@ -449,10 +457,70 @@ else
       "target.mdk's own content never changed (content-hash cache-HIT), but the stdlib now declares a colliding export — a stale cache key would still report nothing here"
 fi
 
+# 7d: an edit that moves no row of the index (a stdlib BODY, not a name or a
+# signature) leaves the index key alone, so no shard is rewritten.
+cat > "$STDROOT7/stdlib/probe.mdk" <<'EOF'
+export
+probeFnUnrelated : Int -> Int
+probeFnUnrelated x = x + 0
+
+export
+probeFnNew : Int -> Int
+probeFnNew x = x
+EOF
+CACHE_SAVE="$CACHE"
+CACHE="$WORK/corpus7/.medaka/lint-cache"
+[ -d "$CACHE" ] || CACHE="$WORK/.medaka/lint-cache"
+before="$WORK/s7d.before"; after="$WORK/s7d.after"
+shard_state > "$before"
+lint_cached7 "$WORK/warm7d.txt"
+shard_state > "$after"
+n_changed="$(changed_shards "$before" "$after")"
+if [ "$n_changed" -eq 0 ]; then
+  ok "7d stdlib body-only edit rewrote no shard (the index key did not move)"
+else
+  bad "7d stdlib body-only edit rewrote no shard" "$n_changed shard(s) rewritten for an edit that moved no index row"
+fi
+if same "$WORK/warm7.txt" "$WORK/warm7d.txt"; then
+  ok "7e stdlib body-only edit: output unchanged"
+else
+  bad "7e stdlib body-only edit: output unchanged" "$(diff "$WORK/warm7.txt" "$WORK/warm7d.txt" | head -5)"
+fi
+
+# 7f: a signature edit moves the index key, so the file's index-reading
+# findings are recomputed (one shard rewritten) and the output follows the
+# uncached run.
+cat > "$STDROOT7/stdlib/probe.mdk" <<'EOF'
+export
+probeFnUnrelated : Int -> Int
+probeFnUnrelated x = x + 0
+
+export
+probeFnNew : Int -> String
+probeFnNew x = "x"
+EOF
+before="$WORK/s7f.before"; after="$WORK/s7f.after"
+shard_state > "$before"
+lint_cached7 "$WORK/warm7f.txt"
+shard_state > "$after"
+lint_plain7 "$WORK/cold7f.txt"
+n_changed="$(changed_shards "$before" "$after")"
+if [ "$n_changed" -eq 1 ]; then
+  ok "7f stdlib signature edit re-ran the index-reading rules (1 shard rewritten)"
+else
+  bad "7f stdlib signature edit re-ran the index-reading rules" "$n_changed shard(s) rewritten, expected 1"
+fi
+if same "$WORK/cold7f.txt" "$WORK/warm7f.txt"; then
+  ok "7g stdlib signature edit: warm == uncached"
+else
+  bad "7g stdlib signature edit: warm == uncached" "$(diff "$WORK/cold7f.txt" "$WORK/warm7f.txt" | head -5)"
+fi
+CACHE="$CACHE_SAVE"
+
 # ── 8. STDLIB-INDEX CACHE POISONING (F1) ─────────────────────────────────────
 # `stdlibIndexNeeded` lets an uncached run skip `buildStdlibIndexResult` for free when
 # the active `--only`/`--disable` set never reads it — but a `--cache` POPULATE
-# run persists `lintFileFresh`'s FULL rule roster regardless of which rules are
+# run persists the FULL rule roster regardless of which rules are
 # active, so populating with `rule-stdlib-reimpl` disabled must not poison the
 # entry with a degraded (empty) stdlib index: a LATER default-rules `--cache`
 # read of the same entry must still see the finding.

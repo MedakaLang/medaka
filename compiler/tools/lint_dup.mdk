@@ -100,7 +100,7 @@ appArgsRev e = match unwrapLoc e
 -- by the identical code an uncached one runs.
 --
 -- This split is the whole correctness story of the lint cache.  A cache MUST
--- store the per-file INPUTS to this join (`fileDupOccs`) and re-run it every
+-- store the per-file INPUTS to this join (the rule's `DupOccs` summary) and re-run it every
 -- time — never the findings it returns.  A finding here names file A *because
 -- of* file B, so a cached A-finding survives an edit to B that should have
 -- retracted it: the finding silently lingers (or, symmetrically, never
@@ -230,12 +230,6 @@ dupGroupFires grp =
 
 -- one occurrence per eligible top-level CLAUSE, plus one per eligible
 -- multi-clause FUNCTION: (file, line, name, key)
-export
-fileDupOccs : (String, Positions, List Decl) ->
-  List (String, Int, String, String)
-fileDupOccs (path, pos, decls) =
-  dupOccsOfClauses path (flatMap dupClauseOfDecl (declLocList pos decls))
-
 export
 dupOccsOfClauses : String ->
   List DupClause ->
