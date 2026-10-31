@@ -1,5 +1,5 @@
 # META
-source_lines=2547
+source_lines=2542
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..), codeText}
@@ -100,7 +100,6 @@ import frontend.parser.{
   parseResult,
   parseLocatedResult,
   parseErrorDiagnostic,
-  parseWithPositions,
   parseWithPositionsOpt,
   positionsDecls,
   Positions,
@@ -113,7 +112,7 @@ import frontend.parser.{
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import support.char.{isIdentChar}
-import support.util.{maxI, utf8Len, joinWith, startsWith, contains, allList}
+import support.util.{utf8Len, startsWith, contains, allList}
 import string.{stripCR, toInt}
 import regex.{Regex, Match, mustCompile, escape, findAll, find}
 import frontend.desugar.{desugar}
@@ -122,7 +121,6 @@ import types.publish.{
   PubScheme(..),
   PartialAnalysis(..),
   TcReport(..),
-  pubSchemes,
   ppPubScheme,
   publishedEntrySchemes,
 }
@@ -144,9 +142,6 @@ import frontend.ast.{
   Loc(..),
   Variant,
   ConPayload(..),
-  Field,
-  IfaceMethod,
-  ImplMethod,
   LetBind,
   UsePath(..),
 }
@@ -2570,22 +2565,22 @@ unit = ()
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToSourcePosition" false) (mem "offsetToUtf16Position" false))))
 (DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false) (mem "lspPositionToOffset" false) (mem "jRangeOfLoc" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false) (mem "manifestPathOf" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorDiagnostic" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "Positions" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorDiagnostic" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "Positions" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false))))
-(DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "utf8Len" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false) (mem "toInt" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "escape" false) (mem "findAll" false) (mem "find" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
-(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "PartialAnalysis" true) (mem "TcReport" true) (mem "pubSchemes" false) (mem "ppPubScheme" false) (mem "publishedEntrySchemes" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "PartialAnalysis" true) (mem "TcReport" true) (mem "ppPubScheme" false) (mem "publishedEntrySchemes" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneReportK" false) (mem "entrySplit" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProjectWithParsed" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "zipWith" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "fieldName" false) (mem "ifaceMethodName" false) (mem "implMethodName" false) (mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "fieldName" false) (mem "ifaceMethodName" false) (mem "implMethodName" false) (mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "LetBind" false) (mem "UsePath" true))))
 (DData Public "Docs" () ((variant "Docs" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kept"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "Int") (TyCon "SyntaxCache")))) ())
 (DData Abstract "Kept" () ((variant "KeptOne" (ConPos (TyCon "String") (TyCon "HoverEnv"))) (variant "KeptGraph" (ConPos (TyCon "String") (TyCon "GraphId") (TyCon "PartialAnalysis")))) ())
 (DTypeSig true "emptyDocs" (TyCon "Docs"))
@@ -3062,22 +3057,22 @@ unit = ()
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToSourcePosition" false) (mem "offsetToUtf16Position" false))))
 (DUse false (UseGroup ("tools" "lsp_positions") ((mem "locToLspRange" false) (mem "lspPositionToOffset" false) (mem "jRangeOfLoc" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false) (mem "manifestPathOf" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorDiagnostic" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "Positions" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorDiagnostic" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "Positions" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false))))
-(DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "utf8Len" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false) (mem "toInt" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "escape" false) (mem "findAll" false) (mem "find" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
-(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "PartialAnalysis" true) (mem "TcReport" true) (mem "pubSchemes" false) (mem "ppPubScheme" false) (mem "publishedEntrySchemes" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "PartialAnalysis" true) (mem "TcReport" true) (mem "ppPubScheme" false) (mem "publishedEntrySchemes" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneReportK" false) (mem "entrySplit" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProjectWithParsed" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "zipWith" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "fieldName" false) (mem "ifaceMethodName" false) (mem "implMethodName" false) (mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "fieldName" false) (mem "ifaceMethodName" false) (mem "implMethodName" false) (mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "LetBind" false) (mem "UsePath" true))))
 (DData Public "Docs" () ((variant "Docs" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kept"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "Int") (TyCon "SyntaxCache")))) ())
 (DData Abstract "Kept" () ((variant "KeptOne" (ConPos (TyCon "String") (TyCon "HoverEnv"))) (variant "KeptGraph" (ConPos (TyCon "String") (TyCon "GraphId") (TyCon "PartialAnalysis")))) ())
 (DTypeSig true "emptyDocs" (TyCon "Docs"))

@@ -15,7 +15,6 @@
 -- import resolver as an argument, and these tests hand it a table.
 
 import test.{
-  Expectation,
   expectEqual,
   expectErrContains,
   expectOkThen,

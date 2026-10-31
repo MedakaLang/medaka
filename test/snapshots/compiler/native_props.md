@@ -1,5 +1,5 @@
 # META
-source_lines=2219
+source_lines=2216
 stages=DESUGAR,MARK
 # SOURCE
 -- Native property runner.  It deliberately compiles one probe per target, then
@@ -18,9 +18,7 @@ import driver.build_cmd.{
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omKeys, omLookup}
-import support.util.{
-  joinNl, joinWith, splitNl, filterList, lookupAssoc, listLen, zipL, reverseL
-}
+import support.util.{joinNl, joinWith, splitNl, listLen, reverseL}
 import string.{toInt}
 import tools.probe_transcript.{
   Chunk(..), Section(..), chunksOf, decodeValue, endTag, firstNonEmptyLine,
@@ -33,17 +31,16 @@ import tools.prop_plan.{
   PlanModule(..), TypeKey(..), CustomPlan(..), PlanEnv(..), GenPlan(..),
   PlanDef(..), PlanCtor(..), PlanField(..), PlanError(..), PlanErrorReason(..),
   PlanVisibility(..), planErrorText, buildPlanEnvModules, planFor, planDef,
-  instantiateCtor, planTy, typeKeyWord, ctorWeights, listLengthBound,
-  listBoundDecays, listLenMax, optionWeights, resultWeights, maxGenDepth,
-  SoftWeight(..), softCtorWeights, intMin, intMax, structuralRngModulus,
+  instantiateCtor, typeKeyWord, ctorWeights, listLengthBound, listBoundDecays,
+  listLenMax, optionWeights, resultWeights, maxGenDepth, SoftWeight(..),
+  softCtorWeights, intMin, intMax, structuralRngModulus,
   structuralRngMultiplier, structuralRngIncrement, structuralRngMixMultiplier1,
   structuralRngMixMultiplier2, structuralRngWordModulus, structuralRngWordHalf,
   ShrinkAction(..), shrinkActions, IntShrinkStep(..), intShrinkSteps
 }
 import tools.prop_runner.{
   PropResult(..), PropStatus(..), PropFailureKind(..), filterProps,
-  filterPropsByName, propSeedValue, PropRequest(..), propRequestName,
-  propRequestSeed, propRequestCases
+  PropRequest(..), propRequestName, propRequestSeed, propRequestCases
 }
 
 sentinelBase : String
@@ -2228,12 +2225,12 @@ paramName (PropParam n _ _) = n
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "zipL" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "listLen" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "Section" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "firstNonEmptyLine" false) (mem "mintNonce" false) (mem "freshProbeNonce" false) (mem "noncedPrefix" false) (mem "probeNameNonce" false) (mem "renameUserMain" false) (mem "runtimeAlias" false) (mem "runtimeDependencyName" false) (mem "runtimeDependencyPrefix" false) (mem "sentinelLine" false) (mem "startTag" false) (mem "tagsInOrder" false) (mem "valuePrintExprWith" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false) (mem "ppTy" false))))
-(DUse false (UseGroup ("tools" "prop_plan") ((mem "PlanModule" true) (mem "TypeKey" true) (mem "CustomPlan" true) (mem "PlanEnv" true) (mem "GenPlan" true) (mem "PlanDef" true) (mem "PlanCtor" true) (mem "PlanField" true) (mem "PlanError" true) (mem "PlanErrorReason" true) (mem "PlanVisibility" true) (mem "planErrorText" false) (mem "buildPlanEnvModules" false) (mem "planFor" false) (mem "planDef" false) (mem "instantiateCtor" false) (mem "planTy" false) (mem "typeKeyWord" false) (mem "ctorWeights" false) (mem "listLengthBound" false) (mem "listBoundDecays" false) (mem "listLenMax" false) (mem "optionWeights" false) (mem "resultWeights" false) (mem "maxGenDepth" false) (mem "SoftWeight" true) (mem "softCtorWeights" false) (mem "intMin" false) (mem "intMax" false) (mem "structuralRngModulus" false) (mem "structuralRngMultiplier" false) (mem "structuralRngIncrement" false) (mem "structuralRngMixMultiplier1" false) (mem "structuralRngMixMultiplier2" false) (mem "structuralRngWordModulus" false) (mem "structuralRngWordHalf" false) (mem "ShrinkAction" true) (mem "shrinkActions" false) (mem "IntShrinkStep" true) (mem "intShrinkSteps" false))))
-(DUse false (UseGroup ("tools" "prop_runner") ((mem "PropResult" true) (mem "PropStatus" true) (mem "PropFailureKind" true) (mem "filterProps" false) (mem "filterPropsByName" false) (mem "propSeedValue" false) (mem "PropRequest" true) (mem "propRequestName" false) (mem "propRequestSeed" false) (mem "propRequestCases" false))))
+(DUse false (UseGroup ("tools" "prop_plan") ((mem "PlanModule" true) (mem "TypeKey" true) (mem "CustomPlan" true) (mem "PlanEnv" true) (mem "GenPlan" true) (mem "PlanDef" true) (mem "PlanCtor" true) (mem "PlanField" true) (mem "PlanError" true) (mem "PlanErrorReason" true) (mem "PlanVisibility" true) (mem "planErrorText" false) (mem "buildPlanEnvModules" false) (mem "planFor" false) (mem "planDef" false) (mem "instantiateCtor" false) (mem "typeKeyWord" false) (mem "ctorWeights" false) (mem "listLengthBound" false) (mem "listBoundDecays" false) (mem "listLenMax" false) (mem "optionWeights" false) (mem "resultWeights" false) (mem "maxGenDepth" false) (mem "SoftWeight" true) (mem "softCtorWeights" false) (mem "intMin" false) (mem "intMax" false) (mem "structuralRngModulus" false) (mem "structuralRngMultiplier" false) (mem "structuralRngIncrement" false) (mem "structuralRngMixMultiplier1" false) (mem "structuralRngMixMultiplier2" false) (mem "structuralRngWordModulus" false) (mem "structuralRngWordHalf" false) (mem "ShrinkAction" true) (mem "shrinkActions" false) (mem "IntShrinkStep" true) (mem "intShrinkSteps" false))))
+(DUse false (UseGroup ("tools" "prop_runner") ((mem "PropResult" true) (mem "PropStatus" true) (mem "PropFailureKind" true) (mem "filterProps" false) (mem "PropRequest" true) (mem "propRequestName" false) (mem "propRequestSeed" false) (mem "propRequestCases" false))))
 (DTypeSig false "sentinelBase" (TyCon "String"))
 (DFunDef false "sentinelBase" () (ELit (LString "@@__mdk_native_prop__@@")))
 (DTypeSig false "boolTag" (TyFun (TyCon "Int") (TyCon "String")))
@@ -2831,12 +2828,12 @@ paramName (PropParam n _ _) = n
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "zipL" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "listLen" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "Section" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "firstNonEmptyLine" false) (mem "mintNonce" false) (mem "freshProbeNonce" false) (mem "noncedPrefix" false) (mem "probeNameNonce" false) (mem "renameUserMain" false) (mem "runtimeAlias" false) (mem "runtimeDependencyName" false) (mem "runtimeDependencyPrefix" false) (mem "sentinelLine" false) (mem "startTag" false) (mem "tagsInOrder" false) (mem "valuePrintExprWith" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false) (mem "ppTy" false))))
-(DUse false (UseGroup ("tools" "prop_plan") ((mem "PlanModule" true) (mem "TypeKey" true) (mem "CustomPlan" true) (mem "PlanEnv" true) (mem "GenPlan" true) (mem "PlanDef" true) (mem "PlanCtor" true) (mem "PlanField" true) (mem "PlanError" true) (mem "PlanErrorReason" true) (mem "PlanVisibility" true) (mem "planErrorText" false) (mem "buildPlanEnvModules" false) (mem "planFor" false) (mem "planDef" false) (mem "instantiateCtor" false) (mem "planTy" false) (mem "typeKeyWord" false) (mem "ctorWeights" false) (mem "listLengthBound" false) (mem "listBoundDecays" false) (mem "listLenMax" false) (mem "optionWeights" false) (mem "resultWeights" false) (mem "maxGenDepth" false) (mem "SoftWeight" true) (mem "softCtorWeights" false) (mem "intMin" false) (mem "intMax" false) (mem "structuralRngModulus" false) (mem "structuralRngMultiplier" false) (mem "structuralRngIncrement" false) (mem "structuralRngMixMultiplier1" false) (mem "structuralRngMixMultiplier2" false) (mem "structuralRngWordModulus" false) (mem "structuralRngWordHalf" false) (mem "ShrinkAction" true) (mem "shrinkActions" false) (mem "IntShrinkStep" true) (mem "intShrinkSteps" false))))
-(DUse false (UseGroup ("tools" "prop_runner") ((mem "PropResult" true) (mem "PropStatus" true) (mem "PropFailureKind" true) (mem "filterProps" false) (mem "filterPropsByName" false) (mem "propSeedValue" false) (mem "PropRequest" true) (mem "propRequestName" false) (mem "propRequestSeed" false) (mem "propRequestCases" false))))
+(DUse false (UseGroup ("tools" "prop_plan") ((mem "PlanModule" true) (mem "TypeKey" true) (mem "CustomPlan" true) (mem "PlanEnv" true) (mem "GenPlan" true) (mem "PlanDef" true) (mem "PlanCtor" true) (mem "PlanField" true) (mem "PlanError" true) (mem "PlanErrorReason" true) (mem "PlanVisibility" true) (mem "planErrorText" false) (mem "buildPlanEnvModules" false) (mem "planFor" false) (mem "planDef" false) (mem "instantiateCtor" false) (mem "typeKeyWord" false) (mem "ctorWeights" false) (mem "listLengthBound" false) (mem "listBoundDecays" false) (mem "listLenMax" false) (mem "optionWeights" false) (mem "resultWeights" false) (mem "maxGenDepth" false) (mem "SoftWeight" true) (mem "softCtorWeights" false) (mem "intMin" false) (mem "intMax" false) (mem "structuralRngModulus" false) (mem "structuralRngMultiplier" false) (mem "structuralRngIncrement" false) (mem "structuralRngMixMultiplier1" false) (mem "structuralRngMixMultiplier2" false) (mem "structuralRngWordModulus" false) (mem "structuralRngWordHalf" false) (mem "ShrinkAction" true) (mem "shrinkActions" false) (mem "IntShrinkStep" true) (mem "intShrinkSteps" false))))
+(DUse false (UseGroup ("tools" "prop_runner") ((mem "PropResult" true) (mem "PropStatus" true) (mem "PropFailureKind" true) (mem "filterProps" false) (mem "PropRequest" true) (mem "propRequestName" false) (mem "propRequestSeed" false) (mem "propRequestCases" false))))
 (DTypeSig false "sentinelBase" (TyCon "String"))
 (DFunDef false "sentinelBase" () (ELit (LString "@@__mdk_native_prop__@@")))
 (DTypeSig false "boolTag" (TyFun (TyCon "Int") (TyCon "String")))

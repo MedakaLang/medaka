@@ -264,7 +264,7 @@ import support.util.{
   lenKey,
   listLen,
 }
-import list.{head, indexed, reverse}
+import list.{indexed, reverse}
 import string.{join}
 import types.registry.{regKeyOfTab, regKeyRender}
 import types.superclass.{superClosure}

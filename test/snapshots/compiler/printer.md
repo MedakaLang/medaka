@@ -1,5 +1,5 @@
 # META
-source_lines=2852
+source_lines=2851
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -44,7 +44,6 @@ import frontend.ast.{
   qualifierSource,
   effAtomSurface,
   binderDomainSurface,
-  authTermSurface,
   ctorBindersSurface,
   DeriveRef(..),
   deriveRefName,
@@ -2855,7 +2854,7 @@ effAxesDoc axes =
       (text (joinWith ", " (map (a => "\{fst a} : \{snd a}") axes)))
       (text ")"))
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
 (DUse false (UseAlias ("hex") "Hex"))
@@ -3851,7 +3850,7 @@ effAxesDoc axes =
 (DFunDef false "effAxesDoc" ((PList)) (EVar "Nil"))
 (DFunDef false "effAxesDoc" ((PVar "axes")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " (")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "a")))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "snd") (EVar "a")))) (ELit (LString ""))))) (EVar "axes"))))) (EApp (EVar "text") (ELit (LString ")"))))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
 (DUse false (UseAlias ("hex") "Hex"))

@@ -30,9 +30,7 @@ import frontend.visibility.{useModId}
 import string as Str
 import support.util.{
   contains,
-  listLen,
   reverseL,
-  initList,
   startsWith,
   endsWith,
   joinDot,

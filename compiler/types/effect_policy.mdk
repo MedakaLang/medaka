@@ -23,7 +23,6 @@ import types.effect_rows.{
   atomLabel,
   atomAuth,
   atomsUnion,
-  renderAtom,
   Atom(..),
   effrowLabels,
 }

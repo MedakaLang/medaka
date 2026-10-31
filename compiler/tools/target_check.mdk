@@ -43,7 +43,7 @@ import types.target_profile.{
 }
 import ir.dce.{ReachRoots(..), reachedExternChains, reachedExternRoutes}
 import types.effect_policy.{
-  PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain
+  PolicyVerdict(..), buildCallGraph, fnEffectsTable, viaChain
 }
 import types.repr.{Scheme}
 import types.effect_rows.{

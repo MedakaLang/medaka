@@ -40,7 +40,6 @@ import types.tc_types.{DriveOutputs}
 import ir.core_ir.{CProgram(..), CBind(..)}
 import ir.core_ir_lower.{
   ifaceImplHeadTable,
-  declaredRecordFieldOrders,
   lowerProgramEmitWith,
   lowerProgramEmitPinnedWith,
   methodIfaceTable,
@@ -64,7 +63,7 @@ import entries.entry_support.{
   stampSiteFiles,
 }
 import support.timer.{statsEnabled, emitStats}
-import support.util.{endsWith, filterList}
+import support.util.{filterList}
 import driver.main_autoprint.{autoPrintPinName}
 import support.stage_count.{stageCountInit, stageDump}
 import types.program_facts.{ProgramFacts}

@@ -1,5 +1,5 @@
 # META
-source_lines=194
+source_lines=191
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` facade.  The framework lives in
@@ -15,9 +15,6 @@ import tools.lint_walk.{
   lintParseSource,
   lintProgramFacts,
   mkFileFacts,
-  mkFileFactsAt,
-  mkFileFactsIn,
-  localModStates,
   withLocalMods,
 }
 import tools.lint_registry.{selectRules}
@@ -201,7 +198,7 @@ editFindings idx rules localMods path src (decls, pos) =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "ppDiagCliSrc" false) (mem "parseErrDiag" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "Positions" false))))
-(DUse false (UseGroup ("tools" "lint_walk") ((mem "lintParseSource" false) (mem "lintProgramFacts" false) (mem "mkFileFacts" false) (mem "mkFileFactsAt" false) (mem "mkFileFactsIn" false) (mem "localModStates" false) (mem "withLocalMods" false))))
+(DUse false (UseGroup ("tools" "lint_walk") ((mem "lintParseSource" false) (mem "lintProgramFacts" false) (mem "mkFileFacts" false) (mem "withLocalMods" false))))
 (DUse false (UseGroup ("tools" "lint_registry") ((mem "selectRules" false))))
 (DUse true (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "ProjectRule" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "Summary" true) (mem "applicabilityText" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "mkStdlibIndex" false) (mem "projectIndexOf" false) (mem "ruleMetaName" false))))
 (DUse true (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false))))
@@ -227,7 +224,7 @@ editFindings idx rules localMods path src (decls, pos) =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "ppDiagCliSrc" false) (mem "parseErrDiag" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "Positions" false))))
-(DUse false (UseGroup ("tools" "lint_walk") ((mem "lintParseSource" false) (mem "lintProgramFacts" false) (mem "mkFileFacts" false) (mem "mkFileFactsAt" false) (mem "mkFileFactsIn" false) (mem "localModStates" false) (mem "withLocalMods" false))))
+(DUse false (UseGroup ("tools" "lint_walk") ((mem "lintParseSource" false) (mem "lintProgramFacts" false) (mem "mkFileFacts" false) (mem "withLocalMods" false))))
 (DUse false (UseGroup ("tools" "lint_registry") ((mem "selectRules" false))))
 (DUse true (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "ProjectRule" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "Summary" true) (mem "applicabilityText" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "mkStdlibIndex" false) (mem "projectIndexOf" false) (mem "ruleMetaName" false))))
 (DUse true (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false))))

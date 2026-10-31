@@ -1,5 +1,5 @@
 # META
-source_lines=15413
+source_lines=15405
 stages=DESUGAR,MARK
 # SOURCE
 import ir.constructor_facts.{
@@ -190,7 +190,6 @@ import types.extern_source.{ExternBindingKind(..)}
 import backend.extern_requirements.{ExternRequirements, requirementFacts}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{
-  hostRows,
   hostSymbol,
   isWildPat,
   Lit(..),
@@ -201,8 +200,6 @@ import frontend.ast.{
   BinderId(..),
   RecPatField(..),
   noDeclLoc,
-  ifaceIdMatches,
-  isFixedWidthHead,
   fixedWidthMask,
   isU64Head,
   isFixedIntHead,
@@ -325,7 +322,6 @@ import backend.trmc_analysis.{
   bindName,
   bindNames,
   patVars,
-  patVarsList,
   patVarNames,
   isCtorTail,
   isSelfSatApp,
@@ -333,9 +329,6 @@ import backend.trmc_analysis.{
   ctorTailName,
   ctorTailLeadFields,
   ctorTailSelfIdx,
-  splitLastF,
-  selfFree,
-  mentionsSelfMethod,
   DispGroup(..),
   dispRootOf,
   dispMembersOf,
@@ -345,7 +338,7 @@ import backend.trmc_analysis.{
   clauseArityOf,
   lastStmtExpr,
 }
-import types.private_mangle.{hashName, injectiveIdent}
+import types.private_mangle.{hashName}
 import types.route_key.{numIntWord}
 import backend.impl_groups.{ImplClauseGroup(..)}
 import backend.emit_plan.{
@@ -356,7 +349,6 @@ import backend.emit_plan.{
 }
 import list.{zip}
 import backend.emit_support.{
-  bindEagerReach,
   bindNameMap,
   guardVars,
   ftPrefix,
@@ -15427,7 +15419,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true))))
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "requirementFacts" false))))
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "hostRows" false) (mem "hostSymbol" false) (mem "isWildPat" false) (mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "BinderId" true) (mem "RecPatField" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "isU64Head" false) (mem "isFixedIntHead" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "hostSymbol" false) (mem "isWildPat" false) (mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "BinderId" true) (mem "RecPatField" true) (mem "noDeclLoc" false) (mem "fixedWidthMask" false) (mem "isU64Head" false) (mem "isFixedIntHead" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
 (DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
@@ -15442,13 +15434,13 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "LlvmFamily" true) (mem "llvmFamily" false) (mem "isLlvmExternFamily" false) (mem "RuntimeExternDomain" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "ExternFinding" false) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "unrefusedExternMessage" false) (mem "validateForEmission" false) (mem "coreDefectMessage" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omEmpty" false) (mem "omKeys" false))))
-(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarsList" false) (mem "patVarNames" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "splitLastF" false) (mem "selfFree" false) (mem "mentionsSelfMethod" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "lastStmtExpr" false))))
-(DUse false (UseGroup ("types" "private_mangle") ((mem "hashName" false) (mem "injectiveIdent" false))))
+(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarNames" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "lastStmtExpr" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "hashName" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "numIntWord" false))))
 (DUse false (UseGroup ("backend" "impl_groups") ((mem "ImplClauseGroup" true))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "lookupMethodResult" false) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
 (DUse false (UseGroup ("list") ((mem "zip" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "guardVars" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "nthArm" false) (mem "bindingOrigin" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "bindNameMap" false) (mem "guardVars" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "nthArm" false) (mem "bindingOrigin" false))))
 (DData Private "GapMode" () ((variant "Strict" (ConPos)) (variant "Record" (ConPos))) ())
 (DTypeSig false "isFallthroughVar" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isFallthroughVar" ((PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "fallthroughName")) (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x"))))
@@ -18196,7 +18188,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true))))
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "requirementFacts" false))))
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "hostRows" false) (mem "hostSymbol" false) (mem "isWildPat" false) (mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "BinderId" true) (mem "RecPatField" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "isU64Head" false) (mem "isFixedIntHead" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "hostSymbol" false) (mem "isWildPat" false) (mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "BinderId" true) (mem "RecPatField" true) (mem "noDeclLoc" false) (mem "fixedWidthMask" false) (mem "isU64Head" false) (mem "isFixedIntHead" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
 (DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
@@ -18211,13 +18203,13 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "LlvmFamily" true) (mem "llvmFamily" false) (mem "isLlvmExternFamily" false) (mem "RuntimeExternDomain" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "ExternFinding" false) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "unrefusedExternMessage" false) (mem "validateForEmission" false) (mem "coreDefectMessage" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omEmpty" false) (mem "omKeys" false))))
-(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarsList" false) (mem "patVarNames" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "splitLastF" false) (mem "selfFree" false) (mem "mentionsSelfMethod" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "lastStmtExpr" false))))
-(DUse false (UseGroup ("types" "private_mangle") ((mem "hashName" false) (mem "injectiveIdent" false))))
+(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarNames" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "lastStmtExpr" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "hashName" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "numIntWord" false))))
 (DUse false (UseGroup ("backend" "impl_groups") ((mem "ImplClauseGroup" true))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "lookupMethodResult" false) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
 (DUse false (UseGroup ("list") ((mem "zip" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "guardVars" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "nthArm" false) (mem "bindingOrigin" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "bindNameMap" false) (mem "guardVars" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "nthArm" false) (mem "bindingOrigin" false))))
 (DData Private "GapMode" () ((variant "Strict" (ConPos)) (variant "Record" (ConPos))) ())
 (DTypeSig false "isFallthroughVar" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isFallthroughVar" ((PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "fallthroughName")) (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x"))))

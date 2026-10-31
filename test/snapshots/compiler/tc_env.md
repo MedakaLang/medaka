@@ -1,5 +1,5 @@
 # META
-source_lines=4501
+source_lines=4497
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -64,7 +64,6 @@ import frontend.ast.{
   UsePath(..),
   Variant(..),
   identOriginOf,
-  ifaceIdentity,
   mkIdent,
   orElseLoc,
   sameTyConHead,
@@ -115,9 +114,7 @@ import support.ordmap.{
   omEmpty, omFromNames, omHasKey, omInsert, omLookup, omSize, OrdMap
 }
 import list.{
-  drop,
   findMap,
-  indexed,
   last,
 }
 import support.util.{
@@ -128,7 +125,6 @@ import support.util.{
   isEmptyL,
   isSome,
   listLen,
-  lookupAssoc,
   reverseL,
   selfBinding,
 }
@@ -4506,7 +4502,7 @@ methodRowSameNameView rows =
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_mono") ((mem "argMentions" false) (mem "entryHeadMatches" false) (mem "headTyconTy" false) (mem "implDeclsWithReqs" false) (mem "nthTy" false) (mem "schemeBodyOf" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyVarNames" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "builtinCtors" false) (mem "emptyClassEnv" false) (mem "emptyDataEnv" false) (mem "emptyDeclEnvSeedAcc" false) (mem "emptyImplEnv" false) (mem "emptyImplUniverse" false) (mem "emptyMethodEnv" false) (mem "probeGraphCtx" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "orElseLoc" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "mkIdent" false) (mem "orElseLoc" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "dtopIn" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
@@ -4516,8 +4512,8 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "AliasDecl" false) (mem "CDeclared" false) (mem "BuiltinClass" true) (mem "dynFor" false) (mem "MethodEntry" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false) (mem "indexed" false) (mem "last" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false))))
+(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "last" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "reverseL" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "MultiRegistry" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "GoalOrigin" true))))
@@ -5283,7 +5279,7 @@ methodRowSameNameView rows =
 # MARK
 (DUse false (UseGroup ("types" "tc_mono") ((mem "argMentions" false) (mem "entryHeadMatches" false) (mem "headTyconTy" false) (mem "implDeclsWithReqs" false) (mem "nthTy" false) (mem "schemeBodyOf" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyVarNames" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "builtinCtors" false) (mem "emptyClassEnv" false) (mem "emptyDataEnv" false) (mem "emptyDeclEnvSeedAcc" false) (mem "emptyImplEnv" false) (mem "emptyImplUniverse" false) (mem "emptyMethodEnv" false) (mem "probeGraphCtx" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "orElseLoc" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "mkIdent" false) (mem "orElseLoc" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "dtopIn" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
@@ -5293,8 +5289,8 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "AliasDecl" false) (mem "CDeclared" false) (mem "BuiltinClass" true) (mem "dynFor" false) (mem "MethodEntry" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false) (mem "indexed" false) (mem "last" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false))))
+(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "last" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "reverseL" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "MultiRegistry" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "GoalOrigin" true))))

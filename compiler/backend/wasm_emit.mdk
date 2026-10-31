@@ -218,7 +218,6 @@ import frontend.ast.{
   Route(..),
   Loc(..),
   noDeclLoc,
-  ifaceIdMatches,
   isTaggedFixedHead,
   fixedWidthMask,
   hostSymbol,
@@ -230,7 +229,6 @@ import types.private_mangle.{injectiveIdent}
 import ir.core_ir.{
   CProgram(..),
   DeclFacts(..),
-  litRuntimeType,
   noDeclFacts,
   CBind(..),
   CClause(..),
@@ -254,14 +252,13 @@ import ir.core_ir.{
   CallSite(..),
   siteSentinelName,
 }
-import list.{replicate, take, drop}
+import list.{replicate}
 import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import backend.extern_catalog.{
   RuntimeExternDomain,
   WasmFamily(..),
   WasmUse(..),
   isWasmExternFamily,
-  wasmFamily,
 }
 import backend.core_validate.{
   findingBinding, isUnprovidedOn, renderExternFinding, renderExternRefusal,
@@ -286,19 +283,15 @@ import support.util.{
   reverseL,
   contains,
   filterList,
-  anyList,
   allList,
   lookupAssoc,
   listLen,
   maxI,
-  dedupBy,
   startsWith,
-  endsWith,
   splitNl,
   stringTrimLeft,
   u64HalvesHex,
   isEmptyL,
-  eqStr,
 }
 import ir.core_ir_lower.{
   ArityEnv,
@@ -331,7 +324,7 @@ import backend.trmc_analysis.{
   armBody,
   lastStmtExpr,
 }
-import types.private_mangle.{dictTag, hashName, injectiveIdent}
+import types.private_mangle.{dictTag, injectiveIdent}
 import backend.impl_groups.{ImplClauseGroup(..)}
 import backend.emit_plan.{
   EmitPlan(..),
@@ -339,7 +332,6 @@ import backend.emit_plan.{
   planEntryMainIsFloat,
 }
 import backend.emit_support.{
-  bindEagerReach,
   bindNameMap,
   ftPrefix,
   labelFallthrough,
@@ -374,58 +366,12 @@ import backend.wasm_preamble.{
   plannedHelperLines,
   declarePlannedHelpers,
   closTypeLines,
-  closApplyLines,
-  ioByteImportLines,
   strTypeLines,
-  ioRuntimeLines,
-  ioStrRuntimeLines,
-  stderrByteImportLines,
-  stderrByteKey,
-  stderrRuntimeLines,
-  trapIntRuntimeLines,
-  intRuntimeLines,
-  siteRuntimeLines,
-  strLeafRuntimeLines,
-  strConcatRuntimeLines,
-  appendRuntimeLines,
-  valueEqRuntimeLines,
-  valueAddRuntimeLines,
-  valueSubRuntimeLines,
-  valueMulRuntimeLines,
-  valueDivRuntimeLines,
-  valueModRuntimeLines,
-  valueCmpNumRuntimeLines,
   Wide64W(..),
-  u64RuntimeLines,
-  i64RuntimeLines,
   rngStateGlobalLines,
-  rngRuntimeLines,
-  hashRuntimeLines,
-  hashStringRuntimeLines,
-  floatFmtImportLines,
-  hostImportLines,
-  jsffiImportLines,
-  jsffiRuntimeLines,
   jsffiWrapperLines,
   jsffiWrapperId,
   jsCrossableHead,
-  floatRemRuntimeLines,
-  floatRuntimeLines,
-  hashFloatRuntimeLines,
-  randomFloatRuntimeLines,
-  floatStrRuntimeLines,
-  strSearchRuntimeLines,
-  strToIntRuntimeLines,
-  strReverseRuntimeLines,
-  strJoinRuntimeLines,
-  strCodecRuntimeLines,
-  utf8LossyRuntimeLines,
-  byteBlockRuntimeLines,
-  charFromCodeRuntimeLines,
-  charClassRuntimeLines,
-  ioHostRuntimeLines,
-  ioArgsRuntimeLines,
-  fileBytesRuntimeLines,
 }
 
 -- ── static value kind (scalar-mode only; for the auto-print routing) ─────────

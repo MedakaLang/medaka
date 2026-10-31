@@ -1,6 +1,6 @@
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.wasm_demand.{
-  WasmDemandPlan, WasmDemand(..), wasmTypeContext, returnStamp, cexprStamp, Env,
+  WasmDemandPlan, WasmDemand(..), wasmTypeContext, returnStamp, cexprStamp,
   EnvRef(..), envEmpty, envBind, envBindUnstamped, envExtendUnstamped,
   envRestrict, envLookup, envHas
 }

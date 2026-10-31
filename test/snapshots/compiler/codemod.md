@@ -1,5 +1,5 @@
 # META
-source_lines=321
+source_lines=320
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/codemod.mdk — the `medaka codemod` framework + registry.
@@ -64,7 +64,6 @@ import support.util.{
   joinNl,
   anyList,
   dedupBy,
-  lenKey,
 }
 
 -- ── public types ───────────────────────────────────────────────────────────
@@ -329,7 +328,7 @@ declEffectWarn _ _ = []
 (DUse false (UseGroup ("frontend" "lexer") ((mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "parse_result") ((mem "parsedDecls" false) (mem "parsedPositions" false) (mem "parsedMetadata" false) (mem "metadataTrailingCommas" false) (mem "metadataUnitStarts" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatProgram" false))))
-(DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "reverseL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "splitOnChar" false) (mem "joinNl" false) (mem "anyList" false) (mem "dedupBy" false) (mem "lenKey" false))))
+(DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "reverseL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "splitOnChar" false) (mem "joinNl" false) (mem "anyList" false) (mem "dedupBy" false))))
 (DData Public "CodeMode" () ((variant "CmDry" (ConPos)) (variant "CmWrite" (ConPos)) (variant "CmStdout" (ConPos))) ())
 (DData Public "Codemod" () ((variant "Codemod" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "argHelp" (TyCon "String")) (field "mk" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool")))))) (field "warn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))))) ())
 (DTypeSig true "allCodemods" (TyApp (TyCon "List") (TyCon "Codemod")))
@@ -410,7 +409,7 @@ declEffectWarn _ _ = []
 (DUse false (UseGroup ("frontend" "lexer") ((mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "parse_result") ((mem "parsedDecls" false) (mem "parsedPositions" false) (mem "parsedMetadata" false) (mem "metadataTrailingCommas" false) (mem "metadataUnitStarts" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatProgram" false))))
-(DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "reverseL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "splitOnChar" false) (mem "joinNl" false) (mem "anyList" false) (mem "dedupBy" false) (mem "lenKey" false))))
+(DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "reverseL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "splitOnChar" false) (mem "joinNl" false) (mem "anyList" false) (mem "dedupBy" false))))
 (DData Public "CodeMode" () ((variant "CmDry" (ConPos)) (variant "CmWrite" (ConPos)) (variant "CmStdout" (ConPos))) ())
 (DData Public "Codemod" () ((variant "Codemod" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "argHelp" (TyCon "String")) (field "mk" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool")))))) (field "warn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))))) ())
 (DTypeSig true "allCodemods" (TyApp (TyCon "List") (TyCon "Codemod")))

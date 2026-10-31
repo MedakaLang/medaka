@@ -24,7 +24,7 @@ import eval.eval.{
   Value(..), EvalEnv(..), EnvFrame(..), apply, eval, extendEnv, envFrameCells,
   force, lookupEnv, lookupRuntimeBinding, ppValue
 }
-import support.util.{listLen, lookupAssoc, isEmptyL, filterList, anyList}
+import support.util.{listLen, lookupAssoc, isEmptyL}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
 import tools.prop_plan.{
   deleteEach,

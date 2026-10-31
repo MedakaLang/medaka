@@ -51,7 +51,6 @@ import test_process.{underRoot}
 import tools.lint.{
   Applicability(..),
   FixRun(..),
-  StdlibIndex,
   allProjectRules,
   allRuleNames,
   applyFixes,

@@ -14,7 +14,7 @@ import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 import ir.sexp.{exprSexp, patSexp}
 import tools.lint_core.{DupClause(..), Finding(..)}
 import tools.lint_shared.{
-  declLocList, isCtorName, ruleNameDuplicateBody, sortUniqS, unwrapLoc
+  isCtorName, ruleNameDuplicateBody, sortUniqS, unwrapLoc
 }
 
 -- minimum body complexity (count of AST nodes) to be eligible.  Calibrated so the
@@ -403,7 +403,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "DupClause" true) (mem "Finding" true))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "isCtorName" false) (mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "isCtorName" false) (mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false) (mem "unwrapLoc" false))))
 (DTypeSig false "dupComplexityThreshold" (TyCon "Int"))
 (DFunDef false "dupComplexityThreshold" () (ELit (LInt 10)))
 (DTypeSig false "structuralKey" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyCon "String"))))
@@ -508,7 +508,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "DupClause" true) (mem "Finding" true))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "isCtorName" false) (mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "isCtorName" false) (mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false) (mem "unwrapLoc" false))))
 (DTypeSig false "dupComplexityThreshold" (TyCon "Int"))
 (DFunDef false "dupComplexityThreshold" () (ELit (LInt 10)))
 (DTypeSig false "structuralKey" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyCon "String"))))

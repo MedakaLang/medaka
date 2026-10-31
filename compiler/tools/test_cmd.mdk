@@ -56,7 +56,7 @@
 -- single-file call site below.
 
 import support.diag_codes.{DiagCode(..)}
-import frontend.ast.{Decl(..), Expr, Loc(..), Ty}
+import frontend.ast.{Decl(..), Expr, Loc(..)}
 import tools.target_parse.{
   parseTargetResult,
   targetRaw,
@@ -169,7 +169,6 @@ import tools.prop_runner.{
   propResultPassed,
   propResultDetail,
   propResultEngine,
-  propResultStatus,
   propResultSeed,
   propResultCases,
   propResultFailureKind,
@@ -204,8 +203,6 @@ import tools.test_pins_report.{
   gradedTestPassed,
   gradedPropRaw,
   gradedTestRaw,
-  gradedPropVerdict,
-  gradedTestVerdict,
   knownRedCountProps,
   knownRedCountTests,
   gradedPropStatus,

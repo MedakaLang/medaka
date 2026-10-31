@@ -11,7 +11,7 @@ import ir.core_ir.{
   CProgram(..), DeclFacts(..), EntryFact(..), CBind(..), CClause(..), CExpr(..),
   CField(..), CGuard(..), CImplEntry(..), CImplBody(..), CStmt(..), CArm(..),
   CHead(..), CTree(..), CTBranch(..), CallSite(..), CallMode(..), FailSite(..),
-  litRuntimeType, siteSentinelName
+  litRuntimeType
 }
 import ir.extern_types.{ExternDeclFact(..)}
 import ir.extern_lower.{externRuntimeKey}
@@ -33,7 +33,7 @@ import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import types.private_mangle.{injectiveIdent}
 import support.ordmap.{
   OrdMap, omEmpty, omInsert, omLookup, omHasKey, omKeys, omFromNames,
-  omFromPairs, omDelete, omRestrict
+  omFromPairs, omRestrict
 }
 import support.util.{
   reverseL, filterList, listLen, contains, startsWith, isEmptyL, isNonEmptyL,

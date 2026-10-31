@@ -1,5 +1,5 @@
 # META
-source_lines=1666
+source_lines=1664
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -34,9 +34,7 @@ import frontend.visibility.{useModId}
 import string as Str
 import support.util.{
   contains,
-  listLen,
   reverseL,
-  initList,
   startsWith,
   endsWith,
   joinDot,
@@ -1675,7 +1673,7 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocated" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseAlias ("string") "Str"))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "initList" false) (mem "startsWith" false) (mem "endsWith" false) (mem "joinDot" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "splitNl" false) (mem "stringTrim" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "reverseL" false) (mem "startsWith" false) (mem "endsWith" false) (mem "joinDot" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "splitNl" false) (mem "stringTrim" false) (mem "sortUniqS" false))))
 (DTypeSig false "lastOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "lastOr" ((PVar "d") (PList)) (EVar "d"))
 (DFunDef false "lastOr" (PWild (PList (PVar "x"))) (EVar "x"))
@@ -1934,7 +1932,7 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocated" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseAlias ("string") "Str"))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "initList" false) (mem "startsWith" false) (mem "endsWith" false) (mem "joinDot" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "splitNl" false) (mem "stringTrim" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "reverseL" false) (mem "startsWith" false) (mem "endsWith" false) (mem "joinDot" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "splitNl" false) (mem "stringTrim" false) (mem "sortUniqS" false))))
 (DTypeSig false "lastOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "lastOr" ((PVar "d") (PList)) (EVar "d"))
 (DFunDef false "lastOr" (PWild (PList (PVar "x"))) (EVar "x"))

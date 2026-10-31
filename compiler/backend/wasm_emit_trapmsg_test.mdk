@@ -10,7 +10,7 @@
 
 import backend.wasm_emit_test_support_test.{watOf}
 import backend.emit_target.{Backend(..)}
-import test.{Expectation, expectAll, expectAtLeast, expectEqual, labelFail}
+import test.{expectAll, expectAtLeast, expectEqual, labelFail}
 import string.{fromChars, lines, stripPrefix, toInt}
 import ir.core_ir_lower.{declaredRecordFieldOrders}
 import backend.emit_plan.{buildEmitPlan}

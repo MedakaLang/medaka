@@ -1,5 +1,5 @@
 # META
-source_lines=829
+source_lines=828
 stages=DESUGAR,MARK
 # SOURCE
 -- The type REPRESENTATION of the typechecker and its renderers: the monotype
@@ -27,7 +27,6 @@ import types.effect_rows.{
   renderAtomsWith,
   Atom(..),
   effrowNorm,
-  effrowLabels,
   rowFlat,
   effvarId,
   isJoinCell,
@@ -36,7 +35,7 @@ import types.effect_rows.{
 }
 import frontend.ast.{
   Ty(..), Constraint(..), TyConOrigin(..), EffAtomTy(..), effAtomSurface,
-  binderDomainSurface, authTermSurface, qualifierSource, authTermsSurface
+  binderDomainSurface, qualifierSource, authTermsSurface
 }
 import support.util.{listLen, filterList, isEmptyL, joinWith, sortUniqS, escStr}
 
@@ -834,8 +833,8 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 # DESUGAR
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authvarName" false) (mem "authNorm" false) (mem "authIsTop" false) (mem "authSub" false) (mem "renderAuthorityWith" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "renderAtoms" false) (mem "renderAtomsWith" false) (mem "Atom" true) (mem "effrowNorm" false) (mem "effrowLabels" false) (mem "rowFlat" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "EffRow" true) (mem "Effvar" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "renderAtoms" false) (mem "renderAtomsWith" false) (mem "Atom" true) (mem "effrowNorm" false) (mem "rowFlat" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "EffRow" true) (mem "Effvar" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "escStr" false))))
 (DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String") (TyCon "TyConOrigin"))) (variant "TRigid" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow"))) (variant "TQual" (ConPos (TyCon "Mono") (TyCon "Authority"))) (variant "TAuth" (ConPos (TyCon "Authority")))) ())
 (DData Public "Tyvar" () ((variant "Unbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "Link" (ConPos (TyCon "Mono")))) ())
@@ -969,8 +968,8 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 # MARK
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authvarName" false) (mem "authNorm" false) (mem "authIsTop" false) (mem "authSub" false) (mem "renderAuthorityWith" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "renderAtoms" false) (mem "renderAtomsWith" false) (mem "Atom" true) (mem "effrowNorm" false) (mem "effrowLabels" false) (mem "rowFlat" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "EffRow" true) (mem "Effvar" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "renderAtoms" false) (mem "renderAtomsWith" false) (mem "Atom" true) (mem "effrowNorm" false) (mem "rowFlat" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "EffRow" true) (mem "Effvar" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "escStr" false))))
 (DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String") (TyCon "TyConOrigin"))) (variant "TRigid" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow"))) (variant "TQual" (ConPos (TyCon "Mono") (TyCon "Authority"))) (variant "TAuth" (ConPos (TyCon "Authority")))) ())
 (DData Public "Tyvar" () ((variant "Unbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "Link" (ConPos (TyCon "Mono")))) ())

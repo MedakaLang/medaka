@@ -31,7 +31,7 @@ import list.{subsequences}
 import support.ordmap.{omEmpty, omFromNames, omHasKey, omKeys}
 import support.symbol_origin.{SymbolOrigin(..)}
 import support.util.{contains, joinWith, stringTrimLeft}
-import test.{Expectation, expectAll, expectEqual, labelFail}
+import test.{expectAll, expectEqual, labelFail}
 
 -- ── reading a block's text ──────────────────────────────────────────────────
 

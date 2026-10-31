@@ -27,7 +27,7 @@ import backend.llvm_symbols.{
 }
 import support.symbol_origin.{SymbolOrigin(..)}
 import support.util.{joinWith}
-import test.{Expectation, expectAll, expectEqual, labelFail}
+import test.{expectAll, expectEqual, labelFail}
 
 at : String -> SymbolOrigin
 at b = SymbolOrigin b "" 0 0

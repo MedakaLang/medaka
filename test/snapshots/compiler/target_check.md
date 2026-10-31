@@ -47,7 +47,7 @@ import types.target_profile.{
 }
 import ir.dce.{ReachRoots(..), reachedExternChains, reachedExternRoutes}
 import types.effect_policy.{
-  PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain
+  PolicyVerdict(..), buildCallGraph, fnEffectsTable, viaChain
 }
 import types.repr.{Scheme}
 import types.effect_rows.{
@@ -603,7 +603,7 @@ firstOr _ (x :: _) = x
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "GapKind" true) (mem "gapKindName" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "buildable" false) (mem "lookupProfile" false) (mem "profileName" false) (mem "profileNames" false) (mem "profileGrants" false) (mem "profileBindingHost" false) (mem "isGatedLabel" false) (mem "reachesLabel" false) (mem "runProfile" false))))
 (DUse false (UseGroup ("ir" "dce") ((mem "ReachRoots" true) (mem "reachedExternChains" false) (mem "reachedExternRoutes" false))))
-(DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "policyRefusals" false) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false))))
+(DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "atomLabel" false) (mem "atomLabelOf" false) (mem "effLabelOrigin" false) (mem "renderAtom" false))))
 (DUse false (UseGroup ("tools" "check_policy") ((mem "TargetInputs" true))))
@@ -749,7 +749,7 @@ firstOr _ (x :: _) = x
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "GapKind" true) (mem "gapKindName" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "buildable" false) (mem "lookupProfile" false) (mem "profileName" false) (mem "profileNames" false) (mem "profileGrants" false) (mem "profileBindingHost" false) (mem "isGatedLabel" false) (mem "reachesLabel" false) (mem "runProfile" false))))
 (DUse false (UseGroup ("ir" "dce") ((mem "ReachRoots" true) (mem "reachedExternChains" false) (mem "reachedExternRoutes" false))))
-(DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "policyRefusals" false) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false))))
+(DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "atomLabel" false) (mem "atomLabelOf" false) (mem "effLabelOrigin" false) (mem "renderAtom" false))))
 (DUse false (UseGroup ("tools" "check_policy") ((mem "TargetInputs" true))))

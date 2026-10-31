@@ -1,5 +1,5 @@
 # META
-source_lines=1942
+source_lines=1940
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.runtime_constructors.{namedRuntimeCtor}
@@ -166,8 +166,6 @@ import support.util.{
   reverseL,
   isEmptyL,
   filterList,
-  initList,
-  joinDot,
   dedup,
   dedupBy,
   lenKey,
@@ -1954,7 +1952,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "zip" false))))
 (DUse false (UseGroup ("map") ((mem "insertWith" false))))
-(DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "joinDot" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
 (DTypeSig true "mangleUnits" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "mangleUnits" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "coreOut") (PVar "modsOut") PWild) (EApp (EApp (EVar "mangleUnitsWithOrigins") (EVar "coreDecls")) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
@@ -2378,7 +2376,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "zip" false))))
 (DUse false (UseGroup ("map") ((mem "insertWith" false))))
-(DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "joinDot" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
 (DTypeSig true "mangleUnits" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "mangleUnits" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "coreOut") (PVar "modsOut") PWild) (EApp (EApp (EVar "mangleUnitsWithOrigins") (EVar "coreDecls")) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
