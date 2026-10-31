@@ -1,3 +1,4 @@
+import backend.impl_groups.{ImplClauseGroup, groupImplEntries}
 import ir.constructor_facts.{ConstructorFacts, planConstructors}
 import support.symbol_encoding.{encodePair}
 import backend.wasm_demand.{
@@ -106,6 +107,7 @@ public export data EmitPlan = EmitPlan {
   lazyGlobals : List String,
   eagerReach : OrdMap (List String),
   globalInit : GlobalInitPlan,
+  implGroups : List ImplClauseGroup,
   trmc : TrmcVerdicts,
   dispGroups : List DispGroup,
   wasmDemand : WasmDemand,
@@ -166,12 +168,13 @@ planOver target domain reach ctorFields prog =
   let lazy = lazyGlobalNames groups
   let eager = eagerReachMap groups
   let globalInit = planGlobals prog lazy eager
+  let implGroups = groupImplEntries impls
   let trmc = TrmcVerdicts {
     eligibleFns =
       omFromNames
         (map bindName (filterList (b => selfTrmcBind ctors b) fns))
         omEmpty,
-    eligibleImpls = trmcImplKeys ctors impls,
+    eligibleImpls = trmcImplKeys ctors impls implGroups,
   }
   let dispatch = planDispatchGroups ctors fns groups impls
   let inputs = WasmDemandInputs {
@@ -196,6 +199,7 @@ planOver target domain reach ctorFields prog =
     lazyGlobals = lazy,
     eagerReach = eager,
     globalInit = globalInit,
+    implGroups = implGroups,
     trmc = trmc,
     dispGroups = dispatch,
     wasmDemand = match physical
@@ -283,31 +287,40 @@ implGroupKey : String -> String -> String
 implGroupKey method key = lenKey method ++ key
 
 -- the eligible impl groups, keyed by `implGroupKey`
-trmcImplKeys : OrdMap Int -> List CImplEntry -> OrdMap Unit
-trmcImplKeys ctors impls =
-  let grouped = groupImplClauses impls omEmpty
+trmcImplKeys : OrdMap Int ->
+  List CImplEntry ->
+  List ImplClauseGroup ->
+  OrdMap Unit
+trmcImplKeys ctors impls groups =
+  let indexed = indexImplEntries impls 0 omEmpty
   omFromNames
-    (filterList
-      (k => match omLookup k grouped
-        Some (method, key, revClauses) =>
-          let clauses = reverseL revClauses
-          clausesTrmc ctors (methodSelf method key (firstPats clauses)) clauses
-        None => False)
-      (omKeys grouped))
+    (map
+      (g => implGroupKey (g : ImplClauseGroup).method (g : ImplClauseGroup).key)
+      (filterList
+        (g =>
+          let clauses =
+            flatMap
+              (i => match omLookup (intToString i) indexed
+                Some (CImplEntry _ _ _ body) => [snd (implKeyClause body)]
+                None => [])
+              (g : ImplClauseGroup).indices
+          clausesTrmc
+            ctors
+            (methodSelf
+              (g : ImplClauseGroup).method
+              (g : ImplClauseGroup).key
+              (firstPats clauses))
+            clauses)
+        groups))
     omEmpty
 
--- each `(method, key)` group's clauses, newest first
-groupImplClauses : List CImplEntry ->
-  OrdMap (String, String, List CClause) ->
-  OrdMap (String, String, List CClause)
-groupImplClauses [] acc = acc
-groupImplClauses ((CImplEntry method _ _ body) :: rest) acc =
-  let (key, clause) = implKeyClause body
-  let k = implGroupKey method key
-  let prev = match omLookup k acc
-    Some (_, _, cs) => cs
-    None => []
-  groupImplClauses rest (omInsert k (method, key, clause :: prev) acc)
+indexImplEntries : List CImplEntry ->
+  Int ->
+  OrdMap CImplEntry ->
+  OrdMap CImplEntry
+indexImplEntries [] _ acc = acc
+indexImplEntries (entry :: rest) i acc =
+  indexImplEntries rest (i + 1) (omInsert (intToString i) entry acc)
 
 implKeyClause : CImplBody -> (String, CClause)
 implKeyClause (CImplTagged _ key _ _ _ pats body) = (key, CClause pats body)

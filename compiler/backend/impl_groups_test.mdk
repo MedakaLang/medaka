@@ -1,0 +1,92 @@
+import backend.impl_groups.{
+  ImplClauseGroup, groupImplEntries, validateImplGroups
+}
+import ir.core_ir.{CImplEntry(..), CImplBody(..), CExpr(..), noImplSym}
+import frontend.ast.{Lit(..)}
+import test.{expectEqual, expectEach, expectFindings, expectNoFindings}
+
+entry : String -> String -> String -> CImplEntry
+entry method key tag =
+  CImplEntry
+    method
+    0
+    0
+    (CImplTagged tag key "I" noImplSym [] [] (CLit (LInt 0)))
+
+defaultEntry : String -> String -> CImplEntry
+defaultEntry method key =
+  CImplEntry
+    method
+    0
+    0
+    (CImplDefault "I" "Box" key noImplSym [] [] (CLit (LInt 0)))
+
+rows : List ImplClauseGroup -> List (String, String, List Int)
+rows gs =
+  map
+    (g => (
+      (g : ImplClauseGroup).method,
+      (g : ImplClauseGroup).key,
+      (g : ImplClauseGroup).indices,
+    ))
+    gs
+
+firstTag : List CImplEntry -> ImplClauseGroup -> String
+firstTag entries group = match (entries, group.indices)
+  ((CImplEntry _ _ _ (CImplTagged tag _ _ _ _ _ _)) :: _, 0 :: _) => tag
+  _ => "missing"
+
+test "partition preserves first-seen and clause order" =
+  let entries = [
+    entry "m" "Box Int" "Box",
+    entry "n" "k2" "N",
+    entry "m" "Box Int" "Other",
+    entry "m" "Box String" "Box",
+    defaultEntry "d" "default",
+    defaultEntry "d" "default",
+  ]
+  let groups = groupImplEntries entries
+  expectEach [
+    (
+      "interleaved tagged and defaults",
+      expectEqual
+        [
+          ("m", "Box Int", [0, 2]),
+          ("n", "k2", [1]),
+          ("m", "Box String", [3]),
+          ("d", "default", [4, 5]),
+        ]
+        (rows groups),
+    ),
+    (
+      "first entry provenance",
+      expectEqual "Box" (match groups
+        g :: _ => firstTag entries g
+        [] => "missing"),
+    ),
+    (
+      "valid",
+      expectNoFindings "group facts" (Ok (validateImplGroups entries groups)),
+    ),
+    (
+      "missing",
+      expectFindings "group facts" (Ok (validateImplGroups entries [])),
+    ),
+    (
+      "permutation",
+      expectEqual
+        [("m", "Box String", [0]), ("m", "Box Int", [1, 2])]
+        (rows
+          (groupImplEntries [
+            entry "m" "Box String" "Box",
+            entry "m" "Box Int" "Box",
+            entry "m" "Box Int" "Other",
+          ])),
+    ),
+    (
+      "pair collision",
+      expectEqual
+        [("ab", "c", [0]), ("a", "bc", [1])]
+        (rows (groupImplEntries [entry "ab" "c" "X", entry "a" "bc" "X"])),
+    ),
+  ]
