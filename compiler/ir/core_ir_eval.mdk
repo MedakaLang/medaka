@@ -665,7 +665,7 @@ installMethodTables facts decls =
 -- its impls lower to `CImplEntry`s against the JOINT dispatch table built from
 -- ALL decls (an impl in one module for a prelude interface needs the prelude's
 -- dispatch positions).  The value-agnostic import-frame machinery (importFrameOf /
--- pubReexports — they thread only cells + DUse paths, never Values) is reused
+-- moduleExports — they thread only cells + DUse paths, never Values) is reused
 -- verbatim from eval.mdk.  Reads the program's `ProgramFacts` (dispositions and evidence) the way
 -- `evalModulesWith` does, so its dispatch is as typed as the facts it is handed.
 -- parameterized over the value type (v := Value e), like eval.mdk's ModInfo —

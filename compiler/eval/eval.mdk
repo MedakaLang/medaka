@@ -4574,7 +4574,8 @@ publicExternCells : List (String, Ref (Value e)) ->
   List Decl ->
   List (String, Ref (Value e))
 publicExternCells globalCells valueNames decls =
-  let names = filterList (n => omHasKey n valueNames) (externDeclNames decls)
+  let names =
+    filterList (n => omHasKey n valueNames) (externDeclNamesOfDecls decls)
   match names
     [] => []
     _ => publicExternCellsGo (omFromPairs (reverseL globalCells) omEmpty) names
@@ -4587,23 +4588,13 @@ publicExternCellsGo cells (n :: rest) = match omLookup n cells
   Some cell => (n, cell) :: publicExternCellsGo cells rest
   None => publicExternCellsGo cells rest
 
-externDeclNames : List Decl -> List String
-externDeclNames decls = flatMap externDeclName decls
-
-externDeclName : Decl -> List String
-externDeclName (DExtern (ExternDecl { edName = n, ... })) = [n]
-externDeclName (DAttrib _ d) = externDeclName d
-externDeclName _ = []
-
--- IMPORT ALIASING: a module must ALSO export the interface/impl METHODS it declares.
+-- A module exports the methods of its own exported interfaces.
 --
 -- Methods are not in `localCells`: they are coalesced into ONE GLOBAL cell per bare name
 -- (evalModulesWith' `globalNames`/`coalesceImpls`), because impl dispatch is global-by-name.
--- So they were absent from every module's `exports` — the very list resolveMembers /
--- importFrameOf consult to bind an import.  That gap was INVISIBLE while every import
--- kept its origin name: the reference simply fell through to the global frame unchanged.
--- The moment a local name diverges from the origin — either alias form — nothing bound
--- it anywhere, and `import shapes.{area as computeArea}` died with "unbound identifier".
+-- So they are absent from every module's `exports` unless added here — the list
+-- resolveMembers / importFrameOf consult to bind an import.  Without them, a local name
+-- that diverges from the origin name (`import shapes.{area as computeArea}`) binds nowhere.
 --
 -- The exported entry is the SAME global cell, never a copy: that cell holds the
 -- coalesced dispatcher, so an alias is a second name for one dispatcher and impl

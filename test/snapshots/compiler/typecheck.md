@@ -1,5 +1,5 @@
 # META
-source_lines=3740
+source_lines=3736
 stages=DESUGAR,MARK
 # SOURCE
 -- typecheck: the entry module: the graph drive (`driveGraphK`), the chain and core memos and
@@ -204,6 +204,7 @@ import frontend.visibility.{
   pubUsePaths,
   exportedValueNames,
   nsAbstractData,
+  directIn,
 }
 import types.value_main.{inMainBinding}
 import frontend.resolve.{
@@ -462,29 +463,24 @@ ioJoinAtoms domains grants =
         (lookupAssoc l grants))
     hostLabels
 
--- The names of all `VisAbstract` data decls.  Only record-shaped ones can be a
--- dot-access receiver, but harvesting any is harmless: a positional ADT's fields
--- never exist, so a field access cannot reach the abstract branch.
-collectAbstractRecordTypes : List Decl -> List String
-collectAbstractRecordTypes decls = flatMap nsAbstractData.nsDirectOf decls
-
--- seed abstractRecordTypesRef from every module's decls (the per-module progs plus
--- the prelude/core decls), once, before checking begins.  Keyed by the type
--- word (`typeTagOf`), so a program's own type that shares an abstract export's
--- name is not mistaken for it.
+-- seed abstractRecordTypesRef from the `VisAbstract` data decls of every module (the
+-- per-module progs plus the prelude/core decls), once, before checking begins.  Keyed
+-- by the type word (`typeTagOf`), so a program's own type that shares an abstract
+-- export's name is not mistaken for it.  Positional ADTs are harvested too, harmlessly:
+-- their fields never exist, so a field access cannot reach the abstract branch.
 seedAbstractRecordTypes : GraphCtx ->
   List Decl ->
   List (String, List Decl) ->
   Unit
 seedAbstractRecordTypes gctx coreDecls modules =
   let abstracts =
-    collectAbstractRecordTypes coreDecls
+    directIn nsAbstractData coreDecls
       ++ flatMap (m => abstractTypeWords (fst m) (snd m)) modules
   gctx.abstractRecordTypesRef := namesToSet abstracts omEmpty
 
 abstractTypeWords : String -> List Decl -> List String
 abstractTypeWords mid decls =
-  map (n => typeTagOf (OriginModule mid) n) (collectAbstractRecordTypes decls)
+  map (n => typeTagOf (OriginModule mid) n) (directIn nsAbstractData decls)
 
 -- Test-only observation (R5): read by `typecheck_test.mdk`, no production caller.
 --
@@ -1562,7 +1558,7 @@ coreRenameScheme coreV m = match useMemberAlias m
     Some s => [(local, s)]
 
 -- the (key, scheme) pairs a module RE-EXPORTS via `export import` (`DUse True`).
--- Mirrors resolve's re-export set (resolve.pubUsePaths filters the same `DUse True`)
+-- Mirrors resolve's re-export set (frontend.visibility.pubUsePaths filters the same `DUse True`)
 -- into the typecheck seed: walk the export-flagged DUse decls and, for each, pick the
 -- re-exported member names out of the SOURCE dependency's public schemes already in
 -- depEnv — the exact member resolution importSeed uses (importFormSchemes /
@@ -3760,7 +3756,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "tcLoc" false) (mem "TcReport" false) (mem "PartialAnalysis" false) (mem "EntryTables" true) (mem "noEntryTables" false) (mem "partialAnalysis" false) (mem "freezePub" false) (mem "freezeRows" false) (mem "freezeModDiags" false) (mem "graphReportWithOutcome" false) (mem "publishSelected" false) (mem "publishCore" false) (mem "publishWithContexts" false) (mem "publishedCore" false) (mem "publishedEntrySchemes" false) (mem "ppPubScheme" false))))
 (DUse false (UseGroup ("types" "entry_outcome") ((mem "mainUseDiags" false) (mem "printlnIface" false) (mem "mainBodySpan" false) (mem "driveOutputsNow" false) (mem "entryOutcomeNow" false) (mem "mainIsAsyncNow" false) (mem "mainAsyncPayloadIsUnitNow" false) (mem "mainIsUnitNow" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false) (mem "pubUsePaths" false) (mem "exportedValueNames" false) (mem "nsAbstractData" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false) (mem "pubUsePaths" false) (mem "exportedValueNames" false) (mem "nsAbstractData" false) (mem "directIn" false))))
 (DUse false (UseGroup ("types" "value_main") ((mem "inMainBinding" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "programIsCore" false) (mem "stampTyOrigins" false) (mem "runtimeExternTyOriginScope" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
@@ -3796,12 +3792,10 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "tc_module") ((mem "captureTypeErrors" false) (mem "checkBodyImpl" false) (mem "checkGraphFinish" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "drainStampQueue" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "settleClosedBody" false) (mem "verdictFinding" false))))
 (DTypeSig true "ioJoinAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "ioJoinAtoms" ((PVar "domains") (PVar "grants")) (EApp (EApp (EVar "filterMap") (ELam ((PVar "l")) (EApp (EApp (EVar "map") (ELam ((PVar "granted")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EApp (EVar "writtenParam") (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EVar "builtinLabel") (EVar "l")))) (EVar "granted"))))) (EApp (EApp (EVar "lookupAssoc") (EVar "l")) (EVar "grants"))))) (EVar "hostLabels")))
-(DTypeSig false "collectAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "collectAbstractRecordTypes" ((PVar "decls")) (EApp (EApp (EVar "flatMap") (EFieldAccess (EVar "nsAbstractData") "nsDirectOf")) (EVar "decls")))
 (DTypeSig false "seedAbstractRecordTypes" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit")))))
-(DFunDef false "seedAbstractRecordTypes" ((PVar "gctx") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "abstracts") (EBinOp "++" (EApp (EVar "collectAbstractRecordTypes") (EVar "coreDecls")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "abstractTypeWords") (EApp (EVar "fst") (EVar "m"))) (EApp (EVar "snd") (EVar "m"))))) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "abstractRecordTypesRef")) (EApp (EApp (EVar "namesToSet") (EVar "abstracts")) (EVar "omEmpty"))))))
+(DFunDef false "seedAbstractRecordTypes" ((PVar "gctx") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "abstracts") (EBinOp "++" (EApp (EApp (EVar "directIn") (EVar "nsAbstractData")) (EVar "coreDecls")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "abstractTypeWords") (EApp (EVar "fst") (EVar "m"))) (EApp (EVar "snd") (EVar "m"))))) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "abstractRecordTypesRef")) (EApp (EApp (EVar "namesToSet") (EVar "abstracts")) (EVar "omEmpty"))))))
 (DTypeSig false "abstractTypeWords" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "abstractTypeWords" ((PVar "mid") (PVar "decls")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EVar "typeTagOf") (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "n")))) (EApp (EVar "collectAbstractRecordTypes") (EVar "decls"))))
+(DFunDef false "abstractTypeWords" ((PVar "mid") (PVar "decls")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EVar "typeTagOf") (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "n")))) (EApp (EApp (EVar "directIn") (EVar "nsAbstractData")) (EVar "decls"))))
 (DTypeSig true "stickyTypeErrorDiags" (TyFun (TyCon "DriveOutputs") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))
 (DFunDef false "stickyTypeErrorDiags" ((PVar "o")) (EApp (EVar "stickyDiagsInPushOrder") (EFieldAccess (EVar "o") "doStickyDiags")))
 (DTypeSig true "hadTypeErrors" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
@@ -4187,7 +4181,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "tcLoc" false) (mem "TcReport" false) (mem "PartialAnalysis" false) (mem "EntryTables" true) (mem "noEntryTables" false) (mem "partialAnalysis" false) (mem "freezePub" false) (mem "freezeRows" false) (mem "freezeModDiags" false) (mem "graphReportWithOutcome" false) (mem "publishSelected" false) (mem "publishCore" false) (mem "publishWithContexts" false) (mem "publishedCore" false) (mem "publishedEntrySchemes" false) (mem "ppPubScheme" false))))
 (DUse false (UseGroup ("types" "entry_outcome") ((mem "mainUseDiags" false) (mem "printlnIface" false) (mem "mainBodySpan" false) (mem "driveOutputsNow" false) (mem "entryOutcomeNow" false) (mem "mainIsAsyncNow" false) (mem "mainAsyncPayloadIsUnitNow" false) (mem "mainIsUnitNow" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false) (mem "pubUsePaths" false) (mem "exportedValueNames" false) (mem "nsAbstractData" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false) (mem "pubUsePaths" false) (mem "exportedValueNames" false) (mem "nsAbstractData" false) (mem "directIn" false))))
 (DUse false (UseGroup ("types" "value_main") ((mem "inMainBinding" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "programIsCore" false) (mem "stampTyOrigins" false) (mem "runtimeExternTyOriginScope" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
@@ -4223,12 +4217,10 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "tc_module") ((mem "captureTypeErrors" false) (mem "checkBodyImpl" false) (mem "checkGraphFinish" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "drainStampQueue" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "settleClosedBody" false) (mem "verdictFinding" false))))
 (DTypeSig true "ioJoinAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "ioJoinAtoms" ((PVar "domains") (PVar "grants")) (EApp (EApp (EMethodRef "filterMap") (ELam ((PVar "l")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "granted")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EApp (EVar "writtenParam") (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EVar "builtinLabel") (EVar "l")))) (EVar "granted"))))) (EApp (EApp (EVar "lookupAssoc") (EVar "l")) (EVar "grants"))))) (EVar "hostLabels")))
-(DTypeSig false "collectAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "collectAbstractRecordTypes" ((PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EFieldAccess (EVar "nsAbstractData") "nsDirectOf")) (EVar "decls")))
 (DTypeSig false "seedAbstractRecordTypes" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit")))))
-(DFunDef false "seedAbstractRecordTypes" ((PVar "gctx") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "abstracts") (EBinOp "++" (EApp (EVar "collectAbstractRecordTypes") (EVar "coreDecls")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "abstractTypeWords") (EApp (EVar "fst") (EVar "m"))) (EApp (EVar "snd") (EVar "m"))))) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "abstractRecordTypesRef")) (EApp (EApp (EVar "namesToSet") (EVar "abstracts")) (EVar "omEmpty"))))))
+(DFunDef false "seedAbstractRecordTypes" ((PVar "gctx") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "abstracts") (EBinOp "++" (EApp (EApp (EVar "directIn") (EVar "nsAbstractData")) (EVar "coreDecls")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "abstractTypeWords") (EApp (EVar "fst") (EVar "m"))) (EApp (EVar "snd") (EVar "m"))))) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "abstractRecordTypesRef")) (EApp (EApp (EVar "namesToSet") (EVar "abstracts")) (EVar "omEmpty"))))))
 (DTypeSig false "abstractTypeWords" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "abstractTypeWords" ((PVar "mid") (PVar "decls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EVar "typeTagOf") (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "n")))) (EApp (EVar "collectAbstractRecordTypes") (EVar "decls"))))
+(DFunDef false "abstractTypeWords" ((PVar "mid") (PVar "decls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EVar "typeTagOf") (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "n")))) (EApp (EApp (EVar "directIn") (EVar "nsAbstractData")) (EVar "decls"))))
 (DTypeSig true "stickyTypeErrorDiags" (TyFun (TyCon "DriveOutputs") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))
 (DFunDef false "stickyTypeErrorDiags" ((PVar "o")) (EApp (EVar "stickyDiagsInPushOrder") (EFieldAccess (EVar "o") "doStickyDiags")))
 (DTypeSig true "hadTypeErrors" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))

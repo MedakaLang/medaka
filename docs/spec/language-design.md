@@ -932,7 +932,7 @@ import collections.HashMap as HM
 
 Wildcard imports are available but style guides should discourage them — makes it hard to know where names come from.
 
-A wildcard import and an explicit import that bind the same name from two different modules are ambiguous, as any two imports of one name are. The program is rejected, and the name must be imported from one of the two modules under an alias, such as `import utils.{greet as hello}`. An explicit import of the name alone is not ambiguous.
+When a wildcard import and an explicit import make two different declarations available under one name, using that name is an error at the use site: the name is ambiguous, as any two imports of one name are. A name that is never used is accepted, and so is one that reaches the module through two paths to the same declaration, such as a facade's re-export. To use the name, import it from one of the two modules under an alias, such as `import utils.{greet as hello}`. An explicit import of the name alone is not ambiguous.
 
 ---
 

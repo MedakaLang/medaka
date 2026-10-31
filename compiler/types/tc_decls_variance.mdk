@@ -120,16 +120,8 @@ polarityPublicKeys : List Decl -> List TabKey
 polarityPublicKeys [] = []
 polarityPublicKeys ((DAttrib _ d) :: rest) = polarityPublicKeys (d :: rest)
 polarityPublicKeys (d :: rest) =
-  (if declExportsIn nsTypes d then typeDeclKeys d else [])
+  (if declExportsIn nsTypes d then declPolarityKeys [d] else [])
     ++ polarityPublicKeys rest
-
-typeDeclKeys : Decl -> List TabKey
-typeDeclKeys (DData { dataName = n, dataOrigin = o, ... }) = [tyTabKey o n]
-typeDeclKeys (DNewtype { newtypeName = n, newtypeOrigin = o, ... }) =
-  [tyTabKey o n]
-typeDeclKeys (DTypeAlias { tyAliasName = n, tyAliasOrigin = o, ... }) =
-  [tyTabKey o n]
-typeDeclKeys _ = []
 
 -- Membership index over a `TabKey` list, bucketed by the bare name: the probe
 -- reads the name already stored in the key (no rendering, no allocation), and

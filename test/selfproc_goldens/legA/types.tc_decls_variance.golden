@@ -30,5 +30,4 @@ seedParamPolarityFixpointScoped : ModuleCtx -> List Decl -> List Decl -> Unit
 tabKeyIndex : List TabKey -> Map String (List TabKey)
 tabKeyIndexGo : List TabKey -> Map String (List TabKey) -> Map String (List TabKey)
 tabKeyIndexHas : Map String (List TabKey) -> TabKey -> Bool
-typeDeclKeys : Decl -> List TabKey
 variantPayload : Variant -> ConPayload

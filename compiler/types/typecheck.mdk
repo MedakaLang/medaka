@@ -200,6 +200,7 @@ import frontend.visibility.{
   pubUsePaths,
   exportedValueNames,
   nsAbstractData,
+  directIn,
 }
 import types.value_main.{inMainBinding}
 import frontend.resolve.{
@@ -458,29 +459,24 @@ ioJoinAtoms domains grants =
         (lookupAssoc l grants))
     hostLabels
 
--- The names of all `VisAbstract` data decls.  Only record-shaped ones can be a
--- dot-access receiver, but harvesting any is harmless: a positional ADT's fields
--- never exist, so a field access cannot reach the abstract branch.
-collectAbstractRecordTypes : List Decl -> List String
-collectAbstractRecordTypes decls = flatMap nsAbstractData.nsDirectOf decls
-
--- seed abstractRecordTypesRef from every module's decls (the per-module progs plus
--- the prelude/core decls), once, before checking begins.  Keyed by the type
--- word (`typeTagOf`), so a program's own type that shares an abstract export's
--- name is not mistaken for it.
+-- seed abstractRecordTypesRef from the `VisAbstract` data decls of every module (the
+-- per-module progs plus the prelude/core decls), once, before checking begins.  Keyed
+-- by the type word (`typeTagOf`), so a program's own type that shares an abstract
+-- export's name is not mistaken for it.  Positional ADTs are harvested too, harmlessly:
+-- their fields never exist, so a field access cannot reach the abstract branch.
 seedAbstractRecordTypes : GraphCtx ->
   List Decl ->
   List (String, List Decl) ->
   Unit
 seedAbstractRecordTypes gctx coreDecls modules =
   let abstracts =
-    collectAbstractRecordTypes coreDecls
+    directIn nsAbstractData coreDecls
       ++ flatMap (m => abstractTypeWords (fst m) (snd m)) modules
   gctx.abstractRecordTypesRef := namesToSet abstracts omEmpty
 
 abstractTypeWords : String -> List Decl -> List String
 abstractTypeWords mid decls =
-  map (n => typeTagOf (OriginModule mid) n) (collectAbstractRecordTypes decls)
+  map (n => typeTagOf (OriginModule mid) n) (directIn nsAbstractData decls)
 
 -- Test-only observation (R5): read by `typecheck_test.mdk`, no production caller.
 --
@@ -1558,7 +1554,7 @@ coreRenameScheme coreV m = match useMemberAlias m
     Some s => [(local, s)]
 
 -- the (key, scheme) pairs a module RE-EXPORTS via `export import` (`DUse True`).
--- Mirrors resolve's re-export set (resolve.pubUsePaths filters the same `DUse True`)
+-- Mirrors resolve's re-export set (frontend.visibility.pubUsePaths filters the same `DUse True`)
 -- into the typecheck seed: walk the export-flagged DUse decls and, for each, pick the
 -- re-exported member names out of the SOURCE dependency's public schemes already in
 -- depEnv — the exact member resolution importSeed uses (importFormSchemes /

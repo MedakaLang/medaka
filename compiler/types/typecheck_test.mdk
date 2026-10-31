@@ -6558,3 +6558,28 @@ test "an integer literal at a type with no Num instance is a type mismatch" =
   expectEqual
     ["T-TYPE-MISMATCH"]
     (map fst (checkDiagsOver numeric (literalAt "y" "Bool" 1)))
+
+-- A wrapper declares what its decl declares: `@deprecated` over an abstractly
+-- exported record leaves the record abstract to an importer, so a field access
+-- through it is rejected exactly as for the bare declaration.
+test "an attributed abstract record is as abstract to an importer as the bare one" =
+  let provider =
+    attr => joinNl [
+      attr,
+      "export data P = P { x : Int, y : Int }",
+      "export mk : Int -> P",
+      "mk n = P n 2",
+    ]
+  let user = joinNl ["import m.{P, mk}", "main = (mk 3).x"]
+  let reportFor =
+    attr => checkModulesEntryReport defaultDriveInputs [] [] [
+      ("m", desugar (parse (provider attr))),
+      ("use", desugar (parse user)),
+    ]
+  expectAll [
+    expectEqual (reportFor "") (reportFor "@deprecated \"old\""),
+    expectSatisfies
+      "an abstract-field rejection"
+      (r => S.contains "exported abstractly" r)
+      (reportFor "@deprecated \"old\""),
+  ]

@@ -100,11 +100,6 @@ prependLocalDicts	Expr	2/43
 recordDeclKinds	Decl	1/14
 recordNegatedLitRange	Expr	3/43
 recordTopDeclBinderTypes	Decl	3/14
-reexportedCtorIdentsOf	Decl	2/14
-reexportedIfaceMethodsOf	Decl	2/14
-reexportedMethodIdentsOf	Decl	2/14
-reexportedMethodsOf	Decl	2/14
-reexportedOriginsOf	Decl	2/14
 registerData	Decl	1/14
 renderCallArg	Expr	10/43
 returnPosOfDecl	Decl	1/14

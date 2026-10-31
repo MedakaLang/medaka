@@ -146,8 +146,6 @@ evalVariantUpdate : String -> Value a -> List (String, Value a) -> Value a
 extendAbsent : String -> List String -> <FileRead | a> Option String
 extendEnv : EvalEnv (Value a) -> List (String, Value a) -> EvalEnv (Value a)
 externBindings : Unit -> List (String, Value a)
-externDeclName : Decl -> List String
-externDeclNames : List Decl -> List String
 externDeclNamesOfDecls : List Decl -> List String
 fallthroughToNone : Value a -> Option (Value a)
 ffiExternNamesRef : Ref (List String)
