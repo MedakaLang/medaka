@@ -1,5 +1,5 @@
 # META
-source_lines=1595
+source_lines=1641
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_walk.mdk — the lint runner: `lintProgram*` and the one
@@ -618,13 +618,37 @@ indexForRoster : List Rule ->
   List String ->
   <IO> Result StdlibIndexError StdlibIndex
 indexForRoster roster root keepAll only disable paths =
+  indexForRosterIn
+    lintStdlibDir
+    (stdlibShardDir ())
+    roster
+    root
+    keepAll
+    only
+    disable
+    paths
+
+-- `indexForRoster` with the stdlib read from `sdir` and its row shards kept in
+-- `shardDir` (empty: not cached), instead of from the environment.  A test
+-- gives each run a stdlib copy of its own this way.
+export
+indexForRosterIn : String ->
+  String ->
+  List Rule ->
+  String ->
+  Bool ->
+  List String ->
+  List String ->
+  List String ->
+  <IO> Result StdlibIndexError StdlibIndex
+indexForRosterIn sdir shardDir roster root keepAll only disable paths =
   let only2 = if keepAll then [] else only
   let disable2 = if keepAll then [] else disable
   if anyActive needsProjectIndex roster only2 disable2 then
-    buildProjectIndexResult root
+    buildProjectIndexResultIn sdir shardDir root
   else if anyActive needsStdlibIndex roster only2 disable2
     || anyActive needsWildIndex roster only2 disable2 && anyPathWild paths then
-    buildStdlibIndexResult
+    buildStdlibIndexResultIn sdir shardDir
   else
     Ok emptyStdlibIndex
 
@@ -670,14 +694,29 @@ ruleNeedsIndex only disable r =
 export
 buildStdlibIndexResult : <IO> Result StdlibIndexError StdlibIndex
 buildStdlibIndexResult =
+  buildStdlibIndexResultIn lintStdlibDir (stdlibShardDir ())
+
+export
+buildStdlibIndexResultIn : String ->
+  String ->
+  <IO> Result StdlibIndexError StdlibIndex
+buildStdlibIndexResultIn sdir shardDir =
   map
     ((digests, rows) => mkStdlibIndex (combineDigests digests) "" rows [])
-    stdlibRowsResult
+    (stdlibRowsResult sdir shardDir)
 
 -- The stdlib's rows plus the rows of every `.mdk` file under `root`.
 export
 buildProjectIndexResult : String -> <IO> Result StdlibIndexError StdlibIndex
 buildProjectIndexResult root =
+  buildProjectIndexResultIn lintStdlibDir (stdlibShardDir ()) root
+
+export
+buildProjectIndexResultIn : String ->
+  String ->
+  String ->
+  <IO> Result StdlibIndexError StdlibIndex
+buildProjectIndexResultIn sdir shardDir root =
   let (pdigests, prows) = projectRowsOf root
   map
     ((sdigests, srows) =>
@@ -686,7 +725,7 @@ buildProjectIndexResult root =
         (combineDigests pdigests)
         srows
         prows)
-    stdlibRowsResult
+    (stdlibRowsResult sdir shardDir)
 
 -- The shard stamp: the build fingerprint, or the binary's own hash for a
 -- binary that carries none (a shipped or `medaka build` binary).  Empty when
@@ -696,15 +735,15 @@ indexStamp _ =
   let fp = buildFingerprint ()
   if fp == "" then ruleSetStamp () else fp
 
-stdlibRowsResult : <IO> Result StdlibIndexError (List String, List IndexRow)
-stdlibRowsResult =
-  let sdir = lintStdlibDir
-  match stdlibMemberPaths sdir
-    None => Ok ([], [])
-    Some rels =>
-      let stamp = indexStamp ()
-      let dir = if stamp == "" then "" else stdlibShardDir ()
-      stdlibRowsGo dir stamp sdir rels
+stdlibRowsResult : String ->
+  String ->
+  <IO> Result StdlibIndexError (List String, List IndexRow)
+stdlibRowsResult sdir shardDir = match stdlibMemberPaths sdir
+  None => Ok ([], [])
+  Some rels =>
+    let stamp = indexStamp ()
+    let dir = if stamp == "" then "" else shardDir
+    stdlibRowsGo dir stamp sdir rels
 
 stdlibRowsGo : String ->
   String ->
@@ -803,8 +842,15 @@ splitByIndex roster found =
 -- The key an index-reading finding group is stored under for `roster`.
 export
 indexKeyFor : List Rule -> StdlibIndex -> String
-indexKeyFor roster idx =
-  if rosterNeeds roster then stdlibIndexFingerprint idx else ""
+indexKeyFor = indexKeyWith stdlibIndexFingerprint
+
+-- `indexKeyFor` with the index fingerprint taken from `fingerprintOf`.  The
+-- soundness tests pass a constant to show a stale hit without the fingerprint;
+-- every production call goes through `indexKeyFor`.
+export
+indexKeyWith : (StdlibIndex -> String) -> List Rule -> StdlibIndex -> String
+indexKeyWith fingerprintOf roster idx =
+  if rosterNeeds roster then fingerprintOf idx else ""
 
 export
 lintParseSource : String -> Result ParseError (List Decl, Positions)
@@ -1744,7 +1790,9 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig true "indexForRun" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))))))
 (DFunDef false "indexForRun" ((PVar "keepAll") (PVar "only") (PVar "disable") (PVar "paths")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "indexForRoster") (EVar "allRules")) (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "canonicalizePath") (ELit (LString "."))))) (EVar "keepAll")) (EVar "only")) (EVar "disable")) (EVar "paths")))
 (DTypeSig true "indexForRoster" (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))))))))
-(DFunDef false "indexForRoster" ((PVar "roster") (PVar "root") (PVar "keepAll") (PVar "only") (PVar "disable") (PVar "paths")) (EBlock (DoLet false false (PVar "only2") (EIf (EVar "keepAll") (EListLit) (EVar "only"))) (DoLet false false (PVar "disable2") (EIf (EVar "keepAll") (EListLit) (EVar "disable"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "anyActive") (EVar "needsProjectIndex")) (EVar "roster")) (EVar "only2")) (EVar "disable2")) (EApp (EVar "buildProjectIndexResult") (EVar "root")) (EIf (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "anyActive") (EVar "needsStdlibIndex")) (EVar "roster")) (EVar "only2")) (EVar "disable2")) (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "anyActive") (EVar "needsWildIndex")) (EVar "roster")) (EVar "only2")) (EVar "disable2")) (EApp (EVar "anyPathWild") (EVar "paths")))) (EVar "buildStdlibIndexResult") (EApp (EVar "Ok") (EVar "emptyStdlibIndex")))))))
+(DFunDef false "indexForRoster" ((PVar "roster") (PVar "root") (PVar "keepAll") (PVar "only") (PVar "disable") (PVar "paths")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "indexForRosterIn") (EVar "lintStdlibDir")) (EApp (EVar "stdlibShardDir") (ELit LUnit))) (EVar "roster")) (EVar "root")) (EVar "keepAll")) (EVar "only")) (EVar "disable")) (EVar "paths")))
+(DTypeSig true "indexForRosterIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))))))))))
+(DFunDef false "indexForRosterIn" ((PVar "sdir") (PVar "shardDir") (PVar "roster") (PVar "root") (PVar "keepAll") (PVar "only") (PVar "disable") (PVar "paths")) (EBlock (DoLet false false (PVar "only2") (EIf (EVar "keepAll") (EListLit) (EVar "only"))) (DoLet false false (PVar "disable2") (EIf (EVar "keepAll") (EListLit) (EVar "disable"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "anyActive") (EVar "needsProjectIndex")) (EVar "roster")) (EVar "only2")) (EVar "disable2")) (EApp (EApp (EApp (EVar "buildProjectIndexResultIn") (EVar "sdir")) (EVar "shardDir")) (EVar "root")) (EIf (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "anyActive") (EVar "needsStdlibIndex")) (EVar "roster")) (EVar "only2")) (EVar "disable2")) (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "anyActive") (EVar "needsWildIndex")) (EVar "roster")) (EVar "only2")) (EVar "disable2")) (EApp (EVar "anyPathWild") (EVar "paths")))) (EApp (EApp (EVar "buildStdlibIndexResultIn") (EVar "sdir")) (EVar "shardDir")) (EApp (EVar "Ok") (EVar "emptyStdlibIndex")))))))
 (DTypeSig false "anyPathWild" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "anyPathWild" ((PList)) (EVar "False"))
 (DFunDef false "anyPathWild" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "||" (EApp (EVar "sourceHasWildImport") (EApp (EVar "readFileSafe") (EVar "p"))) (EApp (EVar "anyPathWild") (EVar "rest"))))
@@ -1761,13 +1809,17 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig false "ruleNeedsIndex" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Rule") (TyCon "Bool")))))
 (DFunDef false "ruleNeedsIndex" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "needsStdlibIndex") (EFieldAccess (EVar "r") "meta")) (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
 (DTypeSig true "buildStdlibIndexResult" (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))
-(DFunDef false "buildStdlibIndexResult" () (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "digests") (PVar "rows"))) (EApp (EApp (EApp (EApp (EVar "mkStdlibIndex") (EApp (EVar "combineDigests") (EVar "digests"))) (ELit (LString ""))) (EVar "rows")) (EListLit)))) (EVar "stdlibRowsResult")))
+(DFunDef false "buildStdlibIndexResult" () (EApp (EApp (EVar "buildStdlibIndexResultIn") (EVar "lintStdlibDir")) (EApp (EVar "stdlibShardDir") (ELit LUnit))))
+(DTypeSig true "buildStdlibIndexResultIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))))
+(DFunDef false "buildStdlibIndexResultIn" ((PVar "sdir") (PVar "shardDir")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "digests") (PVar "rows"))) (EApp (EApp (EApp (EApp (EVar "mkStdlibIndex") (EApp (EVar "combineDigests") (EVar "digests"))) (ELit (LString ""))) (EVar "rows")) (EListLit)))) (EApp (EApp (EVar "stdlibRowsResult") (EVar "sdir")) (EVar "shardDir"))))
 (DTypeSig true "buildProjectIndexResult" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex")))))
-(DFunDef false "buildProjectIndexResult" ((PVar "root")) (EBlock (DoLet false false (PTuple (PVar "pdigests") (PVar "prows")) (EApp (EVar "projectRowsOf") (EVar "root"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "sdigests") (PVar "srows"))) (EApp (EApp (EApp (EApp (EVar "mkStdlibIndex") (EApp (EVar "combineDigests") (EVar "sdigests"))) (EApp (EVar "combineDigests") (EVar "pdigests"))) (EVar "srows")) (EVar "prows")))) (EVar "stdlibRowsResult")))))
+(DFunDef false "buildProjectIndexResult" ((PVar "root")) (EApp (EApp (EApp (EVar "buildProjectIndexResultIn") (EVar "lintStdlibDir")) (EApp (EVar "stdlibShardDir") (ELit LUnit))) (EVar "root")))
+(DTypeSig true "buildProjectIndexResultIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex")))))))
+(DFunDef false "buildProjectIndexResultIn" ((PVar "sdir") (PVar "shardDir") (PVar "root")) (EBlock (DoLet false false (PTuple (PVar "pdigests") (PVar "prows")) (EApp (EVar "projectRowsOf") (EVar "root"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "sdigests") (PVar "srows"))) (EApp (EApp (EApp (EApp (EVar "mkStdlibIndex") (EApp (EVar "combineDigests") (EVar "sdigests"))) (EApp (EVar "combineDigests") (EVar "pdigests"))) (EVar "srows")) (EVar "prows")))) (EApp (EApp (EVar "stdlibRowsResult") (EVar "sdir")) (EVar "shardDir"))))))
 (DTypeSig false "indexStamp" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "indexStamp" (PWild) (EBlock (DoLet false false (PVar "fp") (EApp (EVar "buildFingerprint") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "fp") (ELit (LString ""))) (EApp (EVar "ruleSetStamp") (ELit LUnit)) (EVar "fp")))))
-(DTypeSig false "stdlibRowsResult" (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow"))))))
-(DFunDef false "stdlibRowsResult" () (EBlock (DoLet false false (PVar "sdir") (EVar "lintStdlibDir")) (DoExpr (EMatch (EApp (EVar "stdlibMemberPaths") (EVar "sdir")) (arm (PCon "None") () (EApp (EVar "Ok") (ETuple (EListLit) (EListLit)))) (arm (PCon "Some" (PVar "rels")) () (EBlock (DoLet false false (PVar "stamp") (EApp (EVar "indexStamp") (ELit LUnit))) (DoLet false false (PVar "dir") (EIf (EBinOp "==" (EVar "stamp") (ELit (LString ""))) (ELit (LString "")) (EApp (EVar "stdlibShardDir") (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "stdlibRowsGo") (EVar "dir")) (EVar "stamp")) (EVar "sdir")) (EVar "rels")))))))))
+(DTypeSig false "stdlibRowsResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow"))))))))
+(DFunDef false "stdlibRowsResult" ((PVar "sdir") (PVar "shardDir")) (EMatch (EApp (EVar "stdlibMemberPaths") (EVar "sdir")) (arm (PCon "None") () (EApp (EVar "Ok") (ETuple (EListLit) (EListLit)))) (arm (PCon "Some" (PVar "rels")) () (EBlock (DoLet false false (PVar "stamp") (EApp (EVar "indexStamp") (ELit LUnit))) (DoLet false false (PVar "dir") (EIf (EBinOp "==" (EVar "stamp") (ELit (LString ""))) (ELit (LString "")) (EVar "shardDir"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "stdlibRowsGo") (EVar "dir")) (EVar "stamp")) (EVar "sdir")) (EVar "rels")))))))
 (DTypeSig false "stdlibRowsGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow"))))))))))
 (DFunDef false "stdlibRowsGo" (PWild PWild PWild (PList)) (EApp (EVar "Ok") (ETuple (EListLit) (EListLit))))
 (DFunDef false "stdlibRowsGo" ((PVar "dir") (PVar "stamp") (PVar "sdir") (PCons (PVar "rel") (PVar "rest"))) (EBlock (DoLet false false (PVar "path") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "sdir"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "rel"))) (ELit (LString "")))) (DoLet false false (PVar "modId") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EApp (EVar "stripMdk") (EVar "rel"))))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileRows") (EVar "True")) (EVar "lintParseSource")) (EVar "dir")) (EVar "stamp")) (EVar "modId")) (EVar "path")) (arm (PCon "Err" (PTuple (PVar "src") (PVar "e"))) () (EApp (EVar "Err") (ERecordCreate "StdlibIndexError" ((fa "path" (EVar "path")) (fa "source" (EVar "src")) (fa "diagnostic" (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))))))) (arm (PCon "Ok" (PTuple (PVar "digest") (PVar "rows"))) () (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "ds") (PVar "rs"))) (ETuple (EBinOp "::" (EVar "digest") (EVar "ds")) (EBinOp "++" (EVar "rows") (EVar "rs"))))) (EApp (EApp (EApp (EApp (EVar "stdlibRowsGo") (EVar "dir")) (EVar "stamp")) (EVar "sdir")) (EVar "rest"))))))))
@@ -1788,7 +1840,9 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig true "splitByIndex" (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))
 (DFunDef false "splitByIndex" ((PVar "roster") (PVar "found")) (EBlock (DoLet false false (PVar "indexRanks") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "rankedIndexRules") (EVar "roster")))) (DoExpr (ETuple (EApp (EApp (EVar "filterList") (ELam ((PVar "rf")) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EApp (EVar "fst") (EVar "rf"))) (EVar "indexRanks"))))) (EVar "found")) (EApp (EApp (EVar "filterList") (ELam ((PVar "rf")) (EApp (EApp (EVar "elem") (EApp (EVar "fst") (EVar "rf"))) (EVar "indexRanks")))) (EVar "found"))))))
 (DTypeSig true "indexKeyFor" (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "StdlibIndex") (TyCon "String"))))
-(DFunDef false "indexKeyFor" ((PVar "roster") (PVar "idx")) (EIf (EApp (EVar "rosterNeeds") (EVar "roster")) (EApp (EVar "stdlibIndexFingerprint") (EVar "idx")) (ELit (LString ""))))
+(DFunDef false "indexKeyFor" () (EApp (EVar "indexKeyWith") (EVar "stdlibIndexFingerprint")))
+(DTypeSig true "indexKeyWith" (TyFun (TyFun (TyCon "StdlibIndex") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "StdlibIndex") (TyCon "String")))))
+(DFunDef false "indexKeyWith" ((PVar "fingerprintOf") (PVar "roster") (PVar "idx")) (EIf (EApp (EVar "rosterNeeds") (EVar "roster")) (EApp (EVar "fingerprintOf") (EVar "idx")) (ELit (LString ""))))
 (DTypeSig true "lintParseSource" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))
 (DFunDef false "lintParseSource" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "tokens") (PVar "offsets")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "prescanErrorPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "parse.positions")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "parsed")) () (EApp (EVar "Ok") (EVar "parsed"))) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EVar "parseWithPositions") (EVar "src")))) (EApp (EApp (EApp (EVar "parseResultPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets"))))))))))))
 (DTypeSig false "stdlibMemberPaths" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -2116,7 +2170,9 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig true "indexForRun" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))))))
 (DFunDef false "indexForRun" ((PVar "keepAll") (PVar "only") (PVar "disable") (PVar "paths")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "indexForRoster") (EVar "allRules")) (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "canonicalizePath") (ELit (LString "."))))) (EVar "keepAll")) (EVar "only")) (EVar "disable")) (EVar "paths")))
 (DTypeSig true "indexForRoster" (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))))))))
-(DFunDef false "indexForRoster" ((PVar "roster") (PVar "root") (PVar "keepAll") (PVar "only") (PVar "disable") (PVar "paths")) (EBlock (DoLet false false (PVar "only2") (EIf (EVar "keepAll") (EListLit) (EVar "only"))) (DoLet false false (PVar "disable2") (EIf (EVar "keepAll") (EListLit) (EVar "disable"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "anyActive") (EVar "needsProjectIndex")) (EVar "roster")) (EVar "only2")) (EVar "disable2")) (EApp (EVar "buildProjectIndexResult") (EVar "root")) (EIf (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "anyActive") (EVar "needsStdlibIndex")) (EVar "roster")) (EVar "only2")) (EVar "disable2")) (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "anyActive") (EVar "needsWildIndex")) (EVar "roster")) (EVar "only2")) (EVar "disable2")) (EApp (EVar "anyPathWild") (EVar "paths")))) (EVar "buildStdlibIndexResult") (EApp (EVar "Ok") (EVar "emptyStdlibIndex")))))))
+(DFunDef false "indexForRoster" ((PVar "roster") (PVar "root") (PVar "keepAll") (PVar "only") (PVar "disable") (PVar "paths")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "indexForRosterIn") (EVar "lintStdlibDir")) (EApp (EVar "stdlibShardDir") (ELit LUnit))) (EVar "roster")) (EVar "root")) (EVar "keepAll")) (EVar "only")) (EVar "disable")) (EVar "paths")))
+(DTypeSig true "indexForRosterIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))))))))))
+(DFunDef false "indexForRosterIn" ((PVar "sdir") (PVar "shardDir") (PVar "roster") (PVar "root") (PVar "keepAll") (PVar "only") (PVar "disable") (PVar "paths")) (EBlock (DoLet false false (PVar "only2") (EIf (EVar "keepAll") (EListLit) (EVar "only"))) (DoLet false false (PVar "disable2") (EIf (EVar "keepAll") (EListLit) (EVar "disable"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "anyActive") (EVar "needsProjectIndex")) (EVar "roster")) (EVar "only2")) (EVar "disable2")) (EApp (EApp (EApp (EVar "buildProjectIndexResultIn") (EVar "sdir")) (EVar "shardDir")) (EVar "root")) (EIf (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "anyActive") (EVar "needsStdlibIndex")) (EVar "roster")) (EVar "only2")) (EVar "disable2")) (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "anyActive") (EVar "needsWildIndex")) (EVar "roster")) (EVar "only2")) (EVar "disable2")) (EApp (EVar "anyPathWild") (EVar "paths")))) (EApp (EApp (EVar "buildStdlibIndexResultIn") (EVar "sdir")) (EVar "shardDir")) (EApp (EVar "Ok") (EVar "emptyStdlibIndex")))))))
 (DTypeSig false "anyPathWild" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "anyPathWild" ((PList)) (EVar "False"))
 (DFunDef false "anyPathWild" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "||" (EApp (EVar "sourceHasWildImport") (EApp (EVar "readFileSafe") (EVar "p"))) (EApp (EVar "anyPathWild") (EVar "rest"))))
@@ -2133,13 +2189,17 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig false "ruleNeedsIndex" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Rule") (TyCon "Bool")))))
 (DFunDef false "ruleNeedsIndex" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "needsStdlibIndex") (EFieldAccess (EVar "r") "meta")) (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
 (DTypeSig true "buildStdlibIndexResult" (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))
-(DFunDef false "buildStdlibIndexResult" () (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "digests") (PVar "rows"))) (EApp (EApp (EApp (EApp (EVar "mkStdlibIndex") (EApp (EVar "combineDigests") (EVar "digests"))) (ELit (LString ""))) (EVar "rows")) (EListLit)))) (EVar "stdlibRowsResult")))
+(DFunDef false "buildStdlibIndexResult" () (EApp (EApp (EVar "buildStdlibIndexResultIn") (EVar "lintStdlibDir")) (EApp (EVar "stdlibShardDir") (ELit LUnit))))
+(DTypeSig true "buildStdlibIndexResultIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex"))))))
+(DFunDef false "buildStdlibIndexResultIn" ((PVar "sdir") (PVar "shardDir")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "digests") (PVar "rows"))) (EApp (EApp (EApp (EApp (EVar "mkStdlibIndex") (EApp (EVar "combineDigests") (EVar "digests"))) (ELit (LString ""))) (EVar "rows")) (EListLit)))) (EApp (EApp (EVar "stdlibRowsResult") (EVar "sdir")) (EVar "shardDir"))))
 (DTypeSig true "buildProjectIndexResult" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex")))))
-(DFunDef false "buildProjectIndexResult" ((PVar "root")) (EBlock (DoLet false false (PTuple (PVar "pdigests") (PVar "prows")) (EApp (EVar "projectRowsOf") (EVar "root"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "sdigests") (PVar "srows"))) (EApp (EApp (EApp (EApp (EVar "mkStdlibIndex") (EApp (EVar "combineDigests") (EVar "sdigests"))) (EApp (EVar "combineDigests") (EVar "pdigests"))) (EVar "srows")) (EVar "prows")))) (EVar "stdlibRowsResult")))))
+(DFunDef false "buildProjectIndexResult" ((PVar "root")) (EApp (EApp (EApp (EVar "buildProjectIndexResultIn") (EVar "lintStdlibDir")) (EApp (EVar "stdlibShardDir") (ELit LUnit))) (EVar "root")))
+(DTypeSig true "buildProjectIndexResultIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyCon "StdlibIndex")))))))
+(DFunDef false "buildProjectIndexResultIn" ((PVar "sdir") (PVar "shardDir") (PVar "root")) (EBlock (DoLet false false (PTuple (PVar "pdigests") (PVar "prows")) (EApp (EVar "projectRowsOf") (EVar "root"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "sdigests") (PVar "srows"))) (EApp (EApp (EApp (EApp (EVar "mkStdlibIndex") (EApp (EVar "combineDigests") (EVar "sdigests"))) (EApp (EVar "combineDigests") (EVar "pdigests"))) (EVar "srows")) (EVar "prows")))) (EApp (EApp (EVar "stdlibRowsResult") (EVar "sdir")) (EVar "shardDir"))))))
 (DTypeSig false "indexStamp" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "indexStamp" (PWild) (EBlock (DoLet false false (PVar "fp") (EApp (EVar "buildFingerprint") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "fp") (ELit (LString ""))) (EApp (EVar "ruleSetStamp") (ELit LUnit)) (EVar "fp")))))
-(DTypeSig false "stdlibRowsResult" (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow"))))))
-(DFunDef false "stdlibRowsResult" () (EBlock (DoLet false false (PVar "sdir") (EVar "lintStdlibDir")) (DoExpr (EMatch (EApp (EVar "stdlibMemberPaths") (EVar "sdir")) (arm (PCon "None") () (EApp (EVar "Ok") (ETuple (EListLit) (EListLit)))) (arm (PCon "Some" (PVar "rels")) () (EBlock (DoLet false false (PVar "stamp") (EApp (EVar "indexStamp") (ELit LUnit))) (DoLet false false (PVar "dir") (EIf (EBinOp "==" (EVar "stamp") (ELit (LString ""))) (ELit (LString "")) (EApp (EVar "stdlibShardDir") (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "stdlibRowsGo") (EVar "dir")) (EVar "stamp")) (EVar "sdir")) (EVar "rels")))))))))
+(DTypeSig false "stdlibRowsResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow"))))))))
+(DFunDef false "stdlibRowsResult" ((PVar "sdir") (PVar "shardDir")) (EMatch (EApp (EVar "stdlibMemberPaths") (EVar "sdir")) (arm (PCon "None") () (EApp (EVar "Ok") (ETuple (EListLit) (EListLit)))) (arm (PCon "Some" (PVar "rels")) () (EBlock (DoLet false false (PVar "stamp") (EApp (EVar "indexStamp") (ELit LUnit))) (DoLet false false (PVar "dir") (EIf (EBinOp "==" (EVar "stamp") (ELit (LString ""))) (ELit (LString "")) (EVar "shardDir"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "stdlibRowsGo") (EVar "dir")) (EVar "stamp")) (EVar "sdir")) (EVar "rels")))))))
 (DTypeSig false "stdlibRowsGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "StdlibIndexError")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow"))))))))))
 (DFunDef false "stdlibRowsGo" (PWild PWild PWild (PList)) (EApp (EVar "Ok") (ETuple (EListLit) (EListLit))))
 (DFunDef false "stdlibRowsGo" ((PVar "dir") (PVar "stamp") (PVar "sdir") (PCons (PVar "rel") (PVar "rest"))) (EBlock (DoLet false false (PVar "path") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "sdir"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "rel"))) (ELit (LString "")))) (DoLet false false (PVar "modId") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EApp (EVar "stripMdk") (EVar "rel"))))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileRows") (EVar "True")) (EVar "lintParseSource")) (EVar "dir")) (EVar "stamp")) (EVar "modId")) (EVar "path")) (arm (PCon "Err" (PTuple (PVar "src") (PVar "e"))) () (EApp (EVar "Err") (ERecordCreate "StdlibIndexError" ((fa "path" (EVar "path")) (fa "source" (EVar "src")) (fa "diagnostic" (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))))))) (arm (PCon "Ok" (PTuple (PVar "digest") (PVar "rows"))) () (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "ds") (PVar "rs"))) (ETuple (EBinOp "::" (EVar "digest") (EVar "ds")) (EBinOp "++" (EVar "rows") (EVar "rs"))))) (EApp (EApp (EApp (EApp (EVar "stdlibRowsGo") (EVar "dir")) (EVar "stamp")) (EVar "sdir")) (EVar "rest"))))))))
@@ -2160,7 +2220,9 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig true "splitByIndex" (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))
 (DFunDef false "splitByIndex" ((PVar "roster") (PVar "found")) (EBlock (DoLet false false (PVar "indexRanks") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "rankedIndexRules") (EVar "roster")))) (DoExpr (ETuple (EApp (EApp (EVar "filterList") (ELam ((PVar "rf")) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EApp (EVar "fst") (EVar "rf"))) (EVar "indexRanks"))))) (EVar "found")) (EApp (EApp (EVar "filterList") (ELam ((PVar "rf")) (EApp (EApp (EDictApp "elem") (EApp (EVar "fst") (EVar "rf"))) (EVar "indexRanks")))) (EVar "found"))))))
 (DTypeSig true "indexKeyFor" (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "StdlibIndex") (TyCon "String"))))
-(DFunDef false "indexKeyFor" ((PVar "roster") (PVar "idx")) (EIf (EApp (EVar "rosterNeeds") (EVar "roster")) (EApp (EVar "stdlibIndexFingerprint") (EVar "idx")) (ELit (LString ""))))
+(DFunDef false "indexKeyFor" () (EApp (EVar "indexKeyWith") (EVar "stdlibIndexFingerprint")))
+(DTypeSig true "indexKeyWith" (TyFun (TyFun (TyCon "StdlibIndex") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "StdlibIndex") (TyCon "String")))))
+(DFunDef false "indexKeyWith" ((PVar "fingerprintOf") (PVar "roster") (PVar "idx")) (EIf (EApp (EVar "rosterNeeds") (EVar "roster")) (EApp (EVar "fingerprintOf") (EVar "idx")) (ELit (LString ""))))
 (DTypeSig true "lintParseSource" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))
 (DFunDef false "lintParseSource" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "tokens") (PVar "offsets")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "prescanErrorPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "parse.positions")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "parsed")) () (EApp (EVar "Ok") (EVar "parsed"))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EVar "parseWithPositions") (EVar "src")))) (EApp (EApp (EApp (EVar "parseResultPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets"))))))))))))
 (DTypeSig false "stdlibMemberPaths" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))

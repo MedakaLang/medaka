@@ -477,6 +477,12 @@ inlang-tools-lint-test:
 inlang-tools-lint-index-test:
 	./medaka test --native compiler/tools/lint_index_test.mdk
 
+## compiler/tools/lint_cache_test.mdk is outside every entry's import closure
+## ([W-MODULE-BLIND]): the soundness of what `lint --cache` serves when the
+## declaration index moves. It writes real shards under a scratch directory.
+inlang-tools-lint-cache-test:
+	./medaka test --native compiler/tools/lint_cache_test.mdk
+
 ## compiler/tools/lint_scope_test.mdk is a `*_test.mdk` sibling outside every
 ## entry's import closure ([W-MODULE-BLIND]): the scope model's precision cases.
 inlang-tools-lint-scope-test:

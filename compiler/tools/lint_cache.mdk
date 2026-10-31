@@ -50,7 +50,7 @@
 
 import frontend.ast.{Loc(..)}
 import driver.diagnostics.{Severity(..)}
-import io.{runCommandOk}
+import io.{runVerb}
 import u64 as U64
 import tools.lint_core.{Finding(..), Directive(..), DirScope(..), Summary(..)}
 import support.util.{joinWith, listLen, filterList, splitOnChar, stringTrim}
@@ -527,8 +527,9 @@ dropLastSeg (x :: rest) = x :: dropLastSeg rest
 -- A staging dir unique to THIS process, inside the cache dir (see storeEntries).
 makeStagingDir : String -> <IO> Result String String
 makeStagingDir cacheDir =
-  match runCommandOk "mktemp" ["-d", "\{cacheDir}/.staging_XXXXXX"]
+  match runVerb "mktemp" ["-d", "\{cacheDir}/.staging_XXXXXX"]
     Err e => Err e
-    Ok (out, _) =>
+    Ok (0, out, _) =>
       let dir = stringTrim out
       if dir == "" then Err "mktemp -d printed no path" else Ok dir
+    Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"

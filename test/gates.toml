@@ -2195,6 +2195,22 @@ toolchain = []
 link = "production"
 
 [[gate]]
+name = "diff_compiler_lint_cache_soundness"
+area = "tools"
+shard = "gates_4"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "native"
+migration = "done"
+run = "compiler/tools/lint_cache_test.mdk"
+oracles = []
+sources = ["compiler/tools/lint*.mdk"]
+corpus = []
+toolchain = []
+link = "production"
+
+[[gate]]
 name = "diff_compiler_lint_multi"
 area = "tools"
 shard = "gates_5"

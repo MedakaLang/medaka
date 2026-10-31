@@ -1,5 +1,5 @@
 # META
-source_lines=1070
+source_lines=1101
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cmd.mdk — the `medaka lint` engine.
@@ -28,9 +28,7 @@ import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
 import string as Str
 import json.{Json(..), jArray, jObject, stringify}
 import frontend.ast.{Decl, Loc(..)}
-import frontend.parser.{
-  Positions,
-}
+import frontend.parser.{ParseError, Positions}
 import driver.loader.{
   findProjectRoot,
   findProjectRootOrSelf,
@@ -888,15 +886,15 @@ lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCt
       let _ = ePutStrLn msg
       (True, [])
     Ok src =>
-      let hash = match cacheCtx
-        Some _ => contentHashOf src
-        None => ""
-      let loaded = match cacheCtx
-        Some (cacheDir, stamp) =>
-          loadEntry cacheDir stamp (indexKeyFor allRules idx) target hash
-        None => ShardMiss
-      match loaded
-        ShardHit hit =>
+      let wantSummaries =
+        multiFile && projectRuleSelected onlyNames disableNames
+      let found =
+        entryOfFile idx cacheCtx disableNames onlyNames wantSummaries target src
+      match found
+        Err e =>
+          ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
+          (True, [])
+        Ok entry =>
           lintOneFileRender
             multiFile
             disableNames
@@ -905,33 +903,7 @@ lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCt
             baseCtx
             target
             src
-            hit
-        _ => match lintParseSource src
-          Err e =>
-            ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
-            (True, [])
-          Ok parsedSource =>
-            let entry =
-              lintEntryOf
-                idx
-                cacheCtx
-                loaded
-                disableNames
-                onlyNames
-                (multiFile && projectRuleSelected onlyNames disableNames)
-                target
-                src
-                hash
-                parsedSource
-            lintOneFileRender
-              multiFile
-              disableNames
-              onlyNames
-              denyNames
-              baseCtx
-              target
-              src
-              entry
+            entry
 
 lintOneFileRender : Bool ->
   List String ->
@@ -966,24 +938,69 @@ lintOneFileRender multiFile disableNames onlyNames denyNames baseCtx target src 
   let _ = if hasOutput then putStrLn output
   (anyList isFindingError findings, [entry])
 
--- One file's lint result from a real parse, after the cache could not answer in
--- full.  Uncached, the excluded rules are skipped outright (their findings
--- would be filtered anyway); under --cache the shard must hold the full roster,
--- so every rule runs, except that a stale shard (`loaded` is `ShardStale`)
--- already holds the index-free findings, summaries and directives, and only
--- the index-reading rules run again.
-lintEntryOf : StdlibIndex ->
+-- One file's entry: from the cache when `cacheCtx` is set and a shard answers,
+-- else from a parse.  An unparsable file has no entry.
+entryOfFile : StdlibIndex ->
   Option (String, String) ->
-  ShardLoad ->
   List String ->
   List String ->
   Bool ->
   String ->
   String ->
+  <IO> Result ParseError LintEntry
+entryOfFile idx None disableNames onlyNames wantSummaries target src =
+  map
+    ((decls, pos) =>
+      uncachedEntryOf
+        idx
+        disableNames
+        onlyNames
+        wantSummaries
+        target
+        src
+        decls
+        pos)
+    (lintParseSource src)
+entryOfFile idx (Some (cacheDir, stamp)) _ _ _ target src =
+  cachedEntryOf allRules indexKeyFor idx cacheDir stamp target src
+
+-- The entry a `--cache` run uses for one file: the shard if it answers in full,
+-- the shard's free findings and summaries with the index-reading rules re-run
+-- if only the index key moved, a fresh lint of the whole `roster` otherwise.
+-- `keyOf` names the index the index-reading findings were made against; the
+-- soundness tests substitute a key without the fingerprint (`indexKeyWith`).
+export
+cachedEntryOf : List Rule ->
+  (List Rule -> StdlibIndex -> String) ->
+  StdlibIndex ->
   String ->
-  (List Decl, Positions) ->
+  String ->
+  String ->
+  String ->
+  <IO> Result ParseError LintEntry
+cachedEntryOf roster keyOf idx cacheDir stamp target src =
+  let hash = contentHashOf src
+  let key = keyOf roster idx
+  match loadEntry cacheDir stamp key target hash
+    ShardHit hit => Ok hit
+    loaded =>
+      map
+        ((decls, pos) =>
+          cachedEntryFrom roster key idx loaded target src hash decls pos)
+        (lintParseSource src)
+
+-- Uncached, the excluded rules are skipped outright (their findings would be
+-- filtered anyway).
+uncachedEntryOf : StdlibIndex ->
+  List String ->
+  List String ->
+  Bool ->
+  String ->
+  String ->
+  List Decl ->
+  Positions ->
   <IO> LintEntry
-lintEntryOf idx None _ disableNames onlyNames wantSummaries target src _ (decls, pos) =
+uncachedEntryOf idx disableNames onlyNames wantSummaries target src decls pos =
   let facts = mkFileFactsAt target src decls pos
   let rules = selectRules onlyNames disableNames
   LintEntry {
@@ -1001,23 +1018,37 @@ lintEntryOf idx None _ disableNames onlyNames wantSummaries target src _ (decls,
     directives = factDirectives facts,
     dirty = True,
   }
-lintEntryOf idx (Some _) (ShardStale stale) _ _ _ target src _ (decls, pos) =
+
+-- Under --cache the shard must hold the full roster, so every rule runs, except
+-- that a stale shard (`ShardStale`) already holds the index-free findings,
+-- summaries and directives, and only the index-reading rules run again.
+cachedEntryFrom : List Rule ->
+  String ->
+  StdlibIndex ->
+  ShardLoad ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  Positions ->
+  <IO> LintEntry
+cachedEntryFrom roster _ idx (ShardStale stale) target src _ decls pos =
   let facts = mkFileFactsAt target src decls pos
   { stale |
     indexFindings =
-      lintProgramRanked idx (rankedIndexRules allRules) target facts pos decls,
+      lintProgramRanked idx (rankedIndexRules roster) target facts pos decls,
     dirty = True,
   }
-lintEntryOf idx (Some _) _ _ _ _ target src hash (decls, pos) =
+cachedEntryFrom roster key idx _ target src hash decls pos =
   let facts = mkFileFactsAt target src decls pos
-  let all = lintProgramRanked idx (ranked 0 allRules) target facts pos decls
-  let (free, indexed) = splitByIndex allRules all
+  let all = lintProgramRanked idx (ranked 0 roster) target facts pos decls
+  let (free, indexed) = splitByIndex roster all
   LintEntry {
     path = target,
     contentHash = hash,
     freeFindings = free,
     indexFindings = indexed,
-    indexKey = indexKeyFor allRules idx,
+    indexKey = key,
     summaries = fileSummaries [] [] target facts pos decls,
     directives = factDirectives facts,
     dirty = True,
@@ -1079,7 +1110,7 @@ writeFixedSource target src newSrc n =
 (DUse false (UseAlias ("string") "Str"))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "Positions" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "manifestLintInternal" false) (mem "readSource" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "cjAllToJson" false) (mem "ppSeverity" false) (mem "diagIsError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false))))
 (DUse false (UseGroup ("support" "cli_targets") ((mem "collectMdkFiles" false) (mem "expandLintTarget" false))))
@@ -1257,13 +1288,19 @@ writeFixedSource target src newSrc n =
 (DFunDef false "lintFilesGo" (PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (ETuple (EVar "acc") (EListLit)))
 (DFunDef false "lintFilesGo" ((PVar "idx") (PVar "run") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "fileDisable") (EBinOp "++" (EVar "disableNames") (EApp (EApp (EVar "internalDisabledFor") (EFieldAccess (EVar "run") "lrInternal")) (EVar "f")))) (DoExpr (EIf (EFieldAccess (EVar "run") "lrFix") (EBlock (DoLet false false (PVar "hadErr") (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileFix") (EVar "idx")) (EFieldAccess (EVar "run") "lrUnsafe")) (EVar "onlyNames")) (EVar "fileDisable")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr"))))) (EBlock (DoLet false false (PTuple (PVar "hadErr") (PVar "entries")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileReport") (EVar "idx")) (EFieldAccess (EVar "run") "lrMulti")) (EVar "fileDisable")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "f"))) (DoLet false false (PTuple (PVar "restErr") (PVar "restEntries")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr")))) (DoExpr (ETuple (EVar "restErr") (EBinOp "++" (EVar "entries") (EVar "restEntries")))))))))
 (DTypeSig false "lintOneFileReport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")))))))))))))
-(DFunDef false "lintOneFileReport" ((PVar "idx") (PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (ETuple (EVar "True") (EListLit))))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "hash") (EMatch (EVar "cacheCtx") (arm (PCon "Some" PWild) () (EApp (EVar "contentHashOf") (EVar "src"))) (arm (PCon "None") () (ELit (LString ""))))) (DoLet false false (PVar "loaded") (EMatch (EVar "cacheCtx") (arm (PCon "Some" (PTuple (PVar "cacheDir") (PVar "stamp"))) () (EApp (EApp (EApp (EApp (EApp (EVar "loadEntry") (EVar "cacheDir")) (EVar "stamp")) (EApp (EApp (EVar "indexKeyFor") (EVar "allRules")) (EVar "idx"))) (EVar "target")) (EVar "hash"))) (arm (PCon "None") () (EVar "ShardMiss")))) (DoExpr (EMatch (EVar "loaded") (arm (PCon "ShardHit" (PVar "hit")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileRender") (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "target")) (EVar "src")) (EVar "hit"))) (arm PWild () (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (ETuple (EVar "True") (EListLit))))) (arm (PCon "Ok" (PVar "parsedSource")) () (EBlock (DoLet false false (PVar "entry") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintEntryOf") (EVar "idx")) (EVar "cacheCtx")) (EVar "loaded")) (EVar "disableNames")) (EVar "onlyNames")) (EBinOp "&&" (EVar "multiFile") (EApp (EApp (EVar "projectRuleSelected") (EVar "onlyNames")) (EVar "disableNames")))) (EVar "target")) (EVar "src")) (EVar "hash")) (EVar "parsedSource"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileRender") (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "target")) (EVar "src")) (EVar "entry")))))))))))))
+(DFunDef false "lintOneFileReport" ((PVar "idx") (PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (ETuple (EVar "True") (EListLit))))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "wantSummaries") (EBinOp "&&" (EVar "multiFile") (EApp (EApp (EVar "projectRuleSelected") (EVar "onlyNames")) (EVar "disableNames")))) (DoLet false false (PVar "found") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "entryOfFile") (EVar "idx")) (EVar "cacheCtx")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "wantSummaries")) (EVar "target")) (EVar "src"))) (DoExpr (EMatch (EVar "found") (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (ETuple (EVar "True") (EListLit))))) (arm (PCon "Ok" (PVar "entry")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileRender") (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "target")) (EVar "src")) (EVar "entry")))))))))
 (DTypeSig false "lintOneFileRender" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")))))))))))))
 (DFunDef false "lintOneFileRender" ((PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "target") (PVar "src") (PVar "entry")) (EBlock (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressionsDirs") (EFieldAccess (EVar "entry") "directives")) (EApp (EVar "entryFindings") (EVar "entry")))) (DoLet false false (PVar "filtered") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "allFindings"))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EVar "applyBaselineFindings") (EVar "baseCtx")) (EVar "target")) (EVar "filtered"))) (DoLet false false (PVar "output") (EMatch (EVar "findings") (arm (PList) () (ELit (LString ""))) (arm PWild () (EBlock (DoLet false false (PVar "srcLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (DoExpr (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (ELam ((PVar "f")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EVar "srcLines")) (EVar "target")) (EApp (EVar "findingToDiag") (EVar "f"))))) (EVar "findings")))))))) (DoLet false false (PVar "hasOutput") (EBinOp ">" (EApp (EVar "stringLength") (EVar "output")) (ELit (LInt 0)))) (DoLet false false PWild (EIf (EBinOp "&&" (EVar "multiFile") (EVar "hasOutput")) (EApp (EVar "putStrLn") (EBinOp "++" (EVar "target") (ELit (LString ":")))) (ELit LUnit))) (DoLet false false PWild (EIf (EVar "hasOutput") (EApp (EVar "putStrLn") (EVar "output")) (ELit LUnit))) (DoExpr (ETuple (EApp (EApp (EVar "anyList") (EVar "isFindingError")) (EVar "findings")) (EListLit (EVar "entry"))))))
-(DTypeSig false "lintEntryOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "ShardLoad") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyCon "LintEntry")))))))))))))
-(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "None") PWild (PVar "disableNames") (PVar "onlyNames") (PVar "wantSummaries") (PVar "target") (PVar "src") PWild (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "rules") (EApp (EApp (EVar "selectRules") (EVar "onlyNames")) (EVar "disableNames"))) (DoExpr (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (ELit (LString ""))) (fa "freeFindings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EApp (EVar "ranked") (ELit (LInt 0))) (EVar "rules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "indexFindings" (EListLit)) (fa "indexKey" (ELit (LString ""))) (fa "summaries" (EIf (EVar "wantSummaries") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls")) (EListLit))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))))))
-(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "Some" PWild) (PCon "ShardStale" (PVar "stale")) PWild PWild PWild (PVar "target") (PVar "src") PWild (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoExpr (ERecordUpdate (EVar "stale") ((fa "indexFindings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EVar "rankedIndexRules") (EVar "allRules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "dirty" (EVar "True")))))))
-(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "Some" PWild) PWild PWild PWild PWild (PVar "target") (PVar "src") (PVar "hash") (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "all") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EApp (EVar "ranked") (ELit (LInt 0))) (EVar "allRules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (DoLet false false (PTuple (PVar "free") (PVar "indexed")) (EApp (EApp (EVar "splitByIndex") (EVar "allRules")) (EVar "all"))) (DoExpr (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (EVar "hash")) (fa "freeFindings" (EVar "free")) (fa "indexFindings" (EVar "indexed")) (fa "indexKey" (EApp (EApp (EVar "indexKeyFor") (EVar "allRules")) (EVar "idx"))) (fa "summaries" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EListLit)) (EListLit)) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))))))
+(DTypeSig false "entryOfFile" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyCon "LintEntry")))))))))))
+(DFunDef false "entryOfFile" ((PVar "idx") (PCon "None") (PVar "disableNames") (PVar "onlyNames") (PVar "wantSummaries") (PVar "target") (PVar "src")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "decls") (PVar "pos"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "uncachedEntryOf") (EVar "idx")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "wantSummaries")) (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos")))) (EApp (EVar "lintParseSource") (EVar "src"))))
+(DFunDef false "entryOfFile" ((PVar "idx") (PCon "Some" (PTuple (PVar "cacheDir") (PVar "stamp"))) PWild PWild PWild (PVar "target") (PVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cachedEntryOf") (EVar "allRules")) (EVar "indexKeyFor")) (EVar "idx")) (EVar "cacheDir")) (EVar "stamp")) (EVar "target")) (EVar "src")))
+(DTypeSig true "cachedEntryOf" (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "StdlibIndex") (TyCon "String"))) (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyCon "LintEntry")))))))))))
+(DFunDef false "cachedEntryOf" ((PVar "roster") (PVar "keyOf") (PVar "idx") (PVar "cacheDir") (PVar "stamp") (PVar "target") (PVar "src")) (EBlock (DoLet false false (PVar "hash") (EApp (EVar "contentHashOf") (EVar "src"))) (DoLet false false (PVar "key") (EApp (EApp (EVar "keyOf") (EVar "roster")) (EVar "idx"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "loadEntry") (EVar "cacheDir")) (EVar "stamp")) (EVar "key")) (EVar "target")) (EVar "hash")) (arm (PCon "ShardHit" (PVar "hit")) () (EApp (EVar "Ok") (EVar "hit"))) (arm (PVar "loaded") () (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "decls") (PVar "pos"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cachedEntryFrom") (EVar "roster")) (EVar "key")) (EVar "idx")) (EVar "loaded")) (EVar "target")) (EVar "src")) (EVar "hash")) (EVar "decls")) (EVar "pos")))) (EApp (EVar "lintParseSource") (EVar "src"))))))))
+(DTypeSig false "uncachedEntryOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyCon "LintEntry")))))))))))
+(DFunDef false "uncachedEntryOf" ((PVar "idx") (PVar "disableNames") (PVar "onlyNames") (PVar "wantSummaries") (PVar "target") (PVar "src") (PVar "decls") (PVar "pos")) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "rules") (EApp (EApp (EVar "selectRules") (EVar "onlyNames")) (EVar "disableNames"))) (DoExpr (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (ELit (LString ""))) (fa "freeFindings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EApp (EVar "ranked") (ELit (LInt 0))) (EVar "rules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "indexFindings" (EListLit)) (fa "indexKey" (ELit (LString ""))) (fa "summaries" (EIf (EVar "wantSummaries") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls")) (EListLit))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))))))
+(DTypeSig false "cachedEntryFrom" (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "ShardLoad") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyCon "LintEntry"))))))))))))
+(DFunDef false "cachedEntryFrom" ((PVar "roster") PWild (PVar "idx") (PCon "ShardStale" (PVar "stale")) (PVar "target") (PVar "src") PWild (PVar "decls") (PVar "pos")) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoExpr (ERecordUpdate (EVar "stale") ((fa "indexFindings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EVar "rankedIndexRules") (EVar "roster"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "dirty" (EVar "True")))))))
+(DFunDef false "cachedEntryFrom" ((PVar "roster") (PVar "key") (PVar "idx") PWild (PVar "target") (PVar "src") (PVar "hash") (PVar "decls") (PVar "pos")) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "all") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EApp (EVar "ranked") (ELit (LInt 0))) (EVar "roster"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (DoLet false false (PTuple (PVar "free") (PVar "indexed")) (EApp (EApp (EVar "splitByIndex") (EVar "roster")) (EVar "all"))) (DoExpr (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (EVar "hash")) (fa "freeFindings" (EVar "free")) (fa "indexFindings" (EVar "indexed")) (fa "indexKey" (EVar "key")) (fa "summaries" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EListLit)) (EListLit)) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))))))
 (DTypeSig false "lintOneFileFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))))
 (DFunDef false "lintOneFileFix" ((PVar "idx") (PVar "unsafeMode") (PVar "onlyNames") (PVar "disableNames") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "limit") (EIf (EVar "unsafeMode") (EVar "Unsafe") (EVar "Safe"))) (DoLet false false (PVar "localMods") (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Ok" (PTuple (PVar "decls") PWild)) () (EApp (EApp (EVar "projectWildMods") (EVar "target")) (EVar "decls"))) (arm (PCon "Err" PWild) () (EListLit)))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fixSource") (EVar "idx")) (EVar "limit")) (EVar "onlyNames")) (EVar "disableNames")) (EVar "localMods")) (EVar "target")) (EVar "src")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "run")) () (EApp (EApp (EApp (EVar "writeFixed") (EVar "target")) (EVar "src")) (EVar "run")))))))))
 (DTypeSig false "writeFixed" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "FixRun") (TyEffect ("IO") None (TyCon "Bool"))))))
@@ -1277,7 +1314,7 @@ writeFixedSource target src newSrc n =
 (DUse false (UseAlias ("string") "Str"))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "Positions" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "manifestLintInternal" false) (mem "readSource" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "cjAllToJson" false) (mem "ppSeverity" false) (mem "diagIsError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false))))
 (DUse false (UseGroup ("support" "cli_targets") ((mem "collectMdkFiles" false) (mem "expandLintTarget" false))))
@@ -1455,13 +1492,19 @@ writeFixedSource target src newSrc n =
 (DFunDef false "lintFilesGo" (PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (ETuple (EVar "acc") (EListLit)))
 (DFunDef false "lintFilesGo" ((PVar "idx") (PVar "run") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "fileDisable") (EBinOp "++" (EVar "disableNames") (EApp (EApp (EVar "internalDisabledFor") (EFieldAccess (EVar "run") "lrInternal")) (EVar "f")))) (DoExpr (EIf (EFieldAccess (EVar "run") "lrFix") (EBlock (DoLet false false (PVar "hadErr") (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileFix") (EVar "idx")) (EFieldAccess (EVar "run") "lrUnsafe")) (EVar "onlyNames")) (EVar "fileDisable")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr"))))) (EBlock (DoLet false false (PTuple (PVar "hadErr") (PVar "entries")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileReport") (EVar "idx")) (EFieldAccess (EVar "run") "lrMulti")) (EVar "fileDisable")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "f"))) (DoLet false false (PTuple (PVar "restErr") (PVar "restEntries")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "idx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "hadErr")))) (DoExpr (ETuple (EVar "restErr") (EBinOp "++" (EVar "entries") (EVar "restEntries")))))))))
 (DTypeSig false "lintOneFileReport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")))))))))))))
-(DFunDef false "lintOneFileReport" ((PVar "idx") (PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (ETuple (EVar "True") (EListLit))))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "hash") (EMatch (EVar "cacheCtx") (arm (PCon "Some" PWild) () (EApp (EVar "contentHashOf") (EVar "src"))) (arm (PCon "None") () (ELit (LString ""))))) (DoLet false false (PVar "loaded") (EMatch (EVar "cacheCtx") (arm (PCon "Some" (PTuple (PVar "cacheDir") (PVar "stamp"))) () (EApp (EApp (EApp (EApp (EApp (EVar "loadEntry") (EVar "cacheDir")) (EVar "stamp")) (EApp (EApp (EVar "indexKeyFor") (EVar "allRules")) (EVar "idx"))) (EVar "target")) (EMethodRef "hash"))) (arm (PCon "None") () (EVar "ShardMiss")))) (DoExpr (EMatch (EVar "loaded") (arm (PCon "ShardHit" (PVar "hit")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileRender") (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "target")) (EVar "src")) (EVar "hit"))) (arm PWild () (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (ETuple (EVar "True") (EListLit))))) (arm (PCon "Ok" (PVar "parsedSource")) () (EBlock (DoLet false false (PVar "entry") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintEntryOf") (EVar "idx")) (EVar "cacheCtx")) (EVar "loaded")) (EVar "disableNames")) (EVar "onlyNames")) (EBinOp "&&" (EVar "multiFile") (EApp (EApp (EVar "projectRuleSelected") (EVar "onlyNames")) (EVar "disableNames")))) (EVar "target")) (EVar "src")) (EMethodRef "hash")) (EVar "parsedSource"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileRender") (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "target")) (EVar "src")) (EVar "entry")))))))))))))
+(DFunDef false "lintOneFileReport" ((PVar "idx") (PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "cacheCtx") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (ETuple (EVar "True") (EListLit))))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "wantSummaries") (EBinOp "&&" (EVar "multiFile") (EApp (EApp (EVar "projectRuleSelected") (EVar "onlyNames")) (EVar "disableNames")))) (DoLet false false (PVar "found") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "entryOfFile") (EVar "idx")) (EVar "cacheCtx")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "wantSummaries")) (EVar "target")) (EVar "src"))) (DoExpr (EMatch (EVar "found") (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (ETuple (EVar "True") (EListLit))))) (arm (PCon "Ok" (PVar "entry")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintOneFileRender") (EVar "multiFile")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "target")) (EVar "src")) (EVar "entry")))))))))
 (DTypeSig false "lintOneFileRender" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LintEntry")))))))))))))
 (DFunDef false "lintOneFileRender" ((PVar "multiFile") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "target") (PVar "src") (PVar "entry")) (EBlock (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressionsDirs") (EFieldAccess (EVar "entry") "directives")) (EApp (EVar "entryFindings") (EVar "entry")))) (DoLet false false (PVar "filtered") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "allFindings"))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EVar "applyBaselineFindings") (EVar "baseCtx")) (EVar "target")) (EVar "filtered"))) (DoLet false false (PVar "output") (EMatch (EVar "findings") (arm (PList) () (ELit (LString ""))) (arm PWild () (EBlock (DoLet false false (PVar "srcLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (DoExpr (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (ELam ((PVar "f")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EVar "srcLines")) (EVar "target")) (EApp (EVar "findingToDiag") (EVar "f"))))) (EVar "findings")))))))) (DoLet false false (PVar "hasOutput") (EBinOp ">" (EApp (EVar "stringLength") (EVar "output")) (ELit (LInt 0)))) (DoLet false false PWild (EIf (EBinOp "&&" (EVar "multiFile") (EVar "hasOutput")) (EApp (EVar "putStrLn") (EBinOp "++" (EVar "target") (ELit (LString ":")))) (ELit LUnit))) (DoLet false false PWild (EIf (EVar "hasOutput") (EApp (EVar "putStrLn") (EVar "output")) (ELit LUnit))) (DoExpr (ETuple (EApp (EApp (EVar "anyList") (EVar "isFindingError")) (EVar "findings")) (EListLit (EVar "entry"))))))
-(DTypeSig false "lintEntryOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "ShardLoad") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyEffect ("IO") None (TyCon "LintEntry")))))))))))))
-(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "None") PWild (PVar "disableNames") (PVar "onlyNames") (PVar "wantSummaries") (PVar "target") (PVar "src") PWild (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "rules") (EApp (EApp (EVar "selectRules") (EVar "onlyNames")) (EVar "disableNames"))) (DoExpr (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (ELit (LString ""))) (fa "freeFindings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EApp (EVar "ranked") (ELit (LInt 0))) (EVar "rules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "indexFindings" (EListLit)) (fa "indexKey" (ELit (LString ""))) (fa "summaries" (EIf (EVar "wantSummaries") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls")) (EListLit))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))))))
-(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "Some" PWild) (PCon "ShardStale" (PVar "stale")) PWild PWild PWild (PVar "target") (PVar "src") PWild (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoExpr (ERecordUpdate (EVar "stale") ((fa "indexFindings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EVar "rankedIndexRules") (EVar "allRules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "dirty" (EVar "True")))))))
-(DFunDef false "lintEntryOf" ((PVar "idx") (PCon "Some" PWild) PWild PWild PWild PWild (PVar "target") (PVar "src") (PVar "hash") (PTuple (PVar "decls") (PVar "pos"))) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "all") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EApp (EVar "ranked") (ELit (LInt 0))) (EVar "allRules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (DoLet false false (PTuple (PVar "free") (PVar "indexed")) (EApp (EApp (EVar "splitByIndex") (EVar "allRules")) (EDictApp "all"))) (DoExpr (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (EMethodRef "hash")) (fa "freeFindings" (EVar "free")) (fa "indexFindings" (EVar "indexed")) (fa "indexKey" (EApp (EApp (EVar "indexKeyFor") (EVar "allRules")) (EVar "idx"))) (fa "summaries" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EListLit)) (EListLit)) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))))))
+(DTypeSig false "entryOfFile" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyCon "LintEntry")))))))))))
+(DFunDef false "entryOfFile" ((PVar "idx") (PCon "None") (PVar "disableNames") (PVar "onlyNames") (PVar "wantSummaries") (PVar "target") (PVar "src")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "decls") (PVar "pos"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "uncachedEntryOf") (EVar "idx")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "wantSummaries")) (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos")))) (EApp (EVar "lintParseSource") (EVar "src"))))
+(DFunDef false "entryOfFile" ((PVar "idx") (PCon "Some" (PTuple (PVar "cacheDir") (PVar "stamp"))) PWild PWild PWild (PVar "target") (PVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cachedEntryOf") (EVar "allRules")) (EVar "indexKeyFor")) (EVar "idx")) (EVar "cacheDir")) (EVar "stamp")) (EVar "target")) (EVar "src")))
+(DTypeSig true "cachedEntryOf" (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "StdlibIndex") (TyCon "String"))) (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyCon "LintEntry")))))))))))
+(DFunDef false "cachedEntryOf" ((PVar "roster") (PVar "keyOf") (PVar "idx") (PVar "cacheDir") (PVar "stamp") (PVar "target") (PVar "src")) (EBlock (DoLet false false (PVar "hash") (EApp (EVar "contentHashOf") (EVar "src"))) (DoLet false false (PVar "key") (EApp (EApp (EVar "keyOf") (EVar "roster")) (EVar "idx"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "loadEntry") (EVar "cacheDir")) (EVar "stamp")) (EVar "key")) (EVar "target")) (EMethodRef "hash")) (arm (PCon "ShardHit" (PVar "hit")) () (EApp (EVar "Ok") (EVar "hit"))) (arm (PVar "loaded") () (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "decls") (PVar "pos"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cachedEntryFrom") (EVar "roster")) (EVar "key")) (EVar "idx")) (EVar "loaded")) (EVar "target")) (EVar "src")) (EMethodRef "hash")) (EVar "decls")) (EVar "pos")))) (EApp (EVar "lintParseSource") (EVar "src"))))))))
+(DTypeSig false "uncachedEntryOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyCon "LintEntry")))))))))))
+(DFunDef false "uncachedEntryOf" ((PVar "idx") (PVar "disableNames") (PVar "onlyNames") (PVar "wantSummaries") (PVar "target") (PVar "src") (PVar "decls") (PVar "pos")) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "rules") (EApp (EApp (EVar "selectRules") (EVar "onlyNames")) (EVar "disableNames"))) (DoExpr (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (ELit (LString ""))) (fa "freeFindings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EApp (EVar "ranked") (ELit (LInt 0))) (EVar "rules"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "indexFindings" (EListLit)) (fa "indexKey" (ELit (LString ""))) (fa "summaries" (EIf (EVar "wantSummaries") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EVar "onlyNames")) (EVar "disableNames")) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls")) (EListLit))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))))))
+(DTypeSig false "cachedEntryFrom" (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "ShardLoad") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyCon "LintEntry"))))))))))))
+(DFunDef false "cachedEntryFrom" ((PVar "roster") PWild (PVar "idx") (PCon "ShardStale" (PVar "stale")) (PVar "target") (PVar "src") PWild (PVar "decls") (PVar "pos")) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoExpr (ERecordUpdate (EVar "stale") ((fa "indexFindings" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EVar "rankedIndexRules") (EVar "roster"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "dirty" (EVar "True")))))))
+(DFunDef false "cachedEntryFrom" ((PVar "roster") (PVar "key") (PVar "idx") PWild (PVar "target") (PVar "src") (PVar "hash") (PVar "decls") (PVar "pos")) (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "target")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "all") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramRanked") (EVar "idx")) (EApp (EApp (EVar "ranked") (ELit (LInt 0))) (EVar "roster"))) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (DoLet false false (PTuple (PVar "free") (PVar "indexed")) (EApp (EApp (EVar "splitByIndex") (EVar "roster")) (EDictApp "all"))) (DoExpr (ERecordCreate "LintEntry" ((fa "path" (EVar "target")) (fa "contentHash" (EMethodRef "hash")) (fa "freeFindings" (EVar "free")) (fa "indexFindings" (EVar "indexed")) (fa "indexKey" (EVar "key")) (fa "summaries" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileSummaries") (EListLit)) (EListLit)) (EVar "target")) (EVar "facts")) (EVar "pos")) (EVar "decls"))) (fa "directives" (EApp (EVar "factDirectives") (EVar "facts"))) (fa "dirty" (EVar "True")))))))
 (DTypeSig false "lintOneFileFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))))
 (DFunDef false "lintOneFileFix" ((PVar "idx") (PVar "unsafeMode") (PVar "onlyNames") (PVar "disableNames") (PVar "target")) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "limit") (EIf (EVar "unsafeMode") (EVar "Unsafe") (EVar "Safe"))) (DoLet false false (PVar "localMods") (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Ok" (PTuple (PVar "decls") PWild)) () (EApp (EApp (EVar "projectWildMods") (EVar "target")) (EVar "decls"))) (arm (PCon "Err" PWild) () (EListLit)))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fixSource") (EVar "idx")) (EVar "limit")) (EVar "onlyNames")) (EVar "disableNames")) (EVar "localMods")) (EVar "target")) (EVar "src")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "run")) () (EApp (EApp (EApp (EVar "writeFixed") (EVar "target")) (EVar "src")) (EVar "run")))))))))
 (DTypeSig false "writeFixed" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "FixRun") (TyEffect ("IO") None (TyCon "Bool"))))))
