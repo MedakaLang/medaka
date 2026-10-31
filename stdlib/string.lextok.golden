@@ -1426,15 +1426,44 @@ IDENT "n"
 FAT_ARROW
 UPPER "Err"
 INTERP_OPEN "expected 1 occurrence of `"
+IDENT "quotedNeedle"
+IDENT "old"
+INTERP_MID "`, found "
+IDENT "n"
+INTERP_END ""
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "quotedNeedle"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "quotedNeedle"
+IDENT "old"
+EQUAL
+INDENT
+LET
+IDENT "shown"
+EQUAL
 IDENT "take"
 INT 60
 LPAREN
 IDENT "firstLine"
 IDENT "old"
 RPAREN
-INTERP_MID "…`, found "
-IDENT "n"
-INTERP_END ""
+NEWLINE
+IF
+IDENT "shown"
+EQ_EQ
+IDENT "old"
+THEN
+IDENT "shown"
+ELSE
+INTERP_OPEN ""
+IDENT "shown"
+INTERP_END "…"
 NEWLINE
 DEDENT
 NEWLINE

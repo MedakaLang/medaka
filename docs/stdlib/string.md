@@ -667,19 +667,20 @@ The string with `old` replaced by `new`, provided `old` occurs exactly
 once.
 
 `Err` when `old` occurs no times, more than once, or is empty. The
-message names the first line of `old` (cut at 60 characters) and the
-number of occurrences found. Occurrences are counted as
+message quotes the first line of `old`, cut at 60 characters, and puts an
+ellipsis after the quote when the quote is shorter than `old`. The number
+of occurrences found follows. Occurrences are counted as
 `countOccurrences` counts them.
 
 ```medaka
 > replaceOnce "l" "L" "help"
 Ok "heLp"
 > replaceOnce "z" "Z" "hello"
-Err "expected 1 occurrence of `z…`, found 0"
+Err "expected 1 occurrence of `z`, found 0"
 > replaceOnce "l" "L" "hello"
-Err "expected 1 occurrence of `l…`, found 2"
+Err "expected 1 occurrence of `l`, found 2"
 > replaceOnce "" "x" "hello"
-Err "expected 1 occurrence of `…`, found 0"
+Err "expected 1 occurrence of ``, found 0"
 ```
 
 ### `cutBetween`

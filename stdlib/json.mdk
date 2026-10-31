@@ -82,9 +82,13 @@ charOfCode k = optionOr ' ' (charFromCode k)
 
 -- `floatToString` can emit a trailing-dot form (e.g. `1000.0` → "1000.") which
 -- is not valid JSON (a number needs a digit after the point).  Append a `0` in
--- that case so serialized floats always re-parse.
+-- that case so serialized floats always re-parse. A non-finite float has no
+-- JSON number, so it is written as `null`. `f - f` is zero only for a finite
+-- `f`: it is NaN for an infinity and for a NaN.
 renderFloat : Float -> String
-renderFloat f = fixTrailingDot (floatToString f)
+renderFloat f
+  | f - f == 0.0 = fixTrailingDot (floatToString f)
+  | otherwise = "null"
 
 fixTrailingDot : String -> String
 fixTrailingDot s = fixTrailingDotGo s (stringToChars s)
@@ -161,12 +165,15 @@ objectPiecesInto pairs i acc
 {- | The value as compact JSON text, with no whitespace between tokens.
 
    Strings are escaped as JSON requires. A float always has a digit after
-   its decimal point, so the text parses again.
+   its decimal point, so the text parses again. A non-finite float comes back
+   as null, since JSON has no number for it.
 
    > stringify (jObject [("a", JInt 1), ("b", JString "hi")])
    "{\"a\":1,\"b\":\"hi\"}"
    > stringify (JFloat 1000.0)
    "1000.0"
+   > stringify (jArray [JFloat (1.0 / 0.0), JFloat (0.0 / 0.0)])
+   "[null,null]"
    > stringify (jObject [("a", jArray [JInt 1, jObject []]), ("b", JNull)])
    "{\"a\":[1,{}],\"b\":null}" -}
 export
@@ -859,10 +866,10 @@ prettyMembers n level pairs i acc
    Members keep their stored order, `": "` separates a key from its value,
    and empty arrays and objects stay on one line. The text has no trailing
    newline. An `n` of 0 still breaks lines, with no indentation. A non-finite
-   float is written as the word inf, -inf or nan, as `stringify` writes it, and
-   that text is not JSON. A float of magnitude `1e12` up to but not including
-   `1e16` prints in exponent form (`1e+12`, `1.5e+13`) where Python prints
-   `1000000000000.0`; `123456789012.0` and `999999999999.0` stay plain.
+   float comes back as null, since JSON has no number for it. A float of
+   magnitude `1e12` up to but not including `1e16` prints in exponent form
+   (`1e+12`, `1.5e+13`) where Python prints `1000000000000.0`; `123456789012.0`
+   and `999999999999.0` stay plain.
 
    > pretty 2 (jObject [("a", jArray [JInt 1, JInt 2]), ("b", jObject [])])
    "{\n  \"a\": [\n    1,\n    2\n  ],\n  \"b\": {}\n}" -}

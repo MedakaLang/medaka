@@ -952,6 +952,32 @@ test "replaceOnce names only the first line of a long multi-line old text" =
     (Err "expected 1 occurrence of `\{take 60 (repeat 70 "a")}…`, found 0")
     (replaceOnce "\{repeat 70 "a"}\nsecond" "x" "nothing")
 
+test "replaceOnce quotes an uncut needle with no ellipsis" =
+  expectEqual
+    (Err "expected 1 occurrence of `z`, found 0")
+    (replaceOnce "z" "Z" "hello")
+
+test "replaceOnce quotes a needle of exactly 60 characters with no ellipsis" =
+  let needle = repeat 60 "a"
+  expectEqual
+    (Err "expected 1 occurrence of `\{needle}`, found 0")
+    (replaceOnce needle "x" "nothing")
+
+test "replaceOnce cuts a 61-character needle to 60 with an ellipsis" =
+  expectEqual
+    (Err "expected 1 occurrence of `\{repeat 60 "a"}…`, found 0")
+    (replaceOnce (repeat 61 "a") "x" "nothing")
+
+test "replaceOnce quotes the first line of a multi-line needle with an ellipsis" =
+  expectEqual
+    (Err "expected 1 occurrence of `first…`, found 0")
+    (replaceOnce "first\nsecond" "x" "nothing")
+
+test "replaceOnce quotes an empty needle with no ellipsis" =
+  expectEqual
+    (Err "expected 1 occurrence of ``, found 0")
+    (replaceOnce "" "x" "hello")
+
 test "replaceOnce counts non-overlapping occurrences" =
   expectEqual (Ok "baa") (replaceOnce "aaa" "b" "aaaaa")
 

@@ -1,7 +1,7 @@
 -- Tests for the array-of-tables readers in `stdlib/toml.mdk`.
 
 import toml.{Toml, parse, tableCount, tableEntry, tableEntries, getString}
-import test.{expectEqual}
+import test.{expectEqual, expectOkThen}
 
 multi : String
 multi =
@@ -18,34 +18,48 @@ entriesByIndex name doc =
 
 test "tableEntries equals tableEntry at every index, on a multi-table document" =
   let doc = load multi
-  expectEqual (map Some (tableEntries "gate" doc)) (entriesByIndex "gate" doc)
+  expectOkThen
+    (es => expectEqual (map Some es) (entriesByIndex "gate" doc))
+    (tableEntries "gate" doc)
 
 test "tableEntries agrees with tableEntry for a second table in the same document" =
   let doc = load multi
-  expectEqual (map Some (tableEntries "other" doc)) (entriesByIndex "other" doc)
+  expectOkThen
+    (es => expectEqual (map Some es) (entriesByIndex "other" doc))
+    (tableEntries "other" doc)
 
 test "tableEntries keeps document order" =
-  expectEqual
-    [Some "a", Some "b", Some "c"]
-    (map (getString "name") (tableEntries "gate" (load multi)))
+  expectOkThen
+    (es =>
+      expectEqual [Some "a", Some "b", Some "c"] (map (getString "name") es))
+    (tableEntries "gate" (load multi))
 
 test "tableEntries entries carry unqualified keys" =
-  expectEqual
-    [Some "1"]
-    (map
-      (getString "name")
-      (tableEntries "gate" (load "[[gate]]\nname = \"1\"")))
+  expectOkThen
+    (es => expectEqual [Some "1"] (map (getString "name") es))
+    (tableEntries "gate" (load "[[gate]]\nname = \"1\""))
 
 test "tableEntries is empty when there are no entries" =
-  expectEqual 0 (length (tableEntries "gate" (load "[package]\nname = \"p\"")))
+  expectOkThen
+    (es => expectEqual 0 (length es))
+    (tableEntries "gate" (load "[package]\nname = \"p\""))
 
 test "tableEntries does not take a longer table name for a prefix" =
+  expectOkThen
+    (es => expectEqual 1 (length es))
+    (tableEntries
+      "gate"
+      (load "[[gate]]\nname = \"a\"\n[[gates]]\nname = \"b\""))
+
+test "tableEntries refuses an index past the limit, naming the table and the index" =
   expectEqual
-    1
-    (length
-      (tableEntries
-        "gate"
-        (load "[[gate]]\nname = \"a\"\n[[gates]]\nname = \"b\"")))
+    (Err "too many [[gate]] entries: index 5000000 is past the limit of 100000")
+    (tableEntries "gate" (load "[gate.5000000]\nname = \"x\""))
+
+test "tableEntries refuses the first index past the limit" =
+  expectEqual
+    (Err "too many [[gate]] entries: index 100000 is past the limit of 100000")
+    (tableEntries "gate" (load "[gate.100000]\nname = \"x\""))
 
 test "tableEntry of a negative index is None" =
   expectEqual None (tableEntry "gate" (0 - 1) (load multi))

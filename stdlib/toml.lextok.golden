@@ -2871,6 +2871,14 @@ DEDENT
 NEWLINE
 DEDENT
 NEWLINE
+IDENT "tableEntryLimit"
+COLON
+UPPER "Int"
+NEWLINE
+IDENT "tableEntryLimit"
+EQUAL
+INT 100000
+NEWLINE
 EXPORT
 NEWLINE
 IDENT "tableEntries"
@@ -2879,8 +2887,12 @@ UPPER "String"
 ARROW
 UPPER "Toml"
 ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
 UPPER "List"
 UPPER "Toml"
+RPAREN
 NEWLINE
 IDENT "tableEntries"
 IDENT "name"
@@ -2901,12 +2913,45 @@ STRING "."
 RBRACKET
 NEWLINE
 LET
+IDENT "count"
+EQUAL
+IDENT "tableCountGo"
+IDENT "prefix"
+IDENT "kvs"
+INT 0
+NEWLINE
+LET
 IDENT "groups"
 EQUAL
 IDENT "groupEntries"
 IDENT "prefix"
 IDENT "kvs"
 NEWLINE
+MATCH
+IDENT "count"
+GT
+IDENT "tableEntryLimit"
+INDENT
+UPPER "True"
+FAT_ARROW
+INDENT
+UPPER "Err"
+INTERP_OPEN "too many [["
+IDENT "name"
+INTERP_MID "]] entries: index "
+IDENT "count"
+MINUS
+INT 1
+INTERP_MID " is past the limit of "
+IDENT "tableEntryLimit"
+INTERP_END ""
+NEWLINE
+DEDENT
+NEWLINE
+UPPER "False"
+FAT_ARROW
+UPPER "Ok"
+LPAREN
 IDENT "map"
 LPAREN
 IDENT "i"
@@ -2926,11 +2971,11 @@ RPAREN
 LBRACKET
 INT 0
 DOTDOT
-IDENT "tableCountGo"
-IDENT "prefix"
-IDENT "kvs"
-INT 0
+IDENT "count"
 RBRACKET
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -3934,23 +3979,17 @@ IDENT "eq"
 IDENT "a"
 IDENT "b"
 AND
-IDENT "not"
-LPAREN
 IDENT "display"
 IDENT "a"
-EQ_EQ
+NEQ
 IDENT "display"
 IDENT "c"
-RPAREN
 AND
-IDENT "not"
-LPAREN
 IDENT "display"
 IDENT "a"
-EQ_EQ
+NEQ
 IDENT "display"
 IDENT "d"
-RPAREN
 NEWLINE
 DEDENT
 NEWLINE

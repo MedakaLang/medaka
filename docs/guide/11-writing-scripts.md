@@ -145,8 +145,8 @@ new line 1
 new line 2
 # end generated
 host = "localhost"
-Err "app.toml: expected 1 occurrence of `no such text…`, found 0"
-Err "app.toml: expected 1 occurrence of `line…`, found 2"
+Err "app.toml: expected 1 occurrence of `no such text`, found 0"
+Err "app.toml: expected 1 occurrence of `line`, found 2"
 ```
 
 ### Count what is in a repository
@@ -579,7 +579,7 @@ main =
 bonana
 bonono
 Ok "panana"
-Err "expected 1 occurrence of `n…`, found 2"
+Err "expected 1 occurrence of `n`, found 2"
 ```
 
 ### Line counts

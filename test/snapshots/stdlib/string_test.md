@@ -1,5 +1,5 @@
 # META
-source_lines=1108
+source_lines=1134
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -956,6 +956,32 @@ test "replaceOnce names only the first line of a long multi-line old text" =
     (Err "expected 1 occurrence of `\{take 60 (repeat 70 "a")}…`, found 0")
     (replaceOnce "\{repeat 70 "a"}\nsecond" "x" "nothing")
 
+test "replaceOnce quotes an uncut needle with no ellipsis" =
+  expectEqual
+    (Err "expected 1 occurrence of `z`, found 0")
+    (replaceOnce "z" "Z" "hello")
+
+test "replaceOnce quotes a needle of exactly 60 characters with no ellipsis" =
+  let needle = repeat 60 "a"
+  expectEqual
+    (Err "expected 1 occurrence of `\{needle}`, found 0")
+    (replaceOnce needle "x" "nothing")
+
+test "replaceOnce cuts a 61-character needle to 60 with an ellipsis" =
+  expectEqual
+    (Err "expected 1 occurrence of `\{repeat 60 "a"}…`, found 0")
+    (replaceOnce (repeat 61 "a") "x" "nothing")
+
+test "replaceOnce quotes the first line of a multi-line needle with an ellipsis" =
+  expectEqual
+    (Err "expected 1 occurrence of `first…`, found 0")
+    (replaceOnce "first\nsecond" "x" "nothing")
+
+test "replaceOnce quotes an empty needle with no ellipsis" =
+  expectEqual
+    (Err "expected 1 occurrence of ``, found 0")
+    (replaceOnce "" "x" "hello")
+
 test "replaceOnce counts non-overlapping occurrences" =
   expectEqual (Ok "baa") (replaceOnce "aaa" "b" "aaaaa")
 
@@ -1358,6 +1384,11 @@ test "indent with an empty prefix leaves the text alone" =
 (DTest false "sliceBetween keeps the codepoint count of the slice" (EBlock (DoLet false false (PVar "c") (EApp (EVar "startCursor") (ELit (LString "aé日😀z")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日")) (ELit (LInt 2)))) (EApp (EVar "strAndLen") (EApp (EApp (EVar "sliceBetween") (EApp (EApp (EVar "advance") (ELit (LInt 1))) (EVar "c"))) (EApp (EApp (EVar "advance") (ELit (LInt 3))) (EVar "c"))))))))
 (DTest false "a cursor from another string that bounds a valid range slices" (EBlock (DoLet false false (PVar "other") (EApp (EApp (EVar "advance") (ELit (LInt 1))) (EApp (EVar "startCursor") (ELit (LString "xy"))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ELit (LString "h"))) (EApp (EApp (EVar "sliceBetween") (EApp (EVar "startCursor") (ELit (LString "héllo")))) (EVar "other"))))))
 (DTest false "replaceOnce names only the first line of a long multi-line old text" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EVar "display") (EApp (EApp (EVar "take") (ELit (LInt 60))) (EApp (EApp (EVar "repeat") (ELit (LInt 70))) (ELit (LString "a")))))) (ELit (LString "…`, found 0"))))) (EApp (EApp (EApp (EVar "replaceOnce") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "repeat") (ELit (LInt 70))) (ELit (LString "a"))))) (ELit (LString "\nsecond")))) (ELit (LString "x"))) (ELit (LString "nothing")))))
+(DTest false "replaceOnce quotes an uncut needle with no ellipsis" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "expected 1 occurrence of `z`, found 0")))) (EApp (EApp (EApp (EVar "replaceOnce") (ELit (LString "z"))) (ELit (LString "Z"))) (ELit (LString "hello")))))
+(DTest false "replaceOnce quotes a needle of exactly 60 characters with no ellipsis" (EBlock (DoLet false false (PVar "needle") (EApp (EApp (EVar "repeat") (ELit (LInt 60))) (ELit (LString "a")))) (DoExpr (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EVar "display") (EVar "needle"))) (ELit (LString "`, found 0"))))) (EApp (EApp (EApp (EVar "replaceOnce") (EVar "needle")) (ELit (LString "x"))) (ELit (LString "nothing")))))))
+(DTest false "replaceOnce cuts a 61-character needle to 60 with an ellipsis" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EVar "display") (EApp (EApp (EVar "repeat") (ELit (LInt 60))) (ELit (LString "a"))))) (ELit (LString "…`, found 0"))))) (EApp (EApp (EApp (EVar "replaceOnce") (EApp (EApp (EVar "repeat") (ELit (LInt 61))) (ELit (LString "a")))) (ELit (LString "x"))) (ELit (LString "nothing")))))
+(DTest false "replaceOnce quotes the first line of a multi-line needle with an ellipsis" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "expected 1 occurrence of `first…`, found 0")))) (EApp (EApp (EApp (EVar "replaceOnce") (ELit (LString "first\nsecond"))) (ELit (LString "x"))) (ELit (LString "nothing")))))
+(DTest false "replaceOnce quotes an empty needle with no ellipsis" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "expected 1 occurrence of ``, found 0")))) (EApp (EApp (EApp (EVar "replaceOnce") (ELit (LString ""))) (ELit (LString "x"))) (ELit (LString "hello")))))
 (DTest false "replaceOnce counts non-overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ELit (LString "baa")))) (EApp (EApp (EApp (EVar "replaceOnce") (ELit (LString "aaa"))) (ELit (LString "b"))) (ELit (LString "aaaaa")))))
 (DTest false "cutBetween counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ETuple (ELit (LString "é")) (ELit (LString "ü")) (ELit (LString "ö"))))) (EApp (EApp (EApp (EVar "cutBetween") (ELit (LString "<"))) (ELit (LString ">"))) (ELit (LString "é<ü>ö")))))
 (DTest false "toFixed rounds the exact binary value, so 2.675 gives 2.67" (EApp (EApp (EVar "expectEqual") (ELit (LString "2.67"))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (ELit (LFloat 2.675)))))
@@ -1644,6 +1675,11 @@ test "indent with an empty prefix leaves the text alone" =
 (DTest false "sliceBetween keeps the codepoint count of the slice" (EBlock (DoLet false false (PVar "c") (EApp (EVar "startCursor") (ELit (LString "aé日😀z")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日")) (ELit (LInt 2)))) (EApp (EVar "strAndLen") (EApp (EApp (EVar "sliceBetween") (EApp (EApp (EVar "advance") (ELit (LInt 1))) (EVar "c"))) (EApp (EApp (EVar "advance") (ELit (LInt 3))) (EVar "c"))))))))
 (DTest false "a cursor from another string that bounds a valid range slices" (EBlock (DoLet false false (PVar "other") (EApp (EApp (EVar "advance") (ELit (LInt 1))) (EApp (EVar "startCursor") (ELit (LString "xy"))))) (DoExpr (EApp (EApp (EVar "expectEqual") (ELit (LString "h"))) (EApp (EApp (EVar "sliceBetween") (EApp (EVar "startCursor") (ELit (LString "héllo")))) (EVar "other"))))))
 (DTest false "replaceOnce names only the first line of a long multi-line old text" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EMethodRef "display") (EApp (EApp (EVar "take") (ELit (LInt 60))) (EApp (EApp (EVar "repeat") (ELit (LInt 70))) (ELit (LString "a")))))) (ELit (LString "…`, found 0"))))) (EApp (EApp (EApp (EVar "replaceOnce") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "repeat") (ELit (LInt 70))) (ELit (LString "a"))))) (ELit (LString "\nsecond")))) (ELit (LString "x"))) (ELit (LString "nothing")))))
+(DTest false "replaceOnce quotes an uncut needle with no ellipsis" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "expected 1 occurrence of `z`, found 0")))) (EApp (EApp (EApp (EVar "replaceOnce") (ELit (LString "z"))) (ELit (LString "Z"))) (ELit (LString "hello")))))
+(DTest false "replaceOnce quotes a needle of exactly 60 characters with no ellipsis" (EBlock (DoLet false false (PVar "needle") (EApp (EApp (EVar "repeat") (ELit (LInt 60))) (ELit (LString "a")))) (DoExpr (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EMethodRef "display") (EVar "needle"))) (ELit (LString "`, found 0"))))) (EApp (EApp (EApp (EVar "replaceOnce") (EVar "needle")) (ELit (LString "x"))) (ELit (LString "nothing")))))))
+(DTest false "replaceOnce cuts a 61-character needle to 60 with an ellipsis" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EMethodRef "display") (EApp (EApp (EVar "repeat") (ELit (LInt 60))) (ELit (LString "a"))))) (ELit (LString "…`, found 0"))))) (EApp (EApp (EApp (EVar "replaceOnce") (EApp (EApp (EVar "repeat") (ELit (LInt 61))) (ELit (LString "a")))) (ELit (LString "x"))) (ELit (LString "nothing")))))
+(DTest false "replaceOnce quotes the first line of a multi-line needle with an ellipsis" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "expected 1 occurrence of `first…`, found 0")))) (EApp (EApp (EApp (EVar "replaceOnce") (ELit (LString "first\nsecond"))) (ELit (LString "x"))) (ELit (LString "nothing")))))
+(DTest false "replaceOnce quotes an empty needle with no ellipsis" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "expected 1 occurrence of ``, found 0")))) (EApp (EApp (EApp (EVar "replaceOnce") (ELit (LString ""))) (ELit (LString "x"))) (ELit (LString "hello")))))
 (DTest false "replaceOnce counts non-overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ELit (LString "baa")))) (EApp (EApp (EApp (EVar "replaceOnce") (ELit (LString "aaa"))) (ELit (LString "b"))) (ELit (LString "aaaaa")))))
 (DTest false "cutBetween counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ETuple (ELit (LString "é")) (ELit (LString "ü")) (ELit (LString "ö"))))) (EApp (EApp (EApp (EVar "cutBetween") (ELit (LString "<"))) (ELit (LString ">"))) (ELit (LString "é<ü>ö")))))
 (DTest false "toFixed rounds the exact binary value, so 2.675 gives 2.67" (EApp (EApp (EVar "expectEqual") (ELit (LString "2.67"))) (EApp (EApp (EVar "toFixed") (ELit (LInt 2))) (ELit (LFloat 2.675)))))

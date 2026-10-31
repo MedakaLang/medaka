@@ -1,5 +1,5 @@
 # META
-source_lines=1144
+source_lines=1153
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -601,23 +601,32 @@ spliceAt i oldLen new s = stringConcat [
    once.
 
    `Err` when `old` occurs no times, more than once, or is empty. The
-   message names the first line of `old` (cut at 60 characters) and the
-   number of occurrences found. Occurrences are counted as
+   message quotes the first line of `old`, cut at 60 characters, and puts an
+   ellipsis after the quote when the quote is shorter than `old`. The number
+   of occurrences found follows. Occurrences are counted as
    `countOccurrences` counts them.
 
    > replaceOnce "l" "L" "help"
    Ok "heLp"
    > replaceOnce "z" "Z" "hello"
-   Err "expected 1 occurrence of `z…`, found 0"
+   Err "expected 1 occurrence of `z`, found 0"
    > replaceOnce "l" "L" "hello"
-   Err "expected 1 occurrence of `l…`, found 2"
+   Err "expected 1 occurrence of `l`, found 2"
    > replaceOnce "" "x" "hello"
-   Err "expected 1 occurrence of `…`, found 0" -}
+   Err "expected 1 occurrence of ``, found 0" -}
 export
 replaceOnce : String -> String -> String -> Result String String
 replaceOnce old new s = match countOccurrences old s
   1 => Ok (replaceFirst old new s)
-  n => Err "expected 1 occurrence of `\{take 60 (firstLine old)}…`, found \{n}"
+  n => Err "expected 1 occurrence of `\{quotedNeedle old}`, found \{n}"
+
+-- The needle as the `replaceOnce` message quotes it: its first line, cut at 60
+-- characters. The quote is a prefix of the needle, so it is shorter exactly
+-- when it is cut, and only then does it take an ellipsis.
+quotedNeedle : String -> String
+quotedNeedle old =
+  let shown = take 60 (firstLine old)
+  if shown == old then shown else "\{shown}…"
 
 -- Matches on `lines` instead of calling `list.head`: `string` imports only
 -- `core`, so a `list` import here would load `list` into every program that
@@ -1253,7 +1262,9 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DTypeSig false "spliceAt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "spliceAt" ((PVar "i") (PVar "oldLen") (PVar "new") (PVar "s")) (EApp (EVar "stringConcat") (EListLit (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")) (EVar "new") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EVar "oldLen"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))
 (DTypeSig true "replaceOnce" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "replaceOnce" ((PVar "old") (PVar "new") (PVar "s")) (EMatch (EApp (EApp (EVar "countOccurrences") (EVar "old")) (EVar "s")) (arm (PLit (LInt 1)) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "replaceFirst") (EVar "old")) (EVar "new")) (EVar "s")))) (arm (PVar "n") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EVar "display") (EApp (EApp (EVar "take") (ELit (LInt 60))) (EApp (EVar "firstLine") (EVar "old"))))) (ELit (LString "…`, found "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "")))))))
+(DFunDef false "replaceOnce" ((PVar "old") (PVar "new") (PVar "s")) (EMatch (EApp (EApp (EVar "countOccurrences") (EVar "old")) (EVar "s")) (arm (PLit (LInt 1)) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "replaceFirst") (EVar "old")) (EVar "new")) (EVar "s")))) (arm (PVar "n") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EVar "display") (EApp (EVar "quotedNeedle") (EVar "old")))) (ELit (LString "`, found "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "")))))))
+(DTypeSig false "quotedNeedle" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "quotedNeedle" ((PVar "old")) (EBlock (DoLet false false (PVar "shown") (EApp (EApp (EVar "take") (ELit (LInt 60))) (EApp (EVar "firstLine") (EVar "old")))) (DoExpr (EIf (EBinOp "==" (EVar "shown") (EVar "old")) (EVar "shown") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "shown"))) (ELit (LString "…")))))))
 (DTypeSig false "firstLine" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "firstLine" ((PVar "s")) (EMatch (EApp (EVar "lines") (EVar "s")) (arm (PList) () (ELit (LString ""))) (arm (PCons (PVar "l") PWild) () (EVar "l"))))
 (DTypeSig true "cutBetween" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))))
@@ -1470,7 +1481,9 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DTypeSig false "spliceAt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "spliceAt" ((PVar "i") (PVar "oldLen") (PVar "new") (PVar "s")) (EApp (EVar "stringConcat") (EListLit (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")) (EVar "new") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EVar "oldLen"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))
 (DTypeSig true "replaceOnce" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "replaceOnce" ((PVar "old") (PVar "new") (PVar "s")) (EMatch (EApp (EApp (EVar "countOccurrences") (EVar "old")) (EVar "s")) (arm (PLit (LInt 1)) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "replaceFirst") (EVar "old")) (EVar "new")) (EVar "s")))) (arm (PVar "n") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EMethodRef "display") (EApp (EApp (EVar "take") (ELit (LInt 60))) (EApp (EVar "firstLine") (EVar "old"))))) (ELit (LString "…`, found "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "")))))))
+(DFunDef false "replaceOnce" ((PVar "old") (PVar "new") (PVar "s")) (EMatch (EApp (EApp (EVar "countOccurrences") (EVar "old")) (EVar "s")) (arm (PLit (LInt 1)) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "replaceFirst") (EVar "old")) (EVar "new")) (EVar "s")))) (arm (PVar "n") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EMethodRef "display") (EApp (EVar "quotedNeedle") (EVar "old")))) (ELit (LString "`, found "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "")))))))
+(DTypeSig false "quotedNeedle" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "quotedNeedle" ((PVar "old")) (EBlock (DoLet false false (PVar "shown") (EApp (EApp (EVar "take") (ELit (LInt 60))) (EApp (EVar "firstLine") (EVar "old")))) (DoExpr (EIf (EBinOp "==" (EVar "shown") (EVar "old")) (EVar "shown") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "shown"))) (ELit (LString "…")))))))
 (DTypeSig false "firstLine" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "firstLine" ((PVar "s")) (EMatch (EApp (EVar "lines") (EVar "s")) (arm (PList) () (ELit (LString ""))) (arm (PCons (PVar "l") PWild) () (EVar "l"))))
 (DTypeSig true "cutBetween" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))))

@@ -1,5 +1,5 @@
 # META
-source_lines=833
+source_lines=849
 stages=DESUGAR,MARK
 # SOURCE
 {- | A reader for a subset of TOML.
@@ -608,21 +608,37 @@ groupEntries prefix ((k, v) :: rest) =
     None => groups
     Some (i, key) => insertWith (++) i [(key, v)] groups
 
+-- The most entries `tableEntries` will read. It fills a gap with one empty entry
+-- per index below the largest, so an unchecked index would build a list as long
+-- as that index.
+tableEntryLimit : Int
+tableEntryLimit = 100000
+
 {- | Every `[[name]]` entry in the document, in document order.
 
    Entry `i` is what `tableEntry name i` returns, but the document is read
-   once for all of them. The list is empty when there are no entries.
+   once for all of them. The list is empty when there are no entries. The
+   result is an `Err` when the largest entry index is 100000 or more, so a
+   document holds at most 100000 entries. The message names the table and
+   that index.
 
-   > map (getString "name") (tableEntries "gate" (Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")]))
-   [Some "a", Some "b"]
+   > map (map (getString "name")) (tableEntries "gate" (Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")]))
+   Ok [Some "a", Some "b"]
    > tableEntries "gate" (Toml [("package.name", TString "x")])
-   [] -}
+   Ok []
+   > tableEntries "gate" (Toml [("gate.100000.name", TString "x")])
+   Err "too many [[gate]] entries: index 100000 is past the limit of 100000" -}
 export
-tableEntries : String -> Toml -> List Toml
+tableEntries : String -> Toml -> Result String (List Toml)
 tableEntries name (Toml kvs) =
   let prefix = stringConcat [name, "."]
+  let count = tableCountGo prefix kvs 0
   let groups = groupEntries prefix kvs
-  map (i => Toml (optionOr [] (get i groups))) [0..tableCountGo prefix kvs 0]
+  match count > tableEntryLimit
+    True =>
+      Err
+        "too many [[\{name}]] entries: index \{count - 1} is past the limit of \{tableEntryLimit}"
+    False => Ok (map (i => Toml (optionOr [] (get i groups))) [0..count])
 
 -- ── Eq and Debug instances ──────────────────────────────────────────────────
 
@@ -941,8 +957,10 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "groupEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
 (DFunDef false "groupEntries" (PWild (PList)) (EVar "Tip"))
 (DFunDef false "groupEntries" ((PVar "prefix") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false (PVar "groups") (EApp (EApp (EVar "groupEntries") (EVar "prefix")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "entryKeyOf") (EVar "prefix")) (EVar "k")) (arm (PCon "None") () (EVar "groups")) (arm (PCon "Some" (PTuple (PVar "i") (PVar "key"))) () (EApp (EApp (EApp (EApp (EVar "insertWith") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "++" (EVar "_a") (EVar "_b")))) (EVar "i")) (EListLit (ETuple (EVar "key") (EVar "v")))) (EVar "groups")))))))
-(DTypeSig true "tableEntries" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "List") (TyCon "Toml")))))
-(DFunDef false "tableEntries" ((PVar "name") (PCon "Toml" (PVar "kvs"))) (EBlock (DoLet false false (PVar "prefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString "."))))) (DoLet false false (PVar "groups") (EApp (EApp (EVar "groupEntries") (EVar "prefix")) (EVar "kvs"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EApp (EVar "Toml") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "get") (EVar "i")) (EVar "groups")))))) (ERangeList (ELit (LInt 0)) (EApp (EApp (EApp (EVar "tableCountGo") (EVar "prefix")) (EVar "kvs")) (ELit (LInt 0))) false)))))
+(DTypeSig false "tableEntryLimit" (TyCon "Int"))
+(DFunDef false "tableEntryLimit" () (ELit (LInt 100000)))
+(DTypeSig true "tableEntries" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Toml"))))))
+(DFunDef false "tableEntries" ((PVar "name") (PCon "Toml" (PVar "kvs"))) (EBlock (DoLet false false (PVar "prefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString "."))))) (DoLet false false (PVar "count") (EApp (EApp (EApp (EVar "tableCountGo") (EVar "prefix")) (EVar "kvs")) (ELit (LInt 0)))) (DoLet false false (PVar "groups") (EApp (EApp (EVar "groupEntries") (EVar "prefix")) (EVar "kvs"))) (DoExpr (EMatch (EBinOp ">" (EVar "count") (EVar "tableEntryLimit")) (arm (PCon "True") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "too many [[")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "]] entries: index "))) (EApp (EVar "display") (EBinOp "-" (EVar "count") (ELit (LInt 1))))) (ELit (LString " is past the limit of "))) (EApp (EVar "display") (EVar "tableEntryLimit"))) (ELit (LString ""))))) (arm (PCon "False") () (EApp (EVar "Ok") (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EApp (EVar "Toml") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "get") (EVar "i")) (EVar "groups")))))) (ERangeList (ELit (LInt 0)) (EVar "count") false))))))))
 (DTypeSig false "eqTomlValue" (TyFun (TyCon "TomlValue") (TyFun (TyCon "TomlValue") (TyCon "Bool"))))
 (DFunDef false "eqTomlValue" ((PCon "TString" (PVar "a")) (PCon "TString" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "eqTomlValue" ((PCon "TArray" (PVar "a")) (PCon "TArray" (PVar "b"))) (EApp (EApp (EVar "eqStrLists") (EVar "a")) (EVar "b")))
@@ -1114,8 +1132,10 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "groupEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
 (DFunDef false "groupEntries" (PWild (PList)) (EVar "Tip"))
 (DFunDef false "groupEntries" ((PVar "prefix") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false (PVar "groups") (EApp (EApp (EVar "groupEntries") (EVar "prefix")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "entryKeyOf") (EVar "prefix")) (EVar "k")) (arm (PCon "None") () (EVar "groups")) (arm (PCon "Some" (PTuple (PVar "i") (PVar "key"))) () (EApp (EApp (EApp (EApp (EVar "insertWith") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "++" (EVar "_a") (EVar "_b")))) (EVar "i")) (EListLit (ETuple (EVar "key") (EVar "v")))) (EVar "groups")))))))
-(DTypeSig true "tableEntries" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "List") (TyCon "Toml")))))
-(DFunDef false "tableEntries" ((PVar "name") (PCon "Toml" (PVar "kvs"))) (EBlock (DoLet false false (PVar "prefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString "."))))) (DoLet false false (PVar "groups") (EApp (EApp (EVar "groupEntries") (EVar "prefix")) (EVar "kvs"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EApp (EVar "Toml") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "get") (EVar "i")) (EVar "groups")))))) (ERangeList (ELit (LInt 0)) (EApp (EApp (EApp (EVar "tableCountGo") (EVar "prefix")) (EVar "kvs")) (ELit (LInt 0))) false)))))
+(DTypeSig false "tableEntryLimit" (TyCon "Int"))
+(DFunDef false "tableEntryLimit" () (ELit (LInt 100000)))
+(DTypeSig true "tableEntries" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Toml"))))))
+(DFunDef false "tableEntries" ((PVar "name") (PCon "Toml" (PVar "kvs"))) (EBlock (DoLet false false (PVar "prefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString "."))))) (DoLet false false (PVar "count") (EApp (EApp (EApp (EVar "tableCountGo") (EVar "prefix")) (EVar "kvs")) (ELit (LInt 0)))) (DoLet false false (PVar "groups") (EApp (EApp (EVar "groupEntries") (EVar "prefix")) (EVar "kvs"))) (DoExpr (EMatch (EBinOp ">" (EDictApp "count") (EVar "tableEntryLimit")) (arm (PCon "True") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "too many [[")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "]] entries: index "))) (EApp (EMethodRef "display") (EBinOp "-" (EDictApp "count") (ELit (LInt 1))))) (ELit (LString " is past the limit of "))) (EApp (EMethodRef "display") (EVar "tableEntryLimit"))) (ELit (LString ""))))) (arm (PCon "False") () (EApp (EVar "Ok") (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EApp (EVar "Toml") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "get") (EVar "i")) (EVar "groups")))))) (ERangeList (ELit (LInt 0)) (EDictApp "count") false))))))))
 (DTypeSig false "eqTomlValue" (TyFun (TyCon "TomlValue") (TyFun (TyCon "TomlValue") (TyCon "Bool"))))
 (DFunDef false "eqTomlValue" ((PCon "TString" (PVar "a")) (PCon "TString" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "eqTomlValue" ((PCon "TArray" (PVar "a")) (PCon "TArray" (PVar "b"))) (EApp (EApp (EVar "eqStrLists") (EVar "a")) (EVar "b")))
