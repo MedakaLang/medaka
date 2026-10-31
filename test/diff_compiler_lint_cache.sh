@@ -2,6 +2,11 @@
 # blocked-because: concurrent-spawn — scenario 6 needs four `medaka lint --cache` runs in flight at once, which `runCommand` (one command, run to completion) cannot express
 # `medaka lint --cache` differential gate (#395).
 #
+# The soundness scenarios for the declaration-index key (a signature edit in a
+# project or stdlib file re-lints its readers, a body edit does not, a rule that
+# declared no need keeps its stamp, fail-closed shards) are owned by the native
+# suite compiler/tools/lint_cache_test.mdk; this gate keeps the end-to-end runs.
+#
 # A cache without a gate is a silent-wrongness generator: every bug it can have
 # looks like "lint said nothing and exited 0", which in this repo is
 # indistinguishable from "lint passed". So this gate does not check that the

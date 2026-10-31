@@ -614,13 +614,37 @@ indexForRoster : List Rule ->
   List String ->
   <IO> Result StdlibIndexError StdlibIndex
 indexForRoster roster root keepAll only disable paths =
+  indexForRosterIn
+    lintStdlibDir
+    (stdlibShardDir ())
+    roster
+    root
+    keepAll
+    only
+    disable
+    paths
+
+-- `indexForRoster` with the stdlib read from `sdir` and its row shards kept in
+-- `shardDir` (empty: not cached), instead of from the environment.  A test
+-- gives each run a stdlib copy of its own this way.
+export
+indexForRosterIn : String ->
+  String ->
+  List Rule ->
+  String ->
+  Bool ->
+  List String ->
+  List String ->
+  List String ->
+  <IO> Result StdlibIndexError StdlibIndex
+indexForRosterIn sdir shardDir roster root keepAll only disable paths =
   let only2 = if keepAll then [] else only
   let disable2 = if keepAll then [] else disable
   if anyActive needsProjectIndex roster only2 disable2 then
-    buildProjectIndexResult root
+    buildProjectIndexResultIn sdir shardDir root
   else if anyActive needsStdlibIndex roster only2 disable2
     || anyActive needsWildIndex roster only2 disable2 && anyPathWild paths then
-    buildStdlibIndexResult
+    buildStdlibIndexResultIn sdir shardDir
   else
     Ok emptyStdlibIndex
 
@@ -666,14 +690,29 @@ ruleNeedsIndex only disable r =
 export
 buildStdlibIndexResult : <IO> Result StdlibIndexError StdlibIndex
 buildStdlibIndexResult =
+  buildStdlibIndexResultIn lintStdlibDir (stdlibShardDir ())
+
+export
+buildStdlibIndexResultIn : String ->
+  String ->
+  <IO> Result StdlibIndexError StdlibIndex
+buildStdlibIndexResultIn sdir shardDir =
   map
     ((digests, rows) => mkStdlibIndex (combineDigests digests) "" rows [])
-    stdlibRowsResult
+    (stdlibRowsResult sdir shardDir)
 
 -- The stdlib's rows plus the rows of every `.mdk` file under `root`.
 export
 buildProjectIndexResult : String -> <IO> Result StdlibIndexError StdlibIndex
 buildProjectIndexResult root =
+  buildProjectIndexResultIn lintStdlibDir (stdlibShardDir ()) root
+
+export
+buildProjectIndexResultIn : String ->
+  String ->
+  String ->
+  <IO> Result StdlibIndexError StdlibIndex
+buildProjectIndexResultIn sdir shardDir root =
   let (pdigests, prows) = projectRowsOf root
   map
     ((sdigests, srows) =>
@@ -682,7 +721,7 @@ buildProjectIndexResult root =
         (combineDigests pdigests)
         srows
         prows)
-    stdlibRowsResult
+    (stdlibRowsResult sdir shardDir)
 
 -- The shard stamp: the build fingerprint, or the binary's own hash for a
 -- binary that carries none (a shipped or `medaka build` binary).  Empty when
@@ -692,15 +731,15 @@ indexStamp _ =
   let fp = buildFingerprint ()
   if fp == "" then ruleSetStamp () else fp
 
-stdlibRowsResult : <IO> Result StdlibIndexError (List String, List IndexRow)
-stdlibRowsResult =
-  let sdir = lintStdlibDir
-  match stdlibMemberPaths sdir
-    None => Ok ([], [])
-    Some rels =>
-      let stamp = indexStamp ()
-      let dir = if stamp == "" then "" else stdlibShardDir ()
-      stdlibRowsGo dir stamp sdir rels
+stdlibRowsResult : String ->
+  String ->
+  <IO> Result StdlibIndexError (List String, List IndexRow)
+stdlibRowsResult sdir shardDir = match stdlibMemberPaths sdir
+  None => Ok ([], [])
+  Some rels =>
+    let stamp = indexStamp ()
+    let dir = if stamp == "" then "" else shardDir
+    stdlibRowsGo dir stamp sdir rels
 
 stdlibRowsGo : String ->
   String ->
@@ -799,8 +838,15 @@ splitByIndex roster found =
 -- The key an index-reading finding group is stored under for `roster`.
 export
 indexKeyFor : List Rule -> StdlibIndex -> String
-indexKeyFor roster idx =
-  if rosterNeeds roster then stdlibIndexFingerprint idx else ""
+indexKeyFor = indexKeyWith stdlibIndexFingerprint
+
+-- `indexKeyFor` with the index fingerprint taken from `fingerprintOf`.  The
+-- soundness tests pass a constant to show a stale hit without the fingerprint;
+-- every production call goes through `indexKeyFor`.
+export
+indexKeyWith : (StdlibIndex -> String) -> List Rule -> StdlibIndex -> String
+indexKeyWith fingerprintOf roster idx =
+  if rosterNeeds roster then fingerprintOf idx else ""
 
 export
 lintParseSource : String -> Result ParseError (List Decl, Positions)

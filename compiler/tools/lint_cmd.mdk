@@ -24,9 +24,7 @@ import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
 import string as Str
 import json.{Json(..), jArray, jObject, stringify}
 import frontend.ast.{Decl, Loc(..)}
-import frontend.parser.{
-  Positions,
-}
+import frontend.parser.{ParseError, Positions}
 import driver.loader.{
   findProjectRoot,
   findProjectRootOrSelf,
@@ -884,15 +882,15 @@ lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCt
       let _ = ePutStrLn msg
       (True, [])
     Ok src =>
-      let hash = match cacheCtx
-        Some _ => contentHashOf src
-        None => ""
-      let loaded = match cacheCtx
-        Some (cacheDir, stamp) =>
-          loadEntry cacheDir stamp (indexKeyFor allRules idx) target hash
-        None => ShardMiss
-      match loaded
-        ShardHit hit =>
+      let wantSummaries =
+        multiFile && projectRuleSelected onlyNames disableNames
+      let found =
+        entryOfFile idx cacheCtx disableNames onlyNames wantSummaries target src
+      match found
+        Err e =>
+          ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
+          (True, [])
+        Ok entry =>
           lintOneFileRender
             multiFile
             disableNames
@@ -901,33 +899,7 @@ lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCt
             baseCtx
             target
             src
-            hit
-        _ => match lintParseSource src
-          Err e =>
-            ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
-            (True, [])
-          Ok parsedSource =>
-            let entry =
-              lintEntryOf
-                idx
-                cacheCtx
-                loaded
-                disableNames
-                onlyNames
-                (multiFile && projectRuleSelected onlyNames disableNames)
-                target
-                src
-                hash
-                parsedSource
-            lintOneFileRender
-              multiFile
-              disableNames
-              onlyNames
-              denyNames
-              baseCtx
-              target
-              src
-              entry
+            entry
 
 lintOneFileRender : Bool ->
   List String ->
@@ -962,24 +934,69 @@ lintOneFileRender multiFile disableNames onlyNames denyNames baseCtx target src 
   let _ = if hasOutput then putStrLn output
   (anyList isFindingError findings, [entry])
 
--- One file's lint result from a real parse, after the cache could not answer in
--- full.  Uncached, the excluded rules are skipped outright (their findings
--- would be filtered anyway); under --cache the shard must hold the full roster,
--- so every rule runs, except that a stale shard (`loaded` is `ShardStale`)
--- already holds the index-free findings, summaries and directives, and only
--- the index-reading rules run again.
-lintEntryOf : StdlibIndex ->
+-- One file's entry: from the cache when `cacheCtx` is set and a shard answers,
+-- else from a parse.  An unparsable file has no entry.
+entryOfFile : StdlibIndex ->
   Option (String, String) ->
-  ShardLoad ->
   List String ->
   List String ->
   Bool ->
   String ->
   String ->
+  <IO> Result ParseError LintEntry
+entryOfFile idx None disableNames onlyNames wantSummaries target src =
+  map
+    ((decls, pos) =>
+      uncachedEntryOf
+        idx
+        disableNames
+        onlyNames
+        wantSummaries
+        target
+        src
+        decls
+        pos)
+    (lintParseSource src)
+entryOfFile idx (Some (cacheDir, stamp)) _ _ _ target src =
+  cachedEntryOf allRules indexKeyFor idx cacheDir stamp target src
+
+-- The entry a `--cache` run uses for one file: the shard if it answers in full,
+-- the shard's free findings and summaries with the index-reading rules re-run
+-- if only the index key moved, a fresh lint of the whole `roster` otherwise.
+-- `keyOf` names the index the index-reading findings were made against; the
+-- soundness tests substitute a key without the fingerprint (`indexKeyWith`).
+export
+cachedEntryOf : List Rule ->
+  (List Rule -> StdlibIndex -> String) ->
+  StdlibIndex ->
   String ->
-  (List Decl, Positions) ->
+  String ->
+  String ->
+  String ->
+  <IO> Result ParseError LintEntry
+cachedEntryOf roster keyOf idx cacheDir stamp target src =
+  let hash = contentHashOf src
+  let key = keyOf roster idx
+  match loadEntry cacheDir stamp key target hash
+    ShardHit hit => Ok hit
+    loaded =>
+      map
+        ((decls, pos) =>
+          cachedEntryFrom roster key idx loaded target src hash decls pos)
+        (lintParseSource src)
+
+-- Uncached, the excluded rules are skipped outright (their findings would be
+-- filtered anyway).
+uncachedEntryOf : StdlibIndex ->
+  List String ->
+  List String ->
+  Bool ->
+  String ->
+  String ->
+  List Decl ->
+  Positions ->
   <IO> LintEntry
-lintEntryOf idx None _ disableNames onlyNames wantSummaries target src _ (decls, pos) =
+uncachedEntryOf idx disableNames onlyNames wantSummaries target src decls pos =
   let facts = mkFileFactsAt target src decls pos
   let rules = selectRules onlyNames disableNames
   LintEntry {
@@ -997,23 +1014,37 @@ lintEntryOf idx None _ disableNames onlyNames wantSummaries target src _ (decls,
     directives = factDirectives facts,
     dirty = True,
   }
-lintEntryOf idx (Some _) (ShardStale stale) _ _ _ target src _ (decls, pos) =
+
+-- Under --cache the shard must hold the full roster, so every rule runs, except
+-- that a stale shard (`ShardStale`) already holds the index-free findings,
+-- summaries and directives, and only the index-reading rules run again.
+cachedEntryFrom : List Rule ->
+  String ->
+  StdlibIndex ->
+  ShardLoad ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  Positions ->
+  <IO> LintEntry
+cachedEntryFrom roster _ idx (ShardStale stale) target src _ decls pos =
   let facts = mkFileFactsAt target src decls pos
   { stale |
     indexFindings =
-      lintProgramRanked idx (rankedIndexRules allRules) target facts pos decls,
+      lintProgramRanked idx (rankedIndexRules roster) target facts pos decls,
     dirty = True,
   }
-lintEntryOf idx (Some _) _ _ _ _ target src hash (decls, pos) =
+cachedEntryFrom roster key idx _ target src hash decls pos =
   let facts = mkFileFactsAt target src decls pos
-  let all = lintProgramRanked idx (ranked 0 allRules) target facts pos decls
-  let (free, indexed) = splitByIndex allRules all
+  let all = lintProgramRanked idx (ranked 0 roster) target facts pos decls
+  let (free, indexed) = splitByIndex roster all
   LintEntry {
     path = target,
     contentHash = hash,
     freeFindings = free,
     indexFindings = indexed,
-    indexKey = indexKeyFor allRules idx,
+    indexKey = key,
     summaries = fileSummaries [] [] target facts pos decls,
     directives = factDirectives facts,
     dirty = True,
