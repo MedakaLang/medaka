@@ -1,0 +1,3 @@
+main =
+  writeFile "demo.txt" "hello\n"
+  println "written"

@@ -196,7 +196,7 @@ corpusCheck = match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
         ("no published Link", expectEqual [] (cellsWhere isLink rows)),
         ("no open effect summary", expectEqual [] (cellsWhere isSummary rows)),
         ("every graph published its modules", expectEqual [] unloaded),
-        ("stdlib modules driven", expectEqual 52 (length stdlibEs)),
+        ("stdlib modules driven", expectEqual 57 (length stdlibEs)),
       ]
     (Err e, _) => fail e
     (_, Err e) => fail e

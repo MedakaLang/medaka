@@ -1,0 +1,1 @@
+main = println (debug (concatMap (x => [x, x]) [1, 2]))

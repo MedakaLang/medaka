@@ -699,6 +699,8 @@ scanLiteral ctx src p quote depth frame flavor part =
         emitOne ctx token next depth (HoleFrame flavor start 1)
 
 singleDedent : String -> String
+-- Dedents one lexed segment; unrelated to string.dedent, which works on whole text.
+-- lint-disable-next-line rule-stdlib-reimpl
 singleDedent s = match dedentSegments [s]
   [v] => v
   _ => s

@@ -1,0 +1,22 @@
+import json.{parse, parseLines}
+import string.{repeat, toInt}
+
+verdict r = match r
+  Ok _ => "ok"
+  Err _ => "err"
+
+main =
+  let n = optionOr 1000 (toInt (optionOr "1000" (getEnv "N")))
+  match optionOr "string" (getEnv "KIND")
+    "string" =>
+      println ("string: " ++ verdict (parse ("\"" ++ repeat n "a" ++ "\"")))
+    "lines" =>
+      println ("lines: " ++ intToString (length (parseLines (repeat n "1\n"))))
+    "longline" =>
+      println
+        ("line: " ++ debug (map verdict (parseLines (repeat n " " ++ "1"))))
+    "objects" =>
+      println
+        ("objects: "
+          ++ verdict (parse ("[" ++ repeat n "{\"a\": 1}," ++ "{\"a\": 1}]")))
+    _ => println "unknown KIND"

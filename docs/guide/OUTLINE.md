@@ -95,6 +95,19 @@ Deliberately AFTER effects, so `do` is never mistaken for "how you do IO."
   how these map to the playground. Doctests get a real example.
 - Defer: `build`/backend/LLVM/WasmGC (appendix at most).
 
+## 11. Writing a script in Medaka — "One-off jobs"
+Applies the earlier chapters to the jobs a throwaway script does. Every program on
+the page is a real file under `test/guide_scripts/`, run by
+`test/guide_scripts_test.mdk`, which also requires the page to contain each one
+verbatim.
+- Introduce: running a script (`#!/usr/bin/env -S medaka run`, `medaka run -`,
+  `MEDAKA_SEED`); one worked example per task class (file edit, repo census,
+  run-and-compare, JSON report); the first-round-trip facts (plain block, `Result`
+  statements, effect rows, imports, floats, regex, `replace`, `lines`); what
+  `medaka run` cannot do (no tail calls, no `runCommand`); a Python/shell → Medaka
+  cheat sheet of the thirty most frequent idioms.
+- Defer: the exec policy for `run`, and the standard library reference (link).
+
 ---
 
 ## Cross-cutting notes

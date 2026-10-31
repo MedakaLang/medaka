@@ -1,0 +1,6 @@
+main =
+  resultOrPanic "write demo.txt" (writeFile "demo.txt" "hello\n")
+  match readFile "demo.txt"
+    Ok text => print text
+    Err e => println "cannot read: \{e}"
+  println (debug (readFile "missing.txt"))

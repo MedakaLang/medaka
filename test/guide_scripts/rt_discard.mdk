@@ -1,0 +1,3 @@
+main =
+  let _ = readFile "missing.txt"
+  println "the Err above was dropped without a word"

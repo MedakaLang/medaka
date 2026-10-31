@@ -1,0 +1,29 @@
+default
+total: 3
+  bonono split  
+"banana split"
+["a", "b", "c"]
+Ok "hello\n"
+[3, 2, 1]
+a
+b
+alpha beta
+beta gamma
+Ok (Some "gamma")
+["alpha beta", "beta gamma"]
+aBa
+[]
+[4, 16]
+["1", "22"]
+3.14
+["a", "bb", "ccc"]
+Ok 3
+main.mdk
+[("a", 2), ("b", 1)]
+Ok 1
+--- old
++++ new
+@@ -1,2 +1,2 @@
+ a
+-b
++B
