@@ -1,5 +1,5 @@
 # META
-source_lines=644
+source_lines=642
 stages=DESUGAR,MARK
 # SOURCE
 import types.symbol_origins.{SymbolOrigin(..), CoreSymbolOrigins(..)}
@@ -467,14 +467,12 @@ originsSexp origins = node "origins" [
 ]
 
 originAt : String -> OrdMap SymbolOrigin -> SymbolOrigin
-originAt name rows = match omLookup name rows
-  Some origin => origin
-  None => panic "symbol origin: missing serialized row"
+originAt name rows =
+  optionOrPanic "symbol origin: missing serialized row" (omLookup name rows)
 
 ownerAt : String -> OrdMap (OrdMap SymbolOrigin) -> OrdMap SymbolOrigin
-ownerAt owner rows = match omLookup owner rows
-  Some names => names
-  None => panic "symbol origin: missing serialized owner"
+ownerAt owner rows =
+  optionOrPanic "symbol origin: missing serialized owner" (omLookup owner rows)
 
 entryOutcomeSexp : EntryFact -> String
 entryOutcomeSexp outcome = node "entry" [
@@ -775,9 +773,9 @@ manifestStringSexp = option "none" (value => node "some" [escStr value])
 (DTypeSig false "originsSexp" (TyFun (TyCon "CoreSymbolOrigins") (TyCon "String")))
 (DFunDef false "originsSexp" ((PVar "origins")) (EApp (EApp (EVar "node") (ELit (LString "origins"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (ELam ((PVar "name")) (EApp (EApp (EVar "node") (ELit (LString "function"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "originSexp") (EApp (EApp (EVar "originAt") (EVar "name")) (EFieldAccess (EVar "origins") "functions"))))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "origins") "functions")))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (ELam ((PVar "owner")) (EApp (EApp (EVar "node") (ELit (LString "owner"))) (EListLit (EApp (EVar "escStr") (EVar "owner")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (ELam ((PVar "name")) (EApp (EApp (EVar "node") (ELit (LString "constructor"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "originSexp") (EApp (EApp (EVar "originAt") (EVar "name")) (EApp (EApp (EVar "ownerAt") (EVar "owner")) (EFieldAccess (EVar "origins") "constructors")))))))) (EApp (EVar "omKeys") (EApp (EApp (EVar "ownerAt") (EVar "owner")) (EFieldAccess (EVar "origins") "constructors"))))))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "origins") "constructors")))))))
 (DTypeSig false "originAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin")) (TyCon "SymbolOrigin"))))
-(DFunDef false "originAt" ((PVar "name") (PVar "rows")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "rows")) (arm (PCon "Some" (PVar "origin")) () (EVar "origin")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "symbol origin: missing serialized row"))))))
+(DFunDef false "originAt" ((PVar "name") (PVar "rows")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "symbol origin: missing serialized row"))) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "rows"))))
 (DTypeSig false "ownerAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin"))) (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin")))))
-(DFunDef false "ownerAt" ((PVar "owner") (PVar "rows")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "owner")) (EVar "rows")) (arm (PCon "Some" (PVar "names")) () (EVar "names")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "symbol origin: missing serialized owner"))))))
+(DFunDef false "ownerAt" ((PVar "owner") (PVar "rows")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "symbol origin: missing serialized owner"))) (EApp (EApp (EVar "omLookup") (EVar "owner")) (EVar "rows"))))
 (DTypeSig false "entryOutcomeSexp" (TyFun (TyCon "EntryFact") (TyCon "String")))
 (DFunDef false "entryOutcomeSexp" ((PVar "outcome")) (EApp (EApp (EVar "node") (ELit (LString "entry"))) (EListLit (EApp (EVar "boolStr") (EFieldAccess (EVar "outcome") "entryMainIsUnit")) (EApp (EVar "boolStr") (EFieldAccess (EVar "outcome") "entryMainIsFloat")))))
 (DTypeSig false "methodResultSexp" (TyFun (TyCon "MethodResultFact") (TyCon "String")))
@@ -946,9 +944,9 @@ manifestStringSexp = option "none" (value => node "some" [escStr value])
 (DTypeSig false "originsSexp" (TyFun (TyCon "CoreSymbolOrigins") (TyCon "String")))
 (DFunDef false "originsSexp" ((PVar "origins")) (EApp (EApp (EVar "node") (ELit (LString "origins"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (ELam ((PVar "name")) (EApp (EApp (EVar "node") (ELit (LString "function"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "originSexp") (EApp (EApp (EVar "originAt") (EVar "name")) (EFieldAccess (EVar "origins") "functions"))))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "origins") "functions")))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (ELam ((PVar "owner")) (EApp (EApp (EVar "node") (ELit (LString "owner"))) (EListLit (EApp (EVar "escStr") (EVar "owner")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (ELam ((PVar "name")) (EApp (EApp (EVar "node") (ELit (LString "constructor"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "originSexp") (EApp (EApp (EVar "originAt") (EVar "name")) (EApp (EApp (EVar "ownerAt") (EVar "owner")) (EFieldAccess (EVar "origins") "constructors")))))))) (EApp (EVar "omKeys") (EApp (EApp (EVar "ownerAt") (EVar "owner")) (EFieldAccess (EVar "origins") "constructors"))))))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "origins") "constructors")))))))
 (DTypeSig false "originAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin")) (TyCon "SymbolOrigin"))))
-(DFunDef false "originAt" ((PVar "name") (PVar "rows")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "rows")) (arm (PCon "Some" (PVar "origin")) () (EVar "origin")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "symbol origin: missing serialized row"))))))
+(DFunDef false "originAt" ((PVar "name") (PVar "rows")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "symbol origin: missing serialized row"))) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "rows"))))
 (DTypeSig false "ownerAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin"))) (TyApp (TyCon "OrdMap") (TyCon "SymbolOrigin")))))
-(DFunDef false "ownerAt" ((PVar "owner") (PVar "rows")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "owner")) (EVar "rows")) (arm (PCon "Some" (PVar "names")) () (EVar "names")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "symbol origin: missing serialized owner"))))))
+(DFunDef false "ownerAt" ((PVar "owner") (PVar "rows")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "symbol origin: missing serialized owner"))) (EApp (EApp (EVar "omLookup") (EVar "owner")) (EVar "rows"))))
 (DTypeSig false "entryOutcomeSexp" (TyFun (TyCon "EntryFact") (TyCon "String")))
 (DFunDef false "entryOutcomeSexp" ((PVar "outcome")) (EApp (EApp (EVar "node") (ELit (LString "entry"))) (EListLit (EApp (EVar "boolStr") (EFieldAccess (EVar "outcome") "entryMainIsUnit")) (EApp (EVar "boolStr") (EFieldAccess (EVar "outcome") "entryMainIsFloat")))))
 (DTypeSig false "methodResultSexp" (TyFun (TyCon "MethodResultFact") (TyCon "String")))

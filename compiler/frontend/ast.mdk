@@ -1907,9 +1907,7 @@ useMemberAlias (UseMember _ _ _ alias) = alias
 -- the name a UseGroup member binds HERE: its alias if it has one, else its own name.
 export
 useMemberLocal : UseMember -> String
-useMemberLocal (UseMember n _ _ alias) = match alias
-  Some a => a
-  None => n
+useMemberLocal (UseMember n _ _ alias) = optionOr n alias
 
 -- the local name a MODULE alias binds an origin export under: `A` + `f` → `A.f`.
 export

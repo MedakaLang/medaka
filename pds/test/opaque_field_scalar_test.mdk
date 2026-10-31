@@ -460,7 +460,7 @@ expectBreach : String -> Result String (List String) -> Expectation
 expectBreach wanted (Err e) =
   Fail "could not scan the mutant: \{e}" wanted "the scan could not run"
 expectBreach wanted (Ok hits) =
-  let got = if hits == [] then "no violations" else unlines (map indent hits)
+  let got = if isEmpty hits then "no violations" else unlines (map indent hits)
   if elem wanted hits then
     Pass wanted wanted
   else
@@ -499,7 +499,7 @@ test "mutation control: the real pds/lib/sign.mdk holds no injected import" =
         filter
           (i => contains i content)
           [selectiveInjection, wildcardInjection, aliasInjection]
-      if found == [] then
+      if isEmpty found then
         Pass "no injected import" "no injected import"
       else
         Fail
@@ -642,7 +642,7 @@ test "every opacity cell exists" =
     filter
       (rel => not (fileExists (underRoot rel)))
       (typeMismatchCells ++ abstractExportCells ++ passCells)
-  if missing == [] then
+  if isEmpty missing then
     Pass "9 cells present" "9 cells present"
   else
     Fail

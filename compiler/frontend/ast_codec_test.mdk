@@ -376,10 +376,7 @@ test "a seeded sample of the engine fixtures, elaborated, round-trips" = expectA
     labelFail
       "fixtures elaborated"
       (expectTrue
-        (length
-            (filter
-              (s => not (S.endsWith "(parsed)" s.smLabel))
-              (engineSamples ()))
+        (count (s => not (S.endsWith "(parsed)" s.smLabel)) (engineSamples ())
           >= sampleSize / 2)),
     expectAll (map roundTrips (engineSamples ())),
   ]

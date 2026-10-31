@@ -680,9 +680,7 @@ parseOpts ("--no-tuple" :: rest) (Opts s t b _) =
 parseOpts (_ :: rest) o = parseOpts rest o
 
 intOr : String -> Int -> Int
-intOr s d = match toInt s
-  Some n => n
-  None => d
+intOr s d = optionOr d (toInt s)
 
 export
 oracleMain : Unit -> <IO, Rand> Unit

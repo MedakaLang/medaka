@@ -161,7 +161,7 @@ correctLedger root =
     ++ rows
     ++ verdict
       "a correct ledger of both kinds"
-      (c.findings == [] && c.files == 2 && c.rows == 2)
+      (isEmpty c.findings && c.files == 2 && c.rows == 2)
       c
 
 orphanRow : String -> <Exec, FileRead, FileWrite> List String
@@ -280,7 +280,7 @@ secondaryImpl secondary root =
   let c = checkCorpus root
   written
     ++ rows
-    ++ verdict "impl-secondary \{debug secondary}" (c.findings /= []) c
+    ++ verdict "impl-secondary \{debug secondary}" (not (isEmpty c.findings)) c
 
 -- # The real tree
 

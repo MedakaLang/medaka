@@ -602,9 +602,9 @@ failuresFor target route samples =
   let failed = failuresOf target route samples []
   let counted =
     map
-      (kind => "\{kind}:\{intToString (length (filter (== kind) failed))}")
+      (kind => "\{kind}:\{intToString (count (== kind) failed)}")
       (filter (kind => elem kind failed) failureKinds)
-  if counted == [] then "none" else join "," counted
+  if isEmpty counted then "none" else join "," counted
 
 {- | The nearest-rank percentile: the smallest sample at or above `p` percent
    of the sorted run. `p = 100` is the maximum. -}

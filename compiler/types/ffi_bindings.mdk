@@ -229,14 +229,10 @@ ffiNoHostFix p =
 
 -- A bound's spelling of a whole host, `"c*"`, written in a declaration row.
 dropTrailingStar : String -> String
-dropTrailingStar s = match stripSuffix "*" s
-  Some rest => rest
-  None => s
+dropTrailingStar s = optionOr s (stripSuffix "*" s)
 
 dropTrailingSlash : String -> String
-dropTrailingSlash s = match stripSuffix "/" s
-  Some rest => rest
-  None => s
+dropTrailingSlash s = optionOr s (stripSuffix "/" s)
 
 ffiUnboundHostMsg : String -> String -> String
 ffiUnboundHostMsg n h =

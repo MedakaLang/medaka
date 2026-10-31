@@ -113,7 +113,7 @@ scan dl n fs pend (p :: rest) =
   let opened = match pend
     None => n
     Some (_, m) => m
-  let last = rest == []
+  let last = isEmpty rest
   let shown = if last then stripCR raw else raw
   match field shown
     Some v => scan dl n (v :: fs) None rest

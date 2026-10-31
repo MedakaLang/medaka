@@ -1,5 +1,5 @@
 # META
-source_lines=288
+source_lines=286
 stages=DESUGAR,MARK
 # SOURCE
 {- | Base64 encoding and decoding, per RFC 4648.
@@ -39,9 +39,7 @@ byteAt i bs = match B.get i bs
   None => panic "base64: index out of bounds"
 
 charAt : Int -> Array Char -> Char
-charAt i arr = match get i arr
-  Some c => c
-  None => panic "base64: index out of bounds"
+charAt i arr = optionOrPanic "base64: index out of bounds" (get i arr)
 
 -- ── Alphabet ──────────────────────────────────────────────────────────────
 
@@ -300,7 +298,7 @@ prop "base64 encoded length is a multiple of 4" (xs : List Int) =
 (DTypeSig false "byteAt" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Int"))))
 (DFunDef false "byteAt" ((PVar "i") (PVar "bs")) (EMatch (EApp (EApp (EVar "B.get") (EVar "i")) (EVar "bs")) (arm (PCon "Some" (PVar "b")) () (EApp (EVar "U8.toInt") (EVar "b"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "base64: index out of bounds"))))))
 (DTypeSig false "charAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Char"))))
-(DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "base64: index out of bounds"))))))
+(DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "base64: index out of bounds"))) (EApp (EApp (EVar "get") (EVar "i")) (EVar "arr"))))
 (DTypeSig false "b64Char" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Char"))))
 (DFunDef false "b64Char" ((PVar "n") (PVar "urlSafe")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 26))) (EApp (EVar "charOrFallback") (EApp (EVar "charFromCode") (EBinOp "+" (EVar "n") (ELit (LInt 65))))) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 52))) (EApp (EVar "charOrFallback") (EApp (EVar "charFromCode") (EBinOp "-" (EBinOp "+" (EVar "n") (ELit (LInt 97))) (ELit (LInt 26))))) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 62))) (EApp (EVar "charOrFallback") (EApp (EVar "charFromCode") (EBinOp "-" (EBinOp "+" (EVar "n") (ELit (LInt 48))) (ELit (LInt 52))))) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 62))) (EIf (EVar "urlSafe") (ELit (LChar "-")) (ELit (LChar "+"))) (EIf (EVar "otherwise") (EIf (EVar "urlSafe") (ELit (LChar "_")) (ELit (LChar "/"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "charOrFallback" (TyFun (TyApp (TyCon "Option") (TyCon "Char")) (TyCon "Char")))
@@ -346,7 +344,7 @@ prop "base64 encoded length is a multiple of 4" (xs : List Int) =
 (DTypeSig false "byteAt" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Int"))))
 (DFunDef false "byteAt" ((PVar "i") (PVar "bs")) (EMatch (EApp (EApp (EVar "B.get") (EVar "i")) (EVar "bs")) (arm (PCon "Some" (PVar "b")) () (EApp (EVar "U8.toInt") (EVar "b"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "base64: index out of bounds"))))))
 (DTypeSig false "charAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Char"))))
-(DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "base64: index out of bounds"))))))
+(DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "base64: index out of bounds"))) (EApp (EApp (EVar "get") (EVar "i")) (EVar "arr"))))
 (DTypeSig false "b64Char" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Char"))))
 (DFunDef false "b64Char" ((PVar "n") (PVar "urlSafe")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 26))) (EApp (EVar "charOrFallback") (EApp (EVar "charFromCode") (EBinOp "+" (EVar "n") (ELit (LInt 65))))) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 52))) (EApp (EVar "charOrFallback") (EApp (EVar "charFromCode") (EBinOp "-" (EBinOp "+" (EVar "n") (ELit (LInt 97))) (ELit (LInt 26))))) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 62))) (EApp (EVar "charOrFallback") (EApp (EVar "charFromCode") (EBinOp "-" (EBinOp "+" (EVar "n") (ELit (LInt 48))) (ELit (LInt 52))))) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 62))) (EIf (EVar "urlSafe") (ELit (LChar "-")) (ELit (LChar "+"))) (EIf (EVar "otherwise") (EIf (EVar "urlSafe") (ELit (LChar "_")) (ELit (LChar "/"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "charOrFallback" (TyFun (TyApp (TyCon "Option") (TyCon "Char")) (TyCon "Char")))

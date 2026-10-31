@@ -1102,8 +1102,8 @@ identIn : Ns -> String -> String -> Ident
 -- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
 -- lint-disable-next-line rule-duplicate-body
 identIn ns mid name =
-  optionOr
-    (identBuiltinFixture ns "__fixture_fallback__")
+  optionOrElse
+    (_ => identBuiltinFixture ns "__fixture_fallback__")
     (mkIdent ns (OriginModule mid) name)
 
 identTypeFooM : Ident

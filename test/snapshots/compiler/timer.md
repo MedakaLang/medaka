@@ -1,5 +1,5 @@
 # META
-source_lines=245
+source_lines=241
 stages=DESUGAR,MARK
 # SOURCE
 -- Per-stage wall-clock timing helpers for the self-hosted pipeline.
@@ -91,9 +91,7 @@ putTimerLines (l :: ls) =
 -- True when MEDAKA_PERF is set to any value in the environment.
 export
 perfEnabled : Unit -> <IO> Bool
-perfEnabled () = match getEnv "MEDAKA_PERF"
-  Some _ => True
-  None => False
+perfEnabled () = isSome (getEnv "MEDAKA_PERF")
 
 -- True when MEDAKA_STATS is set to any value in the environment.
 --
@@ -106,9 +104,7 @@ perfEnabled () = match getEnv "MEDAKA_PERF"
 -- empty-string exception, because this only gates PRINTING, never work.
 export
 statsEnabled : Unit -> <IO> Bool
-statsEnabled () = match getEnv "MEDAKA_STATS"
-  Some _ => True
-  None => False
+statsEnabled () = isSome (getEnv "MEDAKA_STATS")
 
 -- Emit one named table cardinality to stderr. No-op when on = False.
 -- Format: [stats] <label>\t<count>
@@ -265,9 +261,9 @@ emitPhaseAO True label elapsed allocDelta ops opDelta =
 (DFunDef false "putTimerLines" ((PList)) (ELit LUnit))
 (DFunDef false "putTimerLines" ((PCons (PVar "l") (PVar "ls"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "l"))) (DoExpr (EApp (EVar "putTimerLines") (EVar "ls")))))
 (DTypeSig true "perfEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
-(DFunDef false "perfEnabled" ((PLit LUnit)) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_PERF"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "perfEnabled" ((PLit LUnit)) (EApp (EVar "isSome") (EApp (EVar "getEnv") (ELit (LString "MEDAKA_PERF")))))
 (DTypeSig true "statsEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
-(DFunDef false "statsEnabled" ((PLit LUnit)) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_STATS"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "statsEnabled" ((PLit LUnit)) (EApp (EVar "isSome") (EApp (EVar "getEnv") (ELit (LString "MEDAKA_STATS")))))
 (DTypeSig true "emitStat" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "emitStat" ((PCon "False") PWild PWild) (ELit LUnit))
 (DFunDef false "emitStat" ((PCon "True") (PVar "label") (PVar "count")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[stats] ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "count")))) (ELit (LString "")))))
@@ -322,9 +318,9 @@ emitPhaseAO True label elapsed allocDelta ops opDelta =
 (DFunDef false "putTimerLines" ((PList)) (ELit LUnit))
 (DFunDef false "putTimerLines" ((PCons (PVar "l") (PVar "ls"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "l"))) (DoExpr (EApp (EVar "putTimerLines") (EVar "ls")))))
 (DTypeSig true "perfEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
-(DFunDef false "perfEnabled" ((PLit LUnit)) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_PERF"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "perfEnabled" ((PLit LUnit)) (EApp (EVar "isSome") (EApp (EVar "getEnv") (ELit (LString "MEDAKA_PERF")))))
 (DTypeSig true "statsEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
-(DFunDef false "statsEnabled" ((PLit LUnit)) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_STATS"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "statsEnabled" ((PLit LUnit)) (EApp (EVar "isSome") (EApp (EVar "getEnv") (ELit (LString "MEDAKA_STATS")))))
 (DTypeSig true "emitStat" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "emitStat" ((PCon "False") PWild PWild) (ELit LUnit))
 (DFunDef false "emitStat" ((PCon "True") (PVar "label") (PVar "count")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[stats] ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EDictApp "count")))) (ELit (LString "")))))

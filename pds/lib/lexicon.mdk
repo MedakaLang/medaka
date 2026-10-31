@@ -734,9 +734,7 @@ datetimeValid text =
     && utcYearInRange text
 
 digitsAt : Int -> Int -> String -> Int
-digitsAt from to text = match toInt (stringSlice from to text)
-  Some n => n
-  None => 0
+digitsAt from to text = optionOr 0 (toInt (stringSlice from to text))
 
 -- Only an offset can move the instant into another year: a positive one
 -- from the first minutes of January 1st, a negative one from the last of
@@ -864,7 +862,8 @@ startsExtension (payload :: _) = isExtensionPayload payload
 startsExtension [] = False
 
 privateUseTail : List String -> Bool
-privateUseTail subtags = subtags /= [] && all (subtagOf 1 8 isAlnumCode) subtags
+privateUseTail subtags =
+  not (isEmpty subtags) && all (subtagOf 1 8 isAlnumCode) subtags
 
 isRegion : String -> Bool
 isRegion subtag =

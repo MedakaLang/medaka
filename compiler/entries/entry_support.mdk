@@ -336,7 +336,7 @@ driveModulesGo runEmit runtimeP coreP entry roots =
             mods
             (desugaredPrelude rsrc)
             (desugaredPrelude csrc)
-            (map desugarPair (map dropPathTriple mods))
+            (map (dropPathTriple >> desugarPair) mods)
 
 -- A `--json` refusal: the envelope goes to the file, nothing to stderr, under
 -- the code that tells `build` the child's verdict is a diagnostic.
@@ -535,9 +535,7 @@ emitTargetGate _ runtimeDecls (Some p) [] =
   checkedTarget := Some (checkedTargetOf p runtimeDecls)
 emitTargetGate modsWithPath _ (Some _) ds =
   let file = entryPathOf modsWithPath
-  let src = match readFile file
-    Ok text => text
-    Err _ => ""
+  let src = resultOr "" (readFile file)
   let _ = ePutStrLn (joinNl (map (ppTargetDiag file src) ds))
   stageExit emitDiagExitCode
 

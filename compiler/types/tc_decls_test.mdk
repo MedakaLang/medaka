@@ -85,8 +85,8 @@ envsOf mods =
   let g = probeGraphCtx ()
   let rows =
     map
-      (e => declEnvModule g (fst e) (fst (snd e)) (snd (snd e)))
-      (map (e => (fst e + 1, snd e)) (indexed stamped))
+      (e => declEnvModule g (fst e + 1) (fst (snd e)) (snd (snd e)))
+      (indexed stamped)
   buildDeclEnvs g emptyDeclEnvAcc (rowOf 0 "" "") rows
 
 typeNames : DeclEnvs -> List String

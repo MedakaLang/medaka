@@ -548,9 +548,7 @@ renderHead name args =
   if all (== "_") args then "" else joinWith " " (name :: args)
 
 headFor : String -> List (String, String) -> String
-headFor name heads = match lookupAssoc name heads
-  Some h => h
-  None => ""
+headFor name heads = optionOr "" (lookupAssoc name heads)
 
 -- An abstract export (`export data`, not `public export data`) publishes the
 -- type and keeps its constructors private, so the reference shows the head

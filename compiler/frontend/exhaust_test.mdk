@@ -19,7 +19,7 @@ import frontend.exhaust.{
 }
 import frontend.parser.{parse}
 import fs.{fixtureFiles}
-import list.{sort, somes}
+import list.{sort}
 import path.{dirname, stem}
 import string.{endsWith, lines, trim, unlines}
 import support.util.{joinWith}
@@ -55,7 +55,7 @@ check = match fixtureFiles "test/exhaust_fixtures"
     let srcs = sort (filter (endsWith ".mdk") files)
     expectAll [
       expectAtLeast 6 (length srcs),
-      expectNoFindings "exhaust fixtures" (Ok (somes (map failureOf srcs))),
+      expectNoFindings "exhaust fixtures" (Ok (filterMap failureOf srcs)),
     ]
 
 test "exhaust: guard warnings match each fixture's .expected" = check

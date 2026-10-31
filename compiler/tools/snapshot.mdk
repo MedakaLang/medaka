@@ -1053,7 +1053,7 @@ runChunk root mode outDir sel pending =
       -- calls `exit 0` kills the worker with a SUCCESS status, so `code == 0` would report
       -- a clean run while silently dropping every fixture after it.  "Every pending fixture
       -- reached its END" is the only claim worth trusting.
-      if missing == [] then
+      if isEmpty missing then
         banked
       else match lastBegun out
         -- the child died: the last BEGIN with no END names the killer.
@@ -1307,9 +1307,8 @@ parseSnapshot text =
 metaSourceLines : List String -> Int
 metaSourceLines [] = 0
 metaSourceLines (l :: rest) =
-  if startsWith "source_lines=" l then match toInt (drop 13 l)
-    Some n => n
-    None => 0
+  if startsWith "source_lines=" l then
+    optionOr 0 (toInt (drop 13 l))
   else
     metaSourceLines rest
 
@@ -1486,7 +1485,7 @@ reportResults results =
       (filterList (r => startsWith "BLESS" (verdictOf r)) results)
   let _ = mapUnit printResult bad
   let _ = putStrLn (summaryLine results)
-  bad == []
+  isEmpty bad
 
 verdictOf : SnapResult -> String
 verdictOf (_, v, _) = v

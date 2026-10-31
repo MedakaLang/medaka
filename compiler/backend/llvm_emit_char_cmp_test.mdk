@@ -34,14 +34,10 @@ cmpRow a b =
   [charLt a b, charLe a b, charGt a b, charGe a b, charEq a b, charNe a b]
 
 maxChar : Char
-maxChar = match charFromCode 1114111
-  Some c => c
-  None => panic "no char at U+10FFFF"
+maxChar = optionOrPanic "no char at U+10FFFF" (charFromCode 1114111)
 
 minChar : Char
-minChar = match charFromCode 0
-  Some c => c
-  None => panic "no char at U+0000"
+minChar = optionOrPanic "no char at U+0000" (charFromCode 0)
 
 test "ASCII order: a < b" =
   expectEqual [True, True, False, False, False, True] (cmpRow 'a' 'b')

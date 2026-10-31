@@ -2363,7 +2363,7 @@ listInRange xs = length xs <= 10 && all inIntRange xs
 -- last clause is why 50 draws are taken rather than one.
 prop "Arbitrary (List a) delegates, bounds length, and is not degenerate" (n : Int) =
   let draws : List (List Int) = drawN 50
-  all listInRange draws && any (xs => length xs > 0) draws
+  all listInRange draws && any (xs => not (isEmpty xs)) draws
 
 -- LAW: `Arbitrary (Option a)` must produce BOTH constructors — a generator
 -- that only ever yielded `None` would satisfy every payload law vacuously —

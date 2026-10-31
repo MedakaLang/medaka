@@ -148,7 +148,7 @@ hasCode code codes = any (== code) codes
 -- How many elements of `xs` satisfy `keep`: the count a census asserts on.
 export
 countWhere : (a -> Bool) -> List a -> Int
-countWhere keep xs = length (filter keep xs)
+countWhere keep xs = count keep xs
 
 -- A permutation of a declaration list: identity, reversal, rotation left by
 -- `k` (any integer, taken modulo the length), evens-then-odds by position,

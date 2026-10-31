@@ -184,7 +184,7 @@ test "drives continuing from the shipped trees agree with in-process ones" =
             (expectTrue (all rowAgrees coreRows)),
           labelFail
             "the user module has local abstractions"
-            (expectTrue (length userLocals > 0)),
+            (expectTrue (not (isEmpty userLocals))),
           labelFail
             "user local abstractions count from 0, whatever the prelude's counter"
             (expectEqual 0 (fold (acc n => min acc n) 1000000 userLocals)),

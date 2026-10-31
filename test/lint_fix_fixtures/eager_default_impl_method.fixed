@@ -1,0 +1,8 @@
+-- Fixture for rule-eager-default autofix.
+-- NEGATIVE: the rewrite would write a call to the very method it sits in, so the
+-- fix is withheld and the file stays byte-identical.
+
+data Box a = Box (Option a)
+
+impl Fallback Box where
+  optionOrElse k (Box o) = optionOr (k ()) o

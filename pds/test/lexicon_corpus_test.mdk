@@ -12,7 +12,7 @@
 
 import io.{readLines}
 import json.{Json(..), get, parse}
-import list.{filter, somes}
+import list.{filter}
 import string.{contains, split}
 import test.{Expectation, expectEach, expectEqual, expectSatisfies}
 import lib.lexicon.{LexVerdict(..), validateRecord}
@@ -46,9 +46,10 @@ rowOf value = Row {
   id = field "id" value,
   collection = field "collection" value,
   rkey = field "rkey" value,
-  record = match get "record" value
-    Some record => record
-    None => panic "lexicon_corpus_test: a row without a record",
+  record =
+    optionOrPanic
+      "lexicon_corpus_test: a row without a record"
+      (get "record" value),
   verdict = field "verdict" value,
   message = field "message" value,
 }
@@ -67,7 +68,7 @@ readableRow line = match parse line
   Err _ => None
 
 corpusRows : <IO> List Row
-corpusRows = somes (map readableRow corpusLines)
+corpusRows = filterMap readableRow corpusLines
 
 verdictOf : Row -> LexVerdict
 verdictOf row = validateRecord knownLexicons row.collection row.rkey row.record
@@ -115,7 +116,7 @@ test "every readable row gets the reference's answer" =
 test "the only row the JSON parser cannot read is the lone surrogate" =
   expectEqual
     ["grapheme-edge-lone-surrogate-escape"]
-    (somes (map unreadableId corpusLines))
+    (filterMap unreadableId corpusLines)
 
 test "11 rows are left undecided by the grapheme bound" =
   expectEqual 11 (length undecidedIds)

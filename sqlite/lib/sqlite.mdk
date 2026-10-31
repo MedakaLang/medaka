@@ -339,9 +339,7 @@ lowerCharsGo arr i n acc =
     reverse acc
   else
     let c = arr[i]
-    let lc = match charFromCode (lowerCode (charCode c))
-      Some ch => ch
-      None => c
+    let lc = optionOr c (charFromCode (lowerCode (charCode c)))
     lowerCharsGo arr (i + 1) n (lc :: acc)
 
 ciScan : Array Char -> Array Char -> Option Int

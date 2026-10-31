@@ -810,9 +810,7 @@ validIpv4 value start end parts =
   if parts >= 4 || start >= end then
     False
   else
-    let dot = match findByte value start end 46
-      None => end
-      Some pos => pos
+    let dot = optionOr end (findByte value start end 46)
     let size = dot - start
     let validPart =
       size >= 1
@@ -839,9 +837,7 @@ validIpv6Go value pos end groups compressed =
   if pos >= end then
     if compressed then groups < 8 else groups == 8
   else
-    let colon = match findByte value pos end 58
-      None => end
-      Some at => at
+    let colon = optionOr end (findByte value pos end 58)
     if colon == pos then
       False
     else
@@ -1043,9 +1039,7 @@ parseChunkExtensionsGo input pos end =
 
 parseChunkSize : Bytes -> Int -> Int -> Result FrameError Int
 parseChunkSize input start end =
-  let semi = match elemIndexWithin start end 59 input
-    None => end
-    Some pos => pos
+  let semi = optionOr end (elemIndexWithin start end 59 input)
   if semi == start then
     malformed "http: empty chunk size"
   else do
@@ -1769,9 +1763,7 @@ responseParseHexSizeGo input pos end acc =
 
 responseParseChunkSize : Bytes -> Int -> Int -> Result FrameError Int
 responseParseChunkSize input start end =
-  let semi = match findByte input start end 59
-    None => end
-    Some pos => pos
+  let semi = optionOr end (findByte input start end 59)
   if semi == start then
     responseMalformed "http: empty chunk size"
   else do
@@ -2293,12 +2285,8 @@ parseQueryFields input start acc =
   if start >= end then
     Ok (reverse acc)
   else
-    let amp = match findByte input start end 38
-      None => end
-      Some pos => pos
-    let equals = match findByte input start amp 61
-      None => amp
-      Some pos => pos
+    let amp = optionOr end (findByte input start end 38)
+    let equals = optionOr amp (findByte input start amp 61)
     if equals == start then
       Err "http: empty query parameter name"
     else do

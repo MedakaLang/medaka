@@ -1,5 +1,5 @@
 # META
-source_lines=3018
+source_lines=3013
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_unify: fresh variables and levels (including level lowering, `lowerToCurrent`,
@@ -777,12 +777,7 @@ indexAtomsCovered mctx (x :: rest) bound = match findAtom (atomKey x) bound
 -- reports their mismatch as an authority index, so it is not a second report
 -- here.
 labelsMissing : List Atom -> List Atom -> List Atom
-labelsMissing l1 l2 =
-  filterList
-    (x => match findAtom (atomKey x) l2
-      Some _ => False
-      None => True)
-    l1
+labelsMissing l1 l2 = filterList (x => isNone (findAtom (atomKey x) l2)) l1
 
 -- Two index rows with nothing left to solve — both closed, or both already ending in the
 -- SAME effvar cell — are the same type iff neither side carries an atom the other lacks.
@@ -3141,7 +3136,7 @@ zipBindFrom dyn _ _ = ()
 (DFunDef false "indexAtomsCovered" ((PVar "mctx") (PList) PWild) (EListLit))
 (DFunDef false "indexAtomsCovered" ((PVar "mctx") (PCons (PVar "x") (PVar "rest")) (PVar "bound")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "bound")) (arm (PCon "Some" (PVar "y")) () (EBlock (DoExpr (EApp (EApp (EApp (EVar "wantIndexCovered") (EVar "mctx")) (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (DoExpr (EApp (EApp (EApp (EVar "indexAtomsCovered") (EVar "mctx")) (EVar "rest")) (EVar "bound"))))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EVar "indexAtomsCovered") (EVar "mctx")) (EVar "rest")) (EVar "bound"))))))
 (DTypeSig false "labelsMissing" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
-(DFunDef false "labelsMissing" ((PVar "l1") (PVar "l2")) (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "l2")) (arm (PCon "Some" PWild) () (EVar "False")) (arm (PCon "None") () (EVar "True"))))) (EVar "l1")))
+(DFunDef false "labelsMissing" ((PVar "l1") (PVar "l2")) (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EApp (EVar "isNone") (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "l2"))))) (EVar "l1")))
 (DTypeSig false "indexRowEqCheck" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))))
 (DFunDef false "indexRowEqCheck" ((PVar "mctx") (PList) (PList) PWild PWild) (ELit LUnit))
 (DFunDef false "indexRowEqCheck" ((PVar "mctx") PWild PWild (PVar "l1") (PVar "l2")) (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TEffectIndexMismatch")) (EApp (EApp (EVar "indexRowMismatchMsg") (EVar "l1")) (EVar "l2"))))
@@ -3699,7 +3694,7 @@ zipBindFrom dyn _ _ = ()
 (DFunDef false "indexAtomsCovered" ((PVar "mctx") (PList) PWild) (EListLit))
 (DFunDef false "indexAtomsCovered" ((PVar "mctx") (PCons (PVar "x") (PVar "rest")) (PVar "bound")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "bound")) (arm (PCon "Some" (PVar "y")) () (EBlock (DoExpr (EApp (EApp (EApp (EVar "wantIndexCovered") (EVar "mctx")) (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (DoExpr (EApp (EApp (EApp (EVar "indexAtomsCovered") (EVar "mctx")) (EVar "rest")) (EVar "bound"))))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EVar "indexAtomsCovered") (EVar "mctx")) (EVar "rest")) (EVar "bound"))))))
 (DTypeSig false "labelsMissing" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
-(DFunDef false "labelsMissing" ((PVar "l1") (PVar "l2")) (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "l2")) (arm (PCon "Some" PWild) () (EVar "False")) (arm (PCon "None") () (EVar "True"))))) (EVar "l1")))
+(DFunDef false "labelsMissing" ((PVar "l1") (PVar "l2")) (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EApp (EVar "isNone") (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "l2"))))) (EVar "l1")))
 (DTypeSig false "indexRowEqCheck" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))))
 (DFunDef false "indexRowEqCheck" ((PVar "mctx") (PList) (PList) PWild PWild) (ELit LUnit))
 (DFunDef false "indexRowEqCheck" ((PVar "mctx") PWild PWild (PVar "l1") (PVar "l2")) (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TEffectIndexMismatch")) (EApp (EApp (EVar "indexRowMismatchMsg") (EVar "l1")) (EVar "l2"))))

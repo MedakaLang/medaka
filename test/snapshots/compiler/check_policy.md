@@ -1,5 +1,5 @@
 # META
-source_lines=805
+source_lines=804
 stages=DESUGAR,MARK
 # SOURCE
 import types.capability_manifest.{
@@ -196,9 +196,8 @@ splitSemiGo cs n start i
 -- pattern (`a.com/*`) has no `=`.
 rhsIsProduct : String -> Bool
 rhsIsProduct rhs =
-  match splitOnFirstEq (stringToChars rhs) (arrayLength (stringToChars rhs)) 0
-    None => False
-    Some _ => True
+  isSome
+    (splitOnFirstEq (stringToChars rhs) (arrayLength (stringToChars rhs)) 0)
 
 -- a policy rhs is a set when it is brace-delimited (`Env={HOME,PATH}`) with no
 -- axis `=` inside (that's the product case, already routed above).
@@ -863,7 +862,7 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "splitSemiGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "splitSemiGo" ((PVar "cs") (PVar "n") (PVar "start") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (EVar "start")) (EVar "n"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ";"))) (EBinOp "::" (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (EVar "start")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "splitSemiGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "splitSemiGo") (EVar "cs")) (EVar "n")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "rhsIsProduct" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "rhsIsProduct" ((PVar "rhs")) (EMatch (EApp (EApp (EApp (EVar "splitOnFirstEq") (EApp (EVar "stringToChars") (EVar "rhs"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "rhs")))) (ELit (LInt 0))) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" PWild) () (EVar "True"))))
+(DFunDef false "rhsIsProduct" ((PVar "rhs")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "splitOnFirstEq") (EApp (EVar "stringToChars") (EVar "rhs"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "rhs")))) (ELit (LInt 0)))))
 (DTypeSig false "rhsIsSet" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "rhsIsSet" ((PVar "rhs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "rhs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "rhs")) (ELit (LString "{")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "rhs")) (ELit (LString "}")))))))
 (DTypeSig false "splitOnFirstEq" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
@@ -1054,7 +1053,7 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "splitSemiGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "splitSemiGo" ((PVar "cs") (PVar "n") (PVar "start") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (EVar "start")) (EVar "n"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ";"))) (EBinOp "::" (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (EVar "start")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "splitSemiGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "splitSemiGo") (EVar "cs")) (EVar "n")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "rhsIsProduct" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "rhsIsProduct" ((PVar "rhs")) (EMatch (EApp (EApp (EApp (EVar "splitOnFirstEq") (EApp (EVar "stringToChars") (EVar "rhs"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "rhs")))) (ELit (LInt 0))) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" PWild) () (EVar "True"))))
+(DFunDef false "rhsIsProduct" ((PVar "rhs")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "splitOnFirstEq") (EApp (EVar "stringToChars") (EVar "rhs"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "rhs")))) (ELit (LInt 0)))))
 (DTypeSig false "rhsIsSet" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "rhsIsSet" ((PVar "rhs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "rhs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "rhs")) (ELit (LString "{")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "rhs")) (ELit (LString "}")))))))
 (DTypeSig false "splitOnFirstEq" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))

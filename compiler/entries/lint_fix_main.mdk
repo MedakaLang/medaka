@@ -32,7 +32,7 @@ oracleMain () = match args ()
 withTarget : List String -> String -> <IO> Unit
 withTarget only targetPath = match readFile targetPath
   Ok targetSrc => match indexForRules only
-    Ok idx => match fixSource idx Unsafe only [] targetPath targetSrc
+    Ok idx => match fixSource idx Unsafe only [] [] targetPath targetSrc
       Ok run => putStr (fst (runParts run))
       Err msg => ePutStrLn msg
     Err msg => ePutStrLn msg

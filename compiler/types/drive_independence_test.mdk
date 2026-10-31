@@ -195,4 +195,4 @@ test "a drive ends outside every construct, whatever its checks were located at"
       []
       (prelude ())
       (mods [("b", badSrc)])
-  expectEqual (True, True) (length reported > 0, isNone last.mcLoc)
+  expectEqual (True, True) (not (isEmpty reported), isNone last.mcLoc)

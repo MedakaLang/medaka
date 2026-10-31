@@ -409,9 +409,7 @@ completeField chunks i f = match lookupChunk (fieldTag i f) chunks
   _ => None
 
 startedTest : List Chunk -> Int -> Bool
-startedTest chunks i = match lookupChunk (startTag i) chunks
-  Some _ => True
-  None => False
+startedTest chunks i = isSome (lookupChunk (startTag i) chunks)
 
 -- A transcript carrying a sentinel line this engine did not write.  Values are
 -- printed quoted so a value cannot spell one; a test's own `println` output

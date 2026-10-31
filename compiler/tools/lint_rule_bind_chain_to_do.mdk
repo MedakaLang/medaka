@@ -127,9 +127,7 @@ bindChainOkPat _ _ = False
 -- excluded here (owned by `rule-match-to-map`).  Reuses the same linchpin.
 bindChainRewrap : Bool -> Pat -> Expr -> Bool
 bindChainRewrap isResult p body =
-  match matchToMapTransform (if isResult then "Ok" else "Some") p body
-    Some _ => True
-    None => False
+  isSome (matchToMapTransform (if isResult then "Ok" else "Some") p body)
 
 bindChainIsTermMap : Expr -> Bool
 bindChainIsTermMap e = match unwrapLoc e

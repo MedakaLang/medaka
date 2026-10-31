@@ -526,9 +526,7 @@ gDispFnArity e n =
 
 -- is `n` a member (root included) of a detected group?
 gDispIsMember : Emit -> String -> Bool
-gDispIsMember e n = match dispGroupOf !e.gDispGroups n
-  Some _ => True
-  None => False
+gDispIsMember e n = isSome (dispGroupOf !e.gDispGroups n)
 
 -- set the binding name attributed to subsequent gaps (the probe sets this per
 -- top-level binding / impl entry before emitting it).
@@ -1298,9 +1296,7 @@ definedArity e hd = definedArityOf e.arities omEmpty hd
 
 isKnownFn : Emit -> String -> Bool
 isKnownFn e name = match !e.knownFnMap
-  Some m => match omLookup name m
-    Some _ => True
-    None => False
+  Some m => isSome (omLookup name m)
   None => panic "llvm: knownFnMap read before install (internal error)"
 
 -- Canonicalize a referenced function name to the actual emitted symbol.  An emit
@@ -1564,9 +1560,7 @@ preludeImplPairKey method identity = "\{method}\n\{identity}"
 -- Both read the entry's stamp.
 implEntryFnName : Emit -> String -> CImplEntry -> String
 implEntryFnName e method (CImplEntry _ _ _ (CImplTagged _ _ _ (ImplSym tag _ _) _ _ _)) =
-  let byMethod = match omLookup tag !e.implNames
-    Some m => m
-    None => omEmpty
+  let byMethod = optionOr omEmpty (omLookup tag !e.implNames)
   match omLookup method byMethod
     Some name => name
     None =>
@@ -1574,12 +1568,8 @@ implEntryFnName e method (CImplEntry _ _ _ (CImplTagged _ _ _ (ImplSym tag _ _) 
       e.implNames := omInsert tag (omInsert method name byMethod) !e.implNames
       name
 implEntryFnName e method (CImplEntry _ _ _ (CImplDefault _ _ _ (sym@(ImplSym _ iface key)) _ _ _)) =
-  let byMethod = match omLookup iface !e.defaultNames
-    Some m => m
-    None => omEmpty
-  let byKey = match omLookup method byMethod
-    Some m => m
-    None => omEmpty
+  let byMethod = optionOr omEmpty (omLookup iface !e.defaultNames)
+  let byKey = optionOr omEmpty (omLookup method byMethod)
   match omLookup key byKey
     Some name => name
     None =>
@@ -1918,9 +1908,7 @@ emitConstantVar _ name = panic ("llvm: no constant " ++ name)
 -- is `x` a local (let/param) binding in the current emit env?  Used to let a local
 -- shadow the prelude math/bound constants (pi/e/intMaxBound/…) above.
 isLocal : OrdMap (String, LTy) -> String -> Bool
-isLocal env x = match omLookup x env
-  Some _ => True
-  None => False
+isLocal env x = isSome (omLookup x env)
 
 -- a Mut-aware variable lookup used at the emit site (emitVar): a local (let/param)
 -- operand shadows everything, so the env is checked FIRST; otherwise the name may
@@ -4731,9 +4719,7 @@ ffiSymOf e name = match omLookup name e.externFacts
   None => name
 
 isFfiExtern : Emit -> String -> Bool
-isFfiExtern e name = match ffiSigOf e name
-  Some _ => True
-  None => False
+isFfiExtern e name = isSome (ffiSigOf e name)
 
 -- declared arity = the arrow count of the declared signature (`Unit` params
 -- included: they are real Medaka arguments, they just marshal to nothing).
@@ -8108,9 +8094,7 @@ hiddenImplGroup e (ImplGroup method _ key _ _ _ _ _) =
   e.input.emitHalf == emitHalfProgram && hasPreludeImpl e method key
 
 hasPreludeImpl : Emit -> String -> String -> Bool
-hasPreludeImpl e method key = match preludeImplSym e method key
-  Some _ => True
-  None => False
+hasPreludeImpl e method key = isSome (preludeImplSym e method key)
 
 -- Run `act` (an ordinary emitFn/emitGroup), then throw its BODY TEXT away and keep
 -- only a `declare` per define it produced.
@@ -13895,7 +13879,7 @@ typeOf _ _ (CList _) = LTCon
 typeOf _ _ (CRangeList _ _ _) = LTCon
 typeOf e env (CVar x _) = match omLookup x env
   Some (_, t) => valueLTy t
-  None => optionOr (runtimeLTy RTValue) (omLookup x e.globalTys)
+  None => optionOrElse (_ => runtimeLTy RTValue) (omLookup x e.globalTys)
 typeOf e env (CBinPrim op l _ tag _)
   | isCmpOp op = LTBool
   | op == "::" = LTCon

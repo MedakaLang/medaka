@@ -1,5 +1,5 @@
 # META
-source_lines=135
+source_lines=136
 stages=DESUGAR,MARK
 # SOURCE
 import types.symbol_origins.{SymbolOrigins}
@@ -130,9 +130,10 @@ withFacts facts action =
 -- is a panic.
 export
 factsNow : Unit -> ProgramFacts
-factsNow _ = match !currentFacts
-  Some facts => facts
-  None => panic "program facts: read outside any withFacts bracket"
+factsNow _ =
+  optionOrPanic
+    "program facts: read outside any withFacts bracket"
+    !currentFacts
 
 export
 withSymbolOrigins : SymbolOrigins -> ProgramFacts -> ProgramFacts
@@ -167,7 +168,7 @@ withSymbolOrigins origins facts = { facts | pfSymbolOrigins = Some origins }
 (DTypeSig true "withFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyVar "a")))))
 (DFunDef false "withFacts" ((PVar "facts") (PVar "action")) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentFacts"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EApp (EVar "Some") (EVar "facts")))) (DoLet false false (PVar "result") (EApp (EVar "action") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EVar "saved"))) (DoExpr (EVar "result"))))
 (DTypeSig true "factsNow" (TyFun (TyCon "Unit") (TyCon "ProgramFacts")))
-(DFunDef false "factsNow" (PWild) (EMatch (EUnOp "!" (EVar "currentFacts")) (arm (PCon "Some" (PVar "facts")) () (EVar "facts")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "program facts: read outside any withFacts bracket"))))))
+(DFunDef false "factsNow" (PWild) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "program facts: read outside any withFacts bracket"))) (EUnOp "!" (EVar "currentFacts"))))
 (DTypeSig true "withSymbolOrigins" (TyFun (TyCon "SymbolOrigins") (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
 (DFunDef false "withSymbolOrigins" ((PVar "origins") (PVar "facts")) (ERecordUpdate (EVar "facts") ((fa "pfSymbolOrigins" (EApp (EVar "Some") (EVar "origins"))))))
 # MARK
@@ -200,6 +201,6 @@ withSymbolOrigins origins facts = { facts | pfSymbolOrigins = Some origins }
 (DTypeSig true "withFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyVar "a")))))
 (DFunDef false "withFacts" ((PVar "facts") (PVar "action")) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentFacts"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EApp (EVar "Some") (EVar "facts")))) (DoLet false false (PVar "result") (EApp (EVar "action") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EVar "saved"))) (DoExpr (EVar "result"))))
 (DTypeSig true "factsNow" (TyFun (TyCon "Unit") (TyCon "ProgramFacts")))
-(DFunDef false "factsNow" (PWild) (EMatch (EUnOp "!" (EVar "currentFacts")) (arm (PCon "Some" (PVar "facts")) () (EVar "facts")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "program facts: read outside any withFacts bracket"))))))
+(DFunDef false "factsNow" (PWild) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "program facts: read outside any withFacts bracket"))) (EUnOp "!" (EVar "currentFacts"))))
 (DTypeSig true "withSymbolOrigins" (TyFun (TyCon "SymbolOrigins") (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
 (DFunDef false "withSymbolOrigins" ((PVar "origins") (PVar "facts")) (ERecordUpdate (EVar "facts") ((fa "pfSymbolOrigins" (EApp (EVar "Some") (EVar "origins"))))))

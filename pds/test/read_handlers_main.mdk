@@ -304,9 +304,7 @@ didWebAccountDid : String
 didWebAccountDid = "did:web:\{accountHostText}"
 
 hasField : String -> Json -> Bool
-hasField name value = match get name value
-  Some _ => True
-  None => False
+hasField name value = isSome (get name value)
 
 textOf : Json -> String
 textOf (JString text) = text

@@ -1295,7 +1295,7 @@ graphCtorValue nonce modules env graph prefix plan owner (ctor@(PlanCtor source 
   match instantiateCtor env plan ctor
     Err _ => "panic \"native property runner: invalid constructor plan\""
     Ok fields =>
-      let values = map (graphCtorDraw modules env graph prefix) (map snd fields)
+      let values = map (snd >> graphCtorDraw modules env graph prefix) fields
       let ref = qualifiedCtor nonce modules owner source
       if hasNamedField fields then
         "\{ref} { \{joinWith ", " (namedAssignments fields values)} }"

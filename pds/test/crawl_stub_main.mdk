@@ -57,9 +57,7 @@ recvFrame conn buffer = match findHeaderEnd buffer 0
     -- plain search of the head's bytes suffices — this driver need not parse
     -- arbitrary header casing the way a real server must. A head with no
     -- such field declares no body.
-    let declared = match headContentLength (B.take at buffer)
-      Some n => n
-      None => 0
+    let declared = optionOr 0 (headContentLength (B.take at buffer))
     recvBody conn buffer (at + 4 + declared)
 
 recvBody : Connection * -> Bytes -> Int -> <Net> Result String Bytes

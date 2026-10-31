@@ -17,7 +17,7 @@
    fails this gate rather than going uncounted. -}
 
 import io.{readLines}
-import list.{lookup, somes, zipWith}
+import list.{lookup, zipWith}
 import test.{Expectation(..)}
 import test.inlang_roster_support.{interpreterSuites}
 import test_process.{
@@ -465,20 +465,19 @@ test "every `libExempt` row names a module that exists" =
    a nonzero exit, and only the label says which arm was asked. -}
 suiteSpawns : <IO> List (String, Int, String, List String, String)
 suiteSpawns =
-  somes
-    (map
-      ((name, (floor, engine)) => match lookup name excluded
-        Some _ => None
-        None =>
-          let path = underRoot "pds/test/\{name}.mdk"
-          Some (
-            name,
-            floor,
-            path,
-            engineArgs engine,
-            "\{path} (\{engineLabel engine})",
-          ))
-      suites)
+  filterMap
+    ((name, (floor, engine)) => match lookup name excluded
+      Some _ => None
+      None =>
+        let path = underRoot "pds/test/\{name}.mdk"
+        Some (
+          name,
+          floor,
+          path,
+          engineArgs engine,
+          "\{path} (\{engineLabel engine})",
+        ))
+    suites
 
 -- One eval-engine spawn per `libSuites` module, in the shape of
 -- `suiteSpawns`.

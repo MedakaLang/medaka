@@ -1,5 +1,5 @@
 # META
-source_lines=223
+source_lines=221
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-concat-to-interp: a `++` chain mixing string literals and expressions. Prefer string interpolation.
@@ -94,9 +94,7 @@ strLitValueOf e = match unwrapLoc e
   _ => None
 
 isStrLitOperand : Expr -> Bool
-isStrLitOperand e = match strLitValueOf e
-  Some _ => True
-  None => False
+isStrLitOperand e = isSome (strLitValueOf e)
 
 -- decoded literal value contains the 2-char sequence `\{` (would open an interp
 -- hole) — such a literal is unsafe to inline into an interpolated string.
@@ -240,7 +238,7 @@ concatToInterpFix idx facts ctx span rewritten =
 (DTypeSig false "strLitValueOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "strLitValueOf" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" (PCon "LString" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "isStrLitOperand" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isStrLitOperand" ((PVar "e")) (EMatch (EApp (EVar "strLitValueOf") (EVar "e")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "isStrLitOperand" ((PVar "e")) (EApp (EVar "isSome") (EApp (EVar "strLitValueOf") (EVar "e"))))
 (DTypeSig false "hasBackslashBrace" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasBackslashBrace" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "backslashBraceGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "backslashBraceGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
@@ -291,7 +289,7 @@ concatToInterpFix idx facts ctx span rewritten =
 (DTypeSig false "strLitValueOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "strLitValueOf" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" (PCon "LString" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "isStrLitOperand" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isStrLitOperand" ((PVar "e")) (EMatch (EApp (EVar "strLitValueOf") (EVar "e")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "isStrLitOperand" ((PVar "e")) (EApp (EVar "isSome") (EApp (EVar "strLitValueOf") (EVar "e"))))
 (DTypeSig false "hasBackslashBrace" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasBackslashBrace" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "backslashBraceGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "backslashBraceGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))

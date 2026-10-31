@@ -627,9 +627,7 @@ readPreludeTrees decode inputs =
         else
           map (_ => None) (readElabKeyGated gate text))
       inputs
-  let held = match value
-    Some v => v
-    None => None
+  let held = optionOr None value
   match verdict
     FileLoaded => withInterface decode inputs held
     _ => (verdict, None)

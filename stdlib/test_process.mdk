@@ -20,7 +20,7 @@
 
 import io.{getEnvOr, runVerb}
 import json.{asInt, get, parse}
-import list.{findMap, somes, zipWith3}
+import list.{findMap, zipWith3}
 import string.{
   contains,
   drop,
@@ -506,7 +506,7 @@ unrosteredUnits : (String -> Option String) ->
   List String ->
   List String
 unrosteredUnits namer known entries =
-  filter (n => not (elem n known)) (somes (map namer entries))
+  filter (n => not (elem n known)) (filterMap namer entries)
 
 {- | The names in `wanted` for which `namer` finds no entry in `entries`.
 
@@ -522,7 +522,7 @@ missingUnits : (String -> Option String) ->
   List String ->
   List String
 missingUnits namer wanted entries =
-  let present = somes (map namer entries)
+  let present = filterMap namer entries
   filter (n => not (elem n present)) wanted
 
 {- | The `*_test.mdk` stems in `dir` that are absent from `known`.

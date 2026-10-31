@@ -286,7 +286,8 @@ effectScan path (line :: rest) collecting sig first =
   else if not collecting then
     effectScan path rest False sig first
   else if not first && not (isIndented line) then
-    let closed = if forbiddenLabels sig /= [] then ["\{path}: \{sig}"] else []
+    let closed =
+      if not (isEmpty (forbiddenLabels sig)) then ["\{path}: \{sig}"] else []
     closed ++ effectScan path rest False "" False
   else
     effectScan path rest True "\{sig} \{line}" False
@@ -322,7 +323,7 @@ unsignedScan path n (line :: rest) pending =
 
 -- | Whether `line` holds nothing but spaces and tabs.
 isBlank : String -> Bool
-isBlank line = words line == []
+isBlank line = isEmpty (words line)
 
 {- | Whether `line` matches awk's `^[^ \t:]+[ \t]*:`: at least one character
    that is neither a space, a tab nor a colon, then optional spaces and
@@ -331,7 +332,8 @@ hasSignatureShape : String -> Bool
 hasSignatureShape line =
   let cs = toList (toChars line)
   let (name, afterName) = span isNameChar cs
-  name /= [] && startsWith ":" (fromChars (dropWhile isBlankChar afterName))
+  not (isEmpty name)
+    && startsWith ":" (fromChars (dropWhile isBlankChar afterName))
 
 isNameChar : Char -> Bool
 isNameChar c = not (isBlankChar c) && c /= ':'

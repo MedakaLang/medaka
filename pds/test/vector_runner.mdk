@@ -316,7 +316,7 @@ edges (l :: rest) = match last rest
    below the floor, rather than making the comparison itself an error — the
    failure mode RUN-PDS0-040 F20 was written for. -}
 countOk : String -> Int
-countOk out = sum (somes (map okCount (lines out)))
+countOk out = sum (filterMap okCount (lines out))
 
 okCount : String -> Option Int
 okCount l = match indexOf " ok," l
@@ -327,9 +327,7 @@ okCount l = match indexOf " ok," l
 
 export
 lastLineOf : String -> String
-lastLineOf out = match last (filter (/= "") (lines out))
-  None => ""
-  Some l => l
+lastLineOf out = optionOr "" (last (filter (/= "") (lines out)))
 
 {- | A spawn's stdout and findings, with `a`'s floor, substrings and last
    line graded only when the spawn itself ran clean: a spawn that failed
@@ -345,7 +343,7 @@ export
 outputFindings : String -> Arm -> List String -> String -> List String
 outputFindings label a extraNeeds out =
   floorFindings label a.countFloor out
-    ++ somes (map (needFinding label out) (a.needs ++ extraNeeds))
+    ++ filterMap (needFinding label out) (a.needs ++ extraNeeds)
     ++ lastLineFindings label a.lastLine out
     ++ exactFindings label a.exactStdout out
 
@@ -615,7 +613,7 @@ parityFindings True rs = parityAgainst (filter (a => a.ran) rs)
 
 parityAgainst : List ArmResult -> List String
 parityAgainst [] = []
-parityAgainst (first :: rest) = somes (map (differsFrom first) rest)
+parityAgainst (first :: rest) = filterMap (differsFrom first) rest
 
 differsFrom : ArmResult -> ArmResult -> Option String
 differsFrom first a =
@@ -687,7 +685,7 @@ boundFinding (Exactly n) got =
 -- # The source-shape precondition
 
 sourceShapeFindings : String -> List (String, String) -> <FileRead> List String
-sourceShapeFindings root shapes = somes (map (sourceShapeFinding root) shapes)
+sourceShapeFindings root shapes = filterMap (sourceShapeFinding root) shapes
 
 sourceShapeFinding : String -> (String, String) -> <FileRead> Option String
 sourceShapeFinding root (rel, shape) = match readFile "\{root}/\{rel}"

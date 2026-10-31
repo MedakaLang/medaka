@@ -23,7 +23,6 @@ import crypto.hmac.{ctEq, hmacSha256, hmacSha256Key, hmacSha256WithKey}
 import bytes as B
 import bytes.{Bytes}
 import hex.{decode}
-import list.{somes}
 import string.{toInt, trim, words}
 import io.{readLines}
 
@@ -61,7 +60,7 @@ parseLine line = match words (trim line)
   _ => panic "hmac_vectors_main: unparseable line: \{line}"
 
 parseRows : List String -> List Row
-parseRows lns = somes (map parseLine lns)
+parseRows lns = filterMap parseLine lns
 
 -- The row's own verdict: the FULL computed tag truncated to `tagBits / 8`
 -- bytes, then `ctEq`'d against the given tag. Truncating before comparing
@@ -89,7 +88,7 @@ checkAll rows =
   let results = map checkRow rows
   let ok = sum (map fst results)
   let failed = sum (map snd results)
-  let truncated = length (filter (r => r.tagBits < 256) rows)
+  let truncated = count (r => r.tagBits < 256) rows
   (ok, failed, truncated)
 
 main : <IO, Env, FileRead> Unit
@@ -105,7 +104,7 @@ main = match args ()
         "\{path}: \{intToString ok} ok, \{intToString failed} failed, 0 skipped"
       println
         "Wycheproof HMAC-SHA256: \{intToString (length rows)} unique tcIds; \{intToString truncated} truncated-tag rows checked via ctEq"
-      if failed > 0 || length rows == 0 then
+      if failed > 0 || isEmpty rows then
         println "TOTAL: FAIL"
         exit 1
       else

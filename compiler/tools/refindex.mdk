@@ -811,9 +811,7 @@ collectDefs ctx expSet mid uri ((d, p) :: rest) =
 -- `expValuesDirect` (which lists both `DTypeSig True` and `DFunDef True`).
 valuePub : Ctx -> HashMap String Unit -> Bool -> String -> Bool
 valuePub _ _ True _ = True
-valuePub ctx expSet False n = match hmGetC ctx expSet n
-  Some _ => True
-  None => False
+valuePub ctx expSet False n = isSome (hmGetC ctx expSet n)
 
 -- names this module exports as VALUES (via sig, def, extern, or let-group).
 collectExportedValues : Ctx -> List Decl -> HashMap String Unit
@@ -1449,9 +1447,7 @@ valEntry expSet mid pub n =
   if pub || memberOfRaw expSet n then [(nsVal, n, mkKey mid nsVal n)] else []
 
 memberOfRaw : HashMap String Unit -> String -> Bool
-memberOfRaw s k = match hmGet k s
-  Some _ => True
-  None => False
+memberOfRaw s k = isSome (hmGet k s)
 
 preludeVariant : String -> Variant -> List (String, String, String)
 preludeVariant mid (Variant cn _) = [(nsCtor, cn, mkKey mid nsCtor cn)]

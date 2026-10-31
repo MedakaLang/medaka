@@ -597,11 +597,7 @@ hasVehicleSegment path =
 underProjectTestDir : String -> <IO> Bool
 underProjectTestDir target =
   let d = dirOf target
-  if baseOf d == "test" then match findProjectRoot d
-    Some _ => True
-    None => False
-  else
-    False
+  if baseOf d == "test" then isSome (findProjectRoot d) else False
 
 -- Does `target` sit directly in the medaka repository's own `test/` directory?
 -- That directory has no manifest at or above it, so `underProjectTestDir`
@@ -2167,9 +2163,7 @@ gradedPropHumanStatus row
 -- single-file list is its own root.  Falls back to the raw `userDecls` for an
 -- empty list, which no caller produces.
 elaboratedRootProps : List (String, List Decl) -> List Decl -> List Decl
-elaboratedRootProps modules userDecls = match lastModule modules
-  Some decls => decls
-  None => userDecls
+elaboratedRootProps modules userDecls = optionOr userDecls (lastModule modules)
 
 lastModule : List (String, List Decl) -> Option (List Decl)
 lastModule [] = None
@@ -2302,9 +2296,7 @@ gradedTestSummarySuffix failed errors knownRed
     " (\{intToString failed} failed, \{intToString errors} errors, \{intToString knownRed} known-red)"
 
 gradedTestPinDetailText : GradedTest -> String
-gradedTestPinDetailText row = match gradedTestPinDetail row
-  Some detail => detail
-  None => ""
+gradedTestPinDetailText row = optionOr "" (gradedTestPinDetail row)
 
 testRowsForPins : List (Engine, String, Int, ExResult) ->
   List (String, String, Int, ExResult)
@@ -3550,7 +3542,7 @@ validateHelperPlansGo planEnv runtimeM rawCoreM rawM plans baseline rejected =
       let delta = helperDiagDelta baseline diags
       let helperFiles = helperFileIndex helpers 0 omEmpty
       let (bad, unexpected) = helperDiagFailures helperFiles delta omEmpty False
-      if omKeys bad == [] then
+      if isEmpty (omKeys bad) then
         if unexpected then
           HelperValidation
             (helperPair runtimeM rawCoreM rawM [])
@@ -4002,9 +3994,8 @@ helperCapabilityResult : PlanEnv ->
 helperCapabilityResult env engine (PropRequest name seed cases) rejected plans =
   match firstRejectedCarrier rejected (customPlansReachable env plans)
     Some (CustomPlan _ carrier word) =>
-      let detail = match omLookup word rejected
-        Some message => message
-        None => "typed helper could not be elaborated"
+      let detail =
+        optionOr "typed helper could not be elaborated" (omLookup word rejected)
       let err =
         PlanError name "$property-helper" carrier PEUnusableArbitrary detail
       PropResult
@@ -4146,14 +4137,10 @@ propRequestsForGo index file engine seed cases (_ :: rest) =
   propRequestsForGo index file engine seed cases rest
 
 pinSeedOr : Int -> TestPin -> Int
-pinSeedOr fallback pin = match pin.pinSeed
-  Some seed => seed
-  None => fallback
+pinSeedOr fallback pin = optionOr fallback pin.pinSeed
 
 pinCasesOr : Int -> TestPin -> Int
-pinCasesOr fallback pin = match pin.pinCases
-  Some cases => cases
-  None => fallback
+pinCasesOr fallback pin = optionOr fallback pin.pinCases
 
 -- ── test-decl phase as pure data (#2295 (d)) ────────────────────────────────
 -- Symmetric with `propsReport` above: the same single-file/multi-module split

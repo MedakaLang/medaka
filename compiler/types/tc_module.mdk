@@ -2516,15 +2516,16 @@ processSCC outer sigs grouped0 members =
 scopedMemberBinding : ScopedMember -> (String, EnvBinding)
 scopedMemberBinding member =
   let binding =
-    optionOr
-      (ordinaryEnvBinding
-        (Forall
-          []
-          []
-          []
-          []
-          (memberForce member)
-          member.smOwned.bsRecursiveValue))
+    optionOrElse
+      (_ =>
+        ordinaryEnvBinding
+          (Forall
+            []
+            []
+            []
+            []
+            (memberForce member)
+            member.smOwned.bsRecursiveValue))
       member.smRecursive.value
   (
     member.smName,
@@ -4313,11 +4314,10 @@ beginModuleMarking : ModuleCtx ->
   ModuleSeed ->
   Unit
 beginModuleMarking mctx mid prog top seed =
-  let ms = match mctx.mcGraph.markSetsRef.value
-    Some s => s
-    None =>
-      panic
-        "checkBodyImpl: Module arm entered with no mark sets (no driver preamble ran)"
+  let ms =
+    optionOrPanic
+      "checkBodyImpl: Module arm entered with no mark sets (no driver preamble ran)"
+      mctx.mcGraph.markSetsRef.value
   -- Core imports nothing, so the dict names nameable in it are its own `=>`
   -- signatures, the set its `dictPass` gives parameters to.  A user definition that
   -- shares a bare name with a core one is a different definition.

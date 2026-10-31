@@ -260,7 +260,7 @@ prop "defaulting the live numeric roots twice is defaulting them once" (c : Root
   let expected = map (k => if k == 2 then "Float" else "Int") kinds
   once == twice
     && once == expected
-    && length m.mcGraph.graphRun.liveNumRoots.value == 0
+    && isEmpty m.mcGraph.graphRun.liveNumRoots.value
 
 -- ── the slot table and the inferred ids ───────────────────────────────────
 

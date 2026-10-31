@@ -245,9 +245,7 @@ orPatternMessages src =
     (filterList (e => startsWithOrPattern (codeText (resErrorCode e))) errs)
 
 startsWithOrPattern : String -> Bool
-startsWithOrPattern code = match stripPrefix "R-OR-PATTERN-" code
-  Some _ => True
-  None => False
+startsWithOrPattern code = isSome (stripPrefix "R-OR-PATTERN-" code)
 
 test "alternatives that bind the same names resolve cleanly" = expectEach [
   (

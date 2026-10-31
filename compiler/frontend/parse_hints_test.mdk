@@ -58,9 +58,7 @@ hintTokens body =
       (arrayFromList [0])
       0
       1
-  match result
-    Some _ => True
-    None => False
+  isSome result
 
 test "match evidence keeps delimiter matching and stop tokens" =
   let following = [TRParen, TDedent, TIdent "arm", TFatArrow]

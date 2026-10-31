@@ -491,9 +491,7 @@ balSetup ocs gateOrcs entries multicall =
         modelled = True,
         price = Price {
           fixedMs = balFixedSetupMs,
-          wasmMs = match wasm
-            Some ms => ms
-            None => dflt,
+          wasmMs = optionOr dflt wasm,
           buildJobs = match js
             [] => 1
             j :: rest => balMinL (j :: rest),
@@ -506,9 +504,7 @@ balSetup ocs gateOrcs entries multicall =
             (filterList (n => not (contains n multicall)) entries)
             gateOrcs
             [],
-        wasmDefaulted = match wasm
-          Some _ => False
-          None => True,
+        wasmDefaulted = isNone wasm,
         jobsDefaulted = match js
           [] => True
           _ => False,
@@ -519,9 +515,7 @@ balSetup ocs gateOrcs entries multicall =
         multicallMs = match mcMs
           Some ms => ms
           None => 2 * balMaxL (map ((_, ms) => ms) ps),
-        multicallDefaulted = match mcMs
-          Some _ => False
-          None => True,
+        multicallDefaulted = isNone mcMs,
       }
 
 balEntryPrices : List OracleCost -> List String -> List (String, Int)
@@ -2635,9 +2629,7 @@ budgetOverClassLines _ _ [] = []
 budgetOverClassLines base commitMessage (g :: gs) =
   -- `ms` is always `Some` here — `budgetOverClassGates` only keeps gates
   -- `costOf` already resolved; the 0 fallback is unreachable, not a real cost.
-  let ms = match costOf g.run base
-    Some m => m
-    None => 0
+  let ms = optionOr 0 (costOf g.run base)
   let tok = "over-class:\{g.name}"
   let ack = if budgetAcked commitMessage tok then " [ACKNOWLEDGED]" else ""
   stringConcat [

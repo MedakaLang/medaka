@@ -1,35 +1,25 @@
 -- lint rule rule-double-reverse: `reverse (reverse x)` is `x`. Drop the double reversal.
 
-import frontend.ast.{Loc(..), Expr(..), Decl(..)}
-import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
-import tools.printer.{exprToString}
 import tools.lint_core.{
   Applicability(..),
   Category(..),
-  Ctx(..),
-  FileFacts(..),
-  Finding(..),
-  Fix,
   Fixability(..),
   Need(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
   Scope(..),
-  StdlibIndex,
-  Visitor,
   mkVisitorRule,
 }
-import tools.lint_shared.{
-  exprRuleEditVisitors,
-  isEVarNamed,
-  noExcl,
-  replaceNodeFix,
-  ruleNameDoubleReverse,
-  unwrapLoc,
-  usesPreludeName,
+import tools.lint_hints.{
+  Hint,
+  HintCond(..),
+  HintRow(..),
+  compileHints,
+  hintVisitors,
 }
+import tools.lint_shared.{ruleNameDoubleReverse}
 
 export
 rule : Rule
@@ -47,56 +37,33 @@ rule =
       fixability = Fixable,
       needs = [NeedsScopes, NeedsWildIndex],
     }
-    ruleDoubleReverse
+    (idx path facts pos decls =>
+      hintVisitors
+        ruleNameDoubleReverse
+        SevWarning
+        hints
+        idx
+        path
+        facts
+        pos
+        decls)
     None
 
 -- ── rule: double-reverse ──────────────────────────────────────────────────────
--- `reverse (reverse x)` → `x` (`reverse` is an involution).
-doubleReverseOf : Expr -> Option Expr
-doubleReverseOf (EApp hd1 arg1)
-  | isEVarNamed "reverse" hd1 = match unwrapLoc arg1
-    EApp hd2 inner => if isEVarNamed "reverse" hd2 then Some inner else None
-    _ => None
-doubleReverseOf _ = None
-
-ruleDoubleReverse : StdlibIndex ->
-  String ->
-  FileFacts ->
-  Positions ->
-  List Decl ->
-  List Visitor
-ruleDoubleReverse idx _ facts _ _ =
-  exprRuleEditVisitors
-    noExcl
-    doubleReverseOf
-    (doubleReverseFix idx facts)
-    doubleReverseFinding
-
-doubleReverseFinding : Option Loc -> Expr -> Option Fix -> Finding
-doubleReverseFinding loc rewritten fix = Finding {
-  rule = ruleNameDoubleReverse,
-  message =
-    "`reverse (reverse …)` is a no-op. Rewrite as '"
-      ++ exprToString rewritten
-      ++ "'",
-  severity = SevWarning,
-  loc = loc,
-  fix = fix,
-}
-
--- The rewrite drops both `reverse` calls, so each must be the one the file
--- resolves to the prelude's: a `reverse` the file binds is not the list
+-- `reverse (reverse x)` → `x` (`reverse` is an involution).  Both `reverse`
+-- heads must be the prelude's: a `reverse` the file binds is not the list
 -- involution the rule knows, and its fix is withheld.
-doubleReverseFix : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
-doubleReverseFix idx facts ctx e rewritten =
-  if reversesArePrelude idx facts e then
-    replaceNodeFix Safe "drop the double reversal" ctx e rewritten
-  else
-    None
+export
+hintRows : List HintRow
+hintRows = [
+  HintRow {
+    rowText = "reverse (reverse a) ==> a",
+    rowMessage = "`reverse (reverse …)` is a no-op",
+    rowFix = "drop the double reversal",
+    rowApplicability = Safe,
+    rowConds = [],
+  },
+]
 
--- Both `reverse` heads of the matched pair resolve to the prelude's.
-reversesArePrelude : StdlibIndex -> FileFacts -> Expr -> Bool
-reversesArePrelude idx facts (EApp hd1 arg1) = match unwrapLoc arg1
-  EApp hd2 _ => usesPreludeName idx facts hd1 && usesPreludeName idx facts hd2
-  _ => False
-reversesArePrelude _ _ _ = False
+hints : List Hint
+hints = compileHints hintRows

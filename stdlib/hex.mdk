@@ -26,9 +26,7 @@ import u8 as U8
 -- the `None` arm is unreachable; this just avoids the internal-only
 -- `arrayGetUnsafe` primitive.
 charAt : Int -> Array Char -> Char
-charAt i arr = match arrGet i arr
-  Some c => c
-  None => panic "hex: index out of bounds"
+charAt i arr = optionOrPanic "hex: index out of bounds" (arrGet i arr)
 
 -- # Encoding
 
@@ -37,9 +35,8 @@ digitChar n upper =
   if upper then match toDigit n
     Some c => charToUpper c
     None => '?'
-  else match toDigit n
-    Some c => c
-    None => '?'
+  else
+    optionOr '?' (toDigit n)
 
 byteToHexChars : Int -> Bool -> (Char, Char)
 byteToHexChars b upper =

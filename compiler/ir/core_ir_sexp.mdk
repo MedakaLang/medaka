@@ -463,14 +463,12 @@ originsSexp origins = node "origins" [
 ]
 
 originAt : String -> OrdMap SymbolOrigin -> SymbolOrigin
-originAt name rows = match omLookup name rows
-  Some origin => origin
-  None => panic "symbol origin: missing serialized row"
+originAt name rows =
+  optionOrPanic "symbol origin: missing serialized row" (omLookup name rows)
 
 ownerAt : String -> OrdMap (OrdMap SymbolOrigin) -> OrdMap SymbolOrigin
-ownerAt owner rows = match omLookup owner rows
-  Some names => names
-  None => panic "symbol origin: missing serialized owner"
+ownerAt owner rows =
+  optionOrPanic "symbol origin: missing serialized owner" (omLookup owner rows)
 
 entryOutcomeSexp : EntryFact -> String
 entryOutcomeSexp outcome = node "entry" [

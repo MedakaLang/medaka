@@ -1,5 +1,5 @@
 # META
-source_lines=3480
+source_lines=3478
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -3240,9 +3240,7 @@ readFileSafe : String -> <IO> String
 readFileSafe path =
   match if path == stdinEntry then loadedSourceOf path else None
     Some src => src
-    None => match readFile path
-      Ok src => src
-      Err _ => ""
+    None => resultOr "" (readFile path)
 
 -- The single located parse-error diagnostic, as the {"files":[...]} JSON string.
 -- Uses the same serializer as other diagnostics, including typed edits.
@@ -3975,7 +3973,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "cjHasErrD" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Bool")))
 (DFunDef false "cjHasErrD" ((PTuple PWild (PVar "diags"))) (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags")))
 (DTypeSig true "readFileSafe" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "readFileSafe" ((PVar "path")) (EMatch (EIf (EBinOp "==" (EVar "path") (EVar "stdinEntry")) (EApp (EVar "loadedSourceOf") (EVar "path")) (EVar "None")) (arm (PCon "Some" (PVar "src")) () (EVar "src")) (arm (PCon "None") () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (EVar "src")) (arm (PCon "Err" PWild) () (ELit (LString "")))))))
+(DFunDef false "readFileSafe" ((PVar "path")) (EMatch (EIf (EBinOp "==" (EVar "path") (EVar "stdinEntry")) (EApp (EVar "loadedSourceOf") (EVar "path")) (EVar "None")) (arm (PCon "Some" (PVar "src")) () (EVar "src")) (arm (PCon "None") () (EApp (EApp (EVar "resultOr") (ELit (LString ""))) (EApp (EVar "readFile") (EVar "path"))))))
 (DTypeSig true "cjParseErrJson" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "String")))))
 (DFunDef false "cjParseErrJson" ((PVar "target") (PVar "src") (PVar "e")) (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e")))))))
 (DData Public "CheckJson" () ((variant "CjRendered" (ConPos (TyCon "String"))) (variant "CjParts" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))) ())
@@ -4497,7 +4495,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "cjHasErrD" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Bool")))
 (DFunDef false "cjHasErrD" ((PTuple PWild (PVar "diags"))) (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags")))
 (DTypeSig true "readFileSafe" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "readFileSafe" ((PVar "path")) (EMatch (EIf (EBinOp "==" (EVar "path") (EVar "stdinEntry")) (EApp (EVar "loadedSourceOf") (EVar "path")) (EVar "None")) (arm (PCon "Some" (PVar "src")) () (EVar "src")) (arm (PCon "None") () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (EVar "src")) (arm (PCon "Err" PWild) () (ELit (LString "")))))))
+(DFunDef false "readFileSafe" ((PVar "path")) (EMatch (EIf (EBinOp "==" (EVar "path") (EVar "stdinEntry")) (EApp (EVar "loadedSourceOf") (EVar "path")) (EVar "None")) (arm (PCon "Some" (PVar "src")) () (EVar "src")) (arm (PCon "None") () (EApp (EApp (EVar "resultOr") (ELit (LString ""))) (EApp (EVar "readFile") (EVar "path"))))))
 (DTypeSig true "cjParseErrJson" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "String")))))
 (DFunDef false "cjParseErrJson" ((PVar "target") (PVar "src") (PVar "e")) (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e")))))))
 (DData Public "CheckJson" () ((variant "CjRendered" (ConPos (TyCon "String"))) (variant "CjParts" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))) ())

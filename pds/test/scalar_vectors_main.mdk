@@ -256,7 +256,7 @@ parseArgs files = (1, files)
 main : <IO, Env, FileRead> Unit
 main =
   let (stride, files) = parseArgs (args ())
-  if files == [] then
+  if isEmpty files then
     let () =
       println
         "usage: scalar_vectors_main [--stride N] <corpus-file> [<corpus-file> ...]"

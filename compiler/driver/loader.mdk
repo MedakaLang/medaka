@@ -178,9 +178,7 @@ findProjectRoot startDir = findRootGo startDir
 -- `findProjectRoot` directly instead of reaching for this.
 export
 findProjectRootOrSelf : String -> <IO> String
-findProjectRootOrSelf startDir = match findProjectRoot startDir
-  Some root => root
-  None => startDir
+findProjectRootOrSelf startDir = optionOr startDir (findProjectRoot startDir)
 
 -- The module-resolution roots for a single entry file: the entry's OWN
 -- directory first, then the project root found by walking up from there

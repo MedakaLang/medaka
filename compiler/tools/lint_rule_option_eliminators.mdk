@@ -1,0 +1,182 @@
+-- lint rule rule-option-eliminators: an Option/Result eliminator written as a 2-arm `match` that a prelude function names. Prefer `optionOr`, `optionOrPanic`, `isSome`, `isNone`, `resultOr`.
+
+import frontend.ast.{
+  Arm(..),
+  Decl(..),
+  Expr(..),
+  Loc(..),
+  Pat(..),
+}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import support.util.{isEmptyL}
+import list.{findMap}
+import tools.printer.{exprToString}
+import tools.lint_core.{
+  Applicability(..),
+  Category(..),
+  Ctx(..),
+  FileFacts(..),
+  Finding(..),
+  Fix,
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  Visitor,
+  mkVisitorRule,
+}
+import tools.lint_shared.{
+  bindingOf,
+  calledName,
+  exprRuleEditVisitors,
+  isEVarNamed,
+  isFalseLit,
+  isNilPCon,
+  isTrueLit,
+  matchSpan,
+  movableDefault,
+  oneLine,
+  noExcl,
+  rebinds,
+  replaceFix,
+  ruleNameOptionEliminators,
+  unwrapLoc,
+  usesPreludeName,
+}
+
+export
+rule : Rule
+rule =
+  mkVisitorRule
+    RuleMeta {
+      name = ruleNameOptionEliminators,
+      summary =
+        "2-arm `match` on an Option/Result that unwraps with a literal, constructor or local-variable default, panics with a message, or answers whether it is `Some`. The prelude names these: `optionOr`, `optionOrPanic`, `isSome`, `isNone`, `resultOr`",
+      doc =
+        "A two-arm `match` that returns the payload of `Some`/`Ok` and otherwise a literal, a nullary constructor or a local variable is `optionOr`/`resultOr`; one that otherwise panics with a message is `optionOrPanic`; one that only answers `True`/`False` is `isSome`/`isNone`. A default that is a call or a top-level value is left alone: the function form evaluates it eagerly. The `optionOrPanic` fix needs `--unsafe-fixes`, because a native panic through it loses the call site's location.\n\nBefore:\n  match o\n    Some x => x\n    None => 0\nAfter:\n  optionOr 0 o",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [NeedsScopes, NeedsWildIndex],
+    }
+    ruleOptionEliminators
+    None
+
+-- A default the function form can take in place of the arm without changing
+-- when it is evaluated or whether it is: a literal, a nullary constructor or a
+-- locally bound variable (`movableDefault`).  A call is excluded, because
+-- `optionOr d o` evaluates `d` even when `o` is `Some`; so is a top-level value,
+-- which `run` forces on first use.
+call1 : String -> Expr -> Expr -> Expr
+call1 fn arg scrut = EApp (EApp (EVar fn) arg) scrut
+
+-- `Some x => x` / `Ok x => x`: the success arm hands its payload back.
+isIdentityArm : String -> Pat -> Expr -> Bool
+isIdentityArm ctor (PCon c [PVar x _ _]) body = c == ctor && isEVarNamed x body
+isIdentityArm _ _ _ = False
+
+-- `panic m` with a movable message.
+panicMessage : FileFacts -> Expr -> Option Expr
+panicMessage facts body = match unwrapLoc body
+  EApp hd m =>
+    if isEVarNamed "panic" hd && movableDefault facts m then Some m else None
+  _ => None
+
+-- (success arm, failure arm) in this order.
+elimPair : FileFacts -> Expr -> Arm -> Arm -> Option Expr
+elimPair facts scrut (Arm ps gs bs) (Arm pf gf bf)
+  | not (isEmptyL gs && isEmptyL gf) = None
+  | isIdentityArm "Some" ps bs && isNilPCon "None" pf =
+    if movableDefault facts bf then
+      Some (call1 "optionOr" bf scrut)
+    else
+      map (m => call1 "optionOrPanic" m scrut) (panicMessage facts bf)
+  | isIdentityArm "Ok" ps bs && isErrWild pf && movableDefault facts bf =
+    Some (call1 "resultOr" bf scrut)
+  | isSomeWild ps && isNilPCon "None" pf && isTrueLit bs && isFalseLit bf =
+    Some (EApp (EVar "isSome") scrut)
+  | isSomeWild ps && isNilPCon "None" pf && isFalseLit bs && isTrueLit bf =
+    Some (EApp (EVar "isNone") scrut)
+  | otherwise = None
+
+isSomeWild : Pat -> Bool
+isSomeWild (PCon "Some" [PWild]) = True
+isSomeWild _ = False
+
+isErrWild : Pat -> Bool
+isErrWild (PCon "Err" [PWild]) = True
+isErrWild _ = False
+
+-- detector (matches the RAW `EMatch`, never its `ELoc` wrapper); either arm order.
+optionElimOf : FileFacts -> Expr -> Option Expr
+optionElimOf facts (EMatch scrut arms) = match arms
+  [a1, a2] => orElse (elimPair facts scrut a1 a2) (elimPair facts scrut a2 a1)
+  _ => None
+optionElimOf _ _ = None
+
+ruleOptionEliminators : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Visitor
+ruleOptionEliminators idx _ facts _ _ =
+  exprRuleEditVisitors
+    noExcl
+    (optionElimOf facts)
+    (optionElimEdit idx facts)
+    optionElimFinding
+
+optionElimFinding : Option Loc -> Expr -> Option Fix -> Finding
+optionElimFinding loc rewritten fix = Finding {
+  rule = ruleNameOptionEliminators,
+  message =
+    "this match is a prelude eliminator — rewrite as '"
+      ++ oneLine (exprToString rewritten)
+      ++ "'",
+  severity = SevWarning,
+  loc = loc,
+  fix = fix,
+}
+
+-- The `panic` the `optionOrPanic` shape reads, when the arm is one.
+panicHead : Expr -> Option Expr
+panicHead (EMatch _ arms) = findMap panicArmHead arms
+panicHead _ = None
+
+panicArmHead : Arm -> Option Expr
+panicArmHead (Arm _ _ body) = match unwrapLoc body
+  EApp hd _ => if isEVarNamed "panic" hd then Some hd else None
+  _ => None
+
+-- The fix replaces the whole `match` with the call.  The scrutinee text moves
+-- unduplicated, the arms are exactly the eliminator, and the default is movable,
+-- so the shapes are `Safe` except `optionOrPanic`: the native engine reports a
+-- `panic` reached through it without the call site's `file:line`, so that shape
+-- is `Unsafe`.  The fix is withheld where the file binds the name the
+-- rewrite writes, or binds the `panic` the match calls, since either would change
+-- what the text means.
+optionElimEdit : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
+optionElimEdit idx facts ctx e rewritten =
+  if rebinds idx facts ctx (calledName rewritten)
+    || panicRebound idx facts e then
+    None
+  else
+    replaceFix
+      (if calledName rewritten == "optionOrPanic" then Unsafe else Safe)
+      "use the prelude eliminator"
+      (matchSpan facts ctx e)
+      (bindingOf rewritten)
+      ctx
+      (exprToString rewritten)
+
+panicRebound : StdlibIndex -> FileFacts -> Expr -> Bool
+panicRebound idx facts e = match panicHead e
+  Some hd => not (usesPreludeName idx facts hd)
+  None => False

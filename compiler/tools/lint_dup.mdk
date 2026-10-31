@@ -7,11 +7,10 @@ import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import support.util.{listLen, allList, filterList, reverseL, joinWith}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
-import support.char.{isUpper}
 import ir.sexp.{exprSexp, patSexp}
 import tools.lint_core.{DupClause(..), Finding(..)}
 import tools.lint_shared.{
-  declLocList, ruleNameDuplicateBody, sortUniqS, unwrapLoc
+  declLocList, isCtorName, ruleNameDuplicateBody, sortUniqS, unwrapLoc
 }
 
 -- minimum body complexity (count of AST nodes) to be eligible.  Calibrated so the
@@ -77,10 +76,10 @@ isPureDataKv : (Expr, Expr) -> Bool
 isPureDataKv (k, v) = isPureDataExpr k && isPureDataExpr v
 
 -- the ultimate callee of an `EApp` spine is an upper-case `EVar` (a data ctor,
--- by Medaka's naming convention — see `isUpperFirst`), not an ordinary function.
+-- by Medaka's naming convention — see `isCtorName`), not an ordinary function.
 appHeadIsCtor : Expr -> Bool
 appHeadIsCtor e = match unwrapLoc e
-  EVar name => isUpperFirst name
+  EVar name => isCtorName name
   EApp f _ => appHeadIsCtor f
   _ => False
 
@@ -93,13 +92,6 @@ appArgsRev : Expr -> List Expr
 appArgsRev e = match unwrapLoc e
   EApp f a => a :: appArgsRev f
   _ => []
-
-isUpperFirst : String -> Bool
-isUpperFirst s =
-  if stringLength s == 0 then
-    False
-  else
-    isUpper (arrayGetUnsafe 0 (stringToChars s))
 
 -- THE join: occurrences (from every file) → findings.  Split out of
 -- `ruleDuplicateBody` for #395's `--cache`, which reaches the same join from

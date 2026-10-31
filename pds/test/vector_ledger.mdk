@@ -23,7 +23,7 @@
 
 import array.{foldWithIndex}
 import io.{runVerb}
-import list.{lookup, nub, reverse, somes, sort}
+import list.{lookup, nub, reverse, sort}
 import string.{
   endsWith, isAlpha, isDigit, lines, startsWith, stripPrefix, toChars, trim,
   words
@@ -281,9 +281,7 @@ hashedAs : String -> String -> <Exec> Result String (String, String)
 hashedAs root path = map (h => (relativeTo root path, h)) (sha256OfFile path)
 
 relativeTo : String -> String -> String
-relativeTo root path = match stripPrefix "\{root}/" path
-  Some rel => rel
-  None => path
+relativeTo root path = optionOr path (stripPrefix "\{root}/" path)
 
 -- One stanza with the ledger line its header sits on, for a finding to
 -- point at.
@@ -352,14 +350,10 @@ headerOf t =
 -- A key's value, the last one when a stanza repeats the key, and "" when it
 -- is absent.
 value : String -> Section -> String
-value key s = match lookup key (reverse s.fields)
-  Some v => v
-  None => ""
+value key s = optionOr "" (lookup key (reverse s.fields))
 
 hasKey : String -> Section -> Bool
-hasKey key s = match lookup key s.fields
-  Some _ => True
-  None => False
+hasKey key s = isSome (lookup key s.fields)
 
 checkLedger : List (String, String) -> String -> CorpusCheck
 checkLedger hashes text =
@@ -377,7 +371,7 @@ checkLedger hashes text =
         ++ conflictFindings [] impls
         ++ flatMap (vectorFindings hashes pinned) vectors
         ++ duplicateFindings [] vectors
-        ++ somes (map (missingRow named) hashes),
+        ++ filterMap (missingRow named) hashes,
   }
 
 stanzaAt : String -> Section -> String

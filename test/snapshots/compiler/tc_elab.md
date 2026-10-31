@@ -1,5 +1,5 @@
 # META
-source_lines=2050
+source_lines=2048
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_elab: dict-passing elaboration (`dictPass`), the grant rewrite (`grantWholeDomain`),
@@ -210,9 +210,7 @@ drivenEvidence gctx _ =
 
 localAbsFor : GraphCtx -> String -> Option LocalAbs
 localAbsFor gctx name =
-  match omLookup name gctx.graphRun.localAbs.lasBinders.value
-    Some found => found
-    None => None
+  optionOr None (omLookup name gctx.graphRun.localAbs.lasBinders.value)
 
 -- dict_pass for locals: an abstracted binder takes its dictionary parameters, and an
 -- occurrence of a binder that abstracted nothing is a plain variable again.
@@ -2090,7 +2088,7 @@ sigPredicateSlot (iface, _) =
 (DTypeSig true "drivenEvidence" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "EvTable"))))
 (DFunDef false "drivenEvidence" ((PVar "gctx") PWild) (EBinOp "++" (EApp (EApp (EVar "cellEntriesFrom") (EFieldAccess (EVar "gctx") "graphRun")) (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "evBase")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "evTable") "value")))
 (DTypeSig false "localAbsFor" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "LocalAbs")))))
-(DFunDef false "localAbsFor" ((PVar "gctx") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "localAbs") "lasBinders") "value")) (arm (PCon "Some" (PVar "found")) () (EVar "found")) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "localAbsFor" ((PVar "gctx") (PVar "name")) (EApp (EApp (EVar "optionOr") (EVar "None")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "localAbs") "lasBinders") "value"))))
 (DTypeSig false "rewriteLocalDictExpr" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "rewriteLocalDictExpr" ((PVar "gctx") (PCon "EDictAt" (PVar "n") (PVar "ev"))) (EIf (EApp (EVar "isLocalAbsName") (EVar "n")) (EMatch (EApp (EApp (EVar "localAbsFor") (EVar "gctx")) (EVar "n")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "EDictAt") (EVar "n")) (EVar "ev"))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "EDictAt") (EVar "n")) (EVar "ev")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "rewriteLocalDictExpr" ((PVar "gctx") (PCon "ELet" (PVar "m") (PVar "r") (PCon "PVar" (PVar "x") (PVar "xloc") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EApp (EApp (EVar "localAbsFor") (EVar "gctx")) (EVar "x")) (arm (PCon "Some" (PVar "la")) () (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "xloc")) (EVar "bid"))) (EApp (EApp (EVar "prependLocalDicts") (EFieldAccess (EVar "la") "laParams")) (EVar "e1"))) (EVar "e2"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "xloc")) (EVar "bid"))) (EVar "e1")) (EVar "e2")))))
@@ -2455,7 +2453,7 @@ sigPredicateSlot (iface, _) =
 (DTypeSig true "drivenEvidence" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "EvTable"))))
 (DFunDef false "drivenEvidence" ((PVar "gctx") PWild) (EBinOp "++" (EApp (EApp (EVar "cellEntriesFrom") (EFieldAccess (EVar "gctx") "graphRun")) (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "evBase")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "evTable") "value")))
 (DTypeSig false "localAbsFor" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "LocalAbs")))))
-(DFunDef false "localAbsFor" ((PVar "gctx") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "localAbs") "lasBinders") "value")) (arm (PCon "Some" (PVar "found")) () (EVar "found")) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "localAbsFor" ((PVar "gctx") (PVar "name")) (EApp (EApp (EVar "optionOr") (EVar "None")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "localAbs") "lasBinders") "value"))))
 (DTypeSig false "rewriteLocalDictExpr" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "rewriteLocalDictExpr" ((PVar "gctx") (PCon "EDictAt" (PVar "n") (PVar "ev"))) (EIf (EApp (EVar "isLocalAbsName") (EVar "n")) (EMatch (EApp (EApp (EVar "localAbsFor") (EVar "gctx")) (EVar "n")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "EDictAt") (EVar "n")) (EVar "ev"))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "EDictAt") (EVar "n")) (EVar "ev")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "rewriteLocalDictExpr" ((PVar "gctx") (PCon "ELet" (PVar "m") (PVar "r") (PCon "PVar" (PVar "x") (PVar "xloc") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EApp (EApp (EVar "localAbsFor") (EVar "gctx")) (EVar "x")) (arm (PCon "Some" (PVar "la")) () (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "xloc")) (EVar "bid"))) (EApp (EApp (EVar "prependLocalDicts") (EFieldAccess (EVar "la") "laParams")) (EVar "e1"))) (EVar "e2"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "xloc")) (EVar "bid"))) (EVar "e1")) (EVar "e2")))))

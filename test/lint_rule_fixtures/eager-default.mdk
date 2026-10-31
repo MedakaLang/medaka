@@ -1,0 +1,84 @@
+-- Fixture for rule-eager-default: a call passed as an always-evaluated default.
+-- The fix is Unsafe, so the harness fixes at that ceiling.  A binder named
+-- `optionOrElse` or `resultOrElse` would withhold every fix in the file, so that
+-- guard, the impl-method guard and the interior comment are pinned in
+-- `test/lint_fix_fixtures/eager_default_*.mdk`.
+
+import map as M
+
+-- POSITIVE: a call as the default of optionOr.
+-- expect-next-line rule-eager-default
+lookupOr k xs = optionOr (fresh k) (lookup k xs)
+
+-- POSITIVE: a call as the default of resultOr.
+-- expect-next-line rule-eager-default
+resOr r = resultOr (fresh 1) r
+
+-- POSITIVE: a nested call keeps its arguments.
+-- expect-next-line rule-eager-default
+nested k xs = optionOr (fresh (fresh k)) (lookup k xs)
+
+-- POSITIVE: as an argument the rewritten call keeps its brackets.
+-- expect-next-line rule-eager-default
+asArg k xs = show (optionOr (fresh k) (lookup k xs))
+
+-- POSITIVE: a qualified function is still a call.
+-- expect-next-line rule-eager-default
+qualified k m = optionOr (M.size m) (lookup k [])
+
+-- NEGATIVE: partially applied, in a pipeline: not applied to its option here.
+piped k xs = lookup k xs |> optionOr (fresh k)
+
+-- NEGATIVE: partially applied as the argument of map.  The eager form computes
+-- the default once for every element; `optionOrElse (_ => fresh k)` would
+-- compute it once per miss, which changes a counting default.
+mapped k xss = map (optionOr (fresh k)) xss
+
+-- NEGATIVE: a lazy default would run once per miss when the function is applied
+-- many times.
+partial k = optionOr (fresh k)
+
+-- POSITIVE: an operator application is the default's head, so the argument is a call.
+-- expect-next-line rule-eager-default
+inOperator k xs = 1 + optionOr (fresh k) (lookup k xs)
+
+-- POSITIVE: the whenL argument runs although the guard is False; no fix.
+-- expect-next-line rule-eager-default unfixed
+guarded xs = whenL False (expensive xs)
+
+-- NEGATIVE: whenL with a guard that is not the literal False.
+guardedVar b xs = whenL b (expensive xs)
+
+-- NEGATIVE: a literal default.
+litDefault xs = optionOr 0 (lookup 1 xs)
+
+-- NEGATIVE: a variable default.
+varDefault d xs = optionOr d (lookup 1 xs)
+
+-- NEGATIVE: a constructor application builds data.
+ctorDefault xs = optionOr (Some 1) (lookup 1 xs)
+
+-- NEGATIVE: a qualified constructor application.
+qualCtorDefault xs = optionOr (M.Tip 1) (lookup 1 xs)
+
+-- NEGATIVE: a tuple and an operator expression are not calls.
+tupleDefault xs = optionOr (1, 2) (lookup 1 xs)
+opDefault xs = optionOr (1 + 2) (lookup 1 xs)
+
+-- NEGATIVE: the lazy forms.
+lazyForm k xs = optionOrElse (_ => fresh k) (lookup k xs)
+
+-- NEGATIVE: a call to a different eliminator.
+otherForm k xs = optionOrPanic "present" (lookup k xs)
+
+-- NEGATIVE: a directive silences the finding.
+-- lint-disable-next-line rule-eager-default
+suppressed k xs = optionOr (fresh k) (lookup k xs)
+
+-- NEGATIVE: a parameter named optionOr is not the prelude's.
+reboundHead optionOr k xs = optionOr (fresh k) (lookup k xs)
+
+-- POSITIVE: a comment above the declaration does not matter.
+-- note kept
+-- expect-next-line rule-eager-default
+commentAbove k xs = optionOr (fresh k) (lookup k xs)

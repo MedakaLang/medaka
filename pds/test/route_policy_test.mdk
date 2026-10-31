@@ -20,7 +20,7 @@
    acknowledge. -}
 
 import http.{maxJsonBodyBytes, maxRawBodyBytes, maxTextBodyBytes}
-import list.{lookup, somes}
+import list.{lookup}
 import string.{join}
 import test.{expectEqual}
 import lib.handlers.{pdsRegistry}
@@ -215,7 +215,7 @@ disagreement (nsid, actual) = match lookup nsid committedLines
 
 -- Routes whose committed line disagrees with the live one.
 mismatchedRoutes : List String
-mismatchedRoutes = somes (map disagreement derivedRoutes)
+mismatchedRoutes = filterMap disagreement derivedRoutes
 
 test "every registered route has a committed policy row" =
   expectEqual [] routesWithoutRows

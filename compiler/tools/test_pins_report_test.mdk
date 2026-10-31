@@ -61,13 +61,14 @@ errorPin = Pin {
 }
 
 index : PinIndex
-index = match buildPinIndex [
-  pin PropPin "law" "native" None,
-  pin TestPin "assertion" "eval" (Some "expected detail"),
-  errorPin,
-]
-  Ok value => value
-  Err _ => omEmpty
+index =
+  resultOr
+    omEmpty
+    (buildPinIndex [
+      pin PropPin "law" "native" None,
+      pin TestPin "assertion" "eval" (Some "expected detail"),
+      errorPin,
+    ])
 
 test "a law false is held while an XPASS and engine error remain failures" =
   let held = gradeProps index "main.mdk" [

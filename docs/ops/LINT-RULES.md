@@ -19,16 +19,19 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-bool-simplify`](#rule-bool-simplify) | universal | complexity | gated | fixable | file |
 | [`rule-rem-parity`](#rule-rem-parity) | universal | style | gated | fixable-unsafe | file |
 | [`rule-double-reverse`](#rule-double-reverse) | universal | complexity | gated | fixable | file |
+| [`rule-fuse-list-pipeline`](#rule-fuse-list-pipeline) | universal | perf | gated | fixable | file |
 | [`rule-when-unless`](#rule-when-unless) | universal | style | gated | fixable | file |
 | [`rule-complement-predicate`](#rule-complement-predicate) | universal | style | gated | fixable-unsafe | file |
 | [`rule-match-to-map`](#rule-match-to-map) | universal | style | gated | fixable | file |
+| [`rule-option-eliminators`](#rule-option-eliminators) | universal | style | gated | fixable | file |
+| [`rule-eager-default`](#rule-eager-default) | universal | perf | gated | fixable-unsafe | file |
 | [`rule-bind-chain-to-do`](#rule-bind-chain-to-do) | universal | complexity | gated | not-fixable | file |
 | [`rule-dead-code`](#rule-dead-code) | universal | suspicious | gated | not-fixable | file |
 | [`rule-concat-to-interp`](#rule-concat-to-interp) | universal | style | gated | fixable | file |
 | [`rule-self-shadow-extern`](#rule-self-shadow-extern) | universal | correctness | gated | not-fixable | file |
 | [`rule-prefer-assign-op`](#rule-prefer-assign-op) | universal | style | gated | fixable | file |
 | [`rule-promissory-reader`](#rule-promissory-reader) | internal | style | gated | not-fixable | file |
-| [`rule-orelse-staircase`](#rule-orelse-staircase) | universal | complexity | baselined | not-fixable | file |
+| [`rule-orelse-staircase`](#rule-orelse-staircase) | universal | complexity | gated | not-fixable | file |
 | [`rule-clone-type`](#rule-clone-type) | universal | style | baselined | not-fixable | file |
 | [`rule-clause-map`](#rule-clause-map) | universal | style | baselined | not-fixable | file |
 | [`rule-duplicate-body`](#rule-duplicate-body) | universal | complexity | gated | not-fixable | file, cross |
@@ -218,6 +221,23 @@ After:
   xs
 ```
 
+## rule-fuse-list-pipeline
+
+a traversal with a single stdlib name: `somes (map f xs)`, `length (filter p xs)`, `length xs == 0`, `xs == []`
+
+Several traversals build an intermediate list, or count a whole list to learn whether it is empty, where one stdlib name does the work in one pass.
+
+```
+Before:
+  length (filter p xs)
+  length xs == 0
+  xs == []
+After:
+  count p xs
+  isEmpty xs
+  isEmpty xs
+```
+
 ## rule-when-unless
 
 `if b then m else pure ()` / `if b then pure () else m`. Prefer `when b m` / `unless b m`
@@ -257,6 +277,36 @@ Before:
     Err e => Err e
 After:
   map f r
+```
+
+## rule-option-eliminators
+
+2-arm `match` on an Option/Result that unwraps with a literal, constructor or local-variable default, panics with a message, or answers whether it is `Some`. The prelude names these: `optionOr`, `optionOrPanic`, `isSome`, `isNone`, `resultOr`
+
+A two-arm `match` that returns the payload of `Some`/`Ok` and otherwise a literal, a nullary constructor or a local variable is `optionOr`/`resultOr`; one that otherwise panics with a message is `optionOrPanic`; one that only answers `True`/`False` is `isSome`/`isNone`. A default that is a call or a top-level value is left alone: the function form evaluates it eagerly. The `optionOrPanic` fix needs `--unsafe-fixes`, because a native panic through it loses the call site's location.
+
+```
+Before:
+  match o
+    Some x => x
+    None => 0
+After:
+  optionOr 0 o
+```
+
+## rule-eager-default
+
+a call passed as the default of `optionOr`/`resultOr`, or as the argument of `whenL False`: it runs although its result is discarded. Use `optionOrElse`/`resultOrElse`
+
+`optionOr d o` and `resultOr d r` are ordinary calls, so `d` is evaluated before the call even when `o` is `Some` or `r` is `Ok`. A default that is a call is wasted work on every hit, and an effect or a panic in it happens anyway. `optionOrElse` and `resultOrElse` take a function that runs on the miss only. A literal, a variable, a tuple, an operator expression or a constructor application is not reported, and neither is a partial application such as `map (optionOr d) xs`, which the lazy form would run once per miss.
+
+`whenL False (f x)` is reported without a fix: its argument is evaluated although the guard is `False`.
+
+```
+Before:
+  optionOr (freshVar ctx ()) (lookup n sub)
+After:
+  optionOrElse (_ => freshVar ctx ()) (lookup n sub)
 ```
 
 ## rule-bind-chain-to-do
@@ -349,9 +399,13 @@ After:
 
 ## rule-orelse-staircase
 
-first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Rewrite with `orElse`/`findMap` (suggest-only)
+first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Where the probes are pure and cheap, rewrite with the lazy `orElseWith` / `findMap` (suggest-only)
 
-Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Express it with `orElse` or `findMap`. Suggest-only.
+Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Suggest-only.
+
+`orElse a b` takes VALUES, so every probe runs. Use the lazy forms for each probe after the first: `orElseWith a (_ => probe)` for `Option`, `optionOrElse (_ => probe) opt`, `resultOrElse (err => probe) res` for `Result`, or `findMap` when the probes are one function over a list.
+
+No rewrite applies when a later probe is expensive, effectful, or the enclosing function's own recursion; a staircase whose later probe calls the enclosing function is not reported.
 
 ```
 Before:
@@ -361,7 +415,7 @@ Before:
       Some v => Some v
       None => probeC x
 After:
-  orElse (probeA x) (orElse (probeB x) (probeC x))
+  orElseWith (probeA x) (_ => orElseWith (probeB x) (_ => probeC x))
 ```
 
 ## rule-clone-type
