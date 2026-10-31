@@ -109,9 +109,7 @@ derivableHit orc loc iface tys
 -- `mkIdent _ OriginUnresolved _ = None`, but naming it directly keeps this
 -- module out of the #1110 OriginUnresolved ratchet).
 hasUserDataDecl : Oracle -> String -> Bool
-hasUserDataDecl orc tyName = match oGetCtors orc (TkBare NsType tyName)
-  Some _ => True
-  None => False
+hasUserDataDecl orc tyName = isSome (oGetCtors orc (TkBare NsType tyName))
 
 -- the head type name iff `tys` is exactly one TyCon-headed type
 singleNamedType : List Ty -> Option String

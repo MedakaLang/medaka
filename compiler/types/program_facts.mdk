@@ -126,9 +126,10 @@ withFacts facts action =
 -- is a panic.
 export
 factsNow : Unit -> ProgramFacts
-factsNow _ = match !currentFacts
-  Some facts => facts
-  None => panic "program facts: read outside any withFacts bracket"
+factsNow _ =
+  optionOrPanic
+    "program facts: read outside any withFacts bracket"
+    !currentFacts
 
 export
 withSymbolOrigins : SymbolOrigins -> ProgramFacts -> ProgramFacts

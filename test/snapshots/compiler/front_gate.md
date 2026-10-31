@@ -1,5 +1,5 @@
 # META
-source_lines=513
+source_lines=511
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -267,9 +267,7 @@ mainRefusal entry pairs = match splitLast pairs
 
 -- The entry's text, for rendering a refusal; the loader has already read it.
 entrySource : String -> <IO> String
-entrySource entry = match readFile entry
-  Ok src => src
-  Err _ => ""
+entrySource entry = resultOr "" (readFile entry)
 
 -- ── `build --json`: the gate's verdict as `check --json`'s envelope ─────────
 -- On the `--json` route the child also gets `diagJsonEnv`, naming a file in the
@@ -557,7 +555,7 @@ fileWithNotes _ _ _ = None
 (DTypeSig false "mainRefusal" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "mainRefusal" ((PVar "entry") (PVar "pairs")) (EMatch (EApp (EVar "splitLast") (EVar "pairs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PTuple PWild (PVar "decls")))) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "ppMainEntryError") (EApp (EVar "entrySource") (EVar "entry"))) (EVar "entry")) (EVar "d")))) (EApp (EVar "mainEntryError") (EVar "decls"))))))
 (DTypeSig false "entrySource" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "entrySource" ((PVar "entry")) (EMatch (EApp (EVar "readFile") (EVar "entry")) (arm (PCon "Ok" (PVar "src")) () (EVar "src")) (arm (PCon "Err" PWild) () (ELit (LString "")))))
+(DFunDef false "entrySource" ((PVar "entry")) (EApp (EApp (EVar "resultOr") (ELit (LString ""))) (EApp (EVar "readFile") (EVar "entry"))))
 (DData Public "GateAsk" () ((variant "GateAsk" (ConNamed (field "askAllowInternal" (TyCon "Bool")) (field "askDiagJson" (TyCon "Bool"))))) ())
 (DTypeSig true "diagJsonEnv" (TyCon "String"))
 (DFunDef false "diagJsonEnv" () (ELit (LString "MEDAKA_DIAG_JSON")))
@@ -642,7 +640,7 @@ fileWithNotes _ _ _ = None
 (DTypeSig false "mainRefusal" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "mainRefusal" ((PVar "entry") (PVar "pairs")) (EMatch (EApp (EVar "splitLast") (EVar "pairs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PTuple PWild (PVar "decls")))) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "ppMainEntryError") (EApp (EVar "entrySource") (EVar "entry"))) (EVar "entry")) (EVar "d")))) (EApp (EVar "mainEntryError") (EVar "decls"))))))
 (DTypeSig false "entrySource" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "entrySource" ((PVar "entry")) (EMatch (EApp (EVar "readFile") (EVar "entry")) (arm (PCon "Ok" (PVar "src")) () (EVar "src")) (arm (PCon "Err" PWild) () (ELit (LString "")))))
+(DFunDef false "entrySource" ((PVar "entry")) (EApp (EApp (EVar "resultOr") (ELit (LString ""))) (EApp (EVar "readFile") (EVar "entry"))))
 (DData Public "GateAsk" () ((variant "GateAsk" (ConNamed (field "askAllowInternal" (TyCon "Bool")) (field "askDiagJson" (TyCon "Bool"))))) ())
 (DTypeSig true "diagJsonEnv" (TyCon "String"))
 (DFunDef false "diagJsonEnv" () (ELit (LString "MEDAKA_DIAG_JSON")))

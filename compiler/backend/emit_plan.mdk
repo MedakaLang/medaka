@@ -259,9 +259,7 @@ isCtorIn : OrdMap Int -> String -> Bool
 isCtorIn ctors name = omHasKey name ctors
 
 ctorArityIn : OrdMap Int -> String -> Int
-ctorArityIn ctors name = match omLookup name ctors
-  Some n => n
-  None => 0
+ctorArityIn ctors name = optionOr 0 (omLookup name ctors)
 
 clausePair : CClause -> (List Pat, CExpr)
 clausePair (CClause pats body) = (pats, body)

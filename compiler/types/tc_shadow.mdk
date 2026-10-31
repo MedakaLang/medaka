@@ -399,9 +399,7 @@ plainAppHeadVar env hd = match shadowStandaloneHead env hd
   Some _ => False
   None => match definerShadowArgHead env.teDyn.dcModule hd
     Some _ => False
-    None => match definerShadowVarHead env.teDyn.dcModule hd
-      Some _ => False
-      None => True
+    None => isNone (definerShadowVarHead env.teDyn.dcModule hd)
 
 -- Bug C: peel a single-argument application's
 -- head to a standalone-shadow interface-method reference (`size b` where `size`
@@ -1109,8 +1107,8 @@ shadowStandaloneDictSlotsAt dyn None _ _ _ = emptyShadowDicts
 shadowStandaloneDictSlotsAt dyn (Some value) name key xt =
   let inst = instantiateMethodTracked dyn.dcModule value.vsScheme
   let dc =
-    optionOr
-      (shadowDeclaredFor dyn.dcModule name key)
+    optionOrElse
+      (_ => shadowDeclaredFor dyn.dcModule name key)
       (declaredEffectsAt dyn.dcModule.mcGraph inst value.vsDeclared)
   if isEmptyL dc.cdSlots then
     emptyShadowDicts
@@ -1668,9 +1666,7 @@ importMemberShadow : List (String, List Decl) ->
   UseMember ->
   List (String, String, Option Ty, Ty, Loc)
 importMemberShadow graph rows nameable universe depDecls (UseMember origin _ mloc alias) =
-  let local = match alias
-    Some a => a
-    None => origin
+  let local = optionOr origin alias
   if not (omHasKey local nameable) then
     []
   else match reachableStandaloneSig graph (listLen graph) depDecls origin
@@ -1828,9 +1824,7 @@ standaloneSigOf n (_ :: rest) = standaloneSigOf n rest
 -- compared are `TyCon`'s `tyConOrigin` and `TyRow`'s `Option Loc`: neither is part of the
 -- written scheme, and `Constraint`'s `constraintOrigin` is skipped for the same reason.
 tyAlphaEq : Ty -> Ty -> Bool
-tyAlphaEq a b = match tyAlphaGo [] a b
-  Some _ => True
-  None => False
+tyAlphaEq a b = isSome (tyAlphaGo [] a b)
 
 tyAlphaGo : List (String, String) -> Ty -> Ty -> Option (List (String, String))
 tyAlphaGo m (TyVar x) (TyVar y) = bindTyName m x y
@@ -2146,9 +2140,7 @@ formBareLocals gctx path acc =
 -- Identity on the un-mangled run/check path, where the map is empty.
 export
 shadowBareName : List (String, String) -> String -> String
-shadowBareName sm n = match lookupAssoc n sm
-  Some bare => bare
-  None => n
+shadowBareName sm n = optionOr n (lookupAssoc n sm)
 
 -- Method nameability and standalone availability are independent. The wrapper
 -- admits standalone routes only for this module's definitions or actual imported

@@ -994,9 +994,8 @@ blobsMoved before after =
    so a blob inserted through the byte-only `storePut` — which no route uses —
    reads back after a restart as exactly what it served before one. -}
 declaredMimeType : Store -> Cid -> String
-declaredMimeType store cid = match storeBlobMimeType cid store
-  Some declared => declared
-  None => "application/octet-stream"
+declaredMimeType store cid =
+  optionOr "application/octet-stream" (storeBlobMimeType cid store)
 
 {- | Whether the transition owes the blob area a write for one blob: it is new
    in `after`, or its declared type is not what it was.
@@ -3138,9 +3137,7 @@ claimDerivation (DerivationCensus running perIdentity) identity =
       let () = running := !running + 1
       True
     else
-      let ownShare = match get key !perIdentity
-        Some n => n
-        None => 0
+      let ownShare = optionOr 0 (get key !perIdentity)
       if ownShare >= maxConcurrentDerivationsPerIdentity then
         False
       else

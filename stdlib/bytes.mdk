@@ -420,7 +420,7 @@ indexOf needle bytes = indexOfWithin 0 (length bytes) needle bytes
 export
 lastIndexOf : Bytes -> Bytes -> Option Int
 lastIndexOf needle haystack
-  | length needle == 0 = Some (length haystack)
+  | isEmpty needle = Some (length haystack)
   | otherwise = lastIndexOfGo needle haystack 0 None
 
 -- Walks forward from each hit, advancing one byte so overlapping matches
@@ -737,9 +737,7 @@ export impl Hashable Bytes where
 -- `Array Int` of the bytes, which would box a machine word per byte to
 -- produce the same characters.
 hexDigit : Int -> Char
-hexDigit n = match toDigit n
-  Some c => c
-  None => '?'
+hexDigit n = optionOr '?' (toDigit n)
 
 debugBytesHex : ByteBlock -> Int -> Int -> String
 debugBytesHex bb i n

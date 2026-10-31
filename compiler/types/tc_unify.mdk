@@ -773,12 +773,7 @@ indexAtomsCovered mctx (x :: rest) bound = match findAtom (atomKey x) bound
 -- reports their mismatch as an authority index, so it is not a second report
 -- here.
 labelsMissing : List Atom -> List Atom -> List Atom
-labelsMissing l1 l2 =
-  filterList
-    (x => match findAtom (atomKey x) l2
-      Some _ => False
-      None => True)
-    l1
+labelsMissing l1 l2 = filterList (x => isNone (findAtom (atomKey x) l2)) l1
 
 -- Two index rows with nothing left to solve — both closed, or both already ending in the
 -- SAME effvar cell — are the same type iff neither side carries an atom the other lacks.

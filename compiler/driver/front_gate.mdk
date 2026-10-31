@@ -263,9 +263,7 @@ mainRefusal entry pairs = match splitLast pairs
 
 -- The entry's text, for rendering a refusal; the loader has already read it.
 entrySource : String -> <IO> String
-entrySource entry = match readFile entry
-  Ok src => src
-  Err _ => ""
+entrySource entry = resultOr "" (readFile entry)
 
 -- ── `build --json`: the gate's verdict as `check --json`'s envelope ─────────
 -- On the `--json` route the child also gets `diagJsonEnv`, naming a file in the

@@ -1,0 +1,194 @@
+-- Fixture for rule-option-eliminators: a 2-arm `match` the prelude names.  The
+-- default must be a literal, a nullary constructor or a locally bound variable:
+-- a call default is left alone, because `optionOr d o` evaluates `d` even when
+-- `o` is `Some`, and so is a top-level value, which `run` forces on first use.  The scrutinee text moves into the call exactly once.  Rebinding,
+-- wildcard-import and impl-method guards are pinned in
+-- `test/lint_fix_fixtures/option_eliminators_*.mdk`, since each is file-wide; a
+-- comment inside the span is pinned there too.
+
+import test.{expectEqual}
+
+data Color = Red | Green
+
+expensive : Int -> Int
+expensive n = n * 2
+
+describe : Option Int -> String
+describe _ = "none"
+
+probe : Int -> String -> Option String
+probe k m = if k > 0 then Some m else None
+
+-- POSITIVE: panic with a literal message.  The fix is Unsafe: the native engine
+-- reports a panic through `optionOrPanic` without the call site's location, so
+-- plain `--fix` leaves the match.
+-- expect-next-line rule-option-eliminators unfixed
+panicLit o = match o
+  Some x => x
+  None => panic "no value"
+
+-- POSITIVE: panic with a variable message.
+-- expect-next-line rule-option-eliminators unfixed
+panicVar msg o = match o
+  Some x => x
+  None => panic msg
+
+-- POSITIVE: Some payload or a literal.
+-- expect-next-line rule-option-eliminators
+litDefault o = optionOr 0 o
+
+-- POSITIVE: arm order is free.
+-- expect-next-line rule-option-eliminators
+failureFirst o = optionOr 'z' o
+
+-- POSITIVE: a variable default.
+-- expect-next-line rule-option-eliminators
+varDefault dflt o = optionOr dflt o
+
+-- POSITIVE: a nullary constructor default.
+-- expect-next-line rule-option-eliminators
+ctorDefault o = optionOr Red o
+
+-- POSITIVE: a call scrutinee moves in unchanged.
+-- expect-next-line rule-option-eliminators
+callScrutinee k m = optionOr "" (probe k m)
+
+-- POSITIVE: Result with a wildcard error.
+-- expect-next-line rule-option-eliminators
+resultDefault r = resultOr 0 r
+
+-- POSITIVE: Result, failure arm first.
+-- expect-next-line rule-option-eliminators
+resultFirst r = resultOr False r
+
+-- POSITIVE: presence tests, both polarities and both orders.
+-- expect-next-line rule-option-eliminators
+presentSome o = isSome o
+-- expect-next-line rule-option-eliminators
+presentNone o = isSome o
+-- expect-next-line rule-option-eliminators
+absentSome o = isNone o
+-- expect-next-line rule-option-eliminators
+absentNone o = isNone o
+
+-- POSITIVE: parenthesised under an operator.
+-- expect-next-line rule-option-eliminators
+underOp o p = isSome o && p
+
+-- POSITIVE: an argument keeps its brackets.
+-- expect-next-line rule-option-eliminators
+asArg o = abs (optionOr 0 o)
+
+-- POSITIVE: in a where-bound function.
+outer o = inner o
+  where
+    -- expect-next-line rule-option-eliminators
+    inner v = optionOr 1 v
+
+-- POSITIVE: a comment above the match, inside the declaration, survives.
+commentAbove o =
+  -- keep this note
+  -- expect-next-line rule-option-eliminators
+  optionOr 0 o
+
+-- NEGATIVE: a call default stays (Q-R1): the function form would evaluate it eagerly.
+callDefault o = match o
+  Some x => x
+  None => expensive 1
+
+-- NEGATIVE: a top-level value default.  `run` forces a top-level value on first
+-- use, so `optionOr fallbackValue o` would force it on every call.
+fallbackValue : Int
+fallbackValue = panic "fallback forced"
+
+topValueDefault o = match o
+  Some x => x
+  None => fallbackValue
+
+-- NEGATIVE: an imported value default, for the same reason.
+importedDefault o = match o
+  Some x => x
+  None => maxBound
+
+-- NEGATIVE: a top-level value as the panic message.
+topValueMessage o = match o
+  Some x => x
+  None => panic fallbackMessage
+
+fallbackMessage : String
+fallbackMessage = "no value"
+
+-- NEGATIVE: an operator expression is a computation, not an atom.
+computedDefault o n = match o
+  Some x => x
+  None => n + 1
+
+-- NEGATIVE: a panic whose message is built at the failure.
+panicBuilt o n = match o
+  Some x => x
+  None => panic "no value at \{n}"
+
+-- NEGATIVE: a panic whose message is a call.
+panicCall o = match o
+  Some x => x
+  None => panic (describe o)
+
+-- NEGATIVE: a named error binder may be used by the default.
+errNamed r = match r
+  Ok x => x
+  Err e => 0
+
+-- NEGATIVE: the success arm transforms its payload.
+transformed o = match o
+  Some x => x + 1
+  None => 0
+
+-- NEGATIVE: the success arm picks the payload apart.
+picked o = match o
+  Some (a, _) => a
+  None => 0
+
+-- NEGATIVE: a guard.
+guarded o = match o
+  Some x if x > 0 => x
+  _ => 0
+
+-- NEGATIVE: three arms.
+threeArms o = match o
+  Some 0 => 0
+  Some x => x
+  None => 1
+
+-- NEGATIVE: a named binder is not a presence test (the binder may be used later).
+namedBinder o = match o
+  Some x => True
+  None => False
+
+-- NEGATIVE: both arms answer the same.
+sameAnswer o = match o
+  Some _ => True
+  None => True
+
+-- NEGATIVE: Result presence is not an Option test.
+okTest r = match r
+  Ok _ => True
+  Err _ => False
+
+-- NEGATIVE: not a two-constructor eliminator at all.
+plain n = match n
+  0 => 1
+  _ => 2
+
+-- The scrutinee runs once before and after the rewrite.  `bump` counts its calls.
+bump : Ref Int -> Option Int
+bump c =
+  let _ = c := !c + 1
+  Some 7
+
+-- expect-next-line rule-option-eliminators
+viaMatch c = optionOr 0 (bump c)
+
+test "the scrutinee is evaluated exactly once" =
+  let c = Ref 0
+  let _ = viaMatch c
+  expectEqual 1 !c

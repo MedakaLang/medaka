@@ -634,14 +634,12 @@ inputManifestRequirementW : WasmEmitInput -> ManifestRequirement
 inputManifestRequirementW (WasmEmitInputData _ _ requirement) = requirement
 
 physicalPlanW : EmitPlan -> WasmDemandPlan
-physicalPlanW plan = match plan.wasmPhysical
-  Some p => p
-  None => panic "internal error: missing-wasm-demand-plan"
+physicalPlanW plan =
+  optionOrPanic "internal error: missing-wasm-demand-plan" plan.wasmPhysical
 
 emitDemandW : WasmEmit -> WasmDemandPlan
-emitDemandW emit = match emit.physical
-  Some p => p
-  None => panic "internal error: missing-wasm-demand-plan"
+emitDemandW emit =
+  optionOrPanic "internal error: missing-wasm-demand-plan" emit.physical
 
 seedPhysicalW : WasmEmit -> WasmDemandPlan -> Unit
 seedPhysicalW emit physical =
@@ -978,7 +976,7 @@ emitFfiEtaW prog name = match jsImportForW prog name
         ([
             "  (func \{lamName} (type $codety) (param \{syntheticLocalName WN.WAbiSelf 0} (ref eq)) (param \{syntheticLocalName WN.WAbiArgs 0} (ref $argarr)) (result (ref eq))",
           ]
-          ++ map ("    " ++ _) (map wParamLocal params)
+          ++ map (wParamLocal >> ("    " ++ _)) params
           ++ indent body
           ++ ["  )"])
     wConstClos prog lamName arity

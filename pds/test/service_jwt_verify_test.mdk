@@ -16,7 +16,7 @@
 
 import bytes.{Bytes, encodeUtf8}
 import hex.{decode}
-import list.{lookup, somes, sort}
+import list.{lookup, sort}
 import string as S
 import test.{expectEach, expectEqual, expectNotEqual}
 import test.vector_ledger.{filesForConsumer}
@@ -77,7 +77,7 @@ parseCorpus text =
       optionOrPanic
         "service_jwt_verify_test: corpus `now` is not an integer"
         (S.toInt (headerValue "now" corpusLines)),
-    rows = somes (map rowOf corpusLines),
+    rows = filterMap rowOf corpusLines,
   }
 
 corpus : <FileRead, Exec, Env "MEDAKA_ROOT"> Corpus

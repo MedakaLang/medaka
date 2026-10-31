@@ -1,5 +1,5 @@
 # META
-source_lines=196
+source_lines=195
 stages=DESUGAR,MARK
 # SOURCE
 -- Nominal lexical scope storage for one typechecking graph.  Raw ScopeIds are
@@ -67,9 +67,8 @@ scopeFrame store sid =
   let frames = store.ssFrames.value
   if i < 0 || i >= arrayLength frames then
     panic "scope frame missing"
-  else match arrayGetUnsafe i frames
-    Some frame => frame
-    None => panic "scope frame missing"
+  else
+    optionOrPanic "scope frame missing" (arrayGetUnsafe i frames)
 
 export
 freshScope : ScopeStore ->
@@ -214,7 +213,7 @@ scopeFrameStats store = (store.ssNext.value, arrayLength store.ssFrames.value)
 (DTypeSig false "scopeOrdinal" (TyFun (TyCon "ScopeId") (TyCon "Int")))
 (DFunDef false "scopeOrdinal" ((PCon "ScopeId" (PVar "i"))) (EVar "i"))
 (DTypeSig true "scopeFrame" (TyFun (TyCon "ScopeStore") (TyFun (TyCon "ScopeId") (TyCon "ScopeFrame"))))
-(DFunDef false "scopeFrame" ((PVar "store") (PVar "sid")) (EBlock (DoLet false false (PVar "i") (EApp (EVar "scopeOrdinal") (EVar "sid"))) (DoLet false false (PVar "frames") (EFieldAccess (EFieldAccess (EVar "store") "ssFrames") "value")) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "frames")))) (EApp (EVar "panic") (ELit (LString "scope frame missing"))) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "frames")) (arm (PCon "Some" (PVar "frame")) () (EVar "frame")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "scope frame missing")))))))))
+(DFunDef false "scopeFrame" ((PVar "store") (PVar "sid")) (EBlock (DoLet false false (PVar "i") (EApp (EVar "scopeOrdinal") (EVar "sid"))) (DoLet false false (PVar "frames") (EFieldAccess (EFieldAccess (EVar "store") "ssFrames") "value")) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "frames")))) (EApp (EVar "panic") (ELit (LString "scope frame missing"))) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "scope frame missing"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "frames")))))))
 (DTypeSig true "freshScope" (TyFun (TyCon "ScopeStore") (TyFun (TyApp (TyCon "Option") (TyCon "ScopeId")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "ScopeOwner") (TyCon "ScopeId")))))))
 (DFunDef false "freshScope" ((PVar "store") (PVar "parent") (PVar "level") (PVar "moduleId") (PVar "owner")) (EBlock (DoLet false false (PVar "i") (EFieldAccess (EFieldAccess (EVar "store") "ssNext") "value")) (DoLet false false (PVar "sid") (EApp (EVar "ScopeId") (EVar "i"))) (DoLet false false (PVar "arr0") (EFieldAccess (EFieldAccess (EVar "store") "ssFrames") "value")) (DoLet false false (PVar "arr") (EIf (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr0"))) (EVar "arr0") (EBlock (DoLet false false (PVar "grown") (EApp (EApp (EVar "arrayMake") (EApp (EApp (EVar "max") (ELit (LInt 16))) (EBinOp "*" (ELit (LInt 2)) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EVar "None"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "arr0")) (ELit (LInt 0))) (EVar "grown")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr0")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "store") "ssFrames")) (EVar "grown"))) (DoExpr (EVar "grown"))))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (ERecordCreate "ScopeFrame" ((fa "sfId" (EVar "sid")) (fa "sfParent" (EVar "parent")) (fa "sfLevel" (EVar "level")) (fa "sfModuleId" (EVar "moduleId")) (fa "sfOwner" (EVar "owner")))))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "store") "ssNext")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (EVar "sid"))))
 (DTypeSig true "givenVisibleFrom" (TyFun (TyCon "ScopeStore") (TyFun (TyCon "ScopeId") (TyFun (TyCon "ScopeId") (TyCon "Bool")))))
@@ -269,7 +268,7 @@ scopeFrameStats store = (store.ssNext.value, arrayLength store.ssFrames.value)
 (DTypeSig false "scopeOrdinal" (TyFun (TyCon "ScopeId") (TyCon "Int")))
 (DFunDef false "scopeOrdinal" ((PCon "ScopeId" (PVar "i"))) (EVar "i"))
 (DTypeSig true "scopeFrame" (TyFun (TyCon "ScopeStore") (TyFun (TyCon "ScopeId") (TyCon "ScopeFrame"))))
-(DFunDef false "scopeFrame" ((PVar "store") (PVar "sid")) (EBlock (DoLet false false (PVar "i") (EApp (EVar "scopeOrdinal") (EVar "sid"))) (DoLet false false (PVar "frames") (EFieldAccess (EFieldAccess (EVar "store") "ssFrames") "value")) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "frames")))) (EApp (EVar "panic") (ELit (LString "scope frame missing"))) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "frames")) (arm (PCon "Some" (PVar "frame")) () (EVar "frame")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "scope frame missing")))))))))
+(DFunDef false "scopeFrame" ((PVar "store") (PVar "sid")) (EBlock (DoLet false false (PVar "i") (EApp (EVar "scopeOrdinal") (EVar "sid"))) (DoLet false false (PVar "frames") (EFieldAccess (EFieldAccess (EVar "store") "ssFrames") "value")) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "frames")))) (EApp (EVar "panic") (ELit (LString "scope frame missing"))) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "scope frame missing"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "frames")))))))
 (DTypeSig true "freshScope" (TyFun (TyCon "ScopeStore") (TyFun (TyApp (TyCon "Option") (TyCon "ScopeId")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "ScopeOwner") (TyCon "ScopeId")))))))
 (DFunDef false "freshScope" ((PVar "store") (PVar "parent") (PVar "level") (PVar "moduleId") (PVar "owner")) (EBlock (DoLet false false (PVar "i") (EFieldAccess (EFieldAccess (EVar "store") "ssNext") "value")) (DoLet false false (PVar "sid") (EApp (EVar "ScopeId") (EVar "i"))) (DoLet false false (PVar "arr0") (EFieldAccess (EFieldAccess (EVar "store") "ssFrames") "value")) (DoLet false false (PVar "arr") (EIf (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr0"))) (EVar "arr0") (EBlock (DoLet false false (PVar "grown") (EApp (EApp (EVar "arrayMake") (EApp (EApp (EMethodRef "max") (ELit (LInt 16))) (EBinOp "*" (ELit (LInt 2)) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EVar "None"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "arr0")) (ELit (LInt 0))) (EVar "grown")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr0")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "store") "ssFrames")) (EVar "grown"))) (DoExpr (EVar "grown"))))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (ERecordCreate "ScopeFrame" ((fa "sfId" (EVar "sid")) (fa "sfParent" (EVar "parent")) (fa "sfLevel" (EVar "level")) (fa "sfModuleId" (EVar "moduleId")) (fa "sfOwner" (EVar "owner")))))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "store") "ssNext")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (EVar "sid"))))
 (DTypeSig true "givenVisibleFrom" (TyFun (TyCon "ScopeStore") (TyFun (TyCon "ScopeId") (TyFun (TyCon "ScopeId") (TyCon "Bool")))))

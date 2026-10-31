@@ -35,9 +35,7 @@ byteAt i bs = match B.get i bs
   None => panic "base64: index out of bounds"
 
 charAt : Int -> Array Char -> Char
-charAt i arr = match get i arr
-  Some c => c
-  None => panic "base64: index out of bounds"
+charAt i arr = optionOrPanic "base64: index out of bounds" (get i arr)
 
 -- ── Alphabet ──────────────────────────────────────────────────────────────
 

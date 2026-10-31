@@ -354,9 +354,7 @@ writeBytesFixture dir slug arr = match writeFileBytes "\{dir}/\{slug}.bin" arr
   Ok _ => Ok "\{dir}/\{slug}.bin"
 
 byteAt : Array Int -> Int -> Int
-byteAt arr i = match A.get i arr
-  Some b => b
-  None => 0
+byteAt arr i = optionOr 0 (A.get i arr)
 
 -- The four bytes of 0xDEADBEEF, written over a trailer field.
 magicByte : Int -> Int

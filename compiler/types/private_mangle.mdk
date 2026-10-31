@@ -1619,9 +1619,7 @@ renameLetBindDef rm (LetBind n clauses site bid) =
     bid
 
 renameDefName : OrdMap String -> String -> String
-renameDefName rm n = match omLookup n rm
-  Some n2 => n2
-  None => n
+renameDefName rm n = optionOr n (omLookup n rm)
 
 renameIfaceMethod : OrdMap String -> IfaceMethod -> IfaceMethod
 renameIfaceMethod _ (IfaceMethod n ty None mloc) = IfaceMethod n ty None mloc

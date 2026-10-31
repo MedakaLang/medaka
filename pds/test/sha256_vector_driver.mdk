@@ -270,7 +270,7 @@ parseArgs files = (-1, files)
 main : <IO, Env, FileRead> Unit
 main =
   let (maxBytes, files) = parseArgs (args ())
-  if files == [] then
+  if isEmpty files then
     let _ =
       println
         "usage: sha256_vector_driver [--max-bytes N] <vector-file> [<vector-file> ...]"

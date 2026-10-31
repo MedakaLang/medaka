@@ -29,9 +29,7 @@ stageBump key = match !stageCountOn
   False => ()
 
 countOf : String -> Int
-countOf key = match omLookup key !stageCounts
-  Some n => n
-  None => 0
+countOf key = optionOr 0 (omLookup key !stageCounts)
 
 -- Turn counting on when MEDAKA_STAGE_COUNTS is set and non-empty.
 export

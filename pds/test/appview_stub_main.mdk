@@ -242,9 +242,8 @@ recvRequest conn buffer = match scanRequestBoundary buffer 0
         recvRequest conn (buffer ++ chunk)
 
 observedField : String -> Request -> String
-observedField name request = match findHeaderValue name (requestHeaders request)
-  Some value => value
-  None => "<absent>"
+observedField name request =
+  optionOr "<absent>" (findHeaderValue name (requestHeaders request))
 
 -- One call is one log line, so a body with a newline in it would split the
 -- record. Nothing this gate forwards carries one, and a body that did would

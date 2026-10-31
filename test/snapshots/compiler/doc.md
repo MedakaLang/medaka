@@ -1,5 +1,5 @@
 # META
-source_lines=1859
+source_lines=1857
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -552,9 +552,7 @@ renderHead name args =
   if all (== "_") args then "" else joinWith " " (name :: args)
 
 headFor : String -> List (String, String) -> String
-headFor name heads = match lookupAssoc name heads
-  Some h => h
-  None => ""
+headFor name heads = optionOr "" (lookupAssoc name heads)
 
 -- An abstract export (`export data`, not `public export data`) publishes the
 -- type and keeps its constructors private, so the reference shows the head
@@ -2007,7 +2005,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "renderHead" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "renderHead" ((PVar "name") (PVar "args")) (EIf (EApp (EApp (EVar "all") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (ELit (LString "_"))))) (EVar "args")) (ELit (LString "")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EVar "name") (EVar "args")))))
 (DTypeSig false "headFor" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String"))))
-(DFunDef false "headFor" ((PVar "name") (PVar "heads")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "heads")) (arm (PCon "Some" (PVar "h")) () (EVar "h")) (arm (PCon "None") () (ELit (LString "")))))
+(DFunDef false "headFor" ((PVar "name") (PVar "heads")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "heads"))))
 (DTypeSig false "dataVisAbstract" (TyFun (TyCon "DataVis") (TyCon "Bool")))
 (DFunDef false "dataVisAbstract" ((PCon "VisAbstract")) (EVar "True"))
 (DFunDef false "dataVisAbstract" (PWild) (EVar "False"))
@@ -2463,7 +2461,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "renderHead" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "renderHead" ((PVar "name") (PVar "args")) (EIf (EApp (EApp (EDictApp "all") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (ELit (LString "_"))))) (EVar "args")) (ELit (LString "")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EVar "name") (EVar "args")))))
 (DTypeSig false "headFor" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String"))))
-(DFunDef false "headFor" ((PVar "name") (PVar "heads")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "heads")) (arm (PCon "Some" (PVar "h")) () (EVar "h")) (arm (PCon "None") () (ELit (LString "")))))
+(DFunDef false "headFor" ((PVar "name") (PVar "heads")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "heads"))))
 (DTypeSig false "dataVisAbstract" (TyFun (TyCon "DataVis") (TyCon "Bool")))
 (DFunDef false "dataVisAbstract" ((PCon "VisAbstract")) (EVar "True"))
 (DFunDef false "dataVisAbstract" (PWild) (EVar "False"))

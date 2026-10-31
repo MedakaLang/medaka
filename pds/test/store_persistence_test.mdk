@@ -48,7 +48,7 @@ import array as A
 import bytes.{fromArrayAssumeByteDomain}
 import fs.{walkDir}
 import hex.{encode, encodeString}
-import list.{get, indexed, last, somes, sort}
+import list.{get, indexed, last, sort}
 import path.{joinPath}
 import regex as R
 import string.{
@@ -151,12 +151,8 @@ require False message = Err message
 -- final newline.
 lastLine : String -> String
 lastLine out =
-  let body = match stripSuffix "\n" out
-    Some b => b
-    None => out
-  match last (lines body)
-    Some l => l
-    None => ""
+  let body = optionOr out (stripSuffix "\n" out)
+  optionOr "" (last (lines body))
 
 requireLast : String -> String -> String -> Result String Unit
 requireLast want out message =
@@ -175,7 +171,7 @@ hasMatch pattern out =
 
 -- Every line that starts with `prefix`, the prefix removed.
 tagged : String -> String -> List String
-tagged prefix out = somes (map (stripPrefix prefix) (lines out))
+tagged prefix out = filterMap (stripPrefix prefix) (lines out)
 
 -- Every regular file under `dir`, sorted.
 filesUnder : String -> <FileRead> Result String (List String)
@@ -190,9 +186,7 @@ fileIsRegular p = match statFile p
 
 -- `path` relative to `root`.
 relativeTo : String -> String -> String
-relativeTo root path = match stripPrefix "\{root}/" path
-  Some rel => rel
-  None => path
+relativeTo root path = optionOr path (stripPrefix "\{root}/" path)
 
 -- `path` with its last `/component` removed, as `sub(/\/[^\/]*$/, "")`.
 parentOf : String -> String
@@ -258,7 +252,7 @@ repoResumed p = do
   () <- requireLine "SAVE records 3" p.save "save did not write three records"
   () <- requireLast "LOAD: PASS" p.load "load route did not pass"
   let saved = tagged "SAVE " p.save
-  () <- require (saved /= []) "save produced no state summary"
+  () <- require (not (isEmpty saved)) "save produced no state summary"
   () <- require
     (saved == tagged "LOAD " p.load)
     "reloaded head commit CID / record count / getRepo CAR differ"
@@ -275,7 +269,7 @@ blobsResumed p = do
   () <- requireLast "BLOB-LOAD: PASS" p.blobLoad "blob load route did not pass"
   let saved = tagged "BLOBSAVE " p.blobSave
   let loaded = tagged "BLOBLOAD " p.blobLoad
-  () <- require (saved /= []) "blob save produced no state summary"
+  () <- require (not (isEmpty saved)) "blob save produced no state summary"
   () <- require
     (saved == loaded)
     "reloaded blob CID / declared MIME type / bytes differ"
@@ -430,9 +424,7 @@ firstOf _ (x :: _) = Ok x
 firstOf what [] = Err "no \{what}"
 
 isSidecar : String -> Bool
-isSidecar path = match stripSuffix ".mime" path
-  Some _ => True
-  None => False
+isSidecar path = isSome (stripSuffix ".mime" path)
 
 test "tamper: a tampered block file and a tampered blob file are refused, not served" = inScratch
   (bin scratch => do
@@ -472,7 +464,7 @@ test "oversize: a blob the pure layer refuses reaches no file at all" = inScratc
       "an oversize blob was not refused before writing"
     files <- filesUnder dir
     require
-      (files == [])
+      (isEmpty files)
       "an oversize blob left \{intToString (length files)} file(s) on disk")
 
 -- # Half-written directories
@@ -504,7 +496,9 @@ unpromotedHead bin scratch = do
     loaded
     "an unpromoted head did not reload at all"
   let oldState = tagged "OLD " old
-  () <- require (oldState /= []) "old-generation save produced no state summary"
+  () <- require
+    (not (isEmpty oldState))
+    "old-generation save produced no state summary"
   () <- require
     (oldState == tagged "LOAD " loaded)
     "an unpromoted head served a repository that is not the previous one"
@@ -855,10 +849,7 @@ test "stray: an entry no store wrote is skipped or refused as its module states,
     () <- require
       (not (contains "refused" base))
       "the unplanted baseline did not read cleanly: \{base}"
-    let field =
-      i => match get i fields
-        Some f => f
-        None => ""
+    let field = i => optionOr "" (get i fields)
     let blocksOk = field 1
     let blobsOk = field 3
     let countOk = field 5
@@ -1002,7 +993,7 @@ modesUnder bin scratch mask bytesMode = do
         _ => True)
       survey
   require
-    (wrong == [])
+    (isEmpty wrong)
     "under umask \{mask}, \{intToString (length wrong)} file(s) are not at the mode they owe (class mode owed path):\n\{join "\n" wrong}"
 
 test "modes: every text file at 0600 under any umask; block and blob bytes follow the umask" = inScratch
@@ -1084,7 +1075,7 @@ traceRoute bin scratch route dir = do
       dir,
     ])
   text <- readText traceFile
-  Ok (out, somes (map traceEvent (lines text)))
+  Ok (out, filterMap traceEvent (lines text))
 
 -- 1-based positions of the events matching `pattern`: line numbers in the
 -- normalized trace, which is what every order assertion compares.
@@ -1109,9 +1100,7 @@ countOf : String -> List String -> Int
 countOf pattern events = length (positions pattern events)
 
 eventAt : List String -> Int -> String
-eventAt events i = match get (i - 1) events
-  Some e => e
-  None => ""
+eventAt events i = optionOr "" (get (i - 1) events)
 
 {- | 12a. `persistTransition` runs the blob half before the repo half, and
    only the syscall order records which ran first. A record may name blob
@@ -1242,16 +1231,14 @@ renameEvent prev ev st0 =
   match words ev
     _ :: src :: dst :: _ =>
       if prev /= Some "F \{src}" then
-        let before = match prev
-          Some p => p
-          None => "<nothing>"
+        let before = optionOr "<nothing>" prev
         { st |
           bad =
             st.bad ++ ["UNBARRIERED PROMOTE: \{ev}\n  preceded by: \{before}"],
         }
       else
         let (bad, owed) =
-          if st.flushed && st.owed /= [] then
+          if st.flushed && not (isEmpty st.owed) then
             (
               st.bad
                 ++ map
@@ -1321,7 +1308,7 @@ gradeBarriers events =
 routeViolations : (String, List String) -> List String
 routeViolations (route, events) =
   let (renames, created, bad) = gradeBarriers events
-  if bad == [] then
+  if isEmpty bad then
     []
   else
     [
@@ -1413,7 +1400,7 @@ traceAll bin scratch = do
   () <- blobAreaBarriered repo (snd blobSaved)
   let violations = flatMap routeViolations routes
   () <- require
-    (violations == [])
+    (isEmpty violations)
     "a rename or a mkdir published a name no barrier had put on disk:\n\{join "\n" violations}"
   pathsExercised everything
 
@@ -1470,9 +1457,7 @@ test "cost: the hundredth upload writes its own blob and sidecar, and no other b
       sum
         (map
           (l => match get 2 (words l)
-            Some s => match toInt s
-              Some n => n
-              None => 0
+            Some s => optionOr 0 (toInt s)
             None => 0)
           written)
     blobSize <- match map words (tagged "BLOB-CHURN-ADD size " add)
@@ -1525,7 +1510,7 @@ test "cost: one commit writes the blocks it adds, and no block the repository al
     let moved = filter (l => not (elem l before)) after
     let rewritten = filter (l => elem (stampPath l) held) moved
     () <- require
-      (rewritten == [])
+      (isEmpty rewritten)
       "one commit rewrote \{intToString (length rewritten)} of the \{intToString (length before)} block files the repository already held:\n\{join "\n" rewritten}"
     () <- require
       (length moved >= 2 && length moved <= 8)

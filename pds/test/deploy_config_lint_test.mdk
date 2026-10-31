@@ -1350,7 +1350,7 @@ test "deploy_config_lint grades at least PATTERN_FLOOR=114 patterns" =
 declaredAssertions : <FileRead, IO> Result String Int
 declaredAssertions =
   map
-    (text => length (filter (startsWith "test \"") (lines text)))
+    (text => count (startsWith "test \"") (lines text))
     (readFile (underRoot "pds/test/deploy_config_lint_test.mdk"))
 
 assertionFloor : Int

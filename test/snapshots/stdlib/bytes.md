@@ -1,5 +1,5 @@
 # META
-source_lines=1005
+source_lines=1003
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
@@ -424,7 +424,7 @@ indexOf needle bytes = indexOfWithin 0 (length bytes) needle bytes
 export
 lastIndexOf : Bytes -> Bytes -> Option Int
 lastIndexOf needle haystack
-  | length needle == 0 = Some (length haystack)
+  | isEmpty needle = Some (length haystack)
   | otherwise = lastIndexOfGo needle haystack 0 None
 
 -- Walks forward from each hit, advancing one byte so overlapping matches
@@ -741,9 +741,7 @@ export impl Hashable Bytes where
 -- `Array Int` of the bytes, which would box a machine word per byte to
 -- produce the same characters.
 hexDigit : Int -> Char
-hexDigit n = match toDigit n
-  Some c => c
-  None => '?'
+hexDigit n = optionOr '?' (toDigit n)
 
 debugBytesHex : ByteBlock -> Int -> Int -> String
 debugBytesHex bb i n
@@ -1058,7 +1056,7 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "indexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "indexOf" ((PVar "needle") (PVar "bytes")) (EApp (EApp (EApp (EApp (EVar "indexOfWithin") (ELit (LInt 0))) (EApp (EVar "length") (EVar "bytes"))) (EVar "needle")) (EVar "bytes")))
 (DTypeSig true "lastIndexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EApp (EVar "length") (EVar "needle")) (ELit (LInt 0))) (EApp (EVar "Some") (EApp (EVar "length") (EVar "haystack"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EApp (EVar "isEmpty") (EVar "needle")) (EApp (EVar "Some") (EApp (EVar "length") (EVar "haystack"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "lastIndexOfGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DFunDef false "lastIndexOfGo" ((PVar "needle") (PVar "haystack") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EVar "indexOfWithin") (EVar "from")) (EApp (EVar "length") (EVar "haystack"))) (EVar "needle")) (EVar "haystack")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "Some") (EVar "i"))))))
 (DTypeSig true "contains" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
@@ -1107,7 +1105,7 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DFunDef false "hashGo" ((PVar "acc") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "hashGo") (EApp (EApp (EVar "derivedHashStep") (EVar "acc")) (EApp (EVar "hashInt") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
 (DImpl true "Hashable" ((TyCon "Bytes")) () ((im "hash" ((PCon "Bytes" (PVar "bb"))) (EApp (EApp (EApp (EApp (EVar "hashGo") (ELit (LInt 0))) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))))
 (DTypeSig false "hexDigit" (TyFun (TyCon "Int") (TyCon "Char")))
-(DFunDef false "hexDigit" ((PVar "n")) (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar "?")))))
+(DFunDef false "hexDigit" ((PVar "n")) (EApp (EApp (EVar "optionOr") (ELit (LChar "?"))) (EApp (EVar "toDigit") (EVar "n"))))
 (DTypeSig false "debugBytesHex" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "debugBytesHex" ((PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "b") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "hexDigit") (EApp (EApp (EVar "shiftRight") (EVar "b")) (ELit (LInt 4)))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "hexDigit") (EApp (EApp (EVar "bitAnd") (EVar "b")) (ELit (LInt 15)))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (ELit (LString ""))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DImpl true "Debug" ((TyCon "Bytes")) () ((im "debug" ((PCon "Bytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Bytes \"")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))) (ELit (LString "\""))))))
@@ -1192,7 +1190,7 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "indexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "indexOf" ((PVar "needle") (PVar "bytes")) (EApp (EApp (EApp (EApp (EVar "indexOfWithin") (ELit (LInt 0))) (EApp (EVar "length#shadow") (EVar "bytes"))) (EVar "needle")) (EVar "bytes")))
 (DTypeSig true "lastIndexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EApp (EVar "length#shadow") (EVar "needle")) (ELit (LInt 0))) (EApp (EVar "Some") (EApp (EVar "length#shadow") (EVar "haystack"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EApp (EVar "isEmpty#shadow") (EVar "needle")) (EApp (EVar "Some") (EApp (EVar "length#shadow") (EVar "haystack"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "lastIndexOfGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DFunDef false "lastIndexOfGo" ((PVar "needle") (PVar "haystack") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EVar "indexOfWithin") (EVar "from")) (EApp (EVar "length#shadow") (EVar "haystack"))) (EVar "needle")) (EVar "haystack")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "Some") (EVar "i"))))))
 (DTypeSig true "contains" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
@@ -1241,7 +1239,7 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DFunDef false "hashGo" ((PVar "acc") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "hashGo") (EApp (EApp (EVar "derivedHashStep") (EVar "acc")) (EApp (EVar "hashInt") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
 (DImpl true "Hashable" ((TyCon "Bytes")) () ((im "hash" ((PCon "Bytes" (PVar "bb"))) (EApp (EApp (EApp (EApp (EVar "hashGo") (ELit (LInt 0))) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))))
 (DTypeSig false "hexDigit" (TyFun (TyCon "Int") (TyCon "Char")))
-(DFunDef false "hexDigit" ((PVar "n")) (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar "?")))))
+(DFunDef false "hexDigit" ((PVar "n")) (EApp (EApp (EVar "optionOr") (ELit (LChar "?"))) (EApp (EVar "toDigit") (EVar "n"))))
 (DTypeSig false "debugBytesHex" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "debugBytesHex" ((PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "b") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "hexDigit") (EApp (EApp (EVar "shiftRight") (EVar "b")) (ELit (LInt 4)))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "hexDigit") (EApp (EApp (EVar "bitAnd") (EVar "b")) (ELit (LInt 15)))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (ELit (LString ""))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DImpl true "Debug" ((TyCon "Bytes")) () ((im "debug" ((PCon "Bytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Bytes \"")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))) (ELit (LString "\""))))))

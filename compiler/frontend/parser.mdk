@@ -4661,9 +4661,7 @@ programWithSpans = defer
 -- panic-on-unparseable behaviour the compiler + `medaka fmt` rely on.
 export
 parseWithPositions : String -> (List Decl, Positions)
-parseWithPositions src = match parseWithPositionsOpt src
-  Some r => r
-  None => panic "parse error"
+parseWithPositions src = optionOrPanic "parse error" (parseWithPositionsOpt src)
 
 -- Backward-compatibility alias kept for callers in `compiler/tools/lint.mdk`'s
 -- `lintFileDiagTriple` and `compiler/driver/medaka_cli.mdk`'s `lintFileFresh`. See

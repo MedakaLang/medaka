@@ -1,5 +1,5 @@
 # META
-source_lines=1944
+source_lines=1942
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.runtime_constructors.{namedRuntimeCtor}
@@ -1623,9 +1623,7 @@ renameLetBindDef rm (LetBind n clauses site bid) =
     bid
 
 renameDefName : OrdMap String -> String -> String
-renameDefName rm n = match omLookup n rm
-  Some n2 => n2
-  None => n
+renameDefName rm n = optionOr n (omLookup n rm)
 
 renameIfaceMethod : OrdMap String -> IfaceMethod -> IfaceMethod
 renameIfaceMethod _ (IfaceMethod n ty None mloc) = IfaceMethod n ty None mloc
@@ -2249,7 +2247,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DTypeSig false "renameLetBindDef" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
 (DFunDef false "renameLetBindDef" ((PVar "rm") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameFunClause") (EVar "rm")) (EVar "omEmpty"))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "renameDefName" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "renameDefName" ((PVar "rm") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EVar "n2")) (arm (PCon "None") () (EVar "n"))))
+(DFunDef false "renameDefName" ((PVar "rm") (PVar "n")) (EApp (EApp (EVar "optionOr") (EVar "n")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm"))))
 (DTypeSig false "renameIfaceMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
 (DFunDef false "renameIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None") (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EVar "None")) (EVar "mloc")))
 (DFunDef false "renameIfaceMethod" ((PVar "rm") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))) (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "patVarsListPM") (EVar "ps")))) (EVar "e"))))) (EVar "mloc")))
@@ -2673,7 +2671,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DTypeSig false "renameLetBindDef" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
 (DFunDef false "renameLetBindDef" ((PVar "rm") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameFunClause") (EVar "rm")) (EVar "omEmpty"))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "renameDefName" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "renameDefName" ((PVar "rm") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EVar "n2")) (arm (PCon "None") () (EVar "n"))))
+(DFunDef false "renameDefName" ((PVar "rm") (PVar "n")) (EApp (EApp (EVar "optionOr") (EVar "n")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm"))))
 (DTypeSig false "renameIfaceMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
 (DFunDef false "renameIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None") (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EVar "None")) (EVar "mloc")))
 (DFunDef false "renameIfaceMethod" ((PVar "rm") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))) (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "patVarsListPM") (EVar "ps")))) (EVar "e"))))) (EVar "mloc")))

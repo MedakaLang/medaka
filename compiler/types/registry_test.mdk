@@ -113,8 +113,8 @@ identBuiltinFixture ns name = Ident ns identOriginBuiltin name
 
 identIn : Ns -> String -> String -> Ident
 identIn ns mid name =
-  optionOr
-    (identBuiltinFixture ns "__fixture_fallback__")
+  optionOrElse
+    (_ => identBuiltinFixture ns "__fixture_fallback__")
     (mkIdent ns (OriginModule mid) name)
 
 identTypeFooM : Ident

@@ -39,7 +39,10 @@ import string.{replace, lines}
 import support.util.{anyList, listLen, sortUniqS}
 import driver.diagnostics.{Diag(..), Severity(..), diagIdText}
 import frontend.ast.{Loc(..)}
+import test_process.{underRoot}
 import tools.lint.{
+  Applicability(..),
+  FixRun(..),
   StdlibIndex,
   allCrossFileRules,
   allRuleNames,
@@ -47,9 +50,11 @@ import tools.lint.{
   buildStdlibIndexResult,
   crossFileMetaProblems,
   emptyStdlibIndex,
+  fixSource,
   lintParseSource,
   lintProgram,
   mergeCrossFileIntoTriples,
+  projectWildMods,
   selectRules,
 }
 import tools.lint_walk.{
@@ -665,3 +670,47 @@ test "rule-not-eq reaches interface-default, let-group and test bodies" =
             notEqSrc
             pos
             decls))
+
+-- A wildcard import of a project module that shares a stdlib module's name
+-- brings that project module's names into scope, whatever the stdlib module
+-- exports: `hex` has no `count`, a project's own `hex.mdk` may.
+lengthOfFilter : String
+lengthOfFilter = "import hex.*\n\nhits xs = length (filter even xs)\n"
+
+test "a wildcard import of the stdlib module hex does not withhold the count fix" =
+  match buildStdlibIndexResult
+    Err _ => fail "could not build stdlib index"
+    Ok idx =>
+      expectEqual
+        (Ok (Settled "import hex.*\n\nhits xs = count even xs\n" 1))
+        (fixSource
+          idx
+          Safe
+          ["rule-fuse-list-pipeline"]
+          []
+          []
+          "t.mdk"
+          lengthOfFilter)
+
+test "a wildcard import of a project module named like a stdlib module withholds the fix" =
+  match buildStdlibIndexResult
+    Err _ => fail "could not build stdlib index"
+    Ok idx =>
+      expectEqual
+        (Ok (Settled lengthOfFilter 0))
+        (fixSource
+          idx
+          Safe
+          ["rule-fuse-list-pipeline"]
+          []
+          ["hex"]
+          "t.mdk"
+          lengthOfFilter)
+
+test "projectWildMods names the wildcard imports that are files of the project" =
+  match lintParseSource "import support.util.*\nimport hex.*\n"
+    Err _ => fail "the source did not parse"
+    Ok (decls, _) =>
+      expectEqual
+        ["support.util"]
+        (projectWildMods (underRoot "compiler/tools/probe.mdk") decls)

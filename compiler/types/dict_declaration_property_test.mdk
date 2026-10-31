@@ -64,7 +64,7 @@ superProgram edges =
     (map
       (i =>
         let reqs = map (j => "I\{idxName j} a") (successors edges i)
-        let clause = if reqs == [] then "" else " requires \{join ", " reqs}"
+        let clause = if isEmpty reqs then "" else " requires \{join ", " reqs}"
         "interface I\{idxName i} a\{clause} where\n  m\{idxName i} : a -> Int\n")
       allIdx)
 
@@ -74,7 +74,7 @@ prop "a superclass cycle is rejected and an acyclic superclass relation is accep
   if superCyclic edges then
     hasCode "T-CYCLIC-SUPERINTERFACE" codes
   else
-    codes == []
+    isEmpty codes
 
 -- An impl body under a name that is no method of the interface.
 public export data Extra = XNone | XNearMiss | XUnrelated deriving (Eq, Debug)
@@ -133,7 +133,7 @@ prop "an impl is accepted iff it is complete and has no extraneous method" (defa
   let codes = frontEndCodes (methodsProgram ds ss x)
   hasCode "T-INCOMPLETE-IMPL" codes == not complete
     && hasCode "R-METHOD-NOT-IN-INTERFACE" codes == (x /= XNone)
-    && codes == [] == (complete && x == XNone)
+    && isEmpty codes == (complete && x == XNone)
 
 -- The three interfaces of the gen-sig law; `Tg` requires `Sz`.
 public export data Cls = Sz | Tg | Nm deriving (Eq, Debug)
@@ -221,11 +221,9 @@ prop "a signature's context is a contract the body is checked against and every 
   let (defOk, callOk) = genSigModel declared used instances
   let (codes, schemes) =
     graphCodesAndSchemes [("law", genSigProgram declared used instances)]
-  let scheme = match lookup "f" schemes
-    Some text => text
-    None => ""
+  let scheme = optionOr "" (lookup "f" schemes)
   let (ctx, ty) = splitContext scheme
-  codes == [] == (defOk && callOk)
+  isEmpty codes == (defOk && callOk)
     && hasCode "T-MISSING-CONSTRAINT" codes == not defOk
     && (not defOk
       || ctx == sort (map clsName declared) && alphaEquiv ty "a -> Int")
@@ -627,7 +625,7 @@ operatorAgrees : Op -> Bool -> Bool -> List Operand -> Operand -> Bool
 operatorAgrees op declared user ats operand =
   let codes = operatorCodes op declared user ats operand
   match operatorModel op declared operand
-    Accepted => codes == []
+    Accepted => isEmpty codes
     Rejected => hasCode "T-NO-IMPL" codes
 
 prop "an operator demands the prelude's class and no program class of that spelling" (op : Op) (user : Bool) (ats : List Operand) (operand : Operand) =

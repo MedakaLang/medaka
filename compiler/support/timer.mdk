@@ -87,9 +87,7 @@ putTimerLines (l :: ls) =
 -- True when MEDAKA_PERF is set to any value in the environment.
 export
 perfEnabled : Unit -> <IO> Bool
-perfEnabled () = match getEnv "MEDAKA_PERF"
-  Some _ => True
-  None => False
+perfEnabled () = isSome (getEnv "MEDAKA_PERF")
 
 -- True when MEDAKA_STATS is set to any value in the environment.
 --
@@ -102,9 +100,7 @@ perfEnabled () = match getEnv "MEDAKA_PERF"
 -- empty-string exception, because this only gates PRINTING, never work.
 export
 statsEnabled : Unit -> <IO> Bool
-statsEnabled () = match getEnv "MEDAKA_STATS"
-  Some _ => True
-  None => False
+statsEnabled () = isSome (getEnv "MEDAKA_STATS")
 
 -- Emit one named table cardinality to stderr. No-op when on = False.
 -- Format: [stats] <label>\t<count>

@@ -51,7 +51,7 @@ import test.vector_runner.{
   spawnBatch,
   spawnFindings,
 }
-import list.{replicate, somes, zip, zipWith}
+import list.{replicate, zip, zipWith}
 import string.{contains, lines, startsWith, toInt, words}
 import test.{Expectation, expectNoFindings}
 import test.mst_vectors_support.{mstCorpora, routeNeeds}
@@ -95,7 +95,7 @@ ranWith : String ->
   <Exec> (String, List String)
 ranWith label bin args needs =
   match spawnFindings label "the built driver" (spawn runSeconds [] bin args)
-    (out, []) => (out, somes (map (missing label out) needs))
+    (out, []) => (out, filterMap (missing label out) needs)
     (out, fs) => (out, fs)
 
 missing : String -> String -> String -> Option String
@@ -132,7 +132,7 @@ boundFindings what small large ceiling ratio =
 -- `key=value` word: `wordFigure "allocBytes=" out` reads the `57` in
 -- `MSTINSERT 1000 1000 allocBytes=57`.
 wordFigure : String -> String -> Option Int
-wordFigure key out = match somes (map (figureInWord key) (words out))
+wordFigure key out = match filterMap (figureInWord key) (words out)
   [] => None
   n :: _ => Some n
 
@@ -378,7 +378,7 @@ routeFigure route key out = match filter (startsWith "\{route} ") (lines out)
 -- The smallest of the `key` figures `route` printed across `outs`; a run that
 -- printed none makes the whole measurement absent.
 bestFigure : String -> String -> List String -> Option Int
-bestFigure route key outs = match somes (map (routeFigure route key) outs)
+bestFigure route key outs = match filterMap (routeFigure route key) outs
   [] => None
   x :: xs => if length xs + 1 == length outs then Some (fold min x xs) else None
 
@@ -447,7 +447,7 @@ synthCorpora synth rows =
         snd (spawnFindings (synthLabel records) "mkdir -p" run))
       rows
       mkdirs
-  let ready = map fst (filter ((_, fs) => fs == []) (zip rows mkdirFs))
+  let ready = map fst (filter ((_, fs) => isEmpty fs) (zip rows mkdirFs))
   let builds =
     spawnBatch
       (map

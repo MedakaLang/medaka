@@ -284,9 +284,8 @@ runCommitEvent dir reps =
     Ok value => value
     Err message => panic "cost_curve: server setup failed: \{message}"
   let (written, response) = handleBytes server benchContext store createRequest
-  let after = match storeRepo written
-    Some repo => repo
-    None => panic "cost_curve: the write left no repository"
+  let after =
+    optionOrPanic "cost_curve: the write left no repository" (storeRepo written)
   let start = monotonicSec ()
   let opCount = repeatCommitEvent (storeRepo store) after reps 0
   let elapsed = monotonicSec () - start

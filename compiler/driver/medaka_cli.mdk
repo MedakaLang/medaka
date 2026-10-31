@@ -1725,7 +1725,7 @@ userSchemeLines decls report =
 -- the reader can see printed just above it.
 checkOkLine : String -> String -> String
 checkOkLine target filtered =
-  let n = length (filter (/= "") (splitNl filtered))
+  let n = count (/= "") (splitNl filtered)
   "-- \{target}: ok (\{intToString n} declaration(s) checked, 0 errors)"
 
 namesUserBinding : OrdMap Unit -> String -> Bool
@@ -3217,9 +3217,7 @@ runTestCmd argv0 =
           let _ = match seedOpt
             Some s => seedPropRng s
             None => ()
-          let cases = match casesOpt
-            Some n => n
-            None => 100
+          let cases = optionOr 100 casesOpt
           let filterOpt = flagValue "--filter" a
           let jsonMode = flag "--json" a
           match a.positionals
@@ -3969,9 +3967,9 @@ flagGiven a n = flag n a || isSome (flagValue n a)
 assertRegistryViewFlags : String -> List String -> Args -> <IO> Unit
 assertRegistryViewFlags mode banned a =
   let bad = filter (flagGiven a) banned
-  if a.positionals /= [] then
+  if not (isEmpty a.positionals) then
     dieMsg "medaka lint: \{mode} takes no target paths"
-  else if bad /= [] then
+  else if not (isEmpty bad) then
     dieMsg "medaka lint: \{joinWith ", " bad} cannot be combined with \{mode}"
   else if mode == "--list-rules" && flag "--markdown" a then
     assertMarkdownTakesNoFilter a
@@ -3980,7 +3978,7 @@ assertMarkdownTakesNoFilter : Args -> <IO> Unit
 assertMarkdownTakesNoFilter a =
   let bad =
     filter (flagGiven a) ["--json", "--names", "--scope", "--ratchet", "--tier"]
-  if bad /= [] then
+  if not (isEmpty bad) then
     dieMsg
       "medaka lint: \{joinWith ", " bad} cannot be combined with --markdown"
 
@@ -4326,7 +4324,7 @@ lintNamesOf nm a = match flagValue nm a
 assertLintRuleNames : List String -> <IO> Unit
 assertLintRuleNames names =
   let bad = filterList (n => not (contains n allRuleNames)) names
-  if bad == [] then
+  if isEmpty bad then
     ()
   else
     let _ =
@@ -4353,7 +4351,7 @@ assertLintTargetsExist : List String -> <IO> Unit
 assertLintTargetsExist [] = ()
 assertLintTargetsExist targets =
   let missing = filter (t => not (lintTargetExists t)) targets
-  if missing == [] then
+  if isEmpty missing then
     ()
   else
     let _ = ePutStrLn "medaka lint: these targets do not exist:"
@@ -4409,7 +4407,7 @@ assertLintTargetsExist targets =
 assertSnapshotTargetsExist : List String -> <IO> Unit
 assertSnapshotTargetsExist files =
   let missing = filter (f => not (fileExists f)) files
-  if missing == [] then
+  if isEmpty missing then
     ()
   else
     let _ = ePutStrLn "medaka snapshot: these targets do not exist:"
@@ -4419,7 +4417,7 @@ assertSnapshotTargetsExist files =
 -- target expansion, so the refusal cannot be confused with "your glob matched no files".
 assertBlessIsScoped : Bool -> List String -> <IO> Unit
 assertBlessIsScoped blessOn targets =
-  if not blessOn || targets /= [] then
+  if not blessOn || not (isEmpty targets) then
     ()
   else
     let _ =
@@ -4501,7 +4499,7 @@ runSnapshotCmd argv0 =
   let _ = assertBlessIsScoped (flag "--bless" a) targets
   let files = flatMap expandLintTarget targets
   let _ = assertSnapshotTargetsExist files
-  if files == [] then
+  if isEmpty files then
     let _ =
       ePutStrLn
         "usage: medaka snapshot [--check|--new|--bless] [--out <dir>] [--stages <a,b,…>] <paths...>"

@@ -1953,16 +1953,13 @@ applyVariantUpdates updates (f :: fs) (v :: vs) =
   applyFieldUpdate updates f v :: applyVariantUpdates updates fs vs
 
 applyFieldUpdate : List (String, Value e) -> String -> Value e -> Value e
-applyFieldUpdate updates field old = match lookupAssoc field updates
-  Some v => v
-  None => old
+applyFieldUpdate updates field old = optionOr old (lookupAssoc field updates)
 
 export
 evalValueField : Value e -> Value e
 evalValueField (VRef cell) = !cell
-evalValueField (VRecord _ fields) = match lookupAssoc "value" fields
-  Some v => v
-  None => panic "record has no field 'value'"
+evalValueField (VRecord _ fields) =
+  optionOrPanic "record has no field 'value'" (lookupAssoc "value" fields)
 evalValueField _ = panic "field access on non-record/ref"
 
 export
@@ -3076,9 +3073,7 @@ evalFileTagName = "$__evalFile__"
 -- synthetic id (e.g. a snapshot-tool fixture's `__main__`) that was never a
 -- real, printable file.
 moduleFileOf : String -> String
-moduleFileOf mid = match lookupAssoc mid !modulePathMap
-  Some path => path
-  None => ""
+moduleFileOf mid = optionOr "" (lookupAssoc mid !modulePathMap)
 
 -- P0-2(a): evaluator recursion-depth guard.  The tree-walker recurses on the
 -- host C stack (`eval`->`apply`->`eval`...) with no TCO, so a deep non-tail
@@ -3357,9 +3352,7 @@ pRandomChar draw _ =
 charFromCodeUnsafe : Int -> Char
 -- Intentional cross-file duplicate of the same helper in prop_runner.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
-charFromCodeUnsafe n = match charFromCode n
-  Some c => c
-  None => ' '
+charFromCodeUnsafe n = optionOr ' ' (charFromCode n)
 
 pSetSeed : Ref U64 -> Value e -> <e> Value e
 pSetSeed ref (VInt seed) =
@@ -4209,7 +4202,7 @@ installConsts cells ((n, v) :: rest) =
 export
 runtimeCellsOf : List (String, Value e) -> <e> List (String, Ref (Value e))
 runtimeCellsOf externs =
-  let cells = map (n => (n, Ref VUnit)) (map fst externs)
+  let cells = map (fst >> (n => (n, Ref VUnit))) externs
   let _ = installConsts cells externs
   cells
 
@@ -4454,7 +4447,7 @@ evalModulesWith facts extraExterns preludeDecls0 modules0 = withFacts
     let globalCells = map (n => (n, Ref VUnit)) globalNames
     let globalFrame = indexedFrame globalCells
     let runtimeFrame = indexedFrame (runtimeCellsOf externs)
-    let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
+    let privateCells = map (fst >> (n => (n, Ref VUnit))) preludePrivate
     let globalEnv =
       EvalEnv (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
     let mods =
@@ -4702,7 +4695,7 @@ buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 = withFacts
     let globalCells = map (n => (n, Ref VUnit)) globalNames
     let globalFrame = indexedFrame globalCells
     let runtimeFrame = indexedFrame (runtimeCellsOf externs)
-    let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
+    let privateCells = map (fst >> (n => (n, Ref VUnit))) preludePrivate
     let globalEnv =
       EvalEnv (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
     let mods =

@@ -972,9 +972,10 @@ lowerProgramWithFacts facts prog = withFacts facts (_ =>
 export
 lowerTypedProgramWith : ProgramFacts -> List Decl -> CProgram
 lowerTypedProgramWith facts prog =
-  let dispositions = match facts.pfDispositions
-    Some table => table
-    None => panic "disposition table: no elaboration has published one"
+  let dispositions =
+    optionOrPanic
+      "disposition table: no elaboration has published one"
+      facts.pfDispositions
   withFacts facts (_ =>
     finishLowering
       TypedLowering
@@ -1031,9 +1032,7 @@ patCanMiss _ (PRec _ _ _) = False
 patCanMiss _ _ = True
 
 ctorHasSibling : OrdMap Bool -> String -> Bool
-ctorHasSibling sib c = match omLookup c sib
-  Some b => b
-  None => True
+ctorHasSibling sib c = optionOr True (omLookup c sib)
 
 -- constructor → whether its type declares another constructor, from a CProgram's
 -- (ctor, type) table; the first row for a constructor name wins, as the emitter's
@@ -1314,12 +1313,14 @@ projectOrigins origins groups constructors = CoreSymbolOrigins {
   constructors =
     fold
       (acc (name, owner) =>
-        let sourceRows = match omLookup owner origins.constructors
-          Some rows => rows
-          None => panic "symbol origin: missing constructor owner"
-        let origin = match omLookup name sourceRows
-          Some value => value
-          None => panic "symbol origin: missing constructor"
+        let sourceRows =
+          optionOrPanic
+            "symbol origin: missing constructor owner"
+            (omLookup owner origins.constructors)
+        let origin =
+          optionOrPanic
+            "symbol origin: missing constructor"
+            (omLookup name sourceRows)
         let rows = optionOr omEmpty (omLookup owner acc)
         match omLookup name rows
           Some old =>

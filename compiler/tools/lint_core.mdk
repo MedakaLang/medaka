@@ -80,13 +80,18 @@ memoGet (Memo cell f) = match !cell
 -- side channel, the constructor `Oracle`, and the per-clause duplicate-body keys
 -- shared by the same-file rule and the cross-file occurrence list, and the scope
 -- model (`tools/lint_scope.mdk`), built only for a rule whose metadata says
--- `NeedsScopes`.
+-- `NeedsScopes`.  `ffLines` is the source split into lines, built when a fix
+-- first asks for the text of a line.  `ffLocalMods` names the file's wildcard-imported modules that
+-- resolve to a file of the project rather than the stdlib, filled by the IO
+-- caller (`withLocalMods`), since a rule cannot touch the file system.
 public export data FileFacts = FileFacts {
   ffSrc : String,
   ffComments : Memo (List Comment),
   ffOracle : Memo Oracle,
   ffDupClauses : Memo (List DupClause),
   ffScopes : Memo FileScopes,
+  ffLines : Memo (Array String),
+  ffLocalMods : List String,
 }
 
 export
@@ -104,6 +109,10 @@ factDupClauses ff = memoGet ff.ffDupClauses
 export
 factScopes : FileFacts -> FileScopes
 factScopes ff = memoGet ff.ffScopes
+
+export
+factLines : FileFacts -> Array String
+factLines ff = memoGet ff.ffLines
 
 -- What kind of defect a rule reports, for the rules page and `--list-rules`.
 public export data Category =

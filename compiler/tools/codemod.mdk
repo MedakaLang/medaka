@@ -154,9 +154,8 @@ codemodSource xf src = match parseResult src
   Err e => Err e
   Ok _ =>
     let (toks, pairs) = tokenizeWithOffsetPairs src
-    let parsed = match parseSourceSyntaxPairs src toks pairs
-      Some value => value
-      None => panic "parse error"
+    let parsed =
+      optionOrPanic "parse error" (parseSourceSyntaxPairs src toks pairs)
     let decls = parsedDecls parsed
     let pos = parsedPositions parsed
     let metadata = parsedMetadata parsed

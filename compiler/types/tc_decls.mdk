@@ -1068,7 +1068,7 @@ sigToSchemeTvsIn outer scope ty = atSignature outer ty (mctx =>
   let etbl = sigVarsForWith mctx ty (dedup (effTailNames ty ++ rows)) auths
   (
     Forall
-      (map monoTyvarId (map snd tvs))
+      (map (snd >> monoTyvarId) tvs)
       (map effvarIdOf etbl.svRows)
       (map authvarIdOf etbl.svAuths)
       []

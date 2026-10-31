@@ -3728,9 +3728,7 @@ budgetMissingValue = [
 ]
 
 budgetCommitMessage : Args -> String
-budgetCommitMessage a = match flagValue "--commit-message" a
-  Some v => v
-  None => ""
+budgetCommitMessage a = optionOr "" (flagValue "--commit-message" a)
 
 -- `budget`, like `verify`, takes no positionals — a leftover token is
 -- rejected the same way an unclaimed flag would be.

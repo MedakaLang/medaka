@@ -1,5 +1,5 @@
 # META
-source_lines=192
+source_lines=190
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-bind-chain-to-do: a deep (>=3) Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only).
@@ -131,9 +131,7 @@ bindChainOkPat _ _ = False
 -- excluded here (owned by `rule-match-to-map`).  Reuses the same linchpin.
 bindChainRewrap : Bool -> Pat -> Expr -> Bool
 bindChainRewrap isResult p body =
-  match matchToMapTransform (if isResult then "Ok" else "Some") p body
-    Some _ => True
-    None => False
+  isSome (matchToMapTransform (if isResult then "Ok" else "Some") p body)
 
 bindChainIsTermMap : Expr -> Bool
 bindChainIsTermMap e = match unwrapLoc e
@@ -218,7 +216,7 @@ bindChainFinding loc _ = Finding {
 (DFunDef false "bindChainOkPat" ((PVar "isResult") (PCon "PCon" (PVar "c") (PList PWild))) (EBinOp "==" (EVar "c") (EIf (EVar "isResult") (ELit (LString "Ok")) (ELit (LString "Some")))))
 (DFunDef false "bindChainOkPat" (PWild PWild) (EVar "False"))
 (DTypeSig false "bindChainRewrap" (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Bool")))))
-(DFunDef false "bindChainRewrap" ((PVar "isResult") (PVar "p") (PVar "body")) (EMatch (EApp (EApp (EApp (EVar "matchToMapTransform") (EIf (EVar "isResult") (ELit (LString "Ok")) (ELit (LString "Some")))) (EVar "p")) (EVar "body")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "bindChainRewrap" ((PVar "isResult") (PVar "p") (PVar "body")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "matchToMapTransform") (EIf (EVar "isResult") (ELit (LString "Ok")) (ELit (LString "Some")))) (EVar "p")) (EVar "body"))))
 (DTypeSig false "bindChainIsTermMap" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "bindChainIsTermMap" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "inner") PWild) () (EMatch (EApp (EVar "unwrapLoc") (EVar "inner")) (arm (PCon "EApp" (PVar "hd") PWild) () (EApp (EApp (EVar "isEVarNamed") (ELit (LString "map"))) (EVar "hd"))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "bindChainOffChain" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr")))))
@@ -257,7 +255,7 @@ bindChainFinding loc _ = Finding {
 (DFunDef false "bindChainOkPat" ((PVar "isResult") (PCon "PCon" (PVar "c") (PList PWild))) (EBinOp "==" (EVar "c") (EIf (EVar "isResult") (ELit (LString "Ok")) (ELit (LString "Some")))))
 (DFunDef false "bindChainOkPat" (PWild PWild) (EVar "False"))
 (DTypeSig false "bindChainRewrap" (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Bool")))))
-(DFunDef false "bindChainRewrap" ((PVar "isResult") (PVar "p") (PVar "body")) (EMatch (EApp (EApp (EApp (EVar "matchToMapTransform") (EIf (EVar "isResult") (ELit (LString "Ok")) (ELit (LString "Some")))) (EVar "p")) (EVar "body")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "bindChainRewrap" ((PVar "isResult") (PVar "p") (PVar "body")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "matchToMapTransform") (EIf (EVar "isResult") (ELit (LString "Ok")) (ELit (LString "Some")))) (EVar "p")) (EVar "body"))))
 (DTypeSig false "bindChainIsTermMap" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "bindChainIsTermMap" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "inner") PWild) () (EMatch (EApp (EVar "unwrapLoc") (EVar "inner")) (arm (PCon "EApp" (PVar "hd") PWild) () (EApp (EApp (EVar "isEVarNamed") (ELit (LString "map"))) (EVar "hd"))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "bindChainOffChain" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr")))))

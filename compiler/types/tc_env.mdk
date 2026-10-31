@@ -1759,9 +1759,7 @@ lookupImportedStandalone env name = match lookupBinding env name
 export
 hasImportDefiner : ModuleCtx -> String -> Bool
 hasImportDefiner mctx name =
-  match omLookup name mctx.mcCells.currentImportDefinersRef.value
-    Some _ => True
-    None => False
+  isSome (omLookup name mctx.mcCells.currentImportDefinersRef.value)
 
 export
 bindingWithStandalone : EnvBinding ->

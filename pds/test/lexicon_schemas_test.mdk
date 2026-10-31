@@ -185,9 +185,7 @@ test "lib.lexicon_schemas equals the schemas file, definition for definition" =
   expectEqual decodedDefs (Ok lexiconDefs)
 
 test "the data has 53 definitions, 20 of them records" =
-  expectEqual
-    (53, 20)
-    (length lexiconDefs, length (filter isRecordDef lexiconDefs))
+  expectEqual (53, 20) (length lexiconDefs, count isRecordDef lexiconDefs)
 
 isRecordDef : (String, LexDef) -> Bool
 isRecordDef (_, LexRecordDef _ _) = True

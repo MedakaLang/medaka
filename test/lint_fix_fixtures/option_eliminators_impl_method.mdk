@@ -1,0 +1,15 @@
+-- Fixture for rule-option-eliminators autofix.
+-- NEGATIVE: each rewrite would write a call to the very method it sits in, so
+-- every fix is withheld and the file stays byte-identical.
+
+data Box a = Box (Option a)
+
+impl Present Box where
+  isSome (Box o) = match o
+    Some _ => True
+    None => False
+
+impl Fallback Box where
+  optionOr d (Box o) = match o
+    Some x => x
+    None => d

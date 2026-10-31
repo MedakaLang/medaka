@@ -386,7 +386,7 @@ runBlobOversize dir =
         Err readMessage =>
           panic "store_persistence: blob directory unreadable: \{readMessage}"
         Ok rows =>
-          if length rows == 0 then
+          if isEmpty rows then
             println "BLOB-OVERSIZE: PASS nothing was written"
           else
             let () =

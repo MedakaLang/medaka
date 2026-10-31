@@ -37,6 +37,7 @@ import frontend.parser.{
   prescanErrorPairs,
   ParseError,
 }
+import driver.loader.{entrySearchRoots, fileOfModuleId}
 import driver.diagnostics.{
   Severity(..),
   Diag(..),
@@ -66,7 +67,8 @@ import support.util.{
 }
 import hash_map.{HashMap, new, get, setInPlace, has, keys, findWithDefault}
 import list.{take, drop, indexed}
-import string.{indexOf}
+import string.{indexOf, lines}
+import array.{fromList}
 import tools.printer.{declToString}
 import support.path.{dirOf, stripMdk}
 import frontend.marker.{declRefs}
@@ -137,7 +139,46 @@ mkFileFacts src prog pos = FileFacts {
   ffOracle = memoNew (_ => buildOracle prog),
   ffDupClauses = memoNew (_ => flatMap dupClauseOfDecl (declLocList pos prog)),
   ffScopes = memoNew (_ => buildScopes prog),
+  ffLines = memoNew (_ => fromList (lines src)),
+  ffLocalMods = [],
 }
+
+-- The dotted names of the program's `import m.*` modules that resolve to a file
+-- of the project: `<root>/<m as a path>.mdk` under the file's own directory or
+-- the manifest root, the loader's rule.  Such a module shadows a stdlib module
+-- of the same name, so its exports are unknown to the stdlib index.
+export
+projectWildMods : String -> List Decl -> <IO> List String
+projectWildMods path prog = match flatMap wildPathsOf prog
+  [] => []
+  wild => localModsIn (entrySearchRoots (dirOf path)) (map (joinWith ".") wild)
+
+localModsIn : List String -> List String -> <IO> List String
+localModsIn _ [] = []
+localModsIn roots (m :: rest) =
+  let others = localModsIn roots rest
+  if hasModuleFile roots m then m :: others else others
+
+hasModuleFile : List String -> String -> <IO> Bool
+hasModuleFile [] _ = False
+hasModuleFile (r :: rs) m =
+  fileExists (fileOfModuleId r m) || hasModuleFile rs m
+
+wildPathsOf : Decl -> List (List String)
+wildPathsOf (DUse _ (UseWild p) _) = [p]
+wildPathsOf _ = []
+
+-- `facts` knowing which wildcard imports are the project's own modules.
+export
+withLocalMods : List String -> FileFacts -> FileFacts
+withLocalMods mods ff = { ff | ffLocalMods = mods }
+
+-- `mkFileFacts` for a file on disk, reading which wildcard imports are the
+-- project's own modules.
+export
+mkFileFactsAt : String -> String -> List Decl -> Positions -> <IO> FileFacts
+mkFileFactsAt path src prog pos =
+  withLocalMods (projectWildMods path prog) (mkFileFacts src prog pos)
 
 -- The file's inline-suppression directives, off the shared comment channel.
 export
@@ -927,9 +968,7 @@ ruleActiveFixable only disable r =
     && ruleHasFixer r
 
 ruleHasFixer : Rule -> Bool
-ruleHasFixer r = match r.fix
-  Some _ => True
-  None => False
+ruleHasFixer r = isSome r.fix
 
 -- one (startLine, endLine, replacementText) per fixed decl, in source order.
 --
@@ -1146,7 +1185,7 @@ lintFileDiagTripleParsed idx disable only deny path =
   match lintParseSource src
     Err e => (path, src, [parseErrDiag path e], Positions [] [] 0 [], [])
     Ok (decls, pos) =>
-      let facts = mkFileFacts src decls pos
+      let facts = mkFileFactsAt path src decls pos
       let allFindings =
         applySuppressionsDirs
           (factDirectives facts)

@@ -90,9 +90,8 @@ runCorpus (line :: rest) current passed total =
       None => panic "mst_vectors: PUT outside CASE"
       Some (CaseState name tree root blocks) =>
         let key = mustHex keyHex
-        let expectedDepth = match toInt depthText
-          Some depth => depth
-          None => panic "mst_vectors: invalid fixture depth"
+        let expectedDepth =
+          optionOrPanic "mst_vectors: invalid fixture depth" (toInt depthText)
         if mstKeyDepth key /= Ok expectedDepth then
           panic "mst_vectors: fixture depth disagreement"
         else
@@ -437,9 +436,10 @@ runProofCorpus (line :: rest) current totals =
       None => panic "mst_vectors: proof PUT outside CASE"
       Some (ProofCase name tree root nodes rows) =>
         let key = mustHex keyHex
-        let expectedDepth = match toInt depthText
-          Some depth => depth
-          None => panic "mst_vectors: invalid proof fixture depth"
+        let expectedDepth =
+          optionOrPanic
+            "mst_vectors: invalid proof fixture depth"
+            (toInt depthText)
         if mstKeyDepth key /= Ok expectedDepth then
           panic "mst_vectors: proof fixture depth disagreement"
         else
@@ -463,9 +463,10 @@ runProofCorpus (line :: rest) current totals =
     ["NODES", countText] => match current
       None => panic "mst_vectors: NODES outside CASE"
       Some (ProofCase name tree root _ rows) =>
-        let count = match toInt countText
-          Some value => value
-          None => panic "mst_vectors: invalid proof node count"
+        let count =
+          optionOrPanic
+            "mst_vectors: invalid proof node count"
+            (toInt countText)
         runProofCorpus rest (Some (ProofCase name tree root count rows)) totals
     ["PROOF", keysField, cidsField] => match current
       None => panic "mst_vectors: PROOF outside CASE"

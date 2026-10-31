@@ -1565,8 +1565,8 @@ describeServerLinks (ServerLinks privacyPolicy termsOfService contactEmail) =
     optionalMember "privacyPolicy" privacyPolicy
       ++ optionalMember "termsOfService" termsOfService
   let contact = optionalMember "email" contactEmail
-  (if links == [] then [] else [("links", jObject links)])
-    ++ (if contact == [] then [] else [("contact", jObject contact)])
+  (if isEmpty links then [] else [("links", jObject links)])
+    ++ (if isEmpty contact then [] else [("contact", jObject contact)])
 
 {- | This is the preflight a relay or a Bluesky client runs before trusting
    the server at all, so it needs no credential and answers about the server
@@ -1639,9 +1639,8 @@ applyGetBlob account store params = do
       Err
         (blobNotFound "No blob with CID '\{cidText}' is stored on this server")
     Some bytes =>
-      let mimeType = match storeBlobMimeType cid store
-        None => "application/octet-stream"
-        Some declared => declared
+      let mimeType =
+        optionOr "application/octet-stream" (storeBlobMimeType cid store)
       Ok (blobOkResponse mimeType bytes)
 
 -- ── com.atproto.sync.listBlobs ──────────────────────────────────────────────
@@ -2707,7 +2706,10 @@ pdsHandler : Account ->
   String ->
   Handler <Mint {"access", "refresh"}, Sign "commit">
 pdsHandler account links version context outcome store call =
-  match recordHandled account context store call
+  let recorded = recordHandled account context store call
+  -- Each probe is a whole endpoint handler (store update, Mint/Sign effects); only the first match may run.
+  -- lint-disable-next-line rule-orelse-staircase
+  match recorded
     Some result => result
     None => match sessionHandled account context outcome store call
       Some result => result

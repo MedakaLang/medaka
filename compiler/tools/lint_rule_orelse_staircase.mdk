@@ -1,4 +1,4 @@
--- lint rule rule-orelse-staircase: a nested first-match probe staircase of `None`/`Err` fall-throughs. Prefer `orElse` or `findMap` (suggest-only).
+-- lint rule rule-orelse-staircase: a nested first-match probe staircase of `None`/`Err` fall-throughs. Prefer the lazy `orElseWith` / `findMap` (suggest-only).
 
 import frontend.ast.{
   Loc(..),
@@ -6,10 +6,13 @@ import frontend.ast.{
   Arm(..),
   Expr(..),
   Decl(..),
+  declBinderNames,
+  letBindName,
 }
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
-import support.util.{isEmptyL}
+import frontend.ast_walk.{DeclBody(..), childExprs, declBodies}
+import support.util.{anyList, isEmptyL}
 import tools.lint_core.{
   Category(..),
   Ctx(..),
@@ -30,6 +33,7 @@ import tools.lint_shared.{
   isEVarNamed,
   isNilPCon,
   matchScrutOf,
+  mentionsVar,
   ruleNameOrElseStaircase,
   unwrapLoc,
 }
@@ -41,12 +45,12 @@ rule =
     RuleMeta {
       name = ruleNameOrElseStaircase,
       summary =
-        "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Rewrite with `orElse`/`findMap` (suggest-only)",
+        "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Where the probes are pure and cheap, rewrite with the lazy `orElseWith` / `findMap` (suggest-only)",
       doc =
-        "Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Express it with `orElse` or `findMap`. Suggest-only.\n\nBefore:\n  match probeA x\n    Some v => Some v\n    None => match probeB x\n      Some v => Some v\n      None => probeC x\nAfter:\n  orElse (probeA x) (orElse (probeB x) (probeC x))",
+        "Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Suggest-only.\n\n`orElse a b` takes VALUES, so every probe runs. Use the lazy forms for each probe after the first: `orElseWith a (_ => probe)` for `Option`, `optionOrElse (_ => probe) opt`, `resultOrElse (err => probe) res` for `Result`, or `findMap` when the probes are one function over a list.\n\nNo rewrite applies when a later probe is expensive, effectful, or the enclosing function's own recursion; a staircase whose later probe calls the enclosing function is not reported.\n\nBefore:\n  match probeA x\n    Some v => Some v\n    None => match probeB x\n      Some v => Some v\n      None => probeC x\nAfter:\n  orElseWith (probeA x) (_ => orElseWith (probeB x) (_ => probeC x))",
       category = Complexity,
       scope = Universal,
-      ratchet = Baselined,
+      ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = NotFixable,
       needs = [],
@@ -159,7 +163,40 @@ ruleOrElseStaircase : StdlibIndex ->
 ruleOrElseStaircase _ _ _ _ _ = [OnDecl orElseAt]
 
 orElseAt : Ctx -> Decl -> List Finding
-orElseAt ctx d = map (orElseHeadFinding ctx.ctxSpan) (declHeadHits orElsePick d)
+orElseAt ctx d = match declHeadHits orElsePick d
+  [] => []
+  hits =>
+    map
+      (orElseHeadFinding ctx.ctxSpan)
+      (filter (orElseNotSelfRecursive (enclosingNames d)) hits)
+
+-- The names whose call from a later probe is the enclosing function's own
+-- recursion: the declaration's, and every `where` or local `let rec` binder in
+-- its body.
+enclosingNames : Decl -> List String
+enclosingNames d = declBinderNames d ++ flatMap bodyBinders (declBodies d)
+
+bodyBinders : DeclBody -> List String
+bodyBinders (DeclBody _ body) = localBinders body
+
+localBinders : Expr -> List String
+localBinders e = ownBinders e ++ flatMap localBinders (childExprs e)
+
+ownBinders : Expr -> List String
+ownBinders (ELetGroup binds _) = map letBindName binds
+ownBinders (ELet _ True (PVar n _ _) _ _) = [n]
+ownBinders _ = []
+
+-- A staircase whose later probe (or final fallback) calls the enclosing function
+-- cannot be turned into value-taking `orElse` without eager recursion; with
+-- `orElseWith` the call still has to stay behind the earlier probes, so the rule
+-- stays silent rather than guess.  The first probe is not a later probe.
+orElseNotSelfRecursive : List String -> (Bool, Expr) -> Bool
+orElseNotSelfRecursive names (isResult, e) =
+  let laterProbes = match orElseOffChain isResult e
+    [] => []
+    _ :: rest => rest
+  not (anyList (n => anyList (mentionsVar n) laterProbes) names)
 
 orElseHeadFinding : Option Loc -> (Bool, Expr) -> Finding
 orElseHeadFinding declLoc (isResult, e) =
@@ -172,13 +209,11 @@ orElseHeadLoc : Option Loc -> Expr -> Option Loc
 orElseHeadLoc _ (ELoc l _) = Some l
 orElseHeadLoc declLoc _ = declLoc
 
--- The rewrite differs by monad, so the message does too.  `orElse` and `findMap`
--- come from `Alternative`, which `stdlib/core.mdk` implements for `List` and
--- `Option` only -- there is no `Alternative Result`, so recommending either over
--- a Result staircase names something that does not typecheck.  And both are
--- eager: Medaka is strict, so the Option rewrite evaluates every probe instead
--- of stopping at the first hit, which makes it a readability change rather than
--- an unconditional improvement.
+-- The rewrite differs by monad, so the message does too.  `orElse`, `orElseWith`
+-- and `findMap` come from `Alternative`, which `stdlib/core.mdk` implements for
+-- `List` and `Option` only -- there is no `Alternative Result`, but `resultOrElse`
+-- takes a lazy handler.  `orElse` itself takes values and is eager, so the
+-- message recommends the lazy forms.
 orElseFinding : Bool -> Option Loc -> Finding
 orElseFinding isResult loc = Finding {
   rule = ruleNameOrElseStaircase,
@@ -190,6 +225,6 @@ orElseFinding isResult loc = Finding {
 
 orElseMessage : Bool -> String
 orElseMessage True =
-  "first-match probe staircase (≥2 `Err` fallthrough re-probes). There is no `Alternative Result`, so `orElse`/`findMap` do not apply -- and Medaka is strict, so no eager combinator would stop at the first hit either; restructure the probes by hand rather than nesting `match`"
+  "first-match probe staircase (≥2 `Err` fallthrough re-probes). There is no `Alternative Result`: where the success arms unwrap (`Ok v => v`) and the probes are pure and cheap, chain them lazily with `resultOrElse (_ => probe)`; a passthrough (`Ok v => Ok v`) staircase has no lazy combinator, so nest the matches. Never the value-taking `orElse`, which runs every probe. An expensive, effectful or self-recursive later probe disqualifies any rewrite"
 orElseMessage False =
-  "first-match probe staircase (≥2 `None` fallthrough re-probes). Rewrite with `orElse` (Alternative, auto-prelude), or `findMap` when the probes are one function over a list -- both are eager, so the rewrite re-runs every probe instead of stopping at the first hit, and is a readability change only where re-probing is cheap and safe"
+  "first-match probe staircase (≥2 `None` fallthrough re-probes). If the probes are pure and cheap, rewrite each probe after the first lazily: `orElseWith a (_ => probe)` where the success arms pass the `Some` through, `optionOrElse (_ => probe) a` where they unwrap (`Some v => v`), or `findMap` over a list -- never the value-taking `orElse`, which runs every probe. An expensive, effectful or self-recursive later probe disqualifies any rewrite"

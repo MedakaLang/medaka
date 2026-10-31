@@ -137,7 +137,7 @@ runDupCells =
       Ok _ => True
       Err _ => False,
   ]
-  length (filter (== True) checks)
+  count (== True) checks
 
 distinctObject : Int -> Json
 distinctObject n = jObject (keyPairs (map (i => "key\{intToString i}") [0..n]))

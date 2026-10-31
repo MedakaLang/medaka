@@ -1272,9 +1272,7 @@ readHeaders lenAcc = match readLineOpt ()
     if line == "" then
       Some lenAcc
     else
-      let lenAcc2 = match parseContentLength line
-        Some n => n
-        None => lenAcc
+      let lenAcc2 = optionOr lenAcc (parseContentLength line)
       readHeaders lenAcc2
 -- EOF mid-stream
 
@@ -2364,9 +2362,7 @@ lastChangeText _ = None
 -- json field accessors specialized to the shapes we read.
 export
 fieldOr : String -> Json -> Json
-fieldOr key j = match get key j
-  Some v => v
-  None => JNull
+fieldOr key j = optionOr JNull (get key j)
 
 export
 fieldStr : String -> Json -> Option String

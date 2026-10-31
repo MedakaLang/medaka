@@ -1526,9 +1526,7 @@ asciiLowerChar c =
   if n >= 65 && n <= 90 then charFromCodeOr c (n + 32) else c
 
 charFromCodeOr : Char -> Int -> Char
-charFromCodeOr fallback n = match charFromCode n
-  Some c => c
-  None => fallback
+charFromCodeOr fallback n = optionOr fallback (charFromCode n)
 
 export
 asciiFold : (Char -> Char) -> String -> String

@@ -51,9 +51,7 @@ mustDecodeHexBytes s =
 hexFieldToInt : String -> Int
 hexFieldToInt raw =
   let s = trim raw
-  let stripped = match stripPrefix "0x" s
-    Some rest => rest
-    None => s
+  let stripped = optionOr s (stripPrefix "0x" s)
   bytesToIntBE (mustDecodeHexBytes stripped)
 
 -- The trimmed field at CSV column `col` (0-based, comma-separated).
@@ -123,12 +121,12 @@ base58SpecArm fname = match readFile fname
     let ls = lines content
     let dataLines = filter (l => l /= "" && not (startsWith "#" l)) ls
     -- dataLines: [alphabet row, row1, row2, erratum row (3 tab-fields)]
-    let alphaLine = match find (startsWith "alphabet\t") dataLines
-      Some l => l
-      None => panic "encodings_vectors: no alphabet row in base58 spec vectors"
-    let alphaValue = match stripPrefix "alphabet\t" alphaLine
-      Some v => v
-      None => panic "unreachable"
+    let alphaLine =
+      optionOrPanic
+        "encodings_vectors: no alphabet row in base58 spec vectors"
+        (find (startsWith "alphabet\t") dataLines)
+    let alphaValue =
+      optionOrPanic "unreachable" (stripPrefix "alphabet\t" alphaLine)
     let pAlpha =
       check
         "base58-spec:alphabet"

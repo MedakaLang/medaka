@@ -84,9 +84,7 @@ prepared =
     >> prepareWasmPlan PreludeFreeRuntime omEmpty
 
 physical : EmitPlan -> WasmDemandPlan
-physical plan = match plan.wasmPhysical
-  Some demand => demand
-  None => panic "missing test demand"
+physical plan = optionOrPanic "missing test demand" plan.wasmPhysical
 
 demandOf : String -> WasmDemandPlan
 demandOf src = physical (fst (prepared src))

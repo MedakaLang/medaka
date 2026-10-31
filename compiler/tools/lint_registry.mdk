@@ -9,11 +9,14 @@ import tools.lint_rule_internal_match_on_param as MatchOnParam
 import tools.lint_rule_stdlib_reimpl as StdlibReimpl
 import tools.lint_rule_not_eq as NotEq
 import tools.lint_rule_double_reverse as DoubleReverse
+import tools.lint_rule_fuse_list_pipeline as FuseListPipeline
 import tools.lint_rule_self_shadow_extern as SelfShadowExtern
 import tools.lint_rule_internal_test_prelude_shadow as TestPreludeShadow
 import tools.lint_rule_andthen_pure_map as AndThenPureMap
 import tools.lint_rule_missing_signature as MissingSignature
 import tools.lint_rule_match_to_map as MatchToMap
+import tools.lint_rule_option_eliminators as OptionEliminators
+import tools.lint_rule_eager_default as EagerDefault
 import tools.lint_rule_orelse_staircase as OrElseStaircase
 import tools.lint_rule_clause_map as ClauseMap
 import tools.lint_rule_internal_test_bool_literal_equal as TestBoolLiteralEqual
@@ -57,9 +60,12 @@ allRules = [
   BoolSimplify.rule,
   RemParity.rule,
   DoubleReverse.rule,
+  FuseListPipeline.rule,
   WhenUnless.rule,
   ComplementPredicate.rule,
   MatchToMap.rule,
+  OptionEliminators.rule,
+  EagerDefault.rule,
   BindChainToDo.rule,
   DeadCode.rule,
   ConcatToInterp.rule,

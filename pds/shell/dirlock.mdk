@@ -171,9 +171,8 @@ ownerText : (dir : String @FileRead*) -> Int -> <FileRead dir> String
 ownerText dir n =
   if not (fileExists (ownerPath dir n)) then
     ""
-  else match readFile (ownerPath dir n)
-    Err _ => ""
-    Ok text => text
+  else
+    resultOr "" (readFile (ownerPath dir n))
 
 -- Whether the holder's heartbeat moves at all within `remaining`
 -- milliseconds. It returns the moment it does, which is what makes a refusal

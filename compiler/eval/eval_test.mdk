@@ -139,9 +139,7 @@ applyPrim (VPrim f) v = f v
 applyPrim other _ = other
 
 bindingOf : String -> List (String, Value <IO>) -> Value <IO>
-bindingOf name binds = match lookup name binds
-  Some v => v
-  None => VUnit
+bindingOf name binds = optionOr VUnit (lookup name binds)
 
 -- `medaka run` draws from its own stream, so seeding or drawing it never moves
 -- the differential oracle's state, and a given seed gives the same draws in both.

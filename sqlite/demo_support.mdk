@@ -88,6 +88,4 @@ printPairs (p :: rest) =
 -- | Parse a CLI arg as an `Int`, defaulting to `0` on a bad parse.
 export
 parseN : String -> Int
-parseN s = match toInt s
-  Some n => n
-  None => 0
+parseN s = optionOr 0 (toInt s)

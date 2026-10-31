@@ -1,5 +1,5 @@
 # META
-source_lines=1934
+source_lines=1930
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -815,9 +815,7 @@ collectDefs ctx expSet mid uri ((d, p) :: rest) =
 -- `expValuesDirect` (which lists both `DTypeSig True` and `DFunDef True`).
 valuePub : Ctx -> HashMap String Unit -> Bool -> String -> Bool
 valuePub _ _ True _ = True
-valuePub ctx expSet False n = match hmGetC ctx expSet n
-  Some _ => True
-  None => False
+valuePub ctx expSet False n = isSome (hmGetC ctx expSet n)
 
 -- names this module exports as VALUES (via sig, def, extern, or let-group).
 collectExportedValues : Ctx -> List Decl -> HashMap String Unit
@@ -1453,9 +1451,7 @@ valEntry expSet mid pub n =
   if pub || memberOfRaw expSet n then [(nsVal, n, mkKey mid nsVal n)] else []
 
 memberOfRaw : HashMap String Unit -> String -> Bool
-memberOfRaw s k = match hmGet k s
-  Some _ => True
-  None => False
+memberOfRaw s k = isSome (hmGet k s)
 
 preludeVariant : String -> Variant -> List (String, String, String)
 preludeVariant mid (Variant cn _) = [(nsCtor, cn, mkKey mid nsCtor cn)]
@@ -2161,7 +2157,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "collectDefs" ((PVar "ctx") (PVar "expSet") (PVar "mid") (PVar "uri") (PCons (PTuple (PVar "d") (PVar "p")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "defsOfDecl") (EVar "ctx")) (EVar "expSet")) (EVar "mid")) (EVar "uri")) (EVar "d")) (EApp (EApp (EVar "nameLocOf") (EVar "uri")) (EVar "p"))) (EVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "collectDefs") (EVar "ctx")) (EVar "expSet")) (EVar "mid")) (EVar "uri")) (EVar "rest"))))
 (DTypeSig false "valuePub" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "valuePub" (PWild PWild (PCon "True") PWild) (EVar "True"))
-(DFunDef false "valuePub" ((PVar "ctx") (PVar "expSet") (PCon "False") (PVar "n")) (EMatch (EApp (EApp (EApp (EVar "hmGetC") (EVar "ctx")) (EVar "expSet")) (EVar "n")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "valuePub" ((PVar "ctx") (PVar "expSet") (PCon "False") (PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "hmGetC") (EVar "ctx")) (EVar "expSet")) (EVar "n"))))
 (DTypeSig false "collectExportedValues" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "collectExportedValues" ((PVar "ctx") (PVar "decls")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "hmNew") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EVar "decls"))) (DoExpr (EVar "s"))))
 (DTypeSig false "collectExpValGo" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))))
@@ -2368,7 +2364,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DTypeSig false "valEntry" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "valEntry" ((PVar "expSet") (PVar "mid") (PVar "pub") (PVar "n")) (EIf (EBinOp "||" (EVar "pub") (EApp (EApp (EVar "memberOfRaw") (EVar "expSet")) (EVar "n"))) (EListLit (ETuple (EVar "nsVal") (EVar "n") (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsVal")) (EVar "n")))) (EListLit)))
 (DTypeSig false "memberOfRaw" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "memberOfRaw" ((PVar "s") (PVar "k")) (EMatch (EApp (EApp (EVar "hmGet") (EVar "k")) (EVar "s")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "memberOfRaw" ((PVar "s") (PVar "k")) (EApp (EVar "isSome") (EApp (EApp (EVar "hmGet") (EVar "k")) (EVar "s"))))
 (DTypeSig false "preludeVariant" (TyFun (TyCon "String") (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))))))
 (DFunDef false "preludeVariant" ((PVar "mid") (PCon "Variant" (PVar "cn") PWild)) (EListLit (ETuple (EVar "nsCtor") (EVar "cn") (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsCtor")) (EVar "cn")))))
 (DTypeSig false "preludeMethod" (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))
@@ -2703,7 +2699,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "collectDefs" ((PVar "ctx") (PVar "expSet") (PVar "mid") (PVar "uri") (PCons (PTuple (PVar "d") (PVar "p")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "defsOfDecl") (EVar "ctx")) (EVar "expSet")) (EVar "mid")) (EVar "uri")) (EVar "d")) (EApp (EApp (EVar "nameLocOf") (EVar "uri")) (EVar "p"))) (EVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "collectDefs") (EVar "ctx")) (EVar "expSet")) (EVar "mid")) (EVar "uri")) (EVar "rest"))))
 (DTypeSig false "valuePub" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "valuePub" (PWild PWild (PCon "True") PWild) (EVar "True"))
-(DFunDef false "valuePub" ((PVar "ctx") (PVar "expSet") (PCon "False") (PVar "n")) (EMatch (EApp (EApp (EApp (EVar "hmGetC") (EVar "ctx")) (EVar "expSet")) (EVar "n")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "valuePub" ((PVar "ctx") (PVar "expSet") (PCon "False") (PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "hmGetC") (EVar "ctx")) (EVar "expSet")) (EVar "n"))))
 (DTypeSig false "collectExportedValues" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "collectExportedValues" ((PVar "ctx") (PVar "decls")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "hmNew") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EVar "decls"))) (DoExpr (EVar "s"))))
 (DTypeSig false "collectExpValGo" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))))
@@ -2910,7 +2906,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DTypeSig false "valEntry" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "valEntry" ((PVar "expSet") (PVar "mid") (PVar "pub") (PVar "n")) (EIf (EBinOp "||" (EVar "pub") (EApp (EApp (EVar "memberOfRaw") (EVar "expSet")) (EVar "n"))) (EListLit (ETuple (EVar "nsVal") (EVar "n") (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsVal")) (EVar "n")))) (EListLit)))
 (DTypeSig false "memberOfRaw" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "memberOfRaw" ((PVar "s") (PVar "k")) (EMatch (EApp (EApp (EVar "hmGet") (EVar "k")) (EVar "s")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "memberOfRaw" ((PVar "s") (PVar "k")) (EApp (EVar "isSome") (EApp (EApp (EVar "hmGet") (EVar "k")) (EVar "s"))))
 (DTypeSig false "preludeVariant" (TyFun (TyCon "String") (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))))))
 (DFunDef false "preludeVariant" ((PVar "mid") (PCon "Variant" (PVar "cn") PWild)) (EListLit (ETuple (EVar "nsCtor") (EVar "cn") (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsCtor")) (EVar "cn")))))
 (DTypeSig false "preludeMethod" (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))

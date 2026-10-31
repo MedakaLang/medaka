@@ -1,5 +1,5 @@
 # META
-source_lines=478
+source_lines=476
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/native_test_decls.mdk — the NATIVE execution engine for
@@ -413,9 +413,7 @@ completeField chunks i f = match lookupChunk (fieldTag i f) chunks
   _ => None
 
 startedTest : List Chunk -> Int -> Bool
-startedTest chunks i = match lookupChunk (startTag i) chunks
-  Some _ => True
-  None => False
+startedTest chunks i = isSome (lookupChunk (startTag i) chunks)
 
 -- A transcript carrying a sentinel line this engine did not write.  Values are
 -- printed quoted so a value cannot spell one; a test's own `println` output
@@ -541,7 +539,7 @@ fromFields note _ _ _ _ =
 (DTypeSig false "completeField" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "completeField" ((PVar "chunks") (PVar "i") (PVar "f")) (EMatch (EApp (EApp (EVar "lookupChunk") (EApp (EApp (EVar "fieldTag") (EVar "i")) (EVar "f"))) (EVar "chunks")) (arm (PCon "Some" (PCon "Chunk" PWild (PVar "ls") (PCon "True"))) () (EApp (EVar "decodeValue") (EVar "ls"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "startedTest" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "startedTest" ((PVar "chunks") (PVar "i")) (EMatch (EApp (EApp (EVar "lookupChunk") (EApp (EVar "startTag") (EVar "i"))) (EVar "chunks")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "startedTest" ((PVar "chunks") (PVar "i")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupChunk") (EApp (EVar "startTag") (EVar "i"))) (EVar "chunks"))))
 (DTypeSig false "forgedTranscript" (TyCon "String"))
 (DFunDef false "forgedTranscript" () (ELit (LString "native test runner: the probe printed a sentinel line this engine did not write, so the transcript no longer says which test each value belongs to. No verdict was read from it.")))
 (DTypeSig false "abortNote" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
@@ -620,7 +618,7 @@ fromFields note _ _ _ _ =
 (DTypeSig false "completeField" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "completeField" ((PVar "chunks") (PVar "i") (PVar "f")) (EMatch (EApp (EApp (EVar "lookupChunk") (EApp (EApp (EVar "fieldTag") (EVar "i")) (EVar "f"))) (EVar "chunks")) (arm (PCon "Some" (PCon "Chunk" PWild (PVar "ls") (PCon "True"))) () (EApp (EVar "decodeValue") (EVar "ls"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "startedTest" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "startedTest" ((PVar "chunks") (PVar "i")) (EMatch (EApp (EApp (EVar "lookupChunk") (EApp (EVar "startTag") (EVar "i"))) (EVar "chunks")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "startedTest" ((PVar "chunks") (PVar "i")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupChunk") (EApp (EVar "startTag") (EVar "i"))) (EVar "chunks"))))
 (DTypeSig false "forgedTranscript" (TyCon "String"))
 (DFunDef false "forgedTranscript" () (ELit (LString "native test runner: the probe printed a sentinel line this engine did not write, so the transcript no longer says which test each value belongs to. No verdict was read from it.")))
 (DTypeSig false "abortNote" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
