@@ -1,5 +1,5 @@
 # META
-source_lines=417
+source_lines=416
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_hints.mdk — the rewrite-hint engine: a rule that rewrites
@@ -29,7 +29,7 @@ stages=DESUGAR,MARK
 -- parses one.  A row that does not compile panics there, and
 -- `lint_hints_test.mdk` compiles every registered row.
 
-import frontend.ast.{Expr(..), Decl(..), Loc}
+import frontend.ast.{Expr(..), Decl(..)}
 import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..), parseResult}
 import driver.diagnostics.{Severity(..)}
@@ -55,7 +55,8 @@ import tools.lint_shared.{
 }
 import list.{nub}
 
--- Two kinds of side condition, not failure and success.
+-- A metavariable test and a definition exclusion: two kinds of side condition, so
+-- the shape is not Option's `Some`/`None` and not Result's `Ok`/`Err`.
 -- lint-disable-next-line rule-clone-type
 public export data HintCond = Atomic String | NotInDefOf (List String)
 
@@ -221,7 +222,7 @@ checkBound row kind lhs rhs bound =
     }
 
 condMetas : List HintCond -> List String
-condMetas conds = flatMap (c => toList (condMeta c)) conds
+condMetas conds = filterMap condMeta conds
 
 rowFailure : HintRow -> String -> String
 rowFailure row why = "hint row `\{row.rowText}`: \{why}"
@@ -309,9 +310,7 @@ instantiate : Hint -> Found -> Expr
 instantiate h found = fill found.foundBinds h.hintRhs
 
 fill : List (String, Expr) -> Expr -> Expr
-fill binds (EVar n) = match lookupAssoc n binds
-  Some e => e
-  None => EVar n
+fill binds (EVar n) = optionOr (EVar n) (lookupAssoc n binds)
 fill binds (EApp f x) = EApp (fill binds f) (fill binds x)
 fill binds (EBinOp op a b r) = EBinOp op (fill binds a) (fill binds b) r
 fill _ e = e
@@ -420,7 +419,7 @@ ownsName : Ctx -> HintCond -> Bool
 ownsName ctx (NotInDefOf names) = elem ctx.ctxDeclName names
 ownsName _ _ = False
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Decl" true) (mem "Loc" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "parseResult" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
@@ -485,7 +484,7 @@ ownsName _ _ = False
 (DTypeSig false "checkBound" (TyFun (TyCon "HintRow") (TyFun (TyCon "ExprKind") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Hint"))))))))
 (DFunDef false "checkBound" ((PVar "row") (PVar "kind") (PVar "lhs") (PVar "rhs") (PVar "bound")) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EVar "m")) (EVar "bound"))))) (EApp (EVar "metasOf") (EVar "rhs"))) (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (ELit (LString "the right side uses a metavariable the left side does not bind")))) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EVar "m")) (EVar "bound"))))) (EApp (EVar "condMetas") (EFieldAccess (EVar "row") "rowConds"))) (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (ELit (LString "a condition names a metavariable the left side does not bind")))) (EApp (EVar "Ok") (ERecordCreate "Hint" ((fa "hintRow" (EVar "row")) (fa "hintKind" (EVar "kind")) (fa "hintLhs" (EApp (EVar "tmplOf") (EVar "lhs"))) (fa "hintRhs" (EVar "rhs")) (fa "hintIntro" (EApp (EVar "introducedOf") (EVar "rhs"))) (fa "hintKey" (EApp (EVar "templateKey") (EVar "lhs")))))))))
 (DTypeSig false "condMetas" (TyFun (TyApp (TyCon "List") (TyCon "HintCond")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "condMetas" ((PVar "conds")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EVar "toList") (EApp (EVar "condMeta") (EVar "c"))))) (EVar "conds")))
+(DFunDef false "condMetas" ((PVar "conds")) (EApp (EApp (EVar "filterMap") (EVar "condMeta")) (EVar "conds")))
 (DTypeSig false "rowFailure" (TyFun (TyCon "HintRow") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "rowFailure" ((PVar "row") (PVar "why")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "hint row `")) (EApp (EVar "display") (EFieldAccess (EVar "row") "rowText"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "why"))) (ELit (LString ""))))
 (DTypeSig true "compileHints" (TyFun (TyApp (TyCon "List") (TyCon "HintRow")) (TyApp (TyCon "List") (TyCon "Hint"))))
@@ -515,7 +514,7 @@ ownsName _ _ = False
 (DTypeSig true "instantiate" (TyFun (TyCon "Hint") (TyFun (TyCon "Found") (TyCon "Expr"))))
 (DFunDef false "instantiate" ((PVar "h") (PVar "found")) (EApp (EApp (EVar "fill") (EFieldAccess (EVar "found") "foundBinds")) (EFieldAccess (EVar "h") "hintRhs")))
 (DTypeSig false "fill" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "fill" ((PVar "binds") (PCon "EVar" (PVar "n"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "binds")) (arm (PCon "Some" (PVar "e")) () (EVar "e")) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))))
+(DFunDef false "fill" ((PVar "binds") (PCon "EVar" (PVar "n"))) (EApp (EApp (EVar "optionOr") (EApp (EVar "EVar") (EVar "n"))) (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "binds"))))
 (DFunDef false "fill" ((PVar "binds") (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "f"))) (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "x"))))
 (DFunDef false "fill" ((PVar "binds") (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "a"))) (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "b"))) (EVar "r")))
 (DFunDef false "fill" (PWild (PVar "e")) (EVar "e"))
@@ -543,7 +542,7 @@ ownsName _ _ = False
 (DFunDef false "ownsName" ((PVar "ctx") (PCon "NotInDefOf" (PVar "names"))) (EApp (EApp (EVar "elem") (EFieldAccess (EVar "ctx") "ctxDeclName")) (EVar "names")))
 (DFunDef false "ownsName" (PWild PWild) (EVar "False"))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Decl" true) (mem "Loc" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "parseResult" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
@@ -608,7 +607,7 @@ ownsName _ _ = False
 (DTypeSig false "checkBound" (TyFun (TyCon "HintRow") (TyFun (TyCon "ExprKind") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Hint"))))))))
 (DFunDef false "checkBound" ((PVar "row") (PVar "kind") (PVar "lhs") (PVar "rhs") (PVar "bound")) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EVar "m")) (EVar "bound"))))) (EApp (EVar "metasOf") (EVar "rhs"))) (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (ELit (LString "the right side uses a metavariable the left side does not bind")))) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EVar "m")) (EVar "bound"))))) (EApp (EVar "condMetas") (EFieldAccess (EVar "row") "rowConds"))) (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (ELit (LString "a condition names a metavariable the left side does not bind")))) (EApp (EVar "Ok") (ERecordCreate "Hint" ((fa "hintRow" (EVar "row")) (fa "hintKind" (EVar "kind")) (fa "hintLhs" (EApp (EVar "tmplOf") (EVar "lhs"))) (fa "hintRhs" (EVar "rhs")) (fa "hintIntro" (EApp (EVar "introducedOf") (EVar "rhs"))) (fa "hintKey" (EApp (EVar "templateKey") (EVar "lhs")))))))))
 (DTypeSig false "condMetas" (TyFun (TyApp (TyCon "List") (TyCon "HintCond")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "condMetas" ((PVar "conds")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EMethodRef "toList") (EApp (EVar "condMeta") (EVar "c"))))) (EVar "conds")))
+(DFunDef false "condMetas" ((PVar "conds")) (EApp (EApp (EMethodRef "filterMap") (EVar "condMeta")) (EVar "conds")))
 (DTypeSig false "rowFailure" (TyFun (TyCon "HintRow") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "rowFailure" ((PVar "row") (PVar "why")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "hint row `")) (EApp (EMethodRef "display") (EFieldAccess (EVar "row") "rowText"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "why"))) (ELit (LString ""))))
 (DTypeSig true "compileHints" (TyFun (TyApp (TyCon "List") (TyCon "HintRow")) (TyApp (TyCon "List") (TyCon "Hint"))))
@@ -638,7 +637,7 @@ ownsName _ _ = False
 (DTypeSig true "instantiate" (TyFun (TyCon "Hint") (TyFun (TyCon "Found") (TyCon "Expr"))))
 (DFunDef false "instantiate" ((PVar "h") (PVar "found")) (EApp (EApp (EVar "fill") (EFieldAccess (EVar "found") "foundBinds")) (EFieldAccess (EVar "h") "hintRhs")))
 (DTypeSig false "fill" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "fill" ((PVar "binds") (PCon "EVar" (PVar "n"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "binds")) (arm (PCon "Some" (PVar "e")) () (EVar "e")) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))))
+(DFunDef false "fill" ((PVar "binds") (PCon "EVar" (PVar "n"))) (EApp (EApp (EVar "optionOr") (EApp (EVar "EVar") (EVar "n"))) (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "binds"))))
 (DFunDef false "fill" ((PVar "binds") (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "f"))) (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "x"))))
 (DFunDef false "fill" ((PVar "binds") (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "a"))) (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "b"))) (EVar "r")))
 (DFunDef false "fill" (PWild (PVar "e")) (EVar "e"))

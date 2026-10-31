@@ -4,12 +4,12 @@
 import test.{
   expectEach, expectEqual, expectErr, expectOk, expectTrue, expectFalse
 }
-import frontend.ast.{Decl(..), Expr}
+import frontend.ast.{Expr}
 import frontend.parser.{parseResult}
 import tools.lint.{emptyStdlibIndex, lintParseSource, lintProgram}
 import tools.lint_core.{Applicability(..), Ctx(..), Finding(..), Rule}
 import tools.lint_hints.{
-  HintCond(..), HintRow(..), compileHint, inOwnDefinition, matchHint, Found(..)
+  HintCond(..), HintRow(..), compileHint, inOwnDefinition, matchHint
 }
 import tools.lint_rule_double_reverse as DoubleReverse
 import tools.lint_rule_fuse_list_pipeline as FuseListPipeline

@@ -1,5 +1,5 @@
 # META
-source_lines=407
+source_lines=399
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_dup.mdk — the duplicate-body occurrence engine: per-clause
@@ -11,11 +11,10 @@ import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import support.util.{listLen, allList, filterList, reverseL, joinWith}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
-import support.char.{isUpper}
 import ir.sexp.{exprSexp, patSexp}
 import tools.lint_core.{DupClause(..), Finding(..)}
 import tools.lint_shared.{
-  declLocList, ruleNameDuplicateBody, sortUniqS, unwrapLoc
+  declLocList, isCtorName, ruleNameDuplicateBody, sortUniqS, unwrapLoc
 }
 
 -- minimum body complexity (count of AST nodes) to be eligible.  Calibrated so the
@@ -81,10 +80,10 @@ isPureDataKv : (Expr, Expr) -> Bool
 isPureDataKv (k, v) = isPureDataExpr k && isPureDataExpr v
 
 -- the ultimate callee of an `EApp` spine is an upper-case `EVar` (a data ctor,
--- by Medaka's naming convention — see `isUpperFirst`), not an ordinary function.
+-- by Medaka's naming convention — see `isCtorName`), not an ordinary function.
 appHeadIsCtor : Expr -> Bool
 appHeadIsCtor e = match unwrapLoc e
-  EVar name => isUpperFirst name
+  EVar name => isCtorName name
   EApp f _ => appHeadIsCtor f
   _ => False
 
@@ -97,13 +96,6 @@ appArgsRev : Expr -> List Expr
 appArgsRev e = match unwrapLoc e
   EApp f a => a :: appArgsRev f
   _ => []
-
-isUpperFirst : String -> Bool
-isUpperFirst s =
-  if stringLength s == 0 then
-    False
-  else
-    isUpper (arrayGetUnsafe 0 (stringToChars s))
 
 -- THE join: occurrences (from every file) → findings.  Split out of
 -- `ruleDuplicateBody` for #395's `--cache`, which reaches the same join from
@@ -415,10 +407,9 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "allList" false) (mem "filterList" false) (mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
-(DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "DupClause" true) (mem "Finding" true))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "isCtorName" false) (mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false) (mem "unwrapLoc" false))))
 (DTypeSig false "dupComplexityThreshold" (TyCon "Int"))
 (DFunDef false "dupComplexityThreshold" () (ELit (LInt 10)))
 (DTypeSig false "structuralKey" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyCon "String"))))
@@ -434,13 +425,11 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DTypeSig false "isPureDataKv" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyCon "Bool")))
 (DFunDef false "isPureDataKv" ((PTuple (PVar "k") (PVar "v"))) (EBinOp "&&" (EApp (EVar "isPureDataExpr") (EVar "k")) (EApp (EVar "isPureDataExpr") (EVar "v"))))
 (DTypeSig false "appHeadIsCtor" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "appHeadIsCtor" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "name")) () (EApp (EVar "isUpperFirst") (EVar "name"))) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "appHeadIsCtor") (EVar "f"))) (arm PWild () (EVar "False"))))
+(DFunDef false "appHeadIsCtor" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "name")) () (EApp (EVar "isCtorName") (EVar "name"))) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "appHeadIsCtor") (EVar "f"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "appArgs" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
 (DFunDef false "appArgs" ((PVar "e")) (EApp (EVar "reverseL") (EApp (EVar "appArgsRev") (EVar "e"))))
 (DTypeSig false "appArgsRev" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
 (DFunDef false "appArgsRev" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EBinOp "::" (EVar "a") (EApp (EVar "appArgsRev") (EVar "f")))) (arm PWild () (EListLit))))
-(DTypeSig false "isUpperFirst" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isUpperFirst" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EApp (EVar "isUpper") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s"))))))
 (DTypeSig true "dupJoin" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "dupJoin" ((PVar "occs")) (EBlock (DoLet false false (PVar "groups") (EApp (EVar "groupOccsByKey") (EVar "occs"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EApp (EVar "dupGroupFires") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups"))))) (EApp (EVar "dupDistinctKeys") (EVar "occs")))) (DoExpr (EApp (EVar "dedupeFindings") (EApp (EApp (EVar "flatMap") (ELam ((PVar "k")) (EApp (EVar "emitDupGroup") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups")))))) (EApp (EVar "sortUniqS") (EVar "live")))))))
 (DTypeSig false "dedupeFindings" (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding"))))
@@ -525,10 +514,9 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "allList" false) (mem "filterList" false) (mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
-(DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "DupClause" true) (mem "Finding" true))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "isCtorName" false) (mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false) (mem "unwrapLoc" false))))
 (DTypeSig false "dupComplexityThreshold" (TyCon "Int"))
 (DFunDef false "dupComplexityThreshold" () (ELit (LInt 10)))
 (DTypeSig false "structuralKey" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyCon "String"))))
@@ -544,13 +532,11 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DTypeSig false "isPureDataKv" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyCon "Bool")))
 (DFunDef false "isPureDataKv" ((PTuple (PVar "k") (PVar "v"))) (EBinOp "&&" (EApp (EVar "isPureDataExpr") (EVar "k")) (EApp (EVar "isPureDataExpr") (EVar "v"))))
 (DTypeSig false "appHeadIsCtor" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "appHeadIsCtor" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "name")) () (EApp (EVar "isUpperFirst") (EVar "name"))) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "appHeadIsCtor") (EVar "f"))) (arm PWild () (EVar "False"))))
+(DFunDef false "appHeadIsCtor" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "name")) () (EApp (EVar "isCtorName") (EVar "name"))) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "appHeadIsCtor") (EVar "f"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "appArgs" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
 (DFunDef false "appArgs" ((PVar "e")) (EApp (EVar "reverseL") (EApp (EVar "appArgsRev") (EVar "e"))))
 (DTypeSig false "appArgsRev" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
 (DFunDef false "appArgsRev" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EBinOp "::" (EVar "a") (EApp (EVar "appArgsRev") (EVar "f")))) (arm PWild () (EListLit))))
-(DTypeSig false "isUpperFirst" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isUpperFirst" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EApp (EVar "isUpper") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s"))))))
 (DTypeSig true "dupJoin" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "dupJoin" ((PVar "occs")) (EBlock (DoLet false false (PVar "groups") (EApp (EVar "groupOccsByKey") (EVar "occs"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EApp (EVar "dupGroupFires") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups"))))) (EApp (EVar "dupDistinctKeys") (EVar "occs")))) (DoExpr (EApp (EVar "dedupeFindings") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "k")) (EApp (EVar "emitDupGroup") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups")))))) (EApp (EVar "sortUniqS") (EVar "live")))))))
 (DTypeSig false "dedupeFindings" (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding"))))

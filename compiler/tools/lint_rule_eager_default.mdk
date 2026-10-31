@@ -25,6 +25,7 @@ import tools.lint_shared.{
   calledName,
   exprRuleEditVisitors,
   isCtorName,
+  isFalseLit,
   noExcl,
   oneLine,
   rebinds,
@@ -83,18 +84,13 @@ lazyName "optionOr" = Some "optionOrElse"
 lazyName "resultOr" = Some "resultOrElse"
 lazyName _ = None
 
-isFalse : Expr -> Bool
-isFalse e = match unwrapLoc e
-  EVar "False" => True
-  _ => False
-
 -- `optionOr d o` / `resultOr d o` with a call for `d`: the lazy call that
 -- replaces the function `optionOr d`.  `whenL False d` with a call for `d`: the
 -- node itself, reported with no fix.
 eagerOf : StdlibIndex -> FileFacts -> Expr -> Option Expr
 eagerOf idx facts (EApp f x) = match unwrapLoc f
   EApp hd d => match unwrapLoc hd
-    EVar "whenL" => if isFalse d && isCall x then Some (EApp f x) else None
+    EVar "whenL" => if isFalseLit d && isCall x then Some (EApp f x) else None
     EVar n => match lazyName n
       Some lazy =>
         if isCall d && usesPreludeName idx facts hd then
@@ -110,10 +106,12 @@ eagerOf _ _ _ = None
 -- enclosing method is that name.  The edit replaces the function `optionOr d`
 -- of the call `optionOr d o`, which stands bare in function position and so
 -- takes no brackets.
+isWhenL : Expr -> Bool
+isWhenL e = calledName e == "whenL"
+
 eagerEdit : StdlibIndex -> FileFacts -> Ctx -> Expr -> Expr -> Option Fix
 eagerEdit idx facts ctx (EApp f _) rewritten =
-  if calledName rewritten == "whenL"
-    || rebinds idx facts ctx (calledName rewritten) then
+  if isWhenL rewritten || rebinds idx facts ctx (calledName rewritten) then
     None
   else
     replaceFix
@@ -129,7 +127,7 @@ eagerFinding : Option Loc -> Expr -> Option Fix -> Finding
 eagerFinding loc rewritten fix = Finding {
   rule = ruleNameEagerDefault,
   message =
-    if calledName rewritten == "whenL" then
+    if isWhenL rewritten then
       "the argument of 'whenL False' is evaluated although the guard is False"
     else
       "this default is evaluated even when the value is present — rewrite as '"
