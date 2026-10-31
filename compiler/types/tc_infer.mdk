@@ -3320,7 +3320,6 @@ processLetGroup env binds =
   beginEffectSummaryScope env.teDyn.dcModule ()
   let oblN0 = wMark env.teDyn.dcModule.mcCells.implObls
   let callN0 = wMark env.teDyn.dcModule.mcCells.obls
-  let dictN0 = goalsMark env.teDyn.dcModule.mcGraph ()
   let summaries = map (localBindingSummary env.teDyn.dcModule) binds
   each
     (entry => recordLetBindType env.teDyn.dcModule.mcGraph entry)

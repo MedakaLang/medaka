@@ -205,8 +205,7 @@ test "gateway emission seams refuse F1-F6 and a mismatched target before returni
             ["llvm-strict", "wasm-strict", "wasm-unchecked"])
 
 test "missing-extern-abi is a fatal metadata defect before target gaps" =
-  let (cp@(CProgram groups ca ct impls mc facts)) =
-    lowered "main = intToString 42"
+  let (CProgram groups ca ct impls mc facts) = lowered "main = intToString 42"
   let symbol = runtimeExternSymbol "intToString"
   match omLookup symbol facts.factExterns
     None => fail "lowering omitted the runtime declaration"

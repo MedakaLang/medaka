@@ -36,7 +36,7 @@ runElab : DriveInputs ->
   List (String, List Decl) ->
   <IO> Unit
 runElab inputs runtimeDecls coreDecls modules =
-  let (elab, report, outputs) =
+  let (elab, _, outputs) =
     elaborateModulesWithReport
       inputs
       (valueMainCandidate coreDecls modules)

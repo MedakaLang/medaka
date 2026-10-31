@@ -4170,10 +4170,7 @@ buildEnvMM ps known prog internalGuard =
   -- which gets no prelude names seeded into its own scope and so cannot resume
   -- from the shared maps.  It builds its three from `omEmpty` as before.
   let seed = not (programIsCore prog)
-  let pTypes = whenL seed ps.psTypes
-  let pCtors = whenL seed ps.psCtors
   let pIfaces = whenL seed ps.psIfaces
-  let pValues = whenL seed ps.psValues
   let pFieldOwners = whenL seed ps.psFieldOwners
   let uIfaces = interfaceList prog
   let adds = collectImports known prog

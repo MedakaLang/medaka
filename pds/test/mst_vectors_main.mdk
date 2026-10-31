@@ -200,7 +200,6 @@ runHostile =
   let rootLow = encodeUtf8 "app.bsky.feed.post/range-2"
   let rootHigh = encodeUtf8 "app.bsky.feed.post/range-3"
   let leftKey = encodeUtf8 "app.bsky.feed.post/range-1"
-  let betweenKey = encodeUtf8 "app.bsky.feed.post/range-20"
   let rightKey = encodeUtf8 "app.bsky.feed.post/range-4"
   let depthTwo = encodeUtf8 "app.bsky.feed.post/medaka-depth-2-31"
   let depthOne = encodeUtf8 "app.bsky.feed.post/medaka-depth-1-5"

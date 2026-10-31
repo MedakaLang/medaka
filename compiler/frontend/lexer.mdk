@@ -176,5 +176,4 @@ collectComments s =
   -- Valid only while lint is the single caller; a second caller must move this bump.
   let _ = stageBump "lint.comments"
   let src = stringToChars s
-  let len = arrayLength src
   rawToComments src (scanRawUndedentedChars src)
