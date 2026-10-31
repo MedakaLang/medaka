@@ -99,6 +99,7 @@ import ir.core_ir.{
   mapProgramBinders,
   BinderSite(..),
   litRuntimeType,
+  leadingDictParams,
 }
 import types.runtime_types.{
   BinderRow(..),
@@ -120,7 +121,6 @@ import ir.core_ir_lower.{
   programArities,
   ifaceMethodArityKey,
   ifaceWordOfKey,
-  leadingDictParams,
 }
 import ir.core_ir_sexp.{callModeSexp}
 import frontend.ast.{

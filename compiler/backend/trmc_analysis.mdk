@@ -21,8 +21,8 @@ import ir.core_ir.{
   CGuard(..),
   CImplEntry(..),
   CImplBody(..),
+  leadingDictParams,
 }
-import ir.core_ir_lower.{leadingDictParams}
 import support.util.{
   lenKey,
   contains,

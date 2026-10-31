@@ -25,8 +25,8 @@ import ir.core_ir.{
   CGuard(..),
   CImplEntry(..),
   CImplBody(..),
+  leadingDictParams,
 }
-import ir.core_ir_lower.{leadingDictParams}
 import support.util.{
   lenKey,
   contains,
@@ -1758,8 +1758,7 @@ isTrmcImpl : TrmcVerdicts -> String -> String -> Bool
 isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true) (mem "Lit" true))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "instanceWord" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "leadingDictParams" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "instanceWord" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "leadingDictParams" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DData Public "SelfRef" () ((variant "SelfByVar" (ConPos (TyCon "String"))) (variant "SelfByMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "Int")))) ())
@@ -2230,8 +2229,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "isTrmcImpl" ((PVar "v") (PVar "method") (PVar "key")) (EApp (EApp (EVar "omHasKey") (EBinOp "++" (EApp (EVar "lenKey") (EVar "method")) (EVar "key"))) (EFieldAccess (EVar "v") "eligibleImpls")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true) (mem "Lit" true))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "instanceWord" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "leadingDictParams" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "instanceWord" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "leadingDictParams" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DData Public "SelfRef" () ((variant "SelfByVar" (ConPos (TyCon "String"))) (variant "SelfByMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "Int")))) ())
