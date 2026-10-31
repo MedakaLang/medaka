@@ -1,5 +1,5 @@
 # META
-source_lines=580
+source_lines=532
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cache.mdk — the on-disk cache behind `medaka lint --cache` (#395).
@@ -139,23 +139,13 @@ cacheFormatVersion : Int
 cacheFormatVersion = 3
 
 -- ── content hashing ──────────────────────────────────────────────────────────
--- The key on which a hit is decided.  `hashString` is FNV-1a but the extern
--- MASKS its result to 30 bits (mdk_hash_string, MDK_HASH_MASK), and 30 bits is
--- too thin to bet correctness on: a ~1e-9 collision between two versions of one
--- file is a STALE HIT, i.e. the exact silent wrongness this cache must not
--- manufacture.  So the key is two independent 30-bit projections plus the byte
--- length — the second lane hashes the source minus its first character, which
--- gives FNV a different starting state and so an unrelated projection.
---
--- Measured on the real corpus (206 files, 4.6 MB): 1 lane = 12.4 ms, 2 lanes =
--- 24 ms.  ~12 ms on a ~350 ms warm run to take the collision odds from ~1e-9 to
--- ~1e-18.  Bought.
+-- The key on which a hit is decided: the 64-bit word-wide digest of the source
+-- (`hashStringHex`).  `hashString` masks its result to 30 bits, too thin to bet
+-- correctness on: a collision between two versions of one file is a STALE HIT,
+-- the silent wrongness this cache must not manufacture.
 export
 contentHashOf : String -> String
-contentHashOf src =
-  let n = stringLength src
-  let lane2 = if n == 0 then 0 else hashString (stringSlice 1 n src)
-  "\{hashString src}.\{lane2}.\{n}"
+contentHashOf src = hashStringHex src
 
 -- ── the rule-set stamp ───────────────────────────────────────────────────────
 -- Editing a rule's LOGIC (its name unchanged) must invalidate every entry, so
@@ -170,49 +160,11 @@ contentHashOf src =
 -- changes too.  Consequence, CORRECT not a bug: for compiler devs the cache dies
 -- on every `make medaka`; for a user on a released binary it is stable.
 --
--- `readFileBytes`, never `readFile`.  `readFile` accepts only valid UTF-8,
--- so on a binary it returns `Err` rather than the bytes, and the fingerprint
--- would be no fingerprint at all.  The bytes themselves are what is hashed.
---
--- Kept behind this ONE function so it stays swappable.
---
--- Cost, MEASURED on the real 3.37 MB binary: ~10 ms readFileBytes + ~15 ms hash
--- = ~25 ms, paid once per run.  (#395 records 5.7–6.1 ms; that figure does not
--- reproduce — measure before quoting it.)  ~7% of a ~350 ms warm run.
+-- `hashFile` hashes the bytes raw, so a binary is no obstacle (`readFile` would
+-- refuse it as non-UTF-8).  Kept behind this ONE function so it stays swappable.
 export
 ruleSetStamp : Unit -> <IO> String
-ruleSetStamp _ = match readFileBytes (executablePath ())
-  Err _ => ""
-  Ok bs => "\{fnv62 bs (arrayLength bs) 0 fnv62Offset}"
-
--- FNV-1a widened to Medaka's full Int range instead of `hashString`'s 30 bits —
--- same single pass, 62 bits instead of 30.  The multiply runs in `U64`, which
--- wraps (an `Int` multiply traps), and the mask keeps the accumulator's low 62
--- bits, non-negative, so it renders as a stable decimal.
-fnv62Mask : Int
-fnv62Mask = 4611686018427387903
-
--- The FNV-1a 64-bit offset basis (14695981039346656037) reduced mod 2^62 — the
--- literal itself exceeds Int's max magnitude and will not lex.
-fnv62Offset : Int
-fnv62Offset = 860922984064492325
-
-fnv62Prime : Int
-fnv62Prime = 1099511628211
-
-fnv62 : Array Int -> Int -> Int -> Int -> Int
-fnv62 bs n i acc
-  | i >= n = acc
-  | otherwise =
-    fnv62
-      bs
-      n
-      (i + 1)
-      (bitAnd
-        fnv62Mask
-        (U64.toIntTruncating
-          (U64.truncate (bitXor acc (arrayGetUnsafe i bs))
-            * U64.truncate fnv62Prime)))
+ruleSetStamp _ = resultOr "" (hashFile (executablePath ()))
 
 -- ── shard paths ──────────────────────────────────────────────────────────────
 
@@ -602,17 +554,9 @@ makeStagingDir cacheDir =
 (DTypeSig false "cacheFormatVersion" (TyCon "Int"))
 (DFunDef false "cacheFormatVersion" () (ELit (LInt 3)))
 (DTypeSig true "contentHashOf" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "contentHashOf" ((PVar "src")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "src"))) (DoLet false false (PVar "lane2") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EVar "hashString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "n")) (EVar "src"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "hashString") (EVar "src")))) (ELit (LString "."))) (EApp (EVar "display") (EVar "lane2"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))))
+(DFunDef false "contentHashOf" ((PVar "src")) (EApp (EVar "hashStringHex") (EVar "src")))
 (DTypeSig true "ruleSetStamp" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "ruleSetStamp" (PWild) (EMatch (EApp (EVar "readFileBytes") (EApp (EVar "executablePath") (ELit LUnit))) (arm (PCon "Err" PWild) () (ELit (LString ""))) (arm (PCon "Ok" (PVar "bs")) () (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "fnv62") (EVar "bs")) (EApp (EVar "arrayLength") (EVar "bs"))) (ELit (LInt 0))) (EVar "fnv62Offset")))) (ELit (LString ""))))))
-(DTypeSig false "fnv62Mask" (TyCon "Int"))
-(DFunDef false "fnv62Mask" () (ELit (LInt 4611686018427387903)))
-(DTypeSig false "fnv62Offset" (TyCon "Int"))
-(DFunDef false "fnv62Offset" () (ELit (LInt 860922984064492325)))
-(DTypeSig false "fnv62Prime" (TyCon "Int"))
-(DFunDef false "fnv62Prime" () (ELit (LInt 1099511628211)))
-(DTypeSig false "fnv62" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "fnv62" ((PVar "bs") (PVar "n") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "fnv62") (EVar "bs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitAnd") (EVar "fnv62Mask")) (EApp (EVar "U64.toIntTruncating") (EBinOp "*" (EApp (EVar "U64.truncate") (EApp (EApp (EVar "bitXor") (EVar "acc")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "bs")))) (EApp (EVar "U64.truncate") (EVar "fnv62Prime")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ruleSetStamp" (PWild) (EApp (EApp (EVar "resultOr") (ELit (LString ""))) (EApp (EVar "hashFile") (EApp (EVar "executablePath") (ELit LUnit)))))
 (DTypeSig true "cacheDirOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "cacheDirOf" ((PVar "root")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/.medaka/lint-cache"))))
 (DTypeSig true "shardPathOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -713,17 +657,9 @@ makeStagingDir cacheDir =
 (DTypeSig false "cacheFormatVersion" (TyCon "Int"))
 (DFunDef false "cacheFormatVersion" () (ELit (LInt 3)))
 (DTypeSig true "contentHashOf" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "contentHashOf" ((PVar "src")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "src"))) (DoLet false false (PVar "lane2") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EVar "hashString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "n")) (EVar "src"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "hashString") (EVar "src")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "lane2"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))))
+(DFunDef false "contentHashOf" ((PVar "src")) (EApp (EVar "hashStringHex") (EVar "src")))
 (DTypeSig true "ruleSetStamp" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "ruleSetStamp" (PWild) (EMatch (EApp (EVar "readFileBytes") (EApp (EVar "executablePath") (ELit LUnit))) (arm (PCon "Err" PWild) () (ELit (LString ""))) (arm (PCon "Ok" (PVar "bs")) () (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "fnv62") (EVar "bs")) (EApp (EVar "arrayLength") (EVar "bs"))) (ELit (LInt 0))) (EVar "fnv62Offset")))) (ELit (LString ""))))))
-(DTypeSig false "fnv62Mask" (TyCon "Int"))
-(DFunDef false "fnv62Mask" () (ELit (LInt 4611686018427387903)))
-(DTypeSig false "fnv62Offset" (TyCon "Int"))
-(DFunDef false "fnv62Offset" () (ELit (LInt 860922984064492325)))
-(DTypeSig false "fnv62Prime" (TyCon "Int"))
-(DFunDef false "fnv62Prime" () (ELit (LInt 1099511628211)))
-(DTypeSig false "fnv62" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "fnv62" ((PVar "bs") (PVar "n") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "fnv62") (EVar "bs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitAnd") (EVar "fnv62Mask")) (EApp (EVar "U64.toIntTruncating") (EBinOp "*" (EApp (EVar "U64.truncate") (EApp (EApp (EVar "bitXor") (EVar "acc")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "bs")))) (EApp (EVar "U64.truncate") (EVar "fnv62Prime")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ruleSetStamp" (PWild) (EApp (EApp (EVar "resultOr") (ELit (LString ""))) (EApp (EVar "hashFile") (EApp (EVar "executablePath") (ELit LUnit)))))
 (DTypeSig true "cacheDirOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "cacheDirOf" ((PVar "root")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/.medaka/lint-cache"))))
 (DTypeSig true "shardPathOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))

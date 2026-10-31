@@ -641,6 +641,13 @@ catalogRows = [
     (Inline WasmLeaf)
     Interpreted,
   ExternRow
+    "hashFile"
+    (CSymbol LlvmFile "mdk_hash_file")
+    (NotProvided
+      GapPermanent
+      "native-toolchain digest whose only callers are `medaka lint`'s cache keys; the compiler is only ever built via the LLVM backend, never wasm, so no WasmGC program reaches it and the target check refuses one that names it")
+    Interpreted,
+  ExternRow
     "readFileBytes"
     (CSymbol LlvmFile "mdk_read_file_bytes")
     (Inline WasmLeaf)
@@ -1061,6 +1068,13 @@ catalogRows = [
     "hashString"
     (CSymbol LlvmHash "mdk_hash_string")
     (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "hashStringHex"
+    (CSymbol LlvmHash "mdk_digest_string")
+    (NotProvided
+      GapPermanent
+      "native-toolchain digest whose only callers are `medaka lint`'s cache keys; the compiler is only ever built via the LLVM backend, never wasm, so no WasmGC program reaches it and the target check refuses one that names it")
     Interpreted,
   ExternRow
     "hashChar"

@@ -1331,6 +1331,30 @@ ARROW
 UPPER "Int"
 NEWLINE
 EXTERN
+IDENT "hashStringHex"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+EXTERN
+IDENT "hashFile"
+COLON
+LPAREN
+IDENT "path"
+COLON
+UPPER "String"
+RPAREN
+ARROW
+LT
+UPPER "FileRead"
+IDENT "path"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "String"
+NEWLINE
+EXTERN
 IDENT "hashChar"
 COLON
 UPPER "Char"
