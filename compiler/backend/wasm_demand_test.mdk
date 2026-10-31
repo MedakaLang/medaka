@@ -2,7 +2,7 @@ import types.capability_manifest.{ManifestRequirement(..)}
 import backend.wasm_demand.{
   WasmDemandPlan, WasmDemand(..), wasmTypeContext, returnStamp, cexprStamp, Env,
   EnvRef(..), envEmpty, envBind, envBindUnstamped, envExtendUnstamped,
-  envRestrict, envLookup, envHas
+  envRestrict, envLookup, envHas, selectedFallthroughSymbols
 }
 import frontend.ast.{BinderId(..)}
 import backend.emit_plan.{EmitPlan, prepareWasmPlan}
@@ -19,7 +19,9 @@ import types.runtime_types.{RuntimeType(..)}
 import ir.core_ir.{CProgram, CExpr(..)}
 import ir.core_ir_lower.{lowerProgramEmitWith}
 import ir.extern_lower.{walkExternVars, externVar, implicitRuntimeFacts}
-import support.ordmap.{omEmpty, omFromNames, omKeys}
+import ir.extern_types.{ExternDeclFact(..)}
+import types.extern_source.{ExternBindingKind(..)}
+import support.ordmap.{omEmpty, omFromNames, omKeys, omFromPairs}
 import support.util.{joinNl}
 import test.{
   Expectation, expectAll, expectEach, expectEqual, expectErrContains,
@@ -35,7 +37,66 @@ import types.capability_manifest.{
 }
 import types.effect_domain.{Param(..)}
 import frontend.ast.{TyConOrigin(..)}
-import ir.core_ir.{CProgram(..)}
+import ir.core_ir.{CProgram(..), CBind(..), CClause(..), synthBind}
+
+test "selected family projection" =
+  let sentinel =
+    optionOrPanic
+      "missing fallthrough declaration"
+      (find (f => f.declaredName == "__fallthrough__") implicitRuntimeFacts)
+  let ordinary =
+    optionOrPanic
+      "missing ordinary declaration"
+      (find (f => f.declaredName == "intToString") implicitRuntimeFacts)
+  let first = { sentinel | symbol = "aliasA" }
+  let second = { sentinel | symbol = "aliasB" }
+  let unused = { sentinel | symbol = "unusedAlias" }
+  let foreign = { sentinel |
+    symbol = "foreignAlias",
+    bindingKind = ForeignBinding,
+    hostBindings = [("js", "foreign")],
+  }
+  let neighbor = { ordinary | symbol = "ordinaryAlias" }
+  let (CProgram _ ca ct impls mc facts) = snd (prepared "main = ()")
+  let cp =
+    CProgram
+      [
+        synthBind "main" [
+          CClause [] (CTuple (map externVar [first, second, foreign, neighbor])),
+        ],
+      ]
+      ca
+      ct
+      impls
+      mc
+      { facts |
+        factExterns =
+          omFromPairs
+            (map
+              (f => (f.symbol, f))
+              [first, second, unused, foreign, neighbor])
+            omEmpty,
+      }
+  let (plan, _) = prepareWasmPlan PreludeFreeRuntime omEmpty cp
+  let selected =
+    selectedFallthroughSymbols
+      plan.externRequirements
+      (physical plan).catalogFamilies
+  expectAll [
+    expectEqual
+      ["aliasA", "aliasB", "foreignAlias", "ordinaryAlias"]
+      (map (row => row.declaration.symbol) plan.externRequirements.rows),
+    expectEqual ["aliasA", "aliasB"] (omKeys selected),
+    expectEqual
+      ["__fallthrough__", "__fallthrough__", "intToString"]
+      (map fst (physical plan).catalogFamilies),
+    expectEqual
+      []
+      (omKeys
+        (selectedFallthroughSymbols
+          { plan.externRequirements | rows = [] }
+          (physical plan).catalogFamilies)),
+  ]
 
 test "declared Clock remains published without adding physical Wasm demand" =
   let manifest = CapabilityManifest {

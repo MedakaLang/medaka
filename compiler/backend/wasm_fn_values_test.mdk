@@ -1,0 +1,386 @@
+import backend.wasm_fn_values.{fnValueUses}
+import frontend.ast.{
+  Pat(..), RecPatField(..), Addr(..), Route(..), Lit(..), noBinderId, noDeclLoc
+}
+import ir.core_ir.{
+  CProgram(..), CBind(..), CClause(..), CExpr(..), CArm(..), CGuard(..),
+  CStmt(..), CField(..), CImplEntry(..), CImplBody(..), CTree(..),
+  MethodEvidence(..), CallSite(..), CallMode(..), noDeclFacts, synthBind,
+  noImplSym
+}
+import support.ordmap.{omEmpty, omFromNames, omKeys}
+import support.symbol_encoding.{encodePair}
+import test.{Expectation, expectEqual, expectEach}
+
+var : String -> CExpr
+var name = CVar name AGlobal
+
+pat : String -> Pat
+pat name = PVar name noDeclLoc noBinderId
+
+unit : CExpr
+unit = CLit LUnit
+
+fun : String -> List Pat -> CExpr -> CBind
+fun name pats body = synthBind name [CClause pats body]
+
+f : CBind
+f = fun "f" [pat "x"] (var "x")
+
+call : CallMode -> Bool -> String -> List CExpr -> CExpr
+call mode tail name args = CApp (var name) args (CallSite mode tail)
+
+program : List CBind -> List CImplEntry -> CProgram
+program binds impls = CProgram binds [] [] impls [] noDeclFacts
+
+uses : List String -> List CBind -> CExpr -> List String
+uses selected extra body =
+  omKeys
+    (fnValueUses
+      (omFromNames selected omEmpty)
+      (program (f :: extra ++ [fun "main" [] body]) []))
+
+example : String -> List String -> CExpr -> (String, Expectation)
+example label expected body = (label, expectEqual expected (uses [] [] body))
+
+method : String -> String -> List Route -> CExpr
+method name sym dicts =
+  CMethod name (MethodEvidence "" 1 (RLocal sym dicts) [] [])
+
+test "ordinary call modes" =
+  let core = encodePair "core" "g"
+  let coreBind = fun core [pat "x"] (var "x")
+  expectEach [
+    example "exact" [] (call CallExact False "f" [unit]),
+    example
+      "bare and exact"
+      ["f"]
+      (CTuple [var "f", call CallExact False "f" [unit]]),
+    example "partial" ["f"] (call (CallPartial 1) False "f" [unit]),
+    example "over" ["f"] (call (CallOver 1) True "f" [unit, unit]),
+    example "dynamic" ["f"] (call CallDynamic False "f" [unit]),
+    example "local parameter despite AGlobal" [] (CLam [pat "f"] (var "f")),
+    example
+      "RLocal symbol"
+      ["f"]
+      (CApp (method "other" "f" []) [unit] (CallSite (CallPartial 1) False)),
+    example
+      "RLocal method fallback"
+      ["f"]
+      (CApp (method "f" "" []) [unit] (CallSite (CallOver 1) True)),
+    example
+      "exact RLocal"
+      []
+      (CApp (method "f" "" []) [unit] (CallSite CallExact True)),
+    example "bare method has separate eta" [] (method "f" "f" []),
+    example
+      "RLocal dictionaries"
+      []
+      (CApp (method "f" "f" [RDict "d"]) [unit] (CallSite CallDynamic False)),
+    ("core fallback", expectEqual [core] (uses [] [coreBind] (var "g"))),
+    (
+      "core exact",
+      expectEqual [] (uses [] [coreBind] (call CallExact True "g" [unit])),
+    ),
+    (
+      "local shadows core fallback",
+      expectEqual [] (uses [] [coreBind] (CLam [pat "g"] (var "g"))),
+    ),
+    example
+      "nested flattened control"
+      ["f"]
+      (CApp
+        (CApp (var "f") [unit] (CallSite CallExact False))
+        [unit]
+        (CallSite (CallOver 1) True)),
+    example "assignment" ["f"] (CBlock [CSAssign "x" (var "f"), CSExpr unit]),
+    example "index" ["f"] (CIndex unit (var "f")),
+    example "slice" ["f"] (CSlice unit unit (var "f") False),
+    example "string index" ["f"] (CStringIndex (var "f") unit),
+    example "string slice" ["f"] (CStringSlice unit (var "f") unit True),
+    example "list index" ["f"] (CListIndex unit (var "f")),
+    example "list slice" ["f"] (CListSlice (var "f") unit unit False),
+    example "record field" ["f"] (CRecord "R" [CField "x" 0 (var "f")]),
+    example
+      "record update"
+      ["f"]
+      (CRecordUpdate "R" unit [CField "x" 0 (var "f")]),
+    example "variant update" ["f"] (CVariantUpdate "R" (var "f") []),
+    example
+      "remaining composites"
+      ["f"]
+      (CTuple [
+        CList [var "f"],
+        CArray [var "f"],
+        CFieldAccess (var "f") "x" "" 0,
+        CRangeList unit (var "f") False,
+        CRangeArray (var "f") unit True,
+        CIf unit (var "f") unit,
+        CUnOp "-" (var "f"),
+        CBinPrim "+" unit (var "f") "" noDeclLoc,
+      ]),
+    example
+      "nonvariable head"
+      ["f"]
+      (CApp (CTuple [var "f"]) [unit] (CallSite CallDynamic False)),
+  ]
+
+test "sequential lexical scopes" =
+  let nested = PTuple [
+    PAs "a" noDeclLoc noBinderId (PList [pat "f"]),
+    PRec "R" [RecPatField "z" noDeclLoc noBinderId None] False,
+  ]
+  let taggedImpl pats body =
+    CImplEntry "m" 0 1 (CImplTagged "T" "K" "I" noImplSym [] pats body)
+  let defaultImpl pats body =
+    CImplEntry "m" 0 1 (CImplDefault "I" "T" "K" noImplSym [] pats body)
+  let implUses entries =
+    omKeys (fnValueUses omEmpty (program [f, fun "main" [] unit] entries))
+  let p = program [f, fun "main" [] (var "f")] []
+  let u = program [fun "f" [] unit, fun "main" [] (var "f")] []
+  let permuted = program [fun "main" [] (var "f"), f] []
+  expectEach [
+    example "nested parameter" [] (CLam [nested] (var "f")),
+    example
+      "nonrecursive RHS outer"
+      ["f"]
+      (CLet False (pat "f") (var "f") (var "f")),
+    example
+      "nonrecursive lambda RHS outer"
+      ["f"]
+      (CLet False (pat "f") (CLam [] (var "f")) unit),
+    example
+      "recursive lambda RHS self"
+      []
+      (CLet True (pat "f") (CLam [] (var "f")) (var "f")),
+    example
+      "block lambda recursive even false"
+      []
+      (CBlock [CSLet False (pat "f") (CLam [] (var "f")), CSExpr (var "f")]),
+    example
+      "block nonlambda RHS outer"
+      ["f"]
+      (CBlock [CSLet False (pat "f") (var "f"), CSExpr (var "f")]),
+    example
+      "block earlier binder"
+      []
+      (CBlock [CSLet False nested unit, CSExpr (var "f")]),
+    example
+      "group functions mutually scoped"
+      []
+      (CLetGroup
+        [fun "f" [pat "a"] (var "g"), fun "g" [pat "a"] (var "f")]
+        (var "f")),
+    example
+      "group function parameter"
+      []
+      (CLetGroup [fun "g" [pat "f"] (var "f")] unit),
+    example
+      "group function sees value"
+      []
+      (CLetGroup [fun "f" [] unit, fun "g" [pat "a"] (var "f")] unit),
+    example
+      "group value RHS outer"
+      ["f"]
+      (CLetGroup [fun "f" [] (var "f")] unit),
+    example
+      "group value sequential"
+      []
+      (CLetGroup [fun "f" [] unit, fun "g" [] (var "f")] unit),
+    example
+      "later value not in earlier initializer"
+      ["f"]
+      (CLetGroup [fun "g" [] (var "f"), fun "f" [] unit] unit),
+    example
+      "outer bare restores demand"
+      ["f"]
+      (CTuple [CLam [pat "f"] (var "f"), var "f"]),
+    (
+      "tagged impl parameter",
+      expectEqual [] (implUses [taggedImpl [pat "f"] (var "f")]),
+    ),
+    (
+      "default impl parameter",
+      expectEqual [] (implUses [defaultImpl [pat "f"] (var "f")]),
+    ),
+    (
+      "impl body global",
+      expectEqual ["f"] (implUses [taggedImpl [pat "x"] (var "f")]),
+    ),
+    (
+      "default body global",
+      expectEqual ["f"] (implUses [defaultImpl [pat "x"] (var "f")]),
+    ),
+    (
+      "top clause parameter",
+      expectEqual [] (uses [] [fun "g" [pat "f"] (var "f")] unit),
+    ),
+    (
+      "P-U-P and permutations",
+      expectEqual
+        [["f"], [], ["f"], ["f"]]
+        (map (cp => omKeys (fnValueUses omEmpty cp)) [p, u, p, permuted]),
+    ),
+    example
+      "connected unrelated binder"
+      ["f"]
+      (CTuple [CLet False (pat "u") unit (var "u"), var "f"]),
+  ]
+
+test "arm owner and guard scopes" =
+  let decision arms = CDecision unit arms (CTLeaf 0)
+  let cases = [
+    ("arm parameter", [], [CArm (pat "f") [] (var "f")]),
+    (
+      "candidate guards use pattern",
+      [],
+      [CArm (pat "f") [CGBool (var "f")] unit],
+    ),
+    (
+      "guard RHS outer",
+      ["f"],
+      [CArm PWild [CGBind (pat "f") (var "f")] (var "f")],
+    ),
+    (
+      "guard bind later guards and body",
+      [],
+      [CArm PWild [CGBind (pat "f") unit, CGBool (var "f")] (var "f")],
+    ),
+    (
+      "earlier boolean before guard binder",
+      ["f"],
+      [CArm PWild [CGBool (var "f"), CGBind (pat "f") unit] (var "f")],
+    ),
+    (
+      "alternative guards own pattern",
+      [],
+      [CArm (pat "f") [] unit, CArmAlt (pat "f") [CGBool (var "f")] 0],
+    ),
+    (
+      "alternative guard RHS outer",
+      ["f"],
+      [CArm PWild [] unit, CArmAlt PWild [CGBind (pat "f") (var "f")] 0],
+    ),
+    (
+      "owner body never alternative scope",
+      [],
+      [CArm (pat "f") [] (var "f"), CArmAlt PWild [] 0],
+    ),
+    (
+      "alternative cannot shadow owner body",
+      ["f"],
+      [CArm PWild [] (var "f"), CArmAlt (pat "f") [] 0],
+    ),
+    (
+      "owner guard scope retained",
+      [],
+      [CArm PWild [CGBind (pat "f") unit] (var "f"), CArmAlt PWild [] 0],
+    ),
+    (
+      "outer use after arm",
+      ["f"],
+      [CArm (pat "f") [] (var "f"), CArm PWild [] (var "f")],
+    ),
+  ]
+  expectEach
+    (flatMap
+      ((name, expected, arms) => [
+        example (name ++ " match") expected (CMatch unit arms),
+        example (name ++ " decision") expected (decision arms),
+      ])
+      cases)
+
+test "selected control skips operands" =
+  let operand = CLet False (pat "g") (var "f") unit
+  let ctrl = fun "ctrl" [pat "x"] unit
+  expectEach
+    (flatMap
+      (tail =>
+        let app = call CallExact tail "ctrl" [operand]
+        let local = CLam [pat "ctrl"] app
+        [
+          ("selected", expectEqual [] (uses ["ctrl"] [ctrl] app)),
+          ("ordinary", expectEqual ["f"] (uses [] [ctrl] app)),
+          ("selected local", expectEqual [] (uses ["ctrl"] [ctrl] local)),
+          ("unselected local", expectEqual ["f"] (uses [] [ctrl] local)),
+          (
+            "raw",
+            expectEqual
+              []
+              (uses [] [] (call CallDynamic tail "__fallthrough__" [operand])),
+          ),
+          (
+            "labeled raw",
+            expectEqual
+              []
+              (uses [] [] (call CallDynamic tail "__ft__clause" [operand])),
+          ),
+          (
+            "raw local",
+            expectEqual
+              []
+              (uses
+                []
+                []
+                (CLam
+                  [pat "__fallthrough__"]
+                  (call CallDynamic tail "__fallthrough__" [operand]))),
+          ),
+          (
+            "flattened selected",
+            expectEqual
+              []
+              (uses
+                ["ctrl"]
+                [ctrl]
+                (CApp app [var "f"] (CallSite (CallOver 1) tail))),
+          ),
+          (
+            "outer f retained",
+            expectEqual ["f"] (uses ["ctrl"] [ctrl] (CTuple [app, var "f"])),
+          ),
+        ])
+      [False, True])
+
+test "bare sentinel precedence" =
+  let sentinel = fun "__fallthrough__" [pat "x"] unit
+  let labeled = fun "__ft__clause" [pat "x"] unit
+  let ctrl = fun "ctrl" [pat "x"] unit
+  expectEach [
+    ("raw top", expectEqual [] (uses [] [sentinel] (var "__fallthrough__"))),
+    (
+      "labeled raw top",
+      expectEqual [] (uses [] [labeled] (var "__ft__clause")),
+    ),
+    (
+      "raw local preserves #4697 trap",
+      expectEqual
+        []
+        (uses
+          []
+          [sentinel]
+          (CLam [pat "__fallthrough__"] (var "__fallthrough__"))),
+    ),
+    (
+      "bare selected family",
+      expectEqual [] (uses ["ctrl"] [ctrl] (var "ctrl")),
+    ),
+    (
+      "bare selected family local",
+      expectEqual [] (uses ["ctrl"] [ctrl] (CLam [pat "ctrl"] (var "ctrl"))),
+    ),
+    (
+      "bare ordinary neighbor",
+      expectEqual ["ctrl"] (uses [] [ctrl] (var "ctrl")),
+    ),
+    (
+      "bare raw with outer f",
+      expectEqual
+        ["f"]
+        (uses [] [sentinel] (CTuple [var "__fallthrough__", var "f"])),
+    ),
+    (
+      "bare selected with outer f",
+      expectEqual ["f"] (uses ["ctrl"] [ctrl] (CTuple [var "ctrl", var "f"])),
+    ),
+  ]
