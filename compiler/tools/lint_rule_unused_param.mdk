@@ -1,0 +1,202 @@
+-- lint rule rule-unused-param: a function, method or `prop` parameter that no use in its clause resolves to. Rename it `_name` to say it is unused.
+
+import driver.diagnostics.{Severity(..)}
+import frontend.ast.{
+  Decl(..),
+  Expr(..),
+  FunClause(..),
+  LetBind(..),
+  Loc(..),
+  Pat(..),
+  PropParam(..),
+  RecPatField(..),
+}
+import frontend.ast_walk.{BodyOwner(..), DeclBody(..), childExprs, declBodies}
+import frontend.parser.{Positions(..)}
+import string.{length as strLength}
+import tools.lint_core.{
+  Applicability(..),
+  Category(..),
+  FileFacts(..),
+  Finding(..),
+  Fix(..),
+  FixEdit(..),
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  factScopes,
+  mkRule,
+}
+import tools.lint_scope.{
+  Binder(..),
+  BinderKind(..),
+  FileScopes,
+  Use(..),
+  allUses,
+  binderOf,
+  bindersNamed,
+  unusedBinders,
+}
+import tools.lint_shared.{ruleNameUnusedParam}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameUnusedParam,
+      summary =
+        "a function, method or `prop` parameter that nothing in its clause uses",
+      doc =
+        "A parameter that no use in its clause resolves to is dead weight, and a reader cannot tell it from one that matters. Renaming it `_name` says it is intentionally unused, and a name starting with `_` is not reported. Function, impl-method, interface-default, `prop` and `where`/`let rec` clause parameters are checked; lambda, `let`, match-arm and `do`-bind binders are not. The fix renames every place the binder is written (each alternative of an or-pattern names it). It is only suggested, not applied, when `_name` is already used in the file, and for a record pun, where renaming the binder would rename the field: the suggestion then reads `field = _name`.\n\nBefore:\n  area w h = w * 2\nAfter:\n  area w _h = w * 2",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [NeedsScopes],
+    }
+    ruleUnusedParam
+    None
+
+ruleUnusedParam : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleUnusedParam _ _ facts _ prog =
+  let fs = factScopes facts
+  let unused = filter (b => b.binderKind == BParam) (unusedBinders fs)
+  if isEmpty unused then
+    []
+  else
+    let sites = flatMap declParamSites prog
+    flatMap (paramFinding fs sites) unused
+
+-- One parameter name token: its name, its span, and whether it is a record pun
+-- (a field `{x}` that binds `x`, so renaming the binder renames the field).
+data ParamSite = ParamSite String Loc Bool
+
+-- The parameter sites of one declaration: those of each body's owner, then
+-- those of every `where` or `let rec` clause nested in a body.
+declParamSites : Decl -> List ParamSite
+declParamSites d = flatMap bodyParamSites (declBodies d)
+
+bodyParamSites : DeclBody -> List ParamSite
+bodyParamSites (DeclBody owner body) =
+  ownerParamSites owner ++ exprParamSites body
+
+ownerParamSites : BodyOwner -> List ParamSite
+ownerParamSites (OwnerClause _ ps) = flatMap patParamSites ps
+ownerParamSites (OwnerImplMethod _ _ ps) = flatMap patParamSites ps
+ownerParamSites (OwnerIfaceDefault _ _ ps) = flatMap patParamSites ps
+ownerParamSites (OwnerLetGroup _ ps) = flatMap patParamSites ps
+ownerParamSites (OwnerProp _ params) = map propParamSite params
+ownerParamSites (OwnerTest _) = []
+
+propParamSite : PropParam -> ParamSite
+propParamSite (PropParam n l _) = ParamSite n l False
+
+exprParamSites : Expr -> List ParamSite
+exprParamSites e = groupParamSites e ++ flatMap exprParamSites (childExprs e)
+
+groupParamSites : Expr -> List ParamSite
+groupParamSites (ELetGroup binds _) = flatMap bindParamSites binds
+groupParamSites _ = []
+
+bindParamSites : LetBind -> List ParamSite
+bindParamSites (LetBind _ clauses _ _) = flatMap clauseParamSites clauses
+
+clauseParamSites : FunClause -> List ParamSite
+clauseParamSites (FunClause ps _) = flatMap patParamSites ps
+
+-- Every name a pattern binds, with its token.  Each alternative of an or-pattern
+-- is listed, since each one names the binder.
+patParamSites : Pat -> List ParamSite
+patParamSites (PVar x l _) = [ParamSite x l False]
+patParamSites PWild = []
+patParamSites (PLit _) = []
+patParamSites (PCon _ ps) = flatMap patParamSites ps
+patParamSites (PCons a b) = patParamSites a ++ patParamSites b
+patParamSites (PTuple ps) = flatMap patParamSites ps
+patParamSites (PList ps) = flatMap patParamSites ps
+patParamSites (PAs x l _ p) = ParamSite x l False :: patParamSites p
+patParamSites (POr ps) = flatMap patParamSites ps
+patParamSites (PRng _ _ _) = []
+patParamSites (PRec _ fields _) = flatMap fieldParamSites fields
+
+fieldParamSites : RecPatField -> List ParamSite
+fieldParamSites (RecPatField n l _ None) = [ParamSite n l True]
+fieldParamSites (RecPatField _ _ _ (Some p)) = patParamSites p
+
+-- One finding per unused parameter, at its binder token.
+paramFinding : FileScopes -> List ParamSite -> Binder -> List Finding
+paramFinding fs sites b =
+  let mine = filter (binderIs fs b) sites
+  [
+    Finding {
+      rule = ruleNameUnusedParam,
+      message =
+        "parameter '\{b.binderName}' is never used. Rename it to '_\{b.binderName}' to mark it intentionally unused",
+      severity = SevWarning,
+      loc = Some b.binderSpan,
+      fix = paramFix fs b mine,
+    },
+  ]
+
+-- A site belongs to the binder when the scope model resolves its position to it.
+binderIs : FileScopes -> Binder -> ParamSite -> Bool
+binderIs fs b (ParamSite _ l _) = match binderOf fs l
+  Some c => c.binderId == b.binderId
+  None => False
+
+-- The rename of every site of the binder.  No fix when the walk did not place
+-- the binder's own token, or a site is not exactly its name's width: the edit
+-- would then land on the wrong text.  A suggestion instead of a fix when a pun
+-- is among the sites, or `_name` is already used in the file.
+paramFix : FileScopes -> Binder -> List ParamSite -> Option Fix
+paramFix fs b mine =
+  let name = b.binderName
+  if not (any (s => siteLoc s == b.binderSpan) mine)
+    || not (all (exactName name) mine) then
+    None
+  else if any sitePun mine || collides fs name then
+    Some (renameFix Suggest name mine)
+  else
+    Some (renameFix Safe name mine)
+
+renameFix : Applicability -> String -> List ParamSite -> Fix
+renameFix applicability name mine = Fix {
+  fixApplicability = applicability,
+  fixEdits = map (s => FixEdit (siteLoc s) (renamedText name s)) mine,
+  fixMessage = "rename the unused parameter",
+}
+
+renamedText : String -> ParamSite -> String
+renamedText name (ParamSite _ _ pun) =
+  if pun then "\{name} = _\{name}" else "_\{name}"
+
+-- `_name` already names a binder or a use in the file, so the rename could clash
+-- with it or capture it.  The file-wide test is wider than the clause, on purpose.
+collides : FileScopes -> String -> Bool
+collides fs name =
+  let renamed = "_" ++ name
+  not (isEmpty (bindersNamed fs renamed))
+    || any (u => u.useName == renamed) (allUses fs)
+
+-- The site spans its name token: one line, as many columns as the name has
+-- characters.
+exactName : String -> ParamSite -> Bool
+exactName name (ParamSite _ (Loc _ sl sc el ec) _) =
+  sl == el && ec - sc == strLength name
+
+siteLoc : ParamSite -> Loc
+siteLoc (ParamSite _ l _) = l
+
+sitePun : ParamSite -> Bool
+sitePun (ParamSite _ _ pun) = pun
