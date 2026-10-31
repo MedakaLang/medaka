@@ -1,5 +1,4 @@
 visibility.driver.main_autoprint	2
-visibility.eval.eval	4
 visibility.frontend.ast	6
 visibility.frontend.ast_codec	10
 visibility.frontend.parser	3

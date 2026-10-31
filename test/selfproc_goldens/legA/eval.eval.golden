@@ -146,6 +146,8 @@ evalVariantUpdate : String -> Value a -> List (String, Value a) -> Value a
 extendAbsent : String -> List String -> <FileRead | a> Option String
 extendEnv : EvalEnv (Value a) -> List (String, Value a) -> EvalEnv (Value a)
 externBindings : Unit -> List (String, Value a)
+externDeclName : Decl -> List String
+externDeclNames : List Decl -> List String
 externDeclNamesOfDecls : List Decl -> List String
 fallthroughToNone : Value a -> Option (Value a)
 ffiExternNamesRef : Ref (List String)
@@ -267,13 +269,14 @@ memoThunkOf : Ref (Option (Value a)) -> EvalEnv (Value a) -> Expr -> Value a
 mergeField : List (String, Value a) -> (String, Value a) -> (String, Value a)
 methodAtNarrow : EvalEnv (Value a) -> String -> Value a -> Route -> <a> (Value a, List (Value a))
 methodCell : List (String, Ref (Value a)) -> String -> List (String, Ref (Value a))
-methodCellsOf : List (String, Ref (Value a)) -> List Decl -> List (String, Ref (Value a))
+methodCellsOf : List (String, Ref (Value a)) -> Map String Unit -> List Decl -> List (String, Ref (Value a))
 methodReqCountIndex : List ((String, String), Int) -> Map String (Map String Int)
 methodReqCountIndexGo : List ((String, String), Int) -> Map String (Map String Int) -> Map String (Map String Int)
 methodReqCountRef : Ref (Map String (Map String Int))
 mkGroup : List (String, (List Pat, Expr, Loc)) -> String -> (String, List (List Pat, Expr, Loc))
 modExportCells : ModExports a -> List (String, Ref a)
 modImplEntries : List ((String, String, String), List Int) -> ModInfo (Value a) -> List (String, (Int, Value a))
+moduleExports : ModExports (Value a) -> List (String, ModExports (Value a)) -> EnvFrame (Value a) -> EnvFrame (Value a) -> List (String, Ref (Value a)) -> List Decl -> ModExports (Value a)
 moduleFileOf : String -> String
 moduleMethodNames : List Decl -> List String
 moduleMethodNamesOf : Decl -> List String
@@ -478,11 +481,8 @@ prim3M : (Value a -> Value a -> Value a -> <a> Value a) -> Value a
 prim5M : (Value a -> Value a -> Value a -> Value a -> Value a -> <a> Value a) -> Value a
 progArgsRef : Ref (List String)
 projectDict : Value a -> List Int -> Value a
-pubReexports : ModExports (Value a) -> List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
-publicExternCells : List (String, Ref (Value a)) -> List Decl -> List (String, Ref (Value a))
+publicExternCells : List (String, Ref (Value a)) -> Map String Unit -> List Decl -> List (String, Ref (Value a))
 publicExternCellsGo : Map String (Ref (Value a)) -> List String -> List (String, Ref (Value a))
-publicExternNames : List Decl -> List String
-publicExternNamesRev : List Decl -> List String -> List String
 pushFrame : EvalEnv (Value a) -> List (String, Ref (Value a)) -> EvalEnv (Value a)
 qualifyCell : String -> (String, Ref (Value a)) -> (String, Ref (Value a))
 rangeArrayMk : List Int -> Value a
@@ -491,7 +491,7 @@ reTag : String -> String -> List Int -> Int -> Value a -> Value a
 readOutput : Unit -> <a> String
 receiverOf : EvalEnv (Value a) -> Route -> List Route -> <a> Value a
 recordCreateVals : String -> List String -> List (String, Value a) -> List (Value a)
-reexport : ModExports (Value a) -> List (String, ModExports (Value a)) -> Decl -> List (String, Ref (Value a))
+reexport : ModExports (Value a) -> List (String, ModExports (Value a)) -> UsePath -> List (String, Ref (Value a))
 reportIfUndecidable : String -> List (Value a) -> Unit
 requireMethodRoute : String -> String -> Route -> Route
 resetOutput : Unit -> <a> Unit

@@ -263,7 +263,7 @@ rows = [
     prelude = [coreMod],
     shape = DirFixture "main_*.mdk" "main.eval.golden",
     batched = False,
-    fixtures = 11,
+    fixtures = 15,
   },
   Row {
     gate = "diff_compiler_core_ir_modules",
@@ -272,7 +272,7 @@ rows = [
     prelude = [coreMod],
     shape = DirFixture "main_*.mdk" "main.eval.golden",
     batched = False,
-    fixtures = 11,
+    fixtures = 15,
   },
   Row {
     gate = "diff_compiler_eval_typed_modules",
@@ -281,7 +281,7 @@ rows = [
     prelude = [runtimeMod, coreMod],
     shape = DirFixture "main.mdk" "main.eval.golden",
     batched = False,
-    fixtures = 25,
+    fixtures = 29,
   },
 ]
 
