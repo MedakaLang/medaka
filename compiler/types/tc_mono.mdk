@@ -1548,7 +1548,7 @@ tyStructEqList _ _ = False
 -- construction — see `headTyconMono`'s note on the same split.
 --
 -- it also peels `TyEffect` — #1618, and the peel is NOT a `TyApp`-spine step.
--- `eval.headTycon` has peeled it since long before this projection existed, so an
+-- `dispatch_keys.headTycon` has peeled it since long before this projection existed, so an
 -- `impl Sz (<Stdout> Int)` was filed by the DEFINITION side under tag `Int` while
 -- this side answered `None` and stamped the route word `__none__`; the emitter
 -- then looked `__none__` up, found nothing, and died with `no impl of method 'sz'
@@ -1559,7 +1559,7 @@ tyStructEqList _ _ = False
 --
 -- It also peels `TyConstrained`.  Peeling a constraint yields a headless
 -- body only for `Eq a => a`; for `Eq a => Int` the peeled body is a `TyCon`.
--- `eval.headTycon` peels `TyConstrained`, so without the peel here the HEADED
+-- `dispatch_keys.headTycon` peels `TyConstrained`, so without the peel here the HEADED
 -- case splits the two sides: the definition side files `impl Sz (Eq a => Int)`
 -- under tag `Int` while this side answers `None` and stamps `__none__`, and
 -- `medaka build` dies with `no impl of method 'sz' for type '__none__'` on a

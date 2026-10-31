@@ -57,6 +57,8 @@ the side tables `ir/`, `eval/` and `backend/` read (dispositions, runtime types,
 | `evidence_complete.mdk` | The completeness judgment: does every dispatch destination name an instance or a given | `EvidenceRow` predicate |
 | `disposition.mdk` | Whole-graph table of which method each impl supplies or inherits from the default; importable by `ir/`, `eval/`, `backend/` without `typecheck.mdk` | `dispositionLookup`, `buildDispositionTable` |
 | `route_key.mdk` | The only mint of an impl route word | `evMethodRoutesIn`, `numIntWord` |
+| `dispatch_keys.mdk` | Leaf: the pure projections of a declaration list that dispatch is keyed on (impl head tag, method dispatch positions, constructor to type), shared by `eval/` and `ir/core_ir_lower.mdk` so the lowering does not import the interpreter | `headTyconHead`, `buildIfaceDispatch` |
+| `expr_loc.mdk` | Leaf: where an expression starts, and the placeholder span for "no location known"; read by the interpreter's trap sites and the lowering's arithmetic nodes | `exprStartLoc`, `noTrapLoc` |
 | `program_facts.mdk` | Leaf: the evidence index, dispositions and binder table of one typechecked program as a value, and the run-owned cell a bracket sets | `withFacts`, `factsNow` |
 | `serve_policy.mdk` | Which modules of a keyed drive are served, checked, recorded, and the per-drive state that decides it (`ServeState`); the typechecker's drain and open-variable test reach it through one record, `ServeOps` | `ServeState`, `ServeOps`, `serveStateOf`, `diagsServe`, `treeServe`, `DiagsPayload` |
 | `chain_key.mdk` | The parts of the module-chain memo key a step reads from modules outside its prefix: the whole graph's instance heads and constrained signature names, and each module's interface declarations, which a step's key carries for the modules before it | `chainGraphKey`, `interfaceRows` |
@@ -138,6 +140,8 @@ One row per module in the Parts table. The `tc_*` and `typecheck` rows are the `
 | `evidence_complete.mdk` | unsourced here (the header cites no spec) |
 | `disposition.mdk` | unsourced here (the header cites no spec) |
 | `route_key.mdk` | unsourced here (the header cites no spec) |
+| `dispatch_keys.mdk` | unsourced here (the header cites no spec) |
+| `expr_loc.mdk` | unsourced here (the header cites no spec) |
 | `program_facts.mdk` | unsourced here (the header cites no spec) |
 | `serve_policy.mdk` | unsourced here (the header cites no spec) |
 | `chain_key.mdk` | unsourced here (the header cites no spec) |

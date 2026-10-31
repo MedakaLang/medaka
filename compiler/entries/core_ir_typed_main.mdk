@@ -38,6 +38,6 @@ runTyped runtimeDecls preludeDecls userDecls =
     runtimeDecls
     livePrelude
     ("__user__", userDecls)
-  cevalOutputOf decls (lowerTypedProgramWith facts decls)
+  cevalOutputOf facts decls (lowerTypedProgramWith facts decls)
 
 main = oracleMain ()
