@@ -1,0 +1,61 @@
+-- lint rule rule-unused-local: a `let` binder that nothing reads. Delete the binding, or use it; rename it `_name` or write `let _ =` to say it is intentionally unused.
+
+import driver.diagnostics.{Severity(..)}
+import frontend.ast.{Decl}
+import frontend.parser.{Positions(..)}
+import tools.lint_core.{
+  Category(..),
+  FileFacts(..),
+  Finding(..),
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  factScopes,
+  mkRule,
+}
+import tools.lint_scope.{Binder(..), BinderKind(..), unusedBinders}
+import tools.lint_shared.{ruleNameUnusedLocal}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameUnusedLocal,
+      summary = "a `let` binder that nothing reads",
+      doc =
+        "A `let` binder that no use resolves to is either dead work or a missed use. Delete the binding if the bound expression has no effect, or use the name if it was meant to be read. A name starting with `_` is not reported; the intended discard is `let _ =` in `do` code and a bare statement elsewhere. Only plain and `do` `let` binders are checked; parameter, lambda, match-arm and `<-` bind binders are not. The finding is only suggested, never fixed, because the bound expression may run an effect.\n\nBefore:\n  let total = sum xs\n  count xs\nAfter:\n  count xs",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [NeedsScopes],
+    }
+    ruleUnusedLocal
+    None
+
+ruleUnusedLocal : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleUnusedLocal _ _ facts _ _ =
+  map
+    localFinding
+    (filter (b => b.binderKind == BLet) (unusedBinders (factScopes facts)))
+
+localFinding : Binder -> Finding
+localFinding b = Finding {
+  rule = ruleNameUnusedLocal,
+  message =
+    "'\{b.binderName}' is bound by a `let` but never read. Either the bound expression is dead work and the binding can be deleted, or a use of '\{b.binderName}' is missing; write '_\{b.binderName}' or `let _ =` to keep it on purpose",
+  severity = SevWarning,
+  loc = Some b.binderSpan,
+  fix = None,
+}

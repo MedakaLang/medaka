@@ -1,0 +1,58 @@
+-- Fixture for rule-unused-local.  The line below each `expect-next-line`
+-- marker holds a `let` binder that nothing reads.  Nothing is fixed: the
+-- bound expression may run an effect.
+
+-- expect-next-line rule-unused-local unfixed
+plainUnused = let a = 1 in 2
+
+doUnused = do
+  -- expect-next-line rule-unused-local unfixed
+  let b = 1
+  pure 2
+
+-- A `<-` bind pattern has no source location, so it is not reported.
+bindNotReported = do
+  c <- readIt
+  pure 1
+
+usedLater = let d = 1 in d + 1
+
+usedInWhere = g
+  where
+    e = 1
+    g = e + 1
+
+usedInInterp = let s = "x" in "a\{s}b"
+
+usedInPun = let x = 1 in P { x }
+
+usedInGuard n =
+  let lim = 3
+  match n
+    k if k > lim => 1
+    _ => 0
+
+-- expect-next-line rule-unused-local unfixed
+shadowed = let v = 1 in (v => v) 2
+
+-- A leading underscore opts out.
+optOut = let _keep = 1 in 2
+
+-- The intended discard in `do` code.
+doDiscard = do
+  let _ = 1
+  pure 2
+
+-- The intended discard in non-`do` code is a bare statement.
+bareDiscard = do
+  log "x"
+  pure 1
+
+-- A lambda, match-arm and parameter binder are not `let` binders.
+lambdaUnused = (q => 1)
+
+armUnused v = match v
+  Some k => 1
+  None => 0
+
+paramUnused p = 1

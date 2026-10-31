@@ -29,6 +29,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-dead-code`](#rule-dead-code) | universal | suspicious | gated | not-fixable | file |
 | [`rule-unused-import`](#rule-unused-import) | universal | style | gated | fixable | file |
 | [`rule-unused-param`](#rule-unused-param) | universal | style | gated | fixable | file |
+| [`rule-unused-local`](#rule-unused-local) | universal | style | gated | not-fixable | file |
 | [`rule-concat-to-interp`](#rule-concat-to-interp) | universal | style | gated | fixable | file |
 | [`rule-self-shadow-extern`](#rule-self-shadow-extern) | universal | correctness | gated | not-fixable | file |
 | [`rule-prefer-assign-op`](#rule-prefer-assign-op) | universal | style | gated | fixable | file |
@@ -372,6 +373,20 @@ Before:
   area w h = w * 2
 After:
   area w _h = w * 2
+```
+
+## rule-unused-local
+
+a `let` binder that nothing reads
+
+A `let` binder that no use resolves to is either dead work or a missed use. Delete the binding if the bound expression has no effect, or use the name if it was meant to be read. A name starting with `_` is not reported; the intended discard is `let _ =` in `do` code and a bare statement elsewhere. Only plain and `do` `let` binders are checked; parameter, lambda, match-arm and `<-` bind binders are not. The finding is only suggested, never fixed, because the bound expression may run an effect.
+
+```
+Before:
+  let total = sum xs
+  count xs
+After:
+  count xs
 ```
 
 ## rule-concat-to-interp
