@@ -11,7 +11,7 @@
    in `Err`. There is no IO monad: an action runs when it is evaluated, so
    `match readFile path` works directly. -}
 
-import core.{Debug, Display, Option, Result, optionOr}
+import core.{Debug, Display, Result, optionOr}
 import string.{stripCR}
 
 -- # Standard error

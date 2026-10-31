@@ -22,7 +22,7 @@ import bytes.{
   Bytes, encodeUtf8, fromArrayAssumeByteDomain, fromU8Array, toArray
 }
 import list.{reverse}
-import string.{fromDigit, toDigit, toUtf8, fromUtf8, toChars}
+import string.{fromDigit, toDigit, fromUtf8, toChars}
 import u8 as U8
 
 -- In-bounds indexing via the safe `Array.get`, panicking on a miss.  Every
@@ -169,7 +169,7 @@ prop "hex encode length is 2x byte length" (xs : List Int) =
 (DUse false (UseAlias ("bytes") "B"))
 (DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "encodeUtf8" false) (mem "fromArrayAssumeByteDomain" false) (mem "fromU8Array" false) (mem "toArray" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
-(DUse false (UseGroup ("string") ((mem "fromDigit" false) (mem "toDigit" false) (mem "toUtf8" false) (mem "fromUtf8" false) (mem "toChars" false))))
+(DUse false (UseGroup ("string") ((mem "fromDigit" false) (mem "toDigit" false) (mem "fromUtf8" false) (mem "toChars" false))))
 (DUse false (UseAlias ("u8") "U8"))
 (DTypeSig false "charAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Char"))))
 (DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "hex: index out of bounds"))) (EApp (EApp (EVar "arrGet") (EVar "i")) (EVar "arr"))))
@@ -202,7 +202,7 @@ prop "hex encode length is 2x byte length" (xs : List Int) =
 (DUse false (UseAlias ("bytes") "B"))
 (DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "encodeUtf8" false) (mem "fromArrayAssumeByteDomain" false) (mem "fromU8Array" false) (mem "toArray" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
-(DUse false (UseGroup ("string") ((mem "fromDigit" false) (mem "toDigit" false) (mem "toUtf8" false) (mem "fromUtf8" false) (mem "toChars" false))))
+(DUse false (UseGroup ("string") ((mem "fromDigit" false) (mem "toDigit" false) (mem "fromUtf8" false) (mem "toChars" false))))
 (DUse false (UseAlias ("u8") "U8"))
 (DTypeSig false "charAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Char"))))
 (DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "hex: index out of bounds"))) (EApp (EApp (EVar "arrGet") (EVar "i")) (EVar "arr"))))

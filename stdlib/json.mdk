@@ -25,7 +25,7 @@
 -- pair decodes to its astral scalar value, and a lone surrogate is a parse
 -- error, not silent corruption.
 
-import core.{Ordering(..), Debug, Display, Option, Result, Thenable, map}
+import core.{Ordering(..), Debug, Display, Option, Result, map}
 import list.{reverse}
 import array
 import string.{contains, fromChars, isDigit, join, repeat, toInt}
@@ -282,7 +282,7 @@ parseUnicodeAt : Array Char ->
   List Char ->
   Option Int ->
   Result String (String, Int)
-parseUnicodeAt arr i acc None = Err "invalid \\u escape"
+parseUnicodeAt _arr _i _acc None = Err "invalid \\u escape"
 parseUnicodeAt arr i acc (Some k)
   | isHighSurrogate k = parseLowSurrogate arr i acc k
   | otherwise = parseUnicodeScalar arr (i + 4) acc k
@@ -311,7 +311,7 @@ parseLowSurrogateAt : Array Char ->
 parseLowSurrogateAt arr i acc hi (Some lo)
   | isLowSurrogate lo =
     parseUnicodeScalar arr (i + 10) acc (combineSurrogates hi lo)
-parseLowSurrogateAt arr i acc hi _ = Err "invalid \\u escape"
+parseLowSurrogateAt _arr _i _acc _hi _ = Err "invalid \\u escape"
 
 -- A codepoint that isn't a surrogate (a lone low surrogate lands here too,
 -- via the `otherwise` arm of `parseUnicodeAt` — `charFromCode` rejects it)
