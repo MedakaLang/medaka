@@ -37,7 +37,7 @@ withTarget targetPath = match readFile targetPath
     -- the round-tripped `prog2` is evaluated, but the interpreter's ctor
     -- field-order table is seeded from the SAME decls that produced `prog` —
     -- the serialization carries no DData, so it cannot re-derive the table.
-    putStrLn (cevalMainOf decls prog2)
+    putStrLn (cevalMainOf emptyFacts decls prog2)
   Err msg => ePutStrLn msg
 
 main = oracleMain ()

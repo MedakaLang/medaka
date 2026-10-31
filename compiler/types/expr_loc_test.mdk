@@ -1,0 +1,35 @@
+-- Sibling tests for `expr_loc.mdk`.  `Loc` derives only `Eq`, so a span is compared
+-- through its fields, which `expectEqual` can print.
+
+import test.{expectEqual, expectAll, expectTrue, expectFalse}
+import frontend.ast.{Expr(..), Loc(..), Lit(..)}
+import types.expr_loc.{exprStartLoc, noTrapLoc, isNoLoc}
+
+here : Loc
+here = Loc "f.mdk" 3 4 3 9
+
+located : Expr
+located = ELoc here (ELit (LInt 1))
+
+fields : Loc -> (String, Int, Int, Int, Int)
+fields (Loc f sl sc el ec) = (f, sl, sc, el, ec)
+
+startOf : Expr -> (String, Int, Int, Int, Int)
+startOf e = fields (exprStartLoc e)
+
+test "the placeholder span is recognised and a real span is not" = expectAll [
+  expectTrue (isNoLoc noTrapLoc),
+  expectFalse (isNoLoc here),
+]
+
+test "a located atom starts where it is located" =
+  expectEqual (fields here) (startOf located)
+
+test "an application starts at its head, or at its argument when the head is unlocated" = expectAll
+  [
+    expectEqual (fields here) (startOf (EApp located (ELit (LInt 2)))),
+    expectEqual (fields here) (startOf (EApp (EVar "index") located)),
+  ]
+
+test "an expression with no located node has no start" =
+  expectEqual (fields noTrapLoc) (startOf (EApp (EVar "f") (EVar "x")))

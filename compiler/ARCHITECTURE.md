@@ -67,9 +67,10 @@ a check is a wish; the playbook's Phase 0 adds the checks that are missing.
 `types` and a shared data module only. `driver`, `tools` and `entries` sit on top and
 nothing below them imports them. Import cycles stay forbidden by the loader.
 
-- *Today (2026-10-18):* 3 violating edges in 1,088: two are `ir -> eval`, one is
-  `eval -> driver` (`test/arch_goldens/layering.golden`). The four `private_mangle` edges
-  closed in Phase 0.
+- *Today (2026-10-31):* 2 violating edges: `ir.core_ir_eval -> eval.eval` and
+  `eval.eval -> driver.diagnostics` (`test/arch_goldens/layering.golden`). The four
+  `private_mangle` edges closed in Phase 0, and `ir.core_ir_lower -> eval.eval` closed
+  with `types/dispatch_keys.mdk`.
 - *Check:* a pinned count of violating edges that may only fall (Phase 0, G3).
 
 ### A2. Every stage's output is a value

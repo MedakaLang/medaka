@@ -498,7 +498,7 @@ ifaceWordOf o name = match ifaceIdentity o name
 -- The dispatch/impl-tag of an ARROW-headed impl (`impl Sz (Int -> Int)`) —
 -- #1617.  Sited HERE, beside the route word, for the reason this module exists
 -- at all: the tag is derived independently on three sides of the seam
--- (`typecheck.headTyconTy`/`headTyconMono`, `eval.headTycon`, and through the
+-- (`tc_mono.headTyconTy`/`headTyconMono`, `dispatch_keys.headTycon`, and through the
 -- latter `core_ir_lower.headTyconHead`), and a mirrored constant is exactly the
 -- drift `tupleHeadTag`/`tupleHeadTagTc` still carries.  One mint, three readers.
 --

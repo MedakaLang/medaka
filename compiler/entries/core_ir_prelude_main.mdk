@@ -26,6 +26,7 @@ oracleMain () = drivePrelude emit
 emit : List Decl -> List Decl -> <IO> Unit
 emit preludeDecls userDecls =
   let decls = annotateProgram (preludeDecls ++ userDecls)
-  putStrLn (cevalMainOf decls (lowerProgramWithFacts emptyFacts decls))
+  putStrLn
+    (cevalMainOf emptyFacts decls (lowerProgramWithFacts emptyFacts decls))
 
 main = oracleMain ()
