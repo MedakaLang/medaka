@@ -10,7 +10,7 @@
    `Traversable` interfaces) are defined in the prelude and work on lists
    without an import. This module holds what is specific to lists. -}
 
-import core.{Ordering(..), Ord, Debug, Foldable, Mappable, Option, Result}
+import core.{Ordering(..), Ord, Debug, Option, Result}
 
 -- # Re-exports
 
@@ -187,7 +187,7 @@ export
 last : List a -> Option a
 last [] = None
 last [x] = Some x
-last (x :: xs) = last xs
+last (_x :: xs) = last xs
 
 -- > last ([] : List Int)
 -- None
@@ -201,7 +201,7 @@ last (x :: xs) = last xs
 export
 init : List a -> Option (List a)
 init [] = None
-init (x :: []) = Some []
+init (_x :: []) = Some []
 init (x :: xs) = map (x :: _) (init xs)
 
 -- > init ([] : List Int)
@@ -798,7 +798,7 @@ split sep xs = go xs
 export
 startsWith : Eq a => List a -> List a -> Bool
 startsWith [] _ = True
-startsWith prefix [] = False
+startsWith _prefix [] = False
 startsWith (p :: ps) (x :: xs) = p == x && startsWith ps xs
 
 -- > startsWith ([] : List Int) [1]

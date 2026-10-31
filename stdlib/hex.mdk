@@ -18,7 +18,7 @@ import bytes.{
   Bytes, encodeUtf8, fromArrayAssumeByteDomain, fromU8Array, toArray
 }
 import list.{reverse}
-import string.{fromDigit, toDigit, toUtf8, fromUtf8, toChars}
+import string.{fromDigit, toDigit, fromUtf8, toChars}
 import u8 as U8
 
 -- In-bounds indexing via the safe `Array.get`, panicking on a miss.  Every

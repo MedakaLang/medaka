@@ -86,30 +86,30 @@ balanceR x (l@(Bin sl _ _ _)) (r@(Bin sr _ _ _)) =
 rotateL : a -> Set a -> Set a -> Set a
 rotateL x l (r@(Bin _ _ rl rr)) =
   if size rl < 2 * size rr then singleL x l r else doubleL x l r
-rotateL x l Tip = panic "Set.rotateL: empty right subtree"
+rotateL _x _l Tip = panic "Set.rotateL: empty right subtree"
 
 rotateR : a -> Set a -> Set a -> Set a
 rotateR x (l@(Bin _ _ ll lr)) r =
   if size lr < 2 * size ll then singleR x l r else doubleR x l r
-rotateR x Tip r = panic "Set.rotateR: empty left subtree"
+rotateR _x Tip _r = panic "Set.rotateR: empty left subtree"
 
 singleL : a -> Set a -> Set a -> Set a
 singleL x1 t1 (Bin _ x2 t2 t3) = bin x2 (bin x1 t1 t2) t3
-singleL x1 t1 Tip = panic "Set.singleL: empty right subtree"
+singleL _x1 _t1 Tip = panic "Set.singleL: empty right subtree"
 
 singleR : a -> Set a -> Set a -> Set a
 singleR x1 (Bin _ x2 t1 t2) t3 = bin x2 t1 (bin x1 t2 t3)
-singleR x1 Tip t3 = panic "Set.singleR: empty left subtree"
+singleR _x1 Tip _t3 = panic "Set.singleR: empty left subtree"
 
 doubleL : a -> Set a -> Set a -> Set a
 doubleL x1 t1 (Bin _ x2 (Bin _ x3 t2 t3) t4) =
   bin x3 (bin x1 t1 t2) (bin x2 t3 t4)
-doubleL x1 t1 _ = panic "Set.doubleL: malformed right subtree"
+doubleL _x1 _t1 _ = panic "Set.doubleL: malformed right subtree"
 
 doubleR : a -> Set a -> Set a -> Set a
 doubleR x1 (Bin _ x2 t1 (Bin _ x3 t2 t3)) t4 =
   bin x3 (bin x2 t1 t2) (bin x1 t3 t4)
-doubleR x1 _ t4 = panic "Set.doubleR: malformed left subtree"
+doubleR _x1 _ _t4 = panic "Set.doubleR: malformed left subtree"
 
 -- # Construction
 
@@ -205,7 +205,7 @@ size (Bin s _ _ _) = s
    False -}
 export
 has : Ord a => a -> Set a -> Bool
-has x Tip = False
+has _x Tip = False
 has x (Bin _ y l r) = match compare x y
   Lt => has x l
   Gt => has x r
@@ -238,7 +238,7 @@ insert x (Bin s y l r) = match compare x y
    False -}
 export
 delete : Ord a => a -> Set a -> Set a
-delete x Tip = Tip
+delete _x Tip = Tip
 delete x (Bin _ y l r) = match compare x y
   Lt => balanceR y (delete x l) r
   Gt => balanceL y l (delete x r)
@@ -348,11 +348,11 @@ elementsOnto Tip acc = acc
 elementsOnto (Bin _ x l r) acc = elementsOnto l (x :: elementsOnto r acc)
 
 foldrSet : (a -> b -> <e> b) -> b -> Set a -> <e> b
-foldrSet f z Tip = z
+foldrSet _f z Tip = z
 foldrSet f z (Bin _ x l r) = foldrSet f (f x (foldrSet f z r)) l
 
 foldlSet : (b -> a -> <e> b) -> b -> Set a -> <e> b
-foldlSet f z Tip = z
+foldlSet _f z Tip = z
 foldlSet f z (Bin _ x l r) = foldlSet f (f (foldlSet f z l) x) r
 
 -- ── Split / join ────────────────────────────────────────────────────────
@@ -401,7 +401,7 @@ link2 (l@(Bin sl xl ll rl)) (r@(Bin sr xr lr rr))
 -- Split a set around an element: everything below it, everything above it.
 -- The element itself (if present) is dropped -- `splitMember` reports it.
 splitAt : Ord a => a -> Set a -> (Set a, Set a)
-splitAt x Tip = (Tip, Tip)
+splitAt _x Tip = (Tip, Tip)
 splitAt x (Bin _ y l r) = match compare x y
   Lt =>
     let (below, above) = splitAt x l
@@ -413,7 +413,7 @@ splitAt x (Bin _ y l r) = match compare x y
 
 -- `splitAt` that also reports whether the split element was present.
 splitMember : Ord a => a -> Set a -> (Set a, Bool, Set a)
-splitMember x Tip = (Tip, False, Tip)
+splitMember _x Tip = (Tip, False, Tip)
 splitMember x (Bin _ y l r) = match compare x y
   Lt =>
     let (below, found, above) = splitMember x l
@@ -454,8 +454,8 @@ union (Bin _ x l r) b =
    [2, 3] -}
 export
 intersection : Ord a => Set a -> Set a -> Set a
-intersection Tip b = Tip
-intersection a Tip = Tip
+intersection Tip _b = Tip
+intersection _a Tip = Tip
 intersection (Bin _ x l r) b =
   let (bl, found, br) = splitMember x b
   let l2 = intersection l bl
@@ -473,7 +473,7 @@ intersection (Bin _ x l r) b =
    [1, 3] -}
 export
 difference : Ord a => Set a -> Set a -> Set a
-difference Tip b = Tip
+difference Tip _b = Tip
 difference a Tip = a
 difference a (Bin _ x l r) =
   let (al, ar) = splitAt x a
@@ -504,8 +504,8 @@ isSubsetOf a b = size a <= size b && subsetGo a b
    `b` on the way down, giving O(|a|·log(|b|/|a| + 1)) rather than a fixed
    O(|a|·log|b|). -}
 subsetGo : Ord a => Set a -> Set a -> Bool
-subsetGo Tip b = True
-subsetGo a Tip = False
+subsetGo Tip _b = True
+subsetGo _a Tip = False
 subsetGo (Bin _ x l r) b =
   let (bl, found, br) = splitMember x b
   found && subsetGo l bl && subsetGo r br
@@ -603,7 +603,7 @@ wellFormed (Bin s x l r) =
 -- True
 
 allElems : (a -> Bool) -> Set a -> Bool
-allElems p Tip = True
+allElems _p Tip = True
 allElems p (Bin _ x l r) = p x && allElems p l && allElems p r
 
 balancedAt : Set a -> Set a -> Bool
@@ -614,7 +614,7 @@ balancedAt l r =
 
 ascending : Ord a => List a -> Bool
 ascending [] = True
-ascending [x] = True
+ascending [_x] = True
 ascending (x :: y :: rest) = lt x y && ascending (y :: rest)
 
 -- ── Properties ──────────────────────────────────────────────────────────

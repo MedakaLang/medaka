@@ -105,31 +105,31 @@ balanceR k v (l@(Bin sl _ _ _ _)) (r@(Bin sr _ _ _ _)) =
 rotateL : k -> v -> Map k v -> Map k v -> Map k v
 rotateL k v l (r@(Bin _ _ _ rl rr)) =
   if size rl < 2 * size rr then singleL k v l r else doubleL k v l r
-rotateL k v l Tip = panic "Map.rotateL: empty right subtree"
+rotateL _k _v _l Tip = panic "Map.rotateL: empty right subtree"
 
 -- Left subtree too heavy: mirror of rotateL.
 rotateR : k -> v -> Map k v -> Map k v -> Map k v
 rotateR k v (l@(Bin _ _ _ ll lr)) r =
   if size lr < 2 * size ll then singleR k v l r else doubleR k v l r
-rotateR k v Tip r = panic "Map.rotateR: empty left subtree"
+rotateR _k _v Tip _r = panic "Map.rotateR: empty left subtree"
 
 singleL : k -> v -> Map k v -> Map k v -> Map k v
 singleL k1 v1 t1 (Bin _ k2 v2 t2 t3) = bin k2 v2 (bin k1 v1 t1 t2) t3
-singleL k1 v1 t1 Tip = panic "Map.singleL: empty right subtree"
+singleL _k1 _v1 _t1 Tip = panic "Map.singleL: empty right subtree"
 
 singleR : k -> v -> Map k v -> Map k v -> Map k v
 singleR k1 v1 (Bin _ k2 v2 t1 t2) t3 = bin k2 v2 t1 (bin k1 v1 t2 t3)
-singleR k1 v1 Tip t3 = panic "Map.singleR: empty left subtree"
+singleR _k1 _v1 Tip _t3 = panic "Map.singleR: empty left subtree"
 
 doubleL : k -> v -> Map k v -> Map k v -> Map k v
 doubleL k1 v1 t1 (Bin _ k2 v2 (Bin _ k3 v3 t2 t3) t4) =
   bin k3 v3 (bin k1 v1 t1 t2) (bin k2 v2 t3 t4)
-doubleL k1 v1 t1 _ = panic "Map.doubleL: malformed right subtree"
+doubleL _k1 _v1 _t1 _ = panic "Map.doubleL: malformed right subtree"
 
 doubleR : k -> v -> Map k v -> Map k v -> Map k v
 doubleR k1 v1 (Bin _ k2 v2 t1 (Bin _ k3 v3 t2 t3)) t4 =
   bin k3 v3 (bin k2 v2 t1 t2) (bin k1 v1 t3 t4)
-doubleR k1 v1 _ t4 = panic "Map.doubleR: malformed left subtree"
+doubleR _k1 _v1 _ _t4 = panic "Map.doubleR: malformed left subtree"
 
 -- # Construction
 
@@ -239,7 +239,7 @@ isEmpty _ = False
    None -}
 export
 get : Ord k => k -> Map k v -> Option v
-get k Tip = None
+get _k Tip = None
 get k (Bin _ k2 v l r) = match compare k k2
   Lt => get k l
   Gt => get k r
@@ -263,7 +263,7 @@ export impl Index (Map k v) k v requires Ord k, Debug k where
    False -}
 export
 has : Ord k => k -> Map k v -> Bool
-has k Tip = False
+has _k Tip = False
 has k (Bin _ k2 _ l r) = match compare k k2
   Lt => has k l
   Gt => has k r
@@ -277,7 +277,7 @@ has k (Bin _ k2 _ l r) = match compare k k2
    0 -}
 export
 findWithDefault : Ord k => v -> k -> Map k v -> v
-findWithDefault d k Tip = d
+findWithDefault d _k Tip = d
 findWithDefault d k (Bin _ k2 v l r) = match compare k k2
   Lt => findWithDefault d k l
   Gt => findWithDefault d k r
@@ -306,7 +306,7 @@ set k v (Bin s k2 v2 l r) = match compare k k2
    15 -}
 export
 insertWith : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
-insertWith f k v Tip = singleton k v
+insertWith _f k v Tip = singleton k v
 insertWith f k v (Bin s k2 v2 l r) = match compare k k2
   Lt => balanceL k2 v2 (insertWith f k v l) r
   Gt => balanceR k2 v2 l (insertWith f k v r)
@@ -320,7 +320,7 @@ insertWith f k v (Bin s k2 v2 l r) = match compare k k2
    50 -}
 export
 adjust : Ord k => (v -> v) -> k -> Map k v -> Map k v
-adjust f k Tip = Tip
+adjust _f _k Tip = Tip
 adjust f k (Bin s k2 v2 l r) = match compare k k2
   Lt => Bin s k2 v2 (adjust f k l) r
   Gt => Bin s k2 v2 l (adjust f k r)
@@ -336,7 +336,7 @@ adjust f k (Bin s k2 v2 l r) = match compare k k2
    False -}
 export
 delete : Ord k => k -> Map k v -> Map k v
-delete k Tip = Tip
+delete _k Tip = Tip
 delete k (Bin _ k2 v2 l r) = match compare k k2
   Lt => balanceR k2 v2 (delete k l) r
   Gt => balanceL k2 v2 l (delete k r)
@@ -450,7 +450,7 @@ deleteMax (Bin _ k v l r) = balanceL k v l (deleteMax r)
    [1, 2] -}
 export
 foldrWithKey : (k -> v -> b -> <e> b) -> b -> Map k v -> <e> b
-foldrWithKey f z Tip = z
+foldrWithKey _f z Tip = z
 foldrWithKey f z (Bin _ k v l r) = foldrWithKey f (f k v (foldrWithKey f z r)) l
 
 {- | A left fold over the entries in ascending key order.
@@ -459,7 +459,7 @@ foldrWithKey f z (Bin _ k v l r) = foldrWithKey f (f k v (foldrWithKey f z r)) l
    30 -}
 export
 foldlWithKey : (b -> k -> v -> <e> b) -> b -> Map k v -> <e> b
-foldlWithKey f z Tip = z
+foldlWithKey _f z Tip = z
 foldlWithKey f z (Bin _ k v l r) = foldlWithKey f (f (foldlWithKey f z l) k v) r
 
 {- | The entries as pairs, in ascending key order.
@@ -581,7 +581,7 @@ valuesOnto (Bin _ _ v l r) acc = valuesOnto l (v :: valuesOnto r acc)
    [11, 22] -}
 export
 mapWithKey : (k -> v -> <e> w) -> Map k v -> <e> Map k w
-mapWithKey f Tip = Tip
+mapWithKey _f Tip = Tip
 mapWithKey f (Bin s k v l r) = Bin s k (f k v) (mapWithKey f l) (mapWithKey f r)
 
 -- ── Split / join ────────────────────────────────────────────────────────
@@ -640,7 +640,7 @@ link2 (l@(Bin sl kl vl ll rl)) (r@(Bin sr kr vr lr rr))
 {- Split a map around a key: every entry below `k`, and every entry above it.
    The entry *at* `k` (if any) is dropped -- `splitLookup` hands it back. -}
 splitAt : Ord k => k -> Map k v -> (Map k v, Map k v)
-splitAt k Tip = (Tip, Tip)
+splitAt _k Tip = (Tip, Tip)
 splitAt k (Bin _ k2 v2 l r) = match compare k k2
   Lt =>
     let (below, above) = splitAt k l
@@ -652,7 +652,7 @@ splitAt k (Bin _ k2 v2 l r) = match compare k k2
 
 -- `splitAt` that also reports the value that sat at the split key.
 splitLookup : Ord k => k -> Map k v -> (Map k v, Option v, Map k v)
-splitLookup k Tip = (Tip, None, Tip)
+splitLookup _k Tip = (Tip, None, Tip)
 splitLookup k (Bin _ k2 v2 l r) = match compare k k2
   Lt =>
     let (below, found, above) = splitLookup k l
@@ -672,7 +672,7 @@ splitLookup k (Bin _ k2 v2 l r) = match compare k k2
    [2, 3] -}
 export
 filterWithKey : Ord k => (k -> v -> <e> Bool) -> Map k v -> <e> Map k v
-filterWithKey p Tip = Tip
+filterWithKey _p Tip = Tip
 filterWithKey p (Bin _ k v l r) =
   let l2 = filterWithKey p l
   let r2 = filterWithKey p r
@@ -724,8 +724,8 @@ unionSplit (Bin _ k v l r) b =
    3 -}
 export
 unionWith : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
-unionWith f Tip b = b
-unionWith f a Tip = a
+unionWith _f Tip b = b
+unionWith _f a Tip = a
 unionWith f a b
   | size b * 16 <= size a =
     foldlWithKey (acc k w => insertWith (x y => f y x) k w acc) a b
@@ -735,15 +735,15 @@ unionWith f a b
 -- `insertWith` that stores the given key on a collision, so a key of the first
 -- map survives a union even when `Eq`-equal keys are distinguishable.
 setWith : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
-setWith f k v Tip = singleton k v
+setWith _f k v Tip = singleton k v
 setWith f k v (Bin s k2 v2 l r) = match compare k k2
   Lt => balanceL k2 v2 (setWith f k v l) r
   Gt => balanceR k2 v2 l (setWith f k v r)
   Eq => Bin s k (f v v2) l r
 
 unionWithSplit : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
-unionWithSplit f Tip b = b
-unionWithSplit f a Tip = a
+unionWithSplit _f Tip b = b
+unionWithSplit _f a Tip = a
 unionWithSplit f (Bin _ k v l r) b =
   let (bl, found, br) = splitLookup k b
   let v2 = match found
@@ -757,7 +757,7 @@ unionWithSplit f (Bin _ k v l r) b =
    [1, 3] -}
 export
 difference : Ord k => Map k v -> Map k w -> Map k v
-difference Tip b = Tip
+difference Tip _b = Tip
 difference a Tip = a
 difference a (Bin _ k _ l r) =
   let (al, ar) = splitAt k a
@@ -770,8 +770,8 @@ difference a (Bin _ k _ l r) =
    [(2, 22)] -}
 export
 intersectionWith : Ord k => (v -> w -> x) -> Map k v -> Map k w -> Map k x
-intersectionWith f Tip b = Tip
-intersectionWith f a Tip = Tip
+intersectionWith _f Tip _b = Tip
+intersectionWith _f _a Tip = Tip
 intersectionWith f (Bin _ k v l r) b =
   let (bl, found, br) = splitLookup k b
   let l2 = intersectionWith f l bl
@@ -795,14 +795,14 @@ intersection a b = intersectionWith (x _ => x) a b
    > values (map (n => n * 10) (fromList [(1, 1), (2, 2)]))
    [10, 20] -}
 export impl Mappable (Map k) where
-  map f Tip = Tip
+  map _f Tip = Tip
   map f (Bin s k v l r) = Bin s k (f v) (map f l) (map f r)
 
 {- | `filter` and `filterMap` test each value, keeping the keys of the
    entries that survive. `filterWithKey` is the form that also sees the
    key. -}
 export impl Filterable (Map k) where
-  filterMap f Tip = Tip
+  filterMap _f Tip = Tip
   filterMap f (Bin _ k v l r) =
     let l2 = filterMap f l
     let r2 = filterMap f r
@@ -928,14 +928,14 @@ groupByKey key xs =
 export
 wellFormed : Ord k => Map k v -> Bool
 wellFormed Tip = True
-wellFormed (Bin s k v l r) =
+wellFormed (Bin s k _v l r) =
   let sizeOk = size l + size r + 1 == s
   let orderOk = allKeys (lk => lt lk k) l && allKeys (gk => gt gk k) r
   sizeOk && balancedAt l r && orderOk && wellFormed l && wellFormed r
 
 -- Every key in the subtree satisfies the predicate.
 allKeys : (k -> Bool) -> Map k v -> Bool
-allKeys p Tip = True
+allKeys _p Tip = True
 allKeys p (Bin _ k _ l r) = p k && allKeys p l && allKeys p r
 
 -- The weight-balance bound between two siblings: tiny pairs are exempt,
@@ -949,7 +949,7 @@ balancedAt l r =
 -- Strictly-ascending check used by the key-ordering property.
 ascending : Ord a => List a -> Bool
 ascending [] = True
-ascending [x] = True
+ascending [_x] = True
 ascending (x :: y :: rest) = lt x y && ascending (y :: rest)
 
 -- ── Properties ──────────────────────────────────────────────────────────
@@ -1024,14 +1024,14 @@ setOld k v (Bin s k2 v2 l r) = match compare k k2
   Eq => Bin s k v l r
 
 insertWithOld : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
-insertWithOld f k v Tip = singleton k v
+insertWithOld _f k v Tip = singleton k v
 insertWithOld f k v (Bin s k2 v2 l r) = match compare k k2
   Lt => balance k2 v2 (insertWithOld f k v l) r
   Gt => balance k2 v2 l (insertWithOld f k v r)
   Eq => Bin s k2 (f v v2) l r
 
 deleteOld : Ord k => k -> Map k v -> Map k v
-deleteOld k Tip = Tip
+deleteOld _k Tip = Tip
 deleteOld k (Bin _ k2 v2 l r) = match compare k k2
   Lt => balance k2 v2 (deleteOld k l) r
   Gt => balance k2 v2 l (deleteOld k r)
@@ -1102,12 +1102,12 @@ foldInserts : (k -> v -> Map k v -> Map k v) ->
   List (k, v) ->
   Map k v ->
   Map k v
-foldInserts step [] m = m
+foldInserts _step [] m = m
 foldInserts step ((k, v) :: rest) m = foldInserts step rest (step k v m)
 
 -- Folds each key through `step` in order, for the delete props.
 foldDeletes : (k -> Map k v -> Map k v) -> List k -> Map k v -> Map k v
-foldDeletes step [] m = m
+foldDeletes _step [] m = m
 foldDeletes step (k :: rest) m = foldDeletes step rest (step k m)
 
 -- Collapses keys onto 0..7 so that the props hit the duplicate (`Eq`) paths.
