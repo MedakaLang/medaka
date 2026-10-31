@@ -1,13 +1,9 @@
 import array
 import frontend.ast.{
-  unminted,
-  negateLiteral,
   DeriveRef(..),
   Ty(..),
   EffAtomTy(..),
   EffParamTy(..),
-  effAtomAt,
-  effectDeclUnstamped,
   KindAnn(..),
   Constraint(..),
   Pat(..),
@@ -23,16 +19,8 @@ import frontend.ast.{
   LetBind(..),
   Expr(..),
   Loc(..),
-  noDeclLoc,
   UseMember(..),
   UsePath(..),
-  useMemberOrigin,
-  useMemberAlias,
-  qualifiedLocal,
-  tyConBuiltin,
-  kindAnnSource,
-  kindAuthorityUnstamped,
-  setDeclNameLoc,
   PropParam(..),
   MethodDefault(..),
   IfaceMethod(..),
@@ -50,10 +38,8 @@ import frontend.ast.{
   Route(..),
 }
 import frontend.lex_token.{
-  Token(..), isCommaTok, isNoiseTok, isColonTok, isConsTok, isDedentTok,
-  isDeferTok, isEofTok, isEqualTok, isExportTok, isImplTok, isInTok,
-  isIndentTok, isLBraceTok, isNewlineTok, isOfTok, isPipeTok, isPublicTok,
-  isRBraceTok, isRequiresTok, isStarTok, isWhereTok, isLayoutTok, isOpenDelim,
+  Token(..), isCommaTok, isNoiseTok, isDedentTok, isEqualTok, isIndentTok,
+  isNewlineTok, isPipeTok, isRequiresTok, isWhereTok, isLayoutTok, isOpenDelim,
   isCloseDelim, isTStringTok, isTUpperTok
 }
 import support.source_index.{lineStartIndex, offsetToLineColFast}

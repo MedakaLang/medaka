@@ -16,10 +16,9 @@ import types.effect_authority.{authHasVars, authConsts}
 import types.effect_param_decode.{decodeSetParam}
 import types.effect_policy as EP
 import types.effect_policy.{
-  PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain,
-  allOk
+  PolicyVerdict(..), buildCallGraph, fnEffectsTable, viaChain, allOk
 }
-import types.effect_rows.{atomKey, atomLabel, atomAuth, renderAtom, Atom(..)}
+import types.effect_rows.{atomKey, atomLabel, atomAuth, Atom(..)}
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
 -- policy checker (WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md).
 --

@@ -382,7 +382,7 @@ import frontend.exhaust.{
 }
 import frontend.desugar.{exprSpanLoc}
 import types.module_interface.{forgetLocalRows}
-import list.{head, last}
+import list.{last}
 import types.effect_values.{joinProducedEnvelope}
 import types.scopes as Scopes
 import map as IdMap

@@ -1,5 +1,5 @@
 # META
-source_lines=829
+source_lines=828
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -50,7 +50,6 @@ import frontend.ast.{
   qualifierSource,
   EffParamTy(..),
   effAtomSurface,
-  authTermSurface,
   effAtomBare,
   effAtomWith,
   Route(..),
@@ -832,7 +831,7 @@ rkTyList =
 -- > implRouteKeyWord OriginUnresolved "A" [TyEffect [effAtomBare "Stdout"] [] rkTyInt] None == implRouteKeyWord OriginUnresolved "A" [TyEffect [effAtomBare "Rand"] [] rkTyInt] None
 -- False
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" true) (mem "EvId" true) (mem "isUnminted" false) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "tyConBuiltin" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" true) (mem "EvId" true) (mem "isUnminted" false) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "tyConBuiltin" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "escStr" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("array") ((mem "sort" false))))
 (DData Abstract "EvIndex" () ((variant "EvIndex" (ConPos (TyApp (TyCon "Array") (TyCon "EvRun"))))) ())
@@ -985,7 +984,7 @@ rkTyList =
 (DTypeSig false "rkTyList" (TyCon "Ty"))
 (DFunDef false "rkTyList" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "List"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" true) (mem "EvId" true) (mem "isUnminted" false) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "tyConBuiltin" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" true) (mem "EvId" true) (mem "isUnminted" false) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "tyConBuiltin" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "escStr" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("array") ((mem "sort" false))))
 (DData Abstract "EvIndex" () ((variant "EvIndex" (ConPos (TyApp (TyCon "Array") (TyCon "EvRun"))))) ())

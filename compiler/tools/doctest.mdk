@@ -18,7 +18,7 @@
 -- compiler/frontend/lexer.mdk (`collectComments`), the run drivers (single/multi) from
 -- compiler/tools/test_cmd.mdk.
 
-import frontend.lexer.{Comment, collectComments, commentLine, commentText}
+import frontend.lexer.{Comment, commentLine, commentText}
 import frontend.ast.{Decl(..)}
 import frontend.parser.{parseLocatedResult, parseErrorMessage}
 import frontend.desugar.{desugar, moduleAliases, qualifyAliasRefsWith}

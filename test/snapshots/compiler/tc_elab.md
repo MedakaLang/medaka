@@ -173,7 +173,7 @@ import support.util.{
   listLen,
   splitOnChar,
 }
-import list.{drop, elemIndex, head, range, replicate, reverse, take}
+import list.{drop, elemIndex, range, replicate, reverse, take}
 import types.runtime_grants.{fileGrantExterns}
 import types.chain_key.{isConstrainedTy}
 import frontend.desugar.{mapChildren, mapProg}
@@ -2078,7 +2078,7 @@ sigPredicateSlot (iface, _) =
 (DUse false (UseGroup ("types" "runtime_ops") ((mem "arithmeticTag" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "cellEntriesFrom" false) (mem "servedEntriesFrom" false) (mem "setServedArity" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "int64Halves" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "splitOnChar" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "elemIndex" false) (mem "head" false) (mem "range" false) (mem "replicate" false) (mem "reverse" false) (mem "take" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "elemIndex" false) (mem "range" false) (mem "replicate" false) (mem "reverse" false) (mem "take" false))))
 (DUse false (UseGroup ("types" "runtime_grants") ((mem "fileGrantExterns" false))))
 (DUse false (UseGroup ("types" "chain_key") ((mem "isConstrainedTy" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false) (mem "mapProg" false))))
@@ -2443,7 +2443,7 @@ sigPredicateSlot (iface, _) =
 (DUse false (UseGroup ("types" "runtime_ops") ((mem "arithmeticTag" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "cellEntriesFrom" false) (mem "servedEntriesFrom" false) (mem "setServedArity" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "int64Halves" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "splitOnChar" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "elemIndex" false) (mem "head" false) (mem "range" false) (mem "replicate" false) (mem "reverse" false) (mem "take" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "elemIndex" false) (mem "range" false) (mem "replicate" false) (mem "reverse" false) (mem "take" false))))
 (DUse false (UseGroup ("types" "runtime_grants") ((mem "fileGrantExterns" false))))
 (DUse false (UseGroup ("types" "chain_key") ((mem "isConstrainedTy" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false) (mem "mapProg" false))))

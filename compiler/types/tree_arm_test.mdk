@@ -8,8 +8,7 @@ import types.capability_manifest.{CapabilityManifest}
 -- `go` is a constrained local abstraction, and it dispatches `compare` at
 -- `Float`, which reaches core's private `compareNaN` and `floatSignBit`.
 import test.{
-  expectAll, expectAtLeast, expectEqual, expectNotEqual, expectTrue, fail,
-  labelFail
+  expectAll, expectEqual, expectNotEqual, expectTrue, fail, labelFail
 }
 import test_process.{underRoot}
 import string as S

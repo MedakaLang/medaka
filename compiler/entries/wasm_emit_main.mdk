@@ -31,7 +31,6 @@ import ir.core_ir_lower.{
   lowerProgramEmitWith,
   stampDeclaredSignatures,
   ctorFieldTypeNames,
-  declaredRecordFieldOrders,
 }
 import backend.wasm_emit.{emitProgram, makeWasmEmitInput}
 import backend.emit_plan.{buildEmitPlan}

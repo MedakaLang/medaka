@@ -1,5 +1,5 @@
 # META
-source_lines=574
+source_lines=573
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted method_marker stage.
@@ -21,7 +21,6 @@ stages=DESUGAR,MARK
 import frontend.ast.{
   ifaceMethodName,
   patBindings,
-  recFieldBindings,
   Lit(..),
   Ty(..),
   Constraint(..),
@@ -53,7 +52,7 @@ import frontend.ast.{
   Variant(..),
   Decl(..),
 }
-import frontend.desugar.{mapProg, mapExpr, mapDecl}
+import frontend.desugar.{mapExpr, mapDecl}
 import support.util.{contains}
 import support.ordmap.{OrdMap, omHasKey, omFromNames, omEmpty}
 
@@ -577,8 +576,8 @@ markerFor preludeProg =
   let preludeConstrained = constrainedFnNames preludeProg
   prog => markWith preludeMethods preludeDroppable preludeConstrained prog
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "ifaceMethodName" false) (mem "patBindings" false) (mem "recFieldBindings" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Route" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Loc" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "mapExpr" false) (mem "mapDecl" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "ifaceMethodName" false) (mem "patBindings" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Route" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Loc" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "mapExpr" false) (mem "mapDecl" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omEmpty" false))))
 (DTypeSig false "interfaceMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -832,8 +831,8 @@ markerFor preludeProg =
 (DTypeSig true "markerFor" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "markerFor" ((PVar "preludeProg")) (EBlock (DoLet false false (PVar "preludeMethods") (EApp (EVar "interfaceMethodNames") (EVar "preludeProg"))) (DoLet false false (PVar "preludeDroppable") (EApp (EVar "droppablePreludeFns") (EVar "preludeProg"))) (DoLet false false (PVar "preludeConstrained") (EApp (EVar "constrainedFnNames") (EVar "preludeProg"))) (DoExpr (ELam ((PVar "prog")) (EApp (EApp (EApp (EApp (EVar "markWith") (EVar "preludeMethods")) (EVar "preludeDroppable")) (EVar "preludeConstrained")) (EVar "prog"))))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "ifaceMethodName" false) (mem "patBindings" false) (mem "recFieldBindings" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Route" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Loc" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "mapExpr" false) (mem "mapDecl" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "ifaceMethodName" false) (mem "patBindings" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Route" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Loc" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "mapExpr" false) (mem "mapDecl" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omEmpty" false))))
 (DTypeSig false "interfaceMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))

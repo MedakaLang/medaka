@@ -24,7 +24,6 @@ import driver.diagnostics.{
   DiagId(..),
   Severity(..),
   cjDiagnostic,
-  cjFoldIntoFile,
   cjGraphParts,
   cjLoadFailure,
   cjSingleParts,

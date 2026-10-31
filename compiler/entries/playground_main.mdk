@@ -110,11 +110,6 @@ import driver.diagnostics.{
   Diag(..),
   DiagId(..),
   Severity(..),
-  cjPosition,
-  cjRange,
-  cjRangeOfLoc,
-  cjDiagnostic,
-  cjFileEntry,
   cjAllToJson,
   readDiagSrc,
   missingMainDiag,
@@ -157,8 +152,6 @@ import types.typecheck.{
 import ir.core_ir_lower.{
   lowerProgramEmitWith,
   validateFfiExternTypeNames,
-  methodIfaceTable,
-  declaredRecordFieldOrders,
   ctorFieldTypeNames,
 }
 import types.private_mangle.{mangleUnitsEv}

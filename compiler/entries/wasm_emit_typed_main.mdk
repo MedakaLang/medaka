@@ -75,8 +75,6 @@ import ir.core_ir_lower.{
   stampImplSymbols,
   stampUntypedBindersWith,
   ctorFieldTypeNames,
-  declaredRecordFieldOrders,
-  methodIfaceTable,
 }
 import backend.wasm_emit.{
   WasmEmitInput,

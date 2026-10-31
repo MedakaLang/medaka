@@ -10,7 +10,7 @@ import support.diag_codes.{codeText}
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import list.{drop, elemIndex, filter, lookup, nub, reverse}
-import string.{isAlphaNum, isLower, join, toChars}
+import string.{isAlphaNum, join, toChars}
 import test.{expectAll, expectAtLeast, expectEqual, expectFalse, expectTrue}
 import types.law_harness_test.{
   Shape(..),

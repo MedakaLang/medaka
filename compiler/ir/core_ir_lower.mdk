@@ -36,7 +36,6 @@ import frontend.ast.{
   Addr(..),
   Decl(..),
   ExternDecl(..),
-  externRowCons,
   hostRows,
   Attr(..),
   Variant(..),

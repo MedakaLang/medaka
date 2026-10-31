@@ -1,5 +1,5 @@
 # META
-source_lines=5015
+source_lines=5012
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -60,7 +60,7 @@ stages=DESUGAR,MARK
 -- single-file call site below.
 
 import support.diag_codes.{DiagCode(..)}
-import frontend.ast.{Decl(..), Expr, Loc(..), Ty}
+import frontend.ast.{Decl(..), Expr, Loc(..)}
 import tools.target_parse.{
   parseTargetResult,
   targetRaw,
@@ -173,7 +173,6 @@ import tools.prop_runner.{
   propResultPassed,
   propResultDetail,
   propResultEngine,
-  propResultStatus,
   propResultSeed,
   propResultCases,
   propResultFailureKind,
@@ -208,8 +207,6 @@ import tools.test_pins_report.{
   gradedTestPassed,
   gradedPropRaw,
   gradedTestRaw,
-  gradedPropVerdict,
-  gradedTestVerdict,
   knownRedCountProps,
   knownRedCountTests,
   gradedPropStatus,
@@ -5019,7 +5016,7 @@ testFilesReport (f :: rest) (r :: results) acc =
 testFilesReport _ _ acc = acc
 # DESUGAR
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "Loc" true) (mem "Ty" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "Loc" true))))
 (DUse false (UseGroup ("tools" "target_parse") ((mem "parseTargetResult" false) (mem "targetRaw" false) (mem "targetDesugared" false) (mem "targetExamples" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedCachedSourcesE" false) (mem "modIdToPath" false) (mem "loadErrorMessage" false) (mem "LoadError" true) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "readSource" false))))
@@ -5041,13 +5038,13 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("tools" "native_props") ((mem "runNativePlannedPropRequests" false))))
 (DUse false (UseGroup ("tools" "native_probe") ((mem "NativeArmResults" true) (mem "NativePropLeaf" false) (mem "runMergedNativeArms" false))))
 (DUse false (UseGroup ("tools" "prop_plan") ((mem "PlanModule" true) (mem "CustomPlan" true) (mem "GenPlan" false) (mem "PlanEnv" false) (mem "PlanError" true) (mem "PlanErrorReason" true) (mem "customPlansReachable" false) (mem "planErrorText" false))))
-(DUse false (UseGroup ("tools" "prop_runner") ((mem "hasProps" false) (mem "runAllPlannedPropRequestsResults" false) (mem "preparePlannedPropRequests" false) (mem "runPreparedPropRequestsResults" false) (mem "PreparedPropRequest" true) (mem "PropHelper" true) (mem "PropResult" true) (mem "PropStatus" true) (mem "PropFailureKind" true) (mem "PropRequest" true) (mem "filterProps" false) (mem "filterPropsByName" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false) (mem "propResultEngine" false) (mem "propResultStatus" false) (mem "propResultSeed" false) (mem "propResultCases" false) (mem "propResultFailureKind" false) (mem "propSeedValue" false))))
+(DUse false (UseGroup ("tools" "prop_runner") ((mem "hasProps" false) (mem "runAllPlannedPropRequestsResults" false) (mem "preparePlannedPropRequests" false) (mem "runPreparedPropRequestsResults" false) (mem "PreparedPropRequest" true) (mem "PropHelper" true) (mem "PropResult" true) (mem "PropStatus" true) (mem "PropFailureKind" true) (mem "PropRequest" true) (mem "filterProps" false) (mem "filterPropsByName" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false) (mem "propResultEngine" false) (mem "propResultSeed" false) (mem "propResultCases" false) (mem "propResultFailureKind" false) (mem "propSeedValue" false))))
 (DUse false (UseGroup ("tools" "prop_helpers") ((mem "PropHelpers" true) (mem "propHelpersForPlans" false))))
 (DUse false (UseGroup ("tools" "eval_props") ((mem "emitEvalPropRows" false) (mem "decodeEvalPropRows" false) (mem "propResultJson" false) (mem "propFailureKindJson" false) (mem "startEvalPropWorker" false) (mem "takeEvalPropBootstrap" false))))
 (DUse false (UseGroup ("tools" "probe_transcript") ((mem "firstNonEmptyLine" false))))
 (DUse false (UseGroup ("tools" "test_pins") ((mem "PinIndex" false) (mem "PinKind" true) (mem "TestExpectedFailure" true) (mem "TestPin" false) (mem "buildPinIndex" false) (mem "pinFromIndex" false) (mem "validatePinNames" false))))
 (DUse false (UseGroup ("tools" "test_pins_io") ((mem "loadPinContext" false))))
-(DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "GradedTest" false) (mem "gradeProps" false) (mem "gradeTests" false) (mem "gradedPropPassed" false) (mem "gradedTestPassed" false) (mem "gradedPropRaw" false) (mem "gradedTestRaw" false) (mem "gradedPropVerdict" false) (mem "gradedTestVerdict" false) (mem "knownRedCountProps" false) (mem "knownRedCountTests" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "gradedTestStatus" false) (mem "gradedTestRawStatus" false) (mem "gradedTestIssue" false) (mem "gradedTestPinDetail" false))))
+(DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "GradedTest" false) (mem "gradeProps" false) (mem "gradeTests" false) (mem "gradedPropPassed" false) (mem "gradedTestPassed" false) (mem "gradedPropRaw" false) (mem "gradedTestRaw" false) (mem "knownRedCountProps" false) (mem "knownRedCountTests" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "gradedTestStatus" false) (mem "gradedTestRawStatus" false) (mem "gradedTestIssue" false) (mem "gradedTestPinDetail" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "exprLine" false) (mem "runOneTestEnv" false) (mem "hasTests" false) (mem "uncapableExternsEnv" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeLocated" false) (mem "frontEnd" false) (mem "FrontInput" true) (mem "FrontOutput" true) (mem "FrontPolicy" true) (mem "FrontProgram" true) (mem "ChainSteps" true) (mem "noStdlibExports" false) (mem "chainKeyOf" false) (mem "graphIdOf" false) (mem "GraphId" true) (mem "desugaredModPairs" false) (mem "mkDiag" false) (mem "Severity" true) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
@@ -5708,7 +5705,7 @@ testFilesReport _ _ acc = acc
 (DFunDef false "testFilesReport" (PWild PWild (PVar "acc")) (EVar "acc"))
 # MARK
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "Loc" true) (mem "Ty" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "Loc" true))))
 (DUse false (UseGroup ("tools" "target_parse") ((mem "parseTargetResult" false) (mem "targetRaw" false) (mem "targetDesugared" false) (mem "targetExamples" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedCachedSourcesE" false) (mem "modIdToPath" false) (mem "loadErrorMessage" false) (mem "LoadError" true) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "readSource" false))))
@@ -5730,13 +5727,13 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("tools" "native_props") ((mem "runNativePlannedPropRequests" false))))
 (DUse false (UseGroup ("tools" "native_probe") ((mem "NativeArmResults" true) (mem "NativePropLeaf" false) (mem "runMergedNativeArms" false))))
 (DUse false (UseGroup ("tools" "prop_plan") ((mem "PlanModule" true) (mem "CustomPlan" true) (mem "GenPlan" false) (mem "PlanEnv" false) (mem "PlanError" true) (mem "PlanErrorReason" true) (mem "customPlansReachable" false) (mem "planErrorText" false))))
-(DUse false (UseGroup ("tools" "prop_runner") ((mem "hasProps" false) (mem "runAllPlannedPropRequestsResults" false) (mem "preparePlannedPropRequests" false) (mem "runPreparedPropRequestsResults" false) (mem "PreparedPropRequest" true) (mem "PropHelper" true) (mem "PropResult" true) (mem "PropStatus" true) (mem "PropFailureKind" true) (mem "PropRequest" true) (mem "filterProps" false) (mem "filterPropsByName" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false) (mem "propResultEngine" false) (mem "propResultStatus" false) (mem "propResultSeed" false) (mem "propResultCases" false) (mem "propResultFailureKind" false) (mem "propSeedValue" false))))
+(DUse false (UseGroup ("tools" "prop_runner") ((mem "hasProps" false) (mem "runAllPlannedPropRequestsResults" false) (mem "preparePlannedPropRequests" false) (mem "runPreparedPropRequestsResults" false) (mem "PreparedPropRequest" true) (mem "PropHelper" true) (mem "PropResult" true) (mem "PropStatus" true) (mem "PropFailureKind" true) (mem "PropRequest" true) (mem "filterProps" false) (mem "filterPropsByName" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false) (mem "propResultEngine" false) (mem "propResultSeed" false) (mem "propResultCases" false) (mem "propResultFailureKind" false) (mem "propSeedValue" false))))
 (DUse false (UseGroup ("tools" "prop_helpers") ((mem "PropHelpers" true) (mem "propHelpersForPlans" false))))
 (DUse false (UseGroup ("tools" "eval_props") ((mem "emitEvalPropRows" false) (mem "decodeEvalPropRows" false) (mem "propResultJson" false) (mem "propFailureKindJson" false) (mem "startEvalPropWorker" false) (mem "takeEvalPropBootstrap" false))))
 (DUse false (UseGroup ("tools" "probe_transcript") ((mem "firstNonEmptyLine" false))))
 (DUse false (UseGroup ("tools" "test_pins") ((mem "PinIndex" false) (mem "PinKind" true) (mem "TestExpectedFailure" true) (mem "TestPin" false) (mem "buildPinIndex" false) (mem "pinFromIndex" false) (mem "validatePinNames" false))))
 (DUse false (UseGroup ("tools" "test_pins_io") ((mem "loadPinContext" false))))
-(DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "GradedTest" false) (mem "gradeProps" false) (mem "gradeTests" false) (mem "gradedPropPassed" false) (mem "gradedTestPassed" false) (mem "gradedPropRaw" false) (mem "gradedTestRaw" false) (mem "gradedPropVerdict" false) (mem "gradedTestVerdict" false) (mem "knownRedCountProps" false) (mem "knownRedCountTests" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "gradedTestStatus" false) (mem "gradedTestRawStatus" false) (mem "gradedTestIssue" false) (mem "gradedTestPinDetail" false))))
+(DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "GradedTest" false) (mem "gradeProps" false) (mem "gradeTests" false) (mem "gradedPropPassed" false) (mem "gradedTestPassed" false) (mem "gradedPropRaw" false) (mem "gradedTestRaw" false) (mem "knownRedCountProps" false) (mem "knownRedCountTests" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "gradedTestStatus" false) (mem "gradedTestRawStatus" false) (mem "gradedTestIssue" false) (mem "gradedTestPinDetail" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "exprLine" false) (mem "runOneTestEnv" false) (mem "hasTests" false) (mem "uncapableExternsEnv" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeLocated" false) (mem "frontEnd" false) (mem "FrontInput" true) (mem "FrontOutput" true) (mem "FrontPolicy" true) (mem "FrontProgram" true) (mem "ChainSteps" true) (mem "noStdlibExports" false) (mem "chainKeyOf" false) (mem "graphIdOf" false) (mem "GraphId" true) (mem "desugaredModPairs" false) (mem "mkDiag" false) (mem "Severity" true) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))

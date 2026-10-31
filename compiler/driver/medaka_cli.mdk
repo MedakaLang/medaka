@@ -35,7 +35,6 @@ import tools.gate_cmd.{gateHelpText, runGateCmd}
 import tools.interface_cmd.{interfaceHelpText, runInterfaceCmd}
 import tools.new_cmd.{newProject}
 import driver.build_cmd.{
-  BuildReport,
   BuildTarget(..),
   ppBuildReport,
   runBuild,
@@ -62,10 +61,8 @@ import support.util.{
   splitNl,
   startsWith,
   endsWith,
-  anyList,
   filterList,
   contains,
-  sortUniqS,
   listLen,
   schemeLineName,
   stringTrim,
@@ -111,21 +108,16 @@ import args.{
   flag,
   flagValue,
   lastValue,
-  flagValues,
   unknownFlagMessage,
   usageExitCode,
   withStrictDash,
 }
 import frontend.ast.{
-  letBindName, Decl(..), ExternDecl(..), Expr(..), Loc(..), Pat, LetBind(..),
-  EvTable, EvId
+  letBindName, Decl(..), ExternDecl(..), Expr(..), Loc(..), LetBind(..)
 }
 import frontend.parser.{
   parseWithPositions,
-  parseWithPositionsLocated,
   parseResult,
-  parseLocatedResult,
-  Positions,
 }
 import frontend.lexer.{tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
@@ -142,7 +134,6 @@ import driver.loader.{
   dropPathTriple,
   modIdToPath,
   findProjectRoot,
-  findProjectRootOrSelf,
   entrySearchRoots,
   projectTrustedMods,
   stdlibOwnership,
@@ -164,13 +155,10 @@ import driver.diagnostics.{
   FrontInput(..),
   FrontPolicy(..),
   FrontOutput(..),
-  ppDiagCli,
   ppDiagCliSrc,
   ppDiagCliLines,
-  renderTcDiags,
   ppDiagBuckets,
   stdlibExportsReader,
-  diagOfResError,
   diagOfTypeError,
   relDiagPath,
   srcLinesArr,
@@ -179,23 +167,15 @@ import driver.diagnostics.{
   diagIdIsSyntax,
   Severity(..),
   Severity(..),
-  cjPosition,
-  cjRange,
-  cjRangeOfLoc,
-  cjDiagnostic,
-  cjFileEntry,
   cjAllToJson,
   flushRunEnvelope,
   pendingStaleNotice,
   pendingPreludeNotices,
   readDiagSrc,
-  optField,
-  cjFixJson,
   mkDiag,
   checkJsonFileParts,
   CheckJson(..),
   ppCheckJson,
-  cjFoldIntoFile,
   readFileSafe,
   diagIsError,
   diagIsWarn,
@@ -205,7 +185,6 @@ import driver.diagnostics.{
   renderTripleWarnings,
   residualOrGeneric,
   coherenceWarnCode,
-  runBuildWarnCodes,
   isCoherenceWarn,
   mainShapeWarnings,
   mainEntryError,
@@ -241,8 +220,6 @@ import eval.eval.{
   progArgsRef,
 }
 import tools.test_cmd.{
-  runTest,
-  runTestReport,
   runTestGradedReport,
   filterMatchedNothing,
   testHelpText,
@@ -251,8 +228,6 @@ import tools.test_cmd.{
   parseTestCasesFlag,
   parseTestIntFlag,
   runTestOne,
-  cliTestReportOk,
-  cliTestReportJson,
   cliGradedTestReportOk,
   cliGradedTestReportJson,
   checkTestMdkRoster,
@@ -276,39 +251,16 @@ import tools.doc.{
   rebucketLibraryImpls,
 }
 import tools.lint.{
-  allRules,
-  lintProgram,
   StdlibIndex,
   StdlibIndexError(..),
   indexForRun,
-  applySuppressions,
-  applySuppressionsMulti,
-  applySuppressionsDirs,
-  applySuppressionsMultiDirs,
-  collectDirectives,
-  findingToDiag,
-  Finding,
-  Directive,
-  applyFixes,
   allRuleNames,
-  applyFindingFilters,
-  applyFindingDeny,
-  isFindingError,
-  lintFileDiagTriple,
   splitLintNames,
 }
 import tools.lint_cache.{storeEntries}
 import tools.lint_baseline.{
   LintBaseline,
   readLintBaseline,
-  baselineKeyOf,
-  baselineViolations,
-  baselineViolationLine,
-  applyBaselineToFindings,
-  applyBaselineToDiags,
-  baselineDiagViolations,
-  diagCodeOf,
-  findingRuleOf,
   renderLintBaseline,
 }
 import tools.codemod.{

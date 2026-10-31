@@ -13,7 +13,7 @@ import ir.core_ir_sexp_parse.{parseCProgram}
 import ir.extern_uses.{collectExternUses}
 import ir.extern_types.{ExternUse(..), ExternUseKind(..)}
 import support.ordmap.{omKeys, omLookup}
-import test.{Expectation, expectAll, expectEach, expectEqual}
+import test.{expectAll, expectEach, expectEqual}
 
 lowered : String -> CProgram
 lowered src =

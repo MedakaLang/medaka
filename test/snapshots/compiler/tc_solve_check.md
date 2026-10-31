@@ -268,7 +268,7 @@ import support.util.{
   lenKey,
   listLen,
 }
-import list.{head, indexed, reverse}
+import list.{indexed, reverse}
 import string.{join}
 import types.registry.{regKeyOfTab, regKeyRender}
 import types.superclass.{superClosure}
@@ -3511,7 +3511,7 @@ inferredPredicateSlotIdTag aid bid cid id
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omDelete" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "lenKey" false) (mem "listLen" false))))
-(DUse false (UseGroup ("list") ((mem "head" false) (mem "indexed" false) (mem "reverse" false))))
+(DUse false (UseGroup ("list") ((mem "indexed" false) (mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false) (mem "regKeyRender" false))))
 (DUse false (UseGroup ("types" "superclass") ((mem "superClosure" false))))
@@ -3891,7 +3891,7 @@ inferredPredicateSlotIdTag aid bid cid id
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omDelete" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "lenKey" false) (mem "listLen" false))))
-(DUse false (UseGroup ("list") ((mem "head" false) (mem "indexed" false) (mem "reverse" false))))
+(DUse false (UseGroup ("list") ((mem "indexed" false) (mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false) (mem "regKeyRender" false))))
 (DUse false (UseGroup ("types" "superclass") ((mem "superClosure" false))))

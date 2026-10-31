@@ -186,7 +186,6 @@ import types.extern_source.{ExternBindingKind(..)}
 import backend.extern_requirements.{ExternRequirements, requirementFacts}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{
-  hostRows,
   hostSymbol,
   isWildPat,
   Lit(..),
@@ -197,8 +196,6 @@ import frontend.ast.{
   BinderId(..),
   RecPatField(..),
   noDeclLoc,
-  ifaceIdMatches,
-  isFixedWidthHead,
   fixedWidthMask,
   isU64Head,
   isFixedIntHead,
@@ -321,7 +318,6 @@ import backend.trmc_analysis.{
   bindName,
   bindNames,
   patVars,
-  patVarsList,
   patVarNames,
   isCtorTail,
   isSelfSatApp,
@@ -329,9 +325,6 @@ import backend.trmc_analysis.{
   ctorTailName,
   ctorTailLeadFields,
   ctorTailSelfIdx,
-  splitLastF,
-  selfFree,
-  mentionsSelfMethod,
   DispGroup(..),
   dispRootOf,
   dispMembersOf,
@@ -341,7 +334,7 @@ import backend.trmc_analysis.{
   clauseArityOf,
   lastStmtExpr,
 }
-import types.private_mangle.{hashName, injectiveIdent}
+import types.private_mangle.{hashName}
 import types.route_key.{numIntWord}
 import backend.impl_groups.{ImplClauseGroup(..)}
 import backend.emit_plan.{
@@ -352,7 +345,6 @@ import backend.emit_plan.{
 }
 import list.{zip}
 import backend.emit_support.{
-  bindEagerReach,
   bindNameMap,
   guardVars,
   ftPrefix,

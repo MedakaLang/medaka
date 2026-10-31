@@ -39,12 +39,10 @@ import types.tc_elab.{grantWholeDomain}
 import types.program_facts.{emptyFacts}
 import ir.core_ir_lower.{
   ctorFieldTypeNames,
-  declaredRecordFieldOrders,
   lowerProgramEmitWith,
 }
 import backend.extern_catalog.{
   RuntimeExternDomain(..),
-  ExternRow,
   WasmFamily(..),
   WasmUse(..),
   catalogRow,

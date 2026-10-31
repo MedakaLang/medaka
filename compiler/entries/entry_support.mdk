@@ -16,7 +16,7 @@ import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- These are `medaka run` scripts — NOT compiled into the `medaka` binary and NOT
 -- in the emitter seed graph — so this module may freely import the whole compiler.
 
-import frontend.ast.{Decl(..), Expr(..), DoStmt(..), LetBind(..), Loc(..), EvId}
+import frontend.ast.{Decl(..), Expr(..), DoStmt(..), LetBind(..), Loc(..)}
 import types.publish.{CheckedProgram(..), TcReport(..)}
 import types.program_facts.{
   ProgramFacts, factsOfChecked, withCheckedExternSources, factsWithEvidence
@@ -90,7 +90,6 @@ import driver.loader.{
 import types.private_mangle.{mangleUnitsEv}
 import driver.main_autoprint.{
   valueMainCandidate,
-  executedTrees,
   executedFromReport,
   factsForExecutedTrees,
   asyncMainShapeError,

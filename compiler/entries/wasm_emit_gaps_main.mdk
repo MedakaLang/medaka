@@ -46,8 +46,6 @@ import types.typecheck.{
 import types.tc_types.{DriveInputs(..)}
 import ir.core_ir_lower.{
   lowerProgramEmitWith,
-  methodIfaceTable,
-  declaredRecordFieldOrders,
 }
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{factsOfElabSources, factsWithEvidence}

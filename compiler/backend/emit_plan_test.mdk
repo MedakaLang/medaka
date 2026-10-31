@@ -1,6 +1,6 @@
 import backend.impl_groups.{ImplClauseGroup}
 import backend.wasm_demand.{JsImport(..)}
-import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
+import backend.trmc_analysis.{isTrmcFn, isTrmcImpl}
 import backend.extern_catalog.{RuntimeExternDomain(..)}
 -- Sibling test for `compiler/backend/emit_plan.mdk` ([P-TEST-SIBLING]).
 --

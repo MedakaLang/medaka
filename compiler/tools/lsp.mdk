@@ -96,7 +96,6 @@ import frontend.parser.{
   parseResult,
   parseLocatedResult,
   parseErrorDiagnostic,
-  parseWithPositions,
   parseWithPositionsOpt,
   positionsDecls,
   Positions,
@@ -109,7 +108,7 @@ import frontend.parser.{
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import support.char.{isIdentChar}
-import support.util.{maxI, utf8Len, joinWith, startsWith, contains, allList}
+import support.util.{utf8Len, startsWith, contains, allList}
 import string.{stripCR, toInt}
 import regex.{Regex, Match, mustCompile, escape, findAll, find}
 import frontend.desugar.{desugar}
@@ -118,7 +117,6 @@ import types.publish.{
   PubScheme(..),
   PartialAnalysis(..),
   TcReport(..),
-  pubSchemes,
   ppPubScheme,
   publishedEntrySchemes,
 }
@@ -140,9 +138,6 @@ import frontend.ast.{
   Loc(..),
   Variant,
   ConPayload(..),
-  Field,
-  IfaceMethod,
-  ImplMethod,
   LetBind,
   UsePath(..),
 }

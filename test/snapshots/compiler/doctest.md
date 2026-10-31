@@ -22,7 +22,7 @@ stages=DESUGAR,MARK
 -- compiler/frontend/lexer.mdk (`collectComments`), the run drivers (single/multi) from
 -- compiler/tools/test_cmd.mdk.
 
-import frontend.lexer.{Comment, collectComments, commentLine, commentText}
+import frontend.lexer.{Comment, commentLine, commentText}
 import frontend.ast.{Decl(..)}
 import frontend.parser.{parseLocatedResult, parseErrorMessage}
 import frontend.desugar.{desugar, moduleAliases, qualifyAliasRefsWith}
@@ -525,7 +525,7 @@ isUse : Decl -> Bool
 isUse (DUse _ _ _) = True
 isUse _ = False
 # DESUGAR
-(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocatedResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "moduleAliases" false) (mem "qualifyAliasRefsWith" false))))
@@ -679,7 +679,7 @@ isUse _ = False
 (DFunDef false "isUse" ((PCon "DUse" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isUse" (PWild) (EVar "False"))
 # MARK
-(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocatedResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "moduleAliases" false) (mem "qualifyAliasRefsWith" false))))
