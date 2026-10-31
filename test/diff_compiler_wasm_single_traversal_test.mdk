@@ -555,6 +555,43 @@ runJudges dir =
                 ("\{route}/\{name}", valueRow dir route row))
               valueCases)
           ["raw", "typed"]),
+      valueRow
+        dir
+        "raw"
+        (ValueCase
+          "as-lambda"
+          """
+f x = x + 1
+main =
+  let (g@f) = x => f
+  g 0 41
+"""
+          "42"),
+      valueRow
+        dir
+        "raw"
+        (ValueCase
+          "plain-lambda"
+          """
+f x = x + 1
+main =
+  let g = x => f
+  g 0 41
+"""
+          "42"),
+      valueRow dir "raw" (ValueCase "unrelated" "main = 42" "42"),
+      valueRow
+        dir
+        "raw"
+        (ValueCase
+          "as-lambda-again"
+          """
+f x = x + 1
+main =
+  let (g@f) = x => f
+  g 0 41
+"""
+          "42"),
       baseline dir,
       expectEach
         (map (route => (route, slotLifetimeRow dir route)) ["raw", "typed"]),

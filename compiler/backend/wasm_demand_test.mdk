@@ -1,29 +1,31 @@
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.wasm_demand.{
-  WasmDemandPlan, WasmDemand(..), wasmTypeContext, returnStamp, cexprStamp, Env,
-  EnvRef(..), envEmpty, envBind, envBindUnstamped, envExtendUnstamped,
-  envRestrict, envLookup, envHas
+  WasmDemandPlan, WasmDemand(..), censusWasmDemand, wasmTypeContext,
+  returnStamp, cexprStamp, Env, EnvRef(..), envEmpty, envBind, envBindUnstamped,
+  envExtendUnstamped, envRestrict, envLookup, envHas, selectedFallthroughSymbols
 }
 import frontend.ast.{BinderId(..)}
 import backend.emit_plan.{EmitPlan, prepareWasmPlan}
 import backend.emit_target.{Backend(..)}
 import backend.extern_catalog.{RuntimeExternDomain(..), WasmUse(..)}
 import backend.core_validate.{validateForEmission, coreDefectMessage}
-import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInput}
+import backend.wasm_emit.{emitProgram, emitProgramGaps, makeWasmEmitInput}
 import frontend.parser.{parse}
-import frontend.ast.{Addr(..)}
+import frontend.ast.{Addr(..), Lit(..)}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
 import types.program_facts.{emptyFacts}
 import types.runtime_types.{RuntimeType(..)}
-import ir.core_ir.{CProgram, CExpr(..)}
+import ir.core_ir.{CProgram, CExpr(..), CallSite(..), CallMode(..)}
 import ir.core_ir_lower.{lowerProgramEmitWith}
 import ir.extern_lower.{walkExternVars, externVar, implicitRuntimeFacts}
-import support.ordmap.{omEmpty, omFromNames, omKeys}
+import ir.extern_types.{ExternDeclFact(..)}
+import types.extern_source.{ExternBindingKind(..)}
+import support.ordmap.{omEmpty, omFromNames, omKeys, omFromPairs, omInsert}
 import support.util.{joinNl}
 import test.{
   Expectation, expectAll, expectEach, expectEqual, expectErrContains,
-  expectFalse
+  expectFalse, expectTextContainsAll, fail
 }
 import types.capability_manifest.{
   EntryKey(..),
@@ -35,7 +37,66 @@ import types.capability_manifest.{
 }
 import types.effect_domain.{Param(..)}
 import frontend.ast.{TyConOrigin(..)}
-import ir.core_ir.{CProgram(..)}
+import ir.core_ir.{CProgram(..), CBind(..), CClause(..), synthBind}
+
+test "selected family projection" =
+  let sentinel =
+    optionOrPanic
+      "missing fallthrough declaration"
+      (find (f => f.declaredName == "__fallthrough__") implicitRuntimeFacts)
+  let ordinary =
+    optionOrPanic
+      "missing ordinary declaration"
+      (find (f => f.declaredName == "intToString") implicitRuntimeFacts)
+  let first = { sentinel | symbol = "aliasA" }
+  let second = { sentinel | symbol = "aliasB" }
+  let unused = { sentinel | symbol = "unusedAlias" }
+  let foreign = { sentinel |
+    symbol = "foreignAlias",
+    bindingKind = ForeignBinding,
+    hostBindings = [("js", "foreign")],
+  }
+  let neighbor = { ordinary | symbol = "ordinaryAlias" }
+  let (CProgram _ ca ct impls mc facts) = snd (prepared "main = ()")
+  let cp =
+    CProgram
+      [
+        synthBind "main" [
+          CClause [] (CTuple (map externVar [first, second, foreign, neighbor])),
+        ],
+      ]
+      ca
+      ct
+      impls
+      mc
+      { facts |
+        factExterns =
+          omFromPairs
+            (map
+              (f => (f.symbol, f))
+              [first, second, unused, foreign, neighbor])
+            omEmpty,
+      }
+  let (plan, _) = prepareWasmPlan PreludeFreeRuntime omEmpty cp
+  let selected =
+    selectedFallthroughSymbols
+      plan.externRequirements
+      (physical plan).catalogFamilies
+  expectAll [
+    expectEqual
+      ["aliasA", "aliasB", "foreignAlias", "ordinaryAlias"]
+      (map (row => row.declaration.symbol) plan.externRequirements.rows),
+    expectEqual ["aliasA", "aliasB"] (omKeys selected),
+    expectEqual
+      ["__fallthrough__", "__fallthrough__", "intToString"]
+      (map fst (physical plan).catalogFamilies),
+    expectEqual
+      []
+      (omKeys
+        (selectedFallthroughSymbols
+          { plan.externRequirements | rows = [] }
+          (physical plan).catalogFamilies)),
+  ]
 
 test "declared Clock remains published without adding physical Wasm demand" =
   let manifest = CapabilityManifest {
@@ -374,6 +435,66 @@ test "gateway refuses required helper, type and catalog disposition mutations" =
     expectErrContains
       "wasm-catalog-disposition-mismatch"
       (refusal "main = (Ref 42).value" (d => { d | catalogFamilies = [] })),
+  ]
+
+test "function value demand validates exact keys and survives census" =
+  let src = "f x = x\nmain = (f, 1)"
+  let d = demandOf src
+  expectAll [
+    expectEqual ["f"] (omKeys d.fnValues),
+    expectEqual (omKeys d.fnValues) (omKeys (censusWasmDemand d).fnValues),
+    expectErrContains
+      "wasm-function-value-demand-mismatch"
+      (refusal src (p => { p | fnValues = omEmpty })),
+    expectErrContains
+      "wasm-function-value-demand-mismatch"
+      (refusal src (p => { p | fnValues = omInsert "bogus" () p.fnValues })),
+  ]
+
+test "function value plans follow their own prepared programs" =
+  let (p, cp) = prepared "f x = x\nmain = (f, 1)"
+  let (u, _) = prepared "g x = x\nmain = (g, 2)"
+  let (pAgain, _) = prepared "f x = x\nmain = (f, 1)"
+  let defects =
+    validateForEmission WasmBackend PreludeFreeRuntime RawUnchecked u cp
+  expectAll [
+    expectEqual ["f"] (omKeys (physical p).fnValues),
+    expectEqual ["g"] (omKeys (physical u).fnValues),
+    expectEqual
+      (omKeys (physical p).fnValues)
+      (omKeys (physical pAgain).fnValues),
+    expectTextContainsAll
+      ["wasm-function-value-demand-mismatch"]
+      (joinNl (map coreDefectMessage defects.defects)),
+  ]
+
+test "index operand function values belong to the emitted plan" =
+  let (_, CProgram bs ca ct impls ms fs) = prepared "f x = x + 1\nmain = 0"
+  let ix = CIndex (CArray [CVar "f" AGlobal]) (CLit (LInt 0))
+  let body = CApp ix [CLit (LInt 41)] (CallSite CallDynamic False)
+  let cp =
+    CProgram
+      (map
+        (b => match b
+          CBind "main" [CClause pats _] loc bid =>
+            CBind "main" [CClause pats body] loc bid
+          _ => b)
+        bs)
+      ca
+      ct
+      impls
+      ms
+      fs
+  let (plan, same) = prepareWasmPlan PreludeFreeRuntime omEmpty cp
+  expectAll [
+    expectEqual ["f"] (omKeys (physical plan).fnValues),
+    expectEqual ["f"] (omKeys (censusWasmDemand (physical plan)).fnValues),
+    match (emitProgram
+      (makeWasmEmitInput RawUnchecked PreludeFreeRuntime [])
+      plan
+      same)
+      Ok wat => expectTextContainsAll ["(func $f.gen.wrapper.66.0"] wat
+      Err _ => fail "index program refused",
   ]
 
 test "paired helper/type/import omissions cannot erase unchanged Core prerequisites" = expectAll
