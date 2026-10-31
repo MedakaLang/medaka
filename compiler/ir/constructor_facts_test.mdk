@@ -7,7 +7,7 @@ import frontend.runtime_constructors.{
   RuntimeCtorId(..), namedRuntimeCtor, runtimeCtorFact
 }
 import support.ordmap.{omInsert}
-import test.{expectEach, expectEqual}
+import test.{expectEach, expectEqual, expectFindings}
 
 program : List (String, Int) -> List (String, String) -> CProgram
 program ars tys = CProgram [] ars tys [] [] noDeclFacts
@@ -189,3 +189,51 @@ test "each carried projection is validated independently" =
             (validateConstructorFacts cp { facts | typeOrder = ["Other", "T"] }),
         ),
       ])
+
+test "qualified declaration owners do not claim bare runtime roster order" =
+  let ars = [
+    ("Some", 1),
+    ("None", 0),
+    ("Ok", 1),
+    ("Err", 1),
+    ("Lt", 0),
+    ("Eq", 0),
+    ("Gt", 0),
+  ]
+  let rows = [
+    ("None", "__user__.Option"),
+    ("Some", "__user__.Option"),
+    ("Err", "__user__.Result"),
+    ("Ok", "__user__.Result"),
+    ("Gt", "__user__.Ordering"),
+    ("Eq", "__user__.Ordering"),
+    ("Lt", "__user__.Ordering"),
+  ]
+  let cp = program ars rows
+  let bare = program [("Some", 1)] [("Some", "User")]
+  let wrongArity =
+    program
+      [("Some", 2), ("None", 0)]
+      [("Some", "__user__.Option"), ("None", "__user__.Option")]
+  expectEach [
+    (
+      "qualified reverse order",
+      expectEqual [] (validateConstructorFacts cp (planConstructors cp)),
+    ),
+    (
+      "declared ordinal stays logical",
+      expectEqual (Some 0) (declaredCtorOrdinal (planConstructors cp) "None"),
+    ),
+    (
+      "bare wrong owner",
+      expectFindings
+        "runtime owner"
+        (Ok (validateConstructorFacts bare (planConstructors bare))),
+    ),
+    (
+      "physical runtime arity",
+      expectFindings
+        "runtime arity"
+        (Ok (validateConstructorFacts wrongArity (planConstructors wrongArity))),
+    ),
+  ]

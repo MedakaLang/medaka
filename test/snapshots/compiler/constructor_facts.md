@@ -1,8 +1,9 @@
 # META
-source_lines=184
+source_lines=188
 stages=DESUGAR,MARK
 # SOURCE
 import list.{findMap}
+import string as S
 import ir.core_ir.{CProgram(..)}
 import frontend.runtime_constructors.{
   RuntimeOwner(..), RuntimeCtorId(..), namedRuntimeCtor, runtimeCtorFact,
@@ -132,12 +133,15 @@ validateRuntimeRoster facts ty = match runtimeOwner ty
     else
       ["constructor-fact: runtime roster disagrees for " ++ ty]
 
+-- Mangling qualifies declared owners while exempt runtime constructor words stay
+-- bare. Only a bare owner claims the runtime roster; physical tags stay reserved.
 validateRuntimeOwner : (String, String) -> List String
 validateRuntimeOwner (name, ty) = match namedRuntimeCtor name
   Some RuntimeCons => []
   Some RuntimeNil => []
   Some id =>
-    if runtimeOwnerWord (runtimeCtorFact id).owner == Some ty then
+    if runtimeOwnerWord (runtimeCtorFact id).owner == Some ty
+      || S.contains "." ty then
       []
     else
       ["constructor-fact: runtime owner disagrees for " ++ name]
@@ -188,6 +192,7 @@ validateRosterPositions facts (name :: rest) position seen =
   (next, bad ++ defects)
 # DESUGAR
 (DUse false (UseGroup ("list") ((mem "findMap" false))))
+(DUse false (UseAlias ("string") "S"))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true))))
 (DUse false (UseGroup ("frontend" "runtime_constructors") ((mem "RuntimeOwner" true) (mem "RuntimeCtorId" true) (mem "namedRuntimeCtor" false) (mem "runtimeCtorFact" false) (mem "runtimeRoster" false) (mem "runtimeCtorName" false) (mem "runtimeOwnerWord" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omFromPairs" false) (mem "omMapValues" false))))
@@ -214,7 +219,7 @@ validateRosterPositions facts (name :: rest) position seen =
 (DTypeSig false "validateRuntimeRoster" (TyFun (TyCon "ConstructorFacts") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "validateRuntimeRoster" ((PVar "facts") (PVar "ty")) (EMatch (EApp (EVar "runtimeOwner") (EVar "ty")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "owner")) () (EBlock (DoLet false false (PVar "roster") (EApp (EApp (EVar "filterMap") (EVar "runtimeCtorName")) (EApp (EVar "runtimeRoster") (EVar "owner")))) (DoExpr (EIf (EBinOp "==" (EApp (EApp (EVar "declaredTypeCtors") (EVar "facts")) (EVar "ty")) (EVar "roster")) (EListLit) (EListLit (EBinOp "++" (ELit (LString "constructor-fact: runtime roster disagrees for ")) (EVar "ty")))))))))
 (DTypeSig false "validateRuntimeOwner" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "validateRuntimeOwner" ((PTuple (PVar "name") (PVar "ty"))) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PCon "RuntimeCons")) () (EListLit)) (arm (PCon "Some" (PCon "RuntimeNil")) () (EListLit)) (arm (PCon "Some" (PVar "id")) () (EIf (EBinOp "==" (EApp (EVar "runtimeOwnerWord") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner")) (EApp (EVar "Some") (EVar "ty"))) (EListLit) (EListLit (EBinOp "++" (ELit (LString "constructor-fact: runtime owner disagrees for ")) (EVar "name"))))) (arm (PCon "None") () (EMatch (EApp (EVar "runtimeOwner") (EVar "ty")) (arm (PCon "Some" PWild) () (EListLit (EBinOp "++" (ELit (LString "constructor-fact: unknown runtime constructor ")) (EVar "name")))) (arm (PCon "None") () (EListLit))))))
+(DFunDef false "validateRuntimeOwner" ((PTuple (PVar "name") (PVar "ty"))) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PCon "RuntimeCons")) () (EListLit)) (arm (PCon "Some" (PCon "RuntimeNil")) () (EListLit)) (arm (PCon "Some" (PVar "id")) () (EIf (EBinOp "||" (EBinOp "==" (EApp (EVar "runtimeOwnerWord") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner")) (EApp (EVar "Some") (EVar "ty"))) (EApp (EApp (EVar "S.contains") (ELit (LString "."))) (EVar "ty"))) (EListLit) (EListLit (EBinOp "++" (ELit (LString "constructor-fact: runtime owner disagrees for ")) (EVar "name"))))) (arm (PCon "None") () (EMatch (EApp (EVar "runtimeOwner") (EVar "ty")) (arm (PCon "Some" PWild) () (EListLit (EBinOp "++" (ELit (LString "constructor-fact: unknown runtime constructor ")) (EVar "name")))) (arm (PCon "None") () (EListLit))))))
 (DTypeSig false "validateRuntimeArity" (TyFun (TyCon "ConstructorFacts") (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "validateRuntimeArity" ((PVar "facts") (PTuple (PVar "name") (PVar "arity"))) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "id")) () (EBlock (DoLet false false (PVar "builtin") (EMatch (EVar "id") (arm (PCon "RuntimeCons") () (EBinOp "==" (EApp (EApp (EVar "declaredCtorOwner") (EVar "facts")) (EVar "name")) (EApp (EVar "Some") (ELit (LString "List"))))) (arm (PCon "RuntimeNil") () (EBinOp "==" (EApp (EApp (EVar "declaredCtorOwner") (EVar "facts")) (EVar "name")) (EApp (EVar "Some") (ELit (LString "List"))))) (arm PWild () (EVar "True")))) (DoExpr (EIf (EBinOp "&&" (EVar "builtin") (EBinOp "/=" (EVar "arity") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "arity"))) (EListLit (EBinOp "++" (ELit (LString "constructor-fact: runtime arity disagrees for ")) (EVar "name"))) (EListLit)))))))
 (DTypeSig false "validateOwnerPositions" (TyFun (TyCon "ConstructorFacts") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -225,6 +230,7 @@ validateRosterPositions facts (name :: rest) position seen =
 (DFunDef false "validateRosterPositions" ((PVar "facts") (PCons (PVar "name") (PVar "rest")) (PVar "position") (PVar "seen")) (EBlock (DoLet false false (PVar "first") (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "seen")))) (DoLet false false (PVar "bad") (EIf (EBinOp "&&" (EVar "first") (EBinOp "/=" (EApp (EApp (EVar "declaredCtorOrdinal") (EVar "facts")) (EVar "name")) (EApp (EVar "Some") (EVar "position")))) (EListLit (EBinOp "++" (ELit (LString "constructor-fact: ambiguous owner ordinal for ")) (EVar "name"))) (EListLit))) (DoLet false false (PTuple (PVar "next") (PVar "defects")) (EApp (EApp (EApp (EApp (EVar "validateRosterPositions") (EVar "facts")) (EVar "rest")) (EBinOp "+" (EVar "position") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ELit LUnit)) (EVar "seen")))) (DoExpr (ETuple (EVar "next") (EBinOp "++" (EVar "bad") (EVar "defects"))))))
 # MARK
 (DUse false (UseGroup ("list") ((mem "findMap" false))))
+(DUse false (UseAlias ("string") "S"))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true))))
 (DUse false (UseGroup ("frontend" "runtime_constructors") ((mem "RuntimeOwner" true) (mem "RuntimeCtorId" true) (mem "namedRuntimeCtor" false) (mem "runtimeCtorFact" false) (mem "runtimeRoster" false) (mem "runtimeCtorName" false) (mem "runtimeOwnerWord" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omFromPairs" false) (mem "omMapValues" false))))
@@ -251,7 +257,7 @@ validateRosterPositions facts (name :: rest) position seen =
 (DTypeSig false "validateRuntimeRoster" (TyFun (TyCon "ConstructorFacts") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "validateRuntimeRoster" ((PVar "facts") (PVar "ty")) (EMatch (EApp (EVar "runtimeOwner") (EVar "ty")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "owner")) () (EBlock (DoLet false false (PVar "roster") (EApp (EApp (EMethodRef "filterMap") (EVar "runtimeCtorName")) (EApp (EVar "runtimeRoster") (EVar "owner")))) (DoExpr (EIf (EBinOp "==" (EApp (EApp (EVar "declaredTypeCtors") (EVar "facts")) (EVar "ty")) (EVar "roster")) (EListLit) (EListLit (EBinOp "++" (ELit (LString "constructor-fact: runtime roster disagrees for ")) (EVar "ty")))))))))
 (DTypeSig false "validateRuntimeOwner" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "validateRuntimeOwner" ((PTuple (PVar "name") (PVar "ty"))) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PCon "RuntimeCons")) () (EListLit)) (arm (PCon "Some" (PCon "RuntimeNil")) () (EListLit)) (arm (PCon "Some" (PVar "id")) () (EIf (EBinOp "==" (EApp (EVar "runtimeOwnerWord") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner")) (EApp (EVar "Some") (EVar "ty"))) (EListLit) (EListLit (EBinOp "++" (ELit (LString "constructor-fact: runtime owner disagrees for ")) (EVar "name"))))) (arm (PCon "None") () (EMatch (EApp (EVar "runtimeOwner") (EVar "ty")) (arm (PCon "Some" PWild) () (EListLit (EBinOp "++" (ELit (LString "constructor-fact: unknown runtime constructor ")) (EVar "name")))) (arm (PCon "None") () (EListLit))))))
+(DFunDef false "validateRuntimeOwner" ((PTuple (PVar "name") (PVar "ty"))) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PCon "RuntimeCons")) () (EListLit)) (arm (PCon "Some" (PCon "RuntimeNil")) () (EListLit)) (arm (PCon "Some" (PVar "id")) () (EIf (EBinOp "||" (EBinOp "==" (EApp (EVar "runtimeOwnerWord") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner")) (EApp (EVar "Some") (EVar "ty"))) (EApp (EApp (EVar "S.contains") (ELit (LString "."))) (EVar "ty"))) (EListLit) (EListLit (EBinOp "++" (ELit (LString "constructor-fact: runtime owner disagrees for ")) (EVar "name"))))) (arm (PCon "None") () (EMatch (EApp (EVar "runtimeOwner") (EVar "ty")) (arm (PCon "Some" PWild) () (EListLit (EBinOp "++" (ELit (LString "constructor-fact: unknown runtime constructor ")) (EVar "name")))) (arm (PCon "None") () (EListLit))))))
 (DTypeSig false "validateRuntimeArity" (TyFun (TyCon "ConstructorFacts") (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "validateRuntimeArity" ((PVar "facts") (PTuple (PVar "name") (PVar "arity"))) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "id")) () (EBlock (DoLet false false (PVar "builtin") (EMatch (EVar "id") (arm (PCon "RuntimeCons") () (EBinOp "==" (EApp (EApp (EVar "declaredCtorOwner") (EVar "facts")) (EVar "name")) (EApp (EVar "Some") (ELit (LString "List"))))) (arm (PCon "RuntimeNil") () (EBinOp "==" (EApp (EApp (EVar "declaredCtorOwner") (EVar "facts")) (EVar "name")) (EApp (EVar "Some") (ELit (LString "List"))))) (arm PWild () (EVar "True")))) (DoExpr (EIf (EBinOp "&&" (EVar "builtin") (EBinOp "/=" (EVar "arity") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "arity"))) (EListLit (EBinOp "++" (ELit (LString "constructor-fact: runtime arity disagrees for ")) (EVar "name"))) (EListLit)))))))
 (DTypeSig false "validateOwnerPositions" (TyFun (TyCon "ConstructorFacts") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "String"))))))
