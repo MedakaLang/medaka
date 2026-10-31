@@ -12,6 +12,7 @@
 
 import frontend.ast.{
   variantName,
+  letBindName,
   Loc(..),
   UseMember(..),
   UsePath(..),
@@ -426,8 +427,8 @@ public export data ExpNs a = ExpNs {
   nsCarry : UsePath -> ModuleExports -> List a,
 }
 
--- pub DTypeSig/DExtern/DFunDef.  The carriage rule is the only one that adds a
--- SECOND source beside the re-exported bindings themselves: a re-exported
+-- pub DTypeSig/DExtern/DFunDef, and the binders of a pub `let rec` group.  The
+-- carriage rule is the only one that adds a SECOND source beside the re-exported bindings themselves: a re-exported
 -- interface carries its value-bound methods too (`carriedIfaceVals`).
 export
 nsValues : ExpNs String
@@ -438,6 +439,7 @@ nsValues = ExpNs {
       DTypeSig True n _ _ => [n]
       DExtern (ExternDecl { edPub = True, edName = n, ... }) => [n]
       DFunDef True n _ _ _ _ => [n]
+      DLetGroup True binds => map letBindName binds
       _ => [],
   nsCarry = path src => carriedValuesFrom src (reexportBindings path src),
 }
