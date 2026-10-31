@@ -1,5 +1,5 @@
 # META
-source_lines=1049
+source_lines=1053
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -142,6 +142,10 @@ ruleNameUnusedImport = "rule-unused-import"
 export
 ruleNameUnusedParam : String
 ruleNameUnusedParam = "rule-unused-param"
+
+export
+ruleNameUnusedLocal : String
+ruleNameUnusedLocal = "rule-unused-local"
 
 export
 ruleNamePreferAssignOp : String
@@ -1122,6 +1126,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameUnusedImport" () (ELit (LString "rule-unused-import")))
 (DTypeSig true "ruleNameUnusedParam" (TyCon "String"))
 (DFunDef false "ruleNameUnusedParam" () (ELit (LString "rule-unused-param")))
+(DTypeSig true "ruleNameUnusedLocal" (TyCon "String"))
+(DFunDef false "ruleNameUnusedLocal" () (ELit (LString "rule-unused-local")))
 (DTypeSig true "ruleNamePreferAssignOp" (TyCon "String"))
 (DFunDef false "ruleNamePreferAssignOp" () (ELit (LString "rule-prefer-assign-op")))
 (DTypeSig true "ruleNamePromissoryReader" (TyCon "String"))
@@ -1469,6 +1475,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameUnusedImport" () (ELit (LString "rule-unused-import")))
 (DTypeSig true "ruleNameUnusedParam" (TyCon "String"))
 (DFunDef false "ruleNameUnusedParam" () (ELit (LString "rule-unused-param")))
+(DTypeSig true "ruleNameUnusedLocal" (TyCon "String"))
+(DFunDef false "ruleNameUnusedLocal" () (ELit (LString "rule-unused-local")))
 (DTypeSig true "ruleNamePreferAssignOp" (TyCon "String"))
 (DFunDef false "ruleNamePreferAssignOp" () (ELit (LString "rule-prefer-assign-op")))
 (DTypeSig true "ruleNamePromissoryReader" (TyCon "String"))

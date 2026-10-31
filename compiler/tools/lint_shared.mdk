@@ -140,6 +140,10 @@ ruleNameUnusedParam : String
 ruleNameUnusedParam = "rule-unused-param"
 
 export
+ruleNameUnusedLocal : String
+ruleNameUnusedLocal = "rule-unused-local"
+
+export
 ruleNamePreferAssignOp : String
 ruleNamePreferAssignOp = "rule-prefer-assign-op"
 

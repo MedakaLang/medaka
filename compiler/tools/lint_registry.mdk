@@ -42,6 +42,7 @@ import tools.lint_rule_regex_literal as RegexLiteral
 import tools.lint_rule_internal_test_equal_in_true as TestEqualInTrue
 import tools.lint_rule_unused_import as UnusedImport
 import tools.lint_rule_unused_param as UnusedParam
+import tools.lint_rule_unused_local as UnusedLocal
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- The list position is the output order of findings.  Each entry is the `rule`
@@ -72,6 +73,7 @@ allRules = [
   DeadCode.rule,
   UnusedImport.rule,
   UnusedParam.rule,
+  UnusedLocal.rule,
   ConcatToInterp.rule,
   SelfShadowExtern.rule,
   PreferAssignOp.rule,
