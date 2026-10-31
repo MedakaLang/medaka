@@ -271,6 +271,11 @@ inlang-backend-emit-plan-test:
 	./medaka test --native compiler/backend/emit_plan_test.mdk compiler/backend/extern_requirements_test.mdk compiler/backend/wasm_demand_test.mdk
 	./medaka test compiler/backend/global_plan_test.mdk
 
+## The immutable implementation-clause partition consumed by both emitters;
+## no entry imports this data-only sibling.
+inlang-backend-impl-groups-test:
+	./medaka test compiler/backend/impl_groups_test.mdk
+
 ## The built-in wall's derived pin: every profile x every NotProvided catalog
 ## row is refused with the row's reason. Native: each pair spawns `medaka`.
 inlang-tools-target-check-test:

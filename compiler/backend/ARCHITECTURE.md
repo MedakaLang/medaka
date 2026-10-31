@@ -14,6 +14,7 @@ Core IR and the Plan rather than reaching for a mangling module of its own.
 | `core_validate.mdk` | Checks a lowered program must pass before an emitter writes any of it: records, calls, extern coverage, impl symbols, dict tags | `validateExterns`, `validateRecords`, `validateCalls`, `validateForEmission` |
 | `emit_target.mdk` | Backend identity shared by validation, plans and the runtime catalog | `Backend`, `backendName`, `profileColumn` |
 | `emit_plan.mdk` | The per-emission plan: facts about the lowered program both backends read and neither recomputes | `buildEmitPlan`, `buildEmitPlanReached` |
+| `impl_groups.mdk` | Ordered partition of Core implementation clauses by method and key, with indices into the original program list | `groupImplEntries`, `validateImplGroups` |
 | `emit_support.mdk` | Backend-neutral helpers shared by both emitters, the canonical definition | shared emit helpers |
 | `extern_catalog.mdk` | The runtime extern catalog as data: one row per `stdlib/runtime.mdk` extern, naming how each backend lowers it | catalog rows |
 | `trmc_analysis.mdk` | Backend-agnostic tail-recursion-modulo-cons eligibility analysis | `trmcEligible` |
@@ -33,6 +34,10 @@ Core IR and the Plan rather than reaching for a mangling module of its own.
 - **A4** — a fact both emitters need is a field of Core IR or the Plan, checked by `core_validate.mdk`, then transcribed. The two emitters still share named twin functions, pinned in `test/arch_goldens/twins.golden`.
 - **A9** — validators run before either emitter writes text, on every build.
 - **A8** — a new target concern is a new module, as the preamble and reach modules were.
+
+`impl_groups.mdk` is a pure Core consumer leaf. It imports `ir/core_ir` and
+`support/ordmap`/`support/util` only (plus the prelude); it does not import an
+emitter, driver, tools, type inference or `emit_plan`.
 
 ## Physical identity
 
@@ -64,6 +69,7 @@ Each fact has one producer; a carrier moves it; a validator or fixture fails whe
 | Symbol origin (binding and position) | `compiler/support/symbol_origin.mdk` | `SymbolOrigin` inside each `SymbolDefect` | `defectOrigin` located by `compiler/driver/diagnostics.mdk` | `compiler/support/symbol_origin_test.mdk` | the per-emitter origin helpers (`bindingOf`, `placeOf` had three identical bodies) |
 | Leading dictionary count | `leadingDictParams` in `compiler/ir/core_ir.mdk` | clause patterns | every consumer reads the one function | `compiler/ir/core_ir_lower_test.mdk` ("leadingDictParams counts only the leading dict witnesses") | `leadingDictPats`, `wLeadingDictPats`, `isDictParamName`; ratchet "no emitter counts leading dictionary parameters from their spelling" |
 | Runtime constructor facts and declared constructor facts | `runtimeCtorFact` / `runtimeRoster` in `compiler/frontend/runtime_constructors.mdk`; `planConstructors` in `compiler/ir/constructor_facts.mdk` | `constructorFacts` in `EmitPlan` | `validateConstructorFacts` from `core_validate.mdk` before backend output | `runtime_constructors_test.mdk`, `constructor_facts_test.mdk`, `core_validate_test.mdk` | LLVM semantic constructor maps and ordinal derivation; Wasm `WasmCtorIndex` semantic tables and ordinal derivation |
+| Implementation-clause grouping | `groupImplEntries` in `compiler/backend/impl_groups.mdk` | `implGroups` in `EmitPlan` | `validateImplGroups` from `core_validate.mdk` before backend output | `impl_groups_test.mdk`, `core_validate_test.mdk`, emitter route tests | LLVM and Wasm duplicate key/group builders; physical group records and method dispatch buckets remain target-owned |
 | Dispatch and definition arities | `definedArityOf` in `compiler/ir/core_ir_lower.mdk` | `e.arities` of the LLVM emission state | `checkCall` shape check | `compiler/backend/llvm_symbols_test.mdk`, `test/diff_compiler_call_arity_test.mdk` | the LLVM dispatch-graph arity table |
 | Int-helper membership | `plan.censusIntHelpers` / `intHelpers` in `compiler/backend/wasm_demand.mdk` | the Wasm demand plan | `UndefinedReference` from the helper rows of `compiler/backend/wasm_preamble.mdk` | `compiler/backend/wasm_demand_test.mdk` | `noteIntRt` and its `unplanned-wasm-helper: Int` panic |
 | Wasm helper manifest | `helperManifest` in `compiler/backend/wasm_demand.mdk` | `HelperManifest` rows | block text agrees with its row | `compiler/backend/wasm_preamble_test.mdk` ("each helper block's text defines and calls what its manifest row states") | none |
