@@ -4,7 +4,6 @@ ctorArity
 ctorOrdinal
 ctorsOfType
 definedArity
-distinctImplKeys
 emitApp
 emitArrayCreate
 emitBin
@@ -51,7 +50,6 @@ emitVariantUpdate
 entrySuperCount
 foldImplsByMethod
 groupImplsByMethod
-headTagForKey
 hex2
 hexDigit
 implEntryAnswers
@@ -59,6 +57,7 @@ implEntryIfaceWord
 implEntryKey
 implEntrySymTag
 implEntryTag
+indexImplGroupEntries
 isCtor
 isFfiExtern
 isFnBind
@@ -74,6 +73,7 @@ orEmptyEntries
 paramEnv
 ptag
 reservedCtorArity
+resolveImplGroup
 runtimeCtorsOfType
 runtimeName
 sitePacked
