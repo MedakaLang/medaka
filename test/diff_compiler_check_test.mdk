@@ -231,7 +231,7 @@ resolveModulesLeg = Leg {
   pairedWith = None,
   golden = InFixtureDir "expected",
   grade = SortedEqual,
-  fixtures = 19,
+  fixtures = 20,
 }
 
 {- | The import-form matrix: one declaring module, and a consumer module per

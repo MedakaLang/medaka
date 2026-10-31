@@ -3,7 +3,7 @@ visibility.eval.eval	4
 visibility.frontend.ast	6
 visibility.frontend.ast_codec	10
 visibility.frontend.parser	3
-visibility.frontend.visibility	24
+visibility.frontend.visibility	25
 visibility.ir.sexp	5
 visibility.tools.doc	12
 visibility.tools.fmt	2
@@ -14,7 +14,6 @@ visibility.tools.printer	5
 visibility.tools.prop_plan	3
 visibility.tools.refindex	12
 visibility.types.interface_sexp	2
-visibility.types.private_mangle	1
 visibility.types.tc_decls	28
 visibility.types.tc_decls_types	4
 visibility.types.typecheck	4
