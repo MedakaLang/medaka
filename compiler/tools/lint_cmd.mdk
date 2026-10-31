@@ -2,7 +2,7 @@
 --
 -- Everything the verb does once its flags are already parsed: resolving the
 -- target set, the per-file pass (fresh or from the `--cache` shards), the
--- cross-file tier, baseline promotion at application time, and the `--json`
+-- project-rule tier, baseline promotion at application time, and the `--json`
 -- envelope.  `medaka_cli.mdk` keeps `runLintCmd` and the flag/target
 -- assertions because they call `requireArgs`/`optDefault`/`dieMsg`, which are
 -- defined there and shared with the other verbs; importing them here would
@@ -12,21 +12,27 @@
 -- `medaka_cli.mdk` in their `sources`.  `lintHelpText` lives here, with the
 -- `--list-rules`/`--explain` views of the registry.
 --
--- Rule implementations are not here either: the `Rule`/`CrossFileRule` types
+-- Rule implementations are not here either: the `Rule`/`ProjectRule` types
 -- live in `tools/lint_core.mdk`, the rules in the `tools/lint_rule_*` modules
 -- listed by `tools/lint_registry.mdk`, the per-file runner in
 -- `tools/lint_walk.mdk`, the cache format in `tools/lint_cache.mdk`, and the
 -- count baseline in `tools/lint_baseline.mdk`.  This module only sequences them.
 
-import support.util.{anyList, contains, joinNl, joinWith, lookupAssoc}
+import support.util.{
+  anyList,
+  contains,
+  filterList,
+  isSome,
+  joinNl,
+  joinWith,
+  lookupAssoc,
+}
 import support.path.{dirOf}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
 import string as Str
 import json.{Json(..), jArray, jObject, stringify}
 import frontend.ast.{Decl, Loc(..)}
-import frontend.parser.{
-  Positions,
-}
+import frontend.parser.{ParseError, Positions}
 import driver.loader.{
   findProjectRoot,
   findProjectRootOrSelf,
@@ -48,7 +54,7 @@ import support.stage_count.{stageExit}
 import tools.lint.{
   Applicability(..),
   Category(..),
-  CrossFileRule(..),
+  ProjectRule(..),
   Directive,
   Finding,
   Fixability(..),
@@ -57,10 +63,11 @@ import tools.lint.{
   Rule(..),
   RuleMeta(..),
   Scope(..),
+  Summary,
   applicabilityText,
   maxApplicability,
   ruleMetaName,
-  allCrossFileRules,
+  allProjectRules,
   StdlibIndex,
   allRules,
   applyFindingDeny,
@@ -68,9 +75,8 @@ import tools.lint.{
   applySuppressionsDirs,
   applySuppressionsMulti,
   applySuppressionsMultiDirs,
-  crossFileCacheSound,
   factDirectives,
-  factDupOccs,
+  fileSummaries,
   findingToDiag,
   fixPassLimit,
   fixSource,
@@ -80,22 +86,38 @@ import tools.lint.{
   lintFileDiagTriple,
   lintFileDiagTripleParsed,
   lintParseSource,
-  lintProgramFacts,
+  lintProgramRanked,
+  indexKeyFor,
+  rankedIndexRules,
+  splitByIndex,
+  mkFileFacts,
   mkFileFactsAt,
+  mkFileFactsIn,
+  localModStates,
   projectWildMods,
-  crossFileSelected,
+  projectRuleSelected,
+  ranked,
   selectRules,
-  mergeCrossFileIntoTriples,
-  runCrossFileRules,
-  runCrossFileRulesFromOccs,
-  stdlibFingerprint,
+  mergeProjectIntoTriples,
+  runProjectRules,
 }
+import tools.lint_core.{
+  recordingStdlibIndex,
+  withStdlibLocalMods,
+  localModOfQuestion,
+  stdlibRecorded,
+  stdlibAnswersHold,
+}
+import tools.lint_index.{Answer(..)}
 import tools.lint_cache.{
   LintEntry(..),
+  ShardLoad(..),
   cacheDirOf,
   contentHashOf,
+  entryFindings,
   loadEntry,
   ruleSetStamp,
+  staleShard,
 }
 import tools.lint_baseline.{
   LintBaseline,
@@ -148,12 +170,12 @@ lintHelpText = stringConcat [
 ]
 
 -- One distinct rule name with the tiers it is registered in.  `rule-duplicate-body`
--- is registered twice (a same-file `Rule` and the `CrossFileRule`) under one name
+-- is registered twice (a same-file `Rule` and the `ProjectRule`) under one name
 -- and appears once here, with both tiers; its per-file metadata is the row's.
 export data RuleRow = RuleRow { rrMeta : RuleMeta, rrTiers : List Tier }
 
 -- Which registry a rule is registered in: the per-file `allRules`, the
--- cross-file `allCrossFileRules`, or both.
+-- project-rule `allProjectRules`, or both.
 export data Tier = TierFile | TierCross deriving (Eq)
 
 tierText : Tier -> String
@@ -164,7 +186,7 @@ export
 allRuleRows : List RuleRow
 allRuleRows =
   let fileMetas = map ruleMetaOf allRules
-  let crossMetas = map crossMetaOf allCrossFileRules
+  let crossMetas = map crossMetaOf allProjectRules
   let fileNames = map ruleMetaName fileMetas
   let crossNames = map ruleMetaName crossMetas
   let crossOnly =
@@ -175,7 +197,7 @@ allRuleRows =
 ruleMetaOf : Rule -> RuleMeta
 ruleMetaOf r = r.meta
 
-crossMetaOf : CrossFileRule -> RuleMeta
+crossMetaOf : ProjectRule -> RuleMeta
 crossMetaOf r = r.meta
 
 mkRow : RuleMeta -> List Tier -> RuleRow
@@ -215,6 +237,7 @@ fixabilityText NotFixable = "not-fixable"
 
 needText : Need -> String
 needText NeedsStdlibIndex = "stdlib-index"
+needText NeedsProjectIndex = "project-index"
 needText NeedsWildIndex = "wildcard-index"
 needText NeedsScopes = "scopes"
 
@@ -378,18 +401,10 @@ docBody doc = match Str.indexOf "\n\nBefore:" doc
     [Str.take i doc, "", "```"] ++ Str.lines (Str.drop (i + 2) doc) ++ ["```"]
 
 -- Resolve `--cache` to `Some (cacheDir, ruleSetStamp)`, or `None` to run
--- uncached.  TWO reasons this declines, both deliberate (#395):
---
---   * `--fix` (and `--json`, which never reaches here) is out of v1 scope. --fix
---     REWRITES the files whose content is the cache key, and ESLint's
---     --cache+--fix is a known sharp edge; --json is a separate per-file path.
---     Combining --cache with either is a silent no-op, not an error.
---   * `crossFileCacheSound` is False — someone added a second cross-file rule,
---     whose per-file inputs nothing caches.  Under --cache that rule would
---     silently not run.  So --cache turns itself off instead, costing a slower
---     lint rather than a wrong one.  (No warning: this is a correct, quiet
---     fallback, and a lint that prints compiler-internal chatter to stdout would
---     break every caller that diffs its output.)
+-- uncached.  `--fix` (and `--json`, which never reaches here) is out of v1
+-- scope: --fix REWRITES the files whose content is the cache key, and ESLint's
+-- --cache+--fix is a known sharp edge; --json is a separate per-file path.
+-- Combining --cache with either is a silent no-op, not an error.
 --
 -- The cache dir hangs off the project root — the same `medaka.toml` walk-up the
 -- rest of the CLI uses, which falls back to the cwd when there is no manifest
@@ -398,32 +413,20 @@ docBody doc = match Str.indexOf "\n\nBefore:" doc
 -- pre-commit hook wants).  A cache dir that resolves somewhere unexpected costs
 -- misses, never wrong answers.
 --
--- The stamp folds in `stdlib.stdlibFingerprint` alongside `ruleSetStamp`
--- (#2327): `rule-stdlib-reimpl` reads the stdlib source tree from disk at
--- runtime (`buildStdlibIndexResult`), content `ruleSetStamp`'s binary hash never
--- observes. Without this, editing `stdlib/list.mdk` would leave every OTHER
--- file's cached findings silently answering with the pre-edit stdlib —
--- exactly the "wrong hit" `lint_cache.mdk`'s invariant forbids. Folding it
--- into every shard's stamp (rather than skipping caching only for this one
--- rule) is the smaller fix: shards are per-FILE, not per-rule, so declining
--- caching "for this rule" would mean declining it for every file, which is
--- declining it outright.
+-- The stamp is the binary alone.  What the declaration index contributes is a
+-- separate key on the shard's index-reading findings (`indexKeyFor`), so an
+-- edit to a stdlib file re-runs only the rules that read the index.
 export
 lintCacheCtx : Bool -> Bool -> <IO> Option (String, String)
 lintCacheCtx False _ = None
 lintCacheCtx True True = None
-lintCacheCtx True False
-  | not crossFileCacheSound = None
-  | otherwise =
-    let root = findProjectRootOrSelf (canonicalizePath ".")
-    let binStamp = ruleSetStamp ()
-    -- An empty stamp means the binary could not be read, so the rule set cannot
-    -- be identified — the one input that makes a hit meaningful is missing.
-    -- Decline rather than share a cache across unknown rule sets.
-    if binStamp == "" then
-      None
-    else
-      Some (cacheDirOf root, "\{binStamp}.\{stdlibFingerprint}")
+lintCacheCtx True False =
+  let root = findProjectRootOrSelf (canonicalizePath ".")
+  let binStamp = ruleSetStamp ()
+  -- An empty stamp means the binary could not be read, so the rule set cannot
+  -- be identified — the one input that makes a hit meaningful is missing.
+  -- Decline rather than share a cache across unknown rule sets.
+  if binStamp == "" then None else Some (cacheDirOf root, binStamp)
 
 -- `medaka lint --json`: run the lint pipeline over every resolved target file
 -- and emit the SAME `{"files":[{"file":...,"diagnostics":[...]}]}` envelope
@@ -432,15 +435,15 @@ lintCacheCtx True False
 -- (inside `lintFileDiagTripleParsed`), which stamps the lint RULE NAME into
 -- the diagnostic's `code` field.  Cross-file rules DO participate (#2701
 -- leg 3): the per-file pass already parses every target
--- (`lintFileDiagTripleParsed`), and `--json` runs `runCrossFileRules` over
--- those parses (the human-text path reaches the tier from entries instead,
--- see `runCrossFileReportCached`).  Each
+-- (`lintFileDiagTripleParsed`), and `--json` summarizes those parses and
+-- evaluates the project rules over them (the human-text path reaches the tier
+-- from entries instead, see `runProjectReport`).  Each
 -- resulting `Finding` is folded into its OWN file's `diagnostics` array via
--- `mergeCrossFileIntoTriples` (never a new top-level key).  A duplicate whose
+-- `mergeProjectIntoTriples` (never a new top-level key).  A duplicate whose
 -- partner file lay outside `files` would be folded into a synthesized entry
--- for that file instead — `mergeCrossFileIntoTriples`'s own defensive
+-- for that file instead — `mergeProjectIntoTriples`'s own defensive
 -- fallback, unreachable today since `files` is exactly the set every
--- cross-file rule here runs over.  `--fix` never reaches this function.
+-- project rule here runs over.  `--fix` never reaches this function.
 -- Exit 1 iff any diagnostic is a
 -- hard error (severity 1) — matches `runCheckJsonCmd`'s convention.
 export
@@ -464,44 +467,50 @@ runLintJsonCmd idx internalFlag disableNames onlyNames denyNames baseCtx files =
       files
   let triples = map dropQuadParse quads
   let cross =
-    crossFileJsonFindings internalFlag disableNames onlyNames denyNames quads
-  let merged = mergeCrossFileIntoTriples cross triples
+    projectJsonFindings idx internalFlag disableNames onlyNames denyNames quads
+  let merged = mergeProjectIntoTriples cross triples
   let _ = putStr (cjAllToJson merged)
   if anyList cjLintTripleHasErr merged then stageExit 1
 
--- The cross-file tier's JSON-path inputs, reused from the per-file parses
+-- The project-rule tier's JSON-path inputs, reused from the per-file parses
 -- already sitting in `quads` (#394's no-second-read rule applies here too).
--- Mirrors `runCrossFileReport`: `--only`/`--disable` are honored inside
--- `runCrossFileRules`, inline `-- lint-disable-*` directives are applied via
+-- Mirrors `runProjectReport`: `--only`/`--disable` are honored inside
+-- `runProjectRules`, inline `-- lint-disable-*` directives are applied via
 -- `applySuppressionsMulti` (each finding anchors to its own file), then
 -- `--deny` promotion.  Unlike the text path this never renders — the caller
 -- folds the result into the JSON triples instead.  Exported so
 -- `compiler/tools/lint_test.mdk`'s renderer-parity property can call the SAME
 -- function `runLintJsonCmd` calls, rather than a reimplementation.
 export
-crossFileJsonFindings : Bool ->
+projectJsonFindings : StdlibIndex ->
+  Bool ->
   List String ->
   List String ->
   List String ->
   List (String, String, List Diag, Positions, List Decl) ->
   <IO> List Finding
-crossFileJsonFindings internalFlag disableNames onlyNames denyNames quads =
-  let parsedTriples = map quadToParseTriple quads
-  let raw = runCrossFileRules onlyNames disableNames parsedTriples
-  let active = dropInactiveInternalCross allCrossFileRules internalFlag raw
+projectJsonFindings idx internalFlag disableNames onlyNames denyNames quads =
+  let summaries = map (quadSummaries onlyNames disableNames) quads
+  let raw = runProjectRules onlyNames disableNames idx summaries
+  let active = dropInactiveInternalProject allProjectRules internalFlag raw
   let suppressed = applySuppressionsMulti (map quadToSrc quads) active
   applyFindingDeny denyNames suppressed
 
+-- A parsed file's project-rule summaries, from the parse alone.
 export
-quadToParseTriple : (String, String, List Diag, Positions, List Decl) ->
-  (String, Positions, List Decl)
-quadToParseTriple (path, _, _, pos, decls) = (path, pos, decls)
+quadSummaries : List String ->
+  List String ->
+  (String, String, List Diag, Positions, List Decl) ->
+  (String, List (String, Summary))
+quadSummaries only disable (path, src, _, pos, decls) =
+  (path, fileSummaries only disable path (mkFileFacts src decls pos) pos decls)
 
 export
 quadToSrc : (String, String, List Diag, Positions, List Decl) ->
   (String, String)
 quadToSrc (path, src, _, _, _) = (path, src)
 
+export
 dropQuadParse : (String, String, List Diag, Positions, List Decl) ->
   (String, String, List Diag)
 dropQuadParse (path, src, diags, _, _) = (path, src, diags)
@@ -511,7 +520,7 @@ dropQuadParse (path, src, diags, _, _) = (path, src, diags)
 -- along untouched — the cross-file tier's input.  Mirrors `lintFilesGo`'s
 -- explicit recursion — this codebase sequences an `<IO>` list traversal by
 -- hand, not via `map` over an effectful function.  Exported for the same
--- reason as `crossFileJsonFindings` above.
+-- reason as `projectJsonFindings` above.
 export
 lintFilesToDiagQuads : StdlibIndex ->
   Bool ->
@@ -602,82 +611,50 @@ baselineFileCodes : String ->
 baselineFileCodes cwd (path, _, diags) =
   (baselineKeyOf cwd path, map diagCodeOf diags)
 
--- Run the cross-file rule tier over the whole set from the parses the per-file
--- pass produced.  This is the fallback route: the human-text path takes it only
--- when `crossFileCacheSound` is False (a registry with a second cross-file rule);
--- otherwise it reaches the tier through `runCrossFileReportCached` over entries.
--- Findings render AFTER the per-file output under a `cross-file:` header.
--- --only/--disable are honored inside `runCrossFileRules`; --deny promotion is
--- applied here (mirrors the per-file path).  Returns whether any finding is an
--- error severity (feeds the exit code).
-export
-runCrossFileReport : Bool ->
-  List String ->
-  List String ->
-  List String ->
-  List (String, String, Positions, List Decl) ->
-  <IO> Bool
-runCrossFileReport internalFlag disableNames onlyNames denyNames parsed =
-  let triples = map parsedToTriple parsed
-  let raw =
-    dropInactiveInternalCross
-      allCrossFileRules
-      internalFlag
-      (runCrossFileRules onlyNames disableNames triples)
-  -- Honor inline `-- lint-disable-*` directives on cross-file findings too:
-  -- each finding anchors to its own file, so filter against that file's own
-  -- directives (recovered from its source) before the CLI flag filters.
-  let suppressed = applySuppressionsMulti (map parsedToSrc parsed) raw
-  reportCrossFindings (applyFindingDeny denyNames suppressed)
-
--- The --cache counterpart of `runCrossFileReport` (#395).  Identical in every
--- observable way; the ONLY difference is its input, because a cache hit has no
--- parse to give the tier:
---   * findings come from `runCrossFileRulesFromOccs` over every file's
---     occurrences — cached ones and freshly-computed ones alike — instead of
---     from `runCrossFileRules` over parses.  Both run the SAME `dupJoin`.
---   * directives are the entries' own (already parsed, cached or fresh) rather
---     than re-lexed from source.
+-- Run the project-rule tier over the whole set from the summaries the per-file
+-- pass produced, cached and fresh alike: a cache hit has no parse to give the
+-- tier, and a summary is all the tier reads.  Findings render AFTER the
+-- per-file output under a `cross-file:` header.  --only/--disable are honored
+-- inside `runProjectRules`; --deny promotion is applied here (mirrors the
+-- per-file path).  Directives are the entries' own (already parsed, cached or
+-- fresh).  Returns whether any finding is an error severity (feeds the exit
+-- code).
 --
--- the join runs every time, over ALL files.  Only its per-file INPUTS are
+-- The evaluation runs every time, over ALL files.  Only its per-file INPUTS are
 -- cached.  A duplicate-body finding names file A because of file B, so caching
 -- these findings would leave A's finding standing after B stopped duplicating
 -- it — A is unchanged, so A hits.  Scenario 3 of
 -- test/diff_compiler_lint_cache.sh is exactly that edit and exists to catch
--- anyone who tries it.  Callers must have checked `crossFileCacheSound`
--- (`lintCacheCtx` does).
+-- anyone who tries it.
 export
-runCrossFileReportCached : Bool ->
+runProjectReport : StdlibIndex ->
+  Bool ->
   List String ->
   List String ->
   List String ->
   List LintEntry ->
   <IO> Bool
-runCrossFileReportCached internalFlag disableNames onlyNames denyNames entries =
+runProjectReport idx internalFlag disableNames onlyNames denyNames entries =
   let raw =
-    dropInactiveInternalCross
-      allCrossFileRules
+    dropInactiveInternalProject
+      allProjectRules
       internalFlag
-      (runCrossFileRulesFromOccs
-        onlyNames
-        disableNames
-        (flatMap entryOccs entries))
+      (runProjectRules onlyNames disableNames idx (map entrySummaries entries))
   let suppressed = applySuppressionsMultiDirs (map entryDirTable entries) raw
-  reportCrossFindings (applyFindingDeny denyNames suppressed)
+  reportProjectFindings (applyFindingDeny denyNames suppressed)
 
-entryOccs : LintEntry -> List (String, Int, String, String)
-entryOccs e = e.dupOccs
+entrySummaries : LintEntry -> (String, List (String, Summary))
+entrySummaries e = (e.path, e.summaries)
 
 entryDirTable : LintEntry -> (String, List Directive)
 entryDirTable e = (e.path, e.directives)
 
--- Shared tail of both cross-file report paths: render (after the per-file
+-- Tail of the project-rule report: render (after the per-file
 -- output, under a `cross-file:` header) and report whether anything was an
--- error.  One renderer, so the cached and uncached paths cannot format
--- differently.
-reportCrossFindings : List Finding -> <IO> Bool
-reportCrossFindings [] = False
-reportCrossFindings findings =
+-- error.
+reportProjectFindings : List Finding -> <IO> Bool
+reportProjectFindings [] = False
+reportProjectFindings findings =
   let _ = putStrLn ""
   let _ = putStrLn "cross-file:"
   let _ = putStrLn (joinNl (map renderCrossFinding findings))
@@ -692,19 +669,6 @@ renderCrossFinding f = ppDiagCliSrc "" (locFileOf f.loc) (findingToDiag f)
 locFileOf : Option Loc -> String
 locFileOf (Some (Loc file _ _ _ _)) = file
 locFileOf None = ""
-
--- Read each readable target's source into `(path, src)` for inline-directive
--- recovery in the cross-file report path.  Unreadable files are skipped.
--- Projections off the threaded (path, src, Positions, decls) quad (#394): the
--- cross-file rule tier wants (path, Positions, decls), and the inline-directive
--- suppression pass wants (path, src).  Both are otherwise re-derived from disk by
--- `parseLintFiles` / `readLintSrcs`, which this replaces.
-parsedToTriple : (String, String, Positions, List Decl) ->
-  (String, Positions, List Decl)
-parsedToTriple (path, _, pos, decls) = (path, pos, decls)
-
-parsedToSrc : (String, String, Positions, List Decl) -> (String, String)
-parsedToSrc (path, src, _, _) = (path, src)
 
 -- Resolve file args to a concrete list of .mdk paths.
 -- Empty args → project root mode (find medaka.toml, list top-level .mdk files).
@@ -779,30 +743,30 @@ firstInactiveTarget named (f :: rest) =
     Some
       "internal rule \{named} is not active for `\{f}`; pass --internal or set `[lint] internal = true` in the project's medaka.toml"
 
--- The cross-file tier sees every target at once, so its internal-scope rules
+-- The project-rule tier sees every target at once, so its internal-scope rules
 -- cannot be switched off by a per-file disable list.  Their findings are
 -- filtered instead, by whether internal rules are active for the file each
 -- finding lands in.
 export
-dropInactiveInternalCross : List CrossFileRule ->
+dropInactiveInternalProject : List ProjectRule ->
   Bool ->
   List Finding ->
   <IO> List Finding
-dropInactiveInternalCross _ _ [] = []
-dropInactiveInternalCross rules internalFlag (f :: rest) =
+dropInactiveInternalProject _ _ [] = []
+dropInactiveInternalProject rules internalFlag (f :: rest) =
   let keep =
-    if isInternalCrossRule rules f.rule then
+    if isInternalProjectRule rules f.rule then
       findingInActiveProject internalFlag f
     else
       True
-  let kept = dropInactiveInternalCross rules internalFlag rest
+  let kept = dropInactiveInternalProject rules internalFlag rest
   if keep then f :: kept else kept
 
-isInternalCrossRule : List CrossFileRule -> String -> Bool
-isInternalCrossRule rules name = anyList (isInternalCrossNamed name) rules
+isInternalProjectRule : List ProjectRule -> String -> Bool
+isInternalProjectRule rules name = anyList (isInternalProjectNamed name) rules
 
-isInternalCrossNamed : String -> CrossFileRule -> Bool
-isInternalCrossNamed name r = r.name == name && isInternalScope r.meta.scope
+isInternalProjectNamed : String -> ProjectRule -> Bool
+isInternalProjectNamed name r = r.name == name && isInternalScope r.meta.scope
 
 findingInActiveProject : Bool -> Finding -> <IO> Bool
 findingInActiveProject internalFlag f = match f.loc
@@ -851,18 +815,13 @@ public export data LintRun = LintRun {
 }
 
 -- Fold over file list, running lint on each.  acc = whether any SevError seen.
--- Returns (anyError, entries, parsedFiles).
+-- Returns (anyError, entries).
 --
 -- `entries` is every readable target's LintEntry — the per-file lint result
--- (findings + duplicate-body occurrences + inline directives), however obtained.
+-- (findings + project-rule summaries + inline directives), however obtained.
 -- Under --cache these are what gets persisted, and the dirty ones are the files
--- that actually had to be linted this run.
---
--- `parsedFiles` feeds the parse-based cross-file tier (`runCrossFileReport`).
--- It is empty whenever `crossFileCacheSound` holds (the tier is reached from
--- `entries` instead, whether or not --cache is on), in --fix mode, which runs
--- no cross-file rules, and under --cache.  Not accumulating it is also why a
--- warm run holds no decls in memory.
+-- that actually had to be linted this run.  The project-rule tier reads the
+-- entries, never a parse, so a warm run holds no decls in memory.
 --
 -- The per-file printing order is unchanged: each file's report is emitted
 -- (strictly) before the recursion.
@@ -876,8 +835,8 @@ lintFilesGo : StdlibIndex ->
   Option (String, String) ->
   List String ->
   Bool ->
-  <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
-lintFilesGo _ _ _ _ _ _ _ [] acc = (acc, [], [])
+  <IO> (Bool, List LintEntry)
+lintFilesGo _ _ _ _ _ _ _ [] acc = (acc, [])
 lintFilesGo idx run disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest) acc =
   let fileDisable = disableNames ++ internalDisabledFor run.lrInternal f
   if run.lrFix then
@@ -893,7 +852,7 @@ lintFilesGo idx run disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest
       rest
       (acc || hadErr)
   else
-    let (hadErr, entries, parsed) =
+    let (hadErr, entries) =
       lintOneFileReport
         idx
         run.lrMulti
@@ -903,7 +862,7 @@ lintFilesGo idx run disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest
         baseCtx
         cacheCtx
         f
-    let (restErr, restEntries, restParsed) =
+    let (restErr, restEntries) =
       lintFilesGo
         idx
         run
@@ -914,16 +873,20 @@ lintFilesGo idx run disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest
         cacheCtx
         rest
         (acc || hadErr)
-    (restErr, entries ++ restEntries, parsed ++ restParsed)
+    (restErr, entries ++ restEntries)
 
 -- Lint a single file in report mode.
 -- multiFile=False: output is byte-for-byte identical to single-file v1 behavior.
 -- multiFile=True: prints "path:" header before findings (only when there are findings).
--- Returns (hadError, parsed) where `parsed` is a 0-or-1 element list carrying this
--- file's (path, src, Positions, decls) for the parse-based cross-file tier
--- (`runCrossFileReport`).  It is empty when the file could not be read, and
--- whenever `crossFileCacheSound` holds, since that tier is then reached from
--- the entries.
+-- Returns (hadError, entries): the 0-or-1 element list carries this file's
+-- LintEntry for the project-rule tier and the shard writer.
+--
+-- The `--cache` decision, in full: a HIT requires the shard to decode, and to
+-- agree on the format version, the rule-set stamp, the path, the content hash
+-- AND the index key.  Agreeing on all but the index key is a partial hit: the
+-- file is parsed and only the index-reading rules re-run.  Anything else is a
+-- miss.  `lint_cache.decodeEntry` owns that check; this function only decides
+-- when to ask.
 lintOneFileReport : StdlibIndex ->
   Bool ->
   List String ->
@@ -932,19 +895,22 @@ lintOneFileReport : StdlibIndex ->
   Option (String, LintBaseline) ->
   Option (String, String) ->
   String ->
-  <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
+  <IO> (Bool, List LintEntry)
 lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCtx target =
   match readSource target
     Err msg =>
       let _ = ePutStrLn msg
-      (True, [], [])
+      (True, [])
     Ok src =>
-      let cached = match cacheCtx
-        Some (cacheDir, stamp) =>
-          loadEntry cacheDir stamp target (contentHashOf src)
-        None => None
-      match cached
-        Some hit =>
+      let wantSummaries =
+        multiFile && projectRuleSelected onlyNames disableNames
+      let found =
+        entryOfFile idx cacheCtx disableNames onlyNames wantSummaries target src
+      match found
+        Err e =>
+          ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
+          (True, [])
+        Ok entry =>
           lintOneFileRender
             multiFile
             disableNames
@@ -953,57 +919,7 @@ lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCt
             baseCtx
             target
             src
-            hit
-            []
-        None => match lintParseSource src
-          Err e =>
-            ePutStrLn (ppDiagCliSrc src target (parseErrDiag target e))
-            (True, [], [])
-          Ok parsedSource =>
-            lintOneFileParsed
-              idx
-              multiFile
-              disableNames
-              onlyNames
-              denyNames
-              baseCtx
-              cacheCtx
-              target
-              src
-              parsedSource
-
-lintOneFileParsed : StdlibIndex ->
-  Bool ->
-  List String ->
-  List String ->
-  List String ->
-  Option (String, LintBaseline) ->
-  Option (String, String) ->
-  String ->
-  String ->
-  (List Decl, Positions) ->
-  <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
-lintOneFileParsed idx multiFile disableNames onlyNames denyNames baseCtx cacheCtx target src parsedSource =
-  -- Uncached, the excluded rules are skipped outright (their findings
-  -- would be filtered below anyway); under --cache the shard must hold the
-  -- full roster, so every rule runs.  The occurrence list is wanted whenever
-  -- the cross-file tier will read it from entries instead of re-walking
-  -- parses.
-  let rules = selectRules onlyNames disableNames
-  let wantOccs =
-    multiFile && crossFileCacheSound && crossFileSelected onlyNames disableNames
-  let (entry, parsed) =
-    lintEntryOf idx cacheCtx rules wantOccs target src parsedSource
-  lintOneFileRender
-    multiFile
-    disableNames
-    onlyNames
-    denyNames
-    baseCtx
-    target
-    src
-    entry
-    parsed
+            entry
 
 lintOneFileRender : Bool ->
   List String ->
@@ -1013,15 +929,14 @@ lintOneFileRender : Bool ->
   String ->
   String ->
   LintEntry ->
-  List (String, String, Positions, List Decl) ->
-  <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
-lintOneFileRender multiFile disableNames onlyNames denyNames baseCtx target src entry parsed =
+  <IO> (Bool, List LintEntry)
+lintOneFileRender multiFile disableNames onlyNames denyNames baseCtx target src entry =
   -- Suppress findings silenced by inline `-- lint-disable-*` directives before
   -- applying the CLI flag filters (--only/--disable/--deny).  Both the cached
   -- and uncached paths render from THIS one expression over the entry, so a
   -- hit and a miss cannot print different things: the only difference between
   -- them is where `entry` came from.
-  let allFindings = applySuppressionsDirs entry.directives entry.findings
+  let allFindings = applySuppressionsDirs entry.directives (entryFindings entry)
   let filtered =
     applyFindingFilters disableNames onlyNames denyNames allFindings
   let findings = applyBaselineFindings baseCtx target filtered
@@ -1037,71 +952,193 @@ lintOneFileRender multiFile disableNames onlyNames denyNames baseCtx target src 
   let hasOutput = stringLength output > 0
   let _ = if multiFile && hasOutput then putStrLn (target ++ ":")
   let _ = if hasOutput then putStrLn output
-  (anyList isFindingError findings, [entry], parsed)
+  (anyList isFindingError findings, [entry])
 
--- One file's lint result, from the cache when it can be trusted and from a real
--- parse otherwise.  Also returns the parse for the parse-based cross-file tier —
--- empty on a cache hit and whenever `crossFileCacheSound`
--- holds, since the tier is then reached from entries.
---
--- The `--cache` decision, in full: a HIT requires the shard to decode, and to
--- agree on the format version, the rule-set stamp, the path, AND the content
--- hash.  Anything else is a miss.  `lint_cache.decodeEntry` owns that check;
--- this function only decides when to ask.
-lintEntryOf : StdlibIndex ->
+-- One file's entry: from the cache when `cacheCtx` is set and a shard answers,
+-- else from a parse.  An unparsable file has no entry.
+entryOfFile : StdlibIndex ->
   Option (String, String) ->
-  List Rule ->
+  List String ->
+  List String ->
   Bool ->
   String ->
   String ->
-  (List Decl, Positions) ->
-  <IO> (LintEntry, List (String, String, Positions, List Decl))
-lintEntryOf idx None rules wantOccs target src parsedSource =
-  let (entry, pos, decls) =
-    lintFileFresh idx rules target src "" wantOccs parsedSource
-  (entry, if crossFileCacheSound then [] else [(target, src, pos, decls)])
-lintEntryOf idx (Some (cacheDir, stamp)) _ _ target src parsedSource =
-  let hash = contentHashOf src
-  match loadEntry cacheDir stamp target hash
-    Some hit => (hit, [])
-    None =>
-      let (entry, _, _) =
-        lintFileFresh idx allRules target src hash True parsedSource
-      (entry, [])
+  <IO> Result ParseError LintEntry
+entryOfFile idx None disableNames onlyNames wantSummaries target src =
+  map
+    ((decls, pos) =>
+      uncachedEntryOf
+        idx
+        disableNames
+        onlyNames
+        wantSummaries
+        target
+        src
+        decls
+        pos)
+    (lintParseSource src)
+entryOfFile idx (Some (cacheDir, stamp)) _ _ _ target src =
+  cachedEntryOf allRules indexKeyFor idx cacheDir stamp target src
 
--- Lint a parsed file for real: the miss path, and the whole of the uncached
--- path.  The returned entry is `dirty` — it is this run's work and its shard (if
--- any) needs writing.
---
--- `wantOccs` exists because Medaka is STRICT: an unconditional occurrence list
--- would compute each body's `structuralKey` for a run that never reads it, and
--- that key is an `exprSexp` of every eligible body, i.e. the single most
--- expensive thing the cross-file tier does.  So the field is filled only when
--- the cross-file tier will consume it via runCrossFileReportCached (--cache, or
--- a multi-file uncached run with `crossFileCacheSound`); the keys come from the same per-clause pass the
--- same-file duplicate-body rule reads, so they are computed once.
-lintFileFresh : StdlibIndex ->
+-- The entry a `--cache` run uses for one file: the shard if it answers in full,
+-- the shard's free findings and summaries with the index-reading rules re-run
+-- if the index answers the file's recorded questions differently, a fresh lint
+-- of the whole `roster` otherwise.  `keyOf` names the index the index-reading
+-- findings were made against; the soundness tests substitute a key without the
+-- fingerprint (`indexKeyWith`).
+export
+cachedEntryOf : List Rule ->
+  (List Rule -> StdlibIndex -> String) ->
+  StdlibIndex ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO> Result ParseError LintEntry
+cachedEntryOf = cachedEntryWith recordingStdlibIndex
+
+-- `cachedEntryOf` with the index a file's rules are handed made by `view`.
+-- Production records what the rules ask (`recordingStdlibIndex`); the
+-- soundness tests pass the index unchanged to show that a shard whose questions
+-- went unrecorded is served stale.
+export
+cachedEntryWith : (StdlibIndex -> StdlibIndex) ->
   List Rule ->
+  (List Rule -> StdlibIndex -> String) ->
+  StdlibIndex ->
   String ->
   String ->
   String ->
+  String ->
+  <IO> Result ParseError LintEntry
+cachedEntryWith view roster keyOf idx cacheDir stamp target src =
+  let hash = contentHashOf src
+  let key = keyOf roster idx
+  let loaded =
+    localAnswersChecked
+      idx
+      key
+      target
+      (loadEntry cacheDir stamp key (indexAnswersHold idx) target hash)
+  match loaded
+    ShardHit hit => Ok hit
+    _ =>
+      map
+        ((decls, pos) =>
+          cachedEntryFrom
+            roster
+            key
+            (view idx)
+            loaded
+            target
+            src
+            hash
+            decls
+            pos)
+        (lintParseSource src)
+
+-- A hit is served only if every project file that the file's wildcard imports
+-- were checked against is still there or still absent as recorded.  Those
+-- answers come from the filesystem, which neither the shard's coarse key nor the
+-- index fingerprint covers, so they are re-asked even when the key matches.
+localAnswersChecked : StdlibIndex ->
+  String ->
+  String ->
+  ShardLoad ->
+  <IO> ShardLoad
+localAnswersChecked idx key target (ShardHit hit) =
+  let asked = filterList isLocalAnswer hit.indexAnswers
+  let states = localModStates target (flatMap localModOf asked)
+  if stdlibAnswersHold (withStdlibLocalMods states idx) asked then
+    ShardHit hit
+  else
+    staleShard key hit
+localAnswersChecked _ _ _ other = other
+
+-- The recorded questions the index itself answers; those about project files
+-- are `localAnswersChecked`'s.
+indexAnswersHold : StdlibIndex -> List Answer -> Bool
+indexAnswersHold idx answers =
+  stdlibAnswersHold idx (filterList (a => not (isLocalAnswer a)) answers)
+
+isLocalAnswer : Answer -> Bool
+isLocalAnswer a = isSome (localModOfQuestion a.ansQuestion)
+
+localModOf : Answer -> List String
+localModOf a = match localModOfQuestion a.ansQuestion
+  Some modId => [modId]
+  None => []
+
+-- Uncached, the excluded rules are skipped outright (their findings would be
+-- filtered anyway).
+uncachedEntryOf : StdlibIndex ->
+  List String ->
+  List String ->
   Bool ->
-  (List Decl, Positions) ->
-  <IO> (LintEntry, Positions, List Decl)
-lintFileFresh idx rules target src hash wantOccs (decls, pos) =
+  String ->
+  String ->
+  List Decl ->
+  Positions ->
+  <IO> LintEntry
+uncachedEntryOf idx disableNames onlyNames wantSummaries target src decls pos =
   let facts = mkFileFactsAt target src decls pos
-  (
-    LintEntry {
-      path = target,
-      contentHash = hash,
-      findings = lintProgramFacts idx rules target facts pos decls,
-      dupOccs = if wantOccs then factDupOccs target facts else [],
-      directives = factDirectives facts,
-      dirty = True,
-    },
-    pos,
-    decls,
-  )
+  let rules = selectRules onlyNames disableNames
+  LintEntry {
+    path = target,
+    contentHash = "",
+    freeFindings =
+      lintProgramRanked idx (ranked 0 rules) target facts pos decls,
+    indexFindings = [],
+    indexKey = "",
+    indexAnswers = [],
+    summaries =
+      if wantSummaries then
+        fileSummaries onlyNames disableNames target facts pos decls
+      else
+        [],
+    directives = factDirectives facts,
+    dirty = True,
+  }
+
+-- Under --cache the shard must hold the full roster, so every rule runs, except
+-- that a stale shard (`ShardStale`) already holds the index-free findings,
+-- summaries and directives, and only the index-reading rules run again.  `idx`
+-- is this file's own recording index, so what its rules asked is read back
+-- once they have run.
+cachedEntryFrom : List Rule ->
+  String ->
+  StdlibIndex ->
+  ShardLoad ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  Positions ->
+  <IO> LintEntry
+cachedEntryFrom roster _ view (ShardStale stale) target src _ decls pos =
+  let (idx, facts) = mkFileFactsIn view target src decls pos
+  let indexed =
+    lintProgramRanked idx (rankedIndexRules roster) target facts pos decls
+  { stale |
+    indexFindings = indexed,
+    indexAnswers = stdlibRecorded idx,
+    dirty = True,
+  }
+cachedEntryFrom roster key view _ target src hash decls pos =
+  let (idx, facts) = mkFileFactsIn view target src decls pos
+  let all = lintProgramRanked idx (ranked 0 roster) target facts pos decls
+  let (free, indexed) = splitByIndex roster all
+  LintEntry {
+    path = target,
+    contentHash = hash,
+    freeFindings = free,
+    indexFindings = indexed,
+    indexKey = key,
+    indexAnswers = stdlibRecorded idx,
+    summaries = fileSummaries [] [] target facts pos decls,
+    directives = factDirectives facts,
+    dirty = True,
+  }
 
 -- Fix a single file in-place.  Returns True only on I/O error (write errors exit 1).
 lintOneFileFix : StdlibIndex ->

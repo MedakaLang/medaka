@@ -2879,6 +2879,12 @@ emitFileExtern e env "readFile" args = match emitArgs e env args
     let _ = emit e (rtLine e r "i64" "mdk_read_file" (i64Ops [p, g]))
     (r, LTCon)
   _ => panic "llvm: readFile takes one argument and its grant"
+emitFileExtern e env "hashFile" args = match emitArgs e env args
+  [p, g] =>
+    let r = freshReg e
+    let _ = emit e (rtLine e r "i64" "mdk_hash_file" (i64Ops [p, g]))
+    (r, LTCon)
+  _ => panic "llvm: hashFile takes one argument and its grant"
 emitFileExtern e env "readFileBytes" args = match emitArgs e env args
   [p, g] =>
     let r = freshReg e
@@ -4567,6 +4573,12 @@ emitHashExtern e env "hashString" args = match emitArgs e env args
     let _ = emit e (rtLine e r "i64" "mdk_hash_string" (i64Ops [a]))
     (tagInt e r, LTInt)
   _ => panic "llvm: hashString takes one argument"
+emitHashExtern e env "hashStringHex" args = match emitArgs e env args
+  [a] =>
+    let r = freshReg e
+    let _ = emit e (rtLine e r "i64" "mdk_digest_string" (i64Ops [a]))
+    (r, LTStr)
+  _ => panic "llvm: hashStringHex takes one argument"
 emitHashExtern e _ name _ = gapE e ("unsupported hash extern " ++ name)
 
 -- Debug-literal externs (byte-exact quoted/escaped rendering; no oracle change).

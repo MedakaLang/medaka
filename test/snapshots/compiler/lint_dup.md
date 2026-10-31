@@ -1,5 +1,5 @@
 # META
-source_lines=399
+source_lines=393
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_dup.mdk — the duplicate-body occurrence engine: per-clause
@@ -104,7 +104,7 @@ appArgsRev e = match unwrapLoc e
 -- by the identical code an uncached one runs.
 --
 -- This split is the whole correctness story of the lint cache.  A cache MUST
--- store the per-file INPUTS to this join (`fileDupOccs`) and re-run it every
+-- store the per-file INPUTS to this join (the rule's `DupOccs` summary) and re-run it every
 -- time — never the findings it returns.  A finding here names file A *because
 -- of* file B, so a cached A-finding survives an edit to B that should have
 -- retracted it: the finding silently lingers (or, symmetrically, never
@@ -234,12 +234,6 @@ dupGroupFires grp =
 
 -- one occurrence per eligible top-level CLAUSE, plus one per eligible
 -- multi-clause FUNCTION: (file, line, name, key)
-export
-fileDupOccs : (String, Positions, List Decl) ->
-  List (String, Int, String, String)
-fileDupOccs (path, pos, decls) =
-  dupOccsOfClauses path (flatMap dupClauseOfDecl (declLocList pos decls))
-
 export
 dupOccsOfClauses : String ->
   List DupClause ->
@@ -454,8 +448,6 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DFunDef false "dupDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "occKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "occKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "occKey") (EVar "o")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dupGroupFires" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyCon "Bool")))
 (DFunDef false "dupGroupFires" ((PVar "grp")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "occFile")) (EVar "grp")))) (ELit (LInt 2)))))
-(DTypeSig true "fileDupOccs" (TyFun (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
-(DFunDef false "fileDupOccs" ((PTuple (PVar "path") (PVar "pos") (PVar "decls"))) (EApp (EApp (EVar "dupOccsOfClauses") (EVar "path")) (EApp (EApp (EVar "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls")))))
 (DTypeSig true "dupOccsOfClauses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
 (DFunDef false "dupOccsOfClauses" ((PVar "path") (PVar "clauses")) (EApp (EApp (EVar "flatMap") (EApp (EVar "dupOccsOfGroup") (EVar "path"))) (EApp (EVar "dupClauseGroups") (EVar "clauses"))))
 (DTypeSig true "dupClauseOfDecl" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "DupClause"))))
@@ -561,8 +553,6 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DFunDef false "dupDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "occKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "occKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "occKey") (EVar "o")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dupGroupFires" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyCon "Bool")))
 (DFunDef false "dupGroupFires" ((PVar "grp")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "occFile")) (EVar "grp")))) (ELit (LInt 2)))))
-(DTypeSig true "fileDupOccs" (TyFun (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
-(DFunDef false "fileDupOccs" ((PTuple (PVar "path") (PVar "pos") (PVar "decls"))) (EApp (EApp (EVar "dupOccsOfClauses") (EVar "path")) (EApp (EApp (EDictApp "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls")))))
 (DTypeSig true "dupOccsOfClauses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
 (DFunDef false "dupOccsOfClauses" ((PVar "path") (PVar "clauses")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "dupOccsOfGroup") (EVar "path"))) (EApp (EVar "dupClauseGroups") (EVar "clauses"))))
 (DTypeSig true "dupClauseOfDecl" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "DupClause"))))

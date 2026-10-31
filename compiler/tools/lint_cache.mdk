@@ -7,38 +7,48 @@
 --
 -- ── THE INVARIANT (hold every change in this file to it) ──────────────────────
 --   A miss is always safe.  A wrong hit is silent wrongness.
--- Every ambiguity — unreadable shard, malformed JSON, unknown format version, a
+-- Every ambiguity — unreadable shard, malformed text, unknown format version, a
 -- foreign rule-set stamp, a path/hash mismatch, a field of the wrong shape —
--- resolves to `None` (a miss: re-lint the file).  There is no "probably fine"
+-- resolves to `ShardMiss` (re-lint the file).  There is no "probably fine"
 -- branch and there must never be one.  A miss costs milliseconds; a wrong hit is
 -- a lint that reports nothing and exits 0, which is this repo's defining failure
 -- mode ("this didn't run" == "this passed").
 --
 -- ── what is cached, and the one thing that must not be ───────────────────────
--- Per file, keyed by content hash: its `findings`, its `dupOccs`, its
--- `directives`.
+-- Per file, keyed by content hash: its findings (in two groups, below), its
+-- project-rule `summaries`, its `directives`.
 --
--- `dupOccs` is the per-file INPUT to the cross-file duplicate-body join, and
+-- A summary is the per-file INPUT to a project rule's cross-file join, and
 -- caching it (rather than the join's OUTPUT) is not an optimisation detail — it
 -- is the correctness argument.  A duplicate-body finding names file A *because
 -- of* file B.  Cache A's findings and B's edit cannot retract them: A is
--- unchanged, so A cache-hits, and A's stale finding survives.  So the join is
--- re-run from scratch on every run (`lint.dupJoin`), from occurrences that are
--- pure functions of one file each.  This is affordable because of where the cost
--- sits: the parse + `structuralKey` is expensive, per-file and cacheable, while
--- the join measures LINEAR at occs≈10k.  Scenario 3 of
--- test/diff_compiler_lint_cache.sh fails loudly if anyone "optimises" this away.
+-- unchanged, so A cache-hits, and A's stale finding survives.  So every project
+-- rule's `prEvaluate` re-runs from scratch on every run, over summaries that
+-- are pure functions of one file each.  `lint_cache_test.mdk` fails if a
+-- project rule's join is cached.
+-- Every registered project rule's summary is stored, so a second project rule
+-- keeps the cache sound with no further work here.
+--
+-- ── two finding groups ────────────────────────────────────────────────────────
+-- The index-free rules' findings are valid for as long as the binary is.  The
+-- index-reading rules' findings were made against one declaration index.  They
+-- are stored with `indexKey`, the fingerprint of every row of that index
+-- (`lint_walk.indexKeyFor`), and with `indexAnswers`, each question the file's
+-- rules asked of it and a digest of the answer (`lint_index.recording`).  They
+-- still hold when the fingerprint is today's, or, when it is not, when today's
+-- index answers every recorded question with the recorded digest: an edit to a
+-- declaration no rule of this file asked about leaves its findings alone.  A
+-- shard that agrees on the binary but on neither is `ShardStale`: the caller
+-- keeps its free findings, summaries and directives and re-runs only the
+-- index-reading rules.
 --
 -- ── SHARDS, NOT A BLOB ───────────────────────────────────────────────────────
--- One JSON file per source file, not one cache file.  Measured (#395, this
--- corpus): parsing the whole 5 MB cache costs 0.27 s against the ~6.5 s of
--- parsing it skips, but STRINGIFYING 5 MB costs 0.44–0.58 s — and every commit
--- changes ≥1 file, so a monolithic cache pays that write EVERY run.  Sharding
--- makes the write O(changed) (~25 KB, ~3 ms) while the read is unchanged (the
--- join needs every file's occurrences either way).  That is what takes the warm
--- run to ~0.35 s (~19x) and is why exact `structuralKey`s stay exact: hashing
--- them would only ever have solved a size problem that was really a write
--- problem, at the price of a ~1e-13 false-duplicate report.
+-- One shard per source file, not one cache file: a typical commit changes 1–2
+-- files, and a monolithic cache would pay the write for all of them every run,
+-- while sharding makes it O(changed).  Shards are s-expressions read by the
+-- cursor reader (`support/sexp_value`), which decodes about four times faster
+-- than the JSON they replaced.  `structuralKey`s are stored exactly, never
+-- hashed: hashing them would risk a false-duplicate report to save space.
 --
 -- Flags are deliberately NOT part of the key: `--only`/`--disable`/`--deny` are
 -- pure post-filters (`applyFindingFilters`), so shards store PRE-filter findings
@@ -46,22 +56,28 @@
 
 import frontend.ast.{Loc(..)}
 import driver.diagnostics.{Severity(..)}
-import io.{runCommandOk}
+import path.{dirname}
 import u64 as U64
-import tools.lint_core.{Finding(..), Directive(..), DirScope(..)}
-import support.util.{joinWith, listLen, filterList, splitOnChar, stringTrim}
+import tools.lint_core.{Finding(..), Directive(..), DirScope(..), Summary(..)}
+import tools.lint_index.{Answer(..), makeStagingDir, stageAndRename}
+import support.util.{joinWith, listLen, filterList}
 import support.char.{isAlnum}
-import json.{
-  Json(..),
-  jArray,
-  jObject,
-  stringify,
-  parse,
-  get,
-  asString,
-  asInt,
-  asArray,
-  at,
+import support.sexp_value.{
+  SexpCursor,
+  atomText,
+  cursorOf,
+  cursorFailed,
+  cursorAtEnd,
+  cursorOpen,
+  cursorClose,
+  cursorInt,
+  cursorAtom,
+  cursorChar,
+  cursorList,
+  cursorPeek,
+  cursorAdvance,
+  cursorFail,
+  isCloseByte,
 }
 
 -- ── the cached unit ──────────────────────────────────────────────────────────
@@ -69,39 +85,63 @@ import json.{
 -- Everything a run needs about ONE file, whether freshly linted or loaded from a
 -- shard.  `dirty = True` means it was computed this run and its shard needs
 -- (re)writing; a cache hit is clean and writes nothing.
+--
+-- Findings are held in two groups, each finding with the rank of the rule that
+-- made it (`lint_walk.ranked`).  `freeFindings` come from rules that read no
+-- index and are valid for as long as the shard's stamp is.  `indexFindings` come
+-- from rules that read the index and are valid only while the index they saw is
+-- the one `indexKey` names or answers `indexAnswers` as it did then.
 public export data LintEntry = LintEntry {
   path : String,
   contentHash : String,
-  findings : List Finding,
-  dupOccs : List (String, Int, String, String),
+  freeFindings : List (Int, Finding),
+  indexFindings : List (Int, Finding),
+  indexKey : String,
+  indexAnswers : List Answer,
+  summaries : List (String, Summary),
   directives : List Directive,
   dirty : Bool,
 }
 
+-- What a shard answered.  `ShardStale` is a shard that is right for this file
+-- and this binary but whose index-reading findings were made against another
+-- index: its other fields are usable, its `indexFindings` are empty.
+public export data ShardLoad =
+  | ShardHit LintEntry
+  | ShardStale LintEntry
+  | ShardMiss
+
+-- The entry's findings in the order one run over the whole roster produces.
+export
+entryFindings : LintEntry -> List Finding
+entryFindings e = match e.indexFindings
+  [] => map snd e.freeFindings
+  _ => map snd (mergeRanked e.freeFindings e.indexFindings)
+
+mergeRanked : List (Int, Finding) -> List (Int, Finding) -> List (Int, Finding)
+mergeRanked [] ys = ys
+mergeRanked xs [] = xs
+mergeRanked (x :: xs) (y :: ys) =
+  if fst y < fst x then
+    y :: mergeRanked (x :: xs) ys
+  else
+    x :: mergeRanked xs (y :: ys)
+
 -- Bump when the shard schema changes in any way that would make an OLD shard
 -- decode into something WRONG rather than fail to decode.  A version mismatch is
--- a miss, so bumping is always safe and never needs a cache purge.
+-- a miss, so bumping is always safe and never needs a cache purge.  Shards from
+-- before the sexp codec (version 2, JSON) fail at the first byte.
 cacheFormatVersion : Int
-cacheFormatVersion = 2
+cacheFormatVersion = 3
 
 -- ── content hashing ──────────────────────────────────────────────────────────
--- The key on which a hit is decided.  `hashString` is FNV-1a but the extern
--- MASKS its result to 30 bits (mdk_hash_string, MDK_HASH_MASK), and 30 bits is
--- too thin to bet correctness on: a ~1e-9 collision between two versions of one
--- file is a STALE HIT, i.e. the exact silent wrongness this cache must not
--- manufacture.  So the key is two independent 30-bit projections plus the byte
--- length — the second lane hashes the source minus its first character, which
--- gives FNV a different starting state and so an unrelated projection.
---
--- Measured on the real corpus (206 files, 4.6 MB): 1 lane = 12.4 ms, 2 lanes =
--- 24 ms.  ~12 ms on a ~350 ms warm run to take the collision odds from ~1e-9 to
--- ~1e-18.  Bought.
+-- The key on which a hit is decided: the 64-bit word-wide digest of the source
+-- (`hashStringHex`).  `hashString` masks its result to 30 bits, too thin to bet
+-- correctness on: a collision between two versions of one file is a STALE HIT,
+-- the silent wrongness this cache must not manufacture.
 export
 contentHashOf : String -> String
-contentHashOf src =
-  let n = stringLength src
-  let lane2 = if n == 0 then 0 else hashString (stringSlice 1 n src)
-  "\{hashString src}.\{lane2}.\{n}"
+contentHashOf src = hashStringHex src
 
 -- ── the rule-set stamp ───────────────────────────────────────────────────────
 -- Editing a rule's LOGIC (its name unchanged) must invalidate every entry, so
@@ -116,49 +156,11 @@ contentHashOf src =
 -- changes too.  Consequence, CORRECT not a bug: for compiler devs the cache dies
 -- on every `make medaka`; for a user on a released binary it is stable.
 --
--- `readFileBytes`, never `readFile`.  `readFile` accepts only valid UTF-8,
--- so on a binary it returns `Err` rather than the bytes, and the fingerprint
--- would be no fingerprint at all.  The bytes themselves are what is hashed.
---
--- Kept behind this ONE function so it stays swappable.
---
--- Cost, MEASURED on the real 3.37 MB binary: ~10 ms readFileBytes + ~15 ms hash
--- = ~25 ms, paid once per run.  (#395 records 5.7–6.1 ms; that figure does not
--- reproduce — measure before quoting it.)  ~7% of a ~350 ms warm run.
+-- `hashFile` hashes the bytes raw, so a binary is no obstacle (`readFile` would
+-- refuse it as non-UTF-8).  Kept behind this ONE function so it stays swappable.
 export
 ruleSetStamp : Unit -> <IO> String
-ruleSetStamp _ = match readFileBytes (executablePath ())
-  Err _ => ""
-  Ok bs => "\{fnv62 bs (arrayLength bs) 0 fnv62Offset}"
-
--- FNV-1a widened to Medaka's full Int range instead of `hashString`'s 30 bits —
--- same single pass, 62 bits instead of 30.  The multiply runs in `U64`, which
--- wraps (an `Int` multiply traps), and the mask keeps the accumulator's low 62
--- bits, non-negative, so it renders as a stable decimal.
-fnv62Mask : Int
-fnv62Mask = 4611686018427387903
-
--- The FNV-1a 64-bit offset basis (14695981039346656037) reduced mod 2^62 — the
--- literal itself exceeds Int's max magnitude and will not lex.
-fnv62Offset : Int
-fnv62Offset = 860922984064492325
-
-fnv62Prime : Int
-fnv62Prime = 1099511628211
-
-fnv62 : Array Int -> Int -> Int -> Int -> Int
-fnv62 bs n i acc
-  | i >= n = acc
-  | otherwise =
-    fnv62
-      bs
-      n
-      (i + 1)
-      (bitAnd
-        fnv62Mask
-        (U64.toIntTruncating
-          (U64.truncate (bitXor acc (arrayGetUnsafe i bs))
-            * U64.truncate fnv62Prime)))
+ruleSetStamp _ = resultOr "" (hashFile (executablePath ()))
 
 -- ── shard paths ──────────────────────────────────────────────────────────────
 
@@ -176,7 +178,7 @@ cacheDirOf root = "\{root}/.medaka/lint-cache"
 export
 shardPathOf : String -> String -> String
 shardPathOf cacheDir srcPath =
-  "\{cacheDir}/\{sanitizePath srcPath}-\{hashString srcPath}.json"
+  "\{cacheDir}/\{sanitizePath srcPath}-\{hashString srcPath}.sx"
 
 -- Map a path to [A-Za-z0-9._-]*, keeping the tail (the basename end is the
 -- legible part) so shard names stay recognisable when eyeballing the dir.
@@ -198,200 +200,250 @@ sanitizeChar c
   | otherwise = '_'
 
 -- ── encode ───────────────────────────────────────────────────────────────────
+-- A shard is one s-expression:
+--   (version "stamp" "path" "hash" "indexKey" (answers) (free) (index) (summaries) (directives))
+-- An older-format shard has a different list count, so its last read fails
+-- and it is a miss.
+-- read by the cursor reader of `support/sexp_value`, which records the first
+-- refusal and hands every later read a neutral value; the decoder checks it once
+-- at the end.
 
 export
 encodeEntry : String -> LintEntry -> String
 encodeEntry stamp e =
-  stringify
-    (jObject [
-      ("version", JInt cacheFormatVersion),
-      ("stamp", JString stamp),
-      ("path", JString e.path),
-      ("hash", JString e.contentHash),
-      ("findings", jArray (map encFinding e.findings)),
-      ("dupOccs", jArray (map encOcc e.dupOccs)),
-      ("directives", jArray (map encDirective e.directives)),
-    ])
+  "(\{intToString cacheFormatVersion} \{atomText stamp} \{atomText e.path} \{atomText e.contentHash} \{atomText e.indexKey} \{listText encAnswer e.indexAnswers} \{listText encRanked e.freeFindings} \{listText encRanked e.indexFindings} \{listText encNamedSummary e.summaries} \{listText encDirective e.directives})"
 
-encFinding : Finding -> Json
-encFinding f = jObject [
-  ("rule", JString f.rule),
-  ("message", JString f.message),
-  ("severity", JString (encSeverity f.severity)),
-  ("loc", encLoc f.loc),
-]
+listText : (a -> String) -> List a -> String
+listText f xs = "(" ++ joinWith " " (map f xs) ++ ")"
+
+encAnswer : Answer -> String
+encAnswer a = "(\{atomText a.ansQuestion} \{atomText a.ansDigest})"
+
+encRanked : (Int, Finding) -> String
+encRanked (rank, f) =
+  "(\{intToString rank} \{atomText f.rule} \{atomText f.message} \{encSeverity f.severity} \{encLoc f.loc})"
 
 encSeverity : Severity -> String
-encSeverity SevError = "error"
-encSeverity SevWarning = "warning"
+encSeverity SevError = "e"
+encSeverity SevWarning = "w"
 
-encLoc : Option Loc -> Json
-encLoc None = JNull
+encLoc : Option Loc -> String
+encLoc None = "()"
 encLoc (Some (Loc file l c el ec)) =
-  jArray [JString file, JInt l, JInt c, JInt el, JInt ec]
+  "(\{atomText file} \{intToString l} \{intToString c} \{intToString el} \{intToString ec})"
 
--- The occurrence's file is always this shard's own file, so it is not stored;
--- `decOcc` re-stamps it from the (verified) `path` field.  One less field that
--- could disagree with itself on load.
-encOcc : (String, Int, String, String) -> Json
-encOcc (_, line, name, key) = jArray [JInt line, JString name, JString key]
+-- `encSummary` and `summaryTag` have no wildcard arm, so a missing arm for a
+-- new summary kind is a non-exhaustive warning from `medaka check` and a
+-- runtime failure on the first store; `readSummary` falls through to a cursor
+-- failure, so a missing decode arm makes every shard holding that summary a
+-- miss.  The `lint_test.mdk` round trip of every `Summary` constructor pins
+-- both.
+encNamedSummary : (String, Summary) -> String
+encNamedSummary (rule, summary) = "(\{atomText rule} \{encSummary summary})"
 
-encDirective : Directive -> Json
-encDirective (Directive scope names) = jObject [
-  ("scope", encScope scope),
-  ("rules", jArray (map (n => JString n) names)),
-]
+encSummary : Summary -> String
+encSummary (DupOccs occs) =
+  "(\{summaryTag (DupOccs occs)} \{listText encOcc occs})"
 
-encScope : DirScope -> Json
-encScope DScopeFile = JString "file"
-encScope (DScopeLine l) = JInt l
+summaryTag : Summary -> String
+summaryTag (DupOccs _) = "d"
+
+encOcc : (Int, String, String) -> String
+encOcc (line, name, key) =
+  "(\{intToString line} \{atomText name} \{atomText key})"
+
+encDirective : Directive -> String
+encDirective (Directive scope names) =
+  "(\{encScope scope} \{listText atomText names})"
+
+encScope : DirScope -> String
+encScope DScopeFile = "f"
+encScope (DScopeLine l) = "l \{intToString l}"
 
 -- ── decode ───────────────────────────────────────────────────────────────────
--- Every step is an `Option` and every failure is `None` (a miss).  This is the
--- half of the module the invariant is really about: `decodeEntry` is handed
--- whatever bytes are on disk, which may be a shard from a different compiler, a
--- half-written file, or something an editor mangled.
+-- Every failure is `ShardMiss`.  This is the half of the module the invariant is
+-- really about: `decodeEntry` is handed whatever bytes are on disk, which may be
+-- a shard from a different compiler, a half-written file, or something an editor
+-- mangled.
 
 -- `path` and `hash` are checked against what the CALLER observed on disk, so a
--- shard can only ever answer for the exact file+content it was written from.
+-- shard can only ever answer for the exact file+content it was written from; the
+-- stamp against the running binary.  `indexKey` is the fingerprint of the index
+-- this run holds and `answersHold` re-asks a shard's recorded questions of it:
+-- a shard that agrees on everything else but on neither is `ShardStale`.
 export
-decodeEntry : String -> String -> String -> String -> Option LintEntry
-decodeEntry stamp path hash text = match parse text
-  Err _ => None
-  Ok j =>
-    if decInt "version" j /= Some cacheFormatVersion
-      || decStr "stamp" j /= Some stamp
-      || decStr "path" j /= Some path
-      || decStr "hash" j /= Some hash then
-      None
+decodeEntry : String ->
+  String ->
+  (List Answer -> Bool) ->
+  String ->
+  String ->
+  String ->
+  ShardLoad
+decodeEntry stamp indexKey answersHold path hash text =
+  let cur = cursorOf text
+  let _ = cursorOpen cur
+  let v = cursorInt cur
+  let st = cursorAtom cur
+  let p = cursorAtom cur
+  let h = cursorAtom cur
+  if cursorFailed cur
+    || v /= cacheFormatVersion
+    || st /= stamp
+    || p /= path
+    || h /= hash then
+    ShardMiss
+  else
+    let key = cursorAtom cur
+    let answers = cursorList readAnswer cur
+    let free = cursorList readRanked cur
+    let indexed = cursorList readRanked cur
+    let sums = cursorList readNamedSummary cur
+    let dirs = cursorList readDirective cur
+    let _ = cursorClose cur
+    if cursorFailed cur || not (cursorAtEnd cur) then
+      ShardMiss
     else
-      map3
-        (fs ds dirs => LintEntry {
-          path = path,
-          contentHash = hash,
-          findings = fs,
-          dupOccs = ds,
-          directives = dirs,
-          dirty = False,
-        })
-        (decList decFinding (get "findings" j))
-        (decList (decOcc path) (get "dupOccs" j))
-        (decList decDirective (get "directives" j))
+      let entry = LintEntry {
+        path = path,
+        contentHash = hash,
+        freeFindings = free,
+        indexFindings = indexed,
+        indexKey = key,
+        indexAnswers = answers,
+        summaries = sums,
+        directives = dirs,
+        dirty = False,
+      }
+      if key == indexKey || answersHold answers then
+        ShardHit entry
+      else
+        staleShard indexKey entry
 
-decStr : String -> Json -> Option String
-decStr k j = optBind (get k j) asString
+-- A shard kept for its index-free findings, summaries and directives alone: the
+-- index-reading findings and the answers they were made against are dropped.
+export
+staleShard : String -> LintEntry -> ShardLoad
+staleShard indexKey entry = ShardStale ({ entry |
+  indexFindings = [],
+  indexKey = indexKey,
+  indexAnswers = [],
+})
 
-decInt : String -> Json -> Option Int
-decInt k j = optBind (get k j) asInt
+readAnswer : SexpCursor -> Answer
+readAnswer cur =
+  let _ = cursorOpen cur
+  let question = cursorAtom cur
+  let digest = cursorAtom cur
+  let _ = cursorClose cur
+  Answer { ansQuestion = question, ansDigest = digest }
 
--- A JArray of decodable elements → a List, all-or-nothing: one bad element
--- fails the whole shard rather than silently yielding a SHORTER list, which
--- would be a hit that quietly lost findings.
-decList : (Json -> Option a) -> Option Json -> Option (List a)
-decList f (Some j) =
-  optBind (asArray j) (arr => decListGo f arr 0 (arrayLength arr))
-decList _ None = None
+readRanked : SexpCursor -> (Int, Finding)
+readRanked cur =
+  let _ = cursorOpen cur
+  let rank = cursorInt cur
+  let rule = cursorAtom cur
+  let message = cursorAtom cur
+  let sev = readSeverity cur
+  let loc = readLoc cur
+  let _ = cursorClose cur
+  (
+    rank,
+    Finding {
+      rule = rule,
+      message = message,
+      severity = sev,
+      loc = loc,
+      fix = None,
+    },
+  )
 
-decListGo : (Json -> Option a) -> Array Json -> Int -> Int -> Option (List a)
-decListGo f arr i n
-  | i >= n = Some []
-  | otherwise = map2 (::) (f (arrayGetUnsafe i arr)) (decListGo f arr (i + 1) n)
+readSeverity : SexpCursor -> Severity
+readSeverity cur =
+  let c = cursorChar cur
+  if c == 101 then
+    SevError
+  else if c == 119 then
+    SevWarning
+  else
+    cursorFail cur SevWarning
 
-decFinding : Json -> Option Finding
-decFinding j =
-  map4
-    (r m s l =>
-      Finding { rule = r, message = m, severity = s, loc = l, fix = None })
-    (decStr "rule" j)
-    (decStr "message" j)
-    (optBind (decStr "severity" j) decSeverity)
-    (decLoc (get "loc" j))
+-- `()` is no location; otherwise `(file line col endLine endCol)`.
+readLoc : SexpCursor -> Option Loc
+readLoc cur =
+  let _ = cursorOpen cur
+  if isCloseByte (cursorPeek cur) then
+    let _ = cursorAdvance cur
+    None
+  else
+    let file = cursorAtom cur
+    let l = cursorInt cur
+    let c = cursorInt cur
+    let el = cursorInt cur
+    let ec = cursorInt cur
+    let _ = cursorClose cur
+    Some (Loc file l c el ec)
 
-decSeverity : String -> Option Severity
-decSeverity "error" = Some SevError
-decSeverity "warning" = Some SevWarning
-decSeverity _ = None
+readNamedSummary : SexpCursor -> (String, Summary)
+readNamedSummary cur =
+  let _ = cursorOpen cur
+  let rule = cursorAtom cur
+  let summary = readSummary cur
+  let _ = cursorClose cur
+  (rule, summary)
 
--- `loc` is `null` (no location) or a 5-element array.  A MISSING key is None
--- (malformed → miss), which is why the null case is matched explicitly rather
--- than folded in with it.
-decLoc : Option Json -> Option (Option Loc)
-decLoc (Some JNull) = Some None
-decLoc (Some j) =
-  map
-    (l => Some l)
-    (map5
-      (f a b c d => Loc f a b c d)
-      (optBind (at 0 j) asString)
-      (optBind (at 1 j) asInt)
-      (optBind (at 2 j) asInt)
-      (optBind (at 3 j) asInt)
-      (optBind (at 4 j) asInt))
-decLoc None = None
+-- The tag names the constructor; a tag no constructor owns fails the cursor.
+readSummary : SexpCursor -> Summary
+readSummary cur =
+  let _ = cursorOpen cur
+  let tag = cursorChar cur
+  let summary =
+    if tag == 100 then
+      DupOccs (cursorList readOcc cur)
+    else
+      cursorFail cur (DupOccs [])
+  let _ = cursorClose cur
+  summary
 
-decOcc : String -> Json -> Option (String, Int, String, String)
-decOcc path j =
-  map3
-    (line name key => (path, line, name, key))
-    (optBind (at 0 j) asInt)
-    (optBind (at 1 j) asString)
-    (optBind (at 2 j) asString)
+readOcc : SexpCursor -> (Int, String, String)
+readOcc cur =
+  let _ = cursorOpen cur
+  let line = cursorInt cur
+  let name = cursorAtom cur
+  let key = cursorAtom cur
+  let _ = cursorClose cur
+  (line, name, key)
 
-decDirective : Json -> Option Directive
-decDirective j =
-  map2
-    (scope names => Directive scope names)
-    (optBind (get "scope" j) decScope)
-    (decList asString (get "rules" j))
-
-decScope : Json -> Option DirScope
-decScope (JString "file") = Some DScopeFile
-decScope (JInt l) = Some (DScopeLine l)
-decScope _ = None
-
--- ── Option combinators ───────────────────────────────────────────────────────
--- Local and monomorphic: the prelude's Applicative surface would dict-pass, and
--- this is the hot decode path.  (util.mdk has no map2..map5.)
-
-optBind : Option a -> (a -> Option b) -> Option b
-optBind (Some a) f = f a
-optBind None _ = None
-
-map2 : (a -> b -> c) -> Option a -> Option b -> Option c
-map2 f (Some a) (Some b) = Some (f a b)
-map2 _ _ _ = None
-
-map3 : (a -> b -> c -> d) -> Option a -> Option b -> Option c -> Option d
-map3 f (Some a) (Some b) (Some c) = Some (f a b c)
-map3 _ _ _ _ = None
-
-map4 : (a -> b -> c -> d -> e) ->
-  Option a ->
-  Option b ->
-  Option c ->
-  Option d ->
-  Option e
-map4 f (Some a) (Some b) (Some c) (Some d) = Some (f a b c d)
-map4 _ _ _ _ _ = None
-
-map5 : (a -> b -> c -> d -> e -> f) ->
-  Option a ->
-  Option b ->
-  Option c ->
-  Option d ->
-  Option e ->
-  Option f
-map5 f (Some a) (Some b) (Some c) (Some d) (Some e) = Some (f a b c d e)
-map5 _ _ _ _ _ _ = None
+readDirective : SexpCursor -> Directive
+readDirective cur =
+  let _ = cursorOpen cur
+  let tag = cursorChar cur
+  let scope =
+    if tag == 102 then
+      DScopeFile
+    else if tag == 108 then
+      DScopeLine (cursorInt cur)
+    else
+      cursorFail cur DScopeFile
+  let names = cursorList cursorAtom cur
+  let _ = cursorClose cur
+  Directive scope names
 
 -- ── load ─────────────────────────────────────────────────────────────────────
 
--- Try to answer for `path` at content `hash`.  `None` on any doubt whatsoever.
+-- Try to answer for `path` at content `hash`.  `ShardMiss` on any doubt
+-- whatsoever.
 export
-loadEntry : String -> String -> String -> String -> <IO> Option LintEntry
-loadEntry cacheDir stamp path hash = match readFile (shardPathOf cacheDir path)
-  Err _ => None
-  Ok text => decodeEntry stamp path hash text
+loadEntry : String ->
+  String ->
+  String ->
+  (List Answer -> Bool) ->
+  String ->
+  String ->
+  <IO> ShardLoad
+loadEntry cacheDir stamp indexKey answersHold path hash =
+  match readFile (shardPathOf cacheDir path)
+    Err _ => ShardMiss
+    Ok text => decodeEntry stamp indexKey answersHold path hash text
 
 -- ── store ────────────────────────────────────────────────────────────────────
 
@@ -444,38 +496,13 @@ storeGo cacheDir tmp stamp (e :: rest) =
 -- deliberate: the invariant is about never being WRONG, not never leaking.
 storeOne : String -> String -> String -> LintEntry -> <IO> Unit
 storeOne cacheDir tmp stamp e =
-  let staged = "\{tmp}/shard.json"
-  match writeFile staged (encodeEntry stamp e)
-    Err _ => ()
-    Ok _ => match rename staged (shardPathOf cacheDir e.path)
-      Err _ =>
-        let _ = removeFile staged
-        ()
-      Ok _ => ()
+  stageAndRename tmp (shardPathOf cacheDir e.path) (encodeEntry stamp e)
 
 -- `mkdir -p` for the two-level cache dir (`<root>/.medaka/lint-cache`).  An
 -- already-existing dir makes `makeDir` fail (EEXIST), which is success here, so
 -- the result is judged by `fileExists`, not by makeDir's own status.
 ensureCacheDir : String -> <IO> Result String Unit
 ensureCacheDir cacheDir =
-  let _ = makeDir (parentOfCacheDir cacheDir)
+  let _ = makeDir (dirname cacheDir)
   let _ = makeDir cacheDir
   if fileExists cacheDir then Ok () else Err "cannot create \{cacheDir}"
-
-parentOfCacheDir : String -> String
-parentOfCacheDir cacheDir =
-  joinWith "/" (dropLastSeg (splitOnChar '/' cacheDir))
-
-dropLastSeg : List String -> List String
-dropLastSeg [] = []
-dropLastSeg [_] = []
-dropLastSeg (x :: rest) = x :: dropLastSeg rest
-
--- A staging dir unique to THIS process, inside the cache dir (see storeEntries).
-makeStagingDir : String -> <IO> Result String String
-makeStagingDir cacheDir =
-  match runCommandOk "mktemp" ["-d", "\{cacheDir}/.staging_XXXXXX"]
-    Err e => Err e
-    Ok (out, _) =>
-      let dir = stringTrim out
-      if dir == "" then Err "mktemp -d printed no path" else Ok dir

@@ -7,8 +7,7 @@ description: Add a lint rule to `medaka lint` - the rule module, the single regi
 
 One rule = one module + one registry line. The framework (`lint_core`, `lint_dup`, `lint_walk`)
 and the CLI never name a rule; `compiler/tools/lint_registry.mdk` is the only place that lists them
-(`lint_shared` holds the `ruleName*` constants, and `lint_walk` names `rule-duplicate-body` for the
-cross-file cache seam). Module map: `compiler/tools/ARCHITECTURE.md`.
+(`lint_shared` holds the `ruleName*` constants). Module map: `compiler/tools/ARCHITECTURE.md`.
 
 ## 1. The module
 
@@ -36,18 +35,21 @@ exported only once a second module reads it. Rule-name constants live in `lint_s
 
 In `lint_registry.mdk` add `import tools.lint_rule_<name> as Alias` and one `Alias.rule,` entry in
 `allRules`. The list position IS the output order of findings; place the entry where its output
-should sort. Cross-file rules go in the cross-file registry instead (`allCrossFileRules`), and
-three things follow:
+should sort. Cross-file rules are `ProjectRule`s and go in the project registry instead
+(`allProjectRules`), and three things follow:
 
-- `crossFileCacheSound` (`lint_walk.mdk`) is true only while the registry holds exactly the one
-  duplicate-body rule. A second cross-file rule turns it False, which silently disables `--cache`
-  (the hook's warm replay becomes a cold ~9 CPU-s run). Before landing it, give the new rule its
-  own cached per-file input in `lint_cache.mdk` and feed it through `runCrossFileRulesFromOccs`,
-  then relax `crossFileCacheSound`; do not land the slowdown unnoticed.
-- A cross-file rule may not be `ratchet = Baselined`: a baseline row is per file and a cross-file
-  finding has none, so nothing would enforce it. `crossFileMetaProblems` rejects it and
-  `lint_test.mdk` runs that check over `allCrossFileRules`.
-- A cross-file rule with `scope = Internal` is fine: `dropInactiveInternalCross` filters its
+- A project rule has a `prSummarize` (one file to a `Summary`, a pure function of that file) and a
+  `prEvaluate` (every file's summary to findings, run on every run). Add a `Summary` constructor
+  with its codec arms in `lint_cache.mdk` (`encSummary`, `summaryTag`, `readSummary`; the encoder
+  has no wildcard arm, so a missing arm is a non-exhaustive warning from `medaka check` and a
+  failure on the first store; the decoder has no such check, so a missing `readSummary` arm makes
+  every shard holding that summary a miss, and the `lint_test.mdk` round trip of every `Summary`
+  constructor is what catches it). Every registered rule's summary is stored in the shard, so
+  `--cache` stays on with no switch to relax.
+- A project rule may not be `ratchet = Baselined`: a baseline row is per file and a cross-file
+  finding has none, so nothing would enforce it. `projectRuleMetaProblems` rejects it and
+  `lint_test.mdk` runs that check over `allProjectRules`.
+- A project rule with `scope = Internal` is fine: `dropInactiveInternalProject` filters its
   findings by whether internal rules are active for the file each lands in, on the text, `--json`,
   `--cache` and MCP paths alike.
 
@@ -236,3 +238,113 @@ and `hints = compileHints hintRows`, `mkVisitorRule meta (idx path facts pos dec
 **Do not use a row** for a rewrite that is not one expression to another (declaration or pattern
 rewrites, several statements), that needs types, that depends on context the matcher cannot see
 (strictness of a default, whether a scrutinee is a value), or whose right side spans lines.
+
+## 10. Rules that read the declaration index
+
+`compiler/tools/lint_index.mdk` holds one row per declared name in two scopes: the stdlib's exported
+rows, and the project's rows (exported or not). A row carries the declared signature as written, or
+no signature (`NoSig`); it never carries an inferred type.
+
+**Declare the need.** `needs` says which index a rule reads (`Need` in `lint_core.mdk`):
+
+- `NeedsStdlibIndex`: the stdlib scope.
+- `NeedsProjectIndex`: the project scope and the stdlib scope (it implies `NeedsStdlibIndex`).
+- `NeedsWildIndex`: resolves an `import m.*` only (`stdlibLocalModAsked`). It also counts as an index
+  need for `readsIndex`, so a rule that declares it alone is handed the real stdlib index. Declare
+  `NeedsStdlibIndex` as well for any other row it reads.
+- `NeedsScopes`: the per-file scope model, not the index.
+
+A per-file rule receives the index as the `StdlibIndex` argument of its `check` or `Visits`. A
+project rule receives a `ProjectIndex` in `prEvaluate`. The runner (`indexFor`, `projectIndexFor` in
+`lint_walk.mdk`) hands either one the EMPTY index when the rule declares none of the index needs. An
+undeclared read therefore finds nothing on every run: it cannot serve a stale answer, but it misses
+what it should flag, so the rule's fixtures must include an index-dependent positive.
+
+**Cost.** The index is built only when a surviving rule needs it, after `--only` and `--disable`
+(`indexForRosterIn`). `NeedsProjectIndex` builds both scopes, `NeedsStdlibIndex` builds the stdlib
+scope, and `NeedsWildIndex` builds it when a linted file has an `import m.*` line. `--cache` keeps
+every rule in the roster, so it builds the index for all of them (`medaka_cli.mdk` passes the `--cache`
+flag to `indexForRun`).
+Do not add an index read to a rule without declaring its need. The LINT cell of
+`test/diff_compiler_check_ir_floor.sh` is the instruction-count ceiling on one `medaka lint` run that
+reads the stdlib index, so a new index read that costs real work shows there.
+
+**Query API.** Every accessor reads the index through one function, `asked`. The exported query
+functions of `lint_index.mdk`:
+
+- By namespace and name (`Ns` is `NsValue` or `NsType`; a constructor and a method are values):
+  `rowsNamed` (every candidate, project rows first, then stdlib rows), `projectRowsNamed`,
+  `stdlibRowsNamed`.
+- By module: `rowsIn` (the candidates one module declares), `rowsOfModule` (every row of a module),
+  `indexKnowsModule` (whether the index holds any row of a module), `stdlibHasValueModule` (whether a
+  stdlib module exports a signed value).
+- Enumerating a scope: `stdlibRows`, `projectRows`, `stdlibValueNames`, `stdlibValueModules`.
+- Wildcard guard: `localModAsked`.
+- Rows: `IndexRow` with the fields `ixrModule`, `ixrName`, `ixrKind` (`RkValue`, `RkCtor`, `RkType`,
+  `RkIface`, `RkMethod`), `ixrSig`, `ixrParent`, `ixrFields`, `ixrArity`, `ixrExported`, `ixrLoc`.
+  `rowSig` decodes a signature (`None` when the row has none or the text does not decode),
+  `rowHasSig` tests for one, and `rowNs` gives a kind's namespace.
+
+The per-file rule helpers in `lint_core.mdk` wrap the stdlib scope: `stdlibEntriesOf`, `stdlibSigIn`,
+`stdlibSigTextIn`, `stdlibIndexNames`, `stdlibAmbiguousNames`, `stdlibKnowsModule`. `projectIndexOf`
+turns a `StdlibIndex` into the `ProjectIndex` the `lint_index` accessors take, so a rule that reads
+project rows imports them from `tools.lint_index`. `lint_rule_duplicate_body.mdk` imports
+`ProjectIndex` from it; that is the one `tools` module such a rule adds to the §1 import list.
+
+The cache's own functions (`recording`, `recordedAnswers`, `answersHold`, `indexFingerprint`) are not
+for rules.
+
+**What a rule must not assume.**
+
+- Ambiguity. A name can be declared by several modules (`stdlibAmbiguousNames` lists them). Every
+  candidate comes back, and there is no "the row for X" accessor. Handle each candidate or abstain;
+  never take the head of the list.
+- Unsigned bindings. A row with no signature declares no type. Abstain on it.
+- Exports. Stdlib rows are exported-only, so an absent stdlib name is not an unexported one. Project
+  rows include unexported declarations, so filter on `ixrExported` for "importable".
+- Recording. Each accessor logs its question with a digest of the answer. A cached finding holds while
+  today's index gives every logged question the logged digest. A keyed lookup therefore invalidates a
+  finding only when the names it asked about change. Enumerating a scope (`stdlibRows`, `projectRows`,
+  `stdlibValueNames`, ...) logs the whole scope, so any row change in it invalidates the finding.
+  Prefer keyed lookups.
+- Abstention. `indexKnowsModule` is false for a module the index did not read. Treat that as "cannot
+  vouch", not as "absent".
+
+**Test.** `compiler/tools/lint_cache_test.mdk` is the soundness suite for the cache keys. Add a scenario
+for the new rule's lookups: edit a row the rule asks about and check that its cached finding is
+re-linted with the new answer; then check that a rule which declares no need sees an empty answer.
+Run it with `medaka test --native compiler/tools/lint_cache_test.mdk`. The accessors are pinned by
+`compiler/tools/lint_index_test.mdk` (`rowsNamed` ambiguity, unsigned rows, the empty index of an
+undeclared rule); add a case there for any new accessor.
+
+## 11. Project rules (`ProjectRule`)
+
+A project rule relates files, such as one body repeated in two of them. `mkProjectRule` (`lint_core.mdk`)
+takes two functions:
+
+- `summarize`: `String -> FileFacts -> Positions -> List Decl -> Summary`, a pure function of one
+  file. Its result is what the cache stores for that file.
+- `evaluate`: `ProjectIndex -> List (String, Summary) -> List Finding`. It sees every file's summary of
+  this rule in file order, and it runs on every run, over cached and fresh summaries alike. A finding
+  that names file A because of file B is therefore never cached under A.
+
+Steps, on top of §2:
+
+1. `Summary` in `lint_core.mdk` is a closed `data` type. Add one constructor there.
+2. Encode it in `lint_cache.mdk`: `encSummary` and `summaryTag` have one arm per constructor and no
+   wildcard. A missing arm is a non-exhaustive-match warning from `medaka check`; it is not a build
+   error, since the compiler-source gate ignores non-exhaustive warnings.
+3. Decode it in `readSummary`, which is not checked for exhaustiveness. It dispatches on the tag
+   character and fails the cursor on a tag it does not know. A missing decode arm compiles, and every
+   shard holding that summary becomes a miss: the file is re-linted, so the cost is time, not a wrong
+   answer. Add the decode arm in the same change, with a round trip case in
+   `compiler/tools/lint_cache_test.mdk`.
+4. Register the rule in `allProjectRules` (`lint_registry.mdk`). A name shared with a per-file rule is
+   listed once in `allRuleNames`.
+5. `ratchet = Baselined` is rejected by `projectRuleMetaProblems`, because a project finding has no
+   per-file count row to hold it. `scope = Internal` is allowed; the runner filters the findings by the
+   file they land in.
+6. `--cache` stays on. Every registered project rule's summary is stored in the shard, so a second
+   project rule needs no switch. `evaluate` receives the real `ProjectIndex` only when the rule declares
+   an index need, and an empty one otherwise.
+7. Each finding carries its own file in `loc`.

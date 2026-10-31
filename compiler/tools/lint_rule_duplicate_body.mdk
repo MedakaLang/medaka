@@ -2,6 +2,7 @@
 
 import frontend.ast.{Decl(..)}
 import frontend.parser.{Positions(..)}
+import tools.lint_index.{ProjectIndex}
 import driver.diagnostics.{Severity(..)}
 import tools.lint_core.{
   Category(..),
@@ -10,16 +11,19 @@ import tools.lint_core.{
   Ratchet(..),
   RuleMeta(..),
   Scope(..),
-  CrossFileRule,
-  mkCrossFileRule,
+  FileFacts,
+  ProjectRule,
+  Summary(..),
+  factDupClauses,
+  mkProjectRule,
 }
 import tools.lint_shared.{ruleNameDuplicateBody}
-import tools.lint_dup.{dupJoin, fileDupOccs}
+import tools.lint_dup.{dupJoin, dupOccsOfClauses}
 
 export
-rule : CrossFileRule
+rule : ProjectRule
 rule =
-  mkCrossFileRule
+  mkProjectRule
     RuleMeta {
       name = ruleNameDuplicateBody,
       summary =
@@ -33,7 +37,26 @@ rule =
       fixability = NotFixable,
       needs = [],
     }
-    ruleDuplicateBody
+    summarizeDuplicateBody
+    evaluateDuplicateBody
 
-ruleDuplicateBody : List (String, Positions, List Decl) -> List Finding
-ruleDuplicateBody files = dupJoin (flatMap fileDupOccs files)
+-- The file's body-key occurrences, which is all the join needs of it.
+summarizeDuplicateBody : String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  Summary
+summarizeDuplicateBody path facts _ _ =
+  DupOccs (map dropPath (dupOccsOfClauses path (factDupClauses facts)))
+
+dropPath : (String, Int, String, String) -> (Int, String, String)
+dropPath (_, line, name, key) = (line, name, key)
+
+evaluateDuplicateBody : ProjectIndex -> List (String, Summary) -> List Finding
+evaluateDuplicateBody _ files = dupJoin (flatMap occsOfFile files)
+
+occsOfFile : (String, Summary) -> List (String, Int, String, String)
+occsOfFile (path, DupOccs occs) = map (withPath path) occs
+
+withPath : String -> (Int, String, String) -> (String, Int, String, String)
+withPath path (line, name, key) = (path, line, name, key)

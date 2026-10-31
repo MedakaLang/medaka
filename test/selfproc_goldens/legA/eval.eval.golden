@@ -367,9 +367,11 @@ pFsync : Value a -> <FileWrite | a> Value a
 pGetEnv : Value a -> <Env | a> Value a
 pHashBool : Value a -> <a> Value a
 pHashChar : Value a -> <a> Value a
+pHashFile : Value a -> <FileRead | a> Value a
 pHashFloat : Value a -> <a> Value a
 pHashInt : Value a -> <a> Value a
 pHashString : Value a -> <a> Value a
+pHashStringHex : Value a -> <a> Value a
 pHypot : Value a -> Value a -> <a> Value a
 pI32Truncate : Value a -> <a> Value a
 pI64FromBits : Value a -> <a> Value a

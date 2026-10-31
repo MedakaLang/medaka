@@ -104,4 +104,6 @@ not bound, so the call is rejected or aborts.
 | `randomState` | canned | real | canned | real | real |
 | `restoreRandomState` | canned | real | canned | real | real |
 | `osEntropyBytes` | refused | real | refused | real | real |
+| `hashStringHex` | real | real | real | real | refused |
+| `hashFile` | refused | real | refused | real | refused |
 | `byteBlockWriteStdout` | canned | real | canned | real | real |

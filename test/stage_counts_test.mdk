@@ -55,16 +55,17 @@ import test_process.{
 fixture : String -> <Env "MEDAKA_ROOT"> String
 fixture rel = underRoot "test/stage_count_fixtures/\{rel}"
 
--- Spawns `medaka <args>` with counting on: (exit code, stdout, stderr), or the
--- spawn error as exit -1.
-spawnCounted : List String ->
+-- Spawns `medaka <args>` with counting on and the extra `NAME=value` settings:
+-- (exit code, stdout, stderr), or the spawn error as exit -1.
+spawnCountedEnv : List String ->
+  List String ->
   <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> (Int, String, String)
-spawnCounted args =
+spawnCountedEnv setting args =
   let spawned =
     boundedVerbSeconds
       (spawnTimeoutSeconds * 3)
       "env"
-      (["MEDAKA_STAGE_COUNTS=1", medakaBin] ++ args)
+      (["MEDAKA_STAGE_COUNTS=1"] ++ setting ++ [medakaBin] ++ args)
   spawnResult spawned
 
 -- A spawn error becomes exit -1 with the error as stderr.
@@ -109,8 +110,18 @@ probeRowsExit : String ->
   Int ->
   List String ->
   <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> (List String, Expectation)
-probeRowsExit name want args =
-  let (code, out, err) = spawnCounted args
+probeRowsExit name want args = probeRowsExitEnv name want [] args
+
+-- `probeRowsExit` with extra `NAME=value` settings for the child.  The lint
+-- probe runs with its own `XDG_CACHE_HOME`, so the row shards it reads are
+-- always cold and the stage counts do not depend on what ran before it.
+probeRowsExitEnv : String ->
+  Int ->
+  List String ->
+  List String ->
+  <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> (List String, Expectation)
+probeRowsExitEnv name want setting args =
+  let (code, out, err) = spawnCountedEnv setting args
   let rows = rowsOf name code err
   let clean = expectAll [
     expectFalse (contains "[stage]" out),
@@ -398,7 +409,11 @@ test "stage_counts: per-verb stage counts match stage_counts.golden" = withScrat
       probeRows "build_hello" ["build", fixture "hello.mdk", "-o", "\{dir}/h"],
       -- the native child's probe and runtime dependency are not the parent's modules
       probeRows "test_probe" ["test", fixture "test_probe.mdk"],
-      probeRows "lint_probe" ["lint", fixture "lint_probe.mdk"],
+      probeRowsExitEnv
+        "lint_probe"
+        0
+        ["XDG_CACHE_HOME=\{dir}/lint-index-cache"]
+        ["lint", fixture "lint_probe.mdk"],
       probeRowsExit "check_bad" 1 ["check", fixture "bad.mdk"],
       probeRowsExit "run_bad" 1 ["run", fixture "bad.mdk"],
       probeRowsExit "build_bad" 1 ["build", fixture "bad.mdk", "-o", "\{dir}/b"],

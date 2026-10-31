@@ -1,5 +1,5 @@
 # META
-source_lines=34
+source_lines=35
 stages=DESUGAR,MARK
 # SOURCE
 import support.ordmap.{OrdMap, omEmpty, omFromPairs}
@@ -11,6 +11,7 @@ runtimePathCount : String -> Int
 runtimePathCount "rename" = 2
 runtimePathCount "readFile" = 1
 runtimePathCount "readFileBytes" = 1
+runtimePathCount "hashFile" = 1
 runtimePathCount "writeFile" = 1
 runtimePathCount "writeFileBytes" = 1
 runtimePathCount "writeFileMode" = 1
@@ -44,6 +45,7 @@ fileGrantExterns =
 (DFunDef false "runtimePathCount" ((PLit (LString "rename"))) (ELit (LInt 2)))
 (DFunDef false "runtimePathCount" ((PLit (LString "readFile"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "readFileBytes"))) (ELit (LInt 1)))
+(DFunDef false "runtimePathCount" ((PLit (LString "hashFile"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "writeFile"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "writeFileBytes"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "writeFileMode"))) (ELit (LInt 1)))
@@ -68,6 +70,7 @@ fileGrantExterns =
 (DFunDef false "runtimePathCount" ((PLit (LString "rename"))) (ELit (LInt 2)))
 (DFunDef false "runtimePathCount" ((PLit (LString "readFile"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "readFileBytes"))) (ELit (LInt 1)))
+(DFunDef false "runtimePathCount" ((PLit (LString "hashFile"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "writeFile"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "writeFileBytes"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "writeFileMode"))) (ELit (LInt 1)))

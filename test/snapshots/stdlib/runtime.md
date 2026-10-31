@@ -1,5 +1,5 @@
 # META
-source_lines=1080
+source_lines=1090
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -553,6 +553,16 @@ extern hashFloat : Float -> Int
 
 -- | The hash of a string.
 extern hashString : String -> Int
+
+-- | A 64-bit digest of a string's UTF-8 bytes, as 16 lowercase hex
+-- characters. Unlike `hashString` it is wide enough to key a cache on, and it
+-- agrees with `hashFile` on equal bytes. Not cryptographic.
+extern hashStringHex : String -> String
+
+-- | The same digest over a file's bytes, or `Err` with the host's message.
+-- The bytes are hashed raw, so a file that is not valid UTF-8 is hashed, not
+-- refused.
+extern hashFile : (path : String) -> <FileRead path> Result String String
 
 -- | The hash of a character.
 extern hashChar : Char -> Int
@@ -1173,6 +1183,8 @@ extern stringToLower : String -> String
 (DExtern false "hashInt" (TyFun (TyCon "Int") (TyCon "Int")))
 (DExtern false "hashFloat" (TyFun (TyCon "Float") (TyCon "Int")))
 (DExtern false "hashString" (TyFun (TyCon "String") (TyCon "Int")))
+(DExtern false "hashStringHex" (TyFun (TyCon "String") (TyCon "String")))
+(DExtern false "hashFile" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DExtern false "hashChar" (TyFun (TyCon "Char") (TyCon "Int")))
 (DExtern false "hashBool" (TyFun (TyCon "Bool") (TyCon "Int")))
 (DExtern false "pi" (TyCon "Float"))
@@ -1388,6 +1400,8 @@ extern stringToLower : String -> String
 (DExtern false "hashInt" (TyFun (TyCon "Int") (TyCon "Int")))
 (DExtern false "hashFloat" (TyFun (TyCon "Float") (TyCon "Int")))
 (DExtern false "hashString" (TyFun (TyCon "String") (TyCon "Int")))
+(DExtern false "hashStringHex" (TyFun (TyCon "String") (TyCon "String")))
+(DExtern false "hashFile" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DExtern false "hashChar" (TyFun (TyCon "Char") (TyCon "Int")))
 (DExtern false "hashBool" (TyFun (TyCon "Bool") (TyCon "Int")))
 (DExtern false "pi" (TyCon "Float"))

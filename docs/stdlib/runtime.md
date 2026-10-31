@@ -765,6 +765,26 @@ hashString : String -> Int
 
 The hash of a string.
 
+### `hashStringHex`
+
+```
+hashStringHex : String -> String
+```
+
+A 64-bit digest of a string's UTF-8 bytes, as 16 lowercase hex
+characters. Unlike `hashString` it is wide enough to key a cache on, and it
+agrees with `hashFile` on equal bytes. Not cryptographic.
+
+### `hashFile`
+
+```
+hashFile : (path : String) -> <FileRead path> Result String String
+```
+
+The same digest over a file's bytes, or `Err` with the host's message.
+The bytes are hashed raw, so a file that is not valid UTF-8 is hashed, not
+refused.
+
 ### `hashChar`
 
 ```

@@ -1,5 +1,5 @@
 # META
-source_lines=180
+source_lines=194
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` facade.  The framework lives in
@@ -16,6 +16,8 @@ import tools.lint_walk.{
   lintProgramFacts,
   mkFileFacts,
   mkFileFactsAt,
+  mkFileFactsIn,
+  localModStates,
   withLocalMods,
 }
 import tools.lint_registry.{selectRules}
@@ -23,7 +25,7 @@ import tools.lint_registry.{selectRules}
 export import tools.lint_core.{
   Applicability(..),
   Category(..),
-  CrossFileRule(..),
+  ProjectRule(..),
   DirScope(..),
   Directive(..),
   Finding(..),
@@ -37,20 +39,22 @@ export import tools.lint_core.{
   Scope(..),
   StdlibIndex(..),
   StdlibIndexError(..),
+  Summary(..),
   applicabilityText,
   emptyStdlibIndex,
   maxApplicability,
+  mkStdlibIndex,
+  projectIndexOf,
   ruleMetaName,
 }
 export import tools.lint_shared.{collectDirectives}
 export import tools.lint_fix.{FixRun(..), fixPassLimit, runParts}
-export import tools.lint_dup.{fileDupOccs}
 export import tools.lint_registry.{
-  allCrossFileRules,
+  allProjectRules,
   allRuleNames,
   allRules,
-  crossFileMetaProblems,
-  crossFileSelected,
+  projectRuleMetaProblems,
+  projectRuleSelected,
   selectRules,
 }
 export import tools.lint_walk.{
@@ -61,26 +65,36 @@ export import tools.lint_walk.{
   applySuppressionsDirs,
   applySuppressionsMulti,
   applySuppressionsMultiDirs,
+  buildProjectIndexResult,
   buildStdlibIndexResult,
-  crossFileCacheSound,
   factDirectives,
-  factDupOccs,
+  fileSummaries,
   findingToDiag,
+  indexForRoster,
+  indexForRun,
+  indexKeyFor,
   isFindingError,
   lintFileDiagTriple,
   lintFileDiagTripleParsed,
   lintParseSource,
   lintProgram,
   lintProgramFacts,
+  lintProgramRanked,
   lintToLines,
-  mergeCrossFileIntoTriples,
+  mergeProjectIntoTriples,
   mkFileFacts,
   mkFileFactsAt,
+  mkFileFactsIn,
+  localModStates,
+  projectIndexNeeded,
   projectWildMods,
-  runCrossFileRules,
-  runCrossFileRulesFromOccs,
+  ranked,
+  rankedIndexRules,
+  rosterNeeds,
+  runProjectRules,
+  runProjectRulesOver,
+  splitByIndex,
   splitLintNames,
-  stdlibFingerprint,
   stdlibIndexNeeded,
   stdlibIndexNeededFor,
   wildIndexNeeded,
@@ -187,14 +201,13 @@ editFindings idx rules localMods path src (decls, pos) =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "ppDiagCliSrc" false) (mem "parseErrDiag" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "Positions" false))))
-(DUse false (UseGroup ("tools" "lint_walk") ((mem "lintParseSource" false) (mem "lintProgramFacts" false) (mem "mkFileFacts" false) (mem "mkFileFactsAt" false) (mem "withLocalMods" false))))
+(DUse false (UseGroup ("tools" "lint_walk") ((mem "lintParseSource" false) (mem "lintProgramFacts" false) (mem "mkFileFacts" false) (mem "mkFileFactsAt" false) (mem "mkFileFactsIn" false) (mem "localModStates" false) (mem "withLocalMods" false))))
 (DUse false (UseGroup ("tools" "lint_registry") ((mem "selectRules" false))))
-(DUse true (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "CrossFileRule" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "applicabilityText" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "ruleMetaName" false))))
+(DUse true (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "ProjectRule" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "Summary" true) (mem "applicabilityText" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "mkStdlibIndex" false) (mem "projectIndexOf" false) (mem "ruleMetaName" false))))
 (DUse true (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false))))
 (DUse true (UseGroup ("tools" "lint_fix") ((mem "FixRun" true) (mem "fixPassLimit" false) (mem "runParts" false))))
-(DUse true (UseGroup ("tools" "lint_dup") ((mem "fileDupOccs" false))))
-(DUse true (UseGroup ("tools" "lint_registry") ((mem "allCrossFileRules" false) (mem "allRuleNames" false) (mem "allRules" false) (mem "crossFileMetaProblems" false) (mem "crossFileSelected" false) (mem "selectRules" false))))
-(DUse true (UseGroup ("tools" "lint_walk") ((mem "applyFindingDeny" false) (mem "applyFindingFilters" false) (mem "applyFixes" false) (mem "applySuppressions" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsMultiDirs" false) (mem "buildStdlibIndexResult" false) (mem "crossFileCacheSound" false) (mem "factDirectives" false) (mem "factDupOccs" false) (mem "findingToDiag" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "lintFileDiagTripleParsed" false) (mem "lintParseSource" false) (mem "lintProgram" false) (mem "lintProgramFacts" false) (mem "lintToLines" false) (mem "mergeCrossFileIntoTriples" false) (mem "mkFileFacts" false) (mem "mkFileFactsAt" false) (mem "projectWildMods" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "splitLintNames" false) (mem "stdlibFingerprint" false) (mem "stdlibIndexNeeded" false) (mem "stdlibIndexNeededFor" false) (mem "wildIndexNeeded" false))))
+(DUse true (UseGroup ("tools" "lint_registry") ((mem "allProjectRules" false) (mem "allRuleNames" false) (mem "allRules" false) (mem "projectRuleMetaProblems" false) (mem "projectRuleSelected" false) (mem "selectRules" false))))
+(DUse true (UseGroup ("tools" "lint_walk") ((mem "applyFindingDeny" false) (mem "applyFindingFilters" false) (mem "applyFixes" false) (mem "applySuppressions" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsMultiDirs" false) (mem "buildProjectIndexResult" false) (mem "buildStdlibIndexResult" false) (mem "factDirectives" false) (mem "fileSummaries" false) (mem "findingToDiag" false) (mem "indexForRoster" false) (mem "indexForRun" false) (mem "indexKeyFor" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "lintFileDiagTripleParsed" false) (mem "lintParseSource" false) (mem "lintProgram" false) (mem "lintProgramFacts" false) (mem "lintProgramRanked" false) (mem "lintToLines" false) (mem "mergeProjectIntoTriples" false) (mem "mkFileFacts" false) (mem "mkFileFactsAt" false) (mem "mkFileFactsIn" false) (mem "localModStates" false) (mem "projectIndexNeeded" false) (mem "projectWildMods" false) (mem "ranked" false) (mem "rankedIndexRules" false) (mem "rosterNeeds" false) (mem "runProjectRules" false) (mem "runProjectRulesOver" false) (mem "splitByIndex" false) (mem "splitLintNames" false) (mem "stdlibIndexNeeded" false) (mem "stdlibIndexNeededFor" false) (mem "wildIndexNeeded" false))))
 (DTypeSig true "fixSource" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Applicability") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LF.FixRun"))))))))))
 (DFunDef false "fixSource" ((PVar "idx") (PVar "limit") (PVar "only") (PVar "disable") (PVar "localMods") (PVar "path") (PVar "src")) (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "parseFailure") (EVar "src")) (EVar "path")) (EVar "e")))) (arm (PCon "Ok" (PVar "parsed")) () (EBlock (DoLet false false (PVar "editRules") (EApp (EApp (EVar "filter") (EVar "emitsEdits")) (EApp (EApp (EVar "selectRules") (EVar "only")) (EVar "disable")))) (DoExpr (EIf (EApp (EVar "isEmpty") (EVar "editRules")) (EApp (EApp (EApp (EApp (EVar "wholeDeclFix") (EVar "only")) (EVar "disable")) (EApp (EApp (EVar "LF.Settled") (EVar "src")) (ELit (LInt 0)))) (EVar "parsed")) (EMatch (EApp (EApp (EApp (EApp (EVar "LF.applyFixes") (EApp (EApp (EApp (EApp (EApp (EVar "editLinter") (EVar "idx")) (EVar "editRules")) (EVar "localMods")) (EVar "src")) (EVar "parsed"))) (EVar "limit")) (EVar "path")) (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "LF.fixErrorText") (EVar "e")))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "run")) () (EMatch (EApp (EVar "LF.runParts") (EVar "run")) (arm (PTuple PWild (PLit (LInt 0))) () (EApp (EApp (EApp (EApp (EVar "wholeDeclFix") (EVar "only")) (EVar "disable")) (EVar "run")) (EVar "parsed"))) (arm (PTuple (PVar "edited") PWild) () (EMatch (EApp (EVar "lintParseSource") (EVar "edited")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "parseFailure") (EVar "edited")) (EVar "path")) (EVar "e")))) (arm (PCon "Ok" (PVar "reparsed")) () (EApp (EApp (EApp (EApp (EVar "wholeDeclFix") (EVar "only")) (EVar "disable")) (EVar "run")) (EVar "reparsed"))))))))))))))
 (DTypeSig false "wholeDeclFix" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "LF.FixRun") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LF.FixRun")))))))
@@ -214,14 +227,13 @@ editFindings idx rules localMods path src (decls, pos) =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "ppDiagCliSrc" false) (mem "parseErrDiag" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "Positions" false))))
-(DUse false (UseGroup ("tools" "lint_walk") ((mem "lintParseSource" false) (mem "lintProgramFacts" false) (mem "mkFileFacts" false) (mem "mkFileFactsAt" false) (mem "withLocalMods" false))))
+(DUse false (UseGroup ("tools" "lint_walk") ((mem "lintParseSource" false) (mem "lintProgramFacts" false) (mem "mkFileFacts" false) (mem "mkFileFactsAt" false) (mem "mkFileFactsIn" false) (mem "localModStates" false) (mem "withLocalMods" false))))
 (DUse false (UseGroup ("tools" "lint_registry") ((mem "selectRules" false))))
-(DUse true (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "CrossFileRule" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "applicabilityText" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "ruleMetaName" false))))
+(DUse true (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "ProjectRule" true) (mem "DirScope" true) (mem "Directive" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "StdlibIndexError" true) (mem "Summary" true) (mem "applicabilityText" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "mkStdlibIndex" false) (mem "projectIndexOf" false) (mem "ruleMetaName" false))))
 (DUse true (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false))))
 (DUse true (UseGroup ("tools" "lint_fix") ((mem "FixRun" true) (mem "fixPassLimit" false) (mem "runParts" false))))
-(DUse true (UseGroup ("tools" "lint_dup") ((mem "fileDupOccs" false))))
-(DUse true (UseGroup ("tools" "lint_registry") ((mem "allCrossFileRules" false) (mem "allRuleNames" false) (mem "allRules" false) (mem "crossFileMetaProblems" false) (mem "crossFileSelected" false) (mem "selectRules" false))))
-(DUse true (UseGroup ("tools" "lint_walk") ((mem "applyFindingDeny" false) (mem "applyFindingFilters" false) (mem "applyFixes" false) (mem "applySuppressions" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsMultiDirs" false) (mem "buildStdlibIndexResult" false) (mem "crossFileCacheSound" false) (mem "factDirectives" false) (mem "factDupOccs" false) (mem "findingToDiag" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "lintFileDiagTripleParsed" false) (mem "lintParseSource" false) (mem "lintProgram" false) (mem "lintProgramFacts" false) (mem "lintToLines" false) (mem "mergeCrossFileIntoTriples" false) (mem "mkFileFacts" false) (mem "mkFileFactsAt" false) (mem "projectWildMods" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "splitLintNames" false) (mem "stdlibFingerprint" false) (mem "stdlibIndexNeeded" false) (mem "stdlibIndexNeededFor" false) (mem "wildIndexNeeded" false))))
+(DUse true (UseGroup ("tools" "lint_registry") ((mem "allProjectRules" false) (mem "allRuleNames" false) (mem "allRules" false) (mem "projectRuleMetaProblems" false) (mem "projectRuleSelected" false) (mem "selectRules" false))))
+(DUse true (UseGroup ("tools" "lint_walk") ((mem "applyFindingDeny" false) (mem "applyFindingFilters" false) (mem "applyFixes" false) (mem "applySuppressions" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsMultiDirs" false) (mem "buildProjectIndexResult" false) (mem "buildStdlibIndexResult" false) (mem "factDirectives" false) (mem "fileSummaries" false) (mem "findingToDiag" false) (mem "indexForRoster" false) (mem "indexForRun" false) (mem "indexKeyFor" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "lintFileDiagTripleParsed" false) (mem "lintParseSource" false) (mem "lintProgram" false) (mem "lintProgramFacts" false) (mem "lintProgramRanked" false) (mem "lintToLines" false) (mem "mergeProjectIntoTriples" false) (mem "mkFileFacts" false) (mem "mkFileFactsAt" false) (mem "mkFileFactsIn" false) (mem "localModStates" false) (mem "projectIndexNeeded" false) (mem "projectWildMods" false) (mem "ranked" false) (mem "rankedIndexRules" false) (mem "rosterNeeds" false) (mem "runProjectRules" false) (mem "runProjectRulesOver" false) (mem "splitByIndex" false) (mem "splitLintNames" false) (mem "stdlibIndexNeeded" false) (mem "stdlibIndexNeededFor" false) (mem "wildIndexNeeded" false))))
 (DTypeSig true "fixSource" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Applicability") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LF.FixRun"))))))))))
 (DFunDef false "fixSource" ((PVar "idx") (PVar "limit") (PVar "only") (PVar "disable") (PVar "localMods") (PVar "path") (PVar "src")) (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "parseFailure") (EVar "src")) (EVar "path")) (EVar "e")))) (arm (PCon "Ok" (PVar "parsed")) () (EBlock (DoLet false false (PVar "editRules") (EApp (EApp (EMethodRef "filter") (EVar "emitsEdits")) (EApp (EApp (EVar "selectRules") (EVar "only")) (EVar "disable")))) (DoExpr (EIf (EApp (EMethodRef "isEmpty") (EVar "editRules")) (EApp (EApp (EApp (EApp (EVar "wholeDeclFix") (EVar "only")) (EVar "disable")) (EApp (EApp (EVar "LF.Settled") (EVar "src")) (ELit (LInt 0)))) (EVar "parsed")) (EMatch (EApp (EApp (EApp (EApp (EVar "LF.applyFixes") (EApp (EApp (EApp (EApp (EApp (EVar "editLinter") (EVar "idx")) (EVar "editRules")) (EVar "localMods")) (EVar "src")) (EVar "parsed"))) (EVar "limit")) (EVar "path")) (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "LF.fixErrorText") (EVar "e")))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "run")) () (EMatch (EApp (EVar "LF.runParts") (EVar "run")) (arm (PTuple PWild (PLit (LInt 0))) () (EApp (EApp (EApp (EApp (EVar "wholeDeclFix") (EVar "only")) (EVar "disable")) (EVar "run")) (EVar "parsed"))) (arm (PTuple (PVar "edited") PWild) () (EMatch (EApp (EVar "lintParseSource") (EVar "edited")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "parseFailure") (EVar "edited")) (EVar "path")) (EVar "e")))) (arm (PCon "Ok" (PVar "reparsed")) () (EApp (EApp (EApp (EApp (EVar "wholeDeclFix") (EVar "only")) (EVar "disable")) (EVar "run")) (EVar "reparsed"))))))))))))))
 (DTypeSig false "wholeDeclFix" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "LF.FixRun") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LF.FixRun")))))))

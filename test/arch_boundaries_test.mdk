@@ -694,6 +694,9 @@ test "arch_boundaries: support.diag_codes closure matches its golden" =
 test "arch_boundaries: tools.lint_core closure matches its golden" =
   closurePin "tools.lint_core"
 
+test "arch_boundaries: tools.lint_index closure matches its golden" =
+  closurePin "tools.lint_index"
+
 test "arch_boundaries: tools.lint_fix closure matches its golden" =
   closurePin "tools.lint_fix"
 

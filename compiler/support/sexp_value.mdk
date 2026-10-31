@@ -81,6 +81,11 @@ renderAtom s
     textOf ([byteQuote] ++ flatMap escapeByte (bytesOf s) ++ [byteQuote])
   | otherwise = s
 
+-- One atom as the writer spells it: bare when it can be, quoted otherwise.
+export
+atomText : String -> String
+atomText s = renderAtom s
+
 export
 renderSExp : SExp -> String
 renderSExp (SAtom s) = renderAtom s
@@ -446,3 +451,55 @@ expectList arity path (SList items)
   | otherwise =
     shapeError path ("expected a list of " ++ intToString arity ++ " items")
 expectList _ path _ = shapeError path "expected a list"
+
+-- ── skipping ────────────────────────────────────────────────────────────────
+
+-- Steps over one node without building it.  A decoder that stores a sub-tree
+-- for later decoding keeps its text with `cursorSkipText`.
+export
+cursorSkip : SexpCursor -> Unit
+cursorSkip cur =
+  let p = skipWsAt cur.scBytes cur.scLen cur.scPos.value
+  cursorStep cur (skipNodeAt cur.scBytes cur.scLen p 0 False)
+
+-- The text of the next node, which the cursor steps over.  The node is checked
+-- for bracket balance only: decoding the text is what checks the rest.
+export
+cursorSkipText : SexpCursor -> String
+cursorSkipText cur =
+  let p = skipWsAt cur.scBytes cur.scLen cur.scPos.value
+  let e = skipNodeAt cur.scBytes cur.scLen p 0 False
+  let _ = cursorStep cur e
+  if p >= cur.scLen || e <= p then
+    cursorFail cur ""
+  else
+    sliceText cur.scBytes p e
+
+skipNodeAt : ByteBlock -> Int -> Int -> Int -> Bool -> Int
+skipNodeAt b n p depth inQ
+  | p >= n = n
+  | inQ =
+    let c = byteBlockGetUnsafe p b
+    if isBackslashByte c then
+      skipNodeAt b n (p + 2) depth True
+    else if isQuoteByte c then
+      if depth == 0 then p + 1 else skipNodeAt b n (p + 1) depth False
+    else
+      skipNodeAt b n (p + 1) depth True
+  | otherwise =
+    let c = byteBlockGetUnsafe p b
+    if isOpenByte c then
+      skipNodeAt b n (p + 1) (depth + 1) False
+    else if isCloseByte c then
+      if depth == 0 then
+        p
+      else if depth == 1 then
+        p + 1
+      else
+        skipNodeAt b n (p + 1) (depth - 1) False
+    else if isQuoteByte c then
+      skipNodeAt b n (p + 1) depth True
+    else if depth == 0 && isWsByte c then
+      p
+    else
+      skipNodeAt b n (p + 1) depth False

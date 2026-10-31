@@ -268,7 +268,11 @@ tyconun_allowed="compiler/entries/fuzz_gen_main.mdk
 compiler/frontend/ast.mdk
 compiler/frontend/desugar.mdk
 compiler/frontend/parser.mdk
+compiler/tools/lint_index.mdk
 compiler/tools/prop_runner_test.mdk"
+# `tools/lint_index.mdk` builds the result type of a constructor row (`T a b`)
+# from names read off PARSED declarations; lint never resolves, so there is no
+# identity to stamp (the same honest absence as the parser's own heads).
 # ⚠️ THIS LIST IS FILENAMES, so it cannot tell CONSTRUCTION from a PATTERN, and a
 # ⚠️ types/tc_mono.mdk IS on this list (as of #1110 unit D, in typecheck.mdk before the
 # Phase 4 split), and it is the one entry that mints the sentinel at a layer this

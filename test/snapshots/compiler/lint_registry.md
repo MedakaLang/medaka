@@ -1,14 +1,14 @@
 # META
-source_lines=166
+source_lines=167
 stages=DESUGAR,MARK
 # SOURCE
--- compiler/tools/lint_registry.mdk — THE REGISTRY: `allRules`, the cross-file
+-- compiler/tools/lint_registry.mdk — THE REGISTRY: `allRules`, the project-rule
 -- registry, and rule-name selection.  Adding a rule = write a `lint_rule_<name>`
 -- module exporting `rule`, import it here `as Alias` and append `Alias.rule,` to
 -- `allRules`.
 
 import support.util.{contains, anyList, filterList, isEmptyL}
-import tools.lint_core.{CrossFileRule(..), Ratchet(..), Rule(..), RuleMeta(..)}
+import tools.lint_core.{ProjectRule(..), Ratchet(..), Rule(..), RuleMeta(..)}
 import tools.lint_rule_internal_match_on_param as MatchOnParam
 import tools.lint_rule_stdlib_reimpl as StdlibReimpl
 import tools.lint_rule_not_eq as NotEq
@@ -87,35 +87,36 @@ allRules = [
   TestPreludeShadow.rule,
 ]
 
--- ── the cross-file registry ───────────────────────────────────────────────────
--- Adding a cross-file rule = a `lint_rule_*` module exporting `rule : CrossFileRule`
--- plus an `Alias.rule,` entry in `allCrossFileRules`.
+-- ── the project registry ──────────────────────────────────────────────────────
+-- Adding a project rule = a `lint_rule_*` module exporting `rule : ProjectRule`
+-- plus an `Alias.rule,` entry in `allProjectRules`.  Its summaries are cached
+-- with every other rule's, so a second entry keeps `--cache` on.
 export
-allCrossFileRules : List CrossFileRule
-allCrossFileRules = [DuplicateBody.rule]
+allProjectRules : List ProjectRule
+allProjectRules = [DuplicateBody.rule]
 
--- Metadata a cross-file rule may not carry.  A `Baselined` ratchet is enforced by
--- a per-file count row, and a cross-file finding has no file row to count
+-- Metadata a project rule may not carry.  A `Baselined` ratchet is enforced by
+-- a per-file count row, and a project finding has no file row to count
 -- against, so such a rule would be enforced by nothing.  (`Internal` scope is
 -- fine: the runner filters the tier's findings by the file they land in.)
 export
-crossFileMetaProblems : List CrossFileRule -> List String
-crossFileMetaProblems rules = flatMap crossFileRuleProblems rules
+projectRuleMetaProblems : List ProjectRule -> List String
+projectRuleMetaProblems rules = flatMap projectRuleProblems rules
 
-crossFileRuleProblems : CrossFileRule -> List String
-crossFileRuleProblems r = match r.meta.ratchet
+projectRuleProblems : ProjectRule -> List String
+projectRuleProblems r = match r.meta.ratchet
   Baselined => [
-    "cross-file rule `\{r.name}` is Baselined; only a per-file rule can be (no count row exists for a cross-file finding), so it would be enforced by nothing",
+    "project rule `\{r.name}` is Baselined; only a per-file rule can be (no count row exists for a project finding), so it would be enforced by nothing",
   ]
   Gated => []
 
--- Every registered rule name, per-file and cross-file, as plain Strings.
+-- Every registered rule name, per-file and project, as plain Strings.
 -- CLI-CONFORMANCE.md §5f: `medaka lint --only=nosuchrule` would otherwise be
 -- accepted silently — a typo'd rule name filters EVERY finding away and the run
 -- exits 0 looking clean.  The CLI validates `--only=`/`--disable=`/`--deny=` against
 -- this list, so the CLI receives only these Strings.
 -- Deduped, and in registry order: `rule-duplicate-body` is registered TWICE
--- (a same-file `Rule` and the cross-file `CrossFileRule` under one name), and
+-- (a same-file `Rule` and the `ProjectRule` under one name), and
 -- printing it twice in the known set reads as a bug in the list.
 export
 allRuleNames : List String
@@ -124,13 +125,13 @@ allRuleNames =
   perFile
     ++ filterList
       (n => not (contains n perFile))
-      (map crossRuleNameOf allCrossFileRules)
+      (map projectRuleNameOf allProjectRules)
 
 ruleNameOf : Rule -> String
 ruleNameOf r = r.name
 
-crossRuleNameOf : CrossFileRule -> String
-crossRuleNameOf r = r.name
+projectRuleNameOf : ProjectRule -> String
+projectRuleNameOf r = r.name
 
 -- ── runner ───────────────────────────────────────────────────────────────────
 
@@ -145,20 +146,20 @@ ruleSelected : List String -> List String -> Rule -> Bool
 ruleSelected only disable r =
   (isEmptyL only || contains r.name only) && not (contains r.name disable)
 
--- Does `--only`/`--disable` leave the cross-file duplicate-body rule active?
+-- Does `--only`/`--disable` leave some project rule active?
 export
-crossFileSelected : List String -> List String -> Bool
-crossFileSelected only disable =
-  anyList (crossRuleActive only disable) allCrossFileRules
+projectRuleSelected : List String -> List String -> Bool
+projectRuleSelected only disable =
+  anyList (projectRuleActive only disable) allProjectRules
 
 export
-crossRuleActive : List String -> List String -> CrossFileRule -> Bool
-crossRuleActive only disable r =
+projectRuleActive : List String -> List String -> ProjectRule -> Bool
+projectRuleActive only disable r =
   r.enabled
     && (isEmptyL only || contains r.name only)
     && not (contains r.name disable)
 
--- ── cross-file rule: duplicate-body (copy-paste detector) ──────────────────────
+-- ── project rule: duplicate-body (copy-paste detector) ──────────────────────
 -- Flags a top-level `DFunDef` whose ELoc-stripped body (+ param-pattern shape) is
 -- structurally identical to a top-level function in a DIFFERENT file.  The
 -- structural key reuses `ir.sexp.exprSexp` — the location-stripped AST serializer
@@ -170,7 +171,7 @@ crossRuleActive only disable r =
 -- sorted by (file, line).
 # DESUGAR
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false) (mem "isEmptyL" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "ProjectRule" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true))))
 (DUse false (UseAlias ("tools" "lint_rule_internal_match_on_param") "MatchOnParam"))
 (DUse false (UseAlias ("tools" "lint_rule_stdlib_reimpl") "StdlibReimpl"))
 (DUse false (UseAlias ("tools" "lint_rule_not_eq") "NotEq"))
@@ -208,29 +209,29 @@ crossRuleActive only disable r =
 (DUse false (UseAlias ("tools" "lint_rule_internal_test_equal_in_true") "TestEqualInTrue"))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
 (DFunDef false "allRules" () (EListLit (EVar "MatchOnParam.rule") (EVar "HandRolledDerivable.rule") (EVar "StdlibReimpl.rule") (EVar "BindThenDestructure.rule") (EVar "LambdaSection.rule") (EVar "IfMaxMin.rule") (EVar "AndThenPureMap.rule") (EVar "DestructureInParam.rule") (EVar "MissingSignature.rule") (EVar "NotEq.rule") (EVar "BoolSimplify.rule") (EVar "RemParity.rule") (EVar "DoubleReverse.rule") (EVar "FuseListPipeline.rule") (EVar "WhenUnless.rule") (EVar "ComplementPredicate.rule") (EVar "MatchToMap.rule") (EVar "OptionEliminators.rule") (EVar "EagerDefault.rule") (EVar "BindChainToDo.rule") (EVar "DeadCode.rule") (EVar "ConcatToInterp.rule") (EVar "SelfShadowExtern.rule") (EVar "PreferAssignOp.rule") (EVar "PromissoryReader.rule") (EVar "OrElseStaircase.rule") (EVar "CloneType.rule") (EVar "ClauseMap.rule") (EVar "DuplicateBodySameFile.rule") (EVar "DirectiveReason.rule") (EVar "RegexLiteral.rule") (EVar "TestBoolLiteralEqual.rule") (EVar "TestEqualInTrue.rule") (EVar "TestPreludeShadow.rule")))
-(DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
-(DFunDef false "allCrossFileRules" () (EListLit (EVar "DuplicateBody.rule")))
-(DTypeSig true "crossFileMetaProblems" (TyFun (TyApp (TyCon "List") (TyCon "CrossFileRule")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "crossFileMetaProblems" ((PVar "rules")) (EApp (EApp (EVar "flatMap") (EVar "crossFileRuleProblems")) (EVar "rules")))
-(DTypeSig false "crossFileRuleProblems" (TyFun (TyCon "CrossFileRule") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "crossFileRuleProblems" ((PVar "r")) (EMatch (EFieldAccess (EFieldAccess (EVar "r") "meta") "ratchet") (arm (PCon "Baselined") () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "cross-file rule `")) (EApp (EVar "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "` is Baselined; only a per-file rule can be (no count row exists for a cross-file finding), so it would be enforced by nothing"))))) (arm (PCon "Gated") () (EListLit))))
+(DTypeSig true "allProjectRules" (TyApp (TyCon "List") (TyCon "ProjectRule")))
+(DFunDef false "allProjectRules" () (EListLit (EVar "DuplicateBody.rule")))
+(DTypeSig true "projectRuleMetaProblems" (TyFun (TyApp (TyCon "List") (TyCon "ProjectRule")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "projectRuleMetaProblems" ((PVar "rules")) (EApp (EApp (EVar "flatMap") (EVar "projectRuleProblems")) (EVar "rules")))
+(DTypeSig false "projectRuleProblems" (TyFun (TyCon "ProjectRule") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "projectRuleProblems" ((PVar "r")) (EMatch (EFieldAccess (EFieldAccess (EVar "r") "meta") "ratchet") (arm (PCon "Baselined") () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "project rule `")) (EApp (EVar "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "` is Baselined; only a per-file rule can be (no count row exists for a project finding), so it would be enforced by nothing"))))) (arm (PCon "Gated") () (EListLit))))
 (DTypeSig true "allRuleNames" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "allRuleNames" () (EBlock (DoLet false false (PVar "perFile") (EApp (EApp (EVar "map") (EVar "ruleNameOf")) (EVar "allRules"))) (DoExpr (EBinOp "++" (EVar "perFile") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "perFile"))))) (EApp (EApp (EVar "map") (EVar "crossRuleNameOf")) (EVar "allCrossFileRules")))))))
+(DFunDef false "allRuleNames" () (EBlock (DoLet false false (PVar "perFile") (EApp (EApp (EVar "map") (EVar "ruleNameOf")) (EVar "allRules"))) (DoExpr (EBinOp "++" (EVar "perFile") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "perFile"))))) (EApp (EApp (EVar "map") (EVar "projectRuleNameOf")) (EVar "allProjectRules")))))))
 (DTypeSig false "ruleNameOf" (TyFun (TyCon "Rule") (TyCon "String")))
 (DFunDef false "ruleNameOf" ((PVar "r")) (EFieldAccess (EVar "r") "name"))
-(DTypeSig false "crossRuleNameOf" (TyFun (TyCon "CrossFileRule") (TyCon "String")))
-(DFunDef false "crossRuleNameOf" ((PVar "r")) (EFieldAccess (EVar "r") "name"))
+(DTypeSig false "projectRuleNameOf" (TyFun (TyCon "ProjectRule") (TyCon "String")))
+(DFunDef false "projectRuleNameOf" ((PVar "r")) (EFieldAccess (EVar "r") "name"))
 (DTypeSig true "selectRules" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Rule")))))
 (DFunDef false "selectRules" ((PVar "only") (PVar "disable")) (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "ruleSelected") (EVar "only")) (EVar "disable"))) (EVar "allRules")))
 (DTypeSig false "ruleSelected" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Rule") (TyCon "Bool")))))
 (DFunDef false "ruleSelected" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
-(DTypeSig true "crossFileSelected" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "crossFileSelected" ((PVar "only") (PVar "disable")) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "crossRuleActive") (EVar "only")) (EVar "disable"))) (EVar "allCrossFileRules")))
-(DTypeSig true "crossRuleActive" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CrossFileRule") (TyCon "Bool")))))
-(DFunDef false "crossRuleActive" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EFieldAccess (EVar "r") "enabled") (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
+(DTypeSig true "projectRuleSelected" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "projectRuleSelected" ((PVar "only") (PVar "disable")) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "projectRuleActive") (EVar "only")) (EVar "disable"))) (EVar "allProjectRules")))
+(DTypeSig true "projectRuleActive" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ProjectRule") (TyCon "Bool")))))
+(DFunDef false "projectRuleActive" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EFieldAccess (EVar "r") "enabled") (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
 # MARK
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false) (mem "isEmptyL" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "CrossFileRule" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "ProjectRule" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true))))
 (DUse false (UseAlias ("tools" "lint_rule_internal_match_on_param") "MatchOnParam"))
 (DUse false (UseAlias ("tools" "lint_rule_stdlib_reimpl") "StdlibReimpl"))
 (DUse false (UseAlias ("tools" "lint_rule_not_eq") "NotEq"))
@@ -268,23 +269,23 @@ crossRuleActive only disable r =
 (DUse false (UseAlias ("tools" "lint_rule_internal_test_equal_in_true") "TestEqualInTrue"))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
 (DFunDef false "allRules" () (EListLit (EVar "MatchOnParam.rule") (EVar "HandRolledDerivable.rule") (EVar "StdlibReimpl.rule") (EVar "BindThenDestructure.rule") (EVar "LambdaSection.rule") (EVar "IfMaxMin.rule") (EVar "AndThenPureMap.rule") (EVar "DestructureInParam.rule") (EVar "MissingSignature.rule") (EVar "NotEq.rule") (EVar "BoolSimplify.rule") (EVar "RemParity.rule") (EVar "DoubleReverse.rule") (EVar "FuseListPipeline.rule") (EVar "WhenUnless.rule") (EVar "ComplementPredicate.rule") (EVar "MatchToMap.rule") (EVar "OptionEliminators.rule") (EVar "EagerDefault.rule") (EVar "BindChainToDo.rule") (EVar "DeadCode.rule") (EVar "ConcatToInterp.rule") (EVar "SelfShadowExtern.rule") (EVar "PreferAssignOp.rule") (EVar "PromissoryReader.rule") (EVar "OrElseStaircase.rule") (EVar "CloneType.rule") (EVar "ClauseMap.rule") (EVar "DuplicateBodySameFile.rule") (EVar "DirectiveReason.rule") (EVar "RegexLiteral.rule") (EVar "TestBoolLiteralEqual.rule") (EVar "TestEqualInTrue.rule") (EVar "TestPreludeShadow.rule")))
-(DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
-(DFunDef false "allCrossFileRules" () (EListLit (EVar "DuplicateBody.rule")))
-(DTypeSig true "crossFileMetaProblems" (TyFun (TyApp (TyCon "List") (TyCon "CrossFileRule")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "crossFileMetaProblems" ((PVar "rules")) (EApp (EApp (EDictApp "flatMap") (EVar "crossFileRuleProblems")) (EVar "rules")))
-(DTypeSig false "crossFileRuleProblems" (TyFun (TyCon "CrossFileRule") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "crossFileRuleProblems" ((PVar "r")) (EMatch (EFieldAccess (EFieldAccess (EVar "r") "meta") "ratchet") (arm (PCon "Baselined") () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "cross-file rule `")) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "` is Baselined; only a per-file rule can be (no count row exists for a cross-file finding), so it would be enforced by nothing"))))) (arm (PCon "Gated") () (EListLit))))
+(DTypeSig true "allProjectRules" (TyApp (TyCon "List") (TyCon "ProjectRule")))
+(DFunDef false "allProjectRules" () (EListLit (EVar "DuplicateBody.rule")))
+(DTypeSig true "projectRuleMetaProblems" (TyFun (TyApp (TyCon "List") (TyCon "ProjectRule")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "projectRuleMetaProblems" ((PVar "rules")) (EApp (EApp (EDictApp "flatMap") (EVar "projectRuleProblems")) (EVar "rules")))
+(DTypeSig false "projectRuleProblems" (TyFun (TyCon "ProjectRule") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "projectRuleProblems" ((PVar "r")) (EMatch (EFieldAccess (EFieldAccess (EVar "r") "meta") "ratchet") (arm (PCon "Baselined") () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "project rule `")) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "` is Baselined; only a per-file rule can be (no count row exists for a project finding), so it would be enforced by nothing"))))) (arm (PCon "Gated") () (EListLit))))
 (DTypeSig true "allRuleNames" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "allRuleNames" () (EBlock (DoLet false false (PVar "perFile") (EApp (EApp (EMethodRef "map") (EVar "ruleNameOf")) (EVar "allRules"))) (DoExpr (EBinOp "++" (EVar "perFile") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "perFile"))))) (EApp (EApp (EMethodRef "map") (EVar "crossRuleNameOf")) (EVar "allCrossFileRules")))))))
+(DFunDef false "allRuleNames" () (EBlock (DoLet false false (PVar "perFile") (EApp (EApp (EMethodRef "map") (EVar "ruleNameOf")) (EVar "allRules"))) (DoExpr (EBinOp "++" (EVar "perFile") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "perFile"))))) (EApp (EApp (EMethodRef "map") (EVar "projectRuleNameOf")) (EVar "allProjectRules")))))))
 (DTypeSig false "ruleNameOf" (TyFun (TyCon "Rule") (TyCon "String")))
 (DFunDef false "ruleNameOf" ((PVar "r")) (EFieldAccess (EVar "r") "name"))
-(DTypeSig false "crossRuleNameOf" (TyFun (TyCon "CrossFileRule") (TyCon "String")))
-(DFunDef false "crossRuleNameOf" ((PVar "r")) (EFieldAccess (EVar "r") "name"))
+(DTypeSig false "projectRuleNameOf" (TyFun (TyCon "ProjectRule") (TyCon "String")))
+(DFunDef false "projectRuleNameOf" ((PVar "r")) (EFieldAccess (EVar "r") "name"))
 (DTypeSig true "selectRules" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Rule")))))
 (DFunDef false "selectRules" ((PVar "only") (PVar "disable")) (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "ruleSelected") (EVar "only")) (EVar "disable"))) (EVar "allRules")))
 (DTypeSig false "ruleSelected" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Rule") (TyCon "Bool")))))
 (DFunDef false "ruleSelected" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
-(DTypeSig true "crossFileSelected" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "crossFileSelected" ((PVar "only") (PVar "disable")) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "crossRuleActive") (EVar "only")) (EVar "disable"))) (EVar "allCrossFileRules")))
-(DTypeSig true "crossRuleActive" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CrossFileRule") (TyCon "Bool")))))
-(DFunDef false "crossRuleActive" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EFieldAccess (EVar "r") "enabled") (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
+(DTypeSig true "projectRuleSelected" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "projectRuleSelected" ((PVar "only") (PVar "disable")) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "projectRuleActive") (EVar "only")) (EVar "disable"))) (EVar "allProjectRules")))
+(DTypeSig true "projectRuleActive" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ProjectRule") (TyCon "Bool")))))
+(DFunDef false "projectRuleActive" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EFieldAccess (EVar "r") "enabled") (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))

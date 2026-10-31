@@ -930,6 +930,8 @@ The host primitives.
 - [`hashInt`](runtime.md#hashint)
 - [`hashFloat`](runtime.md#hashfloat)
 - [`hashString`](runtime.md#hashstring)
+- [`hashStringHex`](runtime.md#hashstringhex)
+- [`hashFile`](runtime.md#hashfile)
 - [`hashChar`](runtime.md#hashchar)
 - [`hashBool`](runtime.md#hashbool)
 - [`pi`](runtime.md#pi)

@@ -1,0 +1,1077 @@
+-- compiler/tools/lint_cache_test.mdk: sibling test for lint_cache.mdk and the
+-- `--cache` decision in lint_cmd.mdk (`[P-TEST-SIBLING]`, AGENTS.md).
+--
+-- Pins that a cached finding which read the declaration index is never served
+-- against an index it was not made from.  The subject is a probe rule (none is
+-- registered) that reports, for every file, the declared signature of `b.f` in
+-- the project and of `list.singleton` in a private stdlib, as the index it was
+-- handed shows them.  Each scenario runs the real `--cache` entry decision
+-- (`cachedEntryOf`) over two project files with isolated cache and stdlib
+-- directories, and grades the finding text and the count of files re-linted.
+--
+-- Scenarios a and c run twice: with the real key, and with a key that omits the
+-- index fingerprint (`indexKeyWith`).  The second run must serve a stale
+-- finding, which is what shows the fingerprint is the thing doing the work.
+--
+-- It reaches the filesystem, so it runs native:
+-- `medaka test --native compiler/tools/lint_cache_test.mdk`.
+
+import test.{
+  Expectation(..),
+  expectEqual,
+  expectNotEqual,
+  expectTrue,
+  expectFalse,
+  expectEach,
+  fail,
+}
+import test_process.{withScratchDir}
+import frontend.ast.{Decl}
+import frontend.parser.{Positions}
+import driver.diagnostics.{Severity(..)}
+import string.{replace}
+import support.util.{joinWith, listLen, filterList}
+import tools.printer.{ppTy}
+import tools.lint_index.{
+  IndexRow(..),
+  RowKind(..),
+  Ns(..),
+  rowSig,
+  rowsIn,
+  rowsNamed,
+  projectRows,
+}
+import tools.lint.{
+  StdlibIndex,
+  Rule,
+  Finding(..),
+  Category(..),
+  Scope(..),
+  Ratchet(..),
+  Fixability(..),
+  Need(..),
+  RuleMeta(..),
+  lintParseSource,
+  lintProgram,
+  projectIndexOf,
+}
+import tools.lint_core.{
+  mkRule,
+  FileFacts(..),
+  stdlibSigTextIn,
+  recordingStdlibIndex,
+}
+import tools.lint_walk.{
+  indexForRosterIn,
+  indexKeyFor,
+  indexKeyWith,
+  mkFileFactsAt,
+  lintProgramFacts,
+}
+import tools.lint_cmd.{cachedEntryOf, cachedEntryWith}
+import tools.lint_cache.{
+  LintEntry(..),
+  entryFindings,
+  storeEntries,
+  cacheDirOf,
+  shardPathOf,
+}
+
+-- ── the probe ───────────────────────────────────────────────────────────────
+
+probeMeta : String -> List Need -> RuleMeta
+probeMeta name needs = RuleMeta {
+  name = name,
+  summary = "probe",
+  doc = "probe",
+  category = Suspicious,
+  scope = Universal,
+  ratchet = Baselined,
+  defaultSeverity = SevWarning,
+  fixability = NotFixable,
+  needs = needs,
+}
+
+probeCheck : String ->
+  StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+probeCheck name idx _ _ _ _ = [
+  Finding {
+    rule = name,
+    message = probeText idx,
+    severity = SevWarning,
+    loc = None,
+    fix = None,
+  },
+]
+
+probeText : StdlibIndex -> String
+probeText idx =
+  "b.f : \{projectSig idx "b" "f"}; list.singleton : \{optionOr "<none>" (stdlibSigTextIn idx "list" "singleton")}"
+
+projectSig : StdlibIndex -> String -> String -> String
+projectSig idx modId name =
+  match map sigText (rowsIn (projectIndexOf idx) modId NsValue name)
+    [] => "<none>"
+    sigs => joinWith "," sigs
+
+sigText : IndexRow -> String
+sigText r = match rowSig r
+  Some t => ppTy t
+  None => "<unsigned>"
+
+readerRule : Rule
+readerRule =
+  mkRule
+    (probeMeta "probe-reader" [NeedsProjectIndex])
+    (probeCheck "probe-reader")
+    None
+
+-- Reads the same index but declares no need for it.
+blindRule : Rule
+blindRule = mkRule (probeMeta "probe-blind" []) (probeCheck "probe-blind") None
+
+-- ── the harness ─────────────────────────────────────────────────────────────
+
+-- Where one scenario's files live.  `shards` holds the stdlib's row shards, so
+-- nothing is shared with the user's cache.
+data Env = Env {
+  proj : String,
+  std : String,
+  shards : String,
+  cacheDir : String,
+}
+
+mkEnv : String -> Env
+mkEnv dir = Env {
+  proj = "\{dir}/proj",
+  std = "\{dir}/std",
+  shards = "\{dir}/shards",
+  cacheDir = cacheDirOf "\{dir}/proj",
+}
+
+stampOf : String
+stampOf = "probe-stamp"
+
+aPath : Env -> String
+aPath e = "\{e.proj}/a.mdk"
+
+bPath : Env -> String
+bPath e = "\{e.proj}/b.mdk"
+
+stdPath : Env -> String
+stdPath e = "\{e.std}/list.mdk"
+
+aSource : String
+aSource = "import b.{f}\n\ng : Int -> Int\ng x = f x\n"
+
+bSource : String -> String -> String
+bSource sig body = "export\nf : \{sig}\nf x = \{body}\n"
+
+stdSource : String -> String -> String
+stdSource sig body = "export\nsingleton : \{sig}\nsingleton a = \{body}\n"
+
+setup : Env -> <IO, FileRead, FileWrite, Exec> Unit
+setup e =
+  let _ = runMkdirs [e.proj, e.std, e.shards]
+  let _ = writeFile (aPath e) aSource
+  let _ = writeFile (bPath e) (bSource "Int -> Int" "x + 1")
+  let _ = writeFile (stdPath e) (stdSource "a -> List a" "[a]")
+  ()
+
+runMkdirs : List String -> <IO, FileRead, FileWrite, Exec> Unit
+runMkdirs [] = ()
+runMkdirs (d :: rest) =
+  let _ = makeDir d
+  runMkdirs rest
+
+-- One file's result of one run: whether it was linted this run, and what the
+-- probe said about it.
+data FileRun = FileRun { relinted : Bool, texts : List String }
+
+data Run = Run { fileA : FileRun, fileB : FileRun }
+
+misses : Run -> Int
+misses r = listLen (filterList (f => f.relinted) [r.fileA, r.fileB])
+
+-- Build the index from `indexRoster`, then take each file's entry through the
+-- `--cache` decision under `roster` and `keyOf`, and write the dirty shards.
+runWith : (List Rule -> StdlibIndex -> String) ->
+  List Rule ->
+  List Rule ->
+  Env ->
+  <IO, FileRead, FileWrite, Exec> Option Run
+runWith keyOf indexRoster roster e = match indexOf indexRoster e
+  None => None
+  Some idx =>
+    let ea = entryFor keyOf roster idx e (aPath e)
+    let eb = entryFor keyOf roster idx e (bPath e)
+    match (ea, eb)
+      (Some xa, Some xb) =>
+        let _ = storeEntries e.cacheDir stampOf [xa, xb]
+        Some Run { fileA = fileRun xa, fileB = fileRun xb }
+      _ => None
+
+entryFor : (List Rule -> StdlibIndex -> String) ->
+  List Rule ->
+  StdlibIndex ->
+  Env ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Option LintEntry
+entryFor keyOf roster idx e path = match readFile path
+  Err _ => None
+  Ok src => match cachedEntryOf roster keyOf idx e.cacheDir stampOf path src
+    Err _ => None
+    Ok entry => Some entry
+
+fileRun : LintEntry -> FileRun
+fileRun entry = FileRun {
+  relinted = entry.dirty,
+  texts = map findingText (entryFindings entry),
+}
+
+-- The run production does: the reader probe, the real key.
+run : Env -> <IO, FileRead, FileWrite, Exec> Option Run
+run e = runWith indexKeyFor [readerRule] [readerRule] e
+
+-- The same run with a key that leaves the index fingerprint out.
+runNoFingerprint : Env -> <IO, FileRead, FileWrite, Exec> Option Run
+runNoFingerprint e = runWith noFingerprint [readerRule] [readerRule] e
+
+noFingerprint : List Rule -> StdlibIndex -> String
+noFingerprint = indexKeyWith (_ => "")
+
+-- The line the reader probe reports, as the index of the CURRENT sources shows.
+probeLine : String -> String -> String
+probeLine projSig stdSig = "b.f : \{projSig}; list.singleton : \{stdSig}"
+
+-- ── scenarios ───────────────────────────────────────────────────────────────
+-- Each takes the run function, so the same assertions grade the real key and
+-- the key without the fingerprint.
+
+put : String -> String -> <IO, FileRead, FileWrite, Exec> Unit
+put path text =
+  let _ = writeFile path text
+  ()
+
+-- Populate the cache with a run, apply `edit`, run again, and grade the two.
+afterEdit : (Env -> <IO, FileRead, FileWrite, Exec> Option Run) ->
+  String ->
+  (Env -> <IO, FileRead, FileWrite, Exec> Unit) ->
+  (Run -> Run -> Expectation) ->
+  <IO, FileRead, FileWrite, Exec> Expectation
+afterEdit go dir edit grade =
+  let e = mkEnv dir
+  let _ = setup e
+  match go e
+    None => fail "the populate run did not complete"
+    Some cold =>
+      let _ = edit e
+      match go e
+        None => fail "the run after the edit did not complete"
+        Some after => grade cold after
+
+-- (a) A signature edit in B re-lints A, and A's finding shows the new signature.
+scenarioA : (Env -> <IO, FileRead, FileWrite, Exec> Option Run) ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Expectation
+scenarioA go dir =
+  afterEdit
+    go
+    dir
+    (e => put (bPath e) (bSource "Int -> String" "intToString x"))
+    (cold after => expectEach [
+      ("cold run lints both files", expectEqual 2 (misses cold)),
+      ("the edit re-lints B and A", expectEqual 2 (misses after)),
+      (
+        "A reports the new signature",
+        expectEqual [probeLine "Int -> String" "a -> List a"] after.fileA.texts,
+      ),
+    ])
+
+-- (b) A body-only edit in B, with a line inserted above, re-lints B alone and
+-- leaves A's finding as it was.
+scenarioB : (Env -> <IO, FileRead, FileWrite, Exec> Option Run) ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Expectation
+scenarioB go dir =
+  afterEdit
+    go
+    dir
+    (e =>
+      put (bPath e) ("-- moved down a line\n" ++ bSource "Int -> Int" "x + 2"))
+    (_ after => expectEach [
+      ("only B is re-linted", expectEqual 1 (misses after)),
+      ("A is served from the cache", expectFalse after.fileA.relinted),
+      (
+        "A's finding is unchanged",
+        expectEqual [probeLine "Int -> Int" "a -> List a"] after.fileA.texts,
+      ),
+    ])
+
+-- (c) A signature edit in a stdlib file re-lints A, and A's finding shows it.
+scenarioC : (Env -> <IO, FileRead, FileWrite, Exec> Option Run) ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Expectation
+scenarioC go dir =
+  afterEdit
+    go
+    dir
+    (e => put (stdPath e) (stdSource "a -> List (List a)" "[[a]]"))
+    (_ after => expectEach [
+      ("both files are re-linted", expectEqual 2 (misses after)),
+      (
+        "A reports the new stdlib signature",
+        expectEqual
+          [probeLine "Int -> Int" "a -> List (List a)"]
+          after.fileA.texts,
+      ),
+    ])
+
+-- (c') A body-only edit in a stdlib file invalidates nothing.
+scenarioC2 : (Env -> <IO, FileRead, FileWrite, Exec> Option Run) ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Expectation
+scenarioC2 go dir =
+  afterEdit
+    go
+    dir
+    (e => put (stdPath e) (stdSource "a -> List a" "a :: []"))
+    (_ after => expectEach [
+      ("nothing is re-linted", expectEqual 0 (misses after)),
+      (
+        "A's finding is unchanged",
+        expectEqual [probeLine "Int -> Int" "a -> List a"] after.fileA.texts,
+      ),
+    ])
+
+isFail : Expectation -> Bool
+isFail (Fail _ _ _) = True
+isFail (Pass _ _) = False
+
+test "(a) a signature edit in B re-lints A and A shows the new signature" =
+  withScratchDir (scenarioA run)
+
+test "(a) without the fingerprint A is served stale, so the scenario goes red" =
+  withScratchDir (dir => expectTrue (isFail (scenarioA runNoFingerprint dir)))
+
+test "(b) a body-only edit in B re-lints B alone and A keeps its finding" =
+  withScratchDir (scenarioB run)
+
+test "(b) holds without the fingerprint too: it is not what keeps A warm" =
+  withScratchDir (scenarioB runNoFingerprint)
+
+test "(c) a stdlib signature edit re-lints A and A shows the new signature" =
+  withScratchDir (scenarioC run)
+
+test "(c) without the fingerprint A is served stale, so the scenario goes red" =
+  withScratchDir (dir => expectTrue (isFail (scenarioC runNoFingerprint dir)))
+
+test "(c') a stdlib body-only edit invalidates nothing" =
+  withScratchDir (scenarioC2 run)
+
+-- ── (d) a rule that declared no need ────────────────────────────────────────
+
+-- The index is built for the reader, but the cache runs the blind rule alone.
+runBlind : Env -> <IO, FileRead, FileWrite, Exec> Option Run
+runBlind e = runWith indexKeyFor [readerRule, blindRule] [blindRule] e
+
+test "(d) a rule that declared no need keeps its stamp across a signature edit" =
+  withScratchDir blindStampCase
+
+blindStampCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+blindStampCase dir =
+  let e = mkEnv dir
+  let _ = setup e
+  match indexOf [readerRule] e
+    None => fail "the index did not build"
+    Some before =>
+      let _ = writeFile (bPath e) (bSource "Int -> String" "intToString x")
+      match indexOf [readerRule] e
+        None => fail "the index did not rebuild"
+        Some after => expectEach [
+          (
+            "control: a declaring roster's key moves with the edit",
+            expectNotEqual
+              (indexKeyFor [readerRule] before)
+              (indexKeyFor [readerRule] after),
+          ),
+          (
+            "the blind roster's key is the same before and after",
+            expectEqual
+              (indexKeyFor [blindRule] before)
+              (indexKeyFor [blindRule] after),
+          ),
+        ]
+
+indexOf : List Rule -> Env -> <IO, FileRead, FileWrite, Exec> Option StdlibIndex
+indexOf roster e =
+  let built =
+    indexForRosterIn e.std e.shards roster e.proj True [] [] [aPath e, bPath e]
+  match built
+    Err _ => None
+    Ok idx => Some idx
+
+test "(d) a signature edit re-lints only B for the blind rule, and A stays warm" =
+  withScratchDir blindRunCase
+
+blindRunCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+blindRunCase dir =
+  afterEdit
+    runBlind
+    dir
+    (e => put (bPath e) (bSource "Int -> String" "intToString x"))
+    (_ after => expectEqual 1 (misses after))
+
+test "(d) a rule that reads the index undeclared sees it empty on every run" =
+  withScratchDir blindSeesNothingCase
+
+blindSeesNothingCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+blindSeesNothingCase dir =
+  let e = mkEnv dir
+  let _ = setup e
+  let blank = probeLine "<none>" "<none>"
+  match indexOf [readerRule] e
+    None => fail "the index did not build"
+    Some idx =>
+      let coldRun = runBlind e
+      let warmRun = runBlind e
+      match (coldRun, warmRun)
+        (Some cold, Some warm) =>
+          let _ = writeFile (bPath e) (bSource "Int -> String" "intToString x")
+          match runBlind e
+            None => fail "the run after the edit did not complete"
+            Some edited => expectEach [
+              (
+                "control: the reader sees the real signature",
+                expectEqual
+                  [probeLine "Int -> Int" "a -> List a"]
+                  (messagesOf readerRule idx),
+              ),
+              (
+                "uncached, through the full index",
+                expectEqual [blank] (messagesOf blindRule idx),
+              ),
+              ("--cache, cold", expectEqual [blank] cold.fileA.texts),
+              ("--cache, warm", expectEqual [blank] warm.fileA.texts),
+              (
+                "--cache, after the signature edit",
+                expectEqual [blank] edited.fileA.texts,
+              ),
+            ]
+        _ => fail "a run did not complete"
+
+messagesOf : Rule -> StdlibIndex -> List String
+messagesOf rule idx = match lintParseSource aSource
+  Err _ => ["<parse error>"]
+  Ok (decls, pos) =>
+    map findingText (lintProgram idx [rule] "a.mdk" aSource pos decls)
+
+-- ── fail closed ─────────────────────────────────────────────────────────────
+
+-- Populate, damage A's shard with `damage`, run again.  A must be re-linted and
+-- its finding must be the true one.
+damagedCase : (String -> String) ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Expectation
+damagedCase damage dir =
+  let e = mkEnv dir
+  let _ = setup e
+  match run e
+    None => fail "the populate run did not complete"
+    Some _ =>
+      let shard = shardPathOf e.cacheDir (aPath e)
+      match readFile shard
+        Err _ => fail "A has no shard after the populate run"
+        Ok text =>
+          let _ = writeFile shard (damage text)
+          match run e
+            None => fail "the run over the damaged shard did not complete"
+            Some after => expectEach [
+              ("A is re-linted", expectTrue after.fileA.relinted),
+              ("B is not", expectFalse after.fileB.relinted),
+              (
+                "A's finding is the true one",
+                expectEqual
+                  [probeLine "Int -> Int" "a -> List a"]
+                  after.fileA.texts,
+              ),
+            ]
+
+test "a corrupt row shard is a miss" =
+  withScratchDir (damagedCase (_ => "(3 \"x\""))
+
+test "a shard of another format version is a miss" =
+  withScratchDir (damagedCase (replace "(3 " "(2 "))
+
+test "a shard under a forged stamp is a miss" =
+  withScratchDir (damagedCase (replace stampOf "forged-stamp"))
+
+test "the second run over an unchanged tree re-lints nothing" =
+  withScratchDir secondRunCase
+
+secondRunCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+secondRunCase dir =
+  let e = mkEnv dir
+  let _ = setup e
+  let firstRun = run e
+  let secondRun = run e
+  match (firstRun, secondRun)
+    (Some first, Some second) => expectEach [
+      ("the first run lints both", expectEqual 2 (misses first)),
+      ("the second run lints none", expectEqual 0 (misses second)),
+      ("and says the same", expectEqual first.fileA.texts second.fileA.texts),
+    ]
+    _ => fail "a run did not complete"
+
+-- A cache directory that cannot be created (its parent is a regular file) must
+-- leave the run's findings correct.
+test "a cache that cannot be written leaves the findings correct" =
+  withScratchDir unwritableCase
+
+unwritableCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+unwritableCase dir =
+  let e0 = mkEnv dir
+  let e = Env {
+    proj = e0.proj,
+    std = e0.std,
+    shards = e0.shards,
+    cacheDir = "\{dir}/blocked/lint-cache",
+  }
+  let _ = setup e
+  let _ = writeFile "\{dir}/blocked" "a file, not a directory"
+  let firstRun = run e
+  let secondRun = run e
+  match (firstRun, secondRun)
+    (Some first, Some second) => expectEach [
+      (
+        "the finding is correct",
+        expectEqual [probeLine "Int -> Int" "a -> List a"] first.fileA.texts,
+      ),
+      (
+        "nothing was stored, so the next run lints again",
+        expectEqual 2 (misses second),
+      ),
+      ("and is correct again", expectEqual first.fileA.texts second.fileA.texts),
+    ]
+    _ => fail "a run did not complete"
+
+findingText : Finding -> String
+findingText f = f.message
+
+-- ── the recorded-answer key ─────────────────────────────────────────────────
+-- A shard's index-reading findings are stored with the questions its rules
+-- asked and a digest of each answer.  Each case below lints a three-file
+-- project twice under `--cache` with one edit between, through a probe that
+-- asks the questions the case names, and grades A: whether it was re-linted,
+-- and whether what it says equals what an uncached lint of the edited tree
+-- says.  A is re-linted exactly when an answer it was given has changed.
+
+-- A rule that reports the answers to `questions`, one line per file.
+askerRule : List (StdlibIndex -> String) -> Rule
+askerRule questions =
+  mkRule
+    (probeMeta "probe-asker" [NeedsProjectIndex])
+    (askerCheck questions)
+    None
+
+askerCheck : List (StdlibIndex -> String) ->
+  StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+askerCheck questions idx _ _ _ _ = [
+  Finding {
+    rule = "probe-asker",
+    message = joinWith "; " (map (q => q idx) questions),
+    severity = SevWarning,
+    loc = None,
+    fix = None,
+  },
+]
+
+-- The rows a question returned, every field a rule could act on shown.
+rowsText : List IndexRow -> String
+rowsText [] = "<none>"
+rowsText rows = joinWith "," (map rowLine rows)
+
+rowLine : IndexRow -> String
+rowLine r =
+  "\{r.ixrModule}.\{r.ixrName}/\{kindText r.ixrKind}/\{if r.ixrExported then "x" else "-"}/\{sigText r}/\{joinWith " " r.ixrFields}"
+
+kindText : RowKind -> String
+kindText RkValue = "value"
+kindText RkCtor = "ctor"
+kindText RkType = "type"
+kindText RkIface = "iface"
+kindText RkMethod = "method"
+
+-- `name` as declared in module `modId` of the project.
+askIn : String -> Ns -> String -> StdlibIndex -> String
+askIn modId ns name idx =
+  "\{modId}.\{name}=\{rowsText (rowsIn (projectIndexOf idx) modId ns name)}"
+
+-- `name` in every module that declares it.
+askNamed : Ns -> String -> StdlibIndex -> String
+askNamed ns name idx =
+  "\{name}=\{rowsText (rowsNamed (projectIndexOf idx) ns name)}"
+
+-- Every row of the project: an enumerating question.
+askAll : StdlibIndex -> String
+askAll idx = "rows=\{intToString (listLen (projectRows (projectIndexOf idx)))}"
+
+cPath : Env -> String
+cPath e = "\{e.proj}/c.mdk"
+
+bBase : String
+bBase = "export\nf : Int -> Int\nf x = x + 1\n"
+
+cBase : String
+cBase = "export\nh : Int -> Int\nh x = x\n"
+
+-- One file's new source, or `None` to delete it.
+data Edit = Edit (Env -> String) (Option String)
+
+-- What one case observed of A after the edit.
+data Outcome = Outcome { warmA : FileRun, truth : List String }
+
+-- The project with B and C as given, the probe asking `questions`, A's index
+-- made by `view` (`recordingStdlibIndex` in production).
+askCase : (StdlibIndex -> StdlibIndex) ->
+  List (StdlibIndex -> String) ->
+  String ->
+  String ->
+  List Edit ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Option Outcome
+askCase view questions bSrc cSrc edits dir =
+  let e = mkEnv dir
+  let rule = askerRule questions
+  let _ = setup e
+  let _ = writeFile (bPath e) bSrc
+  let _ = writeFile (cPath e) cSrc
+  match runAsk view rule e
+    None => None
+    Some _ =>
+      let _ = applyEdits e edits
+      match (runAsk view rule e, indexOf [rule] e)
+        (Some warm, Some fresh) => Some Outcome {
+          warmA = warm,
+          truth = messagesOf rule fresh,
+        }
+        _ => None
+
+applyEdits : Env -> List Edit -> <IO, FileRead, FileWrite, Exec> Unit
+applyEdits _ [] = ()
+applyEdits e ((Edit pathOf src) :: rest) =
+  let _ = match src
+    Some text => writeFile (pathOf e) text
+    None => removeFile (pathOf e)
+  applyEdits e rest
+
+-- Every file of the project through the `--cache` decision; A's result.
+runAsk : (StdlibIndex -> StdlibIndex) ->
+  Rule ->
+  Env ->
+  <IO, FileRead, FileWrite, Exec> Option FileRun
+runAsk view rule e = match indexOf [rule] e
+  None => None
+  Some idx =>
+    let found = flatMap (askEntry view rule idx e) [aPath e, bPath e, cPath e]
+    let _ = storeEntries e.cacheDir stampOf (map snd found)
+    match filterList (pe => fst pe == aPath e) found
+      [(_, a)] => Some (fileRun a)
+      _ => None
+
+askEntry : (StdlibIndex -> StdlibIndex) ->
+  Rule ->
+  StdlibIndex ->
+  Env ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> List (String, LintEntry)
+askEntry view rule idx e path = match readFile path
+  Err _ => []
+  Ok src =>
+    match (cachedEntryWith
+      view
+      [rule]
+      indexKeyFor
+      idx
+      e.cacheDir
+      stampOf
+      path
+      src)
+      Err _ => []
+      Ok entry => [(path, entry)]
+
+-- A is re-linted (or not, as `relint` says) and says what an uncached lint
+-- of the edited tree says.
+graded : Bool -> Option Outcome -> <IO, FileRead, FileWrite, Exec> Expectation
+graded _ None = fail "a run did not complete"
+graded relint (Some o) = expectEach [
+  (
+    "A is re-linted exactly when an answer moved",
+    expectEqual relint o.warmA.relinted,
+  ),
+  ("A says what an uncached lint says", expectEqual o.truth o.warmA.texts),
+]
+
+recorded : StdlibIndex -> StdlibIndex
+recorded = recordingStdlibIndex
+
+unrecorded : StdlibIndex -> StdlibIndex
+unrecorded idx = idx
+
+-- (e) A asks about `b.f`; C's `h` changes signature.
+caseE : (StdlibIndex -> StdlibIndex) ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Expectation
+caseE view dir =
+  graded
+    False
+    (askCase
+      view
+      [askIn "b" NsValue "f"]
+      bBase
+      cBase
+      [Edit cPath (Some "export\nh : Int -> String\nh x = intToString x\n")]
+      dir)
+
+-- (f) A asks about `b.f`; its signature changes.
+caseF : (StdlibIndex -> StdlibIndex) ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Expectation
+caseF view dir =
+  graded
+    True
+    (askCase
+      view
+      [askIn "b" NsValue "f"]
+      bBase
+      cBase
+      [Edit bPath (Some "export\nf : Int -> String\nf x = intToString x\n")]
+      dir)
+
+-- (f) A asks about `b.g`, which B does not declare; B comes to declare it.
+caseFAbsent : (StdlibIndex -> StdlibIndex) ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Expectation
+caseFAbsent view dir =
+  graded
+    True
+    (askCase
+      view
+      [askIn "b" NsValue "g"]
+      bBase
+      cBase
+      [Edit bPath (Some (bBase ++ "\nexport\ng : Int -> Int\ng x = x\n"))]
+      dir)
+
+test "(e) an unasked signature edit in C keeps A warm" =
+  withScratchDir (caseE recorded)
+
+test "(e) control: the edit moved the index fingerprint, so the answers kept A warm" =
+  withScratchDir fingerprintMovesCase
+
+fingerprintMovesCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+fingerprintMovesCase dir =
+  let e = mkEnv dir
+  let rule = askerRule [askIn "b" NsValue "f"]
+  let _ = setup e
+  let _ = writeFile (cPath e) cBase
+  match indexOf [rule] e
+    None => fail "the index did not build"
+    Some before =>
+      let _ =
+        writeFile (cPath e) "export\nh : Int -> String\nh x = intToString x\n"
+      match indexOf [rule] e
+        None => fail "the index did not rebuild"
+        Some after =>
+          expectNotEqual (indexKeyFor [rule] before) (indexKeyFor [rule] after)
+
+test "(f) a signature edit to a name A asked about re-lints A" =
+  withScratchDir (caseF recorded)
+
+test "(f) a name A asked about while absent, then declared, re-lints A" =
+  withScratchDir (caseFAbsent recorded)
+
+test "(g) a second module exporting a name A asked about re-lints A" = withScratchDir
+  (dir =>
+    graded
+      True
+      (askCase
+        recorded
+        [askNamed NsValue "f"]
+        bBase
+        cBase
+        [Edit cPath (Some (cBase ++ "\nexport\nf : Int -> Int\nf x = x\n"))]
+        dir))
+
+test "(h) an enumerating question re-lints A on a signature edit anywhere" = withScratchDir
+  (dir =>
+    graded
+      True
+      (askCase
+        recorded
+        [askAll]
+        bBase
+        cBase
+        [Edit cPath (Some "export\nh : Int -> String\nh x = intToString x\n")]
+        dir))
+
+test "(h) an enumerating question keeps A warm across a body-only edit" = withScratchDir
+  (dir =>
+    graded
+      False
+      (askCase
+        recorded
+        [askAll]
+        bBase
+        cBase
+        [
+          Edit
+            cPath
+            (Some "-- a line above\nexport\nh : Int -> Int\nh x = x + 0\n"),
+        ]
+        dir))
+
+test "(i) without recording, a signature edit to an asked name is served stale" =
+  withScratchDir (dir => expectTrue (isFail (caseF unrecorded dir)))
+
+test "(i) without recording, a newly declared asked name is served stale" =
+  withScratchDir (dir => expectTrue (isFail (caseFAbsent unrecorded dir)))
+
+-- ── adversarial answers ─────────────────────────────────────────────────────
+
+test "an asked name losing its export re-lints A" = withScratchDir (dir =>
+  graded
+    True
+    (askCase
+      recorded
+      [askIn "b" NsValue "f"]
+      bBase
+      cBase
+      [Edit bPath (Some "f : Int -> Int\nf x = x + 1\n")]
+      dir))
+
+test "an unasked name losing its export keeps A warm" = withScratchDir (dir =>
+  graded
+    False
+    (askCase
+      recorded
+      [askIn "b" NsValue "f"]
+      bBase
+      cBase
+      [Edit cPath (Some "h : Int -> Int\nh x = x\n")]
+      dir))
+
+test "an asked constructor's field list changing re-lints A" = withScratchDir
+  (dir =>
+    graded
+      True
+      (askCase
+        recorded
+        [askNamed NsValue "P"]
+        (bBase ++ "\npublic export data P = P { px : Int }\n")
+        cBase
+        [
+          Edit
+            bPath
+            (Some (bBase ++ "\npublic export data P = P { qx : Int }\n")),
+        ]
+        dir))
+
+test "an asked value becoming an interface method re-lints A" = withScratchDir
+  (dir =>
+    graded
+      True
+      (askCase
+        recorded
+        [askIn "b" NsValue "m"]
+        (bBase ++ "\nexport\nm : Int -> Int\nm x = x\n")
+        cBase
+        [
+          Edit
+            bPath
+            (Some (bBase ++ "\nexport interface M a where\n  m : a -> a\n")),
+        ]
+        dir))
+
+test "an asked type alias becoming an interface re-lints A" = withScratchDir
+  (dir =>
+    graded
+      True
+      (askCase
+        recorded
+        [askIn "b" NsType "T"]
+        (bBase ++ "\nexport type T = Int\n")
+        cBase
+        [
+          Edit
+            bPath
+            (Some (bBase ++ "\nexport interface T a where\n  t : a -> a\n")),
+        ]
+        dir))
+
+test "an asked name moving to another module re-lints A" = withScratchDir
+  (dir =>
+    graded
+      True
+      (askCase
+        recorded
+        [askNamed NsValue "f"]
+        bBase
+        cBase
+        [
+          Edit bPath (Some "export\nk : Int\nk = 1\n"),
+          Edit cPath (Some (cBase ++ "\nexport\nf : Int -> Int\nf x = x + 1\n")),
+        ]
+        dir))
+
+test "deleting the file that declared an asked name re-lints A" = withScratchDir
+  (dir =>
+    graded
+      True
+      (askCase
+        recorded
+        [askIn "b" NsValue "f"]
+        bBase
+        cBase
+        [Edit bPath None]
+        dir))
+
+test "deleting a file A asked nothing about keeps A warm" = withScratchDir
+  (dir =>
+    graded
+      False
+      (askCase
+        recorded
+        [askIn "b" NsValue "f"]
+        bBase
+        cBase
+        [Edit cPath None]
+        dir))
+
+-- ── the wildcard-import existence key ───────────────────────────────────────
+-- A file that imports `m.*` is linted differently according to whether `m` is a
+-- file of the project (`ffLocalMods`).  The probe reports the facts' local
+-- modules.  A shard records the answer to "is `m` a project file", present or
+-- absent, so creating or deleting `m.mdk` re-lints A and nothing else does.
+-- The project index covers the same files here, but the question is answered
+-- from the loader's search roots, not from the index's rows.  A project `m`
+-- shadows a stdlib module of the same name, as the loader resolves it.
+
+localRule : Rule
+localRule = mkRule (probeMeta "probe-local" [NeedsProjectIndex]) localCheck None
+
+localCheck : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+localCheck _ _ facts _ _ = [
+  Finding {
+    rule = "probe-local",
+    message = "local: \{joinWith "," facts.ffLocalMods}",
+    severity = SevWarning,
+    loc = None,
+    fix = None,
+  },
+]
+
+wildSource : String
+wildSource = "import m.*\n\ng : Int -> Int\ng x = x\n"
+
+mSource : String
+mSource = "export\nk : Int\nk = 1\n"
+
+mPath : Env -> String
+mPath e = "\{e.proj}/m.mdk"
+
+-- What an uncached lint of A as it now is on disk says.
+wildTruth : Env -> StdlibIndex -> <IO, FileRead, FileWrite, Exec> List String
+wildTruth e idx = match readFile (aPath e)
+  Err _ => ["<unreadable>"]
+  Ok src => match lintParseSource src
+    Err _ => ["<parse error>"]
+    Ok (decls, pos) =>
+      let facts = mkFileFactsAt (aPath e) src decls pos
+      map
+        findingText
+        (lintProgramFacts idx [localRule] (aPath e) facts pos decls)
+
+-- A imports `m.*`; `m.mdk` is there at the start when `mStart` says so.  Two
+-- runs under `--cache` with `edits` between them; A's second run is graded.
+wildCase : (StdlibIndex -> StdlibIndex) ->
+  Option String ->
+  List Edit ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Option Outcome
+wildCase view mStart edits dir =
+  let e = mkEnv dir
+  let _ = setup e
+  let _ = writeFile (aPath e) wildSource
+  let _ = match mStart
+    Some text => writeFile (mPath e) text
+    None => Ok ()
+  match runAsk view localRule e
+    None => None
+    Some _ =>
+      let _ = applyEdits e edits
+      match (runAsk view localRule e, indexOf [localRule] e)
+        (Some warm, Some fresh) => Some Outcome {
+          warmA = warm,
+          truth = wildTruth e fresh,
+        }
+        _ => None
+
+test "(w1) creating the project module A imports with * re-lints A" = withScratchDir
+  (dir => graded True (wildCase recorded None [Edit mPath (Some mSource)] dir))
+
+test "(w1) the finding set changes when the module appears" = withScratchDir
+  (dir => match wildCase recorded None [Edit mPath (Some mSource)] dir
+    None => fail "a run did not complete"
+    Some o => expectEqual ["local: m"] o.warmA.texts)
+
+test "(w2) deleting the project module A imports with * re-lints A" = withScratchDir
+  (dir => graded True (wildCase recorded (Some mSource) [Edit mPath None] dir))
+
+test "(w2) the finding set changes when the module disappears" = withScratchDir
+  (dir => match wildCase recorded (Some mSource) [Edit mPath None] dir
+    None => fail "a run did not complete"
+    Some o => expectEqual ["local: "] o.warmA.texts)
+
+test "(w3) creating an unrelated file keeps A warm" = withScratchDir (dir =>
+  graded False (wildCase recorded None [Edit cPath (Some cBase)] dir))
+
+test "(w3) an edit to the module's body keeps A warm" = withScratchDir (dir =>
+  graded
+    False
+    (wildCase
+      recorded
+      (Some mSource)
+      [Edit mPath (Some "export\nk : Int\nk = 2\n")]
+      dir))
+
+test "(w4) without recording, a created module is served stale" = withScratchDir
+  (dir =>
+    expectTrue
+      (isFail
+        (graded
+          True
+          (wildCase unrecorded None [Edit mPath (Some mSource)] dir))))
+
+test "(w4) without recording, a deleted module is served stale" = withScratchDir
+  (dir =>
+    expectTrue
+      (isFail
+        (graded
+          True
+          (wildCase unrecorded (Some mSource) [Edit mPath None] dir))))

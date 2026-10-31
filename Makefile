@@ -244,6 +244,12 @@ inlang-support-hooks-check:
 inlang-backend-extern-catalog-test:
 	./medaka test compiler/backend/extern_catalog_test.mdk
 
+## compiler/backend/hash_digest_test.mdk pins the `hashStringHex` / `hashFile`
+## digests against vectors computed outside the engine; no entry imports it.
+## `--native`: the file cases write real files.
+inlang-backend-hash-digest-test:
+	./medaka test --native compiler/backend/hash_digest_test.mdk
+
 ## The per-extern engine matrix and its drift guard (an effectful extern the
 ## oracle binds that `run` does not); no entry imports the module or its sibling.
 inlang-tools-engine-table-test:
@@ -475,6 +481,18 @@ inlang-tools-lint-baseline-test:
 ## `medaka test`'s interpreter policy does not bind.
 inlang-tools-lint-test:
 	./medaka test --native compiler/tools/lint_test.mdk
+
+## compiler/tools/lint_index_test.mdk is outside every entry's import closure
+## ([W-MODULE-BLIND]): row extraction, the shard codec, fail-closed reads and
+## the runner's declared-need contract. It reads and writes real shards.
+inlang-tools-lint-index-test:
+	./medaka test --native compiler/tools/lint_index_test.mdk
+
+## compiler/tools/lint_cache_test.mdk is outside every entry's import closure
+## ([W-MODULE-BLIND]): the soundness of what `lint --cache` serves when the
+## declaration index moves. It writes real shards under a scratch directory.
+inlang-tools-lint-cache-test:
+	./medaka test --native compiler/tools/lint_cache_test.mdk
 
 ## compiler/tools/lint_scope_test.mdk is a `*_test.mdk` sibling outside every
 ## entry's import closure ([W-MODULE-BLIND]): the scope model's precision cases.

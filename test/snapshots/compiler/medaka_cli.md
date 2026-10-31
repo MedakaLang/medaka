@@ -1,5 +1,5 @@
 # META
-source_lines=4752
+source_lines=4704
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..), codeText}
@@ -283,10 +283,8 @@ import tools.lint.{
   allRules,
   lintProgram,
   StdlibIndex,
-  buildStdlibIndexResult,
   StdlibIndexError(..),
-  emptyStdlibIndex,
-  stdlibIndexNeededFor,
+  indexForRun,
   applySuppressions,
   applySuppressionsMulti,
   applySuppressionsDirs,
@@ -296,26 +294,14 @@ import tools.lint.{
   Finding,
   Directive,
   applyFixes,
-  runCrossFileRules,
-  runCrossFileRulesFromOccs,
-  crossFileCacheSound,
-  fileDupOccs,
   allRuleNames,
   applyFindingFilters,
   applyFindingDeny,
   isFindingError,
   lintFileDiagTriple,
   splitLintNames,
-  stdlibFingerprint,
 }
-import tools.lint_cache.{
-  LintEntry(..),
-  contentHashOf,
-  ruleSetStamp,
-  cacheDirOf,
-  loadEntry,
-  storeEntries,
-}
+import tools.lint_cache.{storeEntries}
 import tools.lint_baseline.{
   LintBaseline,
   readLintBaseline,
@@ -349,8 +335,7 @@ import tools.lint_cmd.{
   runLintJsonCmd,
   lintFilesToDiagTriples,
   baselineFileCodes,
-  runCrossFileReport,
-  runCrossFileReportCached,
+  runProjectReport,
   resolveLintTargets,
   lintFilesGo,
   LintRun(..),
@@ -4067,31 +4052,18 @@ runLintTargets a =
       (flag "--internal" a)
       (onlyNames ++ denyNames)
       files
-  -- The stdlib reference index: every exported stdlib name with its DECLARED
-  -- signature, for the rules that ask what the stdlib actually provides.  Built
-  -- at most ONCE per `medaka lint` invocation and threaded down — a rule's
-  -- `check` is pure, and rebuilding it per target file would re-parse the whole
-  -- stdlib once per file.  It self-disables to empty when the stdlib cannot be
-  -- read (see `buildStdlibIndexResult`), the same way `lintCacheCtx` declines below.
-  -- `stdlibIndexNeededFor` answers whether a rule that reads it is active
-  -- (`rule-stdlib-reimpl`, or an edit rule while some target has an
-  -- `import m.*`); when it isn't, `emptyStdlibIndex` skips the whole-stdlib parse for free (every other rule ignores its
-  -- `StdlibIndex` argument, and this rule's own findings get discarded by the
-  -- CLI-flag filters below regardless of what index it saw) — but ONLY on the
-  -- uncached path, where that discarding happens in this same process, on this
-  -- same `idx`.  `--cache` persists `lintFileFresh`'s full-roster findings past
-  -- this process's flag choices (under `--cache` `lintFileFresh` runs
-  -- `allRules`, unfiltered), so a populate run under `--disable
-  -- rule-stdlib-reimpl --cache` (or `--only <anything else> --cache`) must
-  -- still build the real index — an `emptyStdlibIndex`-computed entry would
-  -- silently omit that rule's findings for every later `--cache` read, even a
-  -- default-rules one that never named it.
-  let indexResult =
-    if stdlibIndexNeededFor onlyNames disableNames files
-      || flag "--cache" a then
-      buildStdlibIndexResult
-    else
-      Ok emptyStdlibIndex
+  -- The declaration index the rules query: the stdlib's rows, and the
+  -- project's too when a project rule is active.  Built at most ONCE per
+  -- `medaka lint` invocation and threaded down — a rule's `check` is pure, and
+  -- rebuilding it per target file would re-read every shard once per file.
+  -- `indexForRun` builds it from the needs of the rules that survive
+  -- `--only`/`--disable`, and it self-disables to empty when the stdlib cannot
+  -- be read.  `--cache` builds for the whole roster: it persists
+  -- `lintEntryOf`'s full-roster findings past this process's flag choices
+  -- (under `--cache` `lintEntryOf` runs `allRules`, unfiltered), so an entry
+  -- computed from a degraded index would silently omit a rule's findings for
+  -- every later `--cache` read.
+  let indexResult = indexForRun (flag "--cache" a) onlyNames disableNames files
   match indexResult
     Err (StdlibIndexError { path, source, diagnostic }) =>
       if jsonMode then
@@ -4154,18 +4126,13 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
       _ :: _ :: _ => True
       _ => False
     let cacheCtx = lintCacheCtx (flag "--cache" a) fixMode
-    -- `parsed` carries each readable target's (path, src, Positions, decls) out of
-    -- the per-file pass, for the parse-based cross-file tier (runCrossFileReport).
-    -- It is EMPTY whenever `crossFileCacheSound` holds, with or without --cache:
-    -- the tier is then reached through the entries' occurrences instead (see
-    -- runCrossFileReportCached).
     let run = LintRun {
       lrInternal = internalFlag,
       lrFix = fixMode,
       lrUnsafe = flag "--unsafe-fixes" a,
       lrMulti = multiFile,
     }
-    let (perFileErr, entries, parsed) =
+    let (perFileErr, entries) =
       lintFilesGo
         stdlibIdx
         run
@@ -4176,34 +4143,19 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
         cacheCtx
         files
         False
-    -- Cross-file rules only run in the multi-file REPORT path; a single target or
+    -- Project rules only run in the multi-file REPORT path; a single target or
     -- --fix produces nothing (need ≥2 files), keeping single-file output identical.
     let crossErr =
-      if not (multiFile && not fixMode) then
+      if multiFile && not fixMode then
+        runProjectReport
+          stdlibIdx
+          internalFlag
+          disableNames
+          onlyNames
+          denyNames
+          entries
+      else
         False
-      else match cacheCtx
-        Some _ =>
-          runCrossFileReportCached
-            internalFlag
-            disableNames
-            onlyNames
-            denyNames
-            entries
-        None =>
-          if crossFileCacheSound then
-            runCrossFileReportCached
-              internalFlag
-              disableNames
-              onlyNames
-              denyNames
-              entries
-          else
-            runCrossFileReport
-              internalFlag
-              disableNames
-              onlyNames
-              denyNames
-              parsed
     -- Persist AFTER reporting: the cache is an optimisation, so a failure to
     -- write one must never change what a run says or whether it exits 0.
     let _ = match cacheCtx
@@ -4799,11 +4751,11 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "lsp") ((mem "runServer" false))))
 (DUse false (UseGroup ("tools" "mcp") ((mem "runMcpServer" false))))
 (DUse false (UseGroup ("tools" "doc") ((mem "runDoc" false) (mem "ModuleDoc" false) (mem "computeModuleDoc" false) (mem "docParseError" false) (mem "mdName" false) (mem "renderModulePage" false) (mem "renderIndex" false) (mem "libraryInventoryJson" false) (mem "rebucketLibraryImpls" false))))
-(DUse false (UseGroup ("tools" "lint") ((mem "allRules" false) (mem "lintProgram" false) (mem "StdlibIndex" false) (mem "buildStdlibIndexResult" false) (mem "StdlibIndexError" true) (mem "emptyStdlibIndex" false) (mem "stdlibIndexNeededFor" false) (mem "applySuppressions" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMultiDirs" false) (mem "collectDirectives" false) (mem "findingToDiag" false) (mem "Finding" false) (mem "Directive" false) (mem "applyFixes" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "crossFileCacheSound" false) (mem "fileDupOccs" false) (mem "allRuleNames" false) (mem "applyFindingFilters" false) (mem "applyFindingDeny" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "splitLintNames" false) (mem "stdlibFingerprint" false))))
-(DUse false (UseGroup ("tools" "lint_cache") ((mem "LintEntry" true) (mem "contentHashOf" false) (mem "ruleSetStamp" false) (mem "cacheDirOf" false) (mem "loadEntry" false) (mem "storeEntries" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "allRules" false) (mem "lintProgram" false) (mem "StdlibIndex" false) (mem "StdlibIndexError" true) (mem "indexForRun" false) (mem "applySuppressions" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMultiDirs" false) (mem "collectDirectives" false) (mem "findingToDiag" false) (mem "Finding" false) (mem "Directive" false) (mem "applyFixes" false) (mem "allRuleNames" false) (mem "applyFindingFilters" false) (mem "applyFindingDeny" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "splitLintNames" false))))
+(DUse false (UseGroup ("tools" "lint_cache") ((mem "storeEntries" false))))
 (DUse false (UseGroup ("tools" "lint_baseline") ((mem "LintBaseline" false) (mem "readLintBaseline" false) (mem "baselineKeyOf" false) (mem "baselineViolations" false) (mem "baselineViolationLine" false) (mem "applyBaselineToFindings" false) (mem "applyBaselineToDiags" false) (mem "baselineDiagViolations" false) (mem "diagCodeOf" false) (mem "findingRuleOf" false) (mem "renderLintBaseline" false))))
 (DUse false (UseGroup ("tools" "codemod") ((mem "findCodemod" false) (mem "codemodMk" false) (mem "codemodWarnDecls" false) (mem "codemodListing" false) (mem "codemodSource" false) (mem "CodeMode" true))))
-(DUse false (UseGroup ("tools" "lint_cmd") ((mem "explainRule" false) (mem "lintCacheCtx" false) (mem "lintHelpText" false) (mem "renderRuleRowsJson" false) (mem "renderRuleRowsNames" false) (mem "renderRuleRowsText" false) (mem "rulesPageMarkdown" false) (mem "selectRuleRows" false) (mem "runLintJsonCmd" false) (mem "lintFilesToDiagTriples" false) (mem "baselineFileCodes" false) (mem "runCrossFileReport" false) (mem "runCrossFileReportCached" false) (mem "resolveLintTargets" false) (mem "lintFilesGo" false) (mem "LintRun" true) (mem "inactiveInternalRuleUse" false))))
+(DUse false (UseGroup ("tools" "lint_cmd") ((mem "explainRule" false) (mem "lintCacheCtx" false) (mem "lintHelpText" false) (mem "renderRuleRowsJson" false) (mem "renderRuleRowsNames" false) (mem "renderRuleRowsText" false) (mem "rulesPageMarkdown" false) (mem "selectRuleRows" false) (mem "runLintJsonCmd" false) (mem "lintFilesToDiagTriples" false) (mem "baselineFileCodes" false) (mem "runProjectReport" false) (mem "resolveLintTargets" false) (mem "lintFilesGo" false) (mem "LintRun" true) (mem "inactiveInternalRuleUse" false))))
 (DUse false (UseGroup ("support" "cli_targets") ((mem "lintTargetExists" false) (mem "expandLintTarget" false))))
 (DUse false (UseGroup ("tools" "check_policy") ((mem "runCheckPolicy" false) (mem "PolicyArgs" true) (mem "PolicyOutcome" true) (mem "runManifest" false) (mem "ManifestArgs" true) (mem "analyzeProgramReport" false) (mem "EntryAnalysis" true) (mem "TargetInputs" true))))
 (DTypeSig false "medakaVersion" (TyCon "String"))
@@ -5227,9 +5179,9 @@ runMcpServerFromEnv _ =
 (DTypeSig false "runLintExplain" (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runLintExplain" ((PVar "a")) (EMatch (EApp (EApp (EVar "optDefault") (EApp (EApp (EVar "flagValue") (ELit (LString "--explain"))) (EVar "a"))) (ELit (LString ""))) (arm (PLit (LString "")) () (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --explain needs a rule name")))) (arm (PVar "name") () (EMatch (EApp (EVar "explainRule") (EVar "name")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka lint: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "text")) () (EApp (EVar "putStrLn") (EVar "text")))))))
 (DTypeSig false "runLintTargets" (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runLintTargets" ((PVar "a")) (EBlock (DoLet false false (PVar "disableNames") (EApp (EApp (EVar "lintNamesOf") (ELit (LString "--disable"))) (EVar "a"))) (DoLet false false (PVar "onlyNames") (EApp (EApp (EVar "lintNamesOf") (ELit (LString "--only"))) (EVar "a"))) (DoLet false false (PVar "denyNames") (EApp (EApp (EVar "lintNamesOf") (ELit (LString "--deny"))) (EVar "a"))) (DoLet false false PWild (EApp (EVar "assertLintRuleNames") (EBinOp "++" (EBinOp "++" (EVar "disableNames") (EVar "onlyNames")) (EVar "denyNames")))) (DoLet false false (PVar "fixMode") (EApp (EApp (EVar "flag") (ELit (LString "--fix"))) (EVar "a"))) (DoLet false false PWild (EApp (EVar "assertUnsafeFixesNeedFix") (EVar "a"))) (DoLet false false (PVar "jsonMode") (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (DoLet false false (PVar "baselineArg") (EApp (EApp (EVar "flagValue") (ELit (LString "--baseline"))) (EVar "a"))) (DoLet false false (PVar "writeBaselineArg") (EApp (EApp (EVar "flagValue") (ELit (LString "--write-baseline"))) (EVar "a"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "assertBaselineFlagsCoherent") (EVar "baselineArg")) (EVar "writeBaselineArg")) (EVar "fixMode"))) (DoLet false false (PVar "fileArgs") (EFieldAccess (EVar "a") "positionals")) (DoLet false false PWild (EApp (EVar "assertLintTargetsExist") (EVar "fileArgs"))) (DoLet false false (PVar "files") (EApp (EVar "resolveLintTargets") (EVar "fileArgs"))) (DoLet false false PWild (EApp (EVar "assertLintTargetsNonEmpty") (EVar "files"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "assertInternalRulesReachable") (EApp (EApp (EVar "flag") (ELit (LString "--internal"))) (EVar "a"))) (EBinOp "++" (EVar "onlyNames") (EVar "denyNames"))) (EVar "files"))) (DoLet false false (PVar "indexResult") (EIf (EBinOp "||" (EApp (EApp (EApp (EVar "stdlibIndexNeededFor") (EVar "onlyNames")) (EVar "disableNames")) (EVar "files")) (EApp (EApp (EVar "flag") (ELit (LString "--cache"))) (EVar "a"))) (EVar "buildStdlibIndexResult") (EApp (EVar "Ok") (EVar "emptyStdlibIndex")))) (DoExpr (EMatch (EVar "indexResult") (arm (PCon "Err" (PRec "StdlibIndexError" ((rf "path" None) (rf "source" None) (rf "diagnostic" None)) false)) () (EBlock (DoExpr (EIf (EVar "jsonMode") (EApp (EVar "putStr") (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "path") (EVar "source") (EListLit (EVar "diagnostic")))))) (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "source")) (EVar "path")) (EVar "diagnostic"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "stdlibIdx")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runLintWithIndex") (EVar "stdlibIdx")) (EVar "a")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "fixMode")) (EVar "jsonMode")) (EVar "baselineArg")) (EVar "writeBaselineArg")) (EVar "files")))))))
+(DFunDef false "runLintTargets" ((PVar "a")) (EBlock (DoLet false false (PVar "disableNames") (EApp (EApp (EVar "lintNamesOf") (ELit (LString "--disable"))) (EVar "a"))) (DoLet false false (PVar "onlyNames") (EApp (EApp (EVar "lintNamesOf") (ELit (LString "--only"))) (EVar "a"))) (DoLet false false (PVar "denyNames") (EApp (EApp (EVar "lintNamesOf") (ELit (LString "--deny"))) (EVar "a"))) (DoLet false false PWild (EApp (EVar "assertLintRuleNames") (EBinOp "++" (EBinOp "++" (EVar "disableNames") (EVar "onlyNames")) (EVar "denyNames")))) (DoLet false false (PVar "fixMode") (EApp (EApp (EVar "flag") (ELit (LString "--fix"))) (EVar "a"))) (DoLet false false PWild (EApp (EVar "assertUnsafeFixesNeedFix") (EVar "a"))) (DoLet false false (PVar "jsonMode") (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (DoLet false false (PVar "baselineArg") (EApp (EApp (EVar "flagValue") (ELit (LString "--baseline"))) (EVar "a"))) (DoLet false false (PVar "writeBaselineArg") (EApp (EApp (EVar "flagValue") (ELit (LString "--write-baseline"))) (EVar "a"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "assertBaselineFlagsCoherent") (EVar "baselineArg")) (EVar "writeBaselineArg")) (EVar "fixMode"))) (DoLet false false (PVar "fileArgs") (EFieldAccess (EVar "a") "positionals")) (DoLet false false PWild (EApp (EVar "assertLintTargetsExist") (EVar "fileArgs"))) (DoLet false false (PVar "files") (EApp (EVar "resolveLintTargets") (EVar "fileArgs"))) (DoLet false false PWild (EApp (EVar "assertLintTargetsNonEmpty") (EVar "files"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "assertInternalRulesReachable") (EApp (EApp (EVar "flag") (ELit (LString "--internal"))) (EVar "a"))) (EBinOp "++" (EVar "onlyNames") (EVar "denyNames"))) (EVar "files"))) (DoLet false false (PVar "indexResult") (EApp (EApp (EApp (EApp (EVar "indexForRun") (EApp (EApp (EVar "flag") (ELit (LString "--cache"))) (EVar "a"))) (EVar "onlyNames")) (EVar "disableNames")) (EVar "files"))) (DoExpr (EMatch (EVar "indexResult") (arm (PCon "Err" (PRec "StdlibIndexError" ((rf "path" None) (rf "source" None) (rf "diagnostic" None)) false)) () (EBlock (DoExpr (EIf (EVar "jsonMode") (EApp (EVar "putStr") (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "path") (EVar "source") (EListLit (EVar "diagnostic")))))) (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "source")) (EVar "path")) (EVar "diagnostic"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "stdlibIdx")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runLintWithIndex") (EVar "stdlibIdx")) (EVar "a")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "fixMode")) (EVar "jsonMode")) (EVar "baselineArg")) (EVar "writeBaselineArg")) (EVar "files")))))))
 (DTypeSig false "runLintWithIndex" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Args") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))))))))))
-(DFunDef false "runLintWithIndex" ((PVar "stdlibIdx") (PVar "a") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "fixMode") (PVar "jsonMode") (PVar "baselineArg") (PVar "writeBaselineArg") (PVar "files")) (EBlock (DoLet false false (PVar "cwd") (EApp (EVar "canonicalizePath") (ELit (LString ".")))) (DoLet false false (PVar "baseCtx") (EApp (EApp (EVar "loadLintBaselineCtx") (EVar "cwd")) (EVar "baselineArg"))) (DoLet false false (PVar "internalFlag") (EApp (EApp (EVar "flag") (ELit (LString "--internal"))) (EVar "a"))) (DoExpr (EIf (EApp (EVar "isSome") (EVar "writeBaselineArg")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runLintWriteBaselineCmd") (EVar "stdlibIdx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "cwd")) (EApp (EApp (EVar "optDefault") (EVar "writeBaselineArg")) (ELit (LString "")))) (EVar "files")) (EIf (EVar "jsonMode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runLintJsonCmd") (EVar "stdlibIdx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "files")) (EBlock (DoLet false false (PVar "multiFile") (EMatch (EVar "files") (arm (PCons PWild (PCons PWild PWild)) () (EVar "True")) (arm PWild () (EVar "False")))) (DoLet false false (PVar "cacheCtx") (EApp (EApp (EVar "lintCacheCtx") (EApp (EApp (EVar "flag") (ELit (LString "--cache"))) (EVar "a"))) (EVar "fixMode"))) (DoLet false false (PVar "run") (ERecordCreate "LintRun" ((fa "lrInternal" (EVar "internalFlag")) (fa "lrFix" (EVar "fixMode")) (fa "lrUnsafe" (EApp (EApp (EVar "flag") (ELit (LString "--unsafe-fixes"))) (EVar "a"))) (fa "lrMulti" (EVar "multiFile"))))) (DoLet false false (PTuple (PVar "perFileErr") (PVar "entries") (PVar "parsed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "stdlibIdx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "files")) (EVar "False"))) (DoLet false false (PVar "crossErr") (EIf (EApp (EVar "not") (EBinOp "&&" (EVar "multiFile") (EApp (EVar "not") (EVar "fixMode")))) (EVar "False") (EMatch (EVar "cacheCtx") (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "runCrossFileReportCached") (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "entries"))) (arm (PCon "None") () (EIf (EVar "crossFileCacheSound") (EApp (EApp (EApp (EApp (EApp (EVar "runCrossFileReportCached") (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "entries")) (EApp (EApp (EApp (EApp (EApp (EVar "runCrossFileReport") (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "parsed"))))))) (DoLet false false PWild (EMatch (EVar "cacheCtx") (arm (PCon "Some" (PTuple (PVar "cacheDir") (PVar "stamp"))) () (EApp (EApp (EApp (EVar "storeEntries") (EVar "cacheDir")) (EVar "stamp")) (EVar "entries"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EIf (EBinOp "||" (EVar "perFileErr") (EVar "crossErr")) (EApp (EVar "stageExit") (ELit (LInt 1))) (ELit LUnit)))))))))
+(DFunDef false "runLintWithIndex" ((PVar "stdlibIdx") (PVar "a") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "fixMode") (PVar "jsonMode") (PVar "baselineArg") (PVar "writeBaselineArg") (PVar "files")) (EBlock (DoLet false false (PVar "cwd") (EApp (EVar "canonicalizePath") (ELit (LString ".")))) (DoLet false false (PVar "baseCtx") (EApp (EApp (EVar "loadLintBaselineCtx") (EVar "cwd")) (EVar "baselineArg"))) (DoLet false false (PVar "internalFlag") (EApp (EApp (EVar "flag") (ELit (LString "--internal"))) (EVar "a"))) (DoExpr (EIf (EApp (EVar "isSome") (EVar "writeBaselineArg")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runLintWriteBaselineCmd") (EVar "stdlibIdx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "cwd")) (EApp (EApp (EVar "optDefault") (EVar "writeBaselineArg")) (ELit (LString "")))) (EVar "files")) (EIf (EVar "jsonMode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runLintJsonCmd") (EVar "stdlibIdx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "files")) (EBlock (DoLet false false (PVar "multiFile") (EMatch (EVar "files") (arm (PCons PWild (PCons PWild PWild)) () (EVar "True")) (arm PWild () (EVar "False")))) (DoLet false false (PVar "cacheCtx") (EApp (EApp (EVar "lintCacheCtx") (EApp (EApp (EVar "flag") (ELit (LString "--cache"))) (EVar "a"))) (EVar "fixMode"))) (DoLet false false (PVar "run") (ERecordCreate "LintRun" ((fa "lrInternal" (EVar "internalFlag")) (fa "lrFix" (EVar "fixMode")) (fa "lrUnsafe" (EApp (EApp (EVar "flag") (ELit (LString "--unsafe-fixes"))) (EVar "a"))) (fa "lrMulti" (EVar "multiFile"))))) (DoLet false false (PTuple (PVar "perFileErr") (PVar "entries")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "stdlibIdx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "files")) (EVar "False"))) (DoLet false false (PVar "crossErr") (EIf (EBinOp "&&" (EVar "multiFile") (EApp (EVar "not") (EVar "fixMode"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runProjectReport") (EVar "stdlibIdx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "entries")) (EVar "False"))) (DoLet false false PWild (EMatch (EVar "cacheCtx") (arm (PCon "Some" (PTuple (PVar "cacheDir") (PVar "stamp"))) () (EApp (EApp (EApp (EVar "storeEntries") (EVar "cacheDir")) (EVar "stamp")) (EVar "entries"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EIf (EBinOp "||" (EVar "perFileErr") (EVar "crossErr")) (EApp (EVar "stageExit") (ELit (LInt 1))) (ELit LUnit)))))))))
 (DTypeSig false "assertBaselineFlagsCoherent" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "assertBaselineFlagsCoherent" ((PVar "baselineArg") (PVar "writeArg") (PVar "fixMode")) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "baselineArg")) (EApp (EVar "isSome") (EVar "writeArg"))) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --baseline and --write-baseline are mutually exclusive"))) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "writeArg")) (EVar "fixMode")) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --write-baseline cannot be combined with --fix"))) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "baselineArg")) (EVar "fixMode")) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --baseline cannot be combined with --fix"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "assertUnsafeFixesNeedFix" (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -5355,11 +5307,11 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "lsp") ((mem "runServer" false))))
 (DUse false (UseGroup ("tools" "mcp") ((mem "runMcpServer" false))))
 (DUse false (UseGroup ("tools" "doc") ((mem "runDoc" false) (mem "ModuleDoc" false) (mem "computeModuleDoc" false) (mem "docParseError" false) (mem "mdName" false) (mem "renderModulePage" false) (mem "renderIndex" false) (mem "libraryInventoryJson" false) (mem "rebucketLibraryImpls" false))))
-(DUse false (UseGroup ("tools" "lint") ((mem "allRules" false) (mem "lintProgram" false) (mem "StdlibIndex" false) (mem "buildStdlibIndexResult" false) (mem "StdlibIndexError" true) (mem "emptyStdlibIndex" false) (mem "stdlibIndexNeededFor" false) (mem "applySuppressions" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMultiDirs" false) (mem "collectDirectives" false) (mem "findingToDiag" false) (mem "Finding" false) (mem "Directive" false) (mem "applyFixes" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "crossFileCacheSound" false) (mem "fileDupOccs" false) (mem "allRuleNames" false) (mem "applyFindingFilters" false) (mem "applyFindingDeny" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "splitLintNames" false) (mem "stdlibFingerprint" false))))
-(DUse false (UseGroup ("tools" "lint_cache") ((mem "LintEntry" true) (mem "contentHashOf" false) (mem "ruleSetStamp" false) (mem "cacheDirOf" false) (mem "loadEntry" false) (mem "storeEntries" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "allRules" false) (mem "lintProgram" false) (mem "StdlibIndex" false) (mem "StdlibIndexError" true) (mem "indexForRun" false) (mem "applySuppressions" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMultiDirs" false) (mem "collectDirectives" false) (mem "findingToDiag" false) (mem "Finding" false) (mem "Directive" false) (mem "applyFixes" false) (mem "allRuleNames" false) (mem "applyFindingFilters" false) (mem "applyFindingDeny" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "splitLintNames" false))))
+(DUse false (UseGroup ("tools" "lint_cache") ((mem "storeEntries" false))))
 (DUse false (UseGroup ("tools" "lint_baseline") ((mem "LintBaseline" false) (mem "readLintBaseline" false) (mem "baselineKeyOf" false) (mem "baselineViolations" false) (mem "baselineViolationLine" false) (mem "applyBaselineToFindings" false) (mem "applyBaselineToDiags" false) (mem "baselineDiagViolations" false) (mem "diagCodeOf" false) (mem "findingRuleOf" false) (mem "renderLintBaseline" false))))
 (DUse false (UseGroup ("tools" "codemod") ((mem "findCodemod" false) (mem "codemodMk" false) (mem "codemodWarnDecls" false) (mem "codemodListing" false) (mem "codemodSource" false) (mem "CodeMode" true))))
-(DUse false (UseGroup ("tools" "lint_cmd") ((mem "explainRule" false) (mem "lintCacheCtx" false) (mem "lintHelpText" false) (mem "renderRuleRowsJson" false) (mem "renderRuleRowsNames" false) (mem "renderRuleRowsText" false) (mem "rulesPageMarkdown" false) (mem "selectRuleRows" false) (mem "runLintJsonCmd" false) (mem "lintFilesToDiagTriples" false) (mem "baselineFileCodes" false) (mem "runCrossFileReport" false) (mem "runCrossFileReportCached" false) (mem "resolveLintTargets" false) (mem "lintFilesGo" false) (mem "LintRun" true) (mem "inactiveInternalRuleUse" false))))
+(DUse false (UseGroup ("tools" "lint_cmd") ((mem "explainRule" false) (mem "lintCacheCtx" false) (mem "lintHelpText" false) (mem "renderRuleRowsJson" false) (mem "renderRuleRowsNames" false) (mem "renderRuleRowsText" false) (mem "rulesPageMarkdown" false) (mem "selectRuleRows" false) (mem "runLintJsonCmd" false) (mem "lintFilesToDiagTriples" false) (mem "baselineFileCodes" false) (mem "runProjectReport" false) (mem "resolveLintTargets" false) (mem "lintFilesGo" false) (mem "LintRun" true) (mem "inactiveInternalRuleUse" false))))
 (DUse false (UseGroup ("support" "cli_targets") ((mem "lintTargetExists" false) (mem "expandLintTarget" false))))
 (DUse false (UseGroup ("tools" "check_policy") ((mem "runCheckPolicy" false) (mem "PolicyArgs" true) (mem "PolicyOutcome" true) (mem "runManifest" false) (mem "ManifestArgs" true) (mem "analyzeProgramReport" false) (mem "EntryAnalysis" true) (mem "TargetInputs" true))))
 (DTypeSig false "medakaVersion" (TyCon "String"))
@@ -5783,9 +5735,9 @@ runMcpServerFromEnv _ =
 (DTypeSig false "runLintExplain" (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runLintExplain" ((PVar "a")) (EMatch (EApp (EApp (EVar "optDefault") (EApp (EApp (EVar "flagValue") (ELit (LString "--explain"))) (EVar "a"))) (ELit (LString ""))) (arm (PLit (LString "")) () (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --explain needs a rule name")))) (arm (PVar "name") () (EMatch (EApp (EVar "explainRule") (EVar "name")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka lint: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "text")) () (EApp (EVar "putStrLn") (EVar "text")))))))
 (DTypeSig false "runLintTargets" (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runLintTargets" ((PVar "a")) (EBlock (DoLet false false (PVar "disableNames") (EApp (EApp (EVar "lintNamesOf") (ELit (LString "--disable"))) (EVar "a"))) (DoLet false false (PVar "onlyNames") (EApp (EApp (EVar "lintNamesOf") (ELit (LString "--only"))) (EVar "a"))) (DoLet false false (PVar "denyNames") (EApp (EApp (EVar "lintNamesOf") (ELit (LString "--deny"))) (EVar "a"))) (DoLet false false PWild (EApp (EVar "assertLintRuleNames") (EBinOp "++" (EBinOp "++" (EVar "disableNames") (EVar "onlyNames")) (EVar "denyNames")))) (DoLet false false (PVar "fixMode") (EApp (EApp (EVar "flag") (ELit (LString "--fix"))) (EVar "a"))) (DoLet false false PWild (EApp (EVar "assertUnsafeFixesNeedFix") (EVar "a"))) (DoLet false false (PVar "jsonMode") (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (DoLet false false (PVar "baselineArg") (EApp (EApp (EVar "flagValue") (ELit (LString "--baseline"))) (EVar "a"))) (DoLet false false (PVar "writeBaselineArg") (EApp (EApp (EVar "flagValue") (ELit (LString "--write-baseline"))) (EVar "a"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "assertBaselineFlagsCoherent") (EVar "baselineArg")) (EVar "writeBaselineArg")) (EVar "fixMode"))) (DoLet false false (PVar "fileArgs") (EFieldAccess (EVar "a") "positionals")) (DoLet false false PWild (EApp (EVar "assertLintTargetsExist") (EVar "fileArgs"))) (DoLet false false (PVar "files") (EApp (EVar "resolveLintTargets") (EVar "fileArgs"))) (DoLet false false PWild (EApp (EVar "assertLintTargetsNonEmpty") (EVar "files"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "assertInternalRulesReachable") (EApp (EApp (EVar "flag") (ELit (LString "--internal"))) (EVar "a"))) (EBinOp "++" (EVar "onlyNames") (EVar "denyNames"))) (EVar "files"))) (DoLet false false (PVar "indexResult") (EIf (EBinOp "||" (EApp (EApp (EApp (EVar "stdlibIndexNeededFor") (EVar "onlyNames")) (EVar "disableNames")) (EVar "files")) (EApp (EApp (EVar "flag") (ELit (LString "--cache"))) (EVar "a"))) (EVar "buildStdlibIndexResult") (EApp (EVar "Ok") (EVar "emptyStdlibIndex")))) (DoExpr (EMatch (EVar "indexResult") (arm (PCon "Err" (PRec "StdlibIndexError" ((rf "path" None) (rf "source" None) (rf "diagnostic" None)) false)) () (EBlock (DoExpr (EIf (EVar "jsonMode") (EApp (EVar "putStr") (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "path") (EVar "source") (EListLit (EVar "diagnostic")))))) (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "source")) (EVar "path")) (EVar "diagnostic"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "stdlibIdx")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runLintWithIndex") (EVar "stdlibIdx")) (EVar "a")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "fixMode")) (EVar "jsonMode")) (EVar "baselineArg")) (EVar "writeBaselineArg")) (EVar "files")))))))
+(DFunDef false "runLintTargets" ((PVar "a")) (EBlock (DoLet false false (PVar "disableNames") (EApp (EApp (EVar "lintNamesOf") (ELit (LString "--disable"))) (EVar "a"))) (DoLet false false (PVar "onlyNames") (EApp (EApp (EVar "lintNamesOf") (ELit (LString "--only"))) (EVar "a"))) (DoLet false false (PVar "denyNames") (EApp (EApp (EVar "lintNamesOf") (ELit (LString "--deny"))) (EVar "a"))) (DoLet false false PWild (EApp (EVar "assertLintRuleNames") (EBinOp "++" (EBinOp "++" (EVar "disableNames") (EVar "onlyNames")) (EVar "denyNames")))) (DoLet false false (PVar "fixMode") (EApp (EApp (EVar "flag") (ELit (LString "--fix"))) (EVar "a"))) (DoLet false false PWild (EApp (EVar "assertUnsafeFixesNeedFix") (EVar "a"))) (DoLet false false (PVar "jsonMode") (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (DoLet false false (PVar "baselineArg") (EApp (EApp (EVar "flagValue") (ELit (LString "--baseline"))) (EVar "a"))) (DoLet false false (PVar "writeBaselineArg") (EApp (EApp (EVar "flagValue") (ELit (LString "--write-baseline"))) (EVar "a"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "assertBaselineFlagsCoherent") (EVar "baselineArg")) (EVar "writeBaselineArg")) (EVar "fixMode"))) (DoLet false false (PVar "fileArgs") (EFieldAccess (EVar "a") "positionals")) (DoLet false false PWild (EApp (EVar "assertLintTargetsExist") (EVar "fileArgs"))) (DoLet false false (PVar "files") (EApp (EVar "resolveLintTargets") (EVar "fileArgs"))) (DoLet false false PWild (EApp (EVar "assertLintTargetsNonEmpty") (EVar "files"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "assertInternalRulesReachable") (EApp (EApp (EVar "flag") (ELit (LString "--internal"))) (EVar "a"))) (EBinOp "++" (EVar "onlyNames") (EVar "denyNames"))) (EVar "files"))) (DoLet false false (PVar "indexResult") (EApp (EApp (EApp (EApp (EVar "indexForRun") (EApp (EApp (EVar "flag") (ELit (LString "--cache"))) (EVar "a"))) (EVar "onlyNames")) (EVar "disableNames")) (EVar "files"))) (DoExpr (EMatch (EVar "indexResult") (arm (PCon "Err" (PRec "StdlibIndexError" ((rf "path" None) (rf "source" None) (rf "diagnostic" None)) false)) () (EBlock (DoExpr (EIf (EVar "jsonMode") (EApp (EVar "putStr") (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "path") (EVar "source") (EListLit (EVar "diagnostic")))))) (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "source")) (EVar "path")) (EVar "diagnostic"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "stdlibIdx")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runLintWithIndex") (EVar "stdlibIdx")) (EVar "a")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "fixMode")) (EVar "jsonMode")) (EVar "baselineArg")) (EVar "writeBaselineArg")) (EVar "files")))))))
 (DTypeSig false "runLintWithIndex" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "Args") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))))))))))
-(DFunDef false "runLintWithIndex" ((PVar "stdlibIdx") (PVar "a") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "fixMode") (PVar "jsonMode") (PVar "baselineArg") (PVar "writeBaselineArg") (PVar "files")) (EBlock (DoLet false false (PVar "cwd") (EApp (EVar "canonicalizePath") (ELit (LString ".")))) (DoLet false false (PVar "baseCtx") (EApp (EApp (EVar "loadLintBaselineCtx") (EVar "cwd")) (EVar "baselineArg"))) (DoLet false false (PVar "internalFlag") (EApp (EApp (EVar "flag") (ELit (LString "--internal"))) (EVar "a"))) (DoExpr (EIf (EApp (EVar "isSome") (EVar "writeBaselineArg")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runLintWriteBaselineCmd") (EVar "stdlibIdx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "cwd")) (EApp (EApp (EVar "optDefault") (EVar "writeBaselineArg")) (ELit (LString "")))) (EVar "files")) (EIf (EVar "jsonMode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runLintJsonCmd") (EVar "stdlibIdx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "files")) (EBlock (DoLet false false (PVar "multiFile") (EMatch (EVar "files") (arm (PCons PWild (PCons PWild PWild)) () (EVar "True")) (arm PWild () (EVar "False")))) (DoLet false false (PVar "cacheCtx") (EApp (EApp (EVar "lintCacheCtx") (EApp (EApp (EVar "flag") (ELit (LString "--cache"))) (EVar "a"))) (EVar "fixMode"))) (DoLet false false (PVar "run") (ERecordCreate "LintRun" ((fa "lrInternal" (EVar "internalFlag")) (fa "lrFix" (EVar "fixMode")) (fa "lrUnsafe" (EApp (EApp (EVar "flag") (ELit (LString "--unsafe-fixes"))) (EVar "a"))) (fa "lrMulti" (EVar "multiFile"))))) (DoLet false false (PTuple (PVar "perFileErr") (PVar "entries") (PVar "parsed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "stdlibIdx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "files")) (EVar "False"))) (DoLet false false (PVar "crossErr") (EIf (EApp (EVar "not") (EBinOp "&&" (EVar "multiFile") (EApp (EVar "not") (EVar "fixMode")))) (EVar "False") (EMatch (EVar "cacheCtx") (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "runCrossFileReportCached") (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "entries"))) (arm (PCon "None") () (EIf (EVar "crossFileCacheSound") (EApp (EApp (EApp (EApp (EApp (EVar "runCrossFileReportCached") (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "entries")) (EApp (EApp (EApp (EApp (EApp (EVar "runCrossFileReport") (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "parsed"))))))) (DoLet false false PWild (EMatch (EVar "cacheCtx") (arm (PCon "Some" (PTuple (PVar "cacheDir") (PVar "stamp"))) () (EApp (EApp (EApp (EVar "storeEntries") (EVar "cacheDir")) (EVar "stamp")) (EVar "entries"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EIf (EBinOp "||" (EVar "perFileErr") (EVar "crossErr")) (EApp (EVar "stageExit") (ELit (LInt 1))) (ELit LUnit)))))))))
+(DFunDef false "runLintWithIndex" ((PVar "stdlibIdx") (PVar "a") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "fixMode") (PVar "jsonMode") (PVar "baselineArg") (PVar "writeBaselineArg") (PVar "files")) (EBlock (DoLet false false (PVar "cwd") (EApp (EVar "canonicalizePath") (ELit (LString ".")))) (DoLet false false (PVar "baseCtx") (EApp (EApp (EVar "loadLintBaselineCtx") (EVar "cwd")) (EVar "baselineArg"))) (DoLet false false (PVar "internalFlag") (EApp (EApp (EVar "flag") (ELit (LString "--internal"))) (EVar "a"))) (DoExpr (EIf (EApp (EVar "isSome") (EVar "writeBaselineArg")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runLintWriteBaselineCmd") (EVar "stdlibIdx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "cwd")) (EApp (EApp (EVar "optDefault") (EVar "writeBaselineArg")) (ELit (LString "")))) (EVar "files")) (EIf (EVar "jsonMode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runLintJsonCmd") (EVar "stdlibIdx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "files")) (EBlock (DoLet false false (PVar "multiFile") (EMatch (EVar "files") (arm (PCons PWild (PCons PWild PWild)) () (EVar "True")) (arm PWild () (EVar "False")))) (DoLet false false (PVar "cacheCtx") (EApp (EApp (EVar "lintCacheCtx") (EApp (EApp (EVar "flag") (ELit (LString "--cache"))) (EVar "a"))) (EVar "fixMode"))) (DoLet false false (PVar "run") (ERecordCreate "LintRun" ((fa "lrInternal" (EVar "internalFlag")) (fa "lrFix" (EVar "fixMode")) (fa "lrUnsafe" (EApp (EApp (EVar "flag") (ELit (LString "--unsafe-fixes"))) (EVar "a"))) (fa "lrMulti" (EVar "multiFile"))))) (DoLet false false (PTuple (PVar "perFileErr") (PVar "entries")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesGo") (EVar "stdlibIdx")) (EVar "run")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "cacheCtx")) (EVar "files")) (EVar "False"))) (DoLet false false (PVar "crossErr") (EIf (EBinOp "&&" (EVar "multiFile") (EApp (EVar "not") (EVar "fixMode"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runProjectReport") (EVar "stdlibIdx")) (EVar "internalFlag")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "entries")) (EVar "False"))) (DoLet false false PWild (EMatch (EVar "cacheCtx") (arm (PCon "Some" (PTuple (PVar "cacheDir") (PVar "stamp"))) () (EApp (EApp (EApp (EVar "storeEntries") (EVar "cacheDir")) (EVar "stamp")) (EVar "entries"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EIf (EBinOp "||" (EVar "perFileErr") (EVar "crossErr")) (EApp (EVar "stageExit") (ELit (LInt 1))) (ELit LUnit)))))))))
 (DTypeSig false "assertBaselineFlagsCoherent" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "assertBaselineFlagsCoherent" ((PVar "baselineArg") (PVar "writeArg") (PVar "fixMode")) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "baselineArg")) (EApp (EVar "isSome") (EVar "writeArg"))) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --baseline and --write-baseline are mutually exclusive"))) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "writeArg")) (EVar "fixMode")) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --write-baseline cannot be combined with --fix"))) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "baselineArg")) (EVar "fixMode")) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --baseline cannot be combined with --fix"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "assertUnsafeFixesNeedFix" (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit"))))

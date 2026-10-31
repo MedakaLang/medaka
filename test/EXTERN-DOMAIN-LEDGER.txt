@@ -177,6 +177,7 @@ hashBool	TOTAL	total over Bool
 hashChar	TOTAL	total over Char
 hashInt	TOTAL	total over Int
 hashString	TOTAL	total over String (incl. "")
+hashStringHex	TOTAL	total over String (incl. ""); fixed-width hex
 # String ops with a total domain.
 stringLength	TOTAL	total: length of any String
 stringByteLength	TOTAL	total: UTF-8 byte count of any String

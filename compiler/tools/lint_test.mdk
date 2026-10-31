@@ -1,24 +1,24 @@
 -- compiler/tools/lint_test.mdk — sibling test for lint.mdk / lint_cmd.mdk /
 -- mcp.mdk (`[P-TEST-SIBLING]`, AGENTS.md).
 --
--- #2701 leg 3: `rule-duplicate-body` (a `CrossFileRule`) never reached
+-- #2701 leg 3: `rule-duplicate-body` (a `ProjectRule`) never reached
 -- `medaka lint --json` or the `medaka_lint` MCP tool — both surfaces looped
 -- the per-file diag-triple builder alone and never called
--- `runCrossFileRules`.  This property pins the gap AND the fix, over the
+-- `runProjectRules`.  This property pins the gap AND the fix, over the
 -- SHARED `test/lint_crossfile_fixtures` corpus (`[T-SHARED-CORPUS]`):
 --
 --   1. the OLD per-file-only triple builder (`lintFilesToDiagTriples`, kept
 --      unchanged — it is still `--write-baseline`'s vehicle) has NO
 --      `rule-duplicate-body` diagnostic anywhere in it, for ANY file set —
---      `duplicateBodyRule` is a `CrossFileRule`, never a per-file `Rule`, so
+--      `duplicateBodyRule` is a `ProjectRule`, never a per-file `Rule`, so
 --      this holds independent of the fix below and documents exactly the
 --      shape of the gap `rule-duplicate-body` fell into.
 --   2. the JSON path's OWN internals (`lintFilesToDiagQuads` +
---      `crossFileJsonFindings`, exactly what `runLintJsonCmd` calls) DO
+--      `projectJsonFindings`, exactly what `runLintJsonCmd` calls) DO
 --      surface it, merged into the owning file's entry via
---      `mergeCrossFileIntoTriples`.
+--      `mergeProjectIntoTriples`.
 --   3. the MCP path's OWN internals (`lintPathsToDiagQuads` +
---      `crossFileMcpFindings`, exactly what `runLintTool` calls) produce the
+--      `projectMcpFindings`, exactly what `runLintTool` calls) produce the
 --      SAME finding set as the JSON path — renderer parity across both
 --      machine-readable surfaces.  Licensed per the sprint contract §8.4 to
 --      assert this by calling the tool's own internal functions rather than
@@ -34,8 +34,16 @@ import test.{
   Expectation, expectEqual, expectFalse, expectTrue, expectEach, expectNotEqual,
   fail
 }
-import tools.lint_cache.{decodeEntry, LintEntry}
+import tools.lint_index.{Answer(..)}
+import tools.lint_cache.{
+  LintEntry(..),
+  entryFindings,
+  ShardLoad(..),
+  decodeEntry,
+  encodeEntry,
+}
 import string.{replace, lines}
+import list.{take}
 import support.util.{anyList, listLen, sortUniqS}
 import driver.diagnostics.{Diag(..), Severity(..), diagIdText}
 import frontend.ast.{Loc(..)}
@@ -44,20 +52,21 @@ import tools.lint.{
   Applicability(..),
   FixRun(..),
   StdlibIndex,
-  allCrossFileRules,
+  allProjectRules,
   allRuleNames,
   applyFixes,
   buildStdlibIndexResult,
-  crossFileMetaProblems,
+  projectRuleMetaProblems,
   emptyStdlibIndex,
   fixSource,
   lintParseSource,
   lintProgram,
-  mergeCrossFileIntoTriples,
+  mergeProjectIntoTriples,
   projectWildMods,
   selectRules,
 }
 import tools.lint_walk.{
+  runProjectRulesOver,
   runVisitors,
   sourceHasWildImport,
   stdlibIndexNeeded,
@@ -68,19 +77,24 @@ import frontend.ast_walk.{ExprKind(..)}
 import tools.lint_core.{
   Category(..),
   Ctx(..),
-  CrossFileRule,
+  DirScope(..),
+  Directive(..),
+  ProjectRule,
   Finding(..),
   Fixability(..),
   Ratchet(..),
   RuleMeta(..),
   Scope(..),
+  Summary(..),
   Visitor(..),
-  mkCrossFileRule,
+  mkProjectRule,
 }
 import tools.lint_cmd.{
   allRuleRows,
+  dropQuadParse,
+  lintCacheCtx,
   explainRule,
-  dropInactiveInternalCross,
+  dropInactiveInternalProject,
   inactiveInternalRuleUse,
   internalActiveFor,
   internalDisabledFor,
@@ -91,9 +105,9 @@ import tools.lint_cmd.{
   rulesPageMarkdown,
   selectRuleRows,
   lintFilesToDiagQuads,
-  crossFileJsonFindings,
+  projectJsonFindings,
 }
-import tools.mcp.{lintPathsToDiagQuads, crossFileMcpFindings}
+import tools.mcp.{lintPathsToDiagQuads, projectMcpFindings}
 
 -- The two-file duplicate pair the multi-clause blind spot (#2651) fixed —
 -- `stepA`/`stepB` are each one function split across two clauses, so neither
@@ -130,9 +144,6 @@ tripleKeysOne (path, _, diags) = map (diagKeyOf path) diags
 diagKeyOf : String -> Diag -> String
 diagKeyOf path (Diag _ code msg _ _ _) = "\{path}::\{diagIdText code}::\{msg}"
 
-dropQuadParse : (String, String, List Diag, a, b) -> (String, String, List Diag)
-dropQuadParse (path, src, diags, _, _) = (path, src, diags)
-
 -- ── 0. the stdlib index is built only when a reader of it can matter ─────────
 test "the edit rules ask for the index only on a wildcard import" = expectEach [
   (
@@ -167,8 +178,8 @@ test "the JSON path's own internals surface the duplicate-body finding" =
     Ok idx =>
       let quads = lintFilesToDiagQuads idx True [] [] [] None fixtureFiles
       let triples = map dropQuadParse quads
-      let cross = crossFileJsonFindings True [] [] [] quads
-      let merged = mergeCrossFileIntoTriples cross triples
+      let cross = projectJsonFindings idx True [] [] [] quads
+      let merged = mergeProjectIntoTriples cross triples
       expectTrue (anyDupRuleDiag merged)
 
 -- ── 3. renderer parity: JSON internals == MCP internals ─────────────────────
@@ -178,41 +189,219 @@ test "the MCP path's own internals produce the SAME finding set as JSON" =
     Ok idx =>
       let jsonQuads = lintFilesToDiagQuads idx True [] [] [] None fixtureFiles
       let jsonTriples = map dropQuadParse jsonQuads
-      let jsonCross = crossFileJsonFindings True [] [] [] jsonQuads
-      let jsonMerged = mergeCrossFileIntoTriples jsonCross jsonTriples
+      let jsonCross = projectJsonFindings idx True [] [] [] jsonQuads
+      let jsonMerged = mergeProjectIntoTriples jsonCross jsonTriples
       let mcpQuads = lintPathsToDiagQuads idx [] [] [] fixtureFiles
       let mcpTriples = map dropQuadParse mcpQuads
-      let mcpCross = crossFileMcpFindings [] [] [] mcpQuads
-      let mcpMerged = mergeCrossFileIntoTriples mcpCross mcpTriples
+      let mcpCross = projectMcpFindings idx [] [] [] mcpQuads
+      let mcpMerged = mergeProjectIntoTriples mcpCross mcpTriples
       expectEqual (tripleKeys jsonMerged) (tripleKeys mcpMerged)
 
-cachePath : Option LintEntry -> Option String
-cachePath (Some entry) = Some entry.path
-cachePath None = None
+messageOf : Finding -> String
+messageOf f = f.message
 
-test "lint cache rejects pre-strict format and mismatched identity" =
-  let entry =
+-- A ranked finding as text: everything a shard stores of it.
+rankedKey : (Int, Finding) -> String
+rankedKey (rank, f) =
+  "\{intToString rank} \{f.rule} \{f.message} \{severityKey f.severity} \{locKey f.loc}"
+
+severityKey : Severity -> String
+severityKey SevError = "error"
+severityKey SevWarning = "warning"
+
+locKey : Option Loc -> String
+locKey None = "-"
+locKey (Some (Loc file l c el ec)) =
+  "\{file}:\{intToString l}:\{intToString c}:\{intToString el}:\{intToString ec}"
+
+-- A hit's path, so a test can say which shards answered.
+loadedPath : ShardLoad -> Option String
+loadedPath (ShardHit entry) = Some entry.path
+loadedPath (ShardStale entry) = Some "stale:\{entry.path}"
+loadedPath ShardMiss = None
+
+sampleFinding : Finding
+sampleFinding = Finding {
+  rule = "rule-zz-probe",
+  message = "has \"quotes\"\nand a newline",
+  severity = SevError,
+  loc = Some (Loc "p" 1 2 3 4),
+  fix = None,
+}
+
+sampleEntry : LintEntry
+sampleEntry = LintEntry {
+  path = "p",
+  contentHash = "h",
+  freeFindings = [(0, sampleFinding)],
+  indexFindings = [(2, { sampleFinding | message = "indexed", loc = None })],
+  indexKey = "k",
+  indexAnswers = [
+    Answer { ansQuestion = "npv:f", ansDigest = "1.2.3" },
+    Answer { ansQuestion = "as", ansDigest = "4.5.6" },
+  ],
+  summaries = [("rule-a", DupOccs [(3, "f", "(key)")])],
+  directives = [Directive DScopeFile ["rule-a"], Directive (DScopeLine 7) []],
+  dirty = True,
+}
+
+-- A shard whose recorded index answers are not re-asked.
+noAnswers : List Answer -> Bool
+noAnswers _ = False
+
+test "lint cache rejects pre-sexp format and mismatched identity" =
+  let shard = encodeEntry "s" sampleEntry
+  let old =
     "{\"version\":2,\"stamp\":\"s\",\"path\":\"p\",\"hash\":\"h\",\"findings\":[],\"dupOccs\":[],\"directives\":[]}"
-  let old = replace "\"version\":2" "\"version\":1" entry
+  let nextVersion = replace "(3 " "(4 " shard
   expectEach [
     (
-      "new format",
-      expectEqual (Some "p") (cachePath (decodeEntry "s" "p" "h" entry)),
+      "round trip",
+      expectEqual
+        (Some "p")
+        (loadedPath (decodeEntry "s" "k" noAnswers "p" "h" shard)),
     ),
-    ("old format", expectEqual None (cachePath (decodeEntry "s" "p" "h" old))),
+    (
+      "json shard",
+      expectEqual None (loadedPath (decodeEntry "s" "k" noAnswers "p" "h" old)),
+    ),
+    (
+      "other version",
+      expectEqual
+        None
+        (loadedPath (decodeEntry "s" "k" noAnswers "p" "h" nextVersion)),
+    ),
     (
       "other content",
-      expectEqual None (cachePath (decodeEntry "s" "p" "other" entry)),
+      expectEqual
+        None
+        (loadedPath (decodeEntry "s" "k" noAnswers "p" "other" shard)),
     ),
     (
       "other stamp",
-      expectEqual None (cachePath (decodeEntry "other" "p" "h" entry)),
+      expectEqual
+        None
+        (loadedPath (decodeEntry "other" "k" noAnswers "p" "h" shard)),
     ),
     (
       "other path",
-      expectEqual None (cachePath (decodeEntry "s" "other" "h" entry)),
+      expectEqual
+        None
+        (loadedPath (decodeEntry "s" "k" noAnswers "other" "h" shard)),
+    ),
+    (
+      "other index key",
+      expectEqual
+        (Some "stale:p")
+        (loadedPath (decodeEntry "s" "other" noAnswers "p" "h" shard)),
+    ),
+    (
+      "truncated",
+      expectEqual
+        None
+        (loadedPath
+          (decodeEntry "s" "k" noAnswers "p" "h" (stringSlice 0 40 shard))),
+    ),
+    (
+      "trailing text",
+      expectEqual
+        None
+        (loadedPath (decodeEntry "s" "k" noAnswers "p" "h" (shard ++ " x"))),
     ),
   ]
+
+test "a shard round-trips findings, summaries and directives" =
+  match decodeEntry "s" "k" noAnswers "p" "h" (encodeEntry "s" sampleEntry)
+    ShardHit e => expectEach [
+      (
+        "free",
+        expectEqual
+          (map rankedKey sampleEntry.freeFindings)
+          (map rankedKey e.freeFindings),
+      ),
+      (
+        "index",
+        expectEqual
+          (map rankedKey sampleEntry.indexFindings)
+          (map rankedKey e.indexFindings),
+      ),
+      ("answers", expectEqual sampleEntry.indexAnswers e.indexAnswers),
+      ("summaries", expectEqual sampleEntry.summaries e.summaries),
+      ("directives", expectEqual sampleEntry.directives e.directives),
+      (
+        "merged in rank order",
+        expectEqual
+          ["has \"quotes\"\nand a newline", "indexed"]
+          (map messageOf (entryFindings e)),
+      ),
+    ]
+    _ => fail "the shard did not decode"
+
+-- One sample per `Summary` constructor.  `summaryKind` has no wildcard arm, so
+-- a new constructor warns non-exhaustive here until it has a sample below.
+summaryKind : Summary -> String
+summaryKind (DupOccs _) = "dup-occs"
+
+summarySamples : List Summary
+summarySamples = [
+  DupOccs [],
+  DupOccs [
+    (3, "f", "(key)"),
+    (12, "name with space", "has \"quotes\"\nand a newline"),
+  ],
+]
+
+test "every Summary constructor round-trips through the shard codec" =
+  let entryOf =
+    sm => { sampleEntry | summaries = [("rule-a", sm), ("rule-b", sm)] }
+  let roundTrip =
+    sm =>
+      match decodeEntry "s" "k" noAnswers "p" "h" (encodeEntry "s" (entryOf sm))
+        ShardHit e => Some e.summaries
+        _ => None
+  expectEach
+    (map
+      (sm => (
+        summaryKind sm,
+        expectEqual (Some (entryOf sm).summaries) (roundTrip sm),
+      ))
+      summarySamples)
+
+test "a shard made against another index keeps what does not read the index" =
+  match decodeEntry "s" "other" noAnswers "p" "h" (encodeEntry "s" sampleEntry)
+    ShardStale e => expectEach [
+      (
+        "free",
+        expectEqual
+          (map rankedKey sampleEntry.freeFindings)
+          (map rankedKey e.freeFindings),
+      ),
+      ("index group dropped", expectEqual 0 (listLen e.indexFindings)),
+      ("summaries", expectEqual sampleEntry.summaries e.summaries),
+      ("directives", expectEqual sampleEntry.directives e.directives),
+      ("new key", expectEqual "other" e.indexKey),
+      ("answers dropped", expectEqual [] e.indexAnswers),
+    ]
+    _ => fail "expected a stale shard"
+
+test "a shard made against another index is a hit when its answers hold" =
+  let shard = encodeEntry "s" sampleEntry
+  let asked = (== sampleEntry.indexAnswers)
+  match decodeEntry "s" "other" asked "p" "h" shard
+    ShardHit e => expectEach [
+      (
+        "index group kept",
+        expectEqual
+          (map rankedKey sampleEntry.indexFindings)
+          (map rankedKey e.indexFindings),
+      ),
+      ("the stored key is kept", expectEqual "k" e.indexKey),
+    ]
+    _ => fail "expected a hit"
+
+test "a shard from before answers were stored is a miss" =
+  let old = "(3 \"s\" \"p\" \"h\" \"k\" () () () ())"
+  expectEqual None (loadedPath (decodeEntry "s" "k" (_ => True) "p" "h" old))
 
 -- ── 4. the generated rules page ─────────────────────────────────────────────
 -- `docs/ops/LINT-RULES.md` is `medaka lint --list-rules --markdown`.  A rule's
@@ -456,8 +645,9 @@ probeMeta scope ratchet = RuleMeta {
   needs = [],
 }
 
-probeRule : Scope -> Ratchet -> CrossFileRule
-probeRule scope ratchet = mkCrossFileRule (probeMeta scope ratchet) (_ => [])
+probeRule : Scope -> Ratchet -> ProjectRule
+probeRule scope ratchet =
+  mkProjectRule (probeMeta scope ratchet) (_ _ _ _ => DupOccs []) (_ _ => [])
 
 probeFindingIn : String -> Finding
 probeFindingIn file = Finding {
@@ -473,14 +663,81 @@ findingFile f = f.message
 
 test "no registered cross-file rule carries metadata that nothing enforces" = expectEach
   [
-    ("the registry", expectEqual [] (crossFileMetaProblems allCrossFileRules)),
+    ("the registry", expectEqual [] (projectRuleMetaProblems allProjectRules)),
     (
       "a baselined cross-file rule is rejected",
-      expectNotEqual [] (crossFileMetaProblems [probeRule Universal Baselined]),
+      expectNotEqual
+        []
+        (projectRuleMetaProblems [probeRule Universal Baselined]),
     ),
     (
       "a gated internal cross-file rule is allowed",
-      expectEqual [] (crossFileMetaProblems [probeRule Internal Gated]),
+      expectEqual [] (projectRuleMetaProblems [probeRule Internal Gated]),
+    ),
+  ]
+
+-- A second registered project rule needs no switch flipped: its summaries ride
+-- in the same shard as the first's, the runner hands each rule only its own,
+-- and `--cache` stays on.  The roster here is the real duplicate-body rule plus
+-- a probe that reports how many files it was given.
+countingRule : ProjectRule
+countingRule =
+  mkProjectRule
+    (probeMeta Universal Gated)
+    (_ _ _ _ => DupOccs [])
+    (_ files => map (countFinding (listLen files)) (take 1 files))
+
+countFinding : Int -> (String, Summary) -> Finding
+countFinding n (path, _) = Finding {
+  rule = "rule-zz-probe",
+  message = intToString n,
+  severity = SevWarning,
+  loc = Some (Loc path 1 1 1 1),
+  fix = None,
+}
+
+test "a second project rule is evaluated over its own summaries and keeps --cache on" =
+  let both = [countingRule]
+  let files = [
+    ("a.mdk", [("rule-zz-probe", DupOccs []), ("rule-a", DupOccs [])]),
+    ("b.mdk", [("rule-zz-probe", DupOccs [])]),
+    ("c.mdk", [("rule-a", DupOccs [])]),
+  ]
+  let entry = { sampleEntry |
+    summaries =
+      [("rule-a", DupOccs [(1, "f", "k")]), ("rule-zz-probe", DupOccs [])],
+  }
+  expectEach [
+    (
+      "the probe sees only the files that summarized under its name",
+      expectEqual
+        ["2"]
+        (map messageOf (runProjectRulesOver both [] [] emptyStdlibIndex files)),
+    ),
+    (
+      "--only gates it",
+      expectEqual
+        []
+        (map
+          messageOf
+          (runProjectRulesOver both ["rule-a"] [] emptyStdlibIndex files)),
+    ),
+    (
+      "both rules' summaries survive a shard round trip",
+      expectEqual (Some
+        entry.summaries) (match (decodeEntry
+        "s"
+        "k"
+        noAnswers
+        "p"
+        "h"
+        (encodeEntry "s" entry))
+        ShardHit e => Some e.summaries
+        _ => None),
+    ),
+    (
+      "the cache is on whatever the roster holds",
+      expectTrue (isSome (lintCacheCtx True False)),
     ),
   ]
 
@@ -494,7 +751,7 @@ test "an internal cross-file rule's findings are dropped where internal is off" 
         []
         (map
           findingFile
-          (dropInactiveInternalCross
+          (dropInactiveInternalProject
             [probeRule Internal Gated]
             False
             [probeFindingIn "stdlib/list.mdk"])),
@@ -505,7 +762,7 @@ test "an internal cross-file rule's findings are dropped where internal is off" 
         ["compiler/tools/lint.mdk"]
         (map
           findingFile
-          (dropInactiveInternalCross
+          (dropInactiveInternalProject
             [probeRule Internal Gated]
             False
             [probeFindingIn "compiler/tools/lint.mdk"])),
@@ -516,7 +773,7 @@ test "an internal cross-file rule's findings are dropped where internal is off" 
         ["stdlib/list.mdk"]
         (map
           findingFile
-          (dropInactiveInternalCross
+          (dropInactiveInternalProject
             [probeRule Internal Gated]
             True
             [probeFindingIn "stdlib/list.mdk"])),
@@ -527,7 +784,7 @@ test "an internal cross-file rule's findings are dropped where internal is off" 
         ["stdlib/list.mdk"]
         (map
           findingFile
-          (dropInactiveInternalCross
+          (dropInactiveInternalProject
             [probeRule Universal Gated]
             False
             [probeFindingIn "stdlib/list.mdk"])),
@@ -538,7 +795,7 @@ test "an internal cross-file rule's findings are dropped where internal is off" 
         ["compiler/tools/lint.mdk"]
         (map
           findingFile
-          (dropInactiveInternalCross
+          (dropInactiveInternalProject
             [probeRule Internal Gated]
             False
             [
