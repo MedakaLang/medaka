@@ -1,7 +1,8 @@
 # META
-source_lines=127
+source_lines=136
 stages=DESUGAR,MARK
 # SOURCE
+import types.symbol_origins.{SymbolOrigins}
 -- The facts a typechecked program carries to the stages that read it: the
 -- evidence index, the disposition table and the binder-type table, as one value,
 -- plus the one run-owned cell that holds it for the duration of a bracketed
@@ -24,6 +25,7 @@ import types.capability_manifest.{CapabilityManifest}
 -- `Option` fields are `None` for a program that was never typechecked, so an
 -- untyped lowering reads absence.
 public export data ProgramFacts = ProgramFacts {
+  pfSymbolOrigins : Option SymbolOrigins,
   pfManifests : List CapabilityManifest,
   pfEvidence : EvIndex,
   pfDispositions : Option DispositionTable,
@@ -36,6 +38,7 @@ public export data ProgramFacts = ProgramFacts {
 export
 emptyFacts : ProgramFacts
 emptyFacts = ProgramFacts {
+  pfSymbolOrigins = None,
   pfManifests = [],
   pfEvidence = evIndexOf [],
   pfDispositions = None,
@@ -47,6 +50,7 @@ emptyFacts = ProgramFacts {
 export
 factsOfChecked : CheckedProgram -> ProgramFacts
 factsOfChecked c = ProgramFacts {
+  pfSymbolOrigins = None,
   pfManifests = c.cpManifests,
   pfEvidence = evIndexOf c.cpEvidence,
   pfDispositions = Some c.cpDispositions,
@@ -66,6 +70,7 @@ factsOfElab elab = factsOfElabWith elab.erEvidence elab
 export
 factsOfElabWith : EvTable -> ElabResult -> ProgramFacts
 factsOfElabWith table elab = ProgramFacts {
+  pfSymbolOrigins = None,
   pfManifests = elab.erFacts.efManifests,
   pfEvidence = evIndexOf table,
   pfDispositions = Some elab.erDispositions,
@@ -129,7 +134,12 @@ factsNow _ =
   optionOrPanic
     "program facts: read outside any withFacts bracket"
     !currentFacts
+
+export
+withSymbolOrigins : SymbolOrigins -> ProgramFacts -> ProgramFacts
+withSymbolOrigins origins facts = { facts | pfSymbolOrigins = Some origins }
 # DESUGAR
+(DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "EvTable" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternSource" false) (mem "ExternHeadRows" false) (mem "ExternProvenance" true) (mem "sourceExterns" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false) (mem "evIndexOf" false))))
@@ -138,15 +148,15 @@ factsNow _ =
 (DUse false (UseGroup ("types" "publish") ((mem "CheckedProgram" true) (mem "EntryOutcome" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false) (mem "ElabResult" true) (mem "ElabFacts" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "CapabilityManifest" false))))
-(DData Public "ProgramFacts" () ((variant "ProgramFacts" (ConNamed (field "pfManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "pfEvidence" (TyCon "EvIndex")) (field "pfDispositions" (TyApp (TyCon "Option") (TyCon "DispositionTable"))) (field "pfBinders" (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))) (field "pfEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryOutcome"))) (field "pfExternSources" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExternSource"))))))) ())
+(DData Public "ProgramFacts" () ((variant "ProgramFacts" (ConNamed (field "pfSymbolOrigins" (TyApp (TyCon "Option") (TyCon "SymbolOrigins"))) (field "pfManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "pfEvidence" (TyCon "EvIndex")) (field "pfDispositions" (TyApp (TyCon "Option") (TyCon "DispositionTable"))) (field "pfBinders" (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))) (field "pfEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryOutcome"))) (field "pfExternSources" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExternSource"))))))) ())
 (DTypeSig true "emptyFacts" (TyCon "ProgramFacts"))
-(DFunDef false "emptyFacts" () (ERecordCreate "ProgramFacts" ((fa "pfManifests" (EListLit)) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EListLit))) (fa "pfDispositions" (EVar "None")) (fa "pfBinders" (EVar "None")) (fa "pfEntryOutcome" (EVar "None")) (fa "pfExternSources" (EVar "None")))))
+(DFunDef false "emptyFacts" () (ERecordCreate "ProgramFacts" ((fa "pfSymbolOrigins" (EVar "None")) (fa "pfManifests" (EListLit)) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EListLit))) (fa "pfDispositions" (EVar "None")) (fa "pfBinders" (EVar "None")) (fa "pfEntryOutcome" (EVar "None")) (fa "pfExternSources" (EVar "None")))))
 (DTypeSig true "factsOfChecked" (TyFun (TyCon "CheckedProgram") (TyCon "ProgramFacts")))
-(DFunDef false "factsOfChecked" ((PVar "c")) (ERecordCreate "ProgramFacts" ((fa "pfManifests" (EFieldAccess (EVar "c") "cpManifests")) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EFieldAccess (EVar "c") "cpEvidence"))) (fa "pfDispositions" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpDispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpBinders"))) (fa "pfEntryOutcome" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpEntryOutcome"))) (fa "pfExternSources" (EVar "None")))))
+(DFunDef false "factsOfChecked" ((PVar "c")) (ERecordCreate "ProgramFacts" ((fa "pfSymbolOrigins" (EVar "None")) (fa "pfManifests" (EFieldAccess (EVar "c") "cpManifests")) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EFieldAccess (EVar "c") "cpEvidence"))) (fa "pfDispositions" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpDispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpBinders"))) (fa "pfEntryOutcome" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpEntryOutcome"))) (fa "pfExternSources" (EVar "None")))))
 (DTypeSig true "factsOfElab" (TyFun (TyCon "ElabResult") (TyCon "ProgramFacts")))
 (DFunDef false "factsOfElab" ((PVar "elab")) (EApp (EApp (EVar "factsOfElabWith") (EFieldAccess (EVar "elab") "erEvidence")) (EVar "elab")))
 (DTypeSig true "factsOfElabWith" (TyFun (TyCon "EvTable") (TyFun (TyCon "ElabResult") (TyCon "ProgramFacts"))))
-(DFunDef false "factsOfElabWith" ((PVar "table") (PVar "elab")) (ERecordCreate "ProgramFacts" ((fa "pfManifests" (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efManifests")) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EVar "table"))) (fa "pfDispositions" (EApp (EVar "Some") (EFieldAccess (EVar "elab") "erDispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efBinders"))) (fa "pfEntryOutcome" (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efEntryOutcome"))) (fa "pfExternSources" (EVar "None")))))
+(DFunDef false "factsOfElabWith" ((PVar "table") (PVar "elab")) (ERecordCreate "ProgramFacts" ((fa "pfSymbolOrigins" (EVar "None")) (fa "pfManifests" (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efManifests")) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EVar "table"))) (fa "pfDispositions" (EApp (EVar "Some") (EFieldAccess (EVar "elab") "erDispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efBinders"))) (fa "pfEntryOutcome" (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efEntryOutcome"))) (fa "pfExternSources" (EVar "None")))))
 (DTypeSig true "factsOfElabSources" (TyFun (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "ExternHeadRows"))) (TyFun (TyCon "DriveOutputs") (TyFun (TyCon "ElabResult") (TyFun (TyCon "EvTable") (TyCon "ProgramFacts"))))))
 (DFunDef false "factsOfElabSources" ((PVar "project") (PVar "outputs") (PVar "elab") (PVar "table")) (EApp (EApp (EApp (EApp (EApp (EVar "withCheckedExternSources") (EVar "project")) (EVar "outputs")) (EFieldAccess (EVar "elab") "erCore")) (EFieldAccess (EVar "elab") "erModules")) (EApp (EApp (EVar "factsOfElabWith") (EVar "table")) (EVar "elab"))))
 (DTypeSig true "withCheckedExternSources" (TyFun (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "ExternHeadRows"))) (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts")))))))
@@ -159,7 +169,10 @@ factsNow _ =
 (DFunDef false "withFacts" ((PVar "facts") (PVar "action")) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentFacts"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EApp (EVar "Some") (EVar "facts")))) (DoLet false false (PVar "result") (EApp (EVar "action") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EVar "saved"))) (DoExpr (EVar "result"))))
 (DTypeSig true "factsNow" (TyFun (TyCon "Unit") (TyCon "ProgramFacts")))
 (DFunDef false "factsNow" (PWild) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "program facts: read outside any withFacts bracket"))) (EUnOp "!" (EVar "currentFacts"))))
+(DTypeSig true "withSymbolOrigins" (TyFun (TyCon "SymbolOrigins") (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
+(DFunDef false "withSymbolOrigins" ((PVar "origins") (PVar "facts")) (ERecordUpdate (EVar "facts") ((fa "pfSymbolOrigins" (EApp (EVar "Some") (EVar "origins"))))))
 # MARK
+(DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "EvTable" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternSource" false) (mem "ExternHeadRows" false) (mem "ExternProvenance" true) (mem "sourceExterns" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false) (mem "evIndexOf" false))))
@@ -168,15 +181,15 @@ factsNow _ =
 (DUse false (UseGroup ("types" "publish") ((mem "CheckedProgram" true) (mem "EntryOutcome" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false) (mem "ElabResult" true) (mem "ElabFacts" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "CapabilityManifest" false))))
-(DData Public "ProgramFacts" () ((variant "ProgramFacts" (ConNamed (field "pfManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "pfEvidence" (TyCon "EvIndex")) (field "pfDispositions" (TyApp (TyCon "Option") (TyCon "DispositionTable"))) (field "pfBinders" (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))) (field "pfEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryOutcome"))) (field "pfExternSources" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExternSource"))))))) ())
+(DData Public "ProgramFacts" () ((variant "ProgramFacts" (ConNamed (field "pfSymbolOrigins" (TyApp (TyCon "Option") (TyCon "SymbolOrigins"))) (field "pfManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "pfEvidence" (TyCon "EvIndex")) (field "pfDispositions" (TyApp (TyCon "Option") (TyCon "DispositionTable"))) (field "pfBinders" (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))) (field "pfEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryOutcome"))) (field "pfExternSources" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExternSource"))))))) ())
 (DTypeSig true "emptyFacts" (TyCon "ProgramFacts"))
-(DFunDef false "emptyFacts" () (ERecordCreate "ProgramFacts" ((fa "pfManifests" (EListLit)) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EListLit))) (fa "pfDispositions" (EVar "None")) (fa "pfBinders" (EVar "None")) (fa "pfEntryOutcome" (EVar "None")) (fa "pfExternSources" (EVar "None")))))
+(DFunDef false "emptyFacts" () (ERecordCreate "ProgramFacts" ((fa "pfSymbolOrigins" (EVar "None")) (fa "pfManifests" (EListLit)) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EListLit))) (fa "pfDispositions" (EVar "None")) (fa "pfBinders" (EVar "None")) (fa "pfEntryOutcome" (EVar "None")) (fa "pfExternSources" (EVar "None")))))
 (DTypeSig true "factsOfChecked" (TyFun (TyCon "CheckedProgram") (TyCon "ProgramFacts")))
-(DFunDef false "factsOfChecked" ((PVar "c")) (ERecordCreate "ProgramFacts" ((fa "pfManifests" (EFieldAccess (EVar "c") "cpManifests")) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EFieldAccess (EVar "c") "cpEvidence"))) (fa "pfDispositions" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpDispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpBinders"))) (fa "pfEntryOutcome" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpEntryOutcome"))) (fa "pfExternSources" (EVar "None")))))
+(DFunDef false "factsOfChecked" ((PVar "c")) (ERecordCreate "ProgramFacts" ((fa "pfSymbolOrigins" (EVar "None")) (fa "pfManifests" (EFieldAccess (EVar "c") "cpManifests")) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EFieldAccess (EVar "c") "cpEvidence"))) (fa "pfDispositions" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpDispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpBinders"))) (fa "pfEntryOutcome" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpEntryOutcome"))) (fa "pfExternSources" (EVar "None")))))
 (DTypeSig true "factsOfElab" (TyFun (TyCon "ElabResult") (TyCon "ProgramFacts")))
 (DFunDef false "factsOfElab" ((PVar "elab")) (EApp (EApp (EVar "factsOfElabWith") (EFieldAccess (EVar "elab") "erEvidence")) (EVar "elab")))
 (DTypeSig true "factsOfElabWith" (TyFun (TyCon "EvTable") (TyFun (TyCon "ElabResult") (TyCon "ProgramFacts"))))
-(DFunDef false "factsOfElabWith" ((PVar "table") (PVar "elab")) (ERecordCreate "ProgramFacts" ((fa "pfManifests" (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efManifests")) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EVar "table"))) (fa "pfDispositions" (EApp (EVar "Some") (EFieldAccess (EVar "elab") "erDispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efBinders"))) (fa "pfEntryOutcome" (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efEntryOutcome"))) (fa "pfExternSources" (EVar "None")))))
+(DFunDef false "factsOfElabWith" ((PVar "table") (PVar "elab")) (ERecordCreate "ProgramFacts" ((fa "pfSymbolOrigins" (EVar "None")) (fa "pfManifests" (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efManifests")) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EVar "table"))) (fa "pfDispositions" (EApp (EVar "Some") (EFieldAccess (EVar "elab") "erDispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efBinders"))) (fa "pfEntryOutcome" (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "elab") "erFacts") "efEntryOutcome"))) (fa "pfExternSources" (EVar "None")))))
 (DTypeSig true "factsOfElabSources" (TyFun (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "ExternHeadRows"))) (TyFun (TyCon "DriveOutputs") (TyFun (TyCon "ElabResult") (TyFun (TyCon "EvTable") (TyCon "ProgramFacts"))))))
 (DFunDef false "factsOfElabSources" ((PVar "project") (PVar "outputs") (PVar "elab") (PVar "table")) (EApp (EApp (EApp (EApp (EApp (EVar "withCheckedExternSources") (EVar "project")) (EVar "outputs")) (EFieldAccess (EVar "elab") "erCore")) (EFieldAccess (EVar "elab") "erModules")) (EApp (EApp (EVar "factsOfElabWith") (EVar "table")) (EVar "elab"))))
 (DTypeSig true "withCheckedExternSources" (TyFun (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "ExternHeadRows"))) (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts")))))))
@@ -189,3 +202,5 @@ factsNow _ =
 (DFunDef false "withFacts" ((PVar "facts") (PVar "action")) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentFacts"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EApp (EVar "Some") (EVar "facts")))) (DoLet false false (PVar "result") (EApp (EVar "action") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EVar "saved"))) (DoExpr (EVar "result"))))
 (DTypeSig true "factsNow" (TyFun (TyCon "Unit") (TyCon "ProgramFacts")))
 (DFunDef false "factsNow" (PWild) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "program facts: read outside any withFacts bracket"))) (EUnOp "!" (EVar "currentFacts"))))
+(DTypeSig true "withSymbolOrigins" (TyFun (TyCon "SymbolOrigins") (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
+(DFunDef false "withSymbolOrigins" ((PVar "origins") (PVar "facts")) (ERecordUpdate (EVar "facts") ((fa "pfSymbolOrigins" (EApp (EVar "Some") (EVar "origins"))))))

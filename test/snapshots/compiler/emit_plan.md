@@ -1,7 +1,8 @@
 # META
-source_lines=386
+source_lines=387
 stages=DESUGAR,MARK
 # SOURCE
+import support.symbol_encoding.{encodePair}
 import backend.wasm_demand.{
   JsImport(..), WasmDemand(..), WasmDemandInputs(..), WasmDemandPlan,
   planWasmDemand, ctorFloatFieldIndex
@@ -345,8 +346,8 @@ canonFnIn : OrdMap Int -> String -> String
 canonFnIn fns name =
   if omHasKey name fns then
     name
-  else if omHasKey ("core__" ++ name) fns then
-    "core__" ++ name
+  else if omHasKey (encodePair "core" name) fns then
+    encodePair "core" name
   else
     name
 
@@ -389,6 +390,7 @@ data DemandScope = DemandScope {
   externFacts : OrdMap ExternDeclFact,
 }
 # DESUGAR
+(DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true) (mem "WasmDemand" true) (mem "WasmDemandInputs" true) (mem "WasmDemandPlan" false) (mem "planWasmDemand" false) (mem "ctorFloatFieldIndex" false))))
 (DUse false (UseGroup ("backend" "wasm_names") ((mem "uniqueBinders" false))))
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "planExterns" false) (mem "requirementHostRows" false))))
@@ -459,12 +461,13 @@ data DemandScope = DemandScope {
 (DTypeSig false "bindArity" (TyFun (TyCon "CBind") (TyCon "Int")))
 (DFunDef false "bindArity" ((PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EVar "clauseArityOf") (EVar "clauses")))
 (DTypeSig false "canonFnIn" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "canonFnIn" ((PVar "fns") (PVar "name")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "fns")) (EVar "name") (EIf (EApp (EApp (EVar "omHasKey") (EBinOp "++" (ELit (LString "core__")) (EVar "name"))) (EVar "fns")) (EBinOp "++" (ELit (LString "core__")) (EVar "name")) (EVar "name"))))
+(DFunDef false "canonFnIn" ((PVar "fns") (PVar "name")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "fns")) (EVar "name") (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "encodePair") (ELit (LString "core"))) (EVar "name"))) (EVar "fns")) (EApp (EApp (EVar "encodePair") (ELit (LString "core"))) (EVar "name")) (EVar "name"))))
 (DTypeSig false "noDemand" (TyCon "WasmDemand"))
 (DFunDef false "noDemand" () (ERecordCreate "WasmDemand" ((fa "uses" (EListLit)) (fa "refBox" (EVar "False")) (fa "divGuard" (EVar "False")) (fa "tupleArities" (EListLit)))))
 (DData Private "DemandAcc" () ((variant "DemandAcc" (ConNamed (field "seenUses" (TyApp (TyCon "List") (TyCon "WasmUse"))) (field "seenKeys" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "seenJs" (TyApp (TyCon "OrdMap") (TyCon "JsImport"))) (field "seenRefBox" (TyCon "Bool")) (field "seenDivGuard" (TyCon "Bool")) (field "seenArities" (TyApp (TyCon "List") (TyCon "Int")))))) ())
 (DData Private "DemandScope" () ((variant "DemandScope" (ConNamed (field "locals" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "topFns" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "topVals" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "jsBinds" (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (field "externFacts" (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")))))) ())
 # MARK
+(DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true) (mem "WasmDemand" true) (mem "WasmDemandInputs" true) (mem "WasmDemandPlan" false) (mem "planWasmDemand" false) (mem "ctorFloatFieldIndex" false))))
 (DUse false (UseGroup ("backend" "wasm_names") ((mem "uniqueBinders" false))))
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "planExterns" false) (mem "requirementHostRows" false))))
@@ -535,7 +538,7 @@ data DemandScope = DemandScope {
 (DTypeSig false "bindArity" (TyFun (TyCon "CBind") (TyCon "Int")))
 (DFunDef false "bindArity" ((PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EVar "clauseArityOf") (EVar "clauses")))
 (DTypeSig false "canonFnIn" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "canonFnIn" ((PVar "fns") (PVar "name")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "fns")) (EVar "name") (EIf (EApp (EApp (EVar "omHasKey") (EBinOp "++" (ELit (LString "core__")) (EVar "name"))) (EVar "fns")) (EBinOp "++" (ELit (LString "core__")) (EVar "name")) (EVar "name"))))
+(DFunDef false "canonFnIn" ((PVar "fns") (PVar "name")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "fns")) (EVar "name") (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "encodePair") (ELit (LString "core"))) (EVar "name"))) (EVar "fns")) (EApp (EApp (EVar "encodePair") (ELit (LString "core"))) (EVar "name")) (EVar "name"))))
 (DTypeSig false "noDemand" (TyCon "WasmDemand"))
 (DFunDef false "noDemand" () (ERecordCreate "WasmDemand" ((fa "uses" (EListLit)) (fa "refBox" (EVar "False")) (fa "divGuard" (EVar "False")) (fa "tupleArities" (EListLit)))))
 (DData Private "DemandAcc" () ((variant "DemandAcc" (ConNamed (field "seenUses" (TyApp (TyCon "List") (TyCon "WasmUse"))) (field "seenKeys" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "seenJs" (TyApp (TyCon "OrdMap") (TyCon "JsImport"))) (field "seenRefBox" (TyCon "Bool")) (field "seenDivGuard" (TyCon "Bool")) (field "seenArities" (TyApp (TyCon "List") (TyCon "Int")))))) ())
