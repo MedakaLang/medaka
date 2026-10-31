@@ -200,6 +200,7 @@ import frontend.visibility.{
   pubUsePaths,
   exportedValueNames,
   nsAbstractData,
+  directIn,
 }
 import types.value_main.{inMainBinding}
 import frontend.resolve.{
@@ -458,11 +459,10 @@ ioJoinAtoms domains grants =
         (lookupAssoc l grants))
     hostLabels
 
--- The names of all `VisAbstract` data decls.  Only record-shaped ones can be a
--- dot-access receiver, but harvesting any is harmless: a positional ADT's fields
--- never exist, so a field access cannot reach the abstract branch.
+-- The names of all `VisAbstract` data decls.  Harvesting positional ADTs too is
+-- harmless: their fields never exist, so a field access cannot reach the abstract branch.
 collectAbstractRecordTypes : List Decl -> List String
-collectAbstractRecordTypes decls = flatMap nsAbstractData.nsDirectOf decls
+collectAbstractRecordTypes decls = directIn nsAbstractData decls
 
 -- seed abstractRecordTypesRef from every module's decls (the per-module progs plus
 -- the prelude/core decls), once, before checking begins.  Keyed by the type
@@ -1558,7 +1558,7 @@ coreRenameScheme coreV m = match useMemberAlias m
     Some s => [(local, s)]
 
 -- the (key, scheme) pairs a module RE-EXPORTS via `export import` (`DUse True`).
--- Mirrors resolve's re-export set (resolve.pubUsePaths filters the same `DUse True`)
+-- Mirrors resolve's re-export set (frontend.visibility.pubUsePaths filters the same `DUse True`)
 -- into the typecheck seed: walk the export-flagged DUse decls and, for each, pick the
 -- re-exported member names out of the SOURCE dependency's public schemes already in
 -- depEnv — the exact member resolution importSeed uses (importFormSchemes /

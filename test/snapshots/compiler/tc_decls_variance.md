@@ -1,5 +1,5 @@
 # META
-source_lines=587
+source_lines=579
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls_variance: polarity and variance of declared types: occurrence polarity, polarity joins
@@ -124,16 +124,8 @@ polarityPublicKeys : List Decl -> List TabKey
 polarityPublicKeys [] = []
 polarityPublicKeys ((DAttrib _ d) :: rest) = polarityPublicKeys (d :: rest)
 polarityPublicKeys (d :: rest) =
-  (if declExportsIn nsTypes d then typeDeclKeys d else [])
+  (if declExportsIn nsTypes d then declPolarityKeys [d] else [])
     ++ polarityPublicKeys rest
-
-typeDeclKeys : Decl -> List TabKey
-typeDeclKeys (DData { dataName = n, dataOrigin = o, ... }) = [tyTabKey o n]
-typeDeclKeys (DNewtype { newtypeName = n, newtypeOrigin = o, ... }) =
-  [tyTabKey o n]
-typeDeclKeys (DTypeAlias { tyAliasName = n, tyAliasOrigin = o, ... }) =
-  [tyTabKey o n]
-typeDeclKeys _ = []
 
 -- Membership index over a `TabKey` list, bucketed by the bare name: the probe
 -- reads the name already stored in the key (no rendering, no allocation), and
@@ -611,12 +603,7 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DTypeSig false "polarityPublicKeys" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "TabKey"))))
 (DFunDef false "polarityPublicKeys" ((PList)) (EListLit))
 (DFunDef false "polarityPublicKeys" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "polarityPublicKeys") (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "polarityPublicKeys" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "++" (EIf (EApp (EApp (EVar "declExportsIn") (EVar "nsTypes")) (EVar "d")) (EApp (EVar "typeDeclKeys") (EVar "d")) (EListLit)) (EApp (EVar "polarityPublicKeys") (EVar "rest"))))
-(DTypeSig false "typeDeclKeys" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "TabKey"))))
-(DFunDef false "typeDeclKeys" ((PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataOrigin" (PVar "o"))) true)) (EListLit (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))))
-(DFunDef false "typeDeclKeys" ((PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeOrigin" (PVar "o"))) true)) (EListLit (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))))
-(DFunDef false "typeDeclKeys" ((PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n")) (rf "tyAliasOrigin" (PVar "o"))) true)) (EListLit (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))))
-(DFunDef false "typeDeclKeys" (PWild) (EListLit))
+(DFunDef false "polarityPublicKeys" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "++" (EIf (EApp (EApp (EVar "declExportsIn") (EVar "nsTypes")) (EVar "d")) (EApp (EVar "declPolarityKeys") (EListLit (EVar "d"))) (EListLit)) (EApp (EVar "polarityPublicKeys") (EVar "rest"))))
 (DTypeSig false "tabKeyIndex" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "TabKey")))))
 (DFunDef false "tabKeyIndex" ((PVar "keys")) (EApp (EApp (EVar "tabKeyIndexGo") (EVar "keys")) (EVar "omEmpty")))
 (DTypeSig false "tabKeyIndexGo" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "TabKey"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "TabKey"))))))
@@ -755,12 +742,7 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DTypeSig false "polarityPublicKeys" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "TabKey"))))
 (DFunDef false "polarityPublicKeys" ((PList)) (EListLit))
 (DFunDef false "polarityPublicKeys" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "polarityPublicKeys") (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "polarityPublicKeys" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "++" (EIf (EApp (EApp (EVar "declExportsIn") (EVar "nsTypes")) (EVar "d")) (EApp (EVar "typeDeclKeys") (EVar "d")) (EListLit)) (EApp (EVar "polarityPublicKeys") (EVar "rest"))))
-(DTypeSig false "typeDeclKeys" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "TabKey"))))
-(DFunDef false "typeDeclKeys" ((PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataOrigin" (PVar "o"))) true)) (EListLit (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))))
-(DFunDef false "typeDeclKeys" ((PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeOrigin" (PVar "o"))) true)) (EListLit (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))))
-(DFunDef false "typeDeclKeys" ((PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n")) (rf "tyAliasOrigin" (PVar "o"))) true)) (EListLit (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))))
-(DFunDef false "typeDeclKeys" (PWild) (EListLit))
+(DFunDef false "polarityPublicKeys" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "++" (EIf (EApp (EApp (EVar "declExportsIn") (EVar "nsTypes")) (EVar "d")) (EApp (EVar "declPolarityKeys") (EListLit (EVar "d"))) (EListLit)) (EApp (EVar "polarityPublicKeys") (EVar "rest"))))
 (DTypeSig false "tabKeyIndex" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "TabKey")))))
 (DFunDef false "tabKeyIndex" ((PVar "keys")) (EApp (EApp (EVar "tabKeyIndexGo") (EVar "keys")) (EVar "omEmpty")))
 (DTypeSig false "tabKeyIndexGo" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "TabKey"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "TabKey"))))))

@@ -1,5 +1,5 @@
 # META
-source_lines=984
+source_lines=989
 stages=DESUGAR,MARK
 # SOURCE
 -- A module's export surface, built from its declarations and the surfaces of
@@ -10,9 +10,10 @@ stages=DESUGAR,MARK
 -- `export import`s name, and `coreExports` builds the prelude's.  This module
 -- imports no resolver state: `frontend.resolve` imports it, never the reverse.
 --
--- The typechecker reads the same facets through `directIn` (decl lists),
--- `declExportsIn`/`declExportsCtors` (one decl) and `exportedValueNames`.  The
--- one-decl predicates do not unwrap `DAttrib`; the list readers do.
+-- The typechecker and both interpreters (`evalModulesWith`, `cevalModules`) read
+-- the same facets through `directIn` (decl lists), `declExportsIn`/
+-- `declExportsCtors` (one decl) and `exportedValueNames`.  The one-decl
+-- predicates do not unwrap `DAttrib`; the list readers do.
 
 import frontend.ast.{
   variantName,
@@ -432,8 +433,9 @@ public export data ExpNs a = ExpNs {
 }
 
 -- pub DTypeSig/DExtern/DFunDef, and the binders of a pub `let rec` group.  The
--- carriage rule is the only one that adds a SECOND source beside the re-exported bindings themselves: a re-exported
--- interface carries its value-bound methods too (`carriedIfaceVals`).
+-- carriage rule is the only one that adds a SECOND source beside the re-exported
+-- bindings themselves: a re-exported interface carries its value-bound methods
+-- too (`carriedIfaceVals`).
 export
 nsValues : ExpNs String
 nsValues = ExpNs {
@@ -763,6 +765,9 @@ declExportsCtors d =
 
 -- The exported value names of a module's own decls: direct values plus the
 -- methods of every exported interface, in decl order, `DAttrib` looked through.
+-- Resolve's `keepBoundMethods` filters the methods by `env.values`, but every method
+-- of a module's own interface is bound there (shadowed ones included), so the filter
+-- never drops a name this list admits.
 export
 exportedValueNames : List Decl -> List String
 exportedValueNames prog =

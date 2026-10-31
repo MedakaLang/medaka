@@ -1539,7 +1539,7 @@ renameDecl rm (DFunDef pub n ps e site bid) =
 -- a top-level signature (`f : …` / `export f : …`) shares the function's name; it
 -- MUST be renamed in lockstep with its DFunDef so the typechecker keys f's scheme
 -- under the SAME mangled name the call sites + def now use (else dictPass /
--- publicValNames see `clampU` while the def is `<mid>__clampU` → unbound).
+-- the exported-name facet see `clampU` while the def is `<mid>__clampU` → unbound).
 renameDecl rm (DTypeSig pub n ty site) =
   DTypeSig pub (renameDefName rm n) ty site
 renameDecl rm (d@(DInterface { methods, ... })) =
