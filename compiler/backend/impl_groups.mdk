@@ -1,0 +1,73 @@
+import ir.core_ir.{CImplEntry(..), CImplBody(..)}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
+import support.util.{reverseL}
+
+public export data ImplClauseGroup = ImplClauseGroup {
+  method : String,
+  key : String,
+  indices : List Int,
+}
+
+entryKey : CImplBody -> String
+entryKey (CImplTagged _ key _ _ _ _ _) = key
+entryKey (CImplDefault _ _ key _ _ _ _) = key
+
+collect : List CImplEntry ->
+  Int ->
+  OrdMap (OrdMap (List Int)) ->
+  List (String, String) ->
+  (OrdMap (OrdMap (List Int)), List (String, String))
+collect [] _ groups order = (groups, order)
+collect ((CImplEntry method _ _ body) :: rest) i groups order =
+  let key = entryKey body
+  let inner = match omLookup method groups
+    Some m => m
+    None => omEmpty
+  let previous = omLookup key inner
+  let indices = match previous
+    Some xs => xs
+    None => []
+  let nextOrder = match previous
+    Some _ => order
+    None => (method, key) :: order
+  collect
+    rest
+    (i + 1)
+    (omInsert method (omInsert key (i :: indices) inner) groups)
+    nextOrder
+
+export
+groupImplEntries : List CImplEntry -> List ImplClauseGroup
+groupImplEntries entries =
+  let (groups, order) = collect entries 0 omEmpty []
+  map
+    ((method, key) =>
+      let indices = match omLookup method groups
+        Some inner => match omLookup key inner
+          Some xs => reverseL xs
+          None => []
+        None => []
+      ImplClauseGroup { method = method, key = key, indices = indices })
+    (reverseL order)
+
+sameInts : List Int -> List Int -> Bool
+sameInts [] [] = True
+sameInts (a :: xs) (b :: ys) = a == b && sameInts xs ys
+sameInts _ _ = False
+
+sameGroups : List ImplClauseGroup -> List ImplClauseGroup -> Bool
+sameGroups [] [] = True
+sameGroups (a :: xs) (b :: ys) =
+  (a : ImplClauseGroup).method == (b : ImplClauseGroup).method
+    && (a : ImplClauseGroup).key == (b : ImplClauseGroup).key
+    && sameInts (a : ImplClauseGroup).indices (b : ImplClauseGroup).indices
+    && sameGroups xs ys
+sameGroups _ _ = False
+
+export
+validateImplGroups : List CImplEntry -> List ImplClauseGroup -> List String
+validateImplGroups entries groups =
+  if sameGroups (groupImplEntries entries) groups then
+    []
+  else
+    ["impl groups: emit plan partition disagrees with Core"]

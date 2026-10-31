@@ -1,3 +1,4 @@
+import backend.impl_groups.{ImplClauseGroup(..)}
 import backend.wasm_emit_test_support_test.{funcBlock, linesWith}
 import ir.constructor_facts.{ConstructorFacts(..)}
 import types.symbol_origins.{CoreSymbolOrigins(..), SymbolOrigin(..)}
@@ -118,7 +119,9 @@ import backend.wasm_demand.{WasmDemandPlan, PlannedImport}
 import backend.global_plan.{GlobalInitPlan(..)}
 
 import types.target_profile.{lookupProfile}
-import test_process.{underRoot, boundedVerbSeconds, withScratchDir}
+import test_process.{
+  underRoot, boundedVerbSeconds, withScratchDir, expectSpawnFailsAll
+}
 import string.{contains, split, stripPrefix}
 import types.tc_elab.{grantWholeDomain}
 
@@ -2082,6 +2085,13 @@ replaceMain body (CProgram [CBind n _ loc bid] cs ts is ms fs) =
 replaceMain _ cp = cp
 
 emissionVictim : String -> CProgram
+emissionVictim "group-valid" = typedLowered "" mixedGroupSrc
+emissionVictim "group-missing" = typedLowered "" mixedGroupSrc
+emissionVictim "group-duplicate" = typedLowered "" mixedGroupSrc
+emissionVictim "group-reordered" = typedLowered "" mixedGroupSrc
+emissionVictim "group-range" = typedLowered "" mixedGroupSrc
+emissionVictim "group-key" = typedLowered "" mixedGroupSrc
+emissionVictim "group-method" = typedLowered "" mixedGroupSrc
 emissionVictim "F1" =
   replaceMain (CRecord "P" [CField "a" (-1) zero]) emissionControl
 emissionVictim "F2" =
@@ -2315,6 +2325,12 @@ manifestVictims = [
 ]
 
 emissionNeedle : String -> String
+emissionNeedle "group-missing" = "impl groups: emit plan partition"
+emissionNeedle "group-duplicate" = "impl groups: emit plan partition"
+emissionNeedle "group-reordered" = "impl groups: emit plan partition"
+emissionNeedle "group-range" = "impl groups: emit plan partition"
+emissionNeedle "group-key" = "impl groups: emit plan partition"
+emissionNeedle "group-method" = "impl groups: emit plan partition"
 emissionNeedle "ctor-owner" = "constructor-fact: owner projection"
 emissionNeedle "ctor-arity" = "constructor-fact: arity projection"
 emissionNeedle "ctor-ordinal" = "constructor-fact: ordinal projection"
@@ -2533,7 +2549,7 @@ emissionText route victim =
               (if victim == "target" then other else target)
               domain
               cp))))
-  let plan = corruptConstructorPlan victim original
+  let plan = corruptGroupPlan victim (corruptConstructorPlan victim original)
   let requirement = manifestRequirement victim
   let li = makeEmitInput requirement domain [] [] 0 [] [] ""
   let wi = makeWasmEmitInput requirement domain []
@@ -3305,3 +3321,119 @@ test "qualified Ordering keeps runtime physical ordinals under declaration rever
           (linesWith ("i32.const " ++ intToString ordinal) (funcBlock name wat)),
       ))
       [("getLt", 0), ("getEq", 1), ("getGt", 2)])
+
+corruptGroupPlan : String -> EmitPlan -> EmitPlan
+corruptGroupPlan victim plan =
+  let groups = plan.implGroups
+  let changed = match groups
+    [] => []
+    g :: rest => match victim
+      "group-missing" => rest
+      "group-duplicate" => g :: groups
+      "group-reordered" => { g | indices = reverseL g.indices } :: rest
+      "group-range" => { g | indices = [999999] } :: rest
+      "group-key" => { g | key = "wrong-key" } :: rest
+      "group-method" => { g | method = "wrong-method" } :: rest
+      _ => groups
+  { plan | implGroups = changed }
+
+test "impl partition mutations refuse before output on both renderers" =
+  match getEnv emissionProbeVar
+    Some _ => pass
+    None =>
+      expectEach
+        (flatMap
+          (route =>
+            map
+              (victim => ("\{route}/\{victim}", groupRefused route victim))
+              [
+                "group-missing", "group-duplicate", "group-reordered",
+                "group-range", "group-key", "group-method"
+              ])
+          ["llvm-strict", "wasm-strict"])
+
+test "impl partition passing neighbor emits on both renderers" =
+  match getEnv emissionProbeVar
+    Some _ => pass
+    None =>
+      expectEach
+        (map
+          (route => (
+            route,
+            expectTextContainsAll
+              [
+                if route == "llvm-strict" then
+                  "define i32 @mdk_program_main"
+                else
+                  "(module",
+              ]
+              (emissionText route "group-valid"),
+          ))
+          ["llvm-strict", "wasm-strict"])
+
+groupRefused : String ->
+  String ->
+  <IO, Exec, Env, FileRead, FileWrite> Expectation
+groupRefused route victim = withScratchDir (dir =>
+  let destination = dir ++ "/destination"
+  expectEach [
+    (
+      "refusal",
+      expectSpawnFailsAll
+        "env"
+        [
+          "\{emissionProbeVar}=\{route}/\{victim}",
+          "MEDAKA_EMISSION_DESTINATION=" ++ destination,
+          executablePath (),
+        ]
+        ["impl groups: emit plan partition"],
+    ),
+    ("no artifact", expectFalse (fileExists destination)),
+  ])
+
+test "impl partition P U P and wrong-program plan" =
+  let p = typedLowered "" mixedGroupSrc
+  let u = typedLowered "" (defaultSrc "M" "N")
+  let check backend cp plan =
+    map
+      coreDefectMessage
+      (validateForEmission
+        backend
+        PreludeFreeRuntime
+        RawUnchecked
+        plan
+        cp).defects
+  let render backend cp plan =
+    if backendName backend == "llvm" then
+      llvmStrict
+        (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
+        plan
+        cp
+    else
+      wasmStrict (makeWasmEmitInput RawUnchecked PreludeFreeRuntime []) plan cp
+  expectEach
+    (map
+      (backend =>
+        let pp = buildEmitPlan backend PreludeFreeRuntime p
+        let up = buildEmitPlan backend PreludeFreeRuntime u
+        let before = render backend p pp
+        let unrelated = render backend u up
+        let after = render backend p pp
+        (
+          backendName backend,
+          expectEach [
+            ("P text", expectNotEqual "" before),
+            ("U text", expectNotEqual "" unrelated),
+            ("P text again", expectEqual before after),
+            ("P", expectEqual [] (check backend p pp)),
+            ("U", expectEqual [] (check backend u up)),
+            ("P again", expectEqual [] (check backend p pp)),
+            (
+              "wrong program",
+              expectTextContainsAll
+                ["impl groups: emit plan partition"]
+                (joinNl (check backend p { pp | implGroups = up.implGroups })),
+            ),
+          ],
+        ))
+      [LlvmBackend, WasmBackend])
