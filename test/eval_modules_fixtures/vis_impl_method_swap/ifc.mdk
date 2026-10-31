@@ -1,0 +1,2 @@
+export interface Describe a where
+  describe : a -> String

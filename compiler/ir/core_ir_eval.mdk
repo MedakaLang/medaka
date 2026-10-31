@@ -100,12 +100,10 @@ import eval.eval.{
   collectCtors,
   installDispatchTables,
   implMethodNames,
-  methodCellsOf,
-  publicExternCells,
+  moduleExports,
   runtimeCellsOf,
   importFrameOf,
   narrowToIface,
-  pubReexports,
   ModExports(..),
   ctorsByTypeOf,
   evalVariantUpdate,
@@ -798,12 +796,13 @@ cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports
   -- module's `import m.{T(..)}` binds m's own constructor cells instead of falling
   -- through to the bare-name global frame, which every module's ctors share.
   let exports =
-    ModExports
-      (localCells
-        ++ publicExternCells (frameCells runtimeFrame) decls
-        ++ methodCellsOf (frameCells globalFrame) decls
-        ++ pubReexports coreExports exportsMap decls)
-      (ctorsByTypeOf decls)
+    moduleExports
+      coreExports
+      exportsMap
+      globalFrame
+      runtimeFrame
+      localCells
+      decls
   CModInfo mid decls cbinds cimpls localCells menv
     :: cBuildModInfos
       facts
