@@ -78,7 +78,7 @@ import lib.sqltoken.{sqlIdent, keyword, symbol, lexeme, word}
 import lib.recordfmt.{Cell(..)}
 import lib.wideint as W
 import i64
-import string.{toUpper, toInt, toFloat, contains, trim, join, fromChars}
+import string.{toUpper, toInt, toFloat, contains, join, fromChars}
 import list.{reverse}
 
 -- ---------------------------------------------------------------------------
@@ -318,7 +318,7 @@ intIfExactWithin f lim =
     CFloat f
 
 numFromText : String -> Cell
-numFromText s = intFromText (trim s) s
+numFromText s = intFromText (asciiTrim s) s
 
 intFromText : String -> String -> Cell
 intFromText t s = match toInt t
@@ -333,7 +333,7 @@ floatOrText t s = match toFloat t
   None => CText s
 
 realFromText : String -> Cell
-realFromText s = realOfTrimmed (trim s) s
+realFromText s = realOfTrimmed (asciiTrim s) s
 
 realOfTrimmed : String -> String -> Cell
 realOfTrimmed t s = match toFloat t
@@ -868,3 +868,33 @@ commaSepStep p (Some _) = defer
   x <- p
   xs <- commaSepRest p
   deferPure (x :: xs)
+
+-- Trims ASCII whitespace only. SQLite converts text to a number after skipping ASCII whitespace
+-- (its own isspace: space, tab, newline, vertical tab, form feed, return).
+-- A non-ASCII space such as U+00A0 is data here, so `string.trim` (which strips
+-- it) would be wrong.
+asciiTrim : String -> String
+-- The same few lines live in each package that needs a spec-bound trim; the
+-- packages share no module that could host them, and string must not export it.
+-- lint-disable-next-line rule-stdlib-reimpl, rule-duplicate-body
+asciiTrim s =
+  let chars = stringToChars s
+  let n = arrayLength chars
+  let lo = asciiTrimFront chars 0 n
+  stringSlice lo (asciiTrimBack chars (n - 1) lo + 1) s
+
+asciiTrimFront : Array Char -> Int -> Int -> Int
+-- Part of asciiTrim, duplicated with it for the same reason.
+-- lint-disable-next-line rule-duplicate-body
+asciiTrimFront chars i n
+  | i >= n = n
+  | charIsSpace chars[i] = asciiTrimFront chars (i + 1) n
+  | otherwise = i
+
+asciiTrimBack : Array Char -> Int -> Int -> Int
+-- Part of asciiTrim, duplicated with it for the same reason.
+-- lint-disable-next-line rule-duplicate-body
+asciiTrimBack chars i lo
+  | i < lo = lo - 1
+  | charIsSpace chars[i] = asciiTrimBack chars (i - 1) lo
+  | otherwise = i

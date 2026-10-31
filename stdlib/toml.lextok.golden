@@ -21,8 +21,6 @@ NEWLINE
 IMPORT
 IDENT "string"
 DOT_LBRACE
-IDENT "trim"
-COMMA
 IDENT "lines"
 COMMA
 IDENT "toInt"
@@ -981,7 +979,7 @@ NEWLINE
 LET
 IDENT "key"
 EQUAL
-IDENT "trim"
+IDENT "asciiTrim"
 IDENT "keyRaw"
 NEWLINE
 IF
@@ -1309,7 +1307,7 @@ IDENT "n"
 IDENT "i"
 EQUAL
 INDENT
-IDENT "trim"
+IDENT "asciiTrim"
 LPAREN
 IDENT "stringFromChars"
 LPAREN
@@ -1484,7 +1482,7 @@ UPPER "Some"
 LPAREN
 UPPER "HArrayTable"
 LPAREN
-IDENT "trim"
+IDENT "asciiTrim"
 IDENT "g"
 DOT
 IDENT "text"
@@ -1524,7 +1522,7 @@ UPPER "Some"
 LPAREN
 UPPER "HTable"
 LPAREN
-IDENT "trim"
+IDENT "asciiTrim"
 IDENT "g"
 DOT
 IDENT "text"
@@ -1764,7 +1762,7 @@ INDENT
 LET
 IDENT "trimmed"
 EQUAL
-IDENT "trim"
+IDENT "asciiTrim"
 LPAREN
 IDENT "stripComment"
 IDENT "l"
@@ -4063,6 +4061,150 @@ IDENT "n"
 RPAREN
 RPAREN
 IDENT "two"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "asciiTrim"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "asciiTrim"
+IDENT "s"
+EQUAL
+INDENT
+LET
+IDENT "chars"
+EQUAL
+IDENT "stringToChars"
+IDENT "s"
+NEWLINE
+LET
+IDENT "n"
+EQUAL
+IDENT "arrayLength"
+IDENT "chars"
+NEWLINE
+LET
+IDENT "lo"
+EQUAL
+IDENT "asciiTrimFront"
+IDENT "chars"
+INT 0
+IDENT "n"
+NEWLINE
+IDENT "stringSlice"
+IDENT "lo"
+LPAREN
+IDENT "asciiTrimBack"
+IDENT "chars"
+LPAREN
+IDENT "n"
+MINUS
+INT 1
+RPAREN
+IDENT "lo"
+PLUS
+INT 1
+RPAREN
+IDENT "s"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "asciiTrimFront"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "asciiTrimFront"
+IDENT "chars"
+IDENT "i"
+IDENT "n"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "n"
+EQUAL
+IDENT "n"
+NEWLINE
+PIPE
+IDENT "charIsSpace"
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "chars"
+RPAREN
+EQUAL
+IDENT "asciiTrimFront"
+IDENT "chars"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "n"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "i"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "asciiTrimBack"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "asciiTrimBack"
+IDENT "chars"
+IDENT "i"
+IDENT "lo"
+INDENT
+PIPE
+IDENT "i"
+LT
+IDENT "lo"
+EQUAL
+IDENT "lo"
+MINUS
+INT 1
+NEWLINE
+PIPE
+IDENT "charIsSpace"
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "chars"
+RPAREN
+EQUAL
+IDENT "asciiTrimBack"
+IDENT "chars"
+LPAREN
+IDENT "i"
+MINUS
+INT 1
+RPAREN
+IDENT "lo"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "i"
 NEWLINE
 DEDENT
 NEWLINE

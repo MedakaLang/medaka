@@ -55,7 +55,15 @@ isSpace : Char -> Bool
 isSpace c
 ```
 
-Whether `c` is ASCII whitespace.
+Whether `c` is whitespace, as Python counts it.
+
+Besides the ASCII spaces this includes the no-break space, the Unicode
+space separators and the line and paragraph separators.
+
+```medaka
+> isSpace '\u{00A0}'
+True
+```
 
 ### `isUpper`
 
@@ -594,6 +602,11 @@ The string without leading or trailing whitespace.
 "hi"
 ```
 
+```medaka
+> trim "\u{00A0}hi\u{3000}"
+"hi"
+```
+
 ### `toUpper`
 
 ```
@@ -853,6 +866,11 @@ Leading, trailing, and repeated whitespace produce no empty words.
 ```medaka
 > words "  hello   world "
 ["hello", "world"]
+```
+
+```medaka
+> words "a\u{00A0}b c"
+["a", "b", "c"]
 ```
 
 ### `unlines`

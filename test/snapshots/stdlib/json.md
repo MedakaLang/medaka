@@ -1,5 +1,5 @@
 # META
-source_lines=1033
+source_lines=1034
 stages=DESUGAR,MARK
 # SOURCE
 {- | A JSON value type with a parser and a serializer.
@@ -191,8 +191,9 @@ stringify j = stringConcat (reverse (stringifyInto j []))
 
 -- ── Parsing (recursive descent over an Array Char + position) ────────────
 
--- JSON whitespace is *exactly* space, tab, LF, CR — stricter than
--- `string.isSpace` (which accepts other Unicode space chars), so it stays local.
+-- JSON whitespace is *exactly* space, tab, LF, CR (RFC 8259 section 2), a
+-- subset of what `string.isSpace` accepts, so the predicate is spec-bound and
+-- stays local.
 -- Same predicate as sqlite/lib/sqlite.mdk's isSpaceChar; not consolidated since
 -- sqlite shouldn't need to import all of json for one char check.
 isWs : Char -> Bool

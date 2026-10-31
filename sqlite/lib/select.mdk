@@ -1581,7 +1581,7 @@ fnLowerSql c = match cellToTextOp c
 -- SQLite's 1-argument `trim`/`ltrim`/`rtrim` strip ONLY the ASCII space
 -- character (0x20) — NOT general whitespace (tab/newline survive), verified
 -- against `sqlite3`.  This is a real divergence from `string.trim*` (which
--- strips all Unicode whitespace) — see findings.
+-- strips every whitespace character, as Python counts it) — see findings.
 fnTrimSql : Cell -> Cell
 fnTrimSql c = match cellToTextOp c
   None => CNull
@@ -1599,7 +1599,8 @@ fnRtrimSql c = match cellToTextOp c
 
 -- Same declared signature as `string.trimLeft`, but narrower: SQL
 -- `ltrim(X)`/`trim(X)` strip only the literal space char (0x20), never
--- `string.trimLeft`'s broader whitespace set (tab/CR/LF/VT/FF) — matching
+-- `string.trimLeft`'s broader whitespace set (tab, newline, vertical tab, form feed, return and
+-- the non-ASCII spaces) — matching
 -- `sqlite3`'s TRIM semantics, not a real duplicate.
 spaceTrimLeft : String -> String
 -- lint-disable-next-line rule-stdlib-reimpl
@@ -1617,7 +1618,8 @@ spaceTrimLeftIdx chars i n =
 
 -- Same declared signature as `string.trimRight`, but narrower: SQL
 -- `rtrim(X)`/`trim(X)` strip only the literal space char (0x20), never
--- `string.trimRight`'s broader whitespace set (tab/CR/LF/VT/FF) — matching
+-- `string.trimRight`'s broader whitespace set (tab, newline, vertical tab, form feed, return and
+-- the non-ASCII spaces) — matching
 -- `sqlite3`'s TRIM semantics, not a real duplicate.
 spaceTrimRight : String -> String
 -- lint-disable-next-line rule-stdlib-reimpl

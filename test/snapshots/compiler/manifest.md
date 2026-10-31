@@ -1,5 +1,5 @@
 # META
-source_lines=123
+source_lines=153
 stages=DESUGAR,MARK
 # SOURCE
 {- manifest.mdk — typed accessors for `medaka.toml`'s own schema.
@@ -23,7 +23,7 @@ stages=DESUGAR,MARK
 
 import toml.{Toml(..), TomlValue(..), getString, getArray, parse}
 import list.{lookup}
-import string.{startsWith, trim, lines}
+import string.{startsWith, lines}
 
 {- | `name` from a parsed `[package]` section, or `None` when it is absent.
 
@@ -115,7 +115,8 @@ targetProfile (Toml kvs) =
    True -}
 export
 statesTargetSection : String -> Bool
-statesTargetSection text = any (l => startsWith "[target" (trim l)) (lines text)
+statesTargetSection text =
+  any (l => startsWith "[target" (asciiTrim l)) (lines text)
 
 -- Doctest helper: parse a known-good TOML source.  A parse failure here would
 -- be a bug in the fixture, not in the accessor under test, so it panics rather
@@ -125,10 +126,39 @@ okDoc src = match parse src
   Ok doc => doc
   Err e =>
     panic (stringConcat ["manifest doctest fixture failed to parse: ", e])
+
+-- Trims ASCII whitespace only. medaka.toml is TOML, whose whitespace is tab and space.
+-- A non-ASCII space such as U+00A0 is data here, so `string.trim` (which strips
+-- it) would be wrong.
+asciiTrim : String -> String
+-- The same few lines live in each package that needs a spec-bound trim; the
+-- packages share no module that could host them, and string must not export it.
+-- lint-disable-next-line rule-stdlib-reimpl, rule-duplicate-body
+asciiTrim s =
+  let chars = stringToChars s
+  let n = arrayLength chars
+  let lo = asciiTrimFront chars 0 n
+  stringSlice lo (asciiTrimBack chars (n - 1) lo + 1) s
+
+asciiTrimFront : Array Char -> Int -> Int -> Int
+-- Part of asciiTrim, duplicated with it for the same reason.
+-- lint-disable-next-line rule-duplicate-body
+asciiTrimFront chars i n
+  | i >= n = n
+  | charIsSpace chars[i] = asciiTrimFront chars (i + 1) n
+  | otherwise = i
+
+asciiTrimBack : Array Char -> Int -> Int -> Int
+-- Part of asciiTrim, duplicated with it for the same reason.
+-- lint-disable-next-line rule-duplicate-body
+asciiTrimBack chars i lo
+  | i < lo = lo - 1
+  | charIsSpace chars[i] = asciiTrimBack chars (i - 1) lo
+  | otherwise = i
 # DESUGAR
 (DUse false (UseGroup ("toml") ((mem "Toml" true) (mem "TomlValue" true) (mem "getString" false) (mem "getArray" false) (mem "parse" false))))
 (DUse false (UseGroup ("list") ((mem "lookup" false))))
-(DUse false (UseGroup ("string") ((mem "startsWith" false) (mem "trim" false) (mem "lines" false))))
+(DUse false (UseGroup ("string") ((mem "startsWith" false) (mem "lines" false))))
 (DTypeSig true "packageName" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "packageName" ((PVar "doc")) (EApp (EApp (EVar "getString") (ELit (LString "package.name"))) (EVar "doc")))
 (DTypeSig true "packageVersion" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -140,13 +170,19 @@ okDoc src = match parse src
 (DTypeSig true "targetProfile" (TyFun (TyCon "Toml") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "targetProfile" ((PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "filter") (ELam ((PVar "kv")) (EApp (EApp (EVar "startsWith") (ELit (LString "target."))) (EApp (EVar "fst") (EVar "kv"))))) (EVar "kvs")) (arm (PList) () (EApp (EVar "Ok") (EVar "None"))) (arm (PVar "stated") () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "target.profile"))) (EVar "stated")) (arm (PCon "Some" (PCon "TString" (PVar "p"))) () (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "p")))) (arm (PCon "Some" PWild) () (EApp (EVar "Err") (ELit (LString "`profile` is not a string; write a profile name, such as `profile = \"wasmgc/node\"`")))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "it states no `profile`; write one, such as `profile = \"wasmgc/node\"`"))))))))
 (DTypeSig true "statesTargetSection" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "statesTargetSection" ((PVar "text")) (EApp (EApp (EVar "any") (ELam ((PVar "l")) (EApp (EApp (EVar "startsWith") (ELit (LString "[target"))) (EApp (EVar "trim") (EVar "l"))))) (EApp (EVar "lines") (EVar "text"))))
+(DFunDef false "statesTargetSection" ((PVar "text")) (EApp (EApp (EVar "any") (ELam ((PVar "l")) (EApp (EApp (EVar "startsWith") (ELit (LString "[target"))) (EApp (EVar "asciiTrim") (EVar "l"))))) (EApp (EVar "lines") (EVar "text"))))
 (DTypeSig false "okDoc" (TyFun (TyCon "String") (TyCon "Toml")))
 (DFunDef false "okDoc" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Ok" (PVar "doc")) () (EVar "doc")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "panic") (EApp (EVar "stringConcat") (EListLit (ELit (LString "manifest doctest fixture failed to parse: ")) (EVar "e")))))))
+(DTypeSig false "asciiTrim" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "asciiTrim" ((PVar "s")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "chars"))) (DoLet false false (PVar "lo") (EApp (EApp (EApp (EVar "asciiTrimFront") (EVar "chars")) (ELit (LInt 0))) (EVar "n"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EBinOp "+" (EApp (EApp (EApp (EVar "asciiTrimBack") (EVar "chars")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "lo")) (ELit (LInt 1)))) (EVar "s")))))
+(DTypeSig false "asciiTrimFront" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "asciiTrimFront" ((PVar "chars") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EApp (EVar "charIsSpace") (EApp (EApp (EVar "index") (EVar "chars")) (EVar "i"))) (EApp (EApp (EApp (EVar "asciiTrimFront") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "asciiTrimBack" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "asciiTrimBack" ((PVar "chars") (PVar "i") (PVar "lo")) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EBinOp "-" (EVar "lo") (ELit (LInt 1))) (EIf (EApp (EVar "charIsSpace") (EApp (EApp (EVar "index") (EVar "chars")) (EVar "i"))) (EApp (EApp (EApp (EVar "asciiTrimBack") (EVar "chars")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 # MARK
 (DUse false (UseGroup ("toml") ((mem "Toml" true) (mem "TomlValue" true) (mem "getString" false) (mem "getArray" false) (mem "parse" false))))
 (DUse false (UseGroup ("list") ((mem "lookup" false))))
-(DUse false (UseGroup ("string") ((mem "startsWith" false) (mem "trim" false) (mem "lines" false))))
+(DUse false (UseGroup ("string") ((mem "startsWith" false) (mem "lines" false))))
 (DTypeSig true "packageName" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "packageName" ((PVar "doc")) (EApp (EApp (EVar "getString") (ELit (LString "package.name"))) (EVar "doc")))
 (DTypeSig true "packageVersion" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -158,6 +194,12 @@ okDoc src = match parse src
 (DTypeSig true "targetProfile" (TyFun (TyCon "Toml") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "targetProfile" ((PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EMethodRef "filter") (ELam ((PVar "kv")) (EApp (EApp (EVar "startsWith") (ELit (LString "target."))) (EApp (EVar "fst") (EVar "kv"))))) (EVar "kvs")) (arm (PList) () (EApp (EVar "Ok") (EVar "None"))) (arm (PVar "stated") () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "target.profile"))) (EVar "stated")) (arm (PCon "Some" (PCon "TString" (PVar "p"))) () (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "p")))) (arm (PCon "Some" PWild) () (EApp (EVar "Err") (ELit (LString "`profile` is not a string; write a profile name, such as `profile = \"wasmgc/node\"`")))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "it states no `profile`; write one, such as `profile = \"wasmgc/node\"`"))))))))
 (DTypeSig true "statesTargetSection" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "statesTargetSection" ((PVar "text")) (EApp (EApp (EDictApp "any") (ELam ((PVar "l")) (EApp (EApp (EVar "startsWith") (ELit (LString "[target"))) (EApp (EVar "trim") (EVar "l"))))) (EApp (EVar "lines") (EVar "text"))))
+(DFunDef false "statesTargetSection" ((PVar "text")) (EApp (EApp (EDictApp "any") (ELam ((PVar "l")) (EApp (EApp (EVar "startsWith") (ELit (LString "[target"))) (EApp (EVar "asciiTrim") (EVar "l"))))) (EApp (EVar "lines") (EVar "text"))))
 (DTypeSig false "okDoc" (TyFun (TyCon "String") (TyCon "Toml")))
 (DFunDef false "okDoc" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Ok" (PVar "doc")) () (EVar "doc")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "panic") (EApp (EVar "stringConcat") (EListLit (ELit (LString "manifest doctest fixture failed to parse: ")) (EVar "e")))))))
+(DTypeSig false "asciiTrim" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "asciiTrim" ((PVar "s")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "chars"))) (DoLet false false (PVar "lo") (EApp (EApp (EApp (EVar "asciiTrimFront") (EVar "chars")) (ELit (LInt 0))) (EVar "n"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EBinOp "+" (EApp (EApp (EApp (EVar "asciiTrimBack") (EVar "chars")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "lo")) (ELit (LInt 1)))) (EVar "s")))))
+(DTypeSig false "asciiTrimFront" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "asciiTrimFront" ((PVar "chars") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EApp (EVar "charIsSpace") (EApp (EApp (EMethodRef "index") (EVar "chars")) (EVar "i"))) (EApp (EApp (EApp (EVar "asciiTrimFront") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "asciiTrimBack" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "asciiTrimBack" ((PVar "chars") (PVar "i") (PVar "lo")) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EBinOp "-" (EVar "lo") (ELit (LInt 1))) (EIf (EApp (EVar "charIsSpace") (EApp (EApp (EMethodRef "index") (EVar "chars")) (EVar "i"))) (EApp (EApp (EApp (EVar "asciiTrimBack") (EVar "chars")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))

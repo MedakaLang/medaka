@@ -1,5 +1,5 @@
 # META
-source_lines=1134
+source_lines=1182
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -8,12 +8,12 @@ stages=DESUGAR,MARK
 -- byte offset would show.
 
 import string.{
-  StrCursor, byteLength, center, countOccurrences, cutBetween, dedent, drop,
-  endsWith, fromChars, groupThousands, indent, repeat, replaceOnce, indexOf,
-  join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll, reverse,
-  nextChar, sliceBetween, startCursor, splitAt, startsWith, stripPrefix,
-  stripSuffix, take, toInt, toLower, toUpper, toFixed, trim, trimLeft,
-  trimRight, unlines, unwords, utf8ByteLength
+  StrCursor, isSpace, toChars, byteLength, center, countOccurrences, cutBetween,
+  dedent, drop, endsWith, fromChars, groupThousands, indent, repeat,
+  replaceOnce, indexOf, join, lastIndexOf, lines, padLeft, padRight, replace,
+  replaceAll, reverse, nextChar, sliceBetween, startCursor, splitAt, startsWith,
+  stripPrefix, stripSuffix, take, toInt, toLower, toUpper, toFixed, trim,
+  trimLeft, trimRight, unlines, unwords, utf8ByteLength, words
 }
 import test.{expectEach, expectEqual, expectFalse, expectTrue}
 
@@ -302,12 +302,60 @@ test "trimLeft of a multibyte head with spaces" =
 test "trim treats tab, newline, carriage return and vertical tab as space" =
   expectEqual "x" (trim "\r\n\t\u{0b}\u{0c} x \r\n")
 
-test "trim does not remove a non-breaking space" = expectEqual " x" (trim " x")
+test "trim removes a no-break space" = expectEqual "x" (trim " x")
+
+test "words splits on a no-break space and an ideographic space" =
+  expectEqual ["a", "b", "c"] (words "a b　c")
+
+test "isSpace accepts exactly the 29 whitespace code points" =
+  expectEqual spaceCodePoints (acceptedCodePoints 1114111 [])
+
+-- Python's whitespace set, written out from its definition.
+spaceCodePoints : List Int
+spaceCodePoints =
+  [9, 10, 11, 12, 13, 28, 29, 30, 31, 32, 133, 160, 5760]
+    ++ [8192..=8202]
+    ++ [8232, 8233, 8239, 8287, 12288]
+
+-- The code points from `k` down to 0 that `isSpace` accepts, ascending.
+acceptedCodePoints : Int -> List Int -> List Int
+acceptedCodePoints k acc
+  | k < 0 = acc
+  | otherwise = match charFromCode k
+    Some c => acceptedCodePoints (k - 1) (if isSpace c then k :: acc else acc)
+    None => acceptedCodePoints (k - 1) acc
 
 test "trim of a single space character" =
   expectEqual ("", "", "") (trim " ", trimLeft " ", trimRight " ")
 
 -- # Properties
+
+-- Characters drawn from the whitespace set and its near neighbours.
+trimPool : Array Char
+trimPool =
+  arrayFromList
+    (flatMap
+      (k => match charFromCode k
+        Some c => [c]
+        None => [])
+      [
+        97, 98, 9, 10, 11, 13, 28, 31, 32, 133, 160, 1680, 6158, 8192, 8202,
+        8203, 8232, 8239, 8287, 12288, 65279, 173
+      ])
+
+trimSample : List Int -> String
+trimSample ks =
+  fromChars
+    (map (k => arrayGetUnsafe (abs k % arrayLength trimPool) trimPool) ks)
+
+prop "trim neither starts nor ends with whitespace and is a substring" (ks : List Int) =
+  let s = trimSample ks
+  let t = trim s
+  let ends = toChars t
+  (t == ""
+      || not (isSpace (arrayGetUnsafe 0 ends))
+        && not (isSpace (arrayGetUnsafe (arrayLength ends - 1) ends)))
+    && isSome (indexOf t s)
 
 prop "countOccurrences agrees with replaceAll on the removed length" (s : String) =
   stringLength s - stringLength (replaceAll "ab" "" s)
@@ -1137,7 +1185,7 @@ test "indent prefixes a line that starts with a tab" =
 test "indent with an empty prefix leaves the text alone" =
   expectEqual "a\n b" (indent "" "a\n b")
 # DESUGAR
-(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "dedent" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "groupThousands" false) (mem "indent" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "isSpace" false) (mem "toChars" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "dedent" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "groupThousands" false) (mem "indent" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false) (mem "words" false))))
 (DUse false (UseGroup ("test") ((mem "expectEach" false) (mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -1223,8 +1271,19 @@ test "indent with an empty prefix leaves the text alone" =
 (DTest false "trimRight of a multibyte tail with spaces" (EApp (EApp (EVar "expectEqual") (ELit (LString "日本語"))) (EApp (EVar "trimRight") (ELit (LString "日本語 \n")))))
 (DTest false "trimLeft of a multibyte head with spaces" (EApp (EApp (EVar "expectEqual") (ELit (LString "→ x"))) (EApp (EVar "trimLeft") (ELit (LString "\t→ x")))))
 (DTest false "trim treats tab, newline, carriage return and vertical tab as space" (EApp (EApp (EVar "expectEqual") (ELit (LString "x"))) (EApp (EVar "trim") (ELit (LString "\r\n\t\u{0b}\u{0c} x \r\n")))))
-(DTest false "trim does not remove a non-breaking space" (EApp (EApp (EVar "expectEqual") (ELit (LString " x"))) (EApp (EVar "trim") (ELit (LString " x")))))
+(DTest false "trim removes a no-break space" (EApp (EApp (EVar "expectEqual") (ELit (LString "x"))) (EApp (EVar "trim") (ELit (LString " x")))))
+(DTest false "words splits on a no-break space and an ideographic space" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "c")))) (EApp (EVar "words") (ELit (LString "a b　c")))))
+(DTest false "isSpace accepts exactly the 29 whitespace code points" (EApp (EApp (EVar "expectEqual") (EVar "spaceCodePoints")) (EApp (EApp (EVar "acceptedCodePoints") (ELit (LInt 1114111))) (EListLit))))
+(DTypeSig false "spaceCodePoints" (TyApp (TyCon "List") (TyCon "Int")))
+(DFunDef false "spaceCodePoints" () (EBinOp "++" (EBinOp "++" (EListLit (ELit (LInt 9)) (ELit (LInt 10)) (ELit (LInt 11)) (ELit (LInt 12)) (ELit (LInt 13)) (ELit (LInt 28)) (ELit (LInt 29)) (ELit (LInt 30)) (ELit (LInt 31)) (ELit (LInt 32)) (ELit (LInt 133)) (ELit (LInt 160)) (ELit (LInt 5760))) (ERangeList (ELit (LInt 8192)) (ELit (LInt 8202)) true)) (EListLit (ELit (LInt 8232)) (ELit (LInt 8233)) (ELit (LInt 8239)) (ELit (LInt 8287)) (ELit (LInt 12288)))))
+(DTypeSig false "acceptedCodePoints" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "acceptedCodePoints" ((PVar "k") (PVar "acc")) (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EVar "charFromCode") (EVar "k")) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EVar "acceptedCodePoints") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EIf (EApp (EVar "isSpace") (EVar "c")) (EBinOp "::" (EVar "k") (EVar "acc")) (EVar "acc")))) (arm (PCon "None") () (EApp (EApp (EVar "acceptedCodePoints") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTest false "trim of a single space character" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "")) (ELit (LString "")))) (ETuple (EApp (EVar "trim") (ELit (LString " "))) (EApp (EVar "trimLeft") (ELit (LString " "))) (EApp (EVar "trimRight") (ELit (LString " "))))))
+(DTypeSig false "trimPool" (TyApp (TyCon "Array") (TyCon "Char")))
+(DFunDef false "trimPool" () (EApp (EVar "arrayFromList") (EApp (EApp (EVar "flatMap") (ELam ((PVar "k")) (EMatch (EApp (EVar "charFromCode") (EVar "k")) (arm (PCon "Some" (PVar "c")) () (EListLit (EVar "c"))) (arm (PCon "None") () (EListLit))))) (EListLit (ELit (LInt 97)) (ELit (LInt 98)) (ELit (LInt 9)) (ELit (LInt 10)) (ELit (LInt 11)) (ELit (LInt 13)) (ELit (LInt 28)) (ELit (LInt 31)) (ELit (LInt 32)) (ELit (LInt 133)) (ELit (LInt 160)) (ELit (LInt 1680)) (ELit (LInt 6158)) (ELit (LInt 8192)) (ELit (LInt 8202)) (ELit (LInt 8203)) (ELit (LInt 8232)) (ELit (LInt 8239)) (ELit (LInt 8287)) (ELit (LInt 12288)) (ELit (LInt 65279)) (ELit (LInt 173))))))
+(DTypeSig false "trimSample" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "String")))
+(DFunDef false "trimSample" ((PVar "ks")) (EApp (EVar "fromChars") (EApp (EApp (EVar "map") (ELam ((PVar "k")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "%" (EApp (EVar "abs") (EVar "k")) (EApp (EVar "arrayLength") (EVar "trimPool")))) (EVar "trimPool")))) (EVar "ks"))))
+(DProp false "trim neither starts nor ends with whitespace and is a substring" ((pp "ks" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "trimSample") (EVar "ks"))) (DoLet false false (PVar "t") (EApp (EVar "trim") (EVar "s"))) (DoLet false false (PVar "ends") (EApp (EVar "toChars") (EVar "t"))) (DoExpr (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "t") (ELit (LString ""))) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "isSpace") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "ends")))) (EApp (EVar "not") (EApp (EVar "isSpace") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EApp (EVar "arrayLength") (EVar "ends")) (ELit (LInt 1)))) (EVar "ends")))))) (EApp (EVar "isSome") (EApp (EApp (EVar "indexOf") (EVar "t")) (EVar "s")))))))
 (DProp false "countOccurrences agrees with replaceAll on the removed length" ((pp "s" (TyCon "String"))) (EBinOp "==" (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "ab"))) (ELit (LString ""))) (EVar "s")))) (EBinOp "*" (ELit (LInt 2)) (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")))))
 (DProp false "lastIndexOf hit is an occurrence and no later one exists" ((pp "s" (TyCon "String"))) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "ab"))) (EVar "s")) (arm (PCon "None") () (EBinOp "==" (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")) (ELit (LInt 0)))) (arm (PCon "Some" (PVar "i")) () (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "s")) (ELit (LString "ab"))) (EBinOp "==" (EApp (EApp (EVar "indexOf") (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "None"))))))
 (DTest false "startsWith the empty prefix is True" (EApp (EVar "expectTrue") (EApp (EApp (EVar "startsWith") (ELit (LString ""))) (ELit (LString "")))))
@@ -1428,7 +1487,7 @@ test "indent with an empty prefix leaves the text alone" =
 (DTest false "indent prefixes a line that starts with a tab" (EApp (EApp (EVar "expectEqual") (ELit (LString "    x\n\n    \ty\n"))) (EApp (EApp (EVar "indent") (ELit (LString "    "))) (ELit (LString "x\n\n\ty\n")))))
 (DTest false "indent with an empty prefix leaves the text alone" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\n b"))) (EApp (EApp (EVar "indent") (ELit (LString ""))) (ELit (LString "a\n b")))))
 # MARK
-(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "dedent" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "groupThousands" false) (mem "indent" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "StrCursor" false) (mem "isSpace" false) (mem "toChars" false) (mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "cutBetween" false) (mem "dedent" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "groupThousands" false) (mem "indent" false) (mem "repeat" false) (mem "replaceOnce" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "nextChar" false) (mem "sliceBetween" false) (mem "startCursor" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "toFixed" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false) (mem "words" false))))
 (DUse false (UseGroup ("test") ((mem "expectEach" false) (mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -1514,8 +1573,19 @@ test "indent with an empty prefix leaves the text alone" =
 (DTest false "trimRight of a multibyte tail with spaces" (EApp (EApp (EVar "expectEqual") (ELit (LString "日本語"))) (EApp (EVar "trimRight") (ELit (LString "日本語 \n")))))
 (DTest false "trimLeft of a multibyte head with spaces" (EApp (EApp (EVar "expectEqual") (ELit (LString "→ x"))) (EApp (EVar "trimLeft") (ELit (LString "\t→ x")))))
 (DTest false "trim treats tab, newline, carriage return and vertical tab as space" (EApp (EApp (EVar "expectEqual") (ELit (LString "x"))) (EApp (EVar "trim") (ELit (LString "\r\n\t\u{0b}\u{0c} x \r\n")))))
-(DTest false "trim does not remove a non-breaking space" (EApp (EApp (EVar "expectEqual") (ELit (LString " x"))) (EApp (EVar "trim") (ELit (LString " x")))))
+(DTest false "trim removes a no-break space" (EApp (EApp (EVar "expectEqual") (ELit (LString "x"))) (EApp (EVar "trim") (ELit (LString " x")))))
+(DTest false "words splits on a no-break space and an ideographic space" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "c")))) (EApp (EVar "words") (ELit (LString "a b　c")))))
+(DTest false "isSpace accepts exactly the 29 whitespace code points" (EApp (EApp (EVar "expectEqual") (EVar "spaceCodePoints")) (EApp (EApp (EVar "acceptedCodePoints") (ELit (LInt 1114111))) (EListLit))))
+(DTypeSig false "spaceCodePoints" (TyApp (TyCon "List") (TyCon "Int")))
+(DFunDef false "spaceCodePoints" () (EBinOp "++" (EBinOp "++" (EListLit (ELit (LInt 9)) (ELit (LInt 10)) (ELit (LInt 11)) (ELit (LInt 12)) (ELit (LInt 13)) (ELit (LInt 28)) (ELit (LInt 29)) (ELit (LInt 30)) (ELit (LInt 31)) (ELit (LInt 32)) (ELit (LInt 133)) (ELit (LInt 160)) (ELit (LInt 5760))) (ERangeList (ELit (LInt 8192)) (ELit (LInt 8202)) true)) (EListLit (ELit (LInt 8232)) (ELit (LInt 8233)) (ELit (LInt 8239)) (ELit (LInt 8287)) (ELit (LInt 12288)))))
+(DTypeSig false "acceptedCodePoints" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "acceptedCodePoints" ((PVar "k") (PVar "acc")) (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EVar "charFromCode") (EVar "k")) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EVar "acceptedCodePoints") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EIf (EApp (EVar "isSpace") (EVar "c")) (EBinOp "::" (EVar "k") (EVar "acc")) (EVar "acc")))) (arm (PCon "None") () (EApp (EApp (EVar "acceptedCodePoints") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTest false "trim of a single space character" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "")) (ELit (LString "")))) (ETuple (EApp (EVar "trim") (ELit (LString " "))) (EApp (EVar "trimLeft") (ELit (LString " "))) (EApp (EVar "trimRight") (ELit (LString " "))))))
+(DTypeSig false "trimPool" (TyApp (TyCon "Array") (TyCon "Char")))
+(DFunDef false "trimPool" () (EApp (EVar "arrayFromList") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "k")) (EMatch (EApp (EVar "charFromCode") (EVar "k")) (arm (PCon "Some" (PVar "c")) () (EListLit (EVar "c"))) (arm (PCon "None") () (EListLit))))) (EListLit (ELit (LInt 97)) (ELit (LInt 98)) (ELit (LInt 9)) (ELit (LInt 10)) (ELit (LInt 11)) (ELit (LInt 13)) (ELit (LInt 28)) (ELit (LInt 31)) (ELit (LInt 32)) (ELit (LInt 133)) (ELit (LInt 160)) (ELit (LInt 1680)) (ELit (LInt 6158)) (ELit (LInt 8192)) (ELit (LInt 8202)) (ELit (LInt 8203)) (ELit (LInt 8232)) (ELit (LInt 8239)) (ELit (LInt 8287)) (ELit (LInt 12288)) (ELit (LInt 65279)) (ELit (LInt 173))))))
+(DTypeSig false "trimSample" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "String")))
+(DFunDef false "trimSample" ((PVar "ks")) (EApp (EVar "fromChars") (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "%" (EApp (EMethodRef "abs") (EVar "k")) (EApp (EVar "arrayLength") (EVar "trimPool")))) (EVar "trimPool")))) (EVar "ks"))))
+(DProp false "trim neither starts nor ends with whitespace and is a substring" ((pp "ks" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "trimSample") (EVar "ks"))) (DoLet false false (PVar "t") (EApp (EVar "trim") (EVar "s"))) (DoLet false false (PVar "ends") (EApp (EVar "toChars") (EVar "t"))) (DoExpr (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "t") (ELit (LString ""))) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "isSpace") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "ends")))) (EApp (EVar "not") (EApp (EVar "isSpace") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EApp (EVar "arrayLength") (EVar "ends")) (ELit (LInt 1)))) (EVar "ends")))))) (EApp (EVar "isSome") (EApp (EApp (EVar "indexOf") (EVar "t")) (EVar "s")))))))
 (DProp false "countOccurrences agrees with replaceAll on the removed length" ((pp "s" (TyCon "String"))) (EBinOp "==" (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "ab"))) (ELit (LString ""))) (EVar "s")))) (EBinOp "*" (ELit (LInt 2)) (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")))))
 (DProp false "lastIndexOf hit is an occurrence and no later one exists" ((pp "s" (TyCon "String"))) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "ab"))) (EVar "s")) (arm (PCon "None") () (EBinOp "==" (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")) (ELit (LInt 0)))) (arm (PCon "Some" (PVar "i")) () (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "s")) (ELit (LString "ab"))) (EBinOp "==" (EApp (EApp (EVar "indexOf") (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "None"))))))
 (DTest false "startsWith the empty prefix is True" (EApp (EVar "expectTrue") (EApp (EApp (EVar "startsWith") (ELit (LString ""))) (ELit (LString "")))))

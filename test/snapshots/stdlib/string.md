@@ -1,5 +1,5 @@
 # META
-source_lines=1153
+source_lines=1161
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -60,10 +60,29 @@ export
 isAlphaNum : Char -> Bool
 isAlphaNum c = charIsAlpha c || isDigit c
 
--- | Whether `c` is ASCII whitespace.
+{- | Whether `c` is whitespace, as Python counts it.
+
+   Besides the ASCII spaces this includes the no-break space, the Unicode
+   space separators and the line and paragraph separators.
+
+   > isSpace '\u{00A0}'
+   True -}
 export
 isSpace : Char -> Bool
-isSpace c = charIsSpace c
+isSpace c =
+  let k = charCode c
+  if k < 128 then
+    k >= 9 && k <= 13 || k >= 28 && k <= 32
+  else
+    k == 133
+      || k == 160
+      || k == 5760
+      || k >= 8192 && k <= 8202
+      || k == 8232
+      || k == 8233
+      || k == 8239
+      || k == 8287
+      || k == 12288
 
 -- | Whether `c` is an ASCII uppercase letter.
 export
@@ -501,6 +520,9 @@ trimRight s = stringSlice 0 (lastNonSpaceStr s (stringLength s - 1) 0 + 1) s
 {- | The string without leading or trailing whitespace.
 
    > trim "  hi  "
+   "hi"
+
+   > trim "\u{00A0}hi\u{3000}"
    "hi" -}
 export
 trim : String -> String
@@ -864,7 +886,10 @@ stripCR line =
    Leading, trailing, and repeated whitespace produce no empty words.
 
    > words "  hello   world "
-   ["hello", "world"] -}
+   ["hello", "world"]
+
+   > words "a\u{00A0}b c"
+   ["a", "b", "c"] -}
 export
 words : String -> List String
 words s =
@@ -966,24 +991,7 @@ indentFrom prefix a n start
 allSpace : Array Char -> Int -> Int -> Bool
 allSpace a i e
   | i >= e = True
-  | otherwise = isStripSpace (arrayGetUnsafe i a) && allSpace a (i + 1) e
-
--- The characters Python's `str.strip` removes. `isSpace` and `trim` know the
--- ASCII ones only.
-isStripSpace : Char -> Bool
-isStripSpace c =
-  let k = charCode c
-  k >= 9 && k <= 13
-    || k >= 28 && k <= 32
-    || k == 133
-    || k == 160
-    || k == 5760
-    || k >= 8192 && k <= 8202
-    || k == 8232
-    || k == 8233
-    || k == 8239
-    || k == 8287
-    || k == 12288
+  | otherwise = isSpace (arrayGetUnsafe i a) && allSpace a (i + 1) e
 
 -- The index just past the line ending of the line that starts at `i`, or `n`
 -- when the last line has none.
@@ -1164,7 +1172,7 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DTypeSig true "isAlphaNum" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isAlphaNum" ((PVar "c")) (EBinOp "||" (EApp (EVar "charIsAlpha") (EVar "c")) (EApp (EVar "isDigit") (EVar "c"))))
 (DTypeSig true "isSpace" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "isSpace" ((PVar "c")) (EApp (EVar "charIsSpace") (EVar "c")))
+(DFunDef false "isSpace" ((PVar "c")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "charCode") (EVar "c"))) (DoExpr (EIf (EBinOp "<" (EVar "k") (ELit (LInt 128))) (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "k") (ELit (LInt 9))) (EBinOp "<=" (EVar "k") (ELit (LInt 13)))) (EBinOp "&&" (EBinOp ">=" (EVar "k") (ELit (LInt 28))) (EBinOp "<=" (EVar "k") (ELit (LInt 32))))) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "k") (ELit (LInt 133))) (EBinOp "==" (EVar "k") (ELit (LInt 160)))) (EBinOp "==" (EVar "k") (ELit (LInt 5760)))) (EBinOp "&&" (EBinOp ">=" (EVar "k") (ELit (LInt 8192))) (EBinOp "<=" (EVar "k") (ELit (LInt 8202))))) (EBinOp "==" (EVar "k") (ELit (LInt 8232)))) (EBinOp "==" (EVar "k") (ELit (LInt 8233)))) (EBinOp "==" (EVar "k") (ELit (LInt 8239)))) (EBinOp "==" (EVar "k") (ELit (LInt 8287)))) (EBinOp "==" (EVar "k") (ELit (LInt 12288))))))))
 (DTypeSig true "isUpper" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isUpper" ((PVar "c")) (EApp (EVar "charIsUpper") (EVar "c")))
 (DTypeSig true "isLower" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -1330,9 +1338,7 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DTypeSig false "indentFrom" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "indentFrom" ((PVar "prefix") (PVar "a") (PVar "n") (PVar "start")) (EIf (EBinOp ">=" (EVar "start") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "afterLineEnd") (EVar "a")) (EVar "n")) (EVar "start"))) (DoLet false false (PVar "piece") (EApp (EApp (EApp (EVar "subChars") (EVar "a")) (EVar "start")) (EVar "e"))) (DoLet false false (PVar "out") (EIf (EApp (EApp (EApp (EVar "allSpace") (EVar "a")) (EVar "start")) (EVar "e")) (EVar "piece") (EBinOp "++" (EVar "prefix") (EVar "piece")))) (DoExpr (EBinOp "::" (EVar "out") (EApp (EApp (EApp (EApp (EVar "indentFrom") (EVar "prefix")) (EVar "a")) (EVar "n")) (EVar "e"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "allSpace" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "allSpace" ((PVar "a") (PVar "i") (PVar "e")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "True") (EIf (EVar "otherwise") (EBinOp "&&" (EApp (EVar "isStripSpace") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EApp (EVar "allSpace") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "isStripSpace" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "isStripSpace" ((PVar "c")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "charCode") (EVar "c"))) (DoExpr (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "k") (ELit (LInt 9))) (EBinOp "<=" (EVar "k") (ELit (LInt 13)))) (EBinOp "&&" (EBinOp ">=" (EVar "k") (ELit (LInt 28))) (EBinOp "<=" (EVar "k") (ELit (LInt 32))))) (EBinOp "==" (EVar "k") (ELit (LInt 133)))) (EBinOp "==" (EVar "k") (ELit (LInt 160)))) (EBinOp "==" (EVar "k") (ELit (LInt 5760)))) (EBinOp "&&" (EBinOp ">=" (EVar "k") (ELit (LInt 8192))) (EBinOp "<=" (EVar "k") (ELit (LInt 8202))))) (EBinOp "==" (EVar "k") (ELit (LInt 8232)))) (EBinOp "==" (EVar "k") (ELit (LInt 8233)))) (EBinOp "==" (EVar "k") (ELit (LInt 8239)))) (EBinOp "==" (EVar "k") (ELit (LInt 8287)))) (EBinOp "==" (EVar "k") (ELit (LInt 12288)))))))
+(DFunDef false "allSpace" ((PVar "a") (PVar "i") (PVar "e")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "True") (EIf (EVar "otherwise") (EBinOp "&&" (EApp (EVar "isSpace") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EApp (EVar "allSpace") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "afterLineEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "afterLineEnd" ((PVar "a") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a")) (ELit (LChar "\r"))) (EIf (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "a")) (ELit (LChar "\n")))) (EBinOp "+" (EVar "i") (ELit (LInt 2))) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EApp (EVar "isLineBreak") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "afterLineEnd") (EVar "a")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "isLineBreak" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -1383,7 +1389,7 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DTypeSig true "isAlphaNum" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isAlphaNum" ((PVar "c")) (EBinOp "||" (EApp (EVar "charIsAlpha") (EVar "c")) (EApp (EVar "isDigit") (EVar "c"))))
 (DTypeSig true "isSpace" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "isSpace" ((PVar "c")) (EApp (EVar "charIsSpace") (EVar "c")))
+(DFunDef false "isSpace" ((PVar "c")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "charCode") (EVar "c"))) (DoExpr (EIf (EBinOp "<" (EVar "k") (ELit (LInt 128))) (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "k") (ELit (LInt 9))) (EBinOp "<=" (EVar "k") (ELit (LInt 13)))) (EBinOp "&&" (EBinOp ">=" (EVar "k") (ELit (LInt 28))) (EBinOp "<=" (EVar "k") (ELit (LInt 32))))) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "k") (ELit (LInt 133))) (EBinOp "==" (EVar "k") (ELit (LInt 160)))) (EBinOp "==" (EVar "k") (ELit (LInt 5760)))) (EBinOp "&&" (EBinOp ">=" (EVar "k") (ELit (LInt 8192))) (EBinOp "<=" (EVar "k") (ELit (LInt 8202))))) (EBinOp "==" (EVar "k") (ELit (LInt 8232)))) (EBinOp "==" (EVar "k") (ELit (LInt 8233)))) (EBinOp "==" (EVar "k") (ELit (LInt 8239)))) (EBinOp "==" (EVar "k") (ELit (LInt 8287)))) (EBinOp "==" (EVar "k") (ELit (LInt 12288))))))))
 (DTypeSig true "isUpper" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isUpper" ((PVar "c")) (EApp (EVar "charIsUpper") (EVar "c")))
 (DTypeSig true "isLower" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -1549,9 +1555,7 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DTypeSig false "indentFrom" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "indentFrom" ((PVar "prefix") (PVar "a") (PVar "n") (PVar "start")) (EIf (EBinOp ">=" (EVar "start") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "afterLineEnd") (EVar "a")) (EVar "n")) (EVar "start"))) (DoLet false false (PVar "piece") (EApp (EApp (EApp (EVar "subChars") (EVar "a")) (EVar "start")) (EVar "e"))) (DoLet false false (PVar "out") (EIf (EApp (EApp (EApp (EVar "allSpace") (EVar "a")) (EVar "start")) (EVar "e")) (EVar "piece") (EBinOp "++" (EVar "prefix") (EVar "piece")))) (DoExpr (EBinOp "::" (EVar "out") (EApp (EApp (EApp (EApp (EVar "indentFrom") (EVar "prefix")) (EVar "a")) (EVar "n")) (EVar "e"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "allSpace" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "allSpace" ((PVar "a") (PVar "i") (PVar "e")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "True") (EIf (EVar "otherwise") (EBinOp "&&" (EApp (EVar "isStripSpace") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EApp (EVar "allSpace") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "isStripSpace" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "isStripSpace" ((PVar "c")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "charCode") (EVar "c"))) (DoExpr (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "k") (ELit (LInt 9))) (EBinOp "<=" (EVar "k") (ELit (LInt 13)))) (EBinOp "&&" (EBinOp ">=" (EVar "k") (ELit (LInt 28))) (EBinOp "<=" (EVar "k") (ELit (LInt 32))))) (EBinOp "==" (EVar "k") (ELit (LInt 133)))) (EBinOp "==" (EVar "k") (ELit (LInt 160)))) (EBinOp "==" (EVar "k") (ELit (LInt 5760)))) (EBinOp "&&" (EBinOp ">=" (EVar "k") (ELit (LInt 8192))) (EBinOp "<=" (EVar "k") (ELit (LInt 8202))))) (EBinOp "==" (EVar "k") (ELit (LInt 8232)))) (EBinOp "==" (EVar "k") (ELit (LInt 8233)))) (EBinOp "==" (EVar "k") (ELit (LInt 8239)))) (EBinOp "==" (EVar "k") (ELit (LInt 8287)))) (EBinOp "==" (EVar "k") (ELit (LInt 12288)))))))
+(DFunDef false "allSpace" ((PVar "a") (PVar "i") (PVar "e")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "True") (EIf (EVar "otherwise") (EBinOp "&&" (EApp (EVar "isSpace") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EApp (EVar "allSpace") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "afterLineEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "afterLineEnd" ((PVar "a") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a")) (ELit (LChar "\r"))) (EIf (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "a")) (ELit (LChar "\n")))) (EBinOp "+" (EVar "i") (ELit (LInt 2))) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EApp (EVar "isLineBreak") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "afterLineEnd") (EVar "a")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "isLineBreak" (TyFun (TyCon "Char") (TyCon "Bool")))

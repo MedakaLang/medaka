@@ -1,10 +1,13 @@
 # META
-source_lines=73
+source_lines=82
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the array-of-tables readers in `stdlib/toml.mdk`.
 
-import toml.{Toml, parse, tableCount, tableEntry, tableEntries, getString}
+import toml.{
+  Toml(..), TomlValue(..), parse, tableCount, tableEntry, tableEntries,
+  getString
+}
 import test.{expectEqual, expectOkThen}
 
 multi : String
@@ -75,8 +78,14 @@ test "tableEntry of the last entry is present" =
   expectEqual
     (Some "c")
     (tableEntry "gate" 2 (load multi) |> flatMap (getString "name"))
+
+test "a key followed by a no-break space keeps it in the key" =
+  expectEqual (Ok (Toml [("key ", TInt 1)])) (parse "key = 1\n")
+
+test "a table header with a no-break space inside the brackets keeps it" =
+  expectEqual (Ok (Toml [("a .k", TString "v")])) (parse "[a ]\nk = \"v\"\n")
 # DESUGAR
-(DUse false (UseGroup ("toml") ((mem "Toml" false) (mem "parse" false) (mem "tableCount" false) (mem "tableEntry" false) (mem "tableEntries" false) (mem "getString" false))))
+(DUse false (UseGroup ("toml") ((mem "Toml" true) (mem "TomlValue" true) (mem "parse" false) (mem "tableCount" false) (mem "tableEntry" false) (mem "tableEntries" false) (mem "getString" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectOkThen" false))))
 (DTypeSig false "multi" (TyCon "String"))
 (DFunDef false "multi" () (ELit (LString "[package]\nname = \"p\"\n[[gate]]\nname = \"a\"\nshard = 1\n[[other]]\nname = \"x\"\n[[gate]]\nname = \"b\"\n[[other]]\nname = \"y\"\n[[gate]]\nname = \"c\"\nshard = 3\n")))
@@ -95,8 +104,10 @@ test "tableEntry of the last entry is present" =
 (DTest false "tableEntry of a negative index is None" (EApp (EApp (EVar "expectEqual") (EVar "None")) (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EApp (EVar "load") (EVar "multi")))))
 (DTest false "tableEntry one past the last entry is None" (EApp (EApp (EVar "expectEqual") (EVar "None")) (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (ELit (LInt 3))) (EApp (EVar "load") (EVar "multi")))))
 (DTest false "tableEntry of the last entry is present" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LString "c")))) (EBinOp "|>" (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (ELit (LInt 2))) (EApp (EVar "load") (EVar "multi"))) (EApp (EVar "flatMap") (EApp (EVar "getString") (ELit (LString "name")))))))
+(DTest false "a key followed by a no-break space keeps it in the key" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "key ")) (EApp (EVar "TInt") (ELit (LInt 1)))))))) (EApp (EVar "parse") (ELit (LString "key = 1\n")))))
+(DTest false "a table header with a no-break space inside the brackets keeps it" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "a .k")) (EApp (EVar "TString") (ELit (LString "v")))))))) (EApp (EVar "parse") (ELit (LString "[a ]\nk = \"v\"\n")))))
 # MARK
-(DUse false (UseGroup ("toml") ((mem "Toml" false) (mem "parse" false) (mem "tableCount" false) (mem "tableEntry" false) (mem "tableEntries" false) (mem "getString" false))))
+(DUse false (UseGroup ("toml") ((mem "Toml" true) (mem "TomlValue" true) (mem "parse" false) (mem "tableCount" false) (mem "tableEntry" false) (mem "tableEntries" false) (mem "getString" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectOkThen" false))))
 (DTypeSig false "multi" (TyCon "String"))
 (DFunDef false "multi" () (ELit (LString "[package]\nname = \"p\"\n[[gate]]\nname = \"a\"\nshard = 1\n[[other]]\nname = \"x\"\n[[gate]]\nname = \"b\"\n[[other]]\nname = \"y\"\n[[gate]]\nname = \"c\"\nshard = 3\n")))
@@ -115,3 +126,5 @@ test "tableEntry of the last entry is present" =
 (DTest false "tableEntry of a negative index is None" (EApp (EApp (EVar "expectEqual") (EVar "None")) (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EApp (EVar "load") (EVar "multi")))))
 (DTest false "tableEntry one past the last entry is None" (EApp (EApp (EVar "expectEqual") (EVar "None")) (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (ELit (LInt 3))) (EApp (EVar "load") (EVar "multi")))))
 (DTest false "tableEntry of the last entry is present" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LString "c")))) (EBinOp "|>" (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (ELit (LInt 2))) (EApp (EVar "load") (EVar "multi"))) (EApp (EDictApp "flatMap") (EApp (EVar "getString") (ELit (LString "name")))))))
+(DTest false "a key followed by a no-break space keeps it in the key" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "key ")) (EApp (EVar "TInt") (ELit (LInt 1)))))))) (EApp (EVar "parse") (ELit (LString "key = 1\n")))))
+(DTest false "a table header with a no-break space inside the brackets keeps it" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "a .k")) (EApp (EVar "TString") (ELit (LString "v")))))))) (EApp (EVar "parse") (ELit (LString "[a ]\nk = \"v\"\n")))))

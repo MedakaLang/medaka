@@ -19,7 +19,7 @@
 
 import toml.{Toml(..), TomlValue(..), getString, getArray, parse}
 import list.{lookup}
-import string.{startsWith, trim, lines}
+import string.{startsWith, lines}
 
 {- | `name` from a parsed `[package]` section, or `None` when it is absent.
 
@@ -111,7 +111,8 @@ targetProfile (Toml kvs) =
    True -}
 export
 statesTargetSection : String -> Bool
-statesTargetSection text = any (l => startsWith "[target" (trim l)) (lines text)
+statesTargetSection text =
+  any (l => startsWith "[target" (asciiTrim l)) (lines text)
 
 -- Doctest helper: parse a known-good TOML source.  A parse failure here would
 -- be a bug in the fixture, not in the accessor under test, so it panics rather
@@ -121,3 +122,32 @@ okDoc src = match parse src
   Ok doc => doc
   Err e =>
     panic (stringConcat ["manifest doctest fixture failed to parse: ", e])
+
+-- Trims ASCII whitespace only. medaka.toml is TOML, whose whitespace is tab and space.
+-- A non-ASCII space such as U+00A0 is data here, so `string.trim` (which strips
+-- it) would be wrong.
+asciiTrim : String -> String
+-- The same few lines live in each package that needs a spec-bound trim; the
+-- packages share no module that could host them, and string must not export it.
+-- lint-disable-next-line rule-stdlib-reimpl, rule-duplicate-body
+asciiTrim s =
+  let chars = stringToChars s
+  let n = arrayLength chars
+  let lo = asciiTrimFront chars 0 n
+  stringSlice lo (asciiTrimBack chars (n - 1) lo + 1) s
+
+asciiTrimFront : Array Char -> Int -> Int -> Int
+-- Part of asciiTrim, duplicated with it for the same reason.
+-- lint-disable-next-line rule-duplicate-body
+asciiTrimFront chars i n
+  | i >= n = n
+  | charIsSpace chars[i] = asciiTrimFront chars (i + 1) n
+  | otherwise = i
+
+asciiTrimBack : Array Char -> Int -> Int -> Int
+-- Part of asciiTrim, duplicated with it for the same reason.
+-- lint-disable-next-line rule-duplicate-body
+asciiTrimBack chars i lo
+  | i < lo = lo - 1
+  | charIsSpace chars[i] = asciiTrimBack chars (i - 1) lo
+  | otherwise = i

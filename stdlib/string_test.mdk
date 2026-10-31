@@ -4,12 +4,12 @@
 -- byte offset would show.
 
 import string.{
-  StrCursor, byteLength, center, countOccurrences, cutBetween, dedent, drop,
-  endsWith, fromChars, groupThousands, indent, repeat, replaceOnce, indexOf,
-  join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll, reverse,
-  nextChar, sliceBetween, startCursor, splitAt, startsWith, stripPrefix,
-  stripSuffix, take, toInt, toLower, toUpper, toFixed, trim, trimLeft,
-  trimRight, unlines, unwords, utf8ByteLength
+  StrCursor, isSpace, toChars, byteLength, center, countOccurrences, cutBetween,
+  dedent, drop, endsWith, fromChars, groupThousands, indent, repeat,
+  replaceOnce, indexOf, join, lastIndexOf, lines, padLeft, padRight, replace,
+  replaceAll, reverse, nextChar, sliceBetween, startCursor, splitAt, startsWith,
+  stripPrefix, stripSuffix, take, toInt, toLower, toUpper, toFixed, trim,
+  trimLeft, trimRight, unlines, unwords, utf8ByteLength, words
 }
 import test.{expectEach, expectEqual, expectFalse, expectTrue}
 
@@ -298,12 +298,60 @@ test "trimLeft of a multibyte head with spaces" =
 test "trim treats tab, newline, carriage return and vertical tab as space" =
   expectEqual "x" (trim "\r\n\t\u{0b}\u{0c} x \r\n")
 
-test "trim does not remove a non-breaking space" = expectEqual " x" (trim " x")
+test "trim removes a no-break space" = expectEqual "x" (trim " x")
+
+test "words splits on a no-break space and an ideographic space" =
+  expectEqual ["a", "b", "c"] (words "a b　c")
+
+test "isSpace accepts exactly the 29 whitespace code points" =
+  expectEqual spaceCodePoints (acceptedCodePoints 1114111 [])
+
+-- Python's whitespace set, written out from its definition.
+spaceCodePoints : List Int
+spaceCodePoints =
+  [9, 10, 11, 12, 13, 28, 29, 30, 31, 32, 133, 160, 5760]
+    ++ [8192..=8202]
+    ++ [8232, 8233, 8239, 8287, 12288]
+
+-- The code points from `k` down to 0 that `isSpace` accepts, ascending.
+acceptedCodePoints : Int -> List Int -> List Int
+acceptedCodePoints k acc
+  | k < 0 = acc
+  | otherwise = match charFromCode k
+    Some c => acceptedCodePoints (k - 1) (if isSpace c then k :: acc else acc)
+    None => acceptedCodePoints (k - 1) acc
 
 test "trim of a single space character" =
   expectEqual ("", "", "") (trim " ", trimLeft " ", trimRight " ")
 
 -- # Properties
+
+-- Characters drawn from the whitespace set and its near neighbours.
+trimPool : Array Char
+trimPool =
+  arrayFromList
+    (flatMap
+      (k => match charFromCode k
+        Some c => [c]
+        None => [])
+      [
+        97, 98, 9, 10, 11, 13, 28, 31, 32, 133, 160, 1680, 6158, 8192, 8202,
+        8203, 8232, 8239, 8287, 12288, 65279, 173
+      ])
+
+trimSample : List Int -> String
+trimSample ks =
+  fromChars
+    (map (k => arrayGetUnsafe (abs k % arrayLength trimPool) trimPool) ks)
+
+prop "trim neither starts nor ends with whitespace and is a substring" (ks : List Int) =
+  let s = trimSample ks
+  let t = trim s
+  let ends = toChars t
+  (t == ""
+      || not (isSpace (arrayGetUnsafe 0 ends))
+        && not (isSpace (arrayGetUnsafe (arrayLength ends - 1) ends)))
+    && isSome (indexOf t s)
 
 prop "countOccurrences agrees with replaceAll on the removed length" (s : String) =
   stringLength s - stringLength (replaceAll "ab" "" s)
