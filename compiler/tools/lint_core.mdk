@@ -20,9 +20,12 @@ import tools.lint_index.{
   emptyProjectIndex,
   mkProjectIndexWith,
   indexFingerprint,
+  recording,
+  recordedAnswers,
+  answersHold,
   stdlibRowsNamed,
   stdlibValueNames,
-  stdlibValueModules,
+  stdlibHasValueModule,
 }
 import tools.printer.{ppTy}
 import frontend.exhaust.{Oracle}
@@ -465,9 +468,27 @@ stdlibIndexFingerprint : StdlibIndex -> String
 stdlibIndexFingerprint (StdlibIndex ix) = indexFingerprint ix
 
 -- The row index behind the handle, for a rule that declares `NeedsProjectIndex`.
+-- It records what it is asked exactly as the handle does.
 export
 projectIndexOf : StdlibIndex -> ProjectIndex
 projectIndexOf (StdlibIndex ix) = ix
+
+-- The same index with an empty log of what it is asked, for one file's rules
+-- under `--cache` (`lint_index.recording`).
+export
+recordingStdlibIndex : StdlibIndex -> StdlibIndex
+recordingStdlibIndex (StdlibIndex ix) = StdlibIndex (recording ix)
+
+-- What the rules handed a recording index asked, with the digest of each
+-- answer.
+export
+stdlibRecorded : StdlibIndex -> List (String, String)
+stdlibRecorded (StdlibIndex ix) = recordedAnswers ix
+
+-- Whether this index answers every recorded question as it was answered then.
+export
+stdlibAnswersHold : StdlibIndex -> List (String, String) -> Bool
+stdlibAnswersHold (StdlibIndex ix) recorded = answersHold ix recorded
 
 -- How many distinct exported NAMES the index carries (not declarations — a name
 -- declared in two modules counts once).  0 means degraded, or an empty stdlib;
@@ -518,8 +539,7 @@ stdlibIndexNames (StdlibIndex ix) = stdlibValueNames ix
 -- module it did not read exports nothing the index can vouch for.
 export
 stdlibKnowsModule : StdlibIndex -> String -> Bool
-stdlibKnowsModule (StdlibIndex ix) modName =
-  elem modName (stdlibValueModules ix)
+stdlibKnowsModule (StdlibIndex ix) modName = stdlibHasValueModule ix modName
 
 -- The names declared by more than one stdlib module, sorted.  Exported because
 -- it is the set every consumer has to have an answer for — a rule that treats a

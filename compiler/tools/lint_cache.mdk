@@ -31,10 +31,16 @@
 --
 -- ── two finding groups ────────────────────────────────────────────────────────
 -- The index-free rules' findings are valid for as long as the binary is.  The
--- index-reading rules' findings were made against one declaration index, and
--- `indexKey` names it (`lint_walk.indexKeyFor`).  A shard that agrees on the
--- binary but not on the index key is `ShardStale`: the caller keeps its free
--- findings, summaries and directives and re-runs only the index-reading rules.
+-- index-reading rules' findings were made against one declaration index.  They
+-- are stored with `indexKey`, the fingerprint of every row of that index
+-- (`lint_walk.indexKeyFor`), and with `indexAnswers`, each question the file's
+-- rules asked of it and a digest of the answer (`lint_index.recording`).  They
+-- still hold when the fingerprint is today's, or, when it is not, when today's
+-- index answers every recorded question with the recorded digest: an edit to a
+-- declaration no rule of this file asked about leaves its findings alone.  A
+-- shard that agrees on the binary but on neither is `ShardStale`: the caller
+-- keeps its free findings, summaries and directives and re-runs only the
+-- index-reading rules.
 --
 -- ── SHARDS, NOT A BLOB ───────────────────────────────────────────────────────
 -- One shard per source file, not one cache file: a typical commit changes 1–2
@@ -84,13 +90,14 @@ import support.sexp_value.{
 -- made it (`lint_walk.ranked`).  `freeFindings` come from rules that read no
 -- index and are valid for as long as the shard's stamp is.  `indexFindings` come
 -- from rules that read the index and are valid only while the index they saw is
--- the one `indexKey` names.
+-- the one `indexKey` names or answers `indexAnswers` as it did then.
 public export data LintEntry = LintEntry {
   path : String,
   contentHash : String,
   freeFindings : List (Int, Finding),
   indexFindings : List (Int, Finding),
   indexKey : String,
+  indexAnswers : List (String, String),
   summaries : List (String, Summary),
   directives : List Directive,
   dirty : Bool,
@@ -242,7 +249,9 @@ sanitizeChar c
 
 -- ── encode ───────────────────────────────────────────────────────────────────
 -- A shard is one s-expression:
---   (version "stamp" "path" "hash" "indexKey" (free) (index) (summaries) (directives))
+--   (version "stamp" "path" "hash" "indexKey" (answers) (free) (index) (summaries) (directives))
+-- A shard from before `answers` was stored has one list fewer, so its last
+-- read fails and it is a miss under the same version.
 -- read by the cursor reader of `support/sexp_value`, which records the first
 -- refusal and hands every later read a neutral value; the decoder checks it once
 -- at the end.
@@ -250,13 +259,16 @@ sanitizeChar c
 export
 encodeEntry : String -> LintEntry -> String
 encodeEntry stamp e =
-  "(\{intToString cacheFormatVersion} \{atom stamp} \{atom e.path} \{atom e.contentHash} \{atom e.indexKey} \{listText encRanked e.freeFindings} \{listText encRanked e.indexFindings} \{listText encNamedSummary e.summaries} \{listText encDirective e.directives})"
+  "(\{intToString cacheFormatVersion} \{atom stamp} \{atom e.path} \{atom e.contentHash} \{atom e.indexKey} \{listText encAnswer e.indexAnswers} \{listText encRanked e.freeFindings} \{listText encRanked e.indexFindings} \{listText encNamedSummary e.summaries} \{listText encDirective e.directives})"
 
 atom : String -> String
 atom s = renderSExp (SAtom s)
 
 listText : (a -> String) -> List a -> String
 listText f xs = "(" ++ joinWith " " (map f xs) ++ ")"
+
+encAnswer : (String, String) -> String
+encAnswer (question, digest) = "(\{atom question} \{atom digest})"
 
 encRanked : (Int, Finding) -> String
 encRanked (rank, f) =
@@ -302,11 +314,18 @@ encScope (DScopeLine l) = "l \{intToString l}"
 
 -- `path` and `hash` are checked against what the CALLER observed on disk, so a
 -- shard can only ever answer for the exact file+content it was written from; the
--- stamp against the running binary.  `indexKey` is the key of the index this run
--- holds: a shard that agrees on everything else but not on it is `ShardStale`.
+-- stamp against the running binary.  `indexKey` is the fingerprint of the index
+-- this run holds and `answersHold` re-asks a shard's recorded questions of it:
+-- a shard that agrees on everything else but on neither is `ShardStale`.
 export
-decodeEntry : String -> String -> String -> String -> String -> ShardLoad
-decodeEntry stamp indexKey path hash text =
+decodeEntry : String ->
+  String ->
+  (List (String, String) -> Bool) ->
+  String ->
+  String ->
+  String ->
+  ShardLoad
+decodeEntry stamp indexKey answersHold path hash text =
   let cur = cursorOf text
   let _ = cursorOpen cur
   let v = cursorInt cur
@@ -321,6 +340,7 @@ decodeEntry stamp indexKey path hash text =
     ShardMiss
   else
     let key = cursorAtom cur
+    let answers = cursorList readAnswer cur
     let free = cursorList readRanked cur
     let indexed = cursorList readRanked cur
     let sums = cursorList readNamedSummary cur
@@ -335,14 +355,27 @@ decodeEntry stamp indexKey path hash text =
         freeFindings = free,
         indexFindings = indexed,
         indexKey = key,
+        indexAnswers = answers,
         summaries = sums,
         directives = dirs,
         dirty = False,
       }
-      if key == indexKey then
+      if key == indexKey || answersHold answers then
         ShardHit entry
       else
-        ShardStale ({ entry | indexFindings = [], indexKey = indexKey })
+        ShardStale ({ entry |
+          indexFindings = [],
+          indexKey = indexKey,
+          indexAnswers = [],
+        })
+
+readAnswer : SexpCursor -> (String, String)
+readAnswer cur =
+  let _ = cursorOpen cur
+  let question = cursorAtom cur
+  let digest = cursorAtom cur
+  let _ = cursorClose cur
+  (question, digest)
 
 readRanked : SexpCursor -> (Int, Finding)
 readRanked cur =
@@ -440,11 +473,17 @@ readDirective cur =
 -- Try to answer for `path` at content `hash`.  `ShardMiss` on any doubt
 -- whatsoever.
 export
-loadEntry : String -> String -> String -> String -> String -> <IO> ShardLoad
-loadEntry cacheDir stamp indexKey path hash =
+loadEntry : String ->
+  String ->
+  String ->
+  (List (String, String) -> Bool) ->
+  String ->
+  String ->
+  <IO> ShardLoad
+loadEntry cacheDir stamp indexKey answersHold path hash =
   match readFile (shardPathOf cacheDir path)
     Err _ => ShardMiss
-    Ok text => decodeEntry stamp indexKey path hash text
+    Ok text => decodeEntry stamp indexKey answersHold path hash text
 
 -- ── store ────────────────────────────────────────────────────────────────────
 

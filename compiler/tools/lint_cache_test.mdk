@@ -32,7 +32,15 @@ import driver.diagnostics.{Severity(..)}
 import string.{replace}
 import support.util.{joinWith, listLen, filterList}
 import tools.printer.{ppTy}
-import tools.lint_index.{IndexRow, Ns(..), rowSig, rowsIn}
+import tools.lint_index.{
+  IndexRow(..),
+  RowKind(..),
+  Ns(..),
+  rowSig,
+  rowsIn,
+  rowsNamed,
+  projectRows,
+}
 import tools.lint.{
   StdlibIndex,
   Rule,
@@ -47,9 +55,14 @@ import tools.lint.{
   lintProgram,
   projectIndexOf,
 }
-import tools.lint_core.{mkRule, FileFacts, stdlibSigTextIn}
+import tools.lint_core.{
+  mkRule,
+  FileFacts,
+  stdlibSigTextIn,
+  recordingStdlibIndex,
+}
 import tools.lint_walk.{indexForRosterIn, indexKeyFor, indexKeyWith}
-import tools.lint_cmd.{cachedEntryOf}
+import tools.lint_cmd.{cachedEntryOf, cachedEntryWith}
 import tools.lint_cache.{
   LintEntry(..),
   entryFindings,
@@ -548,3 +561,398 @@ unwritableCase dir =
 
 findingText : Finding -> String
 findingText f = f.message
+
+-- ── the recorded-answer key ─────────────────────────────────────────────────
+-- A shard's index-reading findings are stored with the questions its rules
+-- asked and a digest of each answer.  Each case below lints a three-file
+-- project twice under `--cache` with one edit between, through a probe that
+-- asks the questions the case names, and grades A: whether it was re-linted,
+-- and whether what it says equals what an uncached lint of the edited tree
+-- says.  A is re-linted exactly when an answer it was given has changed.
+
+-- A rule that reports the answers to `questions`, one line per file.
+askerRule : List (StdlibIndex -> String) -> Rule
+askerRule questions =
+  mkRule
+    (probeMeta "probe-asker" [NeedsProjectIndex])
+    (askerCheck questions)
+    None
+
+askerCheck : List (StdlibIndex -> String) ->
+  StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+askerCheck questions idx _ _ _ _ = [
+  Finding {
+    rule = "probe-asker",
+    message = joinWith "; " (map (q => q idx) questions),
+    severity = SevWarning,
+    loc = None,
+    fix = None,
+  },
+]
+
+-- The rows a question returned, every field a rule could act on shown.
+rowsText : List IndexRow -> String
+rowsText [] = "<none>"
+rowsText rows = joinWith "," (map rowLine rows)
+
+rowLine : IndexRow -> String
+rowLine r =
+  "\{r.ixrModule}.\{r.ixrName}/\{kindText r.ixrKind}/\{if r.ixrExported then "x" else "-"}/\{sigText r}/\{joinWith " " r.ixrFields}"
+
+kindText : RowKind -> String
+kindText RkValue = "value"
+kindText RkCtor = "ctor"
+kindText RkType = "type"
+kindText RkIface = "iface"
+kindText RkMethod = "method"
+
+-- `name` as declared in module `modId` of the project.
+askIn : String -> Ns -> String -> StdlibIndex -> String
+askIn modId ns name idx =
+  "\{modId}.\{name}=\{rowsText (rowsIn (projectIndexOf idx) modId ns name)}"
+
+-- `name` in every module that declares it.
+askNamed : Ns -> String -> StdlibIndex -> String
+askNamed ns name idx =
+  "\{name}=\{rowsText (rowsNamed (projectIndexOf idx) ns name)}"
+
+-- Every row of the project: an enumerating question.
+askAll : StdlibIndex -> String
+askAll idx = "rows=\{intToString (listLen (projectRows (projectIndexOf idx)))}"
+
+cPath : Env -> String
+cPath e = "\{e.proj}/c.mdk"
+
+bBase : String
+bBase = "export\nf : Int -> Int\nf x = x + 1\n"
+
+cBase : String
+cBase = "export\nh : Int -> Int\nh x = x\n"
+
+-- One file's new source, or `None` to delete it.
+data Edit = Edit (Env -> String) (Option String)
+
+-- What one case observed of A after the edit.
+data Outcome = Outcome { warmA : FileRun, truth : List String }
+
+-- The project with B and C as given, the probe asking `questions`, A's index
+-- made by `view` (`recordingStdlibIndex` in production).
+askCase : (StdlibIndex -> StdlibIndex) ->
+  List (StdlibIndex -> String) ->
+  String ->
+  String ->
+  List Edit ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Option Outcome
+askCase view questions bSrc cSrc edits dir =
+  let e = mkEnv dir
+  let rule = askerRule questions
+  let _ = setup e
+  let _ = writeFile (bPath e) bSrc
+  let _ = writeFile (cPath e) cSrc
+  match runAsk view rule e
+    None => None
+    Some _ =>
+      let _ = applyEdits e edits
+      match (runAsk view rule e, indexOf [rule] e)
+        (Some warm, Some fresh) => Some Outcome {
+          warmA = warm,
+          truth = messagesOf rule fresh,
+        }
+        _ => None
+
+applyEdits : Env -> List Edit -> <IO, FileRead, FileWrite, Exec> Unit
+applyEdits _ [] = ()
+applyEdits e ((Edit pathOf src) :: rest) =
+  let _ = match src
+    Some text => writeFile (pathOf e) text
+    None => removeFile (pathOf e)
+  applyEdits e rest
+
+-- Every file of the project through the `--cache` decision; A's result.
+runAsk : (StdlibIndex -> StdlibIndex) ->
+  Rule ->
+  Env ->
+  <IO, FileRead, FileWrite, Exec> Option FileRun
+runAsk view rule e = match indexOf [rule] e
+  None => None
+  Some idx =>
+    let found = flatMap (askEntry view rule idx e) [aPath e, bPath e, cPath e]
+    let _ = storeEntries e.cacheDir stampOf (map snd found)
+    match filterList (pe => fst pe == aPath e) found
+      [(_, a)] => Some (fileRun a)
+      _ => None
+
+askEntry : (StdlibIndex -> StdlibIndex) ->
+  Rule ->
+  StdlibIndex ->
+  Env ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> List (String, LintEntry)
+askEntry view rule idx e path = match readFile path
+  Err _ => []
+  Ok src =>
+    match (cachedEntryWith
+      view
+      [rule]
+      indexKeyFor
+      idx
+      e.cacheDir
+      stampOf
+      path
+      src)
+      Err _ => []
+      Ok entry => [(path, entry)]
+
+-- A is re-linted (or not, as `relint` says) and says what an uncached lint
+-- of the edited tree says.
+graded : Bool -> Option Outcome -> <IO, FileRead, FileWrite, Exec> Expectation
+graded _ None = fail "a run did not complete"
+graded relint (Some o) = expectEach [
+  (
+    "A is re-linted exactly when an answer moved",
+    expectEqual relint o.warmA.relinted,
+  ),
+  ("A says what an uncached lint says", expectEqual o.truth o.warmA.texts),
+]
+
+recorded : StdlibIndex -> StdlibIndex
+recorded = recordingStdlibIndex
+
+unrecorded : StdlibIndex -> StdlibIndex
+unrecorded idx = idx
+
+-- (e) A asks about `b.f`; C's `h` changes signature.
+caseE : (StdlibIndex -> StdlibIndex) ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Expectation
+caseE view dir =
+  graded
+    False
+    (askCase
+      view
+      [askIn "b" NsValue "f"]
+      bBase
+      cBase
+      [Edit cPath (Some "export\nh : Int -> String\nh x = intToString x\n")]
+      dir)
+
+-- (f) A asks about `b.f`; its signature changes.
+caseF : (StdlibIndex -> StdlibIndex) ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Expectation
+caseF view dir =
+  graded
+    True
+    (askCase
+      view
+      [askIn "b" NsValue "f"]
+      bBase
+      cBase
+      [Edit bPath (Some "export\nf : Int -> String\nf x = intToString x\n")]
+      dir)
+
+-- (f) A asks about `b.g`, which B does not declare; B comes to declare it.
+caseFAbsent : (StdlibIndex -> StdlibIndex) ->
+  String ->
+  <IO, FileRead, FileWrite, Exec> Expectation
+caseFAbsent view dir =
+  graded
+    True
+    (askCase
+      view
+      [askIn "b" NsValue "g"]
+      bBase
+      cBase
+      [Edit bPath (Some (bBase ++ "\nexport\ng : Int -> Int\ng x = x\n"))]
+      dir)
+
+test "(e) an unasked signature edit in C keeps A warm" =
+  withScratchDir (caseE recorded)
+
+test "(e) control: the edit moved the index fingerprint, so the answers kept A warm" =
+  withScratchDir fingerprintMovesCase
+
+fingerprintMovesCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+fingerprintMovesCase dir =
+  let e = mkEnv dir
+  let rule = askerRule [askIn "b" NsValue "f"]
+  let _ = setup e
+  let _ = writeFile (cPath e) cBase
+  match indexOf [rule] e
+    None => fail "the index did not build"
+    Some before =>
+      let _ =
+        writeFile (cPath e) "export\nh : Int -> String\nh x = intToString x\n"
+      match indexOf [rule] e
+        None => fail "the index did not rebuild"
+        Some after =>
+          expectNotEqual (indexKeyFor [rule] before) (indexKeyFor [rule] after)
+
+test "(f) a signature edit to a name A asked about re-lints A" =
+  withScratchDir (caseF recorded)
+
+test "(f) a name A asked about while absent, then declared, re-lints A" =
+  withScratchDir (caseFAbsent recorded)
+
+test "(g) a second module exporting a name A asked about re-lints A" = withScratchDir
+  (dir =>
+    graded
+      True
+      (askCase
+        recorded
+        [askNamed NsValue "f"]
+        bBase
+        cBase
+        [Edit cPath (Some (cBase ++ "\nexport\nf : Int -> Int\nf x = x\n"))]
+        dir))
+
+test "(h) an enumerating question re-lints A on a signature edit anywhere" = withScratchDir
+  (dir =>
+    graded
+      True
+      (askCase
+        recorded
+        [askAll]
+        bBase
+        cBase
+        [Edit cPath (Some "export\nh : Int -> String\nh x = intToString x\n")]
+        dir))
+
+test "(h) an enumerating question keeps A warm across a body-only edit" = withScratchDir
+  (dir =>
+    graded
+      False
+      (askCase
+        recorded
+        [askAll]
+        bBase
+        cBase
+        [
+          Edit
+            cPath
+            (Some "-- a line above\nexport\nh : Int -> Int\nh x = x + 0\n"),
+        ]
+        dir))
+
+test "(i) without recording, a signature edit to an asked name is served stale" =
+  withScratchDir (dir => expectTrue (isFail (caseF unrecorded dir)))
+
+test "(i) without recording, a newly declared asked name is served stale" =
+  withScratchDir (dir => expectTrue (isFail (caseFAbsent unrecorded dir)))
+
+-- ── adversarial answers ─────────────────────────────────────────────────────
+
+test "an asked name losing its export re-lints A" = withScratchDir (dir =>
+  graded
+    True
+    (askCase
+      recorded
+      [askIn "b" NsValue "f"]
+      bBase
+      cBase
+      [Edit bPath (Some "f : Int -> Int\nf x = x + 1\n")]
+      dir))
+
+test "an unasked name losing its export keeps A warm" = withScratchDir (dir =>
+  graded
+    False
+    (askCase
+      recorded
+      [askIn "b" NsValue "f"]
+      bBase
+      cBase
+      [Edit cPath (Some "h : Int -> Int\nh x = x\n")]
+      dir))
+
+test "an asked constructor's field list changing re-lints A" = withScratchDir
+  (dir =>
+    graded
+      True
+      (askCase
+        recorded
+        [askNamed NsValue "P"]
+        (bBase ++ "\npublic export data P = P { px : Int }\n")
+        cBase
+        [
+          Edit
+            bPath
+            (Some (bBase ++ "\npublic export data P = P { qx : Int }\n")),
+        ]
+        dir))
+
+test "an asked value becoming an interface method re-lints A" = withScratchDir
+  (dir =>
+    graded
+      True
+      (askCase
+        recorded
+        [askIn "b" NsValue "m"]
+        (bBase ++ "\nexport\nm : Int -> Int\nm x = x\n")
+        cBase
+        [
+          Edit
+            bPath
+            (Some (bBase ++ "\nexport interface M a where\n  m : a -> a\n")),
+        ]
+        dir))
+
+test "an asked type alias becoming an interface re-lints A" = withScratchDir
+  (dir =>
+    graded
+      True
+      (askCase
+        recorded
+        [askIn "b" NsType "T"]
+        (bBase ++ "\nexport type T = Int\n")
+        cBase
+        [
+          Edit
+            bPath
+            (Some (bBase ++ "\nexport interface T a where\n  t : a -> a\n")),
+        ]
+        dir))
+
+test "an asked name moving to another module re-lints A" = withScratchDir
+  (dir =>
+    graded
+      True
+      (askCase
+        recorded
+        [askNamed NsValue "f"]
+        bBase
+        cBase
+        [
+          Edit bPath (Some "export\nk : Int\nk = 1\n"),
+          Edit cPath (Some (cBase ++ "\nexport\nf : Int -> Int\nf x = x + 1\n")),
+        ]
+        dir))
+
+test "deleting the file that declared an asked name re-lints A" = withScratchDir
+  (dir =>
+    graded
+      True
+      (askCase
+        recorded
+        [askIn "b" NsValue "f"]
+        bBase
+        cBase
+        [Edit bPath None]
+        dir))
+
+test "deleting a file A asked nothing about keeps A warm" = withScratchDir
+  (dir =>
+    graded
+      False
+      (askCase
+        recorded
+        [askIn "b" NsValue "f"]
+        bBase
+        cBase
+        [Edit cPath None]
+        dir))

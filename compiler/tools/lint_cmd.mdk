@@ -91,6 +91,11 @@ import tools.lint.{
   mergeProjectIntoTriples,
   runProjectRules,
 }
+import tools.lint_core.{
+  recordingStdlibIndex,
+  stdlibRecorded,
+  stdlibAnswersHold,
+}
 import tools.lint_cache.{
   LintEntry(..),
   ShardLoad(..),
@@ -962,9 +967,10 @@ entryOfFile idx (Some (cacheDir, stamp)) _ _ _ target src =
 
 -- The entry a `--cache` run uses for one file: the shard if it answers in full,
 -- the shard's free findings and summaries with the index-reading rules re-run
--- if only the index key moved, a fresh lint of the whole `roster` otherwise.
--- `keyOf` names the index the index-reading findings were made against; the
--- soundness tests substitute a key without the fingerprint (`indexKeyWith`).
+-- if the index answers the file's recorded questions differently, a fresh lint
+-- of the whole `roster` otherwise.  `keyOf` names the index the index-reading
+-- findings were made against; the soundness tests substitute a key without the
+-- fingerprint (`indexKeyWith`).
 export
 cachedEntryOf : List Rule ->
   (List Rule -> StdlibIndex -> String) ->
@@ -974,15 +980,40 @@ cachedEntryOf : List Rule ->
   String ->
   String ->
   <IO> Result ParseError LintEntry
-cachedEntryOf roster keyOf idx cacheDir stamp target src =
+cachedEntryOf = cachedEntryWith recordingStdlibIndex
+
+-- `cachedEntryOf` with the index a file's rules are handed made by `view`.
+-- Production records what the rules ask (`recordingStdlibIndex`); the
+-- soundness tests pass the index unchanged to show that a shard whose questions
+-- went unrecorded is served stale.
+export
+cachedEntryWith : (StdlibIndex -> StdlibIndex) ->
+  List Rule ->
+  (List Rule -> StdlibIndex -> String) ->
+  StdlibIndex ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO> Result ParseError LintEntry
+cachedEntryWith view roster keyOf idx cacheDir stamp target src =
   let hash = contentHashOf src
   let key = keyOf roster idx
-  match loadEntry cacheDir stamp key target hash
+  match loadEntry cacheDir stamp key (stdlibAnswersHold idx) target hash
     ShardHit hit => Ok hit
     loaded =>
       map
         ((decls, pos) =>
-          cachedEntryFrom roster key idx loaded target src hash decls pos)
+          cachedEntryFrom
+            roster
+            key
+            (view idx)
+            loaded
+            target
+            src
+            hash
+            decls
+            pos)
         (lintParseSource src)
 
 -- Uncached, the excluded rules are skipped outright (their findings would be
@@ -1006,6 +1037,7 @@ uncachedEntryOf idx disableNames onlyNames wantSummaries target src decls pos =
       lintProgramRanked idx (ranked 0 rules) target facts pos decls,
     indexFindings = [],
     indexKey = "",
+    indexAnswers = [],
     summaries =
       if wantSummaries then
         fileSummaries onlyNames disableNames target facts pos decls
@@ -1017,7 +1049,9 @@ uncachedEntryOf idx disableNames onlyNames wantSummaries target src decls pos =
 
 -- Under --cache the shard must hold the full roster, so every rule runs, except
 -- that a stale shard (`ShardStale`) already holds the index-free findings,
--- summaries and directives, and only the index-reading rules run again.
+-- summaries and directives, and only the index-reading rules run again.  `idx`
+-- is this file's own recording index, so what its rules asked is read back
+-- once they have run.
 cachedEntryFrom : List Rule ->
   String ->
   StdlibIndex ->
@@ -1030,9 +1064,11 @@ cachedEntryFrom : List Rule ->
   <IO> LintEntry
 cachedEntryFrom roster _ idx (ShardStale stale) target src _ decls pos =
   let facts = mkFileFactsAt target src decls pos
+  let indexed =
+    lintProgramRanked idx (rankedIndexRules roster) target facts pos decls
   { stale |
-    indexFindings =
-      lintProgramRanked idx (rankedIndexRules roster) target facts pos decls,
+    indexFindings = indexed,
+    indexAnswers = stdlibRecorded idx,
     dirty = True,
   }
 cachedEntryFrom roster key idx _ target src hash decls pos =
@@ -1045,6 +1081,7 @@ cachedEntryFrom roster key idx _ target src hash decls pos =
     freeFindings = free,
     indexFindings = indexed,
     indexKey = key,
+    indexAnswers = stdlibRecorded idx,
     summaries = fileSummaries [] [] target facts pos decls,
     directives = factDirectives facts,
     dirty = True,

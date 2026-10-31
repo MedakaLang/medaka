@@ -1,5 +1,5 @@
 # META
-source_lines=1641
+source_lines=1644
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_walk.mdk — the lint runner: `lintProgram*` and the one
@@ -806,11 +806,14 @@ exeStdlibDir _ = "\{dirOf (executablePath ())}/stdlib"
 
 -- ── what a cached finding that read the index depends on ──────────────────────
 -- A shard holds two finding groups.  The index-free rules' findings are keyed by
--- the binary alone.  The index-reading rules' findings are also keyed by the
--- fingerprint of the rows the run's index was built from, so an edit to a
--- signature in any indexed file re-runs those rules for every file, and an edit
--- that moves no row (a body, a comment) re-runs nothing.  A roster that reads no
--- index has no such key, so an index edit never invalidates its shards.
+-- the binary alone.  The index-reading rules' findings are also keyed by what
+-- the file's rules asked of the index, each question with a digest of its
+-- answer (`lint_index.recording`), so an edit to a declaration re-runs those
+-- rules for the files that asked about it and for no other.  The fingerprint of
+-- every row the run's index was built from (`indexKeyFor`) is stored beside the
+-- answers: while it is unchanged no question is asked again, since no answer
+-- can have moved.  A roster that reads no index has no such key, so an index
+-- edit never invalidates its shards.
 
 -- Whether some rule of `roster` reads the index.
 export
@@ -839,7 +842,7 @@ splitByIndex roster found =
     filterList (rf => elem (fst rf) indexRanks) found,
   )
 
--- The key an index-reading finding group is stored under for `roster`.
+-- The fingerprint an index-reading finding group is stored under for `roster`.
 export
 indexKeyFor : List Rule -> StdlibIndex -> String
 indexKeyFor = indexKeyWith stdlibIndexFingerprint

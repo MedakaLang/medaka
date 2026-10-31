@@ -237,10 +237,15 @@ sampleEntry = LintEntry {
   freeFindings = [(0, sampleFinding)],
   indexFindings = [(2, { sampleFinding | message = "indexed", loc = None })],
   indexKey = "k",
+  indexAnswers = [("npv:f", "1.2.3"), ("as", "4.5.6")],
   summaries = [("rule-a", DupOccs [(3, "f", "(key)")])],
   directives = [Directive DScopeFile ["rule-a"], Directive (DScopeLine 7) []],
   dirty = True,
 }
+
+-- A shard whose recorded index answers are not re-asked.
+noAnswers : List (String, String) -> Bool
+noAnswers _ = False
 
 test "lint cache rejects pre-sexp format and mismatched identity" =
   let shard = encodeEntry "s" sampleEntry
@@ -250,50 +255,61 @@ test "lint cache rejects pre-sexp format and mismatched identity" =
   expectEach [
     (
       "round trip",
-      expectEqual (Some "p") (loadedPath (decodeEntry "s" "k" "p" "h" shard)),
+      expectEqual
+        (Some "p")
+        (loadedPath (decodeEntry "s" "k" noAnswers "p" "h" shard)),
     ),
     (
       "json shard",
-      expectEqual None (loadedPath (decodeEntry "s" "k" "p" "h" old)),
+      expectEqual None (loadedPath (decodeEntry "s" "k" noAnswers "p" "h" old)),
     ),
     (
       "other version",
-      expectEqual None (loadedPath (decodeEntry "s" "k" "p" "h" nextVersion)),
+      expectEqual
+        None
+        (loadedPath (decodeEntry "s" "k" noAnswers "p" "h" nextVersion)),
     ),
     (
       "other content",
-      expectEqual None (loadedPath (decodeEntry "s" "k" "p" "other" shard)),
+      expectEqual
+        None
+        (loadedPath (decodeEntry "s" "k" noAnswers "p" "other" shard)),
     ),
     (
       "other stamp",
-      expectEqual None (loadedPath (decodeEntry "other" "k" "p" "h" shard)),
+      expectEqual
+        None
+        (loadedPath (decodeEntry "other" "k" noAnswers "p" "h" shard)),
     ),
     (
       "other path",
-      expectEqual None (loadedPath (decodeEntry "s" "k" "other" "h" shard)),
+      expectEqual
+        None
+        (loadedPath (decodeEntry "s" "k" noAnswers "other" "h" shard)),
     ),
     (
       "other index key",
       expectEqual
         (Some "stale:p")
-        (loadedPath (decodeEntry "s" "other" "p" "h" shard)),
+        (loadedPath (decodeEntry "s" "other" noAnswers "p" "h" shard)),
     ),
     (
       "truncated",
       expectEqual
         None
-        (loadedPath (decodeEntry "s" "k" "p" "h" (stringSlice 0 40 shard))),
+        (loadedPath
+          (decodeEntry "s" "k" noAnswers "p" "h" (stringSlice 0 40 shard))),
     ),
     (
       "trailing text",
       expectEqual
         None
-        (loadedPath (decodeEntry "s" "k" "p" "h" (shard ++ " x"))),
+        (loadedPath (decodeEntry "s" "k" noAnswers "p" "h" (shard ++ " x"))),
     ),
   ]
 
 test "a shard round-trips findings, summaries and directives" =
-  match decodeEntry "s" "k" "p" "h" (encodeEntry "s" sampleEntry)
+  match decodeEntry "s" "k" noAnswers "p" "h" (encodeEntry "s" sampleEntry)
     ShardHit e => expectEach [
       (
         "free",
@@ -307,6 +323,7 @@ test "a shard round-trips findings, summaries and directives" =
           (map rankedKey sampleEntry.indexFindings)
           (map rankedKey e.indexFindings),
       ),
+      ("answers", expectEqual sampleEntry.indexAnswers e.indexAnswers),
       ("summaries", expectEqual sampleEntry.summaries e.summaries),
       ("directives", expectEqual sampleEntry.directives e.directives),
       (
@@ -319,7 +336,7 @@ test "a shard round-trips findings, summaries and directives" =
     _ => fail "the shard did not decode"
 
 test "a shard made against another index keeps what does not read the index" =
-  match decodeEntry "s" "other" "p" "h" (encodeEntry "s" sampleEntry)
+  match decodeEntry "s" "other" noAnswers "p" "h" (encodeEntry "s" sampleEntry)
     ShardStale e => expectEach [
       (
         "free",
@@ -331,8 +348,28 @@ test "a shard made against another index keeps what does not read the index" =
       ("summaries", expectEqual sampleEntry.summaries e.summaries),
       ("directives", expectEqual sampleEntry.directives e.directives),
       ("new key", expectEqual "other" e.indexKey),
+      ("answers dropped", expectEqual [] e.indexAnswers),
     ]
     _ => fail "expected a stale shard"
+
+test "a shard made against another index is a hit when its answers hold" =
+  let shard = encodeEntry "s" sampleEntry
+  let asked = (== sampleEntry.indexAnswers)
+  match decodeEntry "s" "other" asked "p" "h" shard
+    ShardHit e => expectEach [
+      (
+        "index group kept",
+        expectEqual
+          (map rankedKey sampleEntry.indexFindings)
+          (map rankedKey e.indexFindings),
+      ),
+      ("the stored key is kept", expectEqual "k" e.indexKey),
+    ]
+    _ => fail "expected a hit"
+
+test "a shard from before answers were stored is a miss" =
+  let old = "(3 \"s\" \"p\" \"h\" \"k\" () () () ())"
+  expectEqual None (loadedPath (decodeEntry "s" "k" (_ => True) "p" "h" old))
 
 -- ── 4. the generated rules page ─────────────────────────────────────────────
 -- `docs/ops/LINT-RULES.md` is `medaka lint --list-rules --markdown`.  A rule's
@@ -659,6 +696,7 @@ test "a second project rule is evaluated over its own summaries and keeps --cach
         entry.summaries) (match (decodeEntry
         "s"
         "k"
+        noAnswers
         "p"
         "h"
         (encodeEntry "s" entry))
