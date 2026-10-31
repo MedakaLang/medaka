@@ -1,5 +1,5 @@
 # META
-source_lines=11542
+source_lines=11545
 stages=DESUGAR,MARK
 # SOURCE
 import ir.constructor_facts.{
@@ -11023,9 +11023,12 @@ ctorTypeName prog name = match declaredCtorOwner (progIndex prog).ctor name
         gapSP prog ("ref-mode: unknown constructor '" ++ name ++ "'")
 
 ctorOrdinal : Prog -> String -> Int
-ctorOrdinal prog name = match declaredCtorOrdinal (progIndex prog).ctor name
-  Some ordinal => ordinal
-  None => syntheticCtorOrdinal name
+ctorOrdinal prog name =
+  if isReservedCtor name then
+    syntheticCtorOrdinal name
+  else match declaredCtorOrdinal (progIndex prog).ctor name
+    Some ordinal => ordinal
+    None => syntheticCtorOrdinal name
 
 -- the ordinal to discriminate a decision-tree switch HEAD against.  Built-in list
 -- heads keep their reserved ordinal (Cons=0/Nil=1) regardless of a poisoning user
@@ -13451,7 +13454,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "ctorTypeName" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ctorTypeName" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "declaredCtorOwner") (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "ctor")) (EVar "name")) (arm (PCon "Some" (PVar "ty")) () (EVar "ty")) (arm (PCon "None") () (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "runtimeOwnerWord") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner")))) (arm (PCon "None") () (EIf (EApp (EVar "isTupleCtorName") (EVar "name")) (EApp (EVar "syntheticCtorType") (EVar "name")) (EApp (EApp (EVar "gapSP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: unknown constructor '")) (EVar "name")) (ELit (LString "'"))))))))))
 (DTypeSig false "ctorOrdinal" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "ctorOrdinal" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "declaredCtorOrdinal") (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "ctor")) (EVar "name")) (arm (PCon "Some" (PVar "ordinal")) () (EVar "ordinal")) (arm (PCon "None") () (EApp (EVar "syntheticCtorOrdinal") (EVar "name")))))
+(DFunDef false "ctorOrdinal" ((PVar "prog") (PVar "name")) (EIf (EApp (EVar "isReservedCtor") (EVar "name")) (EApp (EVar "syntheticCtorOrdinal") (EVar "name")) (EMatch (EApp (EApp (EVar "declaredCtorOrdinal") (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "ctor")) (EVar "name")) (arm (PCon "Some" (PVar "ordinal")) () (EVar "ordinal")) (arm (PCon "None") () (EApp (EVar "syntheticCtorOrdinal") (EVar "name"))))))
 (DTypeSig false "ordinalOfHead" (TyFun (TyCon "Prog") (TyFun (TyCon "CHead") (TyCon "Int"))))
 (DFunDef false "ordinalOfHead" (PWild (PCon "HCons")) (EApp (EVar "syntheticCtorOrdinal") (ELit (LString "Cons"))))
 (DFunDef false "ordinalOfHead" (PWild (PCon "HNil")) (EApp (EVar "syntheticCtorOrdinal") (ELit (LString "Nil"))))
@@ -15567,7 +15570,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "ctorTypeName" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ctorTypeName" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "declaredCtorOwner") (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "ctor")) (EVar "name")) (arm (PCon "Some" (PVar "ty")) () (EVar "ty")) (arm (PCon "None") () (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "runtimeOwnerWord") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner")))) (arm (PCon "None") () (EIf (EApp (EVar "isTupleCtorName") (EVar "name")) (EApp (EVar "syntheticCtorType") (EVar "name")) (EApp (EApp (EVar "gapSP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: unknown constructor '")) (EVar "name")) (ELit (LString "'"))))))))))
 (DTypeSig false "ctorOrdinal" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "ctorOrdinal" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "declaredCtorOrdinal") (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "ctor")) (EVar "name")) (arm (PCon "Some" (PVar "ordinal")) () (EVar "ordinal")) (arm (PCon "None") () (EApp (EVar "syntheticCtorOrdinal") (EVar "name")))))
+(DFunDef false "ctorOrdinal" ((PVar "prog") (PVar "name")) (EIf (EApp (EVar "isReservedCtor") (EVar "name")) (EApp (EVar "syntheticCtorOrdinal") (EVar "name")) (EMatch (EApp (EApp (EVar "declaredCtorOrdinal") (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "ctor")) (EVar "name")) (arm (PCon "Some" (PVar "ordinal")) () (EVar "ordinal")) (arm (PCon "None") () (EApp (EVar "syntheticCtorOrdinal") (EVar "name"))))))
 (DTypeSig false "ordinalOfHead" (TyFun (TyCon "Prog") (TyFun (TyCon "CHead") (TyCon "Int"))))
 (DFunDef false "ordinalOfHead" (PWild (PCon "HCons")) (EApp (EVar "syntheticCtorOrdinal") (ELit (LString "Cons"))))
 (DFunDef false "ordinalOfHead" (PWild (PCon "HNil")) (EApp (EVar "syntheticCtorOrdinal") (ELit (LString "Nil"))))

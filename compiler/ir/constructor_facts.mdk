@@ -1,4 +1,5 @@
 import list.{findMap}
+import string as S
 import ir.core_ir.{CProgram(..)}
 import frontend.runtime_constructors.{
   RuntimeOwner(..), RuntimeCtorId(..), namedRuntimeCtor, runtimeCtorFact,
@@ -128,12 +129,15 @@ validateRuntimeRoster facts ty = match runtimeOwner ty
     else
       ["constructor-fact: runtime roster disagrees for " ++ ty]
 
+-- Mangling qualifies declared owners while exempt runtime constructor words stay
+-- bare. Only a bare owner claims the runtime roster; physical tags stay reserved.
 validateRuntimeOwner : (String, String) -> List String
 validateRuntimeOwner (name, ty) = match namedRuntimeCtor name
   Some RuntimeCons => []
   Some RuntimeNil => []
   Some id =>
-    if runtimeOwnerWord (runtimeCtorFact id).owner == Some ty then
+    if runtimeOwnerWord (runtimeCtorFact id).owner == Some ty
+      || S.contains "." ty then
       []
     else
       ["constructor-fact: runtime owner disagrees for " ++ name]

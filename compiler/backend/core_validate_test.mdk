@@ -1,3 +1,4 @@
+import backend.wasm_emit_test_support_test.{funcBlock, linesWith}
 import ir.constructor_facts.{ConstructorFacts(..)}
 import types.symbol_origins.{CoreSymbolOrigins(..), SymbolOrigin(..)}
 import backend.core_validate.{validateSymbolOrigins}
@@ -3270,3 +3271,37 @@ test "constructor-fact renderer P to U to P and connected colliding controls" =
           ],
         ))
       ["llvm", "wasm"])
+
+test "qualified Ordering keeps runtime physical ordinals under declaration reversal" =
+  let raw =
+    constructorTables
+      [("Gt", 0), ("Eq", 0), ("Lt", 0)]
+      [
+        ("Gt", "__user__.Ordering"),
+        ("Eq", "__user__.Ordering"),
+        ("Lt", "__user__.Ordering"),
+      ]
+      (lowered
+        """
+    data Ordering = Gt | Eq | Lt
+    getLt u = Lt
+    getEq u = Eq
+    getGt u = Gt
+    main = 0
+    """)
+  let (CProgram bs ars tys impls mc facts) = raw
+  let cp = CProgram bs ars tys impls mc { facts | factSymbolOrigins = None }
+  let wat =
+    wasmStrict
+      (makeWasmEmitInput RawUnchecked PreludeFreeRuntime [])
+      (buildEmitPlan WasmBackend PreludeFreeRuntime cp)
+      cp
+  expectEach
+    (map
+      ((name, ordinal) => (
+        name,
+        expectEqual
+          1
+          (linesWith ("i32.const " ++ intToString ordinal) (funcBlock name wat)),
+      ))
+      [("getLt", 0), ("getEq", 1), ("getGt", 2)])

@@ -11019,9 +11019,12 @@ ctorTypeName prog name = match declaredCtorOwner (progIndex prog).ctor name
         gapSP prog ("ref-mode: unknown constructor '" ++ name ++ "'")
 
 ctorOrdinal : Prog -> String -> Int
-ctorOrdinal prog name = match declaredCtorOrdinal (progIndex prog).ctor name
-  Some ordinal => ordinal
-  None => syntheticCtorOrdinal name
+ctorOrdinal prog name =
+  if isReservedCtor name then
+    syntheticCtorOrdinal name
+  else match declaredCtorOrdinal (progIndex prog).ctor name
+    Some ordinal => ordinal
+    None => syntheticCtorOrdinal name
 
 -- the ordinal to discriminate a decision-tree switch HEAD against.  Built-in list
 -- heads keep their reserved ordinal (Cons=0/Nil=1) regardless of a poisoning user
