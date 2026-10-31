@@ -332,6 +332,7 @@ import backend.trmc_analysis.{
   lastStmtExpr,
 }
 import types.private_mangle.{dictTag, hashName, injectiveIdent}
+import backend.impl_groups.{ImplClauseGroup(..)}
 import backend.emit_plan.{
   EmitPlan(..),
   planEntryMainIsUnit,
@@ -722,7 +723,7 @@ topRow rows (CBind name _ _ bid) =
     None => []
 
 data Prog =
-  Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit FnCtx
+  Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) (List ImplG) WasmEmitInput WasmEmit FnCtx
 
 -- What is true of the ONE function whose body is being emitted: the TMC loop
 -- or dispatch-group context its tail leaves redirect to, its first-clause site
@@ -760,23 +761,20 @@ freshFnCtx () = FnCtx {
 }
 
 progValNames : Prog -> List String
-progValNames (Prog _ _ vals _ _ _ _ _) = vals
+progValNames (Prog _ _ vals _ _ _ _ _ _) = vals
 
 progUseClos : Prog -> Bool
-progUseClos (Prog _ _ _ uc _ _ _ _) = uc
+progUseClos (Prog _ _ _ uc _ _ _ _ _) = uc
 
 -- W5: the lowered typeclass impl entries (CProgram's 4th field).
-progImpls : Prog -> List CImplEntry
-progImpls (Prog _ _ _ _ impls _ _ _) = impls
-
 progIndex : Prog -> WasmProgramIndex
-progIndex (Prog index _ _ _ _ _ _ _) = index
+progIndex (Prog index _ _ _ _ _ _ _ _) = index
 
 progEmit : Prog -> WasmEmit
-progEmit (Prog _ _ _ _ _ _ emit _) = emit
+progEmit (Prog _ _ _ _ _ _ _ emit _) = emit
 
 progFnCtx : Prog -> FnCtx
-progFnCtx (Prog _ _ _ _ _ _ _ fn) = fn
+progFnCtx (Prog _ _ _ _ _ _ _ _ fn) = fn
 
 -- [prog] for emitting the body of another function: no TMC loop, no dispatch
 -- group, no clause site; the binding name is inherited.
@@ -813,8 +811,8 @@ progWithDisp : WDispCtx -> Prog -> Prog
 progWithDisp ctx prog = progWithFnCtx prog { progFnCtx prog | disp = ctx }
 
 progWithFnCtx : Prog -> FnCtx -> Prog
-progWithFnCtx (Prog index types vals uc impls input emit _) fn =
-  Prog index types vals uc impls input emit fn
+progWithFnCtx (Prog index types vals uc impls implGroups input emit _) fn =
+  Prog index types vals uc impls implGroups input emit fn
 
 indexFnNamesW : WasmProgramIndex -> OrdMap Unit
 indexFnNamesW index = index.fnImpl.fnNames
@@ -1036,18 +1034,8 @@ fnMemberIndexW : OrdMap Unit -> String -> Bool
 fnMemberIndexW fnNames n = omHasKey n fnNames
 
 -- ── impl INDEX by method name (perf #382 — the #350/#349 twins) ───────────────
--- The `Prog` carries every impl clause as one flat `List CImplEntry` (`progImpls`),
--- and the emitter scans the WHOLE list per RKey/RDict dispatch site: `implForW`,
--- `methodImpls`,
--- `methodReturnsBoolW`, and the `emitImplFns`/`gatherImplGroup` group builder all do
--- `findByKeyArityW`/`flatMap implClauseFor`/`flatMap methodImplKey` over one method bucket.
--- EVERY one of those first filters by the METHOD name (`n == method`) — so restricting
--- the scan to just that method's entries yields the IDENTICAL first-match/flat-map
--- result, only faster.  Wasm inlines a dispatch chain PER call site (llvm outlines one
--- dispatcher), so these per-site scans multiply → O(sites · impls) on dispatch-heavy
--- code (#382). The private immutable index groups the entries by method name once per
--- invocation into per-method lists in ORIGINAL ORDER, so a multi-clause impl's first
--- clause still wins findByKeyArityW. Every per-method scan below routes through it.
+-- Dispatch scans use the per-method index, preserving input order within each
+-- bucket. The separate plan partition supplies the emitted physical groups.
 -- method name of an impl entry (field 1 — the interface method it implements).
 implEntryMethod : CImplEntry -> String
 implEntryMethod (CImplEntry n _ _ _) = n
@@ -1161,7 +1149,7 @@ foldImplsByMethodW (e :: rest) m =
   foldImplsByMethodW rest (omInsert k (e :: orEmptyEntriesW (omLookup k m)) m)
 
 -- [method]'s impl entries from this Prog's immutable bucket, in original order.
--- Every whole-`progImpls` per-site scan routes through this lookup.
+-- Dispatch sites read their method bucket through this lookup.
 methodEntriesW : Prog -> String -> List CImplEntry
 methodEntriesW prog method =
   orEmptyEntriesW (omLookup method (indexImplsByMethodW (progIndex prog)))
@@ -1792,7 +1780,16 @@ emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _
   let useRef = physical.useRef
   let typeNames = plan.constructorFacts.typeOrder
   let prog =
-    Prog index typeNames valNames useClos impls input emit (freshFnCtx ())
+    Prog
+      index
+      typeNames
+      valNames
+      useClos
+      impls
+      (resolveImplGroupsW impls plan.implGroups)
+      input
+      emit
+      (freshFnCtx ())
   emitRefProgram prog plan groups
 
 -- ── emit-time closure check (#392) ──────────────────────────────────────────
@@ -1981,9 +1978,18 @@ emitProgramGaps input plan cp0 =
   -- force the ref path: the census measures the full (ref eq) emitter surface.
   let typeNames = plan.constructorFacts.typeOrder
   let prog =
-    Prog index typeNames valNames useClos impls input emit (freshFnCtx ())
+    Prog
+      index
+      typeNames
+      valNames
+      useClos
+      impls
+      (resolveImplGroupsW impls plan.implGroups)
+      input
+      emit
+      (freshFnCtx ())
   let _ = emitFnsGapsW prog (userFnBinds groups)
-  let _ = emitImplsGapsW prog (implGroups prog impls)
+  let _ = emitImplsGapsW prog (progImplGroups prog)
   let _ = emitValsGapsW prog (filterList isValBind groups)
   match symbolDefectsW emit
     [] => Ok (gapEventsOfW emit)
@@ -2747,7 +2753,7 @@ tupleTypeDecl n =
 -- with their ctor list.  Reserved types are handled separately so they are never
 -- double-declared.
 userTypesWithCtors : Prog -> List String
-userTypesWithCtors (Prog _ typeNames _ _ _ _ _ _) =
+userTypesWithCtors (Prog _ typeNames _ _ _ _ _ _ _) =
   filterList (t => not (isReservedType t)) typeNames
 
 -- per-type: a root struct (just the i32 tag) + one struct per PAYLOAD ctor (tag +
@@ -4511,27 +4517,13 @@ implEntrySymW method (CImplEntry _ _ _ (CImplDefault _ _ _ (ImplSym _ ifaceTag k
 implFnSymOfTag : String -> String -> String
 implFnSymOfTag symTag method = WN.wasmName (WN.WImplMethod symTag method)
 
--- the head tycon of the impl whose canonical key is [key] (mirror of llvm_emit's
--- headTagForKey) — the group's dispatch/self/Float tag, distinct from its symbol tag.
-headTagForKeyW : String -> String -> List CImplEntry -> String
-headTagForKeyW method key entries = match firstEntryForKeyW method key entries
-  Some ent => implEntryTagW ent
-  None => ""
-
-firstEntryForKeyW : String -> String -> List CImplEntry -> Option CImplEntry
-firstEntryForKeyW _ _ [] = None
-firstEntryForKeyW method key (ent :: rest)
-  | implEntryMethodW ent == method && implEntryKeyW ent == key = Some ent
-  | otherwise = firstEntryForKeyW method key rest
-
 -- ── §W5 impl-function emission ───────────────────────────────────────────────
 -- Coalesce the CImplEntry list (one entry per clause) by (method, symTag) into
 -- per-impl clause groups, then emit each as a wasm function $mdk_impl_<tag>_<m>
 -- via the SAME clause machinery top-level fns use (emitClausesRef).  Multi-clause
 -- impls (`eq Red Red = …; eq _ _ = …`) coalesce into a fall-through chain.
 emitImplFns : Prog -> List String
-emitImplFns prog =
-  flatMap (emitImplGroup prog) (implGroups prog (progImpls prog))
+emitImplFns prog = flatMap (emitImplGroup prog) (progImplGroups prog)
 
 -- (method, tag, arity, clauses) per distinct impl key, in first-seen order.
 -- (method, headTag, key, arity, clauses) per distinct canonical impl key.  #324:
@@ -4541,83 +4533,47 @@ emitImplFns prog =
 -- (a sole impl's symbol tag is its head tag), so existing output is byte-identical.
 data ImplG = ImplG String String String Int (List CClause) String
 
-implGroups : Prog -> List CImplEntry -> List ImplG
-implGroups prog entries =
-  mapGatherGroups prog entries (distinctImplKeys entries)
+progImplGroups : Prog -> List ImplG
+progImplGroups (Prog _ _ _ _ _ groups _ _ _) = groups
 
--- map gatherImplGroup (an effectful fn — it reads the iface-arity table) over the keys.
-mapGatherGroups : Prog -> List CImplEntry -> List (String, String) -> List ImplG
-mapGatherGroups _ _ [] = []
-mapGatherGroups prog entries (k :: rest) =
-  let g = gatherImplGroup prog entries k
-  g :: mapGatherGroups prog entries rest
+indexImplGroupEntriesW : List CImplEntry ->
+  Int ->
+  OrdMap CImplEntry ->
+  OrdMap CImplEntry
+indexImplGroupEntriesW [] _ acc = acc
+indexImplGroupEntriesW (entry :: rest) i acc =
+  indexImplGroupEntriesW rest (i + 1) (omInsert (intToString i) entry acc)
 
--- the (method, canonical-key) groups present, first-seen order.  #324: key on the
--- CANONICAL KEY (field 2), not the head tycon — so two overlapping same-head impls
--- (`Default (Box a)` / `Default (Box Int)`, both head `Box`) form DISTINCT groups
--- and get distinct $mdk_impl_* functions, instead of collapsing into one.  For a sole
--- impl per head the key↔head map is 1:1, so the group set (and its emit order) is
--- unchanged from the old head-keyed form.
-distinctImplKeys : List CImplEntry -> List (String, String)
-distinctImplKeys entries = dedupPairs (flatMap implKeyOf entries) []
+resolveImplGroupsW : List CImplEntry -> List ImplClauseGroup -> List ImplG
+resolveImplGroupsW entries groups =
+  let index = indexImplGroupEntriesW entries 0 omEmpty
+  map (resolveImplGroupW index) groups
 
-implKeyOf : CImplEntry -> List (String, String)
-implKeyOf ent = [(implEntryMethodW ent, implEntryKeyW ent)]
-
--- dedup a (method, tag) key list, first-seen order (dedupKeep is String-only).  perf
--- #382: the old `containsPair p acc` was O(kept) per element ⇒ O(k²) — quadratic in
--- distinct impl keys, run once per program by `distinctImplKeys` and once per RDict site
--- by `methodImpls`.  An OrdMap seen-set makes membership O(log k); `acc` still carries
--- the reversed first-seen order (identical output), and `seen` is seeded from the initial
--- `acc` so the 2-arg contract is preserved for any caller.  `pairKey` joins on a SPACE:
--- the method (field 1) is always a bare identifier — space-free — so `m ++ " " ++ tag` is
--- injective (the first space delimits method from tag), i.e. two distinct pairs never
--- collide on a key.
-dedupPairs : List (String, String) ->
-  List (String, String) ->
-  List (String, String)
-dedupPairs pairs acc = dedupPairsGo pairs (seedPairSeen acc omEmpty) acc
-
-pairKey : (String, String) -> String
-pairKey (a, b) = "\{a} \{b}"
-
-seedPairSeen : List (String, String) -> OrdMap Unit -> OrdMap Unit
-seedPairSeen [] m = m
-seedPairSeen (p :: rest) m = seedPairSeen rest (omInsert (pairKey p) () m)
-
-dedupPairsGo : List (String, String) ->
-  OrdMap Unit ->
-  List (String, String) ->
-  List (String, String)
-dedupPairsGo [] _ acc = reverseL acc
-dedupPairsGo (p :: rest) seen acc =
-  let k = pairKey p
-  if omHasKey k seen then
-    dedupPairsGo rest seen acc
-  else
-    dedupPairsGo rest (omInsert k () seen) (p :: acc)
-
-gatherImplGroup : Prog -> List CImplEntry -> (String, String) -> ImplG
-gatherImplGroup prog entries (m, key) =
-  let mEntries = methodEntriesW prog m
-  let headTag = headTagForKeyW m key mEntries
-  let clauses = flatMap (implClauseFor m key) mEntries
-  -- the define takes exactly its clauses' parameters: a call site's mode was read
-  -- against that same count, so nothing here may lengthen a clause
-  let fnName = match firstEntryForKeyW m key mEntries
-    Some ent => implEntrySymW m ent
-    None => panic "wasm: impl group without an entry (internal error)"
-  ImplG m headTag key (implGroupArity clauses) clauses fnName
-
--- the clauses of (method, key): the def-side grouping passes a canonical key, which
--- selects exactly one impl's clauses even when it shares a head with an overlapping
--- sibling (#324).
-implClauseFor : String -> String -> CImplEntry -> List CClause
-implClauseFor m tag ent =
-  if implEntryMethodW ent == m && implEntryAnswersW tag ent then
-    [CClause (implEntryPatsW ent) (implBodyExprW (implEntryBodyW ent))]
-  else
-    []
+resolveImplGroupW : OrdMap CImplEntry -> ImplClauseGroup -> ImplG
+resolveImplGroupW index group =
+  let entries =
+    map
+      (i => match omLookup (intToString i) index
+        Some entry => entry
+        None => panic "wasm: invalid impl group ordinal")
+      group.indices
+  match entries
+    ent :: _ =>
+      let clauses =
+        map
+          (entry =>
+            CClause
+              (implEntryPatsW entry)
+              (implBodyExprW (implEntryBodyW entry)))
+          entries
+      ImplG
+        group.method
+        (implEntryTagW ent)
+        group.key
+        (implGroupArity clauses)
+        clauses
+        (implEntrySymW group.method ent)
+    [] => panic "wasm: empty impl group"
 
 implBodyExprW : CImplBody -> CExpr
 implBodyExprW (CImplTagged _ _ _ _ _ _ e) = e
