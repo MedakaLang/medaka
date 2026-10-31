@@ -138,8 +138,9 @@ preludeReturnPosDictNames : List Decl -> List Decl -> List String
 publicModuleExports : List Decl -> ModuleBindings -> List (String, ExportBinding)
 publishOwn : ModuleCtx -> List (String, Scheme) -> List (String, PubScheme)
 reexportSeed : List (String, a) -> List Decl -> List (String, List (String, a)) -> List (String, a)
+reexportSeedOf : List (String, a) -> List (String, List (String, a)) -> UsePath -> List (String, a)
 reexportedMethodNames : List (String, List String) -> List Decl -> List String
-reexportedMethodsOf : List (String, List String) -> Decl -> List String
+reexportedMethodsOf : List (String, List String) -> UsePath -> List String
 renameAliasedMethods : List Decl -> List (String, List Decl) -> (Map String (List (String, String)), List (String, List Decl))
 renameAliasedMethodsIn : List (String, List String) -> (String, List Decl) -> (String, List Decl)
 renameMethodVar : List (String, String) -> List (String, String) -> Expr -> Expr

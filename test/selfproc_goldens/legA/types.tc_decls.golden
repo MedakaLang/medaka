@@ -139,7 +139,6 @@ paramRowAtomsFor : GraphCtx -> String -> List String -> List EffAtomTy -> List (
 paramRowAtomsOf : ModuleCtx -> TabKey -> Option (List (List Atom))
 pickNumLitRow : IfaceRef -> String -> List MethodSchemeRow -> Option MethodSchemeRow
 pubTopFnNames : List Decl -> List String
-publicStandaloneNames : List Decl -> List String
 recordCtors : GraphCtx -> TyConOrigin -> String -> DataVis -> List String -> List Variant -> Unit
 recordDeclKinds : ModuleCtx -> Decl -> Unit
 recordDeclParamKinds : ModuleCtx -> Decl -> Unit
@@ -149,8 +148,9 @@ recordParamKinds : ModuleCtx -> TyConOrigin -> String -> List Kind -> Unit
 recordParamRowAtoms : ModuleCtx -> TyConOrigin -> String -> List (List Atom) -> Unit
 reexportCtorMember : UseMember -> List (String, String, Ident) -> List (String, String, Ident)
 reexportDefiners : Map String (List (String, (String, String))) -> List Decl -> List (String, (String, String))
+reexportDefinersOf : Map String (List (String, (String, String))) -> UsePath -> List (String, (String, String))
 reexportedCtorIdents : Map String (List (String, String, Ident)) -> List Decl -> List (String, String, Ident)
-reexportedCtorIdentsOf : Map String (List (String, String, Ident)) -> Decl -> List (String, String, Ident)
+reexportedCtorIdentsOf : Map String (List (String, String, Ident)) -> UsePath -> List (String, String, Ident)
 registerAllData : TcEnv -> List Decl -> TcEnv
 registerAllDataGo : TcEnv -> List Decl -> TcEnv
 registerAllDataScoped : TcEnv -> List Decl -> List Decl -> TcEnv

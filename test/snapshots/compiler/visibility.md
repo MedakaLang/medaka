@@ -1,5 +1,5 @@
 # META
-source_lines=951
+source_lines=982
 stages=DESUGAR,MARK
 # SOURCE
 -- A module's export surface, built from its declarations and the surfaces of
@@ -9,6 +9,10 @@ stages=DESUGAR,MARK
 -- computes it from the module's own decls plus the surfaces of the modules its
 -- `export import`s name, and `coreExports` builds the prelude's.  This module
 -- imports no resolver state: `frontend.resolve` imports it, never the reverse.
+--
+-- The typechecker reads the same facets through `directIn` (decl lists),
+-- `declExportsIn`/`declExportsCtors` (one decl) and `exportedValueNames`.  The
+-- one-decl predicates do not unwrap `DAttrib`; the list readers do.
 
 import frontend.ast.{
   variantName,
@@ -44,6 +48,7 @@ import support.util.{
   filterList,
   dedup,
   isEmptyL,
+  isNonEmptyL,
   selfBinding,
 }
 
@@ -461,6 +466,7 @@ nsTypes = ExpNs {
 -- whose constructors exist but are withheld.  Carriage mirrors `nsTypes`:
 -- abstractness travels with the type name through an `export import` facade,
 -- so a facade's consumer gets the same answer the defining module would give.
+export
 nsAbstractData : ExpNs String
 nsAbstractData = ExpNs {
   nsGet = exp => exp.expAbstractData,
@@ -551,6 +557,7 @@ nsInterfaces = ExpNs {
         (reexportOrigins path src),
 }
 
+export
 nsIfaceMethods : ExpNs (String, List String)
 nsIfaceMethods = ExpNs {
   nsGet = exp => exp.expIfaceMethods,
@@ -736,6 +743,30 @@ exportsIn ns exp = ns.nsGet exp
 export
 directIn : ExpNs a -> List Decl -> List a
 directIn ns prog = scanDecls ns.nsDirectOf prog
+
+-- Does this ONE decl declare something in namespace `ns`?  The decl is read
+-- raw: `DAttrib` is not unwrapped, so an `@attr`-wrapped decl answers False.
+-- Use `directIn` on a decl list when the wrapper must be looked through.
+export
+declExportsIn : ExpNs a -> Decl -> Bool
+declExportsIn ns d = isNonEmptyL (ns.nsDirectOf d)
+
+-- Does this decl export constructors that `T(..)` binds?  A `newtype`'s
+-- constructor is always module-private, so `DNewtype` is False.  Raw decl,
+-- as for `declExportsIn`.
+export
+declExportsCtors : Decl -> Bool
+declExportsCtors d =
+  declExportsIn nsTypeCtors d && not (declExportsIn nsNewtypeCtors d)
+
+-- The exported value names of a module's own decls: direct values plus the
+-- methods of every exported interface, in decl order, `DAttrib` looked through.
+export
+exportedValueNames : List Decl -> List String
+exportedValueNames prog =
+  scanDecls
+    (d => nsValues.nsDirectOf d ++ flatMap snd (nsIfaceMethods.nsDirectOf d))
+    prog
 
 scanDecls : (Decl -> List a) -> List Decl -> List a
 scanDecls _ [] = []
@@ -957,7 +988,7 @@ overPubUse coreExp known f path =
 (DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "Loc" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true))))
 (DUse false (UseGroup ("list") ((mem "head" false) (mem "last" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "dedup" false) (mem "isEmptyL" false) (mem "selfBinding" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "dedup" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "selfBinding" false))))
 (DTypeSig true "ifaceMethodsOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ifaceMethodsOf" (PWild (PList)) (EListLit))
 (DFunDef false "ifaceMethodsOf" ((PVar "iface") (PCons (PTuple (PVar "i") (PVar "ms")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EVar "ms") (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceMethodsOf") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -1055,7 +1086,7 @@ overPubUse coreExp known f path =
 (DFunDef false "nsValues" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expValues"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) () (EListLit (EVar "n"))) (arm (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PCon "True")) (rf "edName" (PVar "n"))) true)) () (EListLit (EVar "n"))) (arm (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild PWild PWild) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "carriedValuesFrom") (EVar "src")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
 (DTypeSig true "nsTypes" (TyApp (TyCon "ExpNs") (TyCon "String")))
 (DFunDef false "nsTypes" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expTypes"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True")) (rf "tyAliasName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "localsExportedFrom") (EFieldAccess (EVar "src") "expTypes")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
-(DTypeSig false "nsAbstractData" (TyApp (TyCon "ExpNs") (TyCon "String")))
+(DTypeSig true "nsAbstractData" (TyApp (TyCon "ExpNs") (TyCon "String")))
 (DFunDef false "nsAbstractData" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expAbstractData"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "localsExportedFrom") (EFieldAccess (EVar "src") "expAbstractData")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
 (DTypeSig true "nsCtors" (TyApp (TyCon "ExpNs") (TyCon "String")))
 (DFunDef false "nsCtors" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expCtors"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeCtor" (PVar "con"))) false) () (EListLit (EVar "con"))) (arm (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataCtors" (PVar "vs"))) false) () (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "vs"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "localsExportedFrom") (EFieldAccess (EVar "src") "expCtors")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
@@ -1065,7 +1096,7 @@ overPubUse coreExp known f path =
 (DFunDef false "nsFieldOwners" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expFieldOwners"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataCtors" (PVar "vs"))) false) () (EApp (EApp (EVar "flatMap") (EVar "variantFieldOwners")) (EVar "vs"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "ownersForTypes") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterInSet") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EFieldAccess (EVar "src") "expTypes") (EFieldAccess (EVar "src") "expCtors"))) (EVar "omEmpty"))) (EApp (EApp (EVar "reexportOrigins") (EVar "path")) (EVar "src")))) (EVar "omEmpty"))) (EFieldAccess (EVar "src") "expFieldOwners")))))))
 (DTypeSig true "nsInterfaces" (TyApp (TyCon "ExpNs") (TyCon "String")))
 (DFunDef false "nsInterfaces" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expInterfaces"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DInterface" ((rf "pub" (PCon "True")) (rf "name" (PVar "n"))) true) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "filterInSet") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "src") "expInterfaces")) (EVar "omEmpty"))) (EApp (EApp (EVar "reexportOrigins") (EVar "path")) (EVar "src"))))))))
-(DTypeSig false "nsIfaceMethods" (TyApp (TyCon "ExpNs") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig true "nsIfaceMethods" (TyApp (TyCon "ExpNs") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "nsIfaceMethods" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expIfaceMethods"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DInterface" ((rf "pub" (PCon "True")) (rf "name" (PVar "n")) (rf "methods" None)) true) () (EListLit (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "ifaceMethodNm")) (EVar "methods"))))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "ifaceMethodPairs") (EVar "src")) (EApp (EApp (EVar "filterInSet") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "src") "expInterfaces")) (EVar "omEmpty"))) (EApp (EApp (EVar "reexportOrigins") (EVar "path")) (EVar "src")))))))))
 (DTypeSig true "nsIfaceOrigins" (TyApp (TyCon "ExpNs") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "nsIfaceOrigins" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expIfaceOrigins"))) (fa "nsDirectOf" (ELam (PWild) (EListLit))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EApp (EVar "carriedOriginsFrom") (EVar "path")) (EVar "src")) (EFieldAccess (EVar "src") "expIfaceOrigins")))))))
@@ -1100,6 +1131,12 @@ overPubUse coreExp known f path =
 (DFunDef false "exportsIn" ((PVar "ns") (PVar "exp")) (EApp (EFieldAccess (EVar "ns") "nsGet") (EVar "exp")))
 (DTypeSig true "directIn" (TyFun (TyApp (TyCon "ExpNs") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "directIn" ((PVar "ns") (PVar "prog")) (EApp (EApp (EVar "scanDecls") (EFieldAccess (EVar "ns") "nsDirectOf")) (EVar "prog")))
+(DTypeSig true "declExportsIn" (TyFun (TyApp (TyCon "ExpNs") (TyVar "a")) (TyFun (TyCon "Decl") (TyCon "Bool"))))
+(DFunDef false "declExportsIn" ((PVar "ns") (PVar "d")) (EApp (EVar "isNonEmptyL") (EApp (EFieldAccess (EVar "ns") "nsDirectOf") (EVar "d"))))
+(DTypeSig true "declExportsCtors" (TyFun (TyCon "Decl") (TyCon "Bool")))
+(DFunDef false "declExportsCtors" ((PVar "d")) (EBinOp "&&" (EApp (EApp (EVar "declExportsIn") (EVar "nsTypeCtors")) (EVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "declExportsIn") (EVar "nsNewtypeCtors")) (EVar "d")))))
+(DTypeSig true "exportedValueNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "exportedValueNames" ((PVar "prog")) (EApp (EApp (EVar "scanDecls") (ELam ((PVar "d")) (EBinOp "++" (EApp (EFieldAccess (EVar "nsValues") "nsDirectOf") (EVar "d")) (EApp (EApp (EVar "flatMap") (EVar "snd")) (EApp (EFieldAccess (EVar "nsIfaceMethods") "nsDirectOf") (EVar "d")))))) (EVar "prog")))
 (DTypeSig false "scanDecls" (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "scanDecls" (PWild (PList)) (EListLit))
 (DFunDef false "scanDecls" ((PVar "f") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "scanDecls") (EVar "f")) (EBinOp "::" (EVar "d") (EVar "rest"))))
@@ -1145,7 +1182,7 @@ overPubUse coreExp known f path =
 (DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "Loc" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true))))
 (DUse false (UseGroup ("list") ((mem "head" false) (mem "last" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "dedup" false) (mem "isEmptyL" false) (mem "selfBinding" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "dedup" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "selfBinding" false))))
 (DTypeSig true "ifaceMethodsOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ifaceMethodsOf" (PWild (PList)) (EListLit))
 (DFunDef false "ifaceMethodsOf" ((PVar "iface") (PCons (PTuple (PVar "i") (PVar "ms")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EVar "ms") (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceMethodsOf") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -1243,7 +1280,7 @@ overPubUse coreExp known f path =
 (DFunDef false "nsValues" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expValues"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) () (EListLit (EVar "n"))) (arm (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PCon "True")) (rf "edName" (PVar "n"))) true)) () (EListLit (EVar "n"))) (arm (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild PWild PWild) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "carriedValuesFrom") (EVar "src")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
 (DTypeSig true "nsTypes" (TyApp (TyCon "ExpNs") (TyCon "String")))
 (DFunDef false "nsTypes" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expTypes"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True")) (rf "tyAliasName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "localsExportedFrom") (EFieldAccess (EVar "src") "expTypes")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
-(DTypeSig false "nsAbstractData" (TyApp (TyCon "ExpNs") (TyCon "String")))
+(DTypeSig true "nsAbstractData" (TyApp (TyCon "ExpNs") (TyCon "String")))
 (DFunDef false "nsAbstractData" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expAbstractData"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "localsExportedFrom") (EFieldAccess (EVar "src") "expAbstractData")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
 (DTypeSig true "nsCtors" (TyApp (TyCon "ExpNs") (TyCon "String")))
 (DFunDef false "nsCtors" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expCtors"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeCtor" (PVar "con"))) false) () (EListLit (EVar "con"))) (arm (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataCtors" (PVar "vs"))) false) () (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "vs"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "localsExportedFrom") (EFieldAccess (EVar "src") "expCtors")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
@@ -1253,7 +1290,7 @@ overPubUse coreExp known f path =
 (DFunDef false "nsFieldOwners" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expFieldOwners"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataCtors" (PVar "vs"))) false) () (EApp (EApp (EDictApp "flatMap") (EVar "variantFieldOwners")) (EVar "vs"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "ownersForTypes") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterInSet") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EFieldAccess (EVar "src") "expTypes") (EFieldAccess (EVar "src") "expCtors"))) (EVar "omEmpty"))) (EApp (EApp (EVar "reexportOrigins") (EVar "path")) (EVar "src")))) (EVar "omEmpty"))) (EFieldAccess (EVar "src") "expFieldOwners")))))))
 (DTypeSig true "nsInterfaces" (TyApp (TyCon "ExpNs") (TyCon "String")))
 (DFunDef false "nsInterfaces" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expInterfaces"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DInterface" ((rf "pub" (PCon "True")) (rf "name" (PVar "n"))) true) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "filterInSet") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "src") "expInterfaces")) (EVar "omEmpty"))) (EApp (EApp (EVar "reexportOrigins") (EVar "path")) (EVar "src"))))))))
-(DTypeSig false "nsIfaceMethods" (TyApp (TyCon "ExpNs") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig true "nsIfaceMethods" (TyApp (TyCon "ExpNs") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "nsIfaceMethods" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expIfaceMethods"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DInterface" ((rf "pub" (PCon "True")) (rf "name" (PVar "n")) (rf "methods" None)) true) () (EListLit (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodNm")) (EVar "methods"))))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "ifaceMethodPairs") (EVar "src")) (EApp (EApp (EVar "filterInSet") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "src") "expInterfaces")) (EVar "omEmpty"))) (EApp (EApp (EVar "reexportOrigins") (EVar "path")) (EVar "src")))))))))
 (DTypeSig true "nsIfaceOrigins" (TyApp (TyCon "ExpNs") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "nsIfaceOrigins" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expIfaceOrigins"))) (fa "nsDirectOf" (ELam (PWild) (EListLit))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EApp (EVar "carriedOriginsFrom") (EVar "path")) (EVar "src")) (EFieldAccess (EVar "src") "expIfaceOrigins")))))))
@@ -1288,6 +1325,12 @@ overPubUse coreExp known f path =
 (DFunDef false "exportsIn" ((PVar "ns") (PVar "exp")) (EApp (EFieldAccess (EVar "ns") "nsGet") (EVar "exp")))
 (DTypeSig true "directIn" (TyFun (TyApp (TyCon "ExpNs") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "directIn" ((PVar "ns") (PVar "prog")) (EApp (EApp (EVar "scanDecls") (EFieldAccess (EVar "ns") "nsDirectOf")) (EVar "prog")))
+(DTypeSig true "declExportsIn" (TyFun (TyApp (TyCon "ExpNs") (TyVar "a")) (TyFun (TyCon "Decl") (TyCon "Bool"))))
+(DFunDef false "declExportsIn" ((PVar "ns") (PVar "d")) (EApp (EVar "isNonEmptyL") (EApp (EFieldAccess (EVar "ns") "nsDirectOf") (EVar "d"))))
+(DTypeSig true "declExportsCtors" (TyFun (TyCon "Decl") (TyCon "Bool")))
+(DFunDef false "declExportsCtors" ((PVar "d")) (EBinOp "&&" (EApp (EApp (EVar "declExportsIn") (EVar "nsTypeCtors")) (EVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "declExportsIn") (EVar "nsNewtypeCtors")) (EVar "d")))))
+(DTypeSig true "exportedValueNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "exportedValueNames" ((PVar "prog")) (EApp (EApp (EVar "scanDecls") (ELam ((PVar "d")) (EBinOp "++" (EApp (EFieldAccess (EVar "nsValues") "nsDirectOf") (EVar "d")) (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EApp (EFieldAccess (EVar "nsIfaceMethods") "nsDirectOf") (EVar "d")))))) (EVar "prog")))
 (DTypeSig false "scanDecls" (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "scanDecls" (PWild (PList)) (EListLit))
 (DFunDef false "scanDecls" ((PVar "f") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "scanDecls") (EVar "f")) (EBinOp "::" (EVar "d") (EVar "rest"))))

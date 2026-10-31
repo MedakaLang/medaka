@@ -3589,7 +3589,7 @@ public export data PassMethod = PassMethod String Route (List Route)
 -- four (the miss would otherwise be path-specific — LSP-only or emit-only).  It
 -- owns: the IMPORT-SCOPED seed (`baseSeed ++ importSeed prog depEnv` — a flat
 -- union let `string.reverse` shadow the `list.reverse` a module imports), the
--- per-module PUBLIC accumulator (`pubV = pickSchemes (publicValNames prog) schemes
+-- per-module PUBLIC accumulator (`pubV = pickSchemes (exportedValueNames prog) schemes
 -- ++ reexportSeed coreV prog depEnv`), and the DEPENDENCY-FIRST threading of
 -- depEnv (PREPEND `(mid,pubV)::depEnv`, so importSeed's first-match picks the
 -- nearest dependency), accData (`++ publicDataDecls prog`) and accAll (`++ prog`,

@@ -446,7 +446,7 @@ import types.tc_infer_records.{recordFieldNames}
 import types.invocation_basis.{recordInvocationView}
 import types.tc_decls_variance.{seedParamPolarityFixpointScoped}
 import support.scc.{tarjanSCCs}
-import frontend.visibility.{useModId}
+import frontend.visibility.{useModId, pubUsePaths, exportedValueNames}
 import map as IdMap
 import types.effect_solver as EffectSolver
 import types.scopes as Scopes
@@ -1561,7 +1561,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
       sigs
       defs
       (groupNames defs omEmpty)
-      (namesToSet (publicValNames prog) omEmpty)
+      (namesToSet (exportedValueNames prog) omEmpty)
   recordTopBinderTypes gctx (omFromPairs topSchemes omEmpty) progS
   -- The tail bodies (impl, default, prop and test bodies) see the top-level
   -- bindings as the binding groups do (`processTopGroups`' result env): each
@@ -2739,23 +2739,6 @@ checkModuleFullImpl gctx runSeed mid seedVars _accData implDecls prog =
   enqueueStampCtx mctx mid implDecls
   (schemes, marked, mctx)
 
--- public top-level value names (the pub flag may sit on the sig, def, or extern).
--- C8(a): a PUBLIC interface ALSO exports its method names so an importer can see
--- their schemes — methods of an `export interface` are appended to the exported value
--- schemes.
-export
-publicValNames : List Decl -> List String
-publicValNames [] = []
-publicValNames ((DAttrib _ d) :: rest) =
-  publicValNames [d] ++ publicValNames rest
-publicValNames ((DFunDef True n _ _ _ _) :: rest) = n :: publicValNames rest
-publicValNames ((DTypeSig True n _ _) :: rest) = n :: publicValNames rest
-publicValNames ((DExtern (ExternDecl { edPub = True, edName = n, ... })) :: rest) =
-  n :: publicValNames rest
-publicValNames ((DInterface { pub = True, methods, ... }) :: rest) =
-  ifaceMethodNames methods ++ publicValNames rest
-publicValNames (_ :: rest) = publicValNames rest
-
 -- Impl-completeness is not part of this fold: it reads stage K's `CE`, whose rows carry
 -- their declaring module's ordinal, and `declEnvVisibleAt cur o` (`o <= cur`) admits the
 -- reader's OWN row.  The ordering guarantee of this fold, which `checkBodyImpl`'s Module
@@ -3814,7 +3797,7 @@ attributeModuleSchemeObls : String ->
 attributeModuleSchemeObls mid prog qual entries =
   attributeSchemeOblsGo
       mid
-      (namesToSet (publicValNames prog) omEmpty)
+      (namesToSet (exportedValueNames prog) omEmpty)
       omEmpty
       entries
     ++ map (e => ((mid, fst e), snd e)) (reexportSchemeOblEntries prog qual)
@@ -3829,13 +3812,10 @@ attributeModuleSchemeObls mid prog qual entries =
 reexportSchemeOblEntries : List Decl ->
   List ((String, String), List VecObl) ->
   List (String, List VecObl)
-reexportSchemeOblEntries [] _ = []
-reexportSchemeOblEntries ((DAttrib _ d) :: rest) qual =
-  reexportSchemeOblEntries [d] qual ++ reexportSchemeOblEntries rest qual
-reexportSchemeOblEntries ((DUse True path _) :: rest) qual =
-  schemeOblEntriesFor (useModId path) path qual
-    ++ reexportSchemeOblEntries rest qual
-reexportSchemeOblEntries (_ :: rest) qual = reexportSchemeOblEntries rest qual
+reexportSchemeOblEntries prog qual =
+  flatMap
+    (path => schemeOblEntriesFor (useModId path) path qual)
+    (pubUsePaths prog)
 
 attributeSchemeOblsGo : String ->
   OrdMap Unit ->

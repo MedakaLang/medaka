@@ -21,6 +21,7 @@ import types.tc_types.{
 import types.tc_mono.{tyAppSpine}
 import types.tc_env.{declEnvVisibleTo, padAnns, tyTabKey}
 import types.tc_unify.{polarityAt}
+import frontend.visibility.{declExportsIn, nsTypes}
 import frontend.ast.{
   ConPayload(..),
   DataVis(..),
@@ -105,12 +106,7 @@ declEnvRowPolarityEntries cur m tab
   | otherwise = []
 
 -- The OUTPUT half of that split: keep only the entries whose declaration
--- this row actually exports.  The predicate is `kindPublicDataDecl`'s reading
--- of publicity plus the `DTypeAlias` arm `declEnvPolarityEntries` records
--- (#2108) — a peer projection rather than a widening of `kindPublicDataDecl`
--- itself, because that predicate has readers (`declEnvKindEntries`,
--- `declEnvSeedChain`) with no alias arm at all, and adding one there would
--- move an acceptance table.
+-- this row actually exports (`polarityPublicKeys`).
 polarityEntriesPublicOnly : List Decl ->
   List (TabKey, List Polarity) ->
   List (TabKey, List Polarity)
@@ -119,21 +115,21 @@ polarityEntriesPublicOnly decls entries =
   let index = tabKeyIndex keys
   filterList (e => tabKeyIndexHas index (fst e)) entries
 
--- The keys of [decls] that leave the module.  Arm for arm with
--- `kindPublicDataDecl`, plus `DTypeAlias`; `DAttrib` unwraps as everywhere else
--- in this file.
+-- The keys of [decls] that leave the module: `declExportsIn nsTypes`, `DAttrib` unwrapped.
 polarityPublicKeys : List Decl -> List TabKey
 polarityPublicKeys [] = []
 polarityPublicKeys ((DAttrib _ d) :: rest) = polarityPublicKeys (d :: rest)
-polarityPublicKeys ((DData { dataVis = VisPublic, dataName = n, dataOrigin = o }) :: rest) =
-  tyTabKey o n :: polarityPublicKeys rest
-polarityPublicKeys ((DData { dataVis = VisAbstract, dataName = n, dataOrigin = o }) :: rest) =
-  tyTabKey o n :: polarityPublicKeys rest
-polarityPublicKeys ((DNewtype { newtypePub = True, newtypeName = n, newtypeOrigin = o }) :: rest) =
-  tyTabKey o n :: polarityPublicKeys rest
-polarityPublicKeys ((DTypeAlias { tyAliasPub = True, tyAliasName = n, tyAliasOrigin = o }) :: rest) =
-  tyTabKey o n :: polarityPublicKeys rest
-polarityPublicKeys (_ :: rest) = polarityPublicKeys rest
+polarityPublicKeys (d :: rest) =
+  (if declExportsIn nsTypes d then typeDeclKeys d else [])
+    ++ polarityPublicKeys rest
+
+typeDeclKeys : Decl -> List TabKey
+typeDeclKeys (DData { dataName = n, dataOrigin = o, ... }) = [tyTabKey o n]
+typeDeclKeys (DNewtype { newtypeName = n, newtypeOrigin = o, ... }) =
+  [tyTabKey o n]
+typeDeclKeys (DTypeAlias { tyAliasName = n, tyAliasOrigin = o, ... }) =
+  [tyTabKey o n]
+typeDeclKeys _ = []
 
 -- Membership index over a `TabKey` list, bucketed by the bare name: the probe
 -- reads the name already stored in the key (no rendering, no allocation), and

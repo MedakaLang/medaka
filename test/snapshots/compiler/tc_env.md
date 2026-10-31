@@ -1,5 +1,5 @@
 # META
-source_lines=4501
+source_lines=4500
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -110,7 +110,14 @@ import types.tc_types.{
   dynFor,
   MethodEntry,
 }
-import frontend.visibility.{useModId}
+import frontend.visibility.{
+  useModId,
+  pubUsePaths,
+  declExportsIn,
+  declExportsCtors,
+  nsInterfaces,
+  nsTypes,
+}
 import support.ordmap.{
   omEmpty, omFromNames, omHasKey, omInsert, omLookup, omSize, OrdMap
 }
@@ -3077,9 +3084,8 @@ ifaceMethodNames ((IfaceMethod n _ _ _) :: rest) = n :: ifaceMethodNames rest
 -- DImpl entries are inert for them.
 -- A-3.2b (#1512): the PREDICATE half, split out so `declEnvVisibleTo`'s publicity
 -- conjunct and this filter cannot drift.  The ruling on #1512 requires the flag be
--- `publicDataDecls`' predicate VERBATIM, `DNewtype`'s absence included; the way to
--- guarantee "verbatim" is not to copy it but to make `publicDataDecls` itself the
--- filter over this one function, which is what the two lines below do.
+-- `publicDataDecls`' predicate VERBATIM, `DNewtype`'s absence included, so
+-- `publicDataDecls` is itself the filter over this one function.
 --
 -- `DNewtype`'s absence is deliberate, not an oversight to be tidied up: a newtype
 -- constructor is module-private by design (`public` is a parse error on `newtype`),
@@ -3090,11 +3096,14 @@ ifaceMethodNames ((IfaceMethod n _ _ _) :: rest) = n :: ifaceMethodNames rest
 -- owning those issues.
 export
 publicDataDecl : Decl -> Bool
-publicDataDecl (DData { dataVis = VisPublic }) = True
-publicDataDecl (DInterface { pub = True, ... }) = True
-publicDataDecl (DImpl { pub = True, ... }) = True
-publicDataDecl (DTypeAlias { tyAliasPub = True }) = True
-publicDataDecl _ = False
+publicDataDecl d =
+  declExportsCtors d || declExportsIn nsInterfaces d || aliasOrImplPub d
+
+-- Aliases ride `nsTypes`; `export impl` has no namespace and only keeps the impl.
+aliasOrImplPub : Decl -> Bool
+aliasOrImplPub (DImpl { pub = True, ... }) = True
+aliasOrImplPub (d@(DTypeAlias { ... })) = declExportsIn nsTypes d
+aliasOrImplPub _ = False
 
 -- #1110: the decl passes THROUGH rather than being rebuilt, or the acquired
 -- `dataOrigin` is dropped on the export path — `filterList` preserves that by
@@ -3113,8 +3122,7 @@ publicDataDecls decls = filterList publicDataDecl decls
 -- row-kinded?" misses, and each one fails differently — `fromAstTypeApp` erases a
 -- written row SILENTLY, the bare-row spelling draws a FALSE `T-EFFECT-KIND-MISMATCH`, and
 -- #784's `checkUndeterminedRetEffVars` cannot see `Async e a` pin `<e>` and rejects the
--- method.  `stdlib/async.mdk`'s `Async` is that shape; `test/check_module_fixtures/
--- opaque_param_kinds_xmod/` and its `_newtype` sibling are the fixtures.
+-- method.  `stdlib/async.mdk`'s `Async` is that shape.
 --
 -- A kind is not A FIELD, which is why this may be wider than `publicDataDecl` without
 -- leaking anything: "slot 0 of `Async` has kind Row" says nothing about `Done` or
@@ -3157,12 +3165,7 @@ publicDataDecls decls = filterList publicDataDecl decls
 --     unobservable — see its note.
 export
 kindPublicDataDecl : Decl -> Bool
-kindPublicDataDecl (DData { dataVis = VisPublic }) = True
-kindPublicDataDecl (DData { dataVis = VisAbstract }) = True
-kindPublicDataDecl (DNewtype { newtypePub = True }) = True
--- #2121: an exported alias publishes its declared kinds (see `declEnvKindEntries`).
-kindPublicDataDecl (DTypeAlias { tyAliasPub = True }) = True
-kindPublicDataDecl _ = False
+kindPublicDataDecl d = declExportsIn nsTypes d
 
 export
 ordinaryEnvBinding : Scheme -> EnvBinding
@@ -3347,20 +3350,18 @@ ifaceMethodIdentPair origin (IfaceMethod mname _ _ _) =
 reexportedMethodIdents : OrdMap (List (String, Ident)) ->
   List Decl ->
   List (String, Ident)
-reexportedMethodIdents acc decls = flatMap (reexportedMethodIdentsOf acc) decls
+reexportedMethodIdents acc decls =
+  flatMap (reexportedMethodIdentsOf acc) (pubUsePaths decls)
 
 reexportedMethodIdentsOf : OrdMap (List (String, Ident)) ->
-  Decl ->
+  UsePath ->
   List (String, Ident)
-reexportedMethodIdentsOf acc (DAttrib _ d) = reexportedMethodIdentsOf acc d
-reexportedMethodIdentsOf acc (DUse True path _) =
-  match omLookup (useModId path) acc
-    None => []
-    Some src => match importedBindings path
-      -- `export import src.*` re-exports every one of src's methods, under their own names
-      None => src
-      Some bs => flatMap (b => reexportRenamed b src) bs
-reexportedMethodIdentsOf _ _ = []
+reexportedMethodIdentsOf acc path = match omLookup (useModId path) acc
+  None => []
+  Some src => match importedBindings path
+    -- `export import src.*` re-exports every one of src's methods, under their own names
+    None => src
+    Some bs => flatMap (b => reexportRenamed b src) bs
 
 reexportRenamed : (String, String) ->
   List (String, Ident) ->
@@ -3411,17 +3412,15 @@ ifaceMethodRowOf _ = []
 reexportedIfaceMethods : OrdMap (List (String, List String)) ->
   List Decl ->
   List (String, List String)
-reexportedIfaceMethods acc decls = flatMap (reexportedIfaceMethodsOf acc) decls
+reexportedIfaceMethods acc decls =
+  flatMap (reexportedIfaceMethodsOf acc) (pubUsePaths decls)
 
 reexportedIfaceMethodsOf : OrdMap (List (String, List String)) ->
-  Decl ->
+  UsePath ->
   List (String, List String)
-reexportedIfaceMethodsOf acc (DAttrib _ d) = reexportedIfaceMethodsOf acc d
-reexportedIfaceMethodsOf acc (DUse True path _) =
-  match omLookup (useModId path) acc
-    None => []
-    Some src => selectIfaceRows path src
-reexportedIfaceMethodsOf _ _ = []
+reexportedIfaceMethodsOf acc path = match omLookup (useModId path) acc
+  None => []
+  Some src => selectIfaceRows path src
 
 -- ── S1-NS (RULED 2026-08-08): the rows of [src] a use-path admits ──────────
 -- `docs/spec/SHADOW-SEMANTICS.md` S1-NS (a): S1's right operand is the PER-METHOD UNION of
@@ -4514,7 +4513,7 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "kindName" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "AlphaBinder" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "AliasDecl" false) (mem "CDeclared" false) (mem "BuiltinClass" true) (mem "dynFor" false) (mem "MethodEntry" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false) (mem "pubUsePaths" false) (mem "declExportsIn" false) (mem "declExportsCtors" false) (mem "nsInterfaces" false) (mem "nsTypes" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false) (mem "indexed" false) (mem "last" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false))))
@@ -5041,19 +5040,15 @@ methodRowSameNameView rows =
 (DFunDef false "ifaceMethodNames" ((PList)) (EListLit))
 (DFunDef false "ifaceMethodNames" ((PCons (PCon "IfaceMethod" (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "ifaceMethodNames") (EVar "rest"))))
 (DTypeSig true "publicDataDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
-(DFunDef false "publicDataDecl" ((PRec "DData" ((rf "dataVis" (PCon "VisPublic"))) false)) (EVar "True"))
-(DFunDef false "publicDataDecl" ((PRec "DInterface" ((rf "pub" (PCon "True"))) true)) (EVar "True"))
-(DFunDef false "publicDataDecl" ((PRec "DImpl" ((rf "pub" (PCon "True"))) true)) (EVar "True"))
-(DFunDef false "publicDataDecl" ((PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True"))) false)) (EVar "True"))
-(DFunDef false "publicDataDecl" (PWild) (EVar "False"))
+(DFunDef false "publicDataDecl" ((PVar "d")) (EBinOp "||" (EBinOp "||" (EApp (EVar "declExportsCtors") (EVar "d")) (EApp (EApp (EVar "declExportsIn") (EVar "nsInterfaces")) (EVar "d"))) (EApp (EVar "aliasOrImplPub") (EVar "d"))))
+(DTypeSig false "aliasOrImplPub" (TyFun (TyCon "Decl") (TyCon "Bool")))
+(DFunDef false "aliasOrImplPub" ((PRec "DImpl" ((rf "pub" (PCon "True"))) true)) (EVar "True"))
+(DFunDef false "aliasOrImplPub" ((PAs "d" (PRec "DTypeAlias" () true))) (EApp (EApp (EVar "declExportsIn") (EVar "nsTypes")) (EVar "d")))
+(DFunDef false "aliasOrImplPub" (PWild) (EVar "False"))
 (DTypeSig true "publicDataDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "publicDataDecls" ((PVar "decls")) (EApp (EApp (EVar "filterList") (EVar "publicDataDecl")) (EVar "decls")))
 (DTypeSig true "kindPublicDataDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
-(DFunDef false "kindPublicDataDecl" ((PRec "DData" ((rf "dataVis" (PCon "VisPublic"))) false)) (EVar "True"))
-(DFunDef false "kindPublicDataDecl" ((PRec "DData" ((rf "dataVis" (PCon "VisAbstract"))) false)) (EVar "True"))
-(DFunDef false "kindPublicDataDecl" ((PRec "DNewtype" ((rf "newtypePub" (PCon "True"))) false)) (EVar "True"))
-(DFunDef false "kindPublicDataDecl" ((PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True"))) false)) (EVar "True"))
-(DFunDef false "kindPublicDataDecl" (PWild) (EVar "False"))
+(DFunDef false "kindPublicDataDecl" ((PVar "d")) (EApp (EApp (EVar "declExportsIn") (EVar "nsTypes")) (EVar "d")))
 (DTypeSig true "ordinaryEnvBinding" (TyFun (TyCon "Scheme") (TyCon "EnvBinding")))
 (DFunDef false "ordinaryEnvBinding" ((PVar "scheme")) (ERecordCreate "EnvBinding" ((fa "ebValue" (EApp (EVar "ordinaryValueScheme") (EVar "scheme"))) (fa "ebMethodRow" (EVar "None")) (fa "ebStandalone" (EVar "None")))))
 (DTypeSig false "ordinaryValueScheme" (TyFun (TyCon "Scheme") (TyCon "ValueScheme")))
@@ -5089,11 +5084,9 @@ methodRowSameNameView rows =
 (DTypeSig false "ifaceMethodIdentPair" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))))))
 (DFunDef false "ifaceMethodIdentPair" ((PVar "origin") (PCon "IfaceMethod" (PVar "mname") PWild PWild PWild)) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsMethod")) (EVar "origin")) (EVar "mname")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "i")) () (EListLit (ETuple (EVar "mname") (EVar "i"))))))
 (DTypeSig false "reexportedMethodIdents" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))))))
-(DFunDef false "reexportedMethodIdents" ((PVar "acc") (PVar "decls")) (EApp (EApp (EVar "flatMap") (EApp (EVar "reexportedMethodIdentsOf") (EVar "acc"))) (EVar "decls")))
-(DTypeSig false "reexportedMethodIdentsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))))))
-(DFunDef false "reexportedMethodIdentsOf" ((PVar "acc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "reexportedMethodIdentsOf") (EVar "acc")) (EVar "d")))
-(DFunDef false "reexportedMethodIdentsOf" ((PVar "acc") (PCon "DUse" (PCon "True") (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "src")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "reexportRenamed") (EVar "b")) (EVar "src")))) (EVar "bs")))))))
-(DFunDef false "reexportedMethodIdentsOf" (PWild PWild) (EListLit))
+(DFunDef false "reexportedMethodIdents" ((PVar "acc") (PVar "decls")) (EApp (EApp (EVar "flatMap") (EApp (EVar "reexportedMethodIdentsOf") (EVar "acc"))) (EApp (EVar "pubUsePaths") (EVar "decls"))))
+(DTypeSig false "reexportedMethodIdentsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))))))
+(DFunDef false "reexportedMethodIdentsOf" ((PVar "acc") (PVar "path")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "src")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "reexportRenamed") (EVar "b")) (EVar "src")))) (EVar "bs")))))))
 (DTypeSig false "reexportRenamed" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))))))
 (DFunDef false "reexportRenamed" ((PTuple (PVar "origin") (PVar "local")) (PVar "src")) (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EVar "local") (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "fst") (EVar "e")) (EVar "origin")))) (EVar "src"))))
 (DTypeSig true "ifaceMethodRows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -5108,11 +5101,9 @@ methodRowSameNameView rows =
 (DFunDef false "ifaceMethodRowOf" ((PRec "DInterface" ((rf "name" None) (rf "methods" None)) true)) (EListLit (ETuple (EVar "name") (EApp (EVar "ifaceMethodNames") (EVar "methods")))))
 (DFunDef false "ifaceMethodRowOf" (PWild) (EListLit))
 (DTypeSig false "reexportedIfaceMethods" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "reexportedIfaceMethods" ((PVar "acc") (PVar "decls")) (EApp (EApp (EVar "flatMap") (EApp (EVar "reexportedIfaceMethodsOf") (EVar "acc"))) (EVar "decls")))
-(DTypeSig false "reexportedIfaceMethodsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "reexportedIfaceMethodsOf" ((PVar "acc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "reexportedIfaceMethodsOf") (EVar "acc")) (EVar "d")))
-(DFunDef false "reexportedIfaceMethodsOf" ((PVar "acc") (PCon "DUse" (PCon "True") (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "selectIfaceRows") (EVar "path")) (EVar "src")))))
-(DFunDef false "reexportedIfaceMethodsOf" (PWild PWild) (EListLit))
+(DFunDef false "reexportedIfaceMethods" ((PVar "acc") (PVar "decls")) (EApp (EApp (EVar "flatMap") (EApp (EVar "reexportedIfaceMethodsOf") (EVar "acc"))) (EApp (EVar "pubUsePaths") (EVar "decls"))))
+(DTypeSig false "reexportedIfaceMethodsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "reexportedIfaceMethodsOf" ((PVar "acc") (PVar "path")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "selectIfaceRows") (EVar "path")) (EVar "src")))))
 (DTypeSig true "selectIfaceRows" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "selectIfaceRows" ((PCon "UseAlias" PWild PWild) (PVar "src")) (EVar "src"))
 (DFunDef false "selectIfaceRows" ((PVar "path") (PVar "src")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "src")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "r")) (EApp (EApp (EVar "narrowRowToNamed") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "bs"))) (EVar "r")))) (EVar "src")))))
@@ -5291,7 +5282,7 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "kindName" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "AlphaBinder" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "AliasDecl" false) (mem "CDeclared" false) (mem "BuiltinClass" true) (mem "dynFor" false) (mem "MethodEntry" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false) (mem "pubUsePaths" false) (mem "declExportsIn" false) (mem "declExportsCtors" false) (mem "nsInterfaces" false) (mem "nsTypes" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false) (mem "indexed" false) (mem "last" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false))))
@@ -5818,19 +5809,15 @@ methodRowSameNameView rows =
 (DFunDef false "ifaceMethodNames" ((PList)) (EListLit))
 (DFunDef false "ifaceMethodNames" ((PCons (PCon "IfaceMethod" (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "ifaceMethodNames") (EVar "rest"))))
 (DTypeSig true "publicDataDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
-(DFunDef false "publicDataDecl" ((PRec "DData" ((rf "dataVis" (PCon "VisPublic"))) false)) (EVar "True"))
-(DFunDef false "publicDataDecl" ((PRec "DInterface" ((rf "pub" (PCon "True"))) true)) (EVar "True"))
-(DFunDef false "publicDataDecl" ((PRec "DImpl" ((rf "pub" (PCon "True"))) true)) (EVar "True"))
-(DFunDef false "publicDataDecl" ((PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True"))) false)) (EVar "True"))
-(DFunDef false "publicDataDecl" (PWild) (EVar "False"))
+(DFunDef false "publicDataDecl" ((PVar "d")) (EBinOp "||" (EBinOp "||" (EApp (EVar "declExportsCtors") (EVar "d")) (EApp (EApp (EVar "declExportsIn") (EVar "nsInterfaces")) (EVar "d"))) (EApp (EVar "aliasOrImplPub") (EVar "d"))))
+(DTypeSig false "aliasOrImplPub" (TyFun (TyCon "Decl") (TyCon "Bool")))
+(DFunDef false "aliasOrImplPub" ((PRec "DImpl" ((rf "pub" (PCon "True"))) true)) (EVar "True"))
+(DFunDef false "aliasOrImplPub" ((PAs "d" (PRec "DTypeAlias" () true))) (EApp (EApp (EVar "declExportsIn") (EVar "nsTypes")) (EVar "d")))
+(DFunDef false "aliasOrImplPub" (PWild) (EVar "False"))
 (DTypeSig true "publicDataDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "publicDataDecls" ((PVar "decls")) (EApp (EApp (EVar "filterList") (EVar "publicDataDecl")) (EVar "decls")))
 (DTypeSig true "kindPublicDataDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
-(DFunDef false "kindPublicDataDecl" ((PRec "DData" ((rf "dataVis" (PCon "VisPublic"))) false)) (EVar "True"))
-(DFunDef false "kindPublicDataDecl" ((PRec "DData" ((rf "dataVis" (PCon "VisAbstract"))) false)) (EVar "True"))
-(DFunDef false "kindPublicDataDecl" ((PRec "DNewtype" ((rf "newtypePub" (PCon "True"))) false)) (EVar "True"))
-(DFunDef false "kindPublicDataDecl" ((PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True"))) false)) (EVar "True"))
-(DFunDef false "kindPublicDataDecl" (PWild) (EVar "False"))
+(DFunDef false "kindPublicDataDecl" ((PVar "d")) (EApp (EApp (EVar "declExportsIn") (EVar "nsTypes")) (EVar "d")))
 (DTypeSig true "ordinaryEnvBinding" (TyFun (TyCon "Scheme") (TyCon "EnvBinding")))
 (DFunDef false "ordinaryEnvBinding" ((PVar "scheme")) (ERecordCreate "EnvBinding" ((fa "ebValue" (EApp (EVar "ordinaryValueScheme") (EVar "scheme"))) (fa "ebMethodRow" (EVar "None")) (fa "ebStandalone" (EVar "None")))))
 (DTypeSig false "ordinaryValueScheme" (TyFun (TyCon "Scheme") (TyCon "ValueScheme")))
@@ -5866,11 +5853,9 @@ methodRowSameNameView rows =
 (DTypeSig false "ifaceMethodIdentPair" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))))))
 (DFunDef false "ifaceMethodIdentPair" ((PVar "origin") (PCon "IfaceMethod" (PVar "mname") PWild PWild PWild)) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsMethod")) (EVar "origin")) (EVar "mname")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "i")) () (EListLit (ETuple (EVar "mname") (EVar "i"))))))
 (DTypeSig false "reexportedMethodIdents" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))))))
-(DFunDef false "reexportedMethodIdents" ((PVar "acc") (PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "reexportedMethodIdentsOf") (EVar "acc"))) (EVar "decls")))
-(DTypeSig false "reexportedMethodIdentsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))))))
-(DFunDef false "reexportedMethodIdentsOf" ((PVar "acc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "reexportedMethodIdentsOf") (EVar "acc")) (EVar "d")))
-(DFunDef false "reexportedMethodIdentsOf" ((PVar "acc") (PCon "DUse" (PCon "True") (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "src")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "reexportRenamed") (EVar "b")) (EVar "src")))) (EVar "bs")))))))
-(DFunDef false "reexportedMethodIdentsOf" (PWild PWild) (EListLit))
+(DFunDef false "reexportedMethodIdents" ((PVar "acc") (PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "reexportedMethodIdentsOf") (EVar "acc"))) (EApp (EVar "pubUsePaths") (EVar "decls"))))
+(DTypeSig false "reexportedMethodIdentsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))))))
+(DFunDef false "reexportedMethodIdentsOf" ((PVar "acc") (PVar "path")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "src")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "reexportRenamed") (EVar "b")) (EVar "src")))) (EVar "bs")))))))
 (DTypeSig false "reexportRenamed" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))))))
 (DFunDef false "reexportRenamed" ((PTuple (PVar "origin") (PVar "local")) (PVar "src")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EVar "local") (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "fst") (EVar "e")) (EVar "origin")))) (EVar "src"))))
 (DTypeSig true "ifaceMethodRows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -5885,11 +5870,9 @@ methodRowSameNameView rows =
 (DFunDef false "ifaceMethodRowOf" ((PRec "DInterface" ((rf "name" None) (rf "methods" None)) true)) (EListLit (ETuple (EVar "name") (EApp (EVar "ifaceMethodNames") (EVar "methods")))))
 (DFunDef false "ifaceMethodRowOf" (PWild) (EListLit))
 (DTypeSig false "reexportedIfaceMethods" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "reexportedIfaceMethods" ((PVar "acc") (PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "reexportedIfaceMethodsOf") (EVar "acc"))) (EVar "decls")))
-(DTypeSig false "reexportedIfaceMethodsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "reexportedIfaceMethodsOf" ((PVar "acc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "reexportedIfaceMethodsOf") (EVar "acc")) (EVar "d")))
-(DFunDef false "reexportedIfaceMethodsOf" ((PVar "acc") (PCon "DUse" (PCon "True") (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "selectIfaceRows") (EVar "path")) (EVar "src")))))
-(DFunDef false "reexportedIfaceMethodsOf" (PWild PWild) (EListLit))
+(DFunDef false "reexportedIfaceMethods" ((PVar "acc") (PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "reexportedIfaceMethodsOf") (EVar "acc"))) (EApp (EVar "pubUsePaths") (EVar "decls"))))
+(DTypeSig false "reexportedIfaceMethodsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "reexportedIfaceMethodsOf" ((PVar "acc") (PVar "path")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "selectIfaceRows") (EVar "path")) (EVar "src")))))
 (DTypeSig true "selectIfaceRows" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "selectIfaceRows" ((PCon "UseAlias" PWild PWild) (PVar "src")) (EVar "src"))
 (DFunDef false "selectIfaceRows" ((PVar "path") (PVar "src")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "src")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "r")) (EApp (EApp (EVar "narrowRowToNamed") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "bs"))) (EVar "r")))) (EVar "src")))))

@@ -5,7 +5,7 @@
 -- module publishes, the diagnostics of its bodies (binding, impl method, `test`, `prop`, extern),
 -- the interface-cycle and impl-coherence checks that end the module, the import of an earlier
 -- module's data, the stamp queue and its drain (what is enqueued, what is reported, that a
--- drain empties the queue), `publicValNames`, `externSchemesGo`, `captureTypeErrors`,
+-- drain empties the queue), `exportedValueNames`, `externSchemesGo`, `captureTypeErrors`,
 -- `verdictFinding`, `isLiveSpan`, `spanKeys` and `settleClosedBody`.
 -- Not driven here, because no export reaches them: the import-overlay rows and the plural site
 -- resolvers.  Their effect is observed as the module's errors and as the drain's
@@ -41,6 +41,7 @@ import types.tc_types.{
   ModuleCtx,
   PreludeMarkFacts(..),
 }
+import frontend.visibility.{exportedValueNames}
 import types.tc_module.{
   captureTypeErrors,
   checkBodyImpl,
@@ -50,7 +51,6 @@ import types.tc_module.{
   elabModuleStamp,
   externSchemesGo,
   isLiveSpan,
-  publicValNames,
   settleClosedBody,
   spanKeys,
   verdictFinding,
@@ -474,14 +474,14 @@ test "a public signature and its public definition each name the binding, a priv
       "public",
       expectEqual
         ["f", "f"]
-        (publicValNames (declsOf "m" """
+        (exportedValueNames (declsOf "m" """
 export f : Int
 export f = 1
 """)),
     ),
     (
       "private",
-      expectEqual [] (publicValNames (declsOf "m" """
+      expectEqual [] (exportedValueNames (declsOf "m" """
 g : Int
 g = 2
 """)),
@@ -494,7 +494,7 @@ test "a public interface names its methods and a private one does not" = expectE
       "public",
       expectEqual
         ["q"]
-        (publicValNames
+        (exportedValueNames
           (declsOf "m" """
 export interface Q a where
   q : a -> Int
@@ -504,7 +504,8 @@ export interface Q a where
       "private",
       expectEqual
         []
-        (publicValNames (declsOf "m" """
+        (exportedValueNames
+          (declsOf "m" """
 interface R a where
   r : a -> Int
 """)),
@@ -514,7 +515,7 @@ interface R a where
 test "a public extern is named" =
   expectEqual
     ["foo"]
-    (publicValNames (declsOf "m" "export extern foo : Int -> Int"))
+    (exportedValueNames (declsOf "m" "export extern foo : Int -> Int"))
 
 test "the schemes of the externs among a module's declarations are those and no others" =
   expectEqual

@@ -11,11 +11,14 @@ carriedValuesFrom : ModuleExports -> List (String, String) -> List String
 coreExports : List Decl -> ModuleExports
 ctorNames : List Decl -> List String
 dataRecordNames : List Decl -> List String
+declExportsCtors : Decl -> Bool
+declExportsIn : ExpNs a -> Decl -> Bool
 declUseIds : Decl -> List String
 directIn : ExpNs a -> List Decl -> List a
 dropLocOfExpanded : (String, String, Loc) -> (String, String)
 effectNames : List Decl -> List String
 expandMemberNames : ModuleExports -> UseMember -> List (String, String, Loc)
+exportedValueNames : List Decl -> List String
 exportsIn : ExpNs a -> ModuleExports -> List a
 fieldOwnersOf : List Decl -> List (String, String)
 filterInSet : Map String Unit -> List String -> List String
