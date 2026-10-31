@@ -623,12 +623,17 @@ edge will differ, and all of them work natively.
 
 | call | `medaka run` | `medaka build` |
 |---|---|---|
-| `csv.parse` of rows `a,b,c` | 24,000 rows ok; 25,000 overflow | 300,000 rows ok |
+| `csv.parse` of rows `a,b,c` | 24,000 rows ok; 25,000 overflow | 300,000 ok |
 | `json.parse` of an array of `{"a": n}` objects | 6,000 ok; 7,000 overflow | 100,000 ok |
+| `json.parse` of one string | 8,000 characters ok; 9,000 overflow | 1,000,000 ok |
+| `json.parseLines` of lines `1` | 24,000 lines ok; 25,000 overflow | 300,000 ok |
+| `json.parseLines` of one line, spaces then `1` | 24,000 characters ok; 25,000 overflow | 1,000,000 ok |
 | `diff.editScript` of two lists of lines, one in a thousand different | 12,000 lines ok; 13,000 overflow | 100,000 ok |
 | `fs.walkDir` of one directory of empty files | 20,000 ok; 25,000 overflow | 120,000 ok |
 
-For big inputs, `medaka build`. The probe behind the first row reads its size from
+For big inputs, `medaka build`. That includes a large JSON Lines log: the report
+program above reads its log with `parseLines`, and under `run` it stops at about
+24,000 lines. The probe behind the first row reads its size from
 the environment:
 
 ```medaka

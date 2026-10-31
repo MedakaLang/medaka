@@ -598,7 +598,10 @@ test/guide_scripts_test.mdk    the programs on docs/guide/11-writing-scripts.md,
                                reason as test/stdlib_suite_test.mdk above: a brand-new gate hits
                                [W-SHARD-DERIVED]'s hard refusal. Its behavior IS asserted: the
                                Makefile `test:` target names it (inlang-guide-scripts-test), so
-                               `make test` runs it, and CI's `inlang` job runs `make test`.
+                               `make test` runs it. CI's `inlang` job runs `make test` on the
+                               merge queue and on a PR that touches compiler/, stdlib/, runtime/
+                               or the Makefile; a PR that edits only the guide page or its
+                               programs does not run it until the merge queue.
 test/compiler_module_roster_test.mdk  a small fixed roster over four modules nothing else
                                reaches (#3081): compiler/tools/gate_cost.mdk,
                                compiler/support/util.mdk and compiler/support/manifest.mdk are

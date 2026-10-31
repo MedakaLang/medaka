@@ -14,7 +14,11 @@ import io.{runVerb}
 import list.{nub, sort}
 import string.{
   contains,
+  dedent,
   endsWith,
+  concat,
+  groupThousands,
+  join,
   lines,
   replaceAll,
   split,
@@ -28,6 +32,7 @@ import test.{
   expectEach,
   expectEqual,
   expectTextContainsAll,
+  expectTrue,
   fail,
   labelFail,
 }
@@ -219,7 +224,11 @@ shownOutputs = [
 
 everyFile : List String
 everyFile =
-  shownSources ++ interpreted ++ built ++ map fst rejections ++ ["stdin_empty"]
+  shownSources
+    ++ interpreted
+    ++ built
+    ++ map fst rejections
+    ++ ["stdin_empty", "limit_json"]
 
 test "each interpreted program prints its recorded output under medaka run" =
   expectEach (map (n => (n, graded n (runIn ""))) interpreted)
@@ -320,6 +329,140 @@ test "csv.parse overflows the interpreter at 25000 rows and not at 24000" = expe
           Err e => fail e
           Ok out => expectEqual "rows: 300000\n" out)),
   ]
+
+-- The "Limits of `medaka run`" table. `ok` is the last size that runs under
+-- `run`, `over` the first that overflows, `big` a size built code handles. A
+-- row with a `kind` is measured below by test/guide_scripts/limit_json.mdk (the
+-- csv row by its own test); the diff and fs rows are numbers a reviewer measured,
+-- held here so the page cannot move them unnoticed.
+data Limit = {
+  call : String,
+  kind : String,
+  unit : String,
+  ok : Int,
+  over : Int,
+  big : Int,
+}
+
+limitRows : List Limit
+limitRows = [
+  Limit {
+    call = "`csv.parse` of rows `a,b,c`",
+    kind = "csv",
+    unit = "rows",
+    ok = 24000,
+    over = 25000,
+    big = 300000,
+  },
+  Limit {
+    call = "`json.parse` of an array of `{\"a\": n}` objects",
+    kind = "objects",
+    unit = "",
+    ok = 6000,
+    over = 7000,
+    big = 100000,
+  },
+  Limit {
+    call = "`json.parse` of one string",
+    kind = "string",
+    unit = "characters",
+    ok = 8000,
+    over = 9000,
+    big = 1000000,
+  },
+  Limit {
+    call = "`json.parseLines` of lines `1`",
+    kind = "lines",
+    unit = "lines",
+    ok = 24000,
+    over = 25000,
+    big = 300000,
+  },
+  Limit {
+    call = "`json.parseLines` of one line, spaces then `1`",
+    kind = "longline",
+    unit = "characters",
+    ok = 24000,
+    over = 25000,
+    big = 1000000,
+  },
+  Limit {
+    call =
+      "`diff.editScript` of two lists of lines, one in a thousand different",
+    kind = "",
+    unit = "lines",
+    ok = 12000,
+    over = 13000,
+    big = 100000,
+  },
+  Limit {
+    call = "`fs.walkDir` of one directory of empty files",
+    kind = "",
+    unit = "",
+    ok = 20000,
+    over = 25000,
+    big = 120000,
+  },
+]
+
+limitRowText : Limit -> String
+limitRowText l =
+  let size = if l.unit == "" then "" else " \{l.unit}"
+  "| \{l.call} | \{groupThousands l.ok}\{size} ok; \{groupThousands l.over} overflow | \{groupThousands l.big} ok |"
+
+test "each row of the page's limits table carries the numbers this test holds" =
+  match pageText ()
+    Err e => fail e
+    Ok page =>
+      expectEach
+        (map
+          (l => (l.call, expectTextContainsAll [limitRowText l] page))
+          limitRows)
+
+-- What limit_json prints for `kind` at size `n`.
+jsonProbeOut : String -> Int -> String
+jsonProbeOut kind n = match kind
+  "string" => "string: ok\n"
+  "lines" => "lines: \{intToString n}\n"
+  "longline" => "line: [\"ok\"]\n"
+  _ => "objects: ok\n"
+
+jsonProbes : List Limit
+jsonProbes = filter (l => l.kind /= "" && l.kind /= "csv") limitRows
+
+test "each json limits row runs at its ok size and overflows at the next" = withBinAndFile
+  "limit_json"
+  (bin file =>
+    let at l n = spawnBody bin file (runIn "KIND=\{l.kind} N=\{intToString n} ")
+    expectEach
+      (flatMap
+        (l => [
+          (
+            "\{l.kind} \{intToString l.ok} runs",
+            expectEqual (Ok (jsonProbeOut l.kind l.ok)) (clean (at l l.ok)),
+          ),
+          (
+            "\{l.kind} \{intToString l.over} overflows",
+            match at l l.over
+              Err e => fail e
+              Ok (0, out, _) => fail "accepted: \{debug out}"
+              Ok (_, _, err) => expectTextContainsAll [overflowMessage] err,
+          ),
+        ])
+        jsonProbes))
+
+test "each json limits row builds at the large size the page gives" = withBinAndFile
+  "limit_json"
+  (bin file =>
+    let runOne l = "KIND=\{l.kind} N=\{intToString l.big} ./prog"
+    expectEqual
+      (Ok (concat (map (l => jsonProbeOut l.kind l.big) jsonProbes)))
+      (clean
+        (spawnBody
+          bin
+          file
+          ("MEDAKA_STRICT=1 \"$0\" build \"$1\" -o prog >/dev/null && "
+            ++ join " && " (map runOne jsonProbes)))))
 
 test "json.pretty writes an exponent where Python writes digits" = withBinAndFile
   "float_exponent"
@@ -443,3 +586,70 @@ test "test/guide_scripts holds exactly the programs this test names" =
       labelFail
         "a program the test does not name"
         (expectEqual [] (filter (s => not (any (== s) named)) stems))
+
+-- Each row of the cheat sheet as the Python or shell cell, `==>`, the Medaka
+-- cell; both written as the page shows them, `|` unescaped.
+cheatRowsText : String
+cheatRowsText =
+  r"""
+  `os.environ.get("K", "d")`, `${K:-d}` ==> `println (getEnvOr "NO_SUCH_VARIABLE" "default")`
+  `print(f"total: {1 + 2}")`, `echo "total: $((1 + 2))"` ==> `println "total: \{1 + 2}"`
+  `open(p, "w").write(t)`, `echo t > p` ==> `resultOrPanic "write" (writeFile "out.txt" "hello\n")`
+  `s.replace("a", "o")` ==> `println (replaceAll "a" "o" s)`
+  `s.strip()` ==> `println (debug (trim s))`
+  `s.split(",")` ==> `println (debug (split "," "a,b,c"))`
+  `open(p).read()`, `cat p` ==> `println (debug (readFile "out.txt"))`
+  `a | b` ==> `println (debug ([3, 1, 2] |> sort |> reverse))`
+  `cmd 2>&1`, `subprocess.run(..., stderr=STDOUT)` ==> `println (debug (map merged (sh "echo out; echo err >&2")))`
+  `cd d && cmd` ==> `println (debug (map stdout (sh "cd src && ls")))`
+  `$?`, `proc.returncode` ==> `println (debug (sh "echo out; echo err >&2; exit 2"))`
+  `for x in xs:` ==> `each println ["a", "b"]`
+  `$(cmd)`, `subprocess.check_output` ==> `println (debug (map (trim << stdout) (runCommand "echo" ["hi"])))`
+  `grep beta file` ==> `each println (filter (contains "beta") (lines text))`
+  `tail -n 1 file` ==> `println (debug (map last (readLines "notes.txt")))`
+  `head -n 2 file` ==> `println (debug (take 2 (lines text)))`
+  `mkdir -p a/b/c`, `os.makedirs(p, exist_ok=True)` ==> `resultOrPanic "mkdir" (mkdirAll "a/b/c")`
+  `sys.argv[1:]`, `"$@"` ==> `println (debug (args ()))`
+  `sed 's/b+/B/g'`, `re.sub(r"b+", "B", s)` ==> `println (R.replaceAll (R.mustCompile r"b+") "B" "abba")`
+  `[x * x for x in xs if x % 2 == 0]` ==> `println (debug (map (x => x * x) (filter isEven [1, 2, 3, 4])))`
+  `rm f`, `os.remove(f)` ==> `resultOrPanic "rm" (removeFile "out.txt")`
+  `re.findall(r"\d+", s)` ==> `println (debug (map matchText (R.findAll digits "a1b22")))`
+  `printf "%.2f"`, `f"{x:.2f}"` ==> `println (toFixed 2 3.14159)`
+  `sorted(xs, key=len)` ==> `println (debug (sortOn stringLength ["ccc", "a", "bb"]))`
+  `wc -l file` ==> `println (debug (map length (readLines "notes.txt")))`
+  `cp a b`, `shutil.copy(a, b)` ==> `resultOrPanic "cp" (copyFile "notes.txt" "copy.txt")`
+  `json.loads(s)["a"]["b"]` ==> `println (debug (atPath ["a", "b"] doc))`
+  `basename p`, `os.path.basename(p)` ==> `println (basename "src/lib/main.mdk")`
+  `sort | uniq -c`, `Counter(xs)` ==> `println (debug (entries (countBy (x => x) ["a", "b", "a"])))`
+  `diff -u a b`, `difflib.unified_diff` ==> `print (unified 1 ("old", "a\nb\n") ("new", "a\nB\n"))`
+  """
+
+cheatRows : List (String, String)
+cheatRows =
+  map
+    (l => match split " ==> " l
+      [py, med] => (py, med)
+      _ => (l, ""))
+    (filter (l => trim l /= "") (lines (dedent cheatRowsText)))
+
+test "each cheat-sheet cell sits in the table row of its Python or shell idiom" =
+  match pageText ()
+    Err e => fail e
+    Ok page => match (cheatParts "cheat", cheatParts "cheat_proc")
+      (Ok (_, cells1), Ok (_, cells2)) =>
+        let pageLines = lines page
+        let inRow =
+          (py, med) =>
+            any
+              (l => startsWith "| \{py} | " l && endsWith " | \{med} |" l)
+              pageLines
+        expectAll [
+          labelFail
+            "the pairs name exactly the cells the programs hold"
+            (expectEqual
+              (sort (map (c => "`\{trim c}`") (cells1 ++ cells2)))
+              (sort (map snd cheatRows))),
+          expectEach (map (r => (fst r, expectTrue (inRow r))) cheatRows),
+        ]
+      (Err e, _) => fail e
+      (_, Err e) => fail e
