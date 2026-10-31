@@ -26,6 +26,9 @@ import tools.lint_index.{
   stdlibRowsNamed,
   stdlibValueNames,
   stdlibHasValueModule,
+  withLocalModStates,
+  localModAsked,
+  localModOfKey,
 }
 import tools.printer.{ppTy}
 import frontend.exhaust.{Oracle}
@@ -478,6 +481,25 @@ projectIndexOf (StdlibIndex ix) = ix
 export
 recordingStdlibIndex : StdlibIndex -> StdlibIndex
 recordingStdlibIndex (StdlibIndex ix) = StdlibIndex (recording ix)
+
+-- The same index told which of one file's wildcard-imported modules are files
+-- of the project.
+export
+withStdlibLocalMods : List (String, Bool) -> StdlibIndex -> StdlibIndex
+withStdlibLocalMods states (StdlibIndex ix) =
+  StdlibIndex (withLocalModStates states ix)
+
+-- Whether a wildcard-imported module is a file of the project; a recording
+-- index logs the answer.
+export
+stdlibLocalModAsked : StdlibIndex -> String -> Bool
+stdlibLocalModAsked (StdlibIndex ix) modId = localModAsked ix modId
+
+-- The module a recorded question asks the project file's existence of, if it is
+-- such a question.
+export
+localModOfQuestion : String -> Option String
+localModOfQuestion = localModOfKey
 
 -- What the rules handed a recording index asked, with the digest of each
 -- answer.
