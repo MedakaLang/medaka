@@ -28,6 +28,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-bind-chain-to-do`](#rule-bind-chain-to-do) | universal | complexity | gated | not-fixable | file |
 | [`rule-dead-code`](#rule-dead-code) | universal | suspicious | gated | not-fixable | file |
 | [`rule-unused-import`](#rule-unused-import) | universal | style | gated | fixable | file |
+| [`rule-unused-param`](#rule-unused-param) | universal | style | gated | fixable | file |
 | [`rule-concat-to-interp`](#rule-concat-to-interp) | universal | style | gated | fixable | file |
 | [`rule-self-shadow-extern`](#rule-self-shadow-extern) | universal | correctness | gated | not-fixable | file |
 | [`rule-prefer-assign-op`](#rule-prefer-assign-op) | universal | style | gated | fixable | file |
@@ -358,6 +359,19 @@ Before:
 After:
   import list.{sort}
   main = sort [2, 1]
+```
+
+## rule-unused-param
+
+a function, method or `prop` parameter that nothing in its clause uses
+
+A parameter that no use in its clause resolves to is dead weight, and a reader cannot tell it from one that matters. Renaming it `_name` says it is intentionally unused, and a name starting with `_` is not reported. Function, impl-method, interface-default, `prop` and `where`/`let rec` clause parameters are checked; lambda, `let`, match-arm and `do`-bind binders are not. The fix renames every place the binder is written (each alternative of an or-pattern names it). It is only suggested, not applied, when `_name` is already used in the file, and for a record pun, where renaming the binder would rename the field: the suggestion then reads `field = _name`.
+
+```
+Before:
+  area w h = w * 2
+After:
+  area w _h = w * 2
 ```
 
 ## rule-concat-to-interp

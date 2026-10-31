@@ -136,6 +136,10 @@ ruleNameUnusedImport : String
 ruleNameUnusedImport = "rule-unused-import"
 
 export
+ruleNameUnusedParam : String
+ruleNameUnusedParam = "rule-unused-param"
+
+export
 ruleNamePreferAssignOp : String
 ruleNamePreferAssignOp = "rule-prefer-assign-op"
 

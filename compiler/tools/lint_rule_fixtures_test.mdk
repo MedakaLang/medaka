@@ -130,6 +130,7 @@ fixtureNames = [
   "test-equal-in-true",
   "test-prelude-shadow",
   "unused-import",
+  "unused-param",
   "when-unless",
 ]
 
@@ -413,6 +414,8 @@ test "rule-test-equal-in-true fixture" = fixtureHolds "test-equal-in-true"
 test "rule-test-prelude-shadow fixture" = fixtureHolds "test-prelude-shadow"
 
 test "rule-unused-import fixture" = fixtureHolds "unused-import"
+
+test "rule-unused-param fixture" = fixtureHolds "unused-param"
 
 test "rule-when-unless fixture" = fixtureHolds "when-unless"
 

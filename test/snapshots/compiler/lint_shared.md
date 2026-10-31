@@ -1,5 +1,5 @@
 # META
-source_lines=1045
+source_lines=1049
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -138,6 +138,10 @@ ruleNameSelfShadowExtern = "rule-self-shadow-extern"
 export
 ruleNameUnusedImport : String
 ruleNameUnusedImport = "rule-unused-import"
+
+export
+ruleNameUnusedParam : String
+ruleNameUnusedParam = "rule-unused-param"
 
 export
 ruleNamePreferAssignOp : String
@@ -1116,6 +1120,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameSelfShadowExtern" () (ELit (LString "rule-self-shadow-extern")))
 (DTypeSig true "ruleNameUnusedImport" (TyCon "String"))
 (DFunDef false "ruleNameUnusedImport" () (ELit (LString "rule-unused-import")))
+(DTypeSig true "ruleNameUnusedParam" (TyCon "String"))
+(DFunDef false "ruleNameUnusedParam" () (ELit (LString "rule-unused-param")))
 (DTypeSig true "ruleNamePreferAssignOp" (TyCon "String"))
 (DFunDef false "ruleNamePreferAssignOp" () (ELit (LString "rule-prefer-assign-op")))
 (DTypeSig true "ruleNamePromissoryReader" (TyCon "String"))
@@ -1461,6 +1467,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameSelfShadowExtern" () (ELit (LString "rule-self-shadow-extern")))
 (DTypeSig true "ruleNameUnusedImport" (TyCon "String"))
 (DFunDef false "ruleNameUnusedImport" () (ELit (LString "rule-unused-import")))
+(DTypeSig true "ruleNameUnusedParam" (TyCon "String"))
+(DFunDef false "ruleNameUnusedParam" () (ELit (LString "rule-unused-param")))
 (DTypeSig true "ruleNamePreferAssignOp" (TyCon "String"))
 (DFunDef false "ruleNamePreferAssignOp" () (ELit (LString "rule-prefer-assign-op")))
 (DTypeSig true "ruleNamePromissoryReader" (TyCon "String"))
