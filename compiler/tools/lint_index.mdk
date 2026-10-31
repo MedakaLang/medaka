@@ -604,6 +604,7 @@ data IndexScope = IndexScope {
   ixsRows : List IndexRow,
   ixsNames : List String,
   ixsModules : List String,
+  ixsDigest : String,
 }
 
 -- The stdlib's rows and the project's.  A project index holds both, and a
@@ -616,6 +617,7 @@ emptyScope = IndexScope {
   ixsRows = [],
   ixsNames = [],
   ixsModules = [],
+  ixsDigest = "",
 }
 
 export
@@ -626,10 +628,38 @@ emptyProjectIndex = ProjectIndex emptyScope emptyScope
 export
 mkProjectIndex : List IndexRow -> List IndexRow -> ProjectIndex
 mkProjectIndex stdlibRows projectRows =
-  ProjectIndex (mkScope stdlibRows) (mkScope projectRows)
+  mkProjectIndexWith "" "" stdlibRows projectRows
 
-mkScope : List IndexRow -> IndexScope
-mkScope rows =
+-- The same, each scope carrying the combined digest of its files' row digests
+-- (`combineDigests`), which `indexFingerprint` reports.
+export
+mkProjectIndexWith : String ->
+  String ->
+  List IndexRow ->
+  List IndexRow ->
+  ProjectIndex
+mkProjectIndexWith stdDigest projDigest stdlibRows projectRows =
+  ProjectIndex (mkScope stdDigest stdlibRows) (mkScope projDigest projectRows)
+
+-- One digest for a list of per-file row digests, in file order.  It moves when
+-- a file's names, kinds, signatures, arities, fields or exports move, and not
+-- when only a position or a body does.
+export
+combineDigests : List String -> String
+combineDigests digests =
+  let joined = joinWith ";" digests
+  let n = stringLength joined
+  let lane2 = if n == 0 then 0 else hashString (stringSlice 1 n joined)
+  "\{listLen digests}.\{hashString joined}.\{lane2}.\{n}"
+
+-- What a cached finding that read this index depends on: the stdlib scope's
+-- digest, then the project scope's.  A scope the run did not build is empty.
+export
+indexFingerprint : ProjectIndex -> String
+indexFingerprint (ProjectIndex std proj) = "\{std.ixsDigest}/\{proj.ixsDigest}"
+
+mkScope : String -> List IndexRow -> IndexScope
+mkScope digest rows =
   let m = new ()
   let _ = groupInto (reverseRows rows []) m
   let signed = filterList isExportedSigValue rows
@@ -638,6 +668,7 @@ mkScope rows =
     ixsRows = rows,
     ixsNames = sortedUnique (map rowName signed),
     ixsModules = sortedUnique (map rowModule signed),
+    ixsDigest = digest,
   }
 
 isExportedSigValue : IndexRow -> Bool

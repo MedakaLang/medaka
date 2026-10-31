@@ -1,10 +1,10 @@
--- compiler/tools/lint_registry.mdk — THE REGISTRY: `allRules`, the cross-file
+-- compiler/tools/lint_registry.mdk — THE REGISTRY: `allRules`, the project-rule
 -- registry, and rule-name selection.  Adding a rule = write a `lint_rule_<name>`
 -- module exporting `rule`, import it here `as Alias` and append `Alias.rule,` to
 -- `allRules`.
 
 import support.util.{contains, anyList, filterList, isEmptyL}
-import tools.lint_core.{CrossFileRule(..), Ratchet(..), Rule(..), RuleMeta(..)}
+import tools.lint_core.{ProjectRule(..), Ratchet(..), Rule(..), RuleMeta(..)}
 import tools.lint_rule_internal_match_on_param as MatchOnParam
 import tools.lint_rule_stdlib_reimpl as StdlibReimpl
 import tools.lint_rule_not_eq as NotEq
@@ -83,35 +83,36 @@ allRules = [
   TestPreludeShadow.rule,
 ]
 
--- ── the cross-file registry ───────────────────────────────────────────────────
--- Adding a cross-file rule = a `lint_rule_*` module exporting `rule : CrossFileRule`
--- plus an `Alias.rule,` entry in `allCrossFileRules`.
+-- ── the project registry ──────────────────────────────────────────────────────
+-- Adding a project rule = a `lint_rule_*` module exporting `rule : ProjectRule`
+-- plus an `Alias.rule,` entry in `allProjectRules`.  Its summaries are cached
+-- with every other rule's, so a second entry keeps `--cache` on.
 export
-allCrossFileRules : List CrossFileRule
-allCrossFileRules = [DuplicateBody.rule]
+allProjectRules : List ProjectRule
+allProjectRules = [DuplicateBody.rule]
 
--- Metadata a cross-file rule may not carry.  A `Baselined` ratchet is enforced by
--- a per-file count row, and a cross-file finding has no file row to count
+-- Metadata a project rule may not carry.  A `Baselined` ratchet is enforced by
+-- a per-file count row, and a project finding has no file row to count
 -- against, so such a rule would be enforced by nothing.  (`Internal` scope is
 -- fine: the runner filters the tier's findings by the file they land in.)
 export
-crossFileMetaProblems : List CrossFileRule -> List String
-crossFileMetaProblems rules = flatMap crossFileRuleProblems rules
+projectRuleMetaProblems : List ProjectRule -> List String
+projectRuleMetaProblems rules = flatMap projectRuleProblems rules
 
-crossFileRuleProblems : CrossFileRule -> List String
-crossFileRuleProblems r = match r.meta.ratchet
+projectRuleProblems : ProjectRule -> List String
+projectRuleProblems r = match r.meta.ratchet
   Baselined => [
-    "cross-file rule `\{r.name}` is Baselined; only a per-file rule can be (no count row exists for a cross-file finding), so it would be enforced by nothing",
+    "project rule `\{r.name}` is Baselined; only a per-file rule can be (no count row exists for a project finding), so it would be enforced by nothing",
   ]
   Gated => []
 
--- Every registered rule name, per-file and cross-file, as plain Strings.
+-- Every registered rule name, per-file and project, as plain Strings.
 -- CLI-CONFORMANCE.md §5f: `medaka lint --only=nosuchrule` would otherwise be
 -- accepted silently — a typo'd rule name filters EVERY finding away and the run
 -- exits 0 looking clean.  The CLI validates `--only=`/`--disable=`/`--deny=` against
 -- this list, so the CLI receives only these Strings.
 -- Deduped, and in registry order: `rule-duplicate-body` is registered TWICE
--- (a same-file `Rule` and the cross-file `CrossFileRule` under one name), and
+-- (a same-file `Rule` and the `ProjectRule` under one name), and
 -- printing it twice in the known set reads as a bug in the list.
 export
 allRuleNames : List String
@@ -120,13 +121,13 @@ allRuleNames =
   perFile
     ++ filterList
       (n => not (contains n perFile))
-      (map crossRuleNameOf allCrossFileRules)
+      (map projectRuleNameOf allProjectRules)
 
 ruleNameOf : Rule -> String
 ruleNameOf r = r.name
 
-crossRuleNameOf : CrossFileRule -> String
-crossRuleNameOf r = r.name
+projectRuleNameOf : ProjectRule -> String
+projectRuleNameOf r = r.name
 
 -- ── runner ───────────────────────────────────────────────────────────────────
 
@@ -141,20 +142,20 @@ ruleSelected : List String -> List String -> Rule -> Bool
 ruleSelected only disable r =
   (isEmptyL only || contains r.name only) && not (contains r.name disable)
 
--- Does `--only`/`--disable` leave the cross-file duplicate-body rule active?
+-- Does `--only`/`--disable` leave some project rule active?
 export
-crossFileSelected : List String -> List String -> Bool
-crossFileSelected only disable =
-  anyList (crossRuleActive only disable) allCrossFileRules
+projectRuleSelected : List String -> List String -> Bool
+projectRuleSelected only disable =
+  anyList (projectRuleActive only disable) allProjectRules
 
 export
-crossRuleActive : List String -> List String -> CrossFileRule -> Bool
-crossRuleActive only disable r =
+projectRuleActive : List String -> List String -> ProjectRule -> Bool
+projectRuleActive only disable r =
   r.enabled
     && (isEmptyL only || contains r.name only)
     && not (contains r.name disable)
 
--- ── cross-file rule: duplicate-body (copy-paste detector) ──────────────────────
+-- ── project rule: duplicate-body (copy-paste detector) ──────────────────────
 -- Flags a top-level `DFunDef` whose ELoc-stripped body (+ param-pattern shape) is
 -- structurally identical to a top-level function in a DIFFERENT file.  The
 -- structural key reuses `ir.sexp.exprSexp` — the location-stripped AST serializer

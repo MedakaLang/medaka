@@ -7,8 +7,7 @@ description: Add a lint rule to `medaka lint` - the rule module, the single regi
 
 One rule = one module + one registry line. The framework (`lint_core`, `lint_dup`, `lint_walk`)
 and the CLI never name a rule; `compiler/tools/lint_registry.mdk` is the only place that lists them
-(`lint_shared` holds the `ruleName*` constants, and `lint_walk` names `rule-duplicate-body` for the
-cross-file cache seam). Module map: `compiler/tools/ARCHITECTURE.md`.
+(`lint_shared` holds the `ruleName*` constants). Module map: `compiler/tools/ARCHITECTURE.md`.
 
 ## 1. The module
 
@@ -36,18 +35,18 @@ exported only once a second module reads it. Rule-name constants live in `lint_s
 
 In `lint_registry.mdk` add `import tools.lint_rule_<name> as Alias` and one `Alias.rule,` entry in
 `allRules`. The list position IS the output order of findings; place the entry where its output
-should sort. Cross-file rules go in the cross-file registry instead (`allCrossFileRules`), and
-three things follow:
+should sort. Cross-file rules are `ProjectRule`s and go in the project registry instead
+(`allProjectRules`), and three things follow:
 
-- `crossFileCacheSound` (`lint_walk.mdk`) is true only while the registry holds exactly the one
-  duplicate-body rule. A second cross-file rule turns it False, which silently disables `--cache`
-  (the hook's warm replay becomes a cold ~9 CPU-s run). Before landing it, give the new rule its
-  own cached per-file input in `lint_cache.mdk` and feed it through `runCrossFileRulesFromOccs`,
-  then relax `crossFileCacheSound`; do not land the slowdown unnoticed.
-- A cross-file rule may not be `ratchet = Baselined`: a baseline row is per file and a cross-file
-  finding has none, so nothing would enforce it. `crossFileMetaProblems` rejects it and
-  `lint_test.mdk` runs that check over `allCrossFileRules`.
-- A cross-file rule with `scope = Internal` is fine: `dropInactiveInternalCross` filters its
+- A project rule has a `prSummarize` (one file to a `Summary`, a pure function of that file) and a
+  `prEvaluate` (every file's summary to findings, run on every run). Add a `Summary` constructor
+  with its codec arms in `lint_cache.mdk` (`encSummary`, `summaryTag`, `readSummary`; the encoder
+  has no wildcard arm, so a missing arm does not compile). Every registered rule's summary is
+  stored in the shard, so `--cache` stays on with no switch to relax.
+- A project rule may not be `ratchet = Baselined`: a baseline row is per file and a cross-file
+  finding has none, so nothing would enforce it. `projectRuleMetaProblems` rejects it and
+  `lint_test.mdk` runs that check over `allProjectRules`.
+- A project rule with `scope = Internal` is fine: `dropInactiveInternalProject` filters its
   findings by whether internal rules are active for the file each lands in, on the text, `--json`,
   `--cache` and MCP paths alike.
 

@@ -18,18 +18,18 @@ set of entries (#4141).
 | `printer.mdk` | The comment-free Wadler/Leijen document printer over the AST | AST to source |
 | `fmt.mdk` | The comment-preserving formatter over `printer.mdk` | `formatProgram` |
 | `lint.mdk` | The `medaka lint` facade: re-exports the framework, registry and runner surface the CLI, MCP and tests consume; holds the `--fix` driver | re-exports, `fixSource` |
-| `lint_core.mdk` | The framework's data types: `Finding`, `Fix`, `FixEdit`, `Applicability`, `Fixability`, `Directive`, `FileFacts`, `Rule`, `RuleCheck`, `Ctx`, `Visitor`, `RuleMeta`, `StdlibIndex`; imports no rule, registry or runner; its closure still holds about 100 `types.*` modules, reached through `frontend.exhaust` (`Oracle`) and `tools.printer` (`ppTy`), pinned by `test/arch_goldens/closure.tools.lint_core.golden` | types |
+| `lint_core.mdk` | The framework's data types: `Finding`, `Fix`, `FixEdit`, `Applicability`, `Fixability`, `Directive`, `FileFacts`, `Rule`, `ProjectRule`, `Summary`, `RuleCheck`, `Ctx`, `Visitor`, `RuleMeta`, `StdlibIndex`; imports no rule, registry or runner; its closure still holds about 100 `types.*` modules, reached through `frontend.exhaust` (`Oracle`) and `tools.printer` (`ppTy`), pinned by `test/arch_goldens/closure.tools.lint_core.golden` | types |
 | `lint_shared.mdk` | Helpers used by more than one lint module: rule-name constants, location helpers, the directive parser, stdlib path predicates | shared helpers |
 | `lint_scope.mdk` | The per-file scope model: every binder with its kind and span, every identifier use resolved to its binder, unused local binders and import-member use counts; built on `frontend.ast_walk`, forbidden to import `types.*` or `tools.refindex`; built as a `FileFacts` memo only for a rule whose `needs` lists `NeedsScopes` | `FileScopes`, `binderOf`, `unusedBinders`, `importUses` |
-| `lint_dup.mdk` | The duplicate-body occurrence engine: per-clause facts, grouping and the cross-file join | `fileDupOccs` |
-| `lint_walk.mdk` | The lint runner: the one visitor walk per file, per-file facts, the autofix driver, filters, inline suppressions, the cross-file runner, stdlib-index builders; imports `lint_registry`, since running a rule means reading the registry's lists | `lintProgram*`, `runVisitors` |
+| `lint_dup.mdk` | The duplicate-body occurrence engine: per-clause facts, grouping and the cross-file join | `dupOccsOfClauses`, `dupJoin` |
+| `lint_walk.mdk` | The lint runner: the one visitor walk per file, per-file facts, the autofix driver, filters, inline suppressions, the project-rule runner, index builders and the index cache key; imports `lint_registry`, since running a rule means reading the registry's lists | `lintProgram*`, `runVisitors` |
 | `lint_fix.mdk` | The `--fix` edit pipeline: resolves each fix's span edits against the source snapshot, applies the non-overlapping subset the applicability limit allows, re-parses; imports no rule, registry or runner (the caller passes the linter in) | `applyFixes`, `parenIfNeeded` |
 | `lint_hints.mdk` | The rewrite-hint engine: compiles a row `lhs ==> rhs` once per process and on first use, matches it against expressions with metavariables, and builds the finding and its span fix; imports no rule, registry or runner | `HintRow`, `compileHints`, `hintVisitors` |
-| `lint_registry.mdk` | THE REGISTRY: `allRules`, the cross-file registry and rule-name selection; one `import ... as Alias` and one `Alias.rule,` line per rule | `allRules`, `allCrossFileRules`, `allRuleNames` |
+| `lint_registry.mdk` | THE REGISTRY: `allRules`, the project-rule registry and rule-name selection; one `import ... as Alias` and one `Alias.rule,` line per rule | `allRules`, `allProjectRules`, `allRuleNames` |
 | `lint_rule_<name>.mdk` | One universal lint rule per module, exporting `rule`; may not import another rule module, the registry or the runner | `rule` |
 | `lint_rule_internal_<name>.mdk` | One internal-scope rule (this repository's conventions) per module, exporting `rule`; same import limits | `rule` |
-| `lint_cmd.mdk` | The `medaka lint` engine: targets, cached pass, cross-file tier, JSON | lint engine |
-| `lint_cache.mdk` | The on-disk per-file cache behind `lint --cache` | content-keyed shards |
+| `lint_cmd.mdk` | The `medaka lint` engine: targets, cached pass, project-rule tier, JSON | lint engine |
+| `lint_cache.mdk` | The on-disk per-file cache behind `lint --cache`: sexp shards keyed by content, binary and index, with two finding groups and per-rule summaries | content-keyed shards |
 | `lint_baseline.mdk` | The per-file, per-rule finding-count baseline | `--baseline` reader |
 | `codemod.mdk` | Named source-preserving AST transforms and their registry | codemod registry |
 | `doc.mdk` | `medaka doc`: doc-comment extraction and Markdown rendering, single file or library | `runDoc`, `renderModulePage` |
