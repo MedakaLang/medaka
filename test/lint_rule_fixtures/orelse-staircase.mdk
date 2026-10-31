@@ -83,3 +83,21 @@ negRewrapTransform k = match lookupA k
   None => match lookupB k
     Some v => Some (g v)
     None => None
+
+-- POSITIVE: probes that bump a counter (the #2700 shape).  The rule still
+-- reports it; the message names the lazy forms and says effectful probes
+-- disqualify any rewrite.
+-- expect-next-line rule-orelse-staircase
+posEffectful ctx k = match bumpProbe ctx k
+  Some v => Some v
+  None => match bumpProbe ctx (k + 1)
+    Some v => Some v
+    None => None
+
+-- NEGATIVE: the last probe is the enclosing function's own recursion (the
+-- #2708 shape); no value-taking or lazy rewrite is a clear win, so no report.
+negSelfRecursive k = match lookupA k
+  Some v => Some v
+  None => match lookupB k
+    Some v => Some v
+    None => negSelfRecursive (k - 1)

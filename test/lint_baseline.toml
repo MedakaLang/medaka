@@ -102,11 +102,6 @@ rule = "rule-stdlib-reimpl"
 count = 1
 
 [[entry]]
-file = "compiler/types/tc_solve_entail.mdk"
-rule = "rule-orelse-staircase"
-count = 2
-
-[[entry]]
 file = "compiler/types/tc_types.mdk"
 rule = "rule-clone-type"
 count = 2
@@ -115,11 +110,6 @@ count = 2
 file = "pds/lib/base58.mdk"
 rule = "rule-stdlib-reimpl"
 count = 2
-
-[[entry]]
-file = "pds/lib/handlers.mdk"
-rule = "rule-orelse-staircase"
-count = 1
 
 [[entry]]
 file = "pds/lib/httpclient.mdk"

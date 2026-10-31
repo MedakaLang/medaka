@@ -1,8 +1,8 @@
 # META
-source_lines=195
+source_lines=211
 stages=DESUGAR,MARK
 # SOURCE
--- lint rule rule-orelse-staircase: a nested first-match probe staircase of `None`/`Err` fall-throughs. Prefer `orElse` or `findMap` (suggest-only).
+-- lint rule rule-orelse-staircase: a nested first-match probe staircase of `None`/`Err` fall-throughs. Prefer the lazy `orElseWith` / `findMap` (suggest-only).
 
 import frontend.ast.{
   Loc(..),
@@ -10,10 +10,11 @@ import frontend.ast.{
   Arm(..),
   Expr(..),
   Decl(..),
+  declBinderNames,
 }
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
-import support.util.{isEmptyL}
+import support.util.{anyList, isEmptyL}
 import tools.lint_core.{
   Category(..),
   Ctx(..),
@@ -34,6 +35,7 @@ import tools.lint_shared.{
   isEVarNamed,
   isNilPCon,
   matchScrutOf,
+  mentionsVar,
   ruleNameOrElseStaircase,
   unwrapLoc,
 }
@@ -45,12 +47,12 @@ rule =
     RuleMeta {
       name = ruleNameOrElseStaircase,
       summary =
-        "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Rewrite with `orElse`/`findMap` (suggest-only)",
+        "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Where the probes are pure and cheap, rewrite with the lazy `orElseWith` / `findMap` (suggest-only)",
       doc =
-        "Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Express it with `orElse` or `findMap`. Suggest-only.\n\nBefore:\n  match probeA x\n    Some v => Some v\n    None => match probeB x\n      Some v => Some v\n      None => probeC x\nAfter:\n  orElse (probeA x) (orElse (probeB x) (probeC x))",
+        "Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Suggest-only.\n\n`orElse a b` takes VALUES, so every probe runs. Use the lazy forms for each probe after the first: `orElseWith a (_ => probe)` for `Option`, `optionOrElse (_ => probe) opt`, `resultOrElse (err => probe) res` for `Result`, or `findMap` when the probes are one function over a list.\n\nNo rewrite applies when a later probe is expensive, effectful, or the enclosing function's own recursion; a staircase whose later probe calls the enclosing function is not reported.\n\nBefore:\n  match probeA x\n    Some v => Some v\n    None => match probeB x\n      Some v => Some v\n      None => probeC x\nAfter:\n  orElseWith (probeA x) (_ => orElseWith (probeB x) (_ => probeC x))",
       category = Complexity,
       scope = Universal,
-      ratchet = Baselined,
+      ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = NotFixable,
       needs = [],
@@ -163,7 +165,23 @@ ruleOrElseStaircase : StdlibIndex ->
 ruleOrElseStaircase _ _ _ _ _ = [OnDecl orElseAt]
 
 orElseAt : Ctx -> Decl -> List Finding
-orElseAt ctx d = map (orElseHeadFinding ctx.ctxSpan) (declHeadHits orElsePick d)
+orElseAt ctx d =
+  map
+    (orElseHeadFinding ctx.ctxSpan)
+    (filter
+      (orElseNotSelfRecursive (declBinderNames d))
+      (declHeadHits orElsePick d))
+
+-- A staircase whose later probe (or final fallback) calls the enclosing function
+-- cannot be turned into value-taking `orElse` without eager recursion; with
+-- `orElseWith` the call still has to stay behind the earlier probes, so the rule
+-- stays silent rather than guess.  The first probe is not a later probe.
+orElseNotSelfRecursive : List String -> (Bool, Expr) -> Bool
+orElseNotSelfRecursive names (isResult, e) =
+  let laterProbes = match orElseOffChain isResult e
+    [] => []
+    _ :: rest => rest
+  not (anyList (n => anyList (mentionsVar n) laterProbes) names)
 
 orElseHeadFinding : Option Loc -> (Bool, Expr) -> Finding
 orElseHeadFinding declLoc (isResult, e) =
@@ -176,13 +194,11 @@ orElseHeadLoc : Option Loc -> Expr -> Option Loc
 orElseHeadLoc _ (ELoc l _) = Some l
 orElseHeadLoc declLoc _ = declLoc
 
--- The rewrite differs by monad, so the message does too.  `orElse` and `findMap`
--- come from `Alternative`, which `stdlib/core.mdk` implements for `List` and
--- `Option` only -- there is no `Alternative Result`, so recommending either over
--- a Result staircase names something that does not typecheck.  And both are
--- eager: Medaka is strict, so the Option rewrite evaluates every probe instead
--- of stopping at the first hit, which makes it a readability change rather than
--- an unconditional improvement.
+-- The rewrite differs by monad, so the message does too.  `orElse`, `orElseWith`
+-- and `findMap` come from `Alternative`, which `stdlib/core.mdk` implements for
+-- `List` and `Option` only -- there is no `Alternative Result`, but `resultOrElse`
+-- takes a lazy handler.  `orElse` itself takes values and is eager, so the
+-- message recommends the lazy forms.
 orElseFinding : Bool -> Option Loc -> Finding
 orElseFinding isResult loc = Finding {
   rule = ruleNameOrElseStaircase,
@@ -194,18 +210,18 @@ orElseFinding isResult loc = Finding {
 
 orElseMessage : Bool -> String
 orElseMessage True =
-  "first-match probe staircase (≥2 `Err` fallthrough re-probes). There is no `Alternative Result`, so `orElse`/`findMap` do not apply -- and Medaka is strict, so no eager combinator would stop at the first hit either; restructure the probes by hand rather than nesting `match`"
+  "first-match probe staircase (≥2 `Err` fallthrough re-probes). There is no `Alternative Result`; if the probes are pure and cheap, chain them lazily with `resultOrElse (_ => probe)` -- never the value-taking `orElse`, which runs every probe. An expensive, effectful or self-recursive later probe disqualifies any rewrite"
 orElseMessage False =
-  "first-match probe staircase (≥2 `None` fallthrough re-probes). Rewrite with `orElse` (Alternative, auto-prelude), or `findMap` when the probes are one function over a list -- both are eager, so the rewrite re-runs every probe instead of stopping at the first hit, and is a readability change only where re-probing is cheap and safe"
+  "first-match probe staircase (≥2 `None` fallthrough re-probes). If the probes are pure and cheap, rewrite with the lazy `orElseWith a (_ => probe)` / `optionOrElse (_ => probe)` for each probe after the first, or `findMap` over a list -- never the value-taking `orElse`, which runs every probe. An expensive, effectful or self-recursive later probe disqualifies any rewrite"
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "Expr" true) (mem "Decl" true) (mem "declBinderNames" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "isEmptyL" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "ctorVarPassthru" false) (mem "declHeadHits" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "ruleNameOrElseStaircase" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "ctorVarPassthru" false) (mem "declHeadHits" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "mentionsVar" false) (mem "ruleNameOrElseStaircase" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameOrElseStaircase")) (fa "summary" (ELit (LString "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Rewrite with `orElse`/`findMap` (suggest-only)"))) (fa "doc" (ELit (LString "Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Express it with `orElse` or `findMap`. Suggest-only.\n\nBefore:\n  match probeA x\n    Some v => Some v\n    None => match probeB x\n      Some v => Some v\n      None => probeC x\nAfter:\n  orElse (probeA x) (orElse (probeB x) (probeC x))"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Baselined")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleOrElseStaircase")) (EVar "None")))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameOrElseStaircase")) (fa "summary" (ELit (LString "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Where the probes are pure and cheap, rewrite with the lazy `orElseWith` / `findMap` (suggest-only)"))) (fa "doc" (ELit (LString "Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Suggest-only.\n\n`orElse a b` takes VALUES, so every probe runs. Use the lazy forms for each probe after the first: `orElseWith a (_ => probe)` for `Option`, `optionOrElse (_ => probe) opt`, `resultOrElse (err => probe) res` for `Result`, or `findMap` when the probes are one function over a list.\n\nNo rewrite applies when a later probe is expensive, effectful, or the enclosing function's own recursion; a staircase whose later probe calls the enclosing function is not reported.\n\nBefore:\n  match probeA x\n    Some v => Some v\n    None => match probeB x\n      Some v => Some v\n      None => probeC x\nAfter:\n  orElseWith (probeA x) (_ => orElseWith (probeB x) (_ => probeC x))"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleOrElseStaircase")) (EVar "None")))
 (DTypeSig false "orElseLevel" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "orElseLevel" ((PVar "isResult") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EMatch" PWild (PVar "arms")) () (EMatch (EVar "arms") (arm (PList (PVar "a1") (PVar "a2")) () (EMatch (EApp (EApp (EApp (EVar "orElseTry") (EVar "isResult")) (EVar "a1")) (EVar "a2")) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "Some") (EVar "c"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "orElseTry") (EVar "isResult")) (EVar "a2")) (EVar "a1"))))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "orElseTry" (TyFun (TyCon "Bool") (TyFun (TyCon "Arm") (TyFun (TyCon "Arm") (TyApp (TyCon "Option") (TyCon "Expr"))))))
@@ -229,7 +245,9 @@ orElseMessage False =
 (DTypeSig false "ruleOrElseStaircase" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleOrElseStaircase" (PWild PWild PWild PWild PWild) (EListLit (EApp (EVar "OnDecl") (EVar "orElseAt"))))
 (DTypeSig false "orElseAt" (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding")))))
-(DFunDef false "orElseAt" ((PVar "ctx") (PVar "d")) (EApp (EApp (EVar "map") (EApp (EVar "orElseHeadFinding") (EFieldAccess (EVar "ctx") "ctxSpan"))) (EApp (EApp (EVar "declHeadHits") (EVar "orElsePick")) (EVar "d"))))
+(DFunDef false "orElseAt" ((PVar "ctx") (PVar "d")) (EApp (EApp (EVar "map") (EApp (EVar "orElseHeadFinding") (EFieldAccess (EVar "ctx") "ctxSpan"))) (EApp (EApp (EVar "filter") (EApp (EVar "orElseNotSelfRecursive") (EApp (EVar "declBinderNames") (EVar "d")))) (EApp (EApp (EVar "declHeadHits") (EVar "orElsePick")) (EVar "d")))))
+(DTypeSig false "orElseNotSelfRecursive" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "Bool") (TyCon "Expr")) (TyCon "Bool"))))
+(DFunDef false "orElseNotSelfRecursive" ((PVar "names") (PTuple (PVar "isResult") (PVar "e"))) (EBlock (DoLet false false (PVar "laterProbes") (EMatch (EApp (EApp (EVar "orElseOffChain") (EVar "isResult")) (EVar "e")) (arm (PList) () (EListLit)) (arm (PCons PWild (PVar "rest")) () (EVar "rest")))) (DoExpr (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "n")) (EApp (EApp (EVar "anyList") (EApp (EVar "mentionsVar") (EVar "n"))) (EVar "laterProbes")))) (EVar "names"))))))
 (DTypeSig false "orElseHeadFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyTuple (TyCon "Bool") (TyCon "Expr")) (TyCon "Finding"))))
 (DFunDef false "orElseHeadFinding" ((PVar "declLoc") (PTuple (PVar "isResult") (PVar "e"))) (EApp (EApp (EVar "orElseFinding") (EVar "isResult")) (EApp (EApp (EVar "orElseHeadLoc") (EVar "declLoc")) (EVar "e"))))
 (DTypeSig false "orElseHeadLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))))
@@ -238,17 +256,17 @@ orElseMessage False =
 (DTypeSig false "orElseFinding" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))
 (DFunDef false "orElseFinding" ((PVar "isResult") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameOrElseStaircase")) (fa "message" (EApp (EVar "orElseMessage") (EVar "isResult"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
 (DTypeSig false "orElseMessage" (TyFun (TyCon "Bool") (TyCon "String")))
-(DFunDef false "orElseMessage" ((PCon "True")) (ELit (LString "first-match probe staircase (≥2 `Err` fallthrough re-probes). There is no `Alternative Result`, so `orElse`/`findMap` do not apply -- and Medaka is strict, so no eager combinator would stop at the first hit either; restructure the probes by hand rather than nesting `match`")))
-(DFunDef false "orElseMessage" ((PCon "False")) (ELit (LString "first-match probe staircase (≥2 `None` fallthrough re-probes). Rewrite with `orElse` (Alternative, auto-prelude), or `findMap` when the probes are one function over a list -- both are eager, so the rewrite re-runs every probe instead of stopping at the first hit, and is a readability change only where re-probing is cheap and safe")))
+(DFunDef false "orElseMessage" ((PCon "True")) (ELit (LString "first-match probe staircase (≥2 `Err` fallthrough re-probes). There is no `Alternative Result`; if the probes are pure and cheap, chain them lazily with `resultOrElse (_ => probe)` -- never the value-taking `orElse`, which runs every probe. An expensive, effectful or self-recursive later probe disqualifies any rewrite")))
+(DFunDef false "orElseMessage" ((PCon "False")) (ELit (LString "first-match probe staircase (≥2 `None` fallthrough re-probes). If the probes are pure and cheap, rewrite with the lazy `orElseWith a (_ => probe)` / `optionOrElse (_ => probe)` for each probe after the first, or `findMap` over a list -- never the value-taking `orElse`, which runs every probe. An expensive, effectful or self-recursive later probe disqualifies any rewrite")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "Expr" true) (mem "Decl" true) (mem "declBinderNames" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "isEmptyL" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "ctorVarPassthru" false) (mem "declHeadHits" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "ruleNameOrElseStaircase" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "ctorVarPassthru" false) (mem "declHeadHits" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "mentionsVar" false) (mem "ruleNameOrElseStaircase" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameOrElseStaircase")) (fa "summary" (ELit (LString "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Rewrite with `orElse`/`findMap` (suggest-only)"))) (fa "doc" (ELit (LString "Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Express it with `orElse` or `findMap`. Suggest-only.\n\nBefore:\n  match probeA x\n    Some v => Some v\n    None => match probeB x\n      Some v => Some v\n      None => probeC x\nAfter:\n  orElse (probeA x) (orElse (probeB x) (probeC x))"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Baselined")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleOrElseStaircase")) (EVar "None")))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameOrElseStaircase")) (fa "summary" (ELit (LString "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Where the probes are pure and cheap, rewrite with the lazy `orElseWith` / `findMap` (suggest-only)"))) (fa "doc" (ELit (LString "Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Suggest-only.\n\n`orElse a b` takes VALUES, so every probe runs. Use the lazy forms for each probe after the first: `orElseWith a (_ => probe)` for `Option`, `optionOrElse (_ => probe) opt`, `resultOrElse (err => probe) res` for `Result`, or `findMap` when the probes are one function over a list.\n\nNo rewrite applies when a later probe is expensive, effectful, or the enclosing function's own recursion; a staircase whose later probe calls the enclosing function is not reported.\n\nBefore:\n  match probeA x\n    Some v => Some v\n    None => match probeB x\n      Some v => Some v\n      None => probeC x\nAfter:\n  orElseWith (probeA x) (_ => orElseWith (probeB x) (_ => probeC x))"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleOrElseStaircase")) (EVar "None")))
 (DTypeSig false "orElseLevel" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "orElseLevel" ((PVar "isResult") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EMatch" PWild (PVar "arms")) () (EMatch (EVar "arms") (arm (PList (PVar "a1") (PVar "a2")) () (EMatch (EApp (EApp (EApp (EVar "orElseTry") (EVar "isResult")) (EVar "a1")) (EVar "a2")) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "Some") (EVar "c"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "orElseTry") (EVar "isResult")) (EVar "a2")) (EVar "a1"))))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "orElseTry" (TyFun (TyCon "Bool") (TyFun (TyCon "Arm") (TyFun (TyCon "Arm") (TyApp (TyCon "Option") (TyCon "Expr"))))))
@@ -272,7 +290,9 @@ orElseMessage False =
 (DTypeSig false "ruleOrElseStaircase" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleOrElseStaircase" (PWild PWild PWild PWild PWild) (EListLit (EApp (EVar "OnDecl") (EVar "orElseAt"))))
 (DTypeSig false "orElseAt" (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding")))))
-(DFunDef false "orElseAt" ((PVar "ctx") (PVar "d")) (EApp (EApp (EMethodRef "map") (EApp (EVar "orElseHeadFinding") (EFieldAccess (EVar "ctx") "ctxSpan"))) (EApp (EApp (EVar "declHeadHits") (EVar "orElsePick")) (EVar "d"))))
+(DFunDef false "orElseAt" ((PVar "ctx") (PVar "d")) (EApp (EApp (EMethodRef "map") (EApp (EVar "orElseHeadFinding") (EFieldAccess (EVar "ctx") "ctxSpan"))) (EApp (EApp (EMethodRef "filter") (EApp (EVar "orElseNotSelfRecursive") (EApp (EVar "declBinderNames") (EVar "d")))) (EApp (EApp (EVar "declHeadHits") (EVar "orElsePick")) (EVar "d")))))
+(DTypeSig false "orElseNotSelfRecursive" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "Bool") (TyCon "Expr")) (TyCon "Bool"))))
+(DFunDef false "orElseNotSelfRecursive" ((PVar "names") (PTuple (PVar "isResult") (PVar "e"))) (EBlock (DoLet false false (PVar "laterProbes") (EMatch (EApp (EApp (EVar "orElseOffChain") (EVar "isResult")) (EVar "e")) (arm (PList) () (EListLit)) (arm (PCons PWild (PVar "rest")) () (EVar "rest")))) (DoExpr (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "n")) (EApp (EApp (EVar "anyList") (EApp (EVar "mentionsVar") (EVar "n"))) (EVar "laterProbes")))) (EVar "names"))))))
 (DTypeSig false "orElseHeadFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyTuple (TyCon "Bool") (TyCon "Expr")) (TyCon "Finding"))))
 (DFunDef false "orElseHeadFinding" ((PVar "declLoc") (PTuple (PVar "isResult") (PVar "e"))) (EApp (EApp (EVar "orElseFinding") (EVar "isResult")) (EApp (EApp (EVar "orElseHeadLoc") (EVar "declLoc")) (EVar "e"))))
 (DTypeSig false "orElseHeadLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))))
@@ -281,5 +301,5 @@ orElseMessage False =
 (DTypeSig false "orElseFinding" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))
 (DFunDef false "orElseFinding" ((PVar "isResult") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameOrElseStaircase")) (fa "message" (EApp (EVar "orElseMessage") (EVar "isResult"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
 (DTypeSig false "orElseMessage" (TyFun (TyCon "Bool") (TyCon "String")))
-(DFunDef false "orElseMessage" ((PCon "True")) (ELit (LString "first-match probe staircase (≥2 `Err` fallthrough re-probes). There is no `Alternative Result`, so `orElse`/`findMap` do not apply -- and Medaka is strict, so no eager combinator would stop at the first hit either; restructure the probes by hand rather than nesting `match`")))
-(DFunDef false "orElseMessage" ((PCon "False")) (ELit (LString "first-match probe staircase (≥2 `None` fallthrough re-probes). Rewrite with `orElse` (Alternative, auto-prelude), or `findMap` when the probes are one function over a list -- both are eager, so the rewrite re-runs every probe instead of stopping at the first hit, and is a readability change only where re-probing is cheap and safe")))
+(DFunDef false "orElseMessage" ((PCon "True")) (ELit (LString "first-match probe staircase (≥2 `Err` fallthrough re-probes). There is no `Alternative Result`; if the probes are pure and cheap, chain them lazily with `resultOrElse (_ => probe)` -- never the value-taking `orElse`, which runs every probe. An expensive, effectful or self-recursive later probe disqualifies any rewrite")))
+(DFunDef false "orElseMessage" ((PCon "False")) (ELit (LString "first-match probe staircase (≥2 `None` fallthrough re-probes). If the probes are pure and cheap, rewrite with the lazy `orElseWith a (_ => probe)` / `optionOrElse (_ => probe)` for each probe after the first, or `findMap` over a list -- never the value-taking `orElse`, which runs every probe. An expensive, effectful or self-recursive later probe disqualifies any rewrite")))
