@@ -9464,9 +9464,10 @@ resolveImplGroup : Emit -> OrdMap CImplEntry -> ImplClauseGroup -> ImplGroup
 resolveImplGroup e index group =
   let entries =
     map
-      (i => match omLookup (intToString i) index
-        Some entry => entry
-        None => panic "llvm: invalid impl group ordinal")
+      (i =>
+        optionOrPanic
+          "llvm: invalid impl group ordinal"
+          (omLookup (intToString i) index))
       group.indices
   match entries
     ent :: _ =>

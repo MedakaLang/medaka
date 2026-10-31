@@ -4551,9 +4551,10 @@ resolveImplGroupW : OrdMap CImplEntry -> ImplClauseGroup -> ImplG
 resolveImplGroupW index group =
   let entries =
     map
-      (i => match omLookup (intToString i) index
-        Some entry => entry
-        None => panic "wasm: invalid impl group ordinal")
+      (i =>
+        optionOrPanic
+          "wasm: invalid impl group ordinal"
+          (omLookup (intToString i) index))
       group.indices
   match entries
     ent :: _ =>
