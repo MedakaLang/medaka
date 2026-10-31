@@ -366,6 +366,7 @@ import backend.wasm_symbols.{
   emptyRegistry,
   excuseSymbol,
   unresolved,
+  unresolvedFunctions,
 }
 import support.symbol_origin.{SymbolOrigin(..)}
 import backend.wasm_preamble.{
@@ -1564,6 +1565,8 @@ symbolDefectsW emit =
   reverseL !emit.symbolDefects
     ++ (if emit.closureChecked && emit.completionChecked then
       unresolved !emit.symbols
+    else if not emit.closureChecked && emit.completionChecked then
+      unresolvedFunctions WD.helperFunctionNames !emit.symbols
     else
       [])
 
@@ -1984,6 +1987,7 @@ emitProgramGaps input plan cp0 =
       input
       emit
       (freshFnCtx ())
+  let _ = seedSymbolsW prog (WD.censusWasmDemand (physicalPlanW plan)) []
   let _ = emitFnsGapsW prog (userFnBinds groups)
   let _ = emitImplsGapsW prog (progImplGroups prog)
   let _ = emitValsGapsW prog (filterList isValBind groups)

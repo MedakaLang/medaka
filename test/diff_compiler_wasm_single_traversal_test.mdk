@@ -7,6 +7,7 @@ import test_process.{
   expectSpawnOk, expectSpawnOkLine, expectSpawnFailsAll
 }
 import fs.{mkdirAll}
+import io.{runVerb}
 import string.{contains, startsWith, lines, join, stripPrefix, split}
 
 data ValueCase = ValueCase String String String
@@ -635,3 +636,51 @@ test "current entry routes preserve values, physical ABIs, first traps and named
     Some dir => match mkdirAll dir
       Err e => fail e
       Ok _ => runJudges dir
+
+manifestProbe : String
+manifestProbe = join "\n" [
+  "import backend.wasm_demand.{helperManifest, HelperManifest(..)}",
+  "import backend.emit_plan.{prepareWasmPlan}",
+  "import backend.extern_catalog.{RuntimeExternDomain(..)}",
+  "import frontend.parser.{parse}",
+  "import frontend.desugar.{desugar}",
+  "import types.annotate.{annotateProgram}",
+  "import types.program_facts.{emptyFacts}",
+  "import ir.core_ir_lower.{lowerProgramEmitWith}",
+  "import support.ordmap.{omEmpty}",
+  "main =",
+  "  let cp = lowerProgramEmitWith emptyFacts (annotateProgram (desugar (parse \"main = 1\")))",
+  "  let (plan, _) = prepareWasmPlan PreludeFreeRuntime omEmpty cp",
+  "  let physical = optionOrPanic \"missing plan\" plan.wasmPhysical",
+  "  match helperManifest physical \"notAHelper\"",
+  "    HelperManifest defs _ => length defs",
+]
+
+test "unknown helper manifests refuse by name" = withScratchDir
+  (dir =>
+    match (runVerb "sh" [
+      "-c",
+      "root=$(cd \"$1\" && pwd -P) || exit 1; for d in backend frontend types ir support driver eval tools; do ln -s \"$root/compiler/$d\" \"$2/$d\" || exit 1; done; cp \"$root/compiler/medaka.toml\" \"$2/medaka.toml\"",
+      "sh", medakaRoot, dir
+    ])
+      Err e => fail e
+      Ok (code, _, err) =>
+        if code /= 0 then
+          fail err
+        else match (
+          writeFile (dir ++ "/probe.mdk") manifestProbe,
+          writeFile (dir ++ "/good.mdk") "main = 1",
+        )
+          (Ok _, Ok _) => expectAll [
+            expectSpawnFailsAll "env" (strictArgs medakaBin [
+              "run",
+              dir ++ "/probe.mdk",
+            ]) [
+              "unknown-wasm-helper-manifest: notAHelper",
+            ],
+            expectSpawnOkLine
+              "env"
+              (strictArgs medakaBin ["run", dir ++ "/good.mdk"])
+              "1",
+          ]
+          _ => fail "could not write manifest probes")
