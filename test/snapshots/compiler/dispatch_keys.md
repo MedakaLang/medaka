@@ -1,5 +1,5 @@
 # META
-source_lines=159
+source_lines=166
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/types/dispatch_keys.mdk — the pure projections of a declaration list
@@ -35,10 +35,12 @@ export
 tupleHeadTag : Int -> String
 tupleHeadTag n = "__tuple" ++ intToString n ++ "__"
 
--- The head tag an impl is filed under.  Every arm has a counterpart in
--- `typecheck.headTyNode`, which stamps the caller side; an arm missing here files the
--- impl under `__none__` while its callers look it up under the real tag (#1617).
--- `funHeadTag` is imported rather than respelled so the two sides cannot drift.
+-- The head tag an impl is filed under.  The caller side stamps the same tag in
+-- `tc_mono.headTyconTy` (it peels `TyApp`, `TyEffect` and `TyConstrained` through
+-- `headTyNode` and answers the `TyTuple` and `TyFun` heads itself); an arm missing
+-- here files the impl under `__none__` while its callers look it up under the real
+-- tag (#1617).  `funHeadTag` is imported rather than respelled so the two sides
+-- cannot drift.
 headTycon : Ty -> Option String
 headTycon (TyCon { tyConName = n, tyConOrigin = o }) = Some (typeTagOf o n)
 headTycon (TyApp a _) = headTycon a
@@ -116,6 +118,11 @@ tyMentions (TyAuth _ _) _ = False
 -- One row per interface method: ((interface identity, interface, method), the
 -- argument positions that carry the receiver).  The identity is read off
 -- `ifaceOrigin`, so two modules' same-named interfaces are two rows.
+--
+-- The interpreter must not call this directly: its drivers get the table through
+-- `eval.installDispatchTables`, which installs it together with the method reqCount
+-- tables `applyMethodDicts` reads (#315, #413).  Only the lowering, which reads no
+-- installed state, uses it bare.
 export
 buildIfaceDispatch : List Decl -> List ((String, String, String), List Int)
 buildIfaceDispatch prog = flatMap ifaceDispatchEntries prog

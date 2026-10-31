@@ -682,7 +682,7 @@ ppPredArgsShared : List Mono -> String
 ppPredArgsShared ms = joinWith " " (ppEach (Ref []) (Ref 0) 3 ms)
 
 -- Native Gap C: the arity-distinguished tuple dispatch tag (`__tuple2__`, …),
--- byte-identical to eval.mdk's `tupleHeadTag`.  Stamped as the RKey route tag at a
+-- byte-identical to `dispatch_keys.tupleHeadTag`.  Stamped as the RKey route tag at a
 -- tuple method site so each arity routes to its own impl group / lifted define.
 export
 tupleHeadTagTc : Int -> String

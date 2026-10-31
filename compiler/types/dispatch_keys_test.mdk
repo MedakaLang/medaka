@@ -20,6 +20,12 @@ test "an impl head is the head of its first type argument" = expectAll [
   expectEqual None (headTyconHead [TyVar "a"]),
 ]
 
+test "an effect row or a constraint is peeled to find the head" = expectAll [
+  expectEqual (Some "Int") (headTyconHead [TyEffect [] [] (con "Int")]),
+  expectEqual (Some "Int") (headTyconHead [TyConstrained [] (con "Int")]),
+  expectEqual None (headTyconHead [TyConstrained [] (TyVar "a")]),
+]
+
 test "a tuple head carries its arity and an arrow head is the function tag" = expectAll
   [
     expectEqual

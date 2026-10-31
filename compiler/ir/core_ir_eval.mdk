@@ -501,7 +501,9 @@ cClauseClosure env (CClause pats body) = VClosureF env pats (e => ceval e body)
 -- Mirror of eval.mdk's evalProgram, but installs Core IR groups.  A nullary
 -- top-level binding becomes a deferred VThunk (forced on first lookup) so
 -- point-free defs can reference values installed later, in any order.
-export
+-- Not exported: it installs no dispatch tables, so a caller would silently run
+-- without the method reqCounts.  `cevalMainOf`, `cevalOutputOf` and `cevalModules`
+-- are the ways in.
 cevalProgram : CProgram -> <e> List (String, Value e)
 cevalProgram (CProgram groups ctorArs ctorToType implEntries _ _) =
   ctorToTypeRef := ctorToType
@@ -596,7 +598,6 @@ cTopGroupValue env [CClause pats body]
 cTopGroupValue env clauses = VMulti (map (cClauseClosure env) clauses)
 
 -- ── entry point (pure-value path, diffed via pp_value of `main`) ───────────
-export
 cevalMain : CProgram -> String
 cevalMain prog = match lookupBinding "main" (cevalProgram prog)
   Some v => ppValue (force v)
@@ -606,7 +607,6 @@ cevalMain prog = match lookupBinding "main" (cevalProgram prog)
 -- append to eval.mdk's outputChunks) and return the captured stdout — the Core-IR
 -- analog of eval.mdk's evalOutput, for the typed / run corpora that diff stdout
 -- (=== EVAL === goldens) rather than pp_value of `main`.
-export
 cevalOutput : CProgram -> String
 cevalOutput prog =
   resetOutput ()
@@ -629,8 +629,9 @@ cRunMainForEffect binds = match lookupBinding "main" binds
 -- rather than as a side effect of lowering.  Without the reqCount tables every
 -- reqCount lookup answers None and the dict-forwarding fix of #413 is inert (`impl S
 -- (List a) requires S a where s _ = 2` panics "applied non-function: 2").
--- Callers pass the SAME facts and decl list they lowered — for the elaborated corpora
--- that is the post-`elaborate*` list, not the raw parameters.
+-- Callers pass the SAME facts and decl list they lowered — the post-`elaborate*` list
+-- for the elaborated corpora and the post-`annotateProgram` list for the untyped
+-- ones, not the raw parameters.
 export
 cevalMainOf : ProgramFacts -> List Decl -> CProgram -> String
 cevalMainOf facts decls prog =

@@ -3699,7 +3699,7 @@ methodResultTy (TyQual t _ _) = methodResultTy t
 methodResultTy t = t
 
 -- does a type mention one of the given interface type-parameter names? (the
--- result-side twin of eval.mdk's non-exported `tyMentions`).
+-- result-side twin of `dispatch_keys.mdk`'s non-exported `tyMentions`).
 tyMentionsParams : Ty -> List String -> Bool
 tyMentionsParams (TyVar n) params = contains n params
 tyMentionsParams (TyCon { tyConName = _ }) _ = False
@@ -3712,7 +3712,7 @@ tyMentionsParams (TyTuple ts) params =
 tyMentionsParams (TyEffect _ _ t) params = tyMentionsParams t params
 -- A bare row atom (#997) has no wrapped type, but a bare tail var (`<e>`,
 -- no labels) IS a mention of that name, same as a bare `TyVar` above.
--- Intentional cross-file duplicate of eval.mdk's tyMentions TyRow clause;
+-- Intentional cross-file duplicate of dispatch_keys.mdk's tyMentions TyRow clause;
 -- not consolidating (tiny helper / divergent-by-design untyped-eval vs
 -- typed-core-IR pair — same precedent as typecheck.mdk's and doc.mdk's
 -- ppEffAtomTy).

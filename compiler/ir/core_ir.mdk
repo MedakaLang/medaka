@@ -104,7 +104,7 @@ public export data CExpr =
   -- A fixed-width tag ("U8"/"U16"/"U32", `ast.fixedWidthMask`) is not only a hint:
   -- every engine MUST reduce an arithmetic result modulo 2^n on it.
   -- The 5th field is the trap site of an overflow or zero-divisor abort: the start
-  -- of the left operand, the span the interpreter's `exprStartLoc` names.  An
+  -- of the left operand, the span `types/expr_loc.exprStartLoc` names.  An
   -- engine that cannot print a location ignores it.
   | CBinPrim String CExpr CExpr String Loc
   | CUnOp String CExpr
