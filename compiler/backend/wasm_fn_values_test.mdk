@@ -384,3 +384,28 @@ test "bare sentinel precedence" =
       expectEqual ["f"] (uses ["ctrl"] [ctrl] (CTuple [var "ctrl", var "f"])),
     ),
   ]
+
+test "block lambda initializer uses renderer scope" =
+  let asPat = PAs "g" noDeclLoc noBinderId (pat "f")
+  expectEach [
+    example
+      "as lambda"
+      ["f"]
+      (CBlock [CSLet False asPat (CLam [pat "x"] (var "f")), CSExpr unit]),
+    example
+      "recursive variable lambda"
+      []
+      (CBlock [CSLet False (pat "f") (CLam [pat "x"] (var "f")), CSExpr unit]),
+    example
+      "non-lambda initializer"
+      ["f"]
+      (CBlock [CSLet False (pat "f") (var "f"), CSExpr (var "f")]),
+    example
+      "outer use before binding"
+      ["f"]
+      (CBlock [
+        CSExpr (var "f"),
+        CSLet False (pat "f") (CLam [] (var "f")),
+        CSExpr unit,
+      ]),
+  ]

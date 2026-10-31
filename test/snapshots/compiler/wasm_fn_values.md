@@ -2,7 +2,7 @@
 source_lines=225
 stages=DESUGAR,MARK
 # SOURCE
-import frontend.ast.{Pat, Route(..), patBoundNames}
+import frontend.ast.{Pat(..), Route(..), patBoundNames}
 import ir.core_ir.{
   CProgram(..), CBind(..), CClause(..), CExpr(..), CImplEntry(..),
   CImplBody(..), CArm(..), CGuard(..), CStmt(..), CField(..),
@@ -223,12 +223,12 @@ walkBlock scope acc ((CSAssign _ expr) :: rest) =
   walkBlock scope (walkExpr scope acc expr) rest
 walkBlock scope acc ((CSLet _ pat expr) :: rest) =
   let inner = withPats scope [pat]
-  let rhsScope = match expr
-    CLam _ _ => inner
+  let rhsScope = match (pat, expr)
+    (PVar _ _ _, CLam _ _) => inner
     _ => scope
   walkBlock inner (walkExpr rhsScope acc expr) rest
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" false) (mem "Route" true) (mem "patBoundNames" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "patBoundNames" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "MethodEvidence" true) (mem "CallSite" true) (mem "CallMode" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false))))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
@@ -304,9 +304,9 @@ walkBlock scope acc ((CSLet _ pat expr) :: rest) =
 (DFunDef false "walkBlock" (PWild (PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "walkBlock" ((PVar "scope") (PVar "acc") (PCons (PCon "CSExpr" (PVar "expr")) (PVar "rest"))) (EApp (EApp (EApp (EVar "walkBlock") (EVar "scope")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "scope")) (EVar "acc")) (EVar "expr"))) (EVar "rest")))
 (DFunDef false "walkBlock" ((PVar "scope") (PVar "acc") (PCons (PCon "CSAssign" PWild (PVar "expr")) (PVar "rest"))) (EApp (EApp (EApp (EVar "walkBlock") (EVar "scope")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "scope")) (EVar "acc")) (EVar "expr"))) (EVar "rest")))
-(DFunDef false "walkBlock" ((PVar "scope") (PVar "acc") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "expr")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "withPats") (EVar "scope")) (EListLit (EVar "pat")))) (DoLet false false (PVar "rhsScope") (EMatch (EVar "expr") (arm (PCon "CLam" PWild PWild) () (EVar "inner")) (arm PWild () (EVar "scope")))) (DoExpr (EApp (EApp (EApp (EVar "walkBlock") (EVar "inner")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "rhsScope")) (EVar "acc")) (EVar "expr"))) (EVar "rest")))))
+(DFunDef false "walkBlock" ((PVar "scope") (PVar "acc") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "expr")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "withPats") (EVar "scope")) (EListLit (EVar "pat")))) (DoLet false false (PVar "rhsScope") (EMatch (ETuple (EVar "pat") (EVar "expr")) (arm (PTuple (PCon "PVar" PWild PWild PWild) (PCon "CLam" PWild PWild)) () (EVar "inner")) (arm PWild () (EVar "scope")))) (DoExpr (EApp (EApp (EApp (EVar "walkBlock") (EVar "inner")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "rhsScope")) (EVar "acc")) (EVar "expr"))) (EVar "rest")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" false) (mem "Route" true) (mem "patBoundNames" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "patBoundNames" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "MethodEvidence" true) (mem "CallSite" true) (mem "CallMode" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false))))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
@@ -382,4 +382,4 @@ walkBlock scope acc ((CSLet _ pat expr) :: rest) =
 (DFunDef false "walkBlock" (PWild (PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "walkBlock" ((PVar "scope") (PVar "acc") (PCons (PCon "CSExpr" (PVar "expr")) (PVar "rest"))) (EApp (EApp (EApp (EVar "walkBlock") (EVar "scope")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "scope")) (EVar "acc")) (EVar "expr"))) (EVar "rest")))
 (DFunDef false "walkBlock" ((PVar "scope") (PVar "acc") (PCons (PCon "CSAssign" PWild (PVar "expr")) (PVar "rest"))) (EApp (EApp (EApp (EVar "walkBlock") (EVar "scope")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "scope")) (EVar "acc")) (EVar "expr"))) (EVar "rest")))
-(DFunDef false "walkBlock" ((PVar "scope") (PVar "acc") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "expr")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "withPats") (EVar "scope")) (EListLit (EVar "pat")))) (DoLet false false (PVar "rhsScope") (EMatch (EVar "expr") (arm (PCon "CLam" PWild PWild) () (EVar "inner")) (arm PWild () (EVar "scope")))) (DoExpr (EApp (EApp (EApp (EVar "walkBlock") (EVar "inner")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "rhsScope")) (EVar "acc")) (EVar "expr"))) (EVar "rest")))))
+(DFunDef false "walkBlock" ((PVar "scope") (PVar "acc") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "expr")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "withPats") (EVar "scope")) (EListLit (EVar "pat")))) (DoLet false false (PVar "rhsScope") (EMatch (ETuple (EVar "pat") (EVar "expr")) (arm (PTuple (PCon "PVar" PWild PWild PWild) (PCon "CLam" PWild PWild)) () (EVar "inner")) (arm PWild () (EVar "scope")))) (DoExpr (EApp (EApp (EApp (EVar "walkBlock") (EVar "inner")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "rhsScope")) (EVar "acc")) (EVar "expr"))) (EVar "rest")))))

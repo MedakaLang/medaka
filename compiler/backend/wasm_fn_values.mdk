@@ -1,4 +1,4 @@
-import frontend.ast.{Pat, Route(..), patBoundNames}
+import frontend.ast.{Pat(..), Route(..), patBoundNames}
 import ir.core_ir.{
   CProgram(..), CBind(..), CClause(..), CExpr(..), CImplEntry(..),
   CImplBody(..), CArm(..), CGuard(..), CStmt(..), CField(..),
@@ -219,7 +219,7 @@ walkBlock scope acc ((CSAssign _ expr) :: rest) =
   walkBlock scope (walkExpr scope acc expr) rest
 walkBlock scope acc ((CSLet _ pat expr) :: rest) =
   let inner = withPats scope [pat]
-  let rhsScope = match expr
-    CLam _ _ => inner
+  let rhsScope = match (pat, expr)
+    (PVar _ _ _, CLam _ _) => inner
     _ => scope
   walkBlock inner (walkExpr rhsScope acc expr) rest
