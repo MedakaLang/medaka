@@ -31,7 +31,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-self-shadow-extern`](#rule-self-shadow-extern) | universal | correctness | gated | not-fixable | file |
 | [`rule-prefer-assign-op`](#rule-prefer-assign-op) | universal | style | gated | fixable | file |
 | [`rule-promissory-reader`](#rule-promissory-reader) | internal | style | gated | not-fixable | file |
-| [`rule-orelse-staircase`](#rule-orelse-staircase) | universal | complexity | baselined | not-fixable | file |
+| [`rule-orelse-staircase`](#rule-orelse-staircase) | universal | complexity | gated | not-fixable | file |
 | [`rule-clone-type`](#rule-clone-type) | universal | style | baselined | not-fixable | file |
 | [`rule-clause-map`](#rule-clause-map) | universal | style | baselined | not-fixable | file |
 | [`rule-duplicate-body`](#rule-duplicate-body) | universal | complexity | gated | not-fixable | file, cross |
@@ -399,9 +399,13 @@ After:
 
 ## rule-orelse-staircase
 
-first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Rewrite with `orElse`/`findMap` (suggest-only)
+first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Where the probes are pure and cheap, rewrite with the lazy `orElseWith` / `findMap` (suggest-only)
 
-Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Express it with `orElse` or `findMap`. Suggest-only.
+Two or more nested `None`/`Err` fall-through re-probes, each success arm handing its payload straight back, are a first-match search. Suggest-only.
+
+`orElse a b` takes VALUES, so every probe runs. Use the lazy forms for each probe after the first: `orElseWith a (_ => probe)` for `Option`, `optionOrElse (_ => probe) opt`, `resultOrElse (err => probe) res` for `Result`, or `findMap` when the probes are one function over a list.
+
+No rewrite applies when a later probe is expensive, effectful, or the enclosing function's own recursion; a staircase whose later probe calls the enclosing function is not reported.
 
 ```
 Before:
@@ -411,7 +415,7 @@ Before:
       Some v => Some v
       None => probeC x
 After:
-  orElse (probeA x) (orElse (probeB x) (probeC x))
+  orElseWith (probeA x) (_ => orElseWith (probeB x) (_ => probeC x))
 ```
 
 ## rule-clone-type

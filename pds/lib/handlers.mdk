@@ -2706,7 +2706,10 @@ pdsHandler : Account ->
   String ->
   Handler <Mint {"access", "refresh"}, Sign "commit">
 pdsHandler account links version context outcome store call =
-  match recordHandled account context store call
+  let recorded = recordHandled account context store call
+  -- Each probe is a whole endpoint handler (store update, Mint/Sign effects); only the first match may run.
+  -- lint-disable-next-line rule-orelse-staircase
+  match recorded
     Some result => result
     None => match sessionHandled account context outcome store call
       Some result => result

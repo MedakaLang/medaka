@@ -1,5 +1,5 @@
 # META
-source_lines=2396
+source_lines=2400
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve_entail: entailment as routes: the judgment `P ⊢ π ⇝ e` at a site (`entail` and its
@@ -1262,6 +1262,8 @@ entail sx name m encl useScope kind =
       result
     None => match headTyconMono m
       Some hk => entailInst sx name m encl useScope (headKeyTag hk) kind
+      -- Each later rung is an instance search that must run only when the earlier ones miss, and the final fallback records a numeric entailment; the lazy forms would not shorten this.
+      -- lint-disable-next-line rule-orelse-staircase
       None => match entailRigidLead sx m encl useScope kind
         Some result => result
         None => match entailDetermined sx name encl useScope kind
@@ -1433,6 +1435,8 @@ entailAssumVar mctx request m encl _ useScope (EKNumReturn _ _ _ _) =
 entailAssumVar mctx _ m encl _ useScope (EKNestedTop iface _ _ rest) =
   let request =
     PredicateRequest { prIface = iface, prArgs = PSArgsKnown (m :: rest) }
+  -- Each later rung scans the dictionary-slot graph and is a costlier fallback than the one before; it must run only on a miss.
+  -- lint-disable-next-line rule-orelse-staircase
   match activeFunDictPredOf mctx.mcGraph request useScope
     Some answer => Some answer
     -- #1318 residual: EKNestedTop can still carry OriginUnresolved (#1507).  Preserve
