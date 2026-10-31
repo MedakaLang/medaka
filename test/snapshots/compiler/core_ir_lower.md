@@ -1,5 +1,5 @@
 # META
-source_lines=4164
+source_lines=4156
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -128,13 +128,13 @@ import types.program_facts.{
   factsNow,
   withFacts,
 }
-import eval.eval.{
+import types.dispatch_keys.{
   buildCtorToType,
-  installDispatchTables,
+  buildIfaceDispatch,
   tyvarsInArgs,
   headTyconHead,
-  exprStartLoc,
 }
+import types.expr_loc.{exprStartLoc}
 import list.{replicate, take, drop, range, sortBy}
 import support.ordmap.{
   OrdMap,
@@ -962,9 +962,7 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 -- leaves a method to its interface's default therefore gets no body for it here.  A
 -- driver that typechecks lowers through `lowerTypedProgramWith`.
 --
--- Evidence and binder rows are read from [facts]; the CProgram ignores its
--- dispositions, but `lowerProgramWith` still passes `(factsNow ()).pfDispositions` to
--- `installDispatchTables`.
+-- Evidence and binder rows are read from [facts].
 export
 lowerProgramWithFacts : ProgramFacts -> List Decl -> CProgram
 lowerProgramWithFacts facts prog = withFacts facts (_ =>
@@ -1004,7 +1002,7 @@ lowerProgramWith dispositions pins prog =
   stampImplSymbols
     pins
     (CProgram groups (ctorArities prog) ctorTypes (lowerImplsRaw
-      (installDispatchTables (factsNow ()).pfDispositions prog)
+      (buildIfaceDispatch prog)
       (instanceReqCounts prog)
       (declaredMethodArities prog)
       dispositions
@@ -3102,16 +3100,10 @@ clauseOf (OriginClause _ _ clause _ _) = clause
 -- table once, then emit one CImplEntry per impl-method clause (tagged by the
 -- impl's concrete type head) and per interface default (untagged fallback).  The
 -- method BODY is lowered to CExpr; the tag / positions / score are pure AST
--- computations reused from eval.mdk so the Core IR stays Ty-free.
--- #315/#413: installDispatchTables both BUILDS the dispatch table (as
--- buildIfaceDispatch did) and installs it alongside the method reqCount table that
--- applyMethodDicts consults.  cevalProgram is handed a CProgram and so has no decls
--- of its own to derive them from; lowering is the last point that still does.
--- Without this the Core-IR interpreter's reqCount lookups all returned None and
--- #413's fix was inert there (proven: `impl S (List a) requires S a where s _ = 2`
--- ran correctly under `medaka run` but panicked "applied non-function: 2" under
--- core_ir_typed_main).  The emit path lowers through here too and never reads the
--- tables, so installing is a no-op for it.
+-- computations shared with eval.mdk through types/dispatch_keys.mdk so the Core IR
+-- stays Ty-free.  Lowering installs nothing: the Core-IR interpreter's reqCount
+-- tables are installed by its drivers (`cevalMainOf`, `cevalOutputOf`), which
+-- `cevalProgram` cannot do itself because it is handed a CProgram with no decls.
 
 -- ── the declared impls, read off the impl DECLS ────────────────────────────────
 -- One row per DECLARED impl: (iface identity, iface, head tag, canonical impl key).
@@ -3708,7 +3700,7 @@ methodResultTy (TyQual t _ _) = methodResultTy t
 methodResultTy t = t
 
 -- does a type mention one of the given interface type-parameter names? (the
--- result-side twin of eval.mdk's non-exported `tyMentions`).
+-- result-side twin of `dispatch_keys.mdk`'s non-exported `tyMentions`).
 tyMentionsParams : Ty -> List String -> Bool
 tyMentionsParams (TyVar n) params = contains n params
 tyMentionsParams (TyCon { tyConName = _ }) _ = False
@@ -3721,7 +3713,7 @@ tyMentionsParams (TyTuple ts) params =
 tyMentionsParams (TyEffect _ _ t) params = tyMentionsParams t params
 -- A bare row atom (#997) has no wrapped type, but a bare tail var (`<e>`,
 -- no labels) IS a mention of that name, same as a bare `TyVar` above.
--- Intentional cross-file duplicate of eval.mdk's tyMentions TyRow clause;
+-- Intentional cross-file duplicate of dispatch_keys.mdk's tyMentions TyRow clause;
 -- not consolidating (tiny helper / divergent-by-design untyped-eval vs
 -- typed-core-IR pair — same precedent as typecheck.mdk's and doc.mdk's
 -- ppEffAtomTy).
@@ -4179,7 +4171,8 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "emptyDispositionTable" false) (mem "ifaceSuperCount" false) (mem "inheritorsOf" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "factsNow" false) (mem "withFacts" false))))
-(DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "installDispatchTables" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false) (mem "exprStartLoc" false))))
+(DUse false (UseGroup ("types" "dispatch_keys") ((mem "buildCtorToType" false) (mem "buildIfaceDispatch" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false))))
+(DUse false (UseGroup ("types" "expr_loc") ((mem "exprStartLoc" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false) (mem "range" false) (mem "sortBy" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omKeys" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "externDeclaredName" false) (mem "injectiveIdent" false))))
@@ -4512,7 +4505,7 @@ nodeTag _ = "?"
 (DTypeSig true "lowerTypedProgramWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
 (DFunDef false "lowerTypedProgramWith" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "dispositions") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "disposition table: no elaboration has published one"))) (EFieldAccess (EVar "facts") "pfDispositions"))) (DoExpr (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EApp (EApp (EApp (EVar "finishLowering") (EVar "TypedLowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EApp (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "Some") (EVar "dispositions"))) (EListLit)) (EVar "prog")))))))))
 (DTypeSig false "lowerProgramWith" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))))
-(DFunDef false "lowerProgramWith" ((PVar "dispositions") (PVar "pins") (PVar "prog")) (EBlock (DoLet false false (PVar "origins") (EApp (EVar "originsFor") (EVar "prog"))) (DoLet false false (PVar "groups") (EApp (EVar "lowerGroupsRaw") (EVar "prog"))) (DoLet false false (PVar "ctorTypes") (EApp (EVar "buildCtorToType") (EVar "prog"))) (DoLet false false (PVar "symbols") (EApp (EApp (EApp (EVar "projectOrigins") (EVar "origins")) (EVar "groups")) (EVar "ctorTypes"))) (DoExpr (EApp (EApp (EVar "stampImplSymbols") (EVar "pins")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EApp (EVar "ctorArities") (EVar "prog"))) (EVar "ctorTypes")) (EApp (EApp (EApp (EApp (EApp (EVar "lowerImplsRaw") (EApp (EApp (EVar "installDispatchTables") (EFieldAccess (EApp (EVar "factsNow") (ELit LUnit)) "pfDispositions")) (EVar "prog"))) (EApp (EVar "instanceReqCounts") (EVar "prog"))) (EApp (EVar "declaredMethodArities") (EVar "prog"))) (EVar "dispositions")) (EVar "prog"))) (EApp (EVar "methodContextSlotCounts") (EVar "prog"))) (ERecordUpdate (EVar "noDeclFacts") ((fa "factSymbolOrigins" (EApp (EVar "Some") (EVar "symbols"))))))))))
+(DFunDef false "lowerProgramWith" ((PVar "dispositions") (PVar "pins") (PVar "prog")) (EBlock (DoLet false false (PVar "origins") (EApp (EVar "originsFor") (EVar "prog"))) (DoLet false false (PVar "groups") (EApp (EVar "lowerGroupsRaw") (EVar "prog"))) (DoLet false false (PVar "ctorTypes") (EApp (EVar "buildCtorToType") (EVar "prog"))) (DoLet false false (PVar "symbols") (EApp (EApp (EApp (EVar "projectOrigins") (EVar "origins")) (EVar "groups")) (EVar "ctorTypes"))) (DoExpr (EApp (EApp (EVar "stampImplSymbols") (EVar "pins")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EApp (EVar "ctorArities") (EVar "prog"))) (EVar "ctorTypes")) (EApp (EApp (EApp (EApp (EApp (EVar "lowerImplsRaw") (EApp (EVar "buildIfaceDispatch") (EVar "prog"))) (EApp (EVar "instanceReqCounts") (EVar "prog"))) (EApp (EVar "declaredMethodArities") (EVar "prog"))) (EVar "dispositions")) (EVar "prog"))) (EApp (EVar "methodContextSlotCounts") (EVar "prog"))) (ERecordUpdate (EVar "noDeclFacts") ((fa "factSymbolOrigins" (EApp (EVar "Some") (EVar "symbols"))))))))))
 (DTypeSig false "noLetCheck" (TyFun (TyCon "Pat") (TyCon "Bool")))
 (DFunDef false "noLetCheck" (PWild) (EVar "False"))
 (DTypeSig false "patCanMiss" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyCon "Pat") (TyCon "Bool"))))
@@ -5560,7 +5553,8 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "emptyDispositionTable" false) (mem "ifaceSuperCount" false) (mem "inheritorsOf" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "factsNow" false) (mem "withFacts" false))))
-(DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "installDispatchTables" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false) (mem "exprStartLoc" false))))
+(DUse false (UseGroup ("types" "dispatch_keys") ((mem "buildCtorToType" false) (mem "buildIfaceDispatch" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false))))
+(DUse false (UseGroup ("types" "expr_loc") ((mem "exprStartLoc" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false) (mem "range" false) (mem "sortBy" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omKeys" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "externDeclaredName" false) (mem "injectiveIdent" false))))
@@ -5893,7 +5887,7 @@ nodeTag _ = "?"
 (DTypeSig true "lowerTypedProgramWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
 (DFunDef false "lowerTypedProgramWith" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "dispositions") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "disposition table: no elaboration has published one"))) (EFieldAccess (EVar "facts") "pfDispositions"))) (DoExpr (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EApp (EApp (EApp (EVar "finishLowering") (EVar "TypedLowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EApp (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "Some") (EVar "dispositions"))) (EListLit)) (EVar "prog")))))))))
 (DTypeSig false "lowerProgramWith" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))))
-(DFunDef false "lowerProgramWith" ((PVar "dispositions") (PVar "pins") (PVar "prog")) (EBlock (DoLet false false (PVar "origins") (EApp (EVar "originsFor") (EVar "prog"))) (DoLet false false (PVar "groups") (EApp (EVar "lowerGroupsRaw") (EVar "prog"))) (DoLet false false (PVar "ctorTypes") (EApp (EVar "buildCtorToType") (EVar "prog"))) (DoLet false false (PVar "symbols") (EApp (EApp (EApp (EVar "projectOrigins") (EVar "origins")) (EVar "groups")) (EVar "ctorTypes"))) (DoExpr (EApp (EApp (EVar "stampImplSymbols") (EVar "pins")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EApp (EVar "ctorArities") (EVar "prog"))) (EVar "ctorTypes")) (EApp (EApp (EApp (EApp (EApp (EVar "lowerImplsRaw") (EApp (EApp (EVar "installDispatchTables") (EFieldAccess (EApp (EVar "factsNow") (ELit LUnit)) "pfDispositions")) (EVar "prog"))) (EApp (EVar "instanceReqCounts") (EVar "prog"))) (EApp (EVar "declaredMethodArities") (EVar "prog"))) (EVar "dispositions")) (EVar "prog"))) (EApp (EVar "methodContextSlotCounts") (EVar "prog"))) (ERecordUpdate (EVar "noDeclFacts") ((fa "factSymbolOrigins" (EApp (EVar "Some") (EVar "symbols"))))))))))
+(DFunDef false "lowerProgramWith" ((PVar "dispositions") (PVar "pins") (PVar "prog")) (EBlock (DoLet false false (PVar "origins") (EApp (EVar "originsFor") (EVar "prog"))) (DoLet false false (PVar "groups") (EApp (EVar "lowerGroupsRaw") (EVar "prog"))) (DoLet false false (PVar "ctorTypes") (EApp (EVar "buildCtorToType") (EVar "prog"))) (DoLet false false (PVar "symbols") (EApp (EApp (EApp (EVar "projectOrigins") (EVar "origins")) (EVar "groups")) (EVar "ctorTypes"))) (DoExpr (EApp (EApp (EVar "stampImplSymbols") (EVar "pins")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EApp (EVar "ctorArities") (EVar "prog"))) (EVar "ctorTypes")) (EApp (EApp (EApp (EApp (EApp (EVar "lowerImplsRaw") (EApp (EVar "buildIfaceDispatch") (EVar "prog"))) (EApp (EVar "instanceReqCounts") (EVar "prog"))) (EApp (EVar "declaredMethodArities") (EVar "prog"))) (EVar "dispositions")) (EVar "prog"))) (EApp (EVar "methodContextSlotCounts") (EVar "prog"))) (ERecordUpdate (EVar "noDeclFacts") ((fa "factSymbolOrigins" (EApp (EVar "Some") (EVar "symbols"))))))))))
 (DTypeSig false "noLetCheck" (TyFun (TyCon "Pat") (TyCon "Bool")))
 (DFunDef false "noLetCheck" (PWild) (EVar "False"))
 (DTypeSig false "patCanMiss" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyCon "Pat") (TyCon "Bool"))))
