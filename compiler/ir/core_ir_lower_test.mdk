@@ -10,9 +10,10 @@ import test.{expectAll, expectEqual, expectFalse, expectTrue, fail}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse}
 import ir.core_ir_lower.{
-  noInlineFnNames, methodResultFacts, lowerProgramEmitWith, leadingDictParams
+  noInlineFnNames, methodResultFacts, lowerProgramEmitWith
 }
 import ir.core_ir.{
+  leadingDictParams,
   CArm(..),
   CBind(..),
   CClause(..),

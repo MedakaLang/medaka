@@ -241,6 +241,7 @@ import ir.core_ir.{
   CStmt(..),
   CArm(..),
   CGuard(..),
+  leadingDictParams,
   CTree(..),
   CTBranch(..),
   CHead(..),
@@ -304,7 +305,6 @@ import ir.core_ir_lower.{
   callModeFor,
   isPartialMode,
   definedArityOf,
-  leadingDictParams,
   programArities,
 }
 import backend.trmc_analysis.{

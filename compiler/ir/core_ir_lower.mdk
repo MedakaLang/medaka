@@ -91,6 +91,7 @@ import ir.core_ir.{
   CallMode(..),
   CallSite(..),
   mkApp,
+  leadingDictParams,
   CTree(..),
   CTBranch(..),
   CHead(..),
@@ -153,7 +154,6 @@ import support.util.{
   isNonEmptyL,
   joinWith,
   reverseL,
-  startsWith,
   dedupBy,
   lenKey,
   splitOnChar,
@@ -3656,13 +3656,6 @@ declaredArityOr arities ifaceWord mname pats =
   match omLookup (ifaceMethodArityKey ifaceWord mname) arities
     Some n => n
     None => listLen pats - leadingDictParams pats
-
--- the leading `$dict_*` parameters dict-passing prepended to a default's clause
-export
-leadingDictParams : List Pat -> Int
-leadingDictParams ((PVar x _ _) :: rest) =
-  if startsWith "$dict" x then 1 + leadingDictParams rest else 0
-leadingDictParams _ = 0
 
 -- Declaration-derived results and callback positions, keyed by the qualified
 -- interface word. A method result uses only the head parameter; callbacks keep
