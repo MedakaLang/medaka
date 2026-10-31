@@ -1040,6 +1040,21 @@ catalogFamilies req =
     req.rows
 
 export
+selectedFallthroughSymbols : ExternRequirements ->
+  List (String, WasmFamily) ->
+  OrdMap Unit
+selectedFallthroughSymbols requirements families =
+  let index = omFromPairs families omEmpty
+  fold
+    (selected row => match row.selectedBinding
+      RuntimeRequirement key => match omLookup key index
+        Some WasmFallthrough => omInsert row.declaration.symbol () selected
+        _ => selected
+      ForeignRequirement _ _ => selected)
+    omEmpty
+    requirements.rows
+
+export
 planWasmDemand : ConstructorFacts ->
   WasmDemandInputs ->
   CProgram ->
