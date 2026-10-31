@@ -395,6 +395,50 @@ editCase dir =
           ("after", expectEqual ["Int -> Str"] (sigsIn after "b" "f")),
         ]
 
+-- Two same-length sources that differ in one exported signature and collide
+-- under `hashString` (FNV-1a masked to 30 bits), the key row shards once used.
+-- Found by a birthday search over a free 8-letter trailing comment.
+collideA : String
+collideA =
+  "import list.{map}\n\nexport zorble : Int -> Bool\nzorble n = n > 0\n-- kdyesfjj\n"
+
+collideB : String
+collideB =
+  "import list.{map}\n\nexport zorble : Int -> Char\nzorble n = n > 0\n-- jpsicaii\n"
+
+test "a same-length edit that collides under the 30-bit hash is still seen" =
+  withScratchDir collisionCase
+
+collisionCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+collisionCase dir =
+  let _ = writeFile "\{dir}/b.mdk" collideA
+  match buildProjectIndexResult dir
+    Err _ => fail "index did not build"
+    Ok before =>
+      let _ = writeFile "\{dir}/b.mdk" collideB
+      match buildProjectIndexResult dir
+        Err _ => fail "index did not rebuild"
+        Ok after => expectEach [
+          (
+            "control: the pair collides under the old key",
+            expectTrue
+              (hashString collideA == hashString collideB
+                && stringLength collideA == stringLength collideB),
+          ),
+          (
+            "the shard key tells them apart",
+            expectNotEqual (rowContentHash collideA) (rowContentHash collideB),
+          ),
+          (
+            "before",
+            expectEqual ["Int -> Bool"] (sigsIn before "b" "zorble"),
+          ),
+          (
+            "after: the new signature, not the shard's",
+            expectEqual ["Int -> Char"] (sigsIn after "b" "zorble"),
+          ),
+        ]
+
 -- ── 4. the runner: declared needs ───────────────────────────────────────────
 
 probeMeta : String -> List Need -> RuleMeta

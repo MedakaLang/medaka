@@ -937,6 +937,27 @@ runtimeAbiRows = [
     },
   ),
   (
+    "hashStringHex",
+    CallableShape {
+      writtenValueArity = 1,
+      loweredCoreArity = 1,
+      parameterHeads = ["String"],
+      resultHead = "String",
+      canonicalSignature = "v1:String -> String",
+    },
+  ),
+  (
+    "hashFile",
+    CallableShape {
+      writtenValueArity = 1,
+      loweredCoreArity = 2,
+      parameterHeads = ["String"],
+      resultHead = "Result",
+      canonicalSignature =
+        "v1:(path : String) -> <FileRead path> Result String String",
+    },
+  ),
+  (
     "hashChar",
     CallableShape {
       writtenValueArity = 1,

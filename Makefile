@@ -244,6 +244,12 @@ inlang-support-hooks-check:
 inlang-backend-extern-catalog-test:
 	./medaka test compiler/backend/extern_catalog_test.mdk
 
+## compiler/backend/hash_digest_test.mdk pins the `hashStringHex` / `hashFile`
+## digests against vectors computed outside the engine; no entry imports it.
+## `--native`: the file cases write real files.
+inlang-backend-hash-digest-test:
+	./medaka test --native compiler/backend/hash_digest_test.mdk
+
 ## The per-extern engine matrix and its drift guard (an effectful extern the
 ## oracle binds that `run` does not); no entry imports the module or its sibling.
 inlang-tools-engine-table-test:

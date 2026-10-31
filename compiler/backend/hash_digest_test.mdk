@@ -1,0 +1,109 @@
+-- Sibling test for the `hashStringHex` and `hashFile` externs
+-- (`stdlib/runtime.mdk`, `runtime/medaka_rt.c` `mdk_digest_string` /
+-- `mdk_hash_file`, [P-TEST-SIBLING]).
+--
+-- The expected digests are computed outside the engine: a Python rendering of
+-- the algorithm in the C comment (little-endian 8-byte words folded by a 128-bit
+-- multiply, a zero-padded tail word, the byte length mixed last).  They are
+-- not captured from a run.
+--
+-- The file cases write real files, so they run native:
+-- `medaka test --native compiler/backend/hash_digest_test.mdk`.
+
+import test.{
+  Expectation, expectEqual, expectEach, expectNotEqual, expectTrue, fail
+}
+import string.{repeat}
+import array.{fromList}
+import test_process.{withScratchDir}
+
+test "string vectors: empty, one byte, around the word size" = expectEach [
+  ("empty", expectEqual "b2fa45d8b5414b42" (hashStringHex "")),
+  ("one byte", expectEqual "9e8abaa68345b81a" (hashStringHex "a")),
+  ("7 bytes", expectEqual "f9d8f82a0ad510ce" (hashStringHex "abcdefg")),
+  ("8 bytes", expectEqual "1a3f83ab7eef3655" (hashStringHex "abcdefgh")),
+  ("9 bytes", expectEqual "f777df23ba3fa7e5" (hashStringHex "abcdefghi")),
+  (
+    "multi-byte UTF-8 is hashed as its bytes",
+    expectEqual "b6f5f99b437efef3" (hashStringHex "héllo λ"),
+  ),
+  (
+    "1 MiB",
+    expectEqual
+      "0fe197ae17f8cfca"
+      (hashStringHex (repeat 65536 "0123456789abcdef")),
+  ),
+]
+
+test "a one-bit or one-byte difference moves the digest" = expectEach [
+  ("last byte", expectNotEqual (hashStringHex "ab") (hashStringHex "ac")),
+  ("length", expectNotEqual (hashStringHex "a") (hashStringHex "a\0")),
+]
+
+writeOrFail : String -> String -> <IO, FileWrite> Bool
+writeOrFail path text = match writeFile path text
+  Ok _ => True
+  Err _ => False
+
+hashOf : String -> <IO, FileRead> String
+hashOf path = match hashFile path
+  Ok h => h
+  Err e => "ERR: \{e}"
+
+test "hashFile agrees with hashStringHex on equal bytes, across the block size" = withScratchDir
+  (dir =>
+    let small = "\{dir}/small.txt"
+    let mib = "\{dir}/mib.txt"
+    let blk3 = "\{dir}/blk3.txt"
+    let ok =
+      writeOrFail small "abcdefghi"
+        && writeOrFail mib (repeat 65536 "0123456789abcdef")
+        && writeOrFail blk3 (repeat 4096 "0123456789abcdef" ++ "xyz")
+    if not ok then
+      fail "could not write the fixtures"
+    else
+      expectEach [
+        ("9 bytes", expectEqual "f777df23ba3fa7e5" (hashOf small)),
+        (
+          "1 MiB, an exact multiple of the 64 KiB block",
+          expectEqual "0fe197ae17f8cfca" (hashOf mib),
+        ),
+        ("one block and 3 bytes", expectEqual "0b9f783df4478ff0" (hashOf blk3)),
+        (
+          "string and file agree",
+          expectEqual (hashStringHex "abcdefghi") (hashOf small),
+        ),
+      ])
+
+test "hashFile hashes the bytes of a file that is not UTF-8" = withScratchDir
+  (dir =>
+    let path = "\{dir}/raw.bin"
+    let bytes = [255, 254, 0, 128, 195, 40, 1, 2, 3, 4, 5]
+    match writeFileBytes path (fromList bytes)
+      Err _ => fail "could not write the fixture"
+      Ok _ => expectEach [
+        (
+          "digest of the raw bytes",
+          expectEqual "acdd88054cc98511" (hashOf path),
+        ),
+        (
+          "readFile refuses the same file",
+          expectTrue (match readFile path
+            Err _ => True
+            Ok _ => False),
+        ),
+      ])
+
+test "hashFile of a missing path or a directory is an Err" = withScratchDir
+  (dir => expectEach [
+    (
+      "missing",
+      expectTrue (match hashFile "\{dir}/nope"
+        Err _ => True
+        Ok _ => False),
+    ),
+    (
+      "directory",
+      expectEqual (Err "Is a directory") (hashFile dir),
+    ),
+  ])

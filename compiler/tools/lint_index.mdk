@@ -372,7 +372,7 @@ rowsDigest rows =
 -- Bump when the shard schema changes in a way an old shard would decode into
 -- something wrong rather than fail to decode.
 rowFormatVersion : Int
-rowFormatVersion = 2
+rowFormatVersion = 3
 
 sexpOptLoc : Option Loc -> SExp
 sexpOptLoc None = SList []
@@ -531,10 +531,10 @@ lastSegment : String -> List String -> String
 lastSegment acc [] = acc
 lastSegment _ (x :: rest) = lastSegment x rest
 
--- The content key a shard is checked against: one hash lane plus the length.
+-- The content key a shard is checked against: the 64-bit digest of the source.
 export
 rowContentHash : String -> String
-rowContentHash src = "\{hashString src}.\{stringLength src}"
+rowContentHash src = hashStringHex src
 
 -- A file's rows and their digest, from its shard when the shard answers for
 -- this exact content, else from a parse (and the shard is rewritten).  `Err`

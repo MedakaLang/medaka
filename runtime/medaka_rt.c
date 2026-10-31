@@ -2935,6 +2935,87 @@ long long mdk_read_file(long long path, long long grant) {
   return mdk_ok((long long)cell);
 }
 
+/* hashFile / hashStringHex: a 64-bit word-wide digest rendered as 16 lowercase
+ * hex characters.  Wyhash-shaped: each little-endian 8-byte word w folds into
+ * the state by a 128-bit multiply, h = lo(x*y) ^ hi(x*y) with x = w ^ K1 and
+ * y = h ^ K2; the 0-7 trailing bytes are packed into one zero-padded word, and
+ * the total byte length is mixed in last so inputs that differ only by trailing
+ * zero bytes differ.  About one instruction per byte; the cell bytes and a
+ * file's bytes hash identically, and the digest is not a cryptographic one. */
+#define MDK_DG_K1 0xa0761d6478bd642fULL
+#define MDK_DG_K2 0xe7037ed1a0b428dbULL
+#define MDK_DG_K3 0x8ebc6af09c88c6e3ULL
+
+static inline unsigned long long mdk_dg_mix(unsigned long long x,
+                                            unsigned long long y) {
+  __uint128_t m = (__uint128_t)x * (__uint128_t)y;
+  return (unsigned long long)m ^ (unsigned long long)(m >> 64);
+}
+
+/* Folds `n8` whole 8-byte words from `p` into `h`. */
+static unsigned long long mdk_dg_words(unsigned long long h,
+                                       const unsigned char *p, size_t n8) {
+  for (size_t i = 0; i < n8; i++) {
+    unsigned long long w;
+    memcpy(&w, p + 8 * i, 8);
+    h = mdk_dg_mix(w ^ MDK_DG_K1, h ^ MDK_DG_K2);
+  }
+  return h;
+}
+
+/* Folds the `tail_n` (< 8) trailing bytes and the total length, then renders. */
+static long long mdk_dg_finish(unsigned long long h, const unsigned char *tail,
+                               size_t tail_n, unsigned long long total) {
+  unsigned long long w = 0;
+  for (size_t i = 0; i < tail_n; i++) w |= (unsigned long long)tail[i] << (8 * i);
+  h = mdk_dg_mix(w ^ MDK_DG_K3, h ^ MDK_DG_K2);
+  h = mdk_dg_mix(h ^ MDK_DG_K1, total ^ MDK_DG_K3);
+  static const char hex[] = "0123456789abcdef";
+  char out[16];
+  for (int i = 0; i < 16; i++) out[i] = hex[(h >> (60 - 4 * i)) & 15];
+  return mdk_str_lit(out, 16);
+}
+
+/* hashStringHex : String -> String, over the cell's raw UTF-8 bytes. */
+long long mdk_digest_string(long long w) {
+  const char *cell = (const char *)w;
+  size_t n = (size_t)((const long long *)cell)[1];
+  const unsigned char *b = (const unsigned char *)(cell + 24);
+  unsigned long long h = mdk_dg_words(MDK_DG_K1, b, n / 8);
+  return mdk_dg_finish(h, b + (n & ~(size_t)7), n & 7, (unsigned long long)n);
+}
+
+/* hashFile : String -> Result String String.  Streams the file in 64 KiB
+ * blocks (a fread of a regular file is short only at end of file), so a large
+ * binary is hashed without being held whole.  Same directory guard and error
+ * shape as mdk_read_file; bytes are hashed raw, so a non-UTF-8 file is fine. */
+long long mdk_hash_file(long long path, long long grant) {
+  MDK_CONFINE(path, grant, 0, 0);
+  const char *p = (const char *)path + 24;
+  struct stat st;
+  if (stat(p, &st) == 0 && S_ISDIR(st.st_mode))
+    return mdk_err(mdk_str_cstr("Is a directory"));
+  FILE *f = fopen(p, "rb");
+  if (!f) return mdk_err(mdk_str_cstr(strerror(errno)));
+  enum { BLK = 65536 };
+  unsigned char *buf = (unsigned char *)malloc(BLK);
+  if (!buf) { fclose(f); return mdk_err(mdk_str_cstr("out of memory")); }
+  unsigned long long h = MDK_DG_K1, total = 0;
+  for (;;) {
+    size_t got = fread(buf, 1, BLK, f);
+    total += got;
+    h = mdk_dg_words(h, buf, got / 8);
+    if (got < BLK) {
+      int bad = ferror(f);
+      fclose(f);
+      long long r = mdk_dg_finish(h, buf + (got & ~(size_t)7), got & 7, total);
+      free(buf);
+      if (bad) return mdk_err(mdk_str_cstr(strerror(errno)));
+      return mdk_ok(r);
+    }
+  }
+}
+
 /* readFileBytes : String -> Result String (Array Int) — raw bytes, no decode.
  * Builds an Array cell [len, b0<<1|1, b1<<1|1, ...] of TAGGED int byte values
  * 0..255 (mirrors mdk_array_from_list element tagging).

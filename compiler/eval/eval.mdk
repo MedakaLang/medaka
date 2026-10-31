@@ -3496,6 +3496,7 @@ externBindings _ = [
   ("atan2", prim2 pAtan2),
   ("hypot", prim2 pHypot),
   ("stringToUpper", prim1 pStringToUpper),
+  ("hashStringHex", prim1 pHashStringHex),
   ("stringToLower", prim1 pStringToLower),
   ("stringCompare", prim2 pStringCompare),
   ("stringIndexOf", prim2 pStringIndexOf),
@@ -3914,6 +3915,10 @@ pHypot _ _ = panic "hypot: bad operands"
 pStringToUpper : Value e -> <e> Value e
 pStringToUpper (VString s) = VString (stringToUpper s)
 pStringToUpper _ = panic "stringToUpper: not a String"
+
+pHashStringHex : Value e -> <e> Value e
+pHashStringHex (VString s) = VString (hashStringHex s)
+pHashStringHex _ = panic "hashStringHex: not a String"
 
 pStringToLower : Value e -> <e> Value e
 pStringToLower (VString s) = VString (stringToLower s)
@@ -5084,6 +5089,12 @@ pReadFile (VString path) = match readFile path
   Err m => VCon "Err" [VString m]
 pReadFile _ = panic "readFile: not a String"
 
+pHashFile : Value e -> <FileRead | e> Value e
+pHashFile (VString path) = match hashFile path
+  Ok s => VCon "Ok" [VString s]
+  Err m => VCon "Err" [VString m]
+pHashFile _ = panic "hashFile: not a String"
+
 -- ── Value marshalling for the I/O prims ───────────────────────────────────
 resultToValue : Result String (Value e) -> Value e
 resultToValue (Ok v) = VCon "Ok" [v]
@@ -5400,6 +5411,7 @@ ioHostExterns _ = [
   -- File
   ("readFile", granted1 False Follow pReadFile),
   ("readFileBytes", granted1 False Follow pReadFileBytes),
+  ("hashFile", granted1 False Follow pHashFile),
   ("fileExists", granted1 False FollowPanic pFileExists),
   ("fileMode", granted1 False Follow pFileMode),
   ("canonicalizePath", granted1 False FollowPanic pCanonicalizePath),

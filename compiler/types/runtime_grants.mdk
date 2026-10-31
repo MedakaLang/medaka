@@ -7,6 +7,7 @@ runtimePathCount : String -> Int
 runtimePathCount "rename" = 2
 runtimePathCount "readFile" = 1
 runtimePathCount "readFileBytes" = 1
+runtimePathCount "hashFile" = 1
 runtimePathCount "writeFile" = 1
 runtimePathCount "writeFileBytes" = 1
 runtimePathCount "writeFileMode" = 1
