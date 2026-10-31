@@ -1,5 +1,5 @@
 # META
-source_lines=585
+source_lines=605
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -24,9 +24,12 @@ import tools.lint_index.{
   emptyProjectIndex,
   mkProjectIndexWith,
   indexFingerprint,
+  recording,
+  recordedAnswers,
+  answersHold,
   stdlibRowsNamed,
   stdlibValueNames,
-  stdlibValueModules,
+  stdlibHasValueModule,
 }
 import tools.printer.{ppTy}
 import frontend.exhaust.{Oracle}
@@ -469,9 +472,27 @@ stdlibIndexFingerprint : StdlibIndex -> String
 stdlibIndexFingerprint (StdlibIndex ix) = indexFingerprint ix
 
 -- The row index behind the handle, for a rule that declares `NeedsProjectIndex`.
+-- It records what it is asked exactly as the handle does.
 export
 projectIndexOf : StdlibIndex -> ProjectIndex
 projectIndexOf (StdlibIndex ix) = ix
+
+-- The same index with an empty log of what it is asked, for one file's rules
+-- under `--cache` (`lint_index.recording`).
+export
+recordingStdlibIndex : StdlibIndex -> StdlibIndex
+recordingStdlibIndex (StdlibIndex ix) = StdlibIndex (recording ix)
+
+-- What the rules handed a recording index asked, with the digest of each
+-- answer.
+export
+stdlibRecorded : StdlibIndex -> List (String, String)
+stdlibRecorded (StdlibIndex ix) = recordedAnswers ix
+
+-- Whether this index answers every recorded question as it was answered then.
+export
+stdlibAnswersHold : StdlibIndex -> List (String, String) -> Bool
+stdlibAnswersHold (StdlibIndex ix) recorded = answersHold ix recorded
 
 -- How many distinct exported NAMES the index carries (not declarations — a name
 -- declared in two modules counts once).  0 means degraded, or an empty stdlib;
@@ -522,8 +543,7 @@ stdlibIndexNames (StdlibIndex ix) = stdlibValueNames ix
 -- module it did not read exports nothing the index can vouch for.
 export
 stdlibKnowsModule : StdlibIndex -> String -> Bool
-stdlibKnowsModule (StdlibIndex ix) modName =
-  elem modName (stdlibValueModules ix)
+stdlibKnowsModule (StdlibIndex ix) modName = stdlibHasValueModule ix modName
 
 -- The names declared by more than one stdlib module, sorted.  Exported because
 -- it is the set every consumer has to have an answer for — a rule that treats a
@@ -595,7 +615,7 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseAlias ("driver" "diagnostic_value") "DV"))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "anyList" false))))
-(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndexWith" false) (mem "indexFingerprint" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibValueModules" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndexWith" false) (mem "indexFingerprint" false) (mem "recording" false) (mem "recordedAnswers" false) (mem "answersHold" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibHasValueModule" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
@@ -707,6 +727,12 @@ public export data DupClause = DupClause {
 (DFunDef false "stdlibIndexFingerprint" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "indexFingerprint") (EVar "ix")))
 (DTypeSig true "projectIndexOf" (TyFun (TyCon "StdlibIndex") (TyCon "ProjectIndex")))
 (DFunDef false "projectIndexOf" ((PCon "StdlibIndex" (PVar "ix"))) (EVar "ix"))
+(DTypeSig true "recordingStdlibIndex" (TyFun (TyCon "StdlibIndex") (TyCon "StdlibIndex")))
+(DFunDef false "recordingStdlibIndex" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "StdlibIndex") (EApp (EVar "recording") (EVar "ix"))))
+(DTypeSig true "stdlibRecorded" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "stdlibRecorded" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "recordedAnswers") (EVar "ix")))
+(DTypeSig true "stdlibAnswersHold" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
+(DFunDef false "stdlibAnswersHold" ((PCon "StdlibIndex" (PVar "ix")) (PVar "recorded")) (EApp (EApp (EVar "answersHold") (EVar "ix")) (EVar "recorded")))
 (DTypeSig true "stdlibIndexSize" (TyFun (TyCon "StdlibIndex") (TyCon "Int")))
 (DFunDef false "stdlibIndexSize" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "listLen") (EApp (EVar "stdlibValueNames") (EVar "ix"))))
 (DTypeSig true "stdlibEntriesOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))))
@@ -720,7 +746,7 @@ public export data DupClause = DupClause {
 (DTypeSig true "stdlibIndexNames" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "stdlibIndexNames" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "stdlibValueNames") (EVar "ix")))
 (DTypeSig true "stdlibKnowsModule" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "stdlibKnowsModule" ((PCon "StdlibIndex" (PVar "ix")) (PVar "modName")) (EApp (EApp (EVar "elem") (EVar "modName")) (EApp (EVar "stdlibValueModules") (EVar "ix"))))
+(DFunDef false "stdlibKnowsModule" ((PCon "StdlibIndex" (PVar "ix")) (PVar "modName")) (EApp (EApp (EVar "stdlibHasValueModule") (EVar "ix")) (EVar "modName")))
 (DTypeSig true "stdlibAmbiguousNames" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "stdlibAmbiguousNames" ((PVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "n"))) (ELit (LInt 1))))) (EApp (EVar "stdlibIndexNames") (EVar "idx"))))
 (DData Public "StdlibIndexError" () ((variant "StdlibIndexError" (ConNamed (field "path" (TyCon "String")) (field "source" (TyCon "String")) (field "diagnostic" (TyCon "Diag"))))) ())
@@ -739,7 +765,7 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true))))
 (DUse false (UseAlias ("driver" "diagnostic_value") "DV"))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "anyList" false))))
-(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndexWith" false) (mem "indexFingerprint" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibValueModules" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "RowKind" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "rowSig" false) (mem "emptyProjectIndex" false) (mem "mkProjectIndexWith" false) (mem "indexFingerprint" false) (mem "recording" false) (mem "recordedAnswers" false) (mem "answersHold" false) (mem "stdlibRowsNamed" false) (mem "stdlibValueNames" false) (mem "stdlibHasValueModule" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
@@ -851,6 +877,12 @@ public export data DupClause = DupClause {
 (DFunDef false "stdlibIndexFingerprint" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "indexFingerprint") (EVar "ix")))
 (DTypeSig true "projectIndexOf" (TyFun (TyCon "StdlibIndex") (TyCon "ProjectIndex")))
 (DFunDef false "projectIndexOf" ((PCon "StdlibIndex" (PVar "ix"))) (EVar "ix"))
+(DTypeSig true "recordingStdlibIndex" (TyFun (TyCon "StdlibIndex") (TyCon "StdlibIndex")))
+(DFunDef false "recordingStdlibIndex" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "StdlibIndex") (EApp (EVar "recording") (EVar "ix"))))
+(DTypeSig true "stdlibRecorded" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "stdlibRecorded" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "recordedAnswers") (EVar "ix")))
+(DTypeSig true "stdlibAnswersHold" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
+(DFunDef false "stdlibAnswersHold" ((PCon "StdlibIndex" (PVar "ix")) (PVar "recorded")) (EApp (EApp (EVar "answersHold") (EVar "ix")) (EVar "recorded")))
 (DTypeSig true "stdlibIndexSize" (TyFun (TyCon "StdlibIndex") (TyCon "Int")))
 (DFunDef false "stdlibIndexSize" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "listLen") (EApp (EVar "stdlibValueNames") (EVar "ix"))))
 (DTypeSig true "stdlibEntriesOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))))
@@ -864,7 +896,7 @@ public export data DupClause = DupClause {
 (DTypeSig true "stdlibIndexNames" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "stdlibIndexNames" ((PCon "StdlibIndex" (PVar "ix"))) (EApp (EVar "stdlibValueNames") (EVar "ix")))
 (DTypeSig true "stdlibKnowsModule" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "stdlibKnowsModule" ((PCon "StdlibIndex" (PVar "ix")) (PVar "modName")) (EApp (EApp (EDictApp "elem") (EVar "modName")) (EApp (EVar "stdlibValueModules") (EVar "ix"))))
+(DFunDef false "stdlibKnowsModule" ((PCon "StdlibIndex" (PVar "ix")) (PVar "modName")) (EApp (EApp (EVar "stdlibHasValueModule") (EVar "ix")) (EVar "modName")))
 (DTypeSig true "stdlibAmbiguousNames" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "stdlibAmbiguousNames" ((PVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "n"))) (ELit (LInt 1))))) (EApp (EVar "stdlibIndexNames") (EVar "idx"))))
 (DData Public "StdlibIndexError" () ((variant "StdlibIndexError" (ConNamed (field "path" (TyCon "String")) (field "source" (TyCon "String")) (field "diagnostic" (TyCon "Diag"))))) ())

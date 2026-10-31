@@ -323,6 +323,12 @@ test "the digest ignores positions and follows signatures" =
       "a signature edit moves it",
       expectNotEqual (rowsDigest base) (rowsDigest changed),
     ),
+    (
+      "rows in another order move it",
+      expectNotEqual
+        (rowsDigest (base ++ changed))
+        (rowsDigest (changed ++ base)),
+    ),
   ]
 
 -- ── 3. fail closed ──────────────────────────────────────────────────────────

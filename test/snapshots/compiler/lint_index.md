@@ -1,5 +1,5 @@
 # META
-source_lines=763
+source_lines=974
 stages=DESUGAR,MARK
 # SOURCE
 -- The declaration index lint rules query about modules other than the one they
@@ -23,6 +23,14 @@ stages=DESUGAR,MARK
 -- The stdlib's rows are stored exported-only: an unexported stdlib row answers
 -- no query a user's code can make.  The index is a per-run value; nothing here
 -- keeps rows alive after the run that built them.
+--
+-- Every accessor asks the index a `Query` through `asked`, and an index made by
+-- `recording` logs each question with a digest of its answer.  `medaka lint
+-- --cache` hands each file's rules such an index and stores the log with their
+-- findings; the findings hold for as long as today's index gives every logged
+-- question the logged digest (`answersHold`).  A rule cannot learn anything
+-- from the index that the log does not cover: the type is abstract and no
+-- accessor reads a scope except through `asked`.
 --
 -- This module reads no inferred types and imports nothing from `types/`.
 
@@ -59,8 +67,10 @@ import support.sexp_value.{
   cursorSkipText,
   isCloseByte,
 }
-import support.util.{joinWith, splitOnChar, listLen, filterList, anyList}
-import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
+import support.util.{
+  joinWith, splitOnChar, listLen, filterList, anyList, allList
+}
+import hash_map.{HashMap, new, setInPlace, has, findWithDefault, entries}
 import list.{sortBy}
 import frontend.parser.{Positions, ParseError}
 
@@ -349,12 +359,14 @@ rowKeyText r = joinWith "\t" [
   if r.ixrExported then "t" else "f",
 ]
 
--- A digest of a file's rows that moves when a name, kind, signature, arity,
--- field list or export changes, and does not move when only a position does.
+-- A digest of rows that moves when a name, module, kind, signature, arity,
+-- field list or export changes, or when the rows change order, and does not
+-- move when only a position does.  Order counts because a rule may act on the
+-- first of several candidates.
 export
 rowsDigest : List IndexRow -> String
 rowsDigest rows =
-  let joined = joinWith "\n" (sortBy stringCompare (map rowKeyText rows))
+  let joined = joinWith "\n" (map rowKeyText rows)
   let n = stringLength joined
   let lane2 = if n == 0 then 0 else hashString (stringSlice 1 n joined)
   "\{hashString joined}.\{lane2}.\{n}"
@@ -364,7 +376,7 @@ rowsDigest rows =
 -- Bump when the shard schema changes in a way an old shard would decode into
 -- something wrong rather than fail to decode.
 rowFormatVersion : Int
-rowFormatVersion = 1
+rowFormatVersion = 2
 
 sexpOptLoc : Option Loc -> SExp
 sexpOptLoc None = SList []
@@ -602,7 +614,8 @@ makeDirsGo acc (p :: rest)
 
 -- One scope's rows, grouped by name in input order.  `ixsNames` and
 -- `ixsModules` describe the exported signed values only: the names and modules
--- a rule can ask `rowsNamed` about with a signature in hand.
+-- a rule can ask `rowsNamed` about with a signature in hand.  `ixsDigest`
+-- moves whenever any row of the scope does, or the rows change order.
 data IndexScope = IndexScope {
   ixsByName : HashMap String (List IndexRow),
   ixsRows : List IndexRow,
@@ -611,9 +624,14 @@ data IndexScope = IndexScope {
   ixsDigest : String,
 }
 
--- The stdlib's rows and the project's.  A project index holds both, and a
--- rule that wants the stdlib alone asks the stdlib scope.
-public export data ProjectIndex = ProjectIndex IndexScope IndexScope
+-- The stdlib's rows and the project's, and, on an index a file's rules are
+-- handed under `--cache`, the log of what they asked (`recording`).  A project
+-- index holds both scopes, and a rule that wants the stdlib alone asks the
+-- stdlib scope.  The type is abstract: the accessors below are the only way to
+-- read it, and each one goes through `asked`, so nothing a rule learns from the
+-- index escapes the log.
+export data ProjectIndex =
+  ProjectIndex IndexScope IndexScope (Option (HashMap String String))
 
 emptyScope : IndexScope
 emptyScope = IndexScope {
@@ -626,7 +644,7 @@ emptyScope = IndexScope {
 
 export
 emptyProjectIndex : ProjectIndex
-emptyProjectIndex = ProjectIndex emptyScope emptyScope
+emptyProjectIndex = ProjectIndex emptyScope emptyScope None
 
 -- The index of the stdlib's rows and the project's rows.
 export
@@ -635,7 +653,7 @@ mkProjectIndex stdlibRows projectRows =
   mkProjectIndexWith "" "" stdlibRows projectRows
 
 -- The same, each scope carrying the combined digest of its files' row digests
--- (`combineDigests`), which `indexFingerprint` reports.
+-- (`combineDigests`); a scope given no digest digests its rows itself.
 export
 mkProjectIndexWith : String ->
   String ->
@@ -643,11 +661,14 @@ mkProjectIndexWith : String ->
   List IndexRow ->
   ProjectIndex
 mkProjectIndexWith stdDigest projDigest stdlibRows projectRows =
-  ProjectIndex (mkScope stdDigest stdlibRows) (mkScope projDigest projectRows)
+  ProjectIndex
+    (mkScope stdDigest stdlibRows)
+    (mkScope projDigest projectRows)
+    None
 
 -- One digest for a list of per-file row digests, in file order.  It moves when
--- a file's names, kinds, signatures, arities, fields or exports move, and not
--- when only a position or a body does.
+-- a file's names, kinds, signatures, arities, fields, exports or row order
+-- move, and not when only a position or a body does.
 export
 combineDigests : List String -> String
 combineDigests digests =
@@ -656,11 +677,16 @@ combineDigests digests =
   let lane2 = if n == 0 then 0 else hashString (stringSlice 1 n joined)
   "\{listLen digests}.\{hashString joined}.\{lane2}.\{n}"
 
--- What a cached finding that read this index depends on: the stdlib scope's
--- digest, then the project scope's.  A scope the run did not build is empty.
+-- Every row of both scopes in one string: the stdlib scope's digest, then the
+-- project scope's.  Equal fingerprints mean every question has the answer it
+-- had, so it is the fast half of a cached finding's key (`answersHold` is the
+-- other).
 export
 indexFingerprint : ProjectIndex -> String
-indexFingerprint (ProjectIndex std proj) = "\{std.ixsDigest}/\{proj.ixsDigest}"
+indexFingerprint ix =
+  let _ = asked ix (QScope False)
+  let _ = asked ix (QScope True)
+  "\{scopeDigestOf ix False}/\{scopeDigestOf ix True}"
 
 mkScope : String -> List IndexRow -> IndexScope
 mkScope digest rows =
@@ -672,7 +698,7 @@ mkScope digest rows =
     ixsRows = rows,
     ixsNames = sortedUnique (map rowName signed),
     ixsModules = sortedUnique (map rowModule signed),
-    ixsDigest = digest,
+    ixsDigest = if digest == "" then rowsDigest rows else digest,
   }
 
 isExportedSigValue : IndexRow -> Bool
@@ -709,68 +735,253 @@ scopeNamed : IndexScope -> Ns -> String -> List IndexRow
 scopeNamed s ns name =
   filterList (r => rowNs r.ixrKind == ns) (findWithDefault [] name s.ixsByName)
 
+-- The project scope (`True`) or the stdlib's.
+scopeOf : ProjectIndex -> Bool -> IndexScope
+scopeOf (ProjectIndex _ proj _) True = proj
+scopeOf (ProjectIndex std _ _) False = std
+
+scopeDigestOf : ProjectIndex -> Bool -> String
+scopeDigestOf ix inProject =
+  let s = scopeOf ix inProject
+  s.ixsDigest
+
+-- ── questions and their answers ─────────────────────────────────────────────
+
+-- Every question a rule can ask, in the project scope (`True`) or the
+-- stdlib's: the rows named `name` in `ns`; every row of a scope; whether any
+-- row of either scope is in a module; whether a stdlib module exports a signed
+-- value.  Each accessor below asks one or two of these and nothing else.
+data Query =
+  | QNamed Bool Ns String
+  | QScope Bool
+  | QKnows String
+  | QValueModule String
+
+-- The two constructors are two kinds of answer, not failure and success.
+-- lint-disable-next-line rule-clone-type
+data Answer = ARows (List IndexRow) | AYes Bool
+
+answerOf : ProjectIndex -> Query -> Answer
+answerOf ix (QNamed inProject ns name) =
+  ARows (scopeNamed (scopeOf ix inProject) ns name)
+answerOf ix (QScope inProject) =
+  let s = scopeOf ix inProject
+  ARows s.ixsRows
+answerOf ix (QKnows modId) =
+  let inModule = r => r.ixrModule == modId
+  let proj = scopeOf ix True
+  let std = scopeOf ix False
+  AYes (anyList inModule proj.ixsRows || anyList inModule std.ixsRows)
+answerOf ix (QValueModule modId) =
+  let std = scopeOf ix False
+  AYes (elem modId std.ixsModules)
+
+-- What an answer is compared by when a cached finding is checked against
+-- today's index.  Rows are digested in the order returned, every field but the
+-- location included (`rowKeyText`), so the empty answer, a second candidate, a
+-- moved definition and an export or kind change each digest differently.  A
+-- whole scope is its digest.
+answerDigest : ProjectIndex -> Query -> Answer -> String
+answerDigest ix (QScope inProject) _ = scopeDigestOf ix inProject
+answerDigest _ _ (ARows rows) = rowsDigest rows
+answerDigest _ _ (AYes yes) = if yes then "t" else "f"
+
+-- A question as stored with the findings that depended on it.
+queryKey : Query -> String
+queryKey (QNamed inProject ns name) =
+  "n\{scopeTag inProject}\{nsTag ns}:\{name}"
+queryKey (QScope inProject) = "a\{scopeTag inProject}"
+queryKey (QKnows modId) = "k:\{modId}"
+queryKey (QValueModule modId) = "m:\{modId}"
+
+scopeTag : Bool -> String
+scopeTag True = "p"
+scopeTag False = "s"
+
+nsTag : Ns -> String
+nsTag NsValue = "v"
+nsTag NsType = "t"
+
+-- The question a stored key names, or `None` for a key this binary does not
+-- write; such a key holds no answer, so its findings are re-made.
+readQuery : String -> Option Query
+readQuery key =
+  let n = stringLength key
+  let tag = stringSlice 0 1 key
+  if tag == "n" && n >= 4 && stringSlice 3 4 key == ":" then match (
+    scopeOfTag (stringSlice 1 2 key),
+    nsOfTag (stringSlice 2 3 key),
+  )
+    (Some inProject, Some ns) =>
+      Some (QNamed inProject ns (stringSlice 4 n key))
+    _ => None
+  else if tag == "a" && n == 2 then
+    map QScope (scopeOfTag (stringSlice 1 2 key))
+  else if tag == "k" && n >= 2 && stringSlice 1 2 key == ":" then
+    Some (QKnows (stringSlice 2 n key))
+  else if tag == "m" && n >= 2 && stringSlice 1 2 key == ":" then
+    Some (QValueModule (stringSlice 2 n key))
+  else
+    None
+
+scopeOfTag : String -> Option Bool
+scopeOfTag t =
+  if t == "p" then Some True else if t == "s" then Some False else None
+
+nsOfTag : String -> Option Ns
+nsOfTag t =
+  if t == "v" then Some NsValue else if t == "t" then Some NsType else None
+
+-- The scopes whose digest decides a question's answer: once a rule has asked
+-- for every row of those scopes, the narrower question adds nothing to the log.
+scopesOf : Query -> List Bool
+scopesOf (QNamed inProject _ _) = [inProject]
+scopesOf (QScope _) = []
+scopesOf (QKnows _) = [True, False]
+scopesOf (QValueModule _) = [False]
+
+-- The one way any accessor reads the index: answers `q`, and on a recording
+-- index logs the question with the digest of its answer.
+asked : ProjectIndex -> Query -> Answer
+asked ix q =
+  let a = answerOf ix q
+  let _ = match ix
+    ProjectIndex _ _ (Some log) => logAnswer log ix q a
+    ProjectIndex _ _ None => ()
+  a
+
+logAnswer : HashMap String String -> ProjectIndex -> Query -> Answer -> Unit
+logAnswer log ix q a =
+  if subsumed log q then
+    ()
+  else
+    setInPlace (queryKey q) (answerDigest ix q a) log
+
+subsumed : HashMap String String -> Query -> Bool
+subsumed log q = match scopesOf q
+  [] => False
+  scopes => allList (s => has (queryKey (QScope s)) log) scopes
+
+rowsAsked : ProjectIndex -> Query -> List IndexRow
+rowsAsked ix q = match asked ix q
+  ARows rows => rows
+  AYes _ => []
+
+yesAsked : ProjectIndex -> Query -> Bool
+yesAsked ix q = match asked ix q
+  AYes yes => yes
+  ARows _ => False
+
+-- ── recording ───────────────────────────────────────────────────────────────
+
+-- The same index with an empty log, for one file's rules.
+export
+recording : ProjectIndex -> ProjectIndex
+recording (ProjectIndex std proj _) = ProjectIndex std proj (Some (new ()))
+
+-- What the rules handed `ix` asked, each question with the digest of its
+-- answer, sorted by question.  A question a later whole-scope question covers
+-- is dropped.  Empty on an index that is not recording.
+export
+recordedAnswers : ProjectIndex -> List (String, String)
+recordedAnswers (ProjectIndex _ _ None) = []
+recordedAnswers (ProjectIndex _ _ (Some log)) =
+  sortBy
+    (x y => stringCompare (fst x) (fst y))
+    (filterList (kv => not (keyCovered log (fst kv))) (entries log))
+
+keyCovered : HashMap String String -> String -> Bool
+keyCovered log key = match readQuery key
+  Some q => subsumed log q
+  None => False
+
+-- Whether `ix` gives every recorded question an answer with the recorded
+-- digest.  A question this binary cannot read does not hold.  The questions
+-- are asked like any other, so on a recording index they are logged too.
+export
+answersHold : ProjectIndex -> List (String, String) -> Bool
+answersHold ix recorded = allList (answerHolds ix) recorded
+
+answerHolds : ProjectIndex -> (String, String) -> Bool
+answerHolds ix (key, digest) = match readQuery key
+  None => False
+  Some q => answerDigest ix q (asked ix q) == digest
+
+-- ── the accessors ───────────────────────────────────────────────────────────
+
 -- Every candidate for `name` in `ns`: the project's rows, then the stdlib's.
 export
 rowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
-rowsNamed (ProjectIndex std proj) ns name =
-  scopeNamed proj ns name ++ scopeNamed std ns name
+rowsNamed ix ns name =
+  rowsAsked ix (QNamed True ns name) ++ rowsAsked ix (QNamed False ns name)
 
 -- The stdlib's candidates alone.
 export
 stdlibRowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
-stdlibRowsNamed (ProjectIndex std _) ns name = scopeNamed std ns name
+stdlibRowsNamed ix ns name = rowsAsked ix (QNamed False ns name)
 
 -- The project's candidates alone.
 export
 projectRowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
-projectRowsNamed (ProjectIndex _ proj) ns name = scopeNamed proj ns name
+projectRowsNamed ix ns name = rowsAsked ix (QNamed True ns name)
 
 -- Candidates for `name` declared in module `modId` (still a list: a name can
 -- be a value and a constructor, or be declared twice).
 export
 rowsIn : ProjectIndex -> String -> Ns -> String -> List IndexRow
-rowsIn idx modId ns name =
-  filterList (r => r.ixrModule == modId) (rowsNamed idx ns name)
+rowsIn ix modId ns name =
+  filterList (r => r.ixrModule == modId) (rowsNamed ix ns name)
 
 -- Every row of module `modId`, in file order.
 export
 rowsOfModule : ProjectIndex -> String -> List IndexRow
-rowsOfModule (ProjectIndex std proj) modId =
-  filterList (r => r.ixrModule == modId) (proj.ixsRows ++ std.ixsRows)
+rowsOfModule ix modId =
+  filterList
+    (r => r.ixrModule == modId)
+    (rowsAsked ix (QScope True) ++ rowsAsked ix (QScope False))
 
 -- Every row of a scope, in file order.
 export
 stdlibRows : ProjectIndex -> List IndexRow
-stdlibRows (ProjectIndex std _) = std.ixsRows
+stdlibRows ix = rowsAsked ix (QScope False)
 
 export
 projectRows : ProjectIndex -> List IndexRow
-projectRows (ProjectIndex _ proj) = proj.ixsRows
+projectRows ix = rowsAsked ix (QScope True)
 
 -- The sorted names of the stdlib's exported signed values.
 export
 stdlibValueNames : ProjectIndex -> List String
-stdlibValueNames (ProjectIndex std _) = std.ixsNames
+stdlibValueNames ix =
+  let _ = asked ix (QScope False)
+  let std = scopeOf ix False
+  std.ixsNames
 
 -- The stdlib modules that export a signed value; a module outside this list
 -- has nothing the index can vouch for.
 export
 stdlibValueModules : ProjectIndex -> List String
-stdlibValueModules (ProjectIndex std _) = std.ixsModules
+stdlibValueModules ix =
+  let _ = asked ix (QScope False)
+  let std = scopeOf ix False
+  std.ixsModules
+
+-- Whether `modId` is one of `stdlibValueModules`, asked as one question.
+export
+stdlibHasValueModule : ProjectIndex -> String -> Bool
+stdlibHasValueModule ix modId = yesAsked ix (QValueModule modId)
 
 -- Whether any row of module `modId` is in the index: an abstain test for a
 -- module the index never read.
 export
 indexKnowsModule : ProjectIndex -> String -> Bool
-indexKnowsModule (ProjectIndex std proj) modId =
-  anyList (r => r.ixrModule == modId) proj.ixsRows
-    || anyList (r => r.ixrModule == modId) std.ixsRows
+indexKnowsModule ix modId = yesAsked ix (QKnows modId)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Decl" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "ExternDecl" true) (mem "LetBind" true) (mem "tyConUnresolved" false))))
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "sexpTy" false) (mem "readTy" false))))
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "renderSExp" false) (mem "cursorOf" false) (mem "cursorFailed" false) (mem "cursorAtEnd" false) (mem "cursorOpen" false) (mem "cursorClose" false) (mem "cursorInt" false) (mem "cursorAtom" false) (mem "cursorChar" false) (mem "cursorList" false) (mem "cursorPeek" false) (mem "cursorAdvance" false) (mem "cursorFail" false) (mem "cursorSkipText" false) (mem "isCloseByte" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "splitOnChar" false) (mem "listLen" false) (mem "filterList" false) (mem "anyList" false))))
-(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "splitOnChar" false) (mem "listLen" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false))))
+(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false) (mem "entries" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "ParseError" false))))
 (DData Public "RowKind" () ((variant "RkValue" (ConPos)) (variant "RkCtor" (ConPos)) (variant "RkType" (ConPos)) (variant "RkIface" (ConPos)) (variant "RkMethod" (ConPos))) ())
@@ -878,9 +1089,9 @@ indexKnowsModule (ProjectIndex std proj) modId =
 (DTypeSig false "rowKeyText" (TyFun (TyCon "IndexRow") (TyCon "String")))
 (DFunDef false "rowKeyText" ((PVar "r")) (EApp (EApp (EVar "joinWith") (ELit (LString "\t"))) (EListLit (EFieldAccess (EVar "r") "ixrModule") (EFieldAccess (EVar "r") "ixrName") (EApp (EVar "kindTag") (EFieldAccess (EVar "r") "ixrKind")) (EApp (EVar "slotText") (EFieldAccess (EVar "r") "ixrSig")) (EFieldAccess (EVar "r") "ixrParent") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "r") "ixrFields")) (EApp (EVar "intToString") (EFieldAccess (EVar "r") "ixrArity")) (EIf (EFieldAccess (EVar "r") "ixrExported") (ELit (LString "t")) (ELit (LString "f"))))))
 (DTypeSig true "rowsDigest" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "String")))
-(DFunDef false "rowsDigest" ((PVar "rows")) (EBlock (DoLet false false (PVar "joined") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "sortBy") (EVar "stringCompare")) (EApp (EApp (EVar "map") (EVar "rowKeyText")) (EVar "rows"))))) (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "joined"))) (DoLet false false (PVar "lane2") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EVar "hashString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "n")) (EVar "joined"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "hashString") (EVar "joined")))) (ELit (LString "."))) (EApp (EVar "display") (EVar "lane2"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))))
+(DFunDef false "rowsDigest" ((PVar "rows")) (EBlock (DoLet false false (PVar "joined") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EVar "rowKeyText")) (EVar "rows")))) (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "joined"))) (DoLet false false (PVar "lane2") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EVar "hashString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "n")) (EVar "joined"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "hashString") (EVar "joined")))) (ELit (LString "."))) (EApp (EVar "display") (EVar "lane2"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))))
 (DTypeSig false "rowFormatVersion" (TyCon "Int"))
-(DFunDef false "rowFormatVersion" () (ELit (LInt 1)))
+(DFunDef false "rowFormatVersion" () (ELit (LInt 2)))
 (DTypeSig false "sexpOptLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "SExp")))
 (DFunDef false "sexpOptLoc" ((PCon "None")) (EApp (EVar "SList") (EListLit)))
 (DFunDef false "sexpOptLoc" ((PCon "Some" (PCon "Loc" PWild (PVar "a") (PVar "b") (PVar "c") (PVar "d")))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "a"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "b"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "c"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "d"))))))
@@ -929,21 +1140,21 @@ indexKnowsModule (ProjectIndex std proj) modId =
 (DFunDef false "makeDirsGo" (PWild (PList)) (ELit LUnit))
 (DFunDef false "makeDirsGo" ((PVar "acc") (PCons (PVar "p") (PVar "rest"))) (EIf (EBinOp "==" (EVar "p") (ELit (LString ""))) (EApp (EApp (EVar "makeDirsGo") (EVar "acc")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "acc"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "p"))) (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "makeDir") (EVar "next"))) (DoExpr (EApp (EApp (EVar "makeDirsGo") (EVar "next")) (EVar "rest")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DData Private "IndexScope" () ((variant "IndexScope" (ConNamed (field "ixsByName" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow")))) (field "ixsRows" (TyApp (TyCon "List") (TyCon "IndexRow"))) (field "ixsNames" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsModules" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsDigest" (TyCon "String"))))) ())
-(DData Public "ProjectIndex" () ((variant "ProjectIndex" (ConPos (TyCon "IndexScope") (TyCon "IndexScope")))) ())
+(DData Abstract "ProjectIndex" () ((variant "ProjectIndex" (ConPos (TyCon "IndexScope") (TyCon "IndexScope") (TyApp (TyCon "Option") (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")))))) ())
 (DTypeSig false "emptyScope" (TyCon "IndexScope"))
 (DFunDef false "emptyScope" () (ERecordCreate "IndexScope" ((fa "ixsByName" (EApp (EVar "new") (ELit LUnit))) (fa "ixsRows" (EListLit)) (fa "ixsNames" (EListLit)) (fa "ixsModules" (EListLit)) (fa "ixsDigest" (ELit (LString ""))))))
 (DTypeSig true "emptyProjectIndex" (TyCon "ProjectIndex"))
-(DFunDef false "emptyProjectIndex" () (EApp (EApp (EVar "ProjectIndex") (EVar "emptyScope")) (EVar "emptyScope")))
+(DFunDef false "emptyProjectIndex" () (EApp (EApp (EApp (EVar "ProjectIndex") (EVar "emptyScope")) (EVar "emptyScope")) (EVar "None")))
 (DTypeSig true "mkProjectIndex" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "ProjectIndex"))))
 (DFunDef false "mkProjectIndex" ((PVar "stdlibRows") (PVar "projectRows")) (EApp (EApp (EApp (EApp (EVar "mkProjectIndexWith") (ELit (LString ""))) (ELit (LString ""))) (EVar "stdlibRows")) (EVar "projectRows")))
 (DTypeSig true "mkProjectIndexWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "ProjectIndex"))))))
-(DFunDef false "mkProjectIndexWith" ((PVar "stdDigest") (PVar "projDigest") (PVar "stdlibRows") (PVar "projectRows")) (EApp (EApp (EVar "ProjectIndex") (EApp (EApp (EVar "mkScope") (EVar "stdDigest")) (EVar "stdlibRows"))) (EApp (EApp (EVar "mkScope") (EVar "projDigest")) (EVar "projectRows"))))
+(DFunDef false "mkProjectIndexWith" ((PVar "stdDigest") (PVar "projDigest") (PVar "stdlibRows") (PVar "projectRows")) (EApp (EApp (EApp (EVar "ProjectIndex") (EApp (EApp (EVar "mkScope") (EVar "stdDigest")) (EVar "stdlibRows"))) (EApp (EApp (EVar "mkScope") (EVar "projDigest")) (EVar "projectRows"))) (EVar "None")))
 (DTypeSig true "combineDigests" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "combineDigests" ((PVar "digests")) (EBlock (DoLet false false (PVar "joined") (EApp (EApp (EVar "joinWith") (ELit (LString ";"))) (EVar "digests"))) (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "joined"))) (DoLet false false (PVar "lane2") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EVar "hashString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "n")) (EVar "joined"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "listLen") (EVar "digests")))) (ELit (LString "."))) (EApp (EVar "display") (EApp (EVar "hashString") (EVar "joined")))) (ELit (LString "."))) (EApp (EVar "display") (EVar "lane2"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))))
 (DTypeSig true "indexFingerprint" (TyFun (TyCon "ProjectIndex") (TyCon "String")))
-(DFunDef false "indexFingerprint" ((PCon "ProjectIndex" (PVar "std") (PVar "proj"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "std") "ixsDigest"))) (ELit (LString "/"))) (EApp (EVar "display") (EFieldAccess (EVar "proj") "ixsDigest"))) (ELit (LString ""))))
+(DFunDef false "indexFingerprint" ((PVar "ix")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "asked") (EVar "ix")) (EApp (EVar "QScope") (EVar "False")))) (DoLet false false PWild (EApp (EApp (EVar "asked") (EVar "ix")) (EApp (EVar "QScope") (EVar "True")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "scopeDigestOf") (EVar "ix")) (EVar "False")))) (ELit (LString "/"))) (EApp (EVar "display") (EApp (EApp (EVar "scopeDigestOf") (EVar "ix")) (EVar "True")))) (ELit (LString ""))))))
 (DTypeSig false "mkScope" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "IndexScope"))))
-(DFunDef false "mkScope" ((PVar "digest") (PVar "rows")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "groupInto") (EApp (EApp (EVar "reverseRows") (EVar "rows")) (EListLit))) (EVar "m"))) (DoLet false false (PVar "signed") (EApp (EApp (EVar "filterList") (EVar "isExportedSigValue")) (EVar "rows"))) (DoExpr (ERecordCreate "IndexScope" ((fa "ixsByName" (EVar "m")) (fa "ixsRows" (EVar "rows")) (fa "ixsNames" (EApp (EVar "sortedUnique") (EApp (EApp (EVar "map") (EVar "rowName")) (EVar "signed")))) (fa "ixsModules" (EApp (EVar "sortedUnique") (EApp (EApp (EVar "map") (EVar "rowModule")) (EVar "signed")))) (fa "ixsDigest" (EVar "digest")))))))
+(DFunDef false "mkScope" ((PVar "digest") (PVar "rows")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "groupInto") (EApp (EApp (EVar "reverseRows") (EVar "rows")) (EListLit))) (EVar "m"))) (DoLet false false (PVar "signed") (EApp (EApp (EVar "filterList") (EVar "isExportedSigValue")) (EVar "rows"))) (DoExpr (ERecordCreate "IndexScope" ((fa "ixsByName" (EVar "m")) (fa "ixsRows" (EVar "rows")) (fa "ixsNames" (EApp (EVar "sortedUnique") (EApp (EApp (EVar "map") (EVar "rowName")) (EVar "signed")))) (fa "ixsModules" (EApp (EVar "sortedUnique") (EApp (EApp (EVar "map") (EVar "rowModule")) (EVar "signed")))) (fa "ixsDigest" (EIf (EBinOp "==" (EVar "digest") (ELit (LString ""))) (EApp (EVar "rowsDigest") (EVar "rows")) (EVar "digest"))))))))
 (DTypeSig false "isExportedSigValue" (TyFun (TyCon "IndexRow") (TyCon "Bool")))
 (DFunDef false "isExportedSigValue" ((PVar "r")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "ixrKind") (EVar "RkValue")) (EFieldAccess (EVar "r") "ixrExported")) (EApp (EVar "rowHasSig") (EVar "r"))))
 (DTypeSig false "rowName" (TyFun (TyCon "IndexRow") (TyCon "String")))
@@ -964,32 +1175,93 @@ indexKnowsModule (ProjectIndex std proj) modId =
 (DFunDef false "dropRepeats" ((PCons (PVar "a") (PCons (PVar "b") (PVar "rest")))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EApp (EVar "dropRepeats") (EBinOp "::" (EVar "b") (EVar "rest"))) (EBinOp "::" (EVar "a") (EApp (EVar "dropRepeats") (EBinOp "::" (EVar "b") (EVar "rest"))))))
 (DTypeSig false "scopeNamed" (TyFun (TyCon "IndexScope") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))
 (DFunDef false "scopeNamed" ((PVar "s") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EApp (EVar "rowNs") (EFieldAccess (EVar "r") "ixrKind")) (EVar "ns")))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "name")) (EFieldAccess (EVar "s") "ixsByName"))))
+(DTypeSig false "scopeOf" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Bool") (TyCon "IndexScope"))))
+(DFunDef false "scopeOf" ((PCon "ProjectIndex" PWild (PVar "proj") PWild) (PCon "True")) (EVar "proj"))
+(DFunDef false "scopeOf" ((PCon "ProjectIndex" (PVar "std") PWild PWild) (PCon "False")) (EVar "std"))
+(DTypeSig false "scopeDigestOf" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Bool") (TyCon "String"))))
+(DFunDef false "scopeDigestOf" ((PVar "ix") (PVar "inProject")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "inProject"))) (DoExpr (EFieldAccess (EVar "s") "ixsDigest"))))
+(DData Private "Query" () ((variant "QNamed" (ConPos (TyCon "Bool") (TyCon "Ns") (TyCon "String"))) (variant "QScope" (ConPos (TyCon "Bool"))) (variant "QKnows" (ConPos (TyCon "String"))) (variant "QValueModule" (ConPos (TyCon "String")))) ())
+(DData Private "Answer" () ((variant "ARows" (ConPos (TyApp (TyCon "List") (TyCon "IndexRow")))) (variant "AYes" (ConPos (TyCon "Bool")))) ())
+(DTypeSig false "answerOf" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyCon "Answer"))))
+(DFunDef false "answerOf" ((PVar "ix") (PCon "QNamed" (PVar "inProject") (PVar "ns") (PVar "name"))) (EApp (EVar "ARows") (EApp (EApp (EApp (EVar "scopeNamed") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "inProject"))) (EVar "ns")) (EVar "name"))))
+(DFunDef false "answerOf" ((PVar "ix") (PCon "QScope" (PVar "inProject"))) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "inProject"))) (DoExpr (EApp (EVar "ARows") (EFieldAccess (EVar "s") "ixsRows")))))
+(DFunDef false "answerOf" ((PVar "ix") (PCon "QKnows" (PVar "modId"))) (EBlock (DoLet false false (PVar "inModule") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (DoLet false false (PVar "proj") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "True"))) (DoLet false false (PVar "std") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "False"))) (DoExpr (EApp (EVar "AYes") (EBinOp "||" (EApp (EApp (EVar "anyList") (EVar "inModule")) (EFieldAccess (EVar "proj") "ixsRows")) (EApp (EApp (EVar "anyList") (EVar "inModule")) (EFieldAccess (EVar "std") "ixsRows")))))))
+(DFunDef false "answerOf" ((PVar "ix") (PCon "QValueModule" (PVar "modId"))) (EBlock (DoLet false false (PVar "std") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "False"))) (DoExpr (EApp (EVar "AYes") (EApp (EApp (EVar "elem") (EVar "modId")) (EFieldAccess (EVar "std") "ixsModules"))))))
+(DTypeSig false "answerDigest" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyFun (TyCon "Answer") (TyCon "String")))))
+(DFunDef false "answerDigest" ((PVar "ix") (PCon "QScope" (PVar "inProject")) PWild) (EApp (EApp (EVar "scopeDigestOf") (EVar "ix")) (EVar "inProject")))
+(DFunDef false "answerDigest" (PWild PWild (PCon "ARows" (PVar "rows"))) (EApp (EVar "rowsDigest") (EVar "rows")))
+(DFunDef false "answerDigest" (PWild PWild (PCon "AYes" (PVar "yes"))) (EIf (EVar "yes") (ELit (LString "t")) (ELit (LString "f"))))
+(DTypeSig false "queryKey" (TyFun (TyCon "Query") (TyCon "String")))
+(DFunDef false "queryKey" ((PCon "QNamed" (PVar "inProject") (PVar "ns") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "n")) (EApp (EVar "display") (EApp (EVar "scopeTag") (EVar "inProject")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "nsTag") (EVar "ns")))) (ELit (LString ":"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "queryKey" ((PCon "QScope" (PVar "inProject"))) (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "scopeTag") (EVar "inProject")))) (ELit (LString ""))))
+(DFunDef false "queryKey" ((PCon "QKnows" (PVar "modId"))) (EBinOp "++" (EBinOp "++" (ELit (LString "k:")) (EApp (EVar "display") (EVar "modId"))) (ELit (LString ""))))
+(DFunDef false "queryKey" ((PCon "QValueModule" (PVar "modId"))) (EBinOp "++" (EBinOp "++" (ELit (LString "m:")) (EApp (EVar "display") (EVar "modId"))) (ELit (LString ""))))
+(DTypeSig false "scopeTag" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "scopeTag" ((PCon "True")) (ELit (LString "p")))
+(DFunDef false "scopeTag" ((PCon "False")) (ELit (LString "s")))
+(DTypeSig false "nsTag" (TyFun (TyCon "Ns") (TyCon "String")))
+(DFunDef false "nsTag" ((PCon "NsValue")) (ELit (LString "v")))
+(DFunDef false "nsTag" ((PCon "NsType")) (ELit (LString "t")))
+(DTypeSig false "readQuery" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Query"))))
+(DFunDef false "readQuery" ((PVar "key")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "key"))) (DoLet false false (PVar "tag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "key"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "n"))) (EBinOp ">=" (EVar "n") (ELit (LInt 4)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "key")) (ELit (LString ":")))) (EMatch (ETuple (EApp (EVar "scopeOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key"))) (EApp (EVar "nsOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (ELit (LInt 3))) (EVar "key")))) (arm (PTuple (PCon "Some" (PVar "inProject")) (PCon "Some" (PVar "ns"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "QNamed") (EVar "inProject")) (EVar "ns")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EVar "n")) (EVar "key"))))) (arm PWild () (EVar "None"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "a"))) (EBinOp "==" (EVar "n") (ELit (LInt 2)))) (EApp (EApp (EVar "map") (EVar "QScope")) (EApp (EVar "scopeOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "k"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QKnows") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "m"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QValueModule") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EVar "None"))))))))
+(DTypeSig false "scopeOfTag" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Bool"))))
+(DFunDef false "scopeOfTag" ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "p"))) (EApp (EVar "Some") (EVar "True")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "s"))) (EApp (EVar "Some") (EVar "False")) (EVar "None"))))
+(DTypeSig false "nsOfTag" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ns"))))
+(DFunDef false "nsOfTag" ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "v"))) (EApp (EVar "Some") (EVar "NsValue")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "t"))) (EApp (EVar "Some") (EVar "NsType")) (EVar "None"))))
+(DTypeSig false "scopesOf" (TyFun (TyCon "Query") (TyApp (TyCon "List") (TyCon "Bool"))))
+(DFunDef false "scopesOf" ((PCon "QNamed" (PVar "inProject") PWild PWild)) (EListLit (EVar "inProject")))
+(DFunDef false "scopesOf" ((PCon "QScope" PWild)) (EListLit))
+(DFunDef false "scopesOf" ((PCon "QKnows" PWild)) (EListLit (EVar "True") (EVar "False")))
+(DFunDef false "scopesOf" ((PCon "QValueModule" PWild)) (EListLit (EVar "False")))
+(DTypeSig false "asked" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyCon "Answer"))))
+(DFunDef false "asked" ((PVar "ix") (PVar "q")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "answerOf") (EVar "ix")) (EVar "q"))) (DoLet false false PWild (EMatch (EVar "ix") (arm (PCon "ProjectIndex" PWild PWild (PCon "Some" (PVar "log"))) () (EApp (EApp (EApp (EApp (EVar "logAnswer") (EVar "log")) (EVar "ix")) (EVar "q")) (EVar "a"))) (arm (PCon "ProjectIndex" PWild PWild (PCon "None")) () (ELit LUnit)))) (DoExpr (EVar "a"))))
+(DTypeSig false "logAnswer" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyFun (TyCon "Answer") (TyCon "Unit"))))))
+(DFunDef false "logAnswer" ((PVar "log") (PVar "ix") (PVar "q") (PVar "a")) (EIf (EApp (EApp (EVar "subsumed") (EVar "log")) (EVar "q")) (ELit LUnit) (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "queryKey") (EVar "q"))) (EApp (EApp (EApp (EVar "answerDigest") (EVar "ix")) (EVar "q")) (EVar "a"))) (EVar "log"))))
+(DTypeSig false "subsumed" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyCon "Query") (TyCon "Bool"))))
+(DFunDef false "subsumed" ((PVar "log") (PVar "q")) (EMatch (EApp (EVar "scopesOf") (EVar "q")) (arm (PList) () (EVar "False")) (arm (PVar "scopes") () (EApp (EApp (EVar "allList") (ELam ((PVar "s")) (EApp (EApp (EVar "has") (EApp (EVar "queryKey") (EApp (EVar "QScope") (EVar "s")))) (EVar "log")))) (EVar "scopes")))))
+(DTypeSig false "rowsAsked" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyApp (TyCon "List") (TyCon "IndexRow")))))
+(DFunDef false "rowsAsked" ((PVar "ix") (PVar "q")) (EMatch (EApp (EApp (EVar "asked") (EVar "ix")) (EVar "q")) (arm (PCon "ARows" (PVar "rows")) () (EVar "rows")) (arm (PCon "AYes" PWild) () (EListLit))))
+(DTypeSig false "yesAsked" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyCon "Bool"))))
+(DFunDef false "yesAsked" ((PVar "ix") (PVar "q")) (EMatch (EApp (EApp (EVar "asked") (EVar "ix")) (EVar "q")) (arm (PCon "AYes" (PVar "yes")) () (EVar "yes")) (arm (PCon "ARows" PWild) () (EVar "False"))))
+(DTypeSig true "recording" (TyFun (TyCon "ProjectIndex") (TyCon "ProjectIndex")))
+(DFunDef false "recording" ((PCon "ProjectIndex" (PVar "std") (PVar "proj") PWild)) (EApp (EApp (EApp (EVar "ProjectIndex") (EVar "std")) (EVar "proj")) (EApp (EVar "Some") (EApp (EVar "new") (ELit LUnit)))))
+(DTypeSig true "recordedAnswers" (TyFun (TyCon "ProjectIndex") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "recordedAnswers" ((PCon "ProjectIndex" PWild PWild (PCon "None"))) (EListLit))
+(DFunDef false "recordedAnswers" ((PCon "ProjectIndex" PWild PWild (PCon "Some" (PVar "log")))) (EApp (EApp (EVar "sortBy") (ELam ((PVar "x") (PVar "y")) (EApp (EApp (EVar "stringCompare") (EApp (EVar "fst") (EVar "x"))) (EApp (EVar "fst") (EVar "y"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "kv")) (EApp (EVar "not") (EApp (EApp (EVar "keyCovered") (EVar "log")) (EApp (EVar "fst") (EVar "kv")))))) (EApp (EVar "entries") (EVar "log")))))
+(DTypeSig false "keyCovered" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "keyCovered" ((PVar "log") (PVar "key")) (EMatch (EApp (EVar "readQuery") (EVar "key")) (arm (PCon "Some" (PVar "q")) () (EApp (EApp (EVar "subsumed") (EVar "log")) (EVar "q"))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig true "answersHold" (TyFun (TyCon "ProjectIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
+(DFunDef false "answersHold" ((PVar "ix") (PVar "recorded")) (EApp (EApp (EVar "allList") (EApp (EVar "answerHolds") (EVar "ix"))) (EVar "recorded")))
+(DTypeSig false "answerHolds" (TyFun (TyCon "ProjectIndex") (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "answerHolds" ((PVar "ix") (PTuple (PVar "key") (PVar "digest"))) (EMatch (EApp (EVar "readQuery") (EVar "key")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "q")) () (EBinOp "==" (EApp (EApp (EApp (EVar "answerDigest") (EVar "ix")) (EVar "q")) (EApp (EApp (EVar "asked") (EVar "ix")) (EVar "q"))) (EVar "digest")))))
 (DTypeSig true "rowsNamed" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))
-(DFunDef false "rowsNamed" ((PCon "ProjectIndex" (PVar "std") (PVar "proj")) (PVar "ns") (PVar "name")) (EBinOp "++" (EApp (EApp (EApp (EVar "scopeNamed") (EVar "proj")) (EVar "ns")) (EVar "name")) (EApp (EApp (EApp (EVar "scopeNamed") (EVar "std")) (EVar "ns")) (EVar "name"))))
+(DFunDef false "rowsNamed" ((PVar "ix") (PVar "ns") (PVar "name")) (EBinOp "++" (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "True")) (EVar "ns")) (EVar "name"))) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "False")) (EVar "ns")) (EVar "name")))))
 (DTypeSig true "stdlibRowsNamed" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))
-(DFunDef false "stdlibRowsNamed" ((PCon "ProjectIndex" (PVar "std") PWild) (PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "scopeNamed") (EVar "std")) (EVar "ns")) (EVar "name")))
+(DFunDef false "stdlibRowsNamed" ((PVar "ix") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "False")) (EVar "ns")) (EVar "name"))))
 (DTypeSig true "projectRowsNamed" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))
-(DFunDef false "projectRowsNamed" ((PCon "ProjectIndex" PWild (PVar "proj")) (PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "scopeNamed") (EVar "proj")) (EVar "ns")) (EVar "name")))
+(DFunDef false "projectRowsNamed" ((PVar "ix") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "True")) (EVar "ns")) (EVar "name"))))
 (DTypeSig true "rowsIn" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow")))))))
-(DFunDef false "rowsIn" ((PVar "idx") (PVar "modId") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (EApp (EApp (EApp (EVar "rowsNamed") (EVar "idx")) (EVar "ns")) (EVar "name"))))
+(DFunDef false "rowsIn" ((PVar "ix") (PVar "modId") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (EApp (EApp (EApp (EVar "rowsNamed") (EVar "ix")) (EVar "ns")) (EVar "name"))))
 (DTypeSig true "rowsOfModule" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow")))))
-(DFunDef false "rowsOfModule" ((PCon "ProjectIndex" (PVar "std") (PVar "proj")) (PVar "modId")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (EBinOp "++" (EFieldAccess (EVar "proj") "ixsRows") (EFieldAccess (EVar "std") "ixsRows"))))
+(DFunDef false "rowsOfModule" ((PVar "ix") (PVar "modId")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (EBinOp "++" (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EVar "QScope") (EVar "True"))) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EVar "QScope") (EVar "False"))))))
 (DTypeSig true "stdlibRows" (TyFun (TyCon "ProjectIndex") (TyApp (TyCon "List") (TyCon "IndexRow"))))
-(DFunDef false "stdlibRows" ((PCon "ProjectIndex" (PVar "std") PWild)) (EFieldAccess (EVar "std") "ixsRows"))
+(DFunDef false "stdlibRows" ((PVar "ix")) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EVar "QScope") (EVar "False"))))
 (DTypeSig true "projectRows" (TyFun (TyCon "ProjectIndex") (TyApp (TyCon "List") (TyCon "IndexRow"))))
-(DFunDef false "projectRows" ((PCon "ProjectIndex" PWild (PVar "proj"))) (EFieldAccess (EVar "proj") "ixsRows"))
+(DFunDef false "projectRows" ((PVar "ix")) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EVar "QScope") (EVar "True"))))
 (DTypeSig true "stdlibValueNames" (TyFun (TyCon "ProjectIndex") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "stdlibValueNames" ((PCon "ProjectIndex" (PVar "std") PWild)) (EFieldAccess (EVar "std") "ixsNames"))
+(DFunDef false "stdlibValueNames" ((PVar "ix")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "asked") (EVar "ix")) (EApp (EVar "QScope") (EVar "False")))) (DoLet false false (PVar "std") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "False"))) (DoExpr (EFieldAccess (EVar "std") "ixsNames"))))
 (DTypeSig true "stdlibValueModules" (TyFun (TyCon "ProjectIndex") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "stdlibValueModules" ((PCon "ProjectIndex" (PVar "std") PWild)) (EFieldAccess (EVar "std") "ixsModules"))
+(DFunDef false "stdlibValueModules" ((PVar "ix")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "asked") (EVar "ix")) (EApp (EVar "QScope") (EVar "False")))) (DoLet false false (PVar "std") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "False"))) (DoExpr (EFieldAccess (EVar "std") "ixsModules"))))
+(DTypeSig true "stdlibHasValueModule" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "stdlibHasValueModule" ((PVar "ix") (PVar "modId")) (EApp (EApp (EVar "yesAsked") (EVar "ix")) (EApp (EVar "QValueModule") (EVar "modId"))))
 (DTypeSig true "indexKnowsModule" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "indexKnowsModule" ((PCon "ProjectIndex" (PVar "std") (PVar "proj")) (PVar "modId")) (EBinOp "||" (EApp (EApp (EVar "anyList") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (EFieldAccess (EVar "proj") "ixsRows")) (EApp (EApp (EVar "anyList") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (EFieldAccess (EVar "std") "ixsRows"))))
+(DFunDef false "indexKnowsModule" ((PVar "ix") (PVar "modId")) (EApp (EApp (EVar "yesAsked") (EVar "ix")) (EApp (EVar "QKnows") (EVar "modId"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Decl" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "ExternDecl" true) (mem "LetBind" true) (mem "tyConUnresolved" false))))
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "sexpTy" false) (mem "readTy" false))))
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "renderSExp" false) (mem "cursorOf" false) (mem "cursorFailed" false) (mem "cursorAtEnd" false) (mem "cursorOpen" false) (mem "cursorClose" false) (mem "cursorInt" false) (mem "cursorAtom" false) (mem "cursorChar" false) (mem "cursorList" false) (mem "cursorPeek" false) (mem "cursorAdvance" false) (mem "cursorFail" false) (mem "cursorSkipText" false) (mem "isCloseByte" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "splitOnChar" false) (mem "listLen" false) (mem "filterList" false) (mem "anyList" false))))
-(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "splitOnChar" false) (mem "listLen" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false))))
+(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false) (mem "entries" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "ParseError" false))))
 (DData Public "RowKind" () ((variant "RkValue" (ConPos)) (variant "RkCtor" (ConPos)) (variant "RkType" (ConPos)) (variant "RkIface" (ConPos)) (variant "RkMethod" (ConPos))) ())
@@ -1097,9 +1369,9 @@ indexKnowsModule (ProjectIndex std proj) modId =
 (DTypeSig false "rowKeyText" (TyFun (TyCon "IndexRow") (TyCon "String")))
 (DFunDef false "rowKeyText" ((PVar "r")) (EApp (EApp (EVar "joinWith") (ELit (LString "\t"))) (EListLit (EFieldAccess (EVar "r") "ixrModule") (EFieldAccess (EVar "r") "ixrName") (EApp (EVar "kindTag") (EFieldAccess (EVar "r") "ixrKind")) (EApp (EVar "slotText") (EFieldAccess (EVar "r") "ixrSig")) (EFieldAccess (EVar "r") "ixrParent") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "r") "ixrFields")) (EApp (EVar "intToString") (EFieldAccess (EVar "r") "ixrArity")) (EIf (EFieldAccess (EVar "r") "ixrExported") (ELit (LString "t")) (ELit (LString "f"))))))
 (DTypeSig true "rowsDigest" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "String")))
-(DFunDef false "rowsDigest" ((PVar "rows")) (EBlock (DoLet false false (PVar "joined") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "sortBy") (EVar "stringCompare")) (EApp (EApp (EMethodRef "map") (EVar "rowKeyText")) (EVar "rows"))))) (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "joined"))) (DoLet false false (PVar "lane2") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EVar "hashString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "n")) (EVar "joined"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "hashString") (EVar "joined")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "lane2"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))))
+(DFunDef false "rowsDigest" ((PVar "rows")) (EBlock (DoLet false false (PVar "joined") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EVar "rowKeyText")) (EVar "rows")))) (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "joined"))) (DoLet false false (PVar "lane2") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EVar "hashString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "n")) (EVar "joined"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "hashString") (EVar "joined")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "lane2"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))))
 (DTypeSig false "rowFormatVersion" (TyCon "Int"))
-(DFunDef false "rowFormatVersion" () (ELit (LInt 1)))
+(DFunDef false "rowFormatVersion" () (ELit (LInt 2)))
 (DTypeSig false "sexpOptLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "SExp")))
 (DFunDef false "sexpOptLoc" ((PCon "None")) (EApp (EVar "SList") (EListLit)))
 (DFunDef false "sexpOptLoc" ((PCon "Some" (PCon "Loc" PWild (PVar "a") (PVar "b") (PVar "c") (PVar "d")))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "a"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "b"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "c"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "d"))))))
@@ -1148,21 +1420,21 @@ indexKnowsModule (ProjectIndex std proj) modId =
 (DFunDef false "makeDirsGo" (PWild (PList)) (ELit LUnit))
 (DFunDef false "makeDirsGo" ((PVar "acc") (PCons (PVar "p") (PVar "rest"))) (EIf (EBinOp "==" (EVar "p") (ELit (LString ""))) (EApp (EApp (EVar "makeDirsGo") (EVar "acc")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "acc"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "makeDir") (EVar "next"))) (DoExpr (EApp (EApp (EVar "makeDirsGo") (EVar "next")) (EVar "rest")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DData Private "IndexScope" () ((variant "IndexScope" (ConNamed (field "ixsByName" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow")))) (field "ixsRows" (TyApp (TyCon "List") (TyCon "IndexRow"))) (field "ixsNames" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsModules" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsDigest" (TyCon "String"))))) ())
-(DData Public "ProjectIndex" () ((variant "ProjectIndex" (ConPos (TyCon "IndexScope") (TyCon "IndexScope")))) ())
+(DData Abstract "ProjectIndex" () ((variant "ProjectIndex" (ConPos (TyCon "IndexScope") (TyCon "IndexScope") (TyApp (TyCon "Option") (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")))))) ())
 (DTypeSig false "emptyScope" (TyCon "IndexScope"))
 (DFunDef false "emptyScope" () (ERecordCreate "IndexScope" ((fa "ixsByName" (EApp (EVar "new") (ELit LUnit))) (fa "ixsRows" (EListLit)) (fa "ixsNames" (EListLit)) (fa "ixsModules" (EListLit)) (fa "ixsDigest" (ELit (LString ""))))))
 (DTypeSig true "emptyProjectIndex" (TyCon "ProjectIndex"))
-(DFunDef false "emptyProjectIndex" () (EApp (EApp (EVar "ProjectIndex") (EVar "emptyScope")) (EVar "emptyScope")))
+(DFunDef false "emptyProjectIndex" () (EApp (EApp (EApp (EVar "ProjectIndex") (EVar "emptyScope")) (EVar "emptyScope")) (EVar "None")))
 (DTypeSig true "mkProjectIndex" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "ProjectIndex"))))
 (DFunDef false "mkProjectIndex" ((PVar "stdlibRows") (PVar "projectRows")) (EApp (EApp (EApp (EApp (EVar "mkProjectIndexWith") (ELit (LString ""))) (ELit (LString ""))) (EVar "stdlibRows")) (EVar "projectRows")))
 (DTypeSig true "mkProjectIndexWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "ProjectIndex"))))))
-(DFunDef false "mkProjectIndexWith" ((PVar "stdDigest") (PVar "projDigest") (PVar "stdlibRows") (PVar "projectRows")) (EApp (EApp (EVar "ProjectIndex") (EApp (EApp (EVar "mkScope") (EVar "stdDigest")) (EVar "stdlibRows"))) (EApp (EApp (EVar "mkScope") (EVar "projDigest")) (EVar "projectRows"))))
+(DFunDef false "mkProjectIndexWith" ((PVar "stdDigest") (PVar "projDigest") (PVar "stdlibRows") (PVar "projectRows")) (EApp (EApp (EApp (EVar "ProjectIndex") (EApp (EApp (EVar "mkScope") (EVar "stdDigest")) (EVar "stdlibRows"))) (EApp (EApp (EVar "mkScope") (EVar "projDigest")) (EVar "projectRows"))) (EVar "None")))
 (DTypeSig true "combineDigests" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "combineDigests" ((PVar "digests")) (EBlock (DoLet false false (PVar "joined") (EApp (EApp (EVar "joinWith") (ELit (LString ";"))) (EVar "digests"))) (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "joined"))) (DoLet false false (PVar "lane2") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EVar "hashString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "n")) (EVar "joined"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "listLen") (EVar "digests")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EApp (EVar "hashString") (EVar "joined")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "lane2"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))))
 (DTypeSig true "indexFingerprint" (TyFun (TyCon "ProjectIndex") (TyCon "String")))
-(DFunDef false "indexFingerprint" ((PCon "ProjectIndex" (PVar "std") (PVar "proj"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "std") "ixsDigest"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "proj") "ixsDigest"))) (ELit (LString ""))))
+(DFunDef false "indexFingerprint" ((PVar "ix")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "asked") (EVar "ix")) (EApp (EVar "QScope") (EVar "False")))) (DoLet false false PWild (EApp (EApp (EVar "asked") (EVar "ix")) (EApp (EVar "QScope") (EVar "True")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "scopeDigestOf") (EVar "ix")) (EVar "False")))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "scopeDigestOf") (EVar "ix")) (EVar "True")))) (ELit (LString ""))))))
 (DTypeSig false "mkScope" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "IndexScope"))))
-(DFunDef false "mkScope" ((PVar "digest") (PVar "rows")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "groupInto") (EApp (EApp (EVar "reverseRows") (EVar "rows")) (EListLit))) (EVar "m"))) (DoLet false false (PVar "signed") (EApp (EApp (EVar "filterList") (EVar "isExportedSigValue")) (EVar "rows"))) (DoExpr (ERecordCreate "IndexScope" ((fa "ixsByName" (EVar "m")) (fa "ixsRows" (EVar "rows")) (fa "ixsNames" (EApp (EVar "sortedUnique") (EApp (EApp (EMethodRef "map") (EVar "rowName")) (EVar "signed")))) (fa "ixsModules" (EApp (EVar "sortedUnique") (EApp (EApp (EMethodRef "map") (EVar "rowModule")) (EVar "signed")))) (fa "ixsDigest" (EVar "digest")))))))
+(DFunDef false "mkScope" ((PVar "digest") (PVar "rows")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "groupInto") (EApp (EApp (EVar "reverseRows") (EVar "rows")) (EListLit))) (EVar "m"))) (DoLet false false (PVar "signed") (EApp (EApp (EVar "filterList") (EVar "isExportedSigValue")) (EVar "rows"))) (DoExpr (ERecordCreate "IndexScope" ((fa "ixsByName" (EVar "m")) (fa "ixsRows" (EVar "rows")) (fa "ixsNames" (EApp (EVar "sortedUnique") (EApp (EApp (EMethodRef "map") (EVar "rowName")) (EVar "signed")))) (fa "ixsModules" (EApp (EVar "sortedUnique") (EApp (EApp (EMethodRef "map") (EVar "rowModule")) (EVar "signed")))) (fa "ixsDigest" (EIf (EBinOp "==" (EVar "digest") (ELit (LString ""))) (EApp (EVar "rowsDigest") (EVar "rows")) (EVar "digest"))))))))
 (DTypeSig false "isExportedSigValue" (TyFun (TyCon "IndexRow") (TyCon "Bool")))
 (DFunDef false "isExportedSigValue" ((PVar "r")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "ixrKind") (EVar "RkValue")) (EFieldAccess (EVar "r") "ixrExported")) (EApp (EVar "rowHasSig") (EVar "r"))))
 (DTypeSig false "rowName" (TyFun (TyCon "IndexRow") (TyCon "String")))
@@ -1183,23 +1455,84 @@ indexKnowsModule (ProjectIndex std proj) modId =
 (DFunDef false "dropRepeats" ((PCons (PVar "a") (PCons (PVar "b") (PVar "rest")))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EApp (EVar "dropRepeats") (EBinOp "::" (EVar "b") (EVar "rest"))) (EBinOp "::" (EVar "a") (EApp (EVar "dropRepeats") (EBinOp "::" (EVar "b") (EVar "rest"))))))
 (DTypeSig false "scopeNamed" (TyFun (TyCon "IndexScope") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))
 (DFunDef false "scopeNamed" ((PVar "s") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EApp (EVar "rowNs") (EFieldAccess (EVar "r") "ixrKind")) (EVar "ns")))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "name")) (EFieldAccess (EVar "s") "ixsByName"))))
+(DTypeSig false "scopeOf" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Bool") (TyCon "IndexScope"))))
+(DFunDef false "scopeOf" ((PCon "ProjectIndex" PWild (PVar "proj") PWild) (PCon "True")) (EVar "proj"))
+(DFunDef false "scopeOf" ((PCon "ProjectIndex" (PVar "std") PWild PWild) (PCon "False")) (EVar "std"))
+(DTypeSig false "scopeDigestOf" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Bool") (TyCon "String"))))
+(DFunDef false "scopeDigestOf" ((PVar "ix") (PVar "inProject")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "inProject"))) (DoExpr (EFieldAccess (EVar "s") "ixsDigest"))))
+(DData Private "Query" () ((variant "QNamed" (ConPos (TyCon "Bool") (TyCon "Ns") (TyCon "String"))) (variant "QScope" (ConPos (TyCon "Bool"))) (variant "QKnows" (ConPos (TyCon "String"))) (variant "QValueModule" (ConPos (TyCon "String")))) ())
+(DData Private "Answer" () ((variant "ARows" (ConPos (TyApp (TyCon "List") (TyCon "IndexRow")))) (variant "AYes" (ConPos (TyCon "Bool")))) ())
+(DTypeSig false "answerOf" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyCon "Answer"))))
+(DFunDef false "answerOf" ((PVar "ix") (PCon "QNamed" (PVar "inProject") (PVar "ns") (PVar "name"))) (EApp (EVar "ARows") (EApp (EApp (EApp (EVar "scopeNamed") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "inProject"))) (EVar "ns")) (EVar "name"))))
+(DFunDef false "answerOf" ((PVar "ix") (PCon "QScope" (PVar "inProject"))) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "inProject"))) (DoExpr (EApp (EVar "ARows") (EFieldAccess (EVar "s") "ixsRows")))))
+(DFunDef false "answerOf" ((PVar "ix") (PCon "QKnows" (PVar "modId"))) (EBlock (DoLet false false (PVar "inModule") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (DoLet false false (PVar "proj") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "True"))) (DoLet false false (PVar "std") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "False"))) (DoExpr (EApp (EVar "AYes") (EBinOp "||" (EApp (EApp (EVar "anyList") (EVar "inModule")) (EFieldAccess (EVar "proj") "ixsRows")) (EApp (EApp (EVar "anyList") (EVar "inModule")) (EFieldAccess (EVar "std") "ixsRows")))))))
+(DFunDef false "answerOf" ((PVar "ix") (PCon "QValueModule" (PVar "modId"))) (EBlock (DoLet false false (PVar "std") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "False"))) (DoExpr (EApp (EVar "AYes") (EApp (EApp (EDictApp "elem") (EVar "modId")) (EFieldAccess (EVar "std") "ixsModules"))))))
+(DTypeSig false "answerDigest" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyFun (TyCon "Answer") (TyCon "String")))))
+(DFunDef false "answerDigest" ((PVar "ix") (PCon "QScope" (PVar "inProject")) PWild) (EApp (EApp (EVar "scopeDigestOf") (EVar "ix")) (EVar "inProject")))
+(DFunDef false "answerDigest" (PWild PWild (PCon "ARows" (PVar "rows"))) (EApp (EVar "rowsDigest") (EVar "rows")))
+(DFunDef false "answerDigest" (PWild PWild (PCon "AYes" (PVar "yes"))) (EIf (EVar "yes") (ELit (LString "t")) (ELit (LString "f"))))
+(DTypeSig false "queryKey" (TyFun (TyCon "Query") (TyCon "String")))
+(DFunDef false "queryKey" ((PCon "QNamed" (PVar "inProject") (PVar "ns") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "n")) (EApp (EMethodRef "display") (EApp (EVar "scopeTag") (EVar "inProject")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "nsTag") (EVar "ns")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "queryKey" ((PCon "QScope" (PVar "inProject"))) (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EMethodRef "display") (EApp (EVar "scopeTag") (EVar "inProject")))) (ELit (LString ""))))
+(DFunDef false "queryKey" ((PCon "QKnows" (PVar "modId"))) (EBinOp "++" (EBinOp "++" (ELit (LString "k:")) (EApp (EMethodRef "display") (EVar "modId"))) (ELit (LString ""))))
+(DFunDef false "queryKey" ((PCon "QValueModule" (PVar "modId"))) (EBinOp "++" (EBinOp "++" (ELit (LString "m:")) (EApp (EMethodRef "display") (EVar "modId"))) (ELit (LString ""))))
+(DTypeSig false "scopeTag" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "scopeTag" ((PCon "True")) (ELit (LString "p")))
+(DFunDef false "scopeTag" ((PCon "False")) (ELit (LString "s")))
+(DTypeSig false "nsTag" (TyFun (TyCon "Ns") (TyCon "String")))
+(DFunDef false "nsTag" ((PCon "NsValue")) (ELit (LString "v")))
+(DFunDef false "nsTag" ((PCon "NsType")) (ELit (LString "t")))
+(DTypeSig false "readQuery" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Query"))))
+(DFunDef false "readQuery" ((PVar "key")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "key"))) (DoLet false false (PVar "tag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "key"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "n"))) (EBinOp ">=" (EVar "n") (ELit (LInt 4)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "key")) (ELit (LString ":")))) (EMatch (ETuple (EApp (EVar "scopeOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key"))) (EApp (EVar "nsOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (ELit (LInt 3))) (EVar "key")))) (arm (PTuple (PCon "Some" (PVar "inProject")) (PCon "Some" (PVar "ns"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "QNamed") (EVar "inProject")) (EVar "ns")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EVar "n")) (EVar "key"))))) (arm PWild () (EVar "None"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "a"))) (EBinOp "==" (EVar "n") (ELit (LInt 2)))) (EApp (EApp (EMethodRef "map") (EVar "QScope")) (EApp (EVar "scopeOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "k"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QKnows") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "m"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QValueModule") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EVar "None"))))))))
+(DTypeSig false "scopeOfTag" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Bool"))))
+(DFunDef false "scopeOfTag" ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "p"))) (EApp (EVar "Some") (EVar "True")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "s"))) (EApp (EVar "Some") (EVar "False")) (EVar "None"))))
+(DTypeSig false "nsOfTag" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ns"))))
+(DFunDef false "nsOfTag" ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "v"))) (EApp (EVar "Some") (EVar "NsValue")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "t"))) (EApp (EVar "Some") (EVar "NsType")) (EVar "None"))))
+(DTypeSig false "scopesOf" (TyFun (TyCon "Query") (TyApp (TyCon "List") (TyCon "Bool"))))
+(DFunDef false "scopesOf" ((PCon "QNamed" (PVar "inProject") PWild PWild)) (EListLit (EVar "inProject")))
+(DFunDef false "scopesOf" ((PCon "QScope" PWild)) (EListLit))
+(DFunDef false "scopesOf" ((PCon "QKnows" PWild)) (EListLit (EVar "True") (EVar "False")))
+(DFunDef false "scopesOf" ((PCon "QValueModule" PWild)) (EListLit (EVar "False")))
+(DTypeSig false "asked" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyCon "Answer"))))
+(DFunDef false "asked" ((PVar "ix") (PVar "q")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "answerOf") (EVar "ix")) (EVar "q"))) (DoLet false false PWild (EMatch (EVar "ix") (arm (PCon "ProjectIndex" PWild PWild (PCon "Some" (PVar "log"))) () (EApp (EApp (EApp (EApp (EVar "logAnswer") (EVar "log")) (EVar "ix")) (EVar "q")) (EVar "a"))) (arm (PCon "ProjectIndex" PWild PWild (PCon "None")) () (ELit LUnit)))) (DoExpr (EVar "a"))))
+(DTypeSig false "logAnswer" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyFun (TyCon "Answer") (TyCon "Unit"))))))
+(DFunDef false "logAnswer" ((PVar "log") (PVar "ix") (PVar "q") (PVar "a")) (EIf (EApp (EApp (EVar "subsumed") (EVar "log")) (EVar "q")) (ELit LUnit) (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "queryKey") (EVar "q"))) (EApp (EApp (EApp (EVar "answerDigest") (EVar "ix")) (EVar "q")) (EVar "a"))) (EVar "log"))))
+(DTypeSig false "subsumed" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyCon "Query") (TyCon "Bool"))))
+(DFunDef false "subsumed" ((PVar "log") (PVar "q")) (EMatch (EApp (EVar "scopesOf") (EVar "q")) (arm (PList) () (EVar "False")) (arm (PVar "scopes") () (EApp (EApp (EVar "allList") (ELam ((PVar "s")) (EApp (EApp (EVar "has") (EApp (EVar "queryKey") (EApp (EVar "QScope") (EVar "s")))) (EVar "log")))) (EVar "scopes")))))
+(DTypeSig false "rowsAsked" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyApp (TyCon "List") (TyCon "IndexRow")))))
+(DFunDef false "rowsAsked" ((PVar "ix") (PVar "q")) (EMatch (EApp (EApp (EVar "asked") (EVar "ix")) (EVar "q")) (arm (PCon "ARows" (PVar "rows")) () (EVar "rows")) (arm (PCon "AYes" PWild) () (EListLit))))
+(DTypeSig false "yesAsked" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyCon "Bool"))))
+(DFunDef false "yesAsked" ((PVar "ix") (PVar "q")) (EMatch (EApp (EApp (EVar "asked") (EVar "ix")) (EVar "q")) (arm (PCon "AYes" (PVar "yes")) () (EVar "yes")) (arm (PCon "ARows" PWild) () (EVar "False"))))
+(DTypeSig true "recording" (TyFun (TyCon "ProjectIndex") (TyCon "ProjectIndex")))
+(DFunDef false "recording" ((PCon "ProjectIndex" (PVar "std") (PVar "proj") PWild)) (EApp (EApp (EApp (EVar "ProjectIndex") (EVar "std")) (EVar "proj")) (EApp (EVar "Some") (EApp (EVar "new") (ELit LUnit)))))
+(DTypeSig true "recordedAnswers" (TyFun (TyCon "ProjectIndex") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "recordedAnswers" ((PCon "ProjectIndex" PWild PWild (PCon "None"))) (EListLit))
+(DFunDef false "recordedAnswers" ((PCon "ProjectIndex" PWild PWild (PCon "Some" (PVar "log")))) (EApp (EApp (EVar "sortBy") (ELam ((PVar "x") (PVar "y")) (EApp (EApp (EVar "stringCompare") (EApp (EVar "fst") (EVar "x"))) (EApp (EVar "fst") (EVar "y"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "kv")) (EApp (EVar "not") (EApp (EApp (EVar "keyCovered") (EVar "log")) (EApp (EVar "fst") (EVar "kv")))))) (EApp (EVar "entries") (EVar "log")))))
+(DTypeSig false "keyCovered" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "keyCovered" ((PVar "log") (PVar "key")) (EMatch (EApp (EVar "readQuery") (EVar "key")) (arm (PCon "Some" (PVar "q")) () (EApp (EApp (EVar "subsumed") (EVar "log")) (EVar "q"))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig true "answersHold" (TyFun (TyCon "ProjectIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
+(DFunDef false "answersHold" ((PVar "ix") (PVar "recorded")) (EApp (EApp (EVar "allList") (EApp (EVar "answerHolds") (EVar "ix"))) (EVar "recorded")))
+(DTypeSig false "answerHolds" (TyFun (TyCon "ProjectIndex") (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "answerHolds" ((PVar "ix") (PTuple (PVar "key") (PVar "digest"))) (EMatch (EApp (EVar "readQuery") (EVar "key")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "q")) () (EBinOp "==" (EApp (EApp (EApp (EVar "answerDigest") (EVar "ix")) (EVar "q")) (EApp (EApp (EVar "asked") (EVar "ix")) (EVar "q"))) (EVar "digest")))))
 (DTypeSig true "rowsNamed" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))
-(DFunDef false "rowsNamed" ((PCon "ProjectIndex" (PVar "std") (PVar "proj")) (PVar "ns") (PVar "name")) (EBinOp "++" (EApp (EApp (EApp (EVar "scopeNamed") (EVar "proj")) (EVar "ns")) (EVar "name")) (EApp (EApp (EApp (EVar "scopeNamed") (EVar "std")) (EVar "ns")) (EVar "name"))))
+(DFunDef false "rowsNamed" ((PVar "ix") (PVar "ns") (PVar "name")) (EBinOp "++" (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "True")) (EVar "ns")) (EVar "name"))) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "False")) (EVar "ns")) (EVar "name")))))
 (DTypeSig true "stdlibRowsNamed" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))
-(DFunDef false "stdlibRowsNamed" ((PCon "ProjectIndex" (PVar "std") PWild) (PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "scopeNamed") (EVar "std")) (EVar "ns")) (EVar "name")))
+(DFunDef false "stdlibRowsNamed" ((PVar "ix") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "False")) (EVar "ns")) (EVar "name"))))
 (DTypeSig true "projectRowsNamed" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))
-(DFunDef false "projectRowsNamed" ((PCon "ProjectIndex" PWild (PVar "proj")) (PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "scopeNamed") (EVar "proj")) (EVar "ns")) (EVar "name")))
+(DFunDef false "projectRowsNamed" ((PVar "ix") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "True")) (EVar "ns")) (EVar "name"))))
 (DTypeSig true "rowsIn" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow")))))))
-(DFunDef false "rowsIn" ((PVar "idx") (PVar "modId") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (EApp (EApp (EApp (EVar "rowsNamed") (EVar "idx")) (EVar "ns")) (EVar "name"))))
+(DFunDef false "rowsIn" ((PVar "ix") (PVar "modId") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (EApp (EApp (EApp (EVar "rowsNamed") (EVar "ix")) (EVar "ns")) (EVar "name"))))
 (DTypeSig true "rowsOfModule" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow")))))
-(DFunDef false "rowsOfModule" ((PCon "ProjectIndex" (PVar "std") (PVar "proj")) (PVar "modId")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (EBinOp "++" (EFieldAccess (EVar "proj") "ixsRows") (EFieldAccess (EVar "std") "ixsRows"))))
+(DFunDef false "rowsOfModule" ((PVar "ix") (PVar "modId")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (EBinOp "++" (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EVar "QScope") (EVar "True"))) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EVar "QScope") (EVar "False"))))))
 (DTypeSig true "stdlibRows" (TyFun (TyCon "ProjectIndex") (TyApp (TyCon "List") (TyCon "IndexRow"))))
-(DFunDef false "stdlibRows" ((PCon "ProjectIndex" (PVar "std") PWild)) (EFieldAccess (EVar "std") "ixsRows"))
+(DFunDef false "stdlibRows" ((PVar "ix")) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EVar "QScope") (EVar "False"))))
 (DTypeSig true "projectRows" (TyFun (TyCon "ProjectIndex") (TyApp (TyCon "List") (TyCon "IndexRow"))))
-(DFunDef false "projectRows" ((PCon "ProjectIndex" PWild (PVar "proj"))) (EFieldAccess (EVar "proj") "ixsRows"))
+(DFunDef false "projectRows" ((PVar "ix")) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EVar "QScope") (EVar "True"))))
 (DTypeSig true "stdlibValueNames" (TyFun (TyCon "ProjectIndex") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "stdlibValueNames" ((PCon "ProjectIndex" (PVar "std") PWild)) (EFieldAccess (EVar "std") "ixsNames"))
+(DFunDef false "stdlibValueNames" ((PVar "ix")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "asked") (EVar "ix")) (EApp (EVar "QScope") (EVar "False")))) (DoLet false false (PVar "std") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "False"))) (DoExpr (EFieldAccess (EVar "std") "ixsNames"))))
 (DTypeSig true "stdlibValueModules" (TyFun (TyCon "ProjectIndex") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "stdlibValueModules" ((PCon "ProjectIndex" (PVar "std") PWild)) (EFieldAccess (EVar "std") "ixsModules"))
+(DFunDef false "stdlibValueModules" ((PVar "ix")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "asked") (EVar "ix")) (EApp (EVar "QScope") (EVar "False")))) (DoLet false false (PVar "std") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "False"))) (DoExpr (EFieldAccess (EVar "std") "ixsModules"))))
+(DTypeSig true "stdlibHasValueModule" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "stdlibHasValueModule" ((PVar "ix") (PVar "modId")) (EApp (EApp (EVar "yesAsked") (EVar "ix")) (EApp (EVar "QValueModule") (EVar "modId"))))
 (DTypeSig true "indexKnowsModule" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "indexKnowsModule" ((PCon "ProjectIndex" (PVar "std") (PVar "proj")) (PVar "modId")) (EBinOp "||" (EApp (EApp (EVar "anyList") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (EFieldAccess (EVar "proj") "ixsRows")) (EApp (EApp (EVar "anyList") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (EFieldAccess (EVar "std") "ixsRows"))))
+(DFunDef false "indexKnowsModule" ((PVar "ix") (PVar "modId")) (EApp (EApp (EVar "yesAsked") (EVar "ix")) (EApp (EVar "QKnows") (EVar "modId"))))

@@ -19,6 +19,7 @@ set of entries (#4141).
 | `fmt.mdk` | The comment-preserving formatter over `printer.mdk` | `formatProgram` |
 | `lint.mdk` | The `medaka lint` facade: re-exports the framework, registry and runner surface the CLI, MCP and tests consume; holds the `--fix` driver | re-exports, `fixSource` |
 | `lint_core.mdk` | The framework's data types: `Finding`, `Fix`, `FixEdit`, `Applicability`, `Fixability`, `Directive`, `FileFacts`, `Rule`, `ProjectRule`, `Summary`, `RuleCheck`, `Ctx`, `Visitor`, `RuleMeta`, `StdlibIndex`; imports no rule, registry or runner; its closure still holds about 100 `types.*` modules, reached through `frontend.exhaust` (`Oracle`) and `tools.printer` (`ppTy`), pinned by `test/arch_goldens/closure.tools.lint_core.golden` | types |
+| `lint_index.mdk` | The declaration index: one row per declared name (stdlib and project scopes), per-file row shards, and the abstract `ProjectIndex` whose every accessor asks a `Query` through one function, so a recording index logs each question with a digest of its answer; imports nothing from `types/` | `ProjectIndex`, `rowsNamed`, `recording`, `answersHold` |
 | `lint_shared.mdk` | Helpers used by more than one lint module: rule-name constants, location helpers, the directive parser, stdlib path predicates | shared helpers |
 | `lint_scope.mdk` | The per-file scope model: every binder with its kind and span, every identifier use resolved to its binder, unused local binders and import-member use counts; built on `frontend.ast_walk`, forbidden to import `types.*` or `tools.refindex`; built as a `FileFacts` memo only for a rule whose `needs` lists `NeedsScopes` | `FileScopes`, `binderOf`, `unusedBinders`, `importUses` |
 | `lint_dup.mdk` | The duplicate-body occurrence engine: per-clause facts, grouping and the cross-file join | `dupOccsOfClauses`, `dupJoin` |
@@ -29,7 +30,7 @@ set of entries (#4141).
 | `lint_rule_<name>.mdk` | One universal lint rule per module, exporting `rule`; may not import another rule module, the registry or the runner | `rule` |
 | `lint_rule_internal_<name>.mdk` | One internal-scope rule (this repository's conventions) per module, exporting `rule`; same import limits | `rule` |
 | `lint_cmd.mdk` | The `medaka lint` engine: targets, cached pass, project-rule tier, JSON | lint engine |
-| `lint_cache.mdk` | The on-disk per-file cache behind `lint --cache`: sexp shards keyed by content, binary and index, with two finding groups and per-rule summaries | content-keyed shards |
+| `lint_cache.mdk` | The on-disk per-file cache behind `lint --cache`: sexp shards keyed by content and binary, with two finding groups, per-rule summaries, and the index fingerprint plus the recorded index answers the index-reading group depends on | content-keyed shards |
 | `lint_baseline.mdk` | The per-file, per-rule finding-count baseline | `--baseline` reader |
 | `codemod.mdk` | Named source-preserving AST transforms and their registry | codemod registry |
 | `doc.mdk` | `medaka doc`: doc-comment extraction and Markdown rendering, single file or library | `runDoc`, `renderModulePage` |
