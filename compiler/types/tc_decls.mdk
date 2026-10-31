@@ -224,7 +224,7 @@ import map as IdMap
 -- every table, so the two cannot drift.
 export
 declEnvAccOf : GraphCtx -> List DeclEnvModule -> DeclEnvAcc -> DeclEnvAcc
-declEnvAccOf gctx [] a = a
+declEnvAccOf _gctx [] a = a
 declEnvAccOf gctx (m :: rest) a =
   -- #1675: BOTH definer projections come out of ONE fold.  They are derived from
   -- the same uncollapsed row list -- `deDefiners` keeps the first row per name,
@@ -358,7 +358,7 @@ declEnvSeedChain : GraphCtx ->
   List DeclEnvModule ->
   DeclEnvSeedAcc ->
   DeclEnvSeedAcc
-declEnvSeedChain gctx [] s = s
+declEnvSeedChain _gctx [] s = s
 declEnvSeedChain gctx (m :: rest) s =
   let kents = declEnvRowKindEntries gctx (m.demOrd + 1) m
   declEnvSeedChain gctx rest DeclEnvSeedAcc {
@@ -394,7 +394,7 @@ declEnvRowAtomsChain : GraphCtx ->
   List DeclEnvModule ->
   (List (TabKey, List (List Atom)), OrdMap (List (TabKey, List (List Atom)))) ->
   (List (TabKey, List (List Atom)), OrdMap (List (TabKey, List (List Atom))))
-declEnvRowAtomsChain gctx [] s = s
+declEnvRowAtomsChain _gctx [] s = s
 declEnvRowAtomsChain gctx (m :: rest) (aacc, am) =
   let entries = declEnvRowAtomsEntries gctx (m.demOrd + 1) m
   declEnvRowAtomsChain gctx rest (entries ++ aacc, omInsert m.demId aacc am)
@@ -436,7 +436,7 @@ declEnvRowAtomsEntries gctx cur m
 -- alias has no per-run row either.  Adding one here would publish a
 -- cross-module entry with no single-file counterpart.
 declEnvRowAtomEntries : GraphCtx -> List Decl -> List (TabKey, List (List Atom))
-declEnvRowAtomEntries gctx [] = []
+declEnvRowAtomEntries _gctx [] = []
 declEnvRowAtomEntries gctx ((DAttrib _ d) :: rest) =
   declEnvRowAtomEntries gctx (d :: rest)
 declEnvRowAtomEntries gctx ((DData { dataName = n, dataParams = ps, dataCtors = vs, dataOrigin = o }) :: rest) =
@@ -650,9 +650,9 @@ dataEnvFromDeclsGo ord (d :: rest) acc =
 -- doctest pins population neutrality.
 dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
 dataEnvAddDecl ord _ (DAttrib _ d) acc = dataEnvAddDecl ord True d acc
-dataEnvAddDecl ord _ (DData { dataName, dataParams, dataCtors, dataOrigin, ... }) acc =
+dataEnvAddDecl _ord _ (DData { dataName, dataParams, dataCtors, dataOrigin, ... }) acc =
   addDataTypeDecl dataName dataOrigin dataParams dataCtors acc
-dataEnvAddDecl ord _ (DNewtype { newtypeName, newtypeParams, newtypeCtor, newtypeFieldTy, newtypeOrigin, ... }) acc =
+dataEnvAddDecl _ord _ (DNewtype { newtypeName, newtypeParams, newtypeCtor, newtypeFieldTy, newtypeOrigin, ... }) acc =
   addDataTypeDecl
     newtypeName
     newtypeOrigin
@@ -940,7 +940,7 @@ emitCyclicAliasErrors : ModuleCtx ->
   List (TabKey, (List String, Ty)) ->
   List String ->
   Unit
-emitCyclicAliasErrors mctx _ _ [] = ()
+emitCyclicAliasErrors _mctx _ _ [] = ()
 emitCyclicAliasErrors mctx prog table (name :: rest) =
   let reader = mctx.mcCells.currentModuleRef.value
   let named = filterList (e => tabKeyName (fst e) == name) table
@@ -1190,7 +1190,7 @@ rowArgAtomsIn mctx scope (TyFun a b) =
 rowArgAtomsIn mctx scope (TyTuple ts) = flatMap (rowArgAtomsIn mctx scope) ts
 rowArgAtomsIn mctx scope (TyEffect _ _ t) = rowArgAtomsIn mctx scope t
 rowArgAtomsIn mctx scope (TyConstrained _ t) = rowArgAtomsIn mctx scope t
-rowArgAtomsIn mctx _ _ = []
+rowArgAtomsIn _mctx _ _ = []
 
 rowArgAtomsApp : ModuleCtx ->
   List (String, List Kind) ->
@@ -1231,8 +1231,8 @@ krowArgVarAtoms : GraphCtx ->
   List (List Atom) ->
   List Ty ->
   List (String, List Atom)
-krowArgVarAtoms gctx [] _ _ = []
-krowArgVarAtoms gctx _ _ [] = []
+krowArgVarAtoms _gctx [] _ _ = []
+krowArgVarAtoms _gctx _ _ [] = []
 krowArgVarAtoms gctx (KRow :: ks) decls ((TyVar n) :: as2) =
   (n, optionOr [] (head decls)) :: krowArgVarAtoms gctx ks (restAtoms decls) as2
 krowArgVarAtoms gctx (KRow :: ks) decls ((TyRow labels tails _) :: as2) =
@@ -1581,8 +1581,8 @@ inferParamRowAtoms gctx params variants =
 -- WRITTEN beside it at that occurrence (a tail position `<Stdout | p>` reports
 -- `[Stdout]`; every other occurrence reports `[]`).
 paramRowAtomOccs : GraphCtx -> String -> Ty -> List (List Atom)
-paramRowAtomOccs gctx p (TyVar n) = if n == p then [[]] else []
-paramRowAtomOccs gctx _ (TyCon { tyConName = _ }) = []
+paramRowAtomOccs _gctx p (TyVar n) = if n == p then [[]] else []
+paramRowAtomOccs _gctx _ (TyCon { tyConName = _ }) = []
 paramRowAtomOccs gctx p (TyEffect labels tails t) =
   paramRowAtomsFor gctx p tails labels ++ paramRowAtomOccs gctx p t
 paramRowAtomOccs gctx p (TyRow labels tails _) =
@@ -1593,7 +1593,7 @@ paramRowAtomOccs gctx p (TyTuple ts) = flatMap (paramRowAtomOccs gctx p) ts
 paramRowAtomOccs gctx p (TyApp a b) =
   paramRowAtomOccs gctx p a ++ paramRowAtomOccs gctx p b
 paramRowAtomOccs gctx p (TyConstrained _ t) = paramRowAtomOccs gctx p t
-paramRowAtomOccs gctx _ _ = []
+paramRowAtomOccs _gctx _ _ = []
 
 -- The row's written atoms, once per tail var that IS [p] (a join names several).
 paramRowAtomsFor : GraphCtx ->
@@ -1611,7 +1611,7 @@ paramRowAtomsFor gctx p tails labels =
 -- parameter — guarantees nothing, hence `[]`: the conservative verdict, since
 -- nothing here may widen acceptance on a shape this pass cannot see.
 intersectDeclAtoms : GraphCtx -> List (List Atom) -> List Atom
-intersectDeclAtoms gctx [] = []
+intersectDeclAtoms _gctx [] = []
 intersectDeclAtoms gctx (first :: rest) =
   filterList (x => allList (b => isEmptyL (atomsEscape gctx [x] b)) rest) first
 
@@ -1626,12 +1626,12 @@ mintParamReprs mctx (_ :: ps) (KRow :: ks) =
 mintParamReprs mctx (p :: ps) ((KAuth l pat) :: ks) =
   TAuth (AVar (freshAuthvarRanged mctx (dtopFor mctx.mcGraph l) pat (Some p)))
     :: mintParamReprs mctx ps ks
-mintParamReprs mctx _ _ = []
+mintParamReprs _mctx _ _ = []
 
 -- KType param names → their TVar (the tvs map fromAstTypeE consults for tyvars)
 ktypeTvs : List String -> List Kind -> List Mono -> List (String, Mono)
 ktypeTvs (p :: ps) (KType :: ks) (r :: rs) = (p, r) :: ktypeTvs ps ks rs
-ktypeTvs (p :: ps) (_ :: ks) (_ :: rs) = ktypeTvs ps ks rs
+ktypeTvs (_p :: ps) (_ :: ks) (_ :: rs) = ktypeTvs ps ks rs
 ktypeTvs _ _ _ = []
 
 -- KRow param names → the effvar cell inside their TEff repr, so a field's `<e>`
@@ -1647,7 +1647,7 @@ paramEtbl params kinds reprs = SigVars {
 kauthCells : List String -> List Kind -> List Mono -> List (String, Ref Authvar)
 kauthCells (p :: ps) ((KAuth _ _) :: ks) ((TAuth (AVar cell)) :: rs) =
   (p, cell) :: kauthCells ps ks rs
-kauthCells (p :: ps) (_ :: ks) (_ :: rs) = kauthCells ps ks rs
+kauthCells (_p :: ps) (_ :: ks) (_ :: rs) = kauthCells ps ks rs
 kauthCells _ _ _ = []
 
 -- A constructor's existential binders (`C (p : Authority L) …`): each a fresh
@@ -1672,7 +1672,7 @@ existentialCells mctx binders =
     binders
 
 recordExistentials : GraphCtx -> List (String, Ref Authvar) -> Unit
-recordExistentials gctx [] = ()
+recordExistentials _gctx [] = ()
 recordExistentials gctx cells =
   gctx.graphRun.anyExistentialsRef := True
   gctx.graphRun.ctorExistentialsRef :=
@@ -1693,7 +1693,7 @@ padCtorBinders (_ :: vs) [] = [] :: padCtorBinders vs []
 krowRows : List String -> List Kind -> List Mono -> List (String, Ref Effvar)
 krowRows (p :: ps) (KRow :: ks) ((TEff (EffRow _ (Some cell))) :: rs) =
   (p, cell) :: krowRows ps ks rs
-krowRows (p :: ps) (_ :: ks) (_ :: rs) = krowRows ps ks rs
+krowRows (_p :: ps) (_ :: ks) (_ :: rs) = krowRows ps ks rs
 krowRows _ _ _ = []
 
 -- a named-field data variant (`C { f : T, … }`, e.g. ast's DInterface) carries a
@@ -1732,7 +1732,7 @@ registerNamedFieldVariantsGo mctx o tyName params kinds ((Variant cname (ConName
   registerNamedFieldVariantsGo mctx o tyName params kinds rest brest
 registerNamedFieldVariantsGo mctx o tyName params kinds (_ :: rest) (_ :: brest) =
   registerNamedFieldVariantsGo mctx o tyName params kinds rest brest
-registerNamedFieldVariantsGo mctx _ _ _ _ _ _ = ()
+registerNamedFieldVariantsGo _mctx _ _ _ _ _ _ = ()
 
 addVariants : TcEnv ->
   List (String, Mono) ->
@@ -1895,7 +1895,7 @@ directIfaceSchemeRows mctx (DInterface { name, typarams, typaramKinds, methods, 
     IfaceRef { irName = name, irOrigin = ifaceOrigin }
     typarams
     methods
-directIfaceSchemeRows mctx _ = []
+directIfaceSchemeRows _mctx _ = []
 
 -- Exactly one `sigToSchemeTvsIn` allocation per row.  Slots are computed from that
 -- allocation's tv map and quantified-id order, then installed at the same construction
@@ -1906,7 +1906,7 @@ methodSchemeRows : ModuleCtx ->
   List String ->
   List IfaceMethod ->
   List MethodSchemeRow
-methodSchemeRows mctx _ _ _ [] = []
+methodSchemeRows _mctx _ _ _ [] = []
 methodSchemeRows mctx scope iface typarams ((IfaceMethod mname mty _ _) :: rest) =
   let (scheme, tvs) = sigToSchemeTvsIn mctx scope mty
   let slots =
@@ -1996,7 +1996,7 @@ methodSchemesPure : ModuleCtx ->
   List (String, List Kind) ->
   List IfaceMethod ->
   List (String, Scheme)
-methodSchemesPure mctx _ [] = []
+methodSchemesPure _mctx _ [] = []
 methodSchemesPure mctx scope ((IfaceMethod mname mty _ _) :: rest) =
   (mname, fst (sigToSchemeTvsIn mctx scope mty))
     :: methodSchemesPure mctx scope rest
@@ -2037,7 +2037,7 @@ methodPredicateSlotsOfType mctx typarams (TyConstrained cs t) tvs fullIds =
     ++ methodPredicateSlotsOfType mctx typarams t tvs fullIds
 methodPredicateSlotsOfType mctx typarams (TyEffect _ _ t) tvs fullIds =
   methodPredicateSlotsOfType mctx typarams t tvs fullIds
-methodPredicateSlotsOfType mctx _ _ _ _ = []
+methodPredicateSlotsOfType _mctx _ _ _ _ = []
 
 constraintMethodPredicateSlot : ModuleCtx ->
   List String ->
@@ -2161,7 +2161,7 @@ declKindEntry gctx (DNewtype { newtypeName = name, newtypeParams = params, newty
   Some (o, name, declParamKinds gctx params anns)
 declKindEntry gctx (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasParamKinds = anns, tyAliasOrigin = o }) =
   Some (o, name, declParamKinds gctx params anns)
-declKindEntry gctx _ = None
+declKindEntry _gctx _ = None
 
 -- Runs `k` with the declared kinds of `ds` in the table of [mctx], the current
 -- record, then puts the table back as it was. A reader that elaborates signatures
@@ -2386,7 +2386,7 @@ declEnvModulesFrom : GraphCtx ->
   Int ->
   List (String, List Decl) ->
   List DeclEnvModule
-declEnvModulesFrom gctx _ [] = []
+declEnvModulesFrom _gctx _ [] = []
 declEnvModulesFrom gctx k ((mid, decls) :: rest) =
   declEnvModule gctx k mid decls :: declEnvModulesFrom gctx (k + 1) rest
 

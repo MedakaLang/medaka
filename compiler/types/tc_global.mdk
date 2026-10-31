@@ -319,7 +319,7 @@ import map as IdMap
 -- refactor.
 export
 checkGradedImplHeads : ModuleCtx -> ClassEnv -> Int -> List Decl -> Unit
-checkGradedImplHeads mctx _ _ [] = ()
+checkGradedImplHeads _mctx _ _ [] = ()
 checkGradedImplHeads mctx ce cur (d :: rest) =
   checkGradedImplHeadDecl mctx ce cur d
   checkGradedImplHeads mctx ce cur rest
@@ -332,7 +332,7 @@ checkGradedImplHeadDecl mctx ce cur (DAttrib _ d) =
   checkGradedImplHeadDecl mctx ce cur d
 checkGradedImplHeadDecl mctx ce cur (DImpl { iface, tys, implOrigin = o, ... }) =
   checkGradedImplTys mctx ce cur o iface 0 tys
-checkGradedImplHeadDecl mctx _ _ _ = ()
+checkGradedImplHeadDecl _mctx _ _ _ = ()
 
 -- The `CE` lookup via `ceSlotKindsAt` uses ordinal filtering — the key is a RegKey
 -- (`ifaceTabKey o iface` + slot position), identity-based not bare-name, carrying the
@@ -347,7 +347,7 @@ checkGradedImplTys : ModuleCtx ->
   Int ->
   List Ty ->
   Unit
-checkGradedImplTys mctx _ _ _ _ _ [] = ()
+checkGradedImplTys _mctx _ _ _ _ _ [] = ()
 checkGradedImplTys mctx ce cur o iface i (t :: rest) =
   match ceSlotKindsAt (regKeyOfTab (ifaceTabKey o iface)) cur i ce
     Some want if anyKRow want => checkGradedImplHead mctx iface t want
@@ -538,7 +538,7 @@ checkImplHeadIndices mctx (TyApp a b) = match tyAppSpine (TyApp a b)
           (zip kinds args)
       _ => ()
   _ => ()
-checkImplHeadIndices mctx _ = ()
+checkImplHeadIndices _mctx _ = ()
 
 -- The `IE` row to `CohImpl` adapter: coherence's input.  Every one of the four
 -- things coherence judges on comes out of the row:
@@ -955,12 +955,12 @@ checkCoherence mctx env cur =
       cohPushSoft mctx soft
 
 cohPushHard : ModuleCtx -> Option (String, Option Loc) -> Unit
-cohPushHard mctx None = ()
+cohPushHard _mctx None = ()
 cohPushHard mctx (Some (msg, loc)) =
   pushTypeErrorAt mctx TConflictingImpl loc msg
 
 cohPushSoft : ModuleCtx -> Option (String, Option Loc) -> Unit
-cohPushSoft mctx None = ()
+cohPushSoft _mctx None = ()
 cohPushSoft mctx (Some (msg, loc)) = pushCoherenceWarning mctx loc msg
 
 -- ── the superinterface rule for impl declarations (DICT-SEMANTICS §3 W-super) ──
@@ -1042,7 +1042,7 @@ checkImplSuperContexts mctx decls ce cur rows (DImpl { iface, tys, reqs, implOri
         ()
         (ceRowSupers r)
     _ => ()
-checkImplSuperContexts mctx _ _ _ _ _ = ()
+checkImplSuperContexts _mctx _ _ _ _ _ = ()
 
 -- The span of the `data`/`newtype` declaration a derived impl's head names.
 derivedImplDeclLoc : List Decl -> List Ty -> Option Loc
@@ -1438,7 +1438,7 @@ implHeadParametric _ = False
 -- the plain-check path (activeDictVars mutation is harmless; reset by `freshModuleCtx`).
 export
 inferDefaultBodies : TcEnv -> List Decl -> Unit
-inferDefaultBodies env [] = ()
+inferDefaultBodies _env [] = ()
 inferDefaultBodies env (d :: rest) =
   inferOneIfaceDefaults env d
   inferDefaultBodies env rest
@@ -1472,7 +1472,7 @@ inferOneIfaceDefaults env (DInterface { name, typarams, typaramKinds, methods, i
     dscope
     typarams
     methods
-inferOneIfaceDefaults env _ = ()
+inferOneIfaceDefaults _env _ = ()
 
 inferDefaultMethods : TcEnv ->
   IfaceRef ->
@@ -1480,7 +1480,7 @@ inferDefaultMethods : TcEnv ->
   List String ->
   List IfaceMethod ->
   Unit
-inferDefaultMethods env _ _ _ [] = ()
+inferDefaultMethods _env _ _ _ [] = ()
 inferDefaultMethods env iface dscope typarams (m :: rest) =
   inferDefaultMethod env iface dscope typarams m
   inferDefaultMethods env iface dscope typarams rest
@@ -1495,7 +1495,7 @@ inferDefaultMethod : TcEnv ->
   Unit
 inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (MethodDefault pats body)) _) =
   inferMethodBody env iface DefaultBody (typarams, mty, dscope) mname pats body
-inferDefaultMethod env _ _ _ _ = ()
+inferDefaultMethod _env _ _ _ _ = ()
 
 -- infer each impl-with-`requires`' return-position method bodies; the interface
 -- method declarations come from the identity-keyed ClassEnv row at [cur].
@@ -1507,7 +1507,7 @@ inferImplBodies : TcEnv ->
   Int ->
   List (Option Loc, Decl) ->
   Unit
-inferImplBodies env _ _ _ [] = ()
+inferImplBodies _env _ _ _ [] = ()
 inferImplBodies env rpNames ce cur ((loc, d) :: rest) =
   inferOneImpl (envAtIfSome loc env) rpNames ce cur d
   inferImplBodies env rpNames ce cur rest
@@ -1661,7 +1661,7 @@ inferOneImpl env rpNames ce cur (DImpl { iface, tys, reqs, methods, implOrigin, 
   match reqs
     [] => inferPlainImpl env ce cur iref tys methods
     _ => inferRequiresImpl env rpNames ce cur iref tys reqs methods
-inferOneImpl env _ _ _ _ = ()
+inferOneImpl _env _ _ _ _ = ()
 
 -- D3a: a NON-`requires` impl body, inferred on every path (single elaboration mode)
 -- so its ARG-position method occurrences (e.g. `display` of a String field inside a
@@ -1726,7 +1726,7 @@ scopeImplMethods : ModuleCtx ->
   ScopeId ->
   List ImplMethod ->
   List ScopedImplMethod
-scopeImplMethods mctx _ [] = []
+scopeImplMethods _mctx _ [] = []
 scopeImplMethods mctx parent (method :: rest) =
   let name = implMethodName method
   let scope =
@@ -1748,7 +1748,7 @@ inferImplMethods : TcEnv ->
   List Require ->
   List ScopedImplMethod ->
   Unit
-inferImplMethods env _ _ _ _ _ _ [] = ()
+inferImplMethods _env _ _ _ _ _ _ [] = ()
 inferImplMethods env ce cur iface implTvMap headMonos reqs (m :: rest) =
   inferImplMethod env ce cur iface implTvMap headMonos reqs m
   inferImplMethods env ce cur iface implTvMap headMonos reqs rest
@@ -2544,7 +2544,7 @@ checkImplHeadNumObligations : ModuleCtx ->
   OrdMap Unit ->
   List UObligation ->
   Unit
-checkImplHeadNumObligations mctx _ _ _ _ [] = ()
+checkImplHeadNumObligations _mctx _ _ _ _ [] = ()
 checkImplHeadNumObligations mctx subject implTvMap reqs survivingIds (o :: rest) =
   checkImplHeadNumIds
     mctx
@@ -2564,7 +2564,7 @@ checkImplHeadNumIds : ModuleCtx ->
   Option Loc ->
   List Int ->
   Unit
-checkImplHeadNumIds mctx _ _ _ _ _ [] = ()
+checkImplHeadNumIds _mctx _ _ _ _ _ [] = ()
 checkImplHeadNumIds mctx subject implTvMap reqs survivingIds loc (id :: rest) =
   match survivorNameOfId id implTvMap
     Some vname =>
@@ -2584,7 +2584,7 @@ implRequiresRoot : ModuleCtx ->
   List (String, Mono) ->
   List Require ->
   Bool
-implRequiresRoot mctx _ _ _ [] = False
+implRequiresRoot _mctx _ _ _ [] = False
 implRequiresRoot mctx wanted id implTvMap ((Require { requireHead = iface, requireArgs = args, ... }) :: rest) =
   contains wanted (ifaceSelfAndSupers mctx iface)
       && requireArgsAreRoot id implTvMap args
@@ -2823,7 +2823,7 @@ checkSurvivorCallObligations : ModuleCtx ->
   List (IfaceRef, List Mono, Option Loc) ->
   Option Loc ->
   Unit
-checkSurvivorCallObligations mctx _ _ _ _ _ [] _ = ()
+checkSurvivorCallObligations _mctx _ _ _ _ _ [] _ = ()
 checkSurvivorCallObligations mctx subject ownIface ownTyparams mty extraMap ((oiface, monos, _) :: rest) loc =
   checkSurvivorDispatchMonos
     mctx
@@ -2898,7 +2898,7 @@ calleeNumObls mctx callN0 dictN0 =
 -- never be "Num" and is filtered out anyway.
 export
 numCallObls : GraphCtx -> List UObligation -> List UObligation
-numCallObls gctx [] = []
+numCallObls _gctx [] = []
 numCallObls gctx (o :: rest) = match (o.pred.iface.irName, uOblArgs gctx o)
   ("Num", [mono]) =>
     mkMethodOccObl
@@ -2922,7 +2922,7 @@ numDictObls : GraphCtx -> List PendingDictApp -> List UObligation
 -- `numConstrainedIds`/`groundNumVarsWith` → `numObligIds`/`liveNumVarGo`), and every one
 -- of those readers destructures the 5th element as `_`.  Nothing renders it today;
 -- the point is that the tuple stops carrying a span it knows to be wrong.
-numDictObls gctx [] = []
+numDictObls _gctx [] = []
 -- B-4b-iii: SPELLING consumer of the widened route carrier — the `"Num"` test is a
 -- name test against the prelude spelling, unchanged, so `.irName` is projected here.
 numDictObls gctx (app :: rest) =

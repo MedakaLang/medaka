@@ -252,18 +252,18 @@ export
 isNonexpansive : TcEnv -> Expr -> Bool
 isNonexpansive env (ELoc _ e) = isNonexpansive env e
 isNonexpansive env (EDoOrigin _ e) = isNonexpansive env e
-isNonexpansive env (ELit _) = True
-isNonexpansive env (EVar _) = True
-isNonexpansive env (EVarId _ _) = True
+isNonexpansive _env (ELit _) = True
+isNonexpansive _env (EVar _) = True
+isNonexpansive _env (EVarId _ _) = True
 -- `run`/`build` rewrite a method reference into a dictionary-marked node before
 -- typechecking (`prePassDict`); the marked node is still a variable, so the value
 -- predicate must answer as it does for the `EVar` that `check` sees — otherwise
 -- `callMin = min` is a value under one verb and expansive under another
 -- (check green, build panics on an unbound dictionary witness).
-isNonexpansive env (EMethodAt _ _ _) = True
-isNonexpansive env (EDictAt _ _) = True
-isNonexpansive env (EMethodRef _) = True
-isNonexpansive env (ELam _ _) = True
+isNonexpansive _env (EMethodAt _ _ _) = True
+isNonexpansive _env (EDictAt _ _) = True
+isNonexpansive _env (EMethodRef _) = True
+isNonexpansive _env (ELam _ _) = True
 isNonexpansive env (EAnnot e _) = isNonexpansive env e
 isNonexpansive env (EHeadAnnot e _) = isNonexpansive env e
 isNonexpansive env (ETuple es) = allList (isNonexpansive env) es
@@ -282,7 +282,7 @@ isNonexpansive env (ERecordCreate _ fs) =
     (fa => match fa
       FieldAssign _ e => isNonexpansive env e)
     fs
-isNonexpansive env _ = False
+isNonexpansive _env _ = False
 
 -- Walk the left spine of an application to its head, testing EVERY argument met
 -- on the way, and finally test whether the head IS a constructor that is safe to
@@ -321,7 +321,7 @@ isCtorAppSpine env (EDoOrigin _ e) = isCtorAppSpine env e
 isCtorAppSpine env (EApp f x) = isCtorAppSpine env f && isNonexpansive env x
 isCtorAppSpine env (EVar name) = isDeclaredCtorHead env name
 isCtorAppSpine env (EVarId name _) = isDeclaredCtorHead env name
-isCtorAppSpine env _ = False
+isCtorAppSpine _env _ = False
 
 -- The head test itself: `name` is a real, declared constructor and is not the
 -- `Ref` extern.  See `isCtorAppSpine`'s docblock for why `lookupCtor` is the
@@ -443,14 +443,14 @@ isSyntacticLambda _ = False
 -- Pushes the error into typeErrors for each violating member.
 export
 checkLetRecDecls : ModuleCtx -> List Decl -> Unit
-checkLetRecDecls mctx [] = ()
+checkLetRecDecls _mctx [] = ()
 checkLetRecDecls mctx ((DLetGroup _ binds) :: rest) =
   checkLetBinds mctx binds
   checkLetRecDecls mctx rest
 checkLetRecDecls mctx (_ :: rest) = checkLetRecDecls mctx rest
 
 checkLetBinds : ModuleCtx -> List LetBind -> Unit
-checkLetBinds mctx [] = ()
+checkLetBinds _mctx [] = ()
 checkLetBinds mctx ((LetBind name clauses _ _) :: rest) =
   checkLetBind mctx name clauses
   checkLetBinds mctx rest
@@ -524,7 +524,7 @@ checkLetGroupBindsLocated : ModuleCtx -> List LetBind -> Unit
 checkLetGroupBindsLocated mctx = checkLetGroupBindsGo mctx
 
 checkLetGroupBindsGo : ModuleCtx -> List LetBind -> Unit
-checkLetGroupBindsGo mctx [] = ()
+checkLetGroupBindsGo _mctx [] = ()
 checkLetGroupBindsGo mctx ((LetBind name clauses _ _) :: rest) =
   let selfAndForward = name :: map letBindName rest
   checkClausesNonFunctionLocated mctx selfAndForward name clauses
@@ -709,7 +709,7 @@ clausesAreValue env clauses = allList (clauseIsValue env) clauses
 
 clauseIsValue : TcEnv -> FunClause -> Bool
 clauseIsValue env (FunClause [] rhs) = isNonexpansive env rhs
-clauseIsValue env (FunClause _ _) = True
+clauseIsValue _env (FunClause _ _) = True
 
 -- [o]'s prerequisites, each entered on [o]'s walk by [enter].
 requireGoalsBelow : ModuleCtx ->
@@ -874,7 +874,7 @@ nestedRequireGoalsOnce : ModuleCtx ->
   OrdMap Unit ->
   List (UObligation, ReqWalk) ->
   List UObligation
-nestedRequireGoalsOnce mctx _ _ [] = []
+nestedRequireGoalsOnce _mctx _ _ [] = []
 nestedRequireGoalsOnce mctx rigidIds liveIds walks =
   let (kept, derived) = followRequireLevel mctx rigidIds liveIds walks [] []
   kept ++ nestedRequireGoalsOnce mctx rigidIds liveIds derived
@@ -888,7 +888,7 @@ followRequireLevel : ModuleCtx ->
   List UObligation ->
   List (List (UObligation, ReqWalk)) ->
   (List UObligation, List (UObligation, ReqWalk))
-followRequireLevel mctx _ _ [] kept derived =
+followRequireLevel _mctx _ _ [] kept derived =
   (reverse kept, flatMap identity (reverse derived))
 followRequireLevel mctx rigidIds liveIds ((o, walk) :: rest) kept derived =
   if walkGoalFollowed walk o.pred.iface (uOblGoalArgs mctx.mcGraph o) then
@@ -1378,8 +1378,8 @@ constraintVarArgMonos : ModuleCtx ->
   List (List Ty) ->
   List (String, Mono) ->
   List (List Mono)
-constraintVarArgMonos mctx [] _ _ = []
-constraintVarArgMonos mctx _ [] _ = []
+constraintVarArgMonos _mctx [] _ _ = []
+constraintVarArgMonos _mctx _ [] _ = []
 constraintVarArgMonos mctx ((_, names) :: rest) (args :: argsRest) tvMap =
   match constraintNameMonos names tvMap
     [] => constraintVarArgMonos mctx rest argsRest tvMap
@@ -1418,7 +1418,7 @@ sccSchemes : TcEnv ->
   Int ->
   List ScopedMember ->
   List (String, Scheme)
-sccSchemes env _ _ _ _ _ [] = []
+sccSchemes _env _ _ _ _ _ [] = []
 sccSchemes env sigs grouped isLetrec residuals index (member :: rest) =
   let m = member.smName
   let isVal = allList (memberClauseIsValue env) (clausesOf m grouped)
@@ -1513,7 +1513,7 @@ residualsOf index residuals =
 -- a top-level clause is a value if it has params (function) or a non-expansive RHS
 memberClauseIsValue : TcEnv -> (List Pat, Expr) -> Bool
 memberClauseIsValue env ([], rhs) = isNonexpansive env rhs
-memberClauseIsValue env (_, _) = True
+memberClauseIsValue _env (_, _) = True
 
 -- ── polymorphic signature over an expansive body ─────────────────────────────
 -- HM-CORE-SEMANTICS §1 clause 4 / DICT-SEMANTICS §4.1 G2.  A signed member whose
@@ -1529,7 +1529,7 @@ checkSigsOverExpansive : TcEnv ->
   OrdMap (List (List Pat, Expr)) ->
   List (String, Ty, List (String, Mono)) ->
   Unit
-checkSigsOverExpansive env _ [] = ()
+checkSigsOverExpansive _env _ [] = ()
 checkSigsOverExpansive env grouped ((m, ty, tvs) :: rest) =
   if not (isEmpty tvs)
     && not (allList (memberClauseIsValue env) (clausesOf m grouped)) then
@@ -1549,7 +1549,7 @@ export
 checkSigsTooGeneral : ModuleCtx ->
   List (String, Ty, List (String, Mono)) ->
   Unit
-checkSigsTooGeneral mctx [] = ()
+checkSigsTooGeneral _mctx [] = ()
 checkSigsTooGeneral mctx ((m, ty, tvs) :: rest) =
   checkSigTooGeneral mctx m ty tvs
   checkSigsTooGeneral mctx rest
@@ -1609,7 +1609,7 @@ checkSigsFixedBy : ModuleCtx ->
   List (Int, String) ->
   List (String, Ty, List (String, Mono)) ->
   Unit
-checkSigsFixedBy mctx _ [] = ()
+checkSigsFixedBy _mctx _ [] = ()
 checkSigsFixedBy mctx fixed ((name, ty, tvs) :: rest) =
   match sigVarFixedBy fixed tvs
     Some (vname, sibling) =>
@@ -1675,7 +1675,7 @@ registerSchemeObligations : ModuleCtx ->
   List UObligation ->
   List (String, Scheme) ->
   Unit
-registerSchemeObligations mctx _ _ _ _ [] = ()
+registerSchemeObligations _mctx _ _ _ _ [] = ()
 registerSchemeObligations mctx memberDefIds sigTvMaps callObls addedObls ((m, sch) :: rest) =
   -- #838 I2 / #827: record this binding's QUANTIFIED (generalized) var ids as
   -- caller-deferrable.  A var this binding ∀-quantifies is FORWARDED to its callers
@@ -2002,7 +2002,7 @@ checkSigConstraintCoverage : ModuleCtx ->
   List UObligation ->
   List (String, Scheme) ->
   Unit
-checkSigConstraintCoverage mctx _ _ _ _ _ [] = ()
+checkSigConstraintCoverage _mctx _ _ _ _ _ [] = ()
 checkSigConstraintCoverage mctx regs sigs sigTvMaps callObls addedObls ((m, sch) :: rest) =
   checkSigConstraintOne mctx regs sigs sigTvMaps callObls addedObls m sch
   checkSigConstraintCoverage mctx regs sigs sigTvMaps callObls addedObls rest
@@ -2016,7 +2016,7 @@ checkSigConstraintOne : ModuleCtx ->
   String ->
   Scheme ->
   Unit
-checkSigConstraintOne mctx regs sigs sigTvMaps callObls addedObls m sch =
+checkSigConstraintOne mctx regs _sigs sigTvMaps callObls addedObls m sch =
   match omLookup m mctx.mcCells.sigTyMapRef.value
     None => ()  -- unsigned member: its inferred constraints are promoted, not checked
     Some _ =>
@@ -2158,7 +2158,7 @@ reportUncoveredVec : ModuleCtx ->
   List VecObl ->
   List VecObl ->
   Unit
-reportUncoveredVec mctx _ _ _ _ [] = ()
+reportUncoveredVec _mctx _ _ _ _ [] = ()
 reportUncoveredVec mctx m sigTvMaps declaredPairs declaredVecs (o :: rest) =
   if listLen o.voIds < 2 then
     ()
@@ -2187,7 +2187,7 @@ reportUncovered : ModuleCtx ->
   List (IfaceRef, Int) ->
   List (IfaceRef, Int) ->
   Unit
-reportUncovered mctx _ _ _ [] = ()
+reportUncovered _mctx _ _ _ [] = ()
 reportUncovered mctx m sigTvMaps declared ((iface, id) :: rest) =
   if containsIfacePair (iface, id) declared then
     ()
@@ -2265,27 +2265,27 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DTypeSig true "isNonexpansive" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "e")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "e")))
-(DFunDef false "isNonexpansive" ((PVar "env") (PCon "ELit" PWild)) (EVar "True"))
-(DFunDef false "isNonexpansive" ((PVar "env") (PCon "EVar" PWild)) (EVar "True"))
-(DFunDef false "isNonexpansive" ((PVar "env") (PCon "EVarId" PWild PWild)) (EVar "True"))
-(DFunDef false "isNonexpansive" ((PVar "env") (PCon "EMethodAt" PWild PWild PWild)) (EVar "True"))
-(DFunDef false "isNonexpansive" ((PVar "env") (PCon "EDictAt" PWild PWild)) (EVar "True"))
-(DFunDef false "isNonexpansive" ((PVar "env") (PCon "EMethodRef" PWild)) (EVar "True"))
-(DFunDef false "isNonexpansive" ((PVar "env") (PCon "ELam" PWild PWild)) (EVar "True"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (PCon "ELit" PWild)) (EVar "True"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (PCon "EVar" PWild)) (EVar "True"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (PCon "EVarId" PWild PWild)) (EVar "True"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (PCon "EMethodAt" PWild PWild PWild)) (EVar "True"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (PCon "EDictAt" PWild PWild)) (EVar "True"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (PCon "EMethodRef" PWild)) (EVar "True"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (PCon "ELam" PWild PWild)) (EVar "True"))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "EAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "e")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "e")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "ETuple" (PVar "es"))) (EApp (EApp (EVar "allList") (EApp (EVar "isNonexpansive") (EVar "env"))) (EVar "es")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "EListLit" (PVar "es"))) (EApp (EApp (EVar "allList") (EApp (EVar "isNonexpansive") (EVar "env"))) (EVar "es")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PAs "app" (PCon "EApp" PWild PWild))) (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "app")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "allList") (ELam ((PVar "fa")) (EMatch (EVar "fa") (arm (PCon "FieldAssign" PWild (PVar "e")) () (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "e")))))) (EVar "fs")))
-(DFunDef false "isNonexpansive" ((PVar "env") PWild) (EVar "False"))
+(DFunDef false "isNonexpansive" ((PVar "_env") PWild) (EVar "False"))
 (DTypeSig false "isCtorAppSpine" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "e")))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "e")))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "&&" (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "f")) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "x"))))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EVar" (PVar "name"))) (EApp (EApp (EVar "isDeclaredCtorHead") (EVar "env")) (EVar "name")))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EVarId" (PVar "name") PWild)) (EApp (EApp (EVar "isDeclaredCtorHead") (EVar "env")) (EVar "name")))
-(DFunDef false "isCtorAppSpine" ((PVar "env") PWild) (EVar "False"))
+(DFunDef false "isCtorAppSpine" ((PVar "_env") PWild) (EVar "False"))
 (DTypeSig false "isDeclaredCtorHead" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isDeclaredCtorHead" ((PVar "env") (PVar "name")) (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "name") (ELit (LString "Ref"))) (EApp (EVar "ctorHeadShaped") (EVar "name"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupCtor") (EVar "env")) (EVar "name")))))
 (DTypeSig true "genBindingRestricted" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "AuthResidual")) (TyFun (TyCon "Bool") (TyFun (TyCon "EffRow") (TyFun (TyCon "Mono") (TyCon "Scheme"))))))))
@@ -2307,11 +2307,11 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "isSyntacticLambda" ((PCon "ELam" PWild PWild)) (EVar "True"))
 (DFunDef false "isSyntacticLambda" (PWild) (EVar "False"))
 (DTypeSig true "checkLetRecDecls" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "checkLetRecDecls" ((PVar "mctx") (PList)) (ELit LUnit))
+(DFunDef false "checkLetRecDecls" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "checkLetRecDecls" ((PVar "mctx") (PCons (PCon "DLetGroup" PWild (PVar "binds")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "checkLetBinds") (EVar "mctx")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "checkLetRecDecls") (EVar "mctx")) (EVar "rest")))))
 (DFunDef false "checkLetRecDecls" ((PVar "mctx") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "checkLetRecDecls") (EVar "mctx")) (EVar "rest")))
 (DTypeSig false "checkLetBinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Unit"))))
-(DFunDef false "checkLetBinds" ((PVar "mctx") (PList)) (ELit LUnit))
+(DFunDef false "checkLetBinds" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "checkLetBinds" ((PVar "mctx") (PCons (PCon "LetBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "checkLetBind") (EVar "mctx")) (EVar "name")) (EVar "clauses"))) (DoExpr (EApp (EApp (EVar "checkLetBinds") (EVar "mctx")) (EVar "rest")))))
 (DTypeSig false "checkLetBind" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyCon "Unit")))))
 (DFunDef false "checkLetBind" ((PVar "mctx") (PVar "name") (PVar "clauses")) (EIf (EApp (EApp (EVar "allList") (EVar "clauseIsNonFunction")) (EVar "clauses")) (EApp (EApp (EApp (EVar "pushTypeError") (EApp (EApp (EVar "mctxAtIfSome") (EApp (EVar "clausesSpanLoc") (EVar "clauses"))) (EVar "mctx"))) (EVar "TNonrecValueLet")) (EApp (EVar "letRecNonFunctionMsg") (EVar "name"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -2323,7 +2323,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DTypeSig true "checkLetGroupBindsLocated" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Unit"))))
 (DFunDef false "checkLetGroupBindsLocated" ((PVar "mctx")) (EApp (EVar "checkLetGroupBindsGo") (EVar "mctx")))
 (DTypeSig false "checkLetGroupBindsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Unit"))))
-(DFunDef false "checkLetGroupBindsGo" ((PVar "mctx") (PList)) (ELit LUnit))
+(DFunDef false "checkLetGroupBindsGo" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "checkLetGroupBindsGo" ((PVar "mctx") (PCons (PCon "LetBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "selfAndForward") (EBinOp "::" (EVar "name") (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "rest")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkClausesNonFunctionLocated") (EVar "mctx")) (EVar "selfAndForward")) (EVar "name")) (EVar "clauses"))) (DoExpr (EApp (EApp (EVar "checkLetGroupBindsGo") (EVar "mctx")) (EVar "rest")))))
 (DTypeSig false "checkClausesNonFunctionLocated" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyCon "Unit"))))))
 (DFunDef false "checkClausesNonFunctionLocated" ((PVar "mctx") (PVar "names") (PVar "name") (PVar "clauses")) (EIf (EBinOp "&&" (EApp (EApp (EVar "allList") (EVar "clauseIsNonFunction")) (EVar "clauses")) (EApp (EApp (EVar "anyClauseEagerlyRefsGroup") (EVar "names")) (EVar "clauses"))) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TNonrecValueLet")) (EApp (EVar "clausesLoc") (EVar "clauses"))) (EApp (EVar "letRecNonFunctionMsg") (EVar "name"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -2413,7 +2413,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "clausesAreValue" ((PVar "env") (PVar "clauses")) (EApp (EApp (EVar "allList") (EApp (EVar "clauseIsValue") (EVar "env"))) (EVar "clauses")))
 (DTypeSig false "clauseIsValue" (TyFun (TyCon "TcEnv") (TyFun (TyCon "FunClause") (TyCon "Bool"))))
 (DFunDef false "clauseIsValue" ((PVar "env") (PCon "FunClause" (PList) (PVar "rhs"))) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "rhs")))
-(DFunDef false "clauseIsValue" ((PVar "env") (PCon "FunClause" PWild PWild)) (EVar "True"))
+(DFunDef false "clauseIsValue" ((PVar "_env") (PCon "FunClause" PWild PWild)) (EVar "True"))
 (DTypeSig false "requireGoalsBelow" (TyFun (TyCon "ModuleCtx") (TyFun (TyFun (TyCon "ReqWalk") (TyFun (TyCon "UObligation") (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")))))))))
 (DFunDef false "requireGoalsBelow" ((PVar "mctx") (PVar "enter") (PVar "rigidIds") (PVar "liveIds") (PTuple (PVar "o") (PVar "walk"))) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o")))) (DoLet false false (PVar "iface") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (DoLet false false (PVar "parentIds") (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "args")) (EApp (EVar "monoVectorClosed") (EVar "args"))) (EApp (EApp (EVar "goalVarsAllHeld") (EVar "rigidIds")) (EVar "args"))) (EApp (EApp (EApp (EApp (EVar "goalGivenAt") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "iface")) (EVar "args")) (EFieldAccess (EVar "o") "uoScope"))) (EBinOp "&&" (EApp (EApp (EVar "anyList") (ELam ((PVar "i")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "i"))) (EVar "liveIds")))) (EVar "parentIds")) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "undeterminedGoalExempt") (EVar "mctx")) (EVar "iface")) (EVar "args")) (EFieldAccess (EVar "o") "uoScope"))))) (EListLit) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EVar "goalRows") (EVar "mctx")) (EVar "iface")) (EVar "args"))) (DoLet false false (PVar "reach") (EIf (EApp (EApp (EVar "goalIsProjection") (EVar "args")) (EVar "rows")) (EVar "ReachMany") (EApp (EApp (EApp (EVar "goalReach") (EVar "mctx")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "goalCandidates") (EVar "mctx")) (EVar "rigidIds")) (EVar "args")) (EVar "rows"))))) (DoExpr (EMatch (EVar "reach") (arm (PCon "ReachOne" (PVar "row")) () (EBlock (DoLet false false (PVar "goalsOf") (ELam ((PVar "ids") (PVar "subst") (PVar "reqs")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "req")) (EApp (EApp (EVar "flatMap") (EApp (EVar "enter") (EVar "walk"))) (EApp (EApp (EApp (EVar "requireGoalAt") (EVar "o")) (EVar "ids")) (EApp (EApp (EApp (EVar "reqToObligation") (EVar "mctx")) (EVar "subst")) (EVar "req")))))) (EVar "reqs")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "selectedRowReqMatch") (EVar "mctx")) (EVar "args")) (EVar "row")) (arm (PCon "Some" (PTuple (PVar "subst") (PVar "reqs"))) () (EApp (EApp (EApp (EVar "goalsOf") (EVar "parentIds")) (EVar "subst")) (EVar "reqs"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EApp (EVar "unifiedRowReqs") (EVar "mctx")) (EVar "rigidIds")) (EVar "args")) (EVar "row")) (arm (PCon "Some" (PTuple (PVar "subst") (PVar "fresh") (PVar "reqs"))) () (EApp (EApp (EApp (EVar "goalsOf") (EBinOp "++" (EVar "parentIds") (EVar "fresh"))) (EVar "subst")) (EVar "reqs"))) (arm (PCon "None") () (EListLit)))))))) (arm PWild () (EListLit)))))))))
 (DTypeSig false "unifiedRowReqs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ImplRow") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Require")))))))))
@@ -2427,10 +2427,10 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DTypeSig false "nestedRequireGoalsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyApp (TyCon "List") (TyCon "UObligation")))))))
 (DFunDef false "nestedRequireGoalsGo" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walks")) (EMatch (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "selectedRequireGoals") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds"))) (EVar "walks")) (arm (PList) () (EListLit)) (arm (PVar "derived") () (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "derived")) (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "derived"))))))
 (DTypeSig false "nestedRequireGoalsOnce" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyApp (TyCon "List") (TyCon "UObligation")))))))
-(DFunDef false "nestedRequireGoalsOnce" ((PVar "mctx") PWild PWild (PList)) (EListLit))
+(DFunDef false "nestedRequireGoalsOnce" ((PVar "_mctx") PWild PWild (PList)) (EListLit))
 (DFunDef false "nestedRequireGoalsOnce" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walks")) (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "derived")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "walks")) (EListLit)) (EListLit))) (DoExpr (EBinOp "++" (EVar "kept") (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsOnce") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "derived"))))))
 (DTypeSig false "followRequireLevel" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")))) (TyTuple (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")))))))))))
-(DFunDef false "followRequireLevel" ((PVar "mctx") PWild PWild (PList) (PVar "kept") (PVar "derived")) (ETuple (EApp (EVar "reverse") (EVar "kept")) (EApp (EApp (EVar "flatMap") (EVar "identity")) (EApp (EVar "reverse") (EVar "derived")))))
+(DFunDef false "followRequireLevel" ((PVar "_mctx") PWild PWild (PList) (PVar "kept") (PVar "derived")) (ETuple (EApp (EVar "reverse") (EVar "kept")) (EApp (EApp (EVar "flatMap") (EVar "identity")) (EApp (EVar "reverse") (EVar "derived")))))
 (DFunDef false "followRequireLevel" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PCons (PTuple (PVar "o") (PVar "walk")) (PVar "rest")) (PVar "kept") (PVar "derived")) (EIf (EApp (EApp (EApp (EVar "walkGoalFollowed") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "uOblGoalArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "rest")) (EVar "kept")) (EVar "derived")) (EBlock (DoLet false false (PVar "below") (EApp (EApp (EApp (EApp (EVar "followRequireGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (ETuple (EVar "o") (EVar "walk")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "rest")) (EBinOp "::" (EVar "o") (EVar "kept"))) (EBinOp "::" (EVar "below") (EVar "derived")))))))
 (DTypeSig false "followRequireGoal" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))))
 (DFunDef false "followRequireGoal" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PTuple (PVar "o") (PVar "walk"))) (EBlock (DoLet false false (PTuple (PVar "clean") (PVar "below")) (EApp (EApp (EApp (EVar "solvedCleanly") (EVar "mctx")) (ELam ((PVar "goals")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "g")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EVar "fst") (EVar "g"))))) (EVar "goals")))) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "requireGoalsBelow") (EVar "mctx")) (EVar "prerequisiteUnreported")) (EVar "rigidIds")) (EVar "liveIds")) (ETuple (EVar "o") (EVar "walk")))))) (DoExpr (EIf (EVar "clean") (EApp (EApp (EApp (EVar "noteWalkGoalFollowed") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "uOblGoalArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o"))) (ELit LUnit))) (DoExpr (EVar "below"))))
@@ -2630,11 +2630,11 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "constraintVarIfaceMonos" ((PList) PWild) (EListLit))
 (DFunDef false "constraintVarIfaceMonos" ((PCons (PTuple (PVar "iface") (PVar "names")) (PVar "rest")) (PVar "tvMap")) (EMatch (EApp (EApp (EVar "constraintNameMonos") (EVar "names")) (EVar "tvMap")) (arm (PList) () (EApp (EApp (EVar "constraintVarIfaceMonos") (EVar "rest")) (EVar "tvMap"))) (arm (PVar "monos") () (EBinOp "::" (ETuple (EVar "iface") (EVar "monos")) (EApp (EApp (EVar "constraintVarIfaceMonos") (EVar "rest")) (EVar "tvMap"))))))
 (DTypeSig true "constraintVarArgMonos" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Ty"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))))))))
-(DFunDef false "constraintVarArgMonos" ((PVar "mctx") (PList) PWild PWild) (EListLit))
-(DFunDef false "constraintVarArgMonos" ((PVar "mctx") PWild (PList) PWild) (EListLit))
+(DFunDef false "constraintVarArgMonos" ((PVar "_mctx") (PList) PWild PWild) (EListLit))
+(DFunDef false "constraintVarArgMonos" ((PVar "_mctx") PWild (PList) PWild) (EListLit))
 (DFunDef false "constraintVarArgMonos" ((PVar "mctx") (PCons (PTuple PWild (PVar "names")) (PVar "rest")) (PCons (PVar "args") (PVar "argsRest")) (PVar "tvMap")) (EMatch (EApp (EApp (EVar "constraintNameMonos") (EVar "names")) (EVar "tvMap")) (arm (PList) () (EApp (EApp (EApp (EApp (EVar "constraintVarArgMonos") (EVar "mctx")) (EVar "rest")) (EVar "argsRest")) (EVar "tvMap"))) (arm PWild () (EBinOp "::" (EApp (EApp (EVar "map") (EApp (EApp (EVar "fromAstType") (EVar "mctx")) (EVar "tvMap"))) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "constraintVarArgMonos") (EVar "mctx")) (EVar "rest")) (EVar "argsRest")) (EVar "tvMap"))))))
 (DTypeSig true "sccSchemes" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "AuthResidual"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ScopedMember")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))))
-(DFunDef false "sccSchemes" ((PVar "env") PWild PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "sccSchemes" ((PVar "_env") PWild PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "sccSchemes" ((PVar "env") (PVar "sigs") (PVar "grouped") (PVar "isLetrec") (PVar "residuals") (PVar "index") (PCons (PVar "member") (PVar "rest"))) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "member") "smName")) (DoLet false false (PVar "isVal") (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped")))) (DoExpr (EBinOp "::" (ETuple (EVar "m") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "genBindingRestricted") (EFieldAccess (EVar "env") "teDyn")) (EFieldAccess (EFieldAccess (EVar "member") "smDeclaredAuths") "value")) (EApp (EApp (EVar "residualsOf") (EVar "index")) (EVar "residuals"))) (EVar "isVal")) (EApp (EVar "memberForce") (EVar "member"))) (EFieldAccess (EVar "member") "smMono"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "sccSchemes") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "isLetrec")) (EVar "residuals")) (EBinOp "+" (EVar "index") (ELit (LInt 1)))) (EVar "rest"))))))
 (DTypeSig true "quantifiableAuthorities" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "ScopedMember")) (TyCon "ScopeRoles")))))
 (DFunDef false "quantifiableAuthorities" ((PVar "env") (PVar "grouped") (PVar "members")) (EApp (EVar "scopeRolesOf") (EApp (EApp (EVar "map") (ELam ((PVar "member")) (ETuple (EApp (EApp (EVar "memberRole") (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "member") "smName")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcCells") "sigNameSetRef") "value"))) (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EFieldAccess (EVar "member") "smName")) (EVar "grouped")))) (EFieldAccess (EVar "member") "smMono")))) (EVar "members"))))
@@ -2648,12 +2648,12 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "residualsOf" ((PVar "index") (PVar "residuals")) (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "owner") (PVar "r"))) (EIf (EBinOp "==" (EVar "owner") (EVar "index")) (EListLit (EVar "r")) (EListLit)))) (EVar "residuals")))
 (DTypeSig false "memberClauseIsValue" (TyFun (TyCon "TcEnv") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyCon "Bool"))))
 (DFunDef false "memberClauseIsValue" ((PVar "env") (PTuple (PList) (PVar "rhs"))) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "rhs")))
-(DFunDef false "memberClauseIsValue" ((PVar "env") (PTuple PWild PWild)) (EVar "True"))
+(DFunDef false "memberClauseIsValue" ((PVar "_env") (PTuple PWild PWild)) (EVar "True"))
 (DTypeSig true "checkSigsOverExpansive" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyCon "Unit")))))
-(DFunDef false "checkSigsOverExpansive" ((PVar "env") PWild (PList)) (ELit LUnit))
+(DFunDef false "checkSigsOverExpansive" ((PVar "_env") PWild (PList)) (ELit LUnit))
 (DFunDef false "checkSigsOverExpansive" ((PVar "env") (PVar "grouped") (PCons (PTuple (PVar "m") (PVar "ty") (PVar "tvs")) (PVar "rest"))) (EBlock (DoExpr (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "isEmpty") (EVar "tvs"))) (EApp (EVar "not") (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped"))))) (EApp (EApp (EApp (EVar "pushTypeError") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "TSigOverExpansive")) (EApp (EApp (EVar "sigOverExpansiveMsg") (EVar "m")) (EVar "ty"))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "checkSigsOverExpansive") (EVar "env")) (EVar "grouped")) (EVar "rest")))))
 (DTypeSig true "checkSigsTooGeneral" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyCon "Unit"))))
-(DFunDef false "checkSigsTooGeneral" ((PVar "mctx") (PList)) (ELit LUnit))
+(DFunDef false "checkSigsTooGeneral" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "checkSigsTooGeneral" ((PVar "mctx") (PCons (PTuple (PVar "m") (PVar "ty") (PVar "tvs")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "checkSigTooGeneral") (EVar "mctx")) (EVar "m")) (EVar "ty")) (EVar "tvs"))) (DoExpr (EApp (EApp (EVar "checkSigsTooGeneral") (EVar "mctx")) (EVar "rest")))))
 (DTypeSig false "checkSigTooGeneral" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Unit"))))))
 (DFunDef false "checkSigTooGeneral" ((PVar "mctx") (PVar "name") (PVar "ty") (PVar "tvs")) (EBlock (DoLet false false (PVar "tvarIds") (EApp (EVar "sigTvarIds") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "tvs")))) (DoExpr (EMatch (EApp (EVar "groundedSignatureVariable") (EVar "tvs")) (arm (PCon "Some" (PTuple (PVar "vname") (PVar "actual"))) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "TTypeTooGeneral")) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EApp (EVar "groundedSigVarMsg") (EVar "vname")) (EVar "name")) (EVar "actual")))) (arm (PCon "None") () (EIf (EApp (EVar "hasDupI") (EVar "tvarIds")) (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TTypeTooGeneral")) (EApp (EApp (EVar "sigTooGeneralMsg") (EVar "name")) (EVar "ty"))) (ELit LUnit)))))))
@@ -2663,7 +2663,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DTypeSig true "checkSigsFixedByExpansive" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "ScopedMember")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyCon "Unit"))))))
 (DFunDef false "checkSigsFixedByExpansive" ((PVar "env") (PVar "grouped") (PVar "members") (PVar "sigTvMaps")) (EBlock (DoLet false false (PVar "fixed") (EApp (EApp (EVar "flatMap") (ELam ((PVar "member")) (EIf (EBinOp "||" (EFieldAccess (EFieldAccess (EVar "member") "smSigned") "value") (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EFieldAccess (EVar "member") "smName")) (EVar "grouped")))) (EListLit) (EApp (EApp (EVar "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EFieldAccess (EVar "member") "smName")))) (EApp (EVar "monoUnboundIds") (EFieldAccess (EVar "member") "smMono")))))) (EVar "members"))) (DoExpr (EMatch (EVar "fixed") (arm (PList) () (ELit LUnit)) (arm PWild () (EApp (EApp (EApp (EVar "checkSigsFixedBy") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "fixed")) (EVar "sigTvMaps")))))))
 (DTypeSig false "checkSigsFixedBy" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyCon "Unit")))))
-(DFunDef false "checkSigsFixedBy" ((PVar "mctx") PWild (PList)) (ELit LUnit))
+(DFunDef false "checkSigsFixedBy" ((PVar "_mctx") PWild (PList)) (ELit LUnit))
 (DFunDef false "checkSigsFixedBy" ((PVar "mctx") (PVar "fixed") (PCons (PTuple (PVar "name") (PVar "ty") (PVar "tvs")) (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EApp (EVar "sigVarFixedBy") (EVar "fixed")) (EVar "tvs")) (arm (PCon "Some" (PTuple (PVar "vname") (PVar "sibling"))) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "TTypeTooGeneral")) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EApp (EVar "siblingSharedSigVarMsg") (EVar "vname")) (EVar "name")) (EVar "sibling")))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EVar "checkSigsFixedBy") (EVar "mctx")) (EVar "fixed")) (EVar "rest")))))
 (DTypeSig false "sigVarFixedBy" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "sigVarFixedBy" (PWild (PList)) (EVar "None"))
@@ -2672,7 +2672,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "fixedSibling" (PWild (PList)) (EVar "None"))
 (DFunDef false "fixedSibling" ((PVar "id") (PCons (PTuple (PVar "i") (PVar "sibling")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "id")) (EApp (EVar "Some") (EVar "sibling")) (EIf (EVar "otherwise") (EApp (EApp (EVar "fixedSibling") (EVar "id")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "registerSchemeObligations" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "Unit"))))))))
-(DFunDef false "registerSchemeObligations" ((PVar "mctx") PWild PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "registerSchemeObligations" ((PVar "_mctx") PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "registerSchemeObligations" ((PVar "mctx") (PVar "memberDefIds") (PVar "sigTvMaps") (PVar "callObls") (PVar "addedObls") (PCons (PTuple (PVar "m") (PVar "sch")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "deferrableVarIds")) (EApp (EApp (EVar "idSetInsertAll") (EApp (EVar "schemeIds") (EVar "sch"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "deferrableVarIds") "value")))) (DoLet false false (PVar "obs") (EApp (EVar "dedupVecObls") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "schemeOblsForMember") (EVar "mctx")) (EVar "sigTvMaps")) (EVar "callObls")) (EVar "addedObls")) (EVar "m")) (EVar "sch")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "obs")) (ELit LUnit) (EBlock (DoLet false false (PVar "defId") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "m")) (EVar "memberDefIds")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "schemeObligationsRef")) (EBinOp "::" (ETuple (ETuple (EVar "m") (EVar "defId")) (EVar "obs")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "schemeObligationsRef") "value"))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EVar "mctx")) (EVar "memberDefIds")) (EVar "sigTvMaps")) (EVar "callObls")) (EVar "addedObls")) (EVar "rest")))))
 (DTypeSig false "schemeOblsForMember" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyApp (TyCon "List") (TyCon "VecObl")))))))))
 (DFunDef false "schemeOblsForMember" ((PVar "mctx") (PVar "sigTvMaps") (PVar "callObls") (PVar "addedObls") (PVar "m") (PVar "sch")) (EMatch (EApp (EApp (EVar "lookupSigTvMap") (EVar "m")) (EVar "sigTvMaps")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EVar "declaredSchemeOblsFor") (EVar "mctx")) (EVar "sigTvMaps")) (EVar "m")) (EApp (EVar "schemeIds") (EVar "sch")))) (arm (PCon "None") () (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "schemeObligationsOf") (EVar "mctx")) (EVar "True")) (EApp (EVar "schemeIds") (EVar "sch"))) (EVar "addedObls")) (EApp (EApp (EApp (EApp (EVar "forwardedVecObls") (EVar "mctx")) (EVar "True")) (EApp (EVar "schemeIds") (EVar "sch"))) (EVar "callObls"))))))
@@ -2711,10 +2711,10 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "pairsOfVecObls" ((PList)) (EListLit))
 (DFunDef false "pairsOfVecObls" ((PCons (PVar "o") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "id")) (ETuple (EFieldAccess (EVar "o") "voIface") (EVar "id")))) (EFieldAccess (EVar "o") "voIds")) (EApp (EVar "pairsOfVecObls") (EVar "rest"))))
 (DTypeSig true "checkSigConstraintCoverage" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "ConstraintReg")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "Unit")))))))))
-(DFunDef false "checkSigConstraintCoverage" ((PVar "mctx") PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "checkSigConstraintCoverage" ((PVar "_mctx") PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkSigConstraintCoverage" ((PVar "mctx") (PVar "regs") (PVar "sigs") (PVar "sigTvMaps") (PVar "callObls") (PVar "addedObls") (PCons (PTuple (PVar "m") (PVar "sch")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSigConstraintOne") (EVar "mctx")) (EVar "regs")) (EVar "sigs")) (EVar "sigTvMaps")) (EVar "callObls")) (EVar "addedObls")) (EVar "m")) (EVar "sch"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSigConstraintCoverage") (EVar "mctx")) (EVar "regs")) (EVar "sigs")) (EVar "sigTvMaps")) (EVar "callObls")) (EVar "addedObls")) (EVar "rest")))))
 (DTypeSig false "checkSigConstraintOne" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "ConstraintReg")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "Unit"))))))))))
-(DFunDef false "checkSigConstraintOne" ((PVar "mctx") (PVar "regs") (PVar "sigs") (PVar "sigTvMaps") (PVar "callObls") (PVar "addedObls") (PVar "m") (PVar "sch")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "declaredPairs") (EApp (EApp (EVar "censusSuperClose") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "declaredPairsFor") (EVar "m")) (EVar "regs")))) (DoLet false false (PVar "boundIds") (EApp (EVar "schemeIds") (EVar "sch"))) (DoLet false false (PVar "bodyVecs") (EApp (EApp (EVar "quantifiedVecObls") (EVar "boundIds")) (EApp (EApp (EApp (EApp (EVar "schemeObligationsOf") (EVar "mctx")) (EVar "False")) (EVar "boundIds")) (EVar "addedObls")))) (DoLet false false (PVar "fwdVecs") (EApp (EApp (EVar "quantifiedVecObls") (EVar "boundIds")) (EApp (EApp (EApp (EApp (EVar "forwardedVecObls") (EVar "mctx")) (EVar "False")) (EVar "boundIds")) (EVar "callObls")))) (DoLet false false (PVar "inferredB") (EApp (EApp (EApp (EVar "inferredIfacePairs") (EVar "mctx")) (EVar "m")) (EVar "boundIds"))) (DoLet false false (PVar "inferred") (EApp (EVar "dedupIfacePairs") (EBinOp "++" (EBinOp "++" (EApp (EVar "pairsOfVecObls") (EVar "bodyVecs")) (EApp (EVar "pairsOfVecObls") (EVar "fwdVecs"))) (EVar "inferredB")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportUncovered") (EVar "mctx")) (EVar "m")) (EVar "sigTvMaps")) (EVar "declaredPairs")) (EVar "inferred"))) (DoLet false false (PVar "declaredVecs") (EApp (EApp (EVar "censusSuperCloseVec") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EApp (EVar "declaredSchemeOblsFor") (EVar "mctx")) (EVar "sigTvMaps")) (EVar "m")) (EVar "boundIds")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reportUncoveredVec") (EVar "mctx")) (EVar "m")) (EVar "sigTvMaps")) (EVar "declaredPairs")) (EVar "declaredVecs")) (EBinOp "++" (EVar "bodyVecs") (EVar "fwdVecs"))))))))
+(DFunDef false "checkSigConstraintOne" ((PVar "mctx") (PVar "regs") (PVar "_sigs") (PVar "sigTvMaps") (PVar "callObls") (PVar "addedObls") (PVar "m") (PVar "sch")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "declaredPairs") (EApp (EApp (EVar "censusSuperClose") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "declaredPairsFor") (EVar "m")) (EVar "regs")))) (DoLet false false (PVar "boundIds") (EApp (EVar "schemeIds") (EVar "sch"))) (DoLet false false (PVar "bodyVecs") (EApp (EApp (EVar "quantifiedVecObls") (EVar "boundIds")) (EApp (EApp (EApp (EApp (EVar "schemeObligationsOf") (EVar "mctx")) (EVar "False")) (EVar "boundIds")) (EVar "addedObls")))) (DoLet false false (PVar "fwdVecs") (EApp (EApp (EVar "quantifiedVecObls") (EVar "boundIds")) (EApp (EApp (EApp (EApp (EVar "forwardedVecObls") (EVar "mctx")) (EVar "False")) (EVar "boundIds")) (EVar "callObls")))) (DoLet false false (PVar "inferredB") (EApp (EApp (EApp (EVar "inferredIfacePairs") (EVar "mctx")) (EVar "m")) (EVar "boundIds"))) (DoLet false false (PVar "inferred") (EApp (EVar "dedupIfacePairs") (EBinOp "++" (EBinOp "++" (EApp (EVar "pairsOfVecObls") (EVar "bodyVecs")) (EApp (EVar "pairsOfVecObls") (EVar "fwdVecs"))) (EVar "inferredB")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportUncovered") (EVar "mctx")) (EVar "m")) (EVar "sigTvMaps")) (EVar "declaredPairs")) (EVar "inferred"))) (DoLet false false (PVar "declaredVecs") (EApp (EApp (EVar "censusSuperCloseVec") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EApp (EVar "declaredSchemeOblsFor") (EVar "mctx")) (EVar "sigTvMaps")) (EVar "m")) (EVar "boundIds")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reportUncoveredVec") (EVar "mctx")) (EVar "m")) (EVar "sigTvMaps")) (EVar "declaredPairs")) (EVar "declaredVecs")) (EBinOp "++" (EVar "bodyVecs") (EVar "fwdVecs"))))))))
 (DTypeSig false "quantifiedVecObls" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyApp (TyCon "List") (TyCon "VecObl")))))
 (DFunDef false "quantifiedVecObls" ((PVar "boundIds") (PVar "vecs")) (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EApp (EApp (EVar "allList") (ELam ((PVar "id")) (EApp (EApp (EVar "containsI") (EVar "id")) (EVar "boundIds")))) (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EFieldAccess (EVar "o") "voArgs"))))) (EVar "vecs")))
 (DTypeSig false "inferredIfacePairs" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyCon "Int")))))))
@@ -2739,12 +2739,12 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DTypeSig false "vecOblOfNode" (TyFun (TyApp (TyCon "SuperNode") (TyTuple (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Mono")))) (TyCon "VecObl")))
 (DFunDef false "vecOblOfNode" ((PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ids") (PVar "args")) (EFieldAccess (EVar "n") "superPayload")) (DoExpr (ERecordCreate "VecObl" ((fa "voIface" (EFieldAccess (EVar "n") "superIface")) (fa "voIds" (EVar "ids")) (fa "voArgs" (EVar "args")))))))
 (DTypeSig false "reportUncoveredVec" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyCon "Unit"))))))))
-(DFunDef false "reportUncoveredVec" ((PVar "mctx") PWild PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "reportUncoveredVec" ((PVar "_mctx") PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "reportUncoveredVec" ((PVar "mctx") (PVar "m") (PVar "sigTvMaps") (PVar "declaredPairs") (PVar "declaredVecs") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoExpr (EIf (EBinOp "<" (EApp (EVar "listLen") (EFieldAccess (EVar "o") "voIds")) (ELit (LInt 2))) (ELit LUnit) (EIf (EApp (EApp (EVar "containsVecObl") (EVar "o")) (EVar "declaredVecs")) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "allPairsIn") (EFieldAccess (EVar "o") "voIface")) (EFieldAccess (EVar "o") "voIds")) (EVar "declaredPairs"))) (ELit LUnit) (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TMissingConstraint")) (EApp (EApp (EApp (EVar "missingConstraintVecMsg") (EVar "m")) (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "varNameForId") (EVar "sigTvMaps")) (EVar "m"))) (EFieldAccess (EVar "o") "voIds")))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reportUncoveredVec") (EVar "mctx")) (EVar "m")) (EVar "sigTvMaps")) (EVar "declaredPairs")) (EVar "declaredVecs")) (EVar "rest")))))
 (DTypeSig false "allPairsIn" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyCon "Int"))) (TyCon "Bool")))))
 (DFunDef false "allPairsIn" ((PVar "iface") (PVar "ids") (PVar "declaredPairs")) (EApp (EApp (EVar "allList") (ELam ((PVar "id")) (EApp (EApp (EVar "containsIfacePair") (ETuple (EVar "iface") (EVar "id"))) (EVar "declaredPairs")))) (EVar "ids")))
 (DTypeSig false "reportUncovered" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyCon "Int"))) (TyCon "Unit")))))))
-(DFunDef false "reportUncovered" ((PVar "mctx") PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "reportUncovered" ((PVar "_mctx") PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "reportUncovered" ((PVar "mctx") (PVar "m") (PVar "sigTvMaps") (PVar "declared") (PCons (PTuple (PVar "iface") (PVar "id")) (PVar "rest"))) (EBlock (DoExpr (EIf (EApp (EApp (EVar "containsIfacePair") (ETuple (EVar "iface") (EVar "id"))) (EVar "declared")) (ELit LUnit) (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TMissingConstraint")) (EApp (EApp (EApp (EVar "missingConstraintMsg") (EVar "m")) (EFieldAccess (EVar "iface") "irName")) (EApp (EApp (EApp (EVar "varNameForId") (EVar "sigTvMaps")) (EVar "m")) (EVar "id")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportUncovered") (EVar "mctx")) (EVar "m")) (EVar "sigTvMaps")) (EVar "declared")) (EVar "rest")))))
 (DTypeSig false "containsIfacePair" (TyFun (TyTuple (TyCon "IfaceRef") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyCon "Int"))) (TyCon "Bool"))))
 (DFunDef false "containsIfacePair" (PWild (PList)) (EVar "False"))
@@ -2803,27 +2803,27 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DTypeSig true "isNonexpansive" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "e")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "e")))
-(DFunDef false "isNonexpansive" ((PVar "env") (PCon "ELit" PWild)) (EVar "True"))
-(DFunDef false "isNonexpansive" ((PVar "env") (PCon "EVar" PWild)) (EVar "True"))
-(DFunDef false "isNonexpansive" ((PVar "env") (PCon "EVarId" PWild PWild)) (EVar "True"))
-(DFunDef false "isNonexpansive" ((PVar "env") (PCon "EMethodAt" PWild PWild PWild)) (EVar "True"))
-(DFunDef false "isNonexpansive" ((PVar "env") (PCon "EDictAt" PWild PWild)) (EVar "True"))
-(DFunDef false "isNonexpansive" ((PVar "env") (PCon "EMethodRef" PWild)) (EVar "True"))
-(DFunDef false "isNonexpansive" ((PVar "env") (PCon "ELam" PWild PWild)) (EVar "True"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (PCon "ELit" PWild)) (EVar "True"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (PCon "EVar" PWild)) (EVar "True"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (PCon "EVarId" PWild PWild)) (EVar "True"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (PCon "EMethodAt" PWild PWild PWild)) (EVar "True"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (PCon "EDictAt" PWild PWild)) (EVar "True"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (PCon "EMethodRef" PWild)) (EVar "True"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (PCon "ELam" PWild PWild)) (EVar "True"))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "EAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "e")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "e")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "ETuple" (PVar "es"))) (EApp (EApp (EVar "allList") (EApp (EVar "isNonexpansive") (EVar "env"))) (EVar "es")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "EListLit" (PVar "es"))) (EApp (EApp (EVar "allList") (EApp (EVar "isNonexpansive") (EVar "env"))) (EVar "es")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PAs "app" (PCon "EApp" PWild PWild))) (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "app")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "allList") (ELam ((PVar "fa")) (EMatch (EVar "fa") (arm (PCon "FieldAssign" PWild (PVar "e")) () (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "e")))))) (EVar "fs")))
-(DFunDef false "isNonexpansive" ((PVar "env") PWild) (EVar "False"))
+(DFunDef false "isNonexpansive" ((PVar "_env") PWild) (EVar "False"))
 (DTypeSig false "isCtorAppSpine" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "e")))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "e")))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "&&" (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "f")) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "x"))))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EVar" (PVar "name"))) (EApp (EApp (EVar "isDeclaredCtorHead") (EVar "env")) (EVar "name")))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EVarId" (PVar "name") PWild)) (EApp (EApp (EVar "isDeclaredCtorHead") (EVar "env")) (EVar "name")))
-(DFunDef false "isCtorAppSpine" ((PVar "env") PWild) (EVar "False"))
+(DFunDef false "isCtorAppSpine" ((PVar "_env") PWild) (EVar "False"))
 (DTypeSig false "isDeclaredCtorHead" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isDeclaredCtorHead" ((PVar "env") (PVar "name")) (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "name") (ELit (LString "Ref"))) (EApp (EVar "ctorHeadShaped") (EVar "name"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupCtor") (EVar "env")) (EVar "name")))))
 (DTypeSig true "genBindingRestricted" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "AuthResidual")) (TyFun (TyCon "Bool") (TyFun (TyCon "EffRow") (TyFun (TyCon "Mono") (TyCon "Scheme"))))))))
@@ -2845,11 +2845,11 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "isSyntacticLambda" ((PCon "ELam" PWild PWild)) (EVar "True"))
 (DFunDef false "isSyntacticLambda" (PWild) (EVar "False"))
 (DTypeSig true "checkLetRecDecls" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "checkLetRecDecls" ((PVar "mctx") (PList)) (ELit LUnit))
+(DFunDef false "checkLetRecDecls" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "checkLetRecDecls" ((PVar "mctx") (PCons (PCon "DLetGroup" PWild (PVar "binds")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "checkLetBinds") (EVar "mctx")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "checkLetRecDecls") (EVar "mctx")) (EVar "rest")))))
 (DFunDef false "checkLetRecDecls" ((PVar "mctx") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "checkLetRecDecls") (EVar "mctx")) (EVar "rest")))
 (DTypeSig false "checkLetBinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Unit"))))
-(DFunDef false "checkLetBinds" ((PVar "mctx") (PList)) (ELit LUnit))
+(DFunDef false "checkLetBinds" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "checkLetBinds" ((PVar "mctx") (PCons (PCon "LetBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "checkLetBind") (EVar "mctx")) (EVar "name")) (EVar "clauses"))) (DoExpr (EApp (EApp (EVar "checkLetBinds") (EVar "mctx")) (EVar "rest")))))
 (DTypeSig false "checkLetBind" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyCon "Unit")))))
 (DFunDef false "checkLetBind" ((PVar "mctx") (PVar "name") (PVar "clauses")) (EIf (EApp (EApp (EVar "allList") (EVar "clauseIsNonFunction")) (EVar "clauses")) (EApp (EApp (EApp (EVar "pushTypeError") (EApp (EApp (EVar "mctxAtIfSome") (EApp (EVar "clausesSpanLoc") (EVar "clauses"))) (EVar "mctx"))) (EVar "TNonrecValueLet")) (EApp (EVar "letRecNonFunctionMsg") (EVar "name"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -2861,7 +2861,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DTypeSig true "checkLetGroupBindsLocated" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Unit"))))
 (DFunDef false "checkLetGroupBindsLocated" ((PVar "mctx")) (EApp (EVar "checkLetGroupBindsGo") (EVar "mctx")))
 (DTypeSig false "checkLetGroupBindsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Unit"))))
-(DFunDef false "checkLetGroupBindsGo" ((PVar "mctx") (PList)) (ELit LUnit))
+(DFunDef false "checkLetGroupBindsGo" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "checkLetGroupBindsGo" ((PVar "mctx") (PCons (PCon "LetBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "selfAndForward") (EBinOp "::" (EVar "name") (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "rest")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkClausesNonFunctionLocated") (EVar "mctx")) (EVar "selfAndForward")) (EVar "name")) (EVar "clauses"))) (DoExpr (EApp (EApp (EVar "checkLetGroupBindsGo") (EVar "mctx")) (EVar "rest")))))
 (DTypeSig false "checkClausesNonFunctionLocated" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyCon "Unit"))))))
 (DFunDef false "checkClausesNonFunctionLocated" ((PVar "mctx") (PVar "names") (PVar "name") (PVar "clauses")) (EIf (EBinOp "&&" (EApp (EApp (EVar "allList") (EVar "clauseIsNonFunction")) (EVar "clauses")) (EApp (EApp (EVar "anyClauseEagerlyRefsGroup") (EVar "names")) (EVar "clauses"))) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TNonrecValueLet")) (EApp (EVar "clausesLoc") (EVar "clauses"))) (EApp (EVar "letRecNonFunctionMsg") (EVar "name"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -2951,7 +2951,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "clausesAreValue" ((PVar "env") (PVar "clauses")) (EApp (EApp (EVar "allList") (EApp (EVar "clauseIsValue") (EVar "env"))) (EVar "clauses")))
 (DTypeSig false "clauseIsValue" (TyFun (TyCon "TcEnv") (TyFun (TyCon "FunClause") (TyCon "Bool"))))
 (DFunDef false "clauseIsValue" ((PVar "env") (PCon "FunClause" (PList) (PVar "rhs"))) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "rhs")))
-(DFunDef false "clauseIsValue" ((PVar "env") (PCon "FunClause" PWild PWild)) (EVar "True"))
+(DFunDef false "clauseIsValue" ((PVar "_env") (PCon "FunClause" PWild PWild)) (EVar "True"))
 (DTypeSig false "requireGoalsBelow" (TyFun (TyCon "ModuleCtx") (TyFun (TyFun (TyCon "ReqWalk") (TyFun (TyCon "UObligation") (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")))))))))
 (DFunDef false "requireGoalsBelow" ((PVar "mctx") (PVar "enter") (PVar "rigidIds") (PVar "liveIds") (PTuple (PVar "o") (PVar "walk"))) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o")))) (DoLet false false (PVar "iface") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (DoLet false false (PVar "parentIds") (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "args")) (EApp (EVar "monoVectorClosed") (EVar "args"))) (EApp (EApp (EVar "goalVarsAllHeld") (EVar "rigidIds")) (EVar "args"))) (EApp (EApp (EApp (EApp (EVar "goalGivenAt") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "iface")) (EVar "args")) (EFieldAccess (EVar "o") "uoScope"))) (EBinOp "&&" (EApp (EApp (EVar "anyList") (ELam ((PVar "i")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "i"))) (EVar "liveIds")))) (EVar "parentIds")) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "undeterminedGoalExempt") (EVar "mctx")) (EVar "iface")) (EVar "args")) (EFieldAccess (EVar "o") "uoScope"))))) (EListLit) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EVar "goalRows") (EVar "mctx")) (EVar "iface")) (EVar "args"))) (DoLet false false (PVar "reach") (EIf (EApp (EApp (EVar "goalIsProjection") (EVar "args")) (EVar "rows")) (EVar "ReachMany") (EApp (EApp (EApp (EVar "goalReach") (EVar "mctx")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "goalCandidates") (EVar "mctx")) (EVar "rigidIds")) (EVar "args")) (EVar "rows"))))) (DoExpr (EMatch (EVar "reach") (arm (PCon "ReachOne" (PVar "row")) () (EBlock (DoLet false false (PVar "goalsOf") (ELam ((PVar "ids") (PVar "subst") (PVar "reqs")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "req")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "enter") (EVar "walk"))) (EApp (EApp (EApp (EVar "requireGoalAt") (EVar "o")) (EVar "ids")) (EApp (EApp (EApp (EVar "reqToObligation") (EVar "mctx")) (EVar "subst")) (EVar "req")))))) (EVar "reqs")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "selectedRowReqMatch") (EVar "mctx")) (EVar "args")) (EVar "row")) (arm (PCon "Some" (PTuple (PVar "subst") (PVar "reqs"))) () (EApp (EApp (EApp (EVar "goalsOf") (EVar "parentIds")) (EVar "subst")) (EVar "reqs"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EApp (EVar "unifiedRowReqs") (EVar "mctx")) (EVar "rigidIds")) (EVar "args")) (EVar "row")) (arm (PCon "Some" (PTuple (PVar "subst") (PVar "fresh") (PVar "reqs"))) () (EApp (EApp (EApp (EVar "goalsOf") (EBinOp "++" (EVar "parentIds") (EVar "fresh"))) (EVar "subst")) (EVar "reqs"))) (arm (PCon "None") () (EListLit)))))))) (arm PWild () (EListLit)))))))))
 (DTypeSig false "unifiedRowReqs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ImplRow") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Require")))))))))
@@ -2965,10 +2965,10 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DTypeSig false "nestedRequireGoalsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyApp (TyCon "List") (TyCon "UObligation")))))))
 (DFunDef false "nestedRequireGoalsGo" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walks")) (EMatch (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "selectedRequireGoals") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds"))) (EVar "walks")) (arm (PList) () (EListLit)) (arm (PVar "derived") () (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "derived")) (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "derived"))))))
 (DTypeSig false "nestedRequireGoalsOnce" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyApp (TyCon "List") (TyCon "UObligation")))))))
-(DFunDef false "nestedRequireGoalsOnce" ((PVar "mctx") PWild PWild (PList)) (EListLit))
+(DFunDef false "nestedRequireGoalsOnce" ((PVar "_mctx") PWild PWild (PList)) (EListLit))
 (DFunDef false "nestedRequireGoalsOnce" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PVar "walks")) (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "derived")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "walks")) (EListLit)) (EListLit))) (DoExpr (EBinOp "++" (EVar "kept") (EApp (EApp (EApp (EApp (EVar "nestedRequireGoalsOnce") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "derived"))))))
 (DTypeSig false "followRequireLevel" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")))) (TyTuple (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")))))))))))
-(DFunDef false "followRequireLevel" ((PVar "mctx") PWild PWild (PList) (PVar "kept") (PVar "derived")) (ETuple (EApp (EVar "reverse") (EVar "kept")) (EApp (EApp (EDictApp "flatMap") (EVar "identity")) (EApp (EVar "reverse") (EVar "derived")))))
+(DFunDef false "followRequireLevel" ((PVar "_mctx") PWild PWild (PList) (PVar "kept") (PVar "derived")) (ETuple (EApp (EVar "reverse") (EVar "kept")) (EApp (EApp (EDictApp "flatMap") (EVar "identity")) (EApp (EVar "reverse") (EVar "derived")))))
 (DFunDef false "followRequireLevel" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PCons (PTuple (PVar "o") (PVar "walk")) (PVar "rest")) (PVar "kept") (PVar "derived")) (EIf (EApp (EApp (EApp (EVar "walkGoalFollowed") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "uOblGoalArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "rest")) (EVar "kept")) (EVar "derived")) (EBlock (DoLet false false (PVar "below") (EApp (EApp (EApp (EApp (EVar "followRequireGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (ETuple (EVar "o") (EVar "walk")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "followRequireLevel") (EVar "mctx")) (EVar "rigidIds")) (EVar "liveIds")) (EVar "rest")) (EBinOp "::" (EVar "o") (EVar "kept"))) (EBinOp "::" (EVar "below") (EVar "derived")))))))
 (DTypeSig false "followRequireGoal" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "UObligation") (TyCon "ReqWalk")) (TyApp (TyCon "List") (TyTuple (TyCon "UObligation") (TyCon "ReqWalk"))))))))
 (DFunDef false "followRequireGoal" ((PVar "mctx") (PVar "rigidIds") (PVar "liveIds") (PTuple (PVar "o") (PVar "walk"))) (EBlock (DoLet false false (PTuple (PVar "clean") (PVar "below")) (EApp (EApp (EApp (EVar "solvedCleanly") (EVar "mctx")) (ELam ((PVar "goals")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "g")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EVar "fst") (EVar "g"))))) (EVar "goals")))) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "requireGoalsBelow") (EVar "mctx")) (EVar "prerequisiteUnreported")) (EVar "rigidIds")) (EVar "liveIds")) (ETuple (EVar "o") (EVar "walk")))))) (DoExpr (EIf (EVar "clean") (EApp (EApp (EApp (EVar "noteWalkGoalFollowed") (EVar "walk")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "uOblGoalArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o"))) (ELit LUnit))) (DoExpr (EVar "below"))))
@@ -3168,11 +3168,11 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "constraintVarIfaceMonos" ((PList) PWild) (EListLit))
 (DFunDef false "constraintVarIfaceMonos" ((PCons (PTuple (PVar "iface") (PVar "names")) (PVar "rest")) (PVar "tvMap")) (EMatch (EApp (EApp (EVar "constraintNameMonos") (EVar "names")) (EVar "tvMap")) (arm (PList) () (EApp (EApp (EVar "constraintVarIfaceMonos") (EVar "rest")) (EVar "tvMap"))) (arm (PVar "monos") () (EBinOp "::" (ETuple (EVar "iface") (EVar "monos")) (EApp (EApp (EVar "constraintVarIfaceMonos") (EVar "rest")) (EVar "tvMap"))))))
 (DTypeSig true "constraintVarArgMonos" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Ty"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))))))))
-(DFunDef false "constraintVarArgMonos" ((PVar "mctx") (PList) PWild PWild) (EListLit))
-(DFunDef false "constraintVarArgMonos" ((PVar "mctx") PWild (PList) PWild) (EListLit))
+(DFunDef false "constraintVarArgMonos" ((PVar "_mctx") (PList) PWild PWild) (EListLit))
+(DFunDef false "constraintVarArgMonos" ((PVar "_mctx") PWild (PList) PWild) (EListLit))
 (DFunDef false "constraintVarArgMonos" ((PVar "mctx") (PCons (PTuple PWild (PVar "names")) (PVar "rest")) (PCons (PVar "args") (PVar "argsRest")) (PVar "tvMap")) (EMatch (EApp (EApp (EVar "constraintNameMonos") (EVar "names")) (EVar "tvMap")) (arm (PList) () (EApp (EApp (EApp (EApp (EVar "constraintVarArgMonos") (EVar "mctx")) (EVar "rest")) (EVar "argsRest")) (EVar "tvMap"))) (arm PWild () (EBinOp "::" (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "fromAstType") (EVar "mctx")) (EVar "tvMap"))) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "constraintVarArgMonos") (EVar "mctx")) (EVar "rest")) (EVar "argsRest")) (EVar "tvMap"))))))
 (DTypeSig true "sccSchemes" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "AuthResidual"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ScopedMember")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))))
-(DFunDef false "sccSchemes" ((PVar "env") PWild PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "sccSchemes" ((PVar "_env") PWild PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "sccSchemes" ((PVar "env") (PVar "sigs") (PVar "grouped") (PVar "isLetrec") (PVar "residuals") (PVar "index") (PCons (PVar "member") (PVar "rest"))) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "member") "smName")) (DoLet false false (PVar "isVal") (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped")))) (DoExpr (EBinOp "::" (ETuple (EVar "m") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "genBindingRestricted") (EFieldAccess (EVar "env") "teDyn")) (EFieldAccess (EFieldAccess (EVar "member") "smDeclaredAuths") "value")) (EApp (EApp (EVar "residualsOf") (EMethodRef "index")) (EVar "residuals"))) (EVar "isVal")) (EApp (EVar "memberForce") (EVar "member"))) (EFieldAccess (EVar "member") "smMono"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "sccSchemes") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "isLetrec")) (EVar "residuals")) (EBinOp "+" (EMethodRef "index") (ELit (LInt 1)))) (EVar "rest"))))))
 (DTypeSig true "quantifiableAuthorities" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "ScopedMember")) (TyCon "ScopeRoles")))))
 (DFunDef false "quantifiableAuthorities" ((PVar "env") (PVar "grouped") (PVar "members")) (EApp (EVar "scopeRolesOf") (EApp (EApp (EMethodRef "map") (ELam ((PVar "member")) (ETuple (EApp (EApp (EVar "memberRole") (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "member") "smName")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcCells") "sigNameSetRef") "value"))) (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EFieldAccess (EVar "member") "smName")) (EVar "grouped")))) (EFieldAccess (EVar "member") "smMono")))) (EVar "members"))))
@@ -3186,12 +3186,12 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "residualsOf" ((PVar "index") (PVar "residuals")) (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "owner") (PVar "r"))) (EIf (EBinOp "==" (EVar "owner") (EMethodRef "index")) (EListLit (EVar "r")) (EListLit)))) (EVar "residuals")))
 (DTypeSig false "memberClauseIsValue" (TyFun (TyCon "TcEnv") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyCon "Bool"))))
 (DFunDef false "memberClauseIsValue" ((PVar "env") (PTuple (PList) (PVar "rhs"))) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "rhs")))
-(DFunDef false "memberClauseIsValue" ((PVar "env") (PTuple PWild PWild)) (EVar "True"))
+(DFunDef false "memberClauseIsValue" ((PVar "_env") (PTuple PWild PWild)) (EVar "True"))
 (DTypeSig true "checkSigsOverExpansive" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyCon "Unit")))))
-(DFunDef false "checkSigsOverExpansive" ((PVar "env") PWild (PList)) (ELit LUnit))
+(DFunDef false "checkSigsOverExpansive" ((PVar "_env") PWild (PList)) (ELit LUnit))
 (DFunDef false "checkSigsOverExpansive" ((PVar "env") (PVar "grouped") (PCons (PTuple (PVar "m") (PVar "ty") (PVar "tvs")) (PVar "rest"))) (EBlock (DoExpr (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EVar "tvs"))) (EApp (EVar "not") (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped"))))) (EApp (EApp (EApp (EVar "pushTypeError") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "TSigOverExpansive")) (EApp (EApp (EVar "sigOverExpansiveMsg") (EVar "m")) (EVar "ty"))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "checkSigsOverExpansive") (EVar "env")) (EVar "grouped")) (EVar "rest")))))
 (DTypeSig true "checkSigsTooGeneral" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyCon "Unit"))))
-(DFunDef false "checkSigsTooGeneral" ((PVar "mctx") (PList)) (ELit LUnit))
+(DFunDef false "checkSigsTooGeneral" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "checkSigsTooGeneral" ((PVar "mctx") (PCons (PTuple (PVar "m") (PVar "ty") (PVar "tvs")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "checkSigTooGeneral") (EVar "mctx")) (EVar "m")) (EVar "ty")) (EVar "tvs"))) (DoExpr (EApp (EApp (EVar "checkSigsTooGeneral") (EVar "mctx")) (EVar "rest")))))
 (DTypeSig false "checkSigTooGeneral" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Unit"))))))
 (DFunDef false "checkSigTooGeneral" ((PVar "mctx") (PVar "name") (PVar "ty") (PVar "tvs")) (EBlock (DoLet false false (PVar "tvarIds") (EApp (EVar "sigTvarIds") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "tvs")))) (DoExpr (EMatch (EApp (EVar "groundedSignatureVariable") (EVar "tvs")) (arm (PCon "Some" (PTuple (PVar "vname") (PVar "actual"))) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "TTypeTooGeneral")) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EApp (EVar "groundedSigVarMsg") (EVar "vname")) (EVar "name")) (EVar "actual")))) (arm (PCon "None") () (EIf (EApp (EVar "hasDupI") (EVar "tvarIds")) (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TTypeTooGeneral")) (EApp (EApp (EVar "sigTooGeneralMsg") (EVar "name")) (EVar "ty"))) (ELit LUnit)))))))
@@ -3201,7 +3201,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DTypeSig true "checkSigsFixedByExpansive" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "ScopedMember")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyCon "Unit"))))))
 (DFunDef false "checkSigsFixedByExpansive" ((PVar "env") (PVar "grouped") (PVar "members") (PVar "sigTvMaps")) (EBlock (DoLet false false (PVar "fixed") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "member")) (EIf (EBinOp "||" (EFieldAccess (EFieldAccess (EVar "member") "smSigned") "value") (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EFieldAccess (EVar "member") "smName")) (EVar "grouped")))) (EListLit) (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EFieldAccess (EVar "member") "smName")))) (EApp (EVar "monoUnboundIds") (EFieldAccess (EVar "member") "smMono")))))) (EVar "members"))) (DoExpr (EMatch (EVar "fixed") (arm (PList) () (ELit LUnit)) (arm PWild () (EApp (EApp (EApp (EVar "checkSigsFixedBy") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "fixed")) (EVar "sigTvMaps")))))))
 (DTypeSig false "checkSigsFixedBy" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyCon "Unit")))))
-(DFunDef false "checkSigsFixedBy" ((PVar "mctx") PWild (PList)) (ELit LUnit))
+(DFunDef false "checkSigsFixedBy" ((PVar "_mctx") PWild (PList)) (ELit LUnit))
 (DFunDef false "checkSigsFixedBy" ((PVar "mctx") (PVar "fixed") (PCons (PTuple (PVar "name") (PVar "ty") (PVar "tvs")) (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EApp (EVar "sigVarFixedBy") (EVar "fixed")) (EVar "tvs")) (arm (PCon "Some" (PTuple (PVar "vname") (PVar "sibling"))) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "TTypeTooGeneral")) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EApp (EVar "siblingSharedSigVarMsg") (EVar "vname")) (EVar "name")) (EVar "sibling")))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EVar "checkSigsFixedBy") (EVar "mctx")) (EVar "fixed")) (EVar "rest")))))
 (DTypeSig false "sigVarFixedBy" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "sigVarFixedBy" (PWild (PList)) (EVar "None"))
@@ -3210,7 +3210,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "fixedSibling" (PWild (PList)) (EVar "None"))
 (DFunDef false "fixedSibling" ((PVar "id") (PCons (PTuple (PVar "i") (PVar "sibling")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "id")) (EApp (EVar "Some") (EVar "sibling")) (EIf (EVar "otherwise") (EApp (EApp (EVar "fixedSibling") (EVar "id")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "registerSchemeObligations" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "Unit"))))))))
-(DFunDef false "registerSchemeObligations" ((PVar "mctx") PWild PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "registerSchemeObligations" ((PVar "_mctx") PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "registerSchemeObligations" ((PVar "mctx") (PVar "memberDefIds") (PVar "sigTvMaps") (PVar "callObls") (PVar "addedObls") (PCons (PTuple (PVar "m") (PVar "sch")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "deferrableVarIds")) (EApp (EApp (EVar "idSetInsertAll") (EApp (EVar "schemeIds") (EVar "sch"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "deferrableVarIds") "value")))) (DoLet false false (PVar "obs") (EApp (EVar "dedupVecObls") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "schemeOblsForMember") (EVar "mctx")) (EVar "sigTvMaps")) (EVar "callObls")) (EVar "addedObls")) (EVar "m")) (EVar "sch")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "obs")) (ELit LUnit) (EBlock (DoLet false false (PVar "defId") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "m")) (EVar "memberDefIds")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "schemeObligationsRef")) (EBinOp "::" (ETuple (ETuple (EVar "m") (EVar "defId")) (EVar "obs")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "schemeObligationsRef") "value"))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EVar "mctx")) (EVar "memberDefIds")) (EVar "sigTvMaps")) (EVar "callObls")) (EVar "addedObls")) (EVar "rest")))))
 (DTypeSig false "schemeOblsForMember" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyApp (TyCon "List") (TyCon "VecObl")))))))))
 (DFunDef false "schemeOblsForMember" ((PVar "mctx") (PVar "sigTvMaps") (PVar "callObls") (PVar "addedObls") (PVar "m") (PVar "sch")) (EMatch (EApp (EApp (EVar "lookupSigTvMap") (EVar "m")) (EVar "sigTvMaps")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EVar "declaredSchemeOblsFor") (EVar "mctx")) (EVar "sigTvMaps")) (EVar "m")) (EApp (EVar "schemeIds") (EVar "sch")))) (arm (PCon "None") () (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "schemeObligationsOf") (EVar "mctx")) (EVar "True")) (EApp (EVar "schemeIds") (EVar "sch"))) (EVar "addedObls")) (EApp (EApp (EApp (EApp (EVar "forwardedVecObls") (EVar "mctx")) (EVar "True")) (EApp (EVar "schemeIds") (EVar "sch"))) (EVar "callObls"))))))
@@ -3249,10 +3249,10 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "pairsOfVecObls" ((PList)) (EListLit))
 (DFunDef false "pairsOfVecObls" ((PCons (PVar "o") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (ETuple (EFieldAccess (EVar "o") "voIface") (EVar "id")))) (EFieldAccess (EVar "o") "voIds")) (EApp (EVar "pairsOfVecObls") (EVar "rest"))))
 (DTypeSig true "checkSigConstraintCoverage" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "ConstraintReg")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "Unit")))))))))
-(DFunDef false "checkSigConstraintCoverage" ((PVar "mctx") PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "checkSigConstraintCoverage" ((PVar "_mctx") PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkSigConstraintCoverage" ((PVar "mctx") (PVar "regs") (PVar "sigs") (PVar "sigTvMaps") (PVar "callObls") (PVar "addedObls") (PCons (PTuple (PVar "m") (PVar "sch")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSigConstraintOne") (EVar "mctx")) (EVar "regs")) (EVar "sigs")) (EVar "sigTvMaps")) (EVar "callObls")) (EVar "addedObls")) (EVar "m")) (EVar "sch"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSigConstraintCoverage") (EVar "mctx")) (EVar "regs")) (EVar "sigs")) (EVar "sigTvMaps")) (EVar "callObls")) (EVar "addedObls")) (EVar "rest")))))
 (DTypeSig false "checkSigConstraintOne" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "ConstraintReg")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "Unit"))))))))))
-(DFunDef false "checkSigConstraintOne" ((PVar "mctx") (PVar "regs") (PVar "sigs") (PVar "sigTvMaps") (PVar "callObls") (PVar "addedObls") (PVar "m") (PVar "sch")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "declaredPairs") (EApp (EApp (EVar "censusSuperClose") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "declaredPairsFor") (EVar "m")) (EVar "regs")))) (DoLet false false (PVar "boundIds") (EApp (EVar "schemeIds") (EVar "sch"))) (DoLet false false (PVar "bodyVecs") (EApp (EApp (EVar "quantifiedVecObls") (EVar "boundIds")) (EApp (EApp (EApp (EApp (EVar "schemeObligationsOf") (EVar "mctx")) (EVar "False")) (EVar "boundIds")) (EVar "addedObls")))) (DoLet false false (PVar "fwdVecs") (EApp (EApp (EVar "quantifiedVecObls") (EVar "boundIds")) (EApp (EApp (EApp (EApp (EVar "forwardedVecObls") (EVar "mctx")) (EVar "False")) (EVar "boundIds")) (EVar "callObls")))) (DoLet false false (PVar "inferredB") (EApp (EApp (EApp (EVar "inferredIfacePairs") (EVar "mctx")) (EVar "m")) (EVar "boundIds"))) (DoLet false false (PVar "inferred") (EApp (EVar "dedupIfacePairs") (EBinOp "++" (EBinOp "++" (EApp (EVar "pairsOfVecObls") (EVar "bodyVecs")) (EApp (EVar "pairsOfVecObls") (EVar "fwdVecs"))) (EVar "inferredB")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportUncovered") (EVar "mctx")) (EVar "m")) (EVar "sigTvMaps")) (EVar "declaredPairs")) (EVar "inferred"))) (DoLet false false (PVar "declaredVecs") (EApp (EApp (EVar "censusSuperCloseVec") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EApp (EVar "declaredSchemeOblsFor") (EVar "mctx")) (EVar "sigTvMaps")) (EVar "m")) (EVar "boundIds")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reportUncoveredVec") (EVar "mctx")) (EVar "m")) (EVar "sigTvMaps")) (EVar "declaredPairs")) (EVar "declaredVecs")) (EBinOp "++" (EVar "bodyVecs") (EVar "fwdVecs"))))))))
+(DFunDef false "checkSigConstraintOne" ((PVar "mctx") (PVar "regs") (PVar "_sigs") (PVar "sigTvMaps") (PVar "callObls") (PVar "addedObls") (PVar "m") (PVar "sch")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "declaredPairs") (EApp (EApp (EVar "censusSuperClose") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "declaredPairsFor") (EVar "m")) (EVar "regs")))) (DoLet false false (PVar "boundIds") (EApp (EVar "schemeIds") (EVar "sch"))) (DoLet false false (PVar "bodyVecs") (EApp (EApp (EVar "quantifiedVecObls") (EVar "boundIds")) (EApp (EApp (EApp (EApp (EVar "schemeObligationsOf") (EVar "mctx")) (EVar "False")) (EVar "boundIds")) (EVar "addedObls")))) (DoLet false false (PVar "fwdVecs") (EApp (EApp (EVar "quantifiedVecObls") (EVar "boundIds")) (EApp (EApp (EApp (EApp (EVar "forwardedVecObls") (EVar "mctx")) (EVar "False")) (EVar "boundIds")) (EVar "callObls")))) (DoLet false false (PVar "inferredB") (EApp (EApp (EApp (EVar "inferredIfacePairs") (EVar "mctx")) (EVar "m")) (EVar "boundIds"))) (DoLet false false (PVar "inferred") (EApp (EVar "dedupIfacePairs") (EBinOp "++" (EBinOp "++" (EApp (EVar "pairsOfVecObls") (EVar "bodyVecs")) (EApp (EVar "pairsOfVecObls") (EVar "fwdVecs"))) (EVar "inferredB")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportUncovered") (EVar "mctx")) (EVar "m")) (EVar "sigTvMaps")) (EVar "declaredPairs")) (EVar "inferred"))) (DoLet false false (PVar "declaredVecs") (EApp (EApp (EVar "censusSuperCloseVec") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EApp (EVar "declaredSchemeOblsFor") (EVar "mctx")) (EVar "sigTvMaps")) (EVar "m")) (EVar "boundIds")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reportUncoveredVec") (EVar "mctx")) (EVar "m")) (EVar "sigTvMaps")) (EVar "declaredPairs")) (EVar "declaredVecs")) (EBinOp "++" (EVar "bodyVecs") (EVar "fwdVecs"))))))))
 (DTypeSig false "quantifiedVecObls" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyApp (TyCon "List") (TyCon "VecObl")))))
 (DFunDef false "quantifiedVecObls" ((PVar "boundIds") (PVar "vecs")) (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EApp (EApp (EVar "allList") (ELam ((PVar "id")) (EApp (EApp (EVar "containsI") (EVar "id")) (EVar "boundIds")))) (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EFieldAccess (EVar "o") "voArgs"))))) (EVar "vecs")))
 (DTypeSig false "inferredIfacePairs" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyCon "Int")))))))
@@ -3277,12 +3277,12 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DTypeSig false "vecOblOfNode" (TyFun (TyApp (TyCon "SuperNode") (TyTuple (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Mono")))) (TyCon "VecObl")))
 (DFunDef false "vecOblOfNode" ((PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ids") (PVar "args")) (EFieldAccess (EVar "n") "superPayload")) (DoExpr (ERecordCreate "VecObl" ((fa "voIface" (EFieldAccess (EVar "n") "superIface")) (fa "voIds" (EVar "ids")) (fa "voArgs" (EVar "args")))))))
 (DTypeSig false "reportUncoveredVec" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyCon "Unit"))))))))
-(DFunDef false "reportUncoveredVec" ((PVar "mctx") PWild PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "reportUncoveredVec" ((PVar "_mctx") PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "reportUncoveredVec" ((PVar "mctx") (PVar "m") (PVar "sigTvMaps") (PVar "declaredPairs") (PVar "declaredVecs") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoExpr (EIf (EBinOp "<" (EApp (EVar "listLen") (EFieldAccess (EVar "o") "voIds")) (ELit (LInt 2))) (ELit LUnit) (EIf (EApp (EApp (EVar "containsVecObl") (EVar "o")) (EVar "declaredVecs")) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "allPairsIn") (EFieldAccess (EVar "o") "voIface")) (EFieldAccess (EVar "o") "voIds")) (EVar "declaredPairs"))) (ELit LUnit) (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TMissingConstraint")) (EApp (EApp (EApp (EVar "missingConstraintVecMsg") (EVar "m")) (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "varNameForId") (EVar "sigTvMaps")) (EVar "m"))) (EFieldAccess (EVar "o") "voIds")))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reportUncoveredVec") (EVar "mctx")) (EVar "m")) (EVar "sigTvMaps")) (EVar "declaredPairs")) (EVar "declaredVecs")) (EVar "rest")))))
 (DTypeSig false "allPairsIn" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyCon "Int"))) (TyCon "Bool")))))
 (DFunDef false "allPairsIn" ((PVar "iface") (PVar "ids") (PVar "declaredPairs")) (EApp (EApp (EVar "allList") (ELam ((PVar "id")) (EApp (EApp (EVar "containsIfacePair") (ETuple (EVar "iface") (EVar "id"))) (EVar "declaredPairs")))) (EVar "ids")))
 (DTypeSig false "reportUncovered" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyCon "Int"))) (TyCon "Unit")))))))
-(DFunDef false "reportUncovered" ((PVar "mctx") PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "reportUncovered" ((PVar "_mctx") PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "reportUncovered" ((PVar "mctx") (PVar "m") (PVar "sigTvMaps") (PVar "declared") (PCons (PTuple (PVar "iface") (PVar "id")) (PVar "rest"))) (EBlock (DoExpr (EIf (EApp (EApp (EVar "containsIfacePair") (ETuple (EVar "iface") (EVar "id"))) (EVar "declared")) (ELit LUnit) (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TMissingConstraint")) (EApp (EApp (EApp (EVar "missingConstraintMsg") (EVar "m")) (EFieldAccess (EVar "iface") "irName")) (EApp (EApp (EApp (EVar "varNameForId") (EVar "sigTvMaps")) (EVar "m")) (EVar "id")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportUncovered") (EVar "mctx")) (EVar "m")) (EVar "sigTvMaps")) (EVar "declared")) (EVar "rest")))))
 (DTypeSig false "containsIfacePair" (TyFun (TyTuple (TyCon "IfaceRef") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyCon "Int"))) (TyCon "Bool"))))
 (DFunDef false "containsIfacePair" (PWild (PList)) (EVar "False"))

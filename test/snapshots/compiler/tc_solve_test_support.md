@@ -112,7 +112,7 @@ routeWords (RDict name) = ["dict:\{name}"]
 routeWords (RDictFwd name) = ["dictfwd:\{name}"]
 routeWords (RLocal name rs) = "local:\{name}" :: flatMap routeWords rs
 routeWords (RScalar name) = ["scalar:\{name}"]
-routeWords (RProj r path) = routeWords r
+routeWords (RProj r _path) = routeWords r
 
 -- The inputs of a drive a test observes through [sink]: nothing stdlib-owned, no
 -- profile, the sink as the trace.
@@ -292,7 +292,7 @@ valText (EvHead h) = h
 (DFunDef false "routeWords" ((PCon "RDictFwd" (PVar "name"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "dictfwd:")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))))
 (DFunDef false "routeWords" ((PCon "RLocal" (PVar "name") (PVar "rs"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "local:")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))) (EApp (EApp (EVar "flatMap") (EVar "routeWords")) (EVar "rs"))))
 (DFunDef false "routeWords" ((PCon "RScalar" (PVar "name"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "scalar:")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))))
-(DFunDef false "routeWords" ((PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EVar "routeWords") (EVar "r")))
+(DFunDef false "routeWords" ((PCon "RProj" (PVar "r") (PVar "_path"))) (EApp (EVar "routeWords") (EVar "r")))
 (DTypeSig true "traced" (TyFun (TyCon "TraceSink") (TyCon "DriveInputs")))
 (DFunDef false "traced" ((PVar "sink")) (ERecordUpdate (EVar "defaultDriveInputs") ((fa "diTrace" (EApp (EVar "Some") (EVar "sink"))))))
 (DTypeSig true "numericPreludeSource" (TyCon "String"))
@@ -380,7 +380,7 @@ valText (EvHead h) = h
 (DFunDef false "routeWords" ((PCon "RDictFwd" (PVar "name"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "dictfwd:")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))))
 (DFunDef false "routeWords" ((PCon "RLocal" (PVar "name") (PVar "rs"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "local:")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))) (EApp (EApp (EDictApp "flatMap") (EVar "routeWords")) (EVar "rs"))))
 (DFunDef false "routeWords" ((PCon "RScalar" (PVar "name"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "scalar:")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))))
-(DFunDef false "routeWords" ((PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EVar "routeWords") (EVar "r")))
+(DFunDef false "routeWords" ((PCon "RProj" (PVar "r") (PVar "_path"))) (EApp (EVar "routeWords") (EVar "r")))
 (DTypeSig true "traced" (TyFun (TyCon "TraceSink") (TyCon "DriveInputs")))
 (DFunDef false "traced" ((PVar "sink")) (ERecordUpdate (EVar "defaultDriveInputs") ((fa "diTrace" (EApp (EVar "Some") (EVar "sink"))))))
 (DTypeSig true "numericPreludeSource" (TyCon "String"))

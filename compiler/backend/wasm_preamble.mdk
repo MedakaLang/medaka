@@ -3531,104 +3531,106 @@ helperSymbolSteps plan name =
 -- (wasm_demand.mdk) states what this text defines and calls.
 export
 plannedHelperBlock : WasmDemandPlan -> List (List Int) -> String -> List String
-plannedHelperBlock plan files "closApplyLines" = closApplyLines
-plannedHelperBlock plan files "ioRuntimeLines" = ioRuntimeLines
-plannedHelperBlock plan files "ioStrRuntimeLines" = ioStrRuntimeLines
-plannedHelperBlock plan files "strLeafRuntimeLines" = strLeafRuntimeLines
-plannedHelperBlock plan files "strConcatRuntimeLines" = strConcatRuntimeLines
-plannedHelperBlock plan files "appendRuntimeLines" = appendRuntimeLines
-plannedHelperBlock plan files "valueEqRuntimeLines" =
+plannedHelperBlock _plan _files "closApplyLines" = closApplyLines
+plannedHelperBlock _plan _files "ioRuntimeLines" = ioRuntimeLines
+plannedHelperBlock _plan _files "ioStrRuntimeLines" = ioStrRuntimeLines
+plannedHelperBlock _plan _files "strLeafRuntimeLines" = strLeafRuntimeLines
+plannedHelperBlock _plan _files "strConcatRuntimeLines" = strConcatRuntimeLines
+plannedHelperBlock _plan _files "appendRuntimeLines" = appendRuntimeLines
+plannedHelperBlock plan _files "valueEqRuntimeLines" =
   valueEqRuntimeLines
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock plan files "valueAddRuntimeLines" =
+plannedHelperBlock plan _files "valueAddRuntimeLines" =
   valueAddRuntimeLines
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock plan files "valueSubRuntimeLines" =
+plannedHelperBlock plan _files "valueSubRuntimeLines" =
   valueSubRuntimeLines
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock plan files "valueMulRuntimeLines" =
+plannedHelperBlock plan _files "valueMulRuntimeLines" =
   valueMulRuntimeLines
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock plan files "valueDivRuntimeLines" =
+plannedHelperBlock plan _files "valueDivRuntimeLines" =
   valueDivRuntimeLines
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock plan files "valueModRuntimeLines" =
+plannedHelperBlock plan _files "valueModRuntimeLines" =
   valueModRuntimeLines
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock plan files "valueCmpNumRuntimeLines" =
+plannedHelperBlock plan _files "valueCmpNumRuntimeLines" =
   valueCmpNumRuntimeLines
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock plan files "u64RuntimeLines" = u64RuntimeLines
-plannedHelperBlock plan files "i64RuntimeLines" = i64RuntimeLines
-plannedHelperBlock plan files "stderrRuntimeLines" = stderrRuntimeLines
-plannedHelperBlock plan files "rngRuntimeLines" = rngRuntimeLines
-plannedHelperBlock plan files "hashRuntimeLines" = hashRuntimeLines
-plannedHelperBlock plan files "hashStringRuntimeLines" = hashStringRuntimeLines
-plannedHelperBlock plan files "floatRemRuntimeLines" = floatRemRuntimeLines
-plannedHelperBlock plan files "floatRuntimeLines" = floatRuntimeLines
-plannedHelperBlock plan files "hashFloatRuntimeLines" = hashFloatRuntimeLines
-plannedHelperBlock plan files "randomFloatRuntimeLines" =
+plannedHelperBlock _plan _files "u64RuntimeLines" = u64RuntimeLines
+plannedHelperBlock _plan _files "i64RuntimeLines" = i64RuntimeLines
+plannedHelperBlock _plan _files "stderrRuntimeLines" = stderrRuntimeLines
+plannedHelperBlock _plan _files "rngRuntimeLines" = rngRuntimeLines
+plannedHelperBlock _plan _files "hashRuntimeLines" = hashRuntimeLines
+plannedHelperBlock _plan _files "hashStringRuntimeLines" =
+  hashStringRuntimeLines
+plannedHelperBlock _plan _files "floatRemRuntimeLines" = floatRemRuntimeLines
+plannedHelperBlock _plan _files "floatRuntimeLines" = floatRuntimeLines
+plannedHelperBlock _plan _files "hashFloatRuntimeLines" = hashFloatRuntimeLines
+plannedHelperBlock _plan _files "randomFloatRuntimeLines" =
   randomFloatRuntimeLines
-plannedHelperBlock plan files "floatStrLines" = floatStrLines
-plannedHelperBlock plan files "floatFixedLines" = floatFixedLines
-plannedHelperBlock plan files "strSearchRuntimeLines" = strSearchRuntimeLines
-plannedHelperBlock plan files "strToIntRuntimeLines" = strToIntRuntimeLines
-plannedHelperBlock plan files "strReverseRuntimeLines" = strReverseRuntimeLines
-plannedHelperBlock plan files "strJoinRuntimeLines" = strJoinRuntimeLines
-plannedHelperBlock plan files "strCodecRuntimeLines" = strCodecRuntimeLines
-plannedHelperBlock plan files "byteBlockRuntimeLines" = byteBlockRuntimeLines
-plannedHelperBlock plan files "charFromCodeRuntimeLines" =
+plannedHelperBlock _plan _files "floatStrLines" = floatStrLines
+plannedHelperBlock _plan _files "floatFixedLines" = floatFixedLines
+plannedHelperBlock _plan _files "strSearchRuntimeLines" = strSearchRuntimeLines
+plannedHelperBlock _plan _files "strToIntRuntimeLines" = strToIntRuntimeLines
+plannedHelperBlock _plan _files "strReverseRuntimeLines" =
+  strReverseRuntimeLines
+plannedHelperBlock _plan _files "strJoinRuntimeLines" = strJoinRuntimeLines
+plannedHelperBlock _plan _files "strCodecRuntimeLines" = strCodecRuntimeLines
+plannedHelperBlock _plan _files "byteBlockRuntimeLines" = byteBlockRuntimeLines
+plannedHelperBlock _plan _files "charFromCodeRuntimeLines" =
   charFromCodeRuntimeLines
-plannedHelperBlock plan files "charClassRuntimeLines" = charClassRuntimeLines
-plannedHelperBlock plan files "ioPushPathLines" = ioPushPathLines
-plannedHelperBlock plan files "ioPushPathMoreLines" = ioPushPathMoreLines
-plannedHelperBlock plan files "ioPushGrantLines" = ioPushGrantLines
-plannedHelperBlock plan files "ioPushGrantMoreLines" = ioPushGrantMoreLines
-plannedHelperBlock plan files "ioResultLines" = ioResultLines
-plannedHelperBlock plan files "ioRefusedPanicLines" = ioRefusedPanicLines
-plannedHelperBlock plan files "ioReadFileLines" = ioReadFileLines
-plannedHelperBlock plan files "ioFetchTextLines" = ioFetchTextLines
-plannedHelperBlock plan files "ioFileExistsLines" = ioFileExistsLines
-plannedHelperBlock plan files "ioCanonicalizeLines" = ioCanonicalizeLines
-plannedHelperBlock plan files "ioWriteFileLines" = ioWriteFileLines
-plannedHelperBlock plan files "ioAppendFileLines" = ioAppendFileLines
-plannedHelperBlock plan files "ioRenameLines" = ioRenameLines
-plannedHelperBlock plan files "ioListDirLines" = ioListDirLines
-plannedHelperBlock plan files "ioStatFileLines" = ioStatFileLines
-plannedHelperBlock plan files "ioMakeDirLines" = ioMakeDirLines
-plannedHelperBlock plan files "ioRemoveFileLines" = ioRemoveFileLines
-plannedHelperBlock plan files "ioRemoveDirLines" = ioRemoveDirLines
-plannedHelperBlock plan files "ioFsyncLines" = ioFsyncLines
-plannedHelperBlock plan files "ioFileModeLines" = ioFileModeLines
-plannedHelperBlock plan files "ioWriteFileModeLines" = ioWriteFileModeLines
-plannedHelperBlock plan files "ioGetEnvLines" = ioGetEnvLines
-plannedHelperBlock plan files "ioReadLineLines" = ioReadLineLines
-plannedHelperBlock plan files "ioReadAllLines" = ioReadAllLines
-plannedHelperBlock plan files "ioReadExactlyLines" = ioReadExactlyLines
-plannedHelperBlock plan files "ioExecutablePathLines" = ioExecutablePathLines
-plannedHelperBlock plan files "jsffiArrayLines" = jsffiArrayLines
-plannedHelperBlock plan files "jsffiResultStrLines" = jsffiResultStrLines
-plannedHelperBlock plan files "ioArgsLines" = ioArgsLines
-plannedHelperBlock plan files "utf8LossyRuntimeLines" = utf8LossyRuntimeLines
-plannedHelperBlock plan files "writeFileBytesLines" = writeFileBytesLines
-plannedHelperBlock plan files "osEntropyLines" = osEntropyLines
-plannedHelperBlock plan files "readFileBytesLines" = readFileBytesLines
-plannedHelperBlock plan files "trapIntRuntimeLines" = trapIntRuntimeLines
-plannedHelperBlock plan files "intRuntimeLines" =
+plannedHelperBlock _plan _files "charClassRuntimeLines" = charClassRuntimeLines
+plannedHelperBlock _plan _files "ioPushPathLines" = ioPushPathLines
+plannedHelperBlock _plan _files "ioPushPathMoreLines" = ioPushPathMoreLines
+plannedHelperBlock _plan _files "ioPushGrantLines" = ioPushGrantLines
+plannedHelperBlock _plan _files "ioPushGrantMoreLines" = ioPushGrantMoreLines
+plannedHelperBlock _plan _files "ioResultLines" = ioResultLines
+plannedHelperBlock _plan _files "ioRefusedPanicLines" = ioRefusedPanicLines
+plannedHelperBlock _plan _files "ioReadFileLines" = ioReadFileLines
+plannedHelperBlock _plan _files "ioFetchTextLines" = ioFetchTextLines
+plannedHelperBlock _plan _files "ioFileExistsLines" = ioFileExistsLines
+plannedHelperBlock _plan _files "ioCanonicalizeLines" = ioCanonicalizeLines
+plannedHelperBlock _plan _files "ioWriteFileLines" = ioWriteFileLines
+plannedHelperBlock _plan _files "ioAppendFileLines" = ioAppendFileLines
+plannedHelperBlock _plan _files "ioRenameLines" = ioRenameLines
+plannedHelperBlock _plan _files "ioListDirLines" = ioListDirLines
+plannedHelperBlock _plan _files "ioStatFileLines" = ioStatFileLines
+plannedHelperBlock _plan _files "ioMakeDirLines" = ioMakeDirLines
+plannedHelperBlock _plan _files "ioRemoveFileLines" = ioRemoveFileLines
+plannedHelperBlock _plan _files "ioRemoveDirLines" = ioRemoveDirLines
+plannedHelperBlock _plan _files "ioFsyncLines" = ioFsyncLines
+plannedHelperBlock _plan _files "ioFileModeLines" = ioFileModeLines
+plannedHelperBlock _plan _files "ioWriteFileModeLines" = ioWriteFileModeLines
+plannedHelperBlock _plan _files "ioGetEnvLines" = ioGetEnvLines
+plannedHelperBlock _plan _files "ioReadLineLines" = ioReadLineLines
+plannedHelperBlock _plan _files "ioReadAllLines" = ioReadAllLines
+plannedHelperBlock _plan _files "ioReadExactlyLines" = ioReadExactlyLines
+plannedHelperBlock _plan _files "ioExecutablePathLines" = ioExecutablePathLines
+plannedHelperBlock _plan _files "jsffiArrayLines" = jsffiArrayLines
+plannedHelperBlock _plan _files "jsffiResultStrLines" = jsffiResultStrLines
+plannedHelperBlock _plan _files "ioArgsLines" = ioArgsLines
+plannedHelperBlock _plan _files "utf8LossyRuntimeLines" = utf8LossyRuntimeLines
+plannedHelperBlock _plan _files "writeFileBytesLines" = writeFileBytesLines
+plannedHelperBlock _plan _files "osEntropyLines" = osEntropyLines
+plannedHelperBlock _plan _files "readFileBytesLines" = readFileBytesLines
+plannedHelperBlock _plan _files "trapIntRuntimeLines" = trapIntRuntimeLines
+plannedHelperBlock plan _files "intRuntimeLines" =
   intRuntimeLines plan.intHelpers
 plannedHelperBlock plan files "siteRuntimeLines" =
   siteRuntimeLines files plan.nonexhaustiveRuntime

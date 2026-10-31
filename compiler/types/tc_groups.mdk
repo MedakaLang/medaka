@@ -248,18 +248,18 @@ export
 isNonexpansive : TcEnv -> Expr -> Bool
 isNonexpansive env (ELoc _ e) = isNonexpansive env e
 isNonexpansive env (EDoOrigin _ e) = isNonexpansive env e
-isNonexpansive env (ELit _) = True
-isNonexpansive env (EVar _) = True
-isNonexpansive env (EVarId _ _) = True
+isNonexpansive _env (ELit _) = True
+isNonexpansive _env (EVar _) = True
+isNonexpansive _env (EVarId _ _) = True
 -- `run`/`build` rewrite a method reference into a dictionary-marked node before
 -- typechecking (`prePassDict`); the marked node is still a variable, so the value
 -- predicate must answer as it does for the `EVar` that `check` sees — otherwise
 -- `callMin = min` is a value under one verb and expansive under another
 -- (check green, build panics on an unbound dictionary witness).
-isNonexpansive env (EMethodAt _ _ _) = True
-isNonexpansive env (EDictAt _ _) = True
-isNonexpansive env (EMethodRef _) = True
-isNonexpansive env (ELam _ _) = True
+isNonexpansive _env (EMethodAt _ _ _) = True
+isNonexpansive _env (EDictAt _ _) = True
+isNonexpansive _env (EMethodRef _) = True
+isNonexpansive _env (ELam _ _) = True
 isNonexpansive env (EAnnot e _) = isNonexpansive env e
 isNonexpansive env (EHeadAnnot e _) = isNonexpansive env e
 isNonexpansive env (ETuple es) = allList (isNonexpansive env) es
@@ -278,7 +278,7 @@ isNonexpansive env (ERecordCreate _ fs) =
     (fa => match fa
       FieldAssign _ e => isNonexpansive env e)
     fs
-isNonexpansive env _ = False
+isNonexpansive _env _ = False
 
 -- Walk the left spine of an application to its head, testing EVERY argument met
 -- on the way, and finally test whether the head IS a constructor that is safe to
@@ -317,7 +317,7 @@ isCtorAppSpine env (EDoOrigin _ e) = isCtorAppSpine env e
 isCtorAppSpine env (EApp f x) = isCtorAppSpine env f && isNonexpansive env x
 isCtorAppSpine env (EVar name) = isDeclaredCtorHead env name
 isCtorAppSpine env (EVarId name _) = isDeclaredCtorHead env name
-isCtorAppSpine env _ = False
+isCtorAppSpine _env _ = False
 
 -- The head test itself: `name` is a real, declared constructor and is not the
 -- `Ref` extern.  See `isCtorAppSpine`'s docblock for why `lookupCtor` is the
@@ -439,14 +439,14 @@ isSyntacticLambda _ = False
 -- Pushes the error into typeErrors for each violating member.
 export
 checkLetRecDecls : ModuleCtx -> List Decl -> Unit
-checkLetRecDecls mctx [] = ()
+checkLetRecDecls _mctx [] = ()
 checkLetRecDecls mctx ((DLetGroup _ binds) :: rest) =
   checkLetBinds mctx binds
   checkLetRecDecls mctx rest
 checkLetRecDecls mctx (_ :: rest) = checkLetRecDecls mctx rest
 
 checkLetBinds : ModuleCtx -> List LetBind -> Unit
-checkLetBinds mctx [] = ()
+checkLetBinds _mctx [] = ()
 checkLetBinds mctx ((LetBind name clauses _ _) :: rest) =
   checkLetBind mctx name clauses
   checkLetBinds mctx rest
@@ -520,7 +520,7 @@ checkLetGroupBindsLocated : ModuleCtx -> List LetBind -> Unit
 checkLetGroupBindsLocated mctx = checkLetGroupBindsGo mctx
 
 checkLetGroupBindsGo : ModuleCtx -> List LetBind -> Unit
-checkLetGroupBindsGo mctx [] = ()
+checkLetGroupBindsGo _mctx [] = ()
 checkLetGroupBindsGo mctx ((LetBind name clauses _ _) :: rest) =
   let selfAndForward = name :: map letBindName rest
   checkClausesNonFunctionLocated mctx selfAndForward name clauses
@@ -705,7 +705,7 @@ clausesAreValue env clauses = allList (clauseIsValue env) clauses
 
 clauseIsValue : TcEnv -> FunClause -> Bool
 clauseIsValue env (FunClause [] rhs) = isNonexpansive env rhs
-clauseIsValue env (FunClause _ _) = True
+clauseIsValue _env (FunClause _ _) = True
 
 -- [o]'s prerequisites, each entered on [o]'s walk by [enter].
 requireGoalsBelow : ModuleCtx ->
@@ -870,7 +870,7 @@ nestedRequireGoalsOnce : ModuleCtx ->
   OrdMap Unit ->
   List (UObligation, ReqWalk) ->
   List UObligation
-nestedRequireGoalsOnce mctx _ _ [] = []
+nestedRequireGoalsOnce _mctx _ _ [] = []
 nestedRequireGoalsOnce mctx rigidIds liveIds walks =
   let (kept, derived) = followRequireLevel mctx rigidIds liveIds walks [] []
   kept ++ nestedRequireGoalsOnce mctx rigidIds liveIds derived
@@ -884,7 +884,7 @@ followRequireLevel : ModuleCtx ->
   List UObligation ->
   List (List (UObligation, ReqWalk)) ->
   (List UObligation, List (UObligation, ReqWalk))
-followRequireLevel mctx _ _ [] kept derived =
+followRequireLevel _mctx _ _ [] kept derived =
   (reverse kept, flatMap identity (reverse derived))
 followRequireLevel mctx rigidIds liveIds ((o, walk) :: rest) kept derived =
   if walkGoalFollowed walk o.pred.iface (uOblGoalArgs mctx.mcGraph o) then
@@ -1374,8 +1374,8 @@ constraintVarArgMonos : ModuleCtx ->
   List (List Ty) ->
   List (String, Mono) ->
   List (List Mono)
-constraintVarArgMonos mctx [] _ _ = []
-constraintVarArgMonos mctx _ [] _ = []
+constraintVarArgMonos _mctx [] _ _ = []
+constraintVarArgMonos _mctx _ [] _ = []
 constraintVarArgMonos mctx ((_, names) :: rest) (args :: argsRest) tvMap =
   match constraintNameMonos names tvMap
     [] => constraintVarArgMonos mctx rest argsRest tvMap
@@ -1414,7 +1414,7 @@ sccSchemes : TcEnv ->
   Int ->
   List ScopedMember ->
   List (String, Scheme)
-sccSchemes env _ _ _ _ _ [] = []
+sccSchemes _env _ _ _ _ _ [] = []
 sccSchemes env sigs grouped isLetrec residuals index (member :: rest) =
   let m = member.smName
   let isVal = allList (memberClauseIsValue env) (clausesOf m grouped)
@@ -1509,7 +1509,7 @@ residualsOf index residuals =
 -- a top-level clause is a value if it has params (function) or a non-expansive RHS
 memberClauseIsValue : TcEnv -> (List Pat, Expr) -> Bool
 memberClauseIsValue env ([], rhs) = isNonexpansive env rhs
-memberClauseIsValue env (_, _) = True
+memberClauseIsValue _env (_, _) = True
 
 -- ── polymorphic signature over an expansive body ─────────────────────────────
 -- HM-CORE-SEMANTICS §1 clause 4 / DICT-SEMANTICS §4.1 G2.  A signed member whose
@@ -1525,7 +1525,7 @@ checkSigsOverExpansive : TcEnv ->
   OrdMap (List (List Pat, Expr)) ->
   List (String, Ty, List (String, Mono)) ->
   Unit
-checkSigsOverExpansive env _ [] = ()
+checkSigsOverExpansive _env _ [] = ()
 checkSigsOverExpansive env grouped ((m, ty, tvs) :: rest) =
   if not (isEmpty tvs)
     && not (allList (memberClauseIsValue env) (clausesOf m grouped)) then
@@ -1545,7 +1545,7 @@ export
 checkSigsTooGeneral : ModuleCtx ->
   List (String, Ty, List (String, Mono)) ->
   Unit
-checkSigsTooGeneral mctx [] = ()
+checkSigsTooGeneral _mctx [] = ()
 checkSigsTooGeneral mctx ((m, ty, tvs) :: rest) =
   checkSigTooGeneral mctx m ty tvs
   checkSigsTooGeneral mctx rest
@@ -1605,7 +1605,7 @@ checkSigsFixedBy : ModuleCtx ->
   List (Int, String) ->
   List (String, Ty, List (String, Mono)) ->
   Unit
-checkSigsFixedBy mctx _ [] = ()
+checkSigsFixedBy _mctx _ [] = ()
 checkSigsFixedBy mctx fixed ((name, ty, tvs) :: rest) =
   match sigVarFixedBy fixed tvs
     Some (vname, sibling) =>
@@ -1671,7 +1671,7 @@ registerSchemeObligations : ModuleCtx ->
   List UObligation ->
   List (String, Scheme) ->
   Unit
-registerSchemeObligations mctx _ _ _ _ [] = ()
+registerSchemeObligations _mctx _ _ _ _ [] = ()
 registerSchemeObligations mctx memberDefIds sigTvMaps callObls addedObls ((m, sch) :: rest) =
   -- #838 I2 / #827: record this binding's QUANTIFIED (generalized) var ids as
   -- caller-deferrable.  A var this binding ∀-quantifies is FORWARDED to its callers
@@ -1998,7 +1998,7 @@ checkSigConstraintCoverage : ModuleCtx ->
   List UObligation ->
   List (String, Scheme) ->
   Unit
-checkSigConstraintCoverage mctx _ _ _ _ _ [] = ()
+checkSigConstraintCoverage _mctx _ _ _ _ _ [] = ()
 checkSigConstraintCoverage mctx regs sigs sigTvMaps callObls addedObls ((m, sch) :: rest) =
   checkSigConstraintOne mctx regs sigs sigTvMaps callObls addedObls m sch
   checkSigConstraintCoverage mctx regs sigs sigTvMaps callObls addedObls rest
@@ -2012,7 +2012,7 @@ checkSigConstraintOne : ModuleCtx ->
   String ->
   Scheme ->
   Unit
-checkSigConstraintOne mctx regs sigs sigTvMaps callObls addedObls m sch =
+checkSigConstraintOne mctx regs _sigs sigTvMaps callObls addedObls m sch =
   match omLookup m mctx.mcCells.sigTyMapRef.value
     None => ()  -- unsigned member: its inferred constraints are promoted, not checked
     Some _ =>
@@ -2154,7 +2154,7 @@ reportUncoveredVec : ModuleCtx ->
   List VecObl ->
   List VecObl ->
   Unit
-reportUncoveredVec mctx _ _ _ _ [] = ()
+reportUncoveredVec _mctx _ _ _ _ [] = ()
 reportUncoveredVec mctx m sigTvMaps declaredPairs declaredVecs (o :: rest) =
   if listLen o.voIds < 2 then
     ()
@@ -2183,7 +2183,7 @@ reportUncovered : ModuleCtx ->
   List (IfaceRef, Int) ->
   List (IfaceRef, Int) ->
   Unit
-reportUncovered mctx _ _ _ [] = ()
+reportUncovered _mctx _ _ _ [] = ()
 reportUncovered mctx m sigTvMaps declared ((iface, id) :: rest) =
   if containsIfacePair (iface, id) declared then
     ()

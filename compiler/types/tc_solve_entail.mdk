@@ -804,7 +804,7 @@ goalHeadCon [] = None
 -- an open goal that reaches this arm is as ambiguous at quiescence as it is now
 -- (§6.2 T4, "rejected as ambiguous — never committed to a default instance").
 pickMostSpecificEntry : SiteCtx -> List Mono -> List KeyEntry -> Option KeyEntry
-pickMostSpecificEntry sx _ [] = None
+pickMostSpecificEntry _sx _ [] = None
 pickMostSpecificEntry sx goals (e :: rest) =
   match findMostSpecificEntry (e :: rest) (e :: rest)
     Some best => Some best
@@ -1139,7 +1139,7 @@ implHeadSubst mctx pats concretes
 -- one of the goal's free variables: a repeated head variable never equates it with
 -- another type (DICT-SEMANTICS §3).
 matchEqPairs : ModuleCtx -> List (Mono, Mono) -> Bool
-matchEqPairs mctx [] = True
+matchEqPairs _mctx [] = True
 matchEqPairs mctx pairs0 =
   let pairs =
     rigidSigPairs mctx.mcGraph mctx.mcCells.declaredSigVarIds.value pairs0
@@ -1300,7 +1300,7 @@ entailDetermined sx name encl useScope (EKArg fullMono omitted) = match (
       ))
       (determinedGoalInstance sx.sxModule iface goals)
   _ => None
-entailDetermined sx _ _ _ _ = None
+entailDetermined _sx _ _ _ _ = None
 
 -- `inst` for a nested/top goal whose lead position is a variable, when every variable
 -- of the vector is one a closed binder declared (DICT-SEMANTICS §6.1 points 2-3, §3
@@ -1335,7 +1335,7 @@ entailRigidLead sx m encl useScope (EKNestedTop iface _ walk rest) =
     map
       (row => (nestedRowRoute sx encl useScope m goals walk row, []))
       (ieRowOfEntry env picked)
-entailRigidLead sx _ _ _ _ = None
+entailRigidLead _sx _ _ _ _ = None
 
 noteNumericEntailment : SiteCtx ->
   EntailKind ->
@@ -1364,7 +1364,7 @@ noteNumericEntailment sx (EKPredicateOp _ _ predicate) scope selected route prer
     selected
     (Some route)
     prereqs
-noteNumericEntailment sx _ _ _ _ _ = ()
+noteNumericEntailment _sx _ _ _ _ _ = ()
 
 -- #412: `assum`, both halves.  DICT-SEMANTICS §3 pins the precedence — `assum`/`super`
 -- takes precedence over `inst`; a predicate already in scope is USED, and `inst` fires only
@@ -1392,18 +1392,20 @@ entailAssum mctx m encl name useScope kind =
 goalRequestOfKind : ModuleCtx -> String -> EntailKind -> Option PredicateRequest
 goalRequestOfKind mctx name (EKReturn fullMono _) =
   goalPredOf mctx name fullMono
-goalRequestOfKind mctx _ (EKNumReturn predicate _ _ _) = Some PredicateRequest {
-  prIface = predicate.predicateInterface,
-  prArgs = PSArgsKnown predicate.predicateArguments,
-}
+goalRequestOfKind _mctx _ (EKNumReturn predicate _ _ _) = Some
+  PredicateRequest {
+    prIface = predicate.predicateInterface,
+    prArgs = PSArgsKnown predicate.predicateArguments,
+  }
 goalRequestOfKind mctx name (EKArg fullMono omitted) =
   occurrencePredOf mctx name fullMono omitted
 goalRequestOfKind mctx name (EKOp _ _) = goalPredOfOp mctx name
-goalRequestOfKind mctx _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
-  prIface = predicate.predicateInterface,
-  prArgs = PSArgsKnown predicate.predicateArguments,
-}
-goalRequestOfKind mctx _ (EKNestedTop _ _ _ _) = None
+goalRequestOfKind _mctx _ (EKPredicateOp _ _ predicate) = Some
+  PredicateRequest {
+    prIface = predicate.predicateInterface,
+    prArgs = PSArgsKnown predicate.predicateArguments,
+  }
+goalRequestOfKind _mctx _ (EKNestedTop _ _ _ _) = None
 
 -- assum: which in-scope dict-param (if any) does [m]'s head constraint var read?  The
 -- genuine/arg kinds prefer the enclosing method's own slot (activeDictVarOfEncl); the
@@ -1428,7 +1430,7 @@ entailAssumVar mctx request m encl _ useScope (EKReturn _ _) =
   activeDictVarOfEncl mctx request m encl useScope
 entailAssumVar mctx request m encl _ useScope (EKNumReturn _ _ _ _) =
   activeDictVarOfEncl mctx request m encl useScope
-entailAssumVar mctx _ m encl _ useScope (EKNestedTop iface _ _ rest) =
+entailAssumVar mctx _ m _encl _ useScope (EKNestedTop iface _ _ rest) =
   let request =
     PredicateRequest { prIface = iface, prArgs = PSArgsKnown (m :: rest) }
   -- Each later rung scans the dictionary-slot graph and is a costlier fallback than the one before; it must run only on a miss.
@@ -1467,11 +1469,11 @@ entailAssumVar mctx request m encl _ useScope (EKPredicateOp _ _ _) =
 
 -- The interface of the predicate a goal of [kind] discharges, when the kind knows it.
 goalIfaceOfKind : ModuleCtx -> String -> EntailKind -> Option IfaceRef
-goalIfaceOfKind mctx _ (EKNestedTop iface _ _ _) =
+goalIfaceOfKind _mctx _ (EKNestedTop iface _ _ _) =
   if iface.irName == "" then None else Some iface
-goalIfaceOfKind mctx _ (EKNumReturn predicate _ _ _) =
+goalIfaceOfKind _mctx _ (EKNumReturn predicate _ _ _) =
   Some predicate.predicateInterface
-goalIfaceOfKind mctx _ (EKPredicateOp _ _ predicate) =
+goalIfaceOfKind _mctx _ (EKPredicateOp _ _ predicate) =
   Some predicate.predicateInterface
 goalIfaceOfKind mctx name _ = methodIfaceHere mctx name
 
@@ -1499,7 +1501,7 @@ selectReturnRow sx env name goals = match ieSelectRowByMethod sx env name goals
 -- decision rather than deciding again.
 export
 determinedGoalInstance : ModuleCtx -> IfaceRef -> List Mono -> Option ImplRow
-determinedGoalInstance mctx _ [] = None
+determinedGoalInstance _mctx _ [] = None
 determinedGoalInstance mctx iface (first :: rest) = match normalize first
   TVar cell =>
     let goals = first :: rest
@@ -1529,7 +1531,7 @@ entailInst : SiteCtx ->
 -- The exact arm selects on the interface's full instantiated parameter vector and
 -- uses that same row and vector for both the route word and prerequisites.  A method
 -- with no registered vector retains the legacy scalar result-head match.
-entailInst sx name m encl useScope tag (EKReturn fullMono _) =
+entailInst sx name m encl useScope _ (EKReturn fullMono _) =
   let env = sx.sxModule.mcCells.bodyImplEnvRef.value
   match ifaceParamMonos sx.sxModule name fullMono
     Some goals => match selectReturnRow sx env name goals
@@ -1562,7 +1564,7 @@ entailInst sx name m encl useScope tag (EKReturn fullMono _) =
       -- with two or more admitted declarations never reaches here: its route is
       -- `resolveAdmittedSite`'s, and its verdict `checkAdmittedOccObl`'s.
       None => (RNone, [])
-entailInst sx name m encl useScope _ (kind@(EKNumReturn predicate _ _ _)) =
+entailInst sx name _m encl useScope _ (kind@(EKNumReturn predicate _ _ _)) =
   let goals = predicate.predicateArguments
   let env = sx.sxModule.mcCells.bodyImplEnvRef.value
   match ieSelectRowByIface sx env predicate.predicateInterface goals
@@ -1707,7 +1709,7 @@ committedSuperRoute : SiteCtx ->
   ReqWalk ->
   List Mono ->
   Route
-committedSuperRoute sx _ _ _ _ [] = RNone
+committedSuperRoute _sx _ _ _ _ [] = RNone
 committedSuperRoute sx encl useScope iface walk (goals@(m :: _)) =
   match stableGoalReach sx.sxModule [] iface goals
     ReachOne row if rowHeadMatches sx.sxModule goals row =>
@@ -1732,16 +1734,16 @@ selectedCallSupers sx name (Some (ImplRow _ _ iface _ _ supplied _)) encl useSco
     []
   else
     superRoutesAt sx iface encl useScope goals (reqWalkStart ())
-selectedCallSupers sx _ None _ _ _ = []
+selectedCallSupers _sx _ None _ _ _ = []
 
 entailFallback : SiteCtx -> String -> ScopeId -> Mono -> EntailKind -> Route
-entailFallback sx _ _ _ (EKReturn _ _) = RNone
-entailFallback sx _ _ _ (EKNumReturn _ _ _ _) = RNone
+entailFallback _sx _ _ _ (EKReturn _ _) = RNone
+entailFallback _sx _ _ _ (EKNumReturn _ _ _ _) = RNone
 entailFallback sx encl scope m (EKNestedTop iface policy walk rest) =
   undeterminedRoute sx encl scope iface policy walk (m :: rest)
-entailFallback sx _ _ _ (EKArg _ _) = RNone
-entailFallback sx _ _ _ (EKOp _ _) = RNone
-entailFallback sx _ _ _ (EKPredicateOp _ _ _) = RNone
+entailFallback _sx _ _ _ (EKArg _ _) = RNone
+entailFallback _sx _ _ _ (EKOp _ _) = RNone
+entailFallback _sx _ _ _ (EKPredicateOp _ _ _) = RNone
 
 -- #217: the walk-carrying core of routeOf.  [walk] threads the shared `requires`
 -- measure through the aware recursion (routeOfD → argImplRequiresRoutesForRow →
@@ -1774,7 +1776,7 @@ undeterminedRoute : SiteCtx ->
   ReqWalk ->
   List Mono ->
   Route
-undeterminedRoute sx _ _ _ KeepNone _ _ = RNone
+undeterminedRoute _sx _ _ _ KeepNone _ _ = RNone
 undeterminedRoute sx _ scope _ (CountImpls iface) _ goal =
   routeUndeterminedTop sx scope iface goal
 undeterminedRoute sx encl scope iface CommitSuper walk goal =
@@ -1815,7 +1817,7 @@ undeterminedRowRoute : SiteCtx ->
   List Mono ->
   ImplRow ->
   Route
-undeterminedRowRoute sx _ _ [] _ = RNone
+undeterminedRowRoute _sx _ _ [] _ = RNone
 undeterminedRowRoute sx scope ifaceRef (m :: rest) row =
   RKey
     (rowRouteKey row)
@@ -1982,7 +1984,7 @@ argImplReqRoutes : SiteCtx ->
   List Require ->
   ReqWalk ->
   List Route
-argImplReqRoutes sx _ _ _ [] _ = []
+argImplReqRoutes _sx _ _ _ [] _ = []
 argImplReqRoutes sx encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs, requireOrigin = ro }) :: rest) walk =
   let iface = IfaceRef { irName = rIface, irOrigin = ro }
   argReqRoute sx iface encl useScope subst rargs walk
@@ -2122,8 +2124,8 @@ goalReach : ModuleCtx ->
   List Mono ->
   List (ImplRow, List (Int, Mono)) ->
   GoalReach
-goalReach mctx _ [] = ReachNone
-goalReach mctx _ [(row, _)] = ReachOne row
+goalReach _mctx _ [] = ReachNone
+goalReach _mctx _ [(row, _)] = ReachOne row
 goalReach mctx args cands =
   let rows = map fst cands
   match filterList (row => stableMinimum mctx args rows row) rows
@@ -2204,7 +2206,7 @@ stableGoalReach mctx chosen iface args =
 -- does SOME impl of [iface] match the concrete dispatch monos [args]? (existence)
 export
 implMatchesU : ModuleCtx -> ImplUniverse -> IfaceRef -> List Mono -> Bool
-implMatchesU mctx _ _ [] = False
+implMatchesU _mctx _ _ [] = False
 implMatchesU mctx univ iface (a0 :: rest) =
   bucketArgsMatch
       mctx
@@ -2213,7 +2215,7 @@ implMatchesU mctx univ iface (a0 :: rest) =
     || bucketArgsMatch mctx (univHeadless univ iface) (a0 :: rest)
 
 bucketArgsMatch : ModuleCtx -> List (List Ty, List Require) -> List Mono -> Bool
-bucketArgsMatch mctx [] _ = False
+bucketArgsMatch _mctx [] _ = False
 bucketArgsMatch mctx ((tys, _) :: rest) args =
   implHeadMatchesArgs mctx tys args || bucketArgsMatch mctx rest args
 
@@ -2330,7 +2332,7 @@ firstReqMatch : ModuleCtx ->
   List (List Ty, List Require) ->
   List Mono ->
   Option (List (String, Mono), List Require)
-firstReqMatch mctx [] _ = None
+firstReqMatch _mctx [] _ = None
 firstReqMatch mctx ((tys, reqs) :: rest) args =
   match implHeadSubst mctx tys args
     Some sub => Some (sub, reqs)
@@ -2373,7 +2375,7 @@ implMatchesWithReqsU : ModuleCtx ->
   IfaceRef ->
   List Mono ->
   Bool
-implMatchesWithReqsU mctx _ _ [] = False
+implMatchesWithReqsU _mctx _ _ [] = False
 implMatchesWithReqsU mctx univ iface (a0 :: rest) =
   bucketArgsMatchReqs
       mctx
@@ -2385,7 +2387,7 @@ bucketArgsMatchReqs : ModuleCtx ->
   List (List Ty, List Require) ->
   List Mono ->
   Bool
-bucketArgsMatchReqs mctx [] _ = False
+bucketArgsMatchReqs _mctx [] _ = False
 bucketArgsMatchReqs mctx ((tys, reqs) :: rest) args =
   isNonEmptyL reqs && implHeadMatchesArgs mctx tys args
     || bucketArgsMatchReqs mctx rest args
