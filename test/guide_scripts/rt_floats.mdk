@@ -1,0 +1,6 @@
+import math.{roundInt}
+
+main =
+  println (debug (round 7.6))
+  println (debug (floatToInt (round 7.6) / 2))
+  println (debug (roundInt 7.6 / 2))

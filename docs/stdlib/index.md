@@ -348,6 +348,23 @@ SHA-256 of non-secret data, computed in the runtime.
 
 - [`sha256Fast`](crypto.sha256_fast.md#sha256fast)
 
+## [`csv`](csv.md)
+
+Reading and writing delimiter-separated text: CSV, and TSV by choosing a tab as the delimiter.
+
+- [`parse`](csv.md#parse)
+- [`parseWith`](csv.md#parsewith)
+- [`render`](csv.md#render)
+- [`renderWith`](csv.md#renderwith)
+
+## [`diff`](diff.md)
+
+Differences between two sequences, and between two texts in the unified format that `diff -u` prints.
+
+- [`Edit`](diff.md#edit)
+- [`editScript`](diff.md#editscript)
+- [`unified`](diff.md#unified)
+
 ## [`fs`](fs.md)
 
 Filesystem helpers built on the host file primitives.
@@ -567,6 +584,11 @@ A JSON value type with a parser and a serializer.
 - [`asBool`](json.md#asbool)
 - [`asArray`](json.md#asarray)
 - [`asObject`](json.md#asobject)
+- [`asNumber`](json.md#asnumber)
+- [`atPath`](json.md#atpath)
+- [`pretty`](json.md#pretty)
+- [`parseLines`](json.md#parselines)
+- [`stringifyLines`](json.md#stringifylines)
 
 ## [`list`](list.md)
 
@@ -1072,6 +1094,8 @@ Operations on `String` and `Char`.
 - [`words`](string.md#words)
 - [`unlines`](string.md#unlines)
 - [`unwords`](string.md#unwords)
+- [`dedent`](string.md#dedent)
+- [`indent`](string.md#indent)
 - [`padLeft`](string.md#padleft)
 - [`padRight`](string.md#padright)
 - [`center`](string.md#center)

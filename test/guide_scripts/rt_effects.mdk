@@ -1,0 +1,4 @@
+shout : String -> <IO> Unit
+shout s = println (s ++ "!")
+
+main = shout "a helper with a signature names its effects"

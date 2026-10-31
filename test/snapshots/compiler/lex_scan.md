@@ -1,5 +1,5 @@
 # META
-source_lines=1143
+source_lines=1145
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_diagnostic.{ParseDiagnosticKind(..)}
@@ -703,6 +703,8 @@ scanLiteral ctx src p quote depth frame flavor part =
         emitOne ctx token next depth (HoleFrame flavor start 1)
 
 singleDedent : String -> String
+-- Dedents one lexed segment; unrelated to string.dedent, which works on whole text.
+-- lint-disable-next-line rule-stdlib-reimpl
 singleDedent s = match dedentSegments [s]
   [v] => v
   _ => s

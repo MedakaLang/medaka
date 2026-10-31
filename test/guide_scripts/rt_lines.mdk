@@ -1,0 +1,7 @@
+import io.{readLines}
+import string.{lines}
+
+main =
+  println (debug (lines "a\nb\n"))
+  resultOrPanic "write" (writeFile "two.txt" "a\nb\n")
+  println (debug (readLines "two.txt"))

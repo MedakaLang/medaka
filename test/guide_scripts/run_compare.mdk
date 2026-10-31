@@ -1,0 +1,22 @@
+import diff.{unified}
+import io.{runCommandOk}
+
+golden : String
+golden = "alpha\nbeta\ngamma\ndelta\n"
+
+report : String -> String -> <IO> Unit
+report label out =
+  if out == golden then
+    println "\{label}: same"
+  else
+    print (unified 1 ("golden", golden) (label, out))
+
+capture : String -> String -> <Exec "printf", IO> Unit
+capture label text =
+  let (out, _) = resultOrPanic label (runCommandOk "printf" [text])
+  report label out
+
+main =
+  capture "run-a" golden
+  capture "run-b" "alpha\nBeta\ngamma\n"
+  println (debug (runCommandOk "sh" ["-c", "echo oops >&2; exit 3"]))

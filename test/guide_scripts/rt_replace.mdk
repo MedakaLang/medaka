@@ -1,0 +1,7 @@
+import string.{replace, replaceAll, replaceOnce}
+
+main =
+  println (replace "a" "o" "banana")
+  println (replaceAll "a" "o" "banana")
+  println (debug (replaceOnce "ban" "pan" "banana"))
+  println (debug (replaceOnce "n" "m" "banana"))

@@ -1,0 +1,8 @@
+import regex as R
+
+main =
+  let re = R.mustCompile r"(\w+)@(\w+)"
+  println (R.replaceAll re "$2/$1" "user@host, ann@site")
+  println (R.replaceAll re r"\2/\1" "user@host")
+  println
+    (debug (map (m => (m : R.Match).text) (R.findAll re "user@host, ann@site")))

@@ -1,0 +1,3 @@
+import fs
+
+main = println (debug (walkDir "."))

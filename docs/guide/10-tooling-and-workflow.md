@@ -171,6 +171,7 @@ How either backend works is outside this guide.
 ---
 
 Chapters 1 through 8 covered the language, chapter 9 how to arrange
-it in files, and this one the tools. From here, the [syntax reference](../spec/SYNTAX.md)
+it in files, and this one the tools. [Writing a script in Medaka](11-writing-scripts.md)
+puts them to work on one-off jobs. From here, the [syntax reference](../spec/SYNTAX.md)
 is the precise account of what the compiler accepts, and the
 [stdlib reference](../stdlib/index.md) lists what ships beyond the prelude.

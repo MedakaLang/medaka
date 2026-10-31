@@ -1,0 +1,4 @@
+shout : String -> Unit
+shout s = println (s ++ "!")
+
+main = shout "hi"

@@ -1,0 +1,19 @@
+import fs as F
+import fs.{walkDir}
+import list.{sortOn, tally}
+import path.{basename}
+import string.{lines, padLeft, repeat, trim}
+
+main =
+  println (debug (basename "src/lib/main.mdk"))
+  println (debug (trim "  padded  "))
+  println (padLeft 5 '.' "ab")
+  println (repeat 3 "ab")
+  println (debug (lines "a\nb"))
+  println (debug (sortOn negate [3, 1, 2]))
+  println (debug (tally ["x", "y", "x"]))
+  println (debug (flatMap (x => [x, x]) [1, 2]))
+  println (debug (fold (+) 0 [1, 2, 3]))
+  println (debug (any (> 2) [1, 2, 3]))
+  println (debug (F.isFile "no-such-file"))
+  println (debug (walkDir "no-such-dir"))

@@ -1,0 +1,12 @@
+"main.mdk"
+"padded"
+...ab
+ababab
+["a", "b"]
+[3, 2, 1]
+[("x", 2), ("y", 1)]
+[1, 1, 2, 2]
+6
+True
+Err "No such file or directory"
+Err "No such file or directory"

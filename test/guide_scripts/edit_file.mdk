@@ -1,0 +1,43 @@
+import fs.{editFile}
+import string.{cutBetween, dedent, replaceOnce}
+
+config : String
+config =
+  r"""
+  [server]
+  port = 8080
+  # begin generated
+  old line 1
+  old line 2
+  # end generated
+  host = "localhost"
+  """
+
+generated : String
+generated = r"""
+  new line 1
+  new line 2
+  """
+
+begin : String
+begin = "# begin generated\n"
+
+finish : String
+finish = "# end generated\n"
+
+replaceBlock : String -> (String, String, String) -> String
+replaceBlock new (before, _, after) = before ++ begin ++ new ++ finish ++ after
+
+splice : String -> Result String String
+splice text =
+  map (replaceBlock (dedent generated)) (cutBetween begin finish text)
+
+main =
+  resultOrPanic "write" (writeFile "app.toml" (dedent config))
+  resultOrPanic
+    "port"
+    (editFile "app.toml" (replaceOnce "port = 8080" "port = 9090"))
+  resultOrPanic "splice" (editFile "app.toml" splice)
+  print (resultOrPanic "read" (readFile "app.toml"))
+  println (debug (editFile "app.toml" (replaceOnce "no such text" "x")))
+  println (debug (editFile "app.toml" (replaceOnce "line" "LINE")))
