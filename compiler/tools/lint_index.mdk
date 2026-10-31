@@ -1,0 +1,732 @@
+-- The declaration index lint rules query about modules other than the one they
+-- are linting.
+--
+-- One `IndexRow` per declared name: a value, a constructor, a type, an
+-- interface or an interface method, keyed by (module id, namespace, name).  A
+-- row carries the DECLARED signature as the parser wrote it, never an inferred
+-- type, so an unsigned binding is a row with no signature and a rule must
+-- abstain on it.  Ambiguity is kept: a lookup returns every candidate, and
+-- there is deliberately no "the row for X".
+--
+-- Rows are extracted from a file's parse (`rowsOfDecls`) and cached per file in
+-- a sexp shard keyed by (format version, stamp, path, content hash).  A shard
+-- that does not answer for exactly this content is a miss and the file is
+-- parsed again, so a stale, corrupt or foreign shard can cost time and never
+-- an answer.  A shard's signatures are kept as text and decoded when a lookup
+-- asks for one (`rowSig`), because a run reads thousands of rows and asks about
+-- a handful of signatures.
+--
+-- The stdlib's rows are stored exported-only: an unexported stdlib row answers
+-- no query a user's code can make.  The index is a per-run value; nothing here
+-- keeps rows alive after the run that built them.
+--
+-- This module reads no inferred types and imports nothing from `types/`.
+
+import frontend.ast.{
+  Loc(..),
+  Ty(..),
+  Decl(..),
+  DataVis(..),
+  Variant(..),
+  ConPayload(..),
+  Field(..),
+  IfaceMethod(..),
+  ExternDecl(..),
+  LetBind(..),
+  tyConUnresolved,
+}
+import frontend.ast_codec.{sexpTy, readTy}
+import support.sexp_value.{
+  SExp(..),
+  SexpCursor,
+  renderSExp,
+  cursorOf,
+  cursorFailed,
+  cursorAtEnd,
+  cursorOpen,
+  cursorClose,
+  cursorInt,
+  cursorAtom,
+  cursorChar,
+  cursorList,
+  cursorPeek,
+  cursorAdvance,
+  cursorFail,
+  cursorSkipText,
+  isCloseByte,
+}
+import support.util.{joinWith, splitOnChar, listLen, filterList, anyList}
+import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
+import list.{sortBy}
+import frontend.parser.{Positions, ParseError}
+
+-- ── rows ────────────────────────────────────────────────────────────────────
+
+public export data RowKind =
+  | RkValue
+  | RkCtor
+  | RkType
+  | RkIface
+  | RkMethod
+  deriving (Eq)
+
+-- Two namespaces, as the reference index keys binders: a type and a
+-- constructor of the same name never collide.
+public export data Ns = NsValue | NsType deriving (Eq)
+
+-- A declared signature: absent (an unsigned binding), a parsed type, or the
+-- text of a shard's type, which `rowSig` decodes on demand.
+public export data SigSlot = NoSig | SigVal Ty | SigRaw String
+
+-- `ixrModule` is the module id (the stdlib's dotted relative path, or
+-- `moduleIdOfPath` for a project file).  `ixrParent` is a constructor's type or
+-- a method's interface and "" otherwise.  `ixrFields` names a record
+-- constructor's fields.  `ixrArity` is a constructor's field count and a type's
+-- or interface's parameter count.  `ixrLoc` is the definition site and is not
+-- part of a row's digest.
+public export data IndexRow = IndexRow {
+  ixrModule : String,
+  ixrName : String,
+  ixrKind : RowKind,
+  ixrSig : SigSlot,
+  ixrParent : String,
+  ixrFields : List String,
+  ixrArity : Int,
+  ixrExported : Bool,
+  ixrLoc : Option Loc,
+}
+
+export
+rowNs : RowKind -> Ns
+rowNs RkValue = NsValue
+rowNs RkCtor = NsValue
+rowNs RkMethod = NsValue
+rowNs RkType = NsType
+rowNs RkIface = NsType
+
+-- The declared signature, decoded if the row holds it as text.  A text that
+-- does not decode answers `None`: a rule abstains rather than act on a half
+-- type.
+export
+rowSig : IndexRow -> Option Ty
+rowSig r = sigOfSlot r.ixrSig
+
+sigOfSlot : SigSlot -> Option Ty
+sigOfSlot NoSig = None
+sigOfSlot (SigVal t) = Some t
+sigOfSlot (SigRaw text) =
+  let cur = cursorOf text
+  let t = readOptTy cur
+  if cursorFailed cur || not (cursorAtEnd cur) then None else t
+
+export
+rowHasSig : IndexRow -> Bool
+rowHasSig r = match r.ixrSig
+  NoSig => False
+  SigVal _ => True
+  SigRaw _ => True
+
+mkRow : String ->
+  String ->
+  RowKind ->
+  SigSlot ->
+  String ->
+  List String ->
+  Int ->
+  Bool ->
+  Option Loc ->
+  IndexRow
+mkRow m n k sig parent fields arity exp loc = IndexRow {
+  ixrModule = m,
+  ixrName = n,
+  ixrKind = k,
+  ixrSig = sig,
+  ixrParent = parent,
+  ixrFields = fields,
+  ixrArity = arity,
+  ixrExported = exp,
+  ixrLoc = loc,
+}
+
+-- ── rows of one parsed file ─────────────────────────────────────────────────
+
+-- Signatured declarations first (in source order), then the values that have a
+-- body and no signature.
+export
+rowsOfDecls : String -> List Decl -> List IndexRow
+rowsOfDecls modId decls =
+  let signed = new ()
+  let sigRows = flatMap (sigRowsOf modId signed) decls
+  let seen = new ()
+  sigRows ++ flatMap (unsignedRowsOf modId signed seen) decls
+
+sigOf : Ty -> SigSlot
+sigOf t = SigVal (stripTy t)
+
+sigRowsOf : String -> HashMap String Unit -> Decl -> List IndexRow
+sigRowsOf m signed (DTypeSig pub name ty loc) =
+  let _ = setInPlace name () signed
+  [mkRow m name RkValue (sigOf ty) "" [] 0 pub (Some loc)]
+sigRowsOf m signed (DExtern (ExternDecl { edPub = pub, edName = name, edTy = ty, edLoc = loc, ... })) =
+  let _ = setInPlace name () signed
+  [mkRow m name RkValue (sigOf ty) "" [] 0 pub (Some loc)]
+sigRowsOf m signed (DAttrib _ d) = sigRowsOf m signed d
+sigRowsOf m _ (DData { dataVis = vis, dataName = name, dataParams = ps, dataCtors = ctors, dataNameLoc = loc, ... }) =
+  mkRow m name RkType NoSig "" [] (listLen ps) (visExported vis) loc
+    :: map (ctorRow m name ps (isPublicVis vis) loc) ctors
+sigRowsOf m _ (DNewtype { newtypePub = pub, newtypeName = name, newtypeParams = ps, newtypeCtor = c, newtypeFieldTy = fty, newtypeNameLoc = loc, ... }) = [
+  mkRow m name RkType NoSig "" [] (listLen ps) pub loc,
+  mkRow m c RkCtor (sigOf (TyFun fty (resultTy name ps))) name [] 1 pub loc,
+]
+sigRowsOf m _ (DTypeAlias { tyAliasPub = pub, tyAliasName = name, tyAliasParams = ps, tyAliasRhs = rhs, tyAliasNameLoc = loc, ... }) =
+  [mkRow m name RkType (sigOf rhs) "" [] (listLen ps) pub loc]
+sigRowsOf m _ (DInterface { pub = pub, name = name, typarams = ps, methods = ms, ifaceNameLoc = loc, ... }) =
+  mkRow m name RkIface NoSig "" [] (listLen ps) pub loc
+    :: map (methodRow m name pub) ms
+sigRowsOf _ _ _ = []
+
+isPublicVis : DataVis -> Bool
+isPublicVis VisPublic = True
+isPublicVis VisAbstract = False
+isPublicVis VisPrivate = False
+
+visExported : DataVis -> Bool
+visExported VisPrivate = False
+visExported VisAbstract = True
+visExported VisPublic = True
+
+-- `T a b` for a type named `T` with parameters `a b`.
+resultTy : String -> List String -> Ty
+resultTy name params = applyVars (tyConUnresolved name None) params
+
+applyVars : Ty -> List String -> Ty
+applyVars t [] = t
+applyVars t (p :: rest) = applyVars (TyApp t (TyVar p)) rest
+
+-- `f1 -> f2 -> ... -> result`.
+funTy : List Ty -> Ty -> Ty
+funTy [] result = result
+funTy (t :: rest) result = TyFun t (funTy rest result)
+
+ctorRow : String ->
+  String ->
+  List String ->
+  Bool ->
+  Option Loc ->
+  Variant ->
+  IndexRow
+ctorRow m parent ps exp loc (Variant c (ConPos tys)) =
+  mkRow
+    m
+    c
+    RkCtor
+    (sigOf (funTy tys (resultTy parent ps)))
+    parent
+    []
+    (listLen tys)
+    exp
+    loc
+ctorRow m parent ps exp loc (Variant c (ConNamed fields _)) =
+  mkRow
+    m
+    c
+    RkCtor
+    (sigOf (funTy (map fieldTy fields) (resultTy parent ps)))
+    parent
+    (map fieldName fields)
+    (listLen fields)
+    exp
+    loc
+
+fieldTy : Field -> Ty
+fieldTy (Field _ t) = t
+
+fieldName : Field -> String
+fieldName (Field n _) = n
+
+methodRow : String -> String -> Bool -> IfaceMethod -> IndexRow
+methodRow m iface pub (IfaceMethod n ty _ loc) =
+  mkRow m n RkMethod (sigOf ty) iface [] 0 pub loc
+
+-- A value with a body and no signature: a row with no signature.
+unsignedRowsOf : String ->
+  HashMap String Unit ->
+  HashMap String Unit ->
+  Decl ->
+  List IndexRow
+unsignedRowsOf m signed seen (DFunDef pub name _ _ loc _) =
+  unsignedRow m signed seen pub name loc
+unsignedRowsOf m signed seen (DLetGroup pub binds) =
+  flatMap (b => letRow m signed seen pub b) binds
+unsignedRowsOf m signed seen (DAttrib _ d) = unsignedRowsOf m signed seen d
+unsignedRowsOf _ _ _ _ = []
+
+letRow : String ->
+  HashMap String Unit ->
+  HashMap String Unit ->
+  Bool ->
+  LetBind ->
+  List IndexRow
+letRow m signed seen pub (LetBind n _ loc _) =
+  unsignedRow m signed seen pub n loc
+
+unsignedRow : String ->
+  HashMap String Unit ->
+  HashMap String Unit ->
+  Bool ->
+  String ->
+  Loc ->
+  List IndexRow
+unsignedRow m signed seen pub name loc
+  | has name signed || has name seen = []
+  | otherwise =
+    let _ = setInPlace name () seen
+    [mkRow m name RkValue NoSig "" [] 0 pub (Some loc)]
+
+-- A signature's own spans point into the file that declared it and answer
+-- nothing an index query asks, so a row's type carries none.  This keeps a
+-- body-only edit that moves lines from changing any row's digest.
+export
+stripTy : Ty -> Ty
+stripTy (TyCon { tyConName = n, tyConOrigin = o, ... }) =
+  TyCon { tyConName = n, tyConLoc = None, tyConOrigin = o }
+stripTy (TyVar v) = TyVar v
+stripTy (TyApp a b) = TyApp (stripTy a) (stripTy b)
+stripTy (TyFun a b) = TyFun (stripTy a) (stripTy b)
+stripTy (TyTuple ts) = TyTuple (map stripTy ts)
+stripTy (TyEffect atoms vs t) = TyEffect atoms vs (stripTy t)
+stripTy (TyConstrained cs t) = TyConstrained cs (stripTy t)
+stripTy (TyNamed n t e) = TyNamed n (stripTy t) e
+stripTy (TyQual t ps _) = TyQual (stripTy t) ps None
+stripTy (TyRow atoms vs _) = TyRow atoms vs None
+stripTy (TyAuth ps _) = TyAuth ps None
+
+-- Rows whose module is visible from outside: the stdlib as a user sees it.
+export
+exportedRows : List IndexRow -> List IndexRow
+exportedRows rows = filterList rowIsExported rows
+
+rowIsExported : IndexRow -> Bool
+rowIsExported r = r.ixrExported
+
+-- ── the row digest ──────────────────────────────────────────────────────────
+
+kindTag : RowKind -> String
+kindTag RkValue = "v"
+kindTag RkCtor = "c"
+kindTag RkType = "t"
+kindTag RkIface = "i"
+kindTag RkMethod = "m"
+
+kindOfTag : Int -> Option RowKind
+kindOfTag 118 = Some RkValue
+kindOfTag 99 = Some RkCtor
+kindOfTag 116 = Some RkType
+kindOfTag 105 = Some RkIface
+kindOfTag 109 = Some RkMethod
+kindOfTag _ = None
+
+-- The text of a signature slot as stored: `()` for none, `(<ty>)` otherwise.
+slotText : SigSlot -> String
+slotText NoSig = "()"
+slotText (SigVal t) = renderSExp (SList [sexpTy t])
+slotText (SigRaw text) = text
+
+-- Everything about a row except where it is defined.
+rowKeyText : IndexRow -> String
+rowKeyText r = joinWith "\t" [
+  r.ixrModule,
+  r.ixrName,
+  kindTag r.ixrKind,
+  slotText r.ixrSig,
+  r.ixrParent,
+  joinWith "," r.ixrFields,
+  intToString r.ixrArity,
+  if r.ixrExported then "t" else "f",
+]
+
+-- A digest of a file's rows that moves when a name, kind, signature, arity,
+-- field list or export changes, and does not move when only a position does.
+export
+rowsDigest : List IndexRow -> String
+rowsDigest rows =
+  let joined = joinWith "\n" (sortBy stringCompare (map rowKeyText rows))
+  let n = stringLength joined
+  let lane2 = if n == 0 then 0 else hashString (stringSlice 1 n joined)
+  "\{hashString joined}.\{lane2}.\{n}"
+
+-- ── shard codec ─────────────────────────────────────────────────────────────
+
+-- Bump when the shard schema changes in a way an old shard would decode into
+-- something wrong rather than fail to decode.
+rowFormatVersion : Int
+rowFormatVersion = 1
+
+sexpOptLoc : Option Loc -> SExp
+sexpOptLoc None = SList []
+sexpOptLoc (Some (Loc _ a b c d)) = SList [
+  SAtom (intToString a),
+  SAtom (intToString b),
+  SAtom (intToString c),
+  SAtom (intToString d),
+]
+
+-- The location's file is the shard's own path, restored on load.
+readOptLoc : String -> SexpCursor -> Option Loc
+readOptLoc path cur =
+  let _ = cursorOpen cur
+  if isCloseByte (cursorPeek cur) then
+    let _ = cursorAdvance cur
+    None
+  else
+    let a = cursorInt cur
+    let b = cursorInt cur
+    let c = cursorInt cur
+    let d = cursorInt cur
+    let _ = cursorClose cur
+    Some (Loc path a b c d)
+
+-- The shard text: version, stamp, path, content hash, module id, rows digest,
+-- rows.  A row that holds its signature as text is written with that text.
+export
+encodeRowShard : String -> String -> String -> String -> List IndexRow -> String
+encodeRowShard stamp path hash modId rows =
+  renderShard stamp path hash modId (rowsDigest rows) (map rowText rows)
+
+-- The signature is already text, so it is written into the row verbatim.
+rowText : IndexRow -> String
+rowText r =
+  "(\{quoted r.ixrName} \{kindTag r.ixrKind} \{slotText r.ixrSig} \{quoted r.ixrParent} \{renderSExp (SList (map SAtom r.ixrFields))} \{intToString r.ixrArity} \{if r.ixrExported then "t" else "f"} \{renderSExp (sexpOptLoc r.ixrLoc)})"
+
+renderShard : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List String ->
+  String
+renderShard stamp path hash modId digest rowTexts =
+  "(\{intToString rowFormatVersion} \{quoted stamp} \{quoted path} \{quoted hash} \{quoted modId} \{quoted digest} (\{joinWith " " rowTexts}))"
+
+quoted : String -> String
+quoted s = renderSExp (SAtom s)
+
+readBoolTF : SexpCursor -> Bool
+readBoolTF cur =
+  let c = cursorChar cur
+  if c == 116 then True else if c == 102 then False else cursorFail cur False
+
+-- A signature slot is left as text; `()` is no signature.
+readSlot : SexpCursor -> SigSlot
+readSlot cur =
+  let text = cursorSkipText cur
+  if text == "()" then NoSig else SigRaw text
+
+readRow : String -> String -> SexpCursor -> IndexRow
+readRow path m cur =
+  let _ = cursorOpen cur
+  let n = cursorAtom cur
+  let k = match kindOfTag (cursorChar cur)
+    Some kk => kk
+    None => cursorFail cur RkValue
+  let sig = readSlot cur
+  let parent = cursorAtom cur
+  let fields = cursorList cursorAtom cur
+  let arity = cursorInt cur
+  let exp = readBoolTF cur
+  let loc = readOptLoc path cur
+  let _ = cursorClose cur
+  mkRow m n k sig parent fields arity exp loc
+
+readOptTy : SexpCursor -> Option Ty
+readOptTy cur =
+  let _ = cursorOpen cur
+  if isCloseByte (cursorPeek cur) then
+    let _ = cursorAdvance cur
+    None
+  else
+    let t = readTy cur
+    let _ = cursorClose cur
+    Some t
+
+-- (module id, rows digest, rows), or `None` on any doubt: a wrong version,
+-- stamp, path or content hash, a malformed body, or trailing text.
+export
+decodeRowShard : String ->
+  String ->
+  String ->
+  String ->
+  Option (String, String, List IndexRow)
+decodeRowShard stamp path hash text =
+  let cur = cursorOf text
+  let _ = cursorOpen cur
+  let v = cursorInt cur
+  let st = cursorAtom cur
+  let p = cursorAtom cur
+  let h = cursorAtom cur
+  if cursorFailed cur
+    || v /= rowFormatVersion
+    || st /= stamp
+    || p /= path
+    || h /= hash then
+    None
+  else
+    let m = cursorAtom cur
+    let digest = cursorAtom cur
+    let rows = cursorList (readRow path m) cur
+    let _ = cursorClose cur
+    if cursorFailed cur || not (cursorAtEnd cur) then
+      None
+    else
+      Some (m, digest, rows)
+
+-- ── the per-file row cache ──────────────────────────────────────────────────
+
+-- The directory name of the row cache.  Stdlib rows live under
+-- `${XDG_CACHE_HOME:-$HOME/.cache}/medaka/<indexCacheDir>`; a project's under
+-- `<project root>/.medaka/<indexCacheDir>`.  `medaka lint` writes both without
+-- being asked (docs/ops/CLI-CONFORMANCE.md).
+export
+indexCacheDir : String
+indexCacheDir = "lint-index"
+
+-- Where the stdlib's shards go, or "" when there is no home to put them in.
+export
+stdlibShardDir : Unit -> <IO> String
+stdlibShardDir _ =
+  let xdg = optionOr "" (getEnv "XDG_CACHE_HOME")
+  let home = optionOr "" (getEnv "HOME")
+  if xdg /= "" then
+    "\{xdg}/medaka/\{indexCacheDir}"
+  else if home /= "" then
+    "\{home}/.cache/medaka/\{indexCacheDir}"
+  else
+    ""
+
+export
+projectShardDir : String -> String
+projectShardDir root = "\{root}/.medaka/\{indexCacheDir}"
+
+-- The shard of `path` in `dir`.  The name is the file's own name plus a hash
+-- of its full path; the path is also stored in the shard and checked on load,
+-- so a name collision costs a miss and never a wrong answer.
+export
+rowShardPath : String -> String -> String
+rowShardPath dir path =
+  "\{dir}/\{lastSegment "" (splitOnChar '/' path)}.\{intToString (hashString path)}.sx"
+
+lastSegment : String -> List String -> String
+lastSegment acc [] = acc
+lastSegment _ (x :: rest) = lastSegment x rest
+
+-- The content key a shard is checked against: one hash lane plus the length.
+export
+rowContentHash : String -> String
+rowContentHash src = "\{hashString src}.\{stringLength src}"
+
+-- A file's rows and their digest, from its shard when the shard answers for
+-- this exact content, else from a parse (and the shard is rewritten).  `Err`
+-- carries the source and the parse error for the caller's diagnostic.  An
+-- unreadable file has no rows.  `dir` "" means no cache.  `exportedOnly` keeps
+-- only the exported rows, in the shard and in the result.
+export
+fileRows : Bool ->
+  (String -> Result ParseError (List Decl, Positions)) ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO> Result (String, ParseError) (String, List IndexRow)
+fileRows exportedOnly parse dir stamp modId path = match readFile path
+  Err _ => Ok ("", [])
+  Ok src =>
+    let hash = rowContentHash src
+    let shardStamp = if exportedOnly then "\{stamp}/x" else stamp
+    let sp = rowShardPath dir path
+    let cached =
+      if dir == "" then
+        None
+      else match readFile sp
+        Ok text => decodeRowShard shardStamp path hash text
+        Err _ => None
+    match cached
+      Some (_, digest, rows) => Ok (digest, rows)
+      None => match parse src
+        Err e => Err (src, e)
+        Ok (decls, _) =>
+          let all = map (atPath path) (rowsOfDecls modId decls)
+          let rows = if exportedOnly then exportedRows all else all
+          let _ =
+            if dir == "" then
+              ()
+            else
+              writeShard dir sp (encodeRowShard shardStamp path hash modId rows)
+          Ok (rowsDigest rows, rows)
+
+-- A row's location is in the file the shard describes.
+atPath : String -> IndexRow -> IndexRow
+atPath path r = match r.ixrLoc
+  Some (Loc _ a b c d) => { r | ixrLoc = Some (Loc path a b c d) }
+  None => r
+
+writeShard : String -> String -> String -> <IO> Unit
+writeShard dir sp text =
+  let _ = makeDirs dir
+  let tmp = "\{sp}.tmp"
+  match writeFile tmp text
+    Err _ => ()
+    Ok _ => match rename tmp sp
+      Err _ => ()
+      Ok _ => ()
+
+-- `mkdir -p`: every missing ancestor of `dir`, then `dir`.
+makeDirs : String -> <IO> Unit
+makeDirs dir =
+  let parts = splitOnChar '/' dir
+  makeDirsGo "" parts
+
+makeDirsGo : String -> List String -> <IO> Unit
+makeDirsGo _ [] = ()
+makeDirsGo acc (p :: rest)
+  | p == "" = makeDirsGo acc rest
+  | otherwise =
+    let next = "\{acc}/\{p}"
+    let _ = makeDir next
+    makeDirsGo next rest
+
+-- ── the index ───────────────────────────────────────────────────────────────
+
+-- One scope's rows, grouped by name in input order.  `ixsNames` and
+-- `ixsModules` describe the exported signed values only: the names and modules
+-- a rule can ask `rowsNamed` about with a signature in hand.
+data IndexScope = IndexScope {
+  ixsByName : HashMap String (List IndexRow),
+  ixsRows : List IndexRow,
+  ixsNames : List String,
+  ixsModules : List String,
+}
+
+-- The stdlib's rows and the project's.  A project index holds both, and a
+-- rule that wants the stdlib alone asks the stdlib scope.
+public export data ProjectIndex = ProjectIndex IndexScope IndexScope
+
+emptyScope : IndexScope
+emptyScope = IndexScope {
+  ixsByName = new (),
+  ixsRows = [],
+  ixsNames = [],
+  ixsModules = [],
+}
+
+export
+emptyProjectIndex : ProjectIndex
+emptyProjectIndex = ProjectIndex emptyScope emptyScope
+
+-- The index of the stdlib's rows and the project's rows.
+export
+mkProjectIndex : List IndexRow -> List IndexRow -> ProjectIndex
+mkProjectIndex stdlibRows projectRows =
+  ProjectIndex (mkScope stdlibRows) (mkScope projectRows)
+
+mkScope : List IndexRow -> IndexScope
+mkScope rows =
+  let m = new ()
+  let _ = groupInto (reverseRows rows []) m
+  let signed = filterList isExportedSigValue rows
+  IndexScope {
+    ixsByName = m,
+    ixsRows = rows,
+    ixsNames = sortedUnique (map rowName signed),
+    ixsModules = sortedUnique (map rowModule signed),
+  }
+
+isExportedSigValue : IndexRow -> Bool
+isExportedSigValue r = r.ixrKind == RkValue && r.ixrExported && rowHasSig r
+
+rowName : IndexRow -> String
+rowName r = r.ixrName
+
+rowModule : IndexRow -> String
+rowModule r = r.ixrModule
+
+reverseRows : List IndexRow -> List IndexRow -> List IndexRow
+reverseRows [] acc = acc
+reverseRows (r :: rest) acc = reverseRows rest (r :: acc)
+
+-- Prepending the rows last-first keeps each name's rows in input order.
+groupInto : List IndexRow -> HashMap String (List IndexRow) -> Unit
+groupInto [] _ = ()
+groupInto (r :: rest) m =
+  let _ = setInPlace r.ixrName (r :: findWithDefault [] r.ixrName m) m
+  groupInto rest m
+
+sortedUnique : List String -> List String
+sortedUnique xs = dropRepeats (sortBy stringCompare xs)
+
+-- The input is sorted, so equal names are adjacent.
+dropRepeats : List String -> List String
+dropRepeats [] = []
+dropRepeats [x] = [x]
+dropRepeats (a :: b :: rest) =
+  if a == b then dropRepeats (b :: rest) else a :: dropRepeats (b :: rest)
+
+scopeNamed : IndexScope -> Ns -> String -> List IndexRow
+scopeNamed s ns name =
+  filterList (r => rowNs r.ixrKind == ns) (findWithDefault [] name s.ixsByName)
+
+-- Every candidate for `name` in `ns`: the project's rows, then the stdlib's.
+export
+rowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
+rowsNamed (ProjectIndex std proj) ns name =
+  scopeNamed proj ns name ++ scopeNamed std ns name
+
+-- The stdlib's candidates alone.
+export
+stdlibRowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
+stdlibRowsNamed (ProjectIndex std _) ns name = scopeNamed std ns name
+
+-- The project's candidates alone.
+export
+projectRowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
+projectRowsNamed (ProjectIndex _ proj) ns name = scopeNamed proj ns name
+
+-- Candidates for `name` declared in module `modId` (still a list: a name can
+-- be a value and a constructor, or be declared twice).
+export
+rowsIn : ProjectIndex -> String -> Ns -> String -> List IndexRow
+rowsIn idx modId ns name =
+  filterList (r => r.ixrModule == modId) (rowsNamed idx ns name)
+
+-- Every row of module `modId`, in file order.
+export
+rowsOfModule : ProjectIndex -> String -> List IndexRow
+rowsOfModule (ProjectIndex std proj) modId =
+  filterList (r => r.ixrModule == modId) (proj.ixsRows ++ std.ixsRows)
+
+-- Every row of a scope, in file order.
+export
+stdlibRows : ProjectIndex -> List IndexRow
+stdlibRows (ProjectIndex std _) = std.ixsRows
+
+export
+projectRows : ProjectIndex -> List IndexRow
+projectRows (ProjectIndex _ proj) = proj.ixsRows
+
+-- The sorted names of the stdlib's exported signed values.
+export
+stdlibValueNames : ProjectIndex -> List String
+stdlibValueNames (ProjectIndex std _) = std.ixsNames
+
+-- The stdlib modules that export a signed value; a module outside this list
+-- has nothing the index can vouch for.
+export
+stdlibValueModules : ProjectIndex -> List String
+stdlibValueModules (ProjectIndex std _) = std.ixsModules
+
+-- Whether any row of module `modId` is in the index: an abstain test for a
+-- module the index never read.
+export
+indexKnowsModule : ProjectIndex -> String -> Bool
+indexKnowsModule (ProjectIndex std proj) modId =
+  anyList (r => r.ixrModule == modId) proj.ixsRows
+    || anyList (r => r.ixrModule == modId) std.ixsRows

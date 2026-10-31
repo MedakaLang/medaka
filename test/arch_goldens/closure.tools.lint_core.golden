@@ -41,6 +41,7 @@ support.symbol_encoding
 support.symbol_origin
 support.timer
 support.util
+tools.lint_index
 tools.lint_scope
 tools.printer
 types.capability_manifest

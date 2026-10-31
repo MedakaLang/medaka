@@ -471,6 +471,12 @@ inlang-tools-lint-baseline-test:
 inlang-tools-lint-test:
 	./medaka test --native compiler/tools/lint_test.mdk
 
+## compiler/tools/lint_index_test.mdk is outside every entry's import closure
+## ([W-MODULE-BLIND]): row extraction, the shard codec, fail-closed reads and
+## the runner's declared-need contract. It reads and writes real shards.
+inlang-tools-lint-index-test:
+	./medaka test --native compiler/tools/lint_index_test.mdk
+
 ## compiler/tools/lint_scope_test.mdk is a `*_test.mdk` sibling outside every
 ## entry's import closure ([W-MODULE-BLIND]): the scope model's precision cases.
 inlang-tools-lint-scope-test:

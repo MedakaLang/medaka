@@ -215,6 +215,7 @@ fixabilityText NotFixable = "not-fixable"
 
 needText : Need -> String
 needText NeedsStdlibIndex = "stdlib-index"
+needText NeedsProjectIndex = "project-index"
 needText NeedsWildIndex = "wildcard-index"
 needText NeedsScopes = "scopes"
 

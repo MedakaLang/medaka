@@ -1,0 +1,517 @@
+-- compiler/tools/lint_index_test.mdk: sibling test for lint_index.mdk and the
+-- index plumbing in lint_walk.mdk (`[P-TEST-SIBLING]`, AGENTS.md).
+--
+-- Pins the row extraction (every kind, ambiguity, an unsigned binding), the
+-- shard codec round trip, lazy signature decoding, the fail-closed shard
+-- reads, the runner's empty index for a rule that does not declare its need,
+-- and that `--only`/`--disable` build nothing when no surviving rule needs the
+-- index.  The probe rule is the stand-in for a rule that reads project rows;
+-- none is registered.
+--
+-- It reaches the filesystem, so it runs native:
+-- `medaka test --native compiler/tools/lint_index_test.mdk`.
+
+import test.{
+  Expectation,
+  expectEqual,
+  expectTrue,
+  expectNotEqual,
+  expectFalse,
+  expectEach,
+  fail,
+}
+import test_process.{withScratchDir}
+import frontend.ast.{Decl, Loc(..), UsePath(..), UseMember(..)}
+import frontend.parser.{Positions}
+import driver.diagnostics.{Severity(..)}
+import support.util.{joinWith, listLen}
+import tools.printer.{ppTy}
+import tools.lint_index.{
+  IndexRow(..),
+  RowKind(..),
+  Ns(..),
+  SigSlot(..),
+  ProjectIndex,
+  rowSig,
+  rowsOfDecls,
+  rowsDigest,
+  encodeRowShard,
+  decodeRowShard,
+  rowContentHash,
+  rowShardPath,
+  mkProjectIndex,
+  rowsNamed,
+  rowsIn,
+  stdlibRowsNamed,
+  projectRowsNamed,
+  stdlibRows,
+  projectRows,
+}
+import tools.lint.{
+  StdlibIndex,
+  Rule,
+  Finding(..),
+  Category(..),
+  Scope(..),
+  Ratchet(..),
+  Fixability(..),
+  Need(..),
+  RuleMeta(..),
+  emptyStdlibIndex,
+  lintParseSource,
+  lintProgram,
+  buildProjectIndexResult,
+  buildStdlibIndexResult,
+  indexForRoster,
+  projectIndexOf,
+}
+import tools.lint_core.{mkRule, FileFacts, stdlibSigTextIn}
+
+-- ── fixtures ────────────────────────────────────────────────────────────────
+
+modSource : String
+modSource = joinWith "\n" [
+  "export",
+  "twice : Int -> Int",
+  "twice x = x + x",
+  "",
+  "helper x = x",
+  "",
+  "public export data Shape = Circle Int | Square Int Int",
+  "",
+  "export data Pt = Pt { px : Int, py : Int }",
+  "",
+  "export newtype Wrap a = Wrap a",
+  "",
+  "export type Name = String",
+  "",
+  "export interface Sized a where",
+  "  sizeOf : a -> Int",
+  "",
+]
+
+parseRows : String -> String -> List IndexRow
+parseRows modId src = match lintParseSource src
+  Ok (decls, _) => rowsOfDecls modId decls
+  Err _ => []
+
+rowsOf : String -> List IndexRow
+rowsOf modId = parseRows modId modSource
+
+findRow : List IndexRow -> String -> Option IndexRow
+findRow rows name = match filter (r => r.ixrName == name) rows
+  r :: _ => Some r
+  [] => None
+
+sigText : IndexRow -> String
+sigText r = match rowSig r
+  Some t => ppTy t
+  None => "<none>"
+
+kindOf : List IndexRow -> String -> String
+kindOf rows name = joinWith "+" (kindsOf rows name)
+
+-- Every kind `name` has a row for, in row order: a record's type row precedes
+-- its constructor row.
+kindsOf : List IndexRow -> String -> List String
+kindsOf rows name =
+  map (r => kindName r.ixrKind) (filter (r => r.ixrName == name) rows)
+
+findCtor : List IndexRow -> String -> Option IndexRow
+findCtor rows name =
+  match filter (r => r.ixrName == name && r.ixrKind == RkCtor) rows
+    r :: _ => Some r
+    [] => None
+
+kindName : RowKind -> String
+kindName RkValue = "value"
+kindName RkCtor = "ctor"
+kindName RkType = "type"
+kindName RkIface = "iface"
+kindName RkMethod = "method"
+
+-- ── 1. row extraction ───────────────────────────────────────────────────────
+
+test "rowsOfDecls yields a row of every kind" =
+  let rows = rowsOf "m"
+  expectEach [
+    ("signed value", expectEqual "value" (kindOf rows "twice")),
+    ("unsigned value", expectEqual "value" (kindOf rows "helper")),
+    ("constructor", expectEqual "ctor" (kindOf rows "Circle")),
+    ("record constructor", expectEqual "type+ctor" (kindOf rows "Pt")),
+    ("newtype constructor", expectEqual "type+ctor" (kindOf rows "Wrap")),
+    ("data type", expectEqual "type" (kindOf rows "Shape")),
+    ("alias", expectEqual "type" (kindOf rows "Name")),
+    ("interface", expectEqual "iface" (kindOf rows "Sized")),
+    ("method", expectEqual "method" (kindOf rows "sizeOf")),
+  ]
+
+test "a signed value carries its declared signature" =
+  let rows = rowsOf "m"
+  expectEach [
+    ("value", expectEqual "Int -> Int" (sigTextOf rows "twice")),
+    ("alias rhs", expectEqual "String" (sigTextOf rows "Name")),
+    ("method", expectEqual "a -> Int" (sigTextOf rows "sizeOf")),
+    (
+      "ctor is a function type",
+      expectEqual "Int -> Int -> Shape" (sigTextOf rows "Square"),
+    ),
+    (
+      "newtype ctor",
+      expectEqual "a -> Wrap a" (ctorSigText rows "Wrap"),
+    ),
+  ]
+
+ctorSigText : List IndexRow -> String -> String
+ctorSigText rows name = match findCtor rows name
+  Some r => sigText r
+  None => "<missing>"
+
+sigTextOf : List IndexRow -> String -> String
+sigTextOf rows name = match findRow rows name
+  Some r => sigText r
+  None => "<missing>"
+
+test "an unsigned binding is a row with no signature" =
+  let rows = rowsOf "m"
+  expectEach [
+    ("row exists", expectTrue (isSome (findRow rows "helper"))),
+    ("no signature", expectEqual "<none>" (sigTextOf rows "helper")),
+    (
+      "exported flag follows the declaration",
+      expectEqual
+        [True, False]
+        (map (n => matchExported rows n) ["twice", "helper"]),
+    ),
+  ]
+
+matchExported : List IndexRow -> String -> Bool
+matchExported rows name = match findRow rows name
+  Some r => r.ixrExported
+  None => False
+
+test "constructors carry arity, parent and field names" =
+  let rows = rowsOf "m"
+  let pt = findCtor rows "Pt"
+  let sq = findCtor rows "Square"
+  expectEach [
+    ("record fields", expectEqual (Some ["px", "py"]) (map fieldsOf pt)),
+    ("record arity", expectEqual (Some 2) (map arityOf pt)),
+    ("positional arity", expectEqual (Some 2) (map arityOf sq)),
+    ("positional has no field names", expectEqual (Some []) (map fieldsOf sq)),
+    ("parent", expectEqual (Some "Shape") (map parentOf sq)),
+  ]
+
+fieldsOf : IndexRow -> List String
+fieldsOf r = r.ixrFields
+
+arityOf : IndexRow -> Int
+arityOf r = r.ixrArity
+
+parentOf : IndexRow -> String
+parentOf r = r.ixrParent
+
+test "a type and a constructor of the same name do not collide" =
+  let idx = mkProjectIndex [] (rowsOf "m")
+  expectEach [
+    (
+      "value namespace",
+      expectEqual
+        ["ctor"]
+        (map (r => kindName r.ixrKind) (rowsNamed idx NsValue "Pt")),
+    ),
+    (
+      "type namespace",
+      expectEqual
+        ["type"]
+        (map (r => kindName r.ixrKind) (rowsNamed idx NsType "Pt")),
+    ),
+  ]
+
+test "ambiguity is kept: every module's candidate is returned" =
+  let a = parseRows "a" "export\nf : Int -> Int\nf x = x\n"
+  let b = parseRows "b" "export\nf : String -> String\nf x = x\n"
+  let idx = mkProjectIndex (a ++ b) []
+  expectEach [
+    (
+      "both candidates in file order",
+      expectEqual
+        [("a", "Int -> Int"), ("b", "String -> String")]
+        (map (r => (r.ixrModule, sigText r)) (stdlibRowsNamed idx NsValue "f")),
+    ),
+    ("one module", expectEqual 1 (listLen (rowsIn idx "b" NsValue "f"))),
+    ("absent name", expectEqual 0 (listLen (rowsNamed idx NsValue "nope"))),
+  ]
+
+test "the project and stdlib scopes are kept apart" =
+  let std = parseRows "list" "export\nf : Int -> Int\nf x = x\n"
+  let proj = parseRows "p" "export\nf : String -> String\nf x = x\n"
+  let idx = mkProjectIndex std proj
+  expectEach [
+    (
+      "merged lookup sees both",
+      expectEqual 2 (listLen (rowsNamed idx NsValue "f")),
+    ),
+    (
+      "stdlib scope",
+      expectEqual ["list"] (map modOf (stdlibRowsNamed idx NsValue "f")),
+    ),
+    (
+      "project scope",
+      expectEqual ["p"] (map modOf (projectRowsNamed idx NsValue "f")),
+    ),
+    ("stdlib enumeration", expectEqual 1 (listLen (stdlibRows idx))),
+    ("project enumeration", expectEqual 1 (listLen (projectRows idx))),
+  ]
+
+modOf : IndexRow -> String
+modOf r = r.ixrModule
+
+-- ── 2. the codec ────────────────────────────────────────────────────────────
+
+shardOf : List IndexRow -> String
+shardOf rows =
+  encodeRowShard "stamp" "/p/m.mdk" (rowContentHash modSource) "m" rows
+
+decodes : String -> String -> String -> String -> Bool
+decodes stamp path hash text = isSome (decodeRowShard stamp path hash text)
+
+decodeOk : String -> Option (List IndexRow)
+decodeOk text =
+  map
+    ((_, _, rows) => rows)
+    (decodeRowShard "stamp" "/p/m.mdk" (rowContentHash modSource) text)
+
+test "a shard round-trips every row" =
+  let rows = rowsOf "m"
+  match decodeOk (shardOf rows)
+    None => fail "a shard written by encodeRowShard did not decode"
+    Some back => expectEach [
+      ("same digest", expectEqual (rowsDigest rows) (rowsDigest back)),
+      ("same count", expectEqual (listLen rows) (listLen back)),
+      (
+        "same signatures",
+        expectEqual (map sigText rows) (map sigText back),
+      ),
+      (
+        "same names and kinds",
+        expectEqual
+          (map (r => (r.ixrName, kindName r.ixrKind)) rows)
+          (map (r => (r.ixrName, kindName r.ixrKind)) back),
+      ),
+    ]
+
+test "a decoded signature stays text until it is asked for" =
+  match decodeOk (shardOf (rowsOf "m"))
+    None => fail "shard did not decode"
+    Some back => match findRow back "twice"
+      None => fail "no row for twice"
+      Some r => match r.ixrSig
+        SigRaw _ => expectEqual "Int -> Int" (sigText r)
+        _ => fail "the signature was decoded eagerly"
+
+test "the digest ignores positions and follows signatures" =
+  let base = parseRows "m" "export\nf : Int -> Int\nf x = x\n"
+  let moved = parseRows "m" "\n\n\nexport\nf : Int -> Int\nf x = x + 1\n"
+  let changed = parseRows "m" "export\nf : Int -> String\nf x = x\n"
+  expectEach [
+    (
+      "a body edit that moves lines keeps the digest",
+      expectEqual (rowsDigest base) (rowsDigest moved),
+    ),
+    (
+      "a signature edit moves it",
+      expectNotEqual (rowsDigest base) (rowsDigest changed),
+    ),
+  ]
+
+-- ── 3. fail closed ──────────────────────────────────────────────────────────
+
+test "a corrupt, stale or foreign shard is a miss" =
+  let good = shardOf (rowsOf "m")
+  let hash = rowContentHash modSource
+  expectEach [
+    (
+      "control: the good shard decodes",
+      expectTrue (decodes "stamp" "/p/m.mdk" hash good),
+    ),
+    ("wrong stamp", expectFalse (decodes "other" "/p/m.mdk" hash good)),
+    ("wrong path", expectFalse (decodes "stamp" "/p/n.mdk" hash good)),
+    (
+      "wrong content hash",
+      expectFalse (decodes "stamp" "/p/m.mdk" "1.2" good),
+    ),
+    (
+      "truncated",
+      expectFalse (decodes "stamp" "/p/m.mdk" hash (stringSlice 0 80 good)),
+    ),
+    ("garbage", expectFalse (decodes "stamp" "/p/m.mdk" hash "((((")),
+    ("empty", expectFalse (decodes "stamp" "/p/m.mdk" hash "")),
+    (
+      "trailing text",
+      expectFalse (decodes "stamp" "/p/m.mdk" hash (good ++ " x")),
+    ),
+  ]
+
+test "a corrupted shard on disk is rebuilt from the source, not trusted" =
+  withScratchDir corruptShardCase
+
+corruptShardCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+corruptShardCase dir =
+  let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n"
+  match buildProjectIndexResult dir
+    Err _ => fail "index did not build"
+    Ok first =>
+      let shard = rowShardPath "\{dir}/.medaka/lint-index" "\{dir}/b.mdk"
+      let _ = writeFile shard "(1 \"x\""
+      match buildProjectIndexResult dir
+        Err _ => fail "index did not rebuild"
+        Ok second => expectEqual (sigsIn first "b" "f") (sigsIn second "b" "f")
+
+sigsIn : StdlibIndex -> String -> String -> List String
+sigsIn idx modId name =
+  map sigText (rowsIn (projectIndexOf idx) modId NsValue name)
+
+test "a signature edit is seen on the next build, a stale shard is not served" =
+  withScratchDir editCase
+
+editCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+editCase dir =
+  let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n"
+  match buildProjectIndexResult dir
+    Err _ => fail "index did not build"
+    Ok before =>
+      let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Str\nf x = x\n"
+      match buildProjectIndexResult dir
+        Err _ => fail "index did not rebuild"
+        Ok after => expectEach [
+          ("before", expectEqual ["Int -> Int"] (sigsIn before "b" "f")),
+          ("after", expectEqual ["Int -> Str"] (sigsIn after "b" "f")),
+        ]
+
+-- ── 4. the runner: declared needs ───────────────────────────────────────────
+
+probeMeta : String -> List Need -> RuleMeta
+probeMeta name needs = RuleMeta {
+  name = name,
+  summary = "probe",
+  doc = "probe",
+  category = Suspicious,
+  scope = Universal,
+  ratchet = Baselined,
+  defaultSeverity = SevWarning,
+  fixability = NotFixable,
+  needs = needs,
+}
+
+-- Reports the stdlib signature of `list.singleton` as the index it was handed
+-- shows it, for every file.
+probeRule : String -> List Need -> Rule
+probeRule name needs = mkRule (probeMeta name needs) (probeCheck name) None
+
+probeCheck : String ->
+  StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+probeCheck name idx _ _ _ _ = [
+  Finding {
+    rule = name,
+    message = optionOr "<none>" (stdlibSigTextIn idx "list" "singleton"),
+    severity = SevWarning,
+    loc = None,
+    fix = None,
+  },
+]
+
+findingMessage : Finding -> String
+findingMessage f = f.message
+
+probeMessages : StdlibIndex -> Rule -> List String
+probeMessages idx rule = match lintParseSource "x = 1\n"
+  Err _ => ["<parse error>"]
+  Ok (decls, pos) =>
+    map findingMessage (lintProgram idx [rule] "probe.mdk" "x = 1\n" pos decls)
+
+test "a rule that declares no index need is handed the empty index" =
+  match buildStdlibIndexResult
+    Err _ => fail "cannot build the stdlib index"
+    Ok full => expectEach [
+      (
+        "control: a declared stdlib need sees the signature",
+        expectEqual
+          ["a -> List a"]
+          (probeMessages full (probeRule "p-declared" [NeedsStdlibIndex])),
+      ),
+      (
+        "a project need also gets the stdlib rows",
+        expectEqual
+          ["a -> List a"]
+          (probeMessages full (probeRule "p-project" [NeedsProjectIndex])),
+      ),
+      (
+        "an undeclared need sees nothing",
+        expectEqual
+          ["<none>"]
+          (probeMessages full (probeRule "p-undeclared" [])),
+      ),
+      (
+        "a scopes-only rule sees nothing",
+        expectEqual
+          ["<none>"]
+          (probeMessages full (probeRule "p-scopes" [NeedsScopes])),
+      ),
+    ]
+
+test "--only and --disable build nothing when no surviving rule needs the index" =
+  withScratchDir onlyDisableCase
+
+onlyDisableCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+onlyDisableCase dir =
+  let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n"
+  let roster =
+    [probeRule "p-project" [NeedsProjectIndex], probeRule "p-plain" []]
+  let built = indexRows roster dir False [] []
+  let disabled = indexRows roster dir False [] ["p-project"]
+  let onlyOther = indexRows roster dir False ["p-plain"] []
+  let onlyProbe = indexRows roster dir False ["p-project"] []
+  let cacheKeepsAll = indexRows roster dir True ["p-plain"] []
+  expectEach [
+    (
+      "no filter builds stdlib and project rows",
+      expectTrue (fst built > 0 && snd built > 0),
+    ),
+    (
+      "--disable of the only reader builds nothing",
+      expectEqual (0, 0) disabled,
+    ),
+    ("--only of a non-reader builds nothing", expectEqual (0, 0) onlyOther),
+    ("--only of the reader builds", expectTrue (snd onlyProbe > 0)),
+    ("--cache builds for the whole roster", expectTrue (snd cacheKeepsAll > 0)),
+  ]
+
+-- (stdlib rows, project rows) of the index a run over `roster` would build.
+indexRows : List Rule ->
+  String ->
+  Bool ->
+  List String ->
+  List String ->
+  <IO> (Int, Int)
+indexRows roster dir keepAll only disable =
+  match indexForRoster roster dir keepAll only disable []
+    Err _ => (-1, -1)
+    Ok idx =>
+      let ix = projectIndexOf idx
+      (listLen (stdlibRows ix), listLen (projectRows ix))
+
+test "a stdlib-only reader builds the stdlib rows and no project rows" =
+  withScratchDir stdlibOnlyCase
+
+stdlibOnlyCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
+stdlibOnlyCase dir =
+  let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n"
+  let roster = [probeRule "p-stdlib" [NeedsStdlibIndex]]
+  let (std, proj) = indexRows roster dir False [] []
+  expectTrue (std > 0 && proj == 0)
