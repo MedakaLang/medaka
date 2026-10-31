@@ -40,6 +40,7 @@ import tools.lint_rule_if_max_min as IfMaxMin
 import tools.lint_rule_bool_simplify as BoolSimplify
 import tools.lint_rule_regex_literal as RegexLiteral
 import tools.lint_rule_internal_test_equal_in_true as TestEqualInTrue
+import tools.lint_rule_unused_import as UnusedImport
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- The list position is the output order of findings.  Each entry is the `rule`
@@ -68,6 +69,7 @@ allRules = [
   EagerDefault.rule,
   BindChainToDo.rule,
   DeadCode.rule,
+  UnusedImport.rule,
   ConcatToInterp.rule,
   SelfShadowExtern.rule,
   PreferAssignOp.rule,

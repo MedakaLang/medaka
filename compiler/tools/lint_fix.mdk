@@ -3,7 +3,7 @@
 -- registry and nothing from `types/`: the caller passes the linter in as a
 -- function, so the driver sees only findings.
 
-import list.{sortBy}
+import list.{sortBy, drop}
 import frontend.ast.{Loc(..)}
 import frontend.ast_walk.{ExprKind(..)}
 import frontend.lex_scan.{scanRawChars}
@@ -238,6 +238,22 @@ fixPass lint limit path n total src = match lint path src
     else match applySourceEdits snap (flatMap (r => r.rsEdits) chosen)
       Err e => Err (EditsRejected e)
       Ok out => fixPass lint limit path (n + 1) (total + length chosen) out
+
+-- The edit that removes item `i` of a delimited list whose items sit at `items`
+-- (in source order) together with one separator: an item with a successor goes
+-- with the text up to that successor's start, the last one with the text from
+-- its predecessor's end.  `None` for a sole item, which has no separator to take,
+-- and for an index outside the list.
+export
+removeListItem : List Loc -> Int -> Option FixEdit
+removeListItem items i =
+  let before = if i > 0 then drop (i - 1) items else []
+  match (drop i items, before)
+    ((Loc _ sl sc _ _) :: (Loc _ nl nc _ _) :: _, _) =>
+      Some (FixEdit (Loc "" sl sc nl nc) "")
+    ((Loc _ _ _ el ec) :: [], (Loc _ _ _ pl pc) :: _ :: _) =>
+      Some (FixEdit (Loc "" pl pc el ec) "")
+    _ => None
 
 -- How tightly a replacement's text binds.  `Closed` text (a literal, a name,
 -- anything already bracketed) reads the same in any position; `Applied` text

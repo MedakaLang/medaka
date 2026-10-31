@@ -13,6 +13,16 @@
 
 import frontend.ast.{
   Arm(..),
+  Constraint(..),
+  EffAtomTy(..),
+  Field(..),
+  Require(..),
+  Section(..),
+  Super(..),
+  Ty(..),
+  Variant(..),
+  ConPayload(..),
+  deriveRefName,
   Decl(..),
   DoStmt(..),
   Expr(..),
@@ -84,9 +94,10 @@ export data FileScopes = FileScopes {
   fsCounts : HashMap Int Int,
 }
 
--- Walk state: binders and uses newest first, alternate sites, the id counter.
+-- Walk state: binders and uses newest first, alternate sites, the id counter,
+-- and the binders named where no expression variable stands (see `declNames`).
 data W =
-  W (Ref (List Binder)) (Ref (List Use)) (Ref (List (Loc, Binder))) (Ref Int)
+  W (Ref (List Binder)) (Ref (List Use)) (Ref (List (Loc, Binder))) (Ref Int) (Ref (List Binder))
 
 -- (name, name token, kind, import module path, import origin name)
 data Site = Site String Loc BinderKind (List String) String
@@ -177,18 +188,128 @@ importUses fs =
     (b => (b, useCount fs b))
     (filter (b => b.binderKind == BImport) fs.fsBinders)
 
+-- A name the walk meets where no expression variable stands counts as a use of
+-- the binder it resolves to, without becoming a `Use` (the position tables and
+-- `allUses` keep describing expression variables only).
+noteMentions : W -> List (List Binder) -> List String -> Unit
+noteMentions w scope names = each (noteMention w scope) names
+
+noteMention : W -> List (List Binder) -> String -> Unit
+noteMention (W _ _ _ _ ms) scope n = match lookupFrames n scope
+  Some b => ms := b :: !ms
+  None => ()
+
+-- The names a declaration writes outside its bodies: types, constraints,
+-- interface and `deriving` names.
+declNames : Decl -> List String
+declNames (DTypeSig _ _ ty _) = tyNames ty
+declNames (DExtern (ExternDecl { edTy = ty, ... })) = tyNames ty
+declNames (DData { dataCtors, dataDerives, ... }) =
+  flatMap variantNames dataCtors ++ map deriveRefName dataDerives
+declNames (DNewtype { newtypeFieldTy, newtypeDerives, ... }) =
+  tyNames newtypeFieldTy ++ map deriveRefName newtypeDerives
+declNames (DTypeAlias { tyAliasRhs, ... }) = tyNames tyAliasRhs
+declNames (DInterface { supers, methods, ... }) =
+  map superName supers ++ flatMap ifaceMethodNames methods
+declNames (DImpl { iface, tys, reqs, ... }) =
+  iface :: flatMap tyNames tys ++ flatMap requireNames reqs
+declNames (DAttrib _ d) = declNames d
+declNames _ = []
+
+variantNames : Variant -> List String
+variantNames (Variant _ (ConPos tys)) = flatMap tyNames tys
+variantNames (Variant _ (ConNamed fields _)) = flatMap fieldNames fields
+
+fieldNames : Field -> List String
+fieldNames (Field _ ty) = tyNames ty
+
+superName : Super -> String
+superName (Super { superHead, ... }) = superHead
+
+ifaceMethodNames : IfaceMethod -> List String
+ifaceMethodNames (IfaceMethod _ ty _ _) = tyNames ty
+
+requireNames : Require -> List String
+requireNames (Require { requireHead, requireArgs, ... }) =
+  requireHead :: flatMap tyNames requireArgs
+
+constraintNames : Constraint -> List String
+constraintNames (Constraint { constraintHead, constraintArgs, ... }) =
+  constraintHead :: flatMap tyNames constraintArgs
+
+tyNames : Ty -> List String
+tyNames (TyCon { tyConName = n, ... }) = [n]
+tyNames (TyVar _) = []
+tyNames (TyApp f x) = tyNames f ++ tyNames x
+tyNames (TyFun a b) = tyNames a ++ tyNames b
+tyNames (TyTuple ts) = flatMap tyNames ts
+tyNames (TyEffect es _ t) = map effLabel es ++ tyNames t
+tyNames (TyConstrained cs t) = flatMap constraintNames cs ++ tyNames t
+tyNames (TyNamed _ t eff) = map effLabel (toList eff) ++ tyNames t
+tyNames (TyQual t _ _) = tyNames t
+tyNames (TyRow es _ _) = map effLabel es
+tyNames (TyAuth _ _) = []
+
+effLabel : EffAtomTy -> String
+effLabel a = a.eatLabel
+
+ownerNames : BodyOwner -> List String
+ownerNames (OwnerClause _ ps) = flatMap patNames ps
+ownerNames (OwnerImplMethod _ _ ps) = flatMap patNames ps
+ownerNames (OwnerIfaceDefault _ _ ps) = flatMap patNames ps
+ownerNames (OwnerTest _) = []
+ownerNames (OwnerProp _ params) = flatMap propParamNames params
+ownerNames (OwnerLetGroup _ ps) = flatMap patNames ps
+
+propParamNames : PropParam -> List String
+propParamNames (PropParam _ _ ty) = tyNames ty
+
+-- The names an expression node writes itself: annotations, record and
+-- collection literals, operators.  Its patterns are `patNames`' business.
+leafNames : Expr -> List String
+leafNames (EAnnot _ ty) = tyNames ty
+leafNames (EHeadAnnot _ ty) = tyNames ty
+leafNames (ERecordCreate n _) = [n]
+leafNames (EVariantUpdate n _ _) = [n]
+leafNames (EMapLit n _) = [n]
+leafNames (ESetLit n _) = [n]
+leafNames (EBinOp op _ _ _) = [op]
+leafNames (EUnOp op _ _) = [op]
+leafNames (EInfix op _ _) = [op]
+leafNames (ESection s) = sectionNames s
+leafNames _ = []
+
+sectionNames : Section -> List String
+sectionNames (SecBare op) = [op]
+sectionNames (SecRight op _) = [op]
+sectionNames (SecLeft _ op) = [op]
+
+patNames : Pat -> List String
+patNames (PCon n ps) = n :: flatMap patNames ps
+patNames (PCons a b) = patNames a ++ patNames b
+patNames (PTuple ps) = flatMap patNames ps
+patNames (PList ps) = flatMap patNames ps
+patNames (PAs _ _ _ p) = patNames p
+patNames (POr ps) = flatMap patNames ps
+patNames (PRec n fields _) = n :: flatMap recFieldNames fields
+patNames _ = []
+
+recFieldNames : RecPatField -> List String
+recFieldNames (RecPatField _ _ _ (Some p)) = patNames p
+recFieldNames _ = []
+
 -- ── building ──────────────────────────────────────────────────────────────────
 export
 buildScopes : List Decl -> FileScopes
 buildScopes prog =
-  let w = W (Ref []) (Ref []) (Ref []) (Ref 0)
+  let w = W (Ref []) (Ref []) (Ref []) (Ref 0) (Ref [])
   let imports = mintFrame w (flatMap importSites prog)
   let tops = mintFrame w (flatMap topSites prog)
   walkDecls w [tops, imports] prog
   finish w (flatMap wildPaths prog)
 
 finish : W -> List (List String) -> FileScopes
-finish (W bs us alts _) wild =
+finish (W bs us alts _ ms) wild =
   let binders = reverseL !bs
   let uses = reverseL !us
   let sites = new ()
@@ -197,6 +318,7 @@ finish (W bs us alts _) wild =
   each (setBinderSite sites) binders
   each (setAltSite sites) (reverseL !alts)
   each (countUse counts) uses
+  each (countBinder counts) !ms
   FileScopes {
     fsBinders = binders,
     fsUses = uses,
@@ -215,6 +337,9 @@ setBinderSite m b = setInPlace (siteKey b.binderSpan) b m
 
 setAltSite : HashMap String Binder -> (Loc, Binder) -> Unit
 setAltSite m (loc, b) = setInPlace (siteKey loc) b m
+
+countBinder : HashMap Int Int -> Binder -> Unit
+countBinder m b = setInPlace b.binderId (findWithDefault 0 b.binderId m + 1) m
 
 countUse : HashMap Int Int -> Use -> Unit
 countUse m (Use { useBinder = (Some b), ... }) =
@@ -300,10 +425,10 @@ mintFrameGo w acc ((Site n l k from origin) :: rest) = match findBinder n acc
   None => mintFrameGo w (mintOne w n l k from origin :: acc) rest
 
 pushAlt : W -> Loc -> Binder -> Unit
-pushAlt (W _ _ alts _) l b = alts := (l, b) :: !alts
+pushAlt (W _ _ alts _ _) l b = alts := (l, b) :: !alts
 
 mintOne : W -> String -> Loc -> BinderKind -> List String -> String -> Binder
-mintOne (W bs _ _ counter) n l k from origin =
+mintOne (W bs _ _ counter _) n l k from origin =
   let id = !counter
   counter := id + 1
   let b = Binder {
@@ -327,7 +452,7 @@ lookupFrames n (frame :: rest) = match findBinder n frame
   None => lookupFrames n rest
 
 noteUse : W -> List (List Binder) -> Loc -> String -> Unit
-noteUse (W _ us _ _) scope loc n =
+noteUse (W _ us _ _ _) scope loc n =
   us :=
     Use { useName = n, useSite = loc, useBinder = lookupFrames n scope } :: !us
 
@@ -335,12 +460,14 @@ noteUse (W _ us _ _) scope loc n =
 walkDecls : W -> List (List Binder) -> List Decl -> Unit
 walkDecls _ _ [] = ()
 walkDecls w scope (d :: rest) =
+  noteMentions w scope (declNames d)
   walkBodies w scope (declBodies d)
   walkDecls w scope rest
 
 walkBodies : W -> List (List Binder) -> List DeclBody -> Unit
 walkBodies _ _ [] = ()
 walkBodies w scope ((DeclBody owner body) :: rest) =
+  noteMentions w scope (ownerNames owner)
   let frame = mintFrame w (ownerSites owner)
   walkExpr w (frame :: scope) noDeclLoc body
   walkBodies w scope rest
@@ -350,9 +477,11 @@ walkExpr w scope _ (ELoc l e) = walkExpr w scope l e
 walkExpr w scope _ (EDoOrigin l e) = walkExpr w scope l e
 walkExpr w scope loc (EVar n) = noteUse w scope loc n
 walkExpr w scope loc (ELam ps body) =
+  noteMentions w scope (flatMap patNames ps)
   let frame = mintFrame w (flatMap (patSites BLambda) ps)
   walkExpr w (frame :: scope) loc body
 walkExpr w scope loc (ELet _ isRec p rhs body) =
+  noteMentions w scope (patNames p)
   let frame = mintFrame w (patSites BLet p)
   walkExpr w (letRhsScope isRec frame scope) loc rhs
   walkExpr w (frame :: scope) loc body
@@ -367,7 +496,9 @@ walkExpr w scope loc (EMatch scrut arms) =
 walkExpr w scope loc (EBlock stmts) = walkStmts w scope loc stmts
 walkExpr w scope loc (EDo _ stmts) = walkStmts w scope loc stmts
 walkExpr w scope loc (EGuards arms) = walkGuardArms w scope loc arms
-walkExpr w scope loc e = walkEach w scope loc (childExprs e)
+walkExpr w scope loc e =
+  noteMentions w scope (leafNames e)
+  walkEach w scope loc (childExprs e)
 
 -- The scope a `let` right-hand side sees: its own binders only when recursive.
 letRhsScope : Bool -> List Binder -> List (List Binder) -> List (List Binder)
@@ -385,6 +516,7 @@ walkEach w scope loc (e :: rest) =
 walkClauses : W -> List (List Binder) -> Loc -> List FunClause -> Unit
 walkClauses _ _ _ [] = ()
 walkClauses w scope loc ((FunClause ps body) :: rest) =
+  noteMentions w scope (flatMap patNames ps)
   let frame = mintFrame w (flatMap (patSites BParam) ps)
   walkExpr w (frame :: scope) loc body
   walkClauses w scope loc rest
@@ -392,6 +524,7 @@ walkClauses w scope loc ((FunClause ps body) :: rest) =
 walkArms : W -> List (List Binder) -> Loc -> List Arm -> Unit
 walkArms _ _ _ [] = ()
 walkArms w scope loc ((Arm p gs body) :: rest) =
+  noteMentions w scope (patNames p)
   let scope1 = mintFrame w (patSites BMatchArm p) :: scope
   let scope2 = walkGuards w scope1 loc gs
   walkExpr w scope2 loc body
@@ -411,6 +544,7 @@ walkGuards w scope loc ((GBool e) :: rest) =
   walkExpr w scope loc e
   walkGuards w scope loc rest
 walkGuards w scope loc ((GBind p e) :: rest) =
+  noteMentions w scope (patNames p)
   walkExpr w scope loc e
   walkGuards w (mintFrame w (patSites BMatchArm p) :: scope) loc rest
 
@@ -420,9 +554,11 @@ walkStmts w scope loc ((DoExpr e) :: rest) =
   walkExpr w scope loc e
   walkStmts w scope loc rest
 walkStmts w scope loc ((DoBind p e) :: rest) =
+  noteMentions w scope (patNames p)
   walkExpr w scope loc e
   walkStmts w (mintFrame w (patSites BDoBind p) :: scope) loc rest
 walkStmts w scope loc ((DoLet _ isRec p e _) :: rest) =
+  noteMentions w scope (patNames p)
   let frame = mintFrame w (patSites BLet p)
   walkExpr w (letRhsScope isRec frame scope) loc e
   walkStmts w (frame :: scope) loc rest
