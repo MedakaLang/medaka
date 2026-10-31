@@ -21,7 +21,7 @@
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
 
 import lib.dbwriter.{buildDatabase}
-import lib.sqlite.{Db, fromBytes, scanTableRows}
+import lib.sqlite.{fromBytes, scanTableRows}
 import lib.recordfmt.{Cell(..)}
 import lib.btree.{Row}
 import demo_support.{printRows}
@@ -54,7 +54,7 @@ rowId _ = -1
 -- Replace the age (3rd cell) of a row.
 setAge : List Cell -> Cell -> List Cell
 setAge (i :: n :: _ :: []) age = [i, n, age]
-setAge cells age = cells
+setAge cells _age = cells
 
 -- Build → parse → scan → print one table.
 readTable : String -> String -> Int -> List (List Cell) -> <IO> Unit

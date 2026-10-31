@@ -23,7 +23,6 @@ import bytes as B
 import bytes.{Bytes, decodeUtf8, encodeUtf8}
 import http.{
   Header,
-  Request,
   headerName,
   makeHeader,
   makeResponse,

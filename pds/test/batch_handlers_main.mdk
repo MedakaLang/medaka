@@ -28,7 +28,7 @@ import bytes.{Bytes, decodeUtf8, encodeUtf8}
 import json.{Json(..), jArray, jObject, get, parse, stringify}
 import hex.{decode, encode}
 import io.{readLines}
-import string.{split, startsWith}
+import string.{split}
 import lib.cid.{cidToString}
 import lib.dagcbor.{dagCborDecode}
 import lib.handlers.{recordServer}
@@ -40,7 +40,6 @@ import lib.repo.{
   repoExportCar,
   repoInitFromKeyBytes,
   repoLatestCommit,
-  repoRootCid,
 }
 import lib.server_core.{
   Account,
@@ -68,7 +67,6 @@ import test.fixture_support.{
   storeFingerprint,
   testKey,
   testNonce,
-  testSecret,
 }
 import lib.sign.{Sign}
 import lib.jwt.{mintAccessToken}

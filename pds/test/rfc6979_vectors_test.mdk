@@ -12,7 +12,7 @@
 import test.vector_runner.{
   Arm(..), Bound(..), Corpus(..), Engine(..), Oracle(..), Row(..), expectRow
 }
-import test.{Expectation}
+import test
 
 {- | The independent post-rejection HMAC schedule, in Python.
 

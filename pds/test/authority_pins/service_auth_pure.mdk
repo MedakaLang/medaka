@@ -2,7 +2,7 @@
 -- `service_auth_labelled.mdk`.
 
 import bytes.{Bytes}
-import lib.sign.{SecretKey, Sign, Signature, signServiceAuthDigest}
+import lib.sign.{SecretKey, Signature, signServiceAuthDigest}
 
 export
 signIt : SecretKey -> Bytes -> Result String Signature

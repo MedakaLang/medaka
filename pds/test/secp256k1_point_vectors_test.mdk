@@ -15,7 +15,7 @@ import test.secp256k1_point_support.{corpusFile, driver}
 import test.vector_runner.{
   Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
 }
-import test.{Expectation}
+import test
 
 gate : String
 gate = "pds/test/secp256k1_point_vectors"

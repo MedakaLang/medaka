@@ -2,7 +2,6 @@
 --   byte-identically for the render path of lib.select.
 
 import lib.select.{
-  Select,
   Literal,
   selectFrom,
   withWhere,

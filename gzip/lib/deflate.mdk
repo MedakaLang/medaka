@@ -91,7 +91,7 @@
 -- is the "must not grow" guarantee `gzip/test/deflate_oracle.sh` checks
 -- against `/dev/urandom` input.
 
-import array.{get, make, concat, range, makeWith}
+import array.{get, make, concat, range}
 import bytes as B
 import bytes.{Bytes}
 import u8 as U8
@@ -119,7 +119,7 @@ import lib.huffman.{
 import lib.crc32.{crc32}
 import lib.container.{GzipHeader, emitGzipHeader, emitGzipTrailer}
 import lib.inflate.{inflate, gunzipMember}
-import test.{expectEqual, expectTrue, fail}
+import test.{expectEqual, expectTrue}
 
 -- ---------------------------------------------------------------------------
 -- Named constants (STYLE §12 — name the meaning)
@@ -912,7 +912,7 @@ structureByte prevByte raw
   | otherwise = bitAnd raw 3
 
 structuredBytesGo : List Int -> Int -> List Int
-structuredBytesGo [] prev = []
+structuredBytesGo [] _prev = []
 structuredBytesGo (r :: rest) prev =
   let b = structureByte prev r
   b :: structuredBytesGo rest b
@@ -943,7 +943,7 @@ phraseCount : Int
 phraseCount = 8
 
 nthToken : Int -> List (List Int) -> List Int
-nthToken i [] = []
+nthToken _i [] = []
 nthToken i (t :: rest) = if i <= 0 then t else nthToken (i - 1) rest
 
 -- Repeatedly halve `raw`'s absolute value, counting how many times the low

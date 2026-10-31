@@ -380,7 +380,7 @@ fillBacklog port attempts =
 -- Nothing is ever accepted, so there is no loop to run: the process exists
 -- from here on only to hold the queue full and the sockets open.
 idleForever : Unit -> <Clock> Unit
-idleForever u =
+idleForever _u =
   let () = sleepMs 60000
   idleForever ()
 

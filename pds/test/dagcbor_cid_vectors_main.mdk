@@ -14,7 +14,6 @@ import lib.cid.{
   cidForDagCbor,
   cidFromBytes,
   cidFromString,
-  cidToBytes,
   cidToString,
 }
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
