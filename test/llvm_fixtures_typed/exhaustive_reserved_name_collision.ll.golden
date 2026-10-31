@@ -32,6 +32,7 @@ declare i64 @mdk_str_lit(ptr, i64)
 declare void @mdk_print_str(i64)
 declare i64 @mdk_int_to_string(i64)
 declare i64 @mdk_float_to_string(double)
+declare i64 @mdk_float_to_fixed(i64, double)
 declare i64 @llvm.fptosi.sat.i64.f64(double)
 declare double @llvm.arithmetic.fence.f64(double)
 declare i64 @mdk_string_concat(i64)
@@ -215,7 +216,7 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk___user____partial(i64 562949953421315)
+  %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f7061727469616c(i64 562949953421315)
   %t1 = call ptr @mdk_alloc(i64 24)
   store i64 281474976710656, ptr %t1
   %t2 = getelementptr i8, ptr %t1, i64 8
@@ -223,7 +224,7 @@ entry:
   %t3 = getelementptr i8, ptr %t1, i64 16
   store i64 5, ptr %t3
   %t4 = ptrtoint ptr %t1 to i64
-  %t5 = call i64 @mdk___user____partial(i64 %t4)
+  %t5 = call i64 @mdk.user.6d356635663735373336353732356635665f5f7061727469616c(i64 %t4)
   %t6 = sub i64 21, 1
   %t7 = ashr i64 %t5, 1
   %t8 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t7, i64 %t6)
@@ -248,7 +249,7 @@ intovf19:
   call void @mdk_int_overflow(i64 0, i64 %t20, i64 %t21)
   unreachable
 intok19:
-  %t22 = call i64 @mdk___user____full(i64 562949953421315)
+  %t22 = call i64 @mdk.user.6d356635663735373336353732356635665f5f66756c6c(i64 562949953421315)
   %t23 = sub i64 201, 1
   %t24 = ashr i64 %t22, 1
   %t25 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t24, i64 %t23)
@@ -280,7 +281,7 @@ intok36:
   %t41 = getelementptr i8, ptr %t39, i64 16
   store i64 9, ptr %t41
   %t42 = ptrtoint ptr %t39 to i64
-  %t43 = call i64 @mdk___user____full(i64 %t42)
+  %t43 = call i64 @mdk.user.6d356635663735373336353732356635665f5f66756c6c(i64 %t42)
   %t44 = sub i64 2001, 1
   %t45 = ashr i64 %t43, 1
   %t46 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t45, i64 %t44)
@@ -310,7 +311,7 @@ intok57:
   %t61 = getelementptr i8, ptr %t60, i64 8
   store i64 11, ptr %t61
   %t62 = ptrtoint ptr %t60 to i64
-  %t63 = call i64 @mdk___user____full(i64 %t62)
+  %t63 = call i64 @mdk.user.6d356635663735373336353732356635665f5f66756c6c(i64 %t62)
   %t64 = sub i64 200001, 1
   %t65 = ashr i64 %t63, 1
   %t66 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t65, i64 %t64)
@@ -335,7 +336,7 @@ intovf77:
   call void @mdk_int_overflow(i64 0, i64 %t78, i64 %t79)
   unreachable
 intok77:
-  %t80 = call i64 @mdk___user____plain(i64 8589934593)
+  %t80 = call i64 @mdk.user.6d356635663735373336353732356635665f5f706c61696e(i64 8589934593)
   %t81 = sub i64 20000001, 1
   %t82 = ashr i64 %t80, 1
   %t83 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t82, i64 %t81)
@@ -364,8 +365,8 @@ intok94:
   call void @mdk_print_int(i64 %t97)
   ret i32 0
 }
-; mdk-module program
-define internal i64 @mdk___user____partial(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f7061727469616c(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = and i64 %arg0, 1
@@ -433,8 +434,8 @@ decend1:
   ret i64 %t39
 }
 
-; mdk-module program
-define internal i64 @mdk___user____full(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f66756c6c(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = and i64 %arg0, 1
@@ -525,8 +526,8 @@ decend1:
   ret i64 %t54
 }
 
-; mdk-module program
-define internal i64 @mdk___user____plain(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f706c61696e(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = and i64 %arg0, 1

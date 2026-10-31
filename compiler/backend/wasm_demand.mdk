@@ -1,3 +1,5 @@
+import backend.wasm_symbol_names as WN
+import support.symbol_encoding.{encodePair}
 import frontend.ast.{
   Lit(..), Pat(..), Addr(..), BinderId(..), Loc(..), isTaggedFixedHead
 }
@@ -261,7 +263,7 @@ isLocal : DemandScope -> String -> Bool
 isLocal sc x = omHasKey x sc.locals
 
 isCoreFn : DemandScope -> String -> Bool
-isCoreFn sc x = omHasKey ("core__" ++ x) sc.topFns
+isCoreFn sc x = omHasKey (encodePair "core" x) sc.topFns
 
 -- a name read as a value
 dVar : DemandScope -> DemandAcc -> String -> DemandAcc
@@ -667,7 +669,11 @@ runtimeKeyD ctx symbol = optionOr "" (externRuntimeKey ctx.externFacts symbol)
 export type Env = OrdMap EnvRef
 
 -- what a name denotes inside `env`
-public export data EnvRef = NotLocal | LocalUnstamped | LocalBinder String
+public export data EnvRef =
+  | NotLocal
+  | LocalUnstamped
+  | LocalBinder String
+  | LocalSynthetic Int
 
 export
 envEmpty : Env
@@ -747,6 +753,7 @@ varRow : WasmTypeContext -> Env -> String -> Option BinderRow
 varRow prog env x = match envLookup x env
   LocalBinder ord => stampRowOf prog ord
   LocalUnstamped => None
+  LocalSynthetic _ => None
   NotLocal => omLookup x prog.tops
 
 -- what a reference to [x] holds; RTValue where no row states it
@@ -1234,6 +1241,7 @@ hostHelperRoots = [
   ("mdk_executable_path", "ioExecutablePathLines"),
   ("mdk_args_count", "ioArgsLines"),
   ("mdk_str_to_float", "floatStrLines"),
+  ("mdk_float_fixed", "floatFixedLines"),
 ]
 
 export
@@ -1758,14 +1766,9 @@ physicalTypes (CProgram _ ctorArs ctorTypes _ _ _) True clos rep =
             if contains ty ["Option", "Result", "Ordering"] then
               []
             else
-              ["T_" ++ injectiveIdent ty]
+              [WN.wasmName (WN.WUserType ty)]
                 ++ (if optionOr 0 (omLookup ctor ctorIndex) > 0 then
-                  [
-                    if ctor == "Cons" || ctor == "Nil" then
-                      "CU_" ++ ctor
-                    else
-                      "C_" ++ ctor,
-                  ]
+                  [WN.wasmName (WN.WConstructorType ctor)]
                 else
                   []))
           ctorTypes)
@@ -1842,6 +1845,7 @@ helperOrder = [
   "osEntropyLines",
   "readFileBytesLines",
   "floatStrLines",
+  "floatFixedLines",
   "trapIntRuntimeLines",
   "intRuntimeLines",
   "siteRuntimeLines",
@@ -2170,6 +2174,10 @@ helperManifest _ "floatStrLines" =
       "mdk_path_reset", "mdk_path_push", "mdk_str_to_float",
       "mdk_str_to_float_ok"
     ]
+helperManifest _ "floatFixedLines" =
+  HelperManifest
+    [("mdk_float_to_fixed", 2)]
+    ["mdk_float_fixed", "mdk_float_fixed_byte"]
 helperManifest _ "trapIntRuntimeLines" =
   HelperManifest
     [("mdk_write_err_digits", 1), ("mdk_write_err_int", 1)]
@@ -2318,6 +2326,7 @@ helperDependencies _ _ = []
 
 helperHostKeys : String -> List String
 helperHostKeys "floatFmtImportLines" = ["mdk_float_fmt", "mdk_float_fmt_byte"]
+helperHostKeys "floatFixedLines" = ["mdk_float_fixed", "mdk_float_fixed_byte"]
 helperHostKeys "floatStrLines" =
   ["mdk_path_push", "mdk_path_reset", "mdk_str_to_float", "mdk_str_to_float_ok"]
 helperHostKeys "ioAppendFileLines" =
@@ -2368,6 +2377,7 @@ helperTypes "byteBlockRuntimeLines" = ["arr", "str", "u8arr"]
 helperTypes "charFromCodeRuntimeLines" = ["C_Some"]
 helperTypes "closApplyLines" = ["argarr", "clos"]
 helperTypes "floatRuntimeLines" = ["float", "str", "u8arr"]
+helperTypes "floatFixedLines" = ["str", "u8arr"]
 helperTypes "floatStrLines" = ["C_Some", "float", "str", "u8arr"]
 helperTypes "hashFloatRuntimeLines" = ["float"]
 helperTypes "hashStringRuntimeLines" = ["str", "u8arr"]
@@ -2478,7 +2488,7 @@ plannedJs : JsImport -> PlannedImport
 plannedJs imp = PlannedImport {
   namespace = "jsffi",
   field = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}",
-  watSymbol = "jsffi.import.\{injectiveIdent imp.medakaName}",
+  watSymbol = WN.wasmName (WN.WJSImport imp.medakaName),
   signature =
     joinWith "" (map jsWireParam imp.params) ++ jsWireResult imp.result,
 }
@@ -2530,6 +2540,8 @@ hostImportSigOf "mdk_result_byte" = Some " (param i32) (result i32)"
 hostImportSigOf "mdk_write_file_reset" = Some ""
 hostImportSigOf "mdk_write_file_push" = Some " (param i32)"
 hostImportSigOf "mdk_write_file_commit" = Some " (result i32)"
+hostImportSigOf "mdk_float_fixed" = Some " (param i32) (param f64) (result i32)"
+hostImportSigOf "mdk_float_fixed_byte" = Some " (param i32) (result i32)"
 hostImportSigOf "mdk_str_to_float" = Some " (result f64)"
 hostImportSigOf "mdk_str_to_float_ok" = Some " (result i32)"
 hostImportSigOf "mdk_grant_reset" = Some ""

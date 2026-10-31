@@ -1,5 +1,5 @@
 # META
-source_lines=1334
+source_lines=1350
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `List a`.
@@ -922,13 +922,29 @@ export
 sort : Ord a => List a -> List a
 sort xs = sortBy compare xs
 
+{- | A value ordered in reverse.
+
+   Comparing two `Down` values compares the wrapped values the other way
+   round, so `Down 1 > Down 2`. Use it in a sort key to sort descending.
+
+   > Down 1 > Down 2
+   True
+   > sort [Down 1, Down 3, Down 2]
+   [Down 3, Down 2, Down 1] -}
+public export data Down a = Down a deriving (Eq, Debug)
+
+export impl Ord (Down a) requires Ord a where
+  compare (Down a) (Down b) = compare b a
+
 {- | The list sorted in ascending order of `key`.
 
    `key` is computed once per element, so it may be expensive. The sort is
-   stable.
+   stable. Wrap a key in `Down` to sort that part descending.
 
-   > sortOn (x => 0 - x) [1, 3, 2]
-   [3, 2, 1] -}
+   > sortOn (x => Down x) [1, 3, 2]
+   [3, 2, 1]
+   > sortOn (r => (Down (snd r), fst r)) [("b", 1), ("a", 2), ("c", 2)]
+   [("a", 2), ("c", 2), ("b", 1)] -}
 export
 sortOn : Ord b => (a -> <e> b) -> List a -> <e> List a
 sortOn key xs =
@@ -1510,6 +1526,10 @@ prop "elemIndices agrees with the plain findIndices reference on [] and singleto
 (DFunDef false "sortMergeAll" ((PVar "cmp") (PVar "rs")) (EApp (EApp (EVar "sortMergeAll") (EVar "cmp")) (EApp (EApp (EVar "sortMergePairs") (EVar "cmp")) (EVar "rs"))))
 (DTypeSig true "sort" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "sort" ((PVar "xs")) (EApp (EApp (EVar "sortBy") (EVar "compare")) (EVar "xs")))
+(DData Public "Down" ("a") ((variant "Down" (ConPos (TyVar "a")))) ())
+(DImpl true "Eq" ((TyApp (TyCon "Down") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Down" (PVar "__a0")) (PCon "Down" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")))))))
+(DImpl true "Debug" ((TyApp (TyCon "Down") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Down" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Down ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))))))))
+(DImpl true "Ord" ((TyApp (TyCon "Down") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PCon "Down" (PVar "a")) (PCon "Down" (PVar "b"))) (EApp (EApp (EVar "compare") (EVar "b")) (EVar "a")))))
 (DTypeSig true "sortOn" (TyConstrained ((cstr "Ord" (TyVar "b"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "sortOn" ((PVar "key") (PVar "xs")) (EBlock (DoLet false false (PVar "decorated") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (ETuple (EApp (EVar "key") (EVar "x")) (EVar "x")))) (EVar "xs"))) (DoExpr (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EVar "sortBy") (ELam ((PTuple (PVar "k1") PWild) (PTuple (PVar "k2") PWild)) (EApp (EApp (EVar "compare") (EVar "k1")) (EVar "k2")))) (EVar "decorated"))))))
 (DTypeSig true "nubBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a"))))))
@@ -1790,6 +1810,10 @@ prop "elemIndices agrees with the plain findIndices reference on [] and singleto
 (DFunDef false "sortMergeAll" ((PVar "cmp") (PVar "rs")) (EApp (EApp (EVar "sortMergeAll") (EVar "cmp")) (EApp (EApp (EVar "sortMergePairs") (EVar "cmp")) (EVar "rs"))))
 (DTypeSig true "sort" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "sort" ((PVar "xs")) (EApp (EApp (EVar "sortBy") (EMethodRef "compare")) (EVar "xs")))
+(DData Public "Down" ("a") ((variant "Down" (ConPos (TyVar "a")))) ())
+(DImpl true "Eq" ((TyApp (TyCon "Down") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Down" (PVar "__a0")) (PCon "Down" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")))))))
+(DImpl true "Debug" ((TyApp (TyCon "Down") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Down" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Down ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))))))))
+(DImpl true "Ord" ((TyApp (TyCon "Down") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PCon "Down" (PVar "a")) (PCon "Down" (PVar "b"))) (EApp (EApp (EMethodRef "compare") (EVar "b")) (EVar "a")))))
 (DTypeSig true "sortOn" (TyConstrained ((cstr "Ord" (TyVar "b"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "sortOn" ((PVar "key") (PVar "xs")) (EBlock (DoLet false false (PVar "decorated") (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (ETuple (EApp (EVar "key") (EVar "x")) (EVar "x")))) (EVar "xs"))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EApp (EVar "sortBy") (ELam ((PTuple (PVar "k1") PWild) (PTuple (PVar "k2") PWild)) (EApp (EApp (EMethodRef "compare") (EVar "k1")) (EVar "k2")))) (EVar "decorated"))))))
 (DTypeSig true "nubBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a"))))))

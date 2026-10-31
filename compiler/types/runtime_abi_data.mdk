@@ -1377,6 +1377,16 @@ runtimeAbiRows = [
     },
   ),
   (
+    "floatToFixed",
+    CallableShape {
+      writtenValueArity = 2,
+      loweredCoreArity = 2,
+      parameterHeads = ["Int", "Float"],
+      resultHead = "String",
+      canonicalSignature = "v1:Int -> Float -> String",
+    },
+  ),
+  (
     "debugStringLit",
     CallableShape {
       writtenValueArity = 1,

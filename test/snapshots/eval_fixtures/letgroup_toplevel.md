@@ -17,7 +17,7 @@ main = (ping False, isEven 4, isOdd 3)
 (CBind "pong" (CClause ((PVar "n")) (CIf (CVar "n" (ALocal 0 0)) (CApp (CVar "pong" (ALocal 1 0)) ((CVar "n" (ALocal 0 0))) CallExact true) (CLit (LString "pong")))))
 (CBind "isEven" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CVar "True" AGlobal) (CApp (CVar "isOdd" AGlobal) ((CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)))) CallExact true))))
 (CBind "isOdd" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CVar "False" AGlobal) (CApp (CVar "isEven" AGlobal) ((CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)))) CallExact true))))
-(CBind "main" (CClause () (CTuple (CApp (CVar "ping" AGlobal) ((CVar "False" AGlobal)) CallExact false) (CApp (CVar "isEven" AGlobal) ((CLit (LInt 4))) CallExact false) (CApp (CVar "isOdd" AGlobal) ((CLit (LInt 3))) CallExact false))))) () () () () (facts () ()) (binder-types
+(CBind "main" (CClause () (CTuple (CApp (CVar "ping" AGlobal) ((CVar "False" AGlobal)) CallExact false) (CApp (CVar "isEven" AGlobal) ((CLit (LInt 4))) CallExact false) (CApp (CVar "isOdd" AGlobal) ((CLit (LInt 3))) CallExact false))))) () () () () (facts () () () none (externs) (manifests) (origins ((function "isEven" (single "isEven")) (function "isOdd" (single "isOdd")) (function "main" (single "main")) (function "ping" (single "ping")) (function "pong" (single "pong"))) ())) (binder-types
 (b 0 "" "n" RTValue)
 (b 1 "" "n" RTValue)
 (b 2 "" "n" RTValue)

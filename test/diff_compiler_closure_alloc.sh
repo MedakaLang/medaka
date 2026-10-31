@@ -95,7 +95,7 @@ check_result() {
 # @mdk_lamN(` call — i.e. #2241's direct-call optimization (`e.directFn`)
 # correctly declined to fire for this escaping occurrence.
 #
-# Scoped to THIS FIXTURE's own defines only (`@mdk_<name>__*` — the
+# Scoped to THIS FIXTURE's own defines only (`@mdk.user.<encoded-name>` — the
 # module-qualified mangling every top-level fn gets — plus
 # `@mdk_program_main`, where a bare top-level `main` CAF is inlined): a
 # whole-file grep false-positives on unrelated `@mdk_lamN` direct calls the
@@ -110,16 +110,18 @@ check_indirect_ir() {
     return 1
   fi
   scoped="$WORK/$name.scoped.ll"
-  awk -v pfx="@mdk_${name}__" '
+  module_hex=$(printf %s "$name" | od -An -tx1 | tr -d ' \n')
+  pfx="@mdk.user.$(printf %s "m${module_hex}__" | od -An -tx1 | tr -d ' \n')"
+  awk -v pfx="$pfx" '
     /^define / { keep = (index($0, pfx) > 0 || index($0, "@mdk_program_main") > 0) }
     keep { print }
   ' "$ll" >"$scoped"
-  if [ ! -s "$scoped" ]; then
+  if ! grep -F -q "$pfx" "$scoped"; then
     bad "$name-ir-scope" "no defines matched $pfx or @mdk_program_main in $ll"
     return 1
   fi
-  if grep -Eq 'call i64 @mdk_lam[0-9]+\(' "$scoped"; then
-    bad "$name-ir-no-direct" "found a direct @mdk_lamN call in this fixture's own code — escape case must stay indirect"
+  if grep -Eq 'call i64 @mdk[.]gen[.]lambda[.][A-Za-z0-9.]+\(' "$scoped"; then
+    bad "$name-ir-no-direct" "found a direct generated lambda call in this fixture's own code — escape case must stay indirect"
   else
     ok "$name-ir-no-direct"
   fi

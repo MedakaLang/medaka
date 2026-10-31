@@ -32,6 +32,7 @@ declare i64 @mdk_str_lit(ptr, i64)
 declare void @mdk_print_str(i64)
 declare i64 @mdk_int_to_string(i64)
 declare i64 @mdk_float_to_string(double)
+declare i64 @mdk_float_to_fixed(i64, double)
 declare i64 @llvm.fptosi.sat.i64.f64(double)
 declare double @llvm.arithmetic.fence.f64(double)
 declare i64 @mdk_string_concat(i64)
@@ -215,13 +216,13 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk___user____blend(i64 ptrtoint (ptr @mdk_dc.program.0 to i64))
+  %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626c656e64(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..0 to i64))
   %t1 = call ptr @mdk_alloc(i64 16)
   store i64 12884901888, ptr %t1
   %t2 = getelementptr i8, ptr %t1, i64 8
   store i64 9, ptr %t2
   %t3 = ptrtoint ptr %t1 to i64
-  %t4 = call i64 @mdk___user____unbox(i64 %t3)
+  %t4 = call i64 @mdk.user.6d356635663735373336353732356635665f5f756e626f78(i64 %t3)
   %t5 = sub i64 %t4, 1
   %t6 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t0, i64 %t5)
   %t7 = extractvalue { i64, i1 } %t6, 0
@@ -237,15 +238,15 @@ intok9:
   call void @mdk_print_int(i64 %t12)
   ret i32 0
 }
-; mdk-module program
-define internal i64 @mdk___user____sidesOf(i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f73696465734f66(i64 %arg0, i64 %arg1) {
 entry:
-  %t0 = call i64 @mdk_disp_sides_0_1(i64 %arg0, i64 %arg1)
+  %t0 = call i64 @mdk.dispatch..7369646573.0.1.1(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-define internal i64 @mdk___user____unbox(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f756e626f78(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg0, 1
@@ -272,8 +273,8 @@ decend1:
   ret i64 %t15
 }
 
-; mdk-module program
-define internal i64 @mdk___user____blend(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f626c656e64(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -308,8 +309,8 @@ intok19:
   ret i64 %t17
 }
 
-; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Tri_sides
-define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Tri_sides(i64 %arg0) {
+; mdk-module impl.5f5f757365725f5f3a3a53686170657c5f5f757365725f5f2e5472697c.7369646573
+define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f547269.7369646573(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = icmp eq i64 %arg0, 1
@@ -325,8 +326,8 @@ decend1:
   ret i64 %t4
 }
 
-; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Tri_tag
-define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Tri_tag(i64 %arg0) {
+; mdk-module impl.5f5f757365725f5f3a3a5461676765647c5f5f757365725f5f2e5472697c.746167
+define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f547269.746167(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = icmp eq i64 %arg0, 1
@@ -342,8 +343,8 @@ decend1:
   ret i64 %t4
 }
 
-; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Wrap_sides
-define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Wrap_sides(i64 %arg0, i64 %arg1) {
+; mdk-module impl.5f5f757365725f5f3a3a53686170657c285f5f757365725f5f2e577261702061297c.7369646573
+define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f57726170.7369646573(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg1, 1
@@ -360,7 +361,7 @@ conyes8:
   %t12 = inttoptr i64 %arg1 to ptr
   %t13 = getelementptr i8, ptr %t12, i64 8
   %t14 = load i64, ptr %t13
-  %t15 = call i64 @mdk_disp_sides_0_1(i64 %arg0, i64 %t14)
+  %t15 = call i64 @mdk.dispatch..7369646573.0.1.1(i64 %arg0, i64 %t14)
   ret i64 %t15
 connext8:
   call void @mdk_nonexhaustive_match()
@@ -373,9 +374,9 @@ decend1:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_dc.program.0 = internal constant [3 x i64] [i64 8589934592, i64 11, i64 15]
+@mdk.gen.dictcell.70726f6772616d..0 = internal constant [3 x i64] [i64 8589934592, i64 11, i64 15]
 ; mdk-module program
-define internal i64 @mdk_disp_sides_0_1(i64 %dict, i64 %arg0) {
+define internal i64 @mdk.dispatch..7369646573.0.1.1(i64 %dict, i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %dict to ptr
   %t1 = load i64, ptr %t0
@@ -383,7 +384,7 @@ entry:
   %t4 = icmp eq i64 %t1, 3344899215239209333
   br i1 %t4, label %dispyes5, label %dispnext5
 dispyes5:
-  %t6 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Tri_sides(i64 %arg0)
+  %t6 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f547269.7369646573(i64 %arg0)
   store i64 %t6, ptr %t2
   br label %dispend3
 dispnext5:
@@ -393,7 +394,7 @@ dispyes8:
   %t9 = inttoptr i64 %dict to ptr
   %t10 = getelementptr i8, ptr %t9, i64 8
   %t11 = load i64, ptr %t10
-  %t12 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Wrap_sides(i64 %t11, i64 %arg0)
+  %t12 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f57726170.7369646573(i64 %t11, i64 %arg0)
   store i64 %t12, ptr %t2
   br label %dispend3
 dispnext8:

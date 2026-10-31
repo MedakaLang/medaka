@@ -5,7 +5,8 @@
    `makeDir`, `removeFile`, `rename`, `removeDir`, `statFile`, and
    `canonicalizePath`. This module adds a `FileStat` record over
    `statFile`'s tuple and the composed operations `copyFile`,
-   `replaceDurably`, `mkdirAll`, `mkdirAllDurably`, `walkDir`, `isDir`,
+   `replaceDurably`, `mkdirAll`, `mkdirAllDurably`, `walkDir`, `walkFiles`, `walkFilesSkipping`,
+   `glob`, `isDir`,
    `isFile`, and `fileSize`.
 
    Every operation returns `Result String a`, with the host's error message
@@ -18,8 +19,9 @@
 
 import core.{Result(..)}
 import io.{ownerOnlyMode}
-import path.{dirname, joinPath}
-import string.{contains}
+import list.{sortOn}
+import path.{dirname, joinPath, matchGlob, segments}
+import string.{contains, indexOf, lastIndexOf, startsWith}
 
 -- # Metadata
 
@@ -69,6 +71,27 @@ copyFile : (src : String) ->
 copyFile src dst = match readFileBytes src
   Ok bytes => writeFileBytes dst bytes
   Err e => Err e
+
+{- | Rewrites the file at `path` with the result of `f` applied to its text.
+
+   `Err` from `f` writes nothing and is returned as `Err "<path>: <e>"`, as
+   is a failure to read or to write. The file is written only when the new text differs
+   from what was read, so an unchanged edit leaves the modification time
+   alone. The write is a plain `writeFile`, not a durable replace. -}
+export
+editFile : (path : String) ->
+  (String -> Result String String) ->
+  <FileRead path, FileWrite path> Result String Unit
+editFile path f = match readFile path
+  Err e => Err (namePath path e)
+  Ok text => match f text
+    Err e => Err (namePath path e)
+    Ok t =>
+      if t == text then Ok () else mapErr (namePath path) (writeFile path t)
+
+-- `e` led by `path: `, unless it already is.
+namePath : String -> String -> String
+namePath path e = if startsWith "\{path}: " e then e else "\{path}: \{e}"
 
 {- | Replaces `target` with `content` so that a crash leaves either the
    old file or the new one, never a partial write.
@@ -171,6 +194,177 @@ walkEntries root (name :: rest) =
             map (after => full :: inner ++ after) (walkEntries root rest)
       else
         map (full :: _) (walkEntries root rest)
+
+{- | Every regular file under `root`, in plain string order.
+
+   Each result is the full path, joined onto `root`; directories are not
+   listed, and `Ok []` means there are no files. `Err` on the first
+   directory that cannot be read or entry that cannot be examined. The order
+   does not depend on the host's `listDir` order, so the result is stable.
+   Symbolic links are followed through `stat`, as `walkDir` does, so a link
+   to a directory is walked and a link loop reports an `Err`. An `Err` names
+   the path that failed, as `"<path>: <e>"`.
+
+   > walkFiles "stdlib/no-such-walk-doctest-dir"
+   Err "stdlib/no-such-walk-doctest-dir: No such file or directory" -}
+export
+walkFiles : String -> <FileRead> Result String (List String)
+walkFiles root = walkFilesSkipping (_ => False) root
+
+{- | `walkFiles`, but a directory whose path satisfies `skip` is not entered.
+
+   The path the predicate sees is the one `walkFiles` would report for that
+   directory, joined onto `root`. `root` itself is never tested, so a
+   predicate that holds for it still walks it.
+
+   > walkFilesSkipping (_ => True) "stdlib/no-such-walk-doctest-dir"
+   Err "stdlib/no-such-walk-doctest-dir: No such file or directory" -}
+export
+walkFilesSkipping : (String -> Bool) ->
+  String ->
+  <FileRead> Result String (List String)
+walkFilesSkipping skip root = walkFilesTo (-1) skip root
+
+-- The walk of `walkFilesSkipping`, descending at most `levels` directories
+-- below `root` when `levels` is positive and without limit when it is
+-- negative. Files in `root` are one level down, so a bound of 1 stats only
+-- `root`'s own entries.
+walkFilesTo : Int ->
+  (String -> Bool) ->
+  String ->
+  <FileRead> Result String (List String)
+walkFilesTo levels skip root = match listDir root
+  Err e => Err (namePath root e)
+  Ok names => walkDirSorted levels skip root names
+
+-- A directory's entries, kept when a file or a directory not skipped, each as
+-- (sort key, full path, is a directory). A directory's key ends in `/`, so
+-- ordering the entries by key orders every path beneath them as plain
+-- strings: no name contains `/`.
+type WalkEntry = (String, String, Bool)
+
+-- Sorting each directory's entries, rather than the whole result, keeps every
+-- pass as deep as one directory is wide: `run` has no tail calls, and a sort
+-- of the full result would overflow on a large tree.  Each directory's result
+-- is built forward by explicit `match` chains, as in `walkEntries`.
+collectEntries : Int ->
+  (String -> Bool) ->
+  String ->
+  List String ->
+  <FileRead> Result String (List WalkEntry)
+collectEntries _ _ _ [] = Ok []
+-- lint-disable-next-line rule-bind-chain-to-do
+collectEntries levels skip root (name :: rest) =
+  let full = joinPath root name
+  match stat full
+    Err e => Err (namePath full e)
+    Ok st =>
+      if st.isDir then
+        if levels == 1 || skip full then
+          collectEntries levels skip root rest
+        else
+          map
+            (("\{name}/", full, True) :: _)
+            (collectEntries levels skip root rest)
+      else if st.isFile then
+        map ((name, full, False) :: _) (collectEntries levels skip root rest)
+      else
+        collectEntries levels skip root rest
+
+-- A `do` chain would cost more frames per entry than the explicit `match`
+-- chains here, lowering the widest directory `run` can walk; the pass-through
+-- `Err` arms stay for that reason.
+walkDirSorted : Int ->
+  (String -> Bool) ->
+  String ->
+  List String ->
+  <FileRead> Result String (List String)
+-- lint-disable-next-line rule-bind-chain-to-do
+walkDirSorted levels skip root names =
+  match collectEntries levels skip root names
+    Err e => Err e
+    Ok entries => walkSorted levels skip (sortOn ((key, _, _) => key) entries)
+
+walkSorted : Int ->
+  (String -> Bool) ->
+  List WalkEntry ->
+  <FileRead> Result String (List String)
+walkSorted _ _ [] = Ok []
+-- A `do` chain per entry would cost more frames per entry than this `match`
+-- chain, lowering the widest directory `run` can walk.
+-- lint-disable-next-line rule-bind-chain-to-do
+walkSorted levels skip ((_, full, isDirectory) :: rest) =
+  if isDirectory then match listDir full
+    Err e => Err (namePath full e)
+    Ok subs => match walkDirSorted (belowLevel levels) skip full subs
+      Err e => Err e
+      Ok inner => map (inner ++ _) (walkSorted levels skip rest)
+  else
+    map (full :: _) (walkSorted levels skip rest)
+
+belowLevel : Int -> Int
+belowLevel levels = if levels < 0 then levels else levels - 1
+
+{- | The files whose paths match the glob `pattern`, in plain string order.
+
+   The pattern is read as by `path.matchGlob`. The walk starts at the
+   longest directory prefix of the pattern that has no `*` or `?`, and a
+   result reads as the pattern does: `*.mdk` finds `a.mdk`, not `./a.mdk`.
+   A pattern with no wildcard names one path, which is returned when it is a
+   file and is otherwise `Ok []`. A prefix directory that is missing or
+   cannot be read is an `Err` naming it, unlike Python's `glob`, which returns
+   `[]`. Unless the pattern has a `**` segment the walk goes no deeper than
+   the pattern's segments, so entries below that depth are never examined.
+
+   > glob "stdlib/no-such-glob-doctest-dir/*.mdk"
+   Err "stdlib/no-such-glob-doctest-dir: No such file or directory"
+   > glob "no-such-glob-doctest-file"
+   Ok [] -}
+export
+glob : String -> <FileRead> Result String (List String)
+glob pattern = match wildcardIndex pattern
+  None => match stat pattern
+    Ok st => Ok (if st.isFile then [pattern] else [])
+    Err _ => Ok []
+  Some i =>
+    let prefix = dirPrefix (stringSlice 0 i pattern)
+    map
+      (paths => filter (matchGlob pattern) (map (dropDotSlash prefix) paths))
+      (walkFilesTo
+        (globLevels prefix pattern)
+        (_ => False)
+        (if prefix == "" then "." else prefix))
+
+-- How many directory levels below the prefix a match can lie: the pattern's
+-- segments past the prefix's, or unbounded (-1) when a segment is `**`.
+globLevels : String -> String -> Int
+globLevels prefix pattern =
+  if any (== "**") (segments pattern) then
+    -1
+  else
+    length (segments pattern) - length (segments prefix)
+
+wildcardIndex : String -> Option Int
+wildcardIndex s = match (indexOf "*" s, indexOf "?" s)
+  (Some a, Some b) => Some (min a b)
+  (Some a, None) => Some a
+  (None, b) => b
+
+-- The directory part of a wildcard-free head: up to its last `/`, `"/"` when
+-- that `/` is the first character, and `""` when there is none.
+dirPrefix : String -> String
+dirPrefix head = match lastIndexOf "/" head
+  None => ""
+  Some 0 => "/"
+  Some j => stringSlice 0 j head
+
+-- A walk from `"."` reports `./a`; the pattern reads `a`.
+dropDotSlash : String -> String -> String
+dropDotSlash prefix p =
+  if prefix == "" && startsWith "./" p then
+    stringSlice 2 (stringLength p) p
+  else
+    p
 
 filesOnly : List String -> <FileRead> Result String (List String)
 filesOnly [] = Ok []

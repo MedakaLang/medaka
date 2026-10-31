@@ -1,0 +1,159 @@
+import frontend.ast.{BinderId(..), Decl(..), LetBind(..), variantName}
+import types.route_key.{typeTagOf}
+import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert}
+import support.symbol_encoding.{encodeComponent}
+import support.util.{joinWith}
+import map.{Map(..), get, set, foldlWithKey}
+
+public export data SymbolOrigin =
+  | ModuleOrigin String String
+  | SingleOrigin String
+  | GeneratedOrigin String (List String)
+  | BuiltinOrigin String
+  deriving (Eq, Debug)
+
+public export data OriginRow = OriginRow {
+  binder : BinderId,
+  origin : SymbolOrigin,
+}
+public export data SymbolOrigins = SymbolOrigins {
+  functions : Map Int (OrdMap OriginRow),
+  constructors : OrdMap (OrdMap SymbolOrigin),
+}
+public export data CoreSymbolOrigins = CoreSymbolOrigins {
+  functions : OrdMap SymbolOrigin,
+  constructors : OrdMap (OrdMap SymbolOrigin),
+}
+
+export
+emptyOrigins : SymbolOrigins
+emptyOrigins = SymbolOrigins { functions = Tip, constructors = omEmpty }
+
+export
+originKey : SymbolOrigin -> String
+originKey (ModuleOrigin mid name) =
+  "m.\{encodeComponent mid}.\{encodeComponent name}"
+originKey (SingleOrigin name) = "s." ++ encodeComponent name
+originKey (BuiltinOrigin tag) = "b." ++ encodeComponent tag
+originKey (GeneratedOrigin family parts) =
+  let encoded = joinWith "." (map encodeComponent parts)
+  "g.\{encodeComponent family}.\{intToString (length parts)}.\{encoded}"
+
+ordinal : BinderId -> Int
+ordinal (BinderId _ i) = i
+
+sameBinder : BinderId -> BinderId -> Bool
+sameBinder (BinderId m i) (BinderId n j) = i == j && (i < 0 || m == n)
+
+export
+functionOrigin : SymbolOrigins -> BinderId -> String -> SymbolOrigin
+functionOrigin origins bid name = match get (ordinal bid) origins.functions
+  None => panic "symbol origin: missing function ordinal"
+  Some rows => match omLookup name rows
+    None => panic "symbol origin: missing function name"
+    Some row =>
+      if sameBinder bid row.binder then
+        row.origin
+      else
+        panic "symbol origin: binder mismatch"
+
+addFunction : String ->
+  BinderId ->
+  SymbolOrigin ->
+  SymbolOrigins ->
+  SymbolOrigins
+addFunction name bid origin origins =
+  let i = ordinal bid
+  let rows = optionOr omEmpty (get i origins.functions)
+  let row = OriginRow { binder = bid, origin = origin }
+  match omLookup name rows
+    Some old =>
+      if sameBinder bid old.binder && old.origin == origin then
+        origins
+      else
+        panic "symbol origin: conflicting function"
+    None =>
+      { origins | functions = set i (omInsert name row rows) origins.functions }
+
+addConstructor : String ->
+  String ->
+  SymbolOrigin ->
+  SymbolOrigins ->
+  SymbolOrigins
+addConstructor owner name origin origins =
+  let rows = optionOr omEmpty (omLookup owner origins.constructors)
+  match omLookup name rows
+    Some old =>
+      if old == origin then
+        origins
+      else
+        panic "symbol origin: conflicting constructor"
+    None => { origins |
+      constructors =
+        omInsert owner (omInsert name origin rows) origins.constructors,
+    }
+
+renamed : OrdMap String -> String -> String
+renamed rm name = optionOr name (omLookup name rm)
+
+unitDecl : (String -> SymbolOrigin) ->
+  OrdMap String ->
+  SymbolOrigins ->
+  Decl ->
+  SymbolOrigins
+unitDecl origin rm acc (DFunDef _ n _ _ _ bid) =
+  addFunction (renamed rm n) bid (origin n) acc
+unitDecl origin rm acc (DLetGroup _ binds) = fold (unitBind origin rm) acc binds
+unitDecl origin rm acc (DData { dataName = n, dataOrigin = o, dataCtors = variants }) =
+  fold
+    (a v =>
+      addConstructor
+        (typeTagOf o n)
+        (renamed rm (variantName v))
+        (origin (variantName v))
+        a)
+    acc
+    variants
+unitDecl origin rm acc (DNewtype { newtypeName = n, newtypeOrigin = o, newtypeCtor = c }) =
+  addConstructor (typeTagOf o n) (renamed rm c) (origin c) acc
+unitDecl origin rm acc (DAttrib _ d) = unitDecl origin rm acc d
+unitDecl _ _ acc _ = acc
+
+unitBind : (String -> SymbolOrigin) ->
+  OrdMap String ->
+  SymbolOrigins ->
+  LetBind ->
+  SymbolOrigins
+unitBind origin rm acc (LetBind n _ _ bid) =
+  addFunction (renamed rm n) bid (origin n) acc
+
+export
+unitOrigins : String -> OrdMap String -> List Decl -> SymbolOrigins
+unitOrigins mid rm decls =
+  fold (unitDecl (ModuleOrigin mid) rm) emptyOrigins decls
+
+export
+singleProgramOrigins : List Decl -> SymbolOrigins
+singleProgramOrigins decls =
+  fold (unitDecl SingleOrigin omEmpty) emptyOrigins decls
+
+export
+mergeOrigins : SymbolOrigins -> SymbolOrigins -> SymbolOrigins
+mergeOrigins a b =
+  let withFunctions =
+    foldlWithKey
+      (acc _ rows =>
+        foldlWithKey
+          (next name row => addFunction name row.binder row.origin next)
+          acc
+          rows)
+      a
+      b.functions
+  foldlWithKey
+    (acc owner rows =>
+      foldlWithKey
+        (next name origin => addConstructor owner name origin next)
+        acc
+        rows)
+    withFunctions
+    b.constructors

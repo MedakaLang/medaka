@@ -1,5 +1,5 @@
 # META
-source_lines=298
+source_lines=473
 stages=DESUGAR,MARK
 # SOURCE
 {- | Floating-point math and a few integer helpers.
@@ -12,6 +12,8 @@ stages=DESUGAR,MARK
 
    `abs`, `signum`, `min`, `max`, and `clamp` come from the prelude and
    work on floats already. -}
+
+import list.{drop, sort}
 
 -- # Angles
 
@@ -97,6 +99,119 @@ approxEq a b eps = abs (a - b) <= eps
 -- > approxEq 0.0 0.0 0.0
 -- True
 
+-- # Statistics
+
+{- | The arithmetic mean of a list, or `None` for an empty list.
+
+   The elements are added in floating point, so the last digits can differ
+   from Python's statistics module, which sums exactly.
+
+   > mean [1.0, 2.0, 3.0, 6.0]
+   Some 3.0
+   > mean []
+   None -}
+export
+mean : List Float -> Option Float
+mean [] = None
+mean xs = Some (meanOf xs)
+
+-- The mean of a non-empty list.
+meanOf : List Float -> Float
+meanOf xs = sum xs / intToFloat (length xs)
+
+{- | The median of a list, or `None` for an empty list.
+
+   For an odd length it is the middle value, and for an even length the mean
+   of the two middle values. A NaN in the list gives an unspecified result.
+
+   For an even length the result can differ in the last digit from
+   `percentile 50.0`, which interpolates instead of averaging.
+
+   > median [3.0, 1.0, 2.0]
+   Some 2.0
+   > median [4.0, 1.0, 3.0, 2.0]
+   Some 2.5
+   > median [1.0, 2.0, 1.0 / 0.0]
+   Some 2.0 -}
+export
+median : List Float -> Option Float
+median xs = medianSorted (length xs) (sort xs)
+
+medianSorted : Int -> List Float -> Option Float
+medianSorted 0 _ = None
+medianSorted n sorted =
+  let half = n / 2
+  match drop (if isEven n then half - 1 else half) sorted
+    a :: b :: _ => Some (if isEven n then (a + b) / 2.0 else a)
+    a :: _ => Some a
+    [] => None
+
+{- | The sample standard deviation, dividing by `n - 1` as Python's
+   statistics module does, or `None` for fewer than two values.
+
+   The sums are taken in floating point, so the last digits can differ from
+   Python's statistics module, which sums exactly. A NaN in the list gives an
+   unspecified result.
+
+   > stdev [1.0, 3.0]
+   Some 1.4142135623730951
+   > stdev [1.0]
+   None -}
+export
+stdev : List Float -> Option Float
+stdev xs
+  | length xs < 2 = None
+  | otherwise =
+    let m = meanOf xs
+    let squares = sum (map (x => (x - m) * (x - m)) xs)
+    Some (sqrt (squares / intToFloat (length xs - 1)))
+
+{- | The `p`th percentile of a list, for `p` from 0 to 100, or `None` for an
+   empty list or a `p` outside that range.
+
+   It interpolates linearly between the closest ranks of the sorted list, as
+   numpy's default and Excel's inclusive percentile do, and an exact rank gives
+   that element itself. A NaN in the list gives an unspecified result.
+
+   For an odd length `percentile 50.0 xs` equals `median xs`; for an even
+   length the two can differ in the last digit.
+
+   > percentile 0.0 [4.0, 1.0, 3.0, 2.0]
+   Some 1.0
+   > percentile 50.0 [4.0, 1.0, 3.0, 2.0]
+   Some 2.5
+   > percentile 100.0 [4.0, 1.0, 3.0, 2.0]
+   Some 4.0
+   > percentile 100.0 [1.0, 1.0 / 0.0]
+   Some inf
+   > percentile 101.0 [1.0]
+   None -}
+export
+percentile : Float -> List Float -> Option Float
+percentile p xs
+  | isNaN p || p < 0.0 || p > 100.0 = None
+  | otherwise = interpolateRank (p / 100.0) (sort xs)
+
+-- numpy's interpolation: exact at both ends. At `t == 0.0` it is `a` without reading
+-- `b`, which may be infinite.
+rankLerp : Float -> Float -> Float -> Float
+rankLerp a b t
+  | t == 0.0 = a
+  | t >= 0.5 = b - (b - a) * (1.0 - t)
+  | otherwise = a + (b - a) * t
+
+-- `sorted` is ascending; the rank `q * (n - 1)` falls between two neighbours.
+interpolateRank : Float -> List Float -> Option Float
+interpolateRank _ [] = None
+interpolateRank q sorted =
+  let rank = q * intToFloat (length sorted - 1)
+  let lo = floatToInt (floor rank)
+  let t = rank - intToFloat lo
+  match drop lo sorted
+    a :: b :: _ => Some (rankLerp a b t)
+    a :: _ => Some a
+    [] => None
+
 -- # Logarithms
 
 {- | The logarithm of `x` in base `base`, computed as `log x / log base`.
@@ -112,6 +227,66 @@ logBase base x = log x / log base
 
 -- > logBase 10.0 1000.0
 -- 2.9999999999999996
+
+-- # Rounding to integers
+
+{- | The integer nearest to `x`, with a half rounded away from zero.
+
+   Values outside the `Int` range saturate to the nearest bound, and `NaN`
+   gives `0`.
+
+   > roundInt 2.5
+   3
+   > roundInt (-2.5)
+   -3 -}
+export
+roundInt : Float -> Int
+roundInt x = floatToInt (round x)
+
+-- > roundInt 0.4
+-- 0
+-- > roundInt 1.0e20
+-- 4611686018427387903
+-- > roundInt (0.0 - 1.0e20)
+-- -4611686018427387904
+-- > roundInt (0.0 / 0.0)
+-- 0
+
+{- | The greatest integer not above `x`.
+
+   Values outside the `Int` range saturate to the nearest bound, and `NaN`
+   gives `0`.
+
+   > floorInt 3.7
+   3
+   > floorInt (-0.5)
+   -1 -}
+export
+floorInt : Float -> Int
+floorInt x = floatToInt (floor x)
+
+-- > floorInt (0.0 - 1.0e20)
+-- -4611686018427387904
+-- > floorInt (0.0 / 0.0)
+-- 0
+
+{- | The least integer not below `x`.
+
+   Values outside the `Int` range saturate to the nearest bound, and `NaN`
+   gives `0`.
+
+   > ceilInt 3.2
+   4
+   > ceilInt (-0.5)
+   0 -}
+export
+ceilInt : Float -> Int
+ceilInt x = floatToInt (ceil x)
+
+-- > ceilInt 1.0e20
+-- 4611686018427387903
+-- > ceilInt (0.0 / 0.0)
+-- 0
 
 -- # Integers
 
@@ -301,6 +476,7 @@ prop "powInt b 1 equals b" (b : Int) = eq (powInt b 1) b
 
 prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 # DESUGAR
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "sort" false))))
 (DTypeSig true "toRadians" (TyFun (TyCon "Float") (TyCon "Float")))
 (DFunDef false "toRadians" ((PVar "deg")) (EBinOp "/" (EBinOp "*" (EVar "deg") (EVar "pi")) (ELit (LFloat 180.0))))
 (DTypeSig true "toDegrees" (TyFun (TyCon "Float") (TyCon "Float")))
@@ -315,8 +491,33 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DFunDef false "lerp" ((PVar "a") (PVar "b") (PVar "t")) (EBinOp "+" (EVar "a") (EBinOp "*" (EBinOp "-" (EVar "b") (EVar "a")) (EVar "t"))))
 (DTypeSig true "approxEq" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Bool")))))
 (DFunDef false "approxEq" ((PVar "a") (PVar "b") (PVar "eps")) (EBinOp "<=" (EApp (EVar "abs") (EBinOp "-" (EVar "a") (EVar "b"))) (EVar "eps")))
+(DTypeSig true "mean" (TyFun (TyApp (TyCon "List") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float"))))
+(DFunDef false "mean" ((PList)) (EVar "None"))
+(DFunDef false "mean" ((PVar "xs")) (EApp (EVar "Some") (EApp (EVar "meanOf") (EVar "xs"))))
+(DTypeSig false "meanOf" (TyFun (TyApp (TyCon "List") (TyCon "Float")) (TyCon "Float")))
+(DFunDef false "meanOf" ((PVar "xs")) (EBinOp "/" (EApp (EVar "sum") (EVar "xs")) (EApp (EVar "intToFloat") (EApp (EVar "length") (EVar "xs")))))
+(DTypeSig true "median" (TyFun (TyApp (TyCon "List") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float"))))
+(DFunDef false "median" ((PVar "xs")) (EApp (EApp (EVar "medianSorted") (EApp (EVar "length") (EVar "xs"))) (EApp (EVar "sort") (EVar "xs"))))
+(DTypeSig false "medianSorted" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float")))))
+(DFunDef false "medianSorted" ((PLit (LInt 0)) PWild) (EVar "None"))
+(DFunDef false "medianSorted" ((PVar "n") (PVar "sorted")) (EBlock (DoLet false false (PVar "half") (EBinOp "/" (EVar "n") (ELit (LInt 2)))) (DoExpr (EMatch (EApp (EApp (EVar "drop") (EIf (EApp (EVar "isEven") (EVar "n")) (EBinOp "-" (EVar "half") (ELit (LInt 1))) (EVar "half"))) (EVar "sorted")) (arm (PCons (PVar "a") (PCons (PVar "b") PWild)) () (EApp (EVar "Some") (EIf (EApp (EVar "isEven") (EVar "n")) (EBinOp "/" (EBinOp "+" (EVar "a") (EVar "b")) (ELit (LFloat 2.0))) (EVar "a")))) (arm (PCons (PVar "a") PWild) () (EApp (EVar "Some") (EVar "a"))) (arm (PList) () (EVar "None"))))))
+(DTypeSig true "stdev" (TyFun (TyApp (TyCon "List") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float"))))
+(DFunDef false "stdev" ((PVar "xs")) (EIf (EBinOp "<" (EApp (EVar "length") (EVar "xs")) (ELit (LInt 2))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "m") (EApp (EVar "meanOf") (EVar "xs"))) (DoLet false false (PVar "squares") (EApp (EVar "sum") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EBinOp "*" (EBinOp "-" (EVar "x") (EVar "m")) (EBinOp "-" (EVar "x") (EVar "m"))))) (EVar "xs")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "sqrt") (EBinOp "/" (EVar "squares") (EApp (EVar "intToFloat") (EBinOp "-" (EApp (EVar "length") (EVar "xs")) (ELit (LInt 1))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "percentile" (TyFun (TyCon "Float") (TyFun (TyApp (TyCon "List") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float")))))
+(DFunDef false "percentile" ((PVar "p") (PVar "xs")) (EIf (EBinOp "||" (EBinOp "||" (EApp (EVar "isNaN") (EVar "p")) (EBinOp "<" (EVar "p") (ELit (LFloat 0.0)))) (EBinOp ">" (EVar "p") (ELit (LFloat 100.0)))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "interpolateRank") (EBinOp "/" (EVar "p") (ELit (LFloat 100.0)))) (EApp (EVar "sort") (EVar "xs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "rankLerp" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Float")))))
+(DFunDef false "rankLerp" ((PVar "a") (PVar "b") (PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LFloat 0.0))) (EVar "a") (EIf (EBinOp ">=" (EVar "t") (ELit (LFloat 0.5))) (EBinOp "-" (EVar "b") (EBinOp "*" (EBinOp "-" (EVar "b") (EVar "a")) (EBinOp "-" (ELit (LFloat 1.0)) (EVar "t")))) (EIf (EVar "otherwise") (EBinOp "+" (EVar "a") (EBinOp "*" (EBinOp "-" (EVar "b") (EVar "a")) (EVar "t"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "interpolateRank" (TyFun (TyCon "Float") (TyFun (TyApp (TyCon "List") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float")))))
+(DFunDef false "interpolateRank" (PWild (PList)) (EVar "None"))
+(DFunDef false "interpolateRank" ((PVar "q") (PVar "sorted")) (EBlock (DoLet false false (PVar "rank") (EBinOp "*" (EVar "q") (EApp (EVar "intToFloat") (EBinOp "-" (EApp (EVar "length") (EVar "sorted")) (ELit (LInt 1)))))) (DoLet false false (PVar "lo") (EApp (EVar "floatToInt") (EApp (EVar "floor") (EVar "rank")))) (DoLet false false (PVar "t") (EBinOp "-" (EVar "rank") (EApp (EVar "intToFloat") (EVar "lo")))) (DoExpr (EMatch (EApp (EApp (EVar "drop") (EVar "lo")) (EVar "sorted")) (arm (PCons (PVar "a") (PCons (PVar "b") PWild)) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "rankLerp") (EVar "a")) (EVar "b")) (EVar "t")))) (arm (PCons (PVar "a") PWild) () (EApp (EVar "Some") (EVar "a"))) (arm (PList) () (EVar "None"))))))
 (DTypeSig true "logBase" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Float"))))
 (DFunDef false "logBase" ((PVar "base") (PVar "x")) (EBinOp "/" (EApp (EVar "log") (EVar "x")) (EApp (EVar "log") (EVar "base"))))
+(DTypeSig true "roundInt" (TyFun (TyCon "Float") (TyCon "Int")))
+(DFunDef false "roundInt" ((PVar "x")) (EApp (EVar "floatToInt") (EApp (EVar "round") (EVar "x"))))
+(DTypeSig true "floorInt" (TyFun (TyCon "Float") (TyCon "Int")))
+(DFunDef false "floorInt" ((PVar "x")) (EApp (EVar "floatToInt") (EApp (EVar "floor") (EVar "x"))))
+(DTypeSig true "ceilInt" (TyFun (TyCon "Float") (TyCon "Int")))
+(DFunDef false "ceilInt" ((PVar "x")) (EApp (EVar "floatToInt") (EApp (EVar "ceil") (EVar "x"))))
 (DTypeSig true "floorDiv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "floorDiv" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "q") (EBinOp "/" (EVar "a") (EVar "b"))) (DoLet false false (PVar "r") (EBinOp "-" (EVar "a") (EBinOp "*" (EVar "q") (EVar "b")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "r") (ELit (LInt 0))) (EBinOp "/=" (EBinOp "<" (EVar "r") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (ELit (LInt 0))))) (EBinOp "-" (EVar "q") (ELit (LInt 1))) (EVar "q")))))
 (DTypeSig true "floorMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
@@ -347,6 +548,7 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DProp false "powInt b 1 equals b" ((pp "b" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "powInt") (EVar "b")) (ELit (LInt 1)))) (EVar "b")))
 (DProp false "powInt b 0 equals 1" ((pp "b" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "powInt") (EVar "b")) (ELit (LInt 0)))) (ELit (LInt 1))))
 # MARK
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "sort" false))))
 (DTypeSig true "toRadians" (TyFun (TyCon "Float") (TyCon "Float")))
 (DFunDef false "toRadians" ((PVar "deg")) (EBinOp "/" (EBinOp "*" (EVar "deg") (EVar "pi")) (ELit (LFloat 180.0))))
 (DTypeSig true "toDegrees" (TyFun (TyCon "Float") (TyCon "Float")))
@@ -361,8 +563,33 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DFunDef false "lerp" ((PVar "a") (PVar "b") (PVar "t")) (EBinOp "+" (EVar "a") (EBinOp "*" (EBinOp "-" (EVar "b") (EVar "a")) (EVar "t"))))
 (DTypeSig true "approxEq" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Bool")))))
 (DFunDef false "approxEq" ((PVar "a") (PVar "b") (PVar "eps")) (EBinOp "<=" (EApp (EMethodRef "abs") (EBinOp "-" (EVar "a") (EVar "b"))) (EVar "eps")))
+(DTypeSig true "mean" (TyFun (TyApp (TyCon "List") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float"))))
+(DFunDef false "mean" ((PList)) (EVar "None"))
+(DFunDef false "mean" ((PVar "xs")) (EApp (EVar "Some") (EApp (EVar "meanOf") (EVar "xs"))))
+(DTypeSig false "meanOf" (TyFun (TyApp (TyCon "List") (TyCon "Float")) (TyCon "Float")))
+(DFunDef false "meanOf" ((PVar "xs")) (EBinOp "/" (EApp (EDictApp "sum") (EVar "xs")) (EApp (EVar "intToFloat") (EApp (EMethodRef "length") (EVar "xs")))))
+(DTypeSig true "median" (TyFun (TyApp (TyCon "List") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float"))))
+(DFunDef false "median" ((PVar "xs")) (EApp (EApp (EVar "medianSorted") (EApp (EMethodRef "length") (EVar "xs"))) (EApp (EVar "sort") (EVar "xs"))))
+(DTypeSig false "medianSorted" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float")))))
+(DFunDef false "medianSorted" ((PLit (LInt 0)) PWild) (EVar "None"))
+(DFunDef false "medianSorted" ((PVar "n") (PVar "sorted")) (EBlock (DoLet false false (PVar "half") (EBinOp "/" (EVar "n") (ELit (LInt 2)))) (DoExpr (EMatch (EApp (EApp (EVar "drop") (EIf (EApp (EVar "isEven") (EVar "n")) (EBinOp "-" (EVar "half") (ELit (LInt 1))) (EVar "half"))) (EVar "sorted")) (arm (PCons (PVar "a") (PCons (PVar "b") PWild)) () (EApp (EVar "Some") (EIf (EApp (EVar "isEven") (EVar "n")) (EBinOp "/" (EBinOp "+" (EVar "a") (EVar "b")) (ELit (LFloat 2.0))) (EVar "a")))) (arm (PCons (PVar "a") PWild) () (EApp (EVar "Some") (EVar "a"))) (arm (PList) () (EVar "None"))))))
+(DTypeSig true "stdev" (TyFun (TyApp (TyCon "List") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float"))))
+(DFunDef false "stdev" ((PVar "xs")) (EIf (EBinOp "<" (EApp (EMethodRef "length") (EVar "xs")) (ELit (LInt 2))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "m") (EApp (EVar "meanOf") (EVar "xs"))) (DoLet false false (PVar "squares") (EApp (EDictApp "sum") (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EBinOp "*" (EBinOp "-" (EVar "x") (EVar "m")) (EBinOp "-" (EVar "x") (EVar "m"))))) (EVar "xs")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "sqrt") (EBinOp "/" (EVar "squares") (EApp (EVar "intToFloat") (EBinOp "-" (EApp (EMethodRef "length") (EVar "xs")) (ELit (LInt 1))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "percentile" (TyFun (TyCon "Float") (TyFun (TyApp (TyCon "List") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float")))))
+(DFunDef false "percentile" ((PVar "p") (PVar "xs")) (EIf (EBinOp "||" (EBinOp "||" (EApp (EVar "isNaN") (EVar "p")) (EBinOp "<" (EVar "p") (ELit (LFloat 0.0)))) (EBinOp ">" (EVar "p") (ELit (LFloat 100.0)))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "interpolateRank") (EBinOp "/" (EVar "p") (ELit (LFloat 100.0)))) (EApp (EVar "sort") (EVar "xs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "rankLerp" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Float")))))
+(DFunDef false "rankLerp" ((PVar "a") (PVar "b") (PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LFloat 0.0))) (EVar "a") (EIf (EBinOp ">=" (EVar "t") (ELit (LFloat 0.5))) (EBinOp "-" (EVar "b") (EBinOp "*" (EBinOp "-" (EVar "b") (EVar "a")) (EBinOp "-" (ELit (LFloat 1.0)) (EVar "t")))) (EIf (EVar "otherwise") (EBinOp "+" (EVar "a") (EBinOp "*" (EBinOp "-" (EVar "b") (EVar "a")) (EVar "t"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "interpolateRank" (TyFun (TyCon "Float") (TyFun (TyApp (TyCon "List") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float")))))
+(DFunDef false "interpolateRank" (PWild (PList)) (EVar "None"))
+(DFunDef false "interpolateRank" ((PVar "q") (PVar "sorted")) (EBlock (DoLet false false (PVar "rank") (EBinOp "*" (EVar "q") (EApp (EVar "intToFloat") (EBinOp "-" (EApp (EMethodRef "length") (EVar "sorted")) (ELit (LInt 1)))))) (DoLet false false (PVar "lo") (EApp (EVar "floatToInt") (EApp (EVar "floor") (EVar "rank")))) (DoLet false false (PVar "t") (EBinOp "-" (EVar "rank") (EApp (EVar "intToFloat") (EVar "lo")))) (DoExpr (EMatch (EApp (EApp (EVar "drop") (EVar "lo")) (EVar "sorted")) (arm (PCons (PVar "a") (PCons (PVar "b") PWild)) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "rankLerp") (EVar "a")) (EVar "b")) (EVar "t")))) (arm (PCons (PVar "a") PWild) () (EApp (EVar "Some") (EVar "a"))) (arm (PList) () (EVar "None"))))))
 (DTypeSig true "logBase" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Float"))))
 (DFunDef false "logBase" ((PVar "base") (PVar "x")) (EBinOp "/" (EApp (EVar "log") (EVar "x")) (EApp (EVar "log") (EVar "base"))))
+(DTypeSig true "roundInt" (TyFun (TyCon "Float") (TyCon "Int")))
+(DFunDef false "roundInt" ((PVar "x")) (EApp (EVar "floatToInt") (EApp (EVar "round") (EVar "x"))))
+(DTypeSig true "floorInt" (TyFun (TyCon "Float") (TyCon "Int")))
+(DFunDef false "floorInt" ((PVar "x")) (EApp (EVar "floatToInt") (EApp (EVar "floor") (EVar "x"))))
+(DTypeSig true "ceilInt" (TyFun (TyCon "Float") (TyCon "Int")))
+(DFunDef false "ceilInt" ((PVar "x")) (EApp (EVar "floatToInt") (EApp (EVar "ceil") (EVar "x"))))
 (DTypeSig true "floorDiv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "floorDiv" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "q") (EBinOp "/" (EVar "a") (EVar "b"))) (DoLet false false (PVar "r") (EBinOp "-" (EVar "a") (EBinOp "*" (EVar "q") (EVar "b")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "r") (ELit (LInt 0))) (EBinOp "/=" (EBinOp "<" (EVar "r") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (ELit (LInt 0))))) (EBinOp "-" (EVar "q") (ELit (LInt 1))) (EVar "q")))))
 (DTypeSig true "floorMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))

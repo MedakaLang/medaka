@@ -1,3 +1,4 @@
+import backend.wasm_symbol_names as WN
 import support.diag_codes.{DiagCode(..)}
 import backend.wasm_demand.{
   WasmDemandPlan, PlannedImport, HelperManifest(..), helperManifest,
@@ -50,7 +51,6 @@ import support.symbol_origin.{SymbolOrigin(..)}
 -- deliberately leaves the `(module` paren OPEN.
 
 import support.util.{anyList, contains, filterList, joinWith}
-import types.private_mangle.{injectiveIdent}
 
 export
 preambleHeadLines : List String
@@ -1807,6 +1807,8 @@ hostImportSigOf "mdk_result_byte" = Some " (param i32) (result i32)"
 hostImportSigOf "mdk_write_file_reset" = Some ""
 hostImportSigOf "mdk_write_file_push" = Some " (param i32)"
 hostImportSigOf "mdk_write_file_commit" = Some " (result i32)"
+hostImportSigOf "mdk_float_fixed" = Some " (param i32) (param f64) (result i32)"
+hostImportSigOf "mdk_float_fixed_byte" = Some " (param i32) (result i32)"
 hostImportSigOf "mdk_str_to_float" = Some " (result f64)"
 hostImportSigOf "mdk_str_to_float_ok" = Some " (result i32)"
 hostImportSigOf "mdk_grant_reset" = Some ""
@@ -1871,6 +1873,23 @@ floatStrLines = [
   "      (then (ref.i31 (i32.const 1)))",
   "      (else (struct.new $C_Some (i32.const 0) (struct.new $float (local.get $d)))))",
   "  )"
+]
+
+-- floatToFixed : the host formats into its own cache (the digit count first, the
+-- double second, the byte length back); the bytes are copied into a fresh $str.
+-- Gated on the plan's `mdk_float_fixed` host key.
+floatFixedLines : List String
+floatFixedLines = [
+  "  ;; floatToFixed : the host formats exactly (ties to even) into a cache; copy the bytes.",
+  "  (func $mdk_float_to_fixed (param $k i32) (param $d f64) (result (ref $str))",
+  "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))",
+  "    (local.set $n (call $mdk_float_fixed (local.get $k) (local.get $d)))",
+  "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_float_fixed_byte (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (struct.new $str (local.get $n) (local.get $buf)))"
 ]
 
 -- the Float runtime (RUNTIME-DESIGN §5).  intToFloat/floatToInt are INTRINSIC (the
@@ -2242,11 +2261,11 @@ jsffiImportLine imp =
 -- program defines under its own name can share either.
 export
 jsffiImportId : String -> String
-jsffiImportId name = "jsffi.import.\{injectiveIdent name}"
+jsffiImportId name = WN.wasmName (WN.WJSImport name)
 
 export
 jsffiWrapperId : String -> String
-jsffiWrapperId name = "jsffi.wrap.\{injectiveIdent name}"
+jsffiWrapperId name = WN.wasmName (WN.WJSWrapper name)
 
 -- `<jsName>:<P1>,...,<Pn>-><R>`, each head as declared.
 export
@@ -3565,6 +3584,7 @@ plannedHelperBlock plan files "hashFloatRuntimeLines" = hashFloatRuntimeLines
 plannedHelperBlock plan files "randomFloatRuntimeLines" =
   randomFloatRuntimeLines
 plannedHelperBlock plan files "floatStrLines" = floatStrLines
+plannedHelperBlock plan files "floatFixedLines" = floatFixedLines
 plannedHelperBlock plan files "strSearchRuntimeLines" = strSearchRuntimeLines
 plannedHelperBlock plan files "strToIntRuntimeLines" = strToIntRuntimeLines
 plannedHelperBlock plan files "strReverseRuntimeLines" = strReverseRuntimeLines

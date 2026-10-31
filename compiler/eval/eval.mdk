@@ -3683,6 +3683,7 @@ externBindings _ = [
   ("intToFloat", prim1 pIntToFloat),
   ("floatToInt", prim1 pFloatToInt),
   ("floatToString", prim1 pFloatToString),
+  ("floatToFixed", prim2 pFloatToFixed),
   ("charToStr", prim1 pCharToStr),
   ("charCode", prim1 pCharCode),
   ("charFromCode", prim1 pCharFromCode),
@@ -3997,6 +3998,10 @@ pHashString _ = panic "hashString: not a String"
 pFloatToString : Value e -> <e> Value e
 pFloatToString (VFloat f) = VString (floatToString f)
 pFloatToString _ = panic "floatToString: not a Float"
+
+pFloatToFixed : Value e -> Value e -> <e> Value e
+pFloatToFixed (VInt n) (VFloat f) = VString (floatToFixed n f)
+pFloatToFixed _ _ = panic "floatToFixed: not an Int and a Float"
 
 pCharToStr : Value e -> <e> Value e
 pCharToStr (VChar s) = VString s

@@ -1,0 +1,32 @@
+import support.symbol_encoding.{encodeComponent, encodePair}
+import string.{endsWith, startsWith}
+import test.{expectAll, expectEqual, expectNotEqual, expectTrue}
+
+test "components encode UTF-8 bytes as lowercase hex" = expectAll [
+  expectEqual "" (encodeComponent ""),
+  expectEqual "415f" (encodeComponent "A_"),
+  expectEqual "c3a9" (encodeComponent "é"),
+  expectEqual "2e" (encodeComponent "."),
+  expectEqual "6d646b2e757365722e" (encodeComponent "mdk.user."),
+  expectEqual "6d646b2e676c6f62616c2e" (encodeComponent "mdk.global."),
+  expectEqual
+    "6d646b2e776f726b65722e7261772e"
+    (encodeComponent "mdk.worker.raw."),
+  expectEqual "00" (encodeComponent "\0"),
+  expectEqual "c3bf" (encodeComponent "ÿ"),
+]
+
+test "pairs encode only the module component and retain the raw name" = expectAll
+  [
+    expectEqual "m612e62__c" (encodePair "a.b" "c"),
+    expectEqual "m61__b.c" (encodePair "a" "b.c"),
+    expectNotEqual (encodePair "a.b" "c") (encodePair "a" "b.c"),
+    expectEqual "m__" (encodePair "" ""),
+    expectEqual "mc3a9__naïve" (encodePair "é" "naïve"),
+    expectEqual (encodePair "a.b" "" ++ "c") (encodePair "a.b" "c"),
+    expectEqual (encodePair "é" "" ++ "name") (encodePair "é" "name"),
+    expectTrue (startsWith "m" (encodePair "" "")),
+    expectTrue
+      (startsWith ("m" ++ encodeComponent "é" ++ "__") (encodePair "é" "tail")),
+    expectTrue (endsWith "naïve" (encodePair "é" "naïve")),
+  ]

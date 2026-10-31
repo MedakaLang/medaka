@@ -1,3 +1,4 @@
+import support.symbol_encoding.{encodePair}
 import frontend.ast.{Addr(..), Pat(..), RecPatField(..)}
 import ir.core_ir.{
   CProgram(..), CBind(..), CClause(..), CExpr(..), CImplEntry(..),
@@ -78,7 +79,7 @@ lowerExterns input decls (prog@(CProgram groups _ _ _ _ facts)) =
           CVar name addr
         else match omLookup name names
           Some fact =>
-            if omHasKey ("core__" ++ name) globals
+            if omHasKey (encodePair "core" name) globals
               || omHasKey name globals && (supplied < 0 || isConstant fact) then
               CVar name addr
             else

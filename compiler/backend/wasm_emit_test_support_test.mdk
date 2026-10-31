@@ -1,3 +1,4 @@
+import backend.wasm_symbol_names as WN
 -- Shared helpers for the `wasm_emit_*_test.mdk` siblings that read emitted WAT
 -- ([P-TEST-SIBLING]); it holds no tests of its own.
 
@@ -34,7 +35,10 @@ watOf src =
 -- the lines of the top-level `(func $<name> ` definition, from its header through `  )`
 export
 funcBlock : String -> String -> List String
-funcBlock name wat = blockFrom ("  (func $" ++ name ++ " ") (lines wat)
+funcBlock name wat =
+  blockFrom
+    ("  (func $" ++ WN.wasmName (WN.WUserFunction name) ++ " ")
+    (lines wat)
 
 blockFrom : String -> List String -> List String
 blockFrom _ [] = []

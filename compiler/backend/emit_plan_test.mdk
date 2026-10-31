@@ -1237,7 +1237,7 @@ test "a top-level definition named like an extern, as the emitter resolves it" =
       (expectEqual
         []
         (keysOf [
-          fn "core__rename" ["x"] (ref "x"),
+          fn "m636f7265__rename" ["x"] (ref "x"),
           val "main" (CTuple [call "rename" [int 1], ref "rename"]),
         ])),
     labelFail

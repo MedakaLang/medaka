@@ -32,6 +32,7 @@ declare i64 @mdk_str_lit(ptr, i64)
 declare void @mdk_print_str(i64)
 declare i64 @mdk_int_to_string(i64)
 declare i64 @mdk_float_to_string(double)
+declare i64 @mdk_float_to_fixed(i64, double)
 declare i64 @llvm.fptosi.sat.i64.f64(double)
 declare double @llvm.arithmetic.fence.f64(double)
 declare i64 @mdk_string_concat(i64)
@@ -215,69 +216,69 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_force___user____theVal()
-  %t1 = call i64 @mdk___user____unbox(i64 %t0)
-  %t2 = call i64 @mdk___user____unbox(i64 %t1)
+  %t0 = call i64 @mdk.force.6d356635663735373336353732356635665f5f74686556616c()
+  %t1 = call i64 @mdk.user.6d356635663735373336353732356635665f5f756e626f78(i64 %t0)
+  %t2 = call i64 @mdk.user.6d356635663735373336353732356635665f5f756e626f78(i64 %t1)
   %t3 = ashr i64 %t2, 1
   call void @mdk_print_int(i64 %t3)
   ret i32 0
 }
 ; mdk-module program
-define internal i64 @mdk_force_$memo_Int_def() {
+define internal i64 @mdk.force.246d656d6f5f496e745f646566() {
 entry:
-  %t0 = load i8, ptr @mdk_gs_$memo_Int_def
+  %t0 = load i8, ptr @mdk.state.246d656d6f5f496e745f646566
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
 lz_forced:
-  %t1 = load i64, ptr @mdk_g_$memo_Int_def
+  %t1 = load i64, ptr @mdk.global.246d656d6f5f496e745f646566
   ret i64 %t1
 lz_forcing:
-  call void @mdk_cyclic_value(ptr @.gname.$memo_Int_def)
+  call void @mdk_cyclic_value(ptr @mdk.gen.globalname.70726f6772616d.246d656d6f5f496e745f646566.0)
   unreachable
 lz_unforced:
-  store i8 1, ptr @mdk_gs_$memo_Int_def
-  %t2 = call i64 @mdk_impl_Int_def()
-  store i64 %t2, ptr @mdk_g_$memo_Int_def
-  store i8 2, ptr @mdk_gs_$memo_Int_def
-  ret i64 %t2
-}
-; mdk-module $memo_zZ_5f
-define internal i64 @mdk_force_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_Int_29__7c__def() {
-entry:
-  %t0 = load i8, ptr @mdk_gs_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_Int_29__7c__def
-  switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
-lz_forced:
-  %t1 = load i64, ptr @mdk_g_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_Int_29__7c__def
-  ret i64 %t1
-lz_forcing:
-  call void @mdk_cyclic_value(ptr @.gname.$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_Int_29__7c__def)
-  unreachable
-lz_unforced:
-  store i8 1, ptr @mdk_gs_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_Int_29__7c__def
-  %t2 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_Int_29__7c__def()
-  store i64 %t2, ptr @mdk_g_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_Int_29__7c__def
-  store i8 2, ptr @mdk_gs_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_Int_29__7c__def
+  store i8 1, ptr @mdk.state.246d656d6f5f496e745f646566
+  %t2 = call i64 @mdk.impl.496e74.646566()
+  store i64 %t2, ptr @mdk.global.246d656d6f5f496e745f646566
+  store i8 2, ptr @mdk.state.246d656d6f5f496e745f646566
   ret i64 %t2
 }
 ; mdk-module program
-define internal i64 @mdk_force___user____theVal() {
+define internal i64 @mdk.force.246d656d6f5f7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f5f646566() {
 entry:
-  %t0 = load i8, ptr @mdk_gs___user____theVal
+  %t0 = load i8, ptr @mdk.state.246d656d6f5f7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f5f646566
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
 lz_forced:
-  %t1 = load i64, ptr @mdk_g___user____theVal
+  %t1 = load i64, ptr @mdk.global.246d656d6f5f7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f5f646566
   ret i64 %t1
 lz_forcing:
-  call void @mdk_cyclic_value(ptr @.gname.__user____theVal)
+  call void @mdk_cyclic_value(ptr @mdk.gen.globalname.70726f6772616d.246d656d6f5f7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f5f646566.1)
   unreachable
 lz_unforced:
-  store i8 1, ptr @mdk_gs___user____theVal
-  %t2 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_a_29__7c__def(i64 ptrtoint (ptr @mdk_dc.program.0 to i64))
-  store i64 %t2, ptr @mdk_g___user____theVal
-  store i8 2, ptr @mdk_gs___user____theVal
+  store i8 1, ptr @mdk.state.246d656d6f5f7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f5f646566
+  %t2 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f.646566()
+  store i64 %t2, ptr @mdk.global.246d656d6f5f7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f5f646566
+  store i8 2, ptr @mdk.state.246d656d6f5f7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f5f646566
   ret i64 %t2
 }
-; mdk-module program
-define internal i64 @mdk___user____unbox(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.force.6d356635663735373336353732356635665f5f74686556616c() {
+entry:
+  %t0 = load i8, ptr @mdk.state.6d356635663735373336353732356635665f5f74686556616c
+  switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
+lz_forced:
+  %t1 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f74686556616c
+  ret i64 %t1
+lz_forcing:
+  call void @mdk_cyclic_value(ptr @mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f74686556616c.0)
+  unreachable
+lz_unforced:
+  store i8 1, ptr @mdk.state.6d356635663735373336353732356635665f5f74686556616c
+  %t2 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f615f32395f5f37635f.646566(i64 ptrtoint (ptr @mdk.gen.dictcell.6d6f64756c652e35663566373537333635373235663566..1 to i64))
+  store i64 %t2, ptr @mdk.global.6d356635663735373336353732356635665f5f74686556616c
+  store i8 2, ptr @mdk.state.6d356635663735373336353732356635665f5f74686556616c
+  ret i64 %t2
+}
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f756e626f78(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg0, 1
@@ -304,16 +305,16 @@ decend1:
   ret i64 %t15
 }
 
-; mdk-module impl:Int_def
-define internal i64 @mdk_impl_Int_def() {
+; mdk-module impl.5f5f757365725f5f3a3a44656661756c747c496e747c.646566
+define internal i64 @mdk.impl.496e74.646566() {
 entry:
   ret i64 15
 }
 
-; mdk-module impl:zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_a_29__7c__def
-define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_a_29__7c__def(i64 %arg0) {
+; mdk-module impl.5f5f757365725f5f3a3a44656661756c747c285f5f757365725f5f2e426f782061297c.646566
+define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f615f32395f5f37635f.646566(i64 %arg0) {
 entry:
-  %t0 = call i64 @mdk_disp_def_0_0(i64 %arg0)
+  %t0 = call i64 @mdk.dispatch..646566.0.0.0(i64 %arg0)
   %t1 = call ptr @mdk_alloc(i64 16)
   store i64 0, ptr %t1
   %t2 = getelementptr i8, ptr %t1, i64 8
@@ -322,8 +323,8 @@ entry:
   ret i64 %t3
 }
 
-; mdk-module impl:zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_Int_29__7c__def
-define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_Int_29__7c__def() {
+; mdk-module impl.5f5f757365725f5f3a3a44656661756c747c285f5f757365725f5f2e426f7820496e74297c.646566
+define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f.646566() {
 entry:
   %t0 = call ptr @mdk_alloc(i64 16)
   store i64 0, ptr %t0
@@ -336,27 +337,27 @@ entry:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_g_$memo_Int_def = global i64 0
+@mdk.global.246d656d6f5f496e745f646566 = global i64 0
 ; mdk-module program
-@mdk_gs_$memo_Int_def = global i8 0
-; mdk-module $memo_zZ_5f
-@mdk_g_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_Int_29__7c__def = global i64 0
-; mdk-module $memo_zZ_5f
-@mdk_gs_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_Int_29__7c__def = global i8 0
+@mdk.state.246d656d6f5f496e745f646566 = global i8 0
 ; mdk-module program
-@mdk_g___user____theVal = global i64 0
+@mdk.global.246d656d6f5f7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f5f646566 = global i64 0
 ; mdk-module program
-@mdk_gs___user____theVal = global i8 0
+@mdk.state.246d656d6f5f7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f5f646566 = global i8 0
+; mdk-module module.5f5f757365725f5f
+@mdk.global.6d356635663735373336353732356635665f5f74686556616c = global i64 0
+; mdk-module module.5f5f757365725f5f
+@mdk.state.6d356635663735373336353732356635665f5f74686556616c = global i8 0
 ; mdk-module program
-@.gname.$memo_Int_def = private unnamed_addr constant [14 x i8] c"\24\6D\65\6D\6F\5F\49\6E\74\5F\64\65\66\00"
-; mdk-module $memo_zZ_5f
-@.gname.$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_Int_29__7c__def = private unnamed_addr constant [98 x i8] c"\24\6D\65\6D\6F\5F\7A\5A\5F\35\66\5F\5F\35\66\5F\75\73\65\72\5F\35\66\5F\5F\35\66\5F\5F\33\61\5F\5F\33\61\5F\44\65\66\61\75\6C\74\5F\37\63\5F\5F\32\38\5F\5F\35\66\5F\5F\35\66\5F\75\73\65\72\5F\35\66\5F\5F\35\66\5F\5F\32\65\5F\42\6F\78\5F\32\30\5F\49\6E\74\5F\32\39\5F\5F\37\63\5F\5F\64\65\66\00"
+@mdk.gen.globalname.70726f6772616d.246d656d6f5f496e745f646566.0 = private unnamed_addr constant [14 x i8] c"\24\6D\65\6D\6F\5F\49\6E\74\5F\64\65\66\00"
 ; mdk-module program
-@.gname.__user____theVal = private unnamed_addr constant [17 x i8] c"\5F\5F\75\73\65\72\5F\5F\5F\5F\74\68\65\56\61\6C\00"
+@mdk.gen.globalname.70726f6772616d.246d656d6f5f7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f5f646566.1 = private unnamed_addr constant [98 x i8] c"\24\6D\65\6D\6F\5F\7A\5A\5F\35\66\5F\5F\35\66\5F\75\73\65\72\5F\35\66\5F\5F\35\66\5F\5F\33\61\5F\5F\33\61\5F\44\65\66\61\75\6C\74\5F\37\63\5F\5F\32\38\5F\5F\35\66\5F\5F\35\66\5F\75\73\65\72\5F\35\66\5F\5F\35\66\5F\5F\32\65\5F\42\6F\78\5F\32\30\5F\49\6E\74\5F\32\39\5F\5F\37\63\5F\5F\64\65\66\00"
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f74686556616c.0 = private unnamed_addr constant [26 x i8] c"\6D\35\66\35\66\37\35\37\33\36\35\37\32\35\66\35\66\5F\5F\74\68\65\56\61\6C\00"
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.dictcell.6d6f64756c652e35663566373537333635373235663566..1 = internal constant [1 x i64] [i64 -3679987837389335393]
 ; mdk-module program
-@mdk_dc.program.0 = internal constant [1 x i64] [i64 -3679987837389335393]
-; mdk-module program
-define internal i64 @mdk_disp_def_0_0(i64 %dict) {
+define internal i64 @mdk.dispatch..646566.0.0.0(i64 %dict) {
 entry:
   %t0 = inttoptr i64 %dict to ptr
   %t1 = load i64, ptr %t0
@@ -364,7 +365,7 @@ entry:
   %t4 = icmp eq i64 %t1, 819135516110349788
   br i1 %t4, label %dispyes5, label %dispnext5
 dispyes5:
-  %t6 = call i64 @mdk_force_$memo_Int_def()
+  %t6 = call i64 @mdk.force.246d656d6f5f496e745f646566()
   store i64 %t6, ptr %t2
   br label %dispend3
 dispnext5:
@@ -374,14 +375,14 @@ dispyes8:
   %t9 = inttoptr i64 %dict to ptr
   %t10 = getelementptr i8, ptr %t9, i64 8
   %t11 = load i64, ptr %t10
-  %t12 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_a_29__7c__def(i64 %t11)
+  %t12 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f615f32395f5f37635f.646566(i64 %t11)
   store i64 %t12, ptr %t2
   br label %dispend3
 dispnext8:
   %t13 = icmp eq i64 %t1, -3679987837389335393
   br i1 %t13, label %dispyes14, label %dispnext14
 dispyes14:
-  %t15 = call i64 @mdk_force_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28__5f__5f_user_5f__5f__2e_Box_20_Int_29__7c__def()
+  %t15 = call i64 @mdk.force.246d656d6f5f7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f5f646566()
   store i64 %t15, ptr %t2
   br label %dispend3
 dispnext14:

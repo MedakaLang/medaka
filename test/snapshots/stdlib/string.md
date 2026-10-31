@@ -1,5 +1,5 @@
 # META
-source_lines=865
+source_lines=990
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -241,6 +241,69 @@ toInt s = stringToInt s
 export
 toFloat : String -> Option Float
 toFloat s = stringToFloat s
+
+{- | `x` written with `digits` places after the decimal point, the digit count
+   first.
+
+   The text is rounded from the exact binary value of `x`, not from its
+   shortest decimal form, and an exact tie goes to the even digit, as in C
+   and Python. A negative `digits` counts as `0` and one above `100` as `100`.
+   `NaN` and the infinities print as `floatToString` prints them, and a
+   negative value that rounds to zero keeps its `-`.
+
+   > toFixed 2 12.3456
+   "12.35"
+   > toFixed 2 2.675
+   "2.67"
+   > toFixed 0 2.5
+   "2"
+   > toFixed (-3) 7.5
+   "8" -}
+export
+toFixed : Int -> Float -> String
+toFixed digits x = floatToFixed (max 0 (min 100 digits)) x
+
+{- | `n` written in decimal, with a comma before each group of three digits.
+
+   The groups count from the last digit, and a leading minus sign stays in
+   front. An `n` of magnitude below `1000` is written unchanged. The grouping
+   works on the written digits, so the most negative `Int` groups correctly.
+
+   > groupThousands 1234567
+   "1,234,567"
+   > groupThousands (-1234)
+   "-1,234" -}
+export
+groupThousands : Int -> String
+groupThousands n = groupSigned (intToString n)
+
+-- > groupThousands 0
+-- "0"
+-- > groupThousands 999
+-- "999"
+-- > groupThousands 1000
+-- "1,000"
+-- > groupThousands (-1000)
+-- "-1,000"
+-- > groupThousands intMaxBound
+-- "4,611,686,018,427,387,903"
+-- > groupThousands intMinBound
+-- "-4,611,686,018,427,387,904"
+
+-- Splits off a leading minus sign, which the grouping leaves in front.
+groupSigned : String -> String
+groupSigned s
+  | startsWith "-" s = "-" ++ groupDigits (stringSlice 1 (stringLength s) s)
+  | otherwise = groupDigits s
+
+-- Inserts a comma before each group of three digits, counting from the right.
+groupDigits : String -> String
+groupDigits s =
+  let n = stringLength s
+  if n <= 3 then
+    s
+  else
+    "\{groupDigits (stringSlice 0 (n - 3) s)},\{stringSlice (n - 3) n s}"
 
 -- # Searching
 
@@ -533,6 +596,68 @@ spliceAt i oldLen new s = stringConcat [
   new,
   stringSlice (i + oldLen) (stringLength s) s,
 ]
+
+{- | The string with `old` replaced by `new`, provided `old` occurs exactly
+   once.
+
+   `Err` when `old` occurs no times, more than once, or is empty. The
+   message names the first line of `old` (cut at 60 characters) and the
+   number of occurrences found. Occurrences are counted as
+   `countOccurrences` counts them.
+
+   > replaceOnce "l" "L" "help"
+   Ok "heLp"
+   > replaceOnce "z" "Z" "hello"
+   Err "expected 1 occurrence of `z…`, found 0"
+   > replaceOnce "l" "L" "hello"
+   Err "expected 1 occurrence of `l…`, found 2"
+   > replaceOnce "" "x" "hello"
+   Err "expected 1 occurrence of `…`, found 0" -}
+export
+replaceOnce : String -> String -> String -> Result String String
+replaceOnce old new s = match countOccurrences old s
+  1 => Ok (replaceFirst old new s)
+  n => Err "expected 1 occurrence of `\{take 60 (firstLine old)}…`, found \{n}"
+
+-- Matches on `lines` instead of calling `list.head`: `string` imports only
+-- `core`, so a `list` import here would load `list` into every program that
+-- imports `string`.
+firstLine : String -> String
+firstLine s = match lines s
+  [] => ""
+  l :: _ => l
+
+{- | Splits `s` at the first `start` and the first `end` after it, giving
+   the text before `start`, the text between the two, and the text after
+   `end`. Neither anchor appears in the result.
+
+   `Err` names the anchor that is missing: `start` anywhere in `s`, or
+   `end` after `start`.
+
+   > cutBetween "[" "]" "a[b]c"
+   Ok ("a", "b", "c")
+   > cutBetween "[" "]" "a[]c"
+   Ok ("a", "", "c")
+   > cutBetween "[" "]" "abc"
+   Err "start anchor `[` not found"
+   > cutBetween "[" "]" "a]b[c"
+   Err "end anchor `]` not found after start" -}
+export
+cutBetween : String ->
+  String ->
+  String ->
+  Result String (String, String, String)
+cutBetween start end s = match indexOf start s
+  None => Err "start anchor `\{start}` not found"
+  Some i =>
+    let afterStart = drop (i + stringLength start) s
+    match indexOf end afterStart
+      None => Err "end anchor `\{end}` not found after start"
+      Some j => Ok (
+        take i s,
+        take j afterStart,
+        drop (j + stringLength end) afterStart,
+      )
 
 {- | The string with every non-overlapping occurrence of `old` replaced by
    `new`.
@@ -909,6 +1034,14 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DFunDef false "toInt" ((PVar "s")) (EApp (EVar "stringToInt") (EVar "s")))
 (DTypeSig true "toFloat" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Float"))))
 (DFunDef false "toFloat" ((PVar "s")) (EApp (EVar "stringToFloat") (EVar "s")))
+(DTypeSig true "toFixed" (TyFun (TyCon "Int") (TyFun (TyCon "Float") (TyCon "String"))))
+(DFunDef false "toFixed" ((PVar "digits") (PVar "x")) (EApp (EApp (EVar "floatToFixed") (EApp (EApp (EVar "max") (ELit (LInt 0))) (EApp (EApp (EVar "min") (ELit (LInt 100))) (EVar "digits")))) (EVar "x")))
+(DTypeSig true "groupThousands" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "groupThousands" ((PVar "n")) (EApp (EVar "groupSigned") (EApp (EVar "intToString") (EVar "n"))))
+(DTypeSig false "groupSigned" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "groupSigned" ((PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "-"))) (EVar "s")) (EBinOp "++" (ELit (LString "-")) (EApp (EVar "groupDigits") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))) (EIf (EVar "otherwise") (EApp (EVar "groupDigits") (EVar "s")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "groupDigits" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "groupDigits" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 3))) (EVar "s") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "groupDigits") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "s"))))) (ELit (LString ","))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "n")) (EVar "s")))) (ELit (LString "")))))))
 (DTypeSig true "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "startsWith" ((PVar "prefix") (PVar "s")) (EApp (EApp (EVar "stringStartsWith") (EVar "prefix")) (EVar "s")))
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -965,6 +1098,12 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DFunDef false "replaceFirst" ((PVar "old") (PVar "new") (PVar "s")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "old")) (EVar "s")) (arm (PCon "None") () (EVar "s")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "spliceAt") (EVar "i")) (EApp (EVar "stringLength") (EVar "old"))) (EVar "new")) (EVar "s")))))
 (DTypeSig false "spliceAt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "spliceAt" ((PVar "i") (PVar "oldLen") (PVar "new") (PVar "s")) (EApp (EVar "stringConcat") (EListLit (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")) (EVar "new") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EVar "oldLen"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))
+(DTypeSig true "replaceOnce" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
+(DFunDef false "replaceOnce" ((PVar "old") (PVar "new") (PVar "s")) (EMatch (EApp (EApp (EVar "countOccurrences") (EVar "old")) (EVar "s")) (arm (PLit (LInt 1)) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "replaceFirst") (EVar "old")) (EVar "new")) (EVar "s")))) (arm (PVar "n") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EVar "display") (EApp (EApp (EVar "take") (ELit (LInt 60))) (EApp (EVar "firstLine") (EVar "old"))))) (ELit (LString "…`, found "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "")))))))
+(DTypeSig false "firstLine" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "firstLine" ((PVar "s")) (EMatch (EApp (EVar "lines") (EVar "s")) (arm (PList) () (ELit (LString ""))) (arm (PCons (PVar "l") PWild) () (EVar "l"))))
+(DTypeSig true "cutBetween" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))))
+(DFunDef false "cutBetween" ((PVar "start") (PVar "end") (PVar "s")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "start")) (EVar "s")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "start anchor `")) (EApp (EVar "display") (EVar "start"))) (ELit (LString "` not found"))))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "afterStart") (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "start")))) (EVar "s"))) (DoExpr (EMatch (EApp (EApp (EVar "indexOf") (EVar "end")) (EVar "afterStart")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "end anchor `")) (EApp (EVar "display") (EVar "end"))) (ELit (LString "` not found after start"))))) (arm (PCon "Some" (PVar "j")) () (EApp (EVar "Ok") (ETuple (EApp (EApp (EVar "take") (EVar "i")) (EVar "s")) (EApp (EApp (EVar "take") (EVar "j")) (EVar "afterStart")) (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "j") (EApp (EVar "stringLength") (EVar "end")))) (EVar "afterStart")))))))))))
 (DTypeSig true "replaceAll" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "replaceAll" ((PVar "old") (PVar "new") (PVar "s")) (EIf (EBinOp "==" (EVar "old") (ELit (LString ""))) (EVar "s") (EApp (EApp (EApp (EVar "replaceAllGo") (EVar "old")) (EVar "new")) (EVar "s"))))
 (DTypeSig false "replaceAllGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
@@ -1076,6 +1215,14 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DFunDef false "toInt" ((PVar "s")) (EApp (EVar "stringToInt") (EVar "s")))
 (DTypeSig true "toFloat" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Float"))))
 (DFunDef false "toFloat" ((PVar "s")) (EApp (EVar "stringToFloat") (EVar "s")))
+(DTypeSig true "toFixed" (TyFun (TyCon "Int") (TyFun (TyCon "Float") (TyCon "String"))))
+(DFunDef false "toFixed" ((PVar "digits") (PVar "x")) (EApp (EApp (EVar "floatToFixed") (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EApp (EApp (EMethodRef "min") (ELit (LInt 100))) (EVar "digits")))) (EVar "x")))
+(DTypeSig true "groupThousands" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "groupThousands" ((PVar "n")) (EApp (EVar "groupSigned") (EApp (EVar "intToString") (EVar "n"))))
+(DTypeSig false "groupSigned" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "groupSigned" ((PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "-"))) (EVar "s")) (EBinOp "++" (ELit (LString "-")) (EApp (EVar "groupDigits") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))) (EIf (EVar "otherwise") (EApp (EVar "groupDigits") (EVar "s")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "groupDigits" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "groupDigits" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 3))) (EVar "s") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "groupDigits") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "s"))))) (ELit (LString ","))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "n")) (EVar "s")))) (ELit (LString "")))))))
 (DTypeSig true "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "startsWith" ((PVar "prefix") (PVar "s")) (EApp (EApp (EVar "stringStartsWith") (EVar "prefix")) (EVar "s")))
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -1132,6 +1279,12 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DFunDef false "replaceFirst" ((PVar "old") (PVar "new") (PVar "s")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "old")) (EVar "s")) (arm (PCon "None") () (EVar "s")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "spliceAt") (EVar "i")) (EApp (EVar "stringLength") (EVar "old"))) (EVar "new")) (EVar "s")))))
 (DTypeSig false "spliceAt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "spliceAt" ((PVar "i") (PVar "oldLen") (PVar "new") (PVar "s")) (EApp (EVar "stringConcat") (EListLit (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")) (EVar "new") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EVar "oldLen"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))
+(DTypeSig true "replaceOnce" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
+(DFunDef false "replaceOnce" ((PVar "old") (PVar "new") (PVar "s")) (EMatch (EApp (EApp (EVar "countOccurrences") (EVar "old")) (EVar "s")) (arm (PLit (LInt 1)) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "replaceFirst") (EVar "old")) (EVar "new")) (EVar "s")))) (arm (PVar "n") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected 1 occurrence of `")) (EApp (EMethodRef "display") (EApp (EApp (EVar "take") (ELit (LInt 60))) (EApp (EVar "firstLine") (EVar "old"))))) (ELit (LString "…`, found "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "")))))))
+(DTypeSig false "firstLine" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "firstLine" ((PVar "s")) (EMatch (EApp (EVar "lines") (EVar "s")) (arm (PList) () (ELit (LString ""))) (arm (PCons (PVar "l") PWild) () (EVar "l"))))
+(DTypeSig true "cutBetween" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))))
+(DFunDef false "cutBetween" ((PVar "start") (PVar "end") (PVar "s")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "start")) (EVar "s")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "start anchor `")) (EApp (EMethodRef "display") (EVar "start"))) (ELit (LString "` not found"))))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "afterStart") (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "start")))) (EVar "s"))) (DoExpr (EMatch (EApp (EApp (EVar "indexOf") (EVar "end")) (EVar "afterStart")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "end anchor `")) (EApp (EMethodRef "display") (EVar "end"))) (ELit (LString "` not found after start"))))) (arm (PCon "Some" (PVar "j")) () (EApp (EVar "Ok") (ETuple (EApp (EApp (EVar "take") (EVar "i")) (EVar "s")) (EApp (EApp (EVar "take") (EVar "j")) (EVar "afterStart")) (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "j") (EApp (EVar "stringLength") (EVar "end")))) (EVar "afterStart")))))))))))
 (DTypeSig true "replaceAll" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "replaceAll" ((PVar "old") (PVar "new") (PVar "s")) (EIf (EBinOp "==" (EVar "old") (ELit (LString ""))) (EVar "s") (EApp (EApp (EApp (EVar "replaceAllGo") (EVar "old")) (EVar "new")) (EVar "s"))))
 (DTypeSig false "replaceAllGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))

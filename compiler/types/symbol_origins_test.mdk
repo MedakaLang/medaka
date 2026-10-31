@@ -1,0 +1,70 @@
+import test.{expectAll, expectEqual, expectNotEqual}
+import frontend.parser.{parse}
+import frontend.ast.{
+  Decl(..), LetBind(..), FunClause(..), Expr(..), Lit(..), Attr(..), noDeclLoc,
+  noBinderId
+}
+import support.ordmap.{omEmpty, omLookup}
+import types.symbol_origins.{
+  SymbolOrigin(..), SymbolOrigins(..), unitOrigins, mergeOrigins,
+  functionOrigin, originKey
+}
+
+test "unit definitions retain owner-qualified constructor origins" =
+  let first = unitOrigins "a" omEmpty (parse "data A = Cons | Nil\nf = 1\n")
+  let second = unitOrigins "b" omEmpty (parse "data B = Cons | Nil\ng = 2\n")
+  let origins = mergeOrigins first second
+  let a = optionOr omEmpty (omLookup "A" origins.constructors)
+  let b = optionOr omEmpty (omLookup "B" origins.constructors)
+  expectAll [
+    expectEqual (Some (ModuleOrigin "a" "Cons")) (omLookup "Cons" a),
+    expectEqual (Some (ModuleOrigin "b" "Cons")) (omLookup "Cons" b),
+    expectEqual (Some (ModuleOrigin "a" "Nil")) (omLookup "Nil" a),
+    expectEqual (Some (ModuleOrigin "b" "Nil")) (omLookup "Nil" b),
+    expectEqual (ModuleOrigin "a" "f") (functionOrigin origins noBinderId "f"),
+    expectEqual (ModuleOrigin "b" "g") (functionOrigin origins noBinderId "g"),
+  ]
+
+test "origin keys preserve variants and generated component boundaries" = expectAll
+  [
+    expectNotEqual
+      (originKey (ModuleOrigin "a" "x"))
+      (originKey (SingleOrigin "x")),
+    expectNotEqual
+      (originKey (BuiltinOrigin "x"))
+      (originKey (SingleOrigin "x")),
+    expectNotEqual
+      (originKey (GeneratedOrigin "memo" []))
+      (originKey (GeneratedOrigin "memo" [""])),
+    expectNotEqual
+      (originKey (ModuleOrigin "a.b" "c"))
+      (originKey (ModuleOrigin "a" "b.c")),
+  ]
+
+test "attributes and let groups preserve no-ID definitions" =
+  let body = ELit (LInt 1)
+  let decls = [
+    DAttrib
+      [AttrNoInline]
+      (DFunDef False "attributed" [] body noDeclLoc noBinderId),
+    DLetGroup False [
+      LetBind "first" [FunClause [] body] noDeclLoc noBinderId,
+      LetBind "second" [FunClause [] body] noDeclLoc noBinderId,
+    ],
+    DFunDef False "other" [] body noDeclLoc noBinderId,
+  ]
+  let origins = unitOrigins "unit" omEmpty decls
+  expectAll [
+    expectEqual
+      (ModuleOrigin "unit" "attributed")
+      (functionOrigin origins noBinderId "attributed"),
+    expectEqual
+      (ModuleOrigin "unit" "first")
+      (functionOrigin origins noBinderId "first"),
+    expectEqual
+      (ModuleOrigin "unit" "second")
+      (functionOrigin origins noBinderId "second"),
+    expectEqual
+      (ModuleOrigin "unit" "other")
+      (functionOrigin origins noBinderId "other"),
+  ]

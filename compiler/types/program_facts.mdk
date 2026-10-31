@@ -1,3 +1,4 @@
+import types.symbol_origins.{SymbolOrigins}
 -- The facts a typechecked program carries to the stages that read it: the
 -- evidence index, the disposition table and the binder-type table, as one value,
 -- plus the one run-owned cell that holds it for the duration of a bracketed
@@ -20,6 +21,7 @@ import types.capability_manifest.{CapabilityManifest}
 -- `Option` fields are `None` for a program that was never typechecked, so an
 -- untyped lowering reads absence.
 public export data ProgramFacts = ProgramFacts {
+  pfSymbolOrigins : Option SymbolOrigins,
   pfManifests : List CapabilityManifest,
   pfEvidence : EvIndex,
   pfDispositions : Option DispositionTable,
@@ -32,6 +34,7 @@ public export data ProgramFacts = ProgramFacts {
 export
 emptyFacts : ProgramFacts
 emptyFacts = ProgramFacts {
+  pfSymbolOrigins = None,
   pfManifests = [],
   pfEvidence = evIndexOf [],
   pfDispositions = None,
@@ -43,6 +46,7 @@ emptyFacts = ProgramFacts {
 export
 factsOfChecked : CheckedProgram -> ProgramFacts
 factsOfChecked c = ProgramFacts {
+  pfSymbolOrigins = None,
   pfManifests = c.cpManifests,
   pfEvidence = evIndexOf c.cpEvidence,
   pfDispositions = Some c.cpDispositions,
@@ -62,6 +66,7 @@ factsOfElab elab = factsOfElabWith elab.erEvidence elab
 export
 factsOfElabWith : EvTable -> ElabResult -> ProgramFacts
 factsOfElabWith table elab = ProgramFacts {
+  pfSymbolOrigins = None,
   pfManifests = elab.erFacts.efManifests,
   pfEvidence = evIndexOf table,
   pfDispositions = Some elab.erDispositions,
@@ -125,3 +130,7 @@ factsNow _ =
   optionOrPanic
     "program facts: read outside any withFacts bracket"
     !currentFacts
+
+export
+withSymbolOrigins : SymbolOrigins -> ProgramFacts -> ProgramFacts
+withSymbolOrigins origins facts = { facts | pfSymbolOrigins = Some origins }

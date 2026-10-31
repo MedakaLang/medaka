@@ -1,3 +1,4 @@
+import types.symbol_origins.{SymbolOrigin(..), CoreSymbolOrigins(..)}
 import types.capability_manifest.{
   EntryKey(..),
   ManifestRequest(..),
@@ -23,7 +24,7 @@ import frontend.ast.{TyConOrigin(..)}
 import ir.extern_types.{ExternDeclFact(..)}
 import types.extern_source.{ExternBindingKind(..), ExternProvenance(..)}
 import types.runtime_abi_types.{CallableShape(..)}
-import support.ordmap.{omKeys, omLookup}
+import support.ordmap.{OrdMap, omKeys, omLookup}
 import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..)}
 import ir.core_ir.{
   CExpr(..),
@@ -379,15 +380,18 @@ tablesSexp rows facts None = match (
   facts.factEntryOutcome,
   omKeys facts.factExterns,
   facts.factManifests,
+  facts.factSymbolOrigins,
 )
-  ([], [], [], [], None, [], []) => []
-  (_, [], [], [], None, [], []) => [slist (map methodContextPairSexp rows)]
+  ([], [], [], [], None, [], [], None) => []
+  (_, [], [], [], None, [], [], None) =>
+    [slist (map methodContextPairSexp rows)]
   _ => [slist (map methodContextPairSexp rows), declFactsSexp facts]
 
 declFactsSexp : DeclFacts -> String
 declFactsSexp facts =
   if not (isEmpty (omKeys facts.factExterns))
-    || not (isEmpty facts.factManifests) then
+    || not (isEmpty facts.factManifests)
+    || isSome facts.factSymbolOrigins then
     node
       "facts"
       ([
@@ -403,10 +407,14 @@ declFactsSexp facts =
                 None => panic "extern inventory lost a row")
               (omKeys facts.factExterns)),
         ]
-        ++ (if isEmpty facts.factManifests then
+        ++ (if isEmpty facts.factManifests
+          && isNone facts.factSymbolOrigins then
           []
         else
-          [node "manifests" (map manifestSexp facts.factManifests)]))
+          [node "manifests" (map manifestSexp facts.factManifests)])
+        ++ (match facts.factSymbolOrigins
+          None => []
+          Some origins => [originsSexp origins]))
   else
     node
       "facts"
@@ -422,6 +430,47 @@ declFactsSexp facts =
         ++ (match facts.factEntryOutcome
           Some outcome => [entryOutcomeSexp outcome]
           None => []))
+
+originSexp : SymbolOrigin -> String
+originSexp (ModuleOrigin mid name) = node "module" [escStr mid, escStr name]
+originSexp (SingleOrigin name) = node "single" [escStr name]
+originSexp (GeneratedOrigin family parts) =
+  node "generated" [escStr family, slist (map escStr parts)]
+originSexp (BuiltinOrigin tag) = node "builtin" [escStr tag]
+
+originsSexp : CoreSymbolOrigins -> String
+originsSexp origins = node "origins" [
+  slist
+    (map
+      (name => node "function" [
+        escStr name,
+        originSexp (originAt name origins.functions),
+      ])
+      (omKeys origins.functions)),
+  slist
+    (map
+      (owner => node "owner" [
+        escStr owner,
+        slist
+          (map
+            (name => node "constructor" [
+              escStr name,
+              originSexp (originAt name (ownerAt owner origins.constructors)),
+            ])
+            (omKeys (ownerAt owner origins.constructors))),
+      ])
+      (omKeys origins.constructors)),
+]
+
+originAt : String -> OrdMap SymbolOrigin -> SymbolOrigin
+originAt name rows = match omLookup name rows
+  Some origin => origin
+  None => panic "symbol origin: missing serialized row"
+
+ownerAt : String -> OrdMap (OrdMap SymbolOrigin) -> OrdMap SymbolOrigin
+ownerAt owner rows = match omLookup owner rows
+  Some names => names
+  None => panic "symbol origin: missing serialized owner"
 
 entryOutcomeSexp : EntryFact -> String
 entryOutcomeSexp outcome = node "entry" [

@@ -1,3 +1,4 @@
+import types.program_facts.{withSymbolOrigins}
 import support.diag_codes.{DiagCode(..)}
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{prepareWasmPlan}
@@ -647,10 +648,13 @@ emitBoth root sel runtimeDecls userDecls =
   let evTable = elab.erEvidence
   let externFacts =
     factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
-  let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
+  let (coreD, modules2, evTableM, origins) =
+    mangleUnitsEv evTable coreE modulesE
   let allDecls = coreD ++ flatMap snd modules2
   let cp =
-    lowerProgramEmitWith (factsWithEvidence evTableM externFacts) allDecls
+    lowerProgramEmitWith
+      (withSymbolOrigins origins (factsWithEvidence evTableM externFacts))
+      allDecls
   let _ =
     if wants sel "LLVM" then
       emitSection root "LLVM" (llvmOf runtimeDecls allDecls cp)

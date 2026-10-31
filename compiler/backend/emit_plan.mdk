@@ -1,3 +1,4 @@
+import support.symbol_encoding.{encodePair}
 import backend.wasm_demand.{
   JsImport(..), WasmDemand(..), WasmDemandInputs(..), WasmDemandPlan,
   planWasmDemand, ctorFloatFieldIndex
@@ -341,8 +342,8 @@ canonFnIn : OrdMap Int -> String -> String
 canonFnIn fns name =
   if omHasKey name fns then
     name
-  else if omHasKey ("core__" ++ name) fns then
-    "core__" ++ name
+  else if omHasKey (encodePair "core" name) fns then
+    encodePair "core" name
   else
     name
 

@@ -130,8 +130,8 @@ test "canonical extern imports and same-spelled local functions remain distinct"
       (Some "$extern$u7:runtime11:intToString")
       (refName "main" (declsOf "app" result)),
     expectEqual
-      (Some "app__intToString")
-      (refName "app__local" (declsOf "app" result)),
+      (Some "m617070__intToString")
+      (refName "m617070__local" (declsOf "app" result)),
   ]
 
 test "private externs do not acquire an imported alias route" =
@@ -144,18 +144,18 @@ test "private externs do not acquire an imported alias route" =
 
 test "plain import maps a ctor to its declaring module" =
   expectEqual
-    (Some "amod__Wid")
+    (Some "m616d6f64__Wid")
     (refIn [("amod", amod), ("app", useIn "import amod.{Wid(..)}")])
 
 test "a constructor's definition is renamed to the declaring module's symbol" =
   expectEqual
-    ["amod__Wid", "amod__Gad"]
+    ["m616d6f64__Wid", "m616d6f64__Gad"]
     (ctorNames
       (declsOf "amod" (mangled [("amod", amod), ("app", "main = 1\n")])))
 
 test "one-hop re-export resolves to the original definer, not the re-exporter" =
   expectEqual
-    (Some "amod__Wid")
+    (Some "m616d6f64__Wid")
     (refIn [
       ("amod", amod),
       ("bmod", "export import amod.{Wid(..)}\n"),
@@ -164,7 +164,7 @@ test "one-hop re-export resolves to the original definer, not the re-exporter" =
 
 test "multi-hop re-export chain still resolves to the original definer" =
   expectEqual
-    (Some "amod__Wid")
+    (Some "m616d6f64__Wid")
     (refIn [
       ("amod", amod),
       ("bmod", "export import amod.{Wid(..)}\n"),
@@ -174,7 +174,7 @@ test "multi-hop re-export chain still resolves to the original definer" =
 
 test "wildcard re-export and wildcard import resolve to the original definer" =
   expectEqual
-    (Some "amod__Wid")
+    (Some "m616d6f64__Wid")
     (refIn [
       ("amod", amod),
       ("bmod", "export import amod.*\n"),
@@ -183,7 +183,7 @@ test "wildcard re-export and wildcard import resolve to the original definer" =
 
 test "bare ctor member of a re-export resolves to the original definer" =
   expectEqual
-    (Some "amod__Gad")
+    (Some "m616d6f64__Gad")
     (refName
       "main"
       (declsOf
@@ -198,7 +198,7 @@ test "a re-export that names one ctor offers only that type" = expectAll
   [
     -- `Tq` names a type of qmod and a ctor of its `Sq`; the hop carries the ctor
     expectEqual
-      (Some "qmod__Tq")
+      (Some "m716d6f64__Tq")
       (refName
         "main"
         (declsOf
@@ -248,7 +248,7 @@ test "a private re-export is not offered to importers" =
 
 test "a local constructor shadows an imported one of the same spelling" =
   expectEqual
-    (Some "app__Wid")
+    (Some "m617070__Wid")
     (refIn [
       ("amod", amod),
       ("app", "import amod.{Wid(..)}\ndata Mine = Wid Int Int\nmain = Wid\n"),
@@ -256,7 +256,7 @@ test "a local constructor shadows an imported one of the same spelling" =
 
 test "a private ctor spelled like a public type is not offered" =
   expectEqual
-    (Some "mq__Zz")
+    (Some "m6d71__Zz")
     (refName
       "main"
       (declsOf
@@ -269,7 +269,7 @@ test "a private ctor spelled like a public type is not offered" =
 
 test "reserved constructors are never mangled" = expectAll [
   expectEqual
-    ["None", "amod__Mk"]
+    ["None", "m616d6f64__Mk"]
     (ctorNames
       (declsOf
         "amod"
@@ -288,13 +288,13 @@ test "mangledName and sanitizeId build a legal module-qualified symbol" = expect
     expectEqual "lib_plain" (sanitizeId "lib.plain"),
     expectEqual "a_b_c" (sanitizeId "a/b-c"),
     expectEqual "plain_9" (sanitizeId "plain_9"),
-    expectEqual "amod__Wid" (mangledName "amod" "Wid"),
-    expectEqual "lib_plain__f" (mangledName "lib.plain" "f"),
+    expectEqual "m616d6f64__Wid" (mangledName "amod" "Wid"),
+    expectEqual "m6c69622e706c61696e__f" (mangledName "lib.plain" "f"),
   ]
 
 test "re-exported function resolves to the original definer" =
   expectEqual
-    (Some "amod__mk")
+    (Some "m616d6f64__mk")
     (refName
       "main"
       (declsOf
@@ -308,7 +308,7 @@ test "re-exported function resolves to the original definer" =
 test "a type row's ctors take that type's declaring module, not a same-spelled ctor's" =
   -- `K` is declared by both carried types; `L` only by b's `U` (a's is private)
   expectEqual
-    (Some "b__L")
+    (Some "m62__L")
     (refIn [
       ("a", "public export data T = J | K Int\ndata Priv = L Int | Z\n"),
       ("b", "public export data U = K Int | L Int\n"),
@@ -326,16 +326,16 @@ test "an own type and a carried type of the same name keep their own modules" =
   expectAll
     [
       expectEqual
-        (Some "facade__A")
+        (Some "m666163616465__A")
         (refIn (units "import facade.{T(..)}\nmain = A\n")),
       -- `T(..)` expands through facade's first `T` row, as resolve's does; a
       -- wildcard brings the carried `T`'s ctors too
-      expectEqual (Some "m__B") (refIn (units "import facade.*\nmain = B\n")),
+      expectEqual (Some "m6d__B") (refIn (units "import facade.*\nmain = B\n")),
     ]
 
 test "a function carried after a same-named interface method is still offered" =
   expectEqual
-    (Some "b__rendr")
+    (Some "m62__rendr")
     (refIn [
       ("a", "export\ninterface Rend a where\n  rendr : a -> Int\n"),
       ("b", "export\nrendr n = n + 1\n"),
@@ -367,7 +367,7 @@ test "mangleCtorCollisions returns a collision-free program unchanged" =
 test "mangleCtorCollisions renames only ctors declared by two units" = expectAll
   [
     expectEqual
-      ["amod__Wid", "Gad"]
+      ["m616d6f64__Wid", "Gad"]
       (ctorNames
         (declsOf
           "amod"
@@ -379,7 +379,7 @@ test "mangleCtorCollisions renames only ctors declared by two units" = expectAll
                 ("bmod", "public export data Other = Wid\n"),
               ]))))),
     expectEqual
-      ["bmod__Wid"]
+      ["m626d6f64__Wid"]
       (ctorNames
         (declsOf
           "bmod"

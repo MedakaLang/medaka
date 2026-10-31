@@ -1,3 +1,5 @@
+import backend.wasm_symbol_names as WN
+import support.symbol_encoding.{encodePair}
 import support.diag_codes.{DiagCode(..)}
 import backend.wasm_repr.{
   WasmRepr(..), WasmValue(..), LocalSlot(..), valueRepr, valueLines, slotIndex,
@@ -970,11 +972,11 @@ emitFfiEtaW prog name = match jsImportForW prog name
   Err gap => gap
   Ok imp =>
     let arity = listLen imp.params
-    let lamName = "$mdk_ffi_" ++ injectiveIdent name
-    let params = synthParams arity
+    let lamName = "$" ++ WN.wasmName (WN.WGenerated WN.WFfi name 0)
+    let params = synthWParams arity
     let body =
-      flatMap argLoadAt (zipIdx params 0)
-        ++ map (p => "local.get $" ++ gname p) params
+      flatMap argLoadPosition (rangeList 0 arity)
+        ++ map (p => "local.get $" ++ wParamId p) params
         ++ [callFnW prog CallValueW (jsffiWrapperW prog imp) arity, "return"]
     let _ = noteFuncRef prog lamName
     let _ =
@@ -983,11 +985,9 @@ emitFfiEtaW prog name = match jsImportForW prog name
         lamName
         codeShapeW
         ([
-            "  (func "
-              ++ lamName
-              ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))",
+            "  (func \{lamName} (type $codety) (param \{syntheticLocalName WN.WAbiSelf 0} (ref eq)) (param \{syntheticLocalName WN.WAbiArgs 0} (ref $argarr)) (result (ref eq))",
           ]
-          ++ map (localDeclRef >> ("    " ++ _)) params
+          ++ map (wParamLocal >> ("    " ++ _)) params
           ++ indent body
           ++ ["  )"])
     wConstClos prog lamName arity
@@ -1210,8 +1210,8 @@ canonFn : Prog -> String -> String
 canonFn prog n =
   if progFnMemberW prog n then
     n
-  else if progFnMemberW prog ("core__" ++ n) then
-    "core__" ++ n
+  else if progFnMemberW prog (encodePair "core" n) then
+    encodePair "core" n
   else
     n
 
@@ -1647,7 +1647,7 @@ wConstClos prog lamName arity =
   match omLookup initBody !emit.constClosIdx
     Some g => [globalW prog "global.get" g]
     None =>
-      let g = "$mdk_cc_" ++ intToString !emit.nextConstClosId
+      let g = "$" ++ WN.wasmName (WN.WConstGlobal !emit.nextConstClosId)
       let _ =
         registerW
           emit
@@ -2160,8 +2160,8 @@ scanExprValueUses fnNames ctorArs locals (CVar x _) =
     []
   else if fnMemberIndexW fnNames x then
     [x]
-  else if fnMemberIndexW fnNames ("core__" ++ x) then
-    ["core__" ++ x]
+  else if fnMemberIndexW fnNames (encodePair "core" x) then
+    [encodePair "core" x]
   else
     []
 scanExprValueUses fnNames ctorArs locals (app@(CApp _ _ _)) =
@@ -2171,8 +2171,8 @@ scanExprValueUses fnNames ctorArs locals (app@(CApp _ _ _)) =
       let fn =
         if fnMemberIndexW fnNames fn0 then
           fn0
-        else if fnMemberIndexW fnNames ("core__" ++ fn0) then
-          "core__" ++ fn0
+        else if fnMemberIndexW fnNames (encodePair "core" fn0) then
+          encodePair "core" fn0
         else
           fn0
       if not (envHas fn0 locals)
@@ -2318,7 +2318,7 @@ anyList p (x :: xs) = if p x then True else anyList p xs
 -- ════════════════════════════════════════════════════════════════════════════
 
 oneGlobalI32 : String -> String
-oneGlobalI32 n = "  (global $" ++ gname n ++ " (mut i64) (i64.const 0))"
+oneGlobalI32 n = "  (global $" ++ userGlobalW n ++ " (mut i64) (i64.const 0))"
 
 printFor : Prog -> WTy -> List String
 -- layer-17 §2.1: scalar values are uniformly i64 now.  Int prints directly; Bool is
@@ -2391,8 +2391,9 @@ localTargetW prog env name =
       Some slot => intToString (slotIndex slot)
       None => panic ("wasm: missing numeric local for binder " ++ ord)
     _ => panic ("wasm: missing scoped binder for local " ++ name)
-  else
-    "$" ++ gname name
+  else match WD.envLookup name env
+    WD.LocalSynthetic i => "$" ++ wParamId (ParamPosition i)
+    _ => "$" ++ gname name
 
 mintLocalW : Prog -> BinderId -> Unit
 mintLocalW prog bid =
@@ -2431,7 +2432,7 @@ numericDeclsW prog =
 rawScratchW : Prog -> List String
 rawScratchW prog =
   if rawProgramW prog && (progEmit prog).useDivGuard.value then
-    ["  (local $__sdivr i64)"]
+    ["  (local \{syntheticLocalName WN.WScalarDivr 0} i64)"]
   else
     []
 
@@ -2561,10 +2562,8 @@ emitRefProgram prog plan groups =
         else
           [symNameW rngStateW, symNameW rngSeededW])
         ++ flatMap wDispGlobalNames dispGroups
-        ++ map gname valNames
-        ++ map
-          (n => "gs_" ++ gname n)
-          (filterList (isLazyGlobalW prog) valNames))
+        ++ map userGlobalW valNames
+        ++ map stateGlobalW (filterList (isLazyGlobalW prog) valNames))
   -- emit user fns FIRST (this accumulates lifted lambdas into this WasmEmit).
   let fns = flatMap (emitRefFnBind prog) (userFnBinds groups)
   -- W5: the typeclass impl functions ($mdk_impl_<tag>_<method>), emitted as ordinary
@@ -2651,7 +2650,7 @@ emitElemDeclare emit =
 
 oneGlobalRef : String -> String
 oneGlobalRef n =
-  "  (global $" ++ gname n ++ " (mut (ref null eq)) (ref.null eq))"
+  "  (global $" ++ userGlobalW n ++ " (mut (ref null eq)) (ref.null eq))"
 
 -- ── §3.4 type section: one rec group with the universal root + per-type roots
 -- + per payload-ctor structs.  Each payload struct has an explicit i32 tag field
@@ -2823,7 +2822,8 @@ emitReservedCtorStruct ty ctor =
 -- #561 PR-B: the (mut i32) 3-state flag for a LAZY value global (0 UNFORCED / 1 FORCING
 -- / 2 FORCED).  Peer of oneGlobalRef; the value cell $g_<name> stays (mut (ref null eq)).
 oneGlobalState : String -> String
-oneGlobalState n = "  (global $gs_" ++ gname n ++ " (mut i32) (i32.const 0))"
+oneGlobalState n =
+  "  (global $" ++ stateGlobalW n ++ " (mut i32) (i32.const 0))"
 
 -- The program entry, shared by both init shapes.  `mdk_entry_split` marks a
 -- module whose `start` does not run `main`: a host that finds `mdk_main` without
@@ -2869,15 +2869,13 @@ emitRefInit prog plan groups =
   let valDepth = if rawProgramW prog then 0 else foldMaxDepth valBodies
   let mainDepth = if rawProgramW prog then 0 else foldMaxDepth mainBodies
   let initLocalDecls =
-    map
-      (l => "  " ++ localDeclRef l)
-      (dedupKeep valLocals
-        ++ (if rawProgramW prog then [] else scratchLocals valDepth))
+    map (l => "  " ++ localDeclRef l) (dedupKeep valLocals)
+      ++ map (l => "  " ++ syntheticDecl l) (scratchLocals valDepth)
+      ++ ["  " ++ guardDecl]
   let mainLocalDecls =
-    map
-      (l => "  " ++ localDeclRef l)
-      (dedupKeep mainLocals
-        ++ (if rawProgramW prog then [] else scratchLocals mainDepth))
+    map (l => "  " ++ localDeclRef l) (dedupKeep mainLocals)
+      ++ map (l => "  " ++ syntheticDecl l) (scratchLocals mainDepth)
+      ++ ["  " ++ guardDecl]
   let initW7Decls = map ("  " ++ _) (w7LocalDecls initW7Used valDepth)
   let mainW7Decls = map ("  " ++ _) (w7LocalDecls mainW7Used mainDepth)
   -- `start` runs only the eager value inits; `main` is the exported
@@ -2915,7 +2913,8 @@ foldMaxDepth (e :: rest) = maxI (maxRefDepth e) (foldMaxDepth rest)
 emitRefValInit : Prog -> CBind -> List String
 emitRefValInit prog (CBind name [CClause [] body] _ _) =
   let instrs = emitRefExpr prog envEmpty 0 body
-  indent instrs ++ ["    " ++ globalW prog "global.set" ("$" ++ gname name)]
+  indent instrs
+    ++ ["    " ++ globalW prog "global.set" ("$" ++ userGlobalW name)]
 emitRefValInit prog _ = gapLP prog "value binding must be a nullary clause"
 
 -- ── #561 PR-B: lazy value-global force functions ─────────────────────────────
@@ -2941,14 +2940,18 @@ emitRefForceFns prog groups =
 
 emitRefForceFn : Prog -> CBind -> List String
 emitRefForceFn prog (CBind name [CClause [] body] _ _) =
-  let g = gname name
-  let _ = defineFnW prog ("force_" ++ g) (FuncParams 0)
+  let g = userGlobalW name
+  let force = forcerW name
+  let _ = defineFnW prog force (FuncParams 0)
   let w7Outer = w7ScopeOpen (progEmit prog)
   let instrs = emitRefExpr prog envEmpty 0 body
   let bodyLocals = dedupKeep (collectExprLocals body)
   let maxDepth = maxRefDepth body
   let scratch = scratchLocals maxDepth
-  let localDecls = map (l => "  " ++ localDeclRef l) (bodyLocals ++ scratch)
+  let localDecls =
+    map
+      ("  " ++ _)
+      (guardDecl :: map localDeclRef bodyLocals ++ map syntheticDecl scratch)
   let w7Decls =
     map
       ("  " ++ _)
@@ -2960,22 +2963,22 @@ emitRefForceFn prog (CBind name [CClause [] body] _ _) =
       name
       " refers to itself during initialization (non-productive cyclic value)\n"
   let value = "$" ++ g
-  let state = "$gs_" ++ g
+  let state = "$" ++ stateGlobalW name
   let unforced =
     ["    i32.const 1", "    " ++ globalW prog "global.set" state]
       ++ indent instrs
       ++ [
-        "    local.set $__frcv",
-        "    local.get $__frcv",
+        "    local.set \{syntheticLocalName WN.WForceValue 0}",
+        "    local.get \{syntheticLocalName WN.WForceValue 0}",
         "    " ++ globalW prog "global.set" value,
         "    i32.const 2",
         "    " ++ globalW prog "global.set" state,
-        "    local.get $__frcv",
+        "    local.get \{syntheticLocalName WN.WForceValue 0}",
         "    ref.as_non_null",
       ]
   [
-      "  (func $force_" ++ g ++ " (result (ref eq))",
-      "  (local $__frcv (ref null eq))",
+      "  (func $" ++ force ++ " (result (ref eq))",
+      "  (local \{syntheticLocalName WN.WForceValue 0} (ref null eq))",
     ]
     ++ localDecls
     ++ w7Decls
@@ -3001,9 +3004,7 @@ emitRefForceFn prog (CBind name _ _ _) =
   let _ =
     setRef
       (progEmit prog).symbols
-      (excuseSymbol
-        (WasmFunc ("force_" ++ gname name))
-        !(progEmit prog).symbols)
+      (excuseSymbol (WasmFunc (forcerW name)) !(progEmit prog).symbols)
   gapLP prog "value binding must be a nullary clause"
 
 -- main: compute the body (a (ref eq)), then unbox to i32 and route to the print
@@ -3213,8 +3214,9 @@ emitRefFnBind outer (CBind name clauses bindLoc _) =
   let arity = clauseArityOf clauses
   let params =
     if rawProgramW prog then match clauses
-      [CClause pats _] => map (patName (progEmit prog) name) pats
-      _ => synthParams arity
+      [CClause pats _] =>
+        map (p => WSource (patName (progEmit prog) name p)) pats
+      _ => synthWParams arity
     else
       clauseParamNames clauses arity
   -- Stage-2/3 (b′): a member of a detected dispatch-TMC group emits via the dest-passing
@@ -3257,7 +3259,7 @@ emitRefFnBind outer (CBind name clauses bindLoc _) =
 
 emitOrdinaryFnW : Prog ->
   String ->
-  List String ->
+  List WParam ->
   Int ->
   List CClause ->
   List String
@@ -3287,18 +3289,21 @@ emitOrdinaryFnW prog name params arity clauses =
     if rawProgramW prog then
       []
     else
-      filterList (notIn params) (dedupKeep (clauseLocals clauses))
+      filterList
+        (notIn (sourceParams params))
+        (dedupKeep (clauseLocals clauses))
   let depth = if rawProgramW prog then 0 else clausesMaxDepth clauses
   let scratch = if rawProgramW prog then [] else scratchLocals depth
   let paramDecls =
     if rawProgramW prog then
       map (_ => " (param i64)") params
     else
-      map paramDeclRef params
-  let _ = defineFnW prog (gname name) (FuncParams (listLen params))
+      map wParamDecl params
+  let _ = defineFnW prog (userFnW name) (FuncParams (listLen params))
   let sig =
-    "  (func $\{gname name}\{joinWith "" paramDecls} (result \{physicalType (programReprW prog)})"
-  let localDecls = map localDeclRef (extraLocals ++ scratch)
+    "  (func $\{userFnW name}\{joinWith "" paramDecls} (result \{physicalType (programReprW prog)})"
+  let localDecls =
+    guardDecl :: map localDeclRef extraLocals ++ map syntheticDecl scratch
   let w7Decls = w7LocalDecls (w7ScopeClose (progEmit prog) w7Outer) depth
   let fnDef =
     [sig]
@@ -3323,6 +3328,27 @@ emitOrdinaryFnW prog name params arity clauses =
 -- `$a0/$a1/…`, which a user var named `a1` aliased directly.  `gname` escapes any user
 -- identifier spelled `__wparg<digits>` (mirrors the `self`/`args` reserved-name escape),
 -- so the positional params are provably distinct from every clause-bound source var.
+-- lint-disable-next-line rule-clone-type
+data WParam = WSource String | ParamPosition Int
+
+synthWParams : Int -> List WParam
+synthWParams n = map ParamPosition (rangeList 0 n)
+
+wParamId : WParam -> String
+wParamId (WSource name) = gname name
+wParamId (ParamPosition i) = WN.wasmName (WN.WSyntheticLocal WN.WPosition i)
+
+sourceParams : List WParam -> List String
+sourceParams [] = []
+sourceParams ((WSource n) :: rest) = n :: sourceParams rest
+sourceParams (_ :: rest) = sourceParams rest
+
+wParamDecl : WParam -> String
+wParamDecl p = " (param $" ++ wParamId p ++ " (ref eq))"
+
+wParamLocal : WParam -> String
+wParamLocal p = "(local $" ++ wParamId p ++ " (ref eq))"
+
 synthParams : Int -> List String
 synthParams n = map (i => "__wparg" ++ intToString i) (rangeList 0 n)
 
@@ -3334,21 +3360,20 @@ synthParams n = map (i => "__wparg" ++ intToString i) (rangeList 0 n)
 -- in the head, and is not bound again by a local of the body (a shadowing binder would
 -- otherwise share the param's own wasm local).  Every other param keeps its positional
 -- `__wparg<i>` name (a PWild, a shadowed name, or any param of a multi-clause group).
-clauseParamNames : List CClause -> Int -> List String
+clauseParamNames : List CClause -> Int -> List WParam
 clauseParamNames [CClause pats body] arity =
   if allPlainParams pats && not (exprHasFallthrough body) then
     headParamNames pats (collectExprLocals body) 0
   else
-    synthParams arity
-clauseParamNames _ arity = synthParams arity
+    synthWParams arity
+clauseParamNames _ arity = synthWParams arity
 
-headParamNames : List Pat -> List String -> Int -> List String
+headParamNames : List Pat -> List String -> Int -> List WParam
 headParamNames [] _ _ = []
 headParamNames (p :: ps) inner i =
-  let name = "__wparg" ++ intToString i
   let chosen = match p
-    PVar x _ _ => if startsWith "__" x || contains x inner then name else x
-    _ => name
+    PVar x _ _ => if contains x inner then ParamPosition i else WSource x
+    _ => ParamPosition i
   chosen :: headParamNames ps inner (i + 1)
 
 -- emit the clause chain.  Single all-PVar clause: rename its params to the synthetic
@@ -3356,7 +3381,7 @@ headParamNames (p :: ps) inner i =
 -- chain of guarded blocks.
 emitClausesRef : Prog ->
   String ->
-  List String ->
+  List WParam ->
   Int ->
   List CClause ->
   List String
@@ -3370,7 +3395,7 @@ emitClausesRef prog name params arity clauses =
 emitClausesRefEnv : Prog ->
   Env ->
   String ->
-  List String ->
+  List WParam ->
   Int ->
   List CClause ->
   List String
@@ -3392,17 +3417,20 @@ emitClausesRefEnv prog baseEnv name params arity clauses =
 -- `local.get $<param>; local.set $<srcname>`.  A PVar already named by its source
 -- variable (clauseParamNames) IS its own wasm param, so no copy is emitted.  (The
 -- source names are declared as locals via clauseLocals.)
-bindParamAliases : Prog -> List Pat -> List String -> List String
+bindParamAliases : Prog -> List Pat -> List WParam -> List String
 bindParamAliases prog pats params =
   flatMap (aliasOne prog) (zipPats pats params)
 
-aliasOne : Prog -> (Pat, String) -> List String
+aliasOne : Prog -> (Pat, WParam) -> List String
 aliasOne _ (PVar x _ _, a) =
-  if x == a then [] else ["local.get $" ++ gname a, "local.set $" ++ gname x]
+  if wParamId a == gname x then
+    []
+  else
+    ["local.get $" ++ wParamId a, "local.set $" ++ gname x]
 aliasOne _ (PWild, _) = []
 aliasOne prog _ = gapLP prog "ref-mode: non-plain param in fast-path alias"
 
-zipPats : List Pat -> List String -> List (Pat, String)
+zipPats : List Pat -> List WParam -> List (Pat, WParam)
 zipPats (p :: ps) (a :: bs) = (p, a) :: zipPats ps bs
 zipPats _ _ = []
 
@@ -3417,7 +3445,7 @@ allPlainParams pats = not (anyList (p => not (isPlainParam p)) pats)
 emitClauseChainRefEnv : Prog ->
   Env ->
   String ->
-  List String ->
+  List WParam ->
   Int ->
   List CClause ->
   List String
@@ -3435,7 +3463,7 @@ emitClauseChainRefEnv prog baseEnv name params arity clauses =
 emitClauseChainGo : Prog ->
   Env ->
   String ->
-  List String ->
+  List WParam ->
   Int ->
   List CClause ->
   Int ->
@@ -3444,7 +3472,7 @@ emitClauseChainGo : Prog ->
 -- B5: the last clause fell through (non-exhaustive function) → coded trap.
 emitClauseChainGo prog _ _ _ _ [] _ site = wasmNonexhTrap (progEmit prog) site
 emitClauseChainGo prog baseEnv name params arity ((CClause pats body) :: rest) i site =
-  let clLabel = "$cl_\{name}_\{intToString i}"
+  let clLabel = labelName WN.WClause i
   let (tests, binds, env) = clausePatCodeEnv prog baseEnv pats params clLabel
   -- A guard chain inside this clause's body desugars to `__fallthrough__` (the
   -- "no arm matched, try the next clause" sentinel).  We REWRITE each such occurrence
@@ -3473,14 +3501,14 @@ emitClauseChainGo prog baseEnv name params arity ((CClause pats body) :: rest) i
 clausePatCodeEnv : Prog ->
   Env ->
   List Pat ->
-  List String ->
+  List WParam ->
   String ->
   (List String, List String, Env)
 clausePatCodeEnv prog baseEnv pats params clLabel =
   clausePatGo prog (zipPats pats params) clLabel [] [] baseEnv
 
 clausePatGo : Prog ->
-  List (Pat, String) ->
+  List (Pat, WParam) ->
   String ->
   List String ->
   List String ->
@@ -3488,7 +3516,7 @@ clausePatGo : Prog ->
   (List String, List String, Env)
 clausePatGo _ [] _ tAcc bAcc env = (tAcc, bAcc, env)
 clausePatGo prog ((pat, a) :: rest) clLabel tAcc bAcc env =
-  let occ = ["local.get $" ++ gname a]
+  let occ = ["local.get $" ++ wParamId a]
   let (t, b, env2) = patTestBind prog pat occ clLabel env
   clausePatGo prog rest clLabel (tAcc ++ t) (bAcc ++ b) env2
 
@@ -3740,10 +3768,10 @@ needsClosWrapper prog name =
 -- at the value-reference site (emitVarRef) so partial application threads its arity.
 emitFnClosWrapper : Prog -> String -> Int -> List String
 emitFnClosWrapper prog name arity =
-  let wrapper = "$mdk_w_" ++ name
+  let wrapper = "$" ++ wrapperW name
   let _ = noteFuncRef prog wrapper
   let _ = defineFnW prog wrapper codeShapeW
-  closWrapperLines wrapper (callFnW prog CallTailW (gname name) arity) arity
+  closWrapperLines wrapper (callFnW prog CallTailW (userFnW name) arity) arity
 
 -- A `$codety` function [wrapper] that loads [arity] arguments out of its argument
 -- array and makes the tail call [call] on them.
@@ -3752,22 +3780,17 @@ closWrapperLines wrapper call arity =
   let argLoads =
     flatMap
       (i => [
-        "local.get $args",
+        "local.get \{syntheticLocalName WN.WAbiArgs 0}",
         "i32.const " ++ intToString i,
         "array.get $argarr",
         "ref.as_non_null",
       ])
       (rangeList 0 arity)
   [
-      "  (func "
-        ++ wrapper
-        ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))",
+      "  (func \{wrapper} (type $codety) (param \{syntheticLocalName WN.WAbiSelf 0} (ref eq)) (param \{syntheticLocalName WN.WAbiArgs 0} (ref $argarr)) (result (ref eq))",
     ]
     ++ indent (argLoads ++ [call])
     ++ ["  )"]
-
-paramDeclRef : String -> String
-paramDeclRef p = " (param $" ++ gname p ++ " (ref eq))"
 
 localDeclRef : String -> String
 localDeclRef l = "(local $" ++ gname l ++ " (ref eq))"
@@ -3899,7 +3922,7 @@ emitMethodRef prog env d name _ _ (RLocal sym dicts) implRoutes methRoutes args 
       emitIndirectApp prog env d (CVar target AGlobal) args end
     else
       let argInstrs = flatMap (a => emitRefExpr prog env d a) args
-      argInstrs ++ [callFnW prog end (gname target) (listLen args)]
+      argInstrs ++ [callFnW prog end (userFnW target) (listLen args)]
   else
     emitDictRef prog env d target dicts args mode end
 emitMethodRef prog env d name _ _ (RScalar _) implRoutes methRoutes args _ end =
@@ -4071,7 +4094,7 @@ dispatchCallSeqW : Prog -> ImplArmW -> String -> Int -> CallEndW -> List String
 dispatchCallSeqW prog arm name nArgs end =
   let memoName = "$memo_\{armSymTagW arm}_\{name}"
   if nArgs == 0 && isLazyGlobalW prog memoName then
-    [callFnW prog end ("force_" ++ gname memoName) 0]
+    [callFnW prog end (forcerW memoName) 0]
   else
     [callFnW prog end (armFnSymW arm) (armDictCountW (armEntryW arm) 0 + nArgs)]
 
@@ -4093,7 +4116,9 @@ armIsExactW arm nArgs =
 armClosureW : Prog -> ImplArmW -> List String
 armClosureW prog arm =
   let arity = listLen (implEntryPatsW (armEntryW arm))
-  let wrapper = "$mdk_lam" ++ intToString (freshLamId (progEmit prog))
+  let wrapper =
+    "$"
+      ++ WN.wasmName (WN.WGenerated WN.WLambda "" (freshLamId (progEmit prog)))
   let _ = noteFuncRef prog wrapper
   let _ =
     addLifted
@@ -4341,7 +4366,7 @@ emitDictRef prog env d name routes args mode end =
       let argInstrs = flatMap (a => emitRefExpr prog env d a) args
       dictWords
         ++ argInstrs
-        ++ [callFnW prog end (gname name) (listLen routes + listLen args)]
+        ++ [callFnW prog end (userFnW name) (listLen routes + listLen args)]
     else
       emitIndirectApp prog env d (CDict name routes) args end
   else
@@ -4483,11 +4508,11 @@ implEntrySymW : String -> CImplEntry -> String
 implEntrySymW method (CImplEntry _ _ _ (CImplTagged _ _ _ (ImplSym tag _ _) _ _ _)) =
   implFnSymOfTag tag method
 implEntrySymW method (CImplEntry _ _ _ (CImplDefault _ _ _ (ImplSym _ ifaceTag keyTag) _ _ _)) =
-  "mdk_default_\{ifaceTag}_\{gname method}_\{keyTag}"
+  WN.wasmName (WN.WDefaultMethod ifaceTag method keyTag)
 
 -- build the symbol from an entry's stamped symbol tag
 implFnSymOfTag : String -> String -> String
-implFnSymOfTag symTag method = "mdk_impl_\{symTag}_\{gname method}"
+implFnSymOfTag symTag method = WN.wasmName (WN.WImplMethod symTag method)
 
 -- the head tycon of the impl whose canonical key is [key] (mirror of llvm_emit's
 -- headTagForKey) — the group's dispatch/self/Float tag, distinct from its symbol tag.
@@ -4612,7 +4637,7 @@ emitImplGroup : Prog -> ImplG -> List String
 emitImplGroup outer (ImplG method headTag key arity clauses fnName) =
   -- an impl method has no first-clause site of its own
   let prog = progWithOrigin "impl \{method} for \{key}" (progInFn outer)
-  let params = synthParams arity
+  let params = synthWParams arity
   -- Phase 2 B-dispatch (TRMC-DESIGN §"Phase 2"): a DISPATCHED self-recursive cons/ctor-tail
   -- impl (the `List map`: self-call is a `CMethod method (RKey tag)`) is emitted as a
   -- destination-passing loop — the WasmGC peer of llvm_emit's trmcImplTry.  Eligibility +
@@ -4624,12 +4649,14 @@ emitImplGroup outer (ImplG method headTag key arity clauses fnName) =
       let w7Outer = w7ScopeOpen (progEmit prog)
       let bodyLines = emitClausesImpl prog fnName params arity clauses
       let allLocals = clauseLocals clauses
-      let extraLocals = filterList (notIn params) (dedupKeep allLocals)
+      let extraLocals =
+        filterList (notIn (sourceParams params)) (dedupKeep allLocals)
       let scratch = scratchLocals (clausesMaxDepth clauses)
       let _ = defineFnW prog fnName (FuncParams arity)
       let sig =
-        "  (func $\{fnName}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
-      let localDecls = map localDeclRef (extraLocals ++ scratch)
+        "  (func $\{fnName}\{joinWith "" (map wParamDecl params)} (result (ref eq))"
+      let localDecls =
+        guardDecl :: map localDeclRef extraLocals ++ map syntheticDecl scratch
       let w7Decls =
         w7LocalDecls
           (w7ScopeClose (progEmit prog) w7Outer)
@@ -4643,7 +4670,7 @@ emitImplGroup outer (ImplG method headTag key arity clauses fnName) =
 -- "name" (used only for the internal clause-block labels) is the impl symbol.
 emitClausesImpl : Prog ->
   String ->
-  List String ->
+  List WParam ->
   Int ->
   List CClause ->
   List String
@@ -5001,9 +5028,9 @@ emitVarRef prog env d x =
     if envHas x env then
       ["local.get " ++ localTargetW prog env x]
     else if omHasKey x (indexValNamesW (progIndex prog)) then
-      [globalW prog "global.get" ("$" ++ gname x)]
+      [globalW prog "global.get" ("$" ++ userGlobalW x)]
     else if progFnMemberW prog x then
-      [callFnW prog CallValueW (gname x) 0]
+      [callFnW prog CallValueW (userFnW x) 0]
     else if isUnprovidedOn
       WasmBackend
       (optionOr "" (externRuntimeKey (progEmit prog).externFacts x)) then
@@ -5028,7 +5055,7 @@ emitVarRefBoxed prog env d x = match emitFtSentinel x
 emitVarRefPlain : Prog -> Env -> Int -> String -> List String
 emitVarRefPlain prog env d x =
   if envHas x env then
-    ["local.get $" ++ gname x]
+    ["local.get " ++ localTargetW prog env x]
   else if progValMemberW prog x then
     -- #561 PR-B: a LAZY value global (dispatch-reaching / cyclic) is forced on first use —
     -- `call $force_<x>` memoises into $<x> and black-holes a re-entrant force into
@@ -5038,9 +5065,9 @@ emitVarRefPlain prog env d x =
     -- scans on this hot path); the lazy/eager choice nests under it, byte-identical.
 
     if isLazyGlobalW prog x then
-      [callFnW prog CallValueW ("force_" ++ gname x) 0]
+      [callFnW prog CallValueW (forcerW x) 0]
     else
-      [globalW prog "global.get" ("$" ++ gname x), "ref.as_non_null"]
+      [globalW prog "global.get" ("$" ++ userGlobalW x), "ref.as_non_null"]
   else if x == "True" then
     -- the Bool constructors used as VALUES (e.g. an `eq` impl body `… = True`) are
     -- i31 immediates 1/0 — the same rep as `emitLitRef (LBool _)`, so `if` reads them
@@ -5100,10 +5127,10 @@ emitVarRefPlain prog env d x =
     else
       emitCtorEtaClosure prog x
   else if progFnMemberW prog x then
-    let _ = noteFuncRef prog ("$mdk_w_" ++ x)
+    let _ = noteFuncRef prog ("$" ++ wrapperW x)
     -- S-4: captureless by construction (a top-level fn's wrapper closes over nothing)
     -- ⇒ one hoisted module global, not a fresh `$clos` on every evaluation of `x`.
-    wConstClos prog ("$mdk_w_" ++ x) (fnParamCountW prog x)
+    wConstClos prog ("$" ++ wrapperW x) (fnParamCountW prog x)
   else if canonFn prog x /= x then
     -- W9: a bare prelude reference synthesized post-mangle (string-interp / `/=`) →
     -- resolve to its `core__`-mangled def and emit the closure wrapper for it.
@@ -5131,7 +5158,7 @@ emitExternEtaClosure prog name =
       Some shape => shape.loweredCoreArity
       None => panic ("internal error: missing-extern-abi: " ++ name)
     None => panic ("internal error: missing-extern-requirement: " ++ name)
-  let lamName = "$mdk_ext_" ++ injectiveIdent name
+  let lamName = "$" ++ WN.wasmName (WN.WGenerated WN.WExternEta name 0)
   let _ = noteFuncRef prog lamName
   let _ =
     addLiftedNamed
@@ -5148,20 +5175,20 @@ emitExternEtaClosure prog name =
 -- cursor / closure-init-value cells / i64 reinterpret accumulator.
 arrayEtaScratchLocals : List String
 arrayEtaScratchLocals = [
-  "(local $__aexi0 i32)",
-  "(local $__aexn0 i32)",
-  "(local $__aexarr0 (ref null $arr))",
-  "(local $__aexlst0 (ref eq))",
-  "(local $__aexf0 (ref eq))",
-  "(local $__aexv0 (ref eq))",
-  "(local $__aexbits0 i64)",
-  "(local $__raarr0 (ref null $arr))",
+  "(local \{syntheticLocalName WN.W7Aexi 0} i32)",
+  "(local \{syntheticLocalName WN.W7Aexn 0} i32)",
+  "(local \{syntheticLocalName WN.W7Aexarr 0} (ref null $arr))",
+  "(local \{syntheticLocalName WN.W7Aexlst 0} (ref eq))",
+  "(local \{syntheticLocalName WN.W7Aexf 0} (ref eq))",
+  "(local \{syntheticLocalName WN.W7Aexv 0} (ref eq))",
+  "(local \{syntheticLocalName WN.W7Aexbits 0} i64)",
+  "(local \{syntheticLocalName WN.W7Raarr 0} (ref null $arr))",
 ]
 
 emitExternEtaDefine : Prog -> String -> String -> Int -> List String
 emitExternEtaDefine prog lamName name arity =
   let params = synthParams arity
-  let argPrologue = flatMap argLoadAt (zipIdx params 0)
+  let argPrologue = flatMap argLoadPosition (rangeList 0 arity)
   let argVars = map (p => CVar p AGlobal) params
   -- An ARRAY extern referenced point-free (e.g. `arrayFromList` passed to the byteparser
   -- parse path) must route to emitArrayExternRef — mirroring the DIRECT-call arm at
@@ -5177,27 +5204,19 @@ emitExternEtaDefine prog lamName name arity =
   let family = externFamilyW (progEmit prog) key
   let call = match family
     Some WasmStr =>
-      emitStrExternRef prog (envExtendUnstamped params envEmpty) 0 key argVars
+      emitStrExternRef prog (syntheticEnv params 0 envEmpty) 0 key argVars
     Some WasmArray =>
-      emitArrayExternRef prog (envExtendUnstamped params envEmpty) 0 key argVars
+      emitArrayExternRef prog (syntheticEnv params 0 envEmpty) 0 key argVars
     Some WasmByteBlock =>
-      emitByteBlockExternRef
-        prog
-        (envExtendUnstamped params envEmpty)
-        0
-        key
-        argVars
-    _ =>
-      emitLeafExternRef prog (envExtendUnstamped params envEmpty) 0 key argVars
+      emitByteBlockExternRef prog (syntheticEnv params 0 envEmpty) 0 key argVars
+    _ => emitLeafExternRef prog (syntheticEnv params 0 envEmpty) 0 key argVars
   let _ = w7ScopeClose (progEmit prog) w7Outer
   let arrayScratch = match family
     Some WasmArray => arrayEtaScratchLocals
     _ => []
-  let localLines = map (l => localDeclRef l) params ++ arrayScratch
+  let localLines = map wParamLocal (synthWParams arity) ++ arrayScratch
   [
-      "  (func "
-        ++ lamName
-        ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))",
+      "  (func \{lamName} (type $codety) (param \{syntheticLocalName WN.WAbiSelf 0} (ref eq)) (param \{syntheticLocalName WN.WAbiArgs 0} (ref $argarr)) (result (ref eq))",
     ]
     ++ map ("  " ++ _) localLines
     ++ indent (argPrologue ++ call ++ ["return"])
@@ -5213,7 +5232,7 @@ emitExternEtaDefine prog lamName name arity =
 emitCtorEtaClosure : Prog -> String -> List String
 emitCtorEtaClosure prog ctor =
   let arity = ctorArity prog ctor
-  let lamName = "$mdk_wctor_" ++ gname ctor
+  let lamName = "$" ++ WN.wasmName (WN.WGenerated WN.WCtorEta ctor 0)
   let _ = noteFuncRef prog lamName
   let _ =
     addLiftedNamed
@@ -5227,15 +5246,13 @@ emitCtorEtaClosure prog ctor =
 emitCtorEtaDefine : Prog -> String -> String -> Int -> List String
 emitCtorEtaDefine prog lamName ctor arity =
   let params = synthParams arity
-  let argPrologue = flatMap argLoadAt (zipIdx params 0)
+  let argPrologue = flatMap argLoadPosition (rangeList 0 arity)
   let argVars = map (p => CVar p AGlobal) params
   let body =
-    emitCtorConstruct prog (envExtendUnstamped params envEmpty) 0 ctor argVars
-  let localLines = map (l => localDeclRef l) params
+    emitCtorConstruct prog (syntheticEnv params 0 envEmpty) 0 ctor argVars
+  let localLines = map wParamLocal (synthWParams arity)
   [
-      "  (func "
-        ++ lamName
-        ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))",
+      "  (func \{lamName} (type $codety) (param \{syntheticLocalName WN.WAbiSelf 0} (ref eq)) (param \{syntheticLocalName WN.WAbiArgs 0} (ref $argarr)) (result (ref eq))",
     ]
     ++ map ("  " ++ _) localLines
     ++ indent (argPrologue ++ body ++ ["return"])
@@ -5341,7 +5358,10 @@ emitIntBinRef prog env d op l r tag site =
       ++ emitDivZeroGuard
         (progEmit prog)
         op
-        (if rawProgramW prog then "$__sdivr" else divrLocal prog d)
+        (if rawProgramW prog then
+          "\{syntheticLocalName WN.WScalarDivr 0}"
+        else
+          divrLocal prog d)
         site
       ++ opInstrs
       ++ fixedWidthWrapW tag op
@@ -5903,7 +5923,7 @@ emitDirectRawCallW prog env d (CVar f _) args tail =
         callFnW
           prog
           (if tail then CallTailW else CallValueW)
-          (gname f)
+          (userFnW f)
           (listLen args),
       ]
   else
@@ -5975,7 +5995,7 @@ emitAppRef prog env d app =
         _ =>
           if progFnMemberW prog f && isExactCall mode then
             let argInstrs = flatMap (a => emitRefExpr prog env d a) args
-            argInstrs ++ [callFnW prog CallValueW (gname f) (listLen args)]
+            argInstrs ++ [callFnW prog CallValueW (userFnW f) (listLen args)]
           else
             emitIndirectApp prog env d hd args CallValueW
     -- W5: a method occurrence applied to its args (the common return-/arg-position
@@ -6142,6 +6162,18 @@ emitStrExternRef prog env d "floatToString" [a] =
     ]
 emitStrExternRef prog env d "floatToString" _ =
   gapLP prog "wasm W8b: floatToString takes exactly one argument"
+-- floatToFixed digits x : an i31 Int and a boxed $float -> $mdk_float_to_fixed.
+emitStrExternRef prog env d "floatToFixed" [n, a] =
+  emitRefExpr prog env d n
+    ++ ["ref.cast (ref i31)", "i31.get_s"]
+    ++ emitRefExpr prog env d a
+    ++ [
+      "ref.cast (ref $float)",
+      "struct.get $float 0",
+      rtCallW prog "mdk_float_to_fixed" 2,
+    ]
+emitStrExternRef prog env d "floatToFixed" _ =
+  gapLP prog "wasm: floatToFixed takes exactly two arguments"
 -- W8b: stringIndexOf needle hay : two $str → Option Int (ref eq).  The runtime fn
 -- builds the Some/None result directly (Some idx / None), so no inline ctor here.
 emitStrExternRef prog env d "stringIndexOf" [needle, hay] =
@@ -7004,9 +7036,9 @@ emitArrayExternRef prog env d "arrayMake" _ =
   gapLP prog "wasm W10: arrayMake takes exactly two arguments"
 emitArrayExternRef prog env d "arrayCopy" [a] =
   let sfx = intToString d
-  let srcL = w7Local (progEmit prog) "__aexarr" sfx
-  let dstL = w7Local (progEmit prog) "__raarr" sfx
-  let nL = w7Local (progEmit prog) "__aexn" sfx
+  let srcL = w7Local (progEmit prog) WN.W7Aexarr d
+  let dstL = w7Local (progEmit prog) WN.W7Raarr d
+  let nL = w7Local (progEmit prog) WN.W7Aexn d
   emitRefExpr prog env d a
     ++ ["ref.cast (ref $arr)", "local.set " ++ srcL]
     ++ [
@@ -7049,10 +7081,10 @@ emitArrayExternRef prog env d "arraySetUnsafe" _ =
 -- array.set arr i (apply f [i]).  f is applied via the universal $__mdk_apply.
 emitArrayExternRef prog env d "arrayMakeWith" [n, f] =
   let sfx = intToString d
-  let arrL = w7Local (progEmit prog) "__aexarr" sfx
-  let iL = w7Local (progEmit prog) "__aexi" sfx
-  let nL = w7Local (progEmit prog) "__aexn" sfx
-  let fL = w7Local (progEmit prog) "__aexf" sfx
+  let arrL = w7Local (progEmit prog) WN.W7Aexarr d
+  let iL = w7Local (progEmit prog) WN.W7Aexi d
+  let nL = w7Local (progEmit prog) WN.W7Aexn d
+  let fL = w7Local (progEmit prog) WN.W7Aexf d
   emitRefExpr prog env d n
     ++ ["ref.cast (ref i31)", "i31.get_s", "local.set " ++ nL]
     ++ emitRefExpr prog env d f
@@ -7065,12 +7097,15 @@ emitArrayExternRef prog env d "arrayMakeWith" [n, f] =
       "local.set " ++ arrL,
     ]
     ++ ["i32.const 0", "local.set " ++ iL]
-    ++ ["block $aexd" ++ sfx, "loop $aexl" ++ sfx]
+    ++ [
+      "block " ++ labelName WN.WLabelAexd d,
+      "loop " ++ labelName WN.WLabelAexl d,
+    ]
     ++ [
       "local.get " ++ iL,
       "local.get " ++ nL,
       "i32.ge_s",
-      "br_if $aexd" ++ sfx,
+      "br_if " ++ labelName WN.WLabelAexd d,
     ]
     ++ ["local.get " ++ arrL, "ref.as_non_null", "local.get " ++ iL]
     -- value = f applied to (i31 i): build a 1-element $argarr, call $__mdk_apply
@@ -7083,7 +7118,7 @@ emitArrayExternRef prog env d "arrayMakeWith" [n, f] =
     ]
     ++ ["array.set $arr"]
     ++ ["local.get " ++ iL, "i32.const 1", "i32.add", "local.set " ++ iL]
-    ++ ["br $aexl" ++ sfx, "end", "end"]
+    ++ ["br " ++ labelName WN.WLabelAexl d, "end", "end"]
     ++ ["local.get " ++ arrL, "ref.as_non_null"]
 emitArrayExternRef prog env d "arrayMakeWith" _ =
   gapLP prog "wasm W10: arrayMakeWith takes exactly two arguments"
@@ -7091,16 +7126,23 @@ emitArrayExternRef prog env d "arrayMakeWith" _ =
 -- walk the chain again filling cells in order.  Two-pass over a $C_Cons cursor.
 emitArrayExternRef prog env d "arrayFromList" [lst] =
   let sfx = intToString d
-  let arrL = w7Local (progEmit prog) "__aexarr" sfx
-  let iL = w7Local (progEmit prog) "__aexi" sfx
-  let nL = w7Local (progEmit prog) "__aexn" sfx
-  let curL = w7Local (progEmit prog) "__aexlst" sfx
+  let arrL = w7Local (progEmit prog) WN.W7Aexarr d
+  let iL = w7Local (progEmit prog) WN.W7Aexi d
+  let nL = w7Local (progEmit prog) WN.W7Aexn d
+  let curL = w7Local (progEmit prog) WN.W7Aexlst d
   -- pass 1: length.  cursor = lst; while not i31: n++, cursor = tail.
   emitRefExpr prog env d lst
     ++ ["local.set " ++ curL]
     ++ ["i32.const 0", "local.set " ++ nL]
-    ++ ["block $aexcd" ++ sfx, "loop $aexcl" ++ sfx]
-    ++ ["local.get " ++ curL, "ref.test (ref i31)", "br_if $aexcd" ++ sfx]
+    ++ [
+      "block " ++ labelName WN.WLabelAexcd d,
+      "loop " ++ labelName WN.WLabelAexcl d,
+    ]
+    ++ [
+      "local.get " ++ curL,
+      "ref.test (ref i31)",
+      "br_if " ++ labelName WN.WLabelAexcd d,
+    ]
     ++ ["local.get " ++ nL, "i32.const 1", "i32.add", "local.set " ++ nL]
     ++ [
       "local.get " ++ curL,
@@ -7108,7 +7150,7 @@ emitArrayExternRef prog env d "arrayFromList" [lst] =
       "struct.get $C_Cons 2",
       "local.set " ++ curL,
     ]
-    ++ ["br $aexcl" ++ sfx, "end", "end"]
+    ++ ["br " ++ labelName WN.WLabelAexcl d, "end", "end"]
     -- alloc n slots
     ++ [
       "i32.const 0",
@@ -7121,8 +7163,15 @@ emitArrayExternRef prog env d "arrayFromList" [lst] =
     ++ emitRefExpr prog env d lst
     ++ ["local.set " ++ curL]
     ++ ["i32.const 0", "local.set " ++ iL]
-    ++ ["block $aexfd" ++ sfx, "loop $aexfl" ++ sfx]
-    ++ ["local.get " ++ curL, "ref.test (ref i31)", "br_if $aexfd" ++ sfx]
+    ++ [
+      "block " ++ labelName WN.WLabelAexfd d,
+      "loop " ++ labelName WN.WLabelAexfl d,
+    ]
+    ++ [
+      "local.get " ++ curL,
+      "ref.test (ref i31)",
+      "br_if " ++ labelName WN.WLabelAexfd d,
+    ]
     ++ ["local.get " ++ arrL, "ref.as_non_null", "local.get " ++ iL]
     ++ ["local.get " ++ curL, "ref.cast (ref $C_Cons)", "struct.get $C_Cons 1"]
     ++ ["array.set $arr"]
@@ -7133,7 +7182,7 @@ emitArrayExternRef prog env d "arrayFromList" [lst] =
       "struct.get $C_Cons 2",
       "local.set " ++ curL,
     ]
-    ++ ["br $aexfl" ++ sfx, "end", "end"]
+    ++ ["br " ++ labelName WN.WLabelAexfl d, "end", "end"]
     ++ ["local.get " ++ arrL, "ref.as_non_null"]
 emitArrayExternRef prog env d "arrayFromList" _ =
   gapLP prog "wasm W10: arrayFromList takes exactly one argument"
@@ -7159,10 +7208,10 @@ emitArrayExternRef prog env d "arrayBlit" _ =
 -- Uses the $__aex* W7 scratch locals (w7Local).
 emitArrayExternRef prog env d "arrayFill" [val, arr] =
   let sfx = intToString d
-  let arrL = w7Local (progEmit prog) "__aexarr" sfx
-  let iL = w7Local (progEmit prog) "__aexi" sfx
-  let nL = w7Local (progEmit prog) "__aexn" sfx
-  let vL = w7Local (progEmit prog) "__aexv" sfx
+  let arrL = w7Local (progEmit prog) WN.W7Aexarr d
+  let iL = w7Local (progEmit prog) WN.W7Aexi d
+  let nL = w7Local (progEmit prog) WN.W7Aexn d
+  let vL = w7Local (progEmit prog) WN.W7Aexv d
   emitRefExpr prog env d arr
     ++ ["ref.cast (ref $arr)", "local.set " ++ arrL]
     ++ [
@@ -7174,12 +7223,15 @@ emitArrayExternRef prog env d "arrayFill" [val, arr] =
     ++ emitRefExpr prog env d val
     ++ ["local.set " ++ vL]
     ++ ["i32.const 0", "local.set " ++ iL]
-    ++ ["block $afld" ++ sfx, "loop $afll" ++ sfx]
+    ++ [
+      "block " ++ labelName WN.WLabelAfld d,
+      "loop " ++ labelName WN.WLabelAfll d,
+    ]
     ++ [
       "local.get " ++ iL,
       "local.get " ++ nL,
       "i32.ge_s",
-      "br_if $afld" ++ sfx,
+      "br_if " ++ labelName WN.WLabelAfld d,
     ]
     ++ [
       "local.get " ++ arrL,
@@ -7189,7 +7241,7 @@ emitArrayExternRef prog env d "arrayFill" [val, arr] =
     ]
     ++ ["array.set $arr"]
     ++ ["local.get " ++ iL, "i32.const 1", "i32.add", "local.set " ++ iL]
-    ++ ["br $afll" ++ sfx, "end", "end"]
+    ++ ["br " ++ labelName WN.WLabelAfll d, "end", "end"]
     ++ ["i32.const 0", "ref.i31"]
 emitArrayExternRef prog env d "arrayFill" _ =
   gapLP prog "wasm stage-A: arrayFill takes exactly two arguments"
@@ -7199,8 +7251,8 @@ emitArrayExternRef prog env d "arrayFill" _ =
 -- runtime/medaka_rt.c:mdk_float_to_bytes64 exactly (cell[i+1] = byte at (bits>>(8*(7-i)))&0xFF).
 emitArrayExternRef prog env d "floatToBytes64" [f] =
   let sfx = intToString d
-  let arrL = w7Local (progEmit prog) "__aexarr" sfx
-  let bitsL = w7Local (progEmit prog) "__aexbits" sfx
+  let arrL = w7Local (progEmit prog) WN.W7Aexarr d
+  let bitsL = w7Local (progEmit prog) WN.W7Aexbits d
   emitRefExpr prog env d f
     ++ [
       "ref.cast (ref $float)",
@@ -7225,9 +7277,9 @@ emitArrayExternRef prog env d "floatToBytes64" _ =
 -- f64.reinterpret_i64 + box into a $float.  Matches runtime/medaka_rt.c:mdk_bytes_to_float64.
 emitArrayExternRef prog env d "bytesToFloat64" [arr, off] =
   let sfx = intToString d
-  let arrL = w7Local (progEmit prog) "__aexarr" sfx
-  let offL = w7Local (progEmit prog) "__aexi" sfx
-  let bitsL = w7Local (progEmit prog) "__aexbits" sfx
+  let arrL = w7Local (progEmit prog) WN.W7Aexarr d
+  let offL = w7Local (progEmit prog) WN.W7Aexi d
+  let bitsL = w7Local (progEmit prog) WN.W7Aexbits d
   emitRefExpr prog env d arr
     ++ ["ref.cast (ref $arr)", "local.set " ++ arrL]
     ++ emitRefExpr prog env d off
@@ -7476,28 +7528,28 @@ emitArgsArray prog env d args =
 -- distinct (ctorName, selfFieldIdx) leaf-ctor pairs in first-seen clause order.
 -- A singleton set emits exactly the historical uniform-ctor code; a MIXED set
 -- (P3, TMC-parity arc — LLVM always handled mixed ctors) additionally tracks
--- WHICH ctor the current dest cell is in the i32 local $__tmc_dctor (its index
+-- WHICH ctor the current dest cell is in the i32 local $s.tmcdctor.0 (its index
 -- into ctorSet) and link sites dispatch on it (ref.cast to that ctor's struct +
 -- struct.set at its recursive field).
 -- #712: `isBuiltinList` (the 5th field) records whether this fn's cons leaves are
 -- the built-in `h :: t` (→ reserved `$C_Cons`) vs a user ctor named `Cons`
 -- (→ `$CU_Cons`).  Homogeneous per fn, so the base leaf's parent-link
 -- (emitWasmTrmcBase) reads it from here rather than re-deriving from the ctor name.
--- the loop-local names used by the destination-passing emit.  `$__tmc_head` holds the
--- first cell (the result returned at exit); `$__tmc_dest` holds the cell whose recursive
--- slot the NEXT leaf must fill; `$__tmc_first` is 1 until the first cell is built.
--- `$__tmc_t<k>` are arg-recompute temps (one per param) so an arg may read an old param
+-- the loop-local names used by the destination-passing emit.  `$s.tmchead.0` holds the
+-- first cell (the result returned at exit); `$s.tmcdest.0` holds the cell whose recursive
+-- slot the NEXT leaf must fill; `$s.tmcfirst.0` is 1 until the first cell is built.
+-- `$s.tmctemp.<k>` are arg-recompute temps (one per param) so an arg may read an old param
 -- before any slot is overwritten.
 wTrmcHeadL : String
-wTrmcHeadL = "$__tmc_head"
+wTrmcHeadL = "\{syntheticLocalName WN.WTmcHead 0}"
 wTrmcDestL : String
-wTrmcDestL = "$__tmc_dest"
+wTrmcDestL = "\{syntheticLocalName WN.WTmcDest 0}"
 wTrmcFirstL : String
-wTrmcFirstL = "$__tmc_first"
+wTrmcFirstL = "\{syntheticLocalName WN.WTmcFirst 0}"
 wTrmcTempL : Int -> String
-wTrmcTempL k = "$__tmc_t" ++ intToString k
+wTrmcTempL k = syntheticLocalName WN.WTmcTemp k
 wTrmcDctorL : String
-wTrmcDctorL = "$__tmc_dctor"
+wTrmcDctorL = "\{syntheticLocalName WN.WTmcDctor 0}"
 
 -- Emit `body` in TAIL position of the enclosing function.  Descends into the tails
 -- of if/let/block/decision so the syntactic tail call is found wherever it sits.
@@ -7549,7 +7601,7 @@ emitWDispLeaf prog env root loopLbl rootArity members (e@(CBinPrim "::" _ _ _ _)
         prog
         env
         root
-        (if f == root then loopLbl else f)
+        (if f == root then loopLbl else userFnW f)
         heads
         args
     None =>
@@ -7564,7 +7616,7 @@ emitWDispLeaf prog env root loopLbl rootArity members other =
 
     (_, args) =>
       flatMap (a => emitRefExpr prog env 0 a) args
-        ++ [callFnW prog CallTailW (gname loopLbl) (listLen args)]
+        ++ [callFnW prog CallTailW loopLbl (listLen args)]
   else match flattenApp other []
     (CVar f0 _, args) =>
       let f = canonFn prog f0
@@ -7682,15 +7734,15 @@ emitWasmTrmcLeaf prog env self arity pslots ctorSet loopLbl exitLbl e =
 
 -- cons/ctor leaf: build THIS leaf's ctor cell with its NON-recursive (leading) fields
 -- + a placeholder in the recursive slot, link it into the parent's recursive slot (or
--- seed $__tmc_head on the first cell), advance the destination to this cell, recompute
+-- seed $s.tmchead.0 on the first cell), advance the destination to this cell, recompute
 -- the self-call args into the loop's param locals, and br to the loop header.  NO
 -- recursive call is emitted.
---   • first cell  → $__tmc_head := cell ; $__tmc_first := 0
---   • later cells → struct.set <parent ctor's struct> $__tmc_dest <its selfIdx+1> cell
+--   • first cell  → $s.tmchead.0 := cell ; $s.tmcfirst.0 := 0
+--   • later cells → struct.set <parent ctor's struct> $s.tmcdest.0 <its selfIdx+1> cell
 --     (the PARENT may be a different ctor than this leaf's — wTrmcLinkParent
---     dispatches on $__tmc_dctor when the fn's leaf-ctor set is mixed)
---   • always      → $__tmc_dest := cell (+ record THIS ctor's set-index in
---     $__tmc_dctor when mixed)
+--     dispatches on $s.tmcdctor.0 when the fn's leaf-ctor set is mixed)
+--   • always      → $s.tmcdest.0 := cell (+ record THIS ctor's set-index in
+--     $s.tmcdctor.0 when mixed)
 -- The recursive slot is `(mut (ref eq))` (Stage 0), seeded here with a safe i31 nil
 -- placeholder (never dereferenced — it is overwritten by the next iteration's struct.set,
 -- or stays as the cell's tail which the BASE leaf fills before exit).
@@ -7754,7 +7806,7 @@ emitWasmTrmcCtor prog env self arity pslots ctorSet isBuiltinList ctorName selfI
 
 -- store `valInstrs` into the CURRENT dest cell's recursive slot.  Singleton
 -- leaf-ctor set: the parent's type is static — exactly the historical uniform
--- emit.  Mixed set: dispatch on $__tmc_dctor (the parent ctor's set-index) with
+-- emit.  Mixed set: dispatch on $s.tmcdctor.0 (the parent ctor's set-index) with
 -- an if/else chain; the LAST entry needs no test (the index is exhaustive).
 -- #712: the cons-cell struct id for a TRMC leaf.  A built-in `::` leaf is the
 -- reserved `$C_Cons`; any user ctor keys off its name via ctorStructName (so a user
@@ -7826,15 +7878,15 @@ emitWasmTrmcTailCall prog env pslots loopLbl e =
   argTemps ++ storeSlots ++ ["br " ++ loopLbl]
 
 -- base/other leaf: a value with NO self-call.  Store it into the current destination's
--- recursive slot (or directly into $__tmc_head if no cell was ever built), then br to exit
--- where the function returns $__tmc_head.  Uses $__tmc_first to choose.
+-- recursive slot (or directly into $s.tmchead.0 if no cell was ever built), then br to exit
+-- where the function returns $s.tmchead.0.  Uses $s.tmcfirst.0 to choose.
 emitWasmTrmcBase : Prog -> Env -> String -> CExpr -> List String
 emitWasmTrmcBase prog env exitLbl e =
   let valInstrs = emitRefExpr prog env 0 e
   -- if no cell was built, the whole result IS this value → head := value.
   -- else store it into the current dest's recursive slot (the parent ctor's type
   -- is static for a singleton leaf-ctor set; a mixed set dispatches on
-  -- $__tmc_dctor — wTrmcLinkParent).  Fetch the set from the ctx.
+  -- $s.tmcdctor.0 — wTrmcLinkParent).  Fetch the set from the ctx.
   match (progFnCtx prog).trmc
     WTrmcOn _ _ _ ctorSet isBuiltinList _ _ =>
       let storeBranch = wTrmcLinkParent isBuiltinList ctorSet valInstrs
@@ -7846,7 +7898,7 @@ emitWasmTrmcBase prog env exitLbl e =
         ++ ["end", "br " ++ exitLbl]
     WTrmcOff => valInstrs ++ ["return"]
 
--- recompute each self-call arg into its temp local ($__tmc_t<base+k>), left-to-right.
+-- recompute each self-call arg into its temp local ($s.tmctemp.<base+k>), left-to-right.
 wTrmcEmitArgsToTemps : Prog -> Env -> List CExpr -> Int -> List String
 wTrmcEmitArgsToTemps prog env args base = wTrmcArgsGo prog env args base 0
 
@@ -7868,7 +7920,7 @@ wTrmcStoreGo (p :: ps) (_ :: as_) base k =
   [
       "local.get " ++ wTrmcTempL (base + k),
       "ref.as_non_null",
-      "local.set $" ++ gname p,
+      "local.set $" ++ p,
     ]
     ++ wTrmcStoreGo ps as_ base (k + 1)
 
@@ -8029,9 +8081,9 @@ wTrmcBuildsBuiltinList prog self arity clauses =
 -- emit the eligible function as a destination-passing loop.  Scaffold:
 --   (func $name (param $a0 …) (result (ref eq))
 --     <tmc locals> <clause locals> <scratch> <w7 locals>
---     i32.const 1  local.set $__tmc_first
+--     i32.const 1  local.set $s.tmcfirst.0
 --     block $tmcexit  loop $tmcloop  <body via emitRefTail under WTrmcOn>  end  end
---     local.get $__tmc_head)
+--     local.get $s.tmchead.0)
 -- Every cons/ctor leaf `br $tmcloop` (no recursive call); the base leaf `br $tmcexit`.
 emitWasmTrmcFn : Prog ->
   String ->
@@ -8042,7 +8094,14 @@ emitWasmTrmcFn : Prog ->
 emitWasmTrmcFn prog name arity clauses ctorSet =
   -- top-level define: the func symbol is `gname name`, the self-ref is `SelfByVar name`,
   -- and `name` doubles as the clause-block label root.
-  emitWasmTrmcCore prog (gname name) (SelfByVar name) name arity clauses ctorSet
+  emitWasmTrmcCore
+    prog
+    (userFnW name)
+    (SelfByVar name)
+    name
+    arity
+    clauses
+    ctorSet
 
 -- the shared destination-passing-loop emitter for BOTH the top-level path (SelfByVar) and
 -- the Phase-2 B-dispatch impl path (SelfByMethod).  `funcSym` is the rendered func symbol
@@ -8059,9 +8118,9 @@ emitWasmTrmcCore : Prog ->
   List String
 emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
   let params = clauseParamNames clauses arity
-  let pslots = map gname params
-  let loopLbl = "$tmcloop"
-  let exitLbl = "$tmcexit"
+  let pslots = map wParamId params
+  let loopLbl = labelName WN.WTmcLoop 0
+  let exitLbl = labelName WN.WTmcExit 0
   let isBuiltinList = wTrmcBuildsBuiltinList prog self arity clauses
   let w7Outer = w7ScopeOpen (progEmit prog)
   let tprog =
@@ -8120,17 +8179,24 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
         (k => "(local " ++ wTrmcTempL k ++ " (ref null eq))")
         (rangeList 0 (arity + 1))
   let allLocals = clauseLocals clauses
-  let extraLocals = filterList (notIn params) (dedupKeep allLocals)
+  let extraLocals =
+    filterList (notIn (sourceParams params)) (dedupKeep allLocals)
   let scratch = scratchLocals (clausesMaxDepth clauses)
-  let localDecls = map localDeclRef (extraLocals ++ scratch)
+  let localDecls =
+    guardDecl :: map localDeclRef extraLocals ++ map syntheticDecl scratch
   let w7Decls =
     w7LocalDecls
       (w7ScopeClose (progEmit prog) w7Outer)
       (clausesMaxDepth clauses)
   let _ = defineFnW prog funcSym (FuncParams (listLen params))
   let sig =
-    "  (func $\{funcSym}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
-  wTmcMarker funcSym "trmc"
+    "  (func $\{funcSym}\{joinWith "" (map wParamDecl params)} (result (ref eq))"
+  wTmcMarker
+      (if startsWith "f.impl." funcSym || startsWith "f.default." funcSym then
+        funcSym
+      else
+        lblRoot)
+      "trmc"
     :: [sig]
       ++ map ("  " ++ _) (tmcLocals ++ localDecls ++ w7Decls)
       ++ indent loopShell
@@ -8186,15 +8252,15 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
 -- so a member calling back into its own root through a function-typed argument
 -- passes it.  The root wrapper's save/restore of the triple is what makes that safe.
 wDispHeadL : String -> String
-wDispHeadL root = "$g_tmc_head_" ++ gname root
+wDispHeadL root = "$" ++ WN.wasmName (WN.WDispatchHead root)
 wDispDestL : String -> String
-wDispDestL root = "$g_tmc_dest_" ++ gname root
+wDispDestL root = "$" ++ WN.wasmName (WN.WDispatchDest root)
 wDispFirstL : String -> String
-wDispFirstL root = "$g_tmc_first_" ++ gname root
+wDispFirstL root = "$" ++ WN.wasmName (WN.WDispatchFirst root)
 
 -- the inner-loop fn name for a group root `R`: `<R>__disploop`.
 wDispLoopName : String -> String
-wDispLoopName root = root ++ "__disploop"
+wDispLoopName root = WN.wasmName (WN.WGenerated WN.WDispatch root 0)
 
 -- one group's three dest globals (mutable; reset per outer entry by the wrapper).
 -- the names of the globals `wDispGlobalLines` declares, without their `$`
@@ -8249,7 +8315,13 @@ wDispIsRoot (DispGroup root _) name = root == name
 -- `impl_<tag>_<method>` on both backends).
 wTmcMarker : String -> String -> String
 wTmcMarker sym mode =
-  let name = if startsWith "mdk_" sym then dropPrefix sym "mdk_" else sym
+  let name =
+    if startsWith "f.impl." sym then
+      "impl." ++ dropPrefix sym "f.impl."
+    else if startsWith "f.default." sym then
+      "default." ++ dropPrefix sym "f.default."
+    else
+      sym
   "  ;; tmc: \{name} \{mode}"
 
 -- emit a group ROOT: the reset wrapper `$root` (save and zero the dest globals, call the
@@ -8257,9 +8329,9 @@ wTmcMarker sym mode =
 emitWDispRoot : Prog -> DispGroup -> Int -> List CClause -> List String
 emitWDispRoot prog grp arity clauses =
   let name = dispRootOf grp
-  let params = synthParams arity
+  let params = synthWParams arity
   let loopName = wDispLoopName name
-  let _ = defineFnW prog (gname name) (FuncParams arity)
+  let _ = defineFnW prog (userFnW name) (FuncParams arity)
   let resetWrapper = wDispResetWrapper prog name loopName params arity
   let inner = emitWDispMemberFn prog grp loopName name arity clauses
   wTmcMarker name "group-root" :: resetWrapper ++ inner
@@ -8275,27 +8347,27 @@ emitWDispRoot prog grp arity clauses =
 wDispResetWrapper : Prog ->
   String ->
   String ->
-  List String ->
+  List WParam ->
   Int ->
   List String
 wDispResetWrapper prog name loopName params arity =
   let sig =
-    "  (func $\{gname name}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
+    "  (func $\{userFnW name}\{joinWith "" (map wParamDecl params)} (result (ref eq))"
   let locals = [
-    "(local $__disp_sh (ref null eq))",
-    "(local $__disp_sd (ref null eq))",
-    "(local $__disp_sf i32)",
-    "(local $__disp_r (ref eq))",
+    "(local \{syntheticLocalName WN.WDispSavedHead 0} (ref null eq))",
+    "(local \{syntheticLocalName WN.WDispSavedDest 0} (ref null eq))",
+    "(local \{syntheticLocalName WN.WDispSavedFirst 0} i32)",
+    "(local \{syntheticLocalName WN.WDispResult 0} (ref eq))",
   ]
   let get = g => globalW prog "global.get" g
   let set = g => globalW prog "global.set" g
   let save = [
     get (wDispHeadL name),
-    "local.set $__disp_sh",
+    "local.set \{syntheticLocalName WN.WDispSavedHead 0}",
     get (wDispDestL name),
-    "local.set $__disp_sd",
+    "local.set \{syntheticLocalName WN.WDispSavedDest 0}",
     get (wDispFirstL name),
-    "local.set $__disp_sf",
+    "local.set \{syntheticLocalName WN.WDispSavedFirst 0}",
   ]
   let reset = [
     "i32.const 1",
@@ -8306,16 +8378,19 @@ wDispResetWrapper prog name loopName params arity =
     set (wDispDestL name),
   ]
   let forward =
-    flatMap (p => ["local.get $" ++ gname p]) params
-      ++ [callFnW prog CallValueW (gname loopName) arity, "local.set $__disp_r"]
+    flatMap (p => ["local.get $" ++ wParamId p]) params
+      ++ [
+        callFnW prog CallValueW loopName arity,
+        "local.set \{syntheticLocalName WN.WDispResult 0}",
+      ]
   let restore = [
-    "local.get $__disp_sh",
+    "local.get \{syntheticLocalName WN.WDispSavedHead 0}",
     set (wDispHeadL name),
-    "local.get $__disp_sd",
+    "local.get \{syntheticLocalName WN.WDispSavedDest 0}",
     set (wDispDestL name),
-    "local.get $__disp_sf",
+    "local.get \{syntheticLocalName WN.WDispSavedFirst 0}",
     set (wDispFirstL name),
-    "local.get $__disp_r",
+    "local.get \{syntheticLocalName WN.WDispResult 0}",
   ]
   [sig] ++ indent (locals ++ save ++ reset ++ forward ++ restore) ++ ["  )"]
 
@@ -8332,7 +8407,7 @@ emitWDispMemberFn : Prog ->
   List String
 emitWDispMemberFn prog grp emitName origName arity clauses =
   let root = dispRootOf grp
-  let params = synthParams arity
+  let params = synthWParams arity
   let loopName = wDispLoopName root
   -- the dispatch context carries the ROOT's arity (for the bare-root-call redirect
   -- check), NOT this member's arity — a member like scanAt is arity-6 but the bare
@@ -8344,11 +8419,13 @@ emitWDispMemberFn prog grp emitName origName arity clauses =
     progWithDisp (WDispOn root loopName rootArity (dispMembersOf grp)) prog
   let bodyLines = emitClausesRef dprog origName params arity clauses
   let allLocals = clauseLocals clauses
-  let extraLocals = filterList (notIn params) (dedupKeep allLocals)
+  let extraLocals =
+    filterList (notIn (sourceParams params)) (dedupKeep allLocals)
   let scratch = scratchLocals (clausesMaxDepth clauses)
-  let _ = defineFnW prog (gname emitName) (FuncParams arity)
+  let physicalName = if emitName == origName then userFnW origName else emitName
+  let _ = defineFnW prog physicalName (FuncParams arity)
   let sig =
-    "  (func $\{gname emitName}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
+    "  (func $\{physicalName}\{joinWith "" (map wParamDecl params)} (result (ref eq))"
   -- census marker for a NON-root member (the root's marker is emitted by
   -- emitWDispRoot; the inner __disploop is the root's own body, not a member).
   let marker =
@@ -8356,9 +8433,10 @@ emitWDispMemberFn prog grp emitName origName arity clauses =
       [wTmcMarker origName ("group:" ++ root)]
     else
       []
-  -- the member needs the tmc temp local ($__tmc_t0 = the fresh cell stash).
+  -- the member needs the tmc temp local ($s.tmctemp.0 = the fresh cell stash).
   let tmcLocal = ["(local " ++ wTrmcTempL 0 ++ " (ref null eq))"]
-  let localDecls = map localDeclRef (extraLocals ++ scratch)
+  let localDecls =
+    guardDecl :: map localDeclRef extraLocals ++ map syntheticDecl scratch
   let w7Decls =
     w7LocalDecls
       (w7ScopeClose (progEmit prog) w7Outer)
@@ -8386,7 +8464,7 @@ emitWDispSpineCons : Prog ->
 emitWDispSpineCons prog env root target heads args =
   flatMap (h => emitWDispCell prog env root h) heads
     ++ flatMap (a => emitRefExpr prog env 0 a) args
-    ++ [callFnW prog CallTailW (gname target) (listLen args)]
+    ++ [callFnW prog CallTailW target (listLen args)]
 
 -- one Cons cell of a spine-cons leaf: build, link, advance.
 emitWDispCell : Prog -> Env -> String -> CExpr -> List String
@@ -8523,7 +8601,7 @@ emitTailCallW prog env app =
         emitAppRef prog env 0 app ++ ["return"]
       else if progFnMemberW prog f && isExactCall mode then
         flatMap (a => emitRefExpr prog env 0 a) args
-          ++ [callFnW prog CallTailW (gname f) (listLen args)]
+          ++ [callFnW prog CallTailW (userFnW f) (listLen args)]
       else
         emitIndirectApp prog env 0 hd args CallTailW
     -- #1349: a dispatched method in tail position.  An RKey route return_calls the
@@ -8666,7 +8744,7 @@ emitGuardArmTail : Prog ->
 emitGuardArmTail prog env arity d root occs arms i fail =
   match leafArm prog arms i
     Some (pat, guards, body, share) =>
-      let gLabel = "$gt" ++ intToString d
+      let gLabel = labelName WN.WGuardTail d
       let (tests, binds, env2) = patTestBind prog pat root gLabel env
       -- #379: guards now thread the env (a CGBind binds names the body can see), so the
       -- body is emitted under env3, not env2.
@@ -8757,12 +8835,14 @@ emitBrTableTowerTail : Prog ->
   List String
 emitBrTableTowerTail prog env arity d root svRead rest arms branches dft ty sd nOrd =
   let sfx = intToString sd
-  let labels = map (k => "$swt\{sfx}_\{intToString k}") (rangeList 0 nOrd)
-  let dftLabel = "$swdt" ++ sfx
+  let labels = map (labelBranch WN.WSwitchTail sd) (rangeList 0 nOrd)
+  let dftLabel = labelName WN.WSwitchTail sd
   let tableInstr = "br_table \{joinWith " " labels} \{dftLabel}"
   let opens =
     ["block " ++ dftLabel]
-      ++ map (k => "block $swt\{sfx}_\{intToString k}") (rangeList 0 nOrd)
+      ++ map
+        (k => "block " ++ labelBranch WN.WSwitchTail sd k)
+        (rangeList 0 nOrd)
   let pick = discrimReadOf svRead ty ++ [tableInstr]
   opens
     ++ pick
@@ -8859,7 +8939,7 @@ emitOrdinalSlotTail prog env arity d root svRead rest arms branches ty sd k =
               ])
           (rangeList 0 a)
       emitTreeTail prog env arity d root (fieldOccs ++ rest) arms sub
-    None => ["br $swdt" ++ intToString sd]
+    None => ["br " ++ labelName WN.WSwitchTail sd]
 
 -- `idt` (trailing) is the chain's own INDENT depth — see emitLitSwitchRef (#381).
 emitLitSwitchTail : Prog ->
@@ -8942,7 +9022,7 @@ emitLitSwitchTail prog _ _ _ _ _ _ _ _ _ _ =
 emitClosure : Prog -> Env -> Int -> List Pat -> CExpr -> List String
 emitClosure prog env d pats body =
   let n = freshLamId (progEmit prog)
-  let lamName = "$mdk_lam" ++ intToString n
+  let lamName = "$" ++ WN.wasmName (WN.WGenerated WN.WLambda "" n)
   -- W2/cat2: a param may be a destructuring pattern (tuple/ctor); its BOUND vars
   -- (patVars) — not a single synthetic name — are what the body's free-var set
   -- subtracts, so the captures are computed over the real bound names.
@@ -8985,29 +9065,29 @@ emitLamDefine prog lamName pats captured capEnv body =
   -- each param i: load $args[i] into a synthetic local `$__lp<i>`, then bind its
   -- (possibly-destructuring) pattern against that local via bindPatRef (the same
   -- field-extraction machinery match-arm leaves / destructuring-lets use).
-  let synthPs = map (i => "__lp" ++ intToString i) (rangeList 0 arity)
+  let synthPs = synthWParams arity
   let w7Outer = w7ScopeOpen (progEmit prog)
   let capPrologue = flatMap capLoadAt (zipIdx captured 0)
-  let argLoads = flatMap argLoadAt (zipIdx synthPs 0)
-  let (paramBinds, bodyEnv0) =
-    bindParamPats
-      prog
-      (envExtendUnstamped synthPs capEnv)
-      (zipPatsP pats synthPs)
+  let argLoads = flatMap argLoadPosition (rangeList 0 arity)
+  let (paramBinds, bodyEnv0) = bindParamPats prog capEnv (zipPatsP pats synthPs)
   let bodyEnv = bodyEnv0
   let patBoundVars = flatMap patVars pats
   let bodyLocals =
     filterList
-      (notIn (synthPs ++ captured ++ patBoundVars))
+      (notIn (captured ++ patBoundVars))
       (dedupKeep (collectExprLocals body))
   let scratch = scratchLocals (maxRefDepth body)
   let localLines =
-    ["(local $__self_clos (ref $clos))"]
-      ++ map
-        (l => localDeclRef l)
-        (synthPs ++ captured ++ patBoundVars ++ bodyLocals ++ scratch)
-  let setup =
-    ["local.get $self", "ref.cast (ref $clos)", "local.set $__self_clos"]
+    ["(local \{syntheticLocalName WN.WSelfClosure 0} (ref $clos))"]
+      ++ map (l => localDeclRef l) (captured ++ patBoundVars ++ bodyLocals)
+      ++ map wParamLocal synthPs
+      ++ map syntheticDecl scratch
+      ++ [guardDecl]
+  let setup = [
+    "local.get \{syntheticLocalName WN.WAbiSelf 0}",
+    "ref.cast (ref $clos)",
+    "local.set \{syntheticLocalName WN.WSelfClosure 0}",
+  ]
   -- A lifted lambda is an INDEPENDENT function: it must NOT inherit the enclosing
   -- fn's TMC loop context nor a dispatch-group context, so its body is emitted
   -- with `progInFn`.
@@ -9019,9 +9099,7 @@ emitLamDefine prog lamName pats captured capEnv body =
   let w7Decls =
     w7LocalDecls (w7ScopeClose (progEmit prog) w7Outer) (maxRefDepth body)
   [
-      "  (func "
-        ++ lamName
-        ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))",
+      "  (func \{lamName} (type $codety) (param \{syntheticLocalName WN.WAbiSelf 0} (ref eq)) (param \{syntheticLocalName WN.WAbiArgs 0} (ref $argarr)) (result (ref eq))",
     ]
     ++ map ("  " ++ _) (localLines ++ w7Decls)
     ++ indent (setup ++ capPrologue ++ argLoads ++ paramBinds ++ bodyLines)
@@ -9030,22 +9108,22 @@ emitLamDefine prog lamName pats captured capEnv body =
 -- bind a list of (pattern, synthetic-local-name) lambda params: for each, run
 -- bindPatRef against `local.get $<synth>` (the pattern is irrefutable — the type
 -- proves the shape, like a destructuring let).  Threads the env left-to-right.
-bindParamPats : Prog -> Env -> List (Pat, String) -> (List String, Env)
+bindParamPats : Prog -> Env -> List (Pat, WParam) -> (List String, Env)
 bindParamPats _ env [] = ([], env)
 bindParamPats prog env ((p, a) :: rest) =
-  let (binds, env2) = bindPatRef prog env p ["local.get $" ++ gname a]
+  let (binds, env2) = bindPatRef prog env p ["local.get $" ++ wParamId a]
   let (more, env3) = bindParamPats prog env2 rest
   (binds ++ more, env3)
 
 -- zip patterns to synthetic param names (peer of zipPats but for synthetic params).
-zipPatsP : List Pat -> List String -> List (Pat, String)
+zipPatsP : List Pat -> List WParam -> List (Pat, WParam)
 zipPatsP (p :: ps) (a :: bs) = (p, a) :: zipPatsP ps bs
 zipPatsP _ _ = []
 
--- load captured var i: $__self_clos.$env[i] → its local.
+-- load captured var i: $s.selfclosure.0.$env[i] → its local.
 capLoadAt : (String, Int) -> List String
 capLoadAt (c, i) = [
-  "local.get $__self_clos",
+  "local.get \{syntheticLocalName WN.WSelfClosure 0}",
   "struct.get $clos $env",
   "i32.const " ++ intToString i,
   "array.get $argarr",
@@ -9053,14 +9131,18 @@ capLoadAt (c, i) = [
   "local.set $" ++ gname c,
 ]
 
--- load param i: $args[i] → its local.
-argLoadAt : (String, Int) -> List String
-argLoadAt (p, i) = [
-  "local.get $args",
+syntheticEnv : List String -> Int -> Env -> Env
+syntheticEnv [] _ env = env
+syntheticEnv (name :: rest) i env =
+  syntheticEnv rest (i + 1) (omInsert name (WD.LocalSynthetic i) env)
+
+argLoadPosition : Int -> List String
+argLoadPosition i = [
+  "local.get \{syntheticLocalName WN.WAbiArgs 0}",
   "i32.const " ++ intToString i,
   "array.get $argarr",
   "ref.as_non_null",
-  "local.set $" ++ gname p,
+  "local.set $" ++ wParamId (ParamPosition i),
 ]
 
 -- ── W9: CLetGroup (where / local letrec functions) ───────────────────────────
@@ -9213,7 +9295,7 @@ constLgClosure : Prog -> Int -> CBind -> List String
 constLgClosure prog gid (CBind name clauses _ _) =
   wConstClos
       prog
-      "$mdk_lg\{intToString gid}_\{gname name}"
+      ("$" ++ WN.wasmName (WN.WGenerated WN.WGroup name gid))
       (clauseArityOf clauses)
     ++ ["local.set $" ++ gname name]
 
@@ -9257,16 +9339,16 @@ emitLgLifted prog gid names groupCaps groupEnv binds (CBind name clauses bindLoc
       bindLoc
       (sitePackedW (progEmit prog) bindLoc)
       prog
-  let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
+  let lamName = "$" ++ WN.wasmName (WN.WGenerated WN.WGroup name gid)
   let _ = noteFuncRef prog lamName
   let arity = clauseArityOf clauses
   -- synthetic names: this member also declares its group captures and sibling
   -- names as locals, so a source-named param could collide with either.
-  let params = synthParams arity
+  let params = synthWParams arity
   let w7Outer = w7ScopeOpen (progEmit prog)
   let capPrologue = flatMap capLoadAt (zipIdx groupCaps 0)
   let memberRebuilds = liftedMemberRebuilds prog gid groupCaps binds
-  let argPrologue = flatMap argLoadAt (zipIdx params 0)
+  let argPrologue = flatMap argLoadPosition (rangeList 0 arity)
   -- a lifted letgroup member is an independent function: clear any live TMC /
   -- dispatch-group context so its body doesn't leak `$__tmc_*`/`$tmcloop` references
   -- (see emitLamDefine — same hazard when lifted under a live trmc context).
@@ -9275,25 +9357,27 @@ emitLgLifted prog gid names groupCaps groupEnv binds (CBind name clauses bindLoc
   let memberLocals = names
   let bodyLocals =
     filterList
-      (notIn (params ++ groupCaps ++ memberLocals))
+      (notIn (groupCaps ++ memberLocals))
       (dedupKeep (clauseLocals clauses))
   let scratch = scratchLocals (clausesMaxDepth clauses)
   let localLines =
-    ["(local $__self_clos (ref $clos))"]
+    ["(local \{syntheticLocalName WN.WSelfClosure 0} (ref $clos))"]
       ++ map (n => "(local $" ++ gname n ++ " (ref eq))") memberLocals
-      ++ map
-        (l => localDeclRef l)
-        (params ++ groupCaps ++ bodyLocals ++ scratch)
+      ++ map wParamLocal params
+      ++ map localDeclRef (groupCaps ++ bodyLocals)
+      ++ map syntheticDecl scratch
+      ++ [guardDecl]
       ++ w7LocalDecls
         (w7ScopeClose (progEmit prog) w7Outer)
         (clausesMaxDepth clauses)
-  let setup =
-    ["local.get $self", "ref.cast (ref $clos)", "local.set $__self_clos"]
+  let setup = [
+    "local.get \{syntheticLocalName WN.WAbiSelf 0}",
+    "ref.cast (ref $clos)",
+    "local.set \{syntheticLocalName WN.WSelfClosure 0}",
+  ]
   let def =
     [
-        "  (func "
-          ++ lamName
-          ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))",
+        "  (func \{lamName} (type $codety) (param \{syntheticLocalName WN.WAbiSelf 0} (ref eq)) (param \{syntheticLocalName WN.WAbiArgs 0} (ref $argarr)) (result (ref eq))",
       ]
       ++ map ("  " ++ _) localLines
       ++ indent
@@ -9306,7 +9390,7 @@ emitLgLifted prog gid names groupCaps groupEnv binds (CBind name clauses bindLoc
 -- member's prologue; groupCaps must be bound as locals in either context.
 rebuildLgClosure : Prog -> Int -> List String -> CBind -> List String
 rebuildLgClosure prog gid groupCaps (CBind name clauses _ _) =
-  let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
+  let lamName = "$" ++ WN.wasmName (WN.WGenerated WN.WGroup name gid)
   let arity = clauseArityOf clauses
   let capInstrs = flatMap (c => ["local.get $" ++ gname c]) groupCaps
   [refFuncW prog lamName, "i32.const " ++ intToString arity]
@@ -9487,9 +9571,9 @@ emitRangeListRef prog env d lo hi incl =
   let loI = emitRefExpr prog env d lo ++ [unboxIntW prog]
   let hiI = emitRefExpr prog env d hi ++ [unboxIntW prog]
   let sfx = intToString d
-  let accL = w7Local (progEmit prog) "__rlacc" sfx
-  let iL = w7Local (progEmit prog) "__rli" sfx
-  let loL = w7Local (progEmit prog) "__rllo" sfx
+  let accL = w7Local (progEmit prog) WN.W7Rlacc d
+  let iL = w7Local (progEmit prog) WN.W7Rli d
+  let loL = w7Local (progEmit prog) WN.W7Rllo d
   -- count = (incl ? hi+1 : hi) - lo ; clamped at 0 by the loop guard.
   let adj = if incl then ["i64.const 1", "i64.add"] else []
   -- stash lo, init acc=Nil, i = count-1, loop i>=0: acc = Cons (lo+i) acc.
@@ -9505,14 +9589,22 @@ emitRangeListRef prog env d lo hi incl =
       "i64.sub",
       "local.set " ++ iL,
     ]
-    ++ ["block $rld" ++ sfx, "loop $rll" ++ sfx]
-    ++ ["local.get " ++ iL, "i64.const 0", "i64.lt_s", "br_if $rld" ++ sfx]
+    ++ [
+      "block " ++ labelName WN.WLabelRld d,
+      "loop " ++ labelName WN.WLabelRll d,
+    ]
+    ++ [
+      "local.get " ++ iL,
+      "i64.const 0",
+      "i64.lt_s",
+      "br_if " ++ labelName WN.WLabelRld d,
+    ]
     ++ ["i32.const 0"]
     ++ ["local.get " ++ loL, "local.get " ++ iL, "i64.add", boxIntW prog]
     ++ ["local.get " ++ accL]
     ++ ["struct.new $C_Cons", "local.set " ++ accL]
     ++ ["local.get " ++ iL, "i64.const 1", "i64.sub", "local.set " ++ iL]
-    ++ ["br $rll" ++ sfx, "end", "end"]
+    ++ ["br " ++ labelName WN.WLabelRll d, "end", "end"]
     ++ ["local.get " ++ accL]
 
 -- an array literal: array.new_fixed over the emitted element values.
@@ -9528,10 +9620,10 @@ emitRangeArrayRef prog env d lo hi incl =
   let loI = emitRefExpr prog env d lo ++ [unboxIntW prog]
   let hiI = emitRefExpr prog env d hi ++ [unboxIntW prog]
   let sfx = intToString d
-  let arrL = w7Local (progEmit prog) "__raarr" sfx
-  let iL = w7Local (progEmit prog) "__rai" sfx
-  let loL = w7Local (progEmit prog) "__ralo" sfx
-  let cntL = w7Local (progEmit prog) "__racnt" sfx
+  let arrL = w7Local (progEmit prog) WN.W7Raarr d
+  let iL = w7Local (progEmit prog) WN.W7Rai d
+  let loL = w7Local (progEmit prog) WN.W7Ralo d
+  let cntL = w7Local (progEmit prog) WN.W7Racnt d
   -- the bound and count arithmetic is i64, as in emitRangeListRef; the slot index
   -- stays i32, the width `array.new`/`array.set` take.
   let adj = if incl then ["i64.const 1", "i64.add"] else []
@@ -9570,13 +9662,16 @@ emitRangeArrayRef prog env d lo hi incl =
       "local.set " ++ arrL,
     ]
     ++ ["i32.const 0", "local.set " ++ iL]
-    ++ ["block $rad" ++ sfx, "loop $ral" ++ sfx]
+    ++ [
+      "block " ++ labelName WN.WLabelRad d,
+      "loop " ++ labelName WN.WLabelRal d,
+    ]
     ++ [
       "local.get " ++ iL,
       "i64.extend_i32_u",
       "local.get " ++ cntL,
       "i64.ge_s",
-      "br_if $rad" ++ sfx,
+      "br_if " ++ labelName WN.WLabelRad d,
     ]
     ++ ["local.get " ++ arrL, "ref.as_non_null", "local.get " ++ iL]
     ++ [
@@ -9588,7 +9683,7 @@ emitRangeArrayRef prog env d lo hi incl =
     ]
     ++ ["array.set $arr"]
     ++ ["local.get " ++ iL, "i32.const 1", "i32.add", "local.set " ++ iL]
-    ++ ["br $ral" ++ sfx, "end", "end"]
+    ++ ["br " ++ labelName WN.WLabelRal d, "end", "end"]
     ++ ["local.get " ++ arrL, "ref.as_non_null"]
 
 -- CIndex arr i: bounds-check (i<0 or i>=len → trap, matching native @mdk_oob), then
@@ -9597,8 +9692,8 @@ emitRangeArrayRef prog env d lo hi incl =
 emitIndexRef : Prog -> Env -> Int -> CExpr -> CExpr -> List String
 emitIndexRef prog env d a i =
   let sfx = intToString d
-  let arrL = w7Local (progEmit prog) "__ixarr" sfx
-  let idxL = w7Local (progEmit prog) "__ixi" sfx
+  let arrL = w7Local (progEmit prog) WN.W7Ixarr d
+  let idxL = w7Local (progEmit prog) WN.W7Ixi d
   let arrI =
     emitRefExpr prog env d a ++ ["ref.cast (ref $arr)", "local.set " ++ arrL]
   let idxI =
@@ -9667,10 +9762,10 @@ emitSliceRef : Prog ->
   List String
 emitSliceRef prog env d a lo hi incl =
   let sfx = intToString d
-  let srcL = w7Local (progEmit prog) "__slsrc" sfx
-  let dstL = w7Local (progEmit prog) "__sldst" sfx
-  let loL = w7Local (progEmit prog) "__sllo" sfx
-  let lenL = w7Local (progEmit prog) "__sllen" sfx
+  let srcL = w7Local (progEmit prog) WN.W7Slsrc d
+  let dstL = w7Local (progEmit prog) WN.W7Sldst d
+  let loL = w7Local (progEmit prog) WN.W7Sllo d
+  let lenL = w7Local (progEmit prog) WN.W7Sllen d
   let arrI =
     emitRefExpr prog env d a ++ ["ref.cast (ref $arr)", "local.set " ++ srcL]
   let loI =
@@ -9814,7 +9909,7 @@ emitUpdateCopy : Prog ->
   List String
 emitUpdateCopy prog env d ctor base fields =
   let sfx = intToString d
-  let bL = w7Local (progEmit prog) "__rub" sfx
+  let bL = w7Local (progEmit prog) WN.W7Rub d
   let baseI =
     emitRefExpr prog env d base
       ++ ["ref.cast (ref $" ++ ctorStructName ctor ++ ")", "local.set " ++ bL]
@@ -9878,7 +9973,7 @@ emitDecisionRef : Prog ->
 emitDecisionRef prog env d scrut arms tree =
   let st = emitRefExpr prog env d scrut
   let scrutL = scratchLocal d
-  let decLabel = "$dec" ++ intToString d
+  let decLabel = labelName WN.WDecision d
   let occ0 = ["local.get $" ++ scrutL]
   st
     ++ ["local.set $" ++ scrutL]
@@ -10086,7 +10181,7 @@ emitGuardArmRef : Prog ->
 emitGuardArmRef prog env d decLabel root occs arms i fail =
   match leafArm prog arms i
     Some (pat, guards, body, share) =>
-      let gLabel = "$g" ++ intToString d
+      let gLabel = labelName WN.WGuardValue d
       let (tests, binds, env2) = patTestBind prog pat root gLabel env
       -- #379: guards now thread the env (a CGBind binds names the body can see), so the
       -- body is emitted under env3, not env2.
@@ -10113,9 +10208,6 @@ emitGuardArmRef prog env d decLabel root occs arms i fail =
 -- inside the RHS finishes evaluating before the outer `local.set` — live ranges never
 -- overlap, so no depth indexing is needed (unlike the `__rf<d>` scratch pool, which
 -- `maxIndexAt` sizes by walking arm BODIES only, never their guards).
-guardStashLocal : String
-guardStashLocal = "__gbind"
-
 -- emit a clause's guard chain left-to-right, THREADING the env: a `CGBind p <- e` binds
 -- names that later guards AND the body can see -- which the old `flatMap` over a
 -- FIXED env could not express.  A CGBool tests the unboxed i31 Bool; a
@@ -10137,7 +10229,7 @@ emitGuardChainRef prog env d gLabel ((CGBool g) :: rest) =
   let (more, env2) = emitGuardChainRef prog env d gLabel rest
   (boolTest ++ more, env2)
 emitGuardChainRef prog env d gLabel ((CGBind p ex) :: rest) =
-  let sv = gname guardStashLocal
+  let sv = WN.wasmName (WN.WSyntheticLocal WN.WGuard 0)
   let rhs = emitRefExpr prog env d ex ++ ["local.set $" ++ sv]
   let (tests, binds, env2) = patTestBind prog p ["local.get $" ++ sv] gLabel env
   let (more, env3) = emitGuardChainRef prog env2 d gLabel rest
@@ -10261,11 +10353,11 @@ emitBrTableTower : Prog ->
   List String
 emitBrTableTower prog env d decLabel root svRead rest arms branches dft ty sd nOrd =
   let sfx = intToString sd
-  let labels = map (k => "$sw\{sfx}_\{intToString k}") (rangeList 0 nOrd)
-  let tableInstr = "br_table \{joinWith " " labels} $swd\{sfx}"
+  let labels = map (labelBranch WN.WSwitch sd) (rangeList 0 nOrd)
+  let tableInstr = "br_table \{joinWith " " labels} \{labelName WN.WSwitch sd}"
   let opens =
-    ["block $swd" ++ sfx]
-      ++ map (k => "block $sw\{sfx}_\{intToString k}") (rangeList 0 nOrd)
+    ["block " ++ labelName WN.WSwitch sd]
+      ++ map (k => "block " ++ labelBranch WN.WSwitch sd k) (rangeList 0 nOrd)
   let pick = discrimReadOf svRead ty ++ [tableInstr]
   opens
     ++ pick
@@ -10367,7 +10459,7 @@ emitOrdinalSlot prog env d decLabel root svRead rest arms branches ty sd k =
               ])
           (rangeList 0 a)
       emitTreeRef prog env d decLabel root (fieldOccs ++ rest) arms sub
-    None => ["br $swd" ++ intToString sd]
+    None => ["br " ++ labelName WN.WSwitch sd]
 
 -- the literal switch: compare the focus i31 Int against each branch's constant via
 -- an if/else chain.  The focus is re-read per comparison through `foc`.
@@ -10712,9 +10804,9 @@ collectStmtLocals (CSAssign _ ex) = collectExprLocals ex
 
 -- the `$`-prefixed name of the W7 scratch local `stem` at depth suffix `sfx`, recorded
 -- as referenced by the function being emitted.
-w7Local : WasmEmit -> String -> String -> String
-w7Local emit stem sfx =
-  let name = stem ++ sfx
+w7Local : WasmEmit -> WN.WasmGeneratedFamily -> Int -> String
+w7Local emit family depth =
+  let name = WN.wasmName (WN.WSyntheticLocal family depth)
   let _ = setRef emit.w7Used (omInsert name () !emit.w7Used)
   "$" ++ name
 
@@ -10743,49 +10835,46 @@ w7LocalDecls used maxDepth = match omKeys used
 
 w7LocalsAtDepth : OrdMap Unit -> Int -> List String
 w7LocalsAtDepth used d =
-  let sfx = intToString d
   flatMap
-    ((stem, ty) =>
-      if omHasKey (stem ++ sfx) used then
-        ["(local $\{stem}\{sfx} \{ty})"]
-      else
-        [])
+    ((family, ty) =>
+      let name = WN.wasmName (WN.WSyntheticLocal family d)
+      if omHasKey name used then ["(local $\{name} \{ty})"] else [])
     w7LocalKinds
 
 -- the divisor-guard scratch local of a concrete `/`/`%` at depth `d`.
 divrLocal : Prog -> Int -> String
-divrLocal prog d = w7Local (progEmit prog) "__divr" (intToString d)
+divrLocal prog d = w7Local (progEmit prog) WN.W7Divr d
 
 -- every W7 scratch local's name stem and WAT type, in declaration order.
-w7LocalKinds : List (String, String)
+w7LocalKinds : List (WN.WasmGeneratedFamily, String)
 w7LocalKinds = [
-  ("__rlacc", "(ref eq)"),
-  ("__rli", "i64"),
-  ("__rllo", "i64"),
-  ("__raarr", "(ref null $arr)"),
-  ("__rai", "i32"),
-  ("__ralo", "i64"),
-  ("__racnt", "i64"),
-  ("__ixarr", "(ref null $arr)"),
-  ("__ixi", "i32"),
-  ("__slsrc", "(ref null $arr)"),
-  ("__sldst", "(ref null $arr)"),
-  ("__sllo", "i32"),
-  ("__sllen", "i32"),
+  (WN.W7Rlacc, "(ref eq)"),
+  (WN.W7Rli, "i64"),
+  (WN.W7Rllo, "i64"),
+  (WN.W7Raarr, "(ref null $arr)"),
+  (WN.W7Rai, "i32"),
+  (WN.W7Ralo, "i64"),
+  (WN.W7Racnt, "i64"),
+  (WN.W7Ixarr, "(ref null $arr)"),
+  (WN.W7Ixi, "i32"),
+  (WN.W7Slsrc, "(ref null $arr)"),
+  (WN.W7Sldst, "(ref null $arr)"),
+  (WN.W7Sllo, "i32"),
+  (WN.W7Sllen, "i32"),
   -- W10 array-intrinsic-extern scratch (loop counter, size, result array, list cursor,
   -- closure/init value) for arrayMake/arrayMakeWith/arrayFromList/arraySetUnsafe.
-  ("__aexi", "i32"),
-  ("__aexn", "i32"),
-  ("__aexarr", "(ref null $arr)"),
-  ("__aexlst", "(ref eq)"),
-  ("__aexf", "(ref eq)"),
-  ("__aexv", "(ref eq)"),
+  (WN.W7Aexi, "i32"),
+  (WN.W7Aexn, "i32"),
+  (WN.W7Aexarr, "(ref null $arr)"),
+  (WN.W7Aexlst, "(ref eq)"),
+  (WN.W7Aexf, "(ref eq)"),
+  (WN.W7Aexv, "(ref eq)"),
   -- stage-B: i64 bit accumulator for floatToBytes64/bytesToFloat64 reinterpret.
-  ("__aexbits", "i64"),
+  (WN.W7Aexbits, "i64"),
   -- the record/variant update base (emitUpdateCopy).
-  ("__rub", "(ref eq)"),
+  (WN.W7Rub, "(ref eq)"),
   -- B5: the i64 divisor-guard scratch for a concrete-Int `/`/`%`.
-  ("__divr", "i64"),
+  (WN.W7Divr, "i64"),
 ]
 
 -- an arm contributes its pattern's bound vars + its body's locals + guard locals.
@@ -10800,8 +10889,7 @@ collectGuardLocals (CGBool g) = collectExprLocals g
 -- #379: `guardStashLocal` is the slot emitGuardChainRef evaluates the RHS into before
 -- refutably matching `p` against it — declared here so it rides the normal body-local
 -- path (dedupKeep collapses the repeats when a function has several such guards).
-collectGuardLocals (CGBind p e) =
-  guardStashLocal :: patVars p ++ collectExprLocals e
+collectGuardLocals (CGBind p e) = patVars p ++ collectExprLocals e
 
 -- the variables a pattern binds (for local declaration).
 patVars : Pat -> List String
@@ -11179,7 +11267,11 @@ reservedCtorArity _ = 0
 -- carries its module id (`my prog.T`, `café.T`), which need not be a WAT
 -- identifier, so it is spelled through `injectiveIdent`.
 typeRootName : String -> String
-typeRootName ty = "T_" ++ injectiveIdent ty
+typeRootName ty =
+  if ty == "List" || isReservedType ty || startsWith "$Tuple" ty then
+    "T_" ++ injectiveIdent ty
+  else
+    WN.wasmName (WN.WUserType ty)
 
 -- The per-ctor WasmGC struct type identifier.
 --
@@ -11205,13 +11297,8 @@ typeRootName ty = "T_" ++ injectiveIdent ty
 -- `isBuiltinList` flag rather than calling this with the bare name.
 ctorStructName : String -> String
 ctorStructName ctor
-  | isBuiltinListHeadName ctor = "CU_" ++ ctor
-  | otherwise = "C_" ++ ctor
-
--- the two ctor names the built-in list syntax canonicalises to.  A user ctor of
--- either name is remapped away from the reserved list type id (see ctorStructName).
-isBuiltinListHeadName : String -> Bool
-isBuiltinListHeadName name = name == "Cons" || name == "Nil"
+  | isReservedCtor ctor || isTupleCtorName ctor = "C_" ++ ctor
+  | otherwise = WN.wasmName (WN.WConstructorType ctor)
 
 -- the struct id to `ref.cast` / `struct.get` against for a decision-tree switch
 -- HEAD.  The built-in list head `HCons` is the RESERVED `$C_Cons` cell (never the
@@ -11245,7 +11332,7 @@ distinctTypeNames ctorTypes = dedupKeep (map sndPair ctorTypes)
 -- a CDecision/CTSwitch at nesting depth d stashes its value into `$__rf<d>`.  The
 -- function header declares `$__rf0..$__rf<maxDepth-1>`.
 scratchLocal : Int -> String
-scratchLocal d = "__rf" ++ intToString d
+scratchLocal d = WN.wasmName (WN.WSyntheticLocal WN.WScratch d)
 
 scratchLocals : Int -> List String
 scratchLocals n = map scratchLocal (rangeList 0 n)
@@ -11451,24 +11538,40 @@ indentBy d lines =
 indentPad : Int -> String
 indentPad d = joinWith "" (replicate d "    ")
 
+userFnW : String -> String
+userFnW name = WN.wasmName (WN.WUserFunction name)
+
+userGlobalW : String -> String
+userGlobalW name = WN.wasmName (WN.WUserGlobal name)
+
+stateGlobalW : String -> String
+stateGlobalW name = WN.wasmName (WN.WGlobalState name)
+
+forcerW : String -> String
+forcerW name = WN.wasmName (WN.WGlobalForcer name)
+
+wrapperW : String -> String
+wrapperW name = WN.wasmName (WN.WGenerated WN.WWrapper name 0)
+
 gname : String -> String
--- A user identifier that is LITERALLY one of the codety ABI param names (`$self` /
--- `$args`, emitted as `(param ...)` on every lifted lambda / wrapper / extern-eta)
--- would collide with that param when it also becomes a `(local ...)` in the same body
--- → wasm-tools "duplicate local identifier".  Escape just those two reserved words so
--- the user var renders distinctly; consistent here means decl + local.get + local.set
--- (all routed through gname) stay in agreement.  Top-level fn/global names also flow
--- through gname, but a user binding named `self`/`args` is equally safe to rename there.
-gname "self" = "u__self"
-gname "args" = "u__args"
-gname n =
-  -- The `__wparg<digits>` family is reserved for synthetic positional fn params
-  -- (synthParams).  A source var spelled identically would collide with a sibling
-  -- positional param's wasm local — escape it so user vars stay distinct.
-  if startsWith "__wparg" n && allDigitsFrom (stringToChars n) 7 then
-    "u__" ++ n
-  else
-    n
+gname n = WN.wasmName (WN.WUserLocal n)
+
+labelName : WN.WasmGeneratedFamily -> Int -> String
+labelName family ordinal = "$" ++ WN.wasmName (WN.WLabel family ordinal)
+
+labelBranch : WN.WasmGeneratedFamily -> Int -> Int -> String
+labelBranch family depth ordinal =
+  "$" ++ WN.wasmName (WN.WLabelBranch family depth ordinal)
+
+syntheticLocalName : WN.WasmGeneratedFamily -> Int -> String
+syntheticLocalName family ordinal =
+  "$" ++ WN.wasmName (WN.WSyntheticLocal family ordinal)
+
+syntheticDecl : String -> String
+syntheticDecl n = "(local $" ++ n ++ " (ref eq))"
+
+guardDecl : String
+guardDecl = syntheticDecl (WN.wasmName (WN.WSyntheticLocal WN.WGuard 0))
 
 notIn : List String -> String -> Bool
 notIn xs x = not (contains x xs)

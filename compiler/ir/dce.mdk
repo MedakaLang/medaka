@@ -1,3 +1,4 @@
+import support.symbol_encoding.{encodePair}
 -- DEAD-CODE ELIMINATION for the native LLVM emit path (Stage 3 #2a).
 --
 -- WHY: `medaka build` could only load an EMPTY prelude, because emitting the real
@@ -182,7 +183,7 @@ filterReachable reach (d :: rest) = d :: filterReachable reach rest
 canonRef : HashMap String Unit -> String -> String
 canonRef defined n
   | has n defined = n
-  | has ("core__" ++ n) defined = "core__" ++ n
+  | has (encodePair "core" n) defined = encodePair "core" n
   | otherwise = n
 
 -- set of all DFunDef names defined in the program (the only DCE-droppable decls).

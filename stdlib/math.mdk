@@ -9,6 +9,8 @@
    `abs`, `signum`, `min`, `max`, and `clamp` come from the prelude and
    work on floats already. -}
 
+import list.{drop, sort}
+
 -- # Angles
 
 {- | An angle in degrees converted to radians.
@@ -93,6 +95,119 @@ approxEq a b eps = abs (a - b) <= eps
 -- > approxEq 0.0 0.0 0.0
 -- True
 
+-- # Statistics
+
+{- | The arithmetic mean of a list, or `None` for an empty list.
+
+   The elements are added in floating point, so the last digits can differ
+   from Python's statistics module, which sums exactly.
+
+   > mean [1.0, 2.0, 3.0, 6.0]
+   Some 3.0
+   > mean []
+   None -}
+export
+mean : List Float -> Option Float
+mean [] = None
+mean xs = Some (meanOf xs)
+
+-- The mean of a non-empty list.
+meanOf : List Float -> Float
+meanOf xs = sum xs / intToFloat (length xs)
+
+{- | The median of a list, or `None` for an empty list.
+
+   For an odd length it is the middle value, and for an even length the mean
+   of the two middle values. A NaN in the list gives an unspecified result.
+
+   For an even length the result can differ in the last digit from
+   `percentile 50.0`, which interpolates instead of averaging.
+
+   > median [3.0, 1.0, 2.0]
+   Some 2.0
+   > median [4.0, 1.0, 3.0, 2.0]
+   Some 2.5
+   > median [1.0, 2.0, 1.0 / 0.0]
+   Some 2.0 -}
+export
+median : List Float -> Option Float
+median xs = medianSorted (length xs) (sort xs)
+
+medianSorted : Int -> List Float -> Option Float
+medianSorted 0 _ = None
+medianSorted n sorted =
+  let half = n / 2
+  match drop (if isEven n then half - 1 else half) sorted
+    a :: b :: _ => Some (if isEven n then (a + b) / 2.0 else a)
+    a :: _ => Some a
+    [] => None
+
+{- | The sample standard deviation, dividing by `n - 1` as Python's
+   statistics module does, or `None` for fewer than two values.
+
+   The sums are taken in floating point, so the last digits can differ from
+   Python's statistics module, which sums exactly. A NaN in the list gives an
+   unspecified result.
+
+   > stdev [1.0, 3.0]
+   Some 1.4142135623730951
+   > stdev [1.0]
+   None -}
+export
+stdev : List Float -> Option Float
+stdev xs
+  | length xs < 2 = None
+  | otherwise =
+    let m = meanOf xs
+    let squares = sum (map (x => (x - m) * (x - m)) xs)
+    Some (sqrt (squares / intToFloat (length xs - 1)))
+
+{- | The `p`th percentile of a list, for `p` from 0 to 100, or `None` for an
+   empty list or a `p` outside that range.
+
+   It interpolates linearly between the closest ranks of the sorted list, as
+   numpy's default and Excel's inclusive percentile do, and an exact rank gives
+   that element itself. A NaN in the list gives an unspecified result.
+
+   For an odd length `percentile 50.0 xs` equals `median xs`; for an even
+   length the two can differ in the last digit.
+
+   > percentile 0.0 [4.0, 1.0, 3.0, 2.0]
+   Some 1.0
+   > percentile 50.0 [4.0, 1.0, 3.0, 2.0]
+   Some 2.5
+   > percentile 100.0 [4.0, 1.0, 3.0, 2.0]
+   Some 4.0
+   > percentile 100.0 [1.0, 1.0 / 0.0]
+   Some inf
+   > percentile 101.0 [1.0]
+   None -}
+export
+percentile : Float -> List Float -> Option Float
+percentile p xs
+  | isNaN p || p < 0.0 || p > 100.0 = None
+  | otherwise = interpolateRank (p / 100.0) (sort xs)
+
+-- numpy's interpolation: exact at both ends. At `t == 0.0` it is `a` without reading
+-- `b`, which may be infinite.
+rankLerp : Float -> Float -> Float -> Float
+rankLerp a b t
+  | t == 0.0 = a
+  | t >= 0.5 = b - (b - a) * (1.0 - t)
+  | otherwise = a + (b - a) * t
+
+-- `sorted` is ascending; the rank `q * (n - 1)` falls between two neighbours.
+interpolateRank : Float -> List Float -> Option Float
+interpolateRank _ [] = None
+interpolateRank q sorted =
+  let rank = q * intToFloat (length sorted - 1)
+  let lo = floatToInt (floor rank)
+  let t = rank - intToFloat lo
+  match drop lo sorted
+    a :: b :: _ => Some (rankLerp a b t)
+    a :: _ => Some a
+    [] => None
+
 -- # Logarithms
 
 {- | The logarithm of `x` in base `base`, computed as `log x / log base`.
@@ -108,6 +223,66 @@ logBase base x = log x / log base
 
 -- > logBase 10.0 1000.0
 -- 2.9999999999999996
+
+-- # Rounding to integers
+
+{- | The integer nearest to `x`, with a half rounded away from zero.
+
+   Values outside the `Int` range saturate to the nearest bound, and `NaN`
+   gives `0`.
+
+   > roundInt 2.5
+   3
+   > roundInt (-2.5)
+   -3 -}
+export
+roundInt : Float -> Int
+roundInt x = floatToInt (round x)
+
+-- > roundInt 0.4
+-- 0
+-- > roundInt 1.0e20
+-- 4611686018427387903
+-- > roundInt (0.0 - 1.0e20)
+-- -4611686018427387904
+-- > roundInt (0.0 / 0.0)
+-- 0
+
+{- | The greatest integer not above `x`.
+
+   Values outside the `Int` range saturate to the nearest bound, and `NaN`
+   gives `0`.
+
+   > floorInt 3.7
+   3
+   > floorInt (-0.5)
+   -1 -}
+export
+floorInt : Float -> Int
+floorInt x = floatToInt (floor x)
+
+-- > floorInt (0.0 - 1.0e20)
+-- -4611686018427387904
+-- > floorInt (0.0 / 0.0)
+-- 0
+
+{- | The least integer not below `x`.
+
+   Values outside the `Int` range saturate to the nearest bound, and `NaN`
+   gives `0`.
+
+   > ceilInt 3.2
+   4
+   > ceilInt (-0.5)
+   0 -}
+export
+ceilInt : Float -> Int
+ceilInt x = floatToInt (ceil x)
+
+-- > ceilInt 1.0e20
+-- 4611686018427387903
+-- > ceilInt (0.0 / 0.0)
+-- 0
 
 -- # Integers
 

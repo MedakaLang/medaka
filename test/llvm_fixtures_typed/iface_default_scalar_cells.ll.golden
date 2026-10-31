@@ -32,6 +32,7 @@ declare i64 @mdk_str_lit(ptr, i64)
 declare void @mdk_print_str(i64)
 declare i64 @mdk_int_to_string(i64)
 declare i64 @mdk_float_to_string(double)
+declare i64 @mdk_float_to_fixed(i64, double)
 declare i64 @llvm.fptosi.sat.i64.f64(double)
 declare double @llvm.arithmetic.fence.f64(double)
 declare i64 @mdk_string_concat(i64)
@@ -225,8 +226,8 @@ entry:
   %t4 = getelementptr i8, ptr %t3, i64 8
   store double 2.5, ptr %t4
   %t5 = ptrtoint ptr %t3 to i64
-  %t6 = call i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Float_7c_(i64 ptrtoint (ptr @mdk_dc.program.1 to i64), i64 %t2, i64 %t5)
-  %t7 = call i64 @mdk___user____bit(i64 %t6)
+  %t6 = call i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b65796564.6f726465726564.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b657965645f37635f466c6f61745f37635f(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..1 to i64), i64 %t2, i64 %t5)
+  %t7 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t6)
   %t8 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t8
   %t9 = getelementptr i8, ptr %t8, i64 8
@@ -237,8 +238,8 @@ entry:
   %t12 = getelementptr i8, ptr %t11, i64 8
   store double 1.5, ptr %t12
   %t13 = ptrtoint ptr %t11 to i64
-  %t14 = call i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Float_7c_(i64 ptrtoint (ptr @mdk_dc.program.1 to i64), i64 %t10, i64 %t13)
-  %t15 = call i64 @mdk___user____bit(i64 %t14)
+  %t14 = call i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b65796564.6f726465726564.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b657965645f37635f466c6f61745f37635f(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..1 to i64), i64 %t10, i64 %t13)
+  %t15 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t14)
   %t16 = sub i64 %t15, 1
   %t17 = ashr i64 5, 1
   %t18 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t17, i64 %t16)
@@ -263,8 +264,8 @@ intovf29:
   call void @mdk_int_overflow(i64 0, i64 %t30, i64 %t31)
   unreachable
 intok29:
-  %t32 = call i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_String_7c_(i64 ptrtoint (ptr @mdk_dc.program.5 to i64), i64 ptrtoint (ptr @.strc.program.2 to i64), i64 ptrtoint (ptr @.strc.program.3 to i64))
-  %t33 = call i64 @mdk___user____bit(i64 %t32)
+  %t32 = call i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b65796564.6f726465726564.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b657965645f37635f537472696e675f37635f(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..5 to i64), i64 ptrtoint (ptr @mdk.gen.string.70726f6772616d..2 to i64), i64 ptrtoint (ptr @mdk.gen.string.70726f6772616d..3 to i64))
+  %t33 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t32)
   %t34 = sub i64 %t33, 1
   %t35 = ashr i64 9, 1
   %t36 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t35, i64 %t34)
@@ -289,8 +290,8 @@ intovf47:
   call void @mdk_int_overflow(i64 0, i64 %t48, i64 %t49)
   unreachable
 intok47:
-  %t50 = call i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_String_7c_(i64 ptrtoint (ptr @mdk_dc.program.5 to i64), i64 ptrtoint (ptr @.strc.program.3 to i64), i64 ptrtoint (ptr @.strc.program.2 to i64))
-  %t51 = call i64 @mdk___user____bit(i64 %t50)
+  %t50 = call i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b65796564.6f726465726564.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b657965645f37635f537472696e675f37635f(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..5 to i64), i64 ptrtoint (ptr @mdk.gen.string.70726f6772616d..3 to i64), i64 ptrtoint (ptr @mdk.gen.string.70726f6772616d..2 to i64))
+  %t51 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t50)
   %t52 = sub i64 %t51, 1
   %t53 = ashr i64 17, 1
   %t54 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t53, i64 %t52)
@@ -315,8 +316,8 @@ intovf65:
   call void @mdk_int_overflow(i64 0, i64 %t66, i64 %t67)
   unreachable
 intok65:
-  %t68 = call i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Int_7c_(i64 ptrtoint (ptr @mdk_dc.program.7 to i64), i64 3, i64 5)
-  %t69 = call i64 @mdk___user____bit(i64 %t68)
+  %t68 = call i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b65796564.6f726465726564.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b657965645f37635f496e745f37635f(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..7 to i64), i64 3, i64 5)
+  %t69 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t68)
   %t70 = sub i64 %t69, 1
   %t71 = ashr i64 33, 1
   %t72 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t71, i64 %t70)
@@ -341,8 +342,8 @@ intovf83:
   call void @mdk_int_overflow(i64 0, i64 %t84, i64 %t85)
   unreachable
 intok83:
-  %t86 = call i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Int_7c_(i64 ptrtoint (ptr @mdk_dc.program.7 to i64), i64 5, i64 3)
-  %t87 = call i64 @mdk___user____bit(i64 %t86)
+  %t86 = call i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b65796564.6f726465726564.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b657965645f37635f496e745f37635f(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..7 to i64), i64 5, i64 3)
+  %t87 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t86)
   %t88 = sub i64 %t87, 1
   %t89 = ashr i64 65, 1
   %t90 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t89, i64 %t88)
@@ -371,8 +372,8 @@ intok101:
   call void @mdk_print_int(i64 %t104)
   ret i32 0
 }
-; mdk-module program
-define internal i64 @mdk___user____bit(i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %arg0) {
 entry:
   %t0 = ashr i64 %arg0, 1
   %t1 = icmp ne i64 %t0, 0
@@ -383,11 +384,11 @@ else2:
   ret i64 1
 }
 
-; mdk-module impl:Float_ordered
-define internal i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Float_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
+; mdk-module impl.5f5f757365725f5f3a3a4b657965647c466c6f61747c.6f726465726564
+define internal i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b65796564.6f726465726564.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b657965645f37635f466c6f61745f37635f(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
-  %t0 = call i64 @mdk_impl_Float_keyOf(i64 %arg1)
-  %t1 = call i64 @mdk_impl_Float_keyOf(i64 %arg2)
+  %t0 = call i64 @mdk.impl.466c6f6174.6b65794f66(i64 %arg1)
+  %t1 = call i64 @mdk.impl.466c6f6174.6b65794f66(i64 %arg2)
   %t2 = inttoptr i64 %t0 to ptr
   %t3 = getelementptr i8, ptr %t2, i64 8
   %t4 = load double, ptr %t3
@@ -401,11 +402,11 @@ entry:
   ret i64 %t11
 }
 
-; mdk-module impl:String_ordered
-define internal i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_String_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
+; mdk-module impl.5f5f757365725f5f3a3a4b657965647c537472696e677c.6f726465726564
+define internal i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b65796564.6f726465726564.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b657965645f37635f537472696e675f37635f(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
-  %t0 = call i64 @mdk_impl_String_keyOf(i64 %arg1)
-  %t1 = call i64 @mdk_impl_String_keyOf(i64 %arg2)
+  %t0 = call i64 @mdk.impl.537472696e67.6b65794f66(i64 %arg1)
+  %t1 = call i64 @mdk.impl.537472696e67.6b65794f66(i64 %arg2)
   %t2 = call i64 @mdk_string_compare_raw(i64 %t0, i64 %t1)
   %t3 = icmp slt i64 %t2, 0
   %t4 = zext i1 %t3 to i64
@@ -414,35 +415,35 @@ entry:
   ret i64 %t6
 }
 
-; mdk-module impl:Int_ordered
-define internal i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Int_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
+; mdk-module impl.5f5f757365725f5f3a3a4b657965647c496e747c.6f726465726564
+define internal i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b65796564.6f726465726564.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b657965645f37635f496e745f37635f(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
-  %t0 = call i64 @mdk_impl_Int_keyOf(i64 %arg1)
-  %t1 = call i64 @mdk_impl_Int_keyOf(i64 %arg2)
+  %t0 = call i64 @mdk.impl.496e74.6b65794f66(i64 %arg1)
+  %t1 = call i64 @mdk.impl.496e74.6b65794f66(i64 %arg2)
   %t2 = call i64 @mdk_value_lt(i64 %t0, i64 %t1)
   ret i64 %t2
 }
 
-; mdk-module impl:Float_keyOf
-define internal i64 @mdk_impl_Float_keyOf(i64 %arg0) {
+; mdk-module impl.5f5f757365725f5f3a3a4b657965647c466c6f61747c.6b65794f66
+define internal i64 @mdk.impl.466c6f6174.6b65794f66(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
-; mdk-module impl:String_keyOf
-define internal i64 @mdk_impl_String_keyOf(i64 %arg0) {
+; mdk-module impl.5f5f757365725f5f3a3a4b657965647c537472696e677c.6b65794f66
+define internal i64 @mdk.impl.537472696e67.6b65794f66(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
-; mdk-module impl:Int_keyOf
-define internal i64 @mdk_impl_Int_keyOf(i64 %arg0) {
+; mdk-module impl.5f5f757365725f5f3a3a4b657965647c496e747c.6b65794f66
+define internal i64 @mdk.impl.496e74.6b65794f66(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
-; mdk-module impl:Float_lessThan
-define internal i64 @mdk_impl_Float_lessThan(i64 %arg0, i64 %arg1) {
+; mdk-module impl.5f5f757365725f5f3a3a4f72647c466c6f61747c.6c6573735468616e
+define internal i64 @mdk.impl.466c6f6174.6c6573735468616e(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -457,8 +458,8 @@ entry:
   ret i64 %t9
 }
 
-; mdk-module impl:String_lessThan
-define internal i64 @mdk_impl_String_lessThan(i64 %arg0, i64 %arg1) {
+; mdk-module impl.5f5f757365725f5f3a3a4f72647c537472696e677c.6c6573735468616e
+define internal i64 @mdk.impl.537472696e67.6c6573735468616e(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_string_compare_raw(i64 %arg0, i64 %arg1)
   %t1 = icmp slt i64 %t0, 0
@@ -468,8 +469,8 @@ entry:
   ret i64 %t4
 }
 
-; mdk-module impl:Int_lessThan
-define internal i64 @mdk_impl_Int_lessThan(i64 %arg0, i64 %arg1) {
+; mdk-module impl.5f5f757365725f5f3a3a4f72647c496e747c.6c6573735468616e
+define internal i64 @mdk.impl.496e74.6c6573735468616e(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = icmp slt i64 %arg0, %arg1
   %t1 = zext i1 %t0 to i64
@@ -481,18 +482,18 @@ entry:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_dc.program.0 = internal constant [1 x i64] [i64 -3522064109247241529]
+@mdk.gen.dictcell.70726f6772616d..0 = internal constant [1 x i64] [i64 -3522064109247241529]
 ; mdk-module program
-@mdk_dc.program.1 = internal constant [2 x i64] [i64 1173816999876653108, i64 ptrtoint (ptr @mdk_dc.program.0 to i64)]
+@mdk.gen.dictcell.70726f6772616d..1 = internal constant [2 x i64] [i64 1173816999876653108, i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..0 to i64)]
 ; mdk-module program
-@.strc.program.2 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\61\00" }
+@mdk.gen.string.70726f6772616d..2 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\61\00" }
 ; mdk-module program
-@.strc.program.3 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\62\00" }
+@mdk.gen.string.70726f6772616d..3 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\62\00" }
 ; mdk-module program
-@mdk_dc.program.4 = internal constant [1 x i64] [i64 3675720891059119944]
+@mdk.gen.dictcell.70726f6772616d..4 = internal constant [1 x i64] [i64 3675720891059119944]
 ; mdk-module program
-@mdk_dc.program.5 = internal constant [2 x i64] [i64 1842472865616454229, i64 ptrtoint (ptr @mdk_dc.program.4 to i64)]
+@mdk.gen.dictcell.70726f6772616d..5 = internal constant [2 x i64] [i64 1842472865616454229, i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..4 to i64)]
 ; mdk-module program
-@mdk_dc.program.6 = internal constant [1 x i64] [i64 -54051695436414980]
+@mdk.gen.dictcell.70726f6772616d..6 = internal constant [1 x i64] [i64 -54051695436414980]
 ; mdk-module program
-@mdk_dc.program.7 = internal constant [2 x i64] [i64 -3522267172021662167, i64 ptrtoint (ptr @mdk_dc.program.6 to i64)]
+@mdk.gen.dictcell.70726f6772616d..7 = internal constant [2 x i64] [i64 -3522267172021662167, i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..6 to i64)]
