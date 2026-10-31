@@ -12,18 +12,21 @@ import support.util.{
   contains, filterList, splitOnChar, joinWith, startsWith, listLen, anyList,
   joinNl, dedupBy
 }
-import list.{drop, sortBy, last}
-import string.{lines}
+import list.{drop, sortBy, last, reverse}
+import array.{get as arrayGet}
+import string.{split, isUpper, words, unwords}
 import support.path.{stripMdk}
 import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
 import tools.lint_core.{
   Applicability(..), Ctx(..), DirScope(..), Directive(..), FileFacts(..),
-  Finding(..), Fix(..), FixEdit(..), StdlibIndex, Visitor(..), factScopes,
-  stdlibKnowsModule, stdlibSigIn
+  Finding(..), Fix(..), FixEdit(..), StdlibIndex, Visitor(..), factLines,
+  factScopes, stdlibKnowsModule, stdlibSigIn
 }
 import tools.lint_fix.{Binding(..), parenIfNeeded}
-import tools.lint_scope.{binderOf, bindersNamed, wildImports}
+import tools.lint_scope.{
+  BinderKind(..), Binder(..), binderOf, bindersNamed, wildImports
+}
 export import frontend.ast_walk.{childExprs, mapChildExprs, stmtExprs}
 import frontend.ast_walk.{DeclBody(..), declBodies}
 import hash_map.{HashMap, new, setInPlace}
@@ -776,6 +779,49 @@ replaceNodeFix applicability message ctx e rewritten =
     ctx
     (exprToString rewritten)
 
+-- A constructor spelling: `Some`, `M.Tip`.  Its application builds data.
+export
+isCtorName : String -> Bool
+isCtorName n = match reverse (split "." n)
+  last :: _ => match toList (stringToChars last)
+    c :: _ => isUpper c
+    [] => False
+  [] => False
+
+-- Whether `e` can be passed where a lazily evaluated arm stood without changing
+-- when it is evaluated or whether it is: a literal, a constructor, or a name
+-- bound by a parameter, lambda, `let`, `match` arm or `do` bind.  A file-level
+-- name is excluded: a top-level value or an imported one is forced on first
+-- use, so passing it eagerly can force a panic the arm never reached.
+export
+movableDefault : FileFacts -> Expr -> Bool
+movableDefault facts e = match unwrapLoc e
+  ELit _ => True
+  ENumLit _ _ _ => True
+  EVar n => isCtorName n || strictLocal facts e
+  _ => False
+
+strictLocal : FileFacts -> Expr -> Bool
+strictLocal facts e = match varSite e
+  Some l => match binderOf (factScopes facts) l
+    Some b => strictKind b.binderKind
+    None => False
+  None => False
+
+strictKind : BinderKind -> Bool
+strictKind BParam = True
+strictKind BLet = True
+strictKind BLambda = True
+strictKind BMatchArm = True
+strictKind BDoBind = True
+strictKind _ = False
+
+-- A finding message is one line; the printer wraps a long rewrite, so its line
+-- breaks are folded back into single spaces.
+export
+oneLine : String -> String
+oneLine t = unwords (words t)
+
 -- The name an application spine calls, "" when its head is not a name.
 export
 calledName : Expr -> String
@@ -794,15 +840,18 @@ varSite (ELoc l inner) = match varSite inner
 varSite _ = None
 
 -- Whether an `import m.*` of the file may bring `name` into scope: `m` exports
--- it, or `m` is a module the stdlib index cannot vouch for.
+-- it, or `m` is a module the stdlib index cannot vouch for: unknown to the
+-- stdlib, or a file of the project that shadows the stdlib module's name.
 wildBinds : StdlibIndex -> FileFacts -> String -> Bool
 wildBinds idx facts name =
-  any (wildMayBind idx name) (wildImports (factScopes facts))
+  any (wildMayBind idx facts.ffLocalMods name) (wildImports (factScopes facts))
 
-wildMayBind : StdlibIndex -> String -> List String -> Bool
-wildMayBind idx name path =
+wildMayBind : StdlibIndex -> List String -> String -> List String -> Bool
+wildMayBind idx localMods name path =
   let modName = joinWith "." path
-  not (stdlibKnowsModule idx modName) || isSome (stdlibSigIn idx modName name)
+  elem modName localMods
+    || not (stdlibKnowsModule idx modName)
+    || isSome (stdlibSigIn idx modName name)
 
 varName : Expr -> String
 varName e = match unwrapLoc e
@@ -839,9 +888,7 @@ rebinds idx facts ctx name =
 -- The 1-based line of the source, `None` past the end.
 export
 sourceLine : FileFacts -> Int -> Option String
-sourceLine facts n = match drop (n - 1) (lines facts.ffSrc)
-  l :: _ => Some l
-  [] => None
+sourceLine facts n = arrayGet (n - 1) (factLines facts)
 
 -- Whether the character at line `sl`, column `sc` of the source is `(`.
 export

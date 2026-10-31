@@ -7,7 +7,13 @@ import tools.lint_fix as LF
 import driver.diagnostics.{ppDiagCliSrc, parseErrDiag}
 import frontend.ast.{Decl}
 import frontend.parser.{ParseError, Positions}
-import tools.lint_walk.{lintParseSource, lintProgramFacts, mkFileFacts}
+import tools.lint_walk.{
+  lintParseSource,
+  lintProgramFacts,
+  mkFileFacts,
+  mkFileFactsAt,
+  withLocalMods,
+}
 import tools.lint_registry.{selectRules}
 
 export import tools.lint_core.{
@@ -65,6 +71,8 @@ export import tools.lint_walk.{
   lintToLines,
   mergeCrossFileIntoTriples,
   mkFileFacts,
+  mkFileFactsAt,
+  projectWildMods,
   runCrossFileRules,
   runCrossFileRulesFromOccs,
   splitLintNames,
@@ -78,23 +86,25 @@ export import tools.lint_walk.{
 -- A source fixed to its fixed point: the span edits of the active rules first,
 -- then the whole-declaration fixers over the result.  Returns the fixed source
 -- and the number of fixes made, or why it was left alone.  The CLI's `--fix` and
--- the fixture drivers share this one path.
+-- the fixture drivers share this one path.  `localMods` names the source's
+-- `import m.*` modules that are files of the project (`projectWildMods`).
 export
 fixSource : StdlibIndex ->
   Applicability ->
   List String ->
   List String ->
+  List String ->
   String ->
   String ->
   Result String LF.FixRun
-fixSource idx limit only disable path src = match lintParseSource src
+fixSource idx limit only disable localMods path src = match lintParseSource src
   Err e => Err (parseFailure src path e)
   Ok parsed =>
     let editRules = filter emitsEdits (selectRules only disable)
     if isEmpty editRules then
       wholeDeclFix only disable (LF.Settled src 0) parsed
     else match (LF.applyFixes
-      (editLinter idx editRules src parsed)
+      (editLinter idx editRules localMods src parsed)
       limit
       path
       src)
@@ -145,24 +155,26 @@ emitsEdits r = match r.meta.fixability
 -- reads again.
 editLinter : StdlibIndex ->
   List Rule ->
+  List String ->
   String ->
   (List Decl, Positions) ->
   String ->
   String ->
   Result String (List Finding)
-editLinter idx rules first parsed path src =
+editLinter idx rules localMods first parsed path src =
   if src == first then
-    Ok (editFindings idx rules path src parsed)
+    Ok (editFindings idx rules localMods path src parsed)
   else match lintParseSource src
     Err e => Err (parseFailure src path e)
-    Ok reparsed => Ok (editFindings idx rules path src reparsed)
+    Ok reparsed => Ok (editFindings idx rules localMods path src reparsed)
 
 editFindings : StdlibIndex ->
   List Rule ->
+  List String ->
   String ->
   String ->
   (List Decl, Positions) ->
   List Finding
-editFindings idx rules path src (decls, pos) =
-  let facts = mkFileFacts src decls pos
+editFindings idx rules localMods path src (decls, pos) =
+  let facts = withLocalMods localMods (mkFileFacts src decls pos)
   applySuppressions src (lintProgramFacts idx rules path facts pos decls)

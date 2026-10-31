@@ -42,7 +42,13 @@ import tools.lint_core.{
   StdlibIndex,
   Visitor(..),
 }
-import tools.lint_shared.{unwrapLoc, usesPreludeName, rebinds, replaceNodeFix}
+import tools.lint_shared.{
+  oneLine,
+  rebinds,
+  replaceNodeFix,
+  unwrapLoc,
+  usesPreludeName,
+}
 import list.{nub}
 
 -- Two kinds of side condition, not failure and success.
@@ -372,7 +378,8 @@ hintFinding name severity h found idx facts ctx e =
   let rewritten = instantiate h found
   Finding {
     rule = name,
-    message = "\{h.hintRow.rowMessage}. Rewrite as '\{exprToString rewritten}'",
+    message =
+      "\{h.hintRow.rowMessage}. Rewrite as '\{oneLine (exprToString rewritten)}'",
     severity = severity,
     loc = ctx.ctxSpan,
     fix = hintFix h found idx facts ctx e rewritten,

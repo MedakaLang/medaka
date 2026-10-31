@@ -1,5 +1,5 @@
 # META
-source_lines=994
+source_lines=1041
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -16,18 +16,21 @@ import support.util.{
   contains, filterList, splitOnChar, joinWith, startsWith, listLen, anyList,
   joinNl, dedupBy
 }
-import list.{drop, sortBy, last}
-import string.{lines}
+import list.{drop, sortBy, last, reverse}
+import array.{get as arrayGet}
+import string.{split, isUpper, words, unwords}
 import support.path.{stripMdk}
 import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
 import tools.lint_core.{
   Applicability(..), Ctx(..), DirScope(..), Directive(..), FileFacts(..),
-  Finding(..), Fix(..), FixEdit(..), StdlibIndex, Visitor(..), factScopes,
-  stdlibKnowsModule, stdlibSigIn
+  Finding(..), Fix(..), FixEdit(..), StdlibIndex, Visitor(..), factLines,
+  factScopes, stdlibKnowsModule, stdlibSigIn
 }
 import tools.lint_fix.{Binding(..), parenIfNeeded}
-import tools.lint_scope.{binderOf, bindersNamed, wildImports}
+import tools.lint_scope.{
+  BinderKind(..), Binder(..), binderOf, bindersNamed, wildImports
+}
 export import frontend.ast_walk.{childExprs, mapChildExprs, stmtExprs}
 import frontend.ast_walk.{DeclBody(..), declBodies}
 import hash_map.{HashMap, new, setInPlace}
@@ -780,6 +783,49 @@ replaceNodeFix applicability message ctx e rewritten =
     ctx
     (exprToString rewritten)
 
+-- A constructor spelling: `Some`, `M.Tip`.  Its application builds data.
+export
+isCtorName : String -> Bool
+isCtorName n = match reverse (split "." n)
+  last :: _ => match toList (stringToChars last)
+    c :: _ => isUpper c
+    [] => False
+  [] => False
+
+-- Whether `e` can be passed where a lazily evaluated arm stood without changing
+-- when it is evaluated or whether it is: a literal, a constructor, or a name
+-- bound by a parameter, lambda, `let`, `match` arm or `do` bind.  A file-level
+-- name is excluded: a top-level value or an imported one is forced on first
+-- use, so passing it eagerly can force a panic the arm never reached.
+export
+movableDefault : FileFacts -> Expr -> Bool
+movableDefault facts e = match unwrapLoc e
+  ELit _ => True
+  ENumLit _ _ _ => True
+  EVar n => isCtorName n || strictLocal facts e
+  _ => False
+
+strictLocal : FileFacts -> Expr -> Bool
+strictLocal facts e = match varSite e
+  Some l => match binderOf (factScopes facts) l
+    Some b => strictKind b.binderKind
+    None => False
+  None => False
+
+strictKind : BinderKind -> Bool
+strictKind BParam = True
+strictKind BLet = True
+strictKind BLambda = True
+strictKind BMatchArm = True
+strictKind BDoBind = True
+strictKind _ = False
+
+-- A finding message is one line; the printer wraps a long rewrite, so its line
+-- breaks are folded back into single spaces.
+export
+oneLine : String -> String
+oneLine t = unwords (words t)
+
 -- The name an application spine calls, "" when its head is not a name.
 export
 calledName : Expr -> String
@@ -798,15 +844,18 @@ varSite (ELoc l inner) = match varSite inner
 varSite _ = None
 
 -- Whether an `import m.*` of the file may bring `name` into scope: `m` exports
--- it, or `m` is a module the stdlib index cannot vouch for.
+-- it, or `m` is a module the stdlib index cannot vouch for: unknown to the
+-- stdlib, or a file of the project that shadows the stdlib module's name.
 wildBinds : StdlibIndex -> FileFacts -> String -> Bool
 wildBinds idx facts name =
-  any (wildMayBind idx name) (wildImports (factScopes facts))
+  any (wildMayBind idx facts.ffLocalMods name) (wildImports (factScopes facts))
 
-wildMayBind : StdlibIndex -> String -> List String -> Bool
-wildMayBind idx name path =
+wildMayBind : StdlibIndex -> List String -> String -> List String -> Bool
+wildMayBind idx localMods name path =
   let modName = joinWith "." path
-  not (stdlibKnowsModule idx modName) || isSome (stdlibSigIn idx modName name)
+  elem modName localMods
+    || not (stdlibKnowsModule idx modName)
+    || isSome (stdlibSigIn idx modName name)
 
 varName : Expr -> String
 varName e = match unwrapLoc e
@@ -843,9 +892,7 @@ rebinds idx facts ctx name =
 -- The 1-based line of the source, `None` past the end.
 export
 sourceLine : FileFacts -> Int -> Option String
-sourceLine facts n = match drop (n - 1) (lines facts.ffSrc)
-  l :: _ => Some l
-  [] => None
+sourceLine facts n = arrayGet (n - 1) (factLines facts)
 
 -- Whether the character at line `sl`, column `sc` of the source is `(`.
 export
@@ -1000,14 +1047,15 @@ lastArmSpan arms = match last arms
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "listLen" false) (mem "anyList" false) (mem "joinNl" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "sortBy" false) (mem "last" false))))
-(DUse false (UseGroup ("string") ((mem "lines" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "sortBy" false) (mem "last" false) (mem "reverse" false))))
+(DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
+(DUse false (UseGroup ("string") ((mem "split" false) (mem "isUpper" false) (mem "words" false) (mem "unwords" false))))
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind") (mem "escape" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false) (mem "commentCol" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "stdlibKnowsModule" false) (mem "stdlibSigIn" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factLines" false) (mem "factScopes" false) (mem "stdlibKnowsModule" false) (mem "stdlibSigIn" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true) (mem "parenIfNeeded" false))))
-(DUse false (UseGroup ("tools" "lint_scope") ((mem "binderOf" false) (mem "bindersNamed" false) (mem "wildImports" false))))
+(DUse false (UseGroup ("tools" "lint_scope") ((mem "BinderKind" true) (mem "Binder" true) (mem "binderOf" false) (mem "bindersNamed" false) (mem "wildImports" false))))
 (DUse true (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false) (mem "mapChildExprs" false) (mem "stmtExprs" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "DeclBody" true) (mem "declBodies" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false))))
@@ -1266,15 +1314,30 @@ lastArmSpan arms = match last arms
 (DFunDef false "replaceFix" ((PVar "applicability") (PVar "message") (PVar "span") (PVar "binding") (PVar "ctx") (PVar "text")) (EIf (EApp (EApp (EVar "elem") (ELit (LChar "\n"))) (EApp (EVar "stringToChars") (EVar "text"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "map") (ELam ((PVar "loc")) (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "applicability")) (fa "fixEdits" (EListLit (EApp (EApp (EVar "FixEdit") (EVar "loc")) (EApp (EApp (EApp (EVar "parenIfNeeded") (EVar "binding")) (EFieldAccess (EVar "ctx") "ctxParent")) (EVar "text"))))) (fa "fixMessage" (EVar "message")))))) (EVar "span")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "replaceNodeFix" (TyFun (TyCon "Applicability") (TyFun (TyCon "String") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "replaceNodeFix" ((PVar "applicability") (PVar "message") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "applicability")) (EVar "message")) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten"))))
+(DTypeSig true "isCtorName" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isCtorName" ((PVar "n")) (EMatch (EApp (EVar "reverse") (EApp (EApp (EVar "split") (ELit (LString "."))) (EVar "n"))) (arm (PCons (PVar "last") PWild) () (EMatch (EApp (EVar "toList") (EApp (EVar "stringToChars") (EVar "last"))) (arm (PCons (PVar "c") PWild) () (EApp (EVar "isUpper") (EVar "c"))) (arm (PList) () (EVar "False")))) (arm (PList) () (EVar "False"))))
+(DTypeSig true "movableDefault" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "movableDefault" ((PVar "facts") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "ENumLit" PWild PWild PWild) () (EVar "True")) (arm (PCon "EVar" (PVar "n")) () (EBinOp "||" (EApp (EVar "isCtorName") (EVar "n")) (EApp (EApp (EVar "strictLocal") (EVar "facts")) (EVar "e")))) (arm PWild () (EVar "False"))))
+(DTypeSig false "strictLocal" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "strictLocal" ((PVar "facts") (PVar "e")) (EMatch (EApp (EVar "varSite") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EMatch (EApp (EApp (EVar "binderOf") (EApp (EVar "factScopes") (EVar "facts"))) (EVar "l")) (arm (PCon "Some" (PVar "b")) () (EApp (EVar "strictKind") (EFieldAccess (EVar "b") "binderKind"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig false "strictKind" (TyFun (TyCon "BinderKind") (TyCon "Bool")))
+(DFunDef false "strictKind" ((PCon "BParam")) (EVar "True"))
+(DFunDef false "strictKind" ((PCon "BLet")) (EVar "True"))
+(DFunDef false "strictKind" ((PCon "BLambda")) (EVar "True"))
+(DFunDef false "strictKind" ((PCon "BMatchArm")) (EVar "True"))
+(DFunDef false "strictKind" ((PCon "BDoBind")) (EVar "True"))
+(DFunDef false "strictKind" (PWild) (EVar "False"))
+(DTypeSig true "oneLine" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "oneLine" ((PVar "t")) (EApp (EVar "unwords") (EApp (EVar "words") (EVar "t"))))
 (DTypeSig true "calledName" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "calledName" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "calledName") (EVar "f"))) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "")))))
 (DTypeSig false "varSite" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "varSite" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EMatch (EApp (EVar "varSite") (EVar "inner")) (arm (PCon "Some" (PVar "inner2")) () (EApp (EVar "Some") (EVar "inner2"))) (arm (PCon "None") () (EMatch (EVar "inner") (arm (PCon "EVar" PWild) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "None"))))))
 (DFunDef false "varSite" (PWild) (EVar "None"))
 (DTypeSig false "wildBinds" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "wildBinds" ((PVar "idx") (PVar "facts") (PVar "name")) (EApp (EApp (EVar "any") (EApp (EApp (EVar "wildMayBind") (EVar "idx")) (EVar "name"))) (EApp (EVar "wildImports") (EApp (EVar "factScopes") (EVar "facts")))))
-(DTypeSig false "wildMayBind" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
-(DFunDef false "wildMayBind" ((PVar "idx") (PVar "name") (PVar "path")) (EBlock (DoLet false false (PVar "modName") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "path"))) (DoExpr (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "stdlibKnowsModule") (EVar "idx")) (EVar "modName"))) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "stdlibSigIn") (EVar "idx")) (EVar "modName")) (EVar "name")))))))
+(DFunDef false "wildBinds" ((PVar "idx") (PVar "facts") (PVar "name")) (EApp (EApp (EVar "any") (EApp (EApp (EApp (EVar "wildMayBind") (EVar "idx")) (EFieldAccess (EVar "facts") "ffLocalMods")) (EVar "name"))) (EApp (EVar "wildImports") (EApp (EVar "factScopes") (EVar "facts")))))
+(DTypeSig false "wildMayBind" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))))
+(DFunDef false "wildMayBind" ((PVar "idx") (PVar "localMods") (PVar "name") (PVar "path")) (EBlock (DoLet false false (PVar "modName") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "path"))) (DoExpr (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "elem") (EVar "modName")) (EVar "localMods")) (EApp (EVar "not") (EApp (EApp (EVar "stdlibKnowsModule") (EVar "idx")) (EVar "modName")))) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "stdlibSigIn") (EVar "idx")) (EVar "modName")) (EVar "name")))))))
 (DTypeSig false "varName" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "varName" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "")))))
 (DTypeSig true "usesPreludeName" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Expr") (TyCon "Bool")))))
@@ -1284,7 +1347,7 @@ lastArmSpan arms = match last arms
 (DTypeSig true "rebinds" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "rebinds" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "name")) (EBinOp "||" (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "ctx") "ctxInTest")) (EBinOp "==" (EFieldAccess (EVar "ctx") "ctxDeclName") (EVar "name"))) (EApp (EApp (EApp (EVar "bindsName") (EVar "idx")) (EVar "facts")) (EVar "name"))))
 (DTypeSig true "sourceLine" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "sourceLine" ((PVar "facts") (PVar "n")) (EMatch (EApp (EApp (EVar "drop") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "lines") (EFieldAccess (EVar "facts") "ffSrc"))) (arm (PCons (PVar "l") PWild) () (EApp (EVar "Some") (EVar "l"))) (arm (PList) () (EVar "None"))))
+(DFunDef false "sourceLine" ((PVar "facts") (PVar "n")) (EApp (EApp (EVar "arrayGet") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "factLines") (EVar "facts"))))
 (DTypeSig true "parenAt" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "parenAt" ((PVar "facts") (PVar "sl") (PVar "sc")) (EMatch (EApp (EApp (EVar "sourceLine") (EVar "facts")) (EVar "sl")) (arm (PCon "Some" (PVar "l")) () (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "sc")) (EBinOp "+" (EVar "sc") (ELit (LInt 1)))) (EVar "l")) (ELit (LString "(")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "isNilPCon" (TyFun (TyCon "String") (TyFun (TyCon "Pat") (TyCon "Bool"))))
@@ -1327,14 +1390,15 @@ lastArmSpan arms = match last arms
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "listLen" false) (mem "anyList" false) (mem "joinNl" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "sortBy" false) (mem "last" false))))
-(DUse false (UseGroup ("string") ((mem "lines" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "sortBy" false) (mem "last" false) (mem "reverse" false))))
+(DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
+(DUse false (UseGroup ("string") ((mem "split" false) (mem "isUpper" false) (mem "words" false) (mem "unwords" false))))
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind") (mem "escape" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false) (mem "commentCol" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "stdlibKnowsModule" false) (mem "stdlibSigIn" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factLines" false) (mem "factScopes" false) (mem "stdlibKnowsModule" false) (mem "stdlibSigIn" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true) (mem "parenIfNeeded" false))))
-(DUse false (UseGroup ("tools" "lint_scope") ((mem "binderOf" false) (mem "bindersNamed" false) (mem "wildImports" false))))
+(DUse false (UseGroup ("tools" "lint_scope") ((mem "BinderKind" true) (mem "Binder" true) (mem "binderOf" false) (mem "bindersNamed" false) (mem "wildImports" false))))
 (DUse true (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false) (mem "mapChildExprs" false) (mem "stmtExprs" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "DeclBody" true) (mem "declBodies" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false))))
@@ -1593,15 +1657,30 @@ lastArmSpan arms = match last arms
 (DFunDef false "replaceFix" ((PVar "applicability") (PVar "message") (PVar "span") (PVar "binding") (PVar "ctx") (PVar "text")) (EIf (EApp (EApp (EDictApp "elem") (ELit (LChar "\n"))) (EApp (EVar "stringToChars") (EVar "text"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EMethodRef "map") (ELam ((PVar "loc")) (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "applicability")) (fa "fixEdits" (EListLit (EApp (EApp (EVar "FixEdit") (EVar "loc")) (EApp (EApp (EApp (EVar "parenIfNeeded") (EVar "binding")) (EFieldAccess (EVar "ctx") "ctxParent")) (EVar "text"))))) (fa "fixMessage" (EVar "message")))))) (EVar "span")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "replaceNodeFix" (TyFun (TyCon "Applicability") (TyFun (TyCon "String") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "replaceNodeFix" ((PVar "applicability") (PVar "message") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "applicability")) (EVar "message")) (EApp (EApp (EVar "nodeSpan") (EVar "ctx")) (EVar "e"))) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten"))))
+(DTypeSig true "isCtorName" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isCtorName" ((PVar "n")) (EMatch (EApp (EVar "reverse") (EApp (EApp (EVar "split") (ELit (LString "."))) (EVar "n"))) (arm (PCons (PVar "last") PWild) () (EMatch (EApp (EMethodRef "toList") (EApp (EVar "stringToChars") (EVar "last"))) (arm (PCons (PVar "c") PWild) () (EApp (EVar "isUpper") (EVar "c"))) (arm (PList) () (EVar "False")))) (arm (PList) () (EVar "False"))))
+(DTypeSig true "movableDefault" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "movableDefault" ((PVar "facts") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "ENumLit" PWild PWild PWild) () (EVar "True")) (arm (PCon "EVar" (PVar "n")) () (EBinOp "||" (EApp (EVar "isCtorName") (EVar "n")) (EApp (EApp (EVar "strictLocal") (EVar "facts")) (EVar "e")))) (arm PWild () (EVar "False"))))
+(DTypeSig false "strictLocal" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "strictLocal" ((PVar "facts") (PVar "e")) (EMatch (EApp (EVar "varSite") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EMatch (EApp (EApp (EVar "binderOf") (EApp (EVar "factScopes") (EVar "facts"))) (EVar "l")) (arm (PCon "Some" (PVar "b")) () (EApp (EVar "strictKind") (EFieldAccess (EVar "b") "binderKind"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig false "strictKind" (TyFun (TyCon "BinderKind") (TyCon "Bool")))
+(DFunDef false "strictKind" ((PCon "BParam")) (EVar "True"))
+(DFunDef false "strictKind" ((PCon "BLet")) (EVar "True"))
+(DFunDef false "strictKind" ((PCon "BLambda")) (EVar "True"))
+(DFunDef false "strictKind" ((PCon "BMatchArm")) (EVar "True"))
+(DFunDef false "strictKind" ((PCon "BDoBind")) (EVar "True"))
+(DFunDef false "strictKind" (PWild) (EVar "False"))
+(DTypeSig true "oneLine" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "oneLine" ((PVar "t")) (EApp (EVar "unwords") (EApp (EVar "words") (EVar "t"))))
 (DTypeSig true "calledName" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "calledName" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "calledName") (EVar "f"))) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "")))))
 (DTypeSig false "varSite" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "varSite" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EMatch (EApp (EVar "varSite") (EVar "inner")) (arm (PCon "Some" (PVar "inner2")) () (EApp (EVar "Some") (EVar "inner2"))) (arm (PCon "None") () (EMatch (EVar "inner") (arm (PCon "EVar" PWild) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "None"))))))
 (DFunDef false "varSite" (PWild) (EVar "None"))
 (DTypeSig false "wildBinds" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "wildBinds" ((PVar "idx") (PVar "facts") (PVar "name")) (EApp (EApp (EDictApp "any") (EApp (EApp (EVar "wildMayBind") (EVar "idx")) (EVar "name"))) (EApp (EVar "wildImports") (EApp (EVar "factScopes") (EVar "facts")))))
-(DTypeSig false "wildMayBind" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
-(DFunDef false "wildMayBind" ((PVar "idx") (PVar "name") (PVar "path")) (EBlock (DoLet false false (PVar "modName") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "path"))) (DoExpr (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "stdlibKnowsModule") (EVar "idx")) (EVar "modName"))) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "stdlibSigIn") (EVar "idx")) (EVar "modName")) (EVar "name")))))))
+(DFunDef false "wildBinds" ((PVar "idx") (PVar "facts") (PVar "name")) (EApp (EApp (EDictApp "any") (EApp (EApp (EApp (EVar "wildMayBind") (EVar "idx")) (EFieldAccess (EVar "facts") "ffLocalMods")) (EVar "name"))) (EApp (EVar "wildImports") (EApp (EVar "factScopes") (EVar "facts")))))
+(DTypeSig false "wildMayBind" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))))
+(DFunDef false "wildMayBind" ((PVar "idx") (PVar "localMods") (PVar "name") (PVar "path")) (EBlock (DoLet false false (PVar "modName") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "path"))) (DoExpr (EBinOp "||" (EBinOp "||" (EApp (EApp (EDictApp "elem") (EVar "modName")) (EVar "localMods")) (EApp (EVar "not") (EApp (EApp (EVar "stdlibKnowsModule") (EVar "idx")) (EVar "modName")))) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "stdlibSigIn") (EVar "idx")) (EVar "modName")) (EVar "name")))))))
 (DTypeSig false "varName" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "varName" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "")))))
 (DTypeSig true "usesPreludeName" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Expr") (TyCon "Bool")))))
@@ -1611,7 +1690,7 @@ lastArmSpan arms = match last arms
 (DTypeSig true "rebinds" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "rebinds" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "name")) (EBinOp "||" (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "ctx") "ctxInTest")) (EBinOp "==" (EFieldAccess (EVar "ctx") "ctxDeclName") (EVar "name"))) (EApp (EApp (EApp (EVar "bindsName") (EVar "idx")) (EVar "facts")) (EVar "name"))))
 (DTypeSig true "sourceLine" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "sourceLine" ((PVar "facts") (PVar "n")) (EMatch (EApp (EApp (EVar "drop") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "lines") (EFieldAccess (EVar "facts") "ffSrc"))) (arm (PCons (PVar "l") PWild) () (EApp (EVar "Some") (EVar "l"))) (arm (PList) () (EVar "None"))))
+(DFunDef false "sourceLine" ((PVar "facts") (PVar "n")) (EApp (EApp (EVar "arrayGet") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "factLines") (EVar "facts"))))
 (DTypeSig true "parenAt" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "parenAt" ((PVar "facts") (PVar "sl") (PVar "sc")) (EMatch (EApp (EApp (EVar "sourceLine") (EVar "facts")) (EVar "sl")) (arm (PCon "Some" (PVar "l")) () (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "sc")) (EBinOp "+" (EVar "sc") (ELit (LInt 1)))) (EVar "l")) (ELit (LString "(")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "isNilPCon" (TyFun (TyCon "String") (TyFun (TyCon "Pat") (TyCon "Bool"))))

@@ -7,9 +7,11 @@ import frontend.ast.{
   Expr(..),
   Decl(..),
   declBinderNames,
+  letBindName,
 }
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
+import frontend.ast_walk.{DeclBody(..), childExprs, declBodies}
 import support.util.{anyList, isEmptyL}
 import tools.lint_core.{
   Category(..),
@@ -161,12 +163,29 @@ ruleOrElseStaircase : StdlibIndex ->
 ruleOrElseStaircase _ _ _ _ _ = [OnDecl orElseAt]
 
 orElseAt : Ctx -> Decl -> List Finding
-orElseAt ctx d =
-  map
-    (orElseHeadFinding ctx.ctxSpan)
-    (filter
-      (orElseNotSelfRecursive (declBinderNames d))
-      (declHeadHits orElsePick d))
+orElseAt ctx d = match declHeadHits orElsePick d
+  [] => []
+  hits =>
+    map
+      (orElseHeadFinding ctx.ctxSpan)
+      (filter (orElseNotSelfRecursive (enclosingNames d)) hits)
+
+-- The names whose call from a later probe is the enclosing function's own
+-- recursion: the declaration's, and every `where` or local `let rec` binder in
+-- its body.
+enclosingNames : Decl -> List String
+enclosingNames d = declBinderNames d ++ flatMap bodyBinders (declBodies d)
+
+bodyBinders : DeclBody -> List String
+bodyBinders (DeclBody _ body) = localBinders body
+
+localBinders : Expr -> List String
+localBinders e = ownBinders e ++ flatMap localBinders (childExprs e)
+
+ownBinders : Expr -> List String
+ownBinders (ELetGroup binds _) = map letBindName binds
+ownBinders (ELet _ True (PVar n _ _) _ _) = [n]
+ownBinders _ = []
 
 -- A staircase whose later probe (or final fallback) calls the enclosing function
 -- cannot be turned into value-taking `orElse` without eager recursion; with
@@ -206,6 +225,6 @@ orElseFinding isResult loc = Finding {
 
 orElseMessage : Bool -> String
 orElseMessage True =
-  "first-match probe staircase (≥2 `Err` fallthrough re-probes). There is no `Alternative Result`; if the probes are pure and cheap, chain them lazily with `resultOrElse (_ => probe)` -- never the value-taking `orElse`, which runs every probe. An expensive, effectful or self-recursive later probe disqualifies any rewrite"
+  "first-match probe staircase (≥2 `Err` fallthrough re-probes). There is no `Alternative Result`: where the success arms unwrap (`Ok v => v`) and the probes are pure and cheap, chain them lazily with `resultOrElse (_ => probe)`; a passthrough (`Ok v => Ok v`) staircase has no lazy combinator, so nest the matches. Never the value-taking `orElse`, which runs every probe. An expensive, effectful or self-recursive later probe disqualifies any rewrite"
 orElseMessage False =
-  "first-match probe staircase (≥2 `None` fallthrough re-probes). If the probes are pure and cheap, rewrite with the lazy `orElseWith a (_ => probe)` / `optionOrElse (_ => probe)` for each probe after the first, or `findMap` over a list -- never the value-taking `orElse`, which runs every probe. An expensive, effectful or self-recursive later probe disqualifies any rewrite"
+  "first-match probe staircase (≥2 `None` fallthrough re-probes). If the probes are pure and cheap, rewrite each probe after the first lazily: `orElseWith a (_ => probe)` where the success arms pass the `Some` through, `optionOrElse (_ => probe) a` where they unwrap (`Some v => v`), or `findMap` over a list -- never the value-taking `orElse`, which runs every probe. An expensive, effectful or self-recursive later probe disqualifies any rewrite"

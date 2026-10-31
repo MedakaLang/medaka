@@ -26,13 +26,17 @@ asArg k xs = show (optionOrElse (_ => fresh k) (lookup k xs))
 -- expect-next-line rule-eager-default
 qualified k m = optionOrElse (_ => M.size m) (lookup k [])
 
--- POSITIVE: partially applied, in a pipeline.
--- expect-next-line rule-eager-default
-piped k xs = lookup k xs |> optionOrElse (_ => fresh k)
+-- NEGATIVE: partially applied, in a pipeline: not applied to its option here.
+piped k xs = lookup k xs |> optionOr (fresh k)
 
--- POSITIVE: partially applied inside brackets, as the argument of map.
--- expect-next-line rule-eager-default
-mapped k xss = map (optionOrElse (_ => fresh k)) xss
+-- NEGATIVE: partially applied as the argument of map.  The eager form computes
+-- the default once for every element; `optionOrElse (_ => fresh k)` would
+-- compute it once per miss, which changes a counting default.
+mapped k xss = map (optionOr (fresh k)) xss
+
+-- NEGATIVE: a lazy default would run once per miss when the function is applied
+-- many times.
+partial k = optionOr (fresh k)
 
 -- POSITIVE: an operator application is the default's head, so the argument is a call.
 -- expect-next-line rule-eager-default
