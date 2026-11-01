@@ -107,6 +107,7 @@ fixtureNames = [
   "dead-code",
   "destructure-in-param",
   "directive-reason",
+  "discarded-result",
   "double-reverse",
   "duplicate-body",
   "eager-default",
@@ -367,6 +368,8 @@ test "rule-dead-code fixture" = fixtureHolds "dead-code"
 test "rule-destructure-in-param fixture" = fixtureHolds "destructure-in-param"
 
 test "rule-directive-reason fixture" = fixtureHolds "directive-reason"
+
+test "rule-discarded-result fixture" = fixtureHolds "discarded-result"
 
 test "rule-double-reverse fixture" = fixtureHolds "double-reverse"
 

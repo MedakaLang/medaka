@@ -34,6 +34,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-self-shadow-extern`](#rule-self-shadow-extern) | universal | correctness | gated | not-fixable | file |
 | [`rule-prefer-assign-op`](#rule-prefer-assign-op) | universal | style | gated | fixable | file |
 | [`rule-let-underscore-unit`](#rule-let-underscore-unit) | universal | style | gated | fixable | file |
+| [`rule-discarded-result`](#rule-discarded-result) | universal | style | gated | not-fixable | file |
 | [`rule-promissory-reader`](#rule-promissory-reader) | internal | style | gated | not-fixable | file |
 | [`rule-orelse-staircase`](#rule-orelse-staircase) | universal | complexity | gated | not-fixable | file |
 | [`rule-clone-type`](#rule-clone-type) | universal | style | baselined | not-fixable | file |
@@ -442,6 +443,21 @@ Before:
 After:
   writeLine out "done"
   count xs
+```
+
+## rule-discarded-result
+
+`let _ = e` on a call that returns a Result or an Option, in a plain block. Propagate it, handle it or name the discard
+
+A call whose declared result is a `Result` or an `Option` carries a failure or an absence, and `let _ =` throws it away unread. In a plain block the error must be propagated (the enclosing function's type permits `?`, a match or `andThen`, or its signature changes with its callers), or the discard named with `bestEffort "<reason>"`, whose reason says why this error is ignorable. A discarded `Option` has a `None` case to handle, or the call is rewritten so the result is not discarded. `do` blocks are not checked. Only a saturated call to a signed function is checked: the declared result decides, so a partial application, a method, a shadowed name and an unsigned function are not reported.
+
+```
+Before:
+  let _ = writeFile path text
+  next ()
+After:
+  bestEffort "the scratch file is advisory" (writeFile path text)
+  next ()
 ```
 
 ## rule-promissory-reader

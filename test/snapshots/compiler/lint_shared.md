@@ -1,5 +1,5 @@
 # META
-source_lines=1057
+source_lines=1061
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -150,6 +150,10 @@ ruleNameUnusedLocal = "rule-unused-local"
 export
 ruleNameLetUnderscoreUnit : String
 ruleNameLetUnderscoreUnit = "rule-let-underscore-unit"
+
+export
+ruleNameDiscardedResult : String
+ruleNameDiscardedResult = "rule-discarded-result"
 
 export
 ruleNamePreferAssignOp : String
@@ -1134,6 +1138,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameUnusedLocal" () (ELit (LString "rule-unused-local")))
 (DTypeSig true "ruleNameLetUnderscoreUnit" (TyCon "String"))
 (DFunDef false "ruleNameLetUnderscoreUnit" () (ELit (LString "rule-let-underscore-unit")))
+(DTypeSig true "ruleNameDiscardedResult" (TyCon "String"))
+(DFunDef false "ruleNameDiscardedResult" () (ELit (LString "rule-discarded-result")))
 (DTypeSig true "ruleNamePreferAssignOp" (TyCon "String"))
 (DFunDef false "ruleNamePreferAssignOp" () (ELit (LString "rule-prefer-assign-op")))
 (DTypeSig true "ruleNamePromissoryReader" (TyCon "String"))
@@ -1485,6 +1491,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameUnusedLocal" () (ELit (LString "rule-unused-local")))
 (DTypeSig true "ruleNameLetUnderscoreUnit" (TyCon "String"))
 (DFunDef false "ruleNameLetUnderscoreUnit" () (ELit (LString "rule-let-underscore-unit")))
+(DTypeSig true "ruleNameDiscardedResult" (TyCon "String"))
+(DFunDef false "ruleNameDiscardedResult" () (ELit (LString "rule-discarded-result")))
 (DTypeSig true "ruleNamePreferAssignOp" (TyCon "String"))
 (DFunDef false "ruleNamePreferAssignOp" () (ELit (LString "rule-prefer-assign-op")))
 (DTypeSig true "ruleNamePromissoryReader" (TyCon "String"))
