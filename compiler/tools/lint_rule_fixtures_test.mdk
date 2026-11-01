@@ -427,6 +427,27 @@ test "rule-test-prelude-shadow is silent under a non-test path" =
         Err e => fail e
         Ok flagged => expectEqual [] flagged
 
+-- The rule reads one file: a private helper that only the subject's test
+-- sibling imports is still dead in the subject, and one the subject itself uses
+-- is live.  A test sibling sees the helper (`check`), and this rule does not.
+test "rule-dead-code still reports a private helper only its test sibling uses" =
+  expectEqual
+    (Ok [5])
+    (lintLinesAt
+      emptyStdlibIndex
+      "counter.mdk"
+      "rule-dead-code"
+      "export tick : Int -> Int\ntick n = n\n\nstep : Int -> Int\nstep n = n + 1\n")
+
+test "rule-dead-code is silent on a private helper the subject uses" =
+  expectEqual
+    (Ok [])
+    (lintLinesAt
+      emptyStdlibIndex
+      "counter.mdk"
+      "rule-dead-code"
+      "export tick : Int -> Int\ntick n = step n\n\nstep : Int -> Int\nstep n = n + 1\n")
+
 test "every fixture file is on the roster" = rosterIsClosed
 
 markedRule : Marker -> String

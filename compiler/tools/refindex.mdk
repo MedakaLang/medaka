@@ -85,6 +85,7 @@ import frontend.ast.{
   Variant(..),
   Decl(..),
   ExternDecl(..),
+  SiblingPair,
 }
 import frontend.parser.{
   parseWithPositionsOpt,
@@ -98,7 +99,8 @@ import driver.loader.{
   loadProgramFilesLocatedCached,
   moduleIdOfPath,
 }
-import frontend.visibility.{useModId}
+import frontend.visibility.{useModId, viewFor, isSubjectIn, ExportView(..)}
+import driver.diagnostics.{siblingPairsOf}
 import support.util.{zipL, startsWith, endsWith, splitOnChar}
 import support.path.{joinPath}
 import support.ordmap.{omEmpty}
@@ -192,6 +194,10 @@ export data RefIndex = RefIndex {
 -- Mutable build state threaded through the whole walk.
 --   originOf : "<mid>\t<ns>\t<name>" -> originKey   (EXPORTED names, for imports)
 --   modExp   : mid -> List (ns, localName, originKey)  (for wildcard enumeration)
+--   privOrigin / modPriv : the same two tables for the NON-exported own names of a
+--              module some test sibling is the sibling of; only that sibling's
+--              imports read them (`viewFor sibs`)
+--   sibs     : the graph's test sibling pairs, from `siblingPairsOf`
 --   tyCtors  : a type's origin key -> its constructor names (for `T(..)` imports)
 --   defSeen  : the def sites already recorded (see `pushDef`) — the O(1) dedup set
 --   opCnt    : total hash/push op count (the perf-gate signal)
@@ -202,6 +208,9 @@ data Ctx = Ctx {
   occ : HashMap String (Ref (List (Loc, String))),
   originOf : HashMap String String,
   modExp : HashMap String (List (String, String, String)),
+  privOrigin : HashMap String String,
+  modPriv : HashMap String (List (String, String, String)),
+  sibs : List SiblingPair,
   tyCtors : HashMap String (List String),
   defSeen : HashMap String Unit,
   opCnt : Ref Int,
@@ -599,10 +608,9 @@ aliasHeadOf (W ctx _ _ _ aliasM) (EVar a) = hmGetC ctx aliasM a
 aliasHeadOf _ _ = None
 
 aliasOriginKey : W -> String -> String -> String
-aliasOriginKey (W ctx _ _ _ _) srcMod f =
-  match hmGetC ctx ctx.originOf (mkKey srcMod nsVal f)
-    Some k => k
-    None => extKey nsVal f
+aliasOriginKey (W ctx me _ _ _) srcMod f = match originFor ctx me srcMod nsVal f
+  Some k => k
+  None => extKey nsVal f
 
 peelLoc : Expr -> Expr
 peelLoc (ELoc _ e) = peelLoc e
@@ -1197,8 +1205,27 @@ registerOwnExports ctx mid ((DefEntry ns name key _ pub) :: rest) =
   registerOwnExports ctx mid rest
 
 whenPub : Ctx -> String -> String -> String -> String -> Bool -> Unit
-whenPub _ _ _ _ _ False = ()
 whenPub ctx mid ns name key True = addExport ctx mid ns name key
+whenPub ctx mid ns name key False =
+  if isSubjectIn ctx.sibs mid then addPrivate ctx mid ns name key
+
+-- record a non-exported name of a test subject, visible to its sibling only.
+addPrivate : Ctx -> String -> String -> String -> String -> Unit
+addPrivate ctx mid ns name originKey =
+  let _ = hmSetC ctx ctx.privOrigin (mkKey mid ns name) originKey
+  let cur = match hmGetC ctx ctx.modPriv mid
+    Some l => l
+    None => []
+  hmSetC ctx ctx.modPriv mid ((ns, name, originKey) :: cur)
+
+-- the origin key of `o` in `srcMod` as seen by importer `me`: its exports, and
+-- for the subject's own test sibling also its private names.
+originFor : Ctx -> String -> String -> String -> String -> Option String
+originFor ctx me srcMod ns o = match hmGetC ctx ctx.originOf (mkKey srcMod ns o)
+  Some k => Some k
+  None => match viewFor ctx.sibs me srcMod
+    FullView => hmGetC ctx ctx.privOrigin (mkKey srcMod ns o)
+    ExportedView => None
 
 -- record `<mid> exports <name>@<ns>` with origin key, both in the flat originOf
 -- map (O(1) member lookup) and the per-module list (wildcard enumeration).
@@ -1267,40 +1294,48 @@ reExportWildGo ctx mid ((ns, name, originKey) :: rest) =
 
 -- ── imports → this module's useEnv (all DUse, pub or not) ────────────────────
 processImports : Ctx ->
+  String ->
   HashMap String String ->
   HashMap String String ->
   List Decl ->
   Unit
-processImports _ _ _ [] = ()
-processImports ctx useEnv aliasM ((DUse _ path _) :: rest) =
-  let _ = importPath ctx useEnv aliasM path
-  processImports ctx useEnv aliasM rest
-processImports ctx useEnv aliasM ((DAttrib _ inner) :: rest) =
-  processImports ctx useEnv aliasM (inner :: rest)
-processImports ctx useEnv aliasM (_ :: rest) =
-  processImports ctx useEnv aliasM rest
+processImports _ _ _ _ [] = ()
+processImports ctx me useEnv aliasM ((DUse _ path _) :: rest) =
+  let _ = importPath ctx me useEnv aliasM path
+  processImports ctx me useEnv aliasM rest
+processImports ctx me useEnv aliasM ((DAttrib _ inner) :: rest) =
+  processImports ctx me useEnv aliasM (inner :: rest)
+processImports ctx me useEnv aliasM (_ :: rest) =
+  processImports ctx me useEnv aliasM rest
 
 importPath : Ctx ->
+  String ->
   HashMap String String ->
   HashMap String String ->
   UsePath ->
   Unit
-importPath ctx useEnv _ (UseName ns) = match splitLastL ns
-  Some (pre, nm) => importOne ctx useEnv (joinDotL pre) nm nm
+importPath ctx me useEnv _ (UseName ns) = match splitLastL ns
+  Some (pre, nm) => importOne ctx me useEnv (joinDotL pre) nm nm
   None => ()
-importPath ctx useEnv _ (UseGroup srcPath members) =
-  importMembers ctx useEnv (joinDotL srcPath) members
-importPath ctx useEnv _ (UseWild srcPath) =
-  importWild ctx useEnv (joinDotL srcPath)
-importPath ctx _ aliasM (UseAlias srcPath alias) =
+importPath ctx me useEnv _ (UseGroup srcPath members) =
+  importMembers ctx me useEnv (joinDotL srcPath) members
+importPath ctx me useEnv _ (UseWild srcPath) =
+  importWild ctx me useEnv (joinDotL srcPath)
+importPath ctx _ _ aliasM (UseAlias srcPath alias) =
   hmSetC ctx aliasM alias (joinDotL srcPath)
 
-importMembers : Ctx -> HashMap String String -> String -> List UseMember -> Unit
-importMembers _ _ _ [] = ()
-importMembers ctx useEnv srcMod (m :: rest) =
-  let _ = importOne ctx useEnv srcMod (useMemberOrigin m) (useMemberLocal m)
-  let _ = whenAll m (_ => importTyCtors ctx useEnv srcMod (useMemberOrigin m))
-  importMembers ctx useEnv srcMod rest
+importMembers : Ctx ->
+  String ->
+  HashMap String String ->
+  String ->
+  List UseMember ->
+  Unit
+importMembers _ _ _ _ [] = ()
+importMembers ctx me useEnv srcMod (m :: rest) =
+  let _ = importOne ctx me useEnv srcMod (useMemberOrigin m) (useMemberLocal m)
+  let _ =
+    whenAll m (_ => importTyCtors ctx me useEnv srcMod (useMemberOrigin m))
+  importMembers ctx me useEnv srcMod rest
 
 whenAll : UseMember -> (Unit -> Unit) -> Unit
 whenAll (UseMember _ True _ _) f = f ()
@@ -1308,19 +1343,32 @@ whenAll _ _ = ()
 
 -- `import m.{T(..)}`: the constructors of `T` that `srcMod` exports enter scope
 -- under their own names.
-tyCtorsOf : Ctx -> String -> String -> List String
-tyCtorsOf ctx srcMod o = match hmGetC ctx ctx.originOf (mkKey srcMod nsTy o)
+tyCtorsOf : Ctx -> String -> String -> String -> List String
+tyCtorsOf ctx me srcMod o = match originFor ctx me srcMod nsTy o
   Some tyKey => match hmGetC ctx ctx.tyCtors tyKey
     Some cs => cs
     None => []
   None => []
 
-importTyCtors : Ctx -> HashMap String String -> String -> String -> Unit
-importTyCtors ctx useEnv srcMod o = forEachUnit (tyCtorsOf ctx srcMod o) (c =>
-  importNs ctx useEnv srcMod c c nsCtor)
+importTyCtors : Ctx ->
+  String ->
+  HashMap String String ->
+  String ->
+  String ->
+  Unit
+importTyCtors ctx me useEnv srcMod o = forEachUnit (tyCtorsOf
+  ctx
+  me
+  srcMod
+  o) (c =>
+  importNs ctx me useEnv srcMod c c nsCtor)
 
 reExportTyCtors : Ctx -> String -> String -> String -> Unit
-reExportTyCtors ctx mid srcMod o = forEachUnit (tyCtorsOf ctx srcMod o) (c =>
+reExportTyCtors ctx mid srcMod o = forEachUnit (tyCtorsOf
+  ctx
+  mid
+  srcMod
+  o) (c =>
   reExportNs ctx mid srcMod c c nsCtor)
 
 forEachUnit : List a -> (a -> Unit) -> Unit
@@ -1329,30 +1377,42 @@ forEachUnit (x :: xs) f =
   let _ = f x
   forEachUnit xs f
 
-importOne : Ctx -> HashMap String String -> String -> String -> String -> Unit
-importOne ctx useEnv srcMod o l =
-  let _ = importNs ctx useEnv srcMod o l nsVal
-  let _ = importNs ctx useEnv srcMod o l nsTy
-  let _ = importNs ctx useEnv srcMod o l nsCtor
-  let _ = importNs ctx useEnv srcMod o l nsIface
-  importNs ctx useEnv srcMod o l nsMethod
+importOne : Ctx ->
+  String ->
+  HashMap String String ->
+  String ->
+  String ->
+  String ->
+  Unit
+importOne ctx me useEnv srcMod o l =
+  let _ = importNs ctx me useEnv srcMod o l nsVal
+  let _ = importNs ctx me useEnv srcMod o l nsTy
+  let _ = importNs ctx me useEnv srcMod o l nsCtor
+  let _ = importNs ctx me useEnv srcMod o l nsIface
+  importNs ctx me useEnv srcMod o l nsMethod
 
 importNs : Ctx ->
+  String ->
   HashMap String String ->
   String ->
   String ->
   String ->
   String ->
   Unit
-importNs ctx useEnv srcMod o l ns =
-  match hmGetC ctx ctx.originOf (mkKey srcMod ns o)
-    Some originKey => hmSetC ctx useEnv (ns ++ sep ++ l) originKey
-    None => ()
-
-importWild : Ctx -> HashMap String String -> String -> Unit
-importWild ctx useEnv srcMod = match hmGetC ctx ctx.modExp srcMod
-  Some entries => importWildGo ctx useEnv entries
+importNs ctx me useEnv srcMod o l ns = match originFor ctx me srcMod ns o
+  Some originKey => hmSetC ctx useEnv (ns ++ sep ++ l) originKey
   None => ()
+
+importWild : Ctx -> String -> HashMap String String -> String -> Unit
+importWild ctx me useEnv srcMod =
+  let _ = match hmGetC ctx ctx.modExp srcMod
+    Some entries => importWildGo ctx useEnv entries
+    None => ()
+  match viewFor ctx.sibs me srcMod
+    FullView => match hmGetC ctx ctx.modPriv srcMod
+      Some entries => importWildGo ctx useEnv entries
+      None => ()
+    ExportedView => ()
 
 importWildGo : Ctx ->
   HashMap String String ->
@@ -1468,10 +1528,10 @@ seedPreludeGo ctx mid ((ns, name, originKey) :: rest) =
   seedPreludeGo ctx mid rest
 
 -- copy the prelude modules' exports into a module's useEnv (auto-in-scope).
-seedUseEnvPrelude : Ctx -> HashMap String String -> Unit
-seedUseEnvPrelude ctx useEnv =
-  let _ = importWild ctx useEnv "core"
-  importWild ctx useEnv "runtime"
+seedUseEnvPrelude : Ctx -> String -> HashMap String String -> Unit
+seedUseEnvPrelude ctx me useEnv =
+  let _ = importWild ctx me useEnv "core"
+  importWild ctx me useEnv "runtime"
 
 -- ── the per-module driver ────────────────────────────────────────────────────
 indexModule : Ctx -> String -> String -> String -> Unit
@@ -1490,9 +1550,9 @@ indexParsed ctx mid uri decls positions =
   let ownDefs = collectDefs ctx expSet mid uri paired
   let useEnv = hmNew ()
   let aliasM = hmNew ()
-  let _ = seedUseEnvPrelude ctx useEnv
+  let _ = seedUseEnvPrelude ctx mid useEnv
   let _ = addOwnToEnv ctx useEnv ownDefs
-  let _ = processImports ctx useEnv aliasM decls
+  let _ = processImports ctx mid useEnv aliasM decls
   let _ = registerExports ctx mid ownDefs decls
   walkDecls (W ctx mid uri useEnv aliasM) paired
 
@@ -1522,13 +1582,16 @@ getSrc read path = match read path
     Ok s => Some s
     Err _ => None
 
-newCtx : Unit -> Ctx
-newCtx _ = Ctx {
+newCtx : List SiblingPair -> Ctx
+newCtx sibs = Ctx {
   defs = hmNew (),
   refs = hmNew (),
   occ = hmNew (),
   originOf = hmNew (),
   modExp = hmNew (),
+  privOrigin = hmNew (),
+  modPriv = hmNew (),
+  sibs = sibs,
   tyCtors = hmNew (),
   defSeen = hmNew (),
   opCnt = Ref 0,
@@ -1557,7 +1620,7 @@ buildRefIndex read entry roots runtimeSrc coreSrc =
   match loadProgramFilesLocatedCached parseCache read entry roots
     Err _ => emptyIndex ()
     Ok mods =>
-      let ctx = newCtx ()
+      let ctx = newCtx (siblingPairsOf roots mods)
       let _ = seedPrelude ctx "runtime" runtimeSrc
       let _ = seedPrelude ctx "core" coreSrc
       -- Reset the op counter after (constant-cost) prelude seeding so `riOps`
@@ -1805,13 +1868,17 @@ buildRefIndexProjectWithParsed : (String -> Option String) ->
   String ->
   <IO> RefIndex
 buildRefIndexProjectWithParsed read parse projectRoot runtimeSrc coreSrc =
-  let ctx = newCtx ()
+  let midPaths = midPathsOf projectRoot
+  let ctx =
+    newCtx
+      (siblingPairsOf
+        [projectRoot]
+        (map ((mid, path) => (mid, path, [])) midPaths))
   let _ = seedPrelude ctx "runtime" runtimeSrc
   let _ = seedPrelude ctx "core" coreSrc
   -- Reset AFTER prelude seeding, same rationale as `buildRefIndex`: `riOps`
   -- must measure only the project-indexing work the scaling gate grades.
   ctx.opCnt := 0
-  let midPaths = midPathsOf projectRoot
   let mods = topoOrderModules ctx read parse midPaths
   let _ = processParsed ctx mods
   RefIndex { defs = ctx.defs, refs = ctx.refs, occ = ctx.occ, ops = !ctx.opCnt }

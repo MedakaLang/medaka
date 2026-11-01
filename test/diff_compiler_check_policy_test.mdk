@@ -401,3 +401,31 @@ test "diff_compiler_check_policy: missing-entry control accepts" =
         fail "missing-entry-2047-control: exited \{intToString code}, want 0"
       else
         expectTextContainsAll ["accepted. rewriteHeader"] (out ++ err)
+
+-- `check-policy` reads the same graph view `check` does: the test sibling of
+-- `counter.mdk` is analysed with that subject's private names, a module beside
+-- it with the exported view.
+test "diff_compiler_check_policy: a test sibling sees its subject's private names" =
+  match boundedVerb medakaBin [
+    "check-policy",
+    underRoot "test/sibling_view_fixtures/counter_test.mdk",
+    "--allow",
+    "Stdout",
+    "--fn",
+    "main",
+  ]
+    Err e => fail "sibling-view: could not spawn: \{e}"
+    Ok (code, out, err) => expectAll [
+      if code == 0 then
+        expectTextContainsAll ["accepted. main"] (out ++ err)
+      else
+        fail
+          "sibling-view: the sibling was refused (rc \{intToString code}): \{err}",
+      refuseCase
+        "sibling-view-other"
+        "test/sibling_view_fixtures/other.mdk"
+        "Stdout"
+        "main"
+        "compiler analysis failed"
+        "module `counter` has no export `step`",
+    ]
