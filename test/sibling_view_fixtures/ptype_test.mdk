@@ -4,3 +4,6 @@ import ptype.{Hidden(..)}
 
 test "private constructor" = match Hidden 4
   Hidden n => expectEqual 4 n
+
+main = match Hidden 4
+  Hidden n => println n

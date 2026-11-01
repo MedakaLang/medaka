@@ -3482,7 +3482,7 @@ migration = "native-rewrite"
 run = "test/wasm/diff_wasm_modules.sh"
 oracles = []
 sources = ["playground/medaka_host.mjs"]
-corpus = ["test/wasm/fixtures_modules", "test/trap_site_fixtures"]
+corpus = ["test/wasm/fixtures_modules", "test/trap_site_fixtures", "test/sibling_view_fixtures"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 link = "production"
 

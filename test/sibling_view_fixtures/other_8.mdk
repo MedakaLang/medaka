@@ -1,0 +1,4 @@
+-- Not the sibling: a name the subject only imports.
+import pimport.{last}
+
+main = println (optionOr 0 (last [1, 2, 3]))

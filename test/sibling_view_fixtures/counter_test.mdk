@@ -7,3 +7,8 @@ test "step adds one" = expectEqual 2 (step 1)
 
 test "tick goes through step" = match tick (Counter 1)
   Counter n => expectEqual 2 n
+
+main =
+  let _ = println (step 1)
+  match tick (Counter 1)
+    Counter n => println n

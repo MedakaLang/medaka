@@ -252,6 +252,13 @@ NODE_ABS="$(command -v "$NODE" 2>/dev/null || echo "$NODE")"
     [ -f "$f" ] || continue
     printf '%s\t%s\t%s\n' "trap_site_$(basename "$f")" "$f" "$(dirname "$f")"
   done
+  # The test-sibling fixtures: each `<subject>_test.mdk` carries a `main` that
+  # reads its subject's private names, so native and wasm must agree on what
+  # the privileged view computes.  The fixture directory is the root.
+  for f in "$ROOT"/test/sibling_view_fixtures/p*_test.mdk "$ROOT"/test/sibling_view_fixtures/counter_test.mdk; do
+    [ -f "$f" ] || continue
+    printf '%s\t%s\t%s\n' "sibling_view_$(basename "$f")" "$f" "$(dirname "$f")"
+  done
   # An entry file whose name is not a WAT identifier: its module id is part of
   # every type word it declares (`café(1).Mod5`, #1397), and the emitted type
   # and impl names must still be legal.  Generated here, not committed, so the

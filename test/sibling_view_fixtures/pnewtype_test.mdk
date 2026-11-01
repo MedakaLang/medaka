@@ -4,3 +4,6 @@ import pnewtype.{Meters(..), meters}
 
 test "newtype constructor" = match meters 3
   Meters n => expectEqual 3 n
+
+main = match meters 3
+  Meters n => println n

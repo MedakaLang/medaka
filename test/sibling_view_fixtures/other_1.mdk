@@ -1,0 +1,4 @@
+-- Not the sibling: the same private import as counter_test, rejected.
+import counter.{step}
+
+main = println (step 1)
