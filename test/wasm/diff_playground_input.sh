@@ -47,6 +47,61 @@ JS
 command -v wasm-tools >/dev/null 2>&1 || bad "wasm-tools unavailable"
 command -v node >/dev/null 2>&1 || bad "node unavailable"
 bash "$ROOT/playground/build_playground_wasm.sh" >"$WORK/build.out" 2>"$WORK/build.err" || bad "fresh playground build failed"
+# Compile scratch entry copies that report the plan retained after successful
+# gateway validation. The comments are stripped before comparing renderer text.
+cp -R "$ROOT/compiler" "$WORK/compiler"
+node - "$WORK/compiler" <<'JS'
+const fs = require('node:fs');
+const dir = process.argv[2] + '/entries/';
+const comment = 'stringConcat (map (i => ";; DEMAND \\{i.namespace} \\{i.field}\\n") demand.imports)';
+function patch(file, from, to) {
+  const path = dir + file, source = fs.readFileSync(path, 'utf8');
+  if (source.split(from).length !== 2) throw Error(`observation site changed: ${file}`);
+  fs.writeFileSync(path, source.replace(from, to));
+}
+const observe = `let observed = match plan.wasmPhysical
+        Some demand => ${comment}
+        None => panic "missing demand"
+      let _ = putStr observed
+      putStr text`;
+patch('wasm_emit_modules_main.mdk', '    Ok text => putStr text', '    Ok text =>\n      ' + observe);
+const pgObserve = `let observed = match plan.wasmPhysical
+          Some demand => ${comment}
+          None => panic "missing demand"
+        let _ = putStr observed
+        putStr text`;
+patch('playground_main.mdk', '        let _ = emitWatMarker warnTriples\n        putStr text', '        let _ = emitWatMarker warnTriples\n        ' + pgObserve);
+JS
+MEDAKA_STRICT=1 "$ROOT/medaka" build --allow-internal "$WORK/compiler/entries/wasm_emit_modules_main.mdk" -o "$WORK/observe-modules" >"$WORK/observe-build.out" 2>"$WORK/observe-build.err" || bad "observation entry build failed"
+"$MODULES" "$RUNTIME" "$CORE" "$WORK/compiler/entries/playground_main.mdk" "$WORK/compiler" "$ROOT/stdlib" >"$WORK/observe-playground.wat" 2>"$WORK/observe-playground.err" || bad "observation playground emission failed"
+wasm-tools parse "$WORK/observe-playground.wat" -o "$WORK/observe-playground.wasm" || bad "observation playground parse failed"
+wasm-tools validate --features=all "$WORK/observe-playground.wasm" || bad "observation playground validation failed"
+check_observed() {
+  case_name="$1"; modules_label="$2"; playground_label="$3"; cli_label="$4"
+  checks=$((checks + 1))
+  "$WORK/observe-modules" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/observe-modules-$case_name.wat" 2>"$WORK/observe-modules-$case_name.err" || { bad "$case_name observed modules failed"; return; }
+  node "$ROOT/playground/dev_compile_node.mjs" "$WORK/observe-playground.wasm" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/observe-playground-$case_name.wat" 2>"$WORK/observe-playground-$case_name.err" || { bad "$case_name observed playground failed"; return; }
+  MEDAKA_STRICT=1 MEDAKA_WASM_EMITTER="$WORK/observe-modules" "$ROOT/medaka" build --target wasm --keep-ir "$WORK/input.mdk" -o "$WORK/observe-cli-$case_name.wasm" >"$WORK/observe-cli-$case_name.out" 2>"$WORK/observe-cli-$case_name.err" || { bad "$case_name observed CLI failed"; return; }
+  wasm-tools parse "$WORK/observe-modules-$case_name.wat" -o "$WORK/observe-modules-$case_name.wasm" || { bad "$case_name observed modules parse failed"; return; }
+  wasm-tools parse "$WORK/observe-playground-$case_name.wat" -o "$WORK/observe-playground-$case_name.wasm" || { bad "$case_name observed playground parse failed"; return; }
+  cmp -s "$WORK/observe-modules-$case_name.wasm" "$WORK/$modules_label.wasm" || bad "$case_name modules artifact changed"
+  cmp -s "$WORK/observe-playground-$case_name.wasm" "$WORK/$playground_label.wasm" || bad "$case_name playground artifact changed"
+  cmp -s "$WORK/observe-cli-$case_name.wasm" "$WORK/$cli_label.wasm" || bad "$case_name CLI artifact changed"
+  node - "$WORK" "$case_name" "$modules_label" "$playground_label" "$cli_label" <<'JS' || bad "$case_name validated import projection mismatch"
+const fs = require('node:fs'), [dir, name, ...labels] = process.argv.slice(2);
+const observers = [`observe-modules-${name}.wat`, `observe-playground-${name}.wat`, `observe-cli-${name}.wasm.wat`];
+for (let i = 0; i < observers.length; i++) {
+  const source = fs.readFileSync(`${dir}/${observers[i]}`, 'utf8');
+  const demand = [...source.matchAll(/^;; DEMAND (\S+) (\S+)$/gm)].map(m => JSON.stringify([m[1], m[2], 'function'])).sort();
+  const clean = source.replace(/^;; DEMAND .*\n/gm, '');
+  const actual = WebAssembly.Module.imports(new WebAssembly.Module(fs.readFileSync(`${dir}/${labels[i]}.wasm`)))
+    .map(({module, name, kind}) => JSON.stringify([module, name, kind])).sort();
+  if (!demand.length || JSON.stringify(demand) !== JSON.stringify(actual)) throw Error(`${name}: ${labels[i]} demand mismatch`);
+  const originalWat = labels[i].startsWith('cli') ? `${labels[i]}.wasm.wat` : `${labels[i]}.wat`;
+  if (clean !== fs.readFileSync(`${dir}/${originalWat}`, 'utf8')) throw Error(`${name}: ${labels[i]} WAT changed`);
+}
+JS
+}
 # Scanner dispatch-TMC keeps prelude tokenization within the browser stack.
 cat > "$WORK/scanner.mdk" <<'EOF'
 import frontend.lexer.{tokenize}
@@ -87,6 +142,7 @@ if [ -x "$MODULES" ] && "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" 
 if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground.wat" 2>"$WORK/playground.emit.err"; then check_wat playground "$WORK/playground.wat"; else bad "playground compiler failed"; cat "$WORK/playground.emit.err"; fi
 if MEDAKA_STRICT=1 MEDAKA_WASM_EMITTER="$MODULES" "$ROOT/medaka" build --target wasm --keep-ir "$WORK/input.mdk" -o "$WORK/cli.wasm" >"$WORK/cli.build.out" 2>"$WORK/cli.build.err"; then check_wat cli-text "$WORK/cli.wasm.wat"; check_cli cli; else bad "CLI Float compiler failed"; cat "$WORK/cli.build.err"; fi
 check_product_imports "$WORK/modules.wasm" "$WORK/playground.wasm" "$WORK/cli.wasm"
+check_observed float modules playground cli
 cat > "$WORK/input.mdk" <<'EOF'
 data Box = Box Float
 
@@ -137,6 +193,44 @@ if [ -x "$MODULES" ] && "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" 
 if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-int-control.wat" 2>"$WORK/playground-int-control.emit.err"; then check_wat playground-int-control "$WORK/playground-int-control.wat"; else bad "Int-control playground compiler failed"; cat "$WORK/playground-int-control.emit.err"; fi
 if MEDAKA_STRICT=1 MEDAKA_WASM_EMITTER="$MODULES" "$ROOT/medaka" build --target wasm --keep-ir "$WORK/input.mdk" -o "$WORK/cli-int-control.wasm" >"$WORK/cli-int-control.build.out" 2>"$WORK/cli-int-control.build.err"; then check_wat cli-int-text "$WORK/cli-int-control.wasm.wat"; check_cli cli-int-control; else bad "CLI Int-control compiler failed"; cat "$WORK/cli-int-control.build.err"; fi
 check_product_imports "$WORK/modules-int-control.wasm" "$WORK/playground-int-control.wasm" "$WORK/cli-int-control.wasm"
+check_observed int modules-int-control playground-int-control cli-int-control
+# Re-enter the actual playground guest between colliding programs. CLI and
+# modules are separate public processes; each sees the same source order.
+printf '%s\n' 'f x = x' 'main = println ((f intToString) 42)' > "$WORK/p.mdk"
+printf '%s\n' 'f x = x + 1' 'main = f 1' > "$WORK/u.mdk"
+printf '%s\n' 'f x = x + 1' 'main = f 42' > "$WORK/connected.mdk"
+cat > "$WORK/reemit.mjs" <<'JS'
+import fs from 'node:fs';
+import path from 'node:path';
+const [root, work] = process.argv.slice(2);
+const {loadCompiler, compile} = await import(path.join(root, 'playground/compile.mjs'));
+const wasm = await loadCompiler(path.join(root, 'playground/dist/playground.wasm'));
+const stdlib = {runtime: fs.readFileSync(path.join(root, 'stdlib/runtime.mdk'), 'utf8'), core: fs.readFileSync(path.join(root, 'stdlib/core.mdk'), 'utf8')};
+for (const [name, file] of [['p1', 'p'], ['u', 'u'], ['p2', 'p'], ['connected', 'connected']]) {
+  const result = await compile(fs.readFileSync(path.join(work, file + '.mdk'), 'utf8'), {wasm, stdlib});
+  if (!result.ok) throw Error(`${name}: ${JSON.stringify(result.diagnostics)}`);
+  fs.writeFileSync(path.join(work, `reemit-playground-${name}.wat`), result.wat);
+}
+JS
+node "$WORK/reemit.mjs" "$ROOT" "$WORK" >"$WORK/reemit.out" 2>"$WORK/reemit.err" || { bad "persistent playground re-emission failed"; cat "$WORK/reemit.err"; }
+for name in p1 u p2 connected; do
+  case "$name" in p1|p2) input=p; value=42 ;; u) input=u; value=2 ;; connected) input=connected; value=43 ;; esac
+  cp "$WORK/$input.mdk" "$WORK/input.mdk"
+  printf '%s\n' "$value" > "$WORK/expected"
+  if "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/reemit-modules-$name.wat" 2>"$WORK/reemit-modules-$name.err"; then check_wat "reemit-modules-$name" "$WORK/reemit-modules-$name.wat"; else bad "modules re-emission $name failed"; fi
+  if MEDAKA_STRICT=1 MEDAKA_WASM_EMITTER="$MODULES" "$ROOT/medaka" build --target wasm --keep-ir "$WORK/input.mdk" -o "$WORK/reemit-cli-$name.wasm" >"$WORK/reemit-cli-$name.out" 2>"$WORK/reemit-cli-$name.err"; then check_cli "reemit-cli-$name"; else bad "CLI re-emission $name failed"; fi
+  check_wat "reemit-playground-$name" "$WORK/reemit-playground-$name.wat"
+done
+for mode in modules cli playground; do
+  checks=$((checks + 1))
+  cmp -s "$WORK/reemit-$mode-p1.wasm" "$WORK/reemit-$mode-p2.wasm" || bad "$mode P artifacts changed after unrelated U"
+done
+for mode in modules playground cli; do
+  wat="$WORK/reemit-$mode-p1.wat"
+  [ "$mode" != cli ] || wat="$WORK/reemit-cli-p1.wasm.wat"
+  grep -qF '(import ' "$wat" || bad "$mode P missing import"
+  grep -qF 'gen.wrapper' "$wat" || bad "$mode P missing wrapper"
+done
 cp "$RUNTIME" "$WORK/runtime-missing-row.mdk"
 printf '\nextern zzPlaygroundMissingRow : Int\n' >> "$WORK/runtime-missing-row.mdk"
 checks=$((checks + 1))
