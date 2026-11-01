@@ -1,5 +1,5 @@
 # META
-source_lines=403
+source_lines=404
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/native_probe.mdk — one native probe build for all the native
