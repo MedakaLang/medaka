@@ -173,7 +173,6 @@ import support.util.{
   dedupBy,
   filterList,
   isEmptyL,
-  isSome,
   joinWith,
   lenKey,
   listLen,

@@ -1,5 +1,5 @@
 # META
-source_lines=2268
+source_lines=2267
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mono: operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the
@@ -86,7 +86,6 @@ import support.util.{
   contains,
   eqStr,
   filterList,
-  isSome,
   joinWith,
   lenKey,
   listLen,
@@ -2279,7 +2278,7 @@ implDeclWithReqs _ = []
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "eqStr" false) (mem "filterList" false) (mem "isSome" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "eqStr" false) (mem "filterList" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyIdent" false) (mem "headKeyOfCon" false) (mem "headKeyTag" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "funHeadTag" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "authorityParamSubst" false))))
@@ -2879,7 +2878,7 @@ implDeclWithReqs _ = []
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "eqStr" false) (mem "filterList" false) (mem "isSome" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "eqStr" false) (mem "filterList" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyIdent" false) (mem "headKeyOfCon" false) (mem "headKeyTag" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "funHeadTag" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "authorityParamSubst" false))))

@@ -129,7 +129,6 @@ import support.util.{
   filterList,
   contains,
   joinDot,
-  isSome,
   lenKey,
   reverseL,
 }

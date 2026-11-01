@@ -77,7 +77,6 @@ import support.util.{
   startsWith,
   endsWith,
   dedup,
-  isSome,
 }
 import hash_map.{HashMap, new, get, setInPlace, has}
 import list.{take, drop, indexed, nub}

@@ -22,7 +22,6 @@ import support.util.{
   anyList,
   contains,
   filterList,
-  isSome,
   joinNl,
   joinWith,
   lookupAssoc,

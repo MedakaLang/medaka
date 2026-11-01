@@ -98,7 +98,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   joinDot,
   joinWith,
   listLen,

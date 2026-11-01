@@ -1,5 +1,5 @@
 # META
-source_lines=2060
+source_lines=2059
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_effects: the effect checks inference runs at binding boundaries and impl bodies (escape,
@@ -182,7 +182,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   joinWith,
   listLen,
   lookupAssoc,
@@ -2084,7 +2083,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omDelete" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "effect_solver") ((mem "ScopeRoles" true) (mem "noScopeRoles" false) (mem "SummaryFailure" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "reverse" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "ifaceWordOf" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false) (mem "mapExpr" false))))
@@ -2443,7 +2442,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omDelete" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "effect_solver") ((mem "ScopeRoles" true) (mem "noScopeRoles" false) (mem "SummaryFailure" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "reverse" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "ifaceWordOf" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false) (mem "mapExpr" false))))

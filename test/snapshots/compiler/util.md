@@ -1,5 +1,5 @@
 # META
-source_lines=639
+source_lines=629
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -399,16 +399,6 @@ schemeLineNameGo l i n
   | stringSlice i (i + 3) l == " : " = Some (stringSlice 0 i l)
   | otherwise = schemeLineNameGo l (i + 1) n
 
--- NOTE (#243): this `isSome` duplicates the prelude's `isSome` (stdlib/core.mdk)
--- byte-identically and is a deletion candidate — BUT the LOCKED typecheck.mdk
--- imports it by name (`import support.util.{… isSome …}`, typecheck.mdk:94), so
--- deleting it here breaks that import.  Blocked on the ws:typecheck arc (#160)
--- dropping `isSome` from typecheck.mdk's import list first; then delete this.
-export
-isSome : Option a -> Bool
-isSome (Some _) = True
-isSome None = False
-
 export
 mapOption : (a -> b) -> Option a -> Option b
 mapOption _ None = None
@@ -752,9 +742,6 @@ hexDigits k n acc =
 (DFunDef false "schemeLineName" ((PVar "l")) (EApp (EApp (EApp (EVar "schemeLineNameGo") (EVar "l")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "l"))))
 (DTypeSig false "schemeLineNameGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "schemeLineNameGo" ((PVar "l") (PVar "i") (PVar "n")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 3))) (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 3)))) (EVar "l")) (ELit (LString " : "))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "l"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "schemeLineNameGo") (EVar "l")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig true "isSome" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Bool")))
-(DFunDef false "isSome" ((PCon "Some" PWild)) (EVar "True"))
-(DFunDef false "isSome" ((PCon "None")) (EVar "False"))
 (DTypeSig true "mapOption" (TyFun (TyFun (TyVar "a") (TyVar "b")) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "b")))))
 (DFunDef false "mapOption" (PWild (PCon "None")) (EVar "None"))
 (DFunDef false "mapOption" ((PVar "f") (PCon "Some" (PVar "x"))) (EApp (EVar "Some") (EApp (EVar "f") (EVar "x"))))
@@ -933,9 +920,6 @@ hexDigits k n acc =
 (DFunDef false "schemeLineName" ((PVar "l")) (EApp (EApp (EApp (EVar "schemeLineNameGo") (EVar "l")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "l"))))
 (DTypeSig false "schemeLineNameGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "schemeLineNameGo" ((PVar "l") (PVar "i") (PVar "n")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 3))) (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 3)))) (EVar "l")) (ELit (LString " : "))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "l"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "schemeLineNameGo") (EVar "l")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig true "isSome" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Bool")))
-(DFunDef false "isSome" ((PCon "Some" PWild)) (EVar "True"))
-(DFunDef false "isSome" ((PCon "None")) (EVar "False"))
 (DTypeSig true "mapOption" (TyFun (TyFun (TyVar "a") (TyVar "b")) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "b")))))
 (DFunDef false "mapOption" (PWild (PCon "None")) (EVar "None"))
 (DFunDef false "mapOption" ((PVar "f") (PCon "Some" (PVar "x"))) (EApp (EVar "Some") (EApp (EVar "f") (EVar "x"))))

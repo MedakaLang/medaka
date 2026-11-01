@@ -12,7 +12,7 @@ import string.{lines}
 import frontend.visibility.{useModuleIds}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 import support.util.{
-  anyList, dedup, filterList, isNonEmptyL, isSome, joinNl, listLen, zipL
+  anyList, dedup, filterList, isNonEmptyL, joinNl, listLen, zipL
 }
 import types.chain_key.{chainGraphKey, interfaceRows}
 import types.invocation_basis.{readInvocationView}
@@ -372,7 +372,7 @@ withMarked ((mid, (marked, _, _, _, view)), (_, (schemes, errs, warns))) =
 (DUse false (UseGroup ("string") ((mem "lines" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModuleIds" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "dedup" false) (mem "filterList" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinNl" false) (mem "listLen" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "dedup" false) (mem "filterList" false) (mem "isNonEmptyL" false) (mem "joinNl" false) (mem "listLen" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "chain_key") ((mem "chainGraphKey" false) (mem "interfaceRows" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "readInvocationView" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "ModuleKey" true) (mem "ModuleInterface" false) (mem "ModuleRows" false) (mem "applyModuleInterface" false) (mem "applyModuleTrees" false) (mem "captureModuleRows" false) (mem "freezeModuleInterface" false) (mem "freezeModuleTrees" false) (mem "freshModuleSerial" false) (mem "moduleCacheHit" false) (mem "moduleInterfaceIdentity" false) (mem "recordModuleInterface" false))))
@@ -430,7 +430,7 @@ withMarked ((mid, (marked, _, _, _, view)), (_, (schemes, errs, warns))) =
 (DUse false (UseGroup ("string") ((mem "lines" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModuleIds" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "dedup" false) (mem "filterList" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinNl" false) (mem "listLen" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "dedup" false) (mem "filterList" false) (mem "isNonEmptyL" false) (mem "joinNl" false) (mem "listLen" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "chain_key") ((mem "chainGraphKey" false) (mem "interfaceRows" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "readInvocationView" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "ModuleKey" true) (mem "ModuleInterface" false) (mem "ModuleRows" false) (mem "applyModuleInterface" false) (mem "applyModuleTrees" false) (mem "captureModuleRows" false) (mem "freezeModuleInterface" false) (mem "freezeModuleTrees" false) (mem "freshModuleSerial" false) (mem "moduleCacheHit" false) (mem "moduleInterfaceIdentity" false) (mem "recordModuleInterface" false))))

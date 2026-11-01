@@ -1,5 +1,5 @@
 # META
-source_lines=3013
+source_lines=3012
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_unify: fresh variables and levels (including level lowering, `lowerToCurrent`,
@@ -186,7 +186,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   listLen,
   lookupAssoc,
   minI,
@@ -3033,7 +3032,7 @@ zipBindFrom _dyn _ _ = ()
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
 (DUse false (UseGroup ("types" "effect_values") ((mem "ValueJoinOps" true) (mem "joinProduced" false) (mem "joinProducedEnvelope" false) (mem "resolveDeferredJoin" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "splitOnChar" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "atomOfLabel" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "Instantiation" true) (mem "Wanted" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "hostLabels" false))))
@@ -3591,7 +3590,7 @@ zipBindFrom _dyn _ _ = ()
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
 (DUse false (UseGroup ("types" "effect_values") ((mem "ValueJoinOps" true) (mem "joinProduced" false) (mem "joinProducedEnvelope" false) (mem "resolveDeferredJoin" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "splitOnChar" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "atomOfLabel" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "Instantiation" true) (mem "Wanted" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "hostLabels" false))))

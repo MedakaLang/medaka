@@ -56,7 +56,7 @@ import types.evidence.{EvidenceBinderId(..), ScopeId(..), SolverEvidence(..)}
 import types.repr.{IfaceRef(..), Mono(..), lookupAssocI, normalize}
 import support.ordmap.{omInsert, omLookup, OrdMap}
 import types.superclass.{SuperNode(..), lookupPos, mapAll, superClosure}
-import support.util.{allList, isSome, listLen, lookupAssoc, orElseOpt}
+import support.util.{allList, listLen, lookupAssoc, orElseOpt}
 import list.{drop, elemIndex}
 import string.{join}
 import types.registry.{regKeyOfTab, regKeyRender}
@@ -1054,7 +1054,7 @@ registerActiveDictVars gctx scope slot (s :: rest) =
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "lookupAssocI" false) (mem "normalize" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "superclass") ((mem "SuperNode" true) (mem "lookupPos" false) (mem "mapAll" false) (mem "superClosure" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "elemIndex" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false) (mem "regKeyRender" false))))
@@ -1246,7 +1246,7 @@ registerActiveDictVars gctx scope slot (s :: rest) =
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "lookupAssocI" false) (mem "normalize" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "superclass") ((mem "SuperNode" true) (mem "lookupPos" false) (mem "mapAll" false) (mem "superClosure" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "elemIndex" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false) (mem "regKeyRender" false))))

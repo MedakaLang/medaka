@@ -1,4 +1,4 @@
--- lint rule rule-test-prelude-shadow: a `*_test.mdk` file declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only).
+-- lint rule rule-prelude-shadow: a module declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only).
 
 import frontend.ast.{Loc(..), Decl(..)}
 import frontend.parser.{Positions(..)}
@@ -19,7 +19,7 @@ import tools.lint_core.{
 import tools.lint_shared.{
   dedupeNamesLoc,
   declLocList,
-  ruleNameTestPreludeShadow,
+  ruleNamePreludeShadow,
   topDefNameL,
 }
 
@@ -28,32 +28,31 @@ rule : Rule
 rule =
   mkRule
     RuleMeta {
-      name = ruleNameTestPreludeShadow,
+      name = ruleNamePreludeShadow,
       summary =
-        "a `*_test.mdk` file declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)",
+        "a module declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)",
       doc =
-        "A `*_test.mdk` file that declares a top-level `isOk`, `isErr`, `isSome` or `isNone` shadows the prelude function of that name for the rest of the file. Suggest-only; this guards the repository test-helper convention.\n\nBefore:\n  isOk r = ...   -- in foo_test.mdk\nAfter:\n  rename the helper",
+        "A module that declares a top-level `isOk`, `isErr`, `isSome` or `isNone` shadows the prelude function of that name for the rest of the file, while every other module keeps calling the prelude one. Suggest-only. Delete the local copy when it behaves like the prelude one; otherwise rename it to say what it tests.\n\nBefore:\n  isSome o = o == 1\nAfter:\n  isOne o = o == 1",
       category = Suspicious,
-      scope = Internal,
+      scope = Universal,
       ratchet = Gated,
       defaultSeverity = SevWarning,
       fixability = NotFixable,
       needs = [],
     }
-    ruleTestPreludeShadow
+    rulePreludeShadow
     None
 
--- ── rule: test-prelude-shadow ─────────────────────────────────────────────────
--- A top-level `isOk`/`isErr`/`isSome`/`isNone` in a `*_test.mdk` file shadows the
--- prelude function of that name for the rest of that file, while every OTHER
+-- ── rule: prelude-shadow ─────────────────────────────────────────────────
+-- A top-level `isOk`/`isErr`/`isSome`/`isNone` shadows the prelude function of
+-- that name for the rest of its file, while every OTHER
 -- module in the program — a `deriving`-generated impl body included — keeps
 -- calling the prelude one.  Two functions of one name then answer the same
 -- question and no diagnostic ever fires, because both spellings are individually
 -- well-typed.
 --
--- Scoped to `*_test.mdk`: a non-test module that redeclares one of these names is
--- making a considered choice about its own namespace, where a test file's copy is
--- an author who did not know the prelude already had it.
+-- `stdlib/core.mdk` is exempt: it is the prelude, so its definitions of these
+-- names are the originals rather than shadows.
 --
 -- Suggest-only (`fix = None`), for two independent reasons: (a) the local body
 -- may not be the prelude's body, so deleting it changes behaviour rather than
@@ -63,14 +62,14 @@ rule =
 preludeShadowedNames : List String
 preludeShadowedNames = ["isOk", "isErr", "isSome", "isNone"]
 
-ruleTestPreludeShadow : StdlibIndex ->
+rulePreludeShadow : StdlibIndex ->
   String ->
   FileFacts ->
   Positions ->
   List Decl ->
   List Finding
-ruleTestPreludeShadow _ path _ pos prog
-  | not (endsWith "_test.mdk" path) = []
+rulePreludeShadow _ path _ pos prog
+  | endsWith "stdlib/core.mdk" path = []
   | otherwise =
     flatMap
       preludeShadowHit
@@ -83,7 +82,7 @@ preludeShadowHit (name, loc)
 
 preludeShadowFinding : String -> Option Loc -> Finding
 preludeShadowFinding name loc = Finding {
-  rule = ruleNameTestPreludeShadow,
+  rule = ruleNamePreludeShadow,
   message =
     "top-level `\{name}` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration",
   severity = SevWarning,

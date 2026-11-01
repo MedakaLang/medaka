@@ -1,5 +1,5 @@
 # META
-source_lines=11432
+source_lines=11428
 stages=DESUGAR,MARK
 # SOURCE
 import ir.constructor_facts.{
@@ -11347,10 +11347,6 @@ dedupGo (x :: xs) seen acc =
 fst : (a, b) -> a
 fst (x, _) = x
 
-isSome : Option a -> Bool
-isSome (Some _) = True
-isSome None = False
-
 -- inclusive-exclusive integer range [lo, hi) as a list.
 rangeList : Int -> Int -> List Int
 rangeList lo hi = if lo >= hi then [] else lo :: rangeList (lo + 1) hi
@@ -13473,9 +13469,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "dedupGo" ((PCons (PVar "x") (PVar "xs")) (PVar "seen") (PVar "acc")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen")) (EApp (EApp (EApp (EVar "dedupGo") (EVar "xs")) (EVar "seen")) (EVar "acc")) (EApp (EApp (EApp (EVar "dedupGo") (EVar "xs")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EVar "x") (EVar "acc")))))
 (DTypeSig false "fst" (TyFun (TyTuple (TyVar "a") (TyVar "b")) (TyVar "a")))
 (DFunDef false "fst" ((PTuple (PVar "x") PWild)) (EVar "x"))
-(DTypeSig false "isSome" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Bool")))
-(DFunDef false "isSome" ((PCon "Some" PWild)) (EVar "True"))
-(DFunDef false "isSome" ((PCon "None")) (EVar "False"))
 (DTypeSig false "rangeList" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "rangeList" ((PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "lo") (EVar "hi")) (EListLit) (EBinOp "::" (EVar "lo") (EApp (EApp (EVar "rangeList") (EBinOp "+" (EVar "lo") (ELit (LInt 1)))) (EVar "hi")))))
 (DTypeSig false "tailList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
@@ -15569,9 +15562,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "dedupGo" ((PCons (PVar "x") (PVar "xs")) (PVar "seen") (PVar "acc")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen")) (EApp (EApp (EApp (EVar "dedupGo") (EVar "xs")) (EVar "seen")) (EVar "acc")) (EApp (EApp (EApp (EVar "dedupGo") (EVar "xs")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EVar "x") (EVar "acc")))))
 (DTypeSig false "fst" (TyFun (TyTuple (TyVar "a") (TyVar "b")) (TyVar "a")))
 (DFunDef false "fst" ((PTuple (PVar "x") PWild)) (EVar "x"))
-(DTypeSig false "isSome" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Bool")))
-(DFunDef false "isSome" ((PCon "Some" PWild)) (EVar "True"))
-(DFunDef false "isSome" ((PCon "None")) (EVar "False"))
 (DTypeSig false "rangeList" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "rangeList" ((PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "lo") (EVar "hi")) (EListLit) (EBinOp "::" (EVar "lo") (EApp (EApp (EVar "rangeList") (EBinOp "+" (EVar "lo") (ELit (LInt 1)))) (EVar "hi")))))
 (DTypeSig false "tailList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))

@@ -1,5 +1,5 @@
 # META
-source_lines=3487
+source_lines=3486
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve_check: the solver boundary judgments and the write side of a binder's dictionary
@@ -264,7 +264,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   lenKey,
   listLen,
 }
@@ -3510,7 +3509,7 @@ inferredPredicateSlotIdTag aid bid cid id
 (DUse false (UseGroup ("types" "repr") ((mem "Tyvar" true) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "VecObl" true) (mem "normalize" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppTyAtom" false))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omDelete" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "lenKey" false) (mem "listLen" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "lenKey" false) (mem "listLen" false))))
 (DUse false (UseGroup ("list") ((mem "indexed" false) (mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false) (mem "regKeyRender" false))))
@@ -3890,7 +3889,7 @@ inferredPredicateSlotIdTag aid bid cid id
 (DUse false (UseGroup ("types" "repr") ((mem "Tyvar" true) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "VecObl" true) (mem "normalize" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppTyAtom" false))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omDelete" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "lenKey" false) (mem "listLen" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "lenKey" false) (mem "listLen" false))))
 (DUse false (UseGroup ("list") ((mem "indexed" false) (mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false) (mem "regKeyRender" false))))

@@ -119,7 +119,6 @@ import support.util.{
   dedup,
   filterList,
   isEmptyL,
-  isSome,
   listLen,
   reverseL,
   selfBinding,

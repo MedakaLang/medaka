@@ -68,7 +68,7 @@ losing the operand, the label or the reason. Signatures are in
 Three of the rows below are also enforced, syntactically, by
 `compiler/tools/lint.mdk` (#3235): `rule-test-bool-literal-equal`
 (`expectEqual True e`), `rule-test-equal-in-true` (`expectTrue (a == b)`) and
-`rule-test-prelude-shadow` (a `*_test.mdk` redeclaring the prelude's
+`rule-prelude-shadow` (any module redeclaring the prelude's
 `isOk`/`isErr`/`isSome`/`isNone`). The first two carry `--fix`. They are gated,
 not baselined, so a new one of those three shapes fails the commit rather than
 accumulating. Everything else in this table is yours to get right. A sprint

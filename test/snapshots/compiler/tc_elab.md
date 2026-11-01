@@ -1,5 +1,5 @@
 # META
-source_lines=2048
+source_lines=2047
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_elab: dict-passing elaboration (`dictPass`), the grant rewrite (`grantWholeDomain`),
@@ -169,7 +169,6 @@ import support.util.{
   int64Halves,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   listLen,
   splitOnChar,
 }
@@ -2077,7 +2076,7 @@ sigPredicateSlot (iface, _) =
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("types" "runtime_ops") ((mem "arithmeticTag" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "cellEntriesFrom" false) (mem "servedEntriesFrom" false) (mem "setServedArity" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "int64Halves" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "splitOnChar" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "int64Halves" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "elemIndex" false) (mem "range" false) (mem "replicate" false) (mem "reverse" false) (mem "take" false))))
 (DUse false (UseGroup ("types" "runtime_grants") ((mem "fileGrantExterns" false))))
 (DUse false (UseGroup ("types" "chain_key") ((mem "isConstrainedTy" false))))
@@ -2442,7 +2441,7 @@ sigPredicateSlot (iface, _) =
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("types" "runtime_ops") ((mem "arithmeticTag" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "cellEntriesFrom" false) (mem "servedEntriesFrom" false) (mem "setServedArity" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "int64Halves" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "splitOnChar" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "int64Halves" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "elemIndex" false) (mem "range" false) (mem "replicate" false) (mem "reverse" false) (mem "take" false))))
 (DUse false (UseGroup ("types" "runtime_grants") ((mem "fileGrantExterns" false))))
 (DUse false (UseGroup ("types" "chain_key") ((mem "isConstrainedTy" false))))

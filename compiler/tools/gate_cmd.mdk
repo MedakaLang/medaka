@@ -83,7 +83,6 @@ import support.util.{
   endsWith,
   escStr,
   filterList,
-  isSome,
   joinNl,
   joinWith,
   listLen,

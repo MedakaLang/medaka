@@ -48,7 +48,7 @@
 --
 -- Optional first line `-- fixture-path: <name>` is the virtual path the fixture
 -- is linted under (default `fixture.mdk`), for rules scoped by file name such as
--- `rule-test-prelude-shadow`, which fires only under a `_test.mdk` name.
+-- a rule that must be pinned under both a `_test.mdk` and a plain name.
 --
 -- A rule whose metadata needs the stdlib index (`rule-stdlib-reimpl`) is linted
 -- with the index the CLI builds, built once per test process by that rule's
@@ -121,6 +121,7 @@ fixtureNames = [
   "option-eliminators",
   "orelse-staircase",
   "prefer-assign-op",
+  "prelude-shadow",
   "promissory-reader",
   "regex-literal",
   "rem-parity",
@@ -128,7 +129,6 @@ fixtureNames = [
   "stdlib-reimpl",
   "test-bool-literal-equal",
   "test-equal-in-true",
-  "test-prelude-shadow",
   "unused-import",
   "unused-local",
   "unused-param",
@@ -397,6 +397,8 @@ test "rule-orelse-staircase fixture" = fixtureHolds "orelse-staircase"
 
 test "rule-prefer-assign-op fixture" = fixtureHolds "prefer-assign-op"
 
+test "rule-prelude-shadow fixture" = fixtureHolds "prelude-shadow"
+
 test "rule-promissory-reader fixture" = fixtureHolds "promissory-reader"
 
 test "rule-regex-literal fixture" = fixtureHolds "regex-literal"
@@ -412,8 +414,6 @@ test "rule-test-bool-literal-equal fixture" =
 
 test "rule-test-equal-in-true fixture" = fixtureHolds "test-equal-in-true"
 
-test "rule-test-prelude-shadow fixture" = fixtureHolds "test-prelude-shadow"
-
 test "rule-unused-import fixture" = fixtureHolds "unused-import"
 
 test "rule-unused-local fixture" = fixtureHolds "unused-local"
@@ -422,19 +422,18 @@ test "rule-unused-param fixture" = fixtureHolds "unused-param"
 
 test "rule-when-unless fixture" = fixtureHolds "when-unless"
 
--- The same declarations are silent outside a `_test.mdk` path, so the header
--- path is what makes the rule fire.
-test "rule-test-prelude-shadow is silent under a non-test path" =
-  match readOr "\{fixtureDir}/test-prelude-shadow.mdk"
+-- The same declarations still fire under a `_test.mdk` path.
+test "rule-prelude-shadow fires under a test path" =
+  match readOr "\{fixtureDir}/prelude-shadow.mdk"
     Err e => fail e
     Ok src =>
       match (lintLinesAt
         emptyStdlibIndex
-        "fixture.mdk"
-        "rule-test-prelude-shadow"
+        "fixture_test.mdk"
+        "rule-prelude-shadow"
         src)
         Err e => fail e
-        Ok flagged => expectEqual [] flagged
+        Ok flagged => expectEqual 3 (length flagged)
 
 test "every fixture file is on the roster" = rosterIsClosed
 
