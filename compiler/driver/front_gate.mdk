@@ -252,6 +252,7 @@ resolveRefusal allowInternal stdlibDir trusted rsrc csrc entry g =
               (map modIdToPath g.fgMods)
               allowInternal
               trusted
+              None
               (Some (preludeGeneration rsrc csrc))
               g.fgRuntimeD
               g.fgCoreD

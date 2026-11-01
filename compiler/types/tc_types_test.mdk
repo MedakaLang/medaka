@@ -61,6 +61,7 @@ sampleInputs driver = DriveInputs {
   diIoJoinGrants = [],
   diProfileName = "default",
   diPreludeKey = None,
+  diSibling = None,
 }
 
 keyPair : Option EntryKey -> Option (String, String)

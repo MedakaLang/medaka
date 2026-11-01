@@ -32,6 +32,7 @@ moduleOf ord src = DeclEnvModule {
   demDecls = parse src,
   demPubDecls = parse src,
   demKindEntries = [],
+  demSiblingOrd = 0 - 1,
 }
 
 -- The published polarities of every declared type, by bare name, after the chain over [mods].
