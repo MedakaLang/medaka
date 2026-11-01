@@ -1,5 +1,6 @@
 backend.llvm_emit
 backend.wasm_emit
+backend.wasm_preamble
 eval.eval
 frontend.parser
 frontend.resolve

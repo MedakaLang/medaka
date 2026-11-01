@@ -45,6 +45,7 @@ public export data DiagCode =
   | EPhysUndeclaredFuncref
   | EPhysUndeclaredType
   | EPhysUndefined
+  | EPhysUnchecked
   | ESliceOob
   | EStackOverflow
   | EWasmNoBinding
@@ -247,6 +248,7 @@ codeText EPhysShape = "E-PHYS-SHAPE"
 codeText EPhysUndeclaredFuncref = "E-PHYS-UNDECLARED-FUNCREF"
 codeText EPhysUndeclaredType = "E-PHYS-UNDECLARED-TYPE"
 codeText EPhysUndefined = "E-PHYS-UNDEFINED"
+codeText EPhysUnchecked = "E-PHYS-UNCHECKED"
 codeText ESliceOob = "E-SLICE-OOB"
 codeText EStackOverflow = "E-STACK-OVERFLOW"
 codeText EWasmNoBinding = "E-WASM-NO-BINDING"
@@ -459,26 +461,27 @@ allDiagCodes = [
   EAmbiguousDispatch, ECyclicValue, EDivZero, EIndexOob, EIntOverflow,
   ELetRefute, EMainAsyncPayload, EModZero, ENoMain, ENonexhaustiveMatch,
   ENotAFunction, EPanic, EPhysDuplicate, EPhysShape, EPhysUndeclaredFuncref,
-  EPhysUndeclaredType, EPhysUndefined, ESliceOob, EStackOverflow,
-  EWasmNoBinding, LBadByteLiteral, LBadChar, LBadCharLiteral, LBadEscape,
-  LBadUnicodeEscape, LBareUnicodeEscape, LBlockcomment, LByteLiteralIdent,
-  LByteNonAscii, LFloatOverflow, LHsDollar, LHsLambda, LIntOverflow,
-  LMalformedFloat, LMalformedRadix, LNestedInterpolation, LSemicolon,
-  LUnterminatedComment, LUnterminatedString, PBadNeq, PBraceBlock, PDefKeyword,
-  PDoEndsInBinding, PForWhile, PGuardBarInMatch, PGuardIfInEquation, PHsCase,
-  PHsSig, PMissingWhere, PNoPowOperator, POcamlMatchWith, PParse,
-  PReservedKeyword, PUnexpectedEof, PWhereBodySameLine, RAbstractCtorImport,
-  RAbstractField, RAmbiguousCtor, RAmbiguousEffect, RAmbiguousInterface,
-  RAmbiguousOccurrence, RAmbiguousType, RAsPatternMisplaced, RBareCtorImport,
-  RBuildFailed, RCannotDerive, RDupBinder, RDupBinding, RDuplicateBinding,
-  RDuplicateDef, RDuplicateIfaceMethod, RDuplicateSignature,
-  REffectLabelNoMembers, RExternWithBody, RFieldNotInRecord, RFileNotFound,
-  RFileNotUtf8, RImmutableAssign, RInternalExtern, RMethodNotInInterface,
-  RMisplacedAuthorityBinder, RModuleLoad, RNewtypeCtorPrivate, RNoExportedCtors,
-  RNonrecValueLet, ROrPatternBinders, ROrPatternMisplaced, ROrphanSignature,
-  RPrivateName, RPrivilegedReexport, RTestModuleImport, RUnbound,
-  RUnboundAuthority, RUnknownCtor, RUnknownEffect, RUnknownField,
-  RUnknownInterface, RUnknownModule, RUnknownType, TAbstractField, TAliasArity,
+  EPhysUndeclaredType, EPhysUndefined, EPhysUnchecked, ESliceOob,
+  EStackOverflow, EWasmNoBinding, LBadByteLiteral, LBadChar, LBadCharLiteral,
+  LBadEscape, LBadUnicodeEscape, LBareUnicodeEscape, LBlockcomment,
+  LByteLiteralIdent, LByteNonAscii, LFloatOverflow, LHsDollar, LHsLambda,
+  LIntOverflow, LMalformedFloat, LMalformedRadix, LNestedInterpolation,
+  LSemicolon, LUnterminatedComment, LUnterminatedString, PBadNeq, PBraceBlock,
+  PDefKeyword, PDoEndsInBinding, PForWhile, PGuardBarInMatch,
+  PGuardIfInEquation, PHsCase, PHsSig, PMissingWhere, PNoPowOperator,
+  POcamlMatchWith, PParse, PReservedKeyword, PUnexpectedEof, PWhereBodySameLine,
+  RAbstractCtorImport, RAbstractField, RAmbiguousCtor, RAmbiguousEffect,
+  RAmbiguousInterface, RAmbiguousOccurrence, RAmbiguousType,
+  RAsPatternMisplaced, RBareCtorImport, RBuildFailed, RCannotDerive, RDupBinder,
+  RDupBinding, RDuplicateBinding, RDuplicateDef, RDuplicateIfaceMethod,
+  RDuplicateSignature, REffectLabelNoMembers, RExternWithBody,
+  RFieldNotInRecord, RFileNotFound, RFileNotUtf8, RImmutableAssign,
+  RInternalExtern, RMethodNotInInterface, RMisplacedAuthorityBinder,
+  RModuleLoad, RNewtypeCtorPrivate, RNoExportedCtors, RNonrecValueLet,
+  ROrPatternBinders, ROrPatternMisplaced, ROrphanSignature, RPrivateName,
+  RPrivilegedReexport, RTestModuleImport, RUnbound, RUnboundAuthority,
+  RUnknownCtor, RUnknownEffect, RUnknownField, RUnknownInterface,
+  RUnknownModule, RUnknownType, TAbstractField, TAliasArity,
   TAmbiguousAliasMethod, TAmbiguousField, TAmbiguousInstance, TAmbiguousMethod,
   TAmbiguousReexport, TAmbiguousShadowDecl, TAuthority, TAuthorityBinder,
   TAuthorityDomain, TAuthorityEscape, TAuthorityExistentialScope,

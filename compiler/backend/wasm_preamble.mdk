@@ -50,7 +50,7 @@ import support.symbol_origin.{SymbolOrigin(..)}
 -- section, function defs, `(start)`, and the trailing `)`), so this preamble
 -- deliberately leaves the `(module` paren OPEN.
 
-import support.util.{anyList, contains, filterList, joinWith}
+import support.util.{anyList, contains, filterList, joinWith, listLen}
 
 export
 preambleHeadLines : List String
@@ -107,8 +107,10 @@ closTypeLines = [
 -- `$mdk_pap` is the PAP code: env[0] is the original closure, env[1..] the saved
 -- partial args; it concatenates saved + incoming and re-applies the original.
 export
-closApplyLines : List String
-closApplyLines = [
+closApplyLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+closApplyLines callW tailW = [
   "  ;; ── §4 universal apply runtime (exact / under-PAP / over-saturate) ──",
   "  (func $mdk_pap (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))",
   "    (local $c (ref $clos)) (local $env (ref $argarr)) (local $orig (ref eq))",
@@ -131,7 +133,7 @@ closApplyLines = [
   "      (array.set $argarr (local.get $total) (i32.add (local.get $ne) (local.get $i))",
   "        (array.get $argarr (local.get $args) (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $pl2)))",
-  "    (return_call $__mdk_apply (local.get $orig) (local.get $total)))",
+  "    (\{tailW "__mdk_apply" 2} (local.get $orig) (local.get $total)))",
   "  (func $__mdk_apply (param $f (ref eq)) (param $args (ref $argarr)) (result (ref eq))",
   "    (local $c (ref $clos)) (local $ar i32) (local $na i32)",
   "    (local $sat (ref $argarr)) (local $surplus (ref $argarr)) (local $i i32) (local $r (ref eq))",
@@ -169,7 +171,7 @@ closApplyLines = [
   "              (array.set $argarr (local.get $surplus) (local.get $i)",
   "                (array.get $argarr (local.get $args) (i32.add (local.get $i) (local.get $ar))))",
   "              (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $ol)))",
-  "            (return_call $__mdk_apply (local.get $r) (local.get $surplus)))))))",
+  "            (\{tailW "__mdk_apply" 2} (local.get $r) (local.get $surplus)))))))",
 ]
 
 -- the SCALAR-only preamble (no ADTs in the program): the W2 shape verbatim — an
@@ -232,8 +234,10 @@ strTypeLines = [
 --   $mdk_int_to_str — render an i64 in decimal into a fresh $str (intToString; the
 --                     LEAF extern).  cp_count == byte_len (all ASCII digits/sign).
 export
-ioRuntimeLines : List String
-ioRuntimeLines = [
+ioRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioRuntimeLines callW tailW = [
   "  ;; ── §2.1 Int representation seam: i31 fast path / $boxint i64 box ──",
   "  ;; layer-17 SOUNDNESS: Ints in [-2^30, 2^30) are i31ref immediates; outside that",
   "  ;; range they box into (struct (field i64)) ($boxint).  ALL Int arithmetic unboxes",
@@ -263,25 +267,28 @@ ioRuntimeLines = [
   "  ;; write the decimal digits of a NON-NEGATIVE i64 (most-significant first).",
   "  (func $mdk_write_digits (param $n i64)",
   "    (if (i64.ge_s (local.get $n) (i64.const 10))",
-  "      (then (call $mdk_write_digits (i64.div_s (local.get $n) (i64.const 10)))))",
-  "    (call $mdk_write_byte", "      (i32.add (i32.const 48)",
+  "      (then (\{callW "mdk_write_digits" 1} (i64.div_s (local.get $n) (i64.const 10)))))",
+  "    (\{callW "mdk_write_byte" 1}",
+  "      (i32.add (i32.const 48)",
   "        (i32.wrap_i64 (i64.rem_s (local.get $n) (i64.const 10))))))",
   "  ;; render an i64 in decimal to stdout + a trailing newline (value-main Int).",
   "  (func $mdk_print_int (param $n i64)",
-  "    (if (i64.lt_s (local.get $n) (i64.const 0))", "      (then",
-  "        (call $mdk_write_byte (i32.const 45))",
-  "        (call $mdk_write_digits (i64.sub (i64.const 0) (local.get $n))))",
-  "      (else (call $mdk_write_digits (local.get $n))))",
-  "    (call $mdk_write_byte (i32.const 10)))",
-  "  (func $mdk_print_bool (param $b i32)", "    (if (local.get $b)",
+  "    (if (i64.lt_s (local.get $n) (i64.const 0))",
   "      (then",
-  "        (call $mdk_write_byte (i32.const 84)) (call $mdk_write_byte (i32.const 114))",
-  "        (call $mdk_write_byte (i32.const 117)) (call $mdk_write_byte (i32.const 101)))",
+  "        (\{callW "mdk_write_byte" 1} (i32.const 45))",
+  "        (\{callW "mdk_write_digits" 1} (i64.sub (i64.const 0) (local.get $n))))",
+  "      (else (\{callW "mdk_write_digits" 1} (local.get $n))))",
+  "    (\{callW "mdk_write_byte" 1} (i32.const 10)))",
+  "  (func $mdk_print_bool (param $b i32)",
+  "    (if (local.get $b)",
+  "      (then",
+  "        (\{callW "mdk_write_byte" 1} (i32.const 84)) (\{callW "mdk_write_byte" 1} (i32.const 114))",
+  "        (\{callW "mdk_write_byte" 1} (i32.const 117)) (\{callW "mdk_write_byte" 1} (i32.const 101)))",
   "      (else",
-  "        (call $mdk_write_byte (i32.const 70)) (call $mdk_write_byte (i32.const 97))",
-  "        (call $mdk_write_byte (i32.const 108)) (call $mdk_write_byte (i32.const 115))",
-  "        (call $mdk_write_byte (i32.const 101))))",
-  "    (call $mdk_write_byte (i32.const 10)))"
+  "        (\{callW "mdk_write_byte" 1} (i32.const 70)) (\{callW "mdk_write_byte" 1} (i32.const 97))",
+  "        (\{callW "mdk_write_byte" 1} (i32.const 108)) (\{callW "mdk_write_byte" 1} (i32.const 115))",
+  "        (\{callW "mdk_write_byte" 1} (i32.const 101))))",
+  "    (\{callW "mdk_write_byte" 1} (i32.const 10)))",
 ]
 
 -- the STRING-dependent byte-write runtime (references `$str`/`$u8arr`) — emitted only
@@ -292,8 +299,10 @@ ioRuntimeLines = [
 --   $mdk_int_to_str — render an i64 in decimal into a fresh $str (intToString; the
 --                     LEAF extern).  cp_count == byte_len (all ASCII digits/sign).
 export
-ioStrRuntimeLines : List String
-ioStrRuntimeLines = [
+ioStrRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioStrRuntimeLines callW tailW = [
   "  ;; ── §6 string byte-write runtime ($str-dependent) ──",
   "  (func $mdk_print_str (param $s (ref $str))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
@@ -302,11 +311,11 @@ ioStrRuntimeLines = [
   "    (local.set $i (i32.const 0))",
   "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (call $mdk_write_byte (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (\{callW "mdk_write_byte" 1} (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l))))",
   "  (func $mdk_print_strln (param $s (ref $str))",
-  "    (call $mdk_print_str (local.get $s))",
-  "    (call $mdk_write_byte (i32.const 10)))",
+  "    (\{callW "mdk_print_str" 1} (local.get $s))",
+  "    (\{callW "mdk_write_byte" 1} (i32.const 10)))",
   "  ;; intToString : render an i64 in decimal into a fresh $str (cp_count == byte len).",
   "  (func $mdk_int_to_str (param $n i64) (result (ref $str))",
   "    (local $neg i32) (local $m i64) (local $len i32) (local $i i32)",
@@ -346,15 +355,17 @@ ioStrRuntimeLines = [
 -- these into a separate buffer it prints on `process.stderr`; focused gates assert
 -- stderr directly.
 export
-stderrByteImportLines : List String
-stderrByteImportLines = [
+stderrByteImportLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+stderrByteImportLines callW tailW = [
   "  (import \"env\" \"mdk_write_err_byte\" (func $mdk_write_err_byte (param i32)))",
 ]
 
 {- | The DECIMAL half of the coded-trap stderr seam (#1787): render an i64 in
    decimal straight to stderr, no `$str` and no data segment, so a numbered trap
    works in scalar AND ref mode exactly as the fixed-text one does.  Peer of
-   `$mdk_write_digits`/`$mdk_print_int` (the stdout pair in `ioRuntimeLines`),
+   `$mdk_write_digits`/`$mdk_print_int` (the stdout pair in `(ioRuntimeLines callW tailW)`),
    minus their trailing newline -- a trap line supplies its own.
 
    Gated on `trapIntNeeded`, which is set by emitting a numbered trap -- NOT by
@@ -364,21 +375,25 @@ stderrByteImportLines = [
    impls are emitted whether or not the program indexes anything; ~15 lines of
    WAT.  Measure before assuming otherwise. -}
 export
-trapIntRuntimeLines : List String
-trapIntRuntimeLines = [
+trapIntRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+trapIntRuntimeLines callW tailW = [
   "  ;; -- #1787 numbered-trap decimal runtime (stderr, no newline) --",
   "  ;; write the decimal digits of a NON-NEGATIVE i64 (most-significant first).",
   "  (func $mdk_write_err_digits (param $n i64)",
   "    (if (i64.ge_s (local.get $n) (i64.const 10))",
-  "      (then (call $mdk_write_err_digits (i64.div_s (local.get $n) (i64.const 10)))))",
-  "    (call $mdk_write_err_byte", "      (i32.add (i32.const 48)",
+  "      (then (\{callW "mdk_write_err_digits" 1} (i64.div_s (local.get $n) (i64.const 10)))))",
+  "    (\{callW "mdk_write_err_byte" 1}",
+  "      (i32.add (i32.const 48)",
   "        (i32.wrap_i64 (i64.rem_s (local.get $n) (i64.const 10))))))",
   "  ;; render an i64 in decimal to stderr, sign included, NO trailing newline.",
   "  (func $mdk_write_err_int (param $n i64)",
-  "    (if (i64.lt_s (local.get $n) (i64.const 0))", "      (then",
-  "        (call $mdk_write_err_byte (i32.const 45))",
-  "        (call $mdk_write_err_digits (i64.sub (i64.const 0) (local.get $n))))",
-  "      (else (call $mdk_write_err_digits (local.get $n)))))"
+  "    (if (i64.lt_s (local.get $n) (i64.const 0))",
+  "      (then",
+  "        (\{callW "mdk_write_err_byte" 1} (i32.const 45))",
+  "        (\{callW "mdk_write_err_digits" 1} (i64.sub (i64.const 0) (local.get $n))))",
+  "      (else (\{callW "mdk_write_err_digits" 1} (local.get $n)))))",
 ]
 
 {- | The located half of the coded-trap stderr seam.  A located trap writes
@@ -387,10 +402,14 @@ trapIntRuntimeLines = [
    0 writes nothing.  `files` holds each numbered file's path as UTF-8 bytes, in
    number order, so a program pays for each path once and a trap for one i64.
    `nonexh` adds the whole non-exhaustive-match trap as one helper, which is
-   what every located match miss calls.  Needs `trapIntRuntimeLines`. -}
+   what every located match miss calls.  Needs `(trapIntRuntimeLines callW tailW)`. -}
 export
-siteRuntimeLines : List (List Int) -> Bool -> List String
-siteRuntimeLines files nonexh =
+siteRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List (List Int) ->
+  Bool ->
+  List String
+siteRuntimeLines callW tailW files nonexh =
   [
       "  ;; -- located traps: `<file>:<line>:<col>: ` ahead of a trap line --",
       "  (func $mdk_write_err_loc (param $s i64)",
@@ -399,22 +418,24 @@ siteRuntimeLines files nonexh =
       "      (then",
       "        (local.set $f (i32.wrap_i64 (i64.shr_u (local.get $s) (i64.const 44))))",
     ]
-    ++ flatMap siteFileArmW (zipFilesW files 1)
+    ++ flatMap (siteFileArmW callW tailW) (zipFilesW files 1)
     ++ [
-      "        (call $mdk_write_err_byte (i32.const 58))",
-      "        (call $mdk_write_err_int (i64.and (i64.shr_u (local.get $s) (i64.const 20)) (i64.const 16777215)))",
-      "        (call $mdk_write_err_byte (i32.const 58))",
-      "        (call $mdk_write_err_int (i64.and (local.get $s) (i64.const 1048575)))",
-      "        (call $mdk_write_err_byte (i32.const 58))",
-      "        (call $mdk_write_err_byte (i32.const 32))))",
+      "        (\{callW "mdk_write_err_byte" 1} (i32.const 58))",
+      "        (\{callW "mdk_write_err_int" 1} (i64.and (i64.shr_u (local.get $s) (i64.const 20)) (i64.const 16777215)))",
+      "        (\{callW "mdk_write_err_byte" 1} (i32.const 58))",
+      "        (\{callW "mdk_write_err_int" 1} (i64.and (local.get $s) (i64.const 1048575)))",
+      "        (\{callW "mdk_write_err_byte" 1} (i32.const 58))",
+      "        (\{callW "mdk_write_err_byte" 1} (i32.const 32))))",
       "  )",
     ]
     ++ (if nonexh then
       [
           "  (func $mdk_trap_nonexh (param $s i64)",
-          "    (call $mdk_write_err_loc (local.get $s))",
+          "    (\{callW "mdk_write_err_loc" 1} (local.get $s))",
         ]
         ++ asciiTrapBytesW
+          callW
+          tailW
           "runtime error [\{ENonexhaustiveMatch}]: non-exhaustive match\n"
         ++ ["    unreachable)"]
     else
@@ -424,15 +445,18 @@ zipFilesW : List (List Int) -> Int -> List (Int, List Int)
 zipFilesW [] _ = []
 zipFilesW (f :: fs) n = (n, f) :: zipFilesW fs (n + 1)
 
-siteFileArmW : (Int, List Int) -> List String
-siteFileArmW (n, bytes) =
+siteFileArmW : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  (Int, List Int) ->
+  List String
+siteFileArmW callW tailW (n, bytes) =
   [
       "        (if (i32.eq (local.get $f) (i32.const \{intToString n}))",
       "          (then",
     ]
     ++ map
       (b =>
-        "            (call $mdk_write_err_byte (i32.const \{intToString b}))")
+        "            (\{callW "mdk_write_err_byte" 1} (i32.const \{intToString b}))")
       bytes
     ++ ["          ))"]
 
@@ -440,7 +464,7 @@ siteFileArmW (n, bytes) =
    a program demands.  `used` names them: `add`, `sub`, `mul`, `div`, `neg` for
    `$mdk_int_<name>`, and `left`, `right` for `$mdk_shift_<name>`.  Operands and
    results are raw i64s; ref mode unboxes before and reboxes after.  Every helper
-   traps through the stderr byte import and `trapIntRuntimeLines`, which the
+   traps through the stderr byte import and `(trapIntRuntimeLines callW tailW)`, which the
    plan selects along with it (`needInt`, wasm_demand.mdk).
 
    `Int` is 63-bit, and an operator whose exact result falls outside
@@ -468,14 +492,19 @@ siteFileArmW (n, bytes) =
    take it modulo 64; `shiftRight` is arithmetic.  `shiftLeft` never traps: the
    caller's `$mdk_box_int` drops the bits past bit 62. -}
 export
-intRuntimeLines : List String -> List String
-intRuntimeLines used =
+intRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String ->
+  List String
+intRuntimeLines callW tailW used =
   let arith = filterUsedW used ["add", "sub", "mul", "div", "neg"]
   let shifts = filterUsedW used ["left", "right"]
   let core = match arith
     [] => []
-    _ => intOverflowLines
-  core ++ flatMap checkedIntOpW arith ++ flatMap intShiftW shifts
+    _ => intOverflowLines callW tailW
+  core
+    ++ flatMap (checkedIntOpW callW tailW) arith
+    ++ flatMap (intShiftW callW tailW) shifts
 
 -- `names` in their own order, keeping those in `used`: the emitted text does not
 -- depend on the order the emitter demanded them.
@@ -490,34 +519,36 @@ memberW x (y :: ys) = x == y || memberW x ys
 
 -- the E-INT-OVERFLOW writer every checked operator calls: `$op` is the
 -- operator's ASCII byte, or 0 for negation.
-intOverflowLines : List String
-intOverflowLines =
+intOverflowLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+intOverflowLines callW tailW =
   [
       "  ;; -- #3377 checked Int arithmetic: E-INT-OVERFLOW instead of a wrap --",
       "  (func $mdk_int_operand (param $v i64)",
       "    (if (i64.lt_s (local.get $v) (i64.const 0))",
       "      (then",
-      "        (call $mdk_write_err_byte (i32.const 40))",
-      "        (call $mdk_write_err_int (local.get $v))",
-      "        (call $mdk_write_err_byte (i32.const 41)))",
-      "      (else (call $mdk_write_err_int (local.get $v)))))",
+      "        (\{callW "mdk_write_err_byte" 1} (i32.const 40))",
+      "        (\{callW "mdk_write_err_int" 1} (local.get $v))",
+      "        (\{callW "mdk_write_err_byte" 1} (i32.const 41)))",
+      "      (else (\{callW "mdk_write_err_int" 1} (local.get $v)))))",
       "  (func $mdk_int_overflow (param $op i32) (param $a i64) (param $b i64) (param $s i64)",
-      "    (call $mdk_write_err_loc (local.get $s))",
+      "    (\{callW "mdk_write_err_loc" 1} (local.get $s))",
     ]
-    ++ asciiTrapBytesW "runtime error [\{EIntOverflow}]: "
+    ++ asciiTrapBytesW callW tailW "runtime error [\{EIntOverflow}]: "
     ++ [
       "    (if (i32.eqz (local.get $op))",
       "      (then",
-      "        (call $mdk_write_err_byte (i32.const 45))",
-      "        (call $mdk_int_operand (local.get $a)))",
+      "        (\{callW "mdk_write_err_byte" 1} (i32.const 45))",
+      "        (\{callW "mdk_int_operand" 1} (local.get $a)))",
       "      (else",
-      "        (call $mdk_int_operand (local.get $a))",
-      "        (call $mdk_write_err_byte (i32.const 32))",
-      "        (call $mdk_write_err_byte (local.get $op))",
-      "        (call $mdk_write_err_byte (i32.const 32))",
-      "        (call $mdk_int_operand (local.get $b))))",
+      "        (\{callW "mdk_int_operand" 1} (local.get $a))",
+      "        (\{callW "mdk_write_err_byte" 1} (i32.const 32))",
+      "        (\{callW "mdk_write_err_byte" 1} (local.get $op))",
+      "        (\{callW "mdk_write_err_byte" 1} (i32.const 32))",
+      "        (\{callW "mdk_int_operand" 1} (local.get $b))))",
     ]
-    ++ asciiTrapBytesW " overflows Int\n"
+    ++ asciiTrapBytesW callW tailW " overflows Int\n"
     ++ ["        unreachable)"]
 
 -- `$r` does not survive a sign-extend from bit 62: it is outside the Int range.
@@ -526,73 +557,98 @@ outOfIntRangeW =
   "(i64.ne (i64.shr_s (i64.shl (local.get $r) (i64.const 1)) (i64.const 1)) (local.get $r))"
 
 -- the call that reports `a <op> b` (op byte `code`) as an overflow.
-overflowCallW : String -> String
-overflowCallW code =
-  "(call $mdk_int_overflow (i32.const \{code}) (local.get $a) (local.get $b) (local.get $s))"
+overflowCallW : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  String ->
+  String
+overflowCallW callW tailW code =
+  "(\{callW "mdk_int_overflow" 4} (i32.const \{code}) (local.get $a) (local.get $b) (local.get $s))"
 
-checkedIntOpW : String -> List String
-checkedIntOpW "neg" = [
+checkedIntOpW : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  String ->
+  List String
+checkedIntOpW callW tailW "neg" = [
   "  (func $mdk_int_neg (param $a i64) (result i64)",
   "    (local $r i64)",
   "    (local.set $r (i64.sub (i64.const 0) (local.get $a)))",
   "    (if \{outOfIntRangeW}",
-  "      (then (call $mdk_int_overflow (i32.const 0) (local.get $a) (i64.const 0) (i64.const 0))))",
+  "      (then (\{callW "mdk_int_overflow" 4} (i32.const 0) (local.get $a) (i64.const 0) (i64.const 0))))",
   "    (local.get $r))",
 ]
-checkedIntOpW "mul" = [
+checkedIntOpW callW tailW "mul" = [
   "  (func $mdk_int_mul (param $a i64) (param $b i64) (param $s i64) (result i64)",
   "    (local $r i64)",
   "    (local.set $r (i64.mul (local.get $a) (local.get $b)))",
-  "    (if \{outOfIntRangeW} (then \{overflowCallW "42"}))",
+  "    (if \{outOfIntRangeW} (then \{overflowCallW callW tailW "42"}))",
   "    (if (i64.ne (local.get $a) (i64.const 0))",
   "      (then",
   "        (if (i64.ne (i64.div_s (local.get $r) (local.get $a)) (local.get $b))",
-  "          (then \{overflowCallW "42"}))))",
+  "          (then \{overflowCallW callW tailW "42"}))))",
   "    (local.get $r))",
 ]
-checkedIntOpW "add" = checkedBinOpLinesW "add" "i64.add" "43"
-checkedIntOpW "sub" = checkedBinOpLinesW "sub" "i64.sub" "45"
-checkedIntOpW "div" = checkedBinOpLinesW "div" "i64.div_s" "47"
-checkedIntOpW op = panic ("wasm: no checked Int operator '" ++ op ++ "'")
+checkedIntOpW callW tailW "add" =
+  checkedBinOpLinesW callW tailW "add" "i64.add" "43"
+checkedIntOpW callW tailW "sub" =
+  checkedBinOpLinesW callW tailW "sub" "i64.sub" "45"
+checkedIntOpW callW tailW "div" =
+  checkedBinOpLinesW callW tailW "div" "i64.div_s" "47"
+checkedIntOpW callW tailW op =
+  panic ("wasm: no checked Int operator '" ++ op ++ "'")
 
 -- a checked operator whose i64 instruction is exact on 63-bit operands, so the
 -- range test on its result is the whole check.
-checkedBinOpLinesW : String -> String -> String -> List String
-checkedBinOpLinesW name instr code = [
+checkedBinOpLinesW : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  String ->
+  String ->
+  String ->
+  List String
+checkedBinOpLinesW callW tailW name instr code = [
   "  (func $mdk_int_\{name} (param $a i64) (param $b i64) (param $s i64) (result i64)",
   "    (local $r i64)",
   "    (local.set $r (\{instr} (local.get $a) (local.get $b)))",
-  "    (if \{outOfIntRangeW} (then \{overflowCallW code}))",
+  "    (if \{outOfIntRangeW} (then \{overflowCallW callW tailW code}))",
   "    (local.get $r))",
 ]
 
-intShiftW : String -> List String
-intShiftW "left" =
-  intShiftHeadW "left" "shiftLeft"
+intShiftW : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  String ->
+  List String
+intShiftW callW tailW "left" =
+  intShiftHeadW callW tailW "left" "shiftLeft"
     ++ [
       "    (select (i64.shl (local.get $x) (local.get $k)) (i64.const 0)",
       "      (i64.lt_s (local.get $k) (i64.const 63))))",
     ]
-intShiftW "right" =
-  intShiftHeadW "right" "shiftRight"
+intShiftW callW tailW "right" =
+  intShiftHeadW callW tailW "right" "shiftRight"
     ++ [
       "    (i64.shr_s (local.get $x)",
       "      (select (local.get $k) (i64.const 63) (i64.lt_s (local.get $k) (i64.const 63)))))",
     ]
-intShiftW dir = panic ("wasm: no Int shift '" ++ dir ++ "'")
+intShiftW callW tailW dir = panic ("wasm: no Int shift '" ++ dir ++ "'")
 
 -- a shift helper's signature and its negative-amount panic.
-intShiftHeadW : String -> String -> List String
-intShiftHeadW dir name =
+intShiftHeadW : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  String ->
+  String ->
+  List String
+intShiftHeadW callW tailW dir name =
   [
       "  (func $mdk_shift_\{dir} (param $x i64) (param $k i64) (result i64)",
       "    (if (i64.lt_s (local.get $k) (i64.const 0))",
       "      (then",
     ]
-    ++ asciiTrapBytesW "runtime error [\{EPanic}]: \{name}: negative shift "
+    ++ asciiTrapBytesW
+      callW
+      tailW
+      "runtime error [\{EPanic}]: \{name}: negative shift "
     ++ [
-      "        (call $mdk_write_err_int (local.get $k))",
-      "        (call $mdk_write_err_byte (i32.const 10))",
+      "        (\{callW "mdk_write_err_int" 1} (local.get $k))",
+      "        (\{callW "mdk_write_err_byte" 1} (i32.const 10))",
       "        unreachable))",
     ]
 
@@ -600,8 +656,10 @@ intShiftHeadW dir name =
 -- routing each byte through $mdk_write_err_byte (matches medaka_rt.c mdk_eputstr /
 -- mdk_eputstrln: payload bytes verbatim, optional trailing '\n').
 export
-stderrRuntimeLines : List String
-stderrRuntimeLines = [
+stderrRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+stderrRuntimeLines callW tailW = [
   "  ;; ── W8 stderr byte-write runtime (ePutStr / ePutStrLn) ──",
   "  (func $mdk_eprint_str (param $s (ref $str))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
@@ -610,11 +668,11 @@ stderrRuntimeLines = [
   "    (local.set $i (i32.const 0))",
   "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (call $mdk_write_err_byte (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (\{callW "mdk_write_err_byte" 1} (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l))))",
   "  (func $mdk_eprint_strln (param $s (ref $str))",
-  "    (call $mdk_eprint_str (local.get $s))",
-  "    (call $mdk_write_err_byte (i32.const 10)))",
+  "    (\{callW "mdk_eprint_str" 1} (local.get $s))",
+  "    (\{callW "mdk_write_err_byte" 1} (i32.const 10)))",
 ]
 
 -- ── W8 pure-WasmGC string LEAF ops (RUNTIME-DESIGN §5 LEAF / WASMGC-DESIGN §6) ──
@@ -632,8 +690,10 @@ stderrRuntimeLines = [
 --   $mdk_str_lower    — ASCII-only case map over BYTES (mdk_string_to_upper/lower).
 --   $mdk_cp_count     — count codepoints in a byte range (UTF-8 non-continuation bytes).
 export
-strLeafRuntimeLines : List String
-strLeafRuntimeLines = [
+strLeafRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+strLeafRuntimeLines callW tailW = [
   "  ;; ── W8 string LEAF ops (byte-identical to medaka_rt.c) ──",
   "  ;; count UTF-8 codepoints in a $u8arr over [0,n): every non-continuation byte.",
   "  (func $mdk_cp_count (param $b (ref $u8arr)) (param $n i32) (result i32)",
@@ -702,7 +762,11 @@ strLeafRuntimeLines = [
   "            (array.set $u8arr (local.get $buf) (i32.const 2) (i32.or (i32.const 128) (i32.and (i32.shr_u (local.get $cp) (i32.const 6)) (i32.const 63))))",
   "            (array.set $u8arr (local.get $buf) (i32.const 3) (i32.or (i32.const 128) (i32.and (local.get $cp) (i32.const 63))))",
   "            (struct.new $str (i32.const 1) (local.get $buf)))",
-  "          )", "        )", "      )", "    )", "  ))",
+  "          )",
+  "        )",
+  "      )",
+  "    )",
+  "  ))",
   "  ;; codepoint-indexed [lo,hi) slice, clamped to [0,cp_count].",
   "  (func $mdk_str_slice (param $lo i32) (param $hi i32) (param $s (ref $str)) (result (ref $str))",
   "    (local $b (ref $u8arr)) (local $n i32) (local $cpc i32) (local $blo i32) (local $bhi i32)",
@@ -717,8 +781,8 @@ strLeafRuntimeLines = [
   "    (if (i32.eq (local.get $cpc) (local.get $n))",
   "      (then (local.set $blo (local.get $lo)) (local.set $bhi (local.get $hi)))",
   "      (else",
-  "        (local.set $blo (call $mdk_byte_off (local.get $b) (local.get $n) (local.get $lo)))",
-  "        (local.set $bhi (call $mdk_byte_off (local.get $b) (local.get $n) (local.get $hi)))))",
+  "        (local.set $blo (\{callW "mdk_byte_off" 3} (local.get $b) (local.get $n) (local.get $lo)))",
+  "        (local.set $bhi (\{callW "mdk_byte_off" 3} (local.get $b) (local.get $n) (local.get $hi)))))",
   "    (local.set $len (i32.sub (local.get $bhi) (local.get $blo)))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $len)))",
   "    (array.copy $u8arr $u8arr (local.get $buf) (i32.const 0) (local.get $b) (local.get $blo) (local.get $len))",
@@ -740,7 +804,8 @@ strLeafRuntimeLines = [
   "          (else (local.set $cp (i32.and (local.get $c) (i32.const 7))) (local.set $w (i32.const 4))))))))",
   "    (if (i32.gt_s (local.get $w) (i32.sub (local.get $n) (local.get $bo)))",
   "      (then (local.set $w (i32.sub (local.get $n) (local.get $bo)))))",
-  "    (local.set $k (i32.const 1))", "    (block $d (loop $l",
+  "    (local.set $k (i32.const 1))",
+  "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $k) (local.get $w)))",
   "      (local.set $cp (i32.or (i32.shl (local.get $cp) (i32.const 6))",
   "        (i32.and (array.get_u $u8arr (local.get $b) (i32.add (local.get $bo) (local.get $k))) (i32.const 63))))",
@@ -763,14 +828,15 @@ strLeafRuntimeLines = [
   "    (local.set $len (i32.sub (local.get $hi) (local.get $lo)))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $len)))",
   "    (array.copy $u8arr $u8arr (local.get $buf) (i32.const 0) (local.get $b) (local.get $lo) (local.get $len))",
-  "    (struct.new $str (call $mdk_cp_count (local.get $buf) (local.get $len)) (local.get $buf)))",
+  "    (struct.new $str (\{callW "mdk_cp_count" 2} (local.get $buf) (local.get $len)) (local.get $buf)))",
   "  ;; ASCII upper/lower over BYTES (non-ASCII bytes pass through unchanged).",
   "  (func $mdk_str_upper (param $s (ref $str)) (result (ref $str))",
   "    (local $b (ref $u8arr)) (local $n i32) (local $buf (ref $u8arr)) (local $i i32) (local $c i32)",
   "    (local.set $b (struct.get $str $bytes (local.get $s)))",
   "    (local.set $n (array.len (local.get $b)))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
-  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
   "      (local.set $c (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "      (if (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122)))",
@@ -783,7 +849,8 @@ strLeafRuntimeLines = [
   "    (local.set $b (struct.get $str $bytes (local.get $s)))",
   "    (local.set $n (array.len (local.get $b)))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
-  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
   "      (local.set $c (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "      (if (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90)))",
@@ -805,9 +872,11 @@ strLeafRuntimeLines = [
   "    (if (i32.eq (local.get $c) (i32.const 9))  (then (local.set $r (i32.const 116))))",
   "    (if (i32.eq (local.get $c) (i32.const 13)) (then (local.set $r (i32.const 114))))",
   "    (if (i32.eq (local.get $c) (i32.const 0))  (then (local.set $r (i32.const 48))))",
-  "    (if (result i32) (i32.eq (local.get $r) (i32.const -1))", "      (then",
+  "    (if (result i32) (i32.eq (local.get $r) (i32.const -1))",
+  "      (then",
   "        (array.set $u8arr (local.get $buf) (local.get $bo) (local.get $c))",
-  "        (i32.add (local.get $bo) (i32.const 1)))", "      (else",
+  "        (i32.add (local.get $bo) (i32.const 1)))",
+  "      (else",
   "        (array.set $u8arr (local.get $buf) (local.get $bo) (i32.const 92))",
   "        (array.set $u8arr (local.get $buf) (i32.add (local.get $bo) (i32.const 1)) (local.get $r))",
   "        (i32.add (local.get $bo) (i32.const 2)))))",
@@ -836,20 +905,21 @@ strLeafRuntimeLines = [
   "    (block $d2 (loop $l2",
   "      (br_if $d2 (i32.ge_s (local.get $i) (local.get $n)))",
   "      (local.set $c (array.get_u $u8arr (local.get $b) (local.get $i)))",
-  "      (local.set $bo (call $mdk_dbg_esc_byte (local.get $buf) (local.get $bo) (local.get $c) (local.get $q)))",
+  "      (local.set $bo (\{callW "mdk_dbg_esc_byte" 4} (local.get $buf) (local.get $bo) (local.get $c) (local.get $q)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l2)))",
   "    (array.set $u8arr (local.get $buf) (local.get $bo) (local.get $q))",
-  "    (struct.new $str (call $mdk_cp_count (local.get $buf) (local.get $out)) (local.get $buf)))",
+  "    (struct.new $str (\{callW "mdk_cp_count" 2} (local.get $buf) (local.get $out)) (local.get $buf)))",
   "  ;; debugStringLit : $str -> $str, surround with double-quotes (q = 34).",
   "  (func $mdk_debug_string_lit (param $s (ref $str)) (result (ref $str))",
-  "    (call $mdk_dbg_quote (local.get $s) (i32.const 34)))",
+  "    (\{callW "mdk_dbg_quote" 2} (local.get $s) (i32.const 34)))",
   "  ;; debugCharLit : Char (i31 codepoint) -> $str, surround with single-quotes (q = 39).",
   "  (func $mdk_debug_char_lit (param $cp i32) (result (ref $str))",
-  "    (call $mdk_dbg_quote (call $mdk_char_to_str (local.get $cp)) (i32.const 39)))",
+  "    (\{callW "mdk_dbg_quote" 2} (\{callW "mdk_char_to_str" 1} (local.get $cp)) (i32.const 39)))",
   "  ;; -- W8c byte-level prefix/suffix (byte-identical to medaka_rt.c) --",
   "  ;; $mdk_bytes_match_at: does $nb occur in $hb at byte offset $off (caller bounds it).",
   "  (func $mdk_bytes_match_at (param $nb (ref $u8arr)) (param $hb (ref $u8arr)) (param $off i32) (result i32)",
-  "    (local $j i32)", "    (block $done (loop $cmp",
+  "    (local $j i32)",
+  "    (block $done (loop $cmp",
   "      (br_if $done (i32.ge_s (local.get $j) (array.len (local.get $nb))))",
   "      (if (i32.ne (array.get_u $u8arr (local.get $hb) (i32.add (local.get $off) (local.get $j)))",
   "                  (array.get_u $u8arr (local.get $nb) (local.get $j)))",
@@ -862,15 +932,15 @@ strLeafRuntimeLines = [
   "    (local.set $sb (struct.get $str $bytes (local.get $s)))",
   "    (if (i32.gt_s (array.len (local.get $pb)) (array.len (local.get $sb)))",
   "      (then (return (i32.const 0))))",
-  "    (call $mdk_bytes_match_at (local.get $pb) (local.get $sb) (i32.const 0)))",
+  "    (\{callW "mdk_bytes_match_at" 3} (local.get $pb) (local.get $sb) (i32.const 0)))",
   "  (func $mdk_str_ends_with (param $p (ref $str)) (param $s (ref $str)) (result i32)",
   "    (local $pb (ref $u8arr)) (local $sb (ref $u8arr))",
   "    (local.set $pb (struct.get $str $bytes (local.get $p)))",
   "    (local.set $sb (struct.get $str $bytes (local.get $s)))",
   "    (if (i32.gt_s (array.len (local.get $pb)) (array.len (local.get $sb)))",
   "      (then (return (i32.const 0))))",
-  "    (call $mdk_bytes_match_at (local.get $pb) (local.get $sb)",
-  "      (i32.sub (array.len (local.get $sb)) (array.len (local.get $pb)))))"
+  "    (\{callW "mdk_bytes_match_at" 3} (local.get $pb) (local.get $sb)",
+  "      (i32.sub (array.len (local.get $sb)) (array.len (local.get $pb)))))",
 ]
 
 -- ── W8 stringConcat (List String -> String) ──────────────────────────────────
@@ -919,8 +989,10 @@ strConcatRuntimeLines = [
 -- go through $mdk_box_int (i31 or $boxint).  Emitted only when a program demands
 -- stringToInt (`useStrToInt`).
 export
-strToIntRuntimeLines : List String
-strToIntRuntimeLines = [
+strToIntRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+strToIntRuntimeLines callW tailW = [
   "  ;; ── W8d stringToInt (decimal, optional sign; None on any other byte) ──",
   "  (func $mdk_str_to_int (param $s (ref $str)) (result (ref eq))",
   "    (local $b (ref $u8arr)) (local $n i32) (local $i i32) (local $c i32)",
@@ -939,7 +1011,8 @@ strToIntRuntimeLines = [
   "      (if (i32.or (i32.lt_u (local.get $c) (i32.const 48)) (i32.gt_u (local.get $c) (i32.const 57)))",
   "        (then (return (ref.i31 (i32.const 1)))))",
   "      (local.set $d (i64.extend_i32_u (i32.sub (local.get $c) (i32.const 48))))",
-  "      (local.set $limit", "        (if (result i64) (local.get $neg)",
+  "      (local.set $limit",
+  "        (if (result i64) (local.get $neg)",
   "          (then (i64.const -4611686018427387904))",
   "          (else (i64.const -4611686018427387903))))",
   "      (if (i64.lt_s (local.get $acc) (i64.div_s (local.get $limit) (i64.const 10)))",
@@ -952,10 +1025,11 @@ strToIntRuntimeLines = [
   "      (local.set $i (i32.add (local.get $i) (i32.const 1)))",
   "      (br $step)))",
   "    (if (i32.eqz (local.get $seen)) (then (return (ref.i31 (i32.const 1)))))",
-  "    (struct.new $C_Some (i32.const 0)", "      (call $mdk_box_int",
+  "    (struct.new $C_Some (i32.const 0)",
+  "      (\{callW "mdk_box_int" 1}",
   "        (if (result i64) (local.get $neg)",
   "          (then (local.get $acc))",
-  "          (else (i64.sub (i64.const 0) (local.get $acc)))))))"
+  "          (else (i64.sub (i64.const 0) (local.get $acc)))))))",
 ]
 
 -- ── W8d stringReverse (String -> String) ─────────────────────────────────────
@@ -1045,8 +1119,10 @@ strJoinRuntimeLines = [
 -- onto `b` so cell identity/order matches the W7 cons rep.  Gated by useStrLeafRef
 -- && useListRef (both demanded by `++` in the plan's walk, `emit_plan.noteBinop`), so $str + $C_Cons are in scope.
 export
-appendRuntimeLines : List String
-appendRuntimeLines = [
+appendRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+appendRuntimeLines callW tailW = [
   "  ;; ── W13 runtime-dispatched `++` (String concat OR List append) ──",
   "  ;; List append is ITERATIVE (destination-passing over the mut $C_Cons tail),",
   "  ;; mirroring the native mdk_list_append: walk `a` head-first, struct.new each",
@@ -1054,11 +1130,13 @@ appendRuntimeLines = [
   "  ;; cell's mut tail, and after the loop point the final tail at `b`.  O(1) extra",
   "  ;; space, no self-recursion → no wasm-stack growth proportional to length(a).",
   "  (func $mdk_append (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    (local $cell (ref $C_Cons))", "    (local $result (ref eq))",
-  "    (local $dest (ref $C_Cons))", "    (local $new (ref $C_Cons))",
+  "    (local $cell (ref $C_Cons))",
+  "    (local $result (ref eq))",
+  "    (local $dest (ref $C_Cons))",
+  "    (local $new (ref $C_Cons))",
   "    ;; String `++`: left is a $str struct → byte concat.",
   "    (if (ref.test (ref $str) (local.get $a))",
-  "      (then (return (call $mdk_str_append (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b))))))",
+  "      (then (return (\{callW "mdk_str_append" 2} (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b))))))",
   "    ;; List `++`: a Nil (non-$C_Cons) left → b unchanged.",
   "    (if (i32.eqz (ref.test (ref $C_Cons) (local.get $a)))",
   "      (then (return (local.get $b))))",
@@ -1068,7 +1146,8 @@ appendRuntimeLines = [
   "      (struct.get $C_Cons 1 (local.get $cell)) (ref.i31 (i32.const 0))))",
   "    (local.set $result (local.get $dest))",
   "    ;; Walk the rest of `a`, appending a fresh cell into the previous mut tail.",
-  "    (block $done", "      (loop $l",
+  "    (block $done",
+  "      (loop $l",
   "        ;; If tail(cell) is not a Cons (i.e. Nil), we are done.",
   "        (br_if $done (i32.eqz (ref.test (ref $C_Cons)",
   "          (struct.get $C_Cons 2 (local.get $cell)))))",
@@ -1077,10 +1156,11 @@ appendRuntimeLines = [
   "        (local.set $new (struct.new $C_Cons (i32.const 0)",
   "          (struct.get $C_Cons 1 (local.get $cell)) (ref.i31 (i32.const 0))))",
   "        (struct.set $C_Cons 2 (local.get $dest) (local.get $new))",
-  "        (local.set $dest (local.get $new))", "        (br $l)))",
+  "        (local.set $dest (local.get $new))",
+  "        (br $l)))",
   "    ;; Final tail → b (sharing it, not copying).",
   "    (struct.set $C_Cons 2 (local.get $dest) (local.get $b))",
-  "    (local.get $result))"
+  "    (local.get $result))",
 ]
 
 -- ── layer-9 runtime-shape-dispatched value comparison (`==`/`/=`/`<`/`>`/…) ──────
@@ -1231,8 +1311,11 @@ u64RuntimeLines = [
 ]
 
 export
-valueEqRuntimeLines : Wide64W -> List String
-valueEqRuntimeLines w =
+valueEqRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  Wide64W ->
+  List String
+valueEqRuntimeLines callW tailW w =
   [
       "  ;; -- layer-9 runtime-shape-dispatched `==`/`/=` (String byte-equal OR immediate identity) --",
       "  (func $mdk_value_eq (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
@@ -1240,7 +1323,7 @@ valueEqRuntimeLines w =
       "    (if (i32.and (ref.test (ref $str) (local.get $a)) (ref.test (ref $str) (local.get $b)))",
       "      (then (return (ref.i31 (i32.eq",
       "        (i32.const 1)",
-      "        (i31.get_u (ref.cast (ref i31) (call $mdk_str_compare (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b)))))))))) ;; Eq == ordinal 1",
+      "        (i31.get_u (ref.cast (ref i31) (\{callW "mdk_str_compare" 2} (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b)))))))))) ;; Eq == ordinal 1",
     ]
     ++ wideEqArmsW w
     ++ [
@@ -1254,7 +1337,7 @@ valueEqRuntimeLines w =
       "    ;; layer-17 §2.1: a >2^30 Int is a $boxint struct, so two equal large Ints have",
       "    ;; distinct identities — when either side is a $boxint compare the unboxed i64.",
       "    (if (i32.or (ref.test (ref $boxint) (local.get $a)) (ref.test (ref $boxint) (local.get $b)))",
-      "      (then (return (ref.i31 (i64.eq (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+      "      (then (return (ref.i31 (i64.eq (\{callW "mdk_unbox_int" 1} (local.get $a)) (\{callW "mdk_unbox_int" 1} (local.get $b)))))))",
       "    (ref.i31 (i32.eqz (i32.eqz (ref.eq (local.get $a) (local.get $b))))))",
       "  ;; -- layer-9 runtime-shape-dispatched ordering (String byte-order OR i31 signed) -> i32 -1/0/1 --",
       "  (func $mdk_value_cmp (param $a (ref eq)) (param $b (ref eq)) (result i32)",
@@ -1262,7 +1345,7 @@ valueEqRuntimeLines w =
       "    (if (i32.and (ref.test (ref $str) (local.get $a)) (ref.test (ref $str) (local.get $b)))",
       "      (then",
       "        ;; $mdk_str_compare -> Ordering i31 (Lt 0 / Eq 1 / Gt 2); map to -1/0/1.",
-      "        (local.set $o (i31.get_u (ref.cast (ref i31) (call $mdk_str_compare (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b))))))",
+      "        (local.set $o (i31.get_u (ref.cast (ref i31) (\{callW "mdk_str_compare" 2} (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b))))))",
       "        (return (i32.sub (local.get $o) (i32.const 1)))))",
       "    ;; A2 (poly-Ord-on-Float): a boxed $float operand -> f64 compare -> -1/0/1.",
       "    ;; Mirrors the arith helpers' left-operand $float discriminant.  A poly `Ord`",
@@ -1279,8 +1362,8 @@ valueEqRuntimeLines w =
     ++ wideCmpArmsW w
     ++ [
       "    ;; layer-17 §2.1: Int compare over the i64 box/unbox seam (handles >2^30 boxed).",
-      "    (local.set $ia (call $mdk_unbox_int (local.get $a)))",
-      "    (local.set $ib (call $mdk_unbox_int (local.get $b)))",
+      "    (local.set $ia (\{callW "mdk_unbox_int" 1} (local.get $a)))",
+      "    (local.set $ib (\{callW "mdk_unbox_int" 1} (local.get $b)))",
       "    (if (i64.lt_s (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))",
       "    (if (i64.gt_s (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))",
       "    (i32.const 0))",
@@ -1297,25 +1380,25 @@ valueEqRuntimeLines w =
       "      (then (return (ref.i31 (f64.lt",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-      "    (ref.i31 (i32.lt_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))",
+      "    (ref.i31 (i32.lt_s (\{callW "mdk_value_cmp" 2} (local.get $a) (local.get $b)) (i32.const 0))))",
       "  (func $mdk_value_le (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
       "    (if (ref.test (ref $float) (local.get $a))",
       "      (then (return (ref.i31 (f64.le",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-      "    (ref.i31 (i32.le_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))",
+      "    (ref.i31 (i32.le_s (\{callW "mdk_value_cmp" 2} (local.get $a) (local.get $b)) (i32.const 0))))",
       "  (func $mdk_value_gt (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
       "    (if (ref.test (ref $float) (local.get $a))",
       "      (then (return (ref.i31 (f64.gt",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-      "    (ref.i31 (i32.gt_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))",
+      "    (ref.i31 (i32.gt_s (\{callW "mdk_value_cmp" 2} (local.get $a) (local.get $b)) (i32.const 0))))",
       "  (func $mdk_value_ge (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
       "    (if (ref.test (ref $float) (local.get $a))",
       "      (then (return (ref.i31 (f64.ge",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-      "    (ref.i31 (i32.ge_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))",
+      "    (ref.i31 (i32.ge_s (\{callW "mdk_value_cmp" 2} (local.get $a) (local.get $b)) (i32.const 0))))",
     ]
 
 -- ── A0 (poly-`Num`-on-Float): runtime value-tag-dispatched arithmetic helpers ──
@@ -1345,30 +1428,42 @@ valueEqRuntimeLines w =
 -- (mirroring wasmTrap's `i32.const <n>` / `call $mdk_write_err_byte` per byte — no
 -- $str value, no data segment, works in scalar AND ref mode) is built by a small
 -- ASCII-only local helper instead of importing wasm_emit's dynamic one.
-asciiTrapBytesW : String -> List String
-asciiTrapBytesW s =
+asciiTrapBytesW : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  String ->
+  List String
+asciiTrapBytesW callW tailW s =
   let cs = stringToChars s
-  asciiTrapGoW cs (arrayLength cs) 0
+  asciiTrapGoW callW tailW cs (arrayLength cs) 0
 
-asciiTrapGoW : Array Char -> Int -> Int -> List String
-asciiTrapGoW cs n i =
+asciiTrapGoW : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  Array Char ->
+  Int ->
+  Int ->
+  List String
+asciiTrapGoW callW tailW cs n i =
   if i >= n then
     []
   else
     "        i32.const " ++ intToString (charCode (arrayGetUnsafe i cs))
-      :: "        call $mdk_write_err_byte"
-      :: asciiTrapGoW cs n (i + 1)
+      :: "        \{callW "mdk_write_err_byte" 1}"
+      :: asciiTrapGoW callW tailW cs n (i + 1)
 
 -- the fixed [E-DIV-ZERO]/[E-MOD-ZERO] lines, matching native's mdk_num_div/
 -- mdk_num_mod message bytes exactly (runtime/medaka_rt.c:622,627).
-valueDivZeroTrapW : List String
-valueDivZeroTrapW =
-  asciiTrapBytesW "runtime error [\{EDivZero}]: division by zero\n"
+valueDivZeroTrapW : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+valueDivZeroTrapW callW tailW =
+  asciiTrapBytesW callW tailW "runtime error [\{EDivZero}]: division by zero\n"
     ++ ["        unreachable"]
 
-valueModZeroTrapW : List String
-valueModZeroTrapW =
-  asciiTrapBytesW "runtime error [\{EModZero}]: modulo by zero\n"
+valueModZeroTrapW : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+valueModZeroTrapW callW tailW =
+  asciiTrapBytesW callW tailW "runtime error [\{EModZero}]: modulo by zero\n"
     ++ ["        unreachable"]
 
 -- S2/#2359: split into one list PER OPERATOR (add/sub/mul/div/mod) so a program
@@ -1377,8 +1472,11 @@ valueModZeroTrapW =
 -- (useValueArith). See wasm_emit.mdk's valueAddRt/valueSubRt/valueMulRt/
 -- valueDivRt/valueModRt bindings for the per-flag gating this backs.
 export
-valueAddRuntimeLines : Wide64W -> List String
-valueAddRuntimeLines w =
+valueAddRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  Wide64W ->
+  List String
+valueAddRuntimeLines callW tailW w =
   [
       "  ;; -- A0 runtime value-tag-dispatched arithmetic (poly-`Num`: Int i31/$boxint OR $float) --",
       "  (func $mdk_value_add (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
@@ -1389,12 +1487,15 @@ valueAddRuntimeLines w =
       "      (then (struct.new $float (f64.add",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-      "      (else (call $mdk_box_int (call $mdk_int_add (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)) (i64.const 0))))))",
+      "      (else (\{callW "mdk_box_int" 1} (\{callW "mdk_int_add" 3} (\{callW "mdk_unbox_int" 1} (local.get $a)) (\{callW "mdk_unbox_int" 1} (local.get $b)) (i64.const 0))))))",
     ]
 
 export
-valueSubRuntimeLines : Wide64W -> List String
-valueSubRuntimeLines w =
+valueSubRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  Wide64W ->
+  List String
+valueSubRuntimeLines callW tailW w =
   [
       "  (func $mdk_value_sub (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
     ]
@@ -1404,12 +1505,15 @@ valueSubRuntimeLines w =
       "      (then (struct.new $float (f64.sub",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-      "      (else (call $mdk_box_int (call $mdk_int_sub (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)) (i64.const 0))))))",
+      "      (else (\{callW "mdk_box_int" 1} (\{callW "mdk_int_sub" 3} (\{callW "mdk_unbox_int" 1} (local.get $a)) (\{callW "mdk_unbox_int" 1} (local.get $b)) (i64.const 0))))))",
     ]
 
 export
-valueMulRuntimeLines : Wide64W -> List String
-valueMulRuntimeLines w =
+valueMulRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  Wide64W ->
+  List String
+valueMulRuntimeLines callW tailW w =
   [
       "  (func $mdk_value_mul (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
     ]
@@ -1419,12 +1523,17 @@ valueMulRuntimeLines w =
       "      (then (struct.new $float (f64.mul",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-      "      (else (call $mdk_box_int (call $mdk_int_mul (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)) (i64.const 0))))))",
+      "      (else (\{callW "mdk_box_int" 1} (\{callW "mdk_int_mul" 3} (\{callW "mdk_unbox_int" 1} (local.get $a)) (\{callW "mdk_unbox_int" 1} (local.get $b)) (i64.const 0))))))",
     ]
 
 export
-valueDivRuntimeLines : Wide64W -> List String
-valueDivRuntimeLines w =
+valueDivRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  Wide64W ->
+  List String
+valueDivRuntimeLines callW tailW w =
+  let (Wide64W _ useI64) = w
+  let signedDiv = if useI64 then callW "mdk_i64_div" 2 else ""
   [
       "  ;; #371: int arm guards the divisor (mirrors emitDivZeroGuard's concrete-Int",
       "  ;; guard) — stash $b's unboxed value in $vdr, trap the coded [E-DIV-ZERO] line",
@@ -1432,25 +1541,28 @@ valueDivRuntimeLines w =
       "  (func $mdk_value_div (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
       "    (local $vdr i64)",
     ]
-    ++ wideDivArmsW w "i64.div_u" "call $mdk_i64_div" valueDivZeroTrapW
+    ++ wideDivArmsW w "i64.div_u" signedDiv (valueDivZeroTrapW callW tailW)
     ++ [
       "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
       "      (then (struct.new $float (f64.div",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
       "      (else",
-      "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))",
-      "        (if (i64.eqz (local.get $vdr)) (then"
+      "        (local.set $vdr (\{callW "mdk_unbox_int" 1} (local.get $b)))",
+      "        (if (i64.eqz (local.get $vdr)) (then",
     ]
-    ++ valueDivZeroTrapW
+    ++ valueDivZeroTrapW callW tailW
     ++ [
       "        ))",
-      "        (call $mdk_box_int (call $mdk_int_div (call $mdk_unbox_int (local.get $a)) (local.get $vdr) (i64.const 0))))))",
+      "        (\{callW "mdk_box_int" 1} (\{callW "mdk_int_div" 3} (\{callW "mdk_unbox_int" 1} (local.get $a)) (local.get $vdr) (i64.const 0))))))",
     ]
 
 export
-valueModRuntimeLines : Wide64W -> List String
-valueModRuntimeLines w =
+valueModRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  Wide64W ->
+  List String
+valueModRuntimeLines callW tailW w =
   [
       "  ;; #345 Float arm is fmod ($mdk_float_rem), NOT the old inline `a - b*trunc(a/b)`",
       "  ;; (which lost precision for large |a/b|, e.g. 1e300 % 7 -> 1e300).  Mirrors native",
@@ -1459,20 +1571,20 @@ valueModRuntimeLines w =
       "  (func $mdk_value_mod (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
       "    (local $vdr i64)",
     ]
-    ++ wideDivArmsW w "i64.rem_u" "i64.rem_s" valueModZeroTrapW
+    ++ wideDivArmsW w "i64.rem_u" "i64.rem_s" (valueModZeroTrapW callW tailW)
     ++ [
       "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
-      "      (then (struct.new $float (call $mdk_float_rem",
+      "      (then (struct.new $float (\{callW "mdk_float_rem" 2}",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
       "      (else",
-      "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))",
-      "        (if (i64.eqz (local.get $vdr)) (then"
+      "        (local.set $vdr (\{callW "mdk_unbox_int" 1} (local.get $b)))",
+      "        (if (i64.eqz (local.get $vdr)) (then",
     ]
-    ++ valueModZeroTrapW
+    ++ valueModZeroTrapW callW tailW
     ++ [
       "        ))",
-      "        (call $mdk_box_int (i64.rem_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))",
+      "        (\{callW "mdk_box_int" 1} (i64.rem_s (\{callW "mdk_unbox_int" 1} (local.get $a)) (local.get $vdr))))))",
     ]
 
 -- S2/#2359: the num-only poly-`Ord`/`Eq`-on-Float cmp sextet (eq_num/cmp_num/
@@ -1481,8 +1593,11 @@ valueModRuntimeLines w =
 -- demanded, since the isCmpOp poly-num routing branch (wasm_emit.mdk) never
 -- touches $mdk_value_add/sub/mul/div/mod.
 export
-valueCmpNumRuntimeLines : Wide64W -> List String
-valueCmpNumRuntimeLines w =
+valueCmpNumRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  Wide64W ->
+  List String
+valueCmpNumRuntimeLines callW tailW w =
   [
       "  ;; -- A1 poly-`Ord`/`Eq`-on-Float, NUM-ONLY (no $str): $float f64-eq/cmp else i64 --",
       "  (func $mdk_value_eq_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
@@ -1493,7 +1608,7 @@ valueCmpNumRuntimeLines w =
       "      (then (return (ref.i31 (f64.eq",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-      "    (ref.i31 (i64.eq (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))",
+      "    (ref.i31 (i64.eq (\{callW "mdk_unbox_int" 1} (local.get $a)) (\{callW "mdk_unbox_int" 1} (local.get $b)))))",
       "  (func $mdk_value_cmp_num (param $a (ref eq)) (param $b (ref eq)) (result i32)",
       "    (local $fa f64) (local $fb f64) (local $ia i64) (local $ib i64)",
       "    (if (ref.test (ref $float) (local.get $a))",
@@ -1506,8 +1621,8 @@ valueCmpNumRuntimeLines w =
     ]
     ++ wideCmpArmsW w
     ++ [
-      "    (local.set $ia (call $mdk_unbox_int (local.get $a)))",
-      "    (local.set $ib (call $mdk_unbox_int (local.get $b)))",
+      "    (local.set $ia (\{callW "mdk_unbox_int" 1} (local.get $a)))",
+      "    (local.set $ib (\{callW "mdk_unbox_int" 1} (local.get $b)))",
       "    (if (i64.lt_s (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))",
       "    (if (i64.gt_s (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))",
       "    (i32.const 0))",
@@ -1518,25 +1633,25 @@ valueCmpNumRuntimeLines w =
       "      (then (return (ref.i31 (f64.lt",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-      "    (ref.i31 (i32.lt_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))",
+      "    (ref.i31 (i32.lt_s (\{callW "mdk_value_cmp_num" 2} (local.get $a) (local.get $b)) (i32.const 0))))",
       "  (func $mdk_value_le_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
       "    (if (ref.test (ref $float) (local.get $a))",
       "      (then (return (ref.i31 (f64.le",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-      "    (ref.i31 (i32.le_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))",
+      "    (ref.i31 (i32.le_s (\{callW "mdk_value_cmp_num" 2} (local.get $a) (local.get $b)) (i32.const 0))))",
       "  (func $mdk_value_gt_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
       "    (if (ref.test (ref $float) (local.get $a))",
       "      (then (return (ref.i31 (f64.gt",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-      "    (ref.i31 (i32.gt_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))",
+      "    (ref.i31 (i32.gt_s (\{callW "mdk_value_cmp_num" 2} (local.get $a) (local.get $b)) (i32.const 0))))",
       "  (func $mdk_value_ge_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
       "    (if (ref.test (ref $float) (local.get $a))",
       "      (then (return (ref.i31 (f64.ge",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-      "    (ref.i31 (i32.ge_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))",
+      "    (ref.i31 (i32.ge_s (\{callW "mdk_value_cmp_num" 2} (local.get $a) (local.get $b)) (i32.const 0))))",
     ]
 
 -- ── W8 RNG — deterministic SplitMix64 (RUNTIME-DESIGN §5 RNG) ─────────────────
@@ -1556,14 +1671,19 @@ rngStateGlobalLines = [
 ]
 
 export
-rngRuntimeLines : List String
-rngRuntimeLines = [
+rngRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+rngRuntimeLines callW tailW = [
   "  ;; ── W8 SplitMix64 RNG (byte-identical to medaka_rt.c) ──",
-  "  (func $mdk_rng_ensure", "    (if (i32.eqz (global.get $mdk_rng_seeded))",
-  "      (then", "        (global.set $mdk_rng_state (call $mdk_rng_seed))",
+  "  (func $mdk_rng_ensure",
+  "    (if (i32.eqz (global.get $mdk_rng_seeded))",
+  "      (then",
+  "        (global.set $mdk_rng_state (\{callW "mdk_rng_seed" 0}))",
   "        (global.set $mdk_rng_seeded (i32.const 1)))))",
-  "  (func $mdk_next_u64 (result i64)", "    (local $z i64)",
-  "    (call $mdk_rng_ensure)",
+  "  (func $mdk_next_u64 (result i64)",
+  "    (local $z i64)",
+  "    (\{callW "mdk_rng_ensure" 0})",
   "    (global.set $mdk_rng_state (i64.add (global.get $mdk_rng_state) (i64.const 0x9E3779B97F4A7C15)))",
   "    (local.set $z (global.get $mdk_rng_state))",
   "    (local.set $z (i64.mul (i64.xor (local.get $z) (i64.shr_u (local.get $z) (i64.const 30))) (i64.const 0xBF58476D1CE4E5B9)))",
@@ -1576,14 +1696,15 @@ rngRuntimeLines = [
   "  ;; the full Int range's 2^63 draws too (#3451); it is never 0 for 63-bit bounds.",
   "  (func $mdk_random_int (param $lo i64) (param $hi i64) (result i64)",
   "    (if (result i64) (i64.lt_s (local.get $hi) (local.get $lo))",
-  "      (then (local.get $lo))", "      (else",
+  "      (then (local.get $lo))",
+  "      (else",
   "        (i64.add (local.get $lo)",
-  "          (i64.rem_u (call $mdk_next_u64)",
+  "          (i64.rem_u (\{callW "mdk_next_u64" 0})",
   "            (i64.add (i64.sub (local.get $hi) (local.get $lo)) (i64.const 1)))))))",
   "  (func $mdk_random_bool (result i32)",
-  "    (i32.wrap_i64 (i64.and (call $mdk_next_u64) (i64.const 1))))",
+  "    (i32.wrap_i64 (i64.and (\{callW "mdk_next_u64" 0}) (i64.const 1))))",
   "  (func $mdk_random_char (result i32)",
-  "    (i32.add (i32.const 32) (i32.wrap_i64 (i64.rem_u (call $mdk_next_u64) (i64.const 95)))))"
+  "    (i32.add (i32.const 32) (i32.wrap_i64 (i64.rem_u (\{callW "mdk_next_u64" 0}) (i64.const 95)))))",
 ]
 
 -- ── W8 Hashable per-type hashers — SPECIFIED, byte-identical to medaka_rt.c ────
@@ -1591,11 +1712,14 @@ rngRuntimeLines = [
 -- hashBool : 0/1 direct.  hashString : FNV-1a over UTF-8 BYTES, masked.  hashFloat
 -- is DEFERRED (W8b, Float work).  Mask 0x3FFFFFFF = 2^30-1 fits i31 (non-negative).
 export
-hashRuntimeLines : List String
-hashRuntimeLines = [
+hashRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+hashRuntimeLines callW tailW = [
   "  ;; ── W8 per-type hashers (byte-identical to medaka_rt.c) ──",
   "  ;; SplitMix64 finalizer as a pure mixer (no state update).",
-  "  (func $mdk_hash_mix64 (param $x i64) (result i64)", "    (local $z i64)",
+  "  (func $mdk_hash_mix64 (param $x i64) (result i64)",
+  "    (local $z i64)",
   "    (local.set $z (i64.add (local.get $x) (i64.const 0x9E3779B97F4A7C15)))",
   "    (local.set $z (i64.mul (i64.xor (local.get $z) (i64.shr_u (local.get $z) (i64.const 30))) (i64.const 0xBF58476D1CE4E5B9)))",
   "    (local.set $z (i64.mul (i64.xor (local.get $z) (i64.shr_u (local.get $z) (i64.const 27))) (i64.const 0x94D049BB133111EB)))",
@@ -1605,9 +1729,9 @@ hashRuntimeLines = [
   "  ;; matching medaka_rt.c's signed `tagged>>1` over the whole 63-bit int — so an Int key",
   "  ;; outside +-2^30 (e.g. a HashMap Int) hashes correctly instead of trapping the i31 cast.",
   "  (func $mdk_hash_int (param $n i64) (result i32)",
-  "    (i32.wrap_i64 (i64.and (call $mdk_hash_mix64 (local.get $n)) (i64.const 0x3FFFFFFF))))",
+  "    (i32.wrap_i64 (i64.and (\{callW "mdk_hash_mix64" 1} (local.get $n)) (i64.const 0x3FFFFFFF))))",
   "  (func $mdk_hash_bool (param $b i32) (result i32)",
-  "    (if (result i32) (local.get $b) (then (i32.const 1)) (else (i32.const 0))))"
+  "    (if (result i32) (local.get $b) (then (i32.const 1)) (else (i32.const 0))))",
 ]
 
 -- the $str-dependent hasher (hashString): FNV-1a over UTF-8 BYTES, masked.  offset
@@ -1850,46 +1974,57 @@ hostImportSigOf _ = None
 -- — strtod("nan") SUCCEEDS with a NaN value, while strtod("") and strtod("1.5 ") fail.
 -- Testing the f64 for NaN can distinguish neither.
 export
-floatStrRuntimeLines : List String -> List String
-floatStrRuntimeLines keys = gatedOn "mdk_str_to_float" keys floatStrLines
+floatStrRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String ->
+  List String
+floatStrRuntimeLines callW tailW keys =
+  gatedOn "mdk_str_to_float" keys (floatStrLines callW tailW)
 
-floatStrLines : List String
-floatStrLines = [
+floatStrLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+floatStrLines callW tailW = [
   "  ;; stringToFloat : $str -> Option Float (ref eq).",
   "  (func $mdk_string_to_float (param $s (ref $str)) (result (ref eq))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32) (local $d f64)",
-  "    (call $mdk_path_reset)",
+  "    (\{callW "mdk_path_reset" 0})",
   "    (local.set $b (struct.get $str $bytes (local.get $s)))",
   "    (local.set $n (array.len (local.get $b)))",
-  "    (local.set $i (i32.const 0))", "    (block $done (loop $loop",
+  "    (local.set $i (i32.const 0))",
+  "    (block $done (loop $loop",
   "      (br_if $done (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (\{callW "mdk_path_push" 1} (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1)))",
-  "      (br $loop)))", "    (local.set $d (call $mdk_str_to_float))",
+  "      (br $loop)))",
+  "    (local.set $d (\{callW "mdk_str_to_float" 0}))",
   "    ;; #370: the host latched an ok flag during that call; ask it, rather than",
   "    ;; testing $d for NaN — strtod(\"nan\") legitimately yields Some(NaN), and",
   "    ;; strtod(\"\")/strtod(\"1.5 \") legitimately FAIL with a non-NaN value.",
-  "    (if (result (ref eq)) (i32.eqz (call $mdk_str_to_float_ok))",
+  "    (if (result (ref eq)) (i32.eqz (\{callW "mdk_str_to_float_ok" 0}))",
   "      (then (ref.i31 (i32.const 1)))",
   "      (else (struct.new $C_Some (i32.const 0) (struct.new $float (local.get $d)))))",
-  "  )"
+  "  )",
 ]
 
 -- floatToFixed : the host formats into its own cache (the digit count first, the
 -- double second, the byte length back); the bytes are copied into a fresh $str.
 -- Gated on the plan's `mdk_float_fixed` host key.
-floatFixedLines : List String
-floatFixedLines = [
+floatFixedLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+floatFixedLines callW tailW = [
   "  ;; floatToFixed : the host formats exactly (ties to even) into a cache; copy the bytes.",
   "  (func $mdk_float_to_fixed (param $k i32) (param $d f64) (result (ref $str))",
   "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))",
-  "    (local.set $n (call $mdk_float_fixed (local.get $k) (local.get $d)))",
+  "    (local.set $n (\{callW "mdk_float_fixed" 2} (local.get $k) (local.get $d)))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
-  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_float_fixed_byte (local.get $i)))",
+  "      (array.set $u8arr (local.get $buf) (local.get $i) (\{callW "mdk_float_fixed_byte" 1} (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    (struct.new $str (local.get $n) (local.get $buf)))"
+  "    (struct.new $str (local.get $n) (local.get $buf)))",
 ]
 
 -- the Float runtime (RUNTIME-DESIGN §5).  intToFloat/floatToInt are INTRINSIC (the
@@ -1943,8 +2078,10 @@ floatRemRuntimeLines = [
 ]
 
 export
-floatRuntimeLines : List String
-floatRuntimeLines = [
+floatRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+floatRuntimeLines callW tailW = [
   "  ;; -- W8b Float runtime (byte-identical to medaka_rt.c) --",
   "  ;; intToFloat : i64 (full-width unboxed Int) -> boxed (struct $float).  #199: reads",
   "  ;; the arg through the $mdk_unbox_int seam so Ints outside +-2^30 no longer trap the",
@@ -1978,7 +2115,8 @@ floatRuntimeLines = [
   "  ;; off-by-one.  Here we floor/ceil FIRST, then compare the exact fractional distance",
   "  ;; to 0.5.  Byte-identical to native mdk_round (== C round(), medaka_rt.c) for all",
   "  ;; finite inputs (an already-integral x has fraction 0 < 0.5 -> returned unchanged).",
-  "  (func $mdk_round (param $x f64) (result f64)", "    (local $t f64)",
+  "  (func $mdk_round (param $x f64) (result f64)",
+  "    (local $t f64)",
   "    (if (result f64) (f64.ge (local.get $x) (f64.const 0.0))",
   "      (then (local.set $t (f64.floor (local.get $x)))",
   "        (if (result f64) (f64.ge (f64.sub (local.get $x) (local.get $t)) (f64.const 0.5))",
@@ -1990,21 +2128,24 @@ floatRuntimeLines = [
   "  ;; into a cache; copy the bytes into a fresh $str.  cp_count == byte_len (ASCII).",
   "  (func $mdk_float_to_str (param $d f64) (result (ref $str))",
   "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))",
-  "    (local.set $n (call $mdk_float_fmt (local.get $d)))",
+  "    (local.set $n (\{callW "mdk_float_fmt" 1} (local.get $d)))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
-  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_float_fmt_byte (local.get $i)))",
+  "      (array.set $u8arr (local.get $buf) (local.get $i) (\{callW "mdk_float_fmt_byte" 1} (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    (struct.new $str (local.get $n) (local.get $buf)))"
+  "    (struct.new $str (local.get $n) (local.get $buf)))",
 ]
 
 -- the float HASH ($mdk_hash_float) — bit-reinterpret f64 -> i64 then mix64 & mask.
 -- Emitted only when the program uses BOTH Float and a per-type hasher (so the shared
 -- $mdk_hash_mix64 from hashRuntimeLines is in scope).
 export
-hashFloatRuntimeLines : List String
-hashFloatRuntimeLines = [
+hashFloatRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+hashFloatRuntimeLines callW tailW = [
   "  ;; hashFloat (#758): normalise -0.0 -> +0.0 and every NaN -> one qNaN bit",
   "  ;; pattern, then reinterpret bits as i64 -> mix64 -> mask [0,2^30).  Matches",
   "  ;; mdk_hash_float (native) and pHashFloat (eval), or run /= build reappears.",
@@ -2012,25 +2153,31 @@ hashFloatRuntimeLines = [
   "    (local $d f64) (local $bits i64)",
   "    (local.set $d (struct.get $float 0 (local.get $f)))",
   "    (if (f64.eq (local.get $d) (f64.const 0))",
-  "      (then (local.set $bits (i64.const 0)))", "      (else",
+  "      (then (local.set $bits (i64.const 0)))",
+  "      (else",
   "        (if (f64.ne (local.get $d) (local.get $d))",
   "          (then (local.set $bits (i64.const 0x7FF8000000000000)))",
   "          (else (local.set $bits (i64.reinterpret_f64 (local.get $d)))))))",
-  "    (i32.wrap_i64 (i64.and (call $mdk_hash_mix64 (local.get $bits)) (i64.const 0x3FFFFFFF))))"
+  "    (i32.wrap_i64 (i64.and (\{callW "mdk_hash_mix64" 1} (local.get $bits)) (i64.const 0x3FFFFFFF))))",
 ]
 
 -- randomFloat ($mdk_random_float) — SplitMix64 draw -> f64 in [-1,1).  Needs the W8
 -- $mdk_next_u64 from rngRuntimeLines (gated on float+rng co-use).  `(next>>11)` is the
 -- top 53 bits; * 2^-53 gives [0,1); * 2 - 1 gives [-1,1) — EXACTLY medaka_rt.c.
 export
-randomFloatRuntimeLines : List String
-randomFloatRuntimeLines = [
+randomFloatRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+randomFloatRuntimeLines callW tailW = [
   "  ;; randomFloat : SplitMix64 -> f64 in [-1,1) (NOTE the -1 offset — see medaka_rt.c).",
-  "  (func $mdk_random_float (result (ref $float))", "    (struct.new $float",
-  "      (f64.sub", "        (f64.mul",
-  "          (f64.mul (f64.convert_i64_u (i64.shr_u (call $mdk_next_u64) (i64.const 11)))",
+  "  (func $mdk_random_float (result (ref $float))",
+  "    (struct.new $float",
+  "      (f64.sub",
+  "        (f64.mul",
+  "          (f64.mul (f64.convert_i64_u (i64.shr_u (\{callW "mdk_next_u64" 0}) (i64.const 11)))",
   "                   (f64.const 1.1102230246251565e-16))",
-  "          (f64.const 2.0))", "        (f64.const 1.0))))"
+  "          (f64.const 2.0))",
+  "        (f64.const 1.0))))",
 ]
 
 -- ── W12 IO host surface (readFile / fileExists / args / getEnv) ──────────────
@@ -2095,96 +2242,111 @@ asciiConstsW cs n i =
 -- $str-dependent (every path/result is a $str) and $C_Ok/$C_Err/$C_Some/$T_List are
 -- always declared in ref-mode, so these are always in scope when emitted.
 export
-ioHostRuntimeLines : List String -> List String
-ioHostRuntimeLines keys =
-  gatedOn "mdk_path_push" keys ioPushPathLines
-    ++ gatedOn "mdk_rename" keys ioPushPathMoreLines
-    ++ gatedOn "mdk_grant_push" keys ioPushGrantLines
-    ++ gatedOn "mdk_rename" keys ioPushGrantMoreLines
-    ++ gatedOn "mdk_result_len" keys ioResultLines
+ioHostRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String ->
+  List String
+ioHostRuntimeLines callW tailW keys =
+  gatedOn "mdk_path_push" keys (ioPushPathLines callW tailW)
+    ++ gatedOn "mdk_rename" keys (ioPushPathMoreLines callW tailW)
+    ++ gatedOn "mdk_grant_push" keys (ioPushGrantLines callW tailW)
+    ++ gatedOn "mdk_rename" keys (ioPushGrantMoreLines callW tailW)
+    ++ gatedOn "mdk_result_len" keys (ioResultLines callW tailW)
     ++ (if contains "mdk_file_exists" keys
       || contains "mdk_canonicalize_path" keys
       || contains "mdk_os_entropy" keys then
-      ioRefusedPanicLines
+      ioRefusedPanicLines callW tailW
     else
       [])
-    ++ gatedOn "mdk_read_file" keys ioReadFileLines
-    ++ gatedOn "mdk_fetch_text" keys ioFetchTextLines
-    ++ gatedOn "mdk_file_exists" keys ioFileExistsLines
-    ++ gatedOn "mdk_canonicalize_path" keys ioCanonicalizeLines
-    ++ gatedOn "mdk_write_file" keys ioWriteFileLines
-    ++ gatedOn "mdk_append_file" keys ioAppendFileLines
-    ++ gatedOn "mdk_rename" keys ioRenameLines
-    ++ gatedOn "mdk_list_dir" keys ioListDirLines
-    ++ gatedOn "mdk_stat_file" keys ioStatFileLines
-    ++ gatedOn "mdk_make_dir" keys ioMakeDirLines
-    ++ gatedOn "mdk_remove_file" keys ioRemoveFileLines
-    ++ gatedOn "mdk_remove_dir" keys ioRemoveDirLines
-    ++ gatedOn "mdk_fsync" keys ioFsyncLines
-    ++ gatedOn "mdk_file_mode" keys ioFileModeLines
-    ++ gatedOn "mdk_write_file_mode" keys ioWriteFileModeLines
-    ++ gatedOn "mdk_get_env" keys ioGetEnvLines
-    ++ gatedOn "mdk_read_line" keys ioReadLineLines
-    ++ gatedOn "mdk_read_all" keys ioReadAllLines
-    ++ gatedOn "mdk_read_exactly" keys ioReadExactlyLines
-    ++ gatedOn "mdk_executable_path" keys ioExecutablePathLines
+    ++ gatedOn "mdk_read_file" keys (ioReadFileLines callW tailW)
+    ++ gatedOn "mdk_fetch_text" keys (ioFetchTextLines callW tailW)
+    ++ gatedOn "mdk_file_exists" keys (ioFileExistsLines callW tailW)
+    ++ gatedOn "mdk_canonicalize_path" keys (ioCanonicalizeLines callW tailW)
+    ++ gatedOn "mdk_write_file" keys (ioWriteFileLines callW tailW)
+    ++ gatedOn "mdk_append_file" keys (ioAppendFileLines callW tailW)
+    ++ gatedOn "mdk_rename" keys (ioRenameLines callW tailW)
+    ++ gatedOn "mdk_list_dir" keys (ioListDirLines callW tailW)
+    ++ gatedOn "mdk_stat_file" keys (ioStatFileLines callW tailW)
+    ++ gatedOn "mdk_make_dir" keys (ioMakeDirLines callW tailW)
+    ++ gatedOn "mdk_remove_file" keys (ioRemoveFileLines callW tailW)
+    ++ gatedOn "mdk_remove_dir" keys (ioRemoveDirLines callW tailW)
+    ++ gatedOn "mdk_fsync" keys (ioFsyncLines callW tailW)
+    ++ gatedOn "mdk_file_mode" keys (ioFileModeLines callW tailW)
+    ++ gatedOn "mdk_write_file_mode" keys (ioWriteFileModeLines callW tailW)
+    ++ gatedOn "mdk_get_env" keys (ioGetEnvLines callW tailW)
+    ++ gatedOn "mdk_read_line" keys (ioReadLineLines callW tailW)
+    ++ gatedOn "mdk_read_all" keys (ioReadAllLines callW tailW)
+    ++ gatedOn "mdk_read_exactly" keys (ioReadExactlyLines callW tailW)
+    ++ gatedOn "mdk_executable_path" keys (ioExecutablePathLines callW tailW)
 
 gatedOn : String -> List String -> List String -> List String
 gatedOn key keys block = if contains key keys then block else []
 
-ioPushPathLines : List String
-ioPushPathLines = [
+ioPushPathLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioPushPathLines callW tailW = [
   "  ;; push a $str's bytes to the host path buffer (reset first).",
   "  (func $mdk_push_path (param $s (ref $str))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
-  "    (call $mdk_path_reset)",
+  "    (\{callW "mdk_path_reset" 0})",
   "    (local.set $b (struct.get $str $bytes (local.get $s)))",
   "    (local.set $n (array.len (local.get $b)))",
-  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (\{callW "mdk_path_push" 1} (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    )"
+  "    )",
 ]
 
 -- Only rename pushes a second path; the helper is emitted for it alone.
-ioPushPathMoreLines : List String
-ioPushPathMoreLines = [
+ioPushPathMoreLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioPushPathMoreLines callW tailW = [
   "  ;; append a $str's bytes to the host path buffer (rename's second path).",
   "  (func $mdk_push_path_more (param $s (ref $str))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
   "    (local.set $b (struct.get $str $bytes (local.get $s)))",
   "    (local.set $n (array.len (local.get $b)))",
-  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (\{callW "mdk_path_push" 1} (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    )"
+  "    )",
 ]
 
 -- A grant is the W7 cons list of $str elements; Nil is an i31.
-ioPushGrantLines : List String
-ioPushGrantLines = [
+ioPushGrantLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioPushGrantLines callW tailW = [
   "  ;; push a grant (List String) to the host grant buffer (reset first).",
   "  (func $mdk_push_grant (param $g (ref eq))",
   "    (local $cell (ref $C_Cons)) (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
-  "    (call $mdk_grant_reset)", "    (block $done (loop $next",
+  "    (\{callW "mdk_grant_reset" 0})",
+  "    (block $done (loop $next",
   "      (br_if $done (i32.eqz (ref.test (ref $C_Cons) (local.get $g))))",
   "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $g)))",
   "      (local.set $b (struct.get $str $bytes (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell)))))",
   "      (local.set $n (array.len (local.get $b)))",
-  "      (local.set $i (i32.const 0))", "      (block $d (loop $l",
+  "      (local.set $i (i32.const 0))",
+  "      (block $d (loop $l",
   "        (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "        (call $mdk_grant_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "        (\{callW "mdk_grant_push" 1} (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "      (call $mdk_grant_push (i32.const -1))",
+  "      (\{callW "mdk_grant_push" 1} (i32.const -1))",
   "      (local.set $g (struct.get $C_Cons 2 (local.get $cell))) (br $next)))",
-  "    )"
+  "    )",
 ]
 
 -- Only rename pushes a second grant; the helper is emitted for it alone.
-ioPushGrantMoreLines : List String
-ioPushGrantMoreLines = [
+ioPushGrantMoreLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioPushGrantMoreLines callW tailW = [
   "  ;; append a grant to the host grant buffer (rename's second grant).",
   "  (func $mdk_push_grant_more (param $g (ref eq))",
   "    (local $cell (ref $C_Cons)) (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
@@ -2193,24 +2355,27 @@ ioPushGrantMoreLines = [
   "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $g)))",
   "      (local.set $b (struct.get $str $bytes (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell)))))",
   "      (local.set $n (array.len (local.get $b)))",
-  "      (local.set $i (i32.const 0))", "      (block $d (loop $l",
+  "      (local.set $i (i32.const 0))",
+  "      (block $d (loop $l",
   "        (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "        (call $mdk_grant_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "        (\{callW "mdk_grant_push" 1} (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "      (call $mdk_grant_push (i32.const -1))",
+  "      (\{callW "mdk_grant_push" 1} (i32.const -1))",
   "      (local.set $g (struct.get $C_Cons 2 (local.get $cell))) (br $next)))",
-  "    )"
+  "    )",
 ]
 
 -- A refusal from an extern that returns no Result panics, as medaka_rt.c
 -- mdk_panic prints it: the E-PANIC banner, the message, a newline.
-ioRefusedPanicLines : List String
-ioRefusedPanicLines = [
+ioRefusedPanicLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioRefusedPanicLines callW tailW = [
   "  ;; the host's refusal message (result channel) as an E-PANIC line, then trap.",
   "  (func $mdk_refused_panic",
-  "    (call $mdk_err_u8arr \{panicBannerWat})",
-  "    (call $mdk_err_u8arr (call $mdk_io_result_bytes))",
-  "    (call $mdk_write_err_byte (i32.const 10))",
+  "    (\{callW "mdk_err_u8arr" 1} \{panicBannerWat})",
+  "    (\{callW "mdk_err_u8arr" 1} (\{callW "mdk_io_result_bytes" 0}))",
+  "    (\{callW "mdk_write_err_byte" 1} (i32.const 10))",
   "    (unreachable))",
   "  (func $mdk_err_u8arr (param $b (ref $u8arr))",
   "    (local $i i32) (local $n i32)",
@@ -2218,7 +2383,7 @@ ioRefusedPanicLines = [
   "    (local.set $i (i32.const 0))",
   "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (call $mdk_write_err_byte (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (\{callW "mdk_write_err_byte" 1} (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "    )",
 ]
@@ -2226,21 +2391,24 @@ ioRefusedPanicLines = [
 panicBannerWat : String
 panicBannerWat = asciiU8arrWat "runtime error [\{EPanic}]: "
 
-ioResultLines : List String
-ioResultLines = [
+ioResultLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioResultLines callW tailW = [
   "  ;; copy the host result buffer (length + byte-at-index) into a fresh $u8arr.",
   "  (func $mdk_io_result_bytes (result (ref $u8arr))",
   "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))",
-  "    (local.set $n (call $mdk_result_len))",
+  "    (local.set $n (\{callW "mdk_result_len" 0}))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
-  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_result_byte (local.get $i)))",
+  "      (array.set $u8arr (local.get $buf) (local.get $i) (\{callW "mdk_result_byte" 1} (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "    (local.get $buf))",
   "  ;; the host result buffer as a $str, read as UTF-8 by $mdk_u8_to_str_lossy.",
   "  (func $mdk_io_result_to_str (result (ref $str))",
-  "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))"
+  "    (\{callW "mdk_u8_to_str_lossy" 1} (\{callW "mdk_io_result_bytes" 0})))",
 ]
 
 -- ── user `js` bindings: the `jsffi` import module (WASM-SEMANTICS.md §3.1) ──
@@ -2297,12 +2465,14 @@ jsCrossableHead head = contains head [
 -- back outside `Int`'s range.  An `Array` result never reaches here: it is an
 -- emitter gap, as on native.
 export
-jsffiWrapperLines : JsImport ->
+jsffiWrapperLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  JsImport ->
   List String ->
   List String ->
   List String ->
   List String
-jsffiWrapperLines imp intTrap charTrap copyTrap =
+jsffiWrapperLines callW tailW imp intTrap charTrap copyTrap =
   let ps = zipHeads imp.params 0
   let params =
     joinWith "" (map (p => " (param $p\{intToString (snd p)} (ref eq))") ps)
@@ -2310,7 +2480,7 @@ jsffiWrapperLines imp intTrap charTrap copyTrap =
   let rLocal = if held then " (local $r \{jsWireTy imp.result})" else ""
   let push =
     if anyList (p => isChannelHead (fst p)) ps then
-      "    (call $mdk_path_reset)" :: flatMap jsPushArg ps
+      "    (\{callW "mdk_path_reset" 0})" :: flatMap (jsPushArg callW tailW) ps
     else
       []
   [
@@ -2318,11 +2488,13 @@ jsffiWrapperLines imp intTrap charTrap copyTrap =
       "    (local $off i32)\{rLocal}",
     ]
     ++ push
-    ++ flatMap jsWireArg ps
-    ++ ["    call $\{jsffiImportId imp.medakaName}"]
+    ++ flatMap (jsWireArg callW tailW) ps
+    ++ [
+      "    \{callW (jsffiImportId imp.medakaName) (listLen (filterList (/= "") (map jsWireParam imp.params)))}",
+    ]
     ++ (if held then ["    local.set $r"] else [])
-    ++ flatMap (jsCopyBack copyTrap) ps
-    ++ jsUnwire imp.result intTrap charTrap
+    ++ flatMap (jsCopyBack callW tailW copyTrap) ps
+    ++ jsUnwire callW tailW imp.result intTrap charTrap
     ++ ["  )"]
 
 zipHeads : List String -> Int -> List (String, Int)
@@ -2330,22 +2502,28 @@ zipHeads [] _ = []
 zipHeads (h :: rest) i = (h, i) :: zipHeads rest (i + 1)
 
 -- a `String` or `Array` argument's contents, appended to the path channel
-jsPushArg : (String, Int) -> List String
-jsPushArg ("String", i) = [
-  "    (call $mdk_push_path_more (ref.cast (ref $str) (local.get $p\{intToString i})))",
+jsPushArg : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  (String, Int) ->
+  List String
+jsPushArg callW tailW ("String", i) = [
+  "    (\{callW "mdk_push_path_more" 1} (ref.cast (ref $str) (local.get $p\{intToString i})))",
 ]
-jsPushArg ("Array", i) = [
-  "    (call $mdk_jsffi_push_ints (ref.cast (ref $arr) (local.get $p\{intToString i})))",
+jsPushArg callW tailW ("Array", i) = [
+  "    (\{callW "mdk_jsffi_push_ints" 1} (ref.cast (ref $arr) (local.get $p\{intToString i})))",
 ]
-jsPushArg _ = []
+jsPushArg callW tailW _ = []
 
 -- an argument's wasm value (`jsWireParam`)
-jsWireArg : (String, Int) -> List String
-jsWireArg (head, i) =
+jsWireArg : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  (String, Int) ->
+  List String
+jsWireArg callW tailW (head, i) =
   let p = "(local.get $p\{intToString i})"
   match head
     "Unit" => []
-    "Int" => ["    (call $mdk_unbox_int \{p})"]
+    "Int" => ["    (\{callW "mdk_unbox_int" 1} \{p})"]
     "Float" => ["    (struct.get $float 0 (ref.cast (ref $float) \{p}))"]
     "Bool" => ["    (i31.get_u (ref.cast (ref i31) \{p}))"]
     "Char" => ["    (i31.get_u (ref.cast (ref i31) \{p}))"]
@@ -2354,67 +2532,83 @@ jsWireArg (head, i) =
     "String" =>
       ["    (array.len (struct.get $str $bytes (ref.cast (ref $str) \{p})))"]
     "Array" => ["    (array.len (ref.cast (ref $arr) \{p}))"]
-    _ => ["    (i32.wrap_i64 (call $mdk_unbox_int \{p}))"]
+    _ => ["    (i32.wrap_i64 (\{callW "mdk_unbox_int" 1} \{p}))"]
 
 -- an `Array` argument's copy-back from the result channel, at `$off`
-jsCopyBack : List String -> (String, Int) -> List String
-jsCopyBack trap ("Array", i) =
+jsCopyBack : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String ->
+  (String, Int) ->
+  List String
+jsCopyBack callW tailW trap ("Array", i) =
   [
-      "    (local.set $off (call $mdk_jsffi_copy_back (ref.cast (ref $arr) (local.get $p\{intToString i})) (local.get $off)))",
+      "    (local.set $off (\{callW "mdk_jsffi_copy_back" 2} (ref.cast (ref $arr) (local.get $p\{intToString i})) (local.get $off)))",
       "    (if (i32.lt_s (local.get $off) (i32.const 0)) (then",
     ]
     ++ map ("      " ++ _) trap
     ++ ["    ))"]
-jsCopyBack _ _ = []
+jsCopyBack callW tailW _ _ = []
 
 -- the result as a Medaka value
-jsUnwire : String -> List String -> List String -> List String
-jsUnwire "Int" intTrap _ =
+jsUnwire : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  String ->
+  List String ->
+  List String ->
+  List String
+jsUnwire callW tailW "Int" intTrap _ =
   [
       "    (if (i64.ne (i64.shr_s (i64.shl (local.get $r) (i64.const 1)) (i64.const 1)) (local.get $r)) (then",
     ]
     ++ map ("      " ++ _) intTrap
-    ++ ["    ))", "    (call $mdk_box_int (local.get $r))"]
-jsUnwire "Char" _ charTrap =
+    ++ ["    ))", "    (\{callW "mdk_box_int" 1} (local.get $r))"]
+jsUnwire callW tailW "Char" _ charTrap =
   [
       "    (if (i32.eqz (i32.and (i32.lt_u (local.get $r) (i32.const 1114112))",
       "        (i32.or (i32.lt_u (local.get $r) (i32.const 55296)) (i32.gt_u (local.get $r) (i32.const 57343))))) (then",
     ]
     ++ map ("      " ++ _) charTrap
     ++ ["    ))", "    (ref.i31 (local.get $r))"]
-jsUnwire "Float" _ _ = ["    (struct.new $float (local.get $r))"]
-jsUnwire "Bool" _ _ = ["    (ref.i31 (i32.ne (local.get $r) (i32.const 0)))"]
-jsUnwire "U8" _ _ = [
-  "    (call $mdk_box_int (i64.extend_i32_u (i32.and (local.get $r) (i32.const 255))))",
+jsUnwire callW tailW "Float" _ _ = ["    (struct.new $float (local.get $r))"]
+jsUnwire callW tailW "Bool" _ _ =
+  ["    (ref.i31 (i32.ne (local.get $r) (i32.const 0)))"]
+jsUnwire callW tailW "U8" _ _ = [
+  "    (\{callW "mdk_box_int" 1} (i64.extend_i32_u (i32.and (local.get $r) (i32.const 255))))",
 ]
-jsUnwire "U16" _ _ = [
-  "    (call $mdk_box_int (i64.extend_i32_u (i32.and (local.get $r) (i32.const 65535))))",
+jsUnwire callW tailW "U16" _ _ = [
+  "    (\{callW "mdk_box_int" 1} (i64.extend_i32_u (i32.and (local.get $r) (i32.const 65535))))",
 ]
-jsUnwire "U32" _ _ =
-  ["    (call $mdk_box_int (i64.extend_i32_u (local.get $r)))"]
-jsUnwire "I32" _ _ =
-  ["    (call $mdk_box_int (i64.extend_i32_s (local.get $r)))"]
-jsUnwire "U64" _ _ = ["    (struct.new $u64 (local.get $r))"]
-jsUnwire "I64" _ _ = ["    (struct.new $i64 (local.get $r))"]
-jsUnwire "String" _ _ = ["    (call $mdk_jsffi_result_str (local.get $off))"]
-jsUnwire _ _ _ = ["    (ref.i31 (i32.const 0))"]
+jsUnwire callW tailW "U32" _ _ =
+  ["    (\{callW "mdk_box_int" 1} (i64.extend_i32_u (local.get $r)))"]
+jsUnwire callW tailW "I32" _ _ =
+  ["    (\{callW "mdk_box_int" 1} (i64.extend_i32_s (local.get $r)))"]
+jsUnwire callW tailW "U64" _ _ = ["    (struct.new $u64 (local.get $r))"]
+jsUnwire callW tailW "I64" _ _ = ["    (struct.new $i64 (local.get $r))"]
+jsUnwire callW tailW "String" _ _ =
+  ["    (\{callW "mdk_jsffi_result_str" 1} (local.get $off))"]
+jsUnwire callW tailW _ _ _ = ["    (ref.i31 (i32.const 0))"]
 
 -- The helpers the reached bindings' wrappers call, each emitted when one of
 -- them needs it.  `keys` are the plan's host keys: `rename` already emits
 -- `$mdk_push_path_more`.
 export
-jsffiRuntimeLines : List String -> List JsImport -> List String
-jsffiRuntimeLines keys imps =
+jsffiRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String ->
+  List JsImport ->
+  List String
+jsffiRuntimeLines callW tailW keys imps =
   let heads = flatMap (imp => imp.params) imps
   let pushMore =
     if anyList isChannelHead heads && not (contains "mdk_rename" keys) then
-      ioPushPathMoreLines
+      ioPushPathMoreLines callW tailW
     else
       []
-  let arrays = if contains "Array" heads then jsffiArrayLines else []
+  let arrays =
+    if contains "Array" heads then jsffiArrayLines callW tailW else []
   let strs =
     if anyList (imp => imp.result == "String") imps then
-      jsffiResultStrLines
+      jsffiResultStrLines callW tailW
     else
       []
   pushMore ++ arrays ++ strs
@@ -2422,19 +2616,21 @@ jsffiRuntimeLines keys imps =
 -- An `Array Int` argument crosses as 8 little-endian bytes per element, and its
 -- copy-back is read the same way.  `$mdk_jsffi_copy_back` checks every word
 -- before it writes any, and answers -1 for a word outside `Int`'s 63 bits.
-jsffiArrayLines : List String
-jsffiArrayLines = [
+jsffiArrayLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+jsffiArrayLines callW tailW = [
   "  ;; push an Array Int's elements to the host path buffer, 8 LE bytes each.",
   "  (func $mdk_jsffi_push_ints (param $a (ref $arr))",
   "    (local $i i32) (local $n i32) (local $w i64) (local $k i32)",
   "    (local.set $n (array.len (local.get $a)))",
   "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (local.set $w (call $mdk_unbox_int (array.get $arr (local.get $a) (local.get $i))))",
+  "      (local.set $w (\{callW "mdk_unbox_int" 1} (array.get $arr (local.get $a) (local.get $i))))",
   "      (local.set $k (i32.const 0))",
   "      (block $bd (loop $bl",
   "        (br_if $bd (i32.ge_s (local.get $k) (i32.const 8)))",
-  "        (call $mdk_path_push (i32.wrap_i64 (i64.and (local.get $w) (i64.const 255))))",
+  "        (\{callW "mdk_path_push" 1} (i32.wrap_i64 (i64.and (local.get $w) (i64.const 255))))",
   "        (local.set $w (i64.shr_u (local.get $w) (i64.const 8)))",
   "        (local.set $k (i32.add (local.get $k) (i32.const 1))) (br $bl)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
@@ -2447,7 +2643,7 @@ jsffiArrayLines = [
   "      (br_if $d (i32.eqz (local.get $k)))",
   "      (local.set $k (i32.sub (local.get $k) (i32.const 1)))",
   "      (local.set $w (i64.or (i64.shl (local.get $w) (i64.const 8))",
-  "        (i64.extend_i32_u (i32.and (call $mdk_result_byte (i32.add (local.get $at) (local.get $k))) (i32.const 255)))))",
+  "        (i64.extend_i32_u (i32.and (\{callW "mdk_result_byte" 1} (i32.add (local.get $at) (local.get $k))) (i32.const 255)))))",
   "      (br $l)))",
   "    (local.get $w))",
   "  ;; copy an Array Int argument back from the result buffer at $off: the next",
@@ -2457,7 +2653,7 @@ jsffiArrayLines = [
   "    (local.set $n (array.len (local.get $a)))",
   "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (local.set $w (call $mdk_jsffi_result_i64 (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 3)))))",
+  "      (local.set $w (\{callW "mdk_jsffi_result_i64" 1} (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 3)))))",
   "      (if (i64.ne (i64.shr_s (i64.shl (local.get $w) (i64.const 1)) (i64.const 1)) (local.get $w))",
   "        (then (return (i32.const -1))))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
@@ -2465,30 +2661,34 @@ jsffiArrayLines = [
   "    (block $d2 (loop $l2",
   "      (br_if $d2 (i32.ge_s (local.get $i) (local.get $n)))",
   "      (array.set $arr (local.get $a) (local.get $i)",
-  "        (call $mdk_box_int (call $mdk_jsffi_result_i64 (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 3))))))",
+  "        (\{callW "mdk_box_int" 1} (\{callW "mdk_jsffi_result_i64" 1} (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 3))))))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l2)))",
   "    (i32.add (local.get $off) (i32.shl (local.get $n) (i32.const 3))))",
 ]
 
 -- A `String` result: the result buffer from `$off`, past any copy-back words,
 -- read as UTF-8 by `$mdk_u8_to_str_lossy`.
-jsffiResultStrLines : List String
-jsffiResultStrLines = [
+jsffiResultStrLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+jsffiResultStrLines callW tailW = [
   "  ;; the host result buffer from $off to its end, as a $str.",
   "  (func $mdk_jsffi_result_str (param $off i32) (result (ref $str))",
   "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))",
-  "    (local.set $n (i32.sub (call $mdk_result_len) (local.get $off)))",
+  "    (local.set $n (i32.sub (\{callW "mdk_result_len" 0}) (local.get $off)))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
   "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
   "      (array.set $u8arr (local.get $buf) (local.get $i)",
-  "        (call $mdk_result_byte (i32.add (local.get $off) (local.get $i))))",
+  "        (\{callW "mdk_result_byte" 1} (i32.add (local.get $off) (local.get $i))))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    (call $mdk_u8_to_str_lossy (local.get $buf)))",
+  "    (\{callW "mdk_u8_to_str_lossy" 1} (local.get $buf)))",
 ]
 
-ioReadFileLines : List String
-ioReadFileLines = [
+ioReadFileLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioReadFileLines callW tailW = [
   "  ;; readFile's Err for contents that are not UTF-8: the path, then a fixed ASCII",
   "  ;; suffix, byte-identical to medaka_rt.c mdk_read_file.",
   "  (func $mdk_str_not_utf8 (param $path (ref $str)) (result (ref $str))",
@@ -2504,274 +2704,322 @@ ioReadFileLines = [
   "  ;; Contents that are not UTF-8 are an Err naming the path (medaka_rt.c mdk_read_file).",
   "  (func $mdk_read_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (local $st i32) (local $buf (ref $u8arr)) (local $c i32)",
-  "    (call $mdk_push_grant (local.get $g))",
-  "    (call $mdk_push_path (local.get $path))",
-  "    (local.set $st (call $mdk_read_file))",
+  "    (\{callW "mdk_push_grant" 1} (local.get $g))",
+  "    (\{callW "mdk_push_path" 1} (local.get $path))",
+  "    (local.set $st (\{callW "mdk_read_file" 0}))",
   "    (if (i32.eqz (local.get $st))",
-  "      (then (return (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))",
-  "    (local.set $buf (call $mdk_io_result_bytes))",
-  "    (local.set $c (call $mdk_utf8_valid_count (local.get $buf)))",
+  "      (then (return (struct.new $C_Err (i32.const 1) (\{callW "mdk_io_result_to_str" 0})))))",
+  "    (local.set $buf (\{callW "mdk_io_result_bytes" 0}))",
+  "    (local.set $c (\{callW "mdk_utf8_valid_count" 1} (local.get $buf)))",
   "    (if (result (ref eq)) (i32.ge_s (local.get $c) (i32.const 0))",
   "      (then (struct.new $C_Ok (i32.const 0) (struct.new $str (local.get $c) (local.get $buf))))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_str_not_utf8 (local.get $path))))))",
+  "      (else (struct.new $C_Err (i32.const 1) (\{callW "mdk_str_not_utf8" 1} (local.get $path))))))",
 ]
 
-ioFetchTextLines : List String
-ioFetchTextLines = [
+ioFetchTextLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioFetchTextLines callW tailW = [
   "  ;; fetchText : $str url -> Result String String.  1=Ok body / 0=Err message.",
   "  ;; The host import answers with a promise, so under JSPI the guest suspends in the call.",
   "  (func $mdk_fetch_text_io (param $url (ref $str)) (result (ref eq))",
-  "    (call $mdk_push_path (local.get $url))",
-  "    (if (result (ref eq)) (call $mdk_fetch_text)",
-  "      (then (struct.new $C_Ok (i32.const 0) (call $mdk_io_result_to_str)))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+  "    (\{callW "mdk_push_path" 1} (local.get $url))",
+  "    (if (result (ref eq)) (\{callW "mdk_fetch_text" 0})",
+  "      (then (struct.new $C_Ok (i32.const 0) (\{callW "mdk_io_result_to_str" 0})))",
+  "      (else (struct.new $C_Err (i32.const 1) (\{callW "mdk_io_result_to_str" 0})))))",
 ]
 
-ioFileExistsLines : List String
-ioFileExistsLines = [
+ioFileExistsLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioFileExistsLines callW tailW = [
   "  ;; fileExists : $str path -> Bool (i31 ordinal: False=0 / True=1); 2 = refused.",
   "  (func $mdk_file_exists_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
-  "    (local $r i32)", "    (call $mdk_push_grant (local.get $g))",
-  "    (call $mdk_push_path (local.get $path))",
-  "    (local.set $r (call $mdk_file_exists))",
-  "    (if (i32.eq (local.get $r) (i32.const 2)) (then (call $mdk_refused_panic)))",
-  "    (ref.i31 (local.get $r)))"
+  "    (local $r i32)",
+  "    (\{callW "mdk_push_grant" 1} (local.get $g))",
+  "    (\{callW "mdk_push_path" 1} (local.get $path))",
+  "    (local.set $r (\{callW "mdk_file_exists" 0}))",
+  "    (if (i32.eq (local.get $r) (i32.const 2)) (then (\{callW "mdk_refused_panic" 0})))",
+  "    (ref.i31 (local.get $r)))",
 ]
 
-ioCanonicalizeLines : List String
-ioCanonicalizeLines = [
+ioCanonicalizeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioCanonicalizeLines callW tailW = [
   "  ;; canonicalizePath : $str path -> $str.  1=the host's answer / 0=refused.",
   "  (func $mdk_canonicalize_path_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
-  "    (call $mdk_push_grant (local.get $g))",
-  "    (call $mdk_push_path (local.get $path))",
-  "    (if (i32.eqz (call $mdk_canonicalize_path)) (then (call $mdk_refused_panic)))",
-  "    (call $mdk_io_result_to_str))"
+  "    (\{callW "mdk_push_grant" 1} (local.get $g))",
+  "    (\{callW "mdk_push_path" 1} (local.get $path))",
+  "    (if (i32.eqz (\{callW "mdk_canonicalize_path" 0})) (then (\{callW "mdk_refused_panic" 0})))",
+  "    (\{callW "mdk_io_result_to_str" 0}))",
 ]
 
-ioWriteFileLines : List String
-ioWriteFileLines = [
+ioWriteFileLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioWriteFileLines callW tailW = [
   "  ;; writeFile : $str path -> $str contents -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  ;; The contents' bytes stream to the host's write buffer, as writeFileBytes streams its array.",
   "  (func $mdk_write_file_io (param $path (ref $str)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
-  "    (call $mdk_push_grant (local.get $g))",
-  "    (call $mdk_push_path (local.get $path))",
-  "    (call $mdk_write_file_reset)",
+  "    (\{callW "mdk_push_grant" 1} (local.get $g))",
+  "    (\{callW "mdk_push_path" 1} (local.get $path))",
+  "    (\{callW "mdk_write_file_reset" 0})",
   "    (local.set $b (struct.get $str $bytes (local.get $s)))",
   "    (local.set $n (array.len (local.get $b)))",
-  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (\{callW "mdk_write_file_push" 1} (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    (if (result (ref eq)) (call $mdk_write_file)",
+  "    (if (result (ref eq)) (\{callW "mdk_write_file" 0})",
   "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+  "      (else (struct.new $C_Err (i32.const 1) (\{callW "mdk_io_result_to_str" 0})))))",
 ]
 
-ioWriteFileModeLines : List String
-ioWriteFileModeLines = [
+ioWriteFileModeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioWriteFileModeLines callW tailW = [
   "  ;; writeFileMode : $str path -> Int mode -> $str contents -> Result String Unit.",
   "  ;; 1=Ok () / 0=Err msg.  The contents stream to the host's write buffer; the host sets",
   "  ;; the file's mode before the first byte is written.",
   "  (func $mdk_write_file_mode_io (param $path (ref $str)) (param $mode (ref eq)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
-  "    (call $mdk_push_grant (local.get $g))",
-  "    (call $mdk_push_path (local.get $path))",
-  "    (call $mdk_write_file_reset)",
+  "    (\{callW "mdk_push_grant" 1} (local.get $g))",
+  "    (\{callW "mdk_push_path" 1} (local.get $path))",
+  "    (\{callW "mdk_write_file_reset" 0})",
   "    (local.set $b (struct.get $str $bytes (local.get $s)))",
   "    (local.set $n (array.len (local.get $b)))",
-  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (\{callW "mdk_write_file_push" 1} (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    (if (result (ref eq)) (call $mdk_write_file_mode (i32.wrap_i64 (call $mdk_unbox_int (local.get $mode))))",
+  "    (if (result (ref eq)) (\{callW "mdk_write_file_mode" 1} (i32.wrap_i64 (\{callW "mdk_unbox_int" 1} (local.get $mode))))",
   "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+  "      (else (struct.new $C_Err (i32.const 1) (\{callW "mdk_io_result_to_str" 0})))))",
 ]
 
-ioAppendFileLines : List String
-ioAppendFileLines = [
+ioAppendFileLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioAppendFileLines callW tailW = [
   "  ;; appendFile : $str path -> $str contents -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  ;; The contents' bytes stream to the host's write buffer; the host appends them.",
   "  (func $mdk_append_file_io (param $path (ref $str)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
-  "    (call $mdk_push_grant (local.get $g))",
-  "    (call $mdk_push_path (local.get $path))",
-  "    (call $mdk_write_file_reset)",
+  "    (\{callW "mdk_push_grant" 1} (local.get $g))",
+  "    (\{callW "mdk_push_path" 1} (local.get $path))",
+  "    (\{callW "mdk_write_file_reset" 0})",
   "    (local.set $b (struct.get $str $bytes (local.get $s)))",
   "    (local.set $n (array.len (local.get $b)))",
-  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (\{callW "mdk_write_file_push" 1} (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    (if (result (ref eq)) (call $mdk_append_file)",
+  "    (if (result (ref eq)) (\{callW "mdk_append_file" 0})",
   "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+  "      (else (struct.new $C_Err (i32.const 1) (\{callW "mdk_io_result_to_str" 0})))))",
 ]
 
-ioRenameLines : List String
-ioRenameLines = [
+ioRenameLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioRenameLines callW tailW = [
   "  ;; rename : $str src -> $str dst -> src grant -> dst grant -> Result String Unit.",
   "  ;; The grants share the grant channel (-2 ends the first), the paths the path channel;",
   "  ;; the host splits the path buffer at the source's byte length.",
   "  (func $mdk_rename_io (param $src (ref $str)) (param $dst (ref $str)) (param $gs (ref eq)) (param $gd (ref eq)) (result (ref eq))",
-  "    (call $mdk_push_grant (local.get $gs))",
-  "    (call $mdk_grant_push (i32.const -2))",
-  "    (call $mdk_push_grant_more (local.get $gd))",
-  "    (call $mdk_push_path (local.get $src))",
-  "    (call $mdk_push_path_more (local.get $dst))",
-  "    (if (result (ref eq)) (call $mdk_rename (array.len (struct.get $str $bytes (local.get $src))))",
+  "    (\{callW "mdk_push_grant" 1} (local.get $gs))",
+  "    (\{callW "mdk_grant_push" 1} (i32.const -2))",
+  "    (\{callW "mdk_push_grant_more" 1} (local.get $gd))",
+  "    (\{callW "mdk_push_path" 1} (local.get $src))",
+  "    (\{callW "mdk_push_path_more" 1} (local.get $dst))",
+  "    (if (result (ref eq)) (\{callW "mdk_rename" 1} (array.len (struct.get $str $bytes (local.get $src))))",
   "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+  "      (else (struct.new $C_Err (i32.const 1) (\{callW "mdk_io_result_to_str" 0})))))",
 ]
 
-ioListDirLines : List String
-ioListDirLines = [
+ioListDirLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioListDirLines callW tailW = [
   "  ;; listDir : $str path -> Result String (List String).  The host answers each entry's",
   "  ;; name followed by a NUL byte; the list is built from the last entry back.",
   "  (func $mdk_list_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (local $buf (ref $u8arr)) (local $name (ref $u8arr)) (local $acc (ref eq))",
   "    (local $pos i32) (local $end i32) (local $k i32)",
-  "    (call $mdk_push_grant (local.get $g))",
-  "    (call $mdk_push_path (local.get $path))",
-  "    (if (i32.eqz (call $mdk_list_dir))",
-  "      (then (return (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))",
-  "    (local.set $buf (call $mdk_io_result_bytes))",
+  "    (\{callW "mdk_push_grant" 1} (local.get $g))",
+  "    (\{callW "mdk_push_path" 1} (local.get $path))",
+  "    (if (i32.eqz (\{callW "mdk_list_dir" 0}))",
+  "      (then (return (struct.new $C_Err (i32.const 1) (\{callW "mdk_io_result_to_str" 0})))))",
+  "    (local.set $buf (\{callW "mdk_io_result_bytes" 0}))",
   "    (local.set $acc (ref.i31 (i32.const 1)))",
-  "    (local.set $pos (array.len (local.get $buf)))", "    (block $d (loop $l",
+  "    (local.set $pos (array.len (local.get $buf)))",
+  "    (block $d (loop $l",
   "      (br_if $d (i32.le_s (local.get $pos) (i32.const 0)))",
   "      (local.set $end (i32.sub (local.get $pos) (i32.const 1)))",
-  "      (local.set $k (local.get $end))", "      (block $s (loop $m",
+  "      (local.set $k (local.get $end))",
+  "      (block $s (loop $m",
   "        (br_if $s (i32.eqz (local.get $k)))",
   "        (br_if $s (i32.eqz (array.get_u $u8arr (local.get $buf) (i32.sub (local.get $k) (i32.const 1)))))",
   "        (local.set $k (i32.sub (local.get $k) (i32.const 1))) (br $m)))",
   "      (local.set $name (array.new $u8arr (i32.const 0) (i32.sub (local.get $end) (local.get $k))))",
   "      (array.copy $u8arr $u8arr (local.get $name) (i32.const 0) (local.get $buf) (local.get $k) (i32.sub (local.get $end) (local.get $k)))",
-  "      (local.set $acc (struct.new $C_Cons (i32.const 0) (call $mdk_u8_to_str_lossy (local.get $name)) (local.get $acc)))",
+  "      (local.set $acc (struct.new $C_Cons (i32.const 0) (\{callW "mdk_u8_to_str_lossy" 1} (local.get $name)) (local.get $acc)))",
   "      (local.set $pos (local.get $k)) (br $l)))",
-  "    (struct.new $C_Ok (i32.const 0) (local.get $acc)))"
+  "    (struct.new $C_Ok (i32.const 0) (local.get $acc)))",
 ]
 
-ioStatFileLines : List String
-ioStatFileLines = [
+ioStatFileLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioStatFileLines callW tailW = [
   "  ;; statFile : $str path -> Result String (Int, Bool, Bool, Float): size, isDir, isFile,",
   "  ;; mtime in seconds.  The host answers each field of the stat it took as an f64.",
   "  (func $mdk_stat_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
-  "    (call $mdk_push_grant (local.get $g))",
-  "    (call $mdk_push_path (local.get $path))",
-  "    (if (result (ref eq)) (call $mdk_stat_file)",
+  "    (\{callW "mdk_push_grant" 1} (local.get $g))",
+  "    (\{callW "mdk_push_path" 1} (local.get $path))",
+  "    (if (result (ref eq)) (\{callW "mdk_stat_file" 0})",
   "      (then (struct.new $C_Ok (i32.const 0)",
   "        (struct.new $C_Tup4 (i32.const 0)",
-  "          (call $mdk_box_int (i64.trunc_f64_s (call $mdk_stat_field (i32.const 0))))",
-  "          (ref.i31 (i32.trunc_f64_s (call $mdk_stat_field (i32.const 1))))",
-  "          (ref.i31 (i32.trunc_f64_s (call $mdk_stat_field (i32.const 2))))",
-  "          (struct.new $float (call $mdk_stat_field (i32.const 3))))))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+  "          (\{callW "mdk_box_int" 1} (i64.trunc_f64_s (\{callW "mdk_stat_field" 1} (i32.const 0))))",
+  "          (ref.i31 (i32.trunc_f64_s (\{callW "mdk_stat_field" 1} (i32.const 1))))",
+  "          (ref.i31 (i32.trunc_f64_s (\{callW "mdk_stat_field" 1} (i32.const 2))))",
+  "          (struct.new $float (\{callW "mdk_stat_field" 1} (i32.const 3))))))",
+  "      (else (struct.new $C_Err (i32.const 1) (\{callW "mdk_io_result_to_str" 0})))))",
 ]
 
-ioMakeDirLines : List String
-ioMakeDirLines = [
+ioMakeDirLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioMakeDirLines callW tailW = [
   "  ;; makeDir : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  (func $mdk_make_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
-  "    (call $mdk_push_grant (local.get $g))",
-  "    (call $mdk_push_path (local.get $path))",
-  "    (if (result (ref eq)) (call $mdk_make_dir)",
+  "    (\{callW "mdk_push_grant" 1} (local.get $g))",
+  "    (\{callW "mdk_push_path" 1} (local.get $path))",
+  "    (if (result (ref eq)) (\{callW "mdk_make_dir" 0})",
   "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+  "      (else (struct.new $C_Err (i32.const 1) (\{callW "mdk_io_result_to_str" 0})))))",
 ]
 
-ioRemoveFileLines : List String
-ioRemoveFileLines = [
+ioRemoveFileLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioRemoveFileLines callW tailW = [
   "  ;; removeFile : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  (func $mdk_remove_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
-  "    (call $mdk_push_grant (local.get $g))",
-  "    (call $mdk_push_path (local.get $path))",
-  "    (if (result (ref eq)) (call $mdk_remove_file)",
+  "    (\{callW "mdk_push_grant" 1} (local.get $g))",
+  "    (\{callW "mdk_push_path" 1} (local.get $path))",
+  "    (if (result (ref eq)) (\{callW "mdk_remove_file" 0})",
   "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+  "      (else (struct.new $C_Err (i32.const 1) (\{callW "mdk_io_result_to_str" 0})))))",
 ]
 
-ioRemoveDirLines : List String
-ioRemoveDirLines = [
+ioRemoveDirLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioRemoveDirLines callW tailW = [
   "  ;; removeDir : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  (func $mdk_remove_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
-  "    (call $mdk_push_grant (local.get $g))",
-  "    (call $mdk_push_path (local.get $path))",
-  "    (if (result (ref eq)) (call $mdk_remove_dir)",
+  "    (\{callW "mdk_push_grant" 1} (local.get $g))",
+  "    (\{callW "mdk_push_path" 1} (local.get $path))",
+  "    (if (result (ref eq)) (\{callW "mdk_remove_dir" 0})",
   "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+  "      (else (struct.new $C_Err (i32.const 1) (\{callW "mdk_io_result_to_str" 0})))))",
 ]
 
-ioFsyncLines : List String
-ioFsyncLines = [
+ioFsyncLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioFsyncLines callW tailW = [
   "  ;; fsync : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  (func $mdk_fsync_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
-  "    (call $mdk_push_grant (local.get $g))",
-  "    (call $mdk_push_path (local.get $path))",
-  "    (if (result (ref eq)) (call $mdk_fsync)",
+  "    (\{callW "mdk_push_grant" 1} (local.get $g))",
+  "    (\{callW "mdk_push_path" 1} (local.get $path))",
+  "    (if (result (ref eq)) (\{callW "mdk_fsync" 0})",
   "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+  "      (else (struct.new $C_Err (i32.const 1) (\{callW "mdk_io_result_to_str" 0})))))",
 ]
 
-ioFileModeLines : List String
-ioFileModeLines = [
+ioFileModeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioFileModeLines callW tailW = [
   "  ;; fileMode : $str path -> Result String Int: the permission bits, 0 to 4095.  The host",
   "  ;; takes the stat that statFile takes and answers its mode field, field 4.",
   "  (func $mdk_file_mode_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
-  "    (call $mdk_push_grant (local.get $g))",
-  "    (call $mdk_push_path (local.get $path))",
-  "    (if (result (ref eq)) (call $mdk_file_mode)",
+  "    (\{callW "mdk_push_grant" 1} (local.get $g))",
+  "    (\{callW "mdk_push_path" 1} (local.get $path))",
+  "    (if (result (ref eq)) (\{callW "mdk_file_mode" 0})",
   "      (then (struct.new $C_Ok (i32.const 0)",
-  "        (call $mdk_box_int (i64.trunc_f64_s (call $mdk_stat_field (i32.const 4))))))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+  "        (\{callW "mdk_box_int" 1} (i64.trunc_f64_s (\{callW "mdk_stat_field" 1} (i32.const 4))))))",
+  "      (else (struct.new $C_Err (i32.const 1) (\{callW "mdk_io_result_to_str" 0})))))",
 ]
 
-ioGetEnvLines : List String
-ioGetEnvLines = [
+ioGetEnvLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioGetEnvLines callW tailW = [
   "  ;; getEnv : $str name -> Option String.  1=Some value / 0=None.",
   "  (func $mdk_get_env_io (param $name (ref $str)) (result (ref eq))",
-  "    (local $st i32)", "    (call $mdk_push_path (local.get $name))",
-  "    (local.set $st (call $mdk_get_env))",
+  "    (local $st i32)",
+  "    (\{callW "mdk_push_path" 1} (local.get $name))",
+  "    (local.set $st (\{callW "mdk_get_env" 0}))",
   "    (if (result (ref eq)) (local.get $st)",
-  "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))",
-  "      (else (ref.i31 (i32.const 1)))))"
+  "      (then (struct.new $C_Some (i32.const 0) (\{callW "mdk_io_result_to_str" 0})))",
+  "      (else (ref.i31 (i32.const 1)))))",
 ]
 
-ioReadLineLines : List String
-ioReadLineLines = [
+ioReadLineLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioReadLineLines callW tailW = [
   "  ;; readLine : Unit -> String.  The host answers 1 with a line (its newline",
   "  ;; stripped) on the result channel, or 0 at end of input, where the channel is empty.",
   "  (func $mdk_read_line_io (result (ref eq))",
-  "    (drop (call $mdk_read_line))", "    (call $mdk_io_result_to_str))",
+  "    (drop (\{callW "mdk_read_line" 0}))",
+  "    (\{callW "mdk_io_result_to_str" 0}))",
   "  ;; readLineOpt : Unit -> Option String.  0 is None.",
   "  (func $mdk_read_line_opt_io (result (ref eq))",
-  "    (if (result (ref eq)) (call $mdk_read_line)",
-  "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))",
-  "      (else (ref.i31 (i32.const 1)))))"
+  "    (if (result (ref eq)) (\{callW "mdk_read_line" 0})",
+  "      (then (struct.new $C_Some (i32.const 0) (\{callW "mdk_io_result_to_str" 0})))",
+  "      (else (ref.i31 (i32.const 1)))))",
 ]
 
-ioReadAllLines : List String
-ioReadAllLines = [
+ioReadAllLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioReadAllLines callW tailW = [
   "  ;; readAll : Unit -> String.  The rest of the host's stdin buffer.",
-  "  (func $mdk_read_all_io (result (ref eq))", "    (call $mdk_read_all)",
-  "    (call $mdk_io_result_to_str))"
+  "  (func $mdk_read_all_io (result (ref eq))",
+  "    (\{callW "mdk_read_all" 0})",
+  "    (\{callW "mdk_io_result_to_str" 0}))",
 ]
 
-ioReadExactlyLines : List String
-ioReadExactlyLines = [
+ioReadExactlyLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioReadExactlyLines callW tailW = [
   "  ;; readExactly : Int -> Option String.  1=Some the n bytes / 0=None (end of input",
   "  ;; or a short read, whose bytes the host has consumed).",
   "  (func $mdk_read_exactly_io (param $n i64) (result (ref eq))",
-  "    (if (result (ref eq)) (call $mdk_read_exactly (local.get $n))",
-  "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))",
-  "      (else (ref.i31 (i32.const 1)))))"
+  "    (if (result (ref eq)) (\{callW "mdk_read_exactly" 1} (local.get $n))",
+  "      (then (struct.new $C_Some (i32.const 0) (\{callW "mdk_io_result_to_str" 0})))",
+  "      (else (ref.i31 (i32.const 1)))))",
 ]
 
 -- executablePath : Unit -> String.  The host's path (always 1) on the result channel.
-ioExecutablePathLines : List String
-ioExecutablePathLines = [
+ioExecutablePathLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioExecutablePathLines callW tailW = [
   "  (func $mdk_executable_path_io (result (ref eq))",
-  "    (drop (call $mdk_executable_path))", "    (call $mdk_io_result_to_str))"
+  "    (drop (\{callW "mdk_executable_path" 0}))",
+  "    (\{callW "mdk_io_result_to_str" 0}))",
 ]
 
 -- the `args` extern body — split out from ioHostRuntimeLines because it references
@@ -2779,31 +3027,37 @@ ioExecutablePathLines = [
 -- a list. Gated on the `mdk_args_count` host key; the `args` extern's catalog
 -- demand brings the list types with it.
 export
-ioArgsRuntimeLines : List String -> List String
-ioArgsRuntimeLines keys = gatedOn "mdk_args_count" keys ioArgsLines
+ioArgsRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String ->
+  List String
+ioArgsRuntimeLines callW tailW keys =
+  gatedOn "mdk_args_count" keys (ioArgsLines callW tailW)
 
-ioArgsLines : List String
-ioArgsLines = [
+ioArgsLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+ioArgsLines callW tailW = [
   "  ;; build a $str from the i-th host arg (mdk_arg_len(i) + mdk_arg_byte(i,j)).",
   "  (func $mdk_arg_to_str (param $idx i32) (result (ref $str))",
   "    (local $n i32) (local $j i32) (local $buf (ref $u8arr))",
-  "    (local.set $n (call $mdk_arg_len (local.get $idx)))",
+  "    (local.set $n (\{callW "mdk_arg_len" 1} (local.get $idx)))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
   "    (local.set $j (i32.const 0))",
   "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $j) (local.get $n)))",
-  "      (array.set $u8arr (local.get $buf) (local.get $j) (call $mdk_arg_byte (local.get $idx) (local.get $j)))",
+  "      (array.set $u8arr (local.get $buf) (local.get $j) (\{callW "mdk_arg_byte" 2} (local.get $idx) (local.get $j)))",
   "      (local.set $j (i32.add (local.get $j) (i32.const 1))) (br $l)))",
-  "    (call $mdk_u8_to_str_lossy (local.get $buf)))",
+  "    (\{callW "mdk_u8_to_str_lossy" 1} (local.get $buf)))",
   "  ;; args : Unit -> List String.  Fold a Cons chain right-to-left ending in Nil.",
   "  (func $mdk_args_io (result (ref eq))",
   "    (local $c i32) (local $i i32) (local $acc (ref eq))",
-  "    (local.set $c (call $mdk_args_count))",
+  "    (local.set $c (\{callW "mdk_args_count" 0}))",
   "    (local.set $acc (ref.i31 (i32.const 1)))",  -- Nil
   "    (local.set $i (i32.sub (local.get $c) (i32.const 1)))",
   "    (block $d (loop $l",
   "      (br_if $d (i32.lt_s (local.get $i) (i32.const 0)))",
-  "      (local.set $acc (struct.new $C_Cons (i32.const 0) (call $mdk_arg_to_str (local.get $i)) (local.get $acc)))",
+  "      (local.set $acc (struct.new $C_Cons (i32.const 0) (\{callW "mdk_arg_to_str" 1} (local.get $i)) (local.get $acc)))",
   "      (local.set $i (i32.sub (local.get $i) (i32.const 1))) (br $l)))",
   "    (local.get $acc))",
 ]
@@ -2820,71 +3074,85 @@ ioArgsLines = [
 -- `mdk_write_file_commit` key.  The read body shares its keys with readFile, so
 -- it also needs `readsBytes` (the extern's `useFileBytes` demand, which brings $arr).
 export
-fileBytesRuntimeLines : Bool -> List String -> List String
-fileBytesRuntimeLines readsBytes keys =
-  gatedOn "mdk_write_file_commit" keys writeFileBytesLines
-    ++ gatedOn "mdk_os_entropy" keys osEntropyLines
+fileBytesRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  Bool ->
+  List String ->
+  List String
+fileBytesRuntimeLines callW tailW readsBytes keys =
+  gatedOn "mdk_write_file_commit" keys (writeFileBytesLines callW tailW)
+    ++ gatedOn "mdk_os_entropy" keys (osEntropyLines callW tailW)
     ++ (if readsBytes then
-      gatedOn "mdk_read_file" keys readFileBytesLines
+      gatedOn "mdk_read_file" keys (readFileBytesLines callW tailW)
     else
       [])
 
-readFileBytesLines : List String
-readFileBytesLines = [
+readFileBytesLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+readFileBytesLines callW tailW = [
   "  ;; readFileBytes : $str path -> Result String (Array Int).  1=Ok bytes / 0=Err msg.",
   "  ;; Reuses the read byte-channel but rebuilds an $arr of i31 Int bytes (0..255).",
   "  (func $mdk_read_file_bytes_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (local $st i32) (local $n i32) (local $i i32) (local $out (ref $arr))",
-  "    (call $mdk_push_grant (local.get $g))",
-  "    (call $mdk_push_path (local.get $path))",
-  "    (local.set $st (call $mdk_read_file))",
-  "    (if (result (ref eq)) (local.get $st)", "      (then",
-  "        (local.set $n (call $mdk_result_len))",
+  "    (\{callW "mdk_push_grant" 1} (local.get $g))",
+  "    (\{callW "mdk_push_path" 1} (local.get $path))",
+  "    (local.set $st (\{callW "mdk_read_file" 0}))",
+  "    (if (result (ref eq)) (local.get $st)",
+  "      (then",
+  "        (local.set $n (\{callW "mdk_result_len" 0}))",
   "        (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))",
-  "        (local.set $i (i32.const 0))", "        (block $d (loop $l",
+  "        (local.set $i (i32.const 0))",
+  "        (block $d (loop $l",
   "          (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "          (array.set $arr (local.get $out) (local.get $i) (ref.i31 (call $mdk_result_byte (local.get $i))))",
+  "          (array.set $arr (local.get $out) (local.get $i) (ref.i31 (\{callW "mdk_result_byte" 1} (local.get $i))))",
   "          (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "        (struct.new $C_Ok (i32.const 0) (local.get $out)))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+  "      (else (struct.new $C_Err (i32.const 1) (\{callW "mdk_io_result_to_str" 0})))))",
 ]
 
 -- osEntropyBytes : Int -> Array Int.  The host fills the result channel with n random
 -- bytes, or refuses a negative or oversized count with its panic text on the channel,
 -- which $mdk_refused_panic writes as the E-PANIC line.  Built like readFileBytes's array.
-osEntropyLines : List String
-osEntropyLines = [
+osEntropyLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+osEntropyLines callW tailW = [
   "  ;; osEntropyBytes : Int -> Array Int.  1=n random bytes / 0=a refusal (its text on the channel).",
   "  (func $mdk_os_entropy_io (param $n i64) (result (ref eq))",
   "    (local $len i32) (local $i i32) (local $out (ref $arr))",
-  "    (if (i32.eqz (call $mdk_os_entropy (local.get $n))) (then (call $mdk_refused_panic)))",
-  "    (local.set $len (call $mdk_result_len))",
+  "    (if (i32.eqz (\{callW "mdk_os_entropy" 1} (local.get $n))) (then (\{callW "mdk_refused_panic" 0})))",
+  "    (local.set $len (\{callW "mdk_result_len" 0}))",
   "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $len)))",
-  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $len)))",
-  "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (call $mdk_result_byte (local.get $i))))",
+  "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (\{callW "mdk_result_byte" 1} (local.get $i))))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    (local.get $out))"
+  "    (local.get $out))",
 ]
 
-writeFileBytesLines : List String
-writeFileBytesLines = [
+writeFileBytesLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+writeFileBytesLines callW tailW = [
   "  ;; writeFileBytes : $str path -> $arr bytes -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  ;; Stream each i31 byte (masked to 0..255) to the host, then commit fs.writeFileSync.",
   "  (func $mdk_write_file_bytes_io (param $path (ref $str)) (param $ba (ref $arr)) (param $g (ref eq)) (result (ref eq))",
   "    (local $st i32) (local $n i32) (local $i i32)",
-  "    (call $mdk_push_grant (local.get $g))",
-  "    (call $mdk_push_path (local.get $path))",
-  "    (call $mdk_write_file_reset)",
+  "    (\{callW "mdk_push_grant" 1} (local.get $g))",
+  "    (\{callW "mdk_push_path" 1} (local.get $path))",
+  "    (\{callW "mdk_write_file_reset" 0})",
   "    (local.set $n (array.len (local.get $ba)))",
-  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (call $mdk_write_file_push (i32.and (i31.get_s (ref.cast (ref i31) (array.get $arr (local.get $ba) (local.get $i)))) (i32.const 255)))",
+  "      (\{callW "mdk_write_file_push" 1} (i32.and (i31.get_s (ref.cast (ref i31) (array.get $arr (local.get $ba) (local.get $i)))) (i32.const 255)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    (local.set $st (call $mdk_write_file_commit))",
+  "    (local.set $st (\{callW "mdk_write_file_commit" 0}))",
   "    (if (result (ref eq)) (local.get $st)",
   "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+  "      (else (struct.new $C_Err (i32.const 1) (\{callW "mdk_io_result_to_str" 0})))))",
 ]
 
 -- ── W8b string index-of / compare ($str-dependent) ───────────────────────────
@@ -2896,8 +3164,10 @@ writeFileBytesLines = [
 -- tie-break by length, return Lt/Eq/Gt (i31 0/1/2).  Both byte-identical to medaka_rt.c
 -- (mdk_string_index_of / mdk_string_compare).  Needs $mdk_cp_count from strLeafRuntime.
 export
-strSearchRuntimeLines : List String
-strSearchRuntimeLines = [
+strSearchRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+strSearchRuntimeLines callW tailW = [
   "  ;; -- W8b stringIndexOf / stringCompare (byte-identical to medaka_rt.c) --",
   "  (func $mdk_str_index_of (param $needle (ref $str)) (param $hay (ref $str)) (result (ref eq))",
   "    (local $nb (ref $u8arr)) (local $hb (ref $u8arr)) (local $nl i32) (local $hl i32)",
@@ -2923,7 +3193,7 @@ strSearchRuntimeLines = [
   "        (local.set $j (i32.add (local.get $j) (i32.const 1))) (br $cmpl)))",
   "      (if (local.get $ok)",
   "        (then (return (struct.new $C_Some (i32.const 0)",
-  "          (ref.i31 (call $mdk_cp_count (local.get $hb) (local.get $b)))))))",
+  "          (ref.i31 (\{callW "mdk_cp_count" 2} (local.get $hb) (local.get $b)))))))",
   "      (local.set $b (i32.add (local.get $b) (i32.const 1))) (br $scan)))",
   "    ;; not found -> None (i31 ordinal 1).",
   "    (ref.i31 (i32.const 1)))",
@@ -2939,7 +3209,7 @@ strSearchRuntimeLines = [
   "    (if (i32.eqz (local.get $nl)) (then (return (i32.const 0))))",
   "    (block $done (loop $scan",
   "      (br_if $done (i32.gt_s (i32.add (local.get $b) (local.get $nl)) (local.get $hl)))",
-  "      (if (call $mdk_bytes_match_at (local.get $nb) (local.get $hb) (local.get $b))",
+  "      (if (\{callW "mdk_bytes_match_at" 3} (local.get $nb) (local.get $hb) (local.get $b))",
   "        (then",
   "          (local.set $c (i32.add (local.get $c) (i32.const 1)))",
   "          (local.set $b (i32.add (local.get $b) (local.get $nl))))",
@@ -2960,14 +3230,14 @@ strSearchRuntimeLines = [
   "    (local.set $last (i32.const -1))",
   "    (block $done (loop $scan",
   "      (br_if $done (i32.gt_s (i32.add (local.get $b) (local.get $nl)) (local.get $hl)))",
-  "      (if (call $mdk_bytes_match_at (local.get $nb) (local.get $hb) (local.get $b))",
+  "      (if (\{callW "mdk_bytes_match_at" 3} (local.get $nb) (local.get $hb) (local.get $b))",
   "        (then (local.set $last (local.get $b))))",
   "      (local.set $b (i32.add (local.get $b) (i32.const 1)))",
   "      (br $scan)))",
   "    (if (i32.lt_s (local.get $last) (i32.const 0))",
   "      (then (return (ref.i31 (i32.const 1)))))",
   "    (struct.new $C_Some (i32.const 0)",
-  "      (ref.i31 (call $mdk_cp_count (local.get $hb) (local.get $last)))))",
+  "      (ref.i31 (\{callW "mdk_cp_count" 2} (local.get $hb) (local.get $last)))))",
   "  (func $mdk_str_compare (param $a (ref $str)) (param $b (ref $str)) (result (ref eq))",
   "    (local $ab (ref $u8arr)) (local $bb (ref $u8arr)) (local $al i32) (local $bl i32)",
   "    (local $m i32) (local $i i32) (local $ca i32) (local $cb i32)",
@@ -3005,8 +3275,10 @@ strSearchRuntimeLines = [
 -- Emitted whenever a producer of outside bytes is: the byte codec (useStrCodec),
 -- `byteBlockToString` (useByteBlock), and the IO host surface (useIO).
 export
-utf8LossyRuntimeLines : List String
-utf8LossyRuntimeLines = [
+utf8LossyRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+utf8LossyRuntimeLines callW tailW = [
   "  ;; -- UTF-8 validation (byte-identical to medaka_rt.c mdk_str_lossy) --",
   "  (func $mdk_utf8_step (param $b (ref $u8arr)) (param $i i32) (param $n i32) (result i32)",
   "    (local $b0 i32) (local $b1 i32) (local $lo i32) (local $hi i32)",
@@ -3041,7 +3313,7 @@ utf8LossyRuntimeLines = [
   "    (local.set $i (i32.const 0)) (local.set $c (i32.const 0))",
   "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (local.set $st (call $mdk_utf8_step (local.get $b) (local.get $i) (local.get $n)))",
+  "      (local.set $st (\{callW "mdk_utf8_step" 3} (local.get $b) (local.get $i) (local.get $n)))",
   "      (if (i32.lt_s (local.get $st) (i32.const 0)) (then (return (i32.const -1))))",
   "      (local.set $i (i32.add (local.get $i) (local.get $st)))",
   "      (local.set $c (i32.add (local.get $c) (i32.const 1))) (br $l)))",
@@ -3049,7 +3321,7 @@ utf8LossyRuntimeLines = [
   "  (func $mdk_u8_to_str_lossy (param $b (ref $u8arr)) (result (ref $str))",
   "    (local $n i32) (local $i i32) (local $j i32) (local $c i32) (local $st i32) (local $out i32)",
   "    (local $buf (ref $u8arr))",
-  "    (local.set $c (call $mdk_utf8_valid_count (local.get $b)))",
+  "    (local.set $c (\{callW "mdk_utf8_valid_count" 1} (local.get $b)))",
   "    (if (i32.ge_s (local.get $c) (i32.const 0))",
   "      (then (return (struct.new $str (local.get $c) (local.get $b)))))",
   "    (local.set $n (array.len (local.get $b)))",
@@ -3057,7 +3329,7 @@ utf8LossyRuntimeLines = [
   "    (local.set $i (i32.const 0)) (local.set $out (i32.const 0))",
   "    (block $d1 (loop $l1",
   "      (br_if $d1 (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (local.set $st (call $mdk_utf8_step (local.get $b) (local.get $i) (local.get $n)))",
+  "      (local.set $st (\{callW "mdk_utf8_step" 3} (local.get $b) (local.get $i) (local.get $n)))",
   "      (if (i32.gt_s (local.get $st) (i32.const 0))",
   "        (then",
   "          (local.set $out (i32.add (local.get $out) (local.get $st)))",
@@ -3071,7 +3343,7 @@ utf8LossyRuntimeLines = [
   "    (local.set $i (i32.const 0)) (local.set $j (i32.const 0)) (local.set $c (i32.const 0))",
   "    (block $d2 (loop $l2",
   "      (br_if $d2 (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (local.set $st (call $mdk_utf8_step (local.get $b) (local.get $i) (local.get $n)))",
+  "      (local.set $st (\{callW "mdk_utf8_step" 3} (local.get $b) (local.get $i) (local.get $n)))",
   "      (if (i32.gt_s (local.get $st) (i32.const 0))",
   "        (then",
   "          (array.copy $u8arr $u8arr (local.get $buf) (local.get $j) (local.get $b) (local.get $i) (local.get $st))",
@@ -3101,8 +3373,10 @@ utf8LossyRuntimeLines = [
 --     codepoint in place (same lead/continuation masks as $mdk_char_to_str), cp_count
 --     = array.len.
 export
-strCodecRuntimeLines : List String
-strCodecRuntimeLines = [
+strCodecRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+strCodecRuntimeLines callW tailW = [
   "  ;; -- W11b UTF-8 codec (byte-identical to medaka_rt.c) --",
   "  ;; decode a $str's UTF-8 bytes into a fresh $arr of cp_count i31 Char codepoints.",
   "  (func $mdk_str_to_chars (param $s (ref $str)) (result (ref $arr))",
@@ -3180,7 +3454,7 @@ strCodecRuntimeLines = [
   "    (block $d1 (loop $l1",
   "      (br_if $d1 (i32.ge_s (local.get $i) (local.get $n)))",
   "      (local.set $cp (i31.get_s (ref.cast (ref i31) (array.get $arr (local.get $a) (local.get $i)))))",
-  "      (local.set $total (i32.add (local.get $total) (call $mdk_utf8_nbytes (local.get $cp))))",
+  "      (local.set $total (i32.add (local.get $total) (\{callW "mdk_utf8_nbytes" 1} (local.get $cp))))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l1)))",
   "    ;; pass 2: encode into the buffer.",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $total)))",
@@ -3188,7 +3462,7 @@ strCodecRuntimeLines = [
   "    (block $d2 (loop $l2",
   "      (br_if $d2 (i32.ge_s (local.get $i) (local.get $n)))",
   "      (local.set $cp (i31.get_s (ref.cast (ref i31) (array.get $arr (local.get $a) (local.get $i)))))",
-  "      (local.set $off (call $mdk_utf8_emit_at (local.get $buf) (local.get $off) (local.get $cp)))",
+  "      (local.set $off (\{callW "mdk_utf8_emit_at" 3} (local.get $buf) (local.get $off) (local.get $cp)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l2)))",
   "    (struct.new $str (local.get $n) (local.get $buf)))",
   "  ;; stringToUtf8Bytes: copy the $str's $u8arr backing into a fresh $arr of i31 Int bytes.",
@@ -3215,7 +3489,7 @@ strCodecRuntimeLines = [
   "      (array.set $u8arr (local.get $buf) (local.get $i)",
   "        (i32.and (i31.get_u (ref.cast (ref i31) (array.get $arr (local.get $a) (local.get $i)))) (i32.const 255)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    (call $mdk_u8_to_str_lossy (local.get $buf)))",
+  "    (\{callW "mdk_u8_to_str_lossy" 1} (local.get $buf)))",
 ]
 
 -- ── the `ByteBlock` builtin's byte-block runtime ─────────────────────────────
@@ -3230,8 +3504,10 @@ strCodecRuntimeLines = [
 -- Gated by `WasmEmit.useByteBlock`, which also forces useStr ($u8arr/$str) and
 -- useArray ($arr), the two reps these bodies name.
 export
-byteBlockRuntimeLines : List String
-byteBlockRuntimeLines =
+byteBlockRuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+byteBlockRuntimeLines callW tailW =
   [
       "  ;; -- the `ByteBlock` builtin (peer of the mdk_byteblock_* C helpers) --",
       "  ;; byteBlockCopyUnsafe: the first $n bytes into a FRESH block.  A COPY, never a",
@@ -3254,7 +3530,7 @@ byteBlockRuntimeLines =
       "    (block $d (loop $l",
       "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
       "      (array.set $u8arr (local.get $out) (local.get $i)",
-      "        (i32.and (i32.wrap_i64 (call $mdk_unbox_int (ref.as_non_null (array.get $arr (local.get $a) (local.get $i))))) (i32.const 255)))",
+      "        (i32.and (i32.wrap_i64 (\{callW "mdk_unbox_int" 1} (ref.as_non_null (array.get $arr (local.get $a) (local.get $i))))) (i32.const 255)))",
       "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
       "    (local.get $out))",
       "  ;; byteBlockToIntArray: each byte as an Int in 0..255 (array.get_u zero-extends).",
@@ -3287,7 +3563,7 @@ byteBlockRuntimeLines =
       "    (local.set $n (array.len (local.get $b)))",
       "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
       "    (array.copy $u8arr $u8arr (local.get $buf) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))",
-      "    (call $mdk_u8_to_str_lossy (local.get $buf)))",
+      "    (\{callW "mdk_u8_to_str_lossy" 1} (local.get $buf)))",
       "  ;; byteBlockWriteStdout: write the block's bytes to stdout byte-for-byte, no",
       "  ;; encoding assumption -- unlike $mdk_print_str, there is no $str/cp_count to",
       "  ;; read, just the raw $u8arr length.",
@@ -3297,10 +3573,10 @@ byteBlockRuntimeLines =
       "    (local.set $i (i32.const 0))",
       "    (block $d (loop $l",
       "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-      "      (call $mdk_write_byte (array.get_u $u8arr (local.get $b) (local.get $i)))",
+      "      (\{callW "mdk_write_byte" 1} (array.get_u $u8arr (local.get $b) (local.get $i)))",
       "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l))))",
     ]
-    ++ sha256RuntimeLines
+    ++ sha256RuntimeLines callW tailW
 
 -- FIPS 180-4 section 4.2.2 round constants K[0..63].
 sha256K : List Int
@@ -3340,8 +3616,10 @@ sha256KLines =
 -- sha256Native (mdk_sha256 in medaka_rt.c).  State and message schedule live in
 -- $u8arr scratch blocks holding little-endian 32-bit words, read and written
 -- through $mdk_sha_get / $mdk_sha_set; the message itself is read big-endian.
-sha256RuntimeLines : List String
-sha256RuntimeLines =
+sha256RuntimeLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  List String
+sha256RuntimeLines callW tailW =
   [
       "  ;; -- sha256Native (peer of medaka_rt.c mdk_sha256) --",
       "  (func $mdk_sha_get (param $a (ref $u8arr)) (param $i i32) (result i32)",
@@ -3371,7 +3649,7 @@ sha256RuntimeLines =
       "    (block $d1 (loop $l1",
       "      (br_if $d1 (i32.ge_u (local.get $i) (i32.const 16)))",
       "      (local.set $p (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 2))))",
-      "      (call $mdk_sha_set (local.get $w) (local.get $i)",
+      "      (\{callW "mdk_sha_set" 3} (local.get $w) (local.get $i)",
       "        (i32.or",
       "          (i32.or (i32.shl (array.get_u $u8arr (local.get $src) (local.get $p)) (i32.const 24))",
       "                  (i32.shl (array.get_u $u8arr (local.get $src) (i32.add (local.get $p) (i32.const 1))) (i32.const 16)))",
@@ -3380,22 +3658,22 @@ sha256RuntimeLines =
       "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l1)))",
       "    (block $d2 (loop $l2",
       "      (br_if $d2 (i32.ge_u (local.get $i) (i32.const 64)))",
-      "      (local.set $x (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 15))))",
+      "      (local.set $x (\{callW "mdk_sha_get" 2} (local.get $w) (i32.sub (local.get $i) (i32.const 15))))",
       "      (local.set $s0 (i32.xor (i32.xor (i32.rotr (local.get $x) (i32.const 7)) (i32.rotr (local.get $x) (i32.const 18))) (i32.shr_u (local.get $x) (i32.const 3))))",
-      "      (local.set $x (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 2))))",
+      "      (local.set $x (\{callW "mdk_sha_get" 2} (local.get $w) (i32.sub (local.get $i) (i32.const 2))))",
       "      (local.set $s1 (i32.xor (i32.xor (i32.rotr (local.get $x) (i32.const 17)) (i32.rotr (local.get $x) (i32.const 19))) (i32.shr_u (local.get $x) (i32.const 10))))",
-      "      (call $mdk_sha_set (local.get $w) (local.get $i)",
-      "        (i32.add (i32.add (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 16))) (local.get $s0))",
-      "                 (i32.add (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 7))) (local.get $s1))))",
+      "      (\{callW "mdk_sha_set" 3} (local.get $w) (local.get $i)",
+      "        (i32.add (i32.add (\{callW "mdk_sha_get" 2} (local.get $w) (i32.sub (local.get $i) (i32.const 16))) (local.get $s0))",
+      "                 (i32.add (\{callW "mdk_sha_get" 2} (local.get $w) (i32.sub (local.get $i) (i32.const 7))) (local.get $s1))))",
       "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l2)))",
-      "    (local.set $a (call $mdk_sha_get (local.get $h) (i32.const 0)))",
-      "    (local.set $b (call $mdk_sha_get (local.get $h) (i32.const 1)))",
-      "    (local.set $c (call $mdk_sha_get (local.get $h) (i32.const 2)))",
-      "    (local.set $d (call $mdk_sha_get (local.get $h) (i32.const 3)))",
-      "    (local.set $e (call $mdk_sha_get (local.get $h) (i32.const 4)))",
-      "    (local.set $f (call $mdk_sha_get (local.get $h) (i32.const 5)))",
-      "    (local.set $g (call $mdk_sha_get (local.get $h) (i32.const 6)))",
-      "    (local.set $hh (call $mdk_sha_get (local.get $h) (i32.const 7)))",
+      "    (local.set $a (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 0)))",
+      "    (local.set $b (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 1)))",
+      "    (local.set $c (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 2)))",
+      "    (local.set $d (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 3)))",
+      "    (local.set $e (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 4)))",
+      "    (local.set $f (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 5)))",
+      "    (local.set $g (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 6)))",
+      "    (local.set $hh (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 7)))",
       "    (local.set $i (i32.const 0))",
       "    (block $d3 (loop $l3",
       "      (br_if $d3 (i32.ge_u (local.get $i) (i32.const 64)))",
@@ -3405,7 +3683,7 @@ sha256RuntimeLines =
       "            (i32.xor (i32.xor (i32.rotr (local.get $e) (i32.const 6)) (i32.rotr (local.get $e) (i32.const 11))) (i32.rotr (local.get $e) (i32.const 25))))",
       "          (i32.add",
       "            (i32.xor (i32.and (local.get $e) (local.get $f)) (i32.and (i32.xor (local.get $e) (i32.const -1)) (local.get $g)))",
-      "            (i32.add (call $mdk_sha_k (local.get $i)) (call $mdk_sha_get (local.get $w) (local.get $i))))))",
+      "            (i32.add (\{callW "mdk_sha_k" 1} (local.get $i)) (\{callW "mdk_sha_get" 2} (local.get $w) (local.get $i))))))",
       "      (local.set $t2",
       "        (i32.add",
       "          (i32.xor (i32.xor (i32.rotr (local.get $a) (i32.const 2)) (i32.rotr (local.get $a) (i32.const 13))) (i32.rotr (local.get $a) (i32.const 22)))",
@@ -3419,33 +3697,33 @@ sha256RuntimeLines =
       "      (local.set $b (local.get $a))",
       "      (local.set $a (i32.add (local.get $t1) (local.get $t2)))",
       "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l3)))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 0) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 0)) (local.get $a)))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 1) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 1)) (local.get $b)))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 2) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 2)) (local.get $c)))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 3) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 3)) (local.get $d)))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 4) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 4)) (local.get $e)))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 5) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 5)) (local.get $f)))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 6) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 6)) (local.get $g)))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 7) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 7)) (local.get $hh))))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 0) (i32.add (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 0)) (local.get $a)))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 1) (i32.add (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 1)) (local.get $b)))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 2) (i32.add (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 2)) (local.get $c)))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 3) (i32.add (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 3)) (local.get $d)))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 4) (i32.add (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 4)) (local.get $e)))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 5) (i32.add (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 5)) (local.get $f)))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 6) (i32.add (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 6)) (local.get $g)))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 7) (i32.add (\{callW "mdk_sha_get" 2} (local.get $h) (i32.const 7)) (local.get $hh))))",
       "  (func $mdk_sha256 (param $b (ref $u8arr)) (result (ref $u8arr))",
       "    (local $n i32) (local $full i32) (local $rem i32) (local $size i32) (local $i i32) (local $x i32)",
       "    (local $h (ref $u8arr)) (local $w (ref $u8arr)) (local $tail (ref $u8arr)) (local $out (ref $u8arr)) (local $bits i64)",
       "    (local.set $n (array.len (local.get $b)))",
       "    (local.set $h (array.new $u8arr (i32.const 0) (i32.const 32)))",
       "    (local.set $w (array.new $u8arr (i32.const 0) (i32.const 256)))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 0) (i32.const 1779033703))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 1) (i32.const -1150833019))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 2) (i32.const 1013904242))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 3) (i32.const -1521486534))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 4) (i32.const 1359893119))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 5) (i32.const -1694144372))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 6) (i32.const 528734635))",
-      "    (call $mdk_sha_set (local.get $h) (i32.const 7) (i32.const 1541459225))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 0) (i32.const 1779033703))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 1) (i32.const -1150833019))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 2) (i32.const 1013904242))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 3) (i32.const -1521486534))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 4) (i32.const 1359893119))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 5) (i32.const -1694144372))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 6) (i32.const 528734635))",
+      "    (\{callW "mdk_sha_set" 3} (local.get $h) (i32.const 7) (i32.const 1541459225))",
       "    (local.set $full (i32.shr_u (local.get $n) (i32.const 6)))",
       "    (local.set $i (i32.const 0))",
       "    (block $d (loop $l",
       "      (br_if $d (i32.ge_u (local.get $i) (local.get $full)))",
-      "      (call $mdk_sha_block (local.get $h) (local.get $b) (i32.shl (local.get $i) (i32.const 6)) (local.get $w))",
+      "      (\{callW "mdk_sha_block" 4} (local.get $h) (local.get $b) (i32.shl (local.get $i) (i32.const 6)) (local.get $w))",
       "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
       "    (local.set $rem (i32.and (local.get $n) (i32.const 63)))",
       "    (local.set $size (select (i32.const 64) (i32.const 128) (i32.le_u (i32.add (local.get $rem) (i32.const 9)) (i32.const 64))))",
@@ -3459,14 +3737,14 @@ sha256RuntimeLines =
       "      (array.set $u8arr (local.get $tail) (i32.sub (i32.sub (local.get $size) (i32.const 1)) (local.get $i))",
       "        (i32.wrap_i64 (i64.shr_u (local.get $bits) (i64.extend_i32_u (i32.shl (local.get $i) (i32.const 3))))))",
       "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l4)))",
-      "    (call $mdk_sha_block (local.get $h) (local.get $tail) (i32.const 0) (local.get $w))",
+      "    (\{callW "mdk_sha_block" 4} (local.get $h) (local.get $tail) (i32.const 0) (local.get $w))",
       "    (if (i32.eq (local.get $size) (i32.const 128))",
-      "      (then (call $mdk_sha_block (local.get $h) (local.get $tail) (i32.const 64) (local.get $w))))",
+      "      (then (\{callW "mdk_sha_block" 4} (local.get $h) (local.get $tail) (i32.const 64) (local.get $w))))",
       "    (local.set $out (array.new $u8arr (i32.const 0) (i32.const 32)))",
       "    (local.set $i (i32.const 0))",
       "    (block $d5 (loop $l5",
       "      (br_if $d5 (i32.ge_u (local.get $i) (i32.const 8)))",
-      "      (local.set $x (call $mdk_sha_get (local.get $h) (local.get $i)))",
+      "      (local.set $x (\{callW "mdk_sha_get" 2} (local.get $h) (local.get $i)))",
       "      (array.set $u8arr (local.get $out) (i32.shl (local.get $i) (i32.const 2)) (i32.shr_u (local.get $x) (i32.const 24)))",
       "      (array.set $u8arr (local.get $out) (i32.add (i32.shl (local.get $i) (i32.const 2)) (i32.const 1)) (i32.shr_u (local.get $x) (i32.const 16)))",
       "      (array.set $u8arr (local.get $out) (i32.add (i32.shl (local.get $i) (i32.const 2)) (i32.const 2)) (i32.shr_u (local.get $x) (i32.const 8)))",
@@ -3499,9 +3777,13 @@ plannedImportLines = map (imp =>
   "  (import \"\{imp.namespace}\" \"\{imp.field}\" (func $\{imp.watSymbol}\{imp.signature}))")
 
 export
-plannedHelperLines : WasmDemandPlan -> List (List Int) -> List String
-plannedHelperLines plan files =
-  flatMap (plannedHelperBlock plan files) (plannedHelpers plan)
+plannedHelperLines : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  WasmDemandPlan ->
+  List (List Int) ->
+  List String
+plannedHelperLines callW tailW plan files =
+  flatMap (plannedHelperBlock callW tailW plan files) (plannedHelpers plan)
 
 -- the helper blocks [plan] selects, in module order
 plannedHelpers : WasmDemandPlan -> List String
@@ -3521,116 +3803,204 @@ helperSymbolSteps : WasmDemandPlan ->
   List (SymbolRegistry -> Result SymbolDefect SymbolRegistry)
 helperSymbolSteps plan name =
   let origin = SymbolOrigin "runtime helper \{name}" "" 0 0
-  let (HelperManifest defines calls) = helperManifest plan name
+  let (HelperManifest defines calls _) = helperManifest plan name
   map
       ((f, params) => defineSymbol (WasmFunc f) (FuncParams params) origin)
       defines
     ++ map (f => checkRef (WasmFunc f) origin) calls
 
+-- Complete output materializes these blocks. The census declares their function
+-- domain only; it does not emit helper bodies, types or globals.
+export
+checkPlannedHelperUses : WasmDemandPlan ->
+  List (SymbolRegistry -> Result SymbolDefect SymbolRegistry)
+checkPlannedHelperUses plan =
+  flatMap
+    (name =>
+      let (HelperManifest _ _ uses) = helperManifest plan name
+      let origin = SymbolOrigin "runtime helper \{name}" "" 0 0
+      map ((sym, _) => checkRef sym origin) uses)
+    (plannedHelpers plan)
+
 -- The text of helper block [name] as [plan] selects it.  `helperManifest`
 -- (wasm_demand.mdk) states what this text defines and calls.
 export
-plannedHelperBlock : WasmDemandPlan -> List (List Int) -> String -> List String
-plannedHelperBlock plan files "closApplyLines" = closApplyLines
-plannedHelperBlock plan files "ioRuntimeLines" = ioRuntimeLines
-plannedHelperBlock plan files "ioStrRuntimeLines" = ioStrRuntimeLines
-plannedHelperBlock plan files "strLeafRuntimeLines" = strLeafRuntimeLines
-plannedHelperBlock plan files "strConcatRuntimeLines" = strConcatRuntimeLines
-plannedHelperBlock plan files "appendRuntimeLines" = appendRuntimeLines
-plannedHelperBlock plan files "valueEqRuntimeLines" =
+plannedHelperBlock : (String -> Int -> String) ->
+  (String -> Int -> String) ->
+  WasmDemandPlan ->
+  List (List Int) ->
+  String ->
+  List String
+plannedHelperBlock callW tailW plan files "closApplyLines" =
+  closApplyLines callW tailW
+plannedHelperBlock callW tailW plan files "ioRuntimeLines" =
+  ioRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "ioStrRuntimeLines" =
+  ioStrRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "strLeafRuntimeLines" =
+  strLeafRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "strConcatRuntimeLines" =
+  strConcatRuntimeLines
+plannedHelperBlock callW tailW plan files "appendRuntimeLines" =
+  appendRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "valueEqRuntimeLines" =
   valueEqRuntimeLines
+    callW
+    tailW
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock plan files "valueAddRuntimeLines" =
+plannedHelperBlock callW tailW plan files "valueAddRuntimeLines" =
   valueAddRuntimeLines
+    callW
+    tailW
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock plan files "valueSubRuntimeLines" =
+plannedHelperBlock callW tailW plan files "valueSubRuntimeLines" =
   valueSubRuntimeLines
+    callW
+    tailW
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock plan files "valueMulRuntimeLines" =
+plannedHelperBlock callW tailW plan files "valueMulRuntimeLines" =
   valueMulRuntimeLines
+    callW
+    tailW
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock plan files "valueDivRuntimeLines" =
+plannedHelperBlock callW tailW plan files "valueDivRuntimeLines" =
   valueDivRuntimeLines
+    callW
+    tailW
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock plan files "valueModRuntimeLines" =
+plannedHelperBlock callW tailW plan files "valueModRuntimeLines" =
   valueModRuntimeLines
+    callW
+    tailW
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock plan files "valueCmpNumRuntimeLines" =
+plannedHelperBlock callW tailW plan files "valueCmpNumRuntimeLines" =
   valueCmpNumRuntimeLines
+    callW
+    tailW
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock plan files "u64RuntimeLines" = u64RuntimeLines
-plannedHelperBlock plan files "i64RuntimeLines" = i64RuntimeLines
-plannedHelperBlock plan files "stderrRuntimeLines" = stderrRuntimeLines
-plannedHelperBlock plan files "rngRuntimeLines" = rngRuntimeLines
-plannedHelperBlock plan files "hashRuntimeLines" = hashRuntimeLines
-plannedHelperBlock plan files "hashStringRuntimeLines" = hashStringRuntimeLines
-plannedHelperBlock plan files "floatRemRuntimeLines" = floatRemRuntimeLines
-plannedHelperBlock plan files "floatRuntimeLines" = floatRuntimeLines
-plannedHelperBlock plan files "hashFloatRuntimeLines" = hashFloatRuntimeLines
-plannedHelperBlock plan files "randomFloatRuntimeLines" =
-  randomFloatRuntimeLines
-plannedHelperBlock plan files "floatStrLines" = floatStrLines
-plannedHelperBlock plan files "floatFixedLines" = floatFixedLines
-plannedHelperBlock plan files "strSearchRuntimeLines" = strSearchRuntimeLines
-plannedHelperBlock plan files "strToIntRuntimeLines" = strToIntRuntimeLines
-plannedHelperBlock plan files "strReverseRuntimeLines" = strReverseRuntimeLines
-plannedHelperBlock plan files "strJoinRuntimeLines" = strJoinRuntimeLines
-plannedHelperBlock plan files "strCodecRuntimeLines" = strCodecRuntimeLines
-plannedHelperBlock plan files "byteBlockRuntimeLines" = byteBlockRuntimeLines
-plannedHelperBlock plan files "charFromCodeRuntimeLines" =
+plannedHelperBlock callW tailW plan files "u64RuntimeLines" = u64RuntimeLines
+plannedHelperBlock callW tailW plan files "i64RuntimeLines" = i64RuntimeLines
+plannedHelperBlock callW tailW plan files "stderrRuntimeLines" =
+  stderrRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "rngRuntimeLines" =
+  rngRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "hashRuntimeLines" =
+  hashRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "hashStringRuntimeLines" =
+  hashStringRuntimeLines
+plannedHelperBlock callW tailW plan files "floatRemRuntimeLines" =
+  floatRemRuntimeLines
+plannedHelperBlock callW tailW plan files "floatRuntimeLines" =
+  floatRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "hashFloatRuntimeLines" =
+  hashFloatRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "randomFloatRuntimeLines" =
+  randomFloatRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "floatStrLines" =
+  floatStrLines callW tailW
+plannedHelperBlock callW tailW plan files "floatFixedLines" =
+  floatFixedLines callW tailW
+plannedHelperBlock callW tailW plan files "strSearchRuntimeLines" =
+  strSearchRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "strToIntRuntimeLines" =
+  strToIntRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "strReverseRuntimeLines" =
+  strReverseRuntimeLines
+plannedHelperBlock callW tailW plan files "strJoinRuntimeLines" =
+  strJoinRuntimeLines
+plannedHelperBlock callW tailW plan files "strCodecRuntimeLines" =
+  strCodecRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "byteBlockRuntimeLines" =
+  byteBlockRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "charFromCodeRuntimeLines" =
   charFromCodeRuntimeLines
-plannedHelperBlock plan files "charClassRuntimeLines" = charClassRuntimeLines
-plannedHelperBlock plan files "ioPushPathLines" = ioPushPathLines
-plannedHelperBlock plan files "ioPushPathMoreLines" = ioPushPathMoreLines
-plannedHelperBlock plan files "ioPushGrantLines" = ioPushGrantLines
-plannedHelperBlock plan files "ioPushGrantMoreLines" = ioPushGrantMoreLines
-plannedHelperBlock plan files "ioResultLines" = ioResultLines
-plannedHelperBlock plan files "ioRefusedPanicLines" = ioRefusedPanicLines
-plannedHelperBlock plan files "ioReadFileLines" = ioReadFileLines
-plannedHelperBlock plan files "ioFetchTextLines" = ioFetchTextLines
-plannedHelperBlock plan files "ioFileExistsLines" = ioFileExistsLines
-plannedHelperBlock plan files "ioCanonicalizeLines" = ioCanonicalizeLines
-plannedHelperBlock plan files "ioWriteFileLines" = ioWriteFileLines
-plannedHelperBlock plan files "ioAppendFileLines" = ioAppendFileLines
-plannedHelperBlock plan files "ioRenameLines" = ioRenameLines
-plannedHelperBlock plan files "ioListDirLines" = ioListDirLines
-plannedHelperBlock plan files "ioStatFileLines" = ioStatFileLines
-plannedHelperBlock plan files "ioMakeDirLines" = ioMakeDirLines
-plannedHelperBlock plan files "ioRemoveFileLines" = ioRemoveFileLines
-plannedHelperBlock plan files "ioRemoveDirLines" = ioRemoveDirLines
-plannedHelperBlock plan files "ioFsyncLines" = ioFsyncLines
-plannedHelperBlock plan files "ioFileModeLines" = ioFileModeLines
-plannedHelperBlock plan files "ioWriteFileModeLines" = ioWriteFileModeLines
-plannedHelperBlock plan files "ioGetEnvLines" = ioGetEnvLines
-plannedHelperBlock plan files "ioReadLineLines" = ioReadLineLines
-plannedHelperBlock plan files "ioReadAllLines" = ioReadAllLines
-plannedHelperBlock plan files "ioReadExactlyLines" = ioReadExactlyLines
-plannedHelperBlock plan files "ioExecutablePathLines" = ioExecutablePathLines
-plannedHelperBlock plan files "jsffiArrayLines" = jsffiArrayLines
-plannedHelperBlock plan files "jsffiResultStrLines" = jsffiResultStrLines
-plannedHelperBlock plan files "ioArgsLines" = ioArgsLines
-plannedHelperBlock plan files "utf8LossyRuntimeLines" = utf8LossyRuntimeLines
-plannedHelperBlock plan files "writeFileBytesLines" = writeFileBytesLines
-plannedHelperBlock plan files "osEntropyLines" = osEntropyLines
-plannedHelperBlock plan files "readFileBytesLines" = readFileBytesLines
-plannedHelperBlock plan files "trapIntRuntimeLines" = trapIntRuntimeLines
-plannedHelperBlock plan files "intRuntimeLines" =
-  intRuntimeLines plan.intHelpers
-plannedHelperBlock plan files "siteRuntimeLines" =
-  siteRuntimeLines files plan.nonexhaustiveRuntime
-plannedHelperBlock _ _ name =
+plannedHelperBlock callW tailW plan files "charClassRuntimeLines" =
+  charClassRuntimeLines
+plannedHelperBlock callW tailW plan files "ioPushPathLines" =
+  ioPushPathLines callW tailW
+plannedHelperBlock callW tailW plan files "ioPushPathMoreLines" =
+  ioPushPathMoreLines callW tailW
+plannedHelperBlock callW tailW plan files "ioPushGrantLines" =
+  ioPushGrantLines callW tailW
+plannedHelperBlock callW tailW plan files "ioPushGrantMoreLines" =
+  ioPushGrantMoreLines callW tailW
+plannedHelperBlock callW tailW plan files "ioResultLines" =
+  ioResultLines callW tailW
+plannedHelperBlock callW tailW plan files "ioRefusedPanicLines" =
+  ioRefusedPanicLines callW tailW
+plannedHelperBlock callW tailW plan files "ioReadFileLines" =
+  ioReadFileLines callW tailW
+plannedHelperBlock callW tailW plan files "ioFetchTextLines" =
+  ioFetchTextLines callW tailW
+plannedHelperBlock callW tailW plan files "ioFileExistsLines" =
+  ioFileExistsLines callW tailW
+plannedHelperBlock callW tailW plan files "ioCanonicalizeLines" =
+  ioCanonicalizeLines callW tailW
+plannedHelperBlock callW tailW plan files "ioWriteFileLines" =
+  ioWriteFileLines callW tailW
+plannedHelperBlock callW tailW plan files "ioAppendFileLines" =
+  ioAppendFileLines callW tailW
+plannedHelperBlock callW tailW plan files "ioRenameLines" =
+  ioRenameLines callW tailW
+plannedHelperBlock callW tailW plan files "ioListDirLines" =
+  ioListDirLines callW tailW
+plannedHelperBlock callW tailW plan files "ioStatFileLines" =
+  ioStatFileLines callW tailW
+plannedHelperBlock callW tailW plan files "ioMakeDirLines" =
+  ioMakeDirLines callW tailW
+plannedHelperBlock callW tailW plan files "ioRemoveFileLines" =
+  ioRemoveFileLines callW tailW
+plannedHelperBlock callW tailW plan files "ioRemoveDirLines" =
+  ioRemoveDirLines callW tailW
+plannedHelperBlock callW tailW plan files "ioFsyncLines" =
+  ioFsyncLines callW tailW
+plannedHelperBlock callW tailW plan files "ioFileModeLines" =
+  ioFileModeLines callW tailW
+plannedHelperBlock callW tailW plan files "ioWriteFileModeLines" =
+  ioWriteFileModeLines callW tailW
+plannedHelperBlock callW tailW plan files "ioGetEnvLines" =
+  ioGetEnvLines callW tailW
+plannedHelperBlock callW tailW plan files "ioReadLineLines" =
+  ioReadLineLines callW tailW
+plannedHelperBlock callW tailW plan files "ioReadAllLines" =
+  ioReadAllLines callW tailW
+plannedHelperBlock callW tailW plan files "ioReadExactlyLines" =
+  ioReadExactlyLines callW tailW
+plannedHelperBlock callW tailW plan files "ioExecutablePathLines" =
+  ioExecutablePathLines callW tailW
+plannedHelperBlock callW tailW plan files "jsffiArrayLines" =
+  jsffiArrayLines callW tailW
+plannedHelperBlock callW tailW plan files "jsffiResultStrLines" =
+  jsffiResultStrLines callW tailW
+plannedHelperBlock callW tailW plan files "ioArgsLines" =
+  ioArgsLines callW tailW
+plannedHelperBlock callW tailW plan files "utf8LossyRuntimeLines" =
+  utf8LossyRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "writeFileBytesLines" =
+  writeFileBytesLines callW tailW
+plannedHelperBlock callW tailW plan files "osEntropyLines" =
+  osEntropyLines callW tailW
+plannedHelperBlock callW tailW plan files "readFileBytesLines" =
+  readFileBytesLines callW tailW
+plannedHelperBlock callW tailW plan files "trapIntRuntimeLines" =
+  trapIntRuntimeLines callW tailW
+plannedHelperBlock callW tailW plan files "intRuntimeLines" =
+  intRuntimeLines callW tailW plan.intHelpers
+plannedHelperBlock callW tailW plan files "siteRuntimeLines" =
+  siteRuntimeLines callW tailW files plan.nonexhaustiveRuntime
+plannedHelperBlock callW tailW _ _ name =
   panic ("internal error: unplanned-wasm-helper: " ++ name)

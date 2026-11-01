@@ -66,6 +66,7 @@ public export data SymbolDefect =
   -- a function some call names, or a generated symbol a whole module only
   -- declares, that nothing in the module defines
   | UndefinedReference String SymbolOrigin
+  | UncheckedText String SymbolOrigin
   deriving (Eq, Debug)
 
 data Binding = Declared | Defined deriving (Eq)
@@ -304,6 +305,8 @@ defectCode (PrototypeConflict _ _ _ _ _) = EPhysShape
 defectCode (ShapeMismatch _ _ _ _ _) = EPhysShape
 defectCode (UndefinedReference _ _) = EPhysUndefined
 
+defectCode (UncheckedText _ _) = EPhysUnchecked
+
 -- The binding and position the defect is reported at.
 export
 defectOrigin : SymbolDefect -> SymbolOrigin
@@ -311,6 +314,8 @@ defectOrigin (DuplicateDefinition _ at _) = at
 defectOrigin (PrototypeConflict _ _ _ at _) = at
 defectOrigin (ShapeMismatch _ _ _ at _) = at
 defectOrigin (UndefinedReference _ at) = at
+
+defectOrigin (UncheckedText _ at) = at
 
 export
 defectMessage : SymbolDefect -> String
@@ -323,5 +328,44 @@ defectMessage (ShapeMismatch name shape proto at declared) =
 defectMessage (UndefinedReference name at) =
   "in \{bindingOf at}: the LLVM module refers to `@\{name}`, which nothing in it defines"
 
+defectMessage (UncheckedText reason at) =
+  "in \{bindingOf at}: LLVM text has no valid checked-call receipt (\{reason})"
+
 shapeText : CallShape -> String
 shapeText (CallShape ret operands) = "\{ret} (\{joinWith ", " operands})"
+
+public export data SymbolLinkage =
+  | SymbolDeclared
+  | SymbolDefined
+  deriving (Eq, Debug)
+
+public export data SymbolDeclaration =
+  SymbolDeclaration LlvmSymbol Prototype SymbolLinkage SymbolOrigin
+  deriving (Eq, Debug)
+
+export
+declarations : SymbolRegistry -> List SymbolDeclaration
+-- Each target has a nominal declaration inventory and registry entry type.
+-- lint-disable-next-line rule-duplicate-body
+declarations reg = flatMap (declarationAt reg) (omKeys reg.entries)
+
+declarationAt : SymbolRegistry -> String -> List SymbolDeclaration
+declarationAt reg name = match omLookup name reg.entries
+  None => []
+  Some (Entry binding sym proto origin) => [
+    SymbolDeclaration
+      sym
+      proto
+      (match binding
+        Declared => SymbolDeclared
+        Defined => SymbolDefined)
+      origin,
+  ]
+
+export
+isExcused : LlvmSymbol -> SymbolRegistry -> Bool
+isExcused sym reg = omHasKey (symbolName sym) reg.excused
+
+export
+registryScope : SymbolRegistry -> ModuleScope
+registryScope reg = reg.scope
