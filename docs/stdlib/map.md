@@ -99,7 +99,7 @@ True
 
 ```
 get : Ord k => k -> Map k v -> Option v
-get k _
+get _k _
 ```
 
 The value at `k`, or `None` when the key is absent.
@@ -115,7 +115,7 @@ None
 
 ```
 has : Ord k => k -> Map k v -> Bool
-has k _
+has _k _
 ```
 
 Whether `k` is present.
@@ -131,7 +131,7 @@ False
 
 ```
 findWithDefault : Ord k => v -> k -> Map k v -> v
-findWithDefault d k _
+findWithDefault d _k _
 ```
 
 The value at `k`, or `d` when the key is absent.
@@ -163,7 +163,7 @@ The map with `v` stored at `k`, replacing any existing value.
 
 ```
 insertWith : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
-insertWith f k v _
+insertWith _f k v _
 ```
 
 The map with `v` stored at `k`, combining with an existing value.
@@ -180,10 +180,10 @@ is absent, `v` is stored as it is.
 
 ```
 adjust : Ord k => (v -> v) -> k -> Map k v -> Map k v
-adjust f k _
+adjust _f _k _
 ```
 
-The map with `f` applied to the value at `k`.
+The map with the function applied to the value at `k`.
 
 Unchanged when `k` is absent.
 
@@ -198,7 +198,7 @@ Unchanged when `k` is absent.
 
 ```
 delete : Ord k => k -> Map k v -> Map k v
-delete k _
+delete _k _
 ```
 
 The map without the entry at `k`.
@@ -304,7 +304,7 @@ Unchanged when the map is empty.
 
 ```
 foldrWithKey : (k -> v -> b -> <e> b) -> b -> Map k v -> <e> b
-foldrWithKey f z _
+foldrWithKey _f z _
 ```
 
 A right fold over the entries in ascending key order.
@@ -318,7 +318,7 @@ A right fold over the entries in ascending key order.
 
 ```
 foldlWithKey : (b -> k -> v -> <e> b) -> b -> Map k v -> <e> b
-foldlWithKey f z _
+foldlWithKey _f z _
 ```
 
 A left fold over the entries in ascending key order.
@@ -405,11 +405,11 @@ The values, in ascending order of their keys.
 
 ```
 mapWithKey : (k -> v -> <e> w) -> Map k v -> <e> Map k w
-mapWithKey f _
+mapWithKey _f _
 ```
 
-The map with `f` applied to every value, where `f` also receives the
-key.
+The map with the function applied to every value, where the function also
+receives the key.
 
 `map` is the form whose function sees only the value.
 
@@ -424,10 +424,10 @@ key.
 
 ```
 filterWithKey : Ord k => (k -> v -> <e> Bool) -> Map k v -> <e> Map k v
-filterWithKey p _
+filterWithKey _p _
 ```
 
-The entries whose key and value satisfy `p`.
+The entries whose key and value satisfy the predicate.
 
 `filter` is the form whose predicate sees only the value.
 
@@ -458,7 +458,7 @@ The entries of both maps. On a shared key, the first map's value wins.
 
 ```
 unionWith : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
-unionWith f a b
+unionWith _f a b
 ```
 
 The entries of both maps. On a shared key, the value is `f left right`.
@@ -472,7 +472,7 @@ The entries of both maps. On a shared key, the value is `f left right`.
 
 ```
 difference : Ord k => Map k v -> Map k w -> Map k v
-difference a b
+difference a _b
 ```
 
 The entries of the first map whose keys are absent from the second.
@@ -486,7 +486,7 @@ The entries of the first map whose keys are absent from the second.
 
 ```
 intersectionWith : Ord k => (v -> w -> x) -> Map k v -> Map k w -> Map k x
-intersectionWith f a b
+intersectionWith _f _a _b
 ```
 
 The keys present in both maps, each with the value `f left right`.

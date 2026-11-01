@@ -1,5 +1,5 @@
 # META
-source_lines=603
+source_lines=623
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_scope.mdk — the per-file scope model of the lint rules: every
@@ -392,36 +392,56 @@ plainSite n loc k = Site n loc k [] ""
 letBindSite : BinderKind -> LetBind -> Site
 letBindSite k (LetBind n _ loc _) = plainSite n loc k
 
+-- How a binder name token is written: plainly, as a record pun (a field `{x}`
+-- that binds `x`, so renaming the binder renames the field), or as the binder of
+-- an as-pattern `x@p`.
+public export data SiteKind = SitePlain | SitePun | SiteAs deriving (Eq)
+
+-- One binder name token: its name, its span and how it is written.
+public export data NameSite = NameSite String Loc SiteKind
+
 -- The names a pattern binds, with their name tokens.  Every alternative of an
 -- or-pattern is listed: the later ones become alternate sites of the first's
 -- binder (`mintFrame` joins equal names).
-patSites : BinderKind -> Pat -> List Site
-patSites k (PVar x l _) = [plainSite x l k]
-patSites _ PWild = []
-patSites _ (PLit _) = []
-patSites k (PCon _ ps) = flatMap (patSites k) ps
-patSites k (PCons a b) = patSites k a ++ patSites k b
-patSites k (PTuple ps) = flatMap (patSites k) ps
-patSites k (PList ps) = flatMap (patSites k) ps
-patSites k (PAs x l _ p) = plainSite x l k :: patSites k p
-patSites k (POr ps) = flatMap (patSites k) ps
-patSites _ (PRng _ _ _) = []
-patSites k (PRec _ fields _) = flatMap (recFieldSites k) fields
+export
+patNameSites : Pat -> List NameSite
+patNameSites (PVar x l _) = [NameSite x l SitePlain]
+patNameSites PWild = []
+patNameSites (PLit _) = []
+patNameSites (PCon _ ps) = flatMap patNameSites ps
+patNameSites (PCons a b) = patNameSites a ++ patNameSites b
+patNameSites (PTuple ps) = flatMap patNameSites ps
+patNameSites (PList ps) = flatMap patNameSites ps
+patNameSites (PAs x l _ p) = NameSite x l SiteAs :: patNameSites p
+patNameSites (POr ps) = flatMap patNameSites ps
+patNameSites (PRng _ _ _) = []
+patNameSites (PRec _ fields _) = flatMap recFieldNameSites fields
 
-recFieldSites : BinderKind -> RecPatField -> List Site
-recFieldSites k (RecPatField name l _ None) = [plainSite name l k]
-recFieldSites k (RecPatField _ _ _ (Some p)) = patSites k p
+recFieldNameSites : RecPatField -> List NameSite
+recFieldNameSites (RecPatField name l _ None) = [NameSite name l SitePun]
+recFieldNameSites (RecPatField _ _ _ (Some p)) = patNameSites p
+
+-- The parameter name tokens a body owner writes.
+export
+ownerNameSites : BodyOwner -> List NameSite
+ownerNameSites (OwnerClause _ ps) = flatMap patNameSites ps
+ownerNameSites (OwnerImplMethod _ _ ps) = flatMap patNameSites ps
+ownerNameSites (OwnerIfaceDefault _ _ ps) = flatMap patNameSites ps
+ownerNameSites (OwnerTest _) = []
+ownerNameSites (OwnerProp _ params) = map propParamNameSite params
+ownerNameSites (OwnerLetGroup _ ps) = flatMap patNameSites ps
+
+propParamNameSite : PropParam -> NameSite
+propParamNameSite (PropParam n l _) = NameSite n l SitePlain
+
+binderSite : BinderKind -> NameSite -> Site
+binderSite k (NameSite n l _) = plainSite n l k
+
+patSites : BinderKind -> Pat -> List Site
+patSites k p = map (binderSite k) (patNameSites p)
 
 ownerSites : BodyOwner -> List Site
-ownerSites (OwnerClause _ ps) = flatMap (patSites BParam) ps
-ownerSites (OwnerImplMethod _ _ ps) = flatMap (patSites BParam) ps
-ownerSites (OwnerIfaceDefault _ _ ps) = flatMap (patSites BParam) ps
-ownerSites (OwnerTest _) = []
-ownerSites (OwnerProp _ params) = map propParamSite params
-ownerSites (OwnerLetGroup _ ps) = flatMap (patSites BParam) ps
-
-propParamSite : PropParam -> Site
-propParamSite (PropParam n l _) = plainSite n l BParam
+ownerSites owner = map (binderSite BParam) (ownerNameSites owner)
 
 -- ── frames ────────────────────────────────────────────────────────────────────
 -- One frame from a site list.  A name met again in the same frame is another
@@ -773,30 +793,39 @@ walkAssign w scope loc x e =
 (DFunDef false "plainSite" ((PVar "n") (PVar "loc") (PVar "k")) (EApp (EApp (EApp (EApp (EApp (EVar "Site") (EVar "n")) (EVar "loc")) (EVar "k")) (EListLit)) (ELit (LString ""))))
 (DTypeSig false "letBindSite" (TyFun (TyCon "BinderKind") (TyFun (TyCon "LetBind") (TyCon "Site"))))
 (DFunDef false "letBindSite" ((PVar "k") (PCon "LetBind" (PVar "n") PWild (PVar "loc") PWild)) (EApp (EApp (EApp (EVar "plainSite") (EVar "n")) (EVar "loc")) (EVar "k")))
+(DData Public "SiteKind" () ((variant "SitePlain" (ConPos)) (variant "SitePun" (ConPos)) (variant "SiteAs" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "SiteKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "SitePlain") (PCon "SitePlain")) () (EVar "True")) (arm (PTuple (PCon "SitePun") (PCon "SitePun")) () (EVar "True")) (arm (PTuple (PCon "SiteAs") (PCon "SiteAs")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DData Public "NameSite" () ((variant "NameSite" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "SiteKind")))) ())
+(DTypeSig true "patNameSites" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "NameSite"))))
+(DFunDef false "patNameSites" ((PCon "PVar" (PVar "x") (PVar "l") PWild)) (EListLit (EApp (EApp (EApp (EVar "NameSite") (EVar "x")) (EVar "l")) (EVar "SitePlain"))))
+(DFunDef false "patNameSites" ((PCon "PWild")) (EListLit))
+(DFunDef false "patNameSites" ((PCon "PLit" PWild)) (EListLit))
+(DFunDef false "patNameSites" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DFunDef false "patNameSites" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patNameSites") (EVar "a")) (EApp (EVar "patNameSites") (EVar "b"))))
+(DFunDef false "patNameSites" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DFunDef false "patNameSites" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DFunDef false "patNameSites" ((PCon "PAs" (PVar "x") (PVar "l") PWild (PVar "p"))) (EBinOp "::" (EApp (EApp (EApp (EVar "NameSite") (EVar "x")) (EVar "l")) (EVar "SiteAs")) (EApp (EVar "patNameSites") (EVar "p"))))
+(DFunDef false "patNameSites" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DFunDef false "patNameSites" ((PCon "PRng" PWild PWild PWild)) (EListLit))
+(DFunDef false "patNameSites" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recFieldNameSites")) (EVar "fields")))
+(DTypeSig false "recFieldNameSites" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "NameSite"))))
+(DFunDef false "recFieldNameSites" ((PCon "RecPatField" (PVar "name") (PVar "l") PWild (PCon "None"))) (EListLit (EApp (EApp (EApp (EVar "NameSite") (EVar "name")) (EVar "l")) (EVar "SitePun"))))
+(DFunDef false "recFieldNameSites" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patNameSites") (EVar "p")))
+(DTypeSig true "ownerNameSites" (TyFun (TyCon "BodyOwner") (TyApp (TyCon "List") (TyCon "NameSite"))))
+(DFunDef false "ownerNameSites" ((PCon "OwnerClause" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DFunDef false "ownerNameSites" ((PCon "OwnerImplMethod" PWild PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DFunDef false "ownerNameSites" ((PCon "OwnerIfaceDefault" PWild PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DFunDef false "ownerNameSites" ((PCon "OwnerTest" PWild)) (EListLit))
+(DFunDef false "ownerNameSites" ((PCon "OwnerProp" PWild (PVar "params"))) (EApp (EApp (EVar "map") (EVar "propParamNameSite")) (EVar "params")))
+(DFunDef false "ownerNameSites" ((PCon "OwnerLetGroup" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DTypeSig false "propParamNameSite" (TyFun (TyCon "PropParam") (TyCon "NameSite")))
+(DFunDef false "propParamNameSite" ((PCon "PropParam" (PVar "n") (PVar "l") PWild)) (EApp (EApp (EApp (EVar "NameSite") (EVar "n")) (EVar "l")) (EVar "SitePlain")))
+(DTypeSig false "binderSite" (TyFun (TyCon "BinderKind") (TyFun (TyCon "NameSite") (TyCon "Site"))))
+(DFunDef false "binderSite" ((PVar "k") (PCon "NameSite" (PVar "n") (PVar "l") PWild)) (EApp (EApp (EApp (EVar "plainSite") (EVar "n")) (EVar "l")) (EVar "k")))
 (DTypeSig false "patSites" (TyFun (TyCon "BinderKind") (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Site")))))
-(DFunDef false "patSites" ((PVar "k") (PCon "PVar" (PVar "x") (PVar "l") PWild)) (EListLit (EApp (EApp (EApp (EVar "plainSite") (EVar "x")) (EVar "l")) (EVar "k"))))
-(DFunDef false "patSites" (PWild (PCon "PWild")) (EListLit))
-(DFunDef false "patSites" (PWild (PCon "PLit" PWild)) (EListLit))
-(DFunDef false "patSites" ((PVar "k") (PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "patSites") (EVar "k"))) (EVar "ps")))
-(DFunDef false "patSites" ((PVar "k") (PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "patSites") (EVar "k")) (EVar "a")) (EApp (EApp (EVar "patSites") (EVar "k")) (EVar "b"))))
-(DFunDef false "patSites" ((PVar "k") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "patSites") (EVar "k"))) (EVar "ps")))
-(DFunDef false "patSites" ((PVar "k") (PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "patSites") (EVar "k"))) (EVar "ps")))
-(DFunDef false "patSites" ((PVar "k") (PCon "PAs" (PVar "x") (PVar "l") PWild (PVar "p"))) (EBinOp "::" (EApp (EApp (EApp (EVar "plainSite") (EVar "x")) (EVar "l")) (EVar "k")) (EApp (EApp (EVar "patSites") (EVar "k")) (EVar "p"))))
-(DFunDef false "patSites" ((PVar "k") (PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "patSites") (EVar "k"))) (EVar "ps")))
-(DFunDef false "patSites" (PWild (PCon "PRng" PWild PWild PWild)) (EListLit))
-(DFunDef false "patSites" ((PVar "k") (PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EApp (EVar "recFieldSites") (EVar "k"))) (EVar "fields")))
-(DTypeSig false "recFieldSites" (TyFun (TyCon "BinderKind") (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "Site")))))
-(DFunDef false "recFieldSites" ((PVar "k") (PCon "RecPatField" (PVar "name") (PVar "l") PWild (PCon "None"))) (EListLit (EApp (EApp (EApp (EVar "plainSite") (EVar "name")) (EVar "l")) (EVar "k"))))
-(DFunDef false "recFieldSites" ((PVar "k") (PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EVar "patSites") (EVar "k")) (EVar "p")))
+(DFunDef false "patSites" ((PVar "k") (PVar "p")) (EApp (EApp (EVar "map") (EApp (EVar "binderSite") (EVar "k"))) (EApp (EVar "patNameSites") (EVar "p"))))
 (DTypeSig false "ownerSites" (TyFun (TyCon "BodyOwner") (TyApp (TyCon "List") (TyCon "Site"))))
-(DFunDef false "ownerSites" ((PCon "OwnerClause" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "patSites") (EVar "BParam"))) (EVar "ps")))
-(DFunDef false "ownerSites" ((PCon "OwnerImplMethod" PWild PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "patSites") (EVar "BParam"))) (EVar "ps")))
-(DFunDef false "ownerSites" ((PCon "OwnerIfaceDefault" PWild PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "patSites") (EVar "BParam"))) (EVar "ps")))
-(DFunDef false "ownerSites" ((PCon "OwnerTest" PWild)) (EListLit))
-(DFunDef false "ownerSites" ((PCon "OwnerProp" PWild (PVar "params"))) (EApp (EApp (EVar "map") (EVar "propParamSite")) (EVar "params")))
-(DFunDef false "ownerSites" ((PCon "OwnerLetGroup" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "patSites") (EVar "BParam"))) (EVar "ps")))
-(DTypeSig false "propParamSite" (TyFun (TyCon "PropParam") (TyCon "Site")))
-(DFunDef false "propParamSite" ((PCon "PropParam" (PVar "n") (PVar "l") PWild)) (EApp (EApp (EApp (EVar "plainSite") (EVar "n")) (EVar "l")) (EVar "BParam")))
+(DFunDef false "ownerSites" ((PVar "owner")) (EApp (EApp (EVar "map") (EApp (EVar "binderSite") (EVar "BParam"))) (EApp (EVar "ownerNameSites") (EVar "owner"))))
 (DTypeSig false "mintFrame" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyCon "Site")) (TyCon "Frame"))))
 (DFunDef false "mintFrame" ((PVar "w") (PVar "sites")) (EApp (EApp (EVar "Frame") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "mintFrameGo") (EVar "w")) (EListLit)) (EVar "sites")))) (EVar "None")))
 (DTypeSig false "mintIndexedFrame" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyCon "Site")) (TyCon "Frame"))))
@@ -1035,30 +1064,39 @@ walkAssign w scope loc x e =
 (DFunDef false "plainSite" ((PVar "n") (PVar "loc") (PVar "k")) (EApp (EApp (EApp (EApp (EApp (EVar "Site") (EVar "n")) (EVar "loc")) (EVar "k")) (EListLit)) (ELit (LString ""))))
 (DTypeSig false "letBindSite" (TyFun (TyCon "BinderKind") (TyFun (TyCon "LetBind") (TyCon "Site"))))
 (DFunDef false "letBindSite" ((PVar "k") (PCon "LetBind" (PVar "n") PWild (PVar "loc") PWild)) (EApp (EApp (EApp (EVar "plainSite") (EVar "n")) (EVar "loc")) (EVar "k")))
+(DData Public "SiteKind" () ((variant "SitePlain" (ConPos)) (variant "SitePun" (ConPos)) (variant "SiteAs" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "SiteKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "SitePlain") (PCon "SitePlain")) () (EVar "True")) (arm (PTuple (PCon "SitePun") (PCon "SitePun")) () (EVar "True")) (arm (PTuple (PCon "SiteAs") (PCon "SiteAs")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DData Public "NameSite" () ((variant "NameSite" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "SiteKind")))) ())
+(DTypeSig true "patNameSites" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "NameSite"))))
+(DFunDef false "patNameSites" ((PCon "PVar" (PVar "x") (PVar "l") PWild)) (EListLit (EApp (EApp (EApp (EVar "NameSite") (EVar "x")) (EVar "l")) (EVar "SitePlain"))))
+(DFunDef false "patNameSites" ((PCon "PWild")) (EListLit))
+(DFunDef false "patNameSites" ((PCon "PLit" PWild)) (EListLit))
+(DFunDef false "patNameSites" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DFunDef false "patNameSites" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patNameSites") (EVar "a")) (EApp (EVar "patNameSites") (EVar "b"))))
+(DFunDef false "patNameSites" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DFunDef false "patNameSites" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DFunDef false "patNameSites" ((PCon "PAs" (PVar "x") (PVar "l") PWild (PVar "p"))) (EBinOp "::" (EApp (EApp (EApp (EVar "NameSite") (EVar "x")) (EVar "l")) (EVar "SiteAs")) (EApp (EVar "patNameSites") (EVar "p"))))
+(DFunDef false "patNameSites" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DFunDef false "patNameSites" ((PCon "PRng" PWild PWild PWild)) (EListLit))
+(DFunDef false "patNameSites" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recFieldNameSites")) (EVar "fields")))
+(DTypeSig false "recFieldNameSites" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "NameSite"))))
+(DFunDef false "recFieldNameSites" ((PCon "RecPatField" (PVar "name") (PVar "l") PWild (PCon "None"))) (EListLit (EApp (EApp (EApp (EVar "NameSite") (EVar "name")) (EVar "l")) (EVar "SitePun"))))
+(DFunDef false "recFieldNameSites" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patNameSites") (EVar "p")))
+(DTypeSig true "ownerNameSites" (TyFun (TyCon "BodyOwner") (TyApp (TyCon "List") (TyCon "NameSite"))))
+(DFunDef false "ownerNameSites" ((PCon "OwnerClause" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DFunDef false "ownerNameSites" ((PCon "OwnerImplMethod" PWild PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DFunDef false "ownerNameSites" ((PCon "OwnerIfaceDefault" PWild PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DFunDef false "ownerNameSites" ((PCon "OwnerTest" PWild)) (EListLit))
+(DFunDef false "ownerNameSites" ((PCon "OwnerProp" PWild (PVar "params"))) (EApp (EApp (EMethodRef "map") (EVar "propParamNameSite")) (EVar "params")))
+(DFunDef false "ownerNameSites" ((PCon "OwnerLetGroup" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patNameSites")) (EVar "ps")))
+(DTypeSig false "propParamNameSite" (TyFun (TyCon "PropParam") (TyCon "NameSite")))
+(DFunDef false "propParamNameSite" ((PCon "PropParam" (PVar "n") (PVar "l") PWild)) (EApp (EApp (EApp (EVar "NameSite") (EVar "n")) (EVar "l")) (EVar "SitePlain")))
+(DTypeSig false "binderSite" (TyFun (TyCon "BinderKind") (TyFun (TyCon "NameSite") (TyCon "Site"))))
+(DFunDef false "binderSite" ((PVar "k") (PCon "NameSite" (PVar "n") (PVar "l") PWild)) (EApp (EApp (EApp (EVar "plainSite") (EVar "n")) (EVar "l")) (EVar "k")))
 (DTypeSig false "patSites" (TyFun (TyCon "BinderKind") (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Site")))))
-(DFunDef false "patSites" ((PVar "k") (PCon "PVar" (PVar "x") (PVar "l") PWild)) (EListLit (EApp (EApp (EApp (EVar "plainSite") (EVar "x")) (EVar "l")) (EVar "k"))))
-(DFunDef false "patSites" (PWild (PCon "PWild")) (EListLit))
-(DFunDef false "patSites" (PWild (PCon "PLit" PWild)) (EListLit))
-(DFunDef false "patSites" ((PVar "k") (PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "patSites") (EVar "k"))) (EVar "ps")))
-(DFunDef false "patSites" ((PVar "k") (PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "patSites") (EVar "k")) (EVar "a")) (EApp (EApp (EVar "patSites") (EVar "k")) (EVar "b"))))
-(DFunDef false "patSites" ((PVar "k") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "patSites") (EVar "k"))) (EVar "ps")))
-(DFunDef false "patSites" ((PVar "k") (PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "patSites") (EVar "k"))) (EVar "ps")))
-(DFunDef false "patSites" ((PVar "k") (PCon "PAs" (PVar "x") (PVar "l") PWild (PVar "p"))) (EBinOp "::" (EApp (EApp (EApp (EVar "plainSite") (EVar "x")) (EVar "l")) (EVar "k")) (EApp (EApp (EVar "patSites") (EVar "k")) (EVar "p"))))
-(DFunDef false "patSites" ((PVar "k") (PCon "POr" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "patSites") (EVar "k"))) (EVar "ps")))
-(DFunDef false "patSites" (PWild (PCon "PRng" PWild PWild PWild)) (EListLit))
-(DFunDef false "patSites" ((PVar "k") (PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "recFieldSites") (EVar "k"))) (EVar "fields")))
-(DTypeSig false "recFieldSites" (TyFun (TyCon "BinderKind") (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "Site")))))
-(DFunDef false "recFieldSites" ((PVar "k") (PCon "RecPatField" (PVar "name") (PVar "l") PWild (PCon "None"))) (EListLit (EApp (EApp (EApp (EVar "plainSite") (EVar "name")) (EVar "l")) (EVar "k"))))
-(DFunDef false "recFieldSites" ((PVar "k") (PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EVar "patSites") (EVar "k")) (EVar "p")))
+(DFunDef false "patSites" ((PVar "k") (PVar "p")) (EApp (EApp (EMethodRef "map") (EApp (EVar "binderSite") (EVar "k"))) (EApp (EVar "patNameSites") (EVar "p"))))
 (DTypeSig false "ownerSites" (TyFun (TyCon "BodyOwner") (TyApp (TyCon "List") (TyCon "Site"))))
-(DFunDef false "ownerSites" ((PCon "OwnerClause" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "patSites") (EVar "BParam"))) (EVar "ps")))
-(DFunDef false "ownerSites" ((PCon "OwnerImplMethod" PWild PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "patSites") (EVar "BParam"))) (EVar "ps")))
-(DFunDef false "ownerSites" ((PCon "OwnerIfaceDefault" PWild PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "patSites") (EVar "BParam"))) (EVar "ps")))
-(DFunDef false "ownerSites" ((PCon "OwnerTest" PWild)) (EListLit))
-(DFunDef false "ownerSites" ((PCon "OwnerProp" PWild (PVar "params"))) (EApp (EApp (EMethodRef "map") (EVar "propParamSite")) (EVar "params")))
-(DFunDef false "ownerSites" ((PCon "OwnerLetGroup" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "patSites") (EVar "BParam"))) (EVar "ps")))
-(DTypeSig false "propParamSite" (TyFun (TyCon "PropParam") (TyCon "Site")))
-(DFunDef false "propParamSite" ((PCon "PropParam" (PVar "n") (PVar "l") PWild)) (EApp (EApp (EApp (EVar "plainSite") (EVar "n")) (EVar "l")) (EVar "BParam")))
+(DFunDef false "ownerSites" ((PVar "owner")) (EApp (EApp (EMethodRef "map") (EApp (EVar "binderSite") (EVar "BParam"))) (EApp (EVar "ownerNameSites") (EVar "owner"))))
 (DTypeSig false "mintFrame" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyCon "Site")) (TyCon "Frame"))))
 (DFunDef false "mintFrame" ((PVar "w") (PVar "sites")) (EApp (EApp (EVar "Frame") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "mintFrameGo") (EVar "w")) (EListLit)) (EVar "sites")))) (EVar "None")))
 (DTypeSig false "mintIndexedFrame" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyCon "Site")) (TyCon "Frame"))))

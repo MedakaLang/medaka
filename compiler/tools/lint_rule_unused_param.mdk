@@ -42,9 +42,13 @@ import tools.lint_core.{
 import tools.lint_scope.{
   Binder(..),
   BinderKind(..),
+  NameSite(..),
+  SiteKind(..),
   FileScopes,
   binderOf,
   bindersNamedIn,
+  ownerNameSites,
+  patNameSites,
   unusedBinders,
   usesNamedIn,
 }
@@ -82,75 +86,32 @@ ruleUnusedParam _ _ facts pos prog =
   if isEmpty unused then
     []
   else
-    let sites = flatMap declParamSites prog
+    let sites = flatMap declNameSites prog
     flatMap (paramFinding facts pos sites) unused
-
--- How a parameter name token is written: plainly, as a record pun (a field `{x}`
--- that binds `x`, so renaming the binder renames the field), or as the binder of
--- an as-pattern `x@p`.
-data SiteKind = SitePlain | SitePun | SiteAs deriving (Eq)
-
--- One parameter name token: its name, its span and how it is written.
-data ParamSite = ParamSite String Loc SiteKind
 
 -- The parameter sites of one declaration: those of each body's owner, then
 -- those of every `where` or `let rec` clause nested in a body.
-declParamSites : Decl -> List ParamSite
-declParamSites d = flatMap bodyParamSites (declBodies d)
+declNameSites : Decl -> List NameSite
+declNameSites d = flatMap bodyNameSites (declBodies d)
 
-bodyParamSites : DeclBody -> List ParamSite
-bodyParamSites (DeclBody owner body) =
-  ownerParamSites owner ++ exprParamSites body
+bodyNameSites : DeclBody -> List NameSite
+bodyNameSites (DeclBody owner body) = ownerNameSites owner ++ exprNameSites body
 
-ownerParamSites : BodyOwner -> List ParamSite
-ownerParamSites (OwnerClause _ ps) = flatMap patParamSites ps
-ownerParamSites (OwnerImplMethod _ _ ps) = flatMap patParamSites ps
-ownerParamSites (OwnerIfaceDefault _ _ ps) = flatMap patParamSites ps
-ownerParamSites (OwnerLetGroup _ ps) = flatMap patParamSites ps
-ownerParamSites (OwnerProp _ params) = map propParamSite params
-ownerParamSites (OwnerTest _) = []
+exprNameSites : Expr -> List NameSite
+exprNameSites e = groupNameSites e ++ flatMap exprNameSites (childExprs e)
 
-propParamSite : PropParam -> ParamSite
-propParamSite (PropParam n l _) = ParamSite n l SitePlain
+groupNameSites : Expr -> List NameSite
+groupNameSites (ELetGroup binds _) = flatMap bindNameSites binds
+groupNameSites _ = []
 
-exprParamSites : Expr -> List ParamSite
-exprParamSites e = groupParamSites e ++ flatMap exprParamSites (childExprs e)
+bindNameSites : LetBind -> List NameSite
+bindNameSites (LetBind _ clauses _ _) = flatMap clauseNameSites clauses
 
-groupParamSites : Expr -> List ParamSite
-groupParamSites (ELetGroup binds _) = flatMap bindParamSites binds
-groupParamSites _ = []
-
-bindParamSites : LetBind -> List ParamSite
-bindParamSites (LetBind _ clauses _ _) = flatMap clauseParamSites clauses
-
-clauseParamSites : FunClause -> List ParamSite
-clauseParamSites (FunClause ps _) = flatMap patParamSites ps
-
--- Every name a pattern binds, with its token.  Each alternative of an or-pattern
--- is listed, since each one names the binder.
-patParamSites : Pat -> List ParamSite
-patParamSites (PVar x l _) = [ParamSite x l SitePlain]
-patParamSites PWild = []
-patParamSites (PLit _) = []
-patParamSites (PCon _ ps) = flatMap patParamSites ps
-patParamSites (PCons a b) = patParamSites a ++ patParamSites b
-patParamSites (PTuple ps) = flatMap patParamSites ps
-patParamSites (PList ps) = flatMap patParamSites ps
-patParamSites (PAs x l _ p) = ParamSite x l SiteAs :: patParamSites p
-patParamSites (POr ps) = flatMap patParamSites ps
-patParamSites (PRng _ _ _) = []
-patParamSites (PRec _ fields _) = flatMap fieldParamSites fields
-
-fieldParamSites : RecPatField -> List ParamSite
-fieldParamSites (RecPatField n l _ None) = [ParamSite n l SitePun]
-fieldParamSites (RecPatField _ _ _ (Some p)) = patParamSites p
+clauseNameSites : FunClause -> List NameSite
+clauseNameSites (FunClause ps _) = flatMap patNameSites ps
 
 -- One finding per unused parameter, at its binder token.
-paramFinding : FileFacts ->
-  Positions ->
-  List ParamSite ->
-  Binder ->
-  List Finding
+paramFinding : FileFacts -> Positions -> List NameSite -> Binder -> List Finding
 paramFinding facts pos sites b =
   let fs = factScopes facts
   let mine = filter (binderIs fs b) sites
@@ -166,8 +127,8 @@ paramFinding facts pos sites b =
   ]
 
 -- A site belongs to the binder when the scope model resolves its position to it.
-binderIs : FileScopes -> Binder -> ParamSite -> Bool
-binderIs fs b (ParamSite _ l _) = match binderOf fs l
+binderIs : FileScopes -> Binder -> NameSite -> Bool
+binderIs fs b (NameSite _ l _) = match binderOf fs l
   Some c => c.binderId == b.binderId
   None => False
 
@@ -198,7 +159,7 @@ locLine (Loc _ l _ _ _) = l
 -- name's width: the edit would then land on the wrong text.  A suggestion
 -- instead of a fix when a pun is among the sites, or `_name` is already used in
 -- the declaration.
-paramFix : FileFacts -> (Int, Int) -> Binder -> List ParamSite -> Option Fix
+paramFix : FileFacts -> (Int, Int) -> Binder -> List NameSite -> Option Fix
 paramFix facts range b mine =
   let name = b.binderName
   let hasPun = any (s => siteKind s == SitePun) mine
@@ -212,20 +173,20 @@ paramFix facts range b mine =
   else
     Some (renameFix Safe name mine)
 
-renameFix : Applicability -> String -> List ParamSite -> Fix
+renameFix : Applicability -> String -> List NameSite -> Fix
 renameFix applicability name mine = Fix {
   fixApplicability = applicability,
   fixEdits = map (s => FixEdit (siteLoc s) (renamedText name s)) mine,
   fixMessage = "rename the unused parameter",
 }
 
-renamedText : String -> ParamSite -> String
-renamedText name (ParamSite _ _ kind) =
+renamedText : String -> NameSite -> String
+renamedText name (NameSite _ _ kind) =
   if kind == SitePun then "\{name} = _\{name}" else "_\{name}"
 
 -- Deleting `x@` from each site.  No fix unless an `@` stands right after every
 -- name token, since the parser keeps only the name's span.
-dropAsFix : Array String -> List ParamSite -> Option Fix
+dropAsFix : Array String -> List NameSite -> Option Fix
 dropAsFix lines mine =
   if all (atFollows lines) mine then
     Some Fix {
@@ -236,15 +197,14 @@ dropAsFix lines mine =
   else
     None
 
-dropAsEdit : ParamSite -> FixEdit
-dropAsEdit (ParamSite _ (Loc f sl sc el ec) _) =
+dropAsEdit : NameSite -> FixEdit
+dropAsEdit (NameSite _ (Loc f sl sc el ec) _) =
   FixEdit (Loc f sl sc el (ec + 1)) ""
 
-atFollows : Array String -> ParamSite -> Bool
-atFollows lines (ParamSite _ (Loc _ _ _ el ec) _) =
-  match arrayGet (el - 1) lines
-    Some text => sliceClamped ec (ec + 1) text == "@"
-    None => False
+atFollows : Array String -> NameSite -> Bool
+atFollows lines (NameSite _ (Loc _ _ _ el ec) _) = match arrayGet (el - 1) lines
+  Some text => sliceClamped ec (ec + 1) text == "@"
+  None => False
 
 -- `_name` already names a binder or a use on a line of the declaration, so the
 -- rename could clash with it or capture it.
@@ -256,12 +216,12 @@ collides fs (lo, hi) name =
 
 -- The site spans its name token: one line, as many columns as the name has
 -- characters.
-exactName : String -> ParamSite -> Bool
-exactName name (ParamSite _ (Loc _ sl sc el ec) _) =
+exactName : String -> NameSite -> Bool
+exactName name (NameSite _ (Loc _ sl sc el ec) _) =
   sl == el && ec - sc == strLength name
 
-siteLoc : ParamSite -> Loc
-siteLoc (ParamSite _ l _) = l
+siteLoc : NameSite -> Loc
+siteLoc (NameSite _ l _) = l
 
-siteKind : ParamSite -> SiteKind
-siteKind (ParamSite _ _ kind) = kind
+siteKind : NameSite -> SiteKind
+siteKind (NameSite _ _ kind) = kind

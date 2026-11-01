@@ -82,7 +82,7 @@ The number of elements, in `O(1)`.
 
 ```
 has : Ord a => a -> Set a -> Bool
-has x _
+has _x _
 ```
 
 Whether `x` is a member.
@@ -116,7 +116,7 @@ Unchanged when `x` is already a member.
 
 ```
 delete : Ord a => a -> Set a -> Set a
-delete x _
+delete _x _
 ```
 
 The set without `x`.
@@ -240,7 +240,7 @@ The elements in either set.
 
 ```
 intersection : Ord a => Set a -> Set a -> Set a
-intersection a b
+intersection _a _b
 ```
 
 The elements in both sets.
@@ -254,7 +254,7 @@ The elements in both sets.
 
 ```
 difference : Ord a => Set a -> Set a -> Set a
-difference a b
+difference a _b
 ```
 
 The elements of the first set that are not in the second.

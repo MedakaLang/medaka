@@ -388,36 +388,56 @@ plainSite n loc k = Site n loc k [] ""
 letBindSite : BinderKind -> LetBind -> Site
 letBindSite k (LetBind n _ loc _) = plainSite n loc k
 
+-- How a binder name token is written: plainly, as a record pun (a field `{x}`
+-- that binds `x`, so renaming the binder renames the field), or as the binder of
+-- an as-pattern `x@p`.
+public export data SiteKind = SitePlain | SitePun | SiteAs deriving (Eq)
+
+-- One binder name token: its name, its span and how it is written.
+public export data NameSite = NameSite String Loc SiteKind
+
 -- The names a pattern binds, with their name tokens.  Every alternative of an
 -- or-pattern is listed: the later ones become alternate sites of the first's
 -- binder (`mintFrame` joins equal names).
-patSites : BinderKind -> Pat -> List Site
-patSites k (PVar x l _) = [plainSite x l k]
-patSites _ PWild = []
-patSites _ (PLit _) = []
-patSites k (PCon _ ps) = flatMap (patSites k) ps
-patSites k (PCons a b) = patSites k a ++ patSites k b
-patSites k (PTuple ps) = flatMap (patSites k) ps
-patSites k (PList ps) = flatMap (patSites k) ps
-patSites k (PAs x l _ p) = plainSite x l k :: patSites k p
-patSites k (POr ps) = flatMap (patSites k) ps
-patSites _ (PRng _ _ _) = []
-patSites k (PRec _ fields _) = flatMap (recFieldSites k) fields
+export
+patNameSites : Pat -> List NameSite
+patNameSites (PVar x l _) = [NameSite x l SitePlain]
+patNameSites PWild = []
+patNameSites (PLit _) = []
+patNameSites (PCon _ ps) = flatMap patNameSites ps
+patNameSites (PCons a b) = patNameSites a ++ patNameSites b
+patNameSites (PTuple ps) = flatMap patNameSites ps
+patNameSites (PList ps) = flatMap patNameSites ps
+patNameSites (PAs x l _ p) = NameSite x l SiteAs :: patNameSites p
+patNameSites (POr ps) = flatMap patNameSites ps
+patNameSites (PRng _ _ _) = []
+patNameSites (PRec _ fields _) = flatMap recFieldNameSites fields
 
-recFieldSites : BinderKind -> RecPatField -> List Site
-recFieldSites k (RecPatField name l _ None) = [plainSite name l k]
-recFieldSites k (RecPatField _ _ _ (Some p)) = patSites k p
+recFieldNameSites : RecPatField -> List NameSite
+recFieldNameSites (RecPatField name l _ None) = [NameSite name l SitePun]
+recFieldNameSites (RecPatField _ _ _ (Some p)) = patNameSites p
+
+-- The parameter name tokens a body owner writes.
+export
+ownerNameSites : BodyOwner -> List NameSite
+ownerNameSites (OwnerClause _ ps) = flatMap patNameSites ps
+ownerNameSites (OwnerImplMethod _ _ ps) = flatMap patNameSites ps
+ownerNameSites (OwnerIfaceDefault _ _ ps) = flatMap patNameSites ps
+ownerNameSites (OwnerTest _) = []
+ownerNameSites (OwnerProp _ params) = map propParamNameSite params
+ownerNameSites (OwnerLetGroup _ ps) = flatMap patNameSites ps
+
+propParamNameSite : PropParam -> NameSite
+propParamNameSite (PropParam n l _) = NameSite n l SitePlain
+
+binderSite : BinderKind -> NameSite -> Site
+binderSite k (NameSite n l _) = plainSite n l k
+
+patSites : BinderKind -> Pat -> List Site
+patSites k p = map (binderSite k) (patNameSites p)
 
 ownerSites : BodyOwner -> List Site
-ownerSites (OwnerClause _ ps) = flatMap (patSites BParam) ps
-ownerSites (OwnerImplMethod _ _ ps) = flatMap (patSites BParam) ps
-ownerSites (OwnerIfaceDefault _ _ ps) = flatMap (patSites BParam) ps
-ownerSites (OwnerTest _) = []
-ownerSites (OwnerProp _ params) = map propParamSite params
-ownerSites (OwnerLetGroup _ ps) = flatMap (patSites BParam) ps
-
-propParamSite : PropParam -> Site
-propParamSite (PropParam n l _) = plainSite n l BParam
+ownerSites owner = map (binderSite BParam) (ownerNameSites owner)
 
 -- ── frames ────────────────────────────────────────────────────────────────────
 -- One frame from a site list.  A name met again in the same frame is another

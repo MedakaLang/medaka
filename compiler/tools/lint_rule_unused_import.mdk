@@ -6,7 +6,7 @@ import driver.diagnostics.{Severity(..)}
 import frontend.lex_scan.{scanRaw}
 import frontend.lex_token.{RawTok(..), Token(..)}
 import frontend.lexer.{Comment, commentText}
-import list.{drop, indexed}
+import list.{indexed, zip}
 import string.{lines, stripPrefix, trim}
 import support.util.{joinWith}
 import tools.lint_core.{
@@ -76,8 +76,8 @@ groupFindings fs dead (DUse False (UseGroup path members) groupLoc) =
   let locs = map memberLoc members
   let everyDead = all (f => f) flags
   flatMap
-    (ix => memberFinding path groupLoc locs everyDead members ix)
-    (filter (ix => nthFlag flags ix) (map fst (indexed members)))
+    (m => memberFinding path groupLoc locs everyDead (fst m))
+    (filter snd (zip (indexed members) flags))
 groupFindings _ _ _ = []
 
 -- The identifiers of doctest inputs, which are comments and so never walked.
@@ -112,30 +112,22 @@ memberDead fs dead (UseMember _ allCtors loc _) = match binderOf fs loc
   Some b => not allCtors && elem b.binderId dead
   None => False
 
-nthFlag : List Bool -> Int -> Bool
-nthFlag flags ix = match drop ix flags
-  f :: _ => f
-  [] => False
-
 memberFinding : List String ->
   Loc ->
   List Loc ->
   Bool ->
-  List UseMember ->
-  Int ->
+  (Int, UseMember) ->
   List Finding
-memberFinding path groupLoc locs everyDead members ix = match drop ix members
-  (UseMember n _ loc alias) :: _ => [
-    Finding {
-      rule = ruleNameUnusedImport,
-      message =
-        "imported name '\{optionOr n alias}' is never used. Remove it from the import list",
-      severity = SevWarning,
-      loc = Some loc,
-      fix = removalFix path groupLoc locs everyDead ix,
-    },
-  ]
-  [] => []
+memberFinding path groupLoc locs everyDead (ix, UseMember n _ loc alias) = [
+  Finding {
+    rule = ruleNameUnusedImport,
+    message =
+      "imported name '\{optionOr n alias}' is never used. Remove it from the import list",
+    severity = SevWarning,
+    loc = Some loc,
+    fix = removalFix path groupLoc locs everyDead ix,
+  },
+]
 
 -- A line whose names are all dead keeps the bare import, because the module's
 -- `impl`s stay in scope through it.  A bare import of a dotted path does not

@@ -400,11 +400,10 @@ False
 
 ```
 startsWith : Bytes -> Bytes -> Bool
-startsWith prefix b
 ```
 
-Whether `b` begins with `prefix`. The empty prefix begins every byte
-string.
+Whether the second byte string begins with the first. The empty prefix begins
+every byte string.
 
 ```medaka
 > startsWith (encodeUtf8 "he") (encodeUtf8 "hello")
@@ -417,10 +416,10 @@ False
 
 ```
 endsWith : Bytes -> Bytes -> Bool
-endsWith suffix b
 ```
 
-Whether `b` ends with `suffix`. The empty suffix ends every byte string.
+Whether the second byte string ends with the first. The empty suffix ends
+every byte string.
 
 ```medaka
 > endsWith (encodeUtf8 "lo") (encodeUtf8 "hello")

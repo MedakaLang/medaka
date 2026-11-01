@@ -1,5 +1,5 @@
 # META
-source_lines=158
+source_lines=150
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-unused-import: an `import m.{…}` member that nothing in the file uses. Drop the name from the list.
@@ -10,7 +10,7 @@ import driver.diagnostics.{Severity(..)}
 import frontend.lex_scan.{scanRaw}
 import frontend.lex_token.{RawTok(..), Token(..)}
 import frontend.lexer.{Comment, commentText}
-import list.{drop, indexed}
+import list.{indexed, zip}
 import string.{lines, stripPrefix, trim}
 import support.util.{joinWith}
 import tools.lint_core.{
@@ -80,8 +80,8 @@ groupFindings fs dead (DUse False (UseGroup path members) groupLoc) =
   let locs = map memberLoc members
   let everyDead = all (f => f) flags
   flatMap
-    (ix => memberFinding path groupLoc locs everyDead members ix)
-    (filter (ix => nthFlag flags ix) (map fst (indexed members)))
+    (m => memberFinding path groupLoc locs everyDead (fst m))
+    (filter snd (zip (indexed members) flags))
 groupFindings _ _ _ = []
 
 -- The identifiers of doctest inputs, which are comments and so never walked.
@@ -116,30 +116,22 @@ memberDead fs dead (UseMember _ allCtors loc _) = match binderOf fs loc
   Some b => not allCtors && elem b.binderId dead
   None => False
 
-nthFlag : List Bool -> Int -> Bool
-nthFlag flags ix = match drop ix flags
-  f :: _ => f
-  [] => False
-
 memberFinding : List String ->
   Loc ->
   List Loc ->
   Bool ->
-  List UseMember ->
-  Int ->
+  (Int, UseMember) ->
   List Finding
-memberFinding path groupLoc locs everyDead members ix = match drop ix members
-  (UseMember n _ loc alias) :: _ => [
-    Finding {
-      rule = ruleNameUnusedImport,
-      message =
-        "imported name '\{optionOr n alias}' is never used. Remove it from the import list",
-      severity = SevWarning,
-      loc = Some loc,
-      fix = removalFix path groupLoc locs everyDead ix,
-    },
-  ]
-  [] => []
+memberFinding path groupLoc locs everyDead (ix, UseMember n _ loc alias) = [
+  Finding {
+    rule = ruleNameUnusedImport,
+    message =
+      "imported name '\{optionOr n alias}' is never used. Remove it from the import list",
+    severity = SevWarning,
+    loc = Some loc,
+    fix = removalFix path groupLoc locs everyDead ix,
+  },
+]
 
 -- A line whose names are all dead keeps the bare import, because the module's
 -- `impl`s stay in scope through it.  A bare import of a dotted path does not
@@ -167,7 +159,7 @@ fixOf applicability edit = Fix {
 (DUse false (UseGroup ("frontend" "lex_scan") ((mem "scanRaw" false))))
 (DUse false (UseGroup ("frontend" "lex_token") ((mem "RawTok" true) (mem "Token" true))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentText" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "indexed" false))))
+(DUse false (UseGroup ("list") ((mem "indexed" false) (mem "zip" false))))
 (DUse false (UseGroup ("string") ((mem "lines" false) (mem "stripPrefix" false) (mem "trim" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "factScopes" false) (mem "mkRule" false))))
@@ -179,7 +171,7 @@ fixOf applicability edit = Fix {
 (DTypeSig false "ruleUnusedImport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleUnusedImport" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "fs") (EApp (EVar "factScopes") (EVar "facts"))) (DoLet false false (PVar "silent") (EApp (EApp (EVar "filter") (ELam ((PVar "u")) (EBinOp "==" (EApp (EVar "snd") (EVar "u")) (ELit (LInt 0))))) (EApp (EVar "importUses") (EVar "fs")))) (DoExpr (EIf (EApp (EVar "isEmpty") (EVar "silent")) (EListLit) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "doctestNames") (EApp (EVar "doctestBodies") (EApp (EVar "factComments") (EVar "facts"))))) (DoLet false false (PVar "dead") (EApp (EApp (EVar "map") (ELam ((PVar "u")) (EFieldAccess (EApp (EVar "fst") (EVar "u")) "binderId"))) (EApp (EApp (EVar "filter") (ELam ((PVar "u")) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EFieldAccess (EApp (EVar "fst") (EVar "u")) "binderName")) (EVar "seen"))))) (EVar "silent")))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "groupFindings") (EVar "fs")) (EVar "dead"))) (EVar "prog"))))))))
 (DTypeSig false "groupFindings" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "groupFindings" ((PVar "fs") (PVar "dead") (PCon "DUse" (PCon "False") (PCon "UseGroup" (PVar "path") (PVar "members")) (PVar "groupLoc"))) (EBlock (DoLet false false (PVar "flags") (EApp (EApp (EVar "map") (EApp (EApp (EVar "memberDead") (EVar "fs")) (EVar "dead"))) (EVar "members"))) (DoLet false false (PVar "locs") (EApp (EApp (EVar "map") (EVar "memberLoc")) (EVar "members"))) (DoLet false false (PVar "everyDead") (EApp (EApp (EVar "all") (ELam ((PVar "f")) (EVar "f"))) (EVar "flags"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "ix")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "memberFinding") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EVar "members")) (EVar "ix")))) (EApp (EApp (EVar "filter") (ELam ((PVar "ix")) (EApp (EApp (EVar "nthFlag") (EVar "flags")) (EVar "ix")))) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "indexed") (EVar "members"))))))))
+(DFunDef false "groupFindings" ((PVar "fs") (PVar "dead") (PCon "DUse" (PCon "False") (PCon "UseGroup" (PVar "path") (PVar "members")) (PVar "groupLoc"))) (EBlock (DoLet false false (PVar "flags") (EApp (EApp (EVar "map") (EApp (EApp (EVar "memberDead") (EVar "fs")) (EVar "dead"))) (EVar "members"))) (DoLet false false (PVar "locs") (EApp (EApp (EVar "map") (EVar "memberLoc")) (EVar "members"))) (DoLet false false (PVar "everyDead") (EApp (EApp (EVar "all") (ELam ((PVar "f")) (EVar "f"))) (EVar "flags"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EApp (EApp (EApp (EVar "memberFinding") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EApp (EVar "fst") (EVar "m"))))) (EApp (EApp (EVar "filter") (EVar "snd")) (EApp (EApp (EVar "zip") (EApp (EVar "indexed") (EVar "members"))) (EVar "flags")))))))
 (DFunDef false "groupFindings" (PWild PWild PWild) (EListLit))
 (DTypeSig false "doctestNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doctestNames" ((PVar "inputs")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EApp (EApp (EVar "flatMap") (EVar "rawIdent")) (EApp (EVar "scanRaw") (EVar "d"))))) (EVar "inputs")))
@@ -195,10 +187,8 @@ fixOf applicability edit = Fix {
 (DFunDef false "memberLoc" ((PCon "UseMember" PWild PWild (PVar "loc") PWild)) (EVar "loc"))
 (DTypeSig false "memberDead" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "UseMember") (TyCon "Bool")))))
 (DFunDef false "memberDead" ((PVar "fs") (PVar "dead") (PCon "UseMember" PWild (PVar "allCtors") (PVar "loc") PWild)) (EMatch (EApp (EApp (EVar "binderOf") (EVar "fs")) (EVar "loc")) (arm (PCon "Some" (PVar "b")) () (EBinOp "&&" (EApp (EVar "not") (EVar "allCtors")) (EApp (EApp (EVar "elem") (EFieldAccess (EVar "b") "binderId")) (EVar "dead")))) (arm (PCon "None") () (EVar "False"))))
-(DTypeSig false "nthFlag" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "nthFlag" ((PVar "flags") (PVar "ix")) (EMatch (EApp (EApp (EVar "drop") (EVar "ix")) (EVar "flags")) (arm (PCons (PVar "f") PWild) () (EVar "f")) (arm (PList) () (EVar "False"))))
-(DTypeSig false "memberFinding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "UseMember")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Finding")))))))))
-(DFunDef false "memberFinding" ((PVar "path") (PVar "groupLoc") (PVar "locs") (PVar "everyDead") (PVar "members") (PVar "ix")) (EMatch (EApp (EApp (EVar "drop") (EVar "ix")) (EVar "members")) (arm (PCons (PCon "UseMember" (PVar "n") PWild (PVar "loc") (PVar "alias")) PWild) () (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedImport")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "imported name '")) (EApp (EVar "display") (EApp (EApp (EVar "optionOr") (EVar "n")) (EVar "alias")))) (ELit (LString "' is never used. Remove it from the import list")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EApp (EApp (EApp (EApp (EApp (EVar "removalFix") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EVar "ix"))))))) (arm (PList) () (EListLit))))
+(DTypeSig false "memberFinding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyTuple (TyCon "Int") (TyCon "UseMember")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "memberFinding" ((PVar "path") (PVar "groupLoc") (PVar "locs") (PVar "everyDead") (PTuple (PVar "ix") (PCon "UseMember" (PVar "n") PWild (PVar "loc") (PVar "alias")))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedImport")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "imported name '")) (EApp (EVar "display") (EApp (EApp (EVar "optionOr") (EVar "n")) (EVar "alias")))) (ELit (LString "' is never used. Remove it from the import list")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EApp (EApp (EApp (EApp (EApp (EVar "removalFix") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EVar "ix")))))))
 (DTypeSig false "removalFix" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "removalFix" ((PVar "path") (PVar "groupLoc") (PVar "locs") (PVar "everyDead") (PVar "ix")) (EIf (EVar "everyDead") (EApp (EVar "Some") (EApp (EApp (EVar "fixOf") (EIf (EBinOp ">" (EApp (EVar "length") (EVar "path")) (ELit (LInt 1))) (EVar "Suggest") (EVar "Safe"))) (EApp (EApp (EVar "FixEdit") (EVar "groupLoc")) (EBinOp "++" (ELit (LString "import ")) (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "path")))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "map") (EApp (EVar "fixOf") (EVar "Safe"))) (EApp (EApp (EVar "removeListItem") (EVar "locs")) (EVar "ix"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "fixOf" (TyFun (TyCon "Applicability") (TyFun (TyCon "FixEdit") (TyCon "Fix"))))
@@ -210,7 +200,7 @@ fixOf applicability edit = Fix {
 (DUse false (UseGroup ("frontend" "lex_scan") ((mem "scanRaw" false))))
 (DUse false (UseGroup ("frontend" "lex_token") ((mem "RawTok" true) (mem "Token" true))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentText" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "indexed" false))))
+(DUse false (UseGroup ("list") ((mem "indexed" false) (mem "zip" false))))
 (DUse false (UseGroup ("string") ((mem "lines" false) (mem "stripPrefix" false) (mem "trim" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "factScopes" false) (mem "mkRule" false))))
@@ -222,7 +212,7 @@ fixOf applicability edit = Fix {
 (DTypeSig false "ruleUnusedImport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleUnusedImport" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "fs") (EApp (EVar "factScopes") (EVar "facts"))) (DoLet false false (PVar "silent") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "u")) (EBinOp "==" (EApp (EVar "snd") (EVar "u")) (ELit (LInt 0))))) (EApp (EVar "importUses") (EVar "fs")))) (DoExpr (EIf (EApp (EMethodRef "isEmpty") (EVar "silent")) (EListLit) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "doctestNames") (EApp (EVar "doctestBodies") (EApp (EVar "factComments") (EVar "facts"))))) (DoLet false false (PVar "dead") (EApp (EApp (EMethodRef "map") (ELam ((PVar "u")) (EFieldAccess (EApp (EVar "fst") (EVar "u")) "binderId"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "u")) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EFieldAccess (EApp (EVar "fst") (EVar "u")) "binderName")) (EVar "seen"))))) (EVar "silent")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "groupFindings") (EVar "fs")) (EVar "dead"))) (EVar "prog"))))))))
 (DTypeSig false "groupFindings" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "groupFindings" ((PVar "fs") (PVar "dead") (PCon "DUse" (PCon "False") (PCon "UseGroup" (PVar "path") (PVar "members")) (PVar "groupLoc"))) (EBlock (DoLet false false (PVar "flags") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "memberDead") (EVar "fs")) (EVar "dead"))) (EVar "members"))) (DoLet false false (PVar "locs") (EApp (EApp (EMethodRef "map") (EVar "memberLoc")) (EVar "members"))) (DoLet false false (PVar "everyDead") (EApp (EApp (EDictApp "all") (ELam ((PVar "f")) (EVar "f"))) (EVar "flags"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "ix")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "memberFinding") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EVar "members")) (EVar "ix")))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "ix")) (EApp (EApp (EVar "nthFlag") (EVar "flags")) (EVar "ix")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "indexed") (EVar "members"))))))))
+(DFunDef false "groupFindings" ((PVar "fs") (PVar "dead") (PCon "DUse" (PCon "False") (PCon "UseGroup" (PVar "path") (PVar "members")) (PVar "groupLoc"))) (EBlock (DoLet false false (PVar "flags") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "memberDead") (EVar "fs")) (EVar "dead"))) (EVar "members"))) (DoLet false false (PVar "locs") (EApp (EApp (EMethodRef "map") (EVar "memberLoc")) (EVar "members"))) (DoLet false false (PVar "everyDead") (EApp (EApp (EDictApp "all") (ELam ((PVar "f")) (EVar "f"))) (EVar "flags"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EApp (EApp (EApp (EVar "memberFinding") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EApp (EVar "fst") (EVar "m"))))) (EApp (EApp (EMethodRef "filter") (EVar "snd")) (EApp (EApp (EVar "zip") (EApp (EVar "indexed") (EVar "members"))) (EVar "flags")))))))
 (DFunDef false "groupFindings" (PWild PWild PWild) (EListLit))
 (DTypeSig false "doctestNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doctestNames" ((PVar "inputs")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EApp (EApp (EDictApp "flatMap") (EVar "rawIdent")) (EApp (EVar "scanRaw") (EVar "d"))))) (EVar "inputs")))
@@ -238,10 +228,8 @@ fixOf applicability edit = Fix {
 (DFunDef false "memberLoc" ((PCon "UseMember" PWild PWild (PVar "loc") PWild)) (EVar "loc"))
 (DTypeSig false "memberDead" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "UseMember") (TyCon "Bool")))))
 (DFunDef false "memberDead" ((PVar "fs") (PVar "dead") (PCon "UseMember" PWild (PVar "allCtors") (PVar "loc") PWild)) (EMatch (EApp (EApp (EVar "binderOf") (EVar "fs")) (EVar "loc")) (arm (PCon "Some" (PVar "b")) () (EBinOp "&&" (EApp (EVar "not") (EVar "allCtors")) (EApp (EApp (EDictApp "elem") (EFieldAccess (EVar "b") "binderId")) (EVar "dead")))) (arm (PCon "None") () (EVar "False"))))
-(DTypeSig false "nthFlag" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "nthFlag" ((PVar "flags") (PVar "ix")) (EMatch (EApp (EApp (EVar "drop") (EVar "ix")) (EVar "flags")) (arm (PCons (PVar "f") PWild) () (EVar "f")) (arm (PList) () (EVar "False"))))
-(DTypeSig false "memberFinding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "UseMember")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Finding")))))))))
-(DFunDef false "memberFinding" ((PVar "path") (PVar "groupLoc") (PVar "locs") (PVar "everyDead") (PVar "members") (PVar "ix")) (EMatch (EApp (EApp (EVar "drop") (EVar "ix")) (EVar "members")) (arm (PCons (PCon "UseMember" (PVar "n") PWild (PVar "loc") (PVar "alias")) PWild) () (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedImport")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "imported name '")) (EApp (EMethodRef "display") (EApp (EApp (EVar "optionOr") (EVar "n")) (EVar "alias")))) (ELit (LString "' is never used. Remove it from the import list")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EApp (EApp (EApp (EApp (EApp (EVar "removalFix") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EVar "ix"))))))) (arm (PList) () (EListLit))))
+(DTypeSig false "memberFinding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyTuple (TyCon "Int") (TyCon "UseMember")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "memberFinding" ((PVar "path") (PVar "groupLoc") (PVar "locs") (PVar "everyDead") (PTuple (PVar "ix") (PCon "UseMember" (PVar "n") PWild (PVar "loc") (PVar "alias")))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedImport")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "imported name '")) (EApp (EMethodRef "display") (EApp (EApp (EVar "optionOr") (EVar "n")) (EVar "alias")))) (ELit (LString "' is never used. Remove it from the import list")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EApp (EApp (EApp (EApp (EApp (EVar "removalFix") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EVar "ix")))))))
 (DTypeSig false "removalFix" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "removalFix" ((PVar "path") (PVar "groupLoc") (PVar "locs") (PVar "everyDead") (PVar "ix")) (EIf (EVar "everyDead") (EApp (EVar "Some") (EApp (EApp (EVar "fixOf") (EIf (EBinOp ">" (EApp (EMethodRef "length") (EVar "path")) (ELit (LInt 1))) (EVar "Suggest") (EVar "Safe"))) (EApp (EApp (EVar "FixEdit") (EVar "groupLoc")) (EBinOp "++" (ELit (LString "import ")) (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "path")))))) (EIf (EVar "otherwise") (EApp (EApp (EMethodRef "map") (EApp (EVar "fixOf") (EVar "Safe"))) (EApp (EApp (EVar "removeListItem") (EVar "locs")) (EVar "ix"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "fixOf" (TyFun (TyCon "Applicability") (TyFun (TyCon "FixEdit") (TyCon "Fix"))))

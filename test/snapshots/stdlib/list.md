@@ -790,7 +790,7 @@ split sep xs = go xs
 -- `contains : List a -> List a -> Bool` expects membership, and the type
 -- cannot warn them otherwise.
 
-{- | Whether the list begins with `prefix`.
+{- | Whether the second list begins with the first.
 
    Every list begins with the empty list. `elem` is the test for a single
    element.

@@ -312,7 +312,7 @@ insertWith f k v (Bin s k2 v2 l r) = match compare k k2
   Gt => balanceR k2 v2 l (insertWith f k v r)
   Eq => Bin s k2 (f v v2) l r
 
-{- | The map with `f` applied to the value at `k`.
+{- | The map with the function applied to the value at `k`.
 
    Unchanged when `k` is absent.
 
@@ -572,8 +572,8 @@ valuesOnto : Map k v -> List v -> List v
 valuesOnto Tip acc = acc
 valuesOnto (Bin _ _ v l r) acc = valuesOnto l (v :: valuesOnto r acc)
 
-{- | The map with `f` applied to every value, where `f` also receives the
-   key.
+{- | The map with the function applied to every value, where the function also
+   receives the key.
 
    `map` is the form whose function sees only the value.
 
@@ -664,7 +664,7 @@ splitLookup k (Bin _ k2 v2 l r) = match compare k k2
 
 -- # Filtering
 
-{- | The entries whose key and value satisfy `p`.
+{- | The entries whose key and value satisfy the predicate.
 
    `filter` is the form whose predicate sees only the value.
 
