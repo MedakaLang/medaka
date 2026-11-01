@@ -957,7 +957,7 @@ public export data TcConfig = TcConfig {
   tcStdlibOwned : OrdMap Unit,
   tcFlatEntryIsStdlib : Bool,
   tcKey : String,
-  tcSibling : Option (String, String),
+  tcSibling : List (String, String),
 }
 
 -- The trace gates and buffers a test builds before a drive and reads after it.
@@ -992,7 +992,7 @@ public export data DriveInputs = DriveInputs {
   diIoJoinGrants : List (String, EffParamTy),
   diProfileName : String,
   diPreludeKey : Option (Int, Int),
-  diSibling : Option (String, String),
+  diSibling : List (String, String),
 }
 
 -- What one graph drive is handed besides its output selection: [daValueMain] is the

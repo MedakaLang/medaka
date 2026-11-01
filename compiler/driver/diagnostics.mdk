@@ -125,6 +125,7 @@ import driver.loader.{
 import support.path.{dirOf}
 import driver.main_autoprint.{valueMainCandidate}
 import support.util.{
+  endsWith,
   joinNl,
   listLen,
   lookupAssoc,
@@ -1707,7 +1708,7 @@ projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP prelu
       exportsFor
       allowInternal
       trustedMods
-      None
+      []
       preludeKey
       chainKey
       runtimeP
@@ -2073,7 +2074,7 @@ stepKeysFor NoSteps _ = []
 -- whose analyze serves each module's raw-tree diagnostics from `passCacheRef`
 -- (`foldServeKey`), `None` for one that folds every module afresh.
 typecheckDiagsFold : DriveOutputs ->
-  Option (String, String) ->
+  List (String, String) ->
   Option String ->
   List Decl ->
   List Decl ->
@@ -2148,7 +2149,7 @@ foldServeKey _ _ _ = None
 resolvedBuckets : (List String -> <e> List (String, List String)) ->
   Bool ->
   List String ->
-  Option (String, String) ->
+  List (String, String) ->
   Option (Int, Int) ->
   String ->
   List Decl ->
@@ -2308,10 +2309,12 @@ foldModuleTc : RawPasses ->
   List (String, List Diag)
 foldModuleTc _ _ _ _ [] buckets = buckets
 foldModuleTc passes graph known ids ((mid, path, prog) :: rest) buckets =
+  -- A test sibling's guard oracle binds its subject's private constructors.
+  let sibling = isSome (passes.rpSubjectOf mid)
   let (rawDiags, exp, ident) =
     servedPass
       FoldKind
-      graph
+      (map (k => joinNl [k, boolKey sibling]) graph)
       ids
       (mid, path, prog)
       (_ => rawTreeDiags passes known (mid, path, prog))
@@ -3397,7 +3400,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
         _ => FrontGraph modsWithPath (desugaredModPairs modsWithPath)
       let chainKey = chainKeyOf target roots
       let inputs = { driveInputsFor !selectedProfile flatStdlib ownedStdlib |
-        diSibling = siblingPairOf roots stdlibDir modsWithPath,
+        diSibling = siblingPairsOf roots stdlibDir modsWithPath,
       }
       let front = frontEnd (stdlibExportsReader stdlibDir) (checkDriveReport
         chainKey) FrontInput {
@@ -3415,39 +3418,61 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
         _ => cjGraphParts target stdlibDir mods front.foDiags
       (cj, hasErr, front.foDriven)
 
--- The drive's (test sibling, subject) module-id pair: the entry, which the loader
--- puts last, when its file is the test sibling of a module the graph loaded
+-- The graph's (test sibling, subject) module-id pairs: every module, wherever it
+-- sits in the graph, whose file is the test sibling of a module the graph loaded
 -- (`siblingSubjectId`, with the dependency roots the loader read for it).
 export
-siblingPairOf : List String ->
+siblingPairsOf : List String ->
   String ->
   List (String, String, List Decl) ->
-  <IO> Option (String, String)
-siblingPairOf roots stdlibDir mods = match last mods
-  None => None
-  Some (_, path, _) => siblingPairAt path roots stdlibDir mods
+  <IO> List (String, String)
+siblingPairsOf roots stdlibDir mods =
+  flatMap ((mid, path, _) => siblingPairFor roots stdlibDir mods mid path) mods
 
--- `siblingPairOf` with the sibling relation read off `path` rather than off the
--- entry's own file: a scratch build (`medaka test`'s native runners) names the
--- real target there, and the pair keeps the scratch entry's module id.  Location
--- stays the one grant: a `path` that is no test sibling answers `None`.
+-- `siblingPairsOf` with the entry's sibling relation read off `path` rather than
+-- off the entry's own file: a scratch build (`medaka test`'s native runners) names
+-- the real target there, and the entry's pair keeps the scratch entry's module id.
+-- Location stays the one grant: a `path` that is no test sibling adds no pair.
 export
-siblingPairAt : String ->
+siblingPairsAt : String ->
   List String ->
   String ->
   List (String, String, List Decl) ->
-  <IO> Option (String, String)
-siblingPairAt path roots stdlibDir mods = match last mods
-  None => None
+  <IO> List (String, String)
+siblingPairsAt path roots stdlibDir mods = match last mods
+  None => []
   Some (entry, _, _) =>
+    flatMap
+      ((mid, own, _) => siblingPairFor roots stdlibDir mods mid (if mid
+        == entry then
+        path
+      else
+        own))
+      mods
+
+-- Module [mid]'s pair when the file at [path] is a test sibling whose subject is
+-- among [mods].  Only a `_test.mdk` file reads its project's dependency roots.
+siblingPairFor : List String ->
+  String ->
+  List (String, String, List Decl) ->
+  String ->
+  String ->
+  <IO> List (String, String)
+siblingPairFor roots stdlibDir mods mid path =
+  if endsWith "_test.mdk" (canonicalizePath path) then
     let deps = readDeps (findProjectRootOrSelf (dirOf path))
     match siblingSubjectId deps roots stdlibDir path
-      Some subject if anyList ((m, _, _) => m == subject) mods =>
-        Some (entry, subject)
-      _ => None
+      Some subject =>
+        if anyList ((m, _, _) => m == subject) mods then
+          [(mid, subject)]
+        else
+          []
+      None => []
+  else
+    []
 
 -- The environment variable that hands an emitter child the real target path of a
--- scratch build (see `siblingPairAt`).
+-- scratch build (see `siblingPairsAt`).
 export
 siblingTargetEnv : String
 siblingTargetEnv = "MEDAKA_SIBLING_TARGET"

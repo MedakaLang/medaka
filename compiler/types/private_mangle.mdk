@@ -291,18 +291,18 @@ mangleUnitsEv : EvTable ->
   List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl), EvTable, SymbolOrigins)
-mangleUnitsEv = mangleUnitsEvFor None
+mangleUnitsEv = mangleUnitsEvFor []
 
--- `mangleUnitsEv` for a drive whose (test sibling, subject) pair is [sibling]:
--- the sibling's unit reads the subject's full view, every other unit its
--- exported one.
+-- `mangleUnitsEv` for a graph whose (test sibling, subject) pairs are
+-- [siblings]: each sibling's unit reads its subject's full view, every other
+-- unit the exported ones.
 export
-mangleUnitsEvFor : Option (String, String) ->
+mangleUnitsEvFor : List (String, String) ->
   EvTable ->
   List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl), EvTable, SymbolOrigins)
-mangleUnitsEvFor sibling table coreDecls modules =
+mangleUnitsEvFor siblings table coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
   let entryMid = entryUnitMid allUnits
   let surfaces = unitSurfaces allUnits
@@ -310,7 +310,7 @@ mangleUnitsEvFor sibling table coreDecls modules =
     exportsPerUnitOf (_ => ExportedView) coreDecls allUnits surfaces
   let ctorExportsPerUnit = ctorExportsFrom surfaces
   let externExports = externExportsFrom externSymbolName allUnits surfaces
-  let siblingMaps = siblingUnitMaps sibling coreDecls allUnits surfaces
+  let siblingMaps = map (siblingUnitMaps coreDecls allUnits surfaces) siblings
   -- ONE map per unit, threaded to both readers: the decl rename and the evidence
   -- remap name the same symbols, and building the map twice was measured at +0.99%
   -- Ir on the emitter child over the compiler's own graph.
@@ -361,17 +361,16 @@ exportsPerUnitOf viewOfUnit coreDecls allUnits surfaces =
     []
     (fnExportsFrom viewOfUnit allUnits surfaces)
 
--- The export maps the sibling's unit imports against, with its subject's
--- surface replaced by the full view; `None` when the drive has no sibling.
-siblingUnitMaps : Option (String, String) ->
-  List Decl ->
+-- The export maps the unit of sibling [sib] imports against, with its subject's
+-- surface replaced by the full view.
+siblingUnitMaps : List Decl ->
   List (String, List Decl) ->
   List (String, ModuleExports) ->
-  Option (String, ExportMaps)
-siblingUnitMaps None _ _ _ = None
-siblingUnitMaps (Some (sib, subj)) coreDecls allUnits surfaces =
+  (String, String) ->
+  (String, ExportMaps)
+siblingUnitMaps coreDecls allUnits surfaces (sib, subj) =
   let full = fullSurfaces subj allUnits surfaces
-  Some (
+  (
     sib,
     (
       exportsPerUnitOf (viewOf (Some subj)) coreDecls allUnits full,
@@ -413,18 +412,16 @@ fullSurfaceOf subj coreExp known allUnits (mid, exp) =
   else
     (mid, exp)
 
+-- Unit [mid]'s rename map, built from its own sibling maps in [siblingMaps] when
+-- it is a test sibling and from the exported maps otherwise.
 unitEntryFor : String ->
-  Option (String, ExportMaps) ->
+  List (String, ExportMaps) ->
   ExportMaps ->
   (String, List Decl) ->
   (String, (OrdMap String, Bool, List Decl))
-unitEntryFor entryMid None (fns, ctors, externs) (mid, decls) =
+unitEntryFor entryMid siblingMaps exported (mid, decls) =
+  let (fns, ctors, externs) = optionOr exported (lookupAssoc mid siblingMaps)
   unitRenameMapEntry entryMid fns ctors externs (mid, decls)
-unitEntryFor entryMid (Some (sib, (sibFns, sibCtors, sibExterns))) (fns, ctors, externs) (mid, decls) =
-  if mid == sib then
-    unitRenameMapEntry entryMid sibFns sibCtors sibExterns (mid, decls)
-  else
-    unitRenameMapEntry entryMid fns ctors externs (mid, decls)
 
 -- one unit's rename map, keyed by its module id, beside the decls it applies to.  The
 -- SAME two builders and the same first-entry-wins fold `mangleUnitU` applies, so a
@@ -532,30 +529,48 @@ mangleRoute _ (r@(RScalar _)) = r
 -- to be the second residual is gone (#1287): resolve now shortens such a reference
 -- to the bare ctor name before any tree reaches this pass, so `UseAlias` binds
 -- exactly what `UseWild` binds and the arms are written that way.
+--
+-- [siblings] are the graph's (test sibling, subject) pairs: a sibling's unit binds
+-- its subject's constructors through the full view, as `mangleUnitsEvFor` does.
 export
-mangleCtorCollisions : List Decl ->
+mangleCtorCollisions : List (String, String) ->
+  List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
-mangleCtorCollisions coreDecls modules =
+mangleCtorCollisions siblings coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
   let collided = collidingCtorNames allUnits
   if omSize collided == 0 then
     (coreDecls, modules)
   else
-    let ctorExportsPerUnit = ctorExportsFrom (unitSurfaces allUnits)
+    let surfaces = unitSurfaces allUnits
+    let ctorExportsPerUnit = ctorExportsFrom surfaces
+    let siblingCtors =
+      map
+        ((sib, subj) =>
+          (sib, ctorExportsFrom (fullSurfaces subj allUnits surfaces)))
+        siblings
     let coreOut =
       mangleCtorUnitU collided ctorExportsPerUnit ("core", coreDecls)
-    let modsOut = map (mangleCtorModule collided ctorExportsPerUnit) modules
+    let modsOut =
+      map
+        (m =>
+          mangleCtorModule
+            collided
+            (optionOr ctorExportsPerUnit (lookupAssoc (fst m) siblingCtors))
+            m)
+        modules
     (coreOut, modsOut)
 
 -- pair-shaped convenience wrapper: `elaborateModules` returns exactly this pair,
 -- and every caller that needs the renamed decls back (not just a renamed env)
 -- wraps its result.
 export
-mangleCtorCollisionsPair : (List Decl, List (String, List Decl)) ->
+mangleCtorCollisionsPair : List (String, String) ->
+  (List Decl, List (String, List Decl)) ->
   (List Decl, List (String, List Decl))
-mangleCtorCollisionsPair (coreDecls, modules) =
-  mangleCtorCollisions coreDecls modules
+mangleCtorCollisionsPair siblings (coreDecls, modules) =
+  mangleCtorCollisions siblings coreDecls modules
 
 -- the constructor names DECLARED by two or more distinct units, as a set.
 -- Per-unit `dedup` first, so one unit declaring a name twice (which is a resolve

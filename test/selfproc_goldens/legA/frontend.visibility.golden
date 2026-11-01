@@ -36,6 +36,7 @@ indexExports : ModuleExports -> ModuleExports
 interfaceList : List Decl -> List (String, List String)
 isNewtypeExport : String -> ModuleExports -> Bool
 isPubExp : ModuleExports -> String -> Bool
+isSubjectIn : List (String, String) -> String -> Bool
 localsExportedFrom : List String -> List (String, String) -> List String
 newtypeTypeOfCtor : String -> ModuleExports -> Option String
 noCarry : UsePath -> ModuleExports -> List a
@@ -67,14 +68,18 @@ reexportBindings : UsePath -> ModuleExports -> List (String, String)
 reexportOrigins : UsePath -> ModuleExports -> List String
 ruleOf : ExportView -> ExpNs a -> Decl -> List a
 scanDecls : (Decl -> List a) -> List Decl -> List a
+subjectOf : List (String, String) -> String -> Option String
 typeCtorsAllOf : List Decl -> List (String, List String)
 typeCtorsOf : String -> ModuleExports -> Option (List String)
 typeOfCtor : String -> ModuleExports -> Option String
+unrenamedPath : UsePath -> UsePath
+useMemberName : UseMember -> String
 useModId : UsePath -> String
 useModuleIds : List Decl -> List String
 valueDeclOf : ModuleExports -> Map String (String, String) -> String -> (String, String)
 valueDeclsOf : ModuleExports -> Map String (String, String)
 valueNamesUnder : ExportView -> List Decl -> List String
 variantFieldOwners : Variant -> List (String, String)
+viewFor : List (String, String) -> String -> String -> ExportView
 viewOf : Option String -> String -> ExportView
 withSubjectView : ModuleExports -> Map String ModuleExports -> Option (String, List Decl) -> Map String ModuleExports

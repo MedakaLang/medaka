@@ -67,8 +67,8 @@ import driver.diagnostics.{
   emitDiagExitCode,
   emitGateDiags,
   frontEnd,
-  siblingPairOf,
-  siblingPairAt,
+  siblingPairsOf,
+  siblingPairsAt,
   siblingTargetEnv,
   noStdlibExports,
   residualOrGeneric,
@@ -220,7 +220,7 @@ public export data EmitAsk = EmitAsk {
   askPreludeSrcs : (String, String),
   askJson : Option (String, JsonFront),
   askOwnership : (Bool, List String),
-  askSibling : Option (String, String),
+  askSibling : List (String, String),
 }
 
 -- The inputs of an emit's drive under [profile], with the graph's stdlib ownership
@@ -378,8 +378,8 @@ emitLoaded runEmit srcs json coreP entry roots mods runtimeD coreD modsD =
     askJson = json,
     askOwnership = ownership,
     askSibling = match getEnv siblingTargetEnv
-      Some real => siblingPairAt real roots (dirOf coreP) mods
-      None => siblingPairOf roots (dirOf coreP) mods,
+      Some real => siblingPairsAt real roots (dirOf coreP) mods
+      None => siblingPairsOf roots (dirOf coreP) mods,
   }
   runEmit ask mods runtimeD coreD modsD
 
@@ -736,7 +736,7 @@ runEmitAsked ask requirement asyncDriver emitTail modsWithPath runtimeDecls core
 -- (`report`, whose checked trees are run): the driver's wrap is applied to
 -- them (`executedFromReport`), and the result is mangled once.  The backend
 -- lowers against the facts of the checked program with the mangled table.
-emitElaborated : Option (String, String) ->
+emitElaborated : List (String, String) ->
   DriveOutputs ->
   ManifestRequirement ->
   EntryKey ->

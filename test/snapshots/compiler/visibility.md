@@ -1,5 +1,5 @@
 # META
-source_lines=1148
+source_lines=1177
 stages=DESUGAR,MARK
 # SOURCE
 -- A module's export surface, built from its declarations and the surfaces of
@@ -313,12 +313,23 @@ pubUsePaths ((DUse True path _) :: rest) = path :: pubUsePaths rest
 pubUsePaths (_ :: rest) = pubUsePaths rest
 
 -- The paths of a module's plain imports, the complement of `pubUsePaths`: what
--- its full view carries beyond its exported one.
+-- its full view carries beyond its exported one.  The full view carries a plain
+-- import as an `export import` of the same path would, and an `export import`
+-- cannot rename, so a renamed member (`import m.{a as b}`) is not carried.
 export
 plainUsePaths : List Decl -> List UsePath
 plainUsePaths [] = []
-plainUsePaths ((DUse False path _) :: rest) = path :: plainUsePaths rest
+plainUsePaths ((DUse False path _) :: rest) =
+  unrenamedPath path :: plainUsePaths rest
 plainUsePaths (_ :: rest) = plainUsePaths rest
+
+unrenamedPath : UsePath -> UsePath
+unrenamedPath (UseGroup ns members) =
+  UseGroup ns (filterList (m => useMemberLocal m == useMemberName m) members)
+unrenamedPath path = path
+
+useMemberName : UseMember -> String
+useMemberName (UseMember n _ _ _) = n
 
 -- expand_member: `T(..)` → the type plus its exported ctors; a plain member is
 -- itself.  `T(..)` on an abstractly-exported type is a NoExportedConstructors.
@@ -859,6 +870,24 @@ export
 viewOf : Option String -> String -> ExportView
 viewOf subject mid = if subject == Some mid then FullView else ExportedView
 
+-- The graph's test siblings are a list of (sibling, subject) module-id pairs, one
+-- per `*_test.mdk` module whose subject the graph loaded; the loader classifies
+-- each by location.  A subject has at most one sibling, so either id finds its pair.
+-- The test subject of importer [mid], if [mid] is a sibling.
+export
+subjectOf : List (String, String) -> String -> Option String
+subjectOf siblings mid = lookupAssoc mid siblings
+
+-- The view importer [importer] gets of module [mid] under [siblings].
+export
+viewFor : List (String, String) -> String -> String -> ExportView
+viewFor siblings importer mid = viewOf (subjectOf siblings importer) mid
+
+-- Whether some sibling in [siblings] sees [mid]'s full view.
+export
+isSubjectIn : List (String, String) -> String -> Bool
+isSubjectIn siblings mid = contains mid (map snd siblings)
+
 -- One namespace's own-decl rule under [view], for one decl and for a decl list.
 ruleOf : ExportView -> ExpNs a -> Decl -> List a
 ruleOf ExportedView ns d = ns.nsDirectOf d
@@ -1238,8 +1267,13 @@ overPubUse coreExp known f path =
 (DFunDef false "pubUsePaths" ((PCons PWild (PVar "rest"))) (EApp (EVar "pubUsePaths") (EVar "rest")))
 (DTypeSig true "plainUsePaths" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "UsePath"))))
 (DFunDef false "plainUsePaths" ((PList)) (EListLit))
-(DFunDef false "plainUsePaths" ((PCons (PCon "DUse" (PCon "False") (PVar "path") PWild) (PVar "rest"))) (EBinOp "::" (EVar "path") (EApp (EVar "plainUsePaths") (EVar "rest"))))
+(DFunDef false "plainUsePaths" ((PCons (PCon "DUse" (PCon "False") (PVar "path") PWild) (PVar "rest"))) (EBinOp "::" (EApp (EVar "unrenamedPath") (EVar "path")) (EApp (EVar "plainUsePaths") (EVar "rest"))))
 (DFunDef false "plainUsePaths" ((PCons PWild (PVar "rest"))) (EApp (EVar "plainUsePaths") (EVar "rest")))
+(DTypeSig false "unrenamedPath" (TyFun (TyCon "UsePath") (TyCon "UsePath")))
+(DFunDef false "unrenamedPath" ((PCon "UseGroup" (PVar "ns") (PVar "members"))) (EApp (EApp (EVar "UseGroup") (EVar "ns")) (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EBinOp "==" (EApp (EVar "useMemberLocal") (EVar "m")) (EApp (EVar "useMemberName") (EVar "m"))))) (EVar "members"))))
+(DFunDef false "unrenamedPath" ((PVar "path")) (EVar "path"))
+(DTypeSig false "useMemberName" (TyFun (TyCon "UseMember") (TyCon "String")))
+(DFunDef false "useMemberName" ((PCon "UseMember" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig true "expandMemberNames" (TyFun (TyCon "ModuleExports") (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Loc"))))))
 (DFunDef false "expandMemberNames" ((PVar "exp") (PAs "m" (PCon "UseMember" (PVar "name") (PCon "False") (PVar "loc") PWild))) (EIf (EApp (EApp (EVar "bindsNonCtorExport") (EVar "exp")) (EVar "name")) (EListLit (ETuple (EVar "name") (EApp (EVar "useMemberLocal") (EVar "m")) (EVar "loc"))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "newtypeTypeOfCtor") (EVar "name")) (EVar "exp")) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "typeOfCtor") (EVar "name")) (EVar "exp")) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EVar "exp") "expAbstractCtors")) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EListLit (ETuple (EVar "name") (EApp (EVar "useMemberLocal") (EVar "m")) (EVar "loc"))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "expandMemberNames" ((PVar "exp") (PAs "m" (PCon "UseMember" (PVar "name") (PCon "True") (PVar "loc") PWild))) (EIf (EApp (EApp (EVar "isNewtypeExport") (EVar "name")) (EVar "exp")) (EListLit (ETuple (EVar "name") (EApp (EVar "useMemberLocal") (EVar "m")) (EVar "loc"))) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EFieldAccess (EVar "exp") "expEffects")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "typeCtorsOf") (EVar "name")) (EVar "exp")) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "::" (ETuple (EVar "name") (EApp (EVar "useMemberLocal") (EVar "m")) (EVar "loc")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (ETuple (EVar "c") (EVar "c") (EVar "loc")))) (EVar "ctors")))) (arm (PCon "None") () (EListLit (ETuple (EVar "name") (EApp (EVar "useMemberLocal") (EVar "m")) (EVar "loc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -1316,6 +1350,12 @@ overPubUse coreExp known f path =
 (DData Public "ExportView" () ((variant "ExportedView" (ConPos)) (variant "FullView" (ConPos))) ())
 (DTypeSig true "viewOf" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyCon "ExportView"))))
 (DFunDef false "viewOf" ((PVar "subject") (PVar "mid")) (EIf (EBinOp "==" (EVar "subject") (EApp (EVar "Some") (EVar "mid"))) (EVar "FullView") (EVar "ExportedView")))
+(DTypeSig true "subjectOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "subjectOf" ((PVar "siblings") (PVar "mid")) (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "siblings")))
+(DTypeSig true "viewFor" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "ExportView")))))
+(DFunDef false "viewFor" ((PVar "siblings") (PVar "importer") (PVar "mid")) (EApp (EApp (EVar "viewOf") (EApp (EApp (EVar "subjectOf") (EVar "siblings")) (EVar "importer"))) (EVar "mid")))
+(DTypeSig true "isSubjectIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isSubjectIn" ((PVar "siblings") (PVar "mid")) (EApp (EApp (EVar "contains") (EVar "mid")) (EApp (EApp (EVar "map") (EVar "snd")) (EVar "siblings"))))
 (DTypeSig false "ruleOf" (TyFun (TyCon "ExportView") (TyFun (TyApp (TyCon "ExpNs") (TyVar "a")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "ruleOf" ((PCon "ExportedView") (PVar "ns") (PVar "d")) (EApp (EFieldAccess (EVar "ns") "nsDirectOf") (EVar "d")))
 (DFunDef false "ruleOf" ((PCon "FullView") (PVar "ns") (PVar "d")) (EApp (EFieldAccess (EVar "ns") "nsFullOf") (EVar "d")))
@@ -1460,8 +1500,13 @@ overPubUse coreExp known f path =
 (DFunDef false "pubUsePaths" ((PCons PWild (PVar "rest"))) (EApp (EVar "pubUsePaths") (EVar "rest")))
 (DTypeSig true "plainUsePaths" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "UsePath"))))
 (DFunDef false "plainUsePaths" ((PList)) (EListLit))
-(DFunDef false "plainUsePaths" ((PCons (PCon "DUse" (PCon "False") (PVar "path") PWild) (PVar "rest"))) (EBinOp "::" (EVar "path") (EApp (EVar "plainUsePaths") (EVar "rest"))))
+(DFunDef false "plainUsePaths" ((PCons (PCon "DUse" (PCon "False") (PVar "path") PWild) (PVar "rest"))) (EBinOp "::" (EApp (EVar "unrenamedPath") (EVar "path")) (EApp (EVar "plainUsePaths") (EVar "rest"))))
 (DFunDef false "plainUsePaths" ((PCons PWild (PVar "rest"))) (EApp (EVar "plainUsePaths") (EVar "rest")))
+(DTypeSig false "unrenamedPath" (TyFun (TyCon "UsePath") (TyCon "UsePath")))
+(DFunDef false "unrenamedPath" ((PCon "UseGroup" (PVar "ns") (PVar "members"))) (EApp (EApp (EVar "UseGroup") (EVar "ns")) (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EBinOp "==" (EApp (EVar "useMemberLocal") (EVar "m")) (EApp (EVar "useMemberName") (EVar "m"))))) (EVar "members"))))
+(DFunDef false "unrenamedPath" ((PVar "path")) (EVar "path"))
+(DTypeSig false "useMemberName" (TyFun (TyCon "UseMember") (TyCon "String")))
+(DFunDef false "useMemberName" ((PCon "UseMember" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig true "expandMemberNames" (TyFun (TyCon "ModuleExports") (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Loc"))))))
 (DFunDef false "expandMemberNames" ((PVar "exp") (PAs "m" (PCon "UseMember" (PVar "name") (PCon "False") (PVar "loc") PWild))) (EIf (EApp (EApp (EVar "bindsNonCtorExport") (EVar "exp")) (EVar "name")) (EListLit (ETuple (EVar "name") (EApp (EVar "useMemberLocal") (EVar "m")) (EVar "loc"))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "newtypeTypeOfCtor") (EVar "name")) (EVar "exp")) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "typeOfCtor") (EVar "name")) (EVar "exp")) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EVar "exp") "expAbstractCtors")) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EListLit (ETuple (EVar "name") (EApp (EVar "useMemberLocal") (EVar "m")) (EVar "loc"))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "expandMemberNames" ((PVar "exp") (PAs "m" (PCon "UseMember" (PVar "name") (PCon "True") (PVar "loc") PWild))) (EIf (EApp (EApp (EVar "isNewtypeExport") (EVar "name")) (EVar "exp")) (EListLit (ETuple (EVar "name") (EApp (EVar "useMemberLocal") (EVar "m")) (EVar "loc"))) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EFieldAccess (EVar "exp") "expEffects")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "typeCtorsOf") (EVar "name")) (EVar "exp")) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "::" (ETuple (EVar "name") (EApp (EVar "useMemberLocal") (EVar "m")) (EVar "loc")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (ETuple (EVar "c") (EVar "c") (EVar "loc")))) (EVar "ctors")))) (arm (PCon "None") () (EListLit (ETuple (EVar "name") (EApp (EVar "useMemberLocal") (EVar "m")) (EVar "loc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -1538,6 +1583,12 @@ overPubUse coreExp known f path =
 (DData Public "ExportView" () ((variant "ExportedView" (ConPos)) (variant "FullView" (ConPos))) ())
 (DTypeSig true "viewOf" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyCon "ExportView"))))
 (DFunDef false "viewOf" ((PVar "subject") (PVar "mid")) (EIf (EBinOp "==" (EVar "subject") (EApp (EVar "Some") (EVar "mid"))) (EVar "FullView") (EVar "ExportedView")))
+(DTypeSig true "subjectOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "subjectOf" ((PVar "siblings") (PVar "mid")) (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "siblings")))
+(DTypeSig true "viewFor" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "ExportView")))))
+(DFunDef false "viewFor" ((PVar "siblings") (PVar "importer") (PVar "mid")) (EApp (EApp (EVar "viewOf") (EApp (EApp (EVar "subjectOf") (EVar "siblings")) (EVar "importer"))) (EVar "mid")))
+(DTypeSig true "isSubjectIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isSubjectIn" ((PVar "siblings") (PVar "mid")) (EApp (EApp (EVar "contains") (EVar "mid")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "siblings"))))
 (DTypeSig false "ruleOf" (TyFun (TyCon "ExportView") (TyFun (TyApp (TyCon "ExpNs") (TyVar "a")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "ruleOf" ((PCon "ExportedView") (PVar "ns") (PVar "d")) (EApp (EFieldAccess (EVar "ns") "nsDirectOf") (EVar "d")))
 (DFunDef false "ruleOf" ((PCon "FullView") (PVar "ns") (PVar "d")) (EApp (EFieldAccess (EVar "ns") "nsFullOf") (EVar "d")))

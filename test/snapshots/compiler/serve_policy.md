@@ -1,5 +1,5 @@
 # META
-source_lines=379
+source_lines=376
 stages=DESUGAR,MARK
 # SOURCE
 -- Which modules of a keyed drive are served, checked, recorded, and the per-drive
@@ -9,7 +9,7 @@ stages=DESUGAR,MARK
 -- `ServeOps`, which `typecheck.mdk` builds once; this module imports nothing from it.
 import list.{drop, take, sort}
 import string.{lines}
-import frontend.visibility.{ExportView(..), useModuleIds, viewOf}
+import frontend.visibility.{isSubjectIn, useModuleIds}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 import support.util.{
   anyList, dedup, filterList, isNonEmptyL, isSome, joinNl, listLen, zipL
@@ -186,14 +186,11 @@ serveStep st mid prog prev =
               recordScoped next key before mctx own private done mark)
     _ => ServeCheck (_ _ _ done => unrecorded done)
 
--- Whether [mid] is the test subject of the drive [prev] belongs to: the module its
--- sibling sees in the full view, so the one whose private bindings the drive keeps.
+-- Whether [mid] is a test subject of the graph [prev] belongs to: a module its
+-- sibling sees in the full view, so one whose private bindings the drive keeps.
 export
 isSubject : ModuleCtx -> String -> Bool
-isSubject prev mid =
-  match viewOf (map snd prev.mcGraph.config.value.tcSibling) mid
-    FullView => True
-    ExportedView => False
+isSubject prev mid = isSubjectIn prev.mcGraph.config.value.tcSibling mid
 
 -- The key's graph part for the module [prev] precedes: the graph key and the
 -- interface declarations of the modules before it, whose method names it reads by
@@ -384,7 +381,7 @@ withMarked ((mid, (marked, _, _, _, view)), (_, (schemes, errs, warns))) =
 # DESUGAR
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "take" false) (mem "sort" false))))
 (DUse false (UseGroup ("string") ((mem "lines" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "ExportView" true) (mem "useModuleIds" false) (mem "viewOf" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "isSubjectIn" false) (mem "useModuleIds" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "dedup" false) (mem "filterList" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinNl" false) (mem "listLen" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "chain_key") ((mem "chainGraphKey" false) (mem "interfaceRows" false))))
@@ -408,7 +405,7 @@ withMarked ((mid, (marked, _, _, _, view)), (_, (schemes, errs, warns))) =
 (DTypeSig false "serveStep" (TyFun (TyCon "ServeState") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleCtx") (TyApp (TyCon "ServeStep") (TyCon "DiagsPayload")))))))
 (DFunDef false "serveStep" ((PVar "st") (PVar "mid") (PVar "prog") (PVar "prev")) (EBlock (DoLet false false (PVar "next") (ERecordUpdate (EVar "st") ((fa "ssKeys" (EApp (EApp (EVar "drop") (ELit (LInt 1))) (EFieldAccess (EVar "st") "ssKeys"))) (fa "ssIfaces" (EBinOp "++" (EFieldAccess (EVar "st") "ssIfaces") (EApp (EApp (EVar "interfaceRows") (EVar "mid")) (EVar "prog")))) (fa "ssRows" (EBinOp "+" (EFieldAccess (EVar "st") "ssRows") (ELit (LInt 1))))))) (DoLet false true (PVar "unrecorded") (ELam ((PVar "done")) (ETuple (EVar "done") (EApp (EVar "diagsServe") (EApp (EApp (EVar "unrecordedState") (EVar "next")) (EVar "mid")))))) (DoExpr (EMatch (EFieldAccess (EVar "st") "ssKeys") (arm (PCons (PCon "Some" (PVar "source")) PWild) () (EBlock (DoLet false false (PVar "key") (ERecordCreate "ModuleKey" ((fa "mkModule" (EVar "mid")) (fa "mkSource" (EVar "source")) (fa "mkImports" (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EVar "m") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EVar "st") "ssIdents")))))) (EApp (EVar "dedup") (EApp (EVar "useModuleIds") (EVar "prog"))))) (fa "mkGraph" (EApp (EApp (EVar "graphPart") (EVar "st")) (EVar "prev")))))) (DoExpr (EMatch (EApp (EApp (EVar "servable") (EVar "st")) (EApp (EVar "moduleCacheHit") (EVar "key"))) (arm (PCon "Some" (PVar "mi")) () (EBlock (DoLet false false (PTuple (PTuple PWild (PTuple (PVar "schemes") (PVar "errs") (PVar "warns"))) (PVar "own")) (EApp (EApp (EVar "applyModuleInterface") (EFieldAccess (EVar "prev") "mcGraph")) (EVar "mi"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ServeHit") (EVar "own")) (EIf (EApp (EApp (EVar "isSubject") (EVar "prev")) (EVar "mid")) (EApp (EVar "privateBindingsOf") (EVar "mi")) (EListLit))) (ETuple (EApp (EApp (EApp (EVar "servedTrees") (EVar "st")) (EVar "prev")) (EVar "mi")) (EVar "schemes") (EVar "errs") (EVar "warns") (EIf (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EFieldAccess (EVar "st") "ssCapture")) (EApp (EVar "Some") (EApp (EVar "readInvocationView") (EFieldAccess (EVar "mi") "miInvocationView"))) (EVar "None")))) (EApp (EVar "diagsServe") (EApp (EApp (EApp (EVar "servedState") (EVar "next")) (EVar "mid")) (EVar "mi"))))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "before") (EApp (EVar "captureModuleRows") (EFieldAccess (EVar "prev") "mcGraph"))) (DoLet false false (PVar "mark") (EApp (EVar "queueMarkOf") (EFieldAccess (EVar "prev") "mcGraph"))) (DoExpr (EApp (EVar "ServeCheck") (ELam ((PVar "mctx") (PVar "own") (PVar "private") (PVar "done")) (EIf (EBinOp "||" (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EVar "st") "ssUnrecorded")))) (EApp (EApp (EVar "map") (EVar "fst")) (EFieldAccess (EVar "key") "mkImports"))) (EApp (EApp (EApp (EVar "ownRootsOpen") (EFieldAccess (EVar "st") "ssOps")) (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "mark"))) (EApp (EVar "unrecorded") (EVar "done")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordScoped") (EVar "next")) (EVar "key")) (EVar "before")) (EVar "mctx")) (EVar "own")) (EVar "private")) (EVar "done")) (EVar "mark")))))))))))) (arm PWild () (EApp (EVar "ServeCheck") (ELam (PWild PWild PWild (PVar "done")) (EApp (EVar "unrecorded") (EVar "done")))))))))
 (DTypeSig true "isSubject" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isSubject" ((PVar "prev") (PVar "mid")) (EMatch (EApp (EApp (EVar "viewOf") (EApp (EApp (EVar "map") (EVar "snd")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "prev") "mcGraph") "config") "value") "tcSibling"))) (EVar "mid")) (arm (PCon "FullView") () (EVar "True")) (arm (PCon "ExportedView") () (EVar "False"))))
+(DFunDef false "isSubject" ((PVar "prev") (PVar "mid")) (EApp (EApp (EVar "isSubjectIn") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "prev") "mcGraph") "config") "value") "tcSibling")) (EVar "mid")))
 (DTypeSig false "graphPart" (TyFun (TyCon "ServeState") (TyFun (TyCon "ModuleCtx") (TyCon "String"))))
 (DFunDef false "graphPart" ((PVar "st") (PVar "prev")) (EBlock (DoLet false false (PVar "graph") (EApp (EVar "joinNl") (EBinOp "::" (EFieldAccess (EVar "st") "ssGraph") (EFieldAccess (EVar "st") "ssIfaces")))) (DoExpr (EIf (EFieldAccess (EVar "st") "ssTrees") (EApp (EVar "joinNl") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "graph"))) (ELit (LString "\ntrees"))) (EApp (EVar "sort") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "prev") "mcGraph") "promotionHarvestRef") "value")))) (EVar "graph")))))
 (DTypeSig false "servable" (TyFun (TyCon "ServeState") (TyFun (TyApp (TyCon "Option") (TyCon "ModuleInterface")) (TyApp (TyCon "Option") (TyCon "ModuleInterface")))))
@@ -444,7 +441,7 @@ withMarked ((mid, (marked, _, _, _, view)), (_, (schemes, errs, warns))) =
 # MARK
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "take" false) (mem "sort" false))))
 (DUse false (UseGroup ("string") ((mem "lines" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "ExportView" true) (mem "useModuleIds" false) (mem "viewOf" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "isSubjectIn" false) (mem "useModuleIds" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "dedup" false) (mem "filterList" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinNl" false) (mem "listLen" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "chain_key") ((mem "chainGraphKey" false) (mem "interfaceRows" false))))
@@ -468,7 +465,7 @@ withMarked ((mid, (marked, _, _, _, view)), (_, (schemes, errs, warns))) =
 (DTypeSig false "serveStep" (TyFun (TyCon "ServeState") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleCtx") (TyApp (TyCon "ServeStep") (TyCon "DiagsPayload")))))))
 (DFunDef false "serveStep" ((PVar "st") (PVar "mid") (PVar "prog") (PVar "prev")) (EBlock (DoLet false false (PVar "next") (ERecordUpdate (EVar "st") ((fa "ssKeys" (EApp (EApp (EVar "drop") (ELit (LInt 1))) (EFieldAccess (EVar "st") "ssKeys"))) (fa "ssIfaces" (EBinOp "++" (EFieldAccess (EVar "st") "ssIfaces") (EApp (EApp (EVar "interfaceRows") (EVar "mid")) (EVar "prog")))) (fa "ssRows" (EBinOp "+" (EFieldAccess (EVar "st") "ssRows") (ELit (LInt 1))))))) (DoLet false true (PVar "unrecorded") (ELam ((PVar "done")) (ETuple (EVar "done") (EApp (EVar "diagsServe") (EApp (EApp (EVar "unrecordedState") (EVar "next")) (EVar "mid")))))) (DoExpr (EMatch (EFieldAccess (EVar "st") "ssKeys") (arm (PCons (PCon "Some" (PVar "source")) PWild) () (EBlock (DoLet false false (PVar "key") (ERecordCreate "ModuleKey" ((fa "mkModule" (EVar "mid")) (fa "mkSource" (EVar "source")) (fa "mkImports" (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EVar "m") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EVar "st") "ssIdents")))))) (EApp (EVar "dedup") (EApp (EVar "useModuleIds") (EVar "prog"))))) (fa "mkGraph" (EApp (EApp (EVar "graphPart") (EVar "st")) (EVar "prev")))))) (DoExpr (EMatch (EApp (EApp (EVar "servable") (EVar "st")) (EApp (EVar "moduleCacheHit") (EVar "key"))) (arm (PCon "Some" (PVar "mi")) () (EBlock (DoLet false false (PTuple (PTuple PWild (PTuple (PVar "schemes") (PVar "errs") (PVar "warns"))) (PVar "own")) (EApp (EApp (EVar "applyModuleInterface") (EFieldAccess (EVar "prev") "mcGraph")) (EVar "mi"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ServeHit") (EVar "own")) (EIf (EApp (EApp (EVar "isSubject") (EVar "prev")) (EVar "mid")) (EApp (EVar "privateBindingsOf") (EVar "mi")) (EListLit))) (ETuple (EApp (EApp (EApp (EVar "servedTrees") (EVar "st")) (EVar "prev")) (EVar "mi")) (EVar "schemes") (EVar "errs") (EVar "warns") (EIf (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EFieldAccess (EVar "st") "ssCapture")) (EApp (EVar "Some") (EApp (EVar "readInvocationView") (EFieldAccess (EVar "mi") "miInvocationView"))) (EVar "None")))) (EApp (EVar "diagsServe") (EApp (EApp (EApp (EVar "servedState") (EVar "next")) (EVar "mid")) (EVar "mi"))))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "before") (EApp (EVar "captureModuleRows") (EFieldAccess (EVar "prev") "mcGraph"))) (DoLet false false (PVar "mark") (EApp (EVar "queueMarkOf") (EFieldAccess (EVar "prev") "mcGraph"))) (DoExpr (EApp (EVar "ServeCheck") (ELam ((PVar "mctx") (PVar "own") (PVar "private") (PVar "done")) (EIf (EBinOp "||" (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EVar "st") "ssUnrecorded")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EFieldAccess (EVar "key") "mkImports"))) (EApp (EApp (EApp (EVar "ownRootsOpen") (EFieldAccess (EVar "st") "ssOps")) (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "mark"))) (EApp (EVar "unrecorded") (EVar "done")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordScoped") (EVar "next")) (EVar "key")) (EVar "before")) (EVar "mctx")) (EVar "own")) (EVar "private")) (EVar "done")) (EVar "mark")))))))))))) (arm PWild () (EApp (EVar "ServeCheck") (ELam (PWild PWild PWild (PVar "done")) (EApp (EVar "unrecorded") (EVar "done")))))))))
 (DTypeSig true "isSubject" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isSubject" ((PVar "prev") (PVar "mid")) (EMatch (EApp (EApp (EVar "viewOf") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "prev") "mcGraph") "config") "value") "tcSibling"))) (EVar "mid")) (arm (PCon "FullView") () (EVar "True")) (arm (PCon "ExportedView") () (EVar "False"))))
+(DFunDef false "isSubject" ((PVar "prev") (PVar "mid")) (EApp (EApp (EVar "isSubjectIn") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "prev") "mcGraph") "config") "value") "tcSibling")) (EVar "mid")))
 (DTypeSig false "graphPart" (TyFun (TyCon "ServeState") (TyFun (TyCon "ModuleCtx") (TyCon "String"))))
 (DFunDef false "graphPart" ((PVar "st") (PVar "prev")) (EBlock (DoLet false false (PVar "graph") (EApp (EVar "joinNl") (EBinOp "::" (EFieldAccess (EVar "st") "ssGraph") (EFieldAccess (EVar "st") "ssIfaces")))) (DoExpr (EIf (EFieldAccess (EVar "st") "ssTrees") (EApp (EVar "joinNl") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "graph"))) (ELit (LString "\ntrees"))) (EApp (EVar "sort") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "prev") "mcGraph") "promotionHarvestRef") "value")))) (EVar "graph")))))
 (DTypeSig false "servable" (TyFun (TyCon "ServeState") (TyFun (TyApp (TyCon "Option") (TyCon "ModuleInterface")) (TyApp (TyCon "Option") (TyCon "ModuleInterface")))))

@@ -32,7 +32,7 @@ boolSeeds : List (String, Value a)
 boolToInt : Bool -> Int
 buildCtorFieldOrders : List Decl -> List (String, List String)
 buildMethodReqCounts : Option DispositionTable -> List Decl -> List ((String, String), Int)
-buildModInfos : EnvFrame (Value a) -> EnvFrame (Value a) -> ModExports (Value a) -> Option (String, String) -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
+buildModInfos : EnvFrame (Value a) -> EnvFrame (Value a) -> ModExports (Value a) -> List (String, String) -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
 buildRootModuleStateWith : ProgramFacts -> List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> (List (ModInfo (Value a)), List (String, Ref (Value a)))
 buildStampExterns : Unit -> List (String, Value a)
 buildWith : Value a -> Int -> Int -> <a> List (Value a)
@@ -196,7 +196,7 @@ implMethodReqCountEntry : String -> ImplMethod -> ((String, String), Int)
 implMethodReqCounts : Option DispositionTable -> Decl -> List ((String, String), Int)
 implMethodValue : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> Value a
 importFrameOf : ModExports (Value a) -> List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
-importsMapFor : Option (String, String) -> String -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a))
+importsMapFor : List (String, String) -> String -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a))
 inCharRange : String -> String -> String -> Bool -> Bool
 inIntRange : Int -> Int -> Int -> Bool -> Bool
 indexedFrame : List (String, Ref a) -> EnvFrame a
@@ -567,5 +567,5 @@ valueListEq : List (Value a) -> List (Value a) -> Bool
 valueTag : Value a -> Int
 variantFieldOrder : Variant -> List (String, List String)
 withCallFile : EvalEnv (Value a) -> (Unit -> <a> Value a) -> <a> Value a
-withSubjectFull : Option (String, String) -> String -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a))
+withSubjectFull : List (String, String) -> String -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a))
 zipFieldOrder : List String -> List (Value a) -> List (String, Value a)

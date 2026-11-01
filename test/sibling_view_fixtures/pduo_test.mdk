@@ -1,0 +1,9 @@
+-- The sibling of `pduo.mdk` importing the sibling of `pchain.mdk`: two siblings
+-- of two subjects in one graph, each with its own subject's full view.  Accepted.
+import test.{expectEqual}
+import pduo.{hidden}
+import pchain_test.{probe}
+
+test "each sibling sees its own subject" = expectEqual 200 (hidden probe)
+
+main = println (hidden probe)

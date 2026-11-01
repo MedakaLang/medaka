@@ -28,7 +28,7 @@ public export data ProgramFacts = ProgramFacts {
   pfBinders : Option BinderTypeTable,
   pfEntryOutcome : Option EntryOutcome,
   pfExternSources : Option (List ExternSource),
-  pfSibling : Option (String, String),
+  pfSibling : List (String, String),
 }
 
 -- No evidence, no dispositions, no binders: untyped lowering and eval.
@@ -42,7 +42,7 @@ emptyFacts = ProgramFacts {
   pfBinders = None,
   pfEntryOutcome = None,
   pfExternSources = None,
-  pfSibling = None,
+  pfSibling = [],
 }
 
 export
@@ -55,7 +55,7 @@ factsOfChecked c = ProgramFacts {
   pfBinders = Some c.cpBinders,
   pfEntryOutcome = Some c.cpEntryOutcome,
   pfExternSources = None,
-  pfSibling = None,
+  pfSibling = [],
 }
 
 -- The facts of one elaboration, as it returned them: before `mangleUnitsEv`
@@ -76,7 +76,7 @@ factsOfElabWith table elab = ProgramFacts {
   pfBinders = Some elab.erFacts.efBinders,
   pfEntryOutcome = Some elab.erFacts.efEntryOutcome,
   pfExternSources = None,
-  pfSibling = None,
+  pfSibling = [],
 }
 
 export
@@ -143,5 +143,5 @@ withSymbolOrigins origins facts = { facts | pfSymbolOrigins = Some origins }
 -- [sibling] (`DriveInputs.diSibling`): the engines give the sibling the
 -- subject's full view of its names, as `check` did.
 export
-withSibling : Option (String, String) -> ProgramFacts -> ProgramFacts
+withSibling : List (String, String) -> ProgramFacts -> ProgramFacts
 withSibling sibling facts = { facts | pfSibling = sibling }

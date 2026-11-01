@@ -8,5 +8,5 @@ factsOfElabWith : List EvEntry -> ElabResult -> ProgramFacts
 factsWithEvidence : List EvEntry -> ProgramFacts -> ProgramFacts
 withCheckedExternSources : (DriveOutputs -> List (String, List Decl) -> List (String, (List (String, String), (List String, String)))) -> DriveOutputs -> List Decl -> List (String, List Decl) -> ProgramFacts -> ProgramFacts
 withFacts : ProgramFacts -> (Unit -> <a> b) -> <a> b
-withSibling : Option (String, String) -> ProgramFacts -> ProgramFacts
+withSibling : List (String, String) -> ProgramFacts -> ProgramFacts
 withSymbolOrigins : SymbolOrigins -> ProgramFacts -> ProgramFacts

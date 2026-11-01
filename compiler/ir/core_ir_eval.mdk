@@ -691,7 +691,8 @@ cevalModules facts preludeDecls0 modules0 = withFacts
     -- mechanism and the parity argument are written out once, on eval.mdk's
     -- `evalModulesWith`.  Must move with it: this driver seeds the SAME
     -- program-global `ctorToTypeRef`.
-    let (preludeDecls, modules) = mangleCtorCollisions preludeDecls0 modules0
+    let (preludeDecls, modules) =
+      mangleCtorCollisions facts.pfSibling preludeDecls0 modules0
     let moduleDecls = flatMap snd modules
     let allDecls = preludeDecls ++ moduleDecls
     let dispositions = facts.pfDispositions

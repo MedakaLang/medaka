@@ -265,7 +265,7 @@ runPipeline combined =
       match tcErrs
         e :: _ => (map tcMsg tcErrs, [], [], emptyFacts)
         [] =>
-          let (coreM, modulesM) = mangleCtorCollisionsPair (coreE, modulesE)
+          let (coreM, modulesM) = mangleCtorCollisionsPair [] (coreE, modulesE)
           let facts = factsOfElab elab
           let bindings = evalOneRootEnvFacts facts (testCapableExterns
             ()) coreM (

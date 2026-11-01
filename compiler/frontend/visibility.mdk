@@ -309,12 +309,23 @@ pubUsePaths ((DUse True path _) :: rest) = path :: pubUsePaths rest
 pubUsePaths (_ :: rest) = pubUsePaths rest
 
 -- The paths of a module's plain imports, the complement of `pubUsePaths`: what
--- its full view carries beyond its exported one.
+-- its full view carries beyond its exported one.  The full view carries a plain
+-- import as an `export import` of the same path would, and an `export import`
+-- cannot rename, so a renamed member (`import m.{a as b}`) is not carried.
 export
 plainUsePaths : List Decl -> List UsePath
 plainUsePaths [] = []
-plainUsePaths ((DUse False path _) :: rest) = path :: plainUsePaths rest
+plainUsePaths ((DUse False path _) :: rest) =
+  unrenamedPath path :: plainUsePaths rest
 plainUsePaths (_ :: rest) = plainUsePaths rest
+
+unrenamedPath : UsePath -> UsePath
+unrenamedPath (UseGroup ns members) =
+  UseGroup ns (filterList (m => useMemberLocal m == useMemberName m) members)
+unrenamedPath path = path
+
+useMemberName : UseMember -> String
+useMemberName (UseMember n _ _ _) = n
 
 -- expand_member: `T(..)` → the type plus its exported ctors; a plain member is
 -- itself.  `T(..)` on an abstractly-exported type is a NoExportedConstructors.
@@ -854,6 +865,24 @@ public export data ExportView = ExportedView | FullView
 export
 viewOf : Option String -> String -> ExportView
 viewOf subject mid = if subject == Some mid then FullView else ExportedView
+
+-- The graph's test siblings are a list of (sibling, subject) module-id pairs, one
+-- per `*_test.mdk` module whose subject the graph loaded; the loader classifies
+-- each by location.  A subject has at most one sibling, so either id finds its pair.
+-- The test subject of importer [mid], if [mid] is a sibling.
+export
+subjectOf : List (String, String) -> String -> Option String
+subjectOf siblings mid = lookupAssoc mid siblings
+
+-- The view importer [importer] gets of module [mid] under [siblings].
+export
+viewFor : List (String, String) -> String -> String -> ExportView
+viewFor siblings importer mid = viewOf (subjectOf siblings importer) mid
+
+-- Whether some sibling in [siblings] sees [mid]'s full view.
+export
+isSubjectIn : List (String, String) -> String -> Bool
+isSubjectIn siblings mid = contains mid (map snd siblings)
 
 -- One namespace's own-decl rule under [view], for one decl and for a decl list.
 ruleOf : ExportView -> ExpNs a -> Decl -> List a

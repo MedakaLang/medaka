@@ -108,7 +108,7 @@ hadTypeErrors : DriveOutputs -> Bool
 identKeysByName : Map String (List String) -> List (String, Ident) -> Map String (List String)
 ifaceSuperCountOfRow : GraphCtx -> ImplRow -> (String, Int)
 importFormSchemes : List (String, List (String, a)) -> UsePath -> List (String, a) -> List (String, a)
-importSeed : GraphCtx -> List (String, a) -> List (String, String) -> List Decl -> List (String, List (String, a)) -> List (String, (Option String, a))
+importSeed : GraphCtx -> String -> List (String, a) -> List (String, String) -> List Decl -> List (String, List (String, a)) -> List (String, (Option String, a))
 importSupplierKey : String -> Map String (String, String) -> Map String (List String) -> String -> String
 importedBindingWinners : ModuleCtx -> List (String, (Option String, ExportBinding)) -> Map String Unit -> Map String Unit -> List (String, ExportBinding)
 importedSeed : List (String, a) -> List Decl -> List (String, List (String, a)) -> List (String, a)
@@ -149,7 +149,6 @@ seedContext : ModuleCtx -> Map String (List VecObl) -> String -> List VecObl
 serveOps : ServeOps
 setDictEligible : GraphCtx -> List String -> Unit
 setMainSchemeIfEntry : GraphCtx -> ModulePlace -> List (String, PubScheme) -> Unit
-siblingDepEnv : ModuleCtx -> String -> (List (String, List (String, ExportBinding)), List (String, List (String, ExportBinding))) -> List (String, List (String, ExportBinding))
 stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
 suppliedBy : Option String -> (String, a) -> (String, (Option String, a))
 synthesizedAdmissions : List (String, List String) -> List Decl -> List (String, String)

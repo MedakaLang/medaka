@@ -423,6 +423,12 @@ siblingCases = [
   ("piface", "5\n"),
   ("peffect", "2\n"),
   ("pimport", "3\n"),
+  ("pconstr", "[1, 2, 3]\n"),
+  ("psame", "Some 6\n"),
+  ("pclash", "105\n3\n"),
+  ("palias", "2\n4\n2\n"),
+  ("pchain", "2\n"),
+  ("pduo", "200\n"),
 ]
 
 siblingVerb : String -> String -> <Exec, IO> Result String (Int, String, String)
@@ -489,15 +495,19 @@ test "a test sibling's rows pass under medaka test eval and native" =
 -- Each twin names the same private thing from a module that is not the
 -- subject's sibling: check, run and build reject it alike.  `other_5` is the
 -- one acceptance: an impl is not a name, so importing the type is enough.
-siblingTwins : List (Int, String)
+-- `xduo_test` is another subject's sibling, and `rename_test` names a renamed
+-- import its subject's full view does not carry.
+siblingTwins : List (String, String)
 siblingTwins = [
-  (1, "has no export `step`"),
-  (2, "exports no constructors"),
-  (3, "has no export `Hidden`"),
-  (4, "a `newtype` constructor is always module-private"),
-  (6, "has no export `Sized`"),
-  (7, "has no export `Beep`"),
-  (8, "has no export `last`"),
+  ("other_1", "has no export `step`"),
+  ("other_2", "exports no constructors"),
+  ("other_3", "has no export `Hidden`"),
+  ("other_4", "a `newtype` constructor is always module-private"),
+  ("other_6", "has no export `Sized`"),
+  ("other_7", "has no export `Beep`"),
+  ("other_8", "has no export `last`"),
+  ("xduo_test", "has no export `step`"),
+  ("rename_test", "has no export `lst`"),
 ]
 
 test "the non-sibling twin of each case is rejected alike by check, run and build" = withScratchDir
@@ -505,13 +515,13 @@ test "the non-sibling twin of each case is rejected alike by check, run and buil
     expectAll
       (flatMap
         (t => match t
-          (n, needle) =>
-            let file = "other_\{n}.mdk"
+          (stem, needle) =>
+            let file = "\{stem}.mdk"
             [
               match siblingVerb "check" file
                 Ok (code, _, errOut) =>
                   labelFail
-                    "check other_\{n}"
+                    "check \{stem}"
                     (expectAll [
                       expectEqual 1 code,
                       expectTrue (contains needle errOut),
@@ -520,7 +530,7 @@ test "the non-sibling twin of each case is rejected alike by check, run and buil
               match siblingVerb "run" file
                 Ok (code, _, errOut) =>
                   labelFail
-                    "run other_\{n}"
+                    "run \{stem}"
                     (expectAll [
                       expectEqual 1 code,
                       expectTrue (contains needle errOut),
@@ -530,11 +540,11 @@ test "the non-sibling twin of each case is rejected alike by check, run and buil
                 "build",
                 underRoot "test/sibling_view_fixtures/\{file}",
                 "-o",
-                "\{dir}/other_\{n}",
+                "\{dir}/\{stem}",
               ]
                 Ok (code, _, errOut) =>
                   labelFail
-                    "build other_\{n}"
+                    "build \{stem}"
                     (expectAll [
                       expectEqual 1 code,
                       expectTrue (contains needle errOut),

@@ -1,0 +1,4 @@
+-- A subject whose sibling also reads another subject's private name.
+export
+double : Int -> Int
+double n = n * 2

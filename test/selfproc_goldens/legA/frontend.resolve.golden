@@ -190,7 +190,7 @@ importNameOrigins : ExpNs String -> ExpNs (String, String) -> Map String ModuleE
 importNamesIn : ExpNs String -> Map String ModuleExports -> UsePath -> List String
 importValueBindings : UsePath -> ModuleExports -> List (String, String)
 importValueDecls : Map String ModuleExports -> UsePath -> List (String, String)
-importedCtorDecls : List Decl -> Option (String, String) -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
+importedCtorDecls : List Decl -> List (String, String) -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
 importedCtorDeclsGo : (Option (String, List Decl) -> Map String ModuleExports -> (String, List Decl) -> (List Decl, ModuleExports)) -> (String -> Option (String, List Decl)) -> Map String ModuleExports -> List (String, List Decl) -> List (String, List Decl)
 importedCtorDeclsStep : ModuleExports -> Map String (List Decl) -> Option (String, List Decl) -> Map String ModuleExports -> (String, List Decl) -> (List Decl, ModuleExports)
 importedEffectOrigins : Map String (List (String, String)) -> UsePath -> List (String, String)
@@ -202,7 +202,7 @@ importedNamesMM : UsePath -> ModuleExports -> (List String, List ResError)
 importedTyOrigin : (String, String) -> (String, TyConOrigin)
 importedTypeOrigins : Map String (List (String, String)) -> UsePath -> List (String, String)
 importedTypeOriginsFrom : UsePath -> List (String, String) -> List (String, String)
-importerSubject : Option (String, String) -> List (String, List Decl) -> String -> Option (String, List Decl)
+importerSubject : List (String, String) -> List (String, List Decl) -> String -> Option (String, List Decl)
 indexOwners : List (String, String) -> Map String (List String) -> Map String (List String)
 insertParams : List Pat -> Map String Int -> Map String Int
 insertZero : List String -> Map String Int -> Map String Int
@@ -309,9 +309,9 @@ reservedClashes : String -> List String -> List (String, Option Loc) -> List Res
 resolveModule : List Decl -> List Decl -> Map String ModuleExports -> String -> List Decl -> (ModuleExports, List ResError)
 resolveModuleG : List String -> Option (String, List Decl) -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> String -> List Decl -> (ModuleExports, List ResError)
 resolveModulesErrors : List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List ResError
-resolveModulesErrorsByFile : List (String, String) -> Bool -> List String -> Option (String, String) -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List ResError)
-resolveModulesErrorsG : Bool -> List String -> Option (String, String) -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List ResError
-resolveModulesErrorsPairsG : Bool -> List String -> Option (String, String) -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List (String, List ResError)
+resolveModulesErrorsByFile : List (String, String) -> Bool -> List String -> List (String, String) -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List ResError)
+resolveModulesErrorsG : Bool -> List String -> List (String, String) -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List ResError
+resolveModulesErrorsPairsG : Bool -> List String -> List (String, String) -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List (String, List ResError)
 resolveModulesToLines : List Decl -> List Decl -> List (String, List Decl) -> String
 resolvePairsGo : Bool -> List String -> (String -> Option (String, List Decl)) -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List (String, List ResError)
 resolveProgram : List Decl -> List Decl -> List Decl -> List ResError
@@ -344,7 +344,7 @@ stampEffAtoms : Map String TyConOrigin -> List EffAtomTy -> (List EffAtomTy, Boo
 stampExpr : Map String Int -> Expr -> Expr
 stampFieldAssign : Map String Int -> FieldAssign -> FieldAssign
 stampFlatTyOrigins : List Decl -> List Decl -> List Decl
-stampGraphTyOrigins : Option (String, String) -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+stampGraphTyOrigins : List (String, String) -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 stampGuardArm : Map String Int -> GuardArm -> GuardArm
 stampGuards : Map String Int -> List Guard -> (List Guard, Map String Int)
 stampHeadWith : Ty -> TyConOrigin -> (Ty, Bool)

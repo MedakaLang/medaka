@@ -1189,10 +1189,29 @@ test "a test sibling imports its subject's private names" = expectEach [
     "the phantom-authority constructor",
     expectEqual accepted (siblingFixture "handle_test.mdk"),
   ),
+  (
+    "a name the subject imports beside the same name imported directly",
+    expectEqual accepted (siblingFixture "psame_test.mdk"),
+  ),
+  (
+    "private constructors through a module alias",
+    expectEqual accepted (siblingFixture "palias_test.mdk"),
+  ),
+  (
+    "a sibling that another test module imports",
+    expectEqual accepted (siblingFixture "pduo_test.mdk"),
+  ),
 ]
+
+test "a name the subject imports under another spelling is not carried" =
+  expectEqual (True, ["R-PRIVATE-NAME"]) (siblingFixture "rename_test.mdk")
 
 test "an importer that is not the subject's test sibling gets today's rejections" = expectEach
   [
+    (
+      "the sibling of another subject",
+      expectEqual (True, ["R-PRIVATE-NAME"]) (siblingFixture "xduo_test.mdk"),
+    ),
     (
       "a module beside the subject",
       expectEqual

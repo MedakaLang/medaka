@@ -1,0 +1,13 @@
+-- Reaches its subject's private value and the constructors of its abstract and
+-- private types through a module alias, as a plain import would.  Accepted.
+import test.{expectEqual}
+import palias as P
+
+test "an alias reaches a private constructor" =
+  expectEqual 4 (P.hiddenVal (P.Hidden 4))
+
+main =
+  let _ = println (P.step 1)
+  let _ = println (P.hiddenVal (P.Hidden 4))
+  match P.grow (P.Box 1)
+    P.Box n => println n
