@@ -7,8 +7,9 @@
 -- real stdlib pair.  Paths are relative to the repository root, where `medaka test`
 -- runs.
 
-import test.{expectEqual}
-import driver.loader.{siblingSubjectId}
+import test.{expectEqual, expectTrue}
+import driver.loader.{siblingSubjectId, loadProgramFilesE, LoadError(..)}
+import frontend.ast.{Loc(..)}
 
 proj : String
 proj = "test/loader_sibling_fixtures/proj"
@@ -57,3 +58,31 @@ test "a subject symlinked into another directory is not in the test file's direc
 
 test "a real stdlib pair is a sibling" =
   expectEqual (Some "json") (sibling "stdlib/json_test.mdk")
+
+-- The test-import rule: only a `*_test.mdk` file may import a `*_test.mdk` module.
+
+tifix : String
+tifix = "test/loader_test_import_fixtures"
+
+-- The offending importer file and the line of its `import`, or why there is none.
+testImportSite : String -> <IO> Result String (String, Int)
+testImportSite entry =
+  match loadProgramFilesE (_ => None) "\{tifix}/\{entry}" [tifix]
+    Ok _ => Err "loaded"
+    Err (LoadTestImport _ importer (Some (_, Loc _ line _ _ _))) =>
+      Ok (importer, line)
+    Err _ => Err "other error"
+
+test "a non-test entry importing a test module is rejected at its import line" =
+  expectEqual (Ok ("\{tifix}/entry.mdk", 2)) (testImportSite "entry.mdk")
+
+test "a non-test dependency importing a test module is rejected at the dependency's import" =
+  expectEqual (Ok ("\{tifix}/dep.mdk", 2)) (testImportSite "viadep.mdk")
+
+test "a non-test dependency importing an already-visited test module is still rejected" =
+  expectEqual (Ok ("\{tifix}/dep.mdk", 2)) (testImportSite "again_test.mdk")
+
+test "a test module importing a test module loads" = expectTrue
+  (match loadProgramFilesE (_ => None) "\{tifix}/foo_test.mdk" [tifix]
+    Ok _ => True
+    Err _ => False)

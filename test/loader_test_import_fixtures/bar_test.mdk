@@ -1,0 +1,4 @@
+-- fixture for loader_test.mdk: shared test-only module
+export
+bar : Int
+bar = 1

@@ -305,6 +305,26 @@ run emit runtimeP coreP entry roots exportsFor = match readFile runtimeP
                     [Diag SevError (Coded RModuleLoad) cmsg cloc None None],
                   ),
                 ])
+            Err (LoadTestImport cmsg cpath csite) =>
+              let (cfile, csrc, cloc) = match csite
+                Some (s, l) => (cpath, s, Some l)
+                None => (entry, tsrc, None)
+              emitDiagnostics
+                (cjAllToJson [
+                  (
+                    cfile,
+                    csrc,
+                    [
+                      Diag
+                        SevError
+                        (Coded RTestModuleImport)
+                        cmsg
+                        cloc
+                        None
+                        None,
+                    ],
+                  ),
+                ])
             Err (LoadMsg lmsg) =>
               -- Recover the failing import's own span so the squiggle lands on the
               -- bad `import` line, not line 1 (mirrors medaka_cli's F3 Chunk B

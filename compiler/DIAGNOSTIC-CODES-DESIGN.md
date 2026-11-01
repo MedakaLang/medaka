@@ -179,6 +179,7 @@ The tables below stay as narrative.
 | `R-OR-PATTERN-MISPLACED` | live | resolve error `OrPatternMisplaced`: `(a \| b)` outside a binding LHS |
 | `R-ORPHAN-SIGNATURE` | live | resolve error `OrphanSignature` |
 | `R-PRIVATE-NAME` | live | resolve error `PrivateNameAccess` |
+| `R-TEST-MODULE-IMPORT` | live | a file that is not `*_test.mdk` imports a `*_test.mdk` module |
 | `R-UNBOUND` | live | resolve error `UnboundVariable` |
 | `R-UNBOUND-AUTHORITY` | live | resolve error `UnboundAuthority` |
 | `R-UNKNOWN-CTOR` | live | resolve error `UnknownConstructor` |
@@ -575,6 +576,7 @@ kebab-case; never renumber (append only).
 | `R-MODULE-LOAD` | Not a `ResError` constructor — a driver/loader-level failure (missing/cyclic import, unreadable module) surfaced by `medaka check`/`run`/`build`'s multi-module load step, bucketed under `R-*` like the rest of this table since it has no lex/parse/type home. Span-less (`loc = None`) unless the failing import's own `import` line could be recovered. |
 | `R-FILE-NOT-FOUND` | Not a `ResError` constructor — the CLI target path itself could not be read (`check --json`/`build --json`'s `readFile` on the entry fails before any loading starts). Span-less. Exists so a caller keying off `code` can tell "the file doesn't exist" apart from `R-MODULE-LOAD` ("an *import* doesn't resolve") — see `cjFileNotFoundJson`, `compiler/driver/medaka_cli.mdk`. |
 | `R-FILE-NOT-UTF8` | Not a `ResError` constructor — the CLI target path exists and is readable, but its bytes are not valid UTF-8, so it is not Medaka source (`check --json`/`build --json`'s entry read, through `readSourceE` in `compiler/driver/loader.mdk`). Span-less. Separate from `R-FILE-NOT-FOUND` because the remedy differs: re-encoding the file, not fixing the path. The plain CLI and an imported module report the same message (`sourceNotUtf8Message`); an import still surfaces as `R-MODULE-LOAD`. See `cjSourceReadJson`, `compiler/driver/medaka_cli.mdk`. |
+| `R-TEST-MODULE-IMPORT` | Not a `ResError` constructor — a loader-level refusal: a module whose file name does not end in `_test.mdk` imports one whose resolved file name does (entry, dependency or `<stdin>` as importer). `_test` files may import `_test` files. Located at the offending `import`, carried as `LoadTestImport` like `LoadCycle`. The check reads the resolved file name, never the module id text. |
 | `R-BUILD-FAILED` | Not a `ResError` constructor — `medaka build --json`'s (#1078) envelope for a failure at the EMIT/CLANG stage, i.e. AFTER the front-end gate (the emitter child's, writing the envelope `check --json` prints) has already reported clean. Carries the emitter/linker's own message verbatim as `message`; span-less. Distinguishes "the emitted program is fine, the backend choked" from every front-end `R-*`/`T-*`/`P-*`/`L-*` code the same envelope can also carry on that command. See `cjBuildFailedJson`, `compiler/driver/medaka_cli.mdk`. |
 
 ### Type — see the §1 typecheck table (`T-TYPE-MISMATCH`, `T-NO-IMPL`,

@@ -104,6 +104,13 @@ moduleLoadErrText _ _ _ (LoadCycle lmsg cpath csite) = match csite
       csrc
       cpath
       (Diag SevError (Coded RModuleLoad) lmsg (Some loc) None None)
+moduleLoadErrText _ _ _ (LoadTestImport lmsg cpath csite) = match csite
+  None => lmsg
+  Some (csrc, loc) =>
+    ppDiagCliSrc
+      csrc
+      cpath
+      (Diag SevError (Coded RTestModuleImport) lmsg (Some loc) None None)
 moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
   match unknownModuleIdOf lmsg
     None => lmsg

@@ -1,5 +1,5 @@
 # META
-source_lines=511
+source_lines=518
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -108,6 +108,13 @@ moduleLoadErrText _ _ _ (LoadCycle lmsg cpath csite) = match csite
       csrc
       cpath
       (Diag SevError (Coded RModuleLoad) lmsg (Some loc) None None)
+moduleLoadErrText _ _ _ (LoadTestImport lmsg cpath csite) = match csite
+  None => lmsg
+  Some (csrc, loc) =>
+    ppDiagCliSrc
+      csrc
+      cpath
+      (Diag SevError (Coded RTestModuleImport) lmsg (Some loc) None None)
 moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
   match unknownModuleIdOf lmsg
     None => lmsg
@@ -535,6 +542,7 @@ fileWithNotes _ _ _ = None
 (DTypeSig true "moduleLoadErrText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyCon "String")))))))
 (DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "e"))) (EApp (EApp (EApp (EVar "ppParseError") (EVar "msrc")) (EVar "mpath")) (EVar "e")))
 (DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadCycle" (PVar "lmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "loc"))) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "csrc")) (EVar "cpath")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "Coded") (EVar "RModuleLoad"))) (EVar "lmsg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))
+(DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadTestImport" (PVar "lmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "loc"))) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "csrc")) (EVar "cpath")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "Coded") (EVar "RTestModuleImport"))) (EVar "lmsg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))
 (DFunDef false "moduleLoadErrText" ((PVar "tsrc") (PVar "target") (PVar "stdlibDir") (PCon "LoadMsg" (PVar "lmsg"))) (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PVar "mid")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EVar "lmsg") (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "tsrc"))) (arm (PCon "None") () (EVar "msg")) (arm (PCon "Some" (PVar "loc")) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "Coded") (EVar "RModuleLoad"))) (EVar "msg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))))))
 (DTypeSig true "frontGateEnv" (TyCon "String"))
 (DFunDef false "frontGateEnv" () (ELit (LString "MEDAKA_FRONT_GATE")))
@@ -620,6 +628,7 @@ fileWithNotes _ _ _ = None
 (DTypeSig true "moduleLoadErrText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyCon "String")))))))
 (DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "e"))) (EApp (EApp (EApp (EVar "ppParseError") (EVar "msrc")) (EVar "mpath")) (EVar "e")))
 (DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadCycle" (PVar "lmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "loc"))) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "csrc")) (EVar "cpath")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "Coded") (EVar "RModuleLoad"))) (EVar "lmsg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))
+(DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadTestImport" (PVar "lmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "loc"))) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "csrc")) (EVar "cpath")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "Coded") (EVar "RTestModuleImport"))) (EVar "lmsg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))
 (DFunDef false "moduleLoadErrText" ((PVar "tsrc") (PVar "target") (PVar "stdlibDir") (PCon "LoadMsg" (PVar "lmsg"))) (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PVar "mid")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EVar "lmsg") (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "tsrc"))) (arm (PCon "None") () (EVar "msg")) (arm (PCon "Some" (PVar "loc")) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "Coded") (EVar "RModuleLoad"))) (EVar "msg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))))))
 (DTypeSig true "frontGateEnv" (TyCon "String"))
 (DFunDef false "frontGateEnv" () (ELit (LString "MEDAKA_FRONT_GATE")))
