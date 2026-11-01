@@ -1,5 +1,5 @@
 # META
-source_lines=156
+source_lines=158
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-unused-import: an `import m.{…}` member that nothing in the file uses. Drop the name from the list.
@@ -43,7 +43,7 @@ rule =
       name = ruleNameUnusedImport,
       summary = "an imported name that nothing in the file uses",
       doc =
-        "A name listed in `import m.{…}` that no expression, signature, constraint, pattern, doctest, `test` or `prop` body of the file uses is dead weight and hides which imports matter. `public import` re-exports, `import m.*`, bare `import m` and `import m as A` list no names and are not checked. The fix drops the name and its comma; when no name of the line is used it leaves a bare `import m`, which still brings the module's `impl`s into scope.\n\nBefore:\n  import list.{sort, nub}\n  main = sort [2, 1]\nAfter:\n  import list.{sort}\n  main = sort [2, 1]",
+        "A name listed in `import m.{…}` that no expression, signature, constraint, pattern, doctest, `test` or `prop` body of the file uses is dead weight and hides which imports matter. `public import` re-exports, `import m.*`, bare `import m` and `import m as A` list no names and are not checked, and a `T(..)` member is never reported, since a constructor use is not tied to `T`. The fix drops the name and its comma; when no name of the line is used it leaves a bare `import m`, which still brings the module's `impl`s into scope.\n\nBefore:\n  import list.{sort, nub}\n  main = sort [2, 1]\nAfter:\n  import list.{sort}\n  main = sort [2, 1]",
       category = Style,
       scope = Universal,
       ratchet = Gated,
@@ -94,7 +94,8 @@ rawIdent (RTok (TUpper x) _ _) = [x]
 rawIdent _ = []
 
 -- The input of each doctest line: `-- > expr` in a line comment, or a line
--- starting `> ` inside a block comment.
+-- starting `> ` inside a block comment, which on the opening line follows the
+-- `{-`.
 doctestBodies : List Comment -> List String
 doctestBodies comments =
   flatMap (c => flatMap doctestBody (lines (commentText c))) comments
@@ -102,7 +103,8 @@ doctestBodies comments =
 doctestBody : String -> List String
 doctestBody line =
   let t = trim line
-  toList (stripPrefix "-- > " t) ++ toList (stripPrefix "> " t)
+  let inner = trim (optionOr t (stripPrefix "{-" t))
+  toList (stripPrefix "-- > " t) ++ toList (stripPrefix "> " inner)
 
 memberLoc : UseMember -> Loc
 memberLoc (UseMember _ _ loc _) = loc
@@ -173,7 +175,7 @@ fixOf applicability edit = Fix {
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "FileScopes" false) (mem "binderOf" false) (mem "importUses" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameUnusedImport" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameUnusedImport")) (fa "summary" (ELit (LString "an imported name that nothing in the file uses"))) (fa "doc" (ELit (LString "A name listed in `import m.{…}` that no expression, signature, constraint, pattern, doctest, `test` or `prop` body of the file uses is dead weight and hides which imports matter. `public import` re-exports, `import m.*`, bare `import m` and `import m as A` list no names and are not checked. The fix drops the name and its comma; when no name of the line is used it leaves a bare `import m`, which still brings the module's `impl`s into scope.\n\nBefore:\n  import list.{sort, nub}\n  main = sort [2, 1]\nAfter:\n  import list.{sort}\n  main = sort [2, 1]"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleUnusedImport")) (EVar "None")))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameUnusedImport")) (fa "summary" (ELit (LString "an imported name that nothing in the file uses"))) (fa "doc" (ELit (LString "A name listed in `import m.{…}` that no expression, signature, constraint, pattern, doctest, `test` or `prop` body of the file uses is dead weight and hides which imports matter. `public import` re-exports, `import m.*`, bare `import m` and `import m as A` list no names and are not checked, and a `T(..)` member is never reported, since a constructor use is not tied to `T`. The fix drops the name and its comma; when no name of the line is used it leaves a bare `import m`, which still brings the module's `impl`s into scope.\n\nBefore:\n  import list.{sort, nub}\n  main = sort [2, 1]\nAfter:\n  import list.{sort}\n  main = sort [2, 1]"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleUnusedImport")) (EVar "None")))
 (DTypeSig false "ruleUnusedImport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleUnusedImport" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "fs") (EApp (EVar "factScopes") (EVar "facts"))) (DoLet false false (PVar "silent") (EApp (EApp (EVar "filter") (ELam ((PVar "u")) (EBinOp "==" (EApp (EVar "snd") (EVar "u")) (ELit (LInt 0))))) (EApp (EVar "importUses") (EVar "fs")))) (DoExpr (EIf (EApp (EVar "isEmpty") (EVar "silent")) (EListLit) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "doctestNames") (EApp (EVar "doctestBodies") (EApp (EVar "factComments") (EVar "facts"))))) (DoLet false false (PVar "dead") (EApp (EApp (EVar "map") (ELam ((PVar "u")) (EFieldAccess (EApp (EVar "fst") (EVar "u")) "binderId"))) (EApp (EApp (EVar "filter") (ELam ((PVar "u")) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EFieldAccess (EApp (EVar "fst") (EVar "u")) "binderName")) (EVar "seen"))))) (EVar "silent")))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "groupFindings") (EVar "fs")) (EVar "dead"))) (EVar "prog"))))))))
 (DTypeSig false "groupFindings" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
@@ -188,7 +190,7 @@ fixOf applicability edit = Fix {
 (DTypeSig false "doctestBodies" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doctestBodies" ((PVar "comments")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "flatMap") (EVar "doctestBody")) (EApp (EVar "lines") (EApp (EVar "commentText") (EVar "c")))))) (EVar "comments")))
 (DTypeSig false "doctestBody" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "doctestBody" ((PVar "line")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "trim") (EVar "line"))) (DoExpr (EBinOp "++" (EApp (EVar "toList") (EApp (EApp (EVar "stripPrefix") (ELit (LString "-- > "))) (EVar "t"))) (EApp (EVar "toList") (EApp (EApp (EVar "stripPrefix") (ELit (LString "> "))) (EVar "t")))))))
+(DFunDef false "doctestBody" ((PVar "line")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "trim") (EVar "line"))) (DoLet false false (PVar "inner") (EApp (EVar "trim") (EApp (EApp (EVar "optionOr") (EVar "t")) (EApp (EApp (EVar "stripPrefix") (ELit (LString "{-"))) (EVar "t"))))) (DoExpr (EBinOp "++" (EApp (EVar "toList") (EApp (EApp (EVar "stripPrefix") (ELit (LString "-- > "))) (EVar "t"))) (EApp (EVar "toList") (EApp (EApp (EVar "stripPrefix") (ELit (LString "> "))) (EVar "inner")))))))
 (DTypeSig false "memberLoc" (TyFun (TyCon "UseMember") (TyCon "Loc")))
 (DFunDef false "memberLoc" ((PCon "UseMember" PWild PWild (PVar "loc") PWild)) (EVar "loc"))
 (DTypeSig false "memberDead" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "UseMember") (TyCon "Bool")))))
@@ -216,7 +218,7 @@ fixOf applicability edit = Fix {
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "FileScopes" false) (mem "binderOf" false) (mem "importUses" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameUnusedImport" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameUnusedImport")) (fa "summary" (ELit (LString "an imported name that nothing in the file uses"))) (fa "doc" (ELit (LString "A name listed in `import m.{…}` that no expression, signature, constraint, pattern, doctest, `test` or `prop` body of the file uses is dead weight and hides which imports matter. `public import` re-exports, `import m.*`, bare `import m` and `import m as A` list no names and are not checked. The fix drops the name and its comma; when no name of the line is used it leaves a bare `import m`, which still brings the module's `impl`s into scope.\n\nBefore:\n  import list.{sort, nub}\n  main = sort [2, 1]\nAfter:\n  import list.{sort}\n  main = sort [2, 1]"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleUnusedImport")) (EVar "None")))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameUnusedImport")) (fa "summary" (ELit (LString "an imported name that nothing in the file uses"))) (fa "doc" (ELit (LString "A name listed in `import m.{…}` that no expression, signature, constraint, pattern, doctest, `test` or `prop` body of the file uses is dead weight and hides which imports matter. `public import` re-exports, `import m.*`, bare `import m` and `import m as A` list no names and are not checked, and a `T(..)` member is never reported, since a constructor use is not tied to `T`. The fix drops the name and its comma; when no name of the line is used it leaves a bare `import m`, which still brings the module's `impl`s into scope.\n\nBefore:\n  import list.{sort, nub}\n  main = sort [2, 1]\nAfter:\n  import list.{sort}\n  main = sort [2, 1]"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleUnusedImport")) (EVar "None")))
 (DTypeSig false "ruleUnusedImport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleUnusedImport" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "fs") (EApp (EVar "factScopes") (EVar "facts"))) (DoLet false false (PVar "silent") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "u")) (EBinOp "==" (EApp (EVar "snd") (EVar "u")) (ELit (LInt 0))))) (EApp (EVar "importUses") (EVar "fs")))) (DoExpr (EIf (EApp (EMethodRef "isEmpty") (EVar "silent")) (EListLit) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "doctestNames") (EApp (EVar "doctestBodies") (EApp (EVar "factComments") (EVar "facts"))))) (DoLet false false (PVar "dead") (EApp (EApp (EMethodRef "map") (ELam ((PVar "u")) (EFieldAccess (EApp (EVar "fst") (EVar "u")) "binderId"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "u")) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EFieldAccess (EApp (EVar "fst") (EVar "u")) "binderName")) (EVar "seen"))))) (EVar "silent")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "groupFindings") (EVar "fs")) (EVar "dead"))) (EVar "prog"))))))))
 (DTypeSig false "groupFindings" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
@@ -231,7 +233,7 @@ fixOf applicability edit = Fix {
 (DTypeSig false "doctestBodies" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doctestBodies" ((PVar "comments")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EApp (EDictApp "flatMap") (EVar "doctestBody")) (EApp (EVar "lines") (EApp (EVar "commentText") (EVar "c")))))) (EVar "comments")))
 (DTypeSig false "doctestBody" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "doctestBody" ((PVar "line")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "trim") (EVar "line"))) (DoExpr (EBinOp "++" (EApp (EMethodRef "toList") (EApp (EApp (EVar "stripPrefix") (ELit (LString "-- > "))) (EVar "t"))) (EApp (EMethodRef "toList") (EApp (EApp (EVar "stripPrefix") (ELit (LString "> "))) (EVar "t")))))))
+(DFunDef false "doctestBody" ((PVar "line")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "trim") (EVar "line"))) (DoLet false false (PVar "inner") (EApp (EVar "trim") (EApp (EApp (EVar "optionOr") (EVar "t")) (EApp (EApp (EVar "stripPrefix") (ELit (LString "{-"))) (EVar "t"))))) (DoExpr (EBinOp "++" (EApp (EMethodRef "toList") (EApp (EApp (EVar "stripPrefix") (ELit (LString "-- > "))) (EVar "t"))) (EApp (EMethodRef "toList") (EApp (EApp (EVar "stripPrefix") (ELit (LString "> "))) (EVar "inner")))))))
 (DTypeSig false "memberLoc" (TyFun (TyCon "UseMember") (TyCon "Loc")))
 (DFunDef false "memberLoc" ((PCon "UseMember" PWild PWild (PVar "loc") PWild)) (EVar "loc"))
 (DTypeSig false "memberDead" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "UseMember") (TyCon "Bool")))))

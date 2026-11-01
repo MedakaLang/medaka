@@ -2,7 +2,7 @@
 source_lines=61
 stages=DESUGAR,MARK
 # SOURCE
--- lint rule rule-unused-local: a `let` binder that nothing reads. Delete the binding, or use it; rename it `_name` or write `let _ =` to say it is intentionally unused.
+-- lint rule rule-unused-local: a `let` binder that nothing reads. Delete the binding, or use it; rename it `_name`, or drop the binder, to say it is intentionally unused.
 
 import driver.diagnostics.{Severity(..)}
 import frontend.ast.{Decl}
@@ -58,7 +58,7 @@ localFinding : Binder -> Finding
 localFinding b = Finding {
   rule = ruleNameUnusedLocal,
   message =
-    "'\{b.binderName}' is bound by a `let` but never read. Either the bound expression is dead work and the binding can be deleted, or a use of '\{b.binderName}' is missing; write '_\{b.binderName}' or `let _ =` to keep it on purpose",
+    "'\{b.binderName}' is bound by a `let` but never read. Either the bound expression is dead work and the binding can be deleted, or a use of '\{b.binderName}' is missing; name it '_\{b.binderName}' to keep it on purpose, or when only the effect is wanted drop the binder (a bare statement; `let _ =` in `do` code)",
   severity = SevWarning,
   loc = Some b.binderSpan,
   fix = None,
@@ -75,7 +75,7 @@ localFinding b = Finding {
 (DTypeSig false "ruleUnusedLocal" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleUnusedLocal" (PWild PWild (PVar "facts") PWild PWild) (EApp (EApp (EVar "map") (EVar "localFinding")) (EApp (EApp (EVar "filter") (ELam ((PVar "b")) (EBinOp "==" (EFieldAccess (EVar "b") "binderKind") (EVar "BLet")))) (EApp (EVar "unusedBinders") (EApp (EVar "factScopes") (EVar "facts"))))))
 (DTypeSig false "localFinding" (TyFun (TyCon "Binder") (TyCon "Finding")))
-(DFunDef false "localFinding" ((PVar "b")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedLocal")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' is bound by a `let` but never read. Either the bound expression is dead work and the binding can be deleted, or a use of '"))) (EApp (EVar "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' is missing; write '_"))) (EApp (EVar "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' or `let _ =` to keep it on purpose")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EFieldAccess (EVar "b") "binderSpan"))) (fa "fix" (EVar "None")))))
+(DFunDef false "localFinding" ((PVar "b")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedLocal")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' is bound by a `let` but never read. Either the bound expression is dead work and the binding can be deleted, or a use of '"))) (EApp (EVar "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' is missing; name it '_"))) (EApp (EVar "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' to keep it on purpose, or when only the effect is wanted drop the binder (a bare statement; `let _ =` in `do` code)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EFieldAccess (EVar "b") "binderSpan"))) (fa "fix" (EVar "None")))))
 # MARK
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
@@ -88,4 +88,4 @@ localFinding b = Finding {
 (DTypeSig false "ruleUnusedLocal" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleUnusedLocal" (PWild PWild (PVar "facts") PWild PWild) (EApp (EApp (EMethodRef "map") (EVar "localFinding")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "b")) (EBinOp "==" (EFieldAccess (EVar "b") "binderKind") (EVar "BLet")))) (EApp (EVar "unusedBinders") (EApp (EVar "factScopes") (EVar "facts"))))))
 (DTypeSig false "localFinding" (TyFun (TyCon "Binder") (TyCon "Finding")))
-(DFunDef false "localFinding" ((PVar "b")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedLocal")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' is bound by a `let` but never read. Either the bound expression is dead work and the binding can be deleted, or a use of '"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' is missing; write '_"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' or `let _ =` to keep it on purpose")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EFieldAccess (EVar "b") "binderSpan"))) (fa "fix" (EVar "None")))))
+(DFunDef false "localFinding" ((PVar "b")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedLocal")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' is bound by a `let` but never read. Either the bound expression is dead work and the binding can be deleted, or a use of '"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' is missing; name it '_"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' to keep it on purpose, or when only the effect is wanted drop the binder (a bare statement; `let _ =` in `do` code)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EFieldAccess (EVar "b") "binderSpan"))) (fa "fix" (EVar "None")))))

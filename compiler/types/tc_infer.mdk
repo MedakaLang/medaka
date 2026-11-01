@@ -3401,7 +3401,7 @@ inferLetBinds : TcEnv ->
   List (LetBind, (String, BindingSummary)) ->
   List (Option ScopeId)
 inferLetBinds _env [] = []
-inferLetBinds env ((_bind@(LetBind name clauses _ _), (_, owned)) :: rest) =
+inferLetBinds env ((LetBind name clauses _ _, (_, owned)) :: rest) =
   let pairs = map funClausePair clauses
   let lscope =
     if isLocalAbsName name then

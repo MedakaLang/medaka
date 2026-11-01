@@ -435,6 +435,36 @@ test "rule-prelude-shadow fires under a test path" =
         Err e => fail e
         Ok flagged => expectEqual 3 (length flagged)
 
+preludeShadowAt : String -> String -> Result String (List Int)
+preludeShadowAt path src =
+  lintLinesAt emptyStdlibIndex path "rule-prelude-shadow" src
+
+-- The exemption follows the declarations, not the file name: the module that
+-- declares `Option` owns `isSome`, and a file called `core.mdk` that does not
+-- is shadowing it.
+test "rule-prelude-shadow exempts the module that declares the type" =
+  let owner = "data Option a = Some a | None\n\nisSome o = True\n"
+  let user = "isSome o = True\n"
+  expectAll [
+    labelFail
+      "owner under any path"
+      (expectEqual (Ok []) (preludeShadowAt "core.mdk" owner)),
+    labelFail
+      "owner under a stdlib path"
+      (expectEqual (Ok []) (preludeShadowAt "stdlib/core.mdk" owner)),
+    labelFail
+      "a core.mdk in a stdlib directory that declares no Option"
+      (expectEqual (Ok [1]) (preludeShadowAt "stdlib/core.mdk" user)),
+    labelFail
+      "a core.mdk in a mystdlib directory"
+      (expectEqual (Ok [1]) (preludeShadowAt "mystdlib/core.mdk" user)),
+    labelFail
+      "Option does not own isOk"
+      (expectEqual
+        (Ok [4])
+        (preludeShadowAt "core.mdk" (owner ++ "isOk r = True\n"))),
+  ]
+
 test "every fixture file is on the roster" = rosterIsClosed
 
 markedRule : Marker -> String

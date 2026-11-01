@@ -39,7 +39,7 @@ rule =
       name = ruleNameUnusedImport,
       summary = "an imported name that nothing in the file uses",
       doc =
-        "A name listed in `import m.{…}` that no expression, signature, constraint, pattern, doctest, `test` or `prop` body of the file uses is dead weight and hides which imports matter. `public import` re-exports, `import m.*`, bare `import m` and `import m as A` list no names and are not checked. The fix drops the name and its comma; when no name of the line is used it leaves a bare `import m`, which still brings the module's `impl`s into scope.\n\nBefore:\n  import list.{sort, nub}\n  main = sort [2, 1]\nAfter:\n  import list.{sort}\n  main = sort [2, 1]",
+        "A name listed in `import m.{…}` that no expression, signature, constraint, pattern, doctest, `test` or `prop` body of the file uses is dead weight and hides which imports matter. `public import` re-exports, `import m.*`, bare `import m` and `import m as A` list no names and are not checked, and a `T(..)` member is never reported, since a constructor use is not tied to `T`. The fix drops the name and its comma; when no name of the line is used it leaves a bare `import m`, which still brings the module's `impl`s into scope.\n\nBefore:\n  import list.{sort, nub}\n  main = sort [2, 1]\nAfter:\n  import list.{sort}\n  main = sort [2, 1]",
       category = Style,
       scope = Universal,
       ratchet = Gated,
@@ -90,7 +90,8 @@ rawIdent (RTok (TUpper x) _ _) = [x]
 rawIdent _ = []
 
 -- The input of each doctest line: `-- > expr` in a line comment, or a line
--- starting `> ` inside a block comment.
+-- starting `> ` inside a block comment, which on the opening line follows the
+-- `{-`.
 doctestBodies : List Comment -> List String
 doctestBodies comments =
   flatMap (c => flatMap doctestBody (lines (commentText c))) comments
@@ -98,7 +99,8 @@ doctestBodies comments =
 doctestBody : String -> List String
 doctestBody line =
   let t = trim line
-  toList (stripPrefix "-- > " t) ++ toList (stripPrefix "> " t)
+  let inner = trim (optionOr t (stripPrefix "{-" t))
+  toList (stripPrefix "-- > " t) ++ toList (stripPrefix "> " inner)
 
 memberLoc : UseMember -> Loc
 memberLoc (UseMember _ _ loc _) = loc

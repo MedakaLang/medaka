@@ -1252,7 +1252,7 @@ registerLocalGroupAbs : TcEnv ->
   List (LetBind, Option ScopeId) ->
   Unit
 registerLocalGroupAbs _env _ _ [] = ()
-registerLocalGroupAbs genv oblN0 callN0 ((_bind@(LetBind name _ _ _), lscope) :: rest) =
+registerLocalGroupAbs genv oblN0 callN0 ((LetBind name _ _ _, lscope) :: rest) =
   match lookupVar genv name
     Some sch =>
       registerLocalAbsIf genv.teDyn.dcModule name lscope sch oblN0 callN0

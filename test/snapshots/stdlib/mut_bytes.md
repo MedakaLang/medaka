@@ -67,7 +67,7 @@ make n =
    4 -}
 export
 length : MutBytes -> Int
-length (_mb@(MutBytes bb)) = byteBlockLength bb
+length (MutBytes bb) = byteBlockLength bb
 
 {- | The byte at index `i` of `mb`, or `None` when `i` is out of range.
 
@@ -82,7 +82,7 @@ length (_mb@(MutBytes bb)) = byteBlockLength bb
    None -}
 export
 get : Int -> MutBytes -> Option U8
-get i (_mb@(MutBytes bb)) =
+get i (MutBytes bb) =
   if i < 0 || i >= byteBlockLength bb then
     None
   else
@@ -112,7 +112,7 @@ export impl Index MutBytes Int U8 where
    65 -}
 export
 setInPlace : Int -> U8 -> MutBytes -> Unit
-setInPlace i v (_mb@(MutBytes bb)) =
+setInPlace i v (MutBytes bb) =
   if i < 0 || i >= byteBlockLength bb then
     panic "MutBytes.setInPlace: index out of bounds"
   else
@@ -124,7 +124,7 @@ setInPlace i v (_mb@(MutBytes bb)) =
    "MutBytes \"070707\"" -}
 export
 fill : U8 -> MutBytes -> Unit
-fill v (_mb@(MutBytes bb)) = fillFrom (u8ToInt v) bb 0 (byteBlockLength bb)
+fill v (MutBytes bb) = fillFrom (u8ToInt v) bb 0 (byteBlockLength bb)
 
 -- The runtime has no block-fill primitive, so the bytes go one at a time
 -- through the unchecked setter, with the bounds established by `fill`
@@ -151,7 +151,7 @@ fillFrom v bb i n
    "MutBytes \"01010200\"" -}
 export
 blit : MutBytes -> Int -> MutBytes -> Int -> Int -> Unit
-blit (_src@(MutBytes sb)) srcOff (_dst@(MutBytes db)) dstOff len =
+blit (MutBytes sb) srcOff (MutBytes db) dstOff len =
   if len < 0 then
     panic "MutBytes.blit: negative length"
   else if srcOff < 0 then
@@ -177,7 +177,7 @@ blit (_src@(MutBytes sb)) srcOff (_dst@(MutBytes db)) dstOff len =
    [|0|] -}
 export
 freeze : MutBytes -> Bytes
-freeze (_mb@(MutBytes bb)) =
+freeze (MutBytes bb) =
   B.adoptByteBlockUnsafe (byteBlockCopyUnsafe (byteBlockLength bb) bb)
 
 {- | A mutable copy of `b`.
@@ -224,7 +224,7 @@ adoptByteBlockUnsafe bb = MutBytes bb
    5 -}
 export
 lendByteBlockUnsafe : MutBytes -> ByteBlock
-lendByteBlockUnsafe (_mb@(MutBytes bb)) = bb
+lendByteBlockUnsafe (MutBytes bb) = bb
 
 {- | Renders as `MutBytes "<hex>"`, in the lowercase hex form `Debug Bytes`
    uses, from the buffer's current contents.
@@ -247,26 +247,26 @@ export impl Debug MutBytes where
 (DTypeSig true "make" (TyFun (TyCon "Int") (TyCon "MutBytes")))
 (DFunDef false "make" ((PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.make: negative length"))) (EApp (EVar "MutBytes") (EApp (EVar "byteBlockMake") (EVar "n")))))
 (DTypeSig true "length" (TyFun (TyCon "MutBytes") (TyCon "Int")))
-(DFunDef false "length" ((PAs "_mb" (PCon "MutBytes" (PVar "bb")))) (EApp (EVar "byteBlockLength") (EVar "bb")))
+(DFunDef false "length" ((PCon "MutBytes" (PVar "bb"))) (EApp (EVar "byteBlockLength") (EVar "bb")))
 (DTypeSig true "get" (TyFun (TyCon "Int") (TyFun (TyCon "MutBytes") (TyApp (TyCon "Option") (TyCon "U8")))))
-(DFunDef false "get" ((PVar "i") (PAs "_mb" (PCon "MutBytes" (PVar "bb")))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "u8Truncate") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))))
+(DFunDef false "get" ((PVar "i") (PCon "MutBytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "u8Truncate") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))))
 (DImpl true "Index" ((TyCon "MutBytes") (TyCon "Int") (TyCon "U8")) () ((im "index" ((PCon "MutBytes" (PVar "bb")) (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EVar "u8Truncate") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb")))))))
 (DTypeSig true "setInPlace" (TyFun (TyCon "Int") (TyFun (TyCon "U8") (TyFun (TyCon "MutBytes") (TyCon "Unit")))))
-(DFunDef false "setInPlace" ((PVar "i") (PVar "v") (PAs "_mb" (PCon "MutBytes" (PVar "bb")))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "panic") (ELit (LString "MutBytes.setInPlace: index out of bounds"))) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EVar "v"))) (EVar "bb"))))
+(DFunDef false "setInPlace" ((PVar "i") (PVar "v") (PCon "MutBytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "panic") (ELit (LString "MutBytes.setInPlace: index out of bounds"))) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EVar "v"))) (EVar "bb"))))
 (DTypeSig true "fill" (TyFun (TyCon "U8") (TyFun (TyCon "MutBytes") (TyCon "Unit"))))
-(DFunDef false "fill" ((PVar "v") (PAs "_mb" (PCon "MutBytes" (PVar "bb")))) (EApp (EApp (EApp (EApp (EVar "fillFrom") (EApp (EVar "u8ToInt") (EVar "v"))) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))
+(DFunDef false "fill" ((PVar "v") (PCon "MutBytes" (PVar "bb"))) (EApp (EApp (EApp (EApp (EVar "fillFrom") (EApp (EVar "u8ToInt") (EVar "v"))) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))
 (DTypeSig false "fillFrom" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))
 (DFunDef false "fillFrom" ((PVar "v") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EVar "v")) (EVar "bb"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "fillFrom") (EVar "v")) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "blit" (TyFun (TyCon "MutBytes") (TyFun (TyCon "Int") (TyFun (TyCon "MutBytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
-(DFunDef false "blit" ((PAs "_src" (PCon "MutBytes" (PVar "sb"))) (PVar "srcOff") (PAs "_dst" (PCon "MutBytes" (PVar "db"))) (PVar "dstOff") (PVar "len")) (EIf (EBinOp "<" (EVar "len") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative length"))) (EIf (EBinOp "<" (EVar "srcOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative srcOff"))) (EIf (EBinOp "<" (EVar "dstOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative dstOff"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "byteBlockLength") (EVar "sb")) (EVar "srcOff"))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: source out of bounds"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "byteBlockLength") (EVar "db")) (EVar "dstOff"))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: destination out of bounds"))) (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "sb")) (EVar "srcOff")) (EVar "db")) (EVar "dstOff")) (EVar "len"))))))))
+(DFunDef false "blit" ((PCon "MutBytes" (PVar "sb")) (PVar "srcOff") (PCon "MutBytes" (PVar "db")) (PVar "dstOff") (PVar "len")) (EIf (EBinOp "<" (EVar "len") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative length"))) (EIf (EBinOp "<" (EVar "srcOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative srcOff"))) (EIf (EBinOp "<" (EVar "dstOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative dstOff"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "byteBlockLength") (EVar "sb")) (EVar "srcOff"))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: source out of bounds"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "byteBlockLength") (EVar "db")) (EVar "dstOff"))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: destination out of bounds"))) (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "sb")) (EVar "srcOff")) (EVar "db")) (EVar "dstOff")) (EVar "len"))))))))
 (DTypeSig true "freeze" (TyFun (TyCon "MutBytes") (TyCon "Bytes")))
-(DFunDef false "freeze" ((PAs "_mb" (PCon "MutBytes" (PVar "bb")))) (EApp (EVar "B.adoptByteBlockUnsafe") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))
+(DFunDef false "freeze" ((PCon "MutBytes" (PVar "bb"))) (EApp (EVar "B.adoptByteBlockUnsafe") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))
 (DTypeSig true "thaw" (TyFun (TyCon "Bytes") (TyCon "MutBytes")))
 (DFunDef false "thaw" ((PVar "b")) (EBlock (DoLet false false (PVar "bb") (EApp (EVar "B.lendByteBlockUnsafe") (EVar "b"))) (DoExpr (EApp (EVar "MutBytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))))
 (DTypeSig true "adoptByteBlockUnsafe" (TyFun (TyCon "ByteBlock") (TyCon "MutBytes")))
 (DFunDef false "adoptByteBlockUnsafe" ((PVar "bb")) (EApp (EVar "MutBytes") (EVar "bb")))
 (DTypeSig true "lendByteBlockUnsafe" (TyFun (TyCon "MutBytes") (TyCon "ByteBlock")))
-(DFunDef false "lendByteBlockUnsafe" ((PAs "_mb" (PCon "MutBytes" (PVar "bb")))) (EVar "bb"))
+(DFunDef false "lendByteBlockUnsafe" ((PCon "MutBytes" (PVar "bb"))) (EVar "bb"))
 (DImpl true "Debug" ((TyCon "MutBytes")) () ((im "debug" ((PCon "MutBytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Mut")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "B.adoptByteBlockUnsafe") (EVar "bb"))))) (ELit (LString ""))))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Index" false) (mem "Option" false))))
@@ -277,24 +277,24 @@ export impl Debug MutBytes where
 (DTypeSig true "make" (TyFun (TyCon "Int") (TyCon "MutBytes")))
 (DFunDef false "make" ((PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.make: negative length"))) (EApp (EVar "MutBytes") (EApp (EVar "byteBlockMake") (EVar "n")))))
 (DTypeSig true "length#shadow" (TyFun (TyCon "MutBytes") (TyCon "Int")))
-(DFunDef false "length#shadow" ((PAs "_mb" (PCon "MutBytes" (PVar "bb")))) (EApp (EVar "byteBlockLength") (EVar "bb")))
+(DFunDef false "length#shadow" ((PCon "MutBytes" (PVar "bb"))) (EApp (EVar "byteBlockLength") (EVar "bb")))
 (DTypeSig true "get" (TyFun (TyCon "Int") (TyFun (TyCon "MutBytes") (TyApp (TyCon "Option") (TyCon "U8")))))
-(DFunDef false "get" ((PVar "i") (PAs "_mb" (PCon "MutBytes" (PVar "bb")))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "u8Truncate") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))))
+(DFunDef false "get" ((PVar "i") (PCon "MutBytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "u8Truncate") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))))
 (DImpl true "Index" ((TyCon "MutBytes") (TyCon "Int") (TyCon "U8")) () ((im "index" ((PCon "MutBytes" (PVar "bb")) (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EVar "u8Truncate") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb")))))))
 (DTypeSig true "setInPlace" (TyFun (TyCon "Int") (TyFun (TyCon "U8") (TyFun (TyCon "MutBytes") (TyCon "Unit")))))
-(DFunDef false "setInPlace" ((PVar "i") (PVar "v") (PAs "_mb" (PCon "MutBytes" (PVar "bb")))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "panic") (ELit (LString "MutBytes.setInPlace: index out of bounds"))) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EVar "v"))) (EVar "bb"))))
+(DFunDef false "setInPlace" ((PVar "i") (PVar "v") (PCon "MutBytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "panic") (ELit (LString "MutBytes.setInPlace: index out of bounds"))) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EVar "v"))) (EVar "bb"))))
 (DTypeSig true "fill" (TyFun (TyCon "U8") (TyFun (TyCon "MutBytes") (TyCon "Unit"))))
-(DFunDef false "fill" ((PVar "v") (PAs "_mb" (PCon "MutBytes" (PVar "bb")))) (EApp (EApp (EApp (EApp (EVar "fillFrom") (EApp (EVar "u8ToInt") (EVar "v"))) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))
+(DFunDef false "fill" ((PVar "v") (PCon "MutBytes" (PVar "bb"))) (EApp (EApp (EApp (EApp (EVar "fillFrom") (EApp (EVar "u8ToInt") (EVar "v"))) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))
 (DTypeSig false "fillFrom" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))
 (DFunDef false "fillFrom" ((PVar "v") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EVar "v")) (EVar "bb"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "fillFrom") (EVar "v")) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "blit" (TyFun (TyCon "MutBytes") (TyFun (TyCon "Int") (TyFun (TyCon "MutBytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
-(DFunDef false "blit" ((PAs "_src" (PCon "MutBytes" (PVar "sb"))) (PVar "srcOff") (PAs "_dst" (PCon "MutBytes" (PVar "db"))) (PVar "dstOff") (PVar "len")) (EIf (EBinOp "<" (EVar "len") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative length"))) (EIf (EBinOp "<" (EVar "srcOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative srcOff"))) (EIf (EBinOp "<" (EVar "dstOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative dstOff"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "byteBlockLength") (EVar "sb")) (EVar "srcOff"))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: source out of bounds"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "byteBlockLength") (EVar "db")) (EVar "dstOff"))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: destination out of bounds"))) (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "sb")) (EVar "srcOff")) (EVar "db")) (EVar "dstOff")) (EVar "len"))))))))
+(DFunDef false "blit" ((PCon "MutBytes" (PVar "sb")) (PVar "srcOff") (PCon "MutBytes" (PVar "db")) (PVar "dstOff") (PVar "len")) (EIf (EBinOp "<" (EVar "len") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative length"))) (EIf (EBinOp "<" (EVar "srcOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative srcOff"))) (EIf (EBinOp "<" (EVar "dstOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative dstOff"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "byteBlockLength") (EVar "sb")) (EVar "srcOff"))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: source out of bounds"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "byteBlockLength") (EVar "db")) (EVar "dstOff"))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: destination out of bounds"))) (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "sb")) (EVar "srcOff")) (EVar "db")) (EVar "dstOff")) (EVar "len"))))))))
 (DTypeSig true "freeze" (TyFun (TyCon "MutBytes") (TyCon "Bytes")))
-(DFunDef false "freeze" ((PAs "_mb" (PCon "MutBytes" (PVar "bb")))) (EApp (EVar "B.adoptByteBlockUnsafe") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))
+(DFunDef false "freeze" ((PCon "MutBytes" (PVar "bb"))) (EApp (EVar "B.adoptByteBlockUnsafe") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))
 (DTypeSig true "thaw" (TyFun (TyCon "Bytes") (TyCon "MutBytes")))
 (DFunDef false "thaw" ((PVar "b")) (EBlock (DoLet false false (PVar "bb") (EApp (EVar "B.lendByteBlockUnsafe") (EVar "b"))) (DoExpr (EApp (EVar "MutBytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))))
 (DTypeSig true "adoptByteBlockUnsafe" (TyFun (TyCon "ByteBlock") (TyCon "MutBytes")))
 (DFunDef false "adoptByteBlockUnsafe" ((PVar "bb")) (EApp (EVar "MutBytes") (EVar "bb")))
 (DTypeSig true "lendByteBlockUnsafe" (TyFun (TyCon "MutBytes") (TyCon "ByteBlock")))
-(DFunDef false "lendByteBlockUnsafe" ((PAs "_mb" (PCon "MutBytes" (PVar "bb")))) (EVar "bb"))
+(DFunDef false "lendByteBlockUnsafe" ((PCon "MutBytes" (PVar "bb"))) (EVar "bb"))
 (DImpl true "Debug" ((TyCon "MutBytes")) () ((im "debug" ((PCon "MutBytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Mut")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "B.adoptByteBlockUnsafe") (EVar "bb"))))) (ELit (LString ""))))))

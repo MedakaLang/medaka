@@ -28,6 +28,16 @@ orUsed (Left x | Right x) = x
 -- expect-next-line rule-unused-param
 orUnused (Left _x | Right _x) = 1
 
+-- An unused as-binder drops its `x@` and keeps the pattern.
+-- expect-next-line rule-unused-param
+asUnused (Some y) = y
+
+-- A `_e` bound in an unrelated function does not withhold the fix.
+unrelatedE _e = 0
+
+-- expect-next-line rule-unused-param
+unrelatedF _e = 1
+
 -- A leading underscore opts out.
 optOut _unused = 1
 

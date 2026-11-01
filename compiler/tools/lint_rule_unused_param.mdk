@@ -12,8 +12,15 @@ import frontend.ast.{
   RecPatField(..),
 }
 import frontend.ast_walk.{BodyOwner(..), DeclBody(..), childExprs, declBodies}
-import frontend.parser.{Positions(..)}
-import string.{length as strLength}
+import frontend.parser.{
+  DeclPos,
+  Positions(..),
+  declPosEndLine,
+  declPosLine,
+  positionsDecls,
+}
+import string.{length as strLength, sliceClamped}
+import array.{get as arrayGet}
 import tools.lint_core.{
   Applicability(..),
   Category(..),
@@ -28,6 +35,7 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
+  factLines,
   factScopes,
   mkRule,
 }
@@ -35,11 +43,10 @@ import tools.lint_scope.{
   Binder(..),
   BinderKind(..),
   FileScopes,
-  Use(..),
-  allUses,
   binderOf,
-  bindersNamed,
+  bindersNamedIn,
   unusedBinders,
+  usesNamedIn,
 }
 import tools.lint_shared.{ruleNameUnusedParam}
 
@@ -52,7 +59,7 @@ rule =
       summary =
         "a function, method or `prop` parameter that nothing in its clause uses",
       doc =
-        "A parameter that no use in its clause resolves to is dead weight, and a reader cannot tell it from one that matters. Renaming it `_name` says it is intentionally unused, and a name starting with `_` is not reported. Function, impl-method, interface-default, `prop` and `where`/`let rec` clause parameters are checked; lambda, `let`, match-arm and `do`-bind binders are not. The fix renames every place the binder is written (each alternative of an or-pattern names it). It is only suggested, not applied, when `_name` is already used in the file, and for a record pun, where renaming the binder would rename the field: the suggestion then reads `field = _name`.\n\nBefore:\n  area w h = w * 2\nAfter:\n  area w _h = w * 2",
+        "A parameter that no use in its clause resolves to is dead weight, and a reader cannot tell it from one that matters. Renaming it `_name` says it is intentionally unused, and a name starting with `_` is not reported. Function, impl-method, interface-default, `prop`, `where` and top-level `let rec` clause parameters are checked; the parameters of a `let rec` written inside a block, and lambda, `let`, match-arm and `do`-bind binders, are not. The fix renames every place the binder is written (each alternative of an or-pattern names it). An unused as-binder `x@p` is not renamed: the fix drops `x@` and keeps the pattern. The rename is only suggested, not applied, when `_name` is already used in the declaration, and for a record pun, where renaming the binder would rename the field: the suggestion then reads `field = _name`.\n\nBefore:\n  area w h = w * 2\nAfter:\n  area w _h = w * 2",
       category = Style,
       scope = Universal,
       ratchet = Gated,
@@ -69,18 +76,22 @@ ruleUnusedParam : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleUnusedParam _ _ facts _ prog =
+ruleUnusedParam _ _ facts pos prog =
   let fs = factScopes facts
   let unused = filter (b => b.binderKind == BParam) (unusedBinders fs)
   if isEmpty unused then
     []
   else
     let sites = flatMap declParamSites prog
-    flatMap (paramFinding fs sites) unused
+    flatMap (paramFinding facts pos sites) unused
 
--- One parameter name token: its name, its span, and whether it is a record pun
--- (a field `{x}` that binds `x`, so renaming the binder renames the field).
-data ParamSite = ParamSite String Loc Bool
+-- How a parameter name token is written: plainly, as a record pun (a field `{x}`
+-- that binds `x`, so renaming the binder renames the field), or as the binder of
+-- an as-pattern `x@p`.
+data SiteKind = SitePlain | SitePun | SiteAs deriving (Eq)
+
+-- One parameter name token: its name, its span and how it is written.
+data ParamSite = ParamSite String Loc SiteKind
 
 -- The parameter sites of one declaration: those of each body's owner, then
 -- those of every `where` or `let rec` clause nested in a body.
@@ -100,7 +111,7 @@ ownerParamSites (OwnerProp _ params) = map propParamSite params
 ownerParamSites (OwnerTest _) = []
 
 propParamSite : PropParam -> ParamSite
-propParamSite (PropParam n l _) = ParamSite n l False
+propParamSite (PropParam n l _) = ParamSite n l SitePlain
 
 exprParamSites : Expr -> List ParamSite
 exprParamSites e = groupParamSites e ++ flatMap exprParamSites (childExprs e)
@@ -118,25 +129,30 @@ clauseParamSites (FunClause ps _) = flatMap patParamSites ps
 -- Every name a pattern binds, with its token.  Each alternative of an or-pattern
 -- is listed, since each one names the binder.
 patParamSites : Pat -> List ParamSite
-patParamSites (PVar x l _) = [ParamSite x l False]
+patParamSites (PVar x l _) = [ParamSite x l SitePlain]
 patParamSites PWild = []
 patParamSites (PLit _) = []
 patParamSites (PCon _ ps) = flatMap patParamSites ps
 patParamSites (PCons a b) = patParamSites a ++ patParamSites b
 patParamSites (PTuple ps) = flatMap patParamSites ps
 patParamSites (PList ps) = flatMap patParamSites ps
-patParamSites (PAs x l _ p) = ParamSite x l False :: patParamSites p
+patParamSites (PAs x l _ p) = ParamSite x l SiteAs :: patParamSites p
 patParamSites (POr ps) = flatMap patParamSites ps
 patParamSites (PRng _ _ _) = []
 patParamSites (PRec _ fields _) = flatMap fieldParamSites fields
 
 fieldParamSites : RecPatField -> List ParamSite
-fieldParamSites (RecPatField n l _ None) = [ParamSite n l True]
+fieldParamSites (RecPatField n l _ None) = [ParamSite n l SitePun]
 fieldParamSites (RecPatField _ _ _ (Some p)) = patParamSites p
 
 -- One finding per unused parameter, at its binder token.
-paramFinding : FileScopes -> List ParamSite -> Binder -> List Finding
-paramFinding fs sites b =
+paramFinding : FileFacts ->
+  Positions ->
+  List ParamSite ->
+  Binder ->
+  List Finding
+paramFinding facts pos sites b =
+  let fs = factScopes facts
   let mine = filter (binderIs fs b) sites
   [
     Finding {
@@ -145,7 +161,7 @@ paramFinding fs sites b =
         "parameter '\{b.binderName}' is never used. Rename it to '_\{b.binderName}' to mark it intentionally unused",
       severity = SevWarning,
       loc = Some b.binderSpan,
-      fix = paramFix fs b mine,
+      fix = paramFix facts (declLines pos b) b mine,
     },
   ]
 
@@ -155,17 +171,43 @@ binderIs fs b (ParamSite _ l _) = match binderOf fs l
   Some c => c.binderId == b.binderId
   None => False
 
--- The rename of every site of the binder.  No fix when the walk did not place
--- the binder's own token, or a site is not exactly its name's width: the edit
--- would then land on the wrong text.  A suggestion instead of a fix when a pun
--- is among the sites, or `_name` is already used in the file.
-paramFix : FileScopes -> Binder -> List ParamSite -> Option Fix
-paramFix fs b mine =
+-- The first and last line of the top-level declaration that holds the binder.
+declLines : Positions -> Binder -> (Int, Int)
+declLines pos b =
+  let line = locLine b.binderSpan
+  optionOr
+    (1, maxLine)
+    (find
+      (r => fst r <= line && line <= snd r)
+      (map declPosRange (positionsDecls pos)))
+
+-- Past any line a source can have, so a binder no declaration holds is checked
+-- against the whole file.
+maxLine : Int
+maxLine = 1073741824
+
+declPosRange : DeclPos -> (Int, Int)
+declPosRange d = (declPosLine d, declPosEndLine d)
+
+locLine : Loc -> Int
+locLine (Loc _ l _ _ _) = l
+
+-- The fix of every site of the binder.  An unused as-binder that is only ever
+-- written as one drops its `x@`.  Otherwise the sites are renamed.  No fix when
+-- the walk did not place the binder's own token, or a site is not exactly its
+-- name's width: the edit would then land on the wrong text.  A suggestion
+-- instead of a fix when a pun is among the sites, or `_name` is already used in
+-- the declaration.
+paramFix : FileFacts -> (Int, Int) -> Binder -> List ParamSite -> Option Fix
+paramFix facts range b mine =
   let name = b.binderName
+  let hasPun = any (s => siteKind s == SitePun) mine
   if not (any (s => siteLoc s == b.binderSpan) mine)
     || not (all (exactName name) mine) then
     None
-  else if any sitePun mine || collides fs name then
+  else if all (s => siteKind s == SiteAs) mine then
+    dropAsFix (factLines facts) mine
+  else if hasPun || collides (factScopes facts) range name then
     Some (renameFix Suggest name mine)
   else
     Some (renameFix Safe name mine)
@@ -178,16 +220,39 @@ renameFix applicability name mine = Fix {
 }
 
 renamedText : String -> ParamSite -> String
-renamedText name (ParamSite _ _ pun) =
-  if pun then "\{name} = _\{name}" else "_\{name}"
+renamedText name (ParamSite _ _ kind) =
+  if kind == SitePun then "\{name} = _\{name}" else "_\{name}"
 
--- `_name` already names a binder or a use in the file, so the rename could clash
--- with it or capture it.  The file-wide test is wider than the clause, on purpose.
-collides : FileScopes -> String -> Bool
-collides fs name =
+-- Deleting `x@` from each site.  No fix unless an `@` stands right after every
+-- name token, since the parser keeps only the name's span.
+dropAsFix : Array String -> List ParamSite -> Option Fix
+dropAsFix lines mine =
+  if all (atFollows lines) mine then
+    Some Fix {
+      fixApplicability = Safe,
+      fixEdits = map dropAsEdit mine,
+      fixMessage = "drop the unused as-binder and keep its pattern",
+    }
+  else
+    None
+
+dropAsEdit : ParamSite -> FixEdit
+dropAsEdit (ParamSite _ (Loc f sl sc el ec) _) =
+  FixEdit (Loc f sl sc el (ec + 1)) ""
+
+atFollows : Array String -> ParamSite -> Bool
+atFollows lines (ParamSite _ (Loc _ _ _ el ec) _) =
+  match arrayGet (el - 1) lines
+    Some text => sliceClamped ec (ec + 1) text == "@"
+    None => False
+
+-- `_name` already names a binder or a use on a line of the declaration, so the
+-- rename could clash with it or capture it.
+collides : FileScopes -> (Int, Int) -> String -> Bool
+collides fs (lo, hi) name =
   let renamed = "_" ++ name
-  not (isEmpty (bindersNamed fs renamed))
-    || any (u => u.useName == renamed) (allUses fs)
+  not (isEmpty (bindersNamedIn fs lo hi renamed))
+    || not (isEmpty (usesNamedIn fs lo hi renamed))
 
 -- The site spans its name token: one line, as many columns as the name has
 -- characters.
@@ -198,5 +263,5 @@ exactName name (ParamSite _ (Loc _ sl sc el ec) _) =
 siteLoc : ParamSite -> Loc
 siteLoc (ParamSite _ l _) = l
 
-sitePun : ParamSite -> Bool
-sitePun (ParamSite _ _ pun) = pun
+siteKind : ParamSite -> SiteKind
+siteKind (ParamSite _ _ kind) = kind

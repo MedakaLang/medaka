@@ -14,6 +14,7 @@ export import public_reexport.{neverUsed}
 import wild.*
 import bare_mod
 import aliased_mod as Am
+import list.{blockOne, blockTwo}
 
 -- expect-next-line rule-unused-import
 import list.{dropFirst, useA, useB}
@@ -25,6 +26,8 @@ import list.{useE, useF, dropLast}
 import string.{dropBoth1, dropBoth2}
 -- expect-next-line rule-unused-import
 import math.{dropSole}
+-- expect-next-line rule-unused-import
+import list.{blockProse, useJ}
 -- expect-next-line rule-unused-import unfixed
 import set.{dropWithComment, -- kept note
   useI}
@@ -40,6 +43,17 @@ import list.{
 }
 
 -- > takeDoc 1 [1, 2]
+
+{- > blockOne 1
+   1
+-}
+
+{-
+  Prose that mentions blockProse is no use of it.
+  > blockTwo 2
+  2
+-}
+
 sigUser : Set Int -> Int
 sigUser _ = 0
 
@@ -56,4 +70,4 @@ interpUser = "a\{interpHole}b"
 
 test "uses the verb" = expectEqual 1 1
 
-useAll = (useA, useB, useC, useD, useE, useF, useG, useH, useI)
+useAll = (useA, useB, useC, useD, useE, useF, useG, useH, useI, useJ)

@@ -1,5 +1,5 @@
 # META
-source_lines=601
+source_lines=603
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_scope.mdk — the per-file scope model of the lint rules: every
@@ -111,9 +111,11 @@ data Frame = Frame (List Binder) (Option (HashMap String Binder))
 -- (name, name token, kind, import module path, import origin name)
 data Site = Site String Loc BinderKind (List String) String
 
--- A position as one Int: no per-site string, and columns stay under 2^20.
+-- A position as one Int: no per-site string.  Distinct for every column below
+-- 2^32 and line below 2^30, which holds a 4 GiB line and stays inside `Int`'s
+-- 63 bits; a source string larger than that cannot be held.
 siteKey : Loc -> Int
-siteKey (Loc _ l c _ _) = l * 1048576 + c
+siteKey (Loc _ l c _ _) = l * 4294967296 + c
 
 -- The binder a position stands for: a use resolves to what it names, a binder
 -- site (or an alternate site of the same binder) to itself.
@@ -619,7 +621,7 @@ walkAssign w scope loc x e =
 (DData Private "Frame" () ((variant "Frame" (ConPos (TyApp (TyCon "List") (TyCon "Binder")) (TyApp (TyCon "Option") (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Binder")))))) ())
 (DData Private "Site" () ((variant "Site" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderKind") (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) ())
 (DTypeSig false "siteKey" (TyFun (TyCon "Loc") (TyCon "Int")))
-(DFunDef false "siteKey" ((PCon "Loc" PWild (PVar "l") (PVar "c") PWild PWild)) (EBinOp "+" (EBinOp "*" (EVar "l") (ELit (LInt 1048576))) (EVar "c")))
+(DFunDef false "siteKey" ((PCon "Loc" PWild (PVar "l") (PVar "c") PWild PWild)) (EBinOp "+" (EBinOp "*" (EVar "l") (ELit (LInt 4294967296))) (EVar "c")))
 (DTypeSig true "binderOf" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "Binder")))))
 (DFunDef false "binderOf" ((PVar "fs") (PVar "loc")) (EApp (EApp (EVar "get") (EApp (EVar "siteKey") (EVar "loc"))) (EFieldAccess (EVar "fs") "fsSites")))
 (DTypeSig true "allBinders" (TyFun (TyCon "FileScopes") (TyApp (TyCon "List") (TyCon "Binder"))))
@@ -881,7 +883,7 @@ walkAssign w scope loc x e =
 (DData Private "Frame" () ((variant "Frame" (ConPos (TyApp (TyCon "List") (TyCon "Binder")) (TyApp (TyCon "Option") (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Binder")))))) ())
 (DData Private "Site" () ((variant "Site" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderKind") (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) ())
 (DTypeSig false "siteKey" (TyFun (TyCon "Loc") (TyCon "Int")))
-(DFunDef false "siteKey" ((PCon "Loc" PWild (PVar "l") (PVar "c") PWild PWild)) (EBinOp "+" (EBinOp "*" (EVar "l") (ELit (LInt 1048576))) (EVar "c")))
+(DFunDef false "siteKey" ((PCon "Loc" PWild (PVar "l") (PVar "c") PWild PWild)) (EBinOp "+" (EBinOp "*" (EVar "l") (ELit (LInt 4294967296))) (EVar "c")))
 (DTypeSig true "binderOf" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "Binder")))))
 (DFunDef false "binderOf" ((PVar "fs") (PVar "loc")) (EApp (EApp (EVar "get") (EApp (EVar "siteKey") (EVar "loc"))) (EFieldAccess (EVar "fs") "fsSites")))
 (DTypeSig true "allBinders" (TyFun (TyCon "FileScopes") (TyApp (TyCon "List") (TyCon "Binder"))))
