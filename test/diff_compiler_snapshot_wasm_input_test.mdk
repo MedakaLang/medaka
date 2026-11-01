@@ -10,10 +10,39 @@
    Runs under `medaka test --native`: it spawns subprocesses and reads
    fixtures, neither of which the interpreter binds. -}
 
-import test_process.{medakaBin, medakaRoot, boundedVerb, withScratchDir}
+import test_process.{
+  medakaBin, medakaRoot, boundedVerb, withScratchDir, expectSpawnOk
+}
 import test.{Expectation, expectAll, expectEqualText, fail, pass}
 import fs.{mkdirAll}
 import string.{startsWith, contains, lines, stripPrefix, split, join, drop}
+
+apiWitnessPath : <IO> String
+apiWitnessPath =
+  "\{medakaRoot}/compiler/backend/wasm_emit_api_gate_witness_test.mdk"
+
+apiWitnessSource : String
+apiWitnessSource = join "\n" [
+  "import backend."
+    ++ "wasm_emit.{WasmEmitInput, emitProgram, emitProgramGaps}",
+  "import backend." ++ "emit_plan.{EmitPlan}",
+  "import ir." ++ "core_ir.{CProgram}",
+  "import backend." ++ "wasm_symbols.{SymbolDefect}",
+  "",
+  "normalApiWitness : WasmEmitInput -> EmitPlan -> CProgram -> Result (List SymbolDefect) String",
+  "normalApiWitness input plan program = emitProgram input plan program",
+  "",
+  "gapsApiWitness : WasmEmitInput -> EmitPlan -> CProgram -> Result (List SymbolDefect) (List String)",
+  "gapsApiWitness input plan program = emitProgramGaps input plan program",
+]
+
+typedApiCheck : <IO, Exec, FileWrite> Expectation
+typedApiCheck = match writeFile apiWitnessPath apiWitnessSource
+  Err e => fail "could not write typed Wasm API witness: \{e}"
+  Ok _ =>
+    let checked = expectSpawnOk medakaBin ["check", apiWitnessPath]
+    let _ = removeFile apiWitnessPath
+    checked
 
 wasmEmitPath : <IO> String
 wasmEmitPath = "\{medakaRoot}/compiler/backend/wasm_emit.mdk"
@@ -185,4 +214,4 @@ renderBoth work = do
   Ok (only, combined)
 
 test "snapshot_wasm_input: WASM-only equals combined; Score defined at its clause arity; WasmEmitInput API and no legacy hooks" =
-  expectAll [apiCheck, legacyCheck, wasmCheck]
+  expectAll [apiCheck, typedApiCheck, legacyCheck, wasmCheck]

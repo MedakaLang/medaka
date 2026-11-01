@@ -202,6 +202,50 @@ strictArgs exe argv =
     ]
     ++ argv
 
+execVehicleChild : String
+execVehicleChild =
+  """
+import test.{expectAll}
+import test_process.{expectSpawnOkLine, expectSpawnFailsAll}
+
+strictArgs : String -> List String -> List String
+strictArgs exe argv =
+  ["perl", "-e", "alarm 15; exec @ARGV or die qq(exec: $!)", exe] ++ argv
+
+test "strict exec wrapper observes a missing executable and controls" =
+  expectAll [
+    expectSpawnFailsAll "env" (strictArgs "/medaka-p513-absent-executable" [])
+      ["exec:", "No such file or directory"],
+    expectSpawnOkLine "env" (strictArgs "printf" ["child-ok\\n"]) "child-ok",
+    expectSpawnFailsAll "env" (strictArgs "sh" ["-c", "echo child-fail >&2; exit 7"])
+      ["child-fail"]
+  ]
+"""
+
+execVehicleJudge : String -> <IO, Exec, FileWrite> Expectation
+execVehicleJudge dir =
+  match writeFile (dir ++ "/exec_vehicle_test.mdk") execVehicleChild
+    Err e => fail e
+    Ok _ => expectAll [
+      expectSpawnFailsAll "env" (strictArgs
+        "/medaka-p513-absent-executable"
+        []) [
+        "exec:", "No such file or directory"
+      ],
+      expectSpawnOkLine
+        "env"
+        (strictArgs "printf" ["parent-ok\\n"])
+        "parent-ok",
+      expectSpawnFailsAll "env" (strictArgs "sh" [
+        "-c", "echo parent-fail >&2; exit 7"
+      ]) [
+        "parent-fail",
+      ],
+      expectSpawnOk
+        "env"
+        (strictArgs medakaBin ["test", dir ++ "/exec_vehicle_test.mdk"]),
+    ]
+
 buildEntry : String -> String -> <IO, Exec> Expectation
 buildEntry dir name =
   expectSpawnOk
@@ -636,6 +680,9 @@ test "current entry routes preserve values, physical ABIs, first traps and named
     Some dir => match mkdirAll dir
       Err e => fail e
       Ok _ => runJudges dir
+
+test "wrapped gate exec failure remains observable through the native test runner" =
+  withScratchDir execVehicleJudge
 
 manifestProbe : String
 manifestProbe = join "\n" [
