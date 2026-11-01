@@ -1,0 +1,8 @@
+-- Names the private interface and calls its method.  Accepted.
+import test.{expectEqual}
+import piface.{Sized, size, boxed}
+
+measure : Sized a => a -> Int
+measure x = size x
+
+test "private interface method" = expectEqual 5 (measure (boxed 5))

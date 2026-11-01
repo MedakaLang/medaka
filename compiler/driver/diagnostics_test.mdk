@@ -19,7 +19,7 @@ import driver.diagnostics.{
   analyzeProjectKeyedSources, noStdlibExports, graphCheckDrive, CheckDrive(..),
   CheckDump(..), analyzeFrom, frontEnd, checkFrontDrive, FrontInput(..),
   FrontPolicy(..), FrontProgram(..), FrontOutput(..), Diag(..), diagIdText,
-  foldCachedIdentity, resolveCachedIdentity
+  foldCachedIdentity, resolveCachedIdentity, checkJsonFileParts, ppCheckJson
 }
 import driver.loader.{loadProgramFilesLocatedCachedSourcesE}
 import support.source_index.{indexSource, offsetToUtf16Position}
@@ -31,9 +31,9 @@ import frontend.ast.{Decl}
 import types.tc_types.{DriveOutputs(..), emptyDriveOutputs}
 import frontend.parser.{parseLocated}
 import fs.{fixtureFiles}
-import list.{sort}
+import list.{drop, head, sort}
 import path.{dirname, stem}
-import string.{contains, endsWith, lines, trim, unlines}
+import string.{contains, endsWith, lines, split, trim, unlines}
 import test.{
   Expectation, expectAll, expectEach, expectEqual, expectFalse, expectNotEqual,
   expectNoFindings, expectTrue, fail
@@ -1128,4 +1128,102 @@ main = println (debug (runAsync f))
 test "a defer bind is judged by the pattern the user wrote" = expectEach [
   ("unit bind is silent", deferBindCase 0 "()" "()"),
   ("refutable bind warns", deferBindCase 1 "Some v" "Some 1"),
+]
+
+-- ── the test-sibling view (`test/sibling_view_fixtures`) ───────────────────
+-- `check --json`'s verdict on one fixture: whether it rejected it, and the codes
+-- it reported, sorted.  The fixture directory is its own project.
+
+siblingFixture : String -> <IO> (Bool, List String)
+siblingFixture file = match (
+  readFile "stdlib/runtime.mdk",
+  readFile "stdlib/core.mdk",
+)
+  (Ok rsrc, Ok csrc) =>
+    let (cj, rejected, _) =
+      checkJsonFileParts
+        False
+        rsrc
+        csrc
+        "test/sibling_view_fixtures/\{file}"
+        "stdlib"
+    (rejected, sort (jsonCodes (ppCheckJson cj)))
+  _ => (True, ["the prelude pair could not be read"])
+
+jsonCodes : String -> List String
+jsonCodes text =
+  map
+    (piece => optionOr "" (head (split "\"" piece)))
+    (drop 1 (split "\"code\":\"" text))
+
+accepted : (Bool, List String)
+accepted = (False, [])
+
+test "a test sibling imports its subject's private names" = expectEach [
+  (
+    "private value, abstract constructor",
+    expectEqual accepted (siblingFixture "counter_test.mdk"),
+  ),
+  (
+    "private type's constructor",
+    expectEqual accepted (siblingFixture "ptype_test.mdk"),
+  ),
+  (
+    "newtype constructor",
+    expectEqual accepted (siblingFixture "pnewtype_test.mdk"),
+  ),
+  ("non-exported impl", expectEqual accepted (siblingFixture "pimpl_test.mdk")),
+  (
+    "private interface and its method",
+    expectEqual accepted (siblingFixture "piface_test.mdk"),
+  ),
+  (
+    "private effect label",
+    expectEqual accepted (siblingFixture "peffect_test.mdk"),
+  ),
+  (
+    "a name the subject imports",
+    expectEqual accepted (siblingFixture "pimport_test.mdk"),
+  ),
+  (
+    "the phantom-authority constructor",
+    expectEqual accepted (siblingFixture "handle_test.mdk"),
+  ),
+]
+
+test "an importer that is not the subject's test sibling gets today's rejections" = expectEach
+  [
+    (
+      "a module beside the subject",
+      expectEqual
+        (True, ["R-NO-EXPORTED-CTORS", "R-PRIVATE-NAME"])
+        (siblingFixture "other.mdk"),
+    ),
+    (
+      "a test file of the same name in another directory",
+      expectEqual
+        (True, ["R-NO-EXPORTED-CTORS", "R-PRIVATE-NAME"])
+        (siblingFixture "sub/counter_test.mdk"),
+    ),
+    (
+      "a user-root net_test.mdk against stdlib net",
+      expectEqual (True, ["R-PRIVATE-NAME"]) (siblingFixture "net_test.mdk"),
+    ),
+  ]
+
+test "a sibling cannot hand a privileged name on" = expectEach [
+  (
+    "re-exporting a private value",
+    expectEqual (True, ["R-PRIVILEGED-REEXPORT"]) (siblingFixture "rx_test.mdk"),
+  ),
+  (
+    "re-exporting a withheld phantom-authority constructor",
+    expectEqual
+      (True, ["R-PRIVILEGED-REEXPORT"])
+      (siblingFixture "handle2_test.mdk"),
+  ),
+  (
+    "a non-test module importing the sibling's forge",
+    expectEqual (True, ["R-TEST-MODULE-IMPORT"]) (siblingFixture "leak.mdk"),
+  ),
 ]

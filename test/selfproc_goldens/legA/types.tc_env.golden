@@ -84,6 +84,7 @@ declEnvMarkReached : List String -> Map String Unit -> Map String Unit
 declEnvModule : GraphCtx -> Int -> String -> List Decl -> DeclEnvModule
 declEnvReachFrom : Map String (List String) -> List String -> Map String Unit -> Map String Unit
 declEnvRowVisible : Int -> DeclEnvModule -> List Decl
+declEnvSiblingSees : Int -> DeclEnvModule -> Bool
 declEnvVisibleAt : Int -> Int -> Bool
 declEnvVisibleTo : Int -> Int -> Bool -> Bool
 declEnvsOrdOf : String -> DeclEnvs -> Int

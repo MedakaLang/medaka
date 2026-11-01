@@ -1,9 +1,12 @@
 bindsNonCtorExport : ModuleExports -> String -> Bool
 buildExportsWith : ModuleExports -> Map String ModuleExports -> String -> List Decl -> List String -> ModuleExports
+buildSurface : ExportView -> ModuleExports -> Map String ModuleExports -> String -> List Decl -> List String -> ModuleExports
 carriedEffectOrigins : List (String, String) -> List (String, String) -> List (String, String)
 carriedIfaceVals : ModuleExports -> List String -> List String
-carriedIn : ExpNs a -> ModuleExports -> Map String ModuleExports -> List Decl -> List a
+carriedIn : ExpNs a -> ModuleExports -> Map String ModuleExports -> List UsePath -> List a
+carriedOnlyBy : ExpNs String -> ModuleExports -> ModuleExports -> UsePath -> List String
 carriedOriginsFrom : UsePath -> ModuleExports -> List (String, String) -> List (String, String)
+carriedPaths : ExportView -> List Decl -> List UsePath
 carriedTypeCtors : Map String Unit -> Map String Unit -> List (String, List String) -> List (String, List String)
 carriedTypeCtorsFrom : ModuleExports -> List String -> List (String, List String)
 carriedValueOriginsFrom : ModuleExports -> List (String, String) -> List (String, (String, String))
@@ -15,6 +18,7 @@ declExportsCtors : Decl -> Bool
 declExportsIn : ExpNs a -> Decl -> Bool
 declUseIds : Decl -> List String
 directIn : ExpNs a -> List Decl -> List a
+directUnder : ExportView -> ExpNs a -> List Decl -> List a
 dropLocOfExpanded : (String, String, Loc) -> (String, String)
 effectNames : List Decl -> List String
 expandMemberNames : ModuleExports -> UseMember -> List (String, String, Loc)
@@ -23,6 +27,7 @@ exportsIn : ExpNs a -> ModuleExports -> List a
 fieldOwnersOf : List Decl -> List (String, String)
 filterInSet : Map String Unit -> List String -> List String
 findExports : String -> Map String ModuleExports -> Option ModuleExports
+fullExportsOf : ModuleExports -> Map String ModuleExports -> String -> List Decl -> ModuleExports
 ifaceMethodNm : IfaceMethod -> String
 ifaceMethodPairs : ModuleExports -> List String -> List (String, List String)
 ifaceMethodsOf : String -> List (String, List String) -> List String
@@ -52,12 +57,15 @@ nsValueOrigins : ExpNs (String, (String, String))
 nsValues : ExpNs String
 overPubUse : ModuleExports -> Map String ModuleExports -> (UsePath -> ModuleExports -> List a) -> UsePath -> List a
 ownersForTypes : Map String Unit -> List (String, String) -> List (String, String)
+plainUsePaths : List Decl -> List UsePath
 preludeValueNames : List Decl -> List String
+privilegedCarry : ModuleExports -> ModuleExports -> UsePath -> List String
 pubIfaceMethodSets : List Decl -> List (List String)
 pubUsePaths : List Decl -> List UsePath
 recordFieldOwner : String -> Field -> (String, String)
 reexportBindings : UsePath -> ModuleExports -> List (String, String)
 reexportOrigins : UsePath -> ModuleExports -> List String
+ruleOf : ExportView -> ExpNs a -> Decl -> List a
 scanDecls : (Decl -> List a) -> List Decl -> List a
 typeCtorsAllOf : List Decl -> List (String, List String)
 typeCtorsOf : String -> ModuleExports -> Option (List String)
@@ -66,4 +74,7 @@ useModId : UsePath -> String
 useModuleIds : List Decl -> List String
 valueDeclOf : ModuleExports -> Map String (String, String) -> String -> (String, String)
 valueDeclsOf : ModuleExports -> Map String (String, String)
+valueNamesUnder : ExportView -> List Decl -> List String
 variantFieldOwners : Variant -> List (String, String)
+viewOf : Option String -> String -> ExportView
+withSubjectView : ModuleExports -> Map String ModuleExports -> Option (String, List Decl) -> Map String ModuleExports

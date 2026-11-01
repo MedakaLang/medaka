@@ -1,0 +1,5 @@
+-- A private effect label.
+effect Beep
+
+export quiet : Int -> Int
+quiet n = n

@@ -11,7 +11,7 @@ import test.{
 import frontend.ast.{Loc(..)}
 import frontend.ast.{BinderId(..)}
 import frontend.ast_codec.{evEntriesSExp}
-import list.{take}
+import list.{drop, take}
 import string as S
 import support.sexp_value.{SExp(..), parseSExp, renderSExp}
 import support.util.{joinNl}
@@ -124,6 +124,11 @@ roundTripRows mi seed = match decodeModuleInterface (encodeModuleInterface mi)
         (expectEqual
           (map renderFrozenBinding mi.miExports)
           (map renderFrozenBinding back.miExports)),
+      labelFail
+        "the frozen private bindings print alike"
+        (expectEqual
+          (map renderFrozenBinding mi.miPrivate)
+          (map renderFrozenBinding back.miPrivate)),
       labelFail
         "the function names"
         (expectEqual mi.miFunNames back.miFunNames),
@@ -298,10 +303,10 @@ test "a reader refuses every file that is not whole and true" =
         (
           "a wrong format version",
           expectEqual
-            "format 1"
+            "format 2"
             (verdict
               (decodeModuleInterface
-                (S.replace "(medaka-module 2" "(medaka-module 1" good))),
+                (S.replace "(medaka-module 3" "(medaka-module 2" good))),
         ),
         (
           "an unknown section tag",
@@ -332,7 +337,7 @@ test "a reader refuses every file that is not whole and true" =
         (
           "a truncated list",
           expectEqual
-            "malformed file/0/section.2: module-interface: expected 25 field(s)"
+            "malformed file/0/section.2: module-interface: expected 26 field(s)"
             (verdict (decodeModuleInterface (truncatedList good))),
         ),
         (
@@ -407,14 +412,18 @@ test "a module basis is mandatory and uses the shared view grammar" =
           withDigestOf
             good
             (renderSExp
-                (SList [section, joins, SList (tag :: take 24 fields ++ basis)])
+                (SList [
+                  section,
+                  joins,
+                  SList (tag :: take 24 fields ++ basis ++ drop 25 fields),
+                ])
               ++ "\n")
         _ => good
       expectEach [
         (
           "missing basis",
           expectEqual
-            "malformed file/0/section.2: module-interface: expected 25 field(s)"
+            "malformed file/0/section.2: module-interface: expected 26 field(s)"
             (verdict (decodeModuleInterface (alter []))),
         ),
         (

@@ -48,6 +48,7 @@ import frontend.resolve.{
   resolveModuleG,
   resolveModulesErrorsByFile,
   importedCtorDeclsStep,
+  importerSubject,
   withStdlibExports,
   hintableUnboundNames,
   exportedValueNames,
@@ -117,6 +118,9 @@ import driver.loader.{
   availableModuleIds,
   fileOfModuleId,
   modIdToPath,
+  siblingSubjectId,
+  readDeps,
+  findProjectRootOrSelf,
 }
 import support.path.{dirOf}
 import driver.main_autoprint.{valueMainCandidate}
@@ -1033,6 +1037,7 @@ frontEnd exportsFor drive fi = match fi.fiProgram
               (map modIdToPath mods)
               fi.fiAllowInternal
               fi.fiTrusted
+              fi.fiInputs.diSibling
               preludeKey
               rt
               core
@@ -1047,6 +1052,7 @@ frontEnd exportsFor drive fi = match fi.fiProgram
             exportsFor
             fi.fiAllowInternal
             fi.fiTrusted
+            fi.fiInputs.diSibling
             preludeKey
             chainKey
             rt
@@ -1093,6 +1099,7 @@ drivenGraph drive served d buckets =
   let folded =
     typecheckDiagsFold
       outputs
+      d.fdInputs.diSibling
       served
       d.fdRuntime
       d.fdCore
@@ -1700,6 +1707,7 @@ projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP prelu
       exportsFor
       allowInternal
       trustedMods
+      None
       preludeKey
       chainKey
       runtimeP
@@ -1848,6 +1856,7 @@ foldStale ((path, d) :: rest) buckets =
 resolvePass : (List String -> <e> List (String, List String)) ->
   Bool ->
   List String ->
+  (String -> Option (String, List Decl)) ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
@@ -1857,18 +1866,28 @@ resolvePass : (List String -> <e> List (String, List String)) ->
   List (String, String, List Decl) ->
   List (String, List Diag) ->
   <e> List (String, List Diag)
-resolvePass _ _ _ _ _ _ _ _ _ [] buckets = buckets
-resolvePass exportsFor allowInternal trustedMods preludeKey rt core served known ids ((m@(mid, path, desugared)) :: rest) buckets =
+resolvePass _ _ _ _ _ _ _ _ _ _ [] buckets = buckets
+resolvePass exportsFor allowInternal trustedMods subjectOf preludeKey rt core served known ids ((m@(mid, path, desugared)) :: rest) buckets =
   let trusted = allowInternal || contains mid trustedMods
   -- A module's verdict reads, beside its own decls and its imports' exports, its
-  -- trust (#1362) and whether any module came before it: a missing import is
-  -- `UnknownModule` after the first module and a stub in the first.
+  -- trust (#1362), whether any module came before it (a missing import is
+  -- `UnknownModule` after the first module and a stub in the first), and whether
+  -- it judges its imports as its subject's test sibling.
+  let subject = subjectOf mid
   let graph =
-    map (k => joinNl [k, boolKey trusted, boolKey (omSize known == 0)]) served
+    map
+      (k => joinNl [
+        k,
+        boolKey trusted,
+        boolKey (omSize known == 0),
+        boolKey (isSome subject),
+      ])
+      served
   let (diags, exp, ident) = servedPass ResolveKind graph ids m (_ =>
     let (exp, errs) =
       resolveModuleG
         (internalGuardFor trusted)
+        subject
         preludeKey
         rt
         core
@@ -1880,6 +1899,7 @@ resolvePass exportsFor allowInternal trustedMods preludeKey rt core served known
     exportsFor
     allowInternal
     trustedMods
+    subjectOf
     preludeKey
     rt
     core
@@ -1988,6 +2008,7 @@ typecheckPassReport steps inputs runtimeP coreP preludeKey chainKey mods modPair
     outputs,
     typecheckDiagsFold
       outputs
+      inputs.diSibling
       (foldServeKey steps preludeKey chainKey)
       runtimeP
       coreP
@@ -2052,6 +2073,7 @@ stepKeysFor NoSteps _ = []
 -- whose analyze serves each module's raw-tree diagnostics from `passCacheRef`
 -- (`foldServeKey`), `None` for one that folds every module afresh.
 typecheckDiagsFold : DriveOutputs ->
+  Option (String, String) ->
   Option String ->
   List Decl ->
   List Decl ->
@@ -2060,11 +2082,12 @@ typecheckDiagsFold : DriveOutputs ->
   List (String, (List TcDiag, List TcDiag)) ->
   List (String, List Diag) ->
   List (String, List Diag)
-typecheckDiagsFold outputs served runtimeP coreP mods modPairs tcByMid buckets =
+typecheckDiagsFold outputs sibling served runtimeP coreP mods modPairs tcByMid buckets =
   let preludeDecls = runtimeP ++ coreP
   let desugaredPool = omFromPairs (reverseL modPairs) omEmpty
   let passes = RawPasses {
     rpCoreExports = coreExports coreP,
+    rpSubjectOf = importerSubject sibling modPairs,
     rpPool = omFromPairs (map rawPairOf mods) omEmpty,
     rpPrelude = preludeDecls,
     -- #1499: the prelude-standalone operand is the prelude alone, not the
@@ -2093,12 +2116,14 @@ typecheckDiagsFold outputs served runtimeP coreP mods modPairs tcByMid buckets =
     buckets
 
 -- What every module's raw-tree passes share: the prelude's exports and decls, the
--- graph's raw decls by module id (the constructor declarations a module's imports
--- bind are found there), the prelude-standalone set, the desugared graph the
--- import-shadow detector reads, the desugared decls by module id, the drive's
--- outputs, and the typechecker's (errs, warns) by module id.
+-- test subject of each module (`importerSubject`), the graph's raw decls by module
+-- id (the constructor declarations a module's imports bind are found there), the
+-- prelude-standalone set, the desugared graph the import-shadow detector reads, the
+-- desugared decls by module id, the drive's outputs, and the typechecker's (errs,
+-- warns) by module id.
 data RawPasses = RawPasses {
   rpCoreExports : ModuleExports,
+  rpSubjectOf : String -> Option (String, List Decl),
   rpPool : OrdMap (List Decl),
   rpPrelude : List Decl,
   rpShadowPool : OrdMap Unit,
@@ -2123,6 +2148,7 @@ foldServeKey _ _ _ = None
 resolvedBuckets : (List String -> <e> List (String, List String)) ->
   Bool ->
   List String ->
+  Option (String, String) ->
   Option (Int, Int) ->
   String ->
   List Decl ->
@@ -2130,7 +2156,7 @@ resolvedBuckets : (List String -> <e> List (String, List String)) ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   <e> List (String, List Diag)
-resolvedBuckets exportsFor allowInternal trustedMods preludeKey chainKey runtimeP coreP mods modPairs =
+resolvedBuckets exportsFor allowInternal trustedMods sibling preludeKey chainKey runtimeP coreP mods modPairs =
   -- A keyed prelude serves each module's verdict from `passCacheRef`; unkeyed,
   -- nothing is served or recorded, and no key is built.  The caches keep this
   -- graph's modules and no others.
@@ -2139,6 +2165,7 @@ resolvedBuckets exportsFor allowInternal trustedMods preludeKey chainKey runtime
     exportsFor
     allowInternal
     trustedMods
+    (importerSubject sibling modPairs)
     preludeKey
     runtimeP
     coreP
@@ -2317,6 +2344,7 @@ rawTreeDiags passes known (mid, _, prog) =
   let (imported, exp) = importedCtorDeclsStep
     passes.rpCoreExports
     passes.rpPool
+    (passes.rpSubjectOf mid)
     known
     (mid, desugared)
   let guardWarns =
@@ -3368,9 +3396,12 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
         [m] => FrontFile m
         _ => FrontGraph modsWithPath (desugaredModPairs modsWithPath)
       let chainKey = chainKeyOf target roots
+      let inputs = { driveInputsFor !selectedProfile flatStdlib ownedStdlib |
+        diSibling = siblingPairOf roots stdlibDir modsWithPath,
+      }
       let front = frontEnd (stdlibExportsReader stdlibDir) (checkDriveReport
         chainKey) FrontInput {
-        fiInputs = driveInputsFor !selectedProfile flatStdlib ownedStdlib,
+        fiInputs = inputs,
         fiAllowInternal = allowInternal,
         fiTrusted = trusted,
         fiRuntimeSrc = rsrc,
@@ -3383,6 +3414,23 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
           cjSingleParts target src decls (flatMap snd front.foDiags)
         _ => cjGraphParts target stdlibDir mods front.foDiags
       (cj, hasErr, front.foDriven)
+
+-- The drive's (test sibling, subject) module-id pair: the entry, which the loader
+-- puts last, when its file is the test sibling of a module the graph loaded
+-- (`siblingSubjectId`, with the dependency roots the loader read for it).
+export
+siblingPairOf : List String ->
+  String ->
+  List (String, String, List Decl) ->
+  <IO> Option (String, String)
+siblingPairOf roots stdlibDir mods = match last mods
+  None => None
+  Some (entry, path, _) =>
+    let deps = readDeps (findProjectRootOrSelf (dirOf path))
+    match siblingSubjectId deps roots stdlibDir path
+      Some subject if anyList ((m, _, _) => m == subject) mods =>
+        Some (entry, subject)
+      _ => None
 
 -- An entry the loader could not load: its own parse error if it has one, else
 -- the loader's error.  An unparsable entry is reported against the spelling the

@@ -1,0 +1,5 @@
+-- Dispatches through the non-exported impl.  Accepted.
+import test.{expectEqual}
+import pimpl.{Color(..)}
+
+test "non-exported impl" = expectEqual "green" (display Green)

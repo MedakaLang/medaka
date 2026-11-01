@@ -193,6 +193,7 @@ import driver.diagnostics.{
   cjFixJson,
   mkDiag,
   checkJsonFileParts,
+  siblingPairOf,
   CheckJson(..),
   ppCheckJson,
   cjFoldIntoFile,
@@ -857,8 +858,9 @@ runCheckCmd argv =
                 -- one is stdlib-root ownership with no `allow-internal` opt-out.
                 let (flatStdlib, ownedStdlib) =
                   stdlibOwnership target roots stdlibDir mods
-                let inputs =
-                  driveInputsFor !selectedProfile flatStdlib ownedStdlib
+                let inputs = { driveInputsFor !selectedProfile flatStdlib ownedStdlib |
+                  diSibling = siblingPairOf roots stdlibDir modsWithPath,
+                }
                 let perfTLoad = now ()
                 let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
                 let _ =
@@ -1100,7 +1102,15 @@ checkRoute inputs typesMode allowInternal trusted roots rsrc csrc tsrc target mo
     FrontFile (_, _, decls) =>
       checkFileReport typesMode rsrc csrc tsrc target decls front
     FrontGraph mods modPairs =>
-      checkProjectReport rsrc csrc tsrc target mods modPairs front
+      checkProjectReport
+        rsrc
+        csrc
+        tsrc
+        target
+        inputs.diSibling
+        mods
+        modPairs
+        front
 
 -- `check`'s single-file report over its front-end run.
 checkFileReport : Bool ->
@@ -1168,18 +1178,23 @@ checkProjectReport : String ->
   String ->
   String ->
   String ->
+  Option (String, String) ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   FrontOutput CheckDump ->
   <IO> Unit
-checkProjectReport rsrc csrc tsrc target mods modPairs front =
+checkProjectReport rsrc csrc tsrc target sibling mods modPairs front =
   match front.foDriven
     None => dieMsg (ppDiagBuckets front.foDiags)
     Some dump =>
       -- The entry's guard-exhaustiveness lines, rendered whenever resolve accepted
       -- the graph.
       let exWarns =
-        entryExhaust (desugaredPrelude rsrc) (desugaredPrelude csrc) modPairs
+        entryExhaust
+          (desugaredPrelude rsrc)
+          (desugaredPrelude csrc)
+          sibling
+          modPairs
       match locatedProjectDiags front.foDiags
         -- BUGFIX (imported-module diagnostics): when there ARE type errors, render
         -- the accumulated per-module diagnostics LOCATED (`file:L:C: msg` + caret),

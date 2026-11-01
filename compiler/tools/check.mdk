@@ -190,9 +190,13 @@ checkModulesReport exWarns perMod =
 -- (`driver/diagnostics.mdk`) gives every module.  `rtD`/`coreD`/`mods` are the
 -- DESUGARED decls, which still carry the DData the oracle reads.
 export
-entryExhaust : List Decl -> List Decl -> List (String, List Decl) -> String
-entryExhaust rtD coreD mods =
-  entryExhaustGo (rtD ++ coreD) (importedCtorDecls coreD mods mods) mods
+entryExhaust : List Decl ->
+  List Decl ->
+  Option (String, String) ->
+  List (String, List Decl) ->
+  String
+entryExhaust rtD coreD sibling mods =
+  entryExhaustGo (rtD ++ coreD) (importedCtorDecls coreD sibling mods mods) mods
 
 entryExhaustGo : List Decl ->
   List (String, List Decl) ->
