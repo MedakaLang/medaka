@@ -49,8 +49,9 @@ import ir.core_ir_lower.{
 }
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{factsOfElabSources, factsWithEvidence}
-import ir.dce.{dceFilter}
 import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInput}
+-- emit_plan_test.mdk pins that every emit-route entry mentions buildEmitPlan.
+-- lint-disable-next-line rule-unused-import
 import backend.emit_plan.{buildEmitPlan}
 
 import entries.entry_support.{driveModules}

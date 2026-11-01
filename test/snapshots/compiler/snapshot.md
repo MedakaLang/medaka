@@ -1,5 +1,5 @@
 # META
-source_lines=1522
+source_lines=1521
 stages=DESUGAR,MARK
 # SOURCE
 import types.program_facts.{withSymbolOrigins}
@@ -194,7 +194,6 @@ import types.typecheck.{
   hadTypeErrors,
   hadMatchWarnings,
 }
-import types.tc_types.{DriveOutputs}
 import types.target_profile.{selectedProfile}
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{emptyFacts, factsOfElabSources, factsWithEvidence}
@@ -1545,7 +1544,6 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "cprogramToSexp" false))))
 (DUse false (UseGroup ("types" "annotate") ((mem "annotateProgram" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneToLinesWithRuntime" false) (mem "elaborateOneFacts" false) (mem "elaborateModulesWithReport" false) (mem "hadTypeErrors" false) (mem "hadMatchWarnings" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleUnitsEv" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "emptyFacts" false) (mem "factsOfElabSources" false) (mem "factsWithEvidence" false))))
@@ -1888,7 +1886,6 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "cprogramToSexp" false))))
 (DUse false (UseGroup ("types" "annotate") ((mem "annotateProgram" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneToLinesWithRuntime" false) (mem "elaborateOneFacts" false) (mem "elaborateModulesWithReport" false) (mem "hadTypeErrors" false) (mem "hadMatchWarnings" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleUnitsEv" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "emptyFacts" false) (mem "factsOfElabSources" false) (mem "factsWithEvidence" false))))

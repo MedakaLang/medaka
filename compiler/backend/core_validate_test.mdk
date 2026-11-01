@@ -114,7 +114,7 @@ import backend.llvm_emit.{
 }
 import backend.llvm_symbols as LlvmSymbols
 import backend.emit_plan.{EmitPlan(..), buildEmitPlan}
-import backend.wasm_demand.{WasmDemandPlan, PlannedImport}
+import backend.wasm_demand as WasmDemand
 import backend.global_plan.{GlobalInitPlan(..)}
 
 import types.target_profile.{lookupProfile}

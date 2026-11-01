@@ -9,22 +9,22 @@
 -- process instead of several.  The imports exist only to force the closure; the
 -- module's own (empty-ish) schemes are ignored by the harness.
 
-import frontend.ast.{Decl}
-import frontend.lexer.{tokenize}
-import frontend.parser.{parse}
-import ir.sexp.{programToSexp}
-import frontend.desugar.{desugar}
-import frontend.marker.{markWithPrelude}
-import types.annotate.{annotateProgram}
-import frontend.resolve.{resolveToLines}
-import frontend.exhaust.{exhaustToLines}
-import driver.loader.{loadProgram}
-import types.repr.{ppScheme}
-import types.scopes.{freshScopeStore}
-import types.program_facts.{emptyFacts}
-import eval.eval.{ppValue}
-import tools.check.{runCheck}
-import tools.codemod.{codemodSource}
+import frontend.ast as Ast
+import frontend.lexer as Lexer
+import frontend.parser as Parser
+import ir.sexp as Sexp
+import frontend.desugar as Desugar
+import frontend.marker as Marker
+import types.annotate as Annotate
+import frontend.resolve as Resolve
+import frontend.exhaust as Exhaust
+import driver.loader as Loader
+import types.repr as Repr
+import types.scopes as Scopes
+import types.program_facts as ProgramFacts
+import eval.eval as Eval
+import tools.check as Check
+import tools.codemod as Codemod
 
 batchEntryDummy : Int
 batchEntryDummy = 0

@@ -46,9 +46,6 @@ import types.effect_policy.{
   PolicyVerdict(..), buildCallGraph, fnEffectsTable, viaChain
 }
 import types.repr.{Scheme}
-import types.effect_rows.{
-  Atom, atomLabel, atomLabelOf, effLabelOrigin, renderAtom
-}
 import tools.check_policy.{TargetInputs(..)}
 import types.tc_types.{DriveOutputs(..)}
 import driver.diagnostics.{

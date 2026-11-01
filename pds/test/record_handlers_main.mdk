@@ -24,7 +24,6 @@ import json.{Json(..), jObject, parse, stringify}
 import hex.{decode}
 import io.{readLines}
 import string.{split, startsWith}
-import lib.cid.{cidToString}
 import lib.dagcbor.{dagCborDecode}
 import lib.handlers.{recordServer}
 import lib.lexjson.{dagCborToLexJson}

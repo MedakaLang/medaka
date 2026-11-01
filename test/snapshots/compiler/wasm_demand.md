@@ -1,5 +1,5 @@
 # META
-source_lines=2758
+source_lines=2757
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_fn_values.{fnValueUses}
@@ -35,7 +35,6 @@ import backend.trmc_analysis.{
 }
 import backend.emit_support.{appParts, isExactCall}
 import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
-import types.private_mangle.{injectiveIdent}
 import support.ordmap.{
   OrdMap, omEmpty, omInsert, omLookup, omHasKey, omKeys, omFromNames,
   omFromPairs, omRestrict
@@ -2776,7 +2775,6 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" false) (mem "DispGroup" false) (mem "patVarsList" false) (mem "patVars" false) (mem "bindName" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "flattenApp" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "appParts" false) (mem "isExactCall" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
-(DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omRestrict" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "filterList" false) (mem "listLen" false) (mem "contains" false) (mem "startsWith" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "lenKey" false))))
 (DData Public "JsImport" () ((variant "JsImport" (ConNamed (field "medakaName" (TyCon "String")) (field "jsName" (TyCon "String")) (field "params" (TyApp (TyCon "List") (TyCon "String"))) (field "result" (TyCon "String"))))) ())
@@ -3619,7 +3617,6 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" false) (mem "DispGroup" false) (mem "patVarsList" false) (mem "patVars" false) (mem "bindName" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "flattenApp" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "appParts" false) (mem "isExactCall" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
-(DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omRestrict" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "filterList" false) (mem "listLen" false) (mem "contains" false) (mem "startsWith" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "lenKey" false))))
 (DData Public "JsImport" () ((variant "JsImport" (ConNamed (field "medakaName" (TyCon "String")) (field "jsName" (TyCon "String")) (field "params" (TyApp (TyCon "List") (TyCon "String"))) (field "result" (TyCon "String"))))) ())

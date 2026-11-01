@@ -7,7 +7,6 @@
 -- externs, and prints the ENTRY module's own bindings as `name : scheme` (one per
 -- line; the harness sorts) — the self-hosted analog of dev/tc_module_probe.
 
-import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import driver.loader.{loadProgram}

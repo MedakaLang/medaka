@@ -57,7 +57,6 @@ import backend.extern_catalog.{
 }
 import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInput}
 import backend.wasm_symbols.{defectCode}
-import backend.emit_plan.{buildEmitPlan}
 
 import eval.eval.{externBindings, ioExternBindings}
 import set as S
