@@ -3,3 +3,5 @@ import test.{expectEqual}
 import pimpl.{Color(..)}
 
 test "non-exported impl" = expectEqual "green" (display Green)
+
+main = println (display Green)

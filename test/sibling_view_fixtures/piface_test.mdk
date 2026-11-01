@@ -6,3 +6,5 @@ measure : Sized a => a -> Int
 measure x = size x
 
 test "private interface method" = expectEqual 5 (measure (boxed 5))
+
+main = println (measure (boxed 5))

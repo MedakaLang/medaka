@@ -410,3 +410,141 @@ test "a forged real-target variable grants nothing to an unrelated entry" = with
           || contains "exports no constructors" errOut),
     ]
     Err e => fail e)
+
+-- The privilege, case by case, on every engine that can run a sibling.  Each
+-- subject's private name is read by its sibling's `main`; the value is fixed
+-- by the design (TEST-SIBLING-ACCESS-DESIGN.md §3.1), not by an engine run.
+siblingCases : List (String, String)
+siblingCases = [
+  ("counter", "2\n2\n"),
+  ("ptype", "4\n"),
+  ("pnewtype", "3\n"),
+  ("pimpl", "green\n"),
+  ("piface", "5\n"),
+  ("peffect", "2\n"),
+  ("pimport", "3\n"),
+]
+
+siblingVerb : String -> String -> <Exec, IO> Result String (Int, String, String)
+siblingVerb verb file =
+  runVerb medakaBin [verb, underRoot "test/sibling_view_fixtures/\{file}"]
+
+test "a test sibling's main computes the spec value under check, run and build" = withScratchDir
+  (dir =>
+    expectAll
+      (flatMap
+        (c => match c
+          (subject, expected) =>
+            let file = "\{subject}_test.mdk"
+            [
+              match siblingVerb "check" file
+                Ok (code, _, _) =>
+                  labelFail "check \{subject}" (expectEqual 0 code)
+                Err e => fail e,
+              match siblingVerb "run" file
+                Ok (code, out, _) =>
+                  labelFail
+                    "run \{subject}"
+                    (expectAll [expectEqual 0 code, expectEqual expected out])
+                Err e => fail e,
+              match runVerb medakaBin [
+                "build",
+                underRoot "test/sibling_view_fixtures/\{file}",
+                "-o",
+                "\{dir}/\{subject}",
+              ]
+                Ok (code, _, _) =>
+                  labelFail "build \{subject}" (expectEqual 0 code)
+                Err e => fail e,
+              match runVerb "\{dir}/\{subject}" []
+                Ok (code, out, _) =>
+                  labelFail
+                    "native \{subject}"
+                    (expectAll [expectEqual 0 code, expectEqual expected out])
+                Err e => fail e,
+            ])
+        siblingCases))
+
+test "a test sibling's rows pass under medaka test eval and native" =
+  expectAll
+    (map
+      (c => match c
+        (subject, _) => match runVerb medakaBin [
+          "test",
+          "--engines",
+          "eval,native",
+          underRoot "test/sibling_view_fixtures/\{subject}_test.mdk",
+        ]
+          Ok (code, out, _) =>
+            labelFail
+              "medaka test \{subject}"
+              (expectAll [
+                expectEqual 0 code,
+                expectTrue (contains "passed" out),
+                expectFalse (contains "failed" out),
+              ])
+          Err e => fail e)
+      siblingCases)
+
+-- Each twin names the same private thing from a module that is not the
+-- subject's sibling: check, run and build reject it alike.  `other_5` is the
+-- one acceptance: an impl is not a name, so importing the type is enough.
+siblingTwins : List (Int, String)
+siblingTwins = [
+  (1, "has no export `step`"),
+  (2, "exports no constructors"),
+  (3, "has no export `Hidden`"),
+  (4, "a `newtype` constructor is always module-private"),
+  (6, "has no export `Sized`"),
+  (7, "has no export `Beep`"),
+  (8, "has no export `last`"),
+]
+
+test "the non-sibling twin of each case is rejected alike by check, run and build" = withScratchDir
+  (dir =>
+    expectAll
+      (flatMap
+        (t => match t
+          (n, needle) =>
+            let file = "other_\{n}.mdk"
+            [
+              match siblingVerb "check" file
+                Ok (code, _, errOut) =>
+                  labelFail
+                    "check other_\{n}"
+                    (expectAll [
+                      expectEqual 1 code,
+                      expectTrue (contains needle errOut),
+                    ])
+                Err e => fail e,
+              match siblingVerb "run" file
+                Ok (code, _, errOut) =>
+                  labelFail
+                    "run other_\{n}"
+                    (expectAll [
+                      expectEqual 1 code,
+                      expectTrue (contains needle errOut),
+                    ])
+                Err e => fail e,
+              match runVerb medakaBin [
+                "build",
+                underRoot "test/sibling_view_fixtures/\{file}",
+                "-o",
+                "\{dir}/other_\{n}",
+              ]
+                Ok (code, _, errOut) =>
+                  labelFail
+                    "build other_\{n}"
+                    (expectAll [
+                      expectEqual 1 code,
+                      expectTrue (contains needle errOut),
+                    ])
+                Err e => fail e,
+            ])
+        siblingTwins))
+
+test "importing only a type reaches its non-exported impl from any module" =
+  match siblingVerb "run" "other_5.mdk"
+    Ok (code, out, _) =>
+      expectAll [expectEqual 0 code, expectEqual "green\n" out]
+    Err e => fail e
