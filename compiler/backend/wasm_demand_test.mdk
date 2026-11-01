@@ -1,7 +1,7 @@
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.wasm_demand.{
   WasmDemandPlan, WasmDemand(..), censusWasmDemand, wasmTypeContext,
-  returnStamp, cexprStamp, Env, EnvRef(..), envEmpty, envBind, envBindUnstamped,
+  returnStamp, cexprStamp, EnvRef(..), envEmpty, envBind, envBindUnstamped,
   envExtendUnstamped, envRestrict, envLookup, envHas, selectedFallthroughSymbols
 }
 import frontend.ast.{BinderId(..)}

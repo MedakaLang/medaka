@@ -15,8 +15,8 @@ import backend.wasm_repr.{
 import backend.wasm_demand.{
   WasmDemandPlan, WasmTypeContext, wasmTypeContext, hasWasmHelper,
   selectWasmBin, ctorFloatFieldIndex, exprHasFallthrough, isCmpOp, Env,
-  envEmpty, envHas, envBindUnstamped, envBindPat, envRestrict,
-  envExtendUnstamped, paramEnvOver, appHead, isPlainParam, isValBind
+  envEmpty, envHas, envBindUnstamped, envBindPat, envRestrict, paramEnvOver,
+  appHead, isPlainParam, isValBind
 }
 import backend.wasm_demand as WD
 import backend.wasm_demand.{JsImport(..), WasmDemand(..)}
