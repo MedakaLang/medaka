@@ -148,10 +148,10 @@ runSession : String -> List Json -> <IO> Result String String
 runSession medakaBin msgs =
   let req = stringConcat (map frame msgs)
   let tmp = "/tmp/medaka_lsp_harness_req.txt"
-  let _ = writeFile tmp req
-  map
-    ((code, out, errOut) => out)
-    (runCommand "sh" ["-c", stringConcat [medakaBin, " lsp < ", tmp]])
+  andThen (writeFile tmp req) (_ =>
+    map
+      ((code, out, errOut) => out)
+      (runCommand "sh" ["-c", stringConcat [medakaBin, " lsp < ", tmp]]))
 
 -- ── byte-accurate frame parser (this IS the integrity check) ────────────────
 -- Frame declaredLen body byteValid.  byteValid = exactly `declaredLen` bytes were
@@ -491,7 +491,7 @@ summary total =
 (DTypeSig true "frame" (TyFun (TyCon "Json") (TyCon "String")))
 (DFunDef false "frame" ((PVar "j")) (EBlock (DoLet false false (PVar "body") (EApp (EVar "stringify") (EVar "j"))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "Content-Length: ")) (EApp (EVar "intToString") (EApp (EVar "utf8Len") (EVar "body"))) (ELit (LString "\r\n\r\n")) (EVar "body"))))))
 (DTypeSig true "runSession" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Json")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "runSession" ((PVar "medakaBin") (PVar "msgs")) (EBlock (DoLet false false (PVar "req") (EApp (EVar "stringConcat") (EApp (EApp (EVar "map") (EVar "frame")) (EVar "msgs")))) (DoLet false false (PVar "tmp") (ELit (LString "/tmp/medaka_lsp_harness_req.txt"))) (DoLet false false PWild (EApp (EApp (EVar "writeFile") (EVar "tmp")) (EVar "req"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "code") (PVar "out") (PVar "errOut"))) (EVar "out"))) (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (EApp (EVar "stringConcat") (EListLit (EVar "medakaBin") (ELit (LString " lsp < ")) (EVar "tmp")))))))))
+(DFunDef false "runSession" ((PVar "medakaBin") (PVar "msgs")) (EBlock (DoLet false false (PVar "req") (EApp (EVar "stringConcat") (EApp (EApp (EVar "map") (EVar "frame")) (EVar "msgs")))) (DoLet false false (PVar "tmp") (ELit (LString "/tmp/medaka_lsp_harness_req.txt"))) (DoExpr (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EVar "tmp")) (EVar "req"))) (ELam (PWild) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "code") (PVar "out") (PVar "errOut"))) (EVar "out"))) (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (EApp (EVar "stringConcat") (EListLit (EVar "medakaBin") (ELit (LString " lsp < ")) (EVar "tmp")))))))))))
 (DData Public "Frame" () ((variant "Frame" (ConPos (TyCon "Int") (TyCon "String") (TyCon "Bool")))) ())
 (DTypeSig true "parseFrames" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Frame")) (TyCon "Bool"))))
 (DFunDef false "parseFrames" ((PVar "s")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pfGo") (EVar "s")) (EVar "arr")) (EApp (EVar "arrayLength") (EVar "arr"))) (ELit (LInt 0))))))
@@ -602,7 +602,7 @@ summary total =
 (DTypeSig true "frame" (TyFun (TyCon "Json") (TyCon "String")))
 (DFunDef false "frame" ((PVar "j")) (EBlock (DoLet false false (PVar "body") (EApp (EVar "stringify") (EVar "j"))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "Content-Length: ")) (EApp (EVar "intToString") (EApp (EVar "utf8Len") (EVar "body"))) (ELit (LString "\r\n\r\n")) (EVar "body"))))))
 (DTypeSig true "runSession" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Json")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "runSession" ((PVar "medakaBin") (PVar "msgs")) (EBlock (DoLet false false (PVar "req") (EApp (EVar "stringConcat") (EApp (EApp (EMethodRef "map") (EVar "frame")) (EVar "msgs")))) (DoLet false false (PVar "tmp") (ELit (LString "/tmp/medaka_lsp_harness_req.txt"))) (DoLet false false PWild (EApp (EApp (EVar "writeFile") (EVar "tmp")) (EVar "req"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "code") (PVar "out") (PVar "errOut"))) (EVar "out"))) (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (EApp (EVar "stringConcat") (EListLit (EVar "medakaBin") (ELit (LString " lsp < ")) (EVar "tmp")))))))))
+(DFunDef false "runSession" ((PVar "medakaBin") (PVar "msgs")) (EBlock (DoLet false false (PVar "req") (EApp (EVar "stringConcat") (EApp (EApp (EMethodRef "map") (EVar "frame")) (EVar "msgs")))) (DoLet false false (PVar "tmp") (ELit (LString "/tmp/medaka_lsp_harness_req.txt"))) (DoExpr (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EVar "tmp")) (EVar "req"))) (ELam (PWild) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "code") (PVar "out") (PVar "errOut"))) (EVar "out"))) (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (EApp (EVar "stringConcat") (EListLit (EVar "medakaBin") (ELit (LString " lsp < ")) (EVar "tmp")))))))))))
 (DData Public "Frame" () ((variant "Frame" (ConPos (TyCon "Int") (TyCon "String") (TyCon "Bool")))) ())
 (DTypeSig true "parseFrames" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Frame")) (TyCon "Bool"))))
 (DFunDef false "parseFrames" ((PVar "s")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pfGo") (EVar "s")) (EVar "arr")) (EApp (EVar "arrayLength") (EVar "arr"))) (ELit (LInt 0))))))

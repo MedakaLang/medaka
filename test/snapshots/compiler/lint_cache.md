@@ -1,5 +1,5 @@
 # META
-source_lines=508
+source_lines=513
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cache.mdk — the on-disk cache behind `medaka lint --cache` (#395).
@@ -481,8 +481,9 @@ storeEntries cacheDir stamp entries =
       Err _ => ()
       Ok tmp =>
         storeGo cacheDir tmp stamp dirty
-        let _ = removeDir tmp
-        ()
+        bestEffort
+          "removing the staging dir; one left non-empty by a failed write is kept on purpose (see storeOne)"
+          (removeDir tmp)
 
 entryDirty : LintEntry -> Bool
 entryDirty e = e.dirty
@@ -507,8 +508,12 @@ storeOne cacheDir tmp stamp e =
 -- the result is judged by `fileExists`, not by makeDir's own status.
 ensureCacheDir : String -> <IO> Result String Unit
 ensureCacheDir cacheDir =
-  let _ = makeDir (dirname cacheDir)
-  let _ = makeDir cacheDir
+  bestEffort
+    "makeDir fails with EEXIST on an existing dir, which is success here; fileExists below judges"
+    (makeDir (dirname cacheDir))
+  bestEffort
+    "makeDir fails with EEXIST on an existing dir, which is success here; fileExists below judges"
+    (makeDir cacheDir)
   if fileExists cacheDir then Ok () else Err "cannot create \{cacheDir}"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
@@ -594,7 +599,7 @@ ensureCacheDir cacheDir =
 (DTypeSig true "loadEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Answer")) (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ShardLoad")))))))))
 (DFunDef false "loadEntry" ((PVar "cacheDir") (PVar "stamp") (PVar "indexKey") (PVar "answersHold") (PVar "path") (PVar "hash")) (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "shardPathOf") (EVar "cacheDir")) (EVar "path"))) (arm (PCon "Err" PWild) () (EVar "ShardMiss")) (arm (PCon "Ok" (PVar "text")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "decodeEntry") (EVar "stamp")) (EVar "indexKey")) (EVar "answersHold")) (EVar "path")) (EVar "hash")) (EVar "text")))))
 (DTypeSig true "storeEntries" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "LintEntry")) (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "storeEntries" ((PVar "cacheDir") (PVar "stamp") (PVar "entries")) (EBlock (DoLet false false (PVar "dirty") (EApp (EApp (EVar "filterList") (EVar "entryDirty")) (EVar "entries"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "dirty")) (ELit (LInt 0))) (ELit LUnit) (EMatch (EApp (EVar "ensureCacheDir") (EVar "cacheDir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EVar "makeStagingDir") (EVar "cacheDir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "tmp")) () (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "storeGo") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "dirty"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "tmp"))) (DoExpr (ELit LUnit)))))))))))
+(DFunDef false "storeEntries" ((PVar "cacheDir") (PVar "stamp") (PVar "entries")) (EBlock (DoLet false false (PVar "dirty") (EApp (EApp (EVar "filterList") (EVar "entryDirty")) (EVar "entries"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "dirty")) (ELit (LInt 0))) (ELit LUnit) (EMatch (EApp (EVar "ensureCacheDir") (EVar "cacheDir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EVar "makeStagingDir") (EVar "cacheDir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "tmp")) () (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "storeGo") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "dirty"))) (DoExpr (EApp (EApp (EVar "bestEffort") (ELit (LString "removing the staging dir; one left non-empty by a failed write is kept on purpose (see storeOne)"))) (EApp (EVar "removeDir") (EVar "tmp")))))))))))))
 (DTypeSig false "entryDirty" (TyFun (TyCon "LintEntry") (TyCon "Bool")))
 (DFunDef false "entryDirty" ((PVar "e")) (EFieldAccess (EVar "e") "dirty"))
 (DTypeSig false "storeGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "LintEntry")) (TyEffect ("IO") None (TyCon "Unit")))))))
@@ -603,7 +608,7 @@ ensureCacheDir cacheDir =
 (DTypeSig false "storeOne" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "storeOne" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PVar "e")) (EApp (EApp (EApp (EVar "stageAndRename") (EVar "tmp")) (EApp (EApp (EVar "shardPathOf") (EVar "cacheDir")) (EFieldAccess (EVar "e") "path"))) (EApp (EApp (EVar "encodeEntry") (EVar "stamp")) (EVar "e"))))
 (DTypeSig false "ensureCacheDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "ensureCacheDir" ((PVar "cacheDir")) (EBlock (DoLet false false PWild (EApp (EVar "makeDir") (EApp (EVar "dirname") (EVar "cacheDir")))) (DoLet false false PWild (EApp (EVar "makeDir") (EVar "cacheDir"))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "cacheDir")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "cannot create ")) (EApp (EVar "display") (EVar "cacheDir"))) (ELit (LString ""))))))))
+(DFunDef false "ensureCacheDir" ((PVar "cacheDir")) (EBlock (DoExpr (EApp (EApp (EVar "bestEffort") (ELit (LString "makeDir fails with EEXIST on an existing dir, which is success here; fileExists below judges"))) (EApp (EVar "makeDir") (EApp (EVar "dirname") (EVar "cacheDir"))))) (DoExpr (EApp (EApp (EVar "bestEffort") (ELit (LString "makeDir fails with EEXIST on an existing dir, which is success here; fileExists below judges"))) (EApp (EVar "makeDir") (EVar "cacheDir")))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "cacheDir")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "cannot create ")) (EApp (EVar "display") (EVar "cacheDir"))) (ELit (LString ""))))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
@@ -688,7 +693,7 @@ ensureCacheDir cacheDir =
 (DTypeSig true "loadEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Answer")) (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ShardLoad")))))))))
 (DFunDef false "loadEntry" ((PVar "cacheDir") (PVar "stamp") (PVar "indexKey") (PVar "answersHold") (PVar "path") (PVar "hash")) (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "shardPathOf") (EVar "cacheDir")) (EVar "path"))) (arm (PCon "Err" PWild) () (EVar "ShardMiss")) (arm (PCon "Ok" (PVar "text")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "decodeEntry") (EVar "stamp")) (EVar "indexKey")) (EVar "answersHold")) (EVar "path")) (EMethodRef "hash")) (EVar "text")))))
 (DTypeSig true "storeEntries" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "LintEntry")) (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "storeEntries" ((PVar "cacheDir") (PVar "stamp") (PVar "entries")) (EBlock (DoLet false false (PVar "dirty") (EApp (EApp (EVar "filterList") (EVar "entryDirty")) (EVar "entries"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "dirty")) (ELit (LInt 0))) (ELit LUnit) (EMatch (EApp (EVar "ensureCacheDir") (EVar "cacheDir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EVar "makeStagingDir") (EVar "cacheDir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "tmp")) () (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "storeGo") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "dirty"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "tmp"))) (DoExpr (ELit LUnit)))))))))))
+(DFunDef false "storeEntries" ((PVar "cacheDir") (PVar "stamp") (PVar "entries")) (EBlock (DoLet false false (PVar "dirty") (EApp (EApp (EVar "filterList") (EVar "entryDirty")) (EVar "entries"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "dirty")) (ELit (LInt 0))) (ELit LUnit) (EMatch (EApp (EVar "ensureCacheDir") (EVar "cacheDir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EVar "makeStagingDir") (EVar "cacheDir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "tmp")) () (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "storeGo") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "dirty"))) (DoExpr (EApp (EApp (EVar "bestEffort") (ELit (LString "removing the staging dir; one left non-empty by a failed write is kept on purpose (see storeOne)"))) (EApp (EVar "removeDir") (EVar "tmp")))))))))))))
 (DTypeSig false "entryDirty" (TyFun (TyCon "LintEntry") (TyCon "Bool")))
 (DFunDef false "entryDirty" ((PVar "e")) (EFieldAccess (EVar "e") "dirty"))
 (DTypeSig false "storeGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "LintEntry")) (TyEffect ("IO") None (TyCon "Unit")))))))
@@ -697,4 +702,4 @@ ensureCacheDir cacheDir =
 (DTypeSig false "storeOne" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "storeOne" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PVar "e")) (EApp (EApp (EApp (EVar "stageAndRename") (EVar "tmp")) (EApp (EApp (EVar "shardPathOf") (EVar "cacheDir")) (EFieldAccess (EVar "e") "path"))) (EApp (EApp (EVar "encodeEntry") (EVar "stamp")) (EVar "e"))))
 (DTypeSig false "ensureCacheDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "ensureCacheDir" ((PVar "cacheDir")) (EBlock (DoLet false false PWild (EApp (EVar "makeDir") (EApp (EVar "dirname") (EVar "cacheDir")))) (DoLet false false PWild (EApp (EVar "makeDir") (EVar "cacheDir"))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "cacheDir")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "cannot create ")) (EApp (EMethodRef "display") (EVar "cacheDir"))) (ELit (LString ""))))))))
+(DFunDef false "ensureCacheDir" ((PVar "cacheDir")) (EBlock (DoExpr (EApp (EApp (EVar "bestEffort") (ELit (LString "makeDir fails with EEXIST on an existing dir, which is success here; fileExists below judges"))) (EApp (EVar "makeDir") (EApp (EVar "dirname") (EVar "cacheDir"))))) (DoExpr (EApp (EApp (EVar "bestEffort") (ELit (LString "makeDir fails with EEXIST on an existing dir, which is success here; fileExists below judges"))) (EApp (EVar "makeDir") (EVar "cacheDir")))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "cacheDir")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "cannot create ")) (EApp (EMethodRef "display") (EVar "cacheDir"))) (ELit (LString ""))))))))

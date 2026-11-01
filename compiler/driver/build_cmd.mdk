@@ -857,7 +857,9 @@ renderScratchDep (name, path) = stringConcat [name, " = \"", path, "\""]
 removeEntries : String -> List String -> <IO> Unit
 removeEntries _ [] = ()
 removeEntries dir (n :: rest) =
-  let _ = removeFile (joinPath dir n)
+  bestEffort
+    "unlinking staged scratch files at teardown; a leftover file is swept by the next build's startup sweep"
+    (removeFile (joinPath dir n))
   removeEntries dir rest
 
 -- Tear the scratch dir down so a build leaks nothing into the scratch root.  Every Result is
@@ -868,8 +870,9 @@ cleanupTempDir dir = match listDir dir
   Err _ => ()
   Ok entries =>
     removeEntries dir entries
-    let _ = removeDir dir
-    ()
+    bestEffort
+      "removing the emptied scratch dir at teardown; a leftover dir is swept by the next build's startup sweep"
+      (removeDir dir)
 
 -- ---- startup sweep of leaked scratch dirs (issue #97) ----
 -- A build stages scratch under makeTempDir's medaka_build_* dir in the scratch root and removes
@@ -1041,12 +1044,13 @@ detectGCBare : String -> String -> <IO> Option (List String, List String)
 detectGCBare cc tmpDir =
   let probe = joinPath tmpDir "gcprobe.c"
   let probeOut = joinPath tmpDir "gcprobe.out"
-  let _ = writeFile probe "#include <gc.h>\nint main(void){return 0;}\n"
-  match runCommand cc [probe, "-lgc", "-o", probeOut]
+  match writeFile probe "#include <gc.h>\nint main(void){return 0;}\n"
     -- fail-open-by-design: a failed bare-lgc probe reports "no libgc found"
     -- (None), the final detectGC arm, not a build error of its own.
-    Ok (0, _, _) => Some ([], ["-lgc"])
-    _ => None
+    Err _ => None
+    Ok _ => match runCommand cc [probe, "-lgc", "-o", probeOut]
+      Ok (0, _, _) => Some ([], ["-lgc"])
+      _ => None
 
 -- Single platform-aware message for every detectGC failure (issue #2514) —
 -- called from all three `None => buildErr …` sites so the three copies —
@@ -2219,7 +2223,9 @@ cachedRtObj cc rtC optFlag rtCflags tmpDir =
         -- costs nothing) so `sweepStaleObjCacheEntries` below ages out only
         -- entries that are genuinely unused, never one this box still hits on
         -- every build.
-        let _ = runCommand "touch" [objPath]
+        bestEffort
+          "refreshing the cache entry's mtime; a stale mtime only lets the entry age out early and the next build repopulates it"
+          (runCommand "touch" [objPath])
         objPath
       else
         populateRtObj cc rtC optFlag rtCflags dir objPath
@@ -2302,10 +2308,14 @@ populateRtObj cc rtC optFlag rtCflags dir objPath =
                 sweepStaleObjCacheEntries dir
                 objPath
               _ =>
-                let _ = removeFile tmpObj
+                bestEffort
+                  "removing the half-built temp object after a failed mv; a leftover tmp file is harmless"
+                  (removeFile tmpObj)
                 ""
             _ =>
-              let _ = removeFile tmpObj
+              bestEffort
+                "removing the half-built temp object after a failed compile; a leftover tmp file is harmless"
+                (removeFile tmpObj)
               ""
       _ => ""
     _ => ""

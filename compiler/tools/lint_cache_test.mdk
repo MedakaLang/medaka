@@ -178,15 +178,19 @@ stdSource sig body = "export\nsingleton : \{sig}\nsingleton a = \{body}\n"
 setup : Env -> <IO, FileRead, FileWrite, Exec> Unit
 setup e =
   runMkdirs [e.proj, e.std, e.shards]
-  let _ = writeFile (aPath e) aSource
-  let _ = writeFile (bPath e) (bSource "Int -> Int" "x + 1")
-  let _ = writeFile (stdPath e) (stdSource "a -> List a" "[a]")
+  resultOrPanic "test setup: writeFile aPath e" (writeFile (aPath e) aSource)
+  resultOrPanic
+    "test setup: writeFile bPath e"
+    (writeFile (bPath e) (bSource "Int -> Int" "x + 1"))
+  resultOrPanic
+    "test setup: writeFile stdPath e"
+    (writeFile (stdPath e) (stdSource "a -> List a" "[a]"))
   ()
 
 runMkdirs : List String -> <IO, FileRead, FileWrite, Exec> Unit
 runMkdirs [] = ()
 runMkdirs (d :: rest) =
-  let _ = makeDir d
+  resultOrPanic "test setup: makeDir d" (makeDir d)
   runMkdirs rest
 
 -- One file's result of one run: whether it was linted this run, and what the
@@ -255,7 +259,7 @@ probeLine projSig stdSig = "b.f : \{projSig}; list.singleton : \{stdSig}"
 
 put : String -> String -> <IO, FileRead, FileWrite, Exec> Unit
 put path text =
-  let _ = writeFile path text
+  resultOrPanic "test setup: writeFile path text" (writeFile path text)
   ()
 
 -- Populate the cache with a run, apply `edit`, run again, and grade the two.
@@ -390,7 +394,9 @@ blindStampCase dir =
   match indexOf [readerRule] e
     None => fail "the index did not build"
     Some before =>
-      let _ = writeFile (bPath e) (bSource "Int -> String" "intToString x")
+      resultOrPanic
+        "test setup: writeFile bPath e"
+        (writeFile (bPath e) (bSource "Int -> String" "intToString x"))
       match indexOf [readerRule] e
         None => fail "the index did not rebuild"
         Some after => expectEach [
@@ -442,7 +448,9 @@ blindSeesNothingCase dir =
       let warmRun = runBlind e
       match (coldRun, warmRun)
         (Some cold, Some warm) =>
-          let _ = writeFile (bPath e) (bSource "Int -> String" "intToString x")
+          resultOrPanic
+            "test setup: writeFile bPath e"
+            (writeFile (bPath e) (bSource "Int -> String" "intToString x"))
           match runBlind e
             None => fail "the run after the edit did not complete"
             Some edited => expectEach [
@@ -488,7 +496,9 @@ damagedCase damage dir =
       match readFile shard
         Err _ => fail "A has no shard after the populate run"
         Ok text =>
-          let _ = writeFile shard (damage text)
+          resultOrPanic
+            "test setup: writeFile shard"
+            (writeFile shard (damage text))
           match run e
             None => fail "the run over the damaged shard did not complete"
             Some after => expectEach [
@@ -543,7 +553,9 @@ unwritableCase dir =
     cacheDir = "\{dir}/blocked/lint-cache",
   }
   setup e
-  let _ = writeFile "\{dir}/blocked" "a file, not a directory"
+  resultOrPanic
+    "test setup: writeFile /blocked"
+    (writeFile "\{dir}/blocked" "a file, not a directory")
   let firstRun = run e
   let secondRun = run e
   match (firstRun, secondRun)
@@ -654,8 +666,8 @@ askCase view questions bSrc cSrc edits dir =
   let e = mkEnv dir
   let rule = askerRule questions
   setup e
-  let _ = writeFile (bPath e) bSrc
-  let _ = writeFile (cPath e) cSrc
+  resultOrPanic "test setup: writeFile bPath e" (writeFile (bPath e) bSrc)
+  resultOrPanic "test setup: writeFile cPath e" (writeFile (cPath e) cSrc)
   match runAsk view rule e
     None => None
     Some _ =>
@@ -784,12 +796,13 @@ fingerprintMovesCase dir =
   let e = mkEnv dir
   let rule = askerRule [askIn "b" NsValue "f"]
   setup e
-  let _ = writeFile (cPath e) cBase
+  resultOrPanic "test setup: writeFile cPath e" (writeFile (cPath e) cBase)
   match indexOf [rule] e
     None => fail "the index did not build"
     Some before =>
-      let _ =
-        writeFile (cPath e) "export\nh : Int -> String\nh x = intToString x\n"
+      resultOrPanic
+        "test setup: writeFile cPath e (edited signature)"
+        (writeFile (cPath e) "export\nh : Int -> String\nh x = intToString x\n")
       match indexOf [rule] e
         None => fail "the index did not rebuild"
         Some after =>
@@ -1017,7 +1030,7 @@ wildCase : (StdlibIndex -> StdlibIndex) ->
 wildCase view mStart edits dir =
   let e = mkEnv dir
   setup e
-  let _ = writeFile (aPath e) wildSource
+  resultOrPanic "test setup: writeFile aPath e" (writeFile (aPath e) wildSource)
   let _ = match mStart
     Some text => writeFile (mPath e) text
     None => Ok ()

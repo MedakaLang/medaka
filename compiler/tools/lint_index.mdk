@@ -611,14 +611,15 @@ atPath path r = match r.ixrLoc
   None => r
 
 writeShard : String -> String -> String -> <IO> Unit
-writeShard dir sp text =
-  let _ = mkdirAll dir
-  match makeStagingDir dir
+writeShard dir sp text = match mkdirAll dir
+  Err _ => ()
+  Ok _ => match makeStagingDir dir
     Err _ => ()
     Ok tmp =>
       stageAndRename tmp sp text
-      let _ = removeDir tmp
-      ()
+      bestEffort
+        "removing the staging dir; one left non-empty by a failed rename is kept on purpose"
+        (removeDir tmp)
 
 -- A staging dir unique to THIS process, inside `dir`: `rename(2)` fails across
 -- filesystems, so it cannot be in /tmp.  `mktemp -d` makes the name because the
@@ -644,8 +645,9 @@ stageAndRename tmp dest text =
     Err _ => ()
     Ok _ => match rename staged dest
       Err _ =>
-        let _ = removeFile staged
-        ()
+        bestEffort
+          "removing the staged file after a failed rename; the shard is simply not written"
+          (removeFile staged)
       Ok _ => ()
 
 -- ── the index ───────────────────────────────────────────────────────────────

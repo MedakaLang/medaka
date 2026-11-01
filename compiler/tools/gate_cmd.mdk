@@ -465,8 +465,9 @@ makeGateScratch root = match runCommand "mkdir" ["-p", root]
 -- flat removeFile walk `medaka build` uses is not enough here.
 cleanupScratch : String -> <IO> Unit
 cleanupScratch dir =
-  let _ = runCommand "rm" ["-rf", dir]
-  ()
+  bestEffort
+    "removing the gate's scratch tree after the run; a leftover temp tree is harmless"
+    (runCommand "rm" ["-rf", dir])
 
 -- ── [G-STALE-ORACLE] ────────────────────────────────────────────────────────
 --

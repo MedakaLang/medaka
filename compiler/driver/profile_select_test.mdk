@@ -37,8 +37,8 @@ analyzedIn rsrc csrc manifestText = match makeTempDir ()
   Err e => Err e
   Ok dir =>
     let entry = dir ++ "/main.mdk"
-    let _ = writeFile (dir ++ "/medaka.toml") manifestText
-    let _ = writeFile entry program
+    let written = andThen (writeFile (dir ++ "/medaka.toml") manifestText) (_ =>
+      writeFile entry program)
     let stdlibDir = "stdlib"
     let selected = carryProjectProfile None entry
     let results =
@@ -55,7 +55,7 @@ analyzedIn rsrc csrc manifestText = match makeTempDir ()
         csrc
     let msgs = flatMap (r => map diagMessage (snd r)) results
     cleanupTempDir dir
-    map (_ => msgs) selected
+    andThen written (_ => map (_ => msgs) selected)
 
 edgeRefusal : String
 edgeRefusal =

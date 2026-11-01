@@ -19,6 +19,8 @@ import test.{
   expectFalse,
   expectEach,
   fail,
+  expectOkThen,
+  pass,
 }
 import test_process.{withScratchDir}
 import frontend.ast.{Decl, Loc(..), UsePath(..), UseMember(..)}
@@ -376,12 +378,14 @@ test "a corrupted shard on disk is rebuilt from the source, not trusted" =
 
 corruptShardCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 corruptShardCase dir =
-  let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n"
+  resultOrPanic
+    "test setup: writeFile /b.mdk"
+    (writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n")
   match buildProjectIndexResult dir
     Err _ => fail "index did not build"
     Ok first =>
       let shard = rowShardPath "\{dir}/.medaka/lint-index" "\{dir}/b.mdk"
-      let _ = writeFile shard "(1 \"x\""
+      resultOrPanic "test setup: writeFile shard" (writeFile shard "(1 \"x\"")
       match buildProjectIndexResult dir
         Err _ => fail "index did not rebuild"
         Ok second => expectEqual (sigsIn first "b" "f") (sigsIn second "b" "f")
@@ -395,11 +399,15 @@ test "a signature edit is seen on the next build, a stale shard is not served" =
 
 editCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 editCase dir =
-  let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n"
+  resultOrPanic
+    "test setup: writeFile /b.mdk"
+    (writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n")
   match buildProjectIndexResult dir
     Err _ => fail "index did not build"
     Ok before =>
-      let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Str\nf x = x\n"
+      resultOrPanic
+        "test setup: writeFile /b.mdk"
+        (writeFile "\{dir}/b.mdk" "export\nf : Int -> Str\nf x = x\n")
       match buildProjectIndexResult dir
         Err _ => fail "index did not rebuild"
         Ok after => expectEach [
@@ -423,11 +431,15 @@ test "a same-length edit that collides under the 30-bit hash is still seen" =
 
 collisionCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 collisionCase dir =
-  let _ = writeFile "\{dir}/b.mdk" collideA
+  resultOrPanic
+    "test setup: writeFile /b.mdk"
+    (writeFile "\{dir}/b.mdk" collideA)
   match buildProjectIndexResult dir
     Err _ => fail "index did not build"
     Ok before =>
-      let _ = writeFile "\{dir}/b.mdk" collideB
+      resultOrPanic
+        "test setup: writeFile /b.mdk"
+        (writeFile "\{dir}/b.mdk" collideB)
       match buildProjectIndexResult dir
         Err _ => fail "index did not rebuild"
         Ok after => expectEach [
@@ -532,7 +544,9 @@ test "--only and --disable build nothing when no surviving rule needs the index"
 
 onlyDisableCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 onlyDisableCase dir =
-  let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n"
+  resultOrPanic
+    "test setup: writeFile /b.mdk"
+    (writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n")
   let roster =
     [probeRule "p-project" [NeedsProjectIndex], probeRule "p-plain" []]
   let built = indexRows roster dir False [] []
@@ -573,7 +587,9 @@ test "a stdlib-only reader builds the stdlib rows and no project rows" =
 
 stdlibOnlyCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 stdlibOnlyCase dir =
-  let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n"
+  resultOrPanic
+    "test setup: writeFile /b.mdk"
+    (writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n")
   let roster = [probeRule "p-stdlib" [NeedsStdlibIndex]]
   let (std, proj) = indexRows roster dir False [] []
   expectTrue (std > 0 && proj == 0)
@@ -659,12 +675,26 @@ stampCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 stampCase dir =
   let shards = "\{dir}/idx"
   let src = "\{dir}/m.mdk"
-  let _ = writeFile src "export\nf : Int -> Int\nf x = x\n"
-  let _ = fileRows True lintParseSource shards "stamp-1" "m" src
-  let _ = fileRows True lintParseSource shards "stamp-2" "m" src
+  resultOrPanic
+    "test setup: writeFile src"
+    (writeFile src "export\nf : Int -> Int\nf x = x\n")
+  let firstRun = fileRows True lintParseSource shards "stamp-1" "m" src
+  let secondRun = fileRows True lintParseSource shards "stamp-2" "m" src
   let hash = rowContentHash "export\nf : Int -> Int\nf x = x\n"
   let text = readFile (rowShardPath shards src)
   expectEach [
+    (
+      "stamp-1 run",
+      expectOkThen
+        (_ => pass)
+        (mapErr (_ => "the source did not parse") firstRun),
+    ),
+    (
+      "stamp-2 run",
+      expectOkThen
+        (_ => pass)
+        (mapErr (_ => "the source did not parse") secondRun),
+    ),
     (
       "one shard for the path",
       expectEqual (Ok [basename (rowShardPath shards src)]) (listDir shards),
@@ -751,7 +781,9 @@ test "a project rule's declared index need builds the project index" =
 
 projectNeedCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 projectNeedCase dir =
-  let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n"
+  resultOrPanic
+    "test setup: writeFile /b.mdk"
+    (writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n")
   expectEach [
     (
       "a project need sees the project rows",
@@ -792,16 +824,28 @@ test "project rows are those of the linted file's project, not the working direc
 
 projectRootCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 projectRootCase dir =
-  let _ = makeDir "\{dir}/proj"
-  let _ = makeDir "\{dir}/proj/sub"
-  let _ = makeDir "\{dir}/loose"
-  let _ = makeDir "\{dir}/loose/inner"
-  let _ = writeFile "\{dir}/proj/medaka.toml" "[package]\nname = \"p\"\n"
+  resultOrPanic "test setup: makeDir /proj" (makeDir "\{dir}/proj")
+  resultOrPanic "test setup: makeDir /proj/sub" (makeDir "\{dir}/proj/sub")
+  resultOrPanic "test setup: makeDir /loose" (makeDir "\{dir}/loose")
+  resultOrPanic
+    "test setup: makeDir /loose/inner"
+    (makeDir "\{dir}/loose/inner")
+  resultOrPanic
+    "test setup: writeFile /proj/medaka.toml"
+    (writeFile "\{dir}/proj/medaka.toml" "[package]\nname = \"p\"\n")
   let body = "export\nf : Int -> Int\nf x = x\n"
-  let _ = writeFile "\{dir}/proj/sub/b.mdk" body
-  let _ = writeFile "\{dir}/proj/sub/e.mdk" body
-  let _ = writeFile "\{dir}/loose/c.mdk" body
-  let _ = writeFile "\{dir}/loose/inner/d.mdk" body
+  resultOrPanic
+    "test setup: writeFile /proj/sub/b.mdk"
+    (writeFile "\{dir}/proj/sub/b.mdk" body)
+  resultOrPanic
+    "test setup: writeFile /proj/sub/e.mdk"
+    (writeFile "\{dir}/proj/sub/e.mdk" body)
+  resultOrPanic
+    "test setup: writeFile /loose/c.mdk"
+    (writeFile "\{dir}/loose/c.mdk" body)
+  resultOrPanic
+    "test setup: writeFile /loose/inner/d.mdk"
+    (writeFile "\{dir}/loose/inner/d.mdk" body)
   expectEach [
     (
       "under a manifest: the manifest's directory, each module once",
