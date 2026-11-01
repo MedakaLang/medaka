@@ -851,6 +851,197 @@ interpretedEmitterWitness dir =
 test "#4689 interpreted typed emitters currently panic on default method fixture" =
   withScratchDir interpretedEmitterWitness
 
+option4687 : String
+option4687 =
+  """
+data Option a = Some a | None
+project : Option Int -> Int
+project x = match x
+  Some n => n
+  None => 3
+main = project (Some 7) * 100 + project None
+"""
+
+result4687 : String
+result4687 =
+  """
+data Result e a = Ok a | Err e
+project : Result Int Int -> Int
+project x = match x
+  Ok n => n
+  Err n => n
+main = project (Ok 7) * 100 + project (Err 3)
+"""
+
+ordering4687 : String
+ordering4687 =
+  """
+data Ordering = LT | EQ | GT
+project : Ordering -> Int
+project x = match x
+  LT => 2
+  EQ => 3
+  GT => 5
+main = project LT * 100 + project EQ * 10 + project GT
+"""
+
+duplicate4687 : String ->
+  String ->
+  (Int, String, String) ->
+  <IO, Exec, FileWrite> Expectation
+duplicate4687 path symbol (code, out, err) =
+  if code == 3 then
+    expectAll [
+      expectEqual "" out,
+      expectTextContainsAll
+        ["[E-PHYS-DUPLICATE]", "type `$" ++ symbol ++ "` twice"]
+        err,
+    ]
+  else if code == 0 && err == "" then match writeFile (path ++ ".wat") out
+    Err e => fail e
+    Ok _ => match boundedVerbSeconds 30 "wasm-tools" [
+      "parse",
+      path ++ ".wat",
+      "-o",
+      path ++ ".wasm",
+    ]
+      Err e => fail e
+      Ok (parseCode, parseOut, parseErr) => expectAll [
+        expectTextContainsAll ["(module", "(type $" ++ symbol ++ " "] out,
+        expectAtLeast 3 (length (split ("(type $" ++ symbol ++ " ") out)),
+        expectEqual (1, "") (parseCode, parseOut),
+        expectTextContainsAll
+          ["duplicate type identifier", "(type $" ++ symbol ++ " "]
+          parseErr,
+        expectFalse (fileExists (path ++ ".wasm")),
+      ]
+  else
+    fail
+      "#4687: emitter neither reported the named physical duplicate nor emitted WAT for a duplicate parse check"
+
+constructor4687 : String ->
+  String ->
+  String ->
+  String ->
+  <IO, Exec, FileWrite> Expectation
+constructor4687 dir name symbol src =
+  let path = "\{dir}/issue-4687-\{name}"
+  match writeFile (path ++ ".mdk") src
+    Err e => fail e
+    Ok _ => match emit dir "typed" (path ++ ".mdk")
+      Err e => fail e
+      Ok observed => duplicate4687 path symbol observed
+
+llvmOption4687 : String -> <IO, Exec, FileWrite> Expectation
+llvmOption4687 dir =
+  let source = dir ++ "/issue-4687-option-llvm.mdk"
+  match writeFile source option4687
+    Err e => fail e
+    Ok _ => match (boundedVerbSeconds
+      180
+      "env"
+      (strictArgs (dir ++ "/llvm_emit_typed_main") [
+        underRoot "stdlib/runtime.mdk",
+        source,
+      ]))
+      Err e => fail e
+      Ok (code, ir, err) =>
+        let emitted = expectAll [
+          expectEqual (0, "") (code, err),
+          expectTextContainsAll ["define"] ir,
+        ]
+        if expectationTag emitted == "Fail" then
+          emitted
+        else match writeFile (dir ++ "/issue-4687.ll") ir
+          Err e => fail e
+          Ok _ =>
+            let linked = expectSpawnOk "sh" [
+              "-c",
+              "if pkg-config --exists bdw-gc 2>/dev/null; then clang \"$1\" \"$2\" $(pkg-config --cflags --libs bdw-gc) -lm -o \"$3\"; elif p=$(brew --prefix bdw-gc 2>/dev/null); then clang \"$1\" \"$2\" -I\"$p/include\" -L\"$p/lib\" -lgc -lm -o \"$3\"; else clang \"$1\" \"$2\" -lgc -lm -o \"$3\"; fi",
+              "sh",
+              dir ++ "/issue-4687.ll",
+              underRoot "runtime/medaka_rt.c",
+              dir ++ "/issue-4687-bin",
+            ]
+            if expectationTag linked == "Fail" then
+              linked
+            else
+              expectSpawnOkLine
+                "env"
+                (strictArgs (dir ++ "/issue-4687-bin") [])
+                "703"
+
+duplicateJudge4687 : String -> String -> <IO, Exec, FileWrite> Expectation
+duplicateJudge4687 dir symbol =
+  let prefix = "\{dir}/judge-\{symbol}"
+  let duplicate =
+    "(module\n  (type $\{symbol} (struct))\n  (type $\{symbol} (struct))\n)\n"
+  let other =
+    "(module\n  (type $C_Other (struct))\n  (type $C_Other (struct))\n)\n"
+  let validPath = prefix ++ "-valid"
+  match writeFile (validPath ++ ".mdk") "main = 703"
+    Err e => fail e
+    Ok _ => match emit dir "typed" (validPath ++ ".mdk")
+      Err e => fail e
+      Ok (code, wat, err) => expectAll [
+        expectEqual (0, "") (code, err),
+        runWat validPath wat "703" "",
+        expectEqual
+          "Pass"
+          (expectationTag
+            (duplicate4687 (prefix ++ "-duplicate") symbol (0, duplicate, ""))),
+        expectEqual
+          "Fail"
+          (expectationTag
+            (duplicate4687 (prefix ++ "-fixed") symbol (0, wat, ""))),
+        expectEqual
+          "Fail"
+          (expectationTag
+            (duplicate4687 (prefix ++ "-other") symbol (0, other, ""))),
+        expectEqual
+          "Fail"
+          (expectationTag
+            (duplicate4687 (prefix ++ "-physical-other") symbol (
+              3,
+              "",
+              "[E-PHYS-DUPLICATE] type `$C_Other` twice",
+            ))),
+        expectEqual
+          "Fail"
+          (expectationTag
+            (duplicate4687 (prefix ++ "-unrelated") symbol (
+              1,
+              "",
+              "unrelated failure",
+            ))),
+      ]
+
+test "#4687 duplicate Option and Result constructor types remain rejected" = withScratchDir
+  (dir =>
+    let built =
+      expectEach
+        (map
+          (name => (name, buildEntry dir name))
+          ["wasm_emit_typed_main", "llvm_emit_typed_main"])
+    if expectationTag built == "Fail" then
+      built
+    else
+      expectAll [
+        expectEach [
+          ("Option", constructor4687 dir "option" "C_Some" option4687),
+          ("Result", constructor4687 dir "result" "C_Ok" result4687),
+        ],
+        llvmOption4687 dir,
+        expectEach
+          (map
+            (symbol => (symbol, duplicateJudge4687 dir symbol))
+            ["C_Some", "C_Ok"]),
+        valueRow
+          dir
+          "typed"
+          (ValueCase "issue-4687-ordering" ordering4687 "235"),
+      ])
+
 test "wrapped gate exec failure remains observable through the native test runner" =
   withScratchDir execVehicleJudge
 
