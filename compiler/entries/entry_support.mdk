@@ -68,6 +68,8 @@ import driver.diagnostics.{
   emitGateDiags,
   frontEnd,
   siblingPairOf,
+  siblingPairAt,
+  siblingTargetEnv,
   noStdlibExports,
   residualOrGeneric,
 }
@@ -375,7 +377,9 @@ emitLoaded runEmit srcs json coreP entry roots mods runtimeD coreD modsD =
     askPreludeSrcs = srcs,
     askJson = json,
     askOwnership = ownership,
-    askSibling = siblingPairOf roots (dirOf coreP) mods,
+    askSibling = match getEnv siblingTargetEnv
+      Some real => siblingPairAt real roots (dirOf coreP) mods
+      None => siblingPairOf roots (dirOf coreP) mods,
   }
   runEmit ask mods runtimeD coreD modsD
 

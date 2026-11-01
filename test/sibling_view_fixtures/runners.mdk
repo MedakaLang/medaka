@@ -1,0 +1,7 @@
+-- The subject of `runners_test.mdk`: a private helper the prop and doctest
+-- runners of `medaka test` must reach through the sibling view.
+export bump : Int -> Int
+bump n = step n
+
+step : Int -> Int
+step n = n + 1
