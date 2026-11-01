@@ -520,7 +520,7 @@ indexOwners ((f, owner) :: rest) m = match omLookup f m
 -- lifts the resolve-op ratio superlinear and the gate goes red (#880).
 ownersOf : String -> OrdMap (List String) -> List String
 ownersOf field idx =
-  let _ = opBump ()
+  opBump ()
   match omLookup field idx
     Some owners => owners
     None => []
@@ -1661,7 +1661,7 @@ sameCase _ _ = False
 -- which is what went quadratic and what a filter regression would lift again.
 scoreCand : SugQuery -> String -> Option (String, Int) -> Option (String, Int)
 scoreCand (SugQuery n lim _ _ _ _ _) c acc =
-  let _ = opBump ()
+  opBump ()
   let d = editDistance n c
   if d > lim then acc else keepBetter c d acc
 
@@ -4326,7 +4326,7 @@ resolveModuleG : List String ->
   List Decl ->
   (ModuleExports, List ResError)
 resolveModuleG internalGuard subject preludeKey runtimeDecls preludeDecls known modId prog =
-  let _ = stageBump "resolve"
+  stageBump "resolve"
   let ps = preludeScopeFor preludeKey runtimeDecls preludeDecls
   let seen = withSubjectView ps.psCoreExports known subject
   let (env, importErrs) = buildEnvMM ps seen prog internalGuard
@@ -4849,7 +4849,7 @@ export
 stampTopScope : List Decl -> (OrdMap Int, List (String, Int))
 stampTopScope decls =
   -- Counted as the typechecker's per-module entry: valid only while checkBodyImpl is the sole caller, once per module (user modules + prelude); a second caller must not bump.
-  let _ = stageBump "typecheck.module"
+  stageBump "typecheck.module"
   let top = numberFrom 1 (dedup (topBinderNames decls))
   (omFromPairs top omEmpty, top)
 
@@ -6145,7 +6145,7 @@ stampGraphTyOrigins : List SiblingPair ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
 stampGraphTyOrigins sibling coreDecls modules =
-  let _ = stageBump "typecheck.drive"
+  stageBump "typecheck.drive"
   let coreTypes =
     map (typeDeclaredIn "core") (dataRecordNames coreDecls)
       ++ map (ifaceDeclaredIn "core") (interfaceNamesOf coreDecls)

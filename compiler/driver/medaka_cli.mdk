@@ -441,7 +441,7 @@ checkSourceStaleness argv = match sourceStalenessVerdict ()
 loadCheckPrelude : PreludeInputs -> <IO> Unit
 loadCheckPrelude prelude =
   let verdict = loadPreludeInterface prelude
-  let _ = reportStaleLine dieMsg None (staleLine InterfaceFile verdict)
+  reportStaleLine dieMsg None (staleLine InterfaceFile verdict)
   reportDecls None dieMsg prelude
 
 -- The same load for a verb outside the check family, which prints nothing: a
@@ -494,11 +494,10 @@ takeShippedPrelude : (String -> Option (String -> Unit)) ->
   <IO> Unit
 takeShippedPrelude stagingFor prelude =
   let _ = loadPreludeInterface prelude
-  let _ =
-    reportTrees
-      (stagingFor "stalePreludeTrees")
-      runAbort
-      (loadPreludeElab prelude)
+  reportTrees
+    (stagingFor "stalePreludeTrees")
+    runAbort
+    (loadPreludeElab prelude)
   reportDecls (stagingFor "stalePreludeDecls") runAbort prelude
 
 -- The same two reports from the files' headers alone, for a `run` that stops
@@ -507,11 +506,10 @@ reportShippedHeaders : (String -> Option (String -> Unit)) ->
   PreludeInputs ->
   <IO> Unit
 reportShippedHeaders stagingFor prelude =
-  let _ =
-    reportTrees
-      (stagingFor "stalePreludeTrees")
-      runAbort
-      (checkPreludeElab prelude)
+  reportTrees
+    (stagingFor "stalePreludeTrees")
+    runAbort
+    (checkPreludeElab prelude)
   reportDecls (stagingFor "stalePreludeDecls") runAbort prelude
 
 -- The trees' verdict for a verb whose emitter children take them (`build`,
@@ -519,7 +517,7 @@ reportShippedHeaders stagingFor prelude =
 -- declarations' verdict is this process's own.
 reportChildTrees : PreludeInputs -> <IO> Unit
 reportChildTrees prelude =
-  let _ = reportTrees None dieMsg (checkPreludeElab prelude)
+  reportTrees None dieMsg (checkPreludeElab prelude)
   reportDecls None dieMsg prelude
 
 -- Is this argv `medaka run … --json …`?  The predicate is deliberately the
@@ -566,15 +564,15 @@ flushStaleNoticeProse _ =
 dieMsg : String -> <IO> Unit
 -- lint-disable-next-line rule-duplicate-body
 dieMsg msg =
-  let _ = emitAbortTotal ()
-  let _ = ePutStrLn msg
+  emitAbortTotal ()
+  ePutStrLn msg
   stageExit 1
 
 runAbort : String -> <IO> Unit
 runAbort msg =
-  let _ = flushStaleNoticeProse ()
-  let _ = emitAbortTotal ()
-  let _ = flushPerfSinkProse ()
+  flushStaleNoticeProse ()
+  emitAbortTotal ()
+  flushPerfSinkProse ()
   dieMsg msg
 
 -- `run`'s success chain repeatedly unwraps a `Result String a`, aborting via
@@ -586,14 +584,14 @@ runAbort msg =
 orExit : Result String a -> <IO> a
 orExit (Ok v) = v
 orExit (Err msg) =
-  let _ = runAbort msg
+  runAbort msg
   panic msg
 
 main : <IO> Unit
 main =
-  let _ = stageCountInit ()
-  let _ = checkSourceStaleness (args ())
-  let _ = runCli ()
+  stageCountInit ()
+  checkSourceStaleness (args ())
+  runCli ()
   stageDump ()
 
 runCli : Unit -> <IO> Unit
@@ -638,12 +636,12 @@ runCli _ = match args ()
 -- to `medaka run prog.mdk --help`).
 dispatchSub : String -> (List String -> <IO> Unit) -> List String -> <IO> Unit
 dispatchSub help _ ("--help" :: _) =
-  let _ = flushStaleNoticeProse ()
-  let _ = putStrLn help
+  flushStaleNoticeProse ()
+  putStrLn help
   stageExit 0
 dispatchSub help _ ("-h" :: _) =
-  let _ = flushStaleNoticeProse ()
-  let _ = putStrLn help
+  flushStaleNoticeProse ()
+  putStrLn help
   stageExit 0
 dispatchSub _ run rest = run rest
 
@@ -776,7 +774,7 @@ runCheckCmd argv =
         Ok prelude =>
           let rsrc = prelude.pnRuntimeSrc
           let csrc = prelude.pnCoreSrc
-          let _ = loadCheckPrelude prelude
+          loadCheckPrelude prelude
           if jsonMode then
             -- E: `--types` requests a human-text scheme dump; the `--json`
             -- envelope has no field for one (structured diagnostics only), so
@@ -800,9 +798,8 @@ runCheckCmd argv =
               Err lerr => match parseResult tsrc
                 Err e => dieMsg (ppParseError tsrc target e)
                 Ok _ =>
-                  let _ = emitAbortTotal ()
-                  let _ =
-                    ePutStrLn (moduleLoadErrText tsrc target stdlibDir lerr)
+                  emitAbortTotal ()
+                  ePutStrLn (moduleLoadErrText tsrc target stdlibDir lerr)
                   stageExit 1
               Ok modsWithPath =>
                 let mods = map dropPathTriple modsWithPath
@@ -816,26 +813,24 @@ runCheckCmd argv =
                   diSibling = siblingPairsOf roots modsWithPath,
                 }
                 let perfTLoad = now ()
-                let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
-                let _ =
-                  checkRoute
-                    inputs
-                    typesMode
-                    allowInternal
-                    trusted
-                    roots
-                    rsrc
-                    csrc
-                    tsrc
-                    target
-                    modsWithPath
+                emitPhase perfOn "load" (perfTLoad - perfT0) target
+                checkRoute
+                  inputs
+                  typesMode
+                  allowInternal
+                  trusted
+                  roots
+                  rsrc
+                  csrc
+                  tsrc
+                  target
+                  modsWithPath
                 let perfTCheck = now ()
-                let _ = emitPhase perfOn "check" (perfTCheck - perfTLoad) target
+                emitPhase perfOn "check" (perfTCheck - perfTLoad) target
                 emitTotal perfOn (perfTCheck - perfT0)
     _ =>
-      let _ =
-        ePutStrLn
-          "usage: medaka check [--json] [--types] [--allow-internal] [--target <profile>] <file.mdk>"
+      ePutStrLn
+        "usage: medaka check [--json] [--types] [--allow-internal] [--target <profile>] <file.mdk>"
       stageExit 1
 -- G1: print the report (byte-identical stdout for no-import files:
 -- diff_native_cli gate), then gate the EXIT CODE on the error predicate
@@ -927,9 +922,9 @@ isHiddenNonEntryWarn d = diagIsWarn d && not (isCoherenceWarn d)
 -- being flushed as prose ahead of it the way `runAbort` does.
 runAbortJson : List (String, String, List Diag) -> <IO> Unit
 runAbortJson triples =
-  let _ = emitAbortTotal ()
+  emitAbortTotal ()
   pendingRunDiags := nonEmptyTriples triples
-  let _ = flushPendingRunDiags True
+  flushPendingRunDiags True
   stageExit 1
 
 -- `run --json`'s structured counterpart to `ppDiagBuckets` over a graph resolve
@@ -1100,7 +1095,7 @@ checkFileReport typesMode rsrc csrc tsrc target decls front =
       let _ = match front.foDriven
         Some d => checkTargetGate rsrc csrc tsrc target d.cdDrive
         None => ()
-      let _ = putStrLn report
+      putStrLn report
       -- #916: a clean single-file check gave no unambiguous success signal —
       -- "no error lines among the interface dump" was the only tell, and on a
       -- file whose filtered dump is EMPTY (no top-level bindings the dump
@@ -1114,12 +1109,11 @@ checkFileReport typesMode rsrc csrc tsrc target decls front =
       -- The main-shape warning reads the raw entry decls alone, so its first
       -- three (ignored) parameters are passed empty.
       let mainWarns = mainShapeWarnings [] [] [] decls
-      let _ = emitLocatedWarnings tsrc target (warns ++ mainWarns)
+      emitLocatedWarnings tsrc target (warns ++ mainWarns)
       ()
     _ =>
-      let _ = emitAbortTotal ()
-      let _ =
-        ePutStrLn (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
+      emitAbortTotal ()
+      ePutStrLn (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
       stageExit 1
 
 -- `check`'s multi-module report over its front-end run.  RESOLVE-phase errors
@@ -1157,27 +1151,26 @@ checkProjectReport rsrc csrc tsrc target sibling mods modPairs front =
         -- also dropped every imported-module error's location).  Clean ⇒ the schemes
         -- dump + main-shape warnings, unchanged.
         (Some errText, _, _) =>
-          let _ = emitAbortTotal ()
-          let _ = putStrLn errText
+          emitAbortTotal ()
+          putStrLn errText
           stageExit 1
         (None, projWarns, hiddenCount) =>
           let report = checkModulesReport exWarns front.foReport.trDiagnostics
-          let _ = checkTargetGate rsrc csrc tsrc target dump.cdDrive
-          let _ = putStrLn report
+          checkTargetGate rsrc csrc tsrc target dump.cdDrive
+          putStrLn report
           -- F-3d: an IMPORTED module's ⊑-incomparable pair, LOCATED against that
           -- module's own file.  The line above reaches the ENTRY's diagnostics only,
           -- which is why the entry triple is special-cased here (not the whole list)
           -- — see `trimEntryTriple` for the four graph positions this was silent in,
           -- and for why the entry is trimmed by code rather than dropped whole.
-          let _ =
-            emitWarningLines
-              (flatMap renderTripleWarnings (trimEntryTriple projWarns))
+          emitWarningLines
+            (flatMap renderTripleWarnings (trimEntryTriple projWarns))
           -- #1719: a non-entry module can carry OTHER warnings (chiefly
           -- non-exhaustive-match) that the line above does not surface — human
           -- `check` would otherwise drop these with no trace, reading as a clean
           -- bill of health.  Say so instead of staying silent; `--json` already
           -- reports them per-file.
-          let _ = emitHiddenDiagNote hiddenCount
+          emitHiddenDiagNote hiddenCount
           -- The main-shape warning reads the entry module's raw decls alone, so its
           -- first three (ignored) parameters are passed empty.
           let mainWarns = match lastModPair (map dropPathTriple mods)
@@ -1210,8 +1203,8 @@ checkTargetGate rsrc csrc tsrc target drive =
   match checkTargetRefusal rsrc csrc target drive.cdPaths drive
     [] => ()
     ds =>
-      let _ = emitAbortTotal ()
-      let _ = ePutStrLn (joinNl (map (ppTargetDiag target tsrc) ds))
+      emitAbortTotal ()
+      ePutStrLn (joinNl (map (ppTargetDiag target tsrc) ds))
       stageExit 1
 
 -- The selected profile's refusals of a typechecked program, judged from the
@@ -1436,8 +1429,8 @@ requireArgs : ArgSpec -> List String -> <IO> Args
 requireArgs sp argv = match parseArgs sp argv
   Ok a => a
   Err msg =>
-    let _ = ePutStrLn msg
-    let _ = stageExit usageExitCode
+    ePutStrLn msg
+    stageExit usageExitCode
     Args { given = [], positionals = [], rest = [] }
 
 -- ── check --json ───────────────────────────────────────────────────────────
@@ -1473,7 +1466,7 @@ runCheckJsonCmd : Bool -> String -> String -> String -> String -> <IO> Unit
 runCheckJsonCmd allowInternal rsrc csrc target stdlibDir =
   match readSourceE target
     Err e =>
-      let _ = println (cjSourceReadJson target e)
+      println (cjSourceReadJson target e)
       stageExit 1
     Ok _ =>
       let (cj, hasErr, drive) =
@@ -1485,10 +1478,10 @@ runCheckJsonCmd allowInternal rsrc csrc target stdlibDir =
           checkTargetJson rsrc csrc target stdlibDir cj drive
       match refused
         Some refusedCj =>
-          let _ = println (ppCheckJson refusedCj)
+          println (ppCheckJson refusedCj)
           stageExit 1
         None =>
-          let _ = println (ppCheckJson cj)
+          println (ppCheckJson cj)
           if hasErr then stageExit 1
 
 -- #1078: `medaka build --json`'s envelope for a build-STAGE failure — the
@@ -1522,11 +1515,11 @@ runBuildJsonCmd : Args ->
 runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
   match readSourceE input
     Err e =>
-      let _ = println (cjSourceReadJson input e)
+      println (cjSourceReadJson input e)
       stageExit 1
     Ok entrySrc => match readPreludeSources stdlibDir
       Err msg =>
-        let _ = println (cjBuildFailedJson input msg)
+        println (cjBuildFailedJson input msg)
         stageExit 1
       Ok prelude =>
         let notices = jsonPreludeNotices target prelude
@@ -1562,28 +1555,26 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
                   notices
                   (envelopeWithNotes entry rep.notes envelope))
             None =>
-              let _ =
-                println
-                  (withPreludeFields
-                    notices
-                    (cjBuildFailedJson
-                      input
-                      "error: the emitter wrote no diagnostics envelope; an emitter built from an older medaka does not write one"))
+              println
+                (withPreludeFields
+                  notices
+                  (cjBuildFailedJson
+                    input
+                    "error: the emitter wrote no diagnostics envelope; an emitter built from an older medaka does not write one"))
               stageExit 1
           Err rep => match rep.diagEnvelope
             -- The front end refused the program.
             Some (_, envelope) =>
-              let _ = println (withPreludeFields notices envelope)
+              println (withPreludeFields notices envelope)
               stageExit 1
             -- A build-stage FAILURE already carried its notes: they are
             -- part of the rendered message, exactly as the plain CLI
             -- prints them, inside the one R-BUILD-FAILED diagnostic.
             None =>
-              let _ =
-                println
-                  (withPreludeFields
-                    notices
-                    (cjBuildFailedJson input (ppBuildReport rep)))
+              println
+                (withPreludeFields
+                  notices
+                  (cjBuildFailedJson input (ppBuildReport rep)))
               stageExit 1
 
 -- `build --json`'s stale lines, carried in its envelope as the field each
@@ -1597,12 +1588,11 @@ jsonPreludeNotices target prelude =
   let trees = match target
     TNative => staleLine TreesFile (checkPreludeElab prelude)
     TWasm => None
-  let _ = reportStaleLine dieMsg (stage "stalePreludeTrees") trees
-  let _ =
-    reportStaleLine
-      dieMsg
-      (stage "stalePreludeDecls")
-      (staleLine DeclsFile (preludeDeclsVerdict prelude))
+  reportStaleLine dieMsg (stage "stalePreludeTrees") trees
+  reportStaleLine
+    dieMsg
+    (stage "stalePreludeDecls")
+    (staleLine DeclsFile (preludeDeclsVerdict prelude))
   staged.value
 
 -- [envelope] with each of [notices] appended as its field.
@@ -1898,7 +1888,7 @@ runFmtCmd argv =
   -- argv, BEFORE the parse, so `medaka fmt --write --stdout --zzz` still
   -- reports the conflict rather than the unknown flag.  Moving it after
   -- `requireArgs` would swap those two messages.
-  let _ = assertFmtOneMode argv
+  assertFmtOneMode argv
   runFmtArgs (requireArgs fmtArgSpec argv)
 
 -- §5f, mirroring `snapshotMode`: two modes at once is a person who does not
@@ -1909,9 +1899,8 @@ assertFmtOneMode argv = match fmtModeConflict argv
   [] => ()
   [_] => ()
   many =>
-    let _ =
-      ePutStrLn
-        "medaka fmt: \{joinWith " " many} are mutually exclusive; pass one"
+    ePutStrLn
+      "medaka fmt: \{joinWith " " many} are mutually exclusive; pass one"
     stageExit 1
 
 runFmtArgs : Args -> <IO> Unit
@@ -1921,11 +1910,10 @@ runFmtArgs a =
   -- typo here and not a path.  `args.mdk` deliberately leaves an UNDECLARED
   -- single-dash token as a positional (a filename may start with `-`), so the
   -- extra half of fmt's rule is applied here rather than lost.
-  let _ = assertFmtNoDashTargets a.positionals
+  assertFmtNoDashTargets a.positionals
   match (fmtModeOf a, a.positionals)
     (_, []) =>
-      let _ =
-        ePutStrLn "Usage: medaka fmt [--check | --stdout | --write] <path>..."
+      ePutStrLn "Usage: medaka fmt [--check | --stdout | --write] <path>..."
       stageExit 1
     -- `listDir` Err = literal file (EXACT original single-file behavior); Ok =
     -- a directory, recursively expanded.
@@ -2011,30 +1999,30 @@ sourceReadLine file (Some msg) = "\{file}: \{msg}"
 fmtOneReport : FmtMode -> String -> <IO> (Bool, Bool)
 fmtOneReport mode file = match readSourceE file
   Err e =>
-    let _ = ePutStrLn (sourceReadLine file e)
+    ePutStrLn (sourceReadLine file e)
     (True, False)
   -- One lexing pass shared by the parse check and the formatter.
   Ok src => match tokenizeWithOffsetPairs src
     (toks, pairs) => match formatSourceChecked src toks pairs
       Err e =>
-        let _ = ePutStrLn (ppParseError src file e)
+        ePutStrLn (ppParseError src file e)
         (True, False)
       Ok formatted => match mode
         FmtStdout =>
-          let _ = putStr formatted
+          putStr formatted
           (False, False)
         FmtCheck =>
           if formatted == src then
             (False, False)
           else
-            let _ = ePutStrLn (file ++ ": not formatted")
+            ePutStrLn (file ++ ": not formatted")
             (True, False)
         FmtWrite =>
           if formatted == src then
             (False, False)
           else match writeFile file formatted
             Err msg =>
-              let _ = ePutStrLn "\{file}: \{msg}"
+              ePutStrLn "\{file}: \{msg}"
               (True, False)
             Ok _ => (False, True)
 
@@ -2143,8 +2131,7 @@ runCodemodCmd (name :: rest) = match findCodemod name
             CmStdout => match files
               [one] => codemodStdout xf (codemodWarnDecls cm cargs) one
               _ =>
-                let _ =
-                  ePutStrLn "medaka codemod: --stdout requires exactly one file"
+                ePutStrLn "medaka codemod: --stdout requires exactly one file"
                 stageExit 1
             _ =>
               if codemodFilesGo
@@ -2162,11 +2149,9 @@ runCodemodCmd (name :: rest) = match findCodemod name
 -- 0, which is where the "listing as an answer" case lives.
 listCodemodsAndExit : Unit -> <IO> Unit
 listCodemodsAndExit _ =
-  let _ =
-    ePutStrLn
-      "Usage: medaka codemod <name> [flags] [--write|--stdout] <paths...>"
-  let _ = ePutStrLn ""
-  let _ = ePutStrLn "Available codemods:"
+  ePutStrLn "Usage: medaka codemod <name> [flags] [--write|--stdout] <paths...>"
+  ePutStrLn ""
+  ePutStrLn "Available codemods:"
   dieMsg codemodListing
 
 -- Split the post-name argv into (mode, codemod-flags, paths).  --write/--stdout
@@ -2227,7 +2212,7 @@ codemodStdout xf warnFn file = match readSourceE file
   Ok src => match codemodSource xf src
     Err e => dieMsg (ppParseError src file e)
     Ok result =>
-      let _ = emitCodemodWarns warnFn file src
+      emitCodemodWarns warnFn file src
       match result
         None => putStr src
         Some out => putStr out
@@ -2253,24 +2238,24 @@ codemodOneReport : CodeMode ->
   <IO> Bool
 codemodOneReport mode xf warnFn file = match readSourceE file
   Err e =>
-    let _ = ePutStrLn (sourceReadLine file e)
+    ePutStrLn (sourceReadLine file e)
     True
   Ok src => match codemodSource xf src
     Err e =>
-      let _ = ePutStrLn (ppParseError src file e)
+      ePutStrLn (ppParseError src file e)
       True
     Ok result =>
-      let _ = emitCodemodWarns warnFn file src
+      emitCodemodWarns warnFn file src
       match result
         None => False
         Some out => match mode
           CmWrite => match writeFile file out
             Err msg =>
-              let _ = ePutStrLn "\{file}: \{msg}"
+              ePutStrLn "\{file}: \{msg}"
               True
             Ok _ => False
           _ =>
-            let _ = putStrLn "would rewrite: \{file}"
+            putStrLn "would rewrite: \{file}"
             True
 
 -- Emit a codemod's advisory warnings for one file to stderr.  Safe to reparse:
@@ -2283,7 +2268,7 @@ emitCodemodWarns warnFn file src =
 emitWarnLines : String -> List String -> <IO> Unit
 emitWarnLines _ [] = ()
 emitWarnLines file (w :: ws) =
-  let _ = ePutStrLn "\{file}: warning: \{w}"
+  ePutStrLn "\{file}: warning: \{w}"
   emitWarnLines file ws
 
 -- ── new ───────────────────────────────────────────────────────────────────
@@ -2313,7 +2298,7 @@ runNewCmd [arg] =
     -- C2: one wording, and the REJECTION exits 1.  `new` takes no flags at
     -- all, so its known set is empty.  (The bare `medaka new` usage error
     -- below exits 1 too -- C3's convergence, no verb exits 2.)
-    let _ = ePutStrLn (unknownFlagMessage newArgSpec arg)
+    ePutStrLn (unknownFlagMessage newArgSpec arg)
     dieMsg newUsageLine
   else
     let code = newProject arg
@@ -2324,7 +2309,7 @@ runNewCmd args = match filterList (startsWith "-") args
   -- doesn't read as REJECT-VAGUE just because it also has too many args.
 
   flagTok :: _ =>
-    let _ = ePutStrLn (unknownFlagMessage newArgSpec flagTok)
+    ePutStrLn (unknownFlagMessage newArgSpec flagTok)
     dieMsg newUsageLine
   [] => dieMsg newUsageLine
 
@@ -2462,7 +2447,7 @@ runBuildPlainCmd a =
         match readPreludeSources (root ++ "/stdlib")
           Err msg => dieMsg msg
           Ok prelude =>
-            let _ = nativeTreesReport target prelude
+            nativeTreesReport target prelude
             match (runBuild
               root
               medaka
@@ -2479,8 +2464,8 @@ runBuildPlainCmd a =
               }))
               Ok rep =>
                 let perfTEmit = now ()
-                let _ = emitPhase perfOn "emit" (perfTEmit - perfT0) input
-                let _ = emitTotal perfOn (perfTEmit - perfT0)
+                emitPhase perfOn "emit" (perfTEmit - perfT0) input
+                emitTotal perfOn (perfTEmit - perfT0)
                 println (ppBuildReport rep)
               Err rep => dieMsg (ppBuildReport rep)
 
@@ -2498,11 +2483,11 @@ nativeTreesReport TWasm prelude = reportDecls None dieMsg prelude
 runBuildJsonEntry : Args -> <IO> Unit
 runBuildJsonEntry a = match parseBuildArgs a
   Err msg =>
-    let _ = println (cjBuildFailedJson "" msg)
+    println (cjBuildFailedJson "" msg)
     stageExit 1
   Ok (input, outOpt, _) => match selectBuildProfile a input
     Err msg =>
-      let _ = println (cjBuildFailedJson "" msg)
+      println (cjBuildFailedJson "" msg)
       stageExit 1
     Ok target =>
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
@@ -2630,7 +2615,7 @@ buildTargetOrDie : Args -> String -> <IO> BuildTarget
 buildTargetOrDie a input = match selectBuildProfile a input
   Ok target => target
   Err msg =>
-    let _ = dieMsg msg
+    dieMsg msg
     TNative
 
 finishBuildArgs : List String ->
@@ -2732,7 +2717,7 @@ finishRunEval target jsonMode facts elaborated mods cohWarns postPerf =
       emitWarningLines (flatMap renderTripleWarnings cohWarns)
   currentEvalFile := target
   runJsonMode := jsonMode
-  let _ = putStr (runProgramOutput facts (fst elaborated) (snd elaborated))
+  putStr (runProgramOutput facts (fst elaborated) (snd elaborated))
   -- The `eval`/`total` timings, BEFORE the envelope — see `postPerf`'s note.
   let _ = postPerf ()
   -- Reached only when the program did NOT panic (`panic` is a noreturn C abort), so
@@ -2802,7 +2787,7 @@ runArgSpec = spec "run" [
 runEvalPerf : Bool -> String -> Float -> Float -> Unit -> <IO> Unit
 runEvalPerf perfOn target perfT0 perfTCheck _ =
   let perfTEval = now ()
-  let _ = emitPhase perfOn "eval" (perfTEval - perfTCheck) target
+  emitPhase perfOn "eval" (perfTEval - perfTCheck) target
   emitTotal perfOn (perfTEval - perfT0)
 
 runRunCmd : List String -> <IO> Unit
@@ -2885,9 +2870,9 @@ runRunCmd argv =
       let readEntry = stdinReadOverride stdinText
       let modsWithPath = match loadProgramFilesLocatedE readEntry target roots
         Err lerr =>
-          let _ = reportShippedHeaders (deferredInto jsonMode) prelude
+          reportShippedHeaders (deferredInto jsonMode) prelude
           let _ = orExit (mapErr (ppParseError tsrc target) (parseResult tsrc))
-          let _ = runAbort (moduleLoadErrText tsrc target stdlibDir lerr)
+          runAbort (moduleLoadErrText tsrc target stdlibDir lerr)
           panic "unreachable"
         Ok mp => mp
       let mods = map dropPathTriple modsWithPath
@@ -2902,7 +2887,7 @@ runRunCmd argv =
       let rtD = desugaredPrelude rsrc
       let coreD = desugaredPrelude csrc
       let modsD = map desugarPair mods
-      let _ = takeShippedPrelude (deferredInto jsonMode) prelude
+      takeShippedPrelude (deferredInto jsonMode) prelude
       let trusted = projectTrustedMods target roots stdlibDir mods
       -- #2072: the FFI-stamp discriminator, handed to typecheck alongside the
       -- #1713 reference-trust set above.  Different predicate, deliberately: this
@@ -2914,7 +2899,7 @@ runRunCmd argv =
         diSibling = siblingPairsOf roots modsWithPath,
       }
       let perfTLoad = now ()
-      let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
+      emitPhase perfOn "load" (perfTLoad - perfT0) target
       -- One front-end run (`frontEnd`), the same raw-tree passes and resolve
       -- `checkRoute` runs, so `run` accepts/rejects the SAME set of programs
       -- `medaka check` does (beta P0-1 / P1-8).  A gate of resolve-errors +
@@ -2969,11 +2954,9 @@ runRunCmd argv =
                     runAbortJson (residualJsonTriples target pathMap residual)
                   False => runAbort (residualOrGeneric pathMap target residual)
                 False =>
-                  let _ =
-                    runTargetGate jsonMode (t => t) target pathMap mods analysis
+                  runTargetGate jsonMode (t => t) target pathMap mods analysis
                   let perfTCheck = now ()
-                  let _ =
-                    emitPhase perfOn "check" (perfTCheck - perfTLoad) target
+                  emitPhase perfOn "check" (perfTCheck - perfTLoad) target
                   -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
                   -- the FULL warning set here (it filters `diagIsWarn`, not
                   -- `runBuildWarnCodes`; see its note).
@@ -3052,17 +3035,15 @@ runRunCmd argv =
                         (residualJsonTriples target pathMap residual))
                   False => runAbort (residualOrGeneric pathMap target residual)
                 False =>
-                  let _ =
-                    runTargetGate
-                      jsonMode
-                      (relDiagTriple root)
-                      target
-                      pathMap
-                      mods
-                      analysis
+                  runTargetGate
+                    jsonMode
+                    (relDiagTriple root)
+                    target
+                    pathMap
+                    mods
+                    analysis
                   let perfTCheck = now ()
-                  let _ =
-                    emitPhase perfOn "check" (perfTCheck - perfTLoad) target
+                  emitPhase perfOn "check" (perfTCheck - perfTLoad) target
                   let executed =
                     executedFromReport report executionDriver (coreD, modsD)
                   match executed
@@ -3178,9 +3159,8 @@ runTestCmd argv0 =
           match a.positionals
             [] =>
               if jsonMode then
-                let _ =
-                  ePutStrLn
-                    "medaka test --json: needs a single file.mdk target; with no target, medaka test runs the whole enclosing project"
+                ePutStrLn
+                  "medaka test --json: needs a single file.mdk target; with no target, medaka test runs the whole enclosing project"
                 stageExit 1
               else
                 runTestProjectCmd engines cases filterOpt seedOpt
@@ -3192,17 +3172,15 @@ runTestCmd argv0 =
                   runTestOne engines cases filterOpt target
               Ok _ =>
                 if jsonMode then
-                  let _ =
-                    ePutStrLn
-                      "medaka test --json: directory targets are not supported; pass a single file.mdk target"
+                  ePutStrLn
+                    "medaka test --json: directory targets are not supported; pass a single file.mdk target"
                   stageExit 1
                 else
                   runTestManyTargets engines cases filterOpt seedOpt [target]
             targets =>
               if jsonMode then
-                let _ =
-                  ePutStrLn
-                    "medaka test --json: exactly one file.mdk target is supported"
+                ePutStrLn
+                  "medaka test --json: exactly one file.mdk target is supported"
                 stageExit 1
               else
                 runTestManyTargets engines cases filterOpt seedOpt targets
@@ -3271,8 +3249,7 @@ runTestProjectCmd engines cases filterOpt seedOpt =
       dieMsg
         "medaka test: no target given and no medaka.toml in \{cwd} or any directory above it; pass a file.mdk or directory target, or run inside a project"
     Some root =>
-      let _ =
-        ePutStrLn "medaka test: no target given; testing the project at \{root}"
+      ePutStrLn "medaka test: no target given; testing the project at \{root}"
       runTestManyTargets engines cases filterOpt seedOpt [root]
 
 -- ── test --json (#2295 (d)) ──────────────────────────────────────────────────
@@ -3317,17 +3294,16 @@ runTestJsonCmd engines cases filterOpt target =
           cases
           filterOpt
           True
-      let _ =
-        putStrLn
-          (stringify
-            (cliGradedTestReportJson
-              target
-              typeError
-              engines
-              runs
-              props
-              tests
-              typecheckSkipped))
+      putStrLn
+        (stringify
+          (cliGradedTestReportJson
+            target
+            typeError
+            engines
+            runs
+            props
+            tests
+            typecheckSkipped))
       Ok (cliGradedTestReportOk typeError runs props tests)
   match r
     Err e => dieMsg e
@@ -3358,7 +3334,7 @@ runTestManyTargets engines cases filterOpt seedOpt targets =
       let corePath = root ++ "/stdlib/core.mdk"
       let stdlibDir = root ++ "/stdlib"
       let rosterOk = checkTestMdkRoster root targets files
-      let _ = reportSupervisedTrees stdlibDir rtPath corePath
+      reportSupervisedTrees stdlibDir rtPath corePath
       let anyFailed =
         testFilesGo
           engines
@@ -3437,7 +3413,7 @@ runDocTargets [] = dieMsg "usage: medaka doc <file.mdk>"
 runDocTargets (_ :: _ :: _) =
   dieMsg "usage: medaka doc <file.mdk> (doc takes exactly one file)"
 runDocTargets (target :: _) =
-  let _ = carryTargetProfile None target
+  carryTargetProfile None target
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
@@ -3459,7 +3435,7 @@ runDocLibraryTargets : String -> List String -> <IO> Unit
 runDocLibraryTargets _ [] =
   dieMsg "usage: medaka doc --out DIR <file.mdk> [<file.mdk> ...]"
 runDocLibraryTargets outDir targets =
-  let _ = carryTargetProfile None (optionOr "." (head targets))
+  carryTargetProfile None (optionOr "." (head targets))
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let stdlibDir = root ++ "/stdlib"
   let r = do
@@ -3532,9 +3508,8 @@ checkDistinctGo [] _ = ()
 checkDistinctGo (md :: rest) seen =
   let n = mdName md
   if elemStrCli n seen then
-    let _ =
-      ePutStrLn
-        "medaka doc --out: two targets share the module name `\{n}` and would write the same page `\{n}.md`; rename one"
+    ePutStrLn
+      "medaka doc --out: two targets share the module name `\{n}` and would write the same page `\{n}.md`; rename one"
     stageExit 1
   else
     checkDistinctGo rest (n :: seen)
@@ -3545,9 +3520,9 @@ elemStrCli x (y :: ys) = x == y || elemStrCli x ys
 
 writeLibraryOutputs : String -> List ModuleDoc -> <IO> Unit
 writeLibraryOutputs outDir mds =
-  let _ = checkDistinctModuleNames mds
-  let _ = writeLibraryPages outDir mds
-  let _ = writeLibraryFile outDir "index.md" (renderIndex mds)
+  checkDistinctModuleNames mds
+  writeLibraryPages outDir mds
+  writeLibraryFile outDir "index.md" (renderIndex mds)
   writeLibraryFile
     outDir
     "inventory.json"
@@ -3556,7 +3531,7 @@ writeLibraryOutputs outDir mds =
 writeLibraryPages : String -> List ModuleDoc -> <IO> Unit
 writeLibraryPages _ [] = ()
 writeLibraryPages outDir (md :: rest) =
-  let _ = writeLibraryFile outDir (mdName md ++ ".md") (renderModulePage md)
+  writeLibraryFile outDir (mdName md ++ ".md") (renderModulePage md)
   writeLibraryPages outDir rest
 
 writeLibraryFile : String -> String -> String -> <IO> Unit
@@ -3624,9 +3599,8 @@ optDefault None d = d
 
 runCheckPolicyArgs : PolicyArgs -> <IO> Unit
 runCheckPolicyArgs (PolicyArgs None _ _) =
-  let _ =
-    ePutStrLn
-      "usage: medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]"
+  ePutStrLn
+    "usage: medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]"
   stageExit 1
 runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
   match analyzeTarget target fn
@@ -3635,9 +3609,8 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
     -- A target `check` refuses has no row to judge: the refusal names what
     -- failed and carries `check`'s own diagnostics.
     Err diags =>
-      let _ =
-        ePutStrLn
-          "rejected. compiler analysis failed before policy evaluation; `medaka check \{target}` reports:"
+      ePutStrLn
+        "rejected. compiler analysis failed before policy evaluation; `medaka check \{target}` reports:"
       dieMsg diags
     Ok analysis => match runCheckPolicy analysis allow fn
       -- The accepted verdict prints before the sample run is forced, so a
@@ -3649,10 +3622,10 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
       -- nonzero exit — a diagnostic — and moves to stderr, where every
       -- sibling verb already reports failure.  Exit code unchanged.
       PolicyReject report =>
-        let _ = ePutStr report
+        ePutStr report
         stageExit 1
       PolicyAccept header sample =>
-        let _ = putStr header
+        putStr header
         putStr (sample ())
 
 -- `manifest` and `check-policy` load and analyze their target exactly as
@@ -3663,7 +3636,7 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
 -- manifest's claim is one `check-policy` can verify.
 analyzeTarget : String -> String -> <IO> Result String EntryAnalysis
 analyzeTarget target fn =
-  let _ = carryTargetProfile None target
+  carryTargetProfile None target
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
@@ -3697,7 +3670,7 @@ analyzeLoaded prelude target roots stdlibDir fn modsWithPath =
   let rtD = desugaredPrelude rsrc
   let coreD = desugaredPrelude csrc
   let modsD = map desugarPair mods
-  let _ = takeShippedPrelude unstaged prelude
+  takeShippedPrelude unstaged prelude
   let front =
     frontEnd
       (stdlibExportsReader stdlibDir)
@@ -3876,13 +3849,13 @@ runLintCmd : List String -> <IO> Unit
 runLintCmd argv0 =
   let a = requireArgs lintArgSpec argv0
   if flag "--list-rules" a then
-    let _ = assertRegistryViewFlags "--list-rules" listRulesBannedFlags a
+    assertRegistryViewFlags "--list-rules" listRulesBannedFlags a
     runLintListRules a
   else if isSome (flagValue "--explain" a) then
-    let _ = assertRegistryViewFlags "--explain" explainBannedFlags a
+    assertRegistryViewFlags "--explain" explainBannedFlags a
     runLintExplain a
   else
-    let _ = assertNoListOnlyFlags a
+    assertNoListOnlyFlags a
     runLintTargets a
 
 -- Flags that mean nothing to a registry view are rejected rather than accepted
@@ -3995,15 +3968,15 @@ runLintTargets a =
   let disableNames = lintNamesOf "--disable" a
   let onlyNames = lintNamesOf "--only" a
   let denyNames = lintNamesOf "--deny" a
-  let _ = assertLintRuleNames (disableNames ++ onlyNames ++ denyNames)
+  assertLintRuleNames (disableNames ++ onlyNames ++ denyNames)
   let fixMode = flag "--fix" a
-  let _ = assertUnsafeFixesNeedFix a
+  assertUnsafeFixesNeedFix a
   let jsonMode = flag "--json" a
   let baselineArg = flagValue "--baseline" a
   let writeBaselineArg = flagValue "--write-baseline" a
-  let _ = assertBaselineFlagsCoherent baselineArg writeBaselineArg fixMode
+  assertBaselineFlagsCoherent baselineArg writeBaselineArg fixMode
   let fileArgs = a.positionals
-  let _ = assertLintTargetsExist fileArgs
+  assertLintTargetsExist fileArgs
   let files = resolveLintTargets fileArgs
   -- C3 (docs/ops/CLI-CONFORMANCE.md §3): `lint`'s empty-target cell was the
   -- worst of the three — it printed NOTHING and exited 0, so a directory that
@@ -4012,12 +3985,11 @@ runLintTargets a =
   -- sits BEFORE the `--json` branch deliberately: a machine consumer must learn
   -- that its target set was empty too, and an error on stderr leaves stdout's
   -- one-JSON-document rule intact (C4).
-  let _ = assertLintTargetsNonEmpty files
-  let _ =
-    assertInternalRulesReachable
-      (flag "--internal" a)
-      (onlyNames ++ denyNames)
-      files
+  assertLintTargetsNonEmpty files
+  assertInternalRulesReachable
+    (flag "--internal" a)
+    (onlyNames ++ denyNames)
+    files
   -- The declaration index the rules query: the stdlib's rows, and the
   -- project's too when a project rule is active.  Built at most ONCE per
   -- `medaka lint` invocation and threaded down — a rule's `check` is pure, and
@@ -4173,7 +4145,7 @@ loadLintBaselineCtx : String ->
 loadLintBaselineCtx _ None = None
 loadLintBaselineCtx cwd (Some path) = match readLintBaseline path
   Err msg =>
-    let _ = dieMsg "medaka lint: \{msg}"
+    dieMsg "medaka lint: \{msg}"
     None
   Ok base => Some (cwd, base)
 
@@ -4249,9 +4221,8 @@ assertLintRuleNames names =
   if isEmpty bad then
     ()
   else
-    let _ =
-      ePutStrLn
-        "medaka lint: unknown rule \{joinWith ", " bad} (known: \{joinWith ", " allRuleNames})"
+    ePutStrLn
+      "medaka lint: unknown rule \{joinWith ", " bad} (known: \{joinWith ", " allRuleNames})"
     stageExit 1
 
 assertInternalRulesReachable : Bool -> List String -> List String -> <IO> Unit
@@ -4276,7 +4247,7 @@ assertLintTargetsExist targets =
   if isEmpty missing then
     ()
   else
-    let _ = ePutStrLn "medaka lint: these targets do not exist:"
+    ePutStrLn "medaka lint: these targets do not exist:"
     dieMsg (joinNl (map (m => "  \{m}") missing))
 
 -- ── snapshot ──────────────────────────────────────────────────────────────
@@ -4332,7 +4303,7 @@ assertSnapshotTargetsExist files =
   if isEmpty missing then
     ()
   else
-    let _ = ePutStrLn "medaka snapshot: these targets do not exist:"
+    ePutStrLn "medaka snapshot: these targets do not exist:"
     dieMsg (joinNl (map (m => "  \{m}") missing))
 
 -- Lock 1, on its own, with its own message.  A `--bless` naming nothing is refused BEFORE
@@ -4342,16 +4313,13 @@ assertBlessIsScoped blessOn targets =
   if not blessOn || not (isEmpty targets) then
     ()
   else
-    let _ =
-      ePutStrLn
-        "medaka snapshot: --bless requires explicit targets; there is no whole-suite bless"
-    let _ = ePutStrLn "  name what you are approving, such as:"
-    let _ =
-      ePutStrLn
-        "    medaka snapshot --bless --out test/snapshots/compiler compiler/frontend/lexer.mdk"
-    let _ =
-      ePutStrLn
-        "  or, family-aware: sh test/snapshot_bless.sh --bless compiler/frontend/lexer.mdk"
+    ePutStrLn
+      "medaka snapshot: --bless requires explicit targets; there is no whole-suite bless"
+    ePutStrLn "  name what you are approving, such as:"
+    ePutStrLn
+      "    medaka snapshot --bless --out test/snapshots/compiler compiler/frontend/lexer.mdk"
+    ePutStrLn
+      "  or, family-aware: sh test/snapshot_bless.sh --bless compiler/frontend/lexer.mdk"
     stageExit 1
 
 snapshotHelpText : String
@@ -4418,21 +4386,19 @@ runSnapshotCmd argv0 =
     None => envOr "MEDAKA_ROOT" defaultMedakaRoot
   let sel = snapshotStages a
   let targets = a.positionals
-  let _ = assertBlessIsScoped (flag "--bless" a) targets
+  assertBlessIsScoped (flag "--bless" a) targets
   let files = flatMap expandLintTarget targets
-  let _ = assertSnapshotTargetsExist files
+  assertSnapshotTargetsExist files
   if isEmpty files then
-    let _ =
-      ePutStrLn
-        "usage: medaka snapshot [--check|--new|--bless] [--out <dir>] [--stages <a,b,…>] <paths...>"
+    ePutStrLn
+      "usage: medaka snapshot [--check|--new|--bless] [--out <dir>] [--stages <a,b,…>] <paths...>"
     stageExit 1
   else if flag "--worker" a then
     runSnapshotWorker root sel files
   else match snapshotMode a
     None =>
-      let _ =
-        ePutStrLn
-          "medaka snapshot: pass --check, --new or --bless; exactly one mode is required"
+      ePutStrLn
+        "medaka snapshot: pass --check, --new or --bless; exactly one mode is required"
       stageExit 1
     Some mode =>
       let ok =
@@ -4457,10 +4423,9 @@ snapshotMode a =
     ["--bless"] => Some SnapBless
     [] => None
     many =>
-      let _ =
-        ePutStrLn
-          "medaka snapshot: \{joinWith " " many} are mutually exclusive; pass one"
-      let _ = stageExit 1
+      ePutStrLn
+        "medaka snapshot: \{joinWith " " many} are mutually exclusive; pass one"
+      stageExit 1
       None
 
 -- `--stages parse,desugar,mark` restricts which sections a fixture renders (see
@@ -4473,8 +4438,8 @@ snapshotStages a = match flagValue "--stages" a
   Some spec => match parseStages spec
     Ok names => names
     Err msg =>
-      let _ = ePutStrLn "medaka snapshot: \{msg}"
-      let _ = stageExit 1
+      ePutStrLn "medaka snapshot: \{msg}"
+      stageExit 1
       []
 
 -- `snapshotTargets`/`snapFlagValue` are gone: `Args.positionals` is exactly
@@ -4532,7 +4497,7 @@ replUsageLine = stringConcat [
 -- explicit/unknown arg needs handling before the loop starts.
 runReplCmd : List String -> <IO> Unit
 runReplCmd [] =
-  let _ = carryTargetProfile None (canonicalizePath "." ++ "/repl")
+  carryTargetProfile None (canonicalizePath "." ++ "/repl")
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let r = do
     prelude <- readPreludeSources (root ++ "/stdlib")
@@ -4547,14 +4512,14 @@ runReplCmd [] =
     Err msg => dieMsg msg
     Ok v => v
 runReplCmd ("--help" :: _) =
-  let _ = putStrLn replUsageLine
+  putStrLn replUsageLine
   stageExit 0
 runReplCmd ("-h" :: _) =
-  let _ = putStrLn replUsageLine
+  putStrLn replUsageLine
   stageExit 0
 runReplCmd (bad :: _) =
   -- C2: `repl` takes no flags, so its known set is empty.
-  let _ = ePutStrLn (unknownFlagMessage replArgSpec bad)
+  ePutStrLn (unknownFlagMessage replArgSpec bad)
   dieMsg replUsageLine
 
 -- ── lsp ───────────────────────────────────────────────────────────────────
@@ -4592,14 +4557,14 @@ lspUsageLine = stringConcat [
 runLspCmd : List String -> <IO> Unit
 runLspCmd [] = runLspServerFromEnv ()
 runLspCmd ("--help" :: _) =
-  let _ = putStrLn lspUsageLine
+  putStrLn lspUsageLine
   stageExit 0
 runLspCmd ("-h" :: _) =
-  let _ = putStrLn lspUsageLine
+  putStrLn lspUsageLine
   stageExit 0
 runLspCmd (bad :: _) =
   -- C2: `lsp` takes no flags either.
-  let _ = ePutStrLn (unknownFlagMessage lspArgSpec bad)
+  ePutStrLn (unknownFlagMessage lspArgSpec bad)
   dieMsg lspUsageLine
 
 runLspServerFromEnv : Unit -> <IO> Unit
@@ -4645,14 +4610,14 @@ mcpUsageLine = stringConcat [
 runMcpCmd : List String -> <IO> Unit
 runMcpCmd [] = runMcpServerFromEnv ()
 runMcpCmd ("--help" :: _) =
-  let _ = putStrLn mcpUsageLine
+  putStrLn mcpUsageLine
   stageExit 0
 runMcpCmd ("-h" :: _) =
-  let _ = putStrLn mcpUsageLine
+  putStrLn mcpUsageLine
   stageExit 0
 runMcpCmd (bad :: _) =
   -- C2: `mcp` takes no flags either.
-  let _ = ePutStrLn (unknownFlagMessage mcpArgSpec bad)
+  ePutStrLn (unknownFlagMessage mcpArgSpec bad)
   dieMsg mcpUsageLine
 
 runMcpServerFromEnv : Unit -> <IO> Unit

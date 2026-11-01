@@ -322,9 +322,9 @@ processDeclParsed newDecls =
     [] =>
       let known = !knownNamesRef
       let newSchemes = userSchemes allSchemes known
-      let _ = mapIO printNewScheme newSchemes
+      mapIO printNewScheme newSchemes
       let typeAnns = declTypeAnnotations newDecls
-      let _ = mapIO_ printTypeAnn typeAnns
+      mapIO_ printTypeAnn typeAnns
       let newNames = map fst newSchemes ++ map snd typeAnns
       accumulatedRef := !accumulatedRef ++ newDecls
       knownNamesRef := known ++ newNames
@@ -430,35 +430,34 @@ processCommand cmd =
   if cmd == ":quit" || cmd == ":q" then
     False
   else if cmd == ":reset" then
-    let _ = processReset ()
+    processReset ()
     True
   else if cmd == ":browse" || cmd == ":env" then
-    let _ = processBrowse ()
+    processBrowse ()
     True
   else if startsWith ":type" cmd then
     let rest = stringSlice 5 (stringLength cmd) cmd
-    let _ = processTypeCmd 5 rest
+    processTypeCmd 5 rest
     True
   else if startsWith ":t " cmd then
     let rest = stringSlice 3 (stringLength cmd) cmd
-    let _ = processTypeCmd 3 rest
+    processTypeCmd 3 rest
     True
   else
-    let _ =
-      ePutStrLn
-        ("Unknown command: " ++ cmd ++ " (try :browse, :type, :reset, :quit)")
+    ePutStrLn
+      ("Unknown command: " ++ cmd ++ " (try :browse, :type, :reset, :quit)")
     True
 
 -- ── Main REPL loop ────────────────────────────────────────────────────────
 export
 replLoop : Unit -> <IO> Unit
 replLoop _ =
-  let _ = putStrLn "medaka repl (:quit to exit, :reset to clear session)"
+  putStrLn "medaka repl (:quit to exit, :reset to clear session)"
   replLoopGo "" False
 
 replLoopGo : String -> Bool -> <IO> Unit
 replLoopGo buf cont =
-  let _ = putStr (if cont then "  " else "> ")
+  putStr (if cont then "  " else "> ")
   match readLineOpt ()
     None => ()
     Some line =>
@@ -471,12 +470,12 @@ replLoopGo buf cont =
         else if needsMore newBuf then
           replLoopGo newBuf True
         else
-          let _ = dispatchInput newBuf
+          dispatchInput newBuf
           replLoopGo "" False
       else if needsMore newBuf then
         replLoopGo newBuf True
       else
-        let _ = dispatchInput newBuf
+        dispatchInput newBuf
         replLoopGo "" False
 
 dispatchInput : String -> <IO> Unit

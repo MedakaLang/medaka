@@ -91,7 +91,7 @@ baselineRowsGo doc origin i n seen acc =
       if contains r.rule rules then
         Err "\{origin}: duplicate row for '\{r.file}' / \{r.rule}"
       else
-        let _ = setInPlace r.file (r.rule :: rules) seen
+        setInPlace r.file (r.rule :: rules) seen
         baselineRowsGo doc origin (i + 1) n seen (r :: acc)
 
 baselineRowAt : Toml -> String -> Int -> Result String BaselineRow

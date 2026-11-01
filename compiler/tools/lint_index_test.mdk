@@ -640,9 +640,9 @@ stagingCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 stagingCase dir = match (makeStagingDir dir, makeStagingDir dir)
   (Ok a, Ok b) =>
     let dest = "\{dir}/shard.sx"
-    let _ = stageAndRename a dest "AAAAAAAA"
+    stageAndRename a dest "AAAAAAAA"
     let afterA = readFile dest
-    let _ = stageAndRename b dest "BB"
+    stageAndRename b dest "BB"
     expectEach [
       ("distinct staging dirs", expectNotEqual a b),
       ("the first writer's shard is whole", expectEqual (Ok "AAAAAAAA") afterA),

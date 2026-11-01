@@ -322,9 +322,8 @@ writeGateAck _ = match getEnv gateAckEnv
   Some path => match writeFile path "ran\n"
     Ok _ => ()
     Err e =>
-      let _ =
-        ePutStrLn
-          "error: could not write the gate acknowledgement to \{path}: \{e}"
+      ePutStrLn
+        "error: could not write the gate acknowledgement to \{path}: \{e}"
       stageExit 1
 
 export
@@ -449,9 +448,8 @@ writeDiagJson path cj =
   match writeFile path "\{stringify (JString key)}\n\{ppCheckJson cj}"
     Ok _ => ()
     Err e =>
-      let _ =
-        ePutStrLn
-          "error: could not write the diagnostics envelope to \{path}: \{e}"
+      ePutStrLn
+        "error: could not write the diagnostics envelope to \{path}: \{e}"
       stageExit 1
 
 -- The parent's read: (entry key, envelope), or `None` when the child wrote

@@ -14,7 +14,7 @@ oracleMain () = match args ()
     let code = newProject name
     if code == 0 then () else exit code
   _ =>
-    let _ = ePutStrLn "Usage: medaka new <name>"
+    ePutStrLn "Usage: medaka new <name>"
     exit 2
 
 main = oracleMain ()

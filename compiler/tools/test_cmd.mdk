@@ -353,13 +353,13 @@ runTestUnderProfile engines runtimeP target roots cases filterOpt =
         Ok _ =>
           let userDecls = targetDesugared tsrc
           let exempt = typecheckExempt target userDecls tsrc
-          let _ = exemptNotice exempt target userDecls
+          exemptNotice exempt target userDecls
           match pinIndexForTarget target userDecls
             Err err =>
               ePutStrLn err
               False
             Ok (file, index) =>
-              let _ = holdTestPrelude True prelude
+              holdTestPrelude True prelude
               -- The prelude halves go through the content-keyed `desugaredPrelude`
               -- memo; only the user source is parsed and desugared fresh here.
               driveAll
@@ -389,7 +389,7 @@ holdTestPrelude report inputs =
   let first = not (treesLoaded ())
   let verdict = loadPreludeElab inputs
   if report && first then
-    let _ = reportTestTrees verdict
+    reportTestTrees verdict
     reportTestLine (staleLine DeclsFile (preludeDeclsVerdict inputs))
 
 -- The line a stale file earns, once per process because the load is.
@@ -1049,7 +1049,7 @@ keyedElab : List SiblingPair ->
   (ElabResult, TcReport, DriveOutputs)
 keyedElab sibling rsrc csrc chainKey mods valueMain pairs =
   let coreDecls = desugaredPrelude csrc
-  let _ = retainModuleInterfaces (map ((mid, _, _) => mid) mods)
+  retainModuleInterfaces (map ((mid, _, _) => mid) mods)
   elaborateModulesChainReport
     (testDriveInputs sibling coreDecls)
     valueMain
@@ -1228,7 +1228,7 @@ perfRow : String -> String -> (Unit -> <IO> a) -> <IO> a
 perfRow label ops work =
   let t0 = now ()
   let result = work ()
-  let _ = emitPhase (perfEnabled ()) label (now () - t0) ops
+  emitPhase (perfEnabled ()) label (now () - t0) ops
   result
 
 -- `preparePlannedPropRequests` under the `prop-plan` row.
@@ -1284,7 +1284,7 @@ driveAll engines runtimeDecls coreDecls rsrc csrc stdlibDir target tsrc roots ca
           singleFileTypeErrors target tsrc rsrc csrc)
     match gate
       Some errText =>
-        let _ = ePutStrLn (typecheckGateFail target errText)
+        ePutStrLn (typecheckGateFail target errText)
         False
       None =>
         driveSingle
@@ -1335,11 +1335,11 @@ driveMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases filt
       synthDecls
   match gated
     (Some errText, _) =>
-      let _ = ePutStrLn (typecheckGateFail target errText)
+      ePutStrLn (typecheckGateFail target errText)
       False
     (None, prepared) =>
       if filterMatchedNothing filterOpt tsrc userDecls then
-        let _ = filterMatchedNothingNotice target
+        filterMatchedNothingNotice target
         False
       else
         let pair = phaseTrees engines userDecls rsrc csrc prepared
@@ -1415,7 +1415,7 @@ driveSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fil
   currentEvalFile := target
   let examples = filterExamplesByName filterOpt (targetExamples tsrc)
   if filterMatchedNothing filterOpt tsrc userDecls then
-    let _ = filterMatchedNothingNotice target
+    filterMatchedNothingNotice target
     False
   else
     let synthResults = buildSynthResults userDecls examples
@@ -1754,10 +1754,10 @@ runDoctests : List Engine ->
   List (Result String (List Decl)) ->
   <IO> Bool
 runDoctests engines trees native target tsrc userDecls examples synthResults =
-  let _ = putStrLn ("running doctests in " ++ target)
+  putStrLn ("running doctests in " ++ target)
   match examples
     [] =>
-      let _ = putStrLn "  (no doctests found)"
+      putStrLn "  (no doctests found)"
       True
     _ =>
       runEngines
@@ -1810,8 +1810,8 @@ runEnginesTagged : List Engine ->
   <IO> Bool
 runEnginesTagged [] _ _ _ _ _ _ _ = True
 runEnginesTagged (e :: rest) trees native target tsrc userDecls examples synthResults =
-  let _ = putStrLn ""
-  let _ = putStrLn "-- \{engineName e} --"
+  putStrLn ""
+  putStrLn "-- \{engineName e} --"
   let ok =
     reportDoctests
       target
@@ -2063,13 +2063,12 @@ injectIntoLast synthDecls (x :: rest) = x :: injectIntoLast synthDecls rest
 -- is how that silently stops being true.
 reportDoctests : String -> RunResult -> <IO> Bool
 reportDoctests target result =
-  let _ = printDoctestDetails target (runDetails result)
+  printDoctestDetails target (runDetails result)
   let total = runPassed result + runFailed result + runErrors result
-  let _ =
-    putStr
-      "\n\{target}: \{intToString (runPassed result)}/\{intToString total} passed"
-  let _ = putStr (doctestFailSuffix result)
-  let _ = putStr "\n"
+  putStr
+    "\n\{target}: \{intToString (runPassed result)}/\{intToString total} passed"
+  putStr (doctestFailSuffix result)
+  putStr "\n"
   runFailed result == 0 && runErrors result == 0
 
 -- ── prop phase ───────────────────────────────────────────────────────────────
@@ -2141,7 +2140,7 @@ runPropsPinned engines pair native stdlibDir target tsrc userDecls cases filterO
   | not (hasProps userDecls) = True
   | otherwise = match pair
     TestPairErr err =>
-      let _ = ePutStrLn err
+      ePutStrLn err
       False
     TestPair runtimeM rawCoreM coreM rawM modsM factsM =>
       printGradedPropRows
@@ -2178,9 +2177,8 @@ printGradedPropRows (row :: rest) =
       "\{intToString (propResultCases raw)} tests passed"
     else
       rawDetail
-  let _ =
-    putStrLn
-      "Testing \"\{propResultName raw}\" [\{propResultEngine raw}] ... \{gradedPropHumanStatus row} (\{detail})"
+  putStrLn
+    "Testing \"\{propResultName raw}\" [\{propResultEngine raw}] ... \{gradedPropHumanStatus row} (\{detail})"
   let _ =
     if gradedPropStatus row == "pass" then
       ()
@@ -2267,8 +2265,8 @@ printGradedTestEngineGroups : List Engine ->
   <IO> Bool
 printGradedTestEngineGroups [] _ _ = True
 printGradedTestEngineGroups (engine :: rest) target rows =
-  let _ = putStrLn ""
-  let _ = putStrLn "-- \{engineName engine} --"
+  putStrLn ""
+  putStrLn "-- \{engineName engine} --"
   let passed =
     printGradedTestGroup target (gradedTestsForEngine (engineName engine) rows)
   let restPassed = printGradedTestEngineGroups rest target rows
@@ -2288,10 +2286,9 @@ printGradedTestGroup target rows =
   let (failedCount, errorCount) = gradedTestHumanFailureCounts rows
   let knownRed = knownRedCountTests rows
   let total = listLen rows
-  let _ =
-    putStr "\n\{target}: \{intToString passedCount}/\{intToString total} passed"
-  let _ = putStr (gradedTestSummarySuffix failedCount errorCount knownRed)
-  let _ = putStr "\n"
+  putStr "\n\{target}: \{intToString passedCount}/\{intToString total} passed"
+  putStr (gradedTestSummarySuffix failedCount errorCount knownRed)
+  putStr "\n"
   passed
 
 printGradedTestLines : String -> List GradedTest -> <IO> Bool
@@ -2299,7 +2296,7 @@ printGradedTestLines _ [] = True
 printGradedTestLines target (row :: rest) =
   let (engine, name, line, raw) = gradedTestRaw row
   let label = "\{name} [\{engine}]"
-  let _ = printTestRunning target line label
+  printTestRunning target line label
   let _ =
     if gradedTestStatus row == "known-red" then
       putStrLn
@@ -2461,10 +2458,10 @@ printTestVerdict target line name result =
   match result
     Pass _ _ => putStrLn "  ok   \{loc}: \{name}"
     Fail msg _ _ =>
-      let _ = putStrLn "  FAIL \{loc}: \{name}"
+      putStrLn "  FAIL \{loc}: \{name}"
       putStrLn (indentVerdictMsg msg)
     Errored msg =>
-      let _ = putStrLn "  FAIL \{loc}: \{name}"
+      putStrLn "  FAIL \{loc}: \{name}"
       putStrLn (indentVerdictMsg msg)
 
 -- ── structured (non-printing) report — for `medaka mcp`'s medaka_test (#252) ──
@@ -3297,7 +3294,7 @@ runEvalPropsWorkerSource target nonce requests prelude tsrc userDecls =
   let runtimeSrc = prelude.pnRuntimeSrc
   let coreSrc = prelude.pnCoreSrc
   let stdlibDir = prelude.pnStdlibDir
-  let _ = holdTestPrelude False prelude
+  holdTestPrelude False prelude
   let runtimeDecls = desugaredPrelude runtimeSrc
   let coreDecls = desugaredPrelude coreSrc
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
@@ -4924,9 +4921,8 @@ checkTestMdkRoster root targets files =
       match missing
         [] => True
         _ =>
-          let _ =
-            ePutStrLn
-              "medaka test: git-tracked but not discovered: \{joinWith ", " missing}"
+          ePutStrLn
+            "medaka test: git-tracked but not discovered: \{joinWith ", " missing}"
           False
     Ok (_, _, _) => True
 
@@ -5040,10 +5036,10 @@ testFilesReport : List String ->
 testFilesReport (f :: rest) (r :: results) acc =
   let ok = match r
     Err e =>
-      let _ = ePutStrLn "medaka test: \{f}: failed to start test runner: \{e}"
+      ePutStrLn "medaka test: \{f}: failed to start test runner: \{e}"
       False
     Ok (code, out, err) =>
-      let _ = putStr out
+      putStr out
       -- `putStr` writes to buffered <Stdout>; `ePutStr`/`ePutStrLn` below write
       -- straight through to unbuffered <Stderr>. Under a merged capture
       -- (`2>&1`), the stderr write can hit disk before this file's still-
@@ -5051,14 +5047,13 @@ testFilesReport (f :: rest) (r :: results) acc =
       -- into the MIDDLE of an earlier or later file's own output. Flushing
       -- here pins the ordering: this file's captured stdout is fully on disk
       -- before any stderr write for it (or the next file) can occur.
-      let _ = flushStdout ()
+      flushStdout ()
       if code == 0 then
         True
       else
-        let _ = ePutStr err
-        let _ =
-          ePutStrLn
-            "medaka test: \{f}: test runner died (child exited \{intToString code})"
+        ePutStr err
+        ePutStrLn
+          "medaka test: \{f}: test runner died (child exited \{intToString code})"
         False
   testFilesReport rest results (acc || not ok)
 testFilesReport _ _ acc = acc

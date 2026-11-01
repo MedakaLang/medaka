@@ -101,7 +101,7 @@ sameFileGroupByKey : List (String, Int, String) ->
   HashMap String (List (String, Int, String))
 sameFileGroupByKey occs =
   let m = new ()
-  let _ = sameFileGroupGo m occs
+  sameFileGroupGo m occs
   m
 
 sameFileGroupGo : HashMap String (List (String, Int, String)) ->
@@ -109,11 +109,7 @@ sameFileGroupGo : HashMap String (List (String, Int, String)) ->
   Unit
 sameFileGroupGo _ [] = ()
 sameFileGroupGo m (o :: rest) =
-  let _ =
-    setInPlace
-      (sameFileOccKey o)
-      (o :: findWithDefault [] (sameFileOccKey o) m)
-      m
+  setInPlace (sameFileOccKey o) (o :: findWithDefault [] (sameFileOccKey o) m) m
   sameFileGroupGo m rest
 
 sameFileDistinctKeys : List (String, Int, String) -> List String
@@ -128,7 +124,7 @@ sameFileDistinctGo _ [] = []
 sameFileDistinctGo seen (o :: rest)
   | has (sameFileOccKey o) seen = sameFileDistinctGo seen rest
   | otherwise =
-    let _ = setInPlace (sameFileOccKey o) () seen
+    setInPlace (sameFileOccKey o) () seen
     sameFileOccKey o :: sameFileDistinctGo seen rest
 
 sameFileOccName : (String, Int, String) -> String

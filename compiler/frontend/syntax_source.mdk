@@ -75,12 +75,12 @@ publishSyntaxPrepared : Option (List Decl) ->
   String ->
   Result SyntaxAdmission SyntaxSource
 publishSyntaxPrepared known (limits@(RecoveryLimits maxSource maxTokens maxAttempts maxDiagnostics)) src =
-  let _ = stageBump "syntax.publish"
+  stageBump "syntax.publish"
   if min (min maxSource maxTokens) (min maxAttempts maxDiagnostics) < 0
     || stringLength src > maxSource then
     Err (SourceLimit (stringLength src))
   else
-    let _ = stageBump "syntax.scan_raw"
+    stageBump "syntax.scan_raw"
     let raw = scanRawChars (stringToChars src)
     let ranges = applyLayoutRanges raw
     let tokens = map ((t, _, _) => t) ranges
@@ -92,7 +92,7 @@ publishSyntaxPrepared known (limits@(RecoveryLimits maxSource maxTokens maxAttem
       let index = indexSource src
       let positioned = match known
         Some _ =>
-          let _ = stageBump "syntax.parse_only"
+          stageBump "syntax.parse_only"
           parseSourceSyntaxPairs src tokens offsets
         None => None
       let strict = match (known, positioned)
@@ -103,14 +103,14 @@ publishSyntaxPrepared known (limits@(RecoveryLimits maxSource maxTokens maxAttem
               (parsedPositions parsed)
               (parsedMetadata parsed))
         _ =>
-          let _ = stageBump "syntax.parse_checked"
+          stageBump "syntax.parse_checked"
           parseSourcePairsWithIndex src tokens offsets (() => index)
       let structural = match strict
         Ok parsed => Some parsed
         Err _ => match known
           Some _ => positioned
           None =>
-            let _ = stageBump "syntax.parse_only"
+            stageBump "syntax.parse_only"
             parseSourceSyntaxPairs src tokens offsets
       let recovered =
         recoverSourcePairsWithIndex limits index src tokens offsets strict

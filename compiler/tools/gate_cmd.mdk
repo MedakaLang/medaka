@@ -341,7 +341,7 @@ selectionOutput isJson _ (g :: gs) _ =
 -- The command's only exit site.
 emit : Result String String -> <IO> Unit
 emit (Err msg) =
-  let _ = ePutStrLn msg
+  ePutStrLn msg
   exit 1
 emit (Ok out) = putStr out
 
@@ -786,7 +786,7 @@ runOneGate env g =
         let t0 = monotonicSec ()
         let res = runCommand "env" (gateArgs env scratch secs cmd)
         let dt = monotonicSec () - t0
-        let _ = cleanupScratch scratch
+        cleanupScratch scratch
         match res
           Err e => spawnFailure g script "could not spawn the gate: \{e}" dt
           Ok (code, out, errOut) => GateResult {
@@ -834,8 +834,8 @@ runGatesLoop : RunEnv -> List Gate -> List GateResult -> <IO> List GateResult
 runGatesLoop _ [] acc = reverseL acc
 runGatesLoop env (g :: gs) acc =
   let r = runOneGate env g
-  let _ = putStr (resultLine r)
-  let _ = flushStdout ()
+  putStr (resultLine r)
+  flushStdout ()
   runGatesLoop env gs (r :: acc)
 
 -- ── failure output ──────────────────────────────────────────────────────────
@@ -1067,7 +1067,7 @@ writeReport : Option String -> String -> <IO> Bool
 writeReport None _ = True
 writeReport (Some p) body = match writeFile p body
   Err m =>
-    let _ = ePutStrLn "medaka gate run: could not write --report \{p}: \{m}"
+    ePutStrLn "medaka gate run: could not write --report \{p}: \{m}"
     False
   Ok _ => True
 
@@ -1099,7 +1099,7 @@ runSelected a gs =
     putStr (dryLines env gs)
   else match staleRefusal a.noStaleCheck env.root gs
     Some banner =>
-      let _ = ePutStr banner
+      ePutStr banner
       exit 1
     None => finishRun a (runGatesLoop env gs [])
 
@@ -3273,9 +3273,8 @@ reachPaths a = match a.pathsFrom
   None => a.paths
   Some f => match readFile f
     Err m =>
-      let _ =
-        ePutStrLn
-          "medaka gate reach: cannot read \{f} (\{m}) — failing open to every project"
+      ePutStrLn
+        "medaka gate reach: cannot read \{f} (\{m}) — failing open to every project"
       []
     Ok src => a.paths ++ nonBlankPaths (splitNl src)
 

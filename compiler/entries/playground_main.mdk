@@ -193,7 +193,7 @@ import types.tc_occurrence.{constrainedSigNames}
 -- what diagnostics they report.
 main : <IO> Unit
 main =
-  let _ = selectPlaygroundProfile ()
+  selectPlaygroundProfile ()
   match args ()
     "compile" :: runtimeP :: coreP :: entry :: rest =>
       runWithShipped True runtimeP coreP entry rest
@@ -220,7 +220,7 @@ selectPlaygroundProfile : Unit -> <IO> Unit
 selectPlaygroundProfile _ = match lookupProfile playgroundProfileName
   Ok p => selectedProfile := Some p
   Err m =>
-    let _ = ePutStrLn ("error: " ++ m)
+    ePutStrLn ("error: " ++ m)
     exit 1
 
 -- ── driver ────────────────────────────────────────────────────────────────
@@ -360,7 +360,7 @@ readCoreSeeding : String -> String -> <IO> Result String String
 readCoreSeeding coreP rsrc = match readFile coreP
   Err e => Err e
   Ok csrc =>
-    let _ = seedShippedInterface coreP rsrc csrc
+    seedShippedInterface coreP rsrc csrc
     Ok csrc
 
 -- Seed the prelude cache from the `core.mdki` and `compiler_fingerprint.txt`
@@ -695,7 +695,7 @@ targetRefusalOf written paths analysis = match !selectedProfile
 -- the two modes hand the caller the same diagnostic set either way.
 emitAnalyzeMarker : List (String, String, List Diag) -> <IO> Unit
 emitAnalyzeMarker warnTriples =
-  let _ = putStr "__MEDAKA_ANALYZE__\n"
+  putStr "__MEDAKA_ANALYZE__\n"
   match any tripleHasDiag warnTriples
     True => putStr (cjAllToJson warnTriples ++ "\n")
     False => putStr (cjAllToJson [] ++ "\n")
@@ -706,7 +706,7 @@ emitAnalyzeMarker warnTriples =
 emitWatMarker : List (String, String, List Diag) -> <IO> Unit
 emitWatMarker warnTriples = match any tripleHasDiag warnTriples
   True =>
-    let _ = putStr "__MEDAKA_WAT_DIAGS__\n"
+    putStr "__MEDAKA_WAT_DIAGS__\n"
     putStr (cjAllToJson warnTriples ++ "\n")
   False => putStr "__MEDAKA_WAT__\n"
 
@@ -773,7 +773,7 @@ runEmit emit requirement outputs paths warnTriples runtimeDecls elab executed =
     let wat = emitProgram input plan reached
     match wat
       Ok text =>
-        let _ = emitWatMarker warnTriples
+        emitWatMarker warnTriples
         putStr text
       Err defects => failWith (joinNl (renderSymbolDefects "" defects))
   else
@@ -792,7 +792,7 @@ runEmit emit requirement outputs paths warnTriples runtimeDecls elab executed =
 -- Print the marker then the one-line JSON, then exit 0 (NO trap).
 emitDiagnostics : String -> <IO> Unit
 emitDiagnostics json =
-  let _ = putStr "__MEDAKA_DIAGNOSTICS__\n"
+  putStr "__MEDAKA_DIAGNOSTICS__\n"
   putStr (json ++ "\n")
 
 -- Parse error: single located diagnostic (mirrors medaka_cli runCheckJsonCmd).
@@ -851,8 +851,7 @@ runQuery isHover _ _ _ _ = emitQuery isHover JNull
 
 emitQuery : Bool -> Json -> <IO> Unit
 emitQuery isHover j =
-  let _ =
-    putStr (if isHover then "__MEDAKA_HOVER__\n" else "__MEDAKA_COMPLETE__\n")
+  putStr (if isHover then "__MEDAKA_HOVER__\n" else "__MEDAKA_COMPLETE__\n")
   putStr (stringify j ++ "\n")
 
 -- Build the buffer's typecheck env (core + runtime + this file), then either look

@@ -222,9 +222,6 @@ IDENT "src"
 IDENT "start"
 RPAREN
 NEWLINE
-LET
-UNDERSCORE
-EQUAL
 IDENT "arrayBlit"
 IDENT "src"
 IDENT "start"

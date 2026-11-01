@@ -80,7 +80,7 @@ strictlyAlternates (_ :: []) = True
 strictlyAlternates (a :: b :: rest) = a /= b && strictlyAlternates (b :: rest)
 
 test "a run of Bool draws hits both values and is not a fixed alternation" =
-  let _ = seedPropRng 123456789
+  seedPropRng 123456789
   let draws = drawBools 100
   expectEach [
     ("some draw is True", expectTrue (hasTrue draws)),
@@ -108,7 +108,7 @@ drawTuples 0 = []
 drawTuples n = boolsToBits (drawBools 8) :: drawTuples (n - 1)
 
 test "8-tuples of raw draws reach far more than 62/256 distinct assignments" =
-  let _ = seedPropRng 123456789
+  seedPropRng 123456789
   let tuples = drawTuples 625  -- 625 * 8 = 5000 raw draws
   expectTrue (length (nub tuples) >= 200)
 
@@ -511,7 +511,7 @@ drawsFor source ty =
   let env = buildPlanEnv (map stampBuiltins (parse source))
   match planFor env "policy" "value" ty
     Ok plan =>
-      let _ = seedPropRng 20261009
+      seedPropRng 20261009
       let ge = GenEnv env omEmpty
       map
         (_ => showValue (genFromPlan ge (EvalEnv [ScanFrame []]) 0 plan))

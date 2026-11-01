@@ -30,12 +30,11 @@ emitAll : List Decl -> List String -> <IO> Unit
 emitAll _preludeDecls [] = putStr ""
 emitAll preludeDecls (path :: rest) = match readFile path
   Err msg =>
-    let _ = ePutStrLn msg
+    ePutStrLn msg
     emitAll preludeDecls rest
   Ok src =>
-    let _ =
-      putStr
-        "===SELFHOST-FIX=== \{path}\n\{evalMain (preludeDecls ++ desugar (parse src))}\n"
+    putStr
+      "===SELFHOST-FIX=== \{path}\n\{evalMain (preludeDecls ++ desugar (parse src))}\n"
     emitAll preludeDecls rest
 
 main = oracleMain ()

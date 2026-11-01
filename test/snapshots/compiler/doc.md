@@ -1,5 +1,5 @@
 # META
-source_lines=1855
+source_lines=1854
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -1851,10 +1851,9 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
     runtimeSrc
     coreSrc)
     None =>
-      let _ =
-        ePutStrLn
-          "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"
-      let _ = stageExit 1
+      ePutStrLn
+        "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"
+      stageExit 1
       []
     Some schemes => pubSchemes schemes
 # DESUGAR
@@ -2312,7 +2311,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DFunDef false "sentenceEndAt" (PWild (PList)) (EVar "None"))
 (DFunDef false "sentenceEndAt" ((PVar "prose") (PCons (PVar "m") (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EFieldAccess (EVar "m") "end") (EApp (EVar "dlen") (EVar "prose"))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (EFieldAccess (EVar "m") "end")) (EBinOp "+" (EFieldAccess (EVar "m") "end") (ELit (LInt 1)))) (EVar "prose")) (ELit (LString " ")))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (EFieldAccess (EVar "m") "end")) (EBinOp "+" (EFieldAccess (EVar "m") "end") (ELit (LInt 1)))) (EVar "prose")) (ELit (LString "\n")))) (EApp (EVar "Some") (EFieldAccess (EVar "m") "end")) (EApp (EApp (EVar "sentenceEndAt") (EVar "prose")) (EVar "rest"))))
 (DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
-(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "_rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EVar "omEmpty"))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EVar "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoLet false false PWild (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EApp (EVar "pubSchemes") (EVar "schemes")))))
+(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "_rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EVar "omEmpty"))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EVar "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EApp (EVar "pubSchemes") (EVar "schemes")))))
 # MARK
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
@@ -2768,4 +2767,4 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DFunDef false "sentenceEndAt" (PWild (PList)) (EVar "None"))
 (DFunDef false "sentenceEndAt" ((PVar "prose") (PCons (PVar "m") (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EFieldAccess (EVar "m") "end") (EApp (EVar "dlen") (EVar "prose"))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (EFieldAccess (EVar "m") "end")) (EBinOp "+" (EFieldAccess (EVar "m") "end") (ELit (LInt 1)))) (EVar "prose")) (ELit (LString " ")))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (EFieldAccess (EVar "m") "end")) (EBinOp "+" (EFieldAccess (EVar "m") "end") (ELit (LInt 1)))) (EVar "prose")) (ELit (LString "\n")))) (EApp (EVar "Some") (EFieldAccess (EVar "m") "end")) (EApp (EApp (EVar "sentenceEndAt") (EVar "prose")) (EVar "rest"))))
 (DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
-(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "_rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EVar "omEmpty"))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EMethodRef "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoLet false false PWild (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EApp (EVar "pubSchemes") (EVar "schemes")))))
+(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "_rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EVar "omEmpty"))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EMethodRef "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EApp (EVar "pubSchemes") (EVar "schemes")))))

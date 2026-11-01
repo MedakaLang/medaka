@@ -4673,7 +4673,7 @@ parseWithPositionsLocated src = parseWithPositions src
 export
 parseWithPositionsOpt : String -> Option (List Decl, Positions)
 parseWithPositionsOpt src =
-  let _ = stageBump "parse.positions"
+  stageBump "parse.positions"
   match tokenizeWithOffsetPairs src
     (tokList, offPairList) => parseWithPositionsOptPairs src tokList offPairList
 
@@ -5023,7 +5023,7 @@ prescanError : String ->
   Array Int ->
   Option ParseError
 prescanError src index toks offs ends =
-  let _ = stageBump "parse.prescan"
+  stageBump "parse.prescan"
   map ParseError (prescanDiagnostic index toks offs ends (stringLength src))
 
 -- `prescanError` over the `tokenizeWithOffsetPairs` shape that `fmt` holds.
@@ -6513,7 +6513,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig true "parseWithPositionsLocated" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions"))))
 (DFunDef false "parseWithPositionsLocated" ((PVar "src")) (EApp (EVar "parseWithPositions") (EVar "src")))
 (DTypeSig true "parseWithPositionsOpt" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))
-(DFunDef false "parseWithPositionsOpt" ((PVar "src")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "parse.positions")))) (DoExpr (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "tokList") (PVar "offPairList")) () (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "tokList")) (EVar "offPairList")))))))
+(DFunDef false "parseWithPositionsOpt" ((PVar "src")) (EBlock (DoExpr (EApp (EVar "stageBump") (ELit (LString "parse.positions")))) (DoExpr (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "tokList") (PVar "offPairList")) () (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "tokList")) (EVar "offPairList")))))))
 (DTypeSig true "parseWithPositionsOptPairs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))))
 (DFunDef false "parseWithPositionsOptPairs" ((PVar "src") (PVar "tokList") (PVar "offPairList")) (EApp (EApp (EVar "map") (ELam ((PVar "parsed")) (ETuple (EApp (EVar "parsedDecls") (EVar "parsed")) (EApp (EVar "parsedPositions") (EVar "parsed"))))) (EApp (EApp (EApp (EVar "parseSourceSyntaxPairs") (EVar "src")) (EVar "tokList")) (EVar "offPairList"))))
 (DTypeSig true "parseSourceSyntaxPairs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "ParsedSource"))))))
@@ -6567,7 +6567,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig true "parseLocatedResult" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "parseLocatedResult" ((PVar "src")) (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "tokList") (PVar "offPairs")) () (EApp (EApp (EApp (EApp (EVar "parseResultWith") (EVar "LocatedChecked")) (EVar "src")) (EVar "tokList")) (EVar "offPairs")))))
 (DTypeSig true "prescanError" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyCon "SourceIndex")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "ParseError"))))))))
-(DFunDef false "prescanError" ((PVar "src") (PVar "index") (PVar "toks") (PVar "offs") (PVar "ends")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "parse.prescan")))) (DoExpr (EApp (EApp (EVar "map") (EVar "ParseError")) (EApp (EApp (EApp (EApp (EApp (EVar "prescanDiagnostic") (EVar "index")) (EVar "toks")) (EVar "offs")) (EVar "ends")) (EApp (EVar "stringLength") (EVar "src")))))))
+(DFunDef false "prescanError" ((PVar "src") (PVar "index") (PVar "toks") (PVar "offs") (PVar "ends")) (EBlock (DoExpr (EApp (EVar "stageBump") (ELit (LString "parse.prescan")))) (DoExpr (EApp (EApp (EVar "map") (EVar "ParseError")) (EApp (EApp (EApp (EApp (EApp (EVar "prescanDiagnostic") (EVar "index")) (EVar "toks")) (EVar "offs")) (EVar "ends")) (EApp (EVar "stringLength") (EVar "src")))))))
 (DTypeSig true "prescanErrorPairs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "ParseError"))))))
 (DFunDef false "prescanErrorPairs" ((PVar "src") (PVar "tokList") (PVar "offPairs")) (EApp (EApp (EApp (EApp (EVar "prescanErrorPairsWithIndex") (EVar "src")) (EVar "tokList")) (EVar "offPairs")) (ELam ((PLit LUnit)) (EApp (EVar "indexSource") (EVar "src")))))
 (DTypeSig true "prescanErrorPairsWithIndex" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyFun (TyCon "Unit") (TyCon "SourceIndex")) (TyApp (TyCon "Option") (TyCon "ParseError")))))))
@@ -8014,7 +8014,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig true "parseWithPositionsLocated" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions"))))
 (DFunDef false "parseWithPositionsLocated" ((PVar "src")) (EApp (EVar "parseWithPositions") (EVar "src")))
 (DTypeSig true "parseWithPositionsOpt" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))
-(DFunDef false "parseWithPositionsOpt" ((PVar "src")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "parse.positions")))) (DoExpr (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "tokList") (PVar "offPairList")) () (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "tokList")) (EVar "offPairList")))))))
+(DFunDef false "parseWithPositionsOpt" ((PVar "src")) (EBlock (DoExpr (EApp (EVar "stageBump") (ELit (LString "parse.positions")))) (DoExpr (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "tokList") (PVar "offPairList")) () (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "tokList")) (EVar "offPairList")))))))
 (DTypeSig true "parseWithPositionsOptPairs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))))
 (DFunDef false "parseWithPositionsOptPairs" ((PVar "src") (PVar "tokList") (PVar "offPairList")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "parsed")) (ETuple (EApp (EVar "parsedDecls") (EVar "parsed")) (EApp (EVar "parsedPositions") (EVar "parsed"))))) (EApp (EApp (EApp (EVar "parseSourceSyntaxPairs") (EVar "src")) (EVar "tokList")) (EVar "offPairList"))))
 (DTypeSig true "parseSourceSyntaxPairs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "ParsedSource"))))))
@@ -8068,7 +8068,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig true "parseLocatedResult" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "parseLocatedResult" ((PVar "src")) (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "tokList") (PVar "offPairs")) () (EApp (EApp (EApp (EApp (EVar "parseResultWith") (EVar "LocatedChecked")) (EVar "src")) (EVar "tokList")) (EVar "offPairs")))))
 (DTypeSig true "prescanError" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyCon "SourceIndex")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "ParseError"))))))))
-(DFunDef false "prescanError" ((PVar "src") (PVar "index") (PVar "toks") (PVar "offs") (PVar "ends")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "parse.prescan")))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "ParseError")) (EApp (EApp (EApp (EApp (EApp (EVar "prescanDiagnostic") (EMethodRef "index")) (EVar "toks")) (EVar "offs")) (EVar "ends")) (EApp (EVar "stringLength") (EVar "src")))))))
+(DFunDef false "prescanError" ((PVar "src") (PVar "index") (PVar "toks") (PVar "offs") (PVar "ends")) (EBlock (DoExpr (EApp (EVar "stageBump") (ELit (LString "parse.prescan")))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "ParseError")) (EApp (EApp (EApp (EApp (EApp (EVar "prescanDiagnostic") (EMethodRef "index")) (EVar "toks")) (EVar "offs")) (EVar "ends")) (EApp (EVar "stringLength") (EVar "src")))))))
 (DTypeSig true "prescanErrorPairs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "ParseError"))))))
 (DFunDef false "prescanErrorPairs" ((PVar "src") (PVar "tokList") (PVar "offPairs")) (EApp (EApp (EApp (EApp (EVar "prescanErrorPairsWithIndex") (EVar "src")) (EVar "tokList")) (EVar "offPairs")) (ELam ((PLit LUnit)) (EApp (EVar "indexSource") (EVar "src")))))
 (DTypeSig true "prescanErrorPairsWithIndex" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyFun (TyCon "Unit") (TyCon "SourceIndex")) (TyApp (TyCon "Option") (TyCon "ParseError")))))))
