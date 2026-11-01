@@ -1,5 +1,5 @@
 # META
-source_lines=808
+source_lines=813
 stages=DESUGAR,MARK
 # SOURCE
 -- Receipts are reusable values: their presence in a buffer, rather than the
@@ -138,7 +138,12 @@ boundary c = c == -1 || space c || punct c || c == 59
 wordEnd : Array Int -> Int -> Int
 wordEnd bytes i =
   let c = byte bytes i
-  if c == -1
+  if c >= 97 && c <= 122
+    || c >= 65 && c <= 90
+    || c >= 48 && c <= 57
+    || c == 95 then
+    wordEnd bytes (i + 1)
+  else if c == -1
     || space c
     || punct c
     || c == 59
@@ -842,7 +847,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DTypeSig false "boundary" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "boundary" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (EUnOp "-" (ELit (LInt 1)))) (EApp (EVar "space") (EVar "c"))) (EApp (EVar "punct") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LInt 59)))))
 (DTypeSig false "wordEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "wordEnd" ((PVar "bytes") (PVar "i")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "i"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (EUnOp "-" (ELit (LInt 1)))) (EApp (EVar "space") (EVar "c"))) (EApp (EVar "punct") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LInt 59)))) (EBinOp "==" (EVar "c") (ELit (LInt 34)))) (EBinOp "==" (EVar "c") (ELit (LInt 30)))) (EBinOp "==" (EVar "c") (ELit (LInt 31)))) (EVar "i") (EApp (EApp (EVar "wordEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
+(DFunDef false "wordEnd" ((PVar "bytes") (PVar "i")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "i"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LInt 97))) (EBinOp "<=" (EVar "c") (ELit (LInt 122)))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LInt 65))) (EBinOp "<=" (EVar "c") (ELit (LInt 90))))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LInt 48))) (EBinOp "<=" (EVar "c") (ELit (LInt 57))))) (EBinOp "==" (EVar "c") (ELit (LInt 95)))) (EApp (EApp (EVar "wordEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (EUnOp "-" (ELit (LInt 1)))) (EApp (EVar "space") (EVar "c"))) (EApp (EVar "punct") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LInt 59)))) (EBinOp "==" (EVar "c") (ELit (LInt 34)))) (EBinOp "==" (EVar "c") (ELit (LInt 30)))) (EBinOp "==" (EVar "c") (ELit (LInt 31)))) (EVar "i") (EApp (EApp (EVar "wordEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))
 (DTypeSig false "quotedEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "Int")))))
 (DFunDef false "quotedEnd" ((PVar "bytes") (PVar "i")) (EMatch (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "i")) (arm (PVar "c") ((GBool (EBinOp "==" (EVar "c") (EUnOp "-" (ELit (LInt 1)))))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "unterminated quoted text"))) (EVar "moduleOrigin")))) (arm (PLit (LInt 34)) () (EApp (EVar "Ok") (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (arm (PLit (LInt 92)) () (EIf (EBinOp "==" (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EUnOp "-" (ELit (LInt 1)))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "unterminated escape"))) (EVar "moduleOrigin"))) (EApp (EApp (EVar "quotedEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))))) (arm PWild () (EApp (EApp (EVar "quotedEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
 (DTypeSig false "lineEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Int"))))
@@ -1001,7 +1006,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DTypeSig false "boundary" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "boundary" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (EUnOp "-" (ELit (LInt 1)))) (EApp (EVar "space") (EVar "c"))) (EApp (EVar "punct") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LInt 59)))))
 (DTypeSig false "wordEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "wordEnd" ((PVar "bytes") (PVar "i")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "i"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (EUnOp "-" (ELit (LInt 1)))) (EApp (EVar "space") (EVar "c"))) (EApp (EVar "punct") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LInt 59)))) (EBinOp "==" (EVar "c") (ELit (LInt 34)))) (EBinOp "==" (EVar "c") (ELit (LInt 30)))) (EBinOp "==" (EVar "c") (ELit (LInt 31)))) (EVar "i") (EApp (EApp (EVar "wordEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
+(DFunDef false "wordEnd" ((PVar "bytes") (PVar "i")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "i"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LInt 97))) (EBinOp "<=" (EVar "c") (ELit (LInt 122)))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LInt 65))) (EBinOp "<=" (EVar "c") (ELit (LInt 90))))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LInt 48))) (EBinOp "<=" (EVar "c") (ELit (LInt 57))))) (EBinOp "==" (EVar "c") (ELit (LInt 95)))) (EApp (EApp (EVar "wordEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (EUnOp "-" (ELit (LInt 1)))) (EApp (EVar "space") (EVar "c"))) (EApp (EVar "punct") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LInt 59)))) (EBinOp "==" (EVar "c") (ELit (LInt 34)))) (EBinOp "==" (EVar "c") (ELit (LInt 30)))) (EBinOp "==" (EVar "c") (ELit (LInt 31)))) (EVar "i") (EApp (EApp (EVar "wordEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))
 (DTypeSig false "quotedEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "Int")))))
 (DFunDef false "quotedEnd" ((PVar "bytes") (PVar "i")) (EMatch (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "i")) (arm (PVar "c") ((GBool (EBinOp "==" (EVar "c") (EUnOp "-" (ELit (LInt 1)))))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "unterminated quoted text"))) (EVar "moduleOrigin")))) (arm (PLit (LInt 34)) () (EApp (EVar "Ok") (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (arm (PLit (LInt 92)) () (EIf (EBinOp "==" (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EUnOp "-" (ELit (LInt 1)))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "unterminated escape"))) (EVar "moduleOrigin"))) (EApp (EApp (EVar "quotedEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))))) (arm PWild () (EApp (EApp (EVar "quotedEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
 (DTypeSig false "lineEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Int"))))

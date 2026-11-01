@@ -134,7 +134,12 @@ boundary c = c == -1 || space c || punct c || c == 59
 wordEnd : Array Int -> Int -> Int
 wordEnd bytes i =
   let c = byte bytes i
-  if c == -1
+  if c >= 97 && c <= 122
+    || c >= 65 && c <= 90
+    || c >= 48 && c <= 57
+    || c == 95 then
+    wordEnd bytes (i + 1)
+  else if c == -1
     || space c
     || punct c
     || c == 59
