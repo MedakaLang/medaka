@@ -2862,7 +2862,7 @@ migration = "done"
 run = "test/diff_compiler_wasm_single_traversal_test.mdk"
 oracles = []
 sources = ["compiler/backend/*.mdk", "compiler/entries/wasm_emit_main.mdk", "compiler/entries/wasm_emit_typed_main.mdk", "compiler/entries/wasm_emit_modules_main.mdk", "compiler/entries/playground_main.mdk", "compiler/entries/entry_support.mdk", "compiler/frontend/*.mdk", "compiler/types/*.mdk", "compiler/ir/*.mdk", "compiler/driver/*.mdk", "compiler/support/*.mdk", "stdlib/*.mdk", "runtime/medaka_rt.c", "test/wasm/run.js", "playground/medaka_host.mjs"]
-corpus = []
+corpus = ["test/llvm_fixtures_typed"]
 toolchain = ["clang", "wasm-tools", "node>=24"]
 link = "production"
 
