@@ -54,7 +54,7 @@ analyzedIn rsrc csrc manifestText = match makeTempDir ()
         rsrc
         csrc
     let msgs = flatMap (r => map diagMessage (snd r)) results
-    let _ = cleanupTempDir dir
+    cleanupTempDir dir
     map (_ => msgs) selected
 
 edgeRefusal : String

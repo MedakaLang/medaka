@@ -291,7 +291,7 @@ failWith : String -> <IO> Unit
 -- The same two lines as `entries/entry_support.mdk`'s `failWith`; a tool cannot import an entry.
 -- lint-disable-next-line rule-duplicate-body
 failWith msg =
-  let _ = ePutStrLn msg
+  ePutStrLn msg
   stageExit 1
 
 writeCmd : String -> List String -> <IO> Unit
@@ -488,7 +488,7 @@ verdictOf modulePath = match interfaceVerdictOf modulePath
 verifyCmd : String -> <IO> Unit
 verifyCmd modulePath =
   let verdict = verdictOf modulePath
-  let _ = putStrLn (verdictText verdict)
+  putStrLn (verdictText verdict)
   match verdict
     Fresh => ()
     _ => stageExit 1
@@ -497,7 +497,7 @@ verifyCmd modulePath =
 
 printHelp : Unit -> <IO> Unit
 printHelp _ =
-  let _ = putStrLn interfaceHelpText
+  putStrLn interfaceHelpText
   stageExit 0
 
 oneModule : ArgSpec -> List String -> (String -> <IO> Unit) -> <IO> Unit

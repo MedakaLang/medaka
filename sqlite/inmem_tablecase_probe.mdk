@@ -64,19 +64,19 @@ checkAllSame db label sqls =
     [] => println "\{label}: PASS (empty)"
     first :: rest =>
       if all (== first) rest then
-        let _ = println "\{label}: PASS"
+        println "\{label}: PASS"
         println first
       else
-        let _ = println "\{label}: FAIL — renderings diverge:"
+        println "\{label}: FAIL — renderings diverge:"
         printRows (r => r) rendered
 
 main : <IO> Unit
 main =
-  let _ = println "-- CREATE users (in-memory) --"
+  println "-- CREATE users (in-memory) --"
   match buildDatabaseMulti specs
     Err e => println "build error: \{e}"
     Ok bytes => match fromBytes bytes
       Err e => println "fromBytes error: \{e}"
       Ok db =>
-        let _ = checkAllSame db "table-name casing" tableCasingQueries
+        checkAllSame db "table-name casing" tableCasingQueries
         checkAllSame db "column-name casing" columnCasingQueries

@@ -4669,7 +4669,7 @@ parseWithPositionsLocated src = parseWithPositions src
 export
 parseWithPositionsOpt : String -> Option (List Decl, Positions)
 parseWithPositionsOpt src =
-  let _ = stageBump "parse.positions"
+  stageBump "parse.positions"
   match tokenizeWithOffsetPairs src
     (tokList, offPairList) => parseWithPositionsOptPairs src tokList offPairList
 
@@ -5019,7 +5019,7 @@ prescanError : String ->
   Array Int ->
   Option ParseError
 prescanError src index toks offs ends =
-  let _ = stageBump "parse.prescan"
+  stageBump "parse.prescan"
   map ParseError (prescanDiagnostic index toks offs ends (stringLength src))
 
 -- `prescanError` over the `tokenizeWithOffsetPairs` shape that `fmt` holds.

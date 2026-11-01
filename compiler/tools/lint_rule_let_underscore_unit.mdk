@@ -1,0 +1,134 @@
+-- lint rule rule-let-underscore-unit: `let _ = e` on a call whose declared result is Unit, in a plain block. Write the bare statement `e`.
+
+import driver.diagnostics.{Severity(..)}
+import frontend.ast.{Decl, DoStmt(..), Expr(..), Loc(..), Pat(..)}
+import frontend.ast_walk.{ExprKind(..)}
+import frontend.parser.{Positions(..)}
+import tools.lint_calls.{
+  BlockKind(..),
+  DiscardClass(..),
+  Verdict(..),
+  blockOf,
+  discardClass,
+  discardVerdict,
+}
+import tools.lint_core.{
+  Applicability(..),
+  Category(..),
+  Ctx,
+  FileFacts,
+  Finding(..),
+  Fix(..),
+  FixEdit(..),
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  Visitor(..),
+  factScopes,
+  mkVisitorRule,
+  projectIndexOf,
+}
+import tools.lint_index.{ProjectIndex}
+import tools.lint_scope.{FileScopes}
+import tools.lint_shared.{ruleNameLetUnderscoreUnit, unwrapLoc}
+
+export
+rule : Rule
+rule =
+  mkVisitorRule
+    RuleMeta {
+      name = ruleNameLetUnderscoreUnit,
+      summary =
+        "`let _ = e` on a call that returns Unit, in a plain block. Write the bare statement `e`",
+      doc =
+        "A call whose declared result is Unit has no value to bind, so `let _ =` in front of it says nothing. In a plain block the call is a statement on its own; `do` blocks keep `let _ =`. Only a saturated call to a signed function is checked: the declared result decides, so a partial application, a method, a shadowed name and an unsigned function are not reported.\n\nBefore:\n  let _ = writeLine out \"done\"\n  count xs\nAfter:\n  writeLine out \"done\"\n  count xs",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [NeedsScopes, NeedsProjectIndex],
+    }
+    ruleLetUnderscoreUnit
+    None
+
+ruleLetUnderscoreUnit : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Visitor
+ruleLetUnderscoreUnit idx path facts _ _ = [
+  OnExpr [KBlock] (blockAt (projectIndexOf idx) (factScopes facts) path),
+]
+
+blockAt : ProjectIndex -> FileScopes -> String -> Ctx -> Expr -> List Finding
+blockAt ix scopes path _ e = match blockOf e
+  Some (PlainBlock, stmts) => flatMap (stmtFindings ix scopes path) stmts
+  _ => []
+
+stmtFindings : ProjectIndex -> FileScopes -> String -> DoStmt -> List Finding
+stmtFindings ix scopes path (s@(DoLet _ _ PWild rhs (Loc f sl sc el ec))) =
+  if sl == el && sc == ec then
+    []
+  else match discardVerdict ix scopes path s
+    Discard ty =>
+      if discardClass ty == ClassUnit then
+        [finding (Loc f sl sc el ec) (dropFix f sl sc rhs)]
+      else
+        []
+    Abstain _ => []
+stmtFindings _ _ _ _ = []
+
+finding : Loc -> Option Fix -> Finding
+finding loc fix = Finding {
+  rule = ruleNameLetUnderscoreUnit,
+  message =
+    "`let _ = e` binds a Unit result to nothing. In a plain block write the bare statement `e` (`do` blocks keep `let _ =`). Before: `let _ = f x`; after: `f x`",
+  severity = SevWarning,
+  loc = Some loc,
+  fix = fix,
+}
+
+-- Deleting the text from the `let` keyword to the call leaves the call's own
+-- bytes untouched, and the call then starts where the `let` did, so a call on
+-- a later line keeps every continuation line deeper than the statement.  The
+-- edit is withheld where the call's start is not known.
+dropFix : String -> Int -> Int -> Expr -> Option Fix
+dropFix f sl sc rhs = match callStart rhs
+  Some (Loc _ rl rc _ _) =>
+    if rl > sl || rc > sc then
+      Some Fix {
+        fixApplicability = Safe,
+        fixEdits = [FixEdit (Loc f sl sc rl rc) ""],
+        fixMessage = "drop the `let _ =`",
+      }
+    else
+      None
+  None => None
+
+-- Where the call's text starts: its head, or the enclosing brackets when the
+-- call is parenthesised, whichever comes first.
+callStart : Expr -> Option Loc
+callStart rhs = match (outerStart rhs, headStart (unwrapLoc rhs))
+  (Some a, Some b) => Some (earlier a b)
+  (Some a, None) => Some a
+  (None, b) => b
+
+headStart : Expr -> Option Loc
+headStart (EApp f _) = headStart f
+headStart (ELoc l _) = Some l
+headStart _ = None
+
+outerStart : Expr -> Option Loc
+outerStart (ELoc l _) = Some l
+outerStart _ = None
+
+earlier : Loc -> Loc -> Loc
+earlier a b = match (a, b)
+  (Loc _ al ac _ _, Loc _ bl bc _ _) =>
+    if al < bl || (al == bl && ac <= bc) then a else b

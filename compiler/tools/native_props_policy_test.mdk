@@ -23,7 +23,7 @@ withFixture source inspect = match makeTempDir ()
     let result = match writeFixtureFiles dir files
       Err message => fail message
       Ok _ => inspect "\{dir}/main.mdk"
-    let _ = cleanupTempDir dir
+    cleanupTempDir dir
     result
 
 runReport : String -> <Exec, IO> Result String (Int, Json)

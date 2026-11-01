@@ -396,13 +396,13 @@ ownsModule (Some own) modName = modName == own
 sigTyMapOf : List Decl -> HashMap String Ty
 sigTyMapOf prog =
   let m = new ()
-  let _ = sigTyInto (reverseL (flatMap topSigPairL prog)) m
+  sigTyInto (reverseL (flatMap topSigPairL prog)) m
   m
 
 sigTyInto : List (String, Ty) -> HashMap String Ty -> Unit
 sigTyInto [] _ = ()
 sigTyInto ((n, t) :: rest) m =
-  let _ = setInPlace n t m
+  setInPlace n t m
   sigTyInto rest m
 
 topSigPairL : Decl -> List (String, Ty)

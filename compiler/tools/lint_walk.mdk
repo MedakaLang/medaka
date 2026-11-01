@@ -960,7 +960,7 @@ lintParseSource src =
   match prescanErrorPairs src tokens offsets
     Some e => Err e
     None =>
-      let _ = stageBump "parse.positions"
+      stageBump "parse.positions"
       match parseWithPositionsOptPairs src tokens offsets
         Some parsed => Ok parsed
         None =>
@@ -1587,7 +1587,7 @@ applySuppressionsMultiDirs dirTable findings =
 dirTableMap : List (String, List Directive) -> HashMap String (List Directive)
 dirTableMap rows =
   let m = new ()
-  let _ = dirTableFill m rows
+  dirTableFill m rows
   m
 
 dirTableFill : HashMap String (List Directive) ->

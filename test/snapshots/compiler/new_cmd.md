@@ -53,21 +53,21 @@ export
 newProject : String -> <IO> Int
 newProject name =
   if invalidName name then
-    let _ = ePutStrLn ("medaka new: invalid project name: \"" ++ name ++ "\"")
+    ePutStrLn ("medaka new: invalid project name: \"" ++ name ++ "\"")
     2
   else if fileExists name then
-    let _ = ePutStrLn ("medaka new: path already exists: " ++ name)
+    ePutStrLn ("medaka new: path already exists: " ++ name)
     1
   else match makeDir name
     Err msg =>
-      let _ = ePutStrLn ("medaka new: mkdir failed: " ++ msg)
+      ePutStrLn ("medaka new: mkdir failed: " ++ msg)
       1
     Ok _ =>
-      let _ = writeProjectFile (name ++ "/medaka.toml") (tomlTemplate name)
-      let _ = writeProjectFile (name ++ "/main.mdk") mainTemplate
-      let _ = writeProjectFile (name ++ "/.gitignore") gitignoreTemplate
-      let _ = writeProjectFile (name ++ "/README.md") (readmeTemplate name)
-      let _ = putStrLn ("Created " ++ name ++ "/")
+      writeProjectFile (name ++ "/medaka.toml") (tomlTemplate name)
+      writeProjectFile (name ++ "/main.mdk") mainTemplate
+      writeProjectFile (name ++ "/.gitignore") gitignoreTemplate
+      writeProjectFile (name ++ "/README.md") (readmeTemplate name)
+      putStrLn ("Created " ++ name ++ "/")
       0
 # DESUGAR
 (DTypeSig false "nameContainsChar" (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -85,7 +85,7 @@ newProject name =
 (DTypeSig false "writeProjectFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "writeProjectFile" ((PVar "path") (PVar "contents")) (EMatch (EApp (EApp (EVar "writeFile") (EVar "path")) (EVar "contents")) (arm (PCon "Ok" PWild) () (ELit LUnit)) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "medaka new: writeFile failed: ")) (EVar "msg"))))))
 (DTypeSig true "newProject" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Int"))))
-(DFunDef false "newProject" ((PVar "name")) (EIf (EApp (EVar "invalidName") (EVar "name")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka new: invalid project name: \"")) (EVar "name")) (ELit (LString "\""))))) (DoExpr (ELit (LInt 2)))) (EIf (EApp (EVar "fileExists") (EVar "name")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (ELit (LString "medaka new: path already exists: ")) (EVar "name")))) (DoExpr (ELit (LInt 1)))) (EMatch (EApp (EVar "makeDir") (EVar "name")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (ELit (LString "medaka new: mkdir failed: ")) (EVar "msg")))) (DoExpr (ELit (LInt 1))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/medaka.toml")))) (EApp (EVar "tomlTemplate") (EVar "name")))) (DoLet false false PWild (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/main.mdk")))) (EVar "mainTemplate"))) (DoLet false false PWild (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/.gitignore")))) (EVar "gitignoreTemplate"))) (DoLet false false PWild (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/README.md")))) (EApp (EVar "readmeTemplate") (EVar "name")))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "Created ")) (EVar "name")) (ELit (LString "/"))))) (DoExpr (ELit (LInt 0)))))))))
+(DFunDef false "newProject" ((PVar "name")) (EIf (EApp (EVar "invalidName") (EVar "name")) (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka new: invalid project name: \"")) (EVar "name")) (ELit (LString "\""))))) (DoExpr (ELit (LInt 2)))) (EIf (EApp (EVar "fileExists") (EVar "name")) (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (ELit (LString "medaka new: path already exists: ")) (EVar "name")))) (DoExpr (ELit (LInt 1)))) (EMatch (EApp (EVar "makeDir") (EVar "name")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (ELit (LString "medaka new: mkdir failed: ")) (EVar "msg")))) (DoExpr (ELit (LInt 1))))) (arm (PCon "Ok" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/medaka.toml")))) (EApp (EVar "tomlTemplate") (EVar "name")))) (DoExpr (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/main.mdk")))) (EVar "mainTemplate"))) (DoExpr (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/.gitignore")))) (EVar "gitignoreTemplate"))) (DoExpr (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/README.md")))) (EApp (EVar "readmeTemplate") (EVar "name")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "Created ")) (EVar "name")) (ELit (LString "/"))))) (DoExpr (ELit (LInt 0)))))))))
 # MARK
 (DTypeSig false "nameContainsChar" (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "nameContainsChar" ((PVar "c") (PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EApp (EVar "charToStr") (EVar "c"))) (EVar "name"))))
@@ -102,4 +102,4 @@ newProject name =
 (DTypeSig false "writeProjectFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "writeProjectFile" ((PVar "path") (PVar "contents")) (EMatch (EApp (EApp (EVar "writeFile") (EVar "path")) (EVar "contents")) (arm (PCon "Ok" PWild) () (ELit LUnit)) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "medaka new: writeFile failed: ")) (EVar "msg"))))))
 (DTypeSig true "newProject" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Int"))))
-(DFunDef false "newProject" ((PVar "name")) (EIf (EApp (EVar "invalidName") (EVar "name")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka new: invalid project name: \"")) (EVar "name")) (ELit (LString "\""))))) (DoExpr (ELit (LInt 2)))) (EIf (EApp (EVar "fileExists") (EVar "name")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (ELit (LString "medaka new: path already exists: ")) (EVar "name")))) (DoExpr (ELit (LInt 1)))) (EMatch (EApp (EVar "makeDir") (EVar "name")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (ELit (LString "medaka new: mkdir failed: ")) (EVar "msg")))) (DoExpr (ELit (LInt 1))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/medaka.toml")))) (EApp (EVar "tomlTemplate") (EVar "name")))) (DoLet false false PWild (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/main.mdk")))) (EVar "mainTemplate"))) (DoLet false false PWild (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/.gitignore")))) (EVar "gitignoreTemplate"))) (DoLet false false PWild (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/README.md")))) (EApp (EVar "readmeTemplate") (EVar "name")))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "Created ")) (EVar "name")) (ELit (LString "/"))))) (DoExpr (ELit (LInt 0)))))))))
+(DFunDef false "newProject" ((PVar "name")) (EIf (EApp (EVar "invalidName") (EVar "name")) (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka new: invalid project name: \"")) (EVar "name")) (ELit (LString "\""))))) (DoExpr (ELit (LInt 2)))) (EIf (EApp (EVar "fileExists") (EVar "name")) (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (ELit (LString "medaka new: path already exists: ")) (EVar "name")))) (DoExpr (ELit (LInt 1)))) (EMatch (EApp (EVar "makeDir") (EVar "name")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (ELit (LString "medaka new: mkdir failed: ")) (EVar "msg")))) (DoExpr (ELit (LInt 1))))) (arm (PCon "Ok" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/medaka.toml")))) (EApp (EVar "tomlTemplate") (EVar "name")))) (DoExpr (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/main.mdk")))) (EVar "mainTemplate"))) (DoExpr (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/.gitignore")))) (EVar "gitignoreTemplate"))) (DoExpr (EApp (EApp (EVar "writeProjectFile") (EBinOp "++" (EVar "name") (ELit (LString "/README.md")))) (EApp (EVar "readmeTemplate") (EVar "name")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "Created ")) (EVar "name")) (ELit (LString "/"))))) (DoExpr (ELit (LInt 0)))))))))

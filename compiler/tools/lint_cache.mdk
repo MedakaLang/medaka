@@ -281,7 +281,7 @@ decodeEntry : String ->
   ShardLoad
 decodeEntry stamp indexKey answersHold path hash text =
   let cur = cursorOf text
-  let _ = cursorOpen cur
+  cursorOpen cur
   let v = cursorInt cur
   let st = cursorAtom cur
   let p = cursorAtom cur
@@ -299,7 +299,7 @@ decodeEntry stamp indexKey answersHold path hash text =
     let indexed = cursorList readRanked cur
     let sums = cursorList readNamedSummary cur
     let dirs = cursorList readDirective cur
-    let _ = cursorClose cur
+    cursorClose cur
     if cursorFailed cur || not (cursorAtEnd cur) then
       ShardMiss
     else
@@ -331,21 +331,21 @@ staleShard indexKey entry = ShardStale ({ entry |
 
 readAnswer : SexpCursor -> Answer
 readAnswer cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let question = cursorAtom cur
   let digest = cursorAtom cur
-  let _ = cursorClose cur
+  cursorClose cur
   Answer { ansQuestion = question, ansDigest = digest }
 
 readRanked : SexpCursor -> (Int, Finding)
 readRanked cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let rank = cursorInt cur
   let rule = cursorAtom cur
   let message = cursorAtom cur
   let sev = readSeverity cur
   let loc = readLoc cur
-  let _ = cursorClose cur
+  cursorClose cur
   (
     rank,
     Finding {
@@ -370,9 +370,9 @@ readSeverity cur =
 -- `()` is no location; otherwise `(file line col endLine endCol)`.
 readLoc : SexpCursor -> Option Loc
 readLoc cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   if isCloseByte (cursorPeek cur) then
-    let _ = cursorAdvance cur
+    cursorAdvance cur
     None
   else
     let file = cursorAtom cur
@@ -380,42 +380,42 @@ readLoc cur =
     let c = cursorInt cur
     let el = cursorInt cur
     let ec = cursorInt cur
-    let _ = cursorClose cur
+    cursorClose cur
     Some (Loc file l c el ec)
 
 readNamedSummary : SexpCursor -> (String, Summary)
 readNamedSummary cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let rule = cursorAtom cur
   let summary = readSummary cur
-  let _ = cursorClose cur
+  cursorClose cur
   (rule, summary)
 
 -- The tag names the constructor; a tag no constructor owns fails the cursor.
 readSummary : SexpCursor -> Summary
 readSummary cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let tag = cursorChar cur
   let summary =
     if tag == 100 then
       DupOccs (cursorList readOcc cur)
     else
       cursorFail cur (DupOccs [])
-  let _ = cursorClose cur
+  cursorClose cur
   summary
 
 readOcc : SexpCursor -> (Int, String, String)
 readOcc cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let line = cursorInt cur
   let name = cursorAtom cur
   let key = cursorAtom cur
-  let _ = cursorClose cur
+  cursorClose cur
   (line, name, key)
 
 readDirective : SexpCursor -> Directive
 readDirective cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let tag = cursorChar cur
   let scope =
     if tag == 102 then
@@ -425,7 +425,7 @@ readDirective cur =
     else
       cursorFail cur DScopeFile
   let names = cursorList cursorAtom cur
-  let _ = cursorClose cur
+  cursorClose cur
   Directive scope names
 
 -- ── load ─────────────────────────────────────────────────────────────────────
@@ -476,7 +476,7 @@ storeEntries cacheDir stamp entries =
     Ok _ => match makeStagingDir cacheDir
       Err _ => ()
       Ok tmp =>
-        let _ = storeGo cacheDir tmp stamp dirty
+        storeGo cacheDir tmp stamp dirty
         let _ = removeDir tmp
         ()
 
@@ -486,7 +486,7 @@ entryDirty e = e.dirty
 storeGo : String -> String -> String -> List LintEntry -> <IO> Unit
 storeGo _ _ _ [] = ()
 storeGo cacheDir tmp stamp (e :: rest) =
-  let _ = storeOne cacheDir tmp stamp e
+  storeOne cacheDir tmp stamp e
   storeGo cacheDir tmp stamp rest
 
 -- Stage under the temp dir, then rename ONTO the shard path (same filesystem —

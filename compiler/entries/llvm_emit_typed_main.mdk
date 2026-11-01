@@ -124,7 +124,7 @@ emitGapIsolation =
     Err defects => refuseLlvmSymbolDefects "" defects
     Ok (_, gaps) =>
       if contains "?\tunsupported Core IR node CMatch" gaps then
-        let _ = putStr "LLVM_GAP_RECORD_OK\n"
+        putStr "LLVM_GAP_RECORD_OK\n"
         let _ =
           emitProgram input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
         failWith

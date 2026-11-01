@@ -513,6 +513,11 @@ inlang-tools-lint-fix-test:
 inlang-tools-lint-hints-test:
 	./medaka test compiler/tools/lint_hints_test.mdk
 
+## compiler/tools/lint_calls_test.mdk is a `*_test.mdk` sibling outside every
+## entry's import closure ([W-MODULE-BLIND]): the discarded-call verdict.
+inlang-tools-lint-calls-test:
+	./medaka test compiler/tools/lint_calls_test.mdk
+
 ## The `medaka lint` behaviors only the built binary shows: what the working
 ## directory and the flag combinations do. compiler/tools/lint_cli_test.mdk is
 ## outside every entry's import closure ([W-MODULE-BLIND]).

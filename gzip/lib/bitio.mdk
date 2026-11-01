@@ -154,7 +154,7 @@ newBitWriter _ = BitWriter { buf = new (), hold = Ref 0, count = Ref 0 }
 flushBytes : BitWriter -> Unit
 flushBytes w =
   if w.count.value >= 8 then
-    let _ = push (bitAnd w.hold.value 255) w.buf
+    push (bitAnd w.hold.value 255) w.buf
     w.hold := shiftRight w.hold.value 8
     w.count := w.count.value - 8
     flushBytes w
@@ -200,7 +200,7 @@ putCodeMSBGo v i w =
   if i < 0 then
     ()
   else
-    let _ = putBits (bitAnd (shiftRight v i) 1) 1 w
+    putBits (bitAnd (shiftRight v i) 1) 1 w
     putCodeMSBGo v (i - 1) w
 
 -- | Pad with zero bits up to the next byte boundary. A no-op if already
@@ -223,7 +223,7 @@ putBytesAlignedGo bytes i n w
   | i >= n = ()
   | otherwise = match B.get i bytes
     Some b =>
-      let _ = push (U8.toInt b) w.buf
+      push (U8.toInt b) w.buf
       putBytesAlignedGo bytes (i + 1) n w
     None => ()
 
@@ -231,7 +231,7 @@ putBytesAlignedGo bytes i n w
 export
 finishBitWriter : BitWriter -> Bytes
 finishBitWriter w =
-  let _ = alignByteW w
+  alignByteW w
   B.fromArrayAssumeByteDomain (toArray w.buf)
 
 -- ---------------------------------------------------------------------------
@@ -265,7 +265,7 @@ alignThenRead : Result String Int
 alignThenRead =
   let r = newBitReader (B.fromArrayAssumeByteDomain [|0xFF, 0x00|])
   let _ = getBits 3 r
-  let _ = alignByte r
+  alignByte r
   getBits 8 r
 
 test "alignByte mid-byte discards exactly the unread fraction of the current byte" =
@@ -294,7 +294,7 @@ test "getBytesAligned after alignByte returns raw bytes verbatim" =
 codeBytes : Int -> Int -> Bytes
 codeBytes v width =
   let w = newBitWriter ()
-  let _ = putCodeMSB v width w
+  putCodeMSB v width w
   finishBitWriter w
 
 -- RFC 1951 §3.2.6: literal 65 has an 8-bit fixed-Huffman code
@@ -323,7 +323,7 @@ test "putCodeMSB, non-byte-aligned width 5: code 13 (0b01101) -> 22 (0b10110), z
 writeAllFixed : List Int -> Int -> BitWriter -> Unit
 writeAllFixed [] _width _w = ()
 writeAllFixed (v :: rest) width w =
-  let _ = putBits v width w
+  putBits v width w
   writeAllFixed rest width w
 
 readAllFixed : List Int -> Int -> BitReader -> Result String (List Int)
@@ -342,7 +342,7 @@ prop "putBits/getBits round-trip: arbitrary Int values (incl. negative) at a sha
   let width = 1 + abs rawWidth % 32
   let mask = shiftLeft 1 width - 1
   let w = newBitWriter ()
-  let _ = writeAllFixed values width w
+  writeAllFixed values width w
   let bytes = finishBitWriter w
   let r = newBitReader bytes
   match readAllFixed values width r
@@ -352,7 +352,7 @@ prop "putBits/getBits round-trip: arbitrary Int values (incl. negative) at a sha
 writeAllCodesMSB : List Int -> Int -> BitWriter -> Unit
 writeAllCodesMSB [] _width _w = ()
 writeAllCodesMSB (v :: rest) width w =
-  let _ = putCodeMSB v width w
+  putCodeMSB v width w
   writeAllCodesMSB rest width w
 
 -- Reading a code back one bit at a time (via `getBits 1`, itself LSB-first
@@ -384,7 +384,7 @@ prop "putCodeMSB / MSB-first read round-trip: arbitrary Int values at a shared w
   let width = 1 + abs rawWidth % 24
   let mask = shiftLeft 1 width - 1
   let w = newBitWriter ()
-  let _ = writeAllCodesMSB values width w
+  writeAllCodesMSB values width w
   let bytes = finishBitWriter w
   let r = newBitReader bytes
   match readAllCodesMSB values width r
@@ -419,6 +419,6 @@ prop "bytePos after alignByte equals ceil(bitsConsumed / 8)" (widthsRaw : List I
   let r = newBitReader (B.fromArrayAssumeByteDomain src)
   match consumeWidths widths r
     Ok _ =>
-      let _ = alignByte r
+      alignByte r
       bytePos r == ceilDiv totalBits 8
     Err _ => False

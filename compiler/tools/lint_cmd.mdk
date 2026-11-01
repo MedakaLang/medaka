@@ -468,7 +468,7 @@ runLintJsonCmd idx internalFlag disableNames onlyNames denyNames baseCtx files =
   let cross =
     projectJsonFindings idx internalFlag disableNames onlyNames denyNames quads
   let merged = mergeProjectIntoTriples cross triples
-  let _ = putStr (cjAllToJson merged)
+  putStr (cjAllToJson merged)
   if anyList cjLintTripleHasErr merged then stageExit 1
 
 -- The project-rule tier's JSON-path inputs, reused from the per-file parses
@@ -543,7 +543,7 @@ applyBaselineQuad : Option (String, LintBaseline) ->
 applyBaselineQuad None quad = quad
 applyBaselineQuad (Some (cwd, base)) (path, src, diags, pos, decls) =
   let key = baselineKeyOf cwd path
-  let _ = reportBaselineViolations key (baselineDiagViolations base key diags)
+  reportBaselineViolations key (baselineDiagViolations base key diags)
   (path, src, applyBaselineToDiags base key diags, pos, decls)
 
 -- Sequence `lintFileDiagTriple` over every target file, in order.  Mirrors
@@ -576,7 +576,7 @@ applyBaselineTriple : Option (String, LintBaseline) ->
 applyBaselineTriple None triple = triple
 applyBaselineTriple (Some (cwd, base)) (path, src, diags) =
   let key = baselineKeyOf cwd path
-  let _ = reportBaselineViolations key (baselineDiagViolations base key diags)
+  reportBaselineViolations key (baselineDiagViolations base key diags)
   (path, src, applyBaselineToDiags base key diags)
 
 cjLintTripleHasErr : (String, String, List Diag) -> Bool
@@ -589,10 +589,9 @@ applyBaselineFindings : Option (String, LintBaseline) ->
 applyBaselineFindings None _ findings = findings
 applyBaselineFindings (Some (cwd, base)) target findings =
   let key = baselineKeyOf cwd target
-  let _ =
-    reportBaselineViolations
-      key
-      (baselineViolations base key (map findingRuleOf findings))
+  reportBaselineViolations
+    key
+    (baselineViolations base key (map findingRuleOf findings))
   applyBaselineToFindings base key findings
 
 -- On stderr, beside the promoted findings on stdout: the finding text says what
@@ -600,7 +599,7 @@ applyBaselineFindings (Some (cwd, base)) target findings =
 reportBaselineViolations : String -> List (String, Int, Option Int) -> <IO> Unit
 reportBaselineViolations _ [] = ()
 reportBaselineViolations key (v :: rest) =
-  let _ = ePutStrLn "medaka lint: baseline: \{baselineViolationLine key v}"
+  ePutStrLn "medaka lint: baseline: \{baselineViolationLine key v}"
   reportBaselineViolations key rest
 
 export
@@ -654,9 +653,9 @@ entryDirTable e = (e.path, e.directives)
 reportProjectFindings : List Finding -> <IO> Bool
 reportProjectFindings [] = False
 reportProjectFindings findings =
-  let _ = putStrLn ""
-  let _ = putStrLn "cross-file:"
-  let _ = putStrLn (joinNl (map renderCrossFinding findings))
+  putStrLn ""
+  putStrLn "cross-file:"
+  putStrLn (joinNl (map renderCrossFinding findings))
   anyList isFindingError findings
 
 -- Render one cross-file finding.  The file path lives in the finding's loc; pass
@@ -681,10 +680,9 @@ resolveLintTargets [] =
   let cwd = canonicalizePath "."
   match findProjectRoot cwd
     None =>
-      let _ =
-        ePutStrLn
-          "medaka lint: no medaka.toml found; run from a project directory or pass file/dir paths"
-      let _ = stageExit 1
+      ePutStrLn
+        "medaka lint: no medaka.toml found; run from a project directory or pass file/dir paths"
+      stageExit 1
       []
     Some root => collectMdkFiles root
 resolveLintTargets targets = flatMap expandLintTarget targets
@@ -898,7 +896,7 @@ lintOneFileReport : StdlibIndex ->
 lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCtx target =
   match readSource target
     Err msg =>
-      let _ = ePutStrLn msg
+      ePutStrLn msg
       (True, [])
     Ok src =>
       let wantSummaries =
@@ -1149,7 +1147,7 @@ lintOneFileFix : StdlibIndex ->
 lintOneFileFix idx unsafeMode onlyNames disableNames target =
   match readSource target
     Err msg =>
-      let _ = ePutStrLn msg
+      ePutStrLn msg
       True
     Ok src =>
       let limit = if unsafeMode then Unsafe else Safe
@@ -1158,7 +1156,7 @@ lintOneFileFix idx unsafeMode onlyNames disableNames target =
         Err _ => []
       match fixSource idx limit onlyNames disableNames localMods target src
         Err msg =>
-          let _ = ePutStrLn msg
+          ePutStrLn msg
           True
         Ok run => writeFixed target src run
 
@@ -1178,13 +1176,13 @@ writeFixed target src run =
 writeFixedSource : String -> String -> String -> Int -> <IO> Bool
 writeFixedSource target src newSrc n =
   if n == 0 && newSrc == src then
-    let _ = putStrLn ("fixed 0 finding(s) in " ++ target)
+    putStrLn ("fixed 0 finding(s) in " ++ target)
     False
   else match writeFile target newSrc
     Err msg =>
-      let _ = ePutStrLn "\{target}: \{msg}"
-      let _ = stageExit 1
+      ePutStrLn "\{target}: \{msg}"
+      stageExit 1
       True
     Ok _ =>
-      let _ = putStrLn "fixed \{intToString n} finding(s) in \{target}"
+      putStrLn "fixed \{intToString n} finding(s) in \{target}"
       False

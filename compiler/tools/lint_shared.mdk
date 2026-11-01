@@ -144,6 +144,10 @@ ruleNameUnusedLocal : String
 ruleNameUnusedLocal = "rule-unused-local"
 
 export
+ruleNameLetUnderscoreUnit : String
+ruleNameLetUnderscoreUnit = "rule-let-underscore-unit"
+
+export
 ruleNamePreferAssignOp : String
 ruleNamePreferAssignOp = "rule-prefer-assign-op"
 
@@ -1025,13 +1029,13 @@ export
 nameSetOf : List String -> HashMap String Unit
 nameSetOf names =
   let s = new ()
-  let _ = nameSetInto names s
+  nameSetInto names s
   s
 
 nameSetInto : List String -> HashMap String Unit -> Unit
 nameSetInto [] _ = ()
 nameSetInto (n :: rest) s =
-  let _ = setInPlace n () s
+  setInPlace n () s
   nameSetInto rest s
 
 -- The span the fix replaces.  An unparenthesised `match` starts at its keyword,

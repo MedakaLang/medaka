@@ -76,8 +76,8 @@ runProject runtimeP coreP root queryFile = match readFile runtimeP
 
 printStats : RefIndex -> String -> <IO> Unit
 printStats idx entry =
-  let _ = println ("OPS " ++ intToString (riOps idx))
-  let _ = println ("DEFS " ++ intToString (listLen (allDefKeys idx)))
+  println ("OPS " ++ intToString (riOps idx))
+  println ("DEFS " ++ intToString (listLen (allDefKeys idx)))
   println ("OCC " ++ intToString (occCountFor idx entry))
 
 dumpIndex : RefIndex -> <IO> Unit
@@ -86,7 +86,7 @@ dumpIndex idx = dumpKeys idx (sortUniqS (allDefKeys idx))
 dumpKeys : RefIndex -> List String -> <IO> Unit
 dumpKeys _ [] = ()
 dumpKeys idx (k :: rest) =
-  let _ = println (dumpLine idx k)
+  println (dumpLine idx k)
   dumpKeys idx rest
 
 -- `DEF` lists EVERY def site of the key, space-separated, in source order — a

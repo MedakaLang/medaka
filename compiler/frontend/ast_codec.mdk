@@ -158,10 +158,10 @@ readBool cur =
 
 readFloat : SexpCursor -> Float
 readFloat cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let hi = cursorInt cur
   let lo = cursorInt cur
-  let _ = cursorClose cur
+  cursorClose cur
   if hi < 0 || hi > 4294967295 || lo < 0 || lo > 4294967295 then
     cursorFail cur 0.0
   else
@@ -169,33 +169,33 @@ readFloat cur =
 
 readOpt : (SexpCursor -> a) -> SexpCursor -> Option a
 readOpt f cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   if isCloseByte (cursorPeek cur) then
-    let _ = cursorAdvance cur
+    cursorAdvance cur
     None
   else
     let v = f cur
-    let _ = cursorClose cur
+    cursorClose cur
     Some v
 
 readPair : (SexpCursor -> a) -> (SexpCursor -> b) -> SexpCursor -> (a, b)
 readPair fa fb cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a = fa cur
   let b = fb cur
-  let _ = cursorClose cur
+  cursorClose cur
   (a, b)
 
 readLoc : SexpCursor -> Loc
 readLoc cur =
   if isOpenByte (cursorPeek cur) then
-    let _ = cursorAdvance cur
+    cursorAdvance cur
     let f = readString cur
     let a = readInt cur
     let b = readInt cur
     let c = readInt cur
     let d = readInt cur
-    let _ = cursorClose cur
+    cursorClose cur
     Loc f a b c d
   else if isPlaceholderChar (cursorChar cur) then
     Loc "" 1 0 1 0
@@ -205,10 +205,10 @@ readLoc cur =
 readEvId : SexpCursor -> EvId
 readEvId cur =
   if isOpenByte (cursorPeek cur) then
-    let _ = cursorAdvance cur
+    cursorAdvance cur
     let m = readString cur
     let n = readInt cur
-    let _ = cursorClose cur
+    cursorClose cur
     EvId m n
   else
     EvId "" (readInt cur)
@@ -217,10 +217,10 @@ export
 readBinderId : SexpCursor -> BinderId
 readBinderId cur =
   if isOpenByte (cursorPeek cur) then
-    let _ = cursorAdvance cur
+    cursorAdvance cur
     let m = readString cur
     let n = readInt cur
-    let _ = cursorClose cur
+    cursorClose cur
     BinderId m n
   else
     BinderId "" (readInt cur)
@@ -235,9 +235,9 @@ readTagged : (Int -> SexpCursor -> a) ->
   a
 readTagged tagged bare cur =
   if isOpenByte (cursorPeek cur) then
-    let _ = cursorAdvance cur
+    cursorAdvance cur
     let v = tagged (cursorInt cur) cur
-    let _ = cursorClose cur
+    cursorClose cur
     v
   else
     bare (cursorInt cur) cur
@@ -1269,13 +1269,13 @@ readTyTagged t cur
 
 readEffAtomTy : SexpCursor -> EffAtomTy
 readEffAtomTy cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readString cur
   let a1 = readTyConOrigin cur
   let a2 = readEffParamTy cur
   let a3 = readOpt readLoc cur
   let a4 = readBool cur
-  let _ = cursorClose cur
+  cursorClose cur
   EffAtomTy {
     eatLabel = a0,
     eatOrigin = a1,
@@ -1310,11 +1310,11 @@ readEffParamTyTagged t cur
 
 readConstraint : SexpCursor -> Constraint
 readConstraint cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readString cur
   let a1 = cursorList readTy cur
   let a2 = readTyConOrigin cur
-  let _ = cursorClose cur
+  cursorClose cur
   Constraint { constraintHead = a0, constraintArgs = a1, constraintOrigin = a2 }
 
 readKindAnn : SexpCursor -> KindAnn
@@ -1403,10 +1403,10 @@ readEvValTagged t cur
 
 readEvEntry : SexpCursor -> EvEntry
 readEvEntry cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readEvId cur
   let a1 = readEvVal cur
-  let _ = cursorClose cur
+  cursorClose cur
   EvEntry a0 a1
 
 readAddr : SexpCursor -> Addr
@@ -1428,9 +1428,9 @@ readAddrTagged t cur
 readPat : SexpCursor -> Pat
 readPat cur =
   if isOpenByte (cursorPeek cur) then
-    let _ = cursorAdvance cur
+    cursorAdvance cur
     let v = readPatTagged (cursorInt cur) cur
-    let _ = cursorClose cur
+    cursorClose cur
     v
   else
     readPatBare (cursorInt cur) cur
@@ -1487,12 +1487,12 @@ readPatTagged t cur
 
 readRecPatField : SexpCursor -> RecPatField
 readRecPatField cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readString cur
   let a1 = readLoc cur
   let a2 = readBinderId cur
   let a3 = readOpt readPat cur
-  let _ = cursorClose cur
+  cursorClose cur
   RecPatField a0 a1 a2 a3
 
 readGuard : SexpCursor -> Guard
@@ -1511,11 +1511,11 @@ readGuardTagged t cur
 
 readArm : SexpCursor -> Arm
 readArm cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readPat cur
   let a1 = cursorList readGuard cur
   let a2 = readExpr cur
-  let _ = cursorClose cur
+  cursorClose cur
   Arm a0 a1 a2
 
 readDoStmt : SexpCursor -> DoStmt
@@ -1563,18 +1563,18 @@ readInterpPartTagged t cur
 
 readGuardArm : SexpCursor -> GuardArm
 readGuardArm cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = cursorList readGuard cur
   let a1 = readExpr cur
-  let _ = cursorClose cur
+  cursorClose cur
   GuardArm a0 a1
 
 readFieldAssign : SexpCursor -> FieldAssign
 readFieldAssign cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readString cur
   let a1 = readExpr cur
-  let _ = cursorClose cur
+  cursorClose cur
   FieldAssign a0 a1
 
 readSection : SexpCursor -> Section
@@ -1597,28 +1597,28 @@ readSectionTagged t cur
 
 readFunClause : SexpCursor -> FunClause
 readFunClause cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = cursorList readPat cur
   let a1 = readExpr cur
-  let _ = cursorClose cur
+  cursorClose cur
   FunClause a0 a1
 
 readLetBind : SexpCursor -> LetBind
 readLetBind cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readString cur
   let a1 = cursorList readFunClause cur
   let a2 = readLoc cur
   let a3 = readBinderId cur
-  let _ = cursorClose cur
+  cursorClose cur
   LetBind a0 a1 a2 a3
 
 readExpr : SexpCursor -> Expr
 readExpr cur =
   if isOpenByte (cursorPeek cur) then
-    let _ = cursorAdvance cur
+    cursorAdvance cur
     let v = readExprTagged (cursorInt cur) cur
-    let _ = cursorClose cur
+    cursorClose cur
     v
   else
     cursorFail cur dfltExpr
@@ -1808,12 +1808,12 @@ readExprTagged t cur
 
 readUseMember : SexpCursor -> UseMember
 readUseMember cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readString cur
   let a1 = readBool cur
   let a2 = readLoc cur
   let a3 = readOpt readString cur
-  let _ = cursorClose cur
+  cursorClose cur
   UseMember a0 a1 a2 a3
 
 readUsePath : SexpCursor -> UsePath
@@ -1839,56 +1839,56 @@ readUsePathTagged t cur
 
 readPropParam : SexpCursor -> PropParam
 readPropParam cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readString cur
   let a1 = readLoc cur
   let a2 = readTy cur
-  let _ = cursorClose cur
+  cursorClose cur
   PropParam a0 a1 a2
 
 readMethodDefault : SexpCursor -> MethodDefault
 readMethodDefault cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = cursorList readPat cur
   let a1 = readExpr cur
-  let _ = cursorClose cur
+  cursorClose cur
   MethodDefault a0 a1
 
 readIfaceMethod : SexpCursor -> IfaceMethod
 readIfaceMethod cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readString cur
   let a1 = readTy cur
   let a2 = readOpt readMethodDefault cur
   let a3 = readOpt readLoc cur
-  let _ = cursorClose cur
+  cursorClose cur
   IfaceMethod a0 a1 a2 a3
 
 readSuper : SexpCursor -> Super
 readSuper cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readString cur
   let a1 = cursorList readString cur
   let a2 = readTyConOrigin cur
-  let _ = cursorClose cur
+  cursorClose cur
   Super { superHead = a0, superParams = a1, superOrigin = a2 }
 
 readRequire : SexpCursor -> Require
 readRequire cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readString cur
   let a1 = cursorList readTy cur
   let a2 = readTyConOrigin cur
-  let _ = cursorClose cur
+  cursorClose cur
   Require { requireHead = a0, requireArgs = a1, requireOrigin = a2 }
 
 readImplMethod : SexpCursor -> ImplMethod
 readImplMethod cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readString cur
   let a1 = cursorList readPat cur
   let a2 = readExpr cur
-  let _ = cursorClose cur
+  cursorClose cur
   ImplMethod a0 a1 a2
 
 readDataVis : SexpCursor -> DataVis
@@ -1903,10 +1903,10 @@ readDataVisBare t cur
 
 readField : SexpCursor -> Field
 readField cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readString cur
   let a1 = readTy cur
-  let _ = cursorClose cur
+  cursorClose cur
   Field a0 a1
 
 readConPayload : SexpCursor -> ConPayload
@@ -1925,10 +1925,10 @@ readConPayloadTagged t cur
 
 readVariant : SexpCursor -> Variant
 readVariant cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readString cur
   let a1 = readConPayload cur
-  let _ = cursorClose cur
+  cursorClose cur
   Variant a0 a1
 
 readAttr : SexpCursor -> Attr
@@ -1950,30 +1950,30 @@ readAttrTagged t cur
 
 readDeriveRef : SexpCursor -> DeriveRef
 readDeriveRef cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readString cur
   let a1 = readOpt readLoc cur
-  let _ = cursorClose cur
+  cursorClose cur
   DeriveRef a0 a1
 
 readExternDecl : SexpCursor -> ExternDecl
 readExternDecl cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readBool cur
   let a1 = readString cur
   let a2 = readTy cur
   let a3 = readLoc cur
   let a4 = cursorList readExternBind cur
-  let _ = cursorClose cur
+  cursorClose cur
   ExternDecl { edPub = a0, edName = a1, edTy = a2, edLoc = a3, edBinds = a4 }
 
 readExternBind : SexpCursor -> ExternBind
 readExternBind cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let a0 = readString cur
   let a1 = readString cur
   let a2 = readLoc cur
-  let _ = cursorClose cur
+  cursorClose cur
   ExternBind { ebHost = a0, ebSymbol = a1, ebLoc = a2 }
 
 readDecl : SexpCursor -> Decl

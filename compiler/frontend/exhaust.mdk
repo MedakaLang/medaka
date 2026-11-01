@@ -178,7 +178,7 @@ public export data Oracle = Oracle {
 export
 buildOracle : List Decl -> Oracle
 buildOracle prog =
-  let _ = stageBump "exhaust.oracle"
+  stageBump "exhaust.oracle"
   Oracle {
     -- No `reverseL`/`oracleMap` here: `lookupTab` is FIRST-match-wins, so the
     -- natural order (user data ahead of the builtins, an earlier `data` decl
@@ -1165,7 +1165,7 @@ checkGuardExhaustivenessWith : List Decl ->
   List Decl ->
   List (DiagCode, String, Option Loc)
 checkGuardExhaustivenessWith oracleDecls checkDecls =
-  let _ = stageBump "exhaust.guards"
+  stageBump "exhaust.guards"
   let oracle = buildOracle (checkDecls ++ oracleDecls)
   flatMap (checkNamedGroup oracle) (groupByName (topFunDefClauses checkDecls))
     ++ flatMap (declBodyWarnings oracle) checkDecls

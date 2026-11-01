@@ -177,7 +177,7 @@ stdSource sig body = "export\nsingleton : \{sig}\nsingleton a = \{body}\n"
 
 setup : Env -> <IO, FileRead, FileWrite, Exec> Unit
 setup e =
-  let _ = runMkdirs [e.proj, e.std, e.shards]
+  runMkdirs [e.proj, e.std, e.shards]
   let _ = writeFile (aPath e) aSource
   let _ = writeFile (bPath e) (bSource "Int -> Int" "x + 1")
   let _ = writeFile (stdPath e) (stdSource "a -> List a" "[a]")
@@ -212,7 +212,7 @@ runWith keyOf indexRoster roster e = match indexOf indexRoster e
     let eb = entryFor keyOf roster idx e (bPath e)
     match (ea, eb)
       (Some xa, Some xb) =>
-        let _ = storeEntries e.cacheDir stampOf [xa, xb]
+        storeEntries e.cacheDir stampOf [xa, xb]
         Some Run { fileA = fileRun xa, fileB = fileRun xb }
       _ => None
 
@@ -266,7 +266,7 @@ afterEdit : (Env -> <IO, FileRead, FileWrite, Exec> Option Run) ->
   <IO, FileRead, FileWrite, Exec> Expectation
 afterEdit go dir edit grade =
   let e = mkEnv dir
-  let _ = setup e
+  setup e
   match go e
     None => fail "the populate run did not complete"
     Some cold =>
@@ -386,7 +386,7 @@ test "(d) a rule that declared no need keeps its stamp across a signature edit" 
 blindStampCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 blindStampCase dir =
   let e = mkEnv dir
-  let _ = setup e
+  setup e
   match indexOf [readerRule] e
     None => fail "the index did not build"
     Some before =>
@@ -433,7 +433,7 @@ test "(d) a rule that reads the index undeclared sees it empty on every run" =
 blindSeesNothingCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 blindSeesNothingCase dir =
   let e = mkEnv dir
-  let _ = setup e
+  setup e
   let blank = probeLine "<none>" "<none>"
   match indexOf [readerRule] e
     None => fail "the index did not build"
@@ -480,7 +480,7 @@ damagedCase : (String -> String) ->
   <IO, FileRead, FileWrite, Exec> Expectation
 damagedCase damage dir =
   let e = mkEnv dir
-  let _ = setup e
+  setup e
   match run e
     None => fail "the populate run did not complete"
     Some _ =>
@@ -517,7 +517,7 @@ test "the second run over an unchanged tree re-lints nothing" =
 secondRunCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 secondRunCase dir =
   let e = mkEnv dir
-  let _ = setup e
+  setup e
   let firstRun = run e
   let secondRun = run e
   match (firstRun, secondRun)
@@ -542,7 +542,7 @@ unwritableCase dir =
     shards = e0.shards,
     cacheDir = "\{dir}/blocked/lint-cache",
   }
-  let _ = setup e
+  setup e
   let _ = writeFile "\{dir}/blocked" "a file, not a directory"
   let firstRun = run e
   let secondRun = run e
@@ -653,13 +653,13 @@ askCase : (StdlibIndex -> StdlibIndex) ->
 askCase view questions bSrc cSrc edits dir =
   let e = mkEnv dir
   let rule = askerRule questions
-  let _ = setup e
+  setup e
   let _ = writeFile (bPath e) bSrc
   let _ = writeFile (cPath e) cSrc
   match runAsk view rule e
     None => None
     Some _ =>
-      let _ = applyEdits e edits
+      applyEdits e edits
       match (runAsk view rule e, indexOf [rule] e)
         (Some warm, Some fresh) => Some Outcome {
           warmA = warm,
@@ -684,7 +684,7 @@ runAsk view rule e = match indexOf [rule] e
   None => None
   Some idx =>
     let found = flatMap (askEntry view rule idx e) [aPath e, bPath e, cPath e]
-    let _ = storeEntries e.cacheDir stampOf (map snd found)
+    storeEntries e.cacheDir stampOf (map snd found)
     match filterList (pe => fst pe == aPath e) found
       [(_, a)] => Some (fileRun a)
       _ => None
@@ -783,7 +783,7 @@ fingerprintMovesCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 fingerprintMovesCase dir =
   let e = mkEnv dir
   let rule = askerRule [askIn "b" NsValue "f"]
-  let _ = setup e
+  setup e
   let _ = writeFile (cPath e) cBase
   match indexOf [rule] e
     None => fail "the index did not build"
@@ -1016,7 +1016,7 @@ wildCase : (StdlibIndex -> StdlibIndex) ->
   <IO, FileRead, FileWrite, Exec> Option Outcome
 wildCase view mStart edits dir =
   let e = mkEnv dir
-  let _ = setup e
+  setup e
   let _ = writeFile (aPath e) wildSource
   let _ = match mStart
     Some text => writeFile (mPath e) text
@@ -1024,7 +1024,7 @@ wildCase view mStart edits dir =
   match runAsk view localRule e
     None => None
     Some _ =>
-      let _ = applyEdits e edits
+      applyEdits e edits
       match (runAsk view localRule e, indexOf [localRule] e)
         (Some warm, Some fresh) => Some Outcome {
           warmA = warm,

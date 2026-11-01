@@ -188,7 +188,7 @@ loadedAt : Shipped ->
   Int ->
   <IO> Option (List Decl, Int, Int, Option String)
 loadedAt sh dir decls shift =
-  let _ = forgetPrelude ()
+  forgetPrelude ()
   let written = do
     _ <- makeDir dir
     _ <- writeFile "\{dir}/runtime.mdk" sh.shRuntime

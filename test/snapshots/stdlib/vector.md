@@ -208,7 +208,7 @@ setInPlace i x (Vector backing len)
 export impl IndexMut (Vector a) Int a where
   setIndex (Vector backing len) i v =
     if i >= 0 && i < !len then
-      let _ = arraySetUnsafe i v !backing
+      arraySetUnsafe i v !backing
       Vector backing len
     else
       indexErrorAt i
@@ -270,7 +270,7 @@ shiftUpGo arr hi lo =
   if hi <= lo then
     ()
   else
-    let _ = arraySetUnsafe hi (arrayGetUnsafe (hi - 1) arr) arr
+    arraySetUnsafe hi (arrayGetUnsafe (hi - 1) arr) arr
     shiftUpGo arr (hi - 1) lo
 
 -- Moves `arr[k + 1]` to `arr[k]` for k from `lo` up to `hi - 1`, closing the
@@ -280,7 +280,7 @@ shiftDownGo arr lo hi =
   if lo >= hi then
     ()
   else
-    let _ = arraySetUnsafe lo (arrayGetUnsafe (lo + 1) arr) arr
+    arraySetUnsafe lo (arrayGetUnsafe (lo + 1) arr) arr
     shiftDownGo arr (lo + 1) hi
 
 {- | Inserts `x` at index `i`, shifting the following elements right.
@@ -577,7 +577,7 @@ prop "Display Vector shows only the live range and agrees with Eq" (xs : List In
 (DFunDef false "pop" ((PCon "Vector" (PVar "backing") (PVar "len"))) (EIf (EBinOp "==" (EUnOp "!" (EVar "len")) (ELit (LInt 0))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "i") (EBinOp "-" (EUnOp "!" (EVar "len")) (ELit (LInt 1)))) (DoLet false false (PVar "x") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EUnOp "!" (EVar "backing")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EVar "i"))) (DoExpr (EApp (EVar "Some") (EVar "x")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "setInPlace" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit")))))
 (DFunDef false "setInPlace" ((PVar "i") (PVar "x") (PCon "Vector" (PVar "backing") (PVar "len"))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EUnOp "!" (EVar "len")))) (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "x")) (EUnOp "!" (EVar "backing"))) (EIf (EVar "otherwise") (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DImpl true "IndexMut" ((TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "setIndex" ((PCon "Vector" (PVar "backing") (PVar "len")) (PVar "i") (PVar "v")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EUnOp "!" (EVar "len")))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "v")) (EUnOp "!" (EVar "backing")))) (DoExpr (EApp (EApp (EVar "Vector") (EVar "backing")) (EVar "len")))) (EApp (EVar "indexErrorAt") (EVar "i"))))))
+(DImpl true "IndexMut" ((TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "setIndex" ((PCon "Vector" (PVar "backing") (PVar "len")) (PVar "i") (PVar "v")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EUnOp "!" (EVar "len")))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "v")) (EUnOp "!" (EVar "backing")))) (DoExpr (EApp (EApp (EVar "Vector") (EVar "backing")) (EVar "len")))) (EApp (EVar "indexErrorAt") (EVar "i"))))))
 (DTypeSig true "swap" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit")))))
 (DFunDef false "swap" ((PVar "i") (PVar "j") (PCon "Vector" (PVar "backing") PWild)) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "backing"))) (DoLet false false (PVar "xi") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (DoLet false false (PVar "xj") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "xj")) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "j")) (EVar "xi")) (EVar "arr")))))
 (DTypeSig true "clear" (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit")))
@@ -587,9 +587,9 @@ prop "Display Vector shows only the live range and agrees with Eq" (xs : List In
 (DTypeSig true "mapInPlace" (TyFun (TyFun (TyVar "a") (TyVar "a")) (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "mapInPlace" ((PVar "f") (PCon "Vector" (PVar "backing") (PVar "len"))) (EApp (EApp (EApp (EApp (EVar "mapInPlaceGo") (EVar "f")) (EUnOp "!" (EVar "backing"))) (ELit (LInt 0))) (EUnOp "!" (EVar "len"))))
 (DTypeSig false "shiftUpGo" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))
-(DFunDef false "shiftUpGo" ((PVar "arr") (PVar "hi") (PVar "lo")) (EIf (EBinOp "<=" (EVar "hi") (EVar "lo")) (ELit LUnit) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "hi")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "arr"))) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "shiftUpGo") (EVar "arr")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "lo"))))))
+(DFunDef false "shiftUpGo" ((PVar "arr") (PVar "hi") (PVar "lo")) (EIf (EBinOp "<=" (EVar "hi") (EVar "lo")) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "hi")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "arr"))) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "shiftUpGo") (EVar "arr")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "lo"))))))
 (DTypeSig false "shiftDownGo" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))
-(DFunDef false "shiftDownGo" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "lo") (EVar "hi")) (ELit LUnit) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "lo")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (ELit (LInt 1)))) (EVar "arr"))) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "shiftDownGo") (EVar "arr")) (EBinOp "+" (EVar "lo") (ELit (LInt 1)))) (EVar "hi"))))))
+(DFunDef false "shiftDownGo" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "lo") (EVar "hi")) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "lo")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (ELit (LInt 1)))) (EVar "arr"))) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "shiftDownGo") (EVar "arr")) (EBinOp "+" (EVar "lo") (ELit (LInt 1)))) (EVar "hi"))))))
 (DTypeSig true "insertAtInPlace" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit")))))
 (DFunDef false "insertAtInPlace" ((PVar "i") (PVar "x") (PCon "Vector" (PVar "backing") (PVar "len"))) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EVar "len"))) (DoLet false false (PVar "j") (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EVar "min") (EVar "i")) (EVar "n")))) (DoExpr (EApp (EApp (EVar "push") (EVar "x")) (EApp (EApp (EVar "Vector") (EVar "backing")) (EVar "len")))) (DoLet false false (PVar "arr") (EUnOp "!" (EVar "backing"))) (DoExpr (EApp (EApp (EApp (EVar "shiftUpGo") (EVar "arr")) (EVar "n")) (EVar "j"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "j")) (EVar "x")) (EVar "arr")))))
 (DTypeSig true "removeAtInPlace" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit"))))
@@ -670,7 +670,7 @@ prop "Display Vector shows only the live range and agrees with Eq" (xs : List In
 (DFunDef false "pop" ((PCon "Vector" (PVar "backing") (PVar "len"))) (EIf (EBinOp "==" (EUnOp "!" (EVar "len")) (ELit (LInt 0))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "i") (EBinOp "-" (EUnOp "!" (EVar "len")) (ELit (LInt 1)))) (DoLet false false (PVar "x") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EUnOp "!" (EVar "backing")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EVar "i"))) (DoExpr (EApp (EVar "Some") (EVar "x")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "setInPlace" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit")))))
 (DFunDef false "setInPlace" ((PVar "i") (PVar "x") (PCon "Vector" (PVar "backing") (PVar "len"))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EUnOp "!" (EVar "len")))) (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "x")) (EUnOp "!" (EVar "backing"))) (EIf (EVar "otherwise") (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DImpl true "IndexMut" ((TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "setIndex" ((PCon "Vector" (PVar "backing") (PVar "len")) (PVar "i") (PVar "v")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EUnOp "!" (EVar "len")))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "v")) (EUnOp "!" (EVar "backing")))) (DoExpr (EApp (EApp (EVar "Vector") (EVar "backing")) (EVar "len")))) (EApp (EVar "indexErrorAt") (EVar "i"))))))
+(DImpl true "IndexMut" ((TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "setIndex" ((PCon "Vector" (PVar "backing") (PVar "len")) (PVar "i") (PVar "v")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EUnOp "!" (EVar "len")))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "v")) (EUnOp "!" (EVar "backing")))) (DoExpr (EApp (EApp (EVar "Vector") (EVar "backing")) (EVar "len")))) (EApp (EVar "indexErrorAt") (EVar "i"))))))
 (DTypeSig true "swap" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit")))))
 (DFunDef false "swap" ((PVar "i") (PVar "j") (PCon "Vector" (PVar "backing") PWild)) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "backing"))) (DoLet false false (PVar "xi") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (DoLet false false (PVar "xj") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "xj")) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "j")) (EVar "xi")) (EVar "arr")))))
 (DTypeSig true "clear" (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit")))
@@ -680,9 +680,9 @@ prop "Display Vector shows only the live range and agrees with Eq" (xs : List In
 (DTypeSig true "mapInPlace" (TyFun (TyFun (TyVar "a") (TyVar "a")) (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "mapInPlace" ((PVar "f") (PCon "Vector" (PVar "backing") (PVar "len"))) (EApp (EApp (EApp (EApp (EVar "mapInPlaceGo") (EVar "f")) (EUnOp "!" (EVar "backing"))) (ELit (LInt 0))) (EUnOp "!" (EVar "len"))))
 (DTypeSig false "shiftUpGo" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))
-(DFunDef false "shiftUpGo" ((PVar "arr") (PVar "hi") (PVar "lo")) (EIf (EBinOp "<=" (EVar "hi") (EVar "lo")) (ELit LUnit) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "hi")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "arr"))) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "shiftUpGo") (EVar "arr")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "lo"))))))
+(DFunDef false "shiftUpGo" ((PVar "arr") (PVar "hi") (PVar "lo")) (EIf (EBinOp "<=" (EVar "hi") (EVar "lo")) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "hi")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "arr"))) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "shiftUpGo") (EVar "arr")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "lo"))))))
 (DTypeSig false "shiftDownGo" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))
-(DFunDef false "shiftDownGo" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "lo") (EVar "hi")) (ELit LUnit) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "lo")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (ELit (LInt 1)))) (EVar "arr"))) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "shiftDownGo") (EVar "arr")) (EBinOp "+" (EVar "lo") (ELit (LInt 1)))) (EVar "hi"))))))
+(DFunDef false "shiftDownGo" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "lo") (EVar "hi")) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "lo")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (ELit (LInt 1)))) (EVar "arr"))) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "shiftDownGo") (EVar "arr")) (EBinOp "+" (EVar "lo") (ELit (LInt 1)))) (EVar "hi"))))))
 (DTypeSig true "insertAtInPlace" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit")))))
 (DFunDef false "insertAtInPlace" ((PVar "i") (PVar "x") (PCon "Vector" (PVar "backing") (PVar "len"))) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EVar "len"))) (DoLet false false (PVar "j") (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EMethodRef "min") (EVar "i")) (EVar "n")))) (DoExpr (EApp (EApp (EVar "push") (EVar "x")) (EApp (EApp (EVar "Vector") (EVar "backing")) (EVar "len")))) (DoLet false false (PVar "arr") (EUnOp "!" (EVar "backing"))) (DoExpr (EApp (EApp (EApp (EVar "shiftUpGo") (EVar "arr")) (EVar "n")) (EVar "j"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "j")) (EVar "x")) (EVar "arr")))))
 (DTypeSig true "removeAtInPlace" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit"))))

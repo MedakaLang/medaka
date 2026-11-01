@@ -13,7 +13,7 @@ main =
   let at = match getEnv "PHYSICAL_NO_ORIGIN"
     Some "1" => SymbolOrigin "main" "" 0 0
     _ => SymbolOrigin "main" file 2 3
-  let _ = writeGateAck ()
+  writeGateAck ()
   let _ = match diagJsonPathOfEnv ()
     Some path => writeDiagJson path (CjParts file [(file, "", [])])
     None => ()

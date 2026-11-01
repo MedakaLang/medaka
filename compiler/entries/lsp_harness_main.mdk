@@ -229,22 +229,18 @@ fixtureHoverLocal medaka fixDir =
         Err _ => hoverFail ()
         Ok out => match parseFrames out
           (frames, _) =>
-            let _ =
-              check
-                "hover local: use site → input : String"
-                (hoverContains 2 frames "input : String")
-            let _ =
-              check
-                "hover local: binder site → input : String"
-                (hoverContains 3 frames "input : String")
-            let _ =
-              check
-                "hover extern: putStrLn full signature"
-                (hoverContains 4 frames "putStrLn : String -> <Stdout> Unit")
-            let _ =
-              check
-                "hover extern: readLine full signature"
-                (hoverContains 5 frames "readLine : Unit -> <Stdin> String")
+            check
+              "hover local: use site → input : String"
+              (hoverContains 2 frames "input : String")
+            check
+              "hover local: binder site → input : String"
+              (hoverContains 3 frames "input : String")
+            check
+              "hover extern: putStrLn full signature"
+              (hoverContains 4 frames "putStrLn : String -> <Stdout> Unit")
+            check
+              "hover extern: readLine full signature"
+              (hoverContains 5 frames "readLine : Unit -> <Stdin> String")
             check
               "hover leading-effect: main : <IO> Unit"
               (hoverContains 6 frames "main : <IO> Unit")
@@ -254,10 +250,10 @@ fixtureHoverLocal medaka fixDir =
 -- would fire these checks at startup regardless of the branch taken).
 hoverFail : Unit -> <IO> Unit
 hoverFail _ =
-  let _ = check "hover local: use site → input : String" False
-  let _ = check "hover local: binder site → input : String" False
-  let _ = check "hover extern: putStrLn full signature" False
-  let _ = check "hover extern: readLine full signature" False
+  check "hover local: use site → input : String" False
+  check "hover local: binder site → input : String" False
+  check "hover extern: putStrLn full signature" False
+  check "hover extern: readLine full signature" False
   check "hover leading-effect: main : <IO> Unit" False
 
 hoverContains : Int -> List Frame -> String -> Bool
@@ -358,16 +354,14 @@ fixtureDidChangeConverges medaka fixDir =
             let converged = match lastDiagCountFor uri frames
               Some n => n == 0
               None => False
-            let _ =
-              check
-                "didChange burst: BAD edit surfaces error (no stale cache hit)"
-                sawError
+            check
+              "didChange burst: BAD edit surfaces error (no stale cache hit)"
+              sawError
             check "didChange burst: converges to clean on final edit" converged
 
 didChangeFail : Unit -> <IO> Unit
 didChangeFail _ =
-  let _ =
-    check "didChange burst: BAD edit surfaces error (no stale cache hit)" False
+  check "didChange burst: BAD edit surfaces error (no stale cache hit)" False
   check "didChange burst: converges to clean on final edit" False
 
 -- Fixture 11: expected-type propagation for a do-bind/higher-order lambda
@@ -400,37 +394,35 @@ fixtureHoverDoBind medaka fixDir =
         Err _ => hoverDoBindFail ()
         Ok out => match parseFrames out
           (frames, _) =>
-            let _ =
-              check
-                "hover do-bind: binder site -> stream : List Json"
-                (hoverContains 2 frames "stream : List Json")
-            let _ =
-              check
-                "hover do-bind: use site -> stream : List Json"
-                (hoverContains 3 frames "stream : List Json")
+            check
+              "hover do-bind: binder site -> stream : List Json"
+              (hoverContains 2 frames "stream : List Json")
+            check
+              "hover do-bind: use site -> stream : List Json"
+              (hoverContains 3 frames "stream : List Json")
             check
               "hover do-bind: one diagnostic (mismatch at the use)"
               (diagPublishedFor uri frames && diagCountFor uri frames == 1)
 
 hoverDoBindFail : Unit -> <IO> Unit
 hoverDoBindFail _ =
-  let _ = check "hover do-bind: binder site -> stream : List Json" False
-  let _ = check "hover do-bind: use site -> stream : List Json" False
+  check "hover do-bind: binder site -> stream : List Json" False
+  check "hover do-bind: use site -> stream : List Json" False
   check "hover do-bind: one diagnostic (mismatch at the use)" False
 
 main =
   let medaka = envOr "MEDAKA" "./medaka"
   let root = envOr "MEDAKA_ROOT" "."
   let fixDir = stringConcat [root, "/test/lsp_fixtures"]
-  let _ = fixtureFrameIntegrity medaka fixDir
-  let _ = fixtureMultiModuleClean medaka fixDir
-  let _ = fixtureTypeError medaka fixDir
-  let _ = fixtureUnparseableNoCrash medaka fixDir
-  let _ = fixtureSemanticTokens medaka fixDir
-  let _ = fixtureSemanticRoles medaka fixDir
-  let _ = fixtureHoverLocal medaka fixDir
-  let _ = fixtureHoverImport medaka fixDir
-  let _ = fixtureCompletionImport medaka fixDir
-  let _ = fixtureDidChangeConverges medaka fixDir
-  let _ = fixtureHoverDoBind medaka fixDir
+  fixtureFrameIntegrity medaka fixDir
+  fixtureMultiModuleClean medaka fixDir
+  fixtureTypeError medaka fixDir
+  fixtureUnparseableNoCrash medaka fixDir
+  fixtureSemanticTokens medaka fixDir
+  fixtureSemanticRoles medaka fixDir
+  fixtureHoverLocal medaka fixDir
+  fixtureHoverImport medaka fixDir
+  fixtureCompletionImport medaka fixDir
+  fixtureDidChangeConverges medaka fixDir
+  fixtureHoverDoBind medaka fixDir
   summary 18

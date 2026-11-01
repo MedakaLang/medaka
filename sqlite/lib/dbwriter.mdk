@@ -438,8 +438,8 @@ chainGo spill firstPage i total acc =
     let chunk = min cap (arrayLength spill - off)
     let next = if i == total - 1 then 0 else firstPage + i + 1
     let page = arrayMake pageSize 0
-    let _ = setU32BE page 0 next
-    let _ = blit spill off page 4 chunk
+    setU32BE page 0 next
+    blit spill off page 4 chunk
     chainGo spill firstPage (i + 1) total (page :: acc)
 
 -- | Assign overflow pages to every spilling row in `rows`, patching each cell's
@@ -456,7 +456,7 @@ assignOverflow (row :: rest) next acc =
     assignOverflow rest next acc
   else
     let nPages = overflowPageCount usableSize (arrayLength spill)
-    let _ = patchOverflowPtr (prowCell row) next
+    patchOverflowPtr (prowCell row) next
     let pages = buildOverflowChain spill next
     assignOverflow rest (next + nPages) (reverse pages ++ acc)
 
@@ -967,7 +967,7 @@ blitPages : List (Array Int) -> Array Int -> Int -> Array Int
 blitPages [] file _ = file
 blitPages (p :: rest) file off =
   let n = arrayLength p
-  let _ = blit p 0 file off n
+  blit p 0 file off n
   blitPages rest file (off + n)
 
 -- ---------------------------------------------------------------------------
@@ -1048,8 +1048,8 @@ encodeIndexLeafCell recBytes =
       "index key record of \{intToString plen} bytes needs an overflow page; multi-page/overflow indexes are not supported in v1"
   else
     let buf = newBuilder ()
-    let _ = emitBytes (varintAsBytes plen) buf
-    let _ = emitBytes (asBytes recBytes) buf
+    emitBytes (varintAsBytes plen) buf
+    emitBytes (asBytes recBytes) buf
     Ok (buildArray buf)
 
 -- | Encode every `(keyCell, rowid)` entry of one index into a sorted list of

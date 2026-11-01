@@ -138,14 +138,12 @@ uncapableExternNames corpus bound tests =
     [] => []
     _ =>
       let seen = new ()
-      let _ =
-        closureOver
-          (refGraph corpus)
-          seen
-          (flatMap
-            (t =>
-              freeRefsOf (DFunDef False "" [] (thd3 t) noDeclLoc noBinderId))
-            tests)
+      closureOver
+        (refGraph corpus)
+        seen
+        (flatMap
+          (t => freeRefsOf (DFunDef False "" [] (thd3 t) noDeclLoc noBinderId))
+          tests)
       filterList (n => has n seen) unbound
 
 thd3 : (a, b, c) -> c
@@ -154,13 +152,13 @@ thd3 (_, _, c) = c
 boundNameSet : List (String, Value e) -> HashMap String Unit
 boundNameSet env =
   let s = new ()
-  let _ = insertNames (map fst env) s
+  insertNames (map fst env) s
   s
 
 boundFrameNameSet : List (List (String, Ref (Value e))) -> HashMap String Unit
 boundFrameNameSet frames =
   let s = new ()
-  let _ = insertFrameNames frames s
+  insertFrameNames frames s
   s
 
 insertFrameNames : List (List (String, Ref (Value e))) ->
@@ -168,13 +166,13 @@ insertFrameNames : List (List (String, Ref (Value e))) ->
   Unit
 insertFrameNames [] _ = ()
 insertFrameNames (frame :: rest) names =
-  let _ = insertNames (map fst frame) names
+  insertNames (map fst frame) names
   insertFrameNames rest names
 
 insertNames : List String -> HashMap String Unit -> Unit
 insertNames [] _ = ()
 insertNames (n :: rest) s =
-  let _ = setInPlace n () s
+  setInPlace n () s
   insertNames rest s
 
 -- Every `extern` the corpus declares that the environment does not bind, in
@@ -192,7 +190,7 @@ externScan ((DAttrib _ d) :: rest) bound emitted =
 externScan ((DExtern (ExternDecl { edName = n, ... })) :: rest) bound emitted
   | has n bound || has n emitted = externScan rest bound emitted
   | otherwise =
-    let _ = setInPlace n () emitted
+    setInPlace n () emitted
     n :: externScan rest bound emitted
 externScan (_ :: rest) bound emitted = externScan rest bound emitted
 
@@ -203,7 +201,7 @@ externScan (_ :: rest) bound emitted = externScan rest bound emitted
 freeRefsOf : Decl -> List String
 freeRefsOf d =
   let bound = new ()
-  let _ = insertNames (localBoundNames [d]) bound
+  insertNames (localBoundNames [d]) bound
   filterList (n => not (has n bound)) (declRefs d)
 
 -- name -> globally-referenced names, over every decl that carries a body.  No
@@ -211,18 +209,17 @@ freeRefsOf d =
 refGraph : List Decl -> HashMap String (List String)
 refGraph decls =
   let g = new ()
-  let _ = refGraphInto decls g
+  refGraphInto decls g
   g
 
 refGraphInto : List Decl -> HashMap String (List String) -> Unit
 refGraphInto [] _ = ()
 refGraphInto ((DAttrib _ d) :: rest) g = refGraphInto (d :: rest) g
 refGraphInto ((DFunDef _ n ps body site bid) :: rest) g =
-  let _ =
-    setInPlace
-      n
-      (freeRefsOf (DFunDef False n ps body site bid) ++ findWithDefault [] n g)
-      g
+  setInPlace
+    n
+    (freeRefsOf (DFunDef False n ps body site bid) ++ findWithDefault [] n g)
+    g
   refGraphInto rest g
 -- A non-function body (impl method, interface default, let group) has no single
 -- name for the walk to arrive at, so it contributes no edge.  That is the
@@ -238,5 +235,5 @@ closureOver _ _ [] = ()
 closureOver graph seen (w :: work)
   | has w seen = closureOver graph seen work
   | otherwise =
-    let _ = setInPlace w () seen
+    setInPlace w () seen
     closureOver graph seen (findWithDefault [] w graph ++ work)

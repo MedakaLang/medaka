@@ -33,13 +33,13 @@ usage = "usage: deflate_demo <input> <output.gz>"
 runDeflate : String -> String -> <IO, FileRead, FileWrite> Unit
 runDeflate inPath outPath = match readFileBytes inPath
   Err e =>
-    let _ = eprintln "deflate_demo: could not read \{inPath}: \{e}"
+    eprintln "deflate_demo: could not read \{inPath}: \{e}"
     exit 1
   Ok raw =>
     let compressed = gzipCompress (fromArrayAssumeByteDomain raw)
     match writeFileBytes outPath (toArray compressed)
       Err e =>
-        let _ = eprintln "deflate_demo: could not write \{outPath}: \{e}"
+        eprintln "deflate_demo: could not write \{outPath}: \{e}"
         exit 1
       Ok _ => ()
 
@@ -47,5 +47,5 @@ main : <IO, FileRead, FileWrite> Unit
 main = match args ()
   [inPath, outPath] => runDeflate inPath outPath
   _ =>
-    let _ = eprintln usage
+    eprintln usage
     exit 1

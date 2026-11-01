@@ -516,8 +516,8 @@ export impl Semigroup (Array a) where
       arrayCopy a
     else
       let out = arrayMake (la + lb) (arrayGetUnsafe 0 a)
-      let _ = arrayBlit a 0 out 0 la
-      let _ = arrayBlit b 0 out la lb
+      arrayBlit a 0 out 0 la
+      arrayBlit b 0 out la lb
       out
 
 {- | The empty array.
@@ -1485,7 +1485,7 @@ export impl IndexMut (Array a) Int a where
     if i < 0 || i >= arrayLength arr then
       indexErrorAt i
     else
-      let _ = arraySetUnsafe i v arr
+      arraySetUnsafe i v arr
       arr
 
 {- | `xs[i]` walks the list to position `i`, so it costs `O(i)`.
@@ -1547,7 +1547,7 @@ export impl Slice (Array a) where
       [||]
     else
       let out = arrayMake (hi - lo) (arrayGetUnsafe lo arr)
-      let _ = arrayBlit arr lo out 0 (hi - lo)
+      arrayBlit arr lo out 0 (hi - lo)
       out
 
 {- | The substring over codepoint positions `[lo, hi)`.
@@ -2461,14 +2461,14 @@ prop "Array append agrees with List append and does not alias its inputs" (xs : 
   let b = arrayFromList ys
   let r = append a b
   let snapshot = toList r
-  let _ = arraySetUnsafe 0 0 r
+  arraySetUnsafe 0 0 r
   eq snapshot ((0 :: xs) ++ ys) && eq (toList a) (0 :: xs) && eq (toList b) ys
 
 -- LAW: appending to an empty left array returns a fresh copy of the right one.
 prop "Array append with an empty left side copies the right input" (ys : List Int) =
   let b = arrayFromList (1 :: ys)
   let r = append (arrayFromList ([] : List Int)) b
-  let _ = arraySetUnsafe 0 0 r
+  arraySetUnsafe 0 0 r
   eq (toList b) (1 :: ys) && eq (toList r) (0 :: ys)
 
 -- LAW: `slice` on arrays agrees with `slice` on lists over every in-range

@@ -175,7 +175,7 @@ dedupeFindingsGo _ [] = []
 dedupeFindingsGo seen (f :: rest)
   | has (findingDedupeKey f) seen = dedupeFindingsGo seen rest
   | otherwise =
-    let _ = setInPlace (findingDedupeKey f) () seen
+    setInPlace (findingDedupeKey f) () seen
     f :: dedupeFindingsGo seen rest
 
 findingDedupeKey : Finding -> String
@@ -194,7 +194,7 @@ groupOccsByKey : List (String, Int, String, String) ->
   HashMap String (List (String, Int, String, String))
 groupOccsByKey occs =
   let m = new ()
-  let _ = groupOccsGo m occs
+  groupOccsGo m occs
   m
 
 groupOccsGo : HashMap String (List (String, Int, String, String)) ->
@@ -202,7 +202,7 @@ groupOccsGo : HashMap String (List (String, Int, String, String)) ->
   Unit
 groupOccsGo _ [] = ()
 groupOccsGo m (o :: rest) =
-  let _ = setInPlace (occKey o) (o :: findWithDefault [] (occKey o) m) m
+  setInPlace (occKey o) (o :: findWithDefault [] (occKey o) m) m
   groupOccsGo m rest
 
 -- Distinct keys in first-appearance order.  `keys` on the HashMap would do this
@@ -223,7 +223,7 @@ dupDistinctGo _ [] = []
 dupDistinctGo seen (o :: rest)
   | has (occKey o) seen = dupDistinctGo seen rest
   | otherwise =
-    let _ = setInPlace (occKey o) () seen
+    setInPlace (occKey o) () seen
     occKey o :: dupDistinctGo seen rest
 
 -- Can this key's group emit at all?  ≥2 occurrences spanning ≥2 distinct files.
@@ -430,22 +430,22 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DFunDef false "dedupeFindings" ((PVar "fs")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "fs")))))
 (DTypeSig false "dedupeFindingsGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "dedupeFindingsGo" (PWild (PList)) (EListLit))
-(DFunDef false "dedupeFindingsGo" ((PVar "seen") (PCons (PVar "f") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "findingDedupeKey") (EVar "f"))) (EVar "seen")) (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "findingDedupeKey") (EVar "f"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EVar "f") (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dedupeFindingsGo" ((PVar "seen") (PCons (PVar "f") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "findingDedupeKey") (EVar "f"))) (EVar "seen")) (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "findingDedupeKey") (EVar "f"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EVar "f") (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "findingDedupeKey" (TyFun (TyCon "Finding") (TyCon "String")))
 (DFunDef false "findingDedupeKey" ((PVar "f")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "f") "rule"))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "dupLocKey") (EFieldAccess (EVar "f") "loc")))) (ELit (LString "\n"))) (EApp (EVar "display") (EFieldAccess (EVar "f") "message"))) (ELit (LString ""))))
 (DTypeSig false "dupLocKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "dupLocKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "line") (PVar "col") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EVar "display") (EVar "line"))) (ELit (LString ":"))) (EApp (EVar "display") (EVar "col"))) (ELit (LString ""))))
 (DFunDef false "dupLocKey" ((PCon "None")) (ELit (LString "-")))
 (DTypeSig false "groupOccsByKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
-(DFunDef false "groupOccsByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
+(DFunDef false "groupOccsByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "groupOccsGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "groupOccsGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "groupOccsGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "occKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "occKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "rest")))))
+(DFunDef false "groupOccsGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "occKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "occKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "rest")))))
 (DTypeSig false "dupDistinctKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "dupDistinctKeys" ((PVar "occs")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "occs")))))
 (DTypeSig false "dupDistinctGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "dupDistinctGo" (PWild (PList)) (EListLit))
-(DFunDef false "dupDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "occKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "occKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "occKey") (EVar "o")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dupDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "occKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "occKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "occKey") (EVar "o")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dupGroupFires" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyCon "Bool")))
 (DFunDef false "dupGroupFires" ((PVar "grp")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "occFile")) (EVar "grp")))) (ELit (LInt 2)))))
 (DTypeSig true "dupOccsOfClauses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
@@ -535,22 +535,22 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DFunDef false "dedupeFindings" ((PVar "fs")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "fs")))))
 (DTypeSig false "dedupeFindingsGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "dedupeFindingsGo" (PWild (PList)) (EListLit))
-(DFunDef false "dedupeFindingsGo" ((PVar "seen") (PCons (PVar "f") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "findingDedupeKey") (EVar "f"))) (EVar "seen")) (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "findingDedupeKey") (EVar "f"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EVar "f") (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dedupeFindingsGo" ((PVar "seen") (PCons (PVar "f") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "findingDedupeKey") (EVar "f"))) (EVar "seen")) (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "findingDedupeKey") (EVar "f"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EVar "f") (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "findingDedupeKey" (TyFun (TyCon "Finding") (TyCon "String")))
 (DFunDef false "findingDedupeKey" ((PVar "f")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "f") "rule"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "dupLocKey") (EFieldAccess (EVar "f") "loc")))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "f") "message"))) (ELit (LString ""))))
 (DTypeSig false "dupLocKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "dupLocKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "line") (PVar "col") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EVar "line"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EVar "col"))) (ELit (LString ""))))
 (DFunDef false "dupLocKey" ((PCon "None")) (ELit (LString "-")))
 (DTypeSig false "groupOccsByKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
-(DFunDef false "groupOccsByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
+(DFunDef false "groupOccsByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "groupOccsGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "groupOccsGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "groupOccsGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "occKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "occKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "rest")))))
+(DFunDef false "groupOccsGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "occKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "occKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "rest")))))
 (DTypeSig false "dupDistinctKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "dupDistinctKeys" ((PVar "occs")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "occs")))))
 (DTypeSig false "dupDistinctGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "dupDistinctGo" (PWild (PList)) (EListLit))
-(DFunDef false "dupDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "occKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "occKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "occKey") (EVar "o")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dupDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "occKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "occKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "occKey") (EVar "o")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dupGroupFires" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyCon "Bool")))
 (DFunDef false "dupGroupFires" ((PVar "grp")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "occFile")) (EVar "grp")))) (ELit (LInt 2)))))
 (DTypeSig true "dupOccsOfClauses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))

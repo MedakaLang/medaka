@@ -172,7 +172,7 @@ runArms target tsrc userDecls arms
       -- Bound before the teardown so the binary exists while every section
       -- runs.
       let outs = runMerged target tsrc userDecls arms tmpDir nonce
-      let _ = cleanupTempDir tmpDir
+      cleanupTempDir tmpDir
       outs
 
 mergedPrefixes : List String
