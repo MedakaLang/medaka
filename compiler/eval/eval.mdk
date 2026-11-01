@@ -209,7 +209,7 @@ public export data Value (e : Effect) =
 -- (so letrec / mutual recursion can back-patch a closure's own binding).
 -- Parameterized over the VALUE type (`v := Value e`), not the row — see the
 -- kind-inference note on `Value`.
-public export data EvalEnv v = EvalEnv (List (EnvFrame v))
+public export data EvalEnv v = EvalEnv ProgramFacts (List (EnvFrame v))
 
 -- A call frame is a short list, scanned by name.  A module-level frame (a
 -- module's own top-level names, its imports, the shared global and runtime
@@ -234,7 +234,7 @@ frameCells (IndexedFrame cells _) = cells
 -- The frames' cells, nearest first, for a consumer that reads names only.
 export
 envFrameCells : EvalEnv v -> List (List (String, Ref v))
-envFrameCells (EvalEnv frames) = map frameCells frames
+envFrameCells (EvalEnv _ frames) = map frameCells frames
 
 -- ── value rendering ──────────────────────────────────────────────────────
 export
@@ -600,7 +600,7 @@ runtimeTypeTag _ = None
 -- ── environment ───────────────────────────────────────────────────────────
 export
 lookupEnv : EvalEnv (Value e) -> String -> <e> Value e
-lookupEnv (EvalEnv frames) name = lookupFrames frames name
+lookupEnv (EvalEnv _ frames) name = lookupFrames frames name
 
 -- Runtime externs have their own final frame. A module environment also carries
 -- nearer local/import frames and a mutable global dispatcher frame, where a user
@@ -608,7 +608,7 @@ lookupEnv (EvalEnv frames) name = lookupFrames frames name
 -- that method behavior; this lookup reaches the retained primitive cell instead.
 export
 lookupRuntimeBinding : EvalEnv (Value e) -> String -> <e> Value e
-lookupRuntimeBinding (EvalEnv frames) name =
+lookupRuntimeBinding (EvalEnv _ frames) name =
   lookupRuntimeBindingFrames frames name None
 
 lookupRuntimeBindingFrames : List (EnvFrame (Value e)) ->
@@ -627,7 +627,7 @@ lookupRuntimeBindingFrames (frame :: rest) name found =
 -- right for a program identifier (resolve already proved it bound) and wrong for a
 -- synthetic cell whose absence is a normal answer (`withCallFile`'s file tag).
 lookupEnvOpt : EvalEnv (Value e) -> String -> <e> Option (Value e)
-lookupEnvOpt (EvalEnv frames) name = lookupFramesOpt frames name
+lookupEnvOpt (EvalEnv _ frames) name = lookupFramesOpt frames name
 
 lookupFramesOpt : List (EnvFrame (Value e)) -> String -> <e> Option (Value e)
 lookupFramesOpt [] _ = None
@@ -664,7 +664,7 @@ lookupFrames (frame :: rest) name = match lookupFrameCell frame name
 -- the candidates' shape (VTypedImpl vs VClosure) is the real discriminator.
 export
 lookupMethod : EvalEnv (Value e) -> String -> <e> Value e
-lookupMethod (EvalEnv frames) name = lookupMethodFrames frames frames name
+lookupMethod (EvalEnv _ frames) name = lookupMethodFrames frames frames name
 
 lookupMethodFrames : List (EnvFrame (Value e)) ->
   List (EnvFrame (Value e)) ->
@@ -748,7 +748,7 @@ lookupCells ((n, cell) :: rest) name =
 -- by-name scan it saves), so the rep is unchanged — see PERF-NOTES.
 lookupAtAddr : EvalEnv (Value e) -> String -> Addr -> <e> Value e
 lookupAtAddr env name AGlobal = lookupEnv env name
-lookupAtAddr (EvalEnv frames) name (ALocal depth slot) =
+lookupAtAddr (EvalEnv _ frames) name (ALocal depth slot) =
   forceCell
     (addrCell (frameCells (frameAtDepth frames depth name)) slot name)
     name
@@ -768,8 +768,8 @@ addrCell ((n, cell) :: rest) slot name
 
 export
 extendEnv : EvalEnv (Value e) -> List (String, Value e) -> EvalEnv (Value e)
-extendEnv (EvalEnv frames) binds =
-  EvalEnv (ScanFrame (map cellOf binds) :: frames)
+extendEnv (EvalEnv facts frames) binds =
+  EvalEnv facts (ScanFrame (map cellOf binds) :: frames)
 
 cellOf : (String, Value e) -> (String, Ref (Value e))
 cellOf (n, v) = (n, Ref v)
@@ -778,7 +778,8 @@ export
 pushFrame : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   EvalEnv (Value e)
-pushFrame (EvalEnv frames) frame = EvalEnv (ScanFrame frame :: frames)
+pushFrame (EvalEnv facts frames) frame =
+  EvalEnv facts (ScanFrame frame :: frames)
 
 export
 findCell : List (String, Ref (Value e)) -> String -> Ref (Value e)
@@ -4465,7 +4466,9 @@ evalModulesWith facts extraExterns preludeDecls0 modules0 = withFacts
     let runtimeFrame = indexedFrame (runtimeCellsOf externs)
     let privateCells = map (fst >> (n => (n, Ref VUnit))) preludePrivate
     let globalEnv =
-      EvalEnv (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
+      EvalEnv
+        facts
+        (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
     let mods =
       buildModInfos
         globalFrame
@@ -4525,7 +4528,7 @@ buildModInfos globalFrame runtimeFrame coreExports sibling fulls exportsMap ((mi
   -- applyClosure/applyClosureF (below) ever searches this far.
   let fileTagFrame =
     ScanFrame [(evalFileTagName, Ref (VString (moduleFileOf mid)))]
-  let menv = EvalEnv [
+  let menv = EvalEnv (factsNow ()) [
     indexedFrame localCells,
     indexedFrame imports,
     globalFrame,
@@ -4769,7 +4772,9 @@ buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 = withFacts
     let runtimeFrame = indexedFrame (runtimeCellsOf externs)
     let privateCells = map (fst >> (n => (n, Ref VUnit))) preludePrivate
     let globalEnv =
-      EvalEnv (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
+      EvalEnv
+        facts
+        (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
     let mods =
       buildModInfos
         globalFrame
@@ -4802,7 +4807,7 @@ rootFullEnv mods globalCells = flattenEnv (rootFullEvalEnv mods globalCells)
 rootFullEvalEnv : List (ModInfo (Value e)) ->
   List (String, Ref (Value e)) ->
   EvalEnv (Value e)
-rootFullEvalEnv [] globalCells = EvalEnv [ScanFrame globalCells]
+rootFullEvalEnv [] globalCells = EvalEnv (factsNow ()) [ScanFrame globalCells]
 rootFullEvalEnv [ModInfo _ _ _ _ menv] _ = menv
 rootFullEvalEnv (_ :: rest) globalCells = rootFullEvalEnv rest globalCells
 

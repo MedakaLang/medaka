@@ -24,6 +24,7 @@ import eval.eval.{
   Value(..), EvalEnv(..), EnvFrame(..), apply, eval, extendEnv, envFrameCells,
   force, lookupEnv, lookupRuntimeBinding, ppValue
 }
+import types.program_facts.{emptyFacts}
 import support.util.{listLen, lookupAssoc, isEmptyL}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
 import tools.prop_plan.{
@@ -241,7 +242,7 @@ runProp genEnv evalEnv (DProp _ name params body) maxTests target propLines =
   -- value via `--seed` reproduces this prop's draws byte-for-byte regardless
   -- of what ran before it, so it is the number to print on failure.
   let seedAtStart = !propRngStateRef
-  let rootEnv = extendEnv (EvalEnv [ScanFrame []]) evalEnv
+  let rootEnv = extendEnv (EvalEnv emptyFacts [ScanFrame []]) evalEnv
   match planPropParams (genEnvPlan genEnv) name params
     Err e =>
       let _ = putStrLn ("ERROR: " ++ planErrorText e)
@@ -1155,7 +1156,7 @@ runAllPropsResults : Int ->
   <e> List PropResult
 runAllPropsResults cases filterOpt propLines evalEnv program allDecls =
   let props = filterPropsByName filterOpt (filterProps program)
-  let rootEnv = extendEnv (EvalEnv [ScanFrame []]) evalEnv
+  let rootEnv = extendEnv (EvalEnv emptyFacts [ScanFrame []]) evalEnv
   if isEmptyL props then
     []
   else
@@ -1336,7 +1337,7 @@ runPropRequests : List PropRequest ->
   List Decl ->
   <e> List PropResult
 runPropRequests requests propLines genEnv evalEnv props =
-  let rootEnv = extendEnv (EvalEnv [ScanFrame []]) evalEnv
+  let rootEnv = extendEnv (EvalEnv emptyFacts [ScanFrame []]) evalEnv
   runPropRequestsChecked
     requests
     requests
