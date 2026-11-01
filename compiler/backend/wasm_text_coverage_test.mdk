@@ -799,8 +799,7 @@ importShapeCounts (Err ds) =
       _ => [])
     ds
 
--- The previous closure judge rejected these named callees whether flat, folded,
--- nested on one line or tail-called. Receipts must not let a missing body pass.
+-- Receipts must not let a missing body pass for flat, folded, nested or tail calls.
 test "Wasm finalizer retains every named-call form the legacy closure judge rejected" =
   expectStep
     ((reg, coverage, direct) =>
