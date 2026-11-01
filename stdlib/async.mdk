@@ -267,7 +267,7 @@ runAsync prog =
   let front = Ref [deferThen prog (a => Suspend (u => storeResult cell a))]
   let back = Ref []
   let parked = Ref []
-  let _ = schedule front back parked 1
+  schedule front back parked 1
   optionOrPanic "async: the program finished without producing a value" !cell
 
 {- | `runAsync` for a program whose value is `Unit`.
@@ -315,16 +315,16 @@ schedule : Ref (List (Async e Unit)) ->
   <e> Unit
 schedule front back parked budget =
   if budget <= 0 then
-    let _ = wakeParked back parked False
+    wakeParked back parked False
     schedule front back parked (max 1 (queueLength front back))
   else match popTask front back
     Some t =>
-      let _ = dispatch back parked (stepTask t)
+      dispatch back parked (stepTask t)
       schedule front back parked (budget - 1)
     None => match !parked
       [] => ()
       _ =>
-        let _ = wakeParked back parked True
+        wakeParked back parked True
         schedule front back parked (max 1 (queueLength front back))
 
 stepTask : Async e Unit -> <e> Async e Unit
@@ -339,7 +339,7 @@ dispatch _ _ (Done _) = ()
 dispatch back _ (Suspend k) = pushBack back (Suspend k)
 dispatch _ parked (Await ws k) = parked := (ws, k) :: !parked
 dispatch back _ (Spawn child k) =
-  let _ = pushBack back child
+  pushBack back child
   pushBack back (Suspend k)
 
 -- Move every parked task whose wait is satisfied back to the queue, oldest
@@ -415,7 +415,7 @@ requeueOldestFirst : Ref (List (Async e Unit)) ->
   Unit
 requeueOldestFirst _ [] = ()
 requeueOldestFirst back ((_, k) :: rest) =
-  let _ = pushBack back (Suspend k)
+  pushBack back (Suspend k)
   requeueOldestFirst back rest
 
 isReady : Option Float -> (List (Wait e), Unit -> <e> Async e Unit) -> Bool

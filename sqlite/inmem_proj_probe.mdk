@@ -63,7 +63,7 @@ runIS : Db -> String -> Select -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 runIS db label sel =
-  let _ = println label
+  println label
   match query db sel rowIS
     Err e => println "query error: \{e}"
     Ok rows => printLines showIS rows
@@ -72,40 +72,38 @@ runSI : Db -> String -> Select -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 runSI db label sel =
-  let _ = println label
+  println label
   match query db sel rowSI
     Err e => println "query error: \{e}"
     Ok rows => printLines showSI rows
 
 runIDistinct : Db -> String -> Select -> <IO> Unit
 runIDistinct db label sel =
-  let _ = println label
+  println label
   match queryDistinct db sel tInt
     Err e => println "query error: \{e}"
     Ok rows => printLines (i => "\{i}") rows
 
 runAll : Db -> <IO> Unit
 runAll db =
-  let _ =
-    runIS
-      db
-      "-- SELECT a+b, name ORDER BY name --"
-      (withOrderBy
-        "name"
-        True
-        (withColumns
-          [unExpr (eAdd (eColInt "a") (eColInt "b")), unExpr (eColText "name")]
-          (selectFrom "nums")))
-  let _ =
-    runSI
-      db
-      "-- SELECT name, id ORDER BY id --"
-      (withOrderBy
-        "id"
-        True
-        (withColumns
-          [unExpr (eColText "name"), unExpr (eColInt "id")]
-          (selectFrom "nums")))
+  runIS
+    db
+    "-- SELECT a+b, name ORDER BY name --"
+    (withOrderBy
+      "name"
+      True
+      (withColumns
+        [unExpr (eAdd (eColInt "a") (eColInt "b")), unExpr (eColText "name")]
+        (selectFrom "nums")))
+  runSI
+    db
+    "-- SELECT name, id ORDER BY id --"
+    (withOrderBy
+      "id"
+      True
+      (withColumns
+        [unExpr (eColText "name"), unExpr (eColInt "id")]
+        (selectFrom "nums")))
   runIDistinct
     db
     "-- SELECT DISTINCT a*0 --"
@@ -113,7 +111,7 @@ runAll db =
 
 main : <IO> Unit
 main =
-  let _ = println "-- CREATE nums (in-memory) --"
+  println "-- CREATE nums (in-memory) --"
   match buildDatabase "nums" numsSql 4 ipk numsRows
     Err e => println "build error: \{e}"
     Ok bytes => match fromBytes bytes

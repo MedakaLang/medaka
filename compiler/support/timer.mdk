@@ -81,7 +81,7 @@ flushPerfSinkProse _ = putTimerLines (takePerfSink ())
 putTimerLines : List String -> <IO> Unit
 putTimerLines [] = ()
 putTimerLines (l :: ls) =
-  let _ = ePutStrLn l
+  ePutStrLn l
   putTimerLines ls
 
 -- True when MEDAKA_PERF is set to any value in the environment.
@@ -117,7 +117,7 @@ export
 emitStats : Bool -> List (String, Int) -> <IO> Unit
 emitStats _ [] = ()
 emitStats on ((label, count) :: rest) =
-  let _ = emitStat on label count
+  emitStat on label count
   emitStats on rest
 
 -- True when MEDAKA_PERF_WASM is set to any value in the environment.

@@ -37,7 +37,7 @@ export
 contains : String -> List String -> Bool
 contains _ [] = False
 contains x (y :: ys) =
-  let _ = opBump ()
+  opBump ()
   x == y || contains x ys
 
 -- DECLINED (Foldable dispatch, see `contains` above — AGENTS.md names `length`
@@ -644,7 +644,7 @@ hexDigits k n acc =
 (DUse false (UseGroup ("string") ((mem "join" false) (mem "split" false) (mem "startsWith" false "stdStartsWith"))))
 (DTypeSig true "contains" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "contains" (PWild (PList)) (EVar "False"))
-(DFunDef false "contains" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys"))))))
+(DFunDef false "contains" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBlock (DoExpr (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys"))))))
 (DTypeSig true "listLen" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")))
 (DFunDef false "listLen" ((PVar "xs")) (EApp (EApp (EVar "listLenFrom") (ELit (LInt 0))) (EVar "xs")))
 (DTypeSig false "listLenFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))
@@ -824,7 +824,7 @@ hexDigits k n acc =
 (DUse false (UseGroup ("string") ((mem "join" false) (mem "split" false) (mem "startsWith" false "stdStartsWith"))))
 (DTypeSig true "contains" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "contains" (PWild (PList)) (EVar "False"))
-(DFunDef false "contains" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys"))))))
+(DFunDef false "contains" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBlock (DoExpr (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys"))))))
 (DTypeSig true "listLen" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")))
 (DFunDef false "listLen" ((PVar "xs")) (EApp (EApp (EVar "listLenFrom") (ELit (LInt 0))) (EVar "xs")))
 (DTypeSig false "listLenFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))

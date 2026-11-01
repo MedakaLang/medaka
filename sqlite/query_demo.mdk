@@ -39,7 +39,7 @@ ageOver25 (User { age = a }) = match a
 printUsers : List User -> <IO> Unit
 printUsers [] = ()
 printUsers (u :: rest) =
-  let _ = println (showUser u)
+  println (showUser u)
   printUsers rest
 
 main : <IO> Unit
@@ -48,11 +48,11 @@ main = match args ()
   path :: _ => match openDb path
     Err e => println "open error: \{e}"
     Ok db =>
-      let _ = println "-- fetchAll users --"
+      println "-- fetchAll users --"
       let _ = match fetchAll db "users" userRow
         Err e => println "query error: \{e}"
         Ok rows => printUsers rows
-      let _ = println "-- scanTable users WHERE age > 25 --"
+      println "-- scanTable users WHERE age > 25 --"
       match scanTable db "users" ageOver25 userRow
         Err e => println "query error: \{e}"
         Ok rows => printUsers rows

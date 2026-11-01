@@ -31,7 +31,7 @@ main = match args ()
   path :: _ => match openDb path
     Err e => println "open error: \{e}"
     Ok db =>
-      let _ = println "-- distinct n from nums order by n --"
+      println "-- distinct n from nums order by n --"
       let _ =
         match (queryDistinct
           db
@@ -39,7 +39,7 @@ main = match args ()
           tInt)
           Err e => println "query error: \{e}"
           Ok rows => printInts rows
-      let _ = println "-- distinct a,b from pairs order by a,b --"
+      println "-- distinct a,b from pairs order by a,b --"
       let _ =
         match (queryDistinct
           db
@@ -50,7 +50,7 @@ main = match args ()
           (t2 tInt tInt))
           Err e => println "query error: \{e}"
           Ok rows => printPairs rows
-      let _ = println "-- distinct n from nums order by n limit 2 --"
+      println "-- distinct n from nums order by n limit 2 --"
       match (queryDistinct
         db
         (withLimit 2 (withOrderBy "n" True (withDistinct (selectFrom "nums"))))

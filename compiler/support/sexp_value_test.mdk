@@ -136,13 +136,13 @@ test "the reader keeps its verdicts on quoted atoms and stray bytes" = expectAll
 -- A decoder reading `(point 3 -4 "a\nb c" (x y))` straight off the bytes.
 test "the cursor reads values off the bytes" =
   let cur = cursorOf " ( point 3 -4 \"a\\nb c\" (x y) ) "
-  let _ = cursorOpen cur
+  cursorOpen cur
   let head = cursorAtom cur
   let a = cursorInt cur
   let b = cursorInt cur
   let text = cursorAtom cur
   let rest = cursorList cursorAtom cur
-  let _ = cursorClose cur
+  cursorClose cur
   expectAll [
     expectEqual "point" head,
     expectEqual (3, -4) (a, b),
@@ -156,7 +156,7 @@ test "the cursor reads values off the bytes" =
 -- flag once and never acts on a half-read value.
 test "the cursor fails closed and stays put" =
   let cur = cursorOf "(a 4x b)"
-  let _ = cursorOpen cur
+  cursorOpen cur
   let _ = cursorAtom cur
   let bad = cursorInt cur
   let at = cursorOffset cur
