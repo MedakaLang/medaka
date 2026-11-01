@@ -41,7 +41,8 @@ import frontend.ast.{
   noDeclLoc,
 }
 import frontend.ast_walk.{BodyOwner(..), DeclBody(..), childExprs, declBodies}
-import hash_map.{HashMap, new, setInPlace, get, findWithDefault}
+import array.{make as arrayMake, get as arrayGet, setInPlace as arraySet}
+import hash_map.{HashMap, new, setInPlace, get}
 import support.util.{reverseL, startsWith}
 
 -- Where a name is bound.  `BImport` is a member of an `import m.{…}` group,
@@ -90,8 +91,8 @@ export data FileScopes = FileScopes {
   fsBinders : List Binder,
   fsUses : List Use,
   fsWild : List (List String),
-  fsSites : HashMap String Binder,
-  fsCounts : HashMap Int Int,
+  fsSites : HashMap Int Binder,
+  fsCounts : Array Int,
 }
 
 -- Walk state: binders and uses newest first, alternate sites, the id counter,
@@ -99,11 +100,16 @@ export data FileScopes = FileScopes {
 data W =
   W (Ref (List Binder)) (Ref (List Use)) (Ref (List (Loc, Binder))) (Ref Int) (Ref (List Binder))
 
+-- One scope level: a short level lists its binders and is scanned linearly; a
+-- large one (empty list) is read through its name index.
+data Frame = Frame (List Binder) (Option (HashMap String Binder))
+
 -- (name, name token, kind, import module path, import origin name)
 data Site = Site String Loc BinderKind (List String) String
 
-siteKey : Loc -> String
-siteKey (Loc _ l c _ _) = "\{l}:\{c}"
+-- A position as one Int: no per-site string, and columns stay under 2^20.
+siteKey : Loc -> Int
+siteKey (Loc _ l c _ _) = l * 1048576 + c
 
 -- The binder a position stands for: a use resolves to what it names, a binder
 -- site (or an alternate site of the same binder) to itself.
@@ -162,7 +168,7 @@ localKind BWhere = True
 
 -- How many uses resolved to the binder.
 useCount : FileScopes -> Binder -> Int
-useCount fs b = findWithDefault 0 b.binderId fs.fsCounts
+useCount fs b = optionOr 0 (arrayGet b.binderId fs.fsCounts)
 
 -- The local binders nothing uses, in source order.  A name starting with `_` is
 -- an intentional discard and is not reported; file-level names and import
@@ -191,10 +197,10 @@ importUses fs =
 -- A name the walk meets where no expression variable stands counts as a use of
 -- the binder it resolves to, without becoming a `Use` (the position tables and
 -- `allUses` keep describing expression variables only).
-noteMentions : W -> List (List Binder) -> List String -> Unit
+noteMentions : W -> List Frame -> List String -> Unit
 noteMentions w scope names = each (noteMention w scope) names
 
-noteMention : W -> List (List Binder) -> String -> Unit
+noteMention : W -> List Frame -> String -> Unit
 noteMention (W _ _ _ _ ms) scope n = match lookupFrames n scope
   Some b => ms := b :: !ms
   None => ()
@@ -303,8 +309,8 @@ export
 buildScopes : List Decl -> FileScopes
 buildScopes prog =
   let w = W (Ref []) (Ref []) (Ref []) (Ref 0) (Ref [])
-  let imports = mintFrame w (flatMap importSites prog)
-  let tops = mintFrame w (flatMap topSites prog)
+  let imports = mintIndexedFrame w (flatMap importSites prog)
+  let tops = mintIndexedFrame w (flatMap topSites prog)
   walkDecls w [tops, imports] prog
   finish w (flatMap wildPaths prog)
 
@@ -313,7 +319,7 @@ finish (W bs us alts _ ms) wild =
   let binders = reverseL !bs
   let uses = reverseL !us
   let sites = new ()
-  let counts = new ()
+  let counts = arrayMake (length binders) 0
   each (setUseSite sites) uses
   each (setBinderSite sites) binders
   each (setAltSite sites) (reverseL !alts)
@@ -327,24 +333,26 @@ finish (W bs us alts _ ms) wild =
     fsCounts = counts,
   }
 
-setUseSite : HashMap String Binder -> Use -> Unit
+setUseSite : HashMap Int Binder -> Use -> Unit
 setUseSite m (Use { useSite = loc, useBinder = (Some b), ... }) =
   setInPlace (siteKey loc) b m
 setUseSite _ _ = ()
 
-setBinderSite : HashMap String Binder -> Binder -> Unit
+setBinderSite : HashMap Int Binder -> Binder -> Unit
 setBinderSite m b = setInPlace (siteKey b.binderSpan) b m
 
-setAltSite : HashMap String Binder -> (Loc, Binder) -> Unit
+setAltSite : HashMap Int Binder -> (Loc, Binder) -> Unit
 setAltSite m (loc, b) = setInPlace (siteKey loc) b m
 
-countBinder : HashMap Int Int -> Binder -> Unit
-countBinder m b = setInPlace b.binderId (findWithDefault 0 b.binderId m + 1) m
+countBinder : Array Int -> Binder -> Unit
+countBinder m b = bump m b.binderId
 
-countUse : HashMap Int Int -> Use -> Unit
-countUse m (Use { useBinder = (Some b), ... }) =
-  setInPlace b.binderId (findWithDefault 0 b.binderId m + 1) m
+countUse : Array Int -> Use -> Unit
+countUse m (Use { useBinder = (Some b), ... }) = bump m b.binderId
 countUse _ _ = ()
+
+bump : Array Int -> Int -> Unit
+bump m i = arraySet i (optionOr 0 (arrayGet i m) + 1) m
 
 -- ── binder sites ──────────────────────────────────────────────────────────────
 importSites : Decl -> List Site
@@ -413,8 +421,21 @@ propParamSite (PropParam n l _) = plainSite n l BParam
 -- One frame from a site list.  A name met again in the same frame is another
 -- site of the binder already minted (an or-pattern's later alternative, a later
 -- clause of one function), not a new binder.
-mintFrame : W -> List Site -> List Binder
-mintFrame w sites = reverseL (mintFrameGo w [] sites)
+mintFrame : W -> List Site -> Frame
+mintFrame w sites = Frame (reverseL (mintFrameGo w [] sites)) None
+
+-- The file-level frames hold every top-level name or import member, so they are
+-- indexed by name; a linear scan per use would be quadratic in the file.
+mintIndexedFrame : W -> List Site -> Frame
+mintIndexedFrame w sites =
+  let index = new ()
+  each (mintIndexed w index) sites
+  Frame [] (Some index)
+
+mintIndexed : W -> HashMap String Binder -> Site -> Unit
+mintIndexed w index (Site n l k from origin) = match get n index
+  Some b => pushAlt w l b
+  None => setInPlace n (mintOne w n l k from origin) index
 
 mintFrameGo : W -> List Binder -> List Site -> List Binder
 mintFrameGo _ acc [] = acc
@@ -445,26 +466,30 @@ mintOne (W bs _ _ counter _) n l k from origin =
 findBinder : String -> List Binder -> Option Binder
 findBinder n = find (b => b.binderName == n)
 
-lookupFrames : String -> List (List Binder) -> Option Binder
+lookupFrame : String -> Frame -> Option Binder
+lookupFrame n (Frame bs None) = findBinder n bs
+lookupFrame n (Frame _ (Some index)) = get n index
+
+lookupFrames : String -> List Frame -> Option Binder
 lookupFrames _ [] = None
-lookupFrames n (frame :: rest) = match findBinder n frame
+lookupFrames n (frame :: rest) = match lookupFrame n frame
   Some b => Some b
   None => lookupFrames n rest
 
-noteUse : W -> List (List Binder) -> Loc -> String -> Unit
+noteUse : W -> List Frame -> Loc -> String -> Unit
 noteUse (W _ us _ _ _) scope loc n =
   us :=
     Use { useName = n, useSite = loc, useBinder = lookupFrames n scope } :: !us
 
 -- ── the walk ──────────────────────────────────────────────────────────────────
-walkDecls : W -> List (List Binder) -> List Decl -> Unit
+walkDecls : W -> List Frame -> List Decl -> Unit
 walkDecls _ _ [] = ()
 walkDecls w scope (d :: rest) =
   noteMentions w scope (declNames d)
   walkBodies w scope (declBodies d)
   walkDecls w scope rest
 
-walkBodies : W -> List (List Binder) -> List DeclBody -> Unit
+walkBodies : W -> List Frame -> List DeclBody -> Unit
 walkBodies _ _ [] = ()
 walkBodies w scope ((DeclBody owner body) :: rest) =
   noteMentions w scope (ownerNames owner)
@@ -472,7 +497,7 @@ walkBodies w scope ((DeclBody owner body) :: rest) =
   walkExpr w (frame :: scope) noDeclLoc body
   walkBodies w scope rest
 
-walkExpr : W -> List (List Binder) -> Loc -> Expr -> Unit
+walkExpr : W -> List Frame -> Loc -> Expr -> Unit
 walkExpr w scope _ (ELoc l e) = walkExpr w scope l e
 walkExpr w scope _ (EDoOrigin l e) = walkExpr w scope l e
 walkExpr w scope loc (EVar n) = noteUse w scope loc n
@@ -501,19 +526,19 @@ walkExpr w scope loc e =
   walkEach w scope loc (childExprs e)
 
 -- The scope a `let` right-hand side sees: its own binders only when recursive.
-letRhsScope : Bool -> List Binder -> List (List Binder) -> List (List Binder)
+letRhsScope : Bool -> Frame -> List Frame -> List Frame
 letRhsScope isRec frame scope = if isRec then frame :: scope else scope
 
 letBindClauses : LetBind -> List FunClause
 letBindClauses (LetBind _ clauses _ _) = clauses
 
-walkEach : W -> List (List Binder) -> Loc -> List Expr -> Unit
+walkEach : W -> List Frame -> Loc -> List Expr -> Unit
 walkEach _ _ _ [] = ()
 walkEach w scope loc (e :: rest) =
   walkExpr w scope loc e
   walkEach w scope loc rest
 
-walkClauses : W -> List (List Binder) -> Loc -> List FunClause -> Unit
+walkClauses : W -> List Frame -> Loc -> List FunClause -> Unit
 walkClauses _ _ _ [] = ()
 walkClauses w scope loc ((FunClause ps body) :: rest) =
   noteMentions w scope (flatMap patNames ps)
@@ -521,7 +546,7 @@ walkClauses w scope loc ((FunClause ps body) :: rest) =
   walkExpr w (frame :: scope) loc body
   walkClauses w scope loc rest
 
-walkArms : W -> List (List Binder) -> Loc -> List Arm -> Unit
+walkArms : W -> List Frame -> Loc -> List Arm -> Unit
 walkArms _ _ _ [] = ()
 walkArms w scope loc ((Arm p gs body) :: rest) =
   noteMentions w scope (patNames p)
@@ -530,7 +555,7 @@ walkArms w scope loc ((Arm p gs body) :: rest) =
   walkExpr w scope2 loc body
   walkArms w scope loc rest
 
-walkGuardArms : W -> List (List Binder) -> Loc -> List GuardArm -> Unit
+walkGuardArms : W -> List Frame -> Loc -> List GuardArm -> Unit
 walkGuardArms _ _ _ [] = ()
 walkGuardArms w scope loc ((GuardArm gs body) :: rest) =
   let scope2 = walkGuards w scope loc gs
@@ -538,7 +563,7 @@ walkGuardArms w scope loc ((GuardArm gs body) :: rest) =
   walkGuardArms w scope loc rest
 
 -- A guard list threads scope: a `Pat <- e` guard binds for the guards after it.
-walkGuards : W -> List (List Binder) -> Loc -> List Guard -> List (List Binder)
+walkGuards : W -> List Frame -> Loc -> List Guard -> List Frame
 walkGuards _ scope _ [] = scope
 walkGuards w scope loc ((GBool e) :: rest) =
   walkExpr w scope loc e
@@ -548,7 +573,7 @@ walkGuards w scope loc ((GBind p e) :: rest) =
   walkExpr w scope loc e
   walkGuards w (mintFrame w (patSites BMatchArm p) :: scope) loc rest
 
-walkStmts : W -> List (List Binder) -> Loc -> List DoStmt -> Unit
+walkStmts : W -> List Frame -> Loc -> List DoStmt -> Unit
 walkStmts _ _ _ [] = ()
 walkStmts w scope loc ((DoExpr e) :: rest) =
   walkExpr w scope loc e
@@ -570,7 +595,7 @@ walkStmts w scope loc ((DoFieldAssign x _ e) :: rest) =
   walkStmts w scope loc rest
 
 -- An assignment uses its target and then walks the assigned expression.
-walkAssign : W -> List (List Binder) -> Loc -> String -> Expr -> Unit
+walkAssign : W -> List Frame -> Loc -> String -> Expr -> Unit
 walkAssign w scope loc x e =
   noteUse w scope loc x
   walkExpr w scope loc e
