@@ -8,15 +8,8 @@ import string.{repeat}
 import support.util.{listLen}
 import frontend.parser.{parseLocated}
 import tools.lint_scope.{
-  Binder(..),
-  BinderKind(..),
-  allBinders,
-  allUses,
-  binderOf,
-  buildScopes,
-  importUses,
-  unusedBinders,
-  wildImports,
+  Binder(..), BinderKind(..), binderOf, buildScopes, importUses, unusedBinders,
+  wildImports, FileScopes, Use(..)
 }
 
 -- The binder at (line, col), as (name, kind, site line, site column).
@@ -172,3 +165,9 @@ impl Show ImplTy
     ("impl head", expectEqual (Some True) (isUsed src "ImplTy")),
     ("nothing mentions it", expectEqual (Some 0) (countOf src "Unused")),
   ]
+
+allBinders : FileScopes -> List Binder
+allBinders fs = fs.fsBinders
+
+allUses : FileScopes -> List Use
+allUses fs = fs.fsUses

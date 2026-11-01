@@ -161,32 +161,6 @@ propResultsFromRun nonce (NativePropsToRun _ outcomes runnable) code stdout stde
     outcomes
     runnable
     (plannedRendered nonce runnable code stdout stderr)
--- Expose the rendered probe without compiling it so the registry shape can be
--- checked directly.  The execution path above and this renderer share the
--- same planning and closed-graph construction.
-export
-renderNativePlannedProbe : String ->
-  String ->
-  List PlanModule ->
-  List PropRequest ->
-  Result String String
-renderNativePlannedProbe target tsrc modules requests =
-  let props = filterProps (desugarProps tsrc)
-  match requestIndex requests omEmpty
-    Err e => Err e
-    Ok index => match duplicateSelectedPropName props index omEmpty
-      Some duplicate =>
-        Err "duplicate property declaration name \"\{duplicate}\""
-      None => match buildPlanEnvModules (plannedRoot modules) modules
-        Err e => Err (planErrorText e)
-        Ok env =>
-          let jobs = plannedRunnable (plannedOutcomes env modules props index)
-          if listLen jobs == 0 then
-            Err "native property runner: no selected property could be rendered"
-          else
-            let nonce = freshProbeNonce "source_check" propProbePrefixes tsrc
-            Ok (plannedProbeSource nonce target tsrc modules env jobs)
-
 plannedRoot : List PlanModule -> String
 plannedRoot [] = ""
 plannedRoot [PlanModule name _ _] = name
@@ -553,15 +527,6 @@ renderIndexed _ _ _ [] = []
 renderIndexed chunks note i ((_, request) :: rest) =
   classifyNativeFields chunks note request i
     :: renderIndexed chunks note (i + 1) rest
-
-export
-classifyNativeTranscript : List Chunk ->
-  String ->
-  PropRequest ->
-  Int ->
-  PropResult
-classifyNativeTranscript chunks note request i =
-  classifyNativeFields (indexNativeChunks chunks omEmpty) note request i
 
 classifyNativeFields : OrdMap Chunk ->
   String ->

@@ -170,7 +170,6 @@ condMeta (Atomic m) = Some m
 condMeta _ = None
 
 -- Compile one row, or say why it cannot be.
-export
 compileHint : HintRow -> Result String Hint
 compileHint row = match split " ==> " row.rowText
   [lhsText, rhsText] => match (exprOfText lhsText, exprOfText rhsText)
@@ -243,7 +242,6 @@ public export data Found = Found {
 }
 
 -- The subject against the template; a bound subexpression keeps its wrappers.
-export
 matchHint : Hint -> Expr -> Option Found
 matchHint h subject = match matchT h.hintLhs subject (Found [] [])
   Some found => if condsHold h.hintRow.rowConds found then Some found else None
@@ -406,7 +404,6 @@ allHeadsPrelude idx facts found =
 
 -- Inside the definition of a function the row names, the rewrite would call it
 -- from its own body.  A test's or prop's owner name is its description.
-export
 inOwnDefinition : Hint -> Ctx -> Bool
 inOwnDefinition h ctx =
   not ctx.ctxInTest && any (ownsName ctx) h.hintRow.rowConds

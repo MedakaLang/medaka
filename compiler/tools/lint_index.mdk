@@ -92,7 +92,7 @@ public export data Ns = NsValue | NsType deriving (Eq)
 
 -- A declared signature: absent (an unsigned binding), a parsed type, or the
 -- text of a shard's type, which `rowSig` decodes on demand.
-public export data SigSlot = NoSig | SigVal Ty | SigRaw String
+export data SigSlot = NoSig | SigVal Ty | SigRaw String
 
 -- `ixrModule` is the module id (the stdlib's dotted relative path, or
 -- `moduleIdOfPath` for a project file).  `ixrParent` is a constructor's type or
@@ -168,7 +168,6 @@ mkRow m n k sig parent fields arity exp loc = IndexRow {
 
 -- Signatured declarations first (in source order), then the values that have a
 -- body and no signature.
-export
 rowsOfDecls : String -> List Decl -> List IndexRow
 rowsOfDecls modId decls =
   let signed = new ()
@@ -374,7 +373,6 @@ rowKeyText r = joinWith "\t" [
 -- field list or export changes, or when the rows change order, and does not
 -- move when only a position does.  Order counts because a rule may act on the
 -- first of several candidates.
-export
 rowsDigest : List IndexRow -> String
 rowsDigest rows =
   let joined = joinWith "\n" (map rowKeyText rows)
@@ -413,7 +411,6 @@ readOptLoc path cur =
 
 -- The shard text: version, stamp, path, content hash, module id, rows digest,
 -- rows.  A row that holds its signature as text is written with that text.
-export
 encodeRowShard : String -> String -> String -> String -> List IndexRow -> String
 encodeRowShard stamp path hash modId rows =
   renderShard stamp path hash modId (rowsDigest rows) (map rowText rows)
@@ -473,7 +470,6 @@ readOptTy cur =
 
 -- (module id, rows digest, rows), or `None` on any doubt: a wrong version,
 -- stamp, path or content hash, a malformed body, or trailing text.
-export
 decodeRowShard : String ->
   String ->
   String ->
@@ -524,7 +520,6 @@ stdlibShardDir _ =
 -- value is not a directory the XDG base-directory specification allows, and
 -- one would be created under the working directory (or, mis-joined, at the
 -- filesystem root), so it is ignored like an unset one.
-export
 stdlibShardDirOf : String -> String -> String
 stdlibShardDirOf xdg home =
   if startsWith "/" xdg then
@@ -544,12 +539,10 @@ projectShardDir root = "\{root}/.medaka/\{indexCacheDir}"
 -- stamp or content rewrites the same file.  The path is also stored in the
 -- shard and checked on load, so a name collision costs a miss and never a
 -- wrong answer.
-export
 rowShardPath : String -> String -> String
 rowShardPath dir path = "\{dir}/\{basename path}.\{hashStringHex path}.sx"
 
 -- The content key a shard is checked against: the 64-bit digest of the source.
-export
 rowContentHash : String -> String
 rowContentHash src = hashStringHex src
 
@@ -673,12 +666,6 @@ emptyScope = IndexScope {
 export
 emptyProjectIndex : ProjectIndex
 emptyProjectIndex = ProjectIndex emptyScope emptyScope [] None
-
--- The index of the stdlib's rows and the project's rows.
-export
-mkProjectIndex : List IndexRow -> List IndexRow -> ProjectIndex
-mkProjectIndex stdlibRows projectRows =
-  mkProjectIndexWith "" "" stdlibRows projectRows
 
 -- The same, each scope carrying the combined digest of its files' row digests
 -- (`combineDigests`); a scope given no digest digests its rows itself.
@@ -979,11 +966,6 @@ rowsNamed ix ns name =
 export
 stdlibRowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
 stdlibRowsNamed ix ns name = rowsAsked ix (QNamed StdlibScope ns name)
-
--- The project's candidates alone.
-export
-projectRowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
-projectRowsNamed ix ns name = rowsAsked ix (QNamed ProjectScope ns name)
 
 -- Candidates for `name` declared in module `modId` (still a list: a name can
 -- be a value and a constructor, or be declared twice).

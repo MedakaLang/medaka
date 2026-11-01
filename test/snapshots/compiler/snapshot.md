@@ -1,5 +1,5 @@
 # META
-source_lines=1521
+source_lines=1520
 stages=DESUGAR,MARK
 # SOURCE
 import types.program_facts.{withSymbolOrigins}
@@ -393,7 +393,6 @@ isRunSection n = n == "EVAL" || n == "CRASH"
 canonText : String -> String
 canonText text = blockOf (map trimRight (contentLines text))
 
-export
 normalizeText : String -> String -> String
 normalizeText root text = blockOf (map (normalizeLine root) (contentLines text))
 
@@ -1596,7 +1595,7 @@ mapUnit f (x :: rest) =
 (DFunDef false "isRunSection" ((PVar "n")) (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LString "EVAL"))) (EBinOp "==" (EVar "n") (ELit (LString "CRASH")))))
 (DTypeSig false "canonText" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "canonText" ((PVar "text")) (EApp (EVar "blockOf") (EApp (EApp (EVar "map") (EVar "trimRight")) (EApp (EVar "contentLines") (EVar "text")))))
-(DTypeSig true "normalizeText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DTypeSig false "normalizeText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "normalizeText" ((PVar "root") (PVar "text")) (EApp (EVar "blockOf") (EApp (EApp (EVar "map") (EApp (EVar "normalizeLine") (EVar "root"))) (EApp (EVar "contentLines") (EVar "text")))))
 (DTypeSig false "normalizeLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "normalizeLine" ((PVar "root") (PVar "line")) (EApp (EVar "trimRight") (EApp (EVar "normDurations") (EApp (EVar "normTmp") (EApp (EApp (EVar "normRoot") (EVar "root")) (EVar "line"))))))
@@ -1938,7 +1937,7 @@ mapUnit f (x :: rest) =
 (DFunDef false "isRunSection" ((PVar "n")) (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LString "EVAL"))) (EBinOp "==" (EVar "n") (ELit (LString "CRASH")))))
 (DTypeSig false "canonText" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "canonText" ((PVar "text")) (EApp (EVar "blockOf") (EApp (EApp (EMethodRef "map") (EVar "trimRight")) (EApp (EVar "contentLines") (EVar "text")))))
-(DTypeSig true "normalizeText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DTypeSig false "normalizeText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "normalizeText" ((PVar "root") (PVar "text")) (EApp (EVar "blockOf") (EApp (EApp (EMethodRef "map") (EApp (EVar "normalizeLine") (EVar "root"))) (EApp (EVar "contentLines") (EVar "text")))))
 (DTypeSig false "normalizeLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "normalizeLine" ((PVar "root") (PVar "line")) (EApp (EVar "trimRight") (EApp (EVar "normDurations") (EApp (EVar "normTmp") (EApp (EApp (EVar "normRoot") (EVar "root")) (EVar "line"))))))

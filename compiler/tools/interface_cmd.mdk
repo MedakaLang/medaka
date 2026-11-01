@@ -160,17 +160,6 @@ driveUnder inputs modulePath profile =
       sections => Ok (flatMap (s => map (j => (j, snd s)) (fst s)) sections)
     _ => Err (joinNl (map (ppDiagCliSrc coreSrc modulePath) errors))
 
--- The file for [modulePath] checked under [targets] (profile names, "" for the
--- full join; none given means the default targets).
-export
-buildInterfaceFile : String ->
-  List String ->
-  <IO> Result String PreludeInterfaceFile
-buildInterfaceFile modulePath targets = do
-  runtimeSrc <- readPreludeFile (runtimePathOf modulePath)
-  coreSrc <- readPreludeFile modulePath
-  buildInterfaceFileFrom modulePath runtimeSrc coreSrc targets
-
 -- `buildInterfaceFile` over prelude texts already read.
 buildInterfaceFileFrom : String ->
   String ->
@@ -228,7 +217,6 @@ declsOf runtimeSrc coreSrc elab = do
 -- The three files for [modulePath]: the interface file, the elaborated trees
 -- under the same key, and the desugared declarations the trees came from.  A
 -- type error shows as the interface check's diagnostic.
-export
 buildBoth : String ->
   List String ->
   <IO> Result String (PreludeInterfaceFile, PreludeElab, PreludeDecls)
@@ -336,7 +324,6 @@ showHeaderLines key middle digest =
     ++ ["digest \{digest}"]
 
 -- The header and every section of a decoded file; [digest] is the file's own.
-export
 showLines : String -> PreludeInterfaceFile -> List String
 showLines digest f =
   let total = length f.ifSections
@@ -356,7 +343,6 @@ showCmd path
 
 -- The header and counts of a desugared-declarations file; [digest] is the
 -- file's own.
-export
 showDeclsLines : String -> InterfaceKey -> PreludeDecls -> List String
 showDeclsLines digest key pd =
   showHeaderLines
@@ -419,7 +405,6 @@ showFile path = match readFile path
 
 public export data Verdict = Fresh | Stale String | Missing
 
-export
 verdictText : Verdict -> String
 verdictText Fresh = "fresh"
 verdictText (Stale component) = "stale: \{component}"
@@ -473,7 +458,6 @@ declsVerdictOf modulePath = match readFile (declsPath modulePath)
 -- How [modulePath]'s three files stand against the module's sources now: fresh
 -- only when all are, and a stale or missing elaborated-trees or declarations
 -- file is named as such.
-export
 verdictOf : String -> <IO> Verdict
 verdictOf modulePath = match interfaceVerdictOf modulePath
   Fresh => match elabVerdictOf modulePath
