@@ -1614,6 +1614,16 @@ projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc
   None,
   appendStale staleRef [(entry, [mkDiag SevError RModuleLoad e None])],
 )
+projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadTestImport e cpath (Some (_, loc)))) = (
+  None,
+  appendStale staleRef [
+    (cpath, [mkDiag SevError RTestModuleImport e (Some loc)]),
+  ],
+)
+projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadTestImport e _ None)) = (
+  None,
+  appendStale staleRef [(entry, [mkDiag SevError RTestModuleImport e None])],
+)
 projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Ok mods) =
   let chainKey = chainKeyOf entry roots
   let front =
@@ -3438,6 +3448,27 @@ checkJsonLoadErr target src _ (LoadCycle cmsg cpath csite) = match csite
   None => (
     CjParts target [
       (target, src, [Diag SevError (Coded RModuleLoad) cmsg None None None]),
+    ],
+    True,
+  )
+checkJsonLoadErr target src _ (LoadTestImport cmsg cpath csite) = match csite
+  Some (csrc, cloc) => (
+    CjParts target [
+      (
+        cpath,
+        csrc,
+        [Diag SevError (Coded RTestModuleImport) cmsg (Some cloc) None None],
+      ),
+    ],
+    True,
+  )
+  None => (
+    CjParts target [
+      (
+        target,
+        src,
+        [Diag SevError (Coded RTestModuleImport) cmsg None None None],
+      ),
     ],
     True,
   )

@@ -706,6 +706,7 @@ loadGate False target le =
   let sources = match le
     LoadParseFailed path src _ => omInsert path src omEmpty
     LoadCycle _ path (Some (src, _)) => omInsert path src omEmpty
+    LoadTestImport _ path (Some (src, _)) => omInsert path src omEmpty
     _ => omEmpty
   diagnosticGate sources (loadErrorDiags target le)
 
@@ -715,6 +716,9 @@ loadErrorDiags _ (LoadParseFailed mpath _ pe) =
 loadErrorDiags target (LoadCycle e cpath csite) = match csite
   Some (_, loc) => [(cpath, [mkDiag SevError RModuleLoad e (Some loc)])]
   None => [(target, [mkDiag SevError RModuleLoad e None])]
+loadErrorDiags target (LoadTestImport e cpath csite) = match csite
+  Some (_, loc) => [(cpath, [mkDiag SevError RTestModuleImport e (Some loc)])]
+  None => [(target, [mkDiag SevError RTestModuleImport e None])]
 loadErrorDiags target (LoadMsg e) =
   [(target, [mkDiag SevError RModuleLoad e None])]
 

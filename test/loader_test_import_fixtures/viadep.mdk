@@ -1,0 +1,4 @@
+-- fixture for loader_test.mdk: a non-test entry reaching a test module only through a dependency
+import dep
+
+main = 0

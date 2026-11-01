@@ -98,11 +98,13 @@ stdlibOwnedMods : String -> List String -> String -> List (String, List Decl) ->
 stdlibOwnership : String -> List String -> String -> List (String, List Decl) -> <IO> (Bool, List String)
 stripSuffixStr : String -> String -> String
 takeTo : String -> List String -> List String
+testImportViolation : List (String, String) -> List String -> String -> String -> String -> <IO> Option LoadError
 trustedModsGo : List (String, String) -> List String -> String -> List String -> List String -> <IO> List String
 underDir : String -> String -> Bool
 unknownModuleIdOf : String -> Option String
 unquote : String -> String
 valAfterEq : String -> String
 valEqGo : String -> Int -> Int -> String
+visitModChecked : (String -> String -> Result ParseError (List Decl)) -> (String -> Option String) -> List (String, String) -> List String -> List String -> List String -> List (String, String, List Decl) -> String -> String -> String -> <IO> Result LoadError (List String, List (String, String, List Decl))
 visitModF : (String -> String -> Result ParseError (List Decl)) -> (String -> Option String) -> List (String, String) -> List String -> List String -> List String -> List (String, String, List Decl) -> String -> String -> String -> <IO> Result LoadError (List String, List (String, String, List Decl))
 visitModsF : (String -> String -> Result ParseError (List Decl)) -> (String -> Option String) -> List (String, String) -> List String -> List String -> List String -> List (String, String, List Decl) -> String -> List String -> <IO> Result LoadError (List String, List (String, String, List Decl))

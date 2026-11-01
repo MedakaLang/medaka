@@ -1,0 +1,5 @@
+-- fixture for loader_test.mdk: a test entry imports a test module, then a non-test dependency imports it again
+import foo_test
+import dep
+
+main = 0
