@@ -1,0 +1,220 @@
+-- compiler/tools/lint_calls_test.mdk: sibling test for lint_calls.mdk
+-- (`[P-TEST-SIBLING]`, AGENTS.md).  Each row parses a small program, takes the
+-- first `let _ =` of its first block and checks the verdict and the block kind.
+
+import test.{expectEqual, expectTrue, expectFalse}
+import frontend.ast.{Decl(..), DoStmt(..), Expr(..), Pat(..), Ty}
+import frontend.ast_walk.{DeclBody(..), ExprKind(..), childExprs, declBodies}
+import tools.lint_calls.{
+  AbstainReason(..),
+  BlockKind(..),
+  DiscardClass(..),
+  Verdict(..),
+  blockOf,
+  discardClass,
+  discardVerdict,
+  inPlainBlock,
+}
+import tools.lint_core.{Ctx(..)}
+import tools.lint_index.{mkProjectIndex, rowsOfDecls}
+import tools.lint_scope.{buildScopes}
+import tools.lint.{lintParseSource}
+
+-- The callees live in the same file, so a head resolves to a top-level binder
+-- and reads the project rows.
+header : String
+header =
+  """
+unitFn : Int -> Unit
+unitFn _ = ()
+
+resultFn : Int -> Result String Int
+resultFn n = Ok n
+
+optionFn : Int -> Option Int
+optionFn n = Some n
+
+twoArgs : Int -> Int -> Result String Int
+twoArgs a b = Ok (a + b)
+
+effectful : String -> <IO> Result String Unit
+effectful _ = Ok ()
+
+noSig n = Ok n
+"""
+
+stmtsOf : Expr -> Option (BlockKind, List DoStmt)
+stmtsOf e = match blockOf e
+  Some found => Some found
+  None => firstBlock (childExprs e)
+
+firstBlock : List Expr -> Option (BlockKind, List DoStmt)
+firstBlock [] = None
+firstBlock (e :: rest) = match stmtsOf e
+  Some found => Some found
+  None => firstBlock rest
+
+mainBlock : List Decl -> Option (BlockKind, List DoStmt)
+mainBlock [] = None
+mainBlock (d :: rest) = match firstBlockOfDecl d
+  Some found => Some found
+  None => mainBlock rest
+
+firstBlockOfDecl : Decl -> Option (BlockKind, List DoStmt)
+firstBlockOfDecl d = firstBlock (map ((DeclBody _ body) => body) (declBodies d))
+
+firstDiscard : List DoStmt -> Option DoStmt
+firstDiscard [] = None
+firstDiscard (s :: rest) = match s
+  DoLet _ _ PWild _ _ => Some s
+  _ => firstDiscard rest
+
+-- The block kind and verdict of the first `let _ =` in `body`, the program
+-- being `header` followed by `body`.  `stdlib` rows come from `lib` instead.
+probe : String -> String -> Option (BlockKind, Verdict)
+probe lib body = match lintParseSource (header ++ body)
+  Err _ => None
+  Ok (decls, _) =>
+    let stdRows = match lintParseSource lib
+      Ok (ds, _) => rowsOfDecls "core" ds
+      Err _ => []
+    let ix = mkProjectIndex stdRows (rowsOfDecls "m" decls)
+    match mainBlock decls
+      None => None
+      Some (kind, stmts) =>
+        map
+          (s => (kind, discardVerdict ix (buildScopes decls) "m" s))
+          (firstDiscard stmts)
+
+verdictOf : String -> Option (BlockKind, Verdict)
+verdictOf body = probe "" body
+
+-- A type written in a signature, as a parsed `Ty`.
+tyOfSig : String -> Option Ty
+tyOfSig t = match lintParseSource "probeTy : \{t}\nprobeTy = probeTy\n"
+  Ok ((DTypeSig _ _ ty _) :: _, _) => Some ty
+  _ => None
+
+discarding : String -> Option (BlockKind, Verdict)
+discarding t = map (ty => (PlainBlock, Discard ty)) (tyOfSig t)
+
+test "a saturated Unit call is a Unit discard" =
+  expectEqual
+    (discarding "Unit")
+    (verdictOf "\nmain =\n  let _ = unitFn 1\n  ()\n")
+
+test "a saturated Result call is a Result discard" =
+  expectEqual
+    (discarding "Result String Int")
+    (verdictOf "\nmain =\n  let _ = resultFn 1\n  ()\n")
+
+test "a saturated Option call is an Option discard" =
+  expectEqual
+    (discarding "Option Int")
+    (verdictOf "\nmain =\n  let _ = optionFn 1\n  ()\n")
+
+test "an effect row on the result is not part of the declared result" =
+  expectEqual
+    (discarding "Result String Unit")
+    (verdictOf "\nmain =\n  let _ = effectful \"x\"\n  ()\n")
+
+test "a partial application abstains" =
+  expectEqual
+    (Some (PlainBlock, Abstain PartialApplication))
+    (verdictOf "\nmain =\n  let _ = twoArgs 1\n  ()\n")
+
+test "a local that shadows a top-level name abstains" =
+  expectEqual
+    (Some (PlainBlock, Abstain LocalBinder))
+    (verdictOf "\nmain =\n  let unitFn = n => Ok n\n  let _ = unitFn 1\n  ()\n")
+
+test "a parameter that shadows a top-level name abstains" =
+  expectEqual
+    (Some (PlainBlock, Abstain LocalBinder))
+    (verdictOf
+      "\nrun resultFn =\n  let _ = resultFn 1\n  ()\n\nmain = run unitFn\n")
+
+test "an unsigned callee abstains" =
+  expectEqual
+    (Some (PlainBlock, Abstain NoSignature))
+    (verdictOf "\nmain =\n  let _ = noSig 1\n  ()\n")
+
+test "an operator section head abstains" =
+  expectEqual
+    (Some (PlainBlock, Abstain HeadNotAName))
+    (verdictOf "\nmain =\n  let _ = (+ 1) 2\n  ()\n")
+
+test "a lambda head abstains" =
+  expectEqual
+    (Some (PlainBlock, Abstain HeadNotAName))
+    (verdictOf "\nmain =\n  let _ = (n => Ok n) 2\n  ()\n")
+
+test "a name with no argument abstains" =
+  expectEqual
+    (Some (PlainBlock, Abstain NotACall))
+    (verdictOf "\nmain =\n  let _ = unitFn\n  ()\n")
+
+test "a name the index does not declare abstains" =
+  expectEqual
+    (Some (PlainBlock, Abstain NoRows))
+    (verdictOf "\nmain =\n  let _ = mystery 1\n  ()\n")
+
+test "an unresolved prelude name resolves through the stdlib rows" =
+  expectEqual
+    (discarding "Option Int")
+    (probe
+      "libFn : Int -> Option Int\nlibFn n = Some n\n"
+      "\nmain =\n  let _ = libFn 1\n  ()\n")
+
+test "a method call abstains" =
+  expectEqual
+    (Some (PlainBlock, Abstain NotAPlainFunction))
+    (probe
+      "interface Sized a where\n  sizeOf : a -> Int\n"
+      "\nmain =\n  let _ = sizeOf 1\n  ()\n")
+
+test "a saturated call inside a do block reports the do kind" =
+  expectEqual
+    (Some (DoBlock, Abstain NoRows))
+    (verdictOf "\nmain =\n  do\n    let _ = missing 1\n    pure ()\n")
+
+test "the same saturated call in a do block is a Unit discard of a do block" =
+  expectEqual
+    (map (ty => (DoBlock, Discard ty)) (tyOfSig "Unit"))
+    (verdictOf "\nmain =\n  do\n    let _ = unitFn 1\n    pure ()\n")
+
+test "a statement that is not let underscore is no discard" =
+  expectEqual
+    (Abstain NotADiscard)
+    (discardVerdict
+      (mkProjectIndex [] [])
+      (buildScopes [])
+      "m"
+      (DoAssign "x" (EVar "y")))
+
+test "the ctx fact says plain block for a bare-block parent" =
+  expectTrue (inPlainBlock (ctxWithParent (Some KBlock)))
+
+test "the ctx fact says do for a do-block parent" =
+  expectFalse (inPlainBlock (ctxWithParent (Some KDo)))
+
+test "result and option and unit classify" =
+  expectEqual
+    [ClassUnit, ClassResult, ClassOption, ClassOther]
+    (map classOfSig ["Unit", "Result String Int", "Option Int", "Int"])
+
+classOfSig : String -> DiscardClass
+classOfSig t = match tyOfSig t
+  Some ty => discardClass ty
+  None => ClassOther
+
+ctxWithParent : Option ExprKind -> Ctx
+ctxWithParent parent = Ctx {
+  ctxDeclName = "",
+  ctxParams = [],
+  ctxInTest = False,
+  ctxParent = parent,
+  ctxSpan = None,
+  ctxOwn = None,
+  ctxDeclLoc = None,
+}
