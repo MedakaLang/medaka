@@ -147,7 +147,8 @@ diagKeyOf path (Diag _ code msg _ _ _) = "\{path}::\{diagIdText code}::\{msg}"
 test "the edit rules ask for the index only on a wildcard import" = expectEach [
   (
     "reimpl disabled",
-    expectFalse (stdlibIndexNeeded [] ["rule-stdlib-reimpl"]),
+    expectFalse
+      (stdlibIndexNeeded [] ["rule-stdlib-reimpl", "rule-let-underscore-unit"]),
   ),
   ("reimpl active", expectTrue (stdlibIndexNeeded [] [])),
   ("edit rules active", expectTrue (wildIndexNeeded [] ["rule-stdlib-reimpl"])),

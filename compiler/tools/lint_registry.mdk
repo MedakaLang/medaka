@@ -43,6 +43,7 @@ import tools.lint_rule_internal_test_equal_in_true as TestEqualInTrue
 import tools.lint_rule_unused_import as UnusedImport
 import tools.lint_rule_unused_param as UnusedParam
 import tools.lint_rule_unused_local as UnusedLocal
+import tools.lint_rule_let_underscore_unit as LetUnderscoreUnit
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- The list position is the output order of findings.  Each entry is the `rule`
@@ -77,6 +78,7 @@ allRules = [
   ConcatToInterp.rule,
   SelfShadowExtern.rule,
   PreferAssignOp.rule,
+  LetUnderscoreUnit.rule,
   PromissoryReader.rule,
   OrElseStaircase.rule,
   CloneType.rule,

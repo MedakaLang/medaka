@@ -16,7 +16,7 @@ import tools.lint_calls.{
   inPlainBlock,
 }
 import tools.lint_core.{Ctx(..)}
-import tools.lint_index.{mkProjectIndex, rowsOfDecls}
+import tools.lint_index.{mkProjectIndex, rowsOfDecls, stdlibKeptRows}
 import tools.lint_scope.{buildScopes}
 import tools.lint.{lintParseSource}
 
@@ -83,8 +83,24 @@ probe lib body = match lintParseSource (header ++ body)
       None => None
       Some (kind, stmts) =>
         map
-          (s => (kind, discardVerdict ix (buildScopes decls) "m" s))
+          (s => (kind, discardVerdict ix (buildScopes decls) "" s))
           (firstDiscard stmts)
+
+-- As `probe`, the library rows passing through `stdlibKeptRows` as module `lib`.
+probeKept : String -> String -> String -> Option (BlockKind, Verdict)
+probeKept lib src body = match (lintParseSource src, lintParseSource (header ++ body))
+  (Ok (libDecls, _), Ok (decls, _)) =>
+    let ix =
+      mkProjectIndex
+        (stdlibKeptRows (rowsOfDecls lib libDecls))
+        (rowsOfDecls "m" decls)
+    match mainBlock decls
+      None => None
+      Some (kind, stmts) =>
+        map
+          (s => (kind, discardVerdict ix (buildScopes decls) "" s))
+          (firstDiscard stmts)
+  _ => None
 
 verdictOf : String -> Option (BlockKind, Verdict)
 verdictOf body = probe "" body
@@ -166,6 +182,22 @@ test "an unresolved prelude name resolves through the stdlib rows" =
       "libFn : Int -> Option Int\nlibFn n = Some n\n"
       "\nmain =\n  let _ = libFn 1\n  ()\n")
 
+test "a runtime extern resolves through the kept stdlib rows" =
+  expectEqual
+    (discarding "Unit")
+    (probeKept
+      "runtime"
+      "extern ePutStrLn : String -> <Stderr> Unit\n"
+      "\nmain =\n  let _ = ePutStrLn \"x\"\n  ()\n")
+
+test "an unexported value of another stdlib module stays out of the stdlib rows" =
+  expectEqual
+    (Some (PlainBlock, Abstain NoRows))
+    (probeKept
+      "other"
+      "hidden : Int -> Unit\nhidden _ = ()\n"
+      "\nmain =\n  let _ = hidden 1\n  ()\n")
+
 test "a method call abstains" =
   expectEqual
     (Some (PlainBlock, Abstain NotAPlainFunction))
@@ -189,7 +221,7 @@ test "a statement that is not let underscore is no discard" =
     (discardVerdict
       (mkProjectIndex [] [])
       (buildScopes [])
-      "m"
+      ""
       (DoAssign "x" (EVar "y")))
 
 test "the ctx fact says plain block for a bare-block parent" =
