@@ -444,6 +444,49 @@ test "Wasm explicit and forward named function types agree with registry" =
     ])
     reg
 
+shapeDetails : Result (List SymbolDefect) String ->
+  List (String, String, SymbolOrigin)
+shapeDetails (Ok _) = []
+shapeDetails (Err ds) =
+  map (d => (codeText (defectCode d), defectMessage d, defectOrigin d)) ds
+
+test "Wasm named type conflict reports explicit and named counts" =
+  let reg = do
+    r <- declareSymbol (WasmType "sig") TypeDecl at emptyRegistry
+    defineSymbol (WasmFunc "f") (FuncOfType "sig" 1) at r
+  expectStep
+    (r => expectAll [
+      expectEqual
+        [
+          (
+            "E-PHYS-SHAPE",
+            "in `caller`: function `$f` declares 1 explicit parameter(s), but named type `$sig` declares 2",
+            at,
+          ),
+        ]
+        (shapeDetails
+          (finishCheckedText
+            ClosedOutput
+            r
+            emptyCoverage
+            "(module (type $sig (func (param i64 i64))) (func $f (type $sig) (param i64)))")),
+      expectEqual
+        [
+          (
+            "E-PHYS-SHAPE",
+            "in `caller`: function `$f` declares 2 explicit parameter(s), but named type `$sig` declares 1",
+            at,
+          ),
+        ]
+        (shapeDetails
+          (finishCheckedText
+            ClosedOutput
+            r
+            emptyCoverage
+            "(module (func $f (type $sig) (param i64 i64)) (type $sig (func (param i64))))")),
+    ])
+    reg
+
 test "Wasm imported named types preserve linkage and resolve forward declarations" =
   let setup = do
     r <- declareSymbol (WasmType "sig") TypeDecl at emptyRegistry

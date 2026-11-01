@@ -55,6 +55,7 @@ public export data SymbolDefect =
   -- the function, its parameter count, the operands the call supplies, the
   -- call, the definition
   | ShapeMismatch String Int Int SymbolOrigin SymbolOrigin
+  | NamedTypeShapeMismatch String String Int Int SymbolOrigin
   -- a function some call or `ref.func` names, or a global some access names,
   -- that nothing defined
   | UndefinedReference WasmSymbol SymbolOrigin
@@ -290,6 +291,7 @@ export
 defectCode : SymbolDefect -> DiagCode
 defectCode (DuplicateDefinition _ _ _) = EPhysDuplicate
 defectCode (ShapeMismatch _ _ _ _ _) = EPhysShape
+defectCode (NamedTypeShapeMismatch _ _ _ _ _) = EPhysShape
 defectCode (UndefinedReference _ _) = EPhysUndefined
 defectCode (UndeclaredType _ _ _) = EPhysUndeclaredType
 defectCode (UndeclaredFuncRef _ _) = EPhysUndeclaredFuncref
@@ -301,6 +303,7 @@ export
 defectOrigin : SymbolDefect -> SymbolOrigin
 defectOrigin (DuplicateDefinition _ at _) = at
 defectOrigin (ShapeMismatch _ _ _ at _) = at
+defectOrigin (NamedTypeShapeMismatch _ _ _ _ at) = at
 defectOrigin (UndefinedReference _ at) = at
 defectOrigin (UndeclaredType _ _ at) = at
 defectOrigin (UndeclaredFuncRef _ at) = at
@@ -313,6 +316,8 @@ defectMessage (DuplicateDefinition sym at first) =
   "in \{bindingOf at}: the WebAssembly module would define \{describe sym} twice, here and in \{placeOf first}; a module may name it once"
 defectMessage (ShapeMismatch f params operands at defined) =
   "in \{bindingOf at}: a call of function `$\{f}` supplies \{intToString operands} operand(s), but its definition in \{placeOf defined} takes \{intToString params}"
+defectMessage (NamedTypeShapeMismatch f ty explicit named at) =
+  "in \{bindingOf at}: function `$\{f}` declares \{intToString explicit} explicit parameter(s), but named type `$\{ty}` declares \{intToString named}"
 defectMessage (UndefinedReference sym at) =
   "in \{bindingOf at}: the WebAssembly module refers to \{describe sym}, which nothing in it defines"
 defectMessage (UndeclaredType t user at) =

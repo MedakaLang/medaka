@@ -529,6 +529,37 @@ sameShape deferred expected actual imported types =
     _ => expected == actual
   linkage && countMatches && kindMatches
 
+shapeDefect : WasmSymbol ->
+  WasmShape ->
+  WasmShape ->
+  OrdMap Int ->
+  SymbolOrigin ->
+  SymbolDefect
+shapeDefect sym expected (FuncOfType name explicit) types at =
+  match omLookup name types
+    Some count =>
+      if explicit >= 0 && explicit /= count then
+        NamedTypeShapeMismatch (symbolName sym) name explicit count at
+      else
+        ordinaryShapeDefect sym expected (FuncOfType name explicit) types at
+    None => ordinaryShapeDefect sym expected (FuncOfType name explicit) types at
+shapeDefect sym expected actual types at =
+  ordinaryShapeDefect sym expected actual types at
+
+ordinaryShapeDefect : WasmSymbol ->
+  WasmShape ->
+  WasmShape ->
+  OrdMap Int ->
+  SymbolOrigin ->
+  SymbolDefect
+ordinaryShapeDefect sym expected actual types at =
+  ShapeMismatch
+    (symbolName sym)
+    (actualCount expected types)
+    (actualCount actual types)
+    at
+    at
+
 declarationDefects : SymbolIndex Expected ->
   SymbolIndex Materialized ->
   OrdMap Int ->
@@ -544,14 +575,7 @@ declarationDefects expected seen types gaps =
             if sameShape False shape actual imported types then
               []
             else
-              [
-                ShapeMismatch
-                  (symbolName sym)
-                  (actualCount shape types)
-                  (actualCount actual types)
-                  at
-                  at,
-              ])
+              [shapeDefect sym shape actual types at])
       (symbolKeys expected)
     ++ flatMap
       (sym =>
@@ -727,14 +751,7 @@ fragmentDeclarations expected seen types =
           if sameShape True shape actual imported types then
             []
           else
-            [
-              ShapeMismatch
-                (symbolName sym)
-                (actualCount shape types)
-                (actualCount actual types)
-                at
-                at,
-            ]
+            [shapeDefect sym shape actual types at]
         None => [])
     (symbolKeys seen)
 
