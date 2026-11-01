@@ -284,19 +284,23 @@ links back here.
 
 ### R9. Order of work
 
-1. **Now, no dependency:** `playground_main.runEmit` passes the validated FFI
-   extern table exactly as `wasm_emit_modules_main.emitTail` does (the browser
-   compiler passes `[]` today, so a user FFI extern dies as an unbound variable
-   instead of the named WasmGC rejection). Re-derive `EMITTER-ARCHITECTURE.md`
-   and `EMITTER-ARCH-BUG-FIT.md` (done in the same PR as this revision).
+1. **Done (P5.15).** `playground_main.runEmit` carries checked extern sources
+   into lowered facts and constructs the same Wasm input shape as the modules
+   route. `test/wasm/diff_playground_input.sh` exercises named FFI refusal and
+   compares validated import demand with the actual local shipping playground
+   artifact. This is bounded Node product evidence, not browser, deployment,
+   or general host-ABI qualification.
 2. **Done.** The draft semantic program, the ANF identity modules, their probe
    entries and their gates are deleted. R9's rule stands for any future carrier:
    consumer-or-delete within one sprint, and only a product consumer keeps one.
 3. **R5 plan record** (no dependency; can run beside F1).
 4. **F1, F3, F2, F4, F5** in that order, one row per PR series, each with its
    R6 validator arm and L7 fixture.
-5. **F6** (#3966) landed 2026-10-11 (see its R4 row). **F7** is supplied by
-   checked-drive publication: policy, manifest and emission consume frozen
+5. **F6** (#3966) landed 2026-10-11 (see its R4 row): the Core carrier and
+   `validateDispatchEvidence` are present. #993 is CLOSED for its evidence and
+   disposition work; #2549 remains OPEN for upstream evidence-as-bindings work,
+   which is not a prerequisite to the landed emitter carrier. **F7** is supplied
+   by checked-drive publication: policy, manifest and emission consume frozen
    entry/protocol values after effect-row erasure.
 
 Compiler-source landing stays serialized through the one-PR golden lane and
