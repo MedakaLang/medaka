@@ -120,15 +120,15 @@ reachKeys groups impls =
   let graph = refGraph defined groups impls
   let seen = new ()
   let roots = map (canonKey defined) ("main" :: memoRootNames groups)
-  let _ = closure graph seen roots
+  closure graph seen roots
   seen
 
 -- every key the graph can name: top-level binding names + impl method names.
 definedKeys : List CBind -> List CImplEntry -> HashMap String Unit
 definedKeys groups impls =
   let s = new ()
-  let _ = forEachU (b => setInPlace (bindKey b) () s) groups
-  let _ = forEachU (e => setInPlace (implKey e) () s) impls
+  forEachU (b => setInPlace (bindKey b) () s) groups
+  forEachU (e => setInPlace (implKey e) () s) impls
   s
 
 -- mirrors dce.canonRef / wasm_emit.canonFn: a post-mangle-synthesized bare prelude
@@ -156,8 +156,8 @@ refGraph : HashMap String Unit ->
   HashMap String (List String)
 refGraph defined groups impls =
   let g = new ()
-  let _ = forEachU (b => addBindEdges defined g b) groups
-  let _ = forEachU (e => addImplEdges defined g e) impls
+  forEachU (b => addBindEdges defined g b) groups
+  forEachU (e => addImplEdges defined g e) impls
   g
 
 addBindEdges : HashMap String Unit ->
@@ -191,7 +191,7 @@ closure _ _ [] = ()
 closure graph seen (w :: work)
   | has w seen = closure graph seen work
   | otherwise =
-    let _ = setInPlace w () seen
+    setInPlace w () seen
     closure graph seen (findWithDefault [] w graph ++ work)
 
 -- ── structural reference collection ────────────────────────────────────────

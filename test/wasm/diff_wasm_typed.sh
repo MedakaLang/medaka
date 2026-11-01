@@ -254,8 +254,8 @@ for required in \
   'let physical = physicalPlanW plan' \
   'let useClos = physical.useClos' \
   'let imports = plannedImportLines physical.imports' \
-  'let _ = forEachU (registerW emit) (declarePlannedHelpers physical)' \
-  'let _ = seedDemandW emit physical.representation' \
+  'forEachU (registerW emit) (declarePlannedHelpers physical)' \
+  'seedDemandW emit physical.representation' \
   'emitDivZeroGuard (progEmit prog) op (if rawProgramW prog then "\{syntheticLocalName WN.WScalarDivr 0}" else divrLocal prog d) site' \
   'wasmTrap emit ENonexhaustiveMatch "non-exhaustive match"' \
   'wasmTrapBytes (progEmit prog) "runtime error [\{EPanic}]: "'; do
@@ -264,7 +264,7 @@ for required in \
     exit 1
   }
 done
-if grep -E '^[[:space:]]*let _ = setRef (emit|\(progEmit prog\))\.(trapImportNeeded|useValueCmp|useStrSearch|useStrLeaf) True' "$WASM_SRC" >/dev/null; then
+if grep -E '^[[:space:]]*(let _ = )?setRef (emit|\(progEmit prog\))\.(trapImportNeeded|useValueCmp|useStrSearch|useStrLeaf) True' "$WASM_SRC" >/dev/null; then
   echo "FAIL WASM-DEMAND-RENDER: body emission mutates physical prerequisites"
   exit 1
 fi
@@ -841,10 +841,10 @@ reemitLeafRuntimeRow name p u gapBind gapMissing =
   let (recordU, recordEvents) = emitProgramRecord leafRuntimeInput u
   let censusEvents =
     emitProgramGaps leafRuntimeInput (leafRuntimeCensus p gapBind gapMissing)
-  let _ = printCapture ("LEAF_" ++ name ++ "_P1") p1
-  let _ = printCapture ("LEAF_" ++ name ++ "_RECORD_U") recordU
-  let _ = printEvents ("LEAF_" ++ name ++ "_RECORD_U_EVENTS") recordEvents
-  let _ = printEvents ("LEAF_" ++ name ++ "_CENSUS_P_GAP") censusEvents
+  printCapture ("LEAF_" ++ name ++ "_P1") p1
+  printCapture ("LEAF_" ++ name ++ "_RECORD_U") recordU
+  printEvents ("LEAF_" ++ name ++ "_RECORD_U_EVENTS") recordEvents
+  printEvents ("LEAF_" ++ name ++ "_CENSUS_P_GAP") censusEvents
   printCapture ("LEAF_" ++ name ++ "_P2") (emitProgram leafRuntimeInput p)'
 [ "$LEAF_ROW_SOURCE" = "$LEAF_ROW_EXPECTED" ] || {
   echo "FAIL LR-LEAF-CENSUS-PROVENANCE: exact shared helper shape changed"
