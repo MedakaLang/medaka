@@ -1,5 +1,5 @@
 # META
-source_lines=82
+source_lines=84
 stages=DESUGAR,MARK
 # SOURCE
 -- `OrdMap a` is a transparent alias for `Map String a` (stdlib/map.mdk).
@@ -79,6 +79,8 @@ export
 omRestrict : List String -> OrdMap a -> OrdMap a
 omRestrict ids m = omFromPairs (restrictedPairs ids m) omEmpty
 
+-- The entries of [m] for [ks], in the order of [ks], skipping a key it lacks.
+export
 restrictedPairs : List String -> OrdMap a -> List (String, a)
 restrictedPairs [] _ = []
 restrictedPairs (k :: ks) m = match omLookup k m
@@ -113,7 +115,7 @@ restrictedPairs (k :: ks) m = match omLookup k m
 (DFunDef false "omFromPairs" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "omFromPairs") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EVar "v")) (EVar "m"))))
 (DTypeSig true "omRestrict" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "OrdMap") (TyVar "a")))))
 (DFunDef false "omRestrict" ((PVar "ids") (PVar "m")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "restrictedPairs") (EVar "ids")) (EVar "m"))) (EVar "omEmpty")))
-(DTypeSig false "restrictedPairs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
+(DTypeSig true "restrictedPairs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
 (DFunDef false "restrictedPairs" ((PList) PWild) (EListLit))
 (DFunDef false "restrictedPairs" ((PCons (PVar "k") (PVar "ks")) (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PVar "v")) () (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EApp (EApp (EVar "restrictedPairs") (EVar "ks")) (EVar "m")))) (arm (PCon "None") () (EApp (EApp (EVar "restrictedPairs") (EVar "ks")) (EVar "m")))))
 # MARK
@@ -145,6 +147,6 @@ restrictedPairs (k :: ks) m = match omLookup k m
 (DFunDef false "omFromPairs" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "omFromPairs") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EVar "v")) (EVar "m"))))
 (DTypeSig true "omRestrict" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "OrdMap") (TyVar "a")))))
 (DFunDef false "omRestrict" ((PVar "ids") (PVar "m")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "restrictedPairs") (EVar "ids")) (EVar "m"))) (EVar "omEmpty")))
-(DTypeSig false "restrictedPairs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
+(DTypeSig true "restrictedPairs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
 (DFunDef false "restrictedPairs" ((PList) PWild) (EListLit))
 (DFunDef false "restrictedPairs" ((PCons (PVar "k") (PVar "ks")) (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PVar "v")) () (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EApp (EApp (EVar "restrictedPairs") (EVar "ks")) (EVar "m")))) (arm (PCon "None") () (EApp (EApp (EVar "restrictedPairs") (EVar "ks")) (EVar "m")))))

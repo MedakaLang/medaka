@@ -86,10 +86,11 @@ import backend.wasm_emit.{
   inputRuntimeExternsW,
 }
 import entries.entry_support.{driveRuntime}
-import driver.diagnostics.{refuseSymbolDefects, renderSymbolDefects}
+import driver.diagnostics.{renderSymbolDefects}
+import driver.emit_diagnostics.{refuseSymbolDefects}
 import backend.wasm_symbols.{SymbolDefect}
 import support.util.{joinNl}
-import backend.emit_plan.{EmitPlan(..), buildEmitPlan}
+import backend.emit_plan.{EmitPlan(..)}
 import ir.extern_lower.{externVar, implicitRuntimeFacts}
 import ir.extern_types.{ExternDeclFact(..)}
 import types.extern_source.{runtimeExternSymbol}
@@ -318,34 +319,38 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         let mainProgram = typedProgram runtimeDecls [] mainDecls
         let mainBase =
           emitProgram (typedInput runtimeDecls [] mainDecls) mainProgram
-        -- A Float entry outcome is deliberately mismatched against the Float-free
-        -- Dummy program (proves the fact alone moves the output, P_NE_MAIN) --
-        -- unchecked for the same reason as the four above.  Every other field
-        -- mirrors typedInput's, so that fact is the only thing that varies.
-        let mainPlan =
-          buildEmitPlan
-            WasmBackend
+        -- Change the entry fact while deriving its physical plan from the same
+        -- fact, so this isolation probe still supplies a complete module.
+        let (CProgram mg ma mt mi mm mf) = mainProgram
+        let floatFacts = { mf |
+          factEntryOutcome =
+            map
+              (outcome => { outcome | entryMainIsFloat = True })
+              mf.factEntryOutcome,
+        }
+        let floatProgram = CProgram mg ma mt mi mm floatFacts
+        let probeInput =
+          makeWasmEmitInput
+            RawUnchecked
             (runtimeDomain (externDecls runtimeDecls))
-            mainProgram
-        let floatPlan = match mainPlan.entryOutcome
-          Some outcome => { mainPlan |
-            entryOutcome = Some ({ outcome | entryMainIsFloat = True }),
-          }
-          None => mainPlan
+            (ctorFieldTypeNames mainMangled)
+        let (floatPlan, floatPrepared) =
+          prepareWasmPlan
+            (inputRuntimeExternsW probeInput)
+            (inputCtorFloatFieldsW probeInput)
+            floatProgram
         let mainWat =
           probeEmission
-            (emitUncheckedWithPlan
-              (makeWasmEmitInput
-                RawUnchecked
-                (runtimeDomain (externDecls runtimeDecls))
-                (ctorFieldTypeNames mainMangled))
-              floatPlan
-              mainProgram)
+            (emitUncheckedWithPlan probeInput floatPlan floatPrepared)
         let pLast = emitProgram pInput pProgram
         let _ = putStrLn (if p1 == pLast then "P_EQ_PLAST" else "P_NE_PLAST")
         let _ = putStrLn (if p1 /= ctorWat then "P_NE_CTOR" else "P_EQ_CTOR")
-        let _ =
-          putStrLn (if mainBase /= mainWat then "P_NE_MAIN" else "P_EQ_MAIN")
+        let _ = putStrLn (if mainBase /= mainWat
+          && isNone (stringIndexOf "call $mdk_float_to_str" mainBase)
+          && isSome (stringIndexOf "call $mdk_float_to_str" mainWat) then
+          "P_NE_MAIN"
+        else
+          "P_EQ_MAIN")
         ()
 
 -- X-W.H2a: the selected Wasm physical indexes must belong to one private Prog, not

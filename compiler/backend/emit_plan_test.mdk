@@ -34,8 +34,8 @@ import test.{
   expectTextContainsAll,
   fail,
 }
-import string.{contains, endsWith, lines, split, trimLeft, startsWith, words}
-import list.{drop, sort, take}
+import string.{contains, endsWith, lines, trimLeft, startsWith}
+import list.{sort}
 import frontend.ast.{
   Addr(..), Lit(..), Pat(..), Route(..), noDeclLoc, noBinderId
 }
@@ -313,53 +313,6 @@ withBackendCode file check =
     Err e => fail "cannot read compiler/backend/\{file}: \{e}"
     Ok text => check (codeLinesOf text)
 
--- A line that writes `call <type> @<name>`, a direct call of a named function.
--- An indirect call (`call i64 %fp`) names no symbol and is not one.
-writesNamedCall : String -> Bool
-writesNamedCall l =
-  any
-    (piece => match words piece
-      [] => False
-      w :: _ => startsWith "\{w} @" piece)
-    (drop 1 (split "call " l))
-
--- The one spelling `directCall` renders a checked call with.
-llvmCheckedCallLine : String
-llvmCheckedCallLine =
-  "\"call \\{ret} @\\{symbolName sym}(\\{rawArgDecls ops})\""
-
--- Lines writing a named call that neither are the checked renderer nor sit
--- within three lines after any `checkWordCall`. A spelling check: a call
--- assembled by concatenation is not seen.
-uncheckedLlvmCalls : List String -> List String -> List String
-uncheckedLlvmCalls _ [] = []
-uncheckedLlvmCalls recent (l :: rest) =
-  let bare =
-    writesNamedCall l
-      && trimLeft l /= llvmCheckedCallLine
-      && not (any (contains "checkWordCall") recent)
-  (if bare then [trimLeft l] else [])
-    ++ uncheckedLlvmCalls (take 3 (l :: recent)) rest
-
-test "llvm_emit writes a named call only through directCall or after checkWordCall" = withBackendCode
-  "llvm_emit.mdk"
-  (code => expectEqual [] (uncheckedLlvmCalls [] code))
-
--- Lines naming a direct Wasm call (`call $f`, `return_call $f`) outside
--- `callInstrW` and the closure check's own needle.
-uncheckedWasmCalls : List String -> List String
-uncheckedWasmCalls ls =
-  filter
-    (l =>
-      contains "call $" l
-        && not (startsWith "callInstrW " (trimLeft l))
-        && not (contains "identsAfterAllRevW" l))
-    ls
-
-test "wasm_emit writes a direct call only through callInstrW" = withBackendCode
-  "wasm_emit.mdk"
-  (code => expectEqual [] (uncheckedWasmCalls code))
-
 -- These names identify the retired recursive wrapper-demand scanner in
 -- wasm_emit. The plan owns the set now; this is a source-shape ratchet.
 legacyWasmValueScanners : List String
@@ -421,7 +374,8 @@ test "no emitter counts leading dictionary parameters from their spelling" =
       ["llvm_emit.mdk", "wasm_emit.mdk", "trmc_analysis.mdk", "emit_plan.mdk"])
 
 -- Every entry that imports an emitter is a route a program reaches an artifact
--- through; each builds its plan with `buildEmitPlan*`, never by hand.
+-- through; each builds its plan with `buildEmitPlan*` or `prepareWasmPlan`,
+-- never by hand.
 emitRoutes : List String
 emitRoutes = [
   "llvm_bootstrap_lex_main.mdk", "llvm_emit_main.mdk",
@@ -458,7 +412,9 @@ test "the emit-route entries are exactly the pinned roster and each builds its p
               Ok text =>
                 labelFail
                   "\{n} builds no emission plan"
-                  (expectTrue (contains "buildEmitPlan" text))
+                  (expectTrue
+                    (contains "buildEmitPlan" text
+                      || contains "prepareWasmPlan" text))
               Err e => expectEqual "readable" "cannot read \{n}: \{e}")
             routes),
       ]

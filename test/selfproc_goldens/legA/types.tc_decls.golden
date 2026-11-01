@@ -92,6 +92,7 @@ declEnvRowAtomEntries : GraphCtx -> List Decl -> List (TabKey, List (List Atom))
 declEnvRowAtomsChain : GraphCtx -> List DeclEnvModule -> (List (TabKey, List (List Atom)), Map String (List (TabKey, List (List Atom)))) -> (List (TabKey, List (List Atom)), Map String (List (TabKey, List (List Atom))))
 declEnvRowAtomsEntries : GraphCtx -> Int -> DeclEnvModule -> List (TabKey, List (List Atom))
 declEnvRowKindEntries : GraphCtx -> Int -> DeclEnvModule -> List (TabKey, List Kind)
+declEnvRowsFrom : GraphCtx -> Int -> List (String, List Decl) -> List DeclEnvModule
 declEnvSeedChain : GraphCtx -> List DeclEnvModule -> DeclEnvSeedAcc -> DeclEnvSeedAcc
 declEnvSeedDataUniverse : ModuleCtx -> String -> DeclEnvs -> Unit
 declEnvVariantFieldOwners : List Variant -> Map String (List String) -> Map String (List String)
@@ -111,6 +112,7 @@ groupDefinerPairs : Map String (List (String, String)) -> List (String, (String,
 headAnnotTy : ModuleCtx -> Ty -> Mono
 ifaceMethodSchemeRows : ModuleCtx -> List Decl -> List MethodSchemeRow
 implHeadNormalDecl : List (TabKey, (List String, Ty)) -> Decl -> Decl
+importerDefiners : GraphCtx -> String -> String -> List (String, (String, String))
 inferParamRowAtoms : GraphCtx -> List String -> List Variant -> List (List Atom)
 installMethodPredicateSlots : ModuleCtx -> String -> List MethodPredicateSlot -> Unit
 instantiateSigTracked : ModuleCtx -> Ty -> (Mono, List (String, Mono), Option EffRow)
@@ -131,6 +133,8 @@ methodRowNumObservation : ModuleCtx -> String -> List Decl -> List Decl -> NumAn
 methodSchemeRows : ModuleCtx -> List (String, List Kind) -> IfaceRef -> List String -> List IfaceMethod -> List MethodSchemeRow
 methodSchemesPure : ModuleCtx -> List (String, List Kind) -> List IfaceMethod -> List (String, Scheme)
 mintParamReprs : ModuleCtx -> List String -> List Kind -> List Mono
+moduleBindingsUnder : ExportView -> List String -> List Decl -> ModuleBindings -> List (String, ExportBinding)
+moduleDefinersUnder : ExportView -> Map String (List (String, (String, String))) -> String -> List Decl -> List (String, (String, String))
 modulePubDefiners : Map String (List (String, (String, String))) -> String -> List Decl -> List (String, (String, String))
 padCtorBinders : List Variant -> List (List (String, KindAnn)) -> List (List (String, KindAnn))
 paramEtbl : List String -> List Kind -> List Mono -> SigVars
@@ -138,8 +142,9 @@ paramRowAtomOccs : GraphCtx -> String -> Ty -> List (List Atom)
 paramRowAtomsFor : GraphCtx -> String -> List String -> List EffAtomTy -> List (List Atom)
 paramRowAtomsOf : ModuleCtx -> TabKey -> Option (List (List Atom))
 pickNumLitRow : IfaceRef -> String -> List MethodSchemeRow -> Option MethodSchemeRow
+privateModuleExports : List Decl -> ModuleBindings -> List (String, ExportBinding) -> List (String, ExportBinding)
 pubTopFnNames : List Decl -> List String
-publicStandaloneNames : List Decl -> List String
+publicModuleExports : List Decl -> ModuleBindings -> List (String, ExportBinding)
 recordCtors : GraphCtx -> TyConOrigin -> String -> DataVis -> List String -> List Variant -> Unit
 recordDeclKinds : ModuleCtx -> Decl -> Unit
 recordDeclParamKinds : ModuleCtx -> Decl -> Unit
@@ -148,9 +153,10 @@ recordExistentials : GraphCtx -> List (String, Ref Authvar) -> Unit
 recordParamKinds : ModuleCtx -> TyConOrigin -> String -> List Kind -> Unit
 recordParamRowAtoms : ModuleCtx -> TyConOrigin -> String -> List (List Atom) -> Unit
 reexportCtorMember : UseMember -> List (String, String, Ident) -> List (String, String, Ident)
-reexportDefiners : Map String (List (String, (String, String))) -> List Decl -> List (String, (String, String))
+reexportDefiners : Map String (List (String, (String, String))) -> List UsePath -> List (String, (String, String))
+reexportDefinersOf : Map String (List (String, (String, String))) -> UsePath -> List (String, (String, String))
 reexportedCtorIdents : Map String (List (String, String, Ident)) -> List Decl -> List (String, String, Ident)
-reexportedCtorIdentsOf : Map String (List (String, String, Ident)) -> Decl -> List (String, String, Ident)
+reexportedCtorIdentsOf : Map String (List (String, String, Ident)) -> UsePath -> List (String, String, Ident)
 registerAllData : TcEnv -> List Decl -> TcEnv
 registerAllDataGo : TcEnv -> List Decl -> TcEnv
 registerAllDataScoped : TcEnv -> List Decl -> List Decl -> TcEnv
@@ -168,15 +174,18 @@ rowArgAtomsVarApp : ModuleCtx -> List (String, List Kind) -> String -> List Ty -
 rowBoundByMember : UseMember -> (String, String, Ident) -> Bool
 seedNumLitFromIntAnchor : ModuleCtx -> List MethodSchemeRow -> Unit
 setMethodPredicateSlotEntry : ModuleCtx -> String -> List MethodPredicateSlot -> Unit
+siblingDepEnv : ModuleCtx -> String -> (List (String, List (String, ExportBinding)), List (String, List (String, ExportBinding))) -> List (String, List (String, ExportBinding))
 sigToScheme : ModuleCtx -> Ty -> Scheme
 sigToSchemeTvs : ModuleCtx -> Ty -> (Scheme, List (String, Mono))
 sigToSchemeTvsIn : ModuleCtx -> List (String, List Kind) -> Ty -> (Scheme, List (String, Mono))
 sigTyVarNames : Ty -> List String -> List String -> List String
 sigVarsFor : ModuleCtx -> Ty -> List String -> SigVars
 sigVarsForWith : ModuleCtx -> Ty -> List String -> List (String, Param) -> SigVars
-stampGraphDecls : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+stampGraphDecls : List SiblingPair -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 tabKeyModule : TabKey -> Option String
+tagModuleExports : Map String Scheme -> List (String, Scheme) -> List (String, ExportBinding)
 takeUntilInclusiveS : String -> List String -> List String
+topFnNamesUnder : ExportView -> List Decl -> List String
 tyAliasNormalForm : List (TabKey, (List String, Ty)) -> List TabKey -> Ty -> Ty
 tyAliasNormalFormKids : List (TabKey, (List String, Ty)) -> List TabKey -> Ty -> Ty
 tyConNamesInConstraint : Constraint -> List String
@@ -184,3 +193,4 @@ tyConNamesInTy : Ty -> List String
 tyVarNamesWithConstraints : Ty -> List String
 variantIdentRow : String -> TyConOrigin -> Variant -> List (String, String, Ident)
 withDeclParamKinds : ModuleCtx -> List Decl -> (Unit -> a) -> a
+withSiblingOrd : List SiblingPair -> List DeclEnvModule -> List DeclEnvModule

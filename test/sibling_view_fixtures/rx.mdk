@@ -1,0 +1,6 @@
+-- A subject whose sibling tries to re-export a private name.
+export visible : Int
+visible = 1
+
+hidden : Int
+hidden = 2

@@ -1,0 +1,4 @@
+-- The private `hidden` did not travel through `rxg_test`'s glob re-export.
+import rxg_test.*
+
+main = println hidden

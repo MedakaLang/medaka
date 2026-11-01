@@ -43,7 +43,7 @@ import ir.core_ir_lower.{
 }
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
-import driver.diagnostics.{refuseLlvmSymbolDefects}
+import driver.emit_diagnostics.{refuseLlvmSymbolDefects}
 
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{factsOfElabSources, factsWithEvidence}

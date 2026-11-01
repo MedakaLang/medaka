@@ -56,6 +56,7 @@ import driver.build_cmd.{
 }
 import support.util.{
   reverseL,
+  testFileSuffix,
   joinNl,
   joinWith,
   splitNl,
@@ -145,6 +146,7 @@ import driver.front_gate.{
   moduleLoadErrText,
   ppParseError,
 }
+import frontend.ast.{SiblingPair}
 import driver.diagnostics.{
   desugaredModPairs,
   CheckDrive(..),
@@ -174,6 +176,7 @@ import driver.diagnostics.{
   readDiagSrc,
   mkDiag,
   checkJsonFileParts,
+  siblingPairsOf,
   CheckJson(..),
   ppCheckJson,
   readFileSafe,
@@ -199,7 +202,7 @@ import json.{
   asString,
 }
 import types.publish.{TcReport(..), tcCode}
-import types.program_facts.{ProgramFacts, factsOfChecked}
+import types.program_facts.{ProgramFacts, factsOfChecked, withSibling}
 import types.typecheck.{
   TcDiag,
   driveInputsFor,
@@ -809,8 +812,9 @@ runCheckCmd argv =
                 -- one is stdlib-root ownership with no `allow-internal` opt-out.
                 let (flatStdlib, ownedStdlib) =
                   stdlibOwnership target roots stdlibDir mods
-                let inputs =
-                  driveInputsFor !selectedProfile flatStdlib ownedStdlib
+                let inputs = { driveInputsFor !selectedProfile flatStdlib ownedStdlib |
+                  diSibling = siblingPairsOf roots modsWithPath,
+                }
                 let perfTLoad = now ()
                 let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
                 let _ =
@@ -1052,7 +1056,15 @@ checkRoute inputs typesMode allowInternal trusted roots rsrc csrc tsrc target mo
     FrontFile (_, _, decls) =>
       checkFileReport typesMode rsrc csrc tsrc target decls front
     FrontGraph mods modPairs =>
-      checkProjectReport rsrc csrc tsrc target mods modPairs front
+      checkProjectReport
+        rsrc
+        csrc
+        tsrc
+        target
+        inputs.diSibling
+        mods
+        modPairs
+        front
 
 -- `check`'s single-file report over its front-end run.
 checkFileReport : Bool ->
@@ -1120,18 +1132,23 @@ checkProjectReport : String ->
   String ->
   String ->
   String ->
+  List SiblingPair ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   FrontOutput CheckDump ->
   <IO> Unit
-checkProjectReport rsrc csrc tsrc target mods modPairs front =
+checkProjectReport rsrc csrc tsrc target sibling mods modPairs front =
   match front.foDriven
     None => dieMsg (ppDiagBuckets front.foDiags)
     Some dump =>
       -- The entry's guard-exhaustiveness lines, rendered whenever resolve accepted
       -- the graph.
       let exWarns =
-        entryExhaust (desugaredPrelude rsrc) (desugaredPrelude csrc) modPairs
+        entryExhaust
+          (desugaredPrelude rsrc)
+          (desugaredPrelude csrc)
+          sibling
+          modPairs
       match locatedProjectDiags front.foDiags
         -- BUGFIX (imported-module diagnostics): when there ARE type errors, render
         -- the accumulated per-module diagnostics LOCATED (`file:L:C: msg` + caret),
@@ -2894,6 +2911,7 @@ runRunCmd argv =
         stdlibOwnership target roots stdlibDir mods
       let inputs = { driveInputsFor !selectedProfile flatStdlib ownedStdlib |
         diPreludeKey = Some (preludeGeneration rsrc csrc),
+        diSibling = siblingPairsOf roots modsWithPath,
       }
       let perfTLoad = now ()
       let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
@@ -2972,7 +2990,7 @@ runRunCmd argv =
                       finishRunEval
                         target
                         jsonMode
-                        (checkedFacts report)
+                        (withSibling inputs.diSibling (checkedFacts report))
                         trees
                         mods
                         (allWarnTriples tsrc target diags)
@@ -3053,7 +3071,7 @@ runRunCmd argv =
                       finishRunEval
                         target
                         jsonMode
-                        (checkedFacts report)
+                        (withSibling inputs.diSibling (checkedFacts report))
                         trees
                         mods
                         projWarns
@@ -3454,7 +3472,7 @@ runDocLibraryTargets outDir targets =
       prelude.pnRuntimeSrc
       prelude.pnCoreSrc
       stdlibDir
-      (filter (t => not (endsWith "_test.mdk" t)) targets)
+      (filter (t => not (endsWith testFileSuffix t)) targets)
     -- `rebucketLibraryImpls` runs at the `List ModuleDoc` level, after
     -- every module is computed and before ANY output is written, so the
     -- pages, the index and the inventory all read the same (already

@@ -137,7 +137,7 @@ import support.util.{
 import list
 import frontend.marker.{localBoundNames}
 import types.private_mangle.{mangledName}
-import frontend.visibility.{useModId}
+import frontend.visibility.{useModId, pubUsePaths}
 import map as IdMap
 import types.tc_foreign.{declExternNames}
 
@@ -1777,21 +1777,17 @@ reachableStandaloneSigGo graph fuel ((mid, n) :: rest) =
 -- no name into the re-exporter's own exports, so nothing downstream can reach through
 -- it.
 --
--- The catch-all arm is exhaustive by that rule rather than by omission — a re-export is
--- representable only as a `DUse True`, wrapped in `DAttrib` or not, so no other `Decl`
--- constructor can contribute a hop and a new one never will.  Its ledgered peer
--- `reexportedIfaceMethodsOf` (the interface-row half of the same walk) carries the same
--- two arms for the same reason.
+-- The hops are `pubUsePaths decls`, the one reader of `DUse True`; its ledgered peer
+-- `reexportedIfaceMethodsOf` (the interface-row half of the same walk) iterates the same list.
 reexportedOrigins : List Decl -> String -> List (String, String)
-reexportedOrigins decls name = flatMap (d => reexportedOriginsOf d name) decls
+reexportedOrigins decls name =
+  flatMap (p => reexportedOriginsOf p name) (pubUsePaths decls)
 
-reexportedOriginsOf : Decl -> String -> List (String, String)
-reexportedOriginsOf (DAttrib _ d) name = reexportedOriginsOf d name
-reexportedOriginsOf (DUse True path _) name = match importedBindings path
+reexportedOriginsOf : UsePath -> String -> List (String, String)
+reexportedOriginsOf path name = match importedBindings path
   None => [(useModId path, name)]
   Some bs =>
     map (b => (useModId path, fst b)) (filterList (b => snd b == name) bs)
-reexportedOriginsOf _ _ = []
 
 declaresStandalone : String -> List Decl -> Bool
 declaresStandalone _ [] = False

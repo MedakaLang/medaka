@@ -107,6 +107,7 @@ import support.util.{
   isEmptyL,
   selfBinding,
 }
+import frontend.ast.{SiblingPair}
 import frontend.visibility.{
   ModuleExports(..),
   ExpNs(..),
@@ -127,7 +128,7 @@ import frontend.visibility.{
   newtypeTypeOfCtor,
   isNewtypeExport,
   bindsNonCtorExport,
-  pubUsePaths,
+  pubUsesLocated,
   expandMemberNames,
   coreExports,
   nsValues,
@@ -148,6 +149,12 @@ import frontend.visibility.{
   buildExportsWith,
   pubIfaceMethodSets,
   reexportBindings,
+  withSubjectView,
+  subjectOf,
+  privilegedCarry,
+  ExportView(..),
+  directUnder,
+  carriedPaths,
 }
 import test.{expectTrue}
 
@@ -218,6 +225,10 @@ public export data ResError =
   -- ctor name as written, owning type, owning module: a selective member list
   -- names a constructor of a type the module exports abstractly
   -- (`export data`, no `public`).  The ctor exists but is withheld.
+  | PrivilegedReexport String String (Option Loc)
+  -- name, subject module: a test sibling's `export import` of its subject
+  -- names something the subject does not export, which the sibling sees only
+  -- through its privilege (design §3.1 re-export row).
   | EffectLabelNoMembers String String (Option Loc)
   -- effect label name, owning module: `Label(..)` on an effect label — an
   -- effect label has no constructors or fields to bring, unlike a type, so
@@ -270,6 +281,9 @@ public export data ResError =
   -- name USED unqualified, exported by ≥2 non-`core` modules (use-time
   -- ambiguity; MAP-SET-AMBIGUITY-DESIGN.md)
   | AmbiguousOccurrence String (List String) (Option Loc)
+  -- the same, when the name is private to the importing test sibling's subject
+  -- (the subject, then the other exporting modules)
+  | AmbiguousPrivateOccurrence String String (List String) (Option Loc)
   -- CONSTRUCTOR (in a pattern or an expression) that ≥2 explicitly-imported
   -- non-`core` modules bring into scope under the same name (#674).  The
   -- constructor peer of AmbiguousOccurrence: without it a cross-module duplicate
@@ -376,6 +390,7 @@ resErrorLoc (ExternWithBody _ l) = l
 resErrorLoc (PrivateNameAccess _ _ l _) = l
 resErrorLoc (NoExportedConstructors _ _ l) = l
 resErrorLoc (NewtypeCtorNotExported _ _ l) = l
+resErrorLoc (PrivilegedReexport _ _ l) = l
 resErrorLoc (BareCtorImport _ _ l) = l
 resErrorLoc (AbstractCtorImport _ _ _ l) = l
 resErrorLoc (EffectLabelNoMembers _ _ l) = l
@@ -391,6 +406,7 @@ resErrorLoc (AsPatternMisplaced l) = l
 resErrorLoc (OrPatternMisplaced l) = l
 resErrorLoc (OrPatternBinders _ _ _ l) = l
 resErrorLoc (AmbiguousOccurrence _ _ l) = l
+resErrorLoc (AmbiguousPrivateOccurrence _ _ _ l) = l
 resErrorLoc (AmbiguousConstructor _ _ l) = l
 resErrorLoc (AmbiguousAliasCtor _ _ l) = l
 resErrorLoc (AmbiguousType _ _ l) = l
@@ -2773,6 +2789,8 @@ resErrorSexp (NoExportedConstructors n m _) =
   "(NoExportedConstructors \{escStr n} \{escStr m})"
 resErrorSexp (NewtypeCtorNotExported n m _) =
   "(NewtypeCtorNotExported \{escStr n} \{escStr m})"
+resErrorSexp (PrivilegedReexport n m _) =
+  "(PrivilegedReexport \{escStr n} \{escStr m})"
 resErrorSexp (BareCtorImport n t _) = "(BareCtorImport \{escStr n} \{escStr t})"
 resErrorSexp (AbstractCtorImport n t m _) =
   "(AbstractCtorImport \{escStr n} \{escStr t} \{escStr m})"
@@ -2797,6 +2815,10 @@ resErrorSexp (OrPatternBinders xs ys _ _) =
   "(OrPatternBinders \{joinWith " " (map escStr xs)} | \{joinWith " " (map escStr ys)})"
 resErrorSexp (AmbiguousOccurrence n mods _) =
   "(AmbiguousOccurrence " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
+resErrorSexp (AmbiguousPrivateOccurrence n subj mods _) =
+  "(AmbiguousPrivateOccurrence "
+    ++ joinWith " " (escStr n :: escStr subj :: map escStr mods)
+    ++ ")"
 resErrorSexp (AmbiguousConstructor n mods _) =
   "(AmbiguousConstructor " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
 resErrorSexp (AmbiguousAliasCtor n mid _) =
@@ -2941,6 +2963,8 @@ ppResError (BareCtorImport n t _) =
   "`\{n}` is a constructor of `\{t}`; import it as `\{t}(..)`"
 ppResError (AbstractCtorImport n t m _) =
   "`\{n}` is a constructor of `\{t}`, which module `\{m}` exports abstractly; declare `\{t}` a `public export data` in `\{m}`"
+ppResError (PrivilegedReexport n m _) =
+  "module `\{m}` does not export `\{n}`, and its test sibling may import it but not re-export it; drop `\{n}` from this `export import` or import it without `export`"
 ppResError (EffectLabelNoMembers n _m _) =
   "`\{n}` is an effect label, not a type, and has no constructors; remove `(..)`"
 ppResError (AbstractFieldAccess t f _) =
@@ -2976,6 +3000,8 @@ ppResError (AmbiguousOccurrence n mods _) = match dedup mods
     "ambiguous occurrence: `\{n}` is bound to \{intToString (listLen mods)} declarations imported from `\{m}`; import one of them under an alias with `import \{m}.{<name> as <alias>}`"
   distinct =>
     "ambiguous occurrence: `\{n}` is exported by \{ambigModPhrase distinct}; import it from one of them under an alias with `import <mod>.{\{n} as <alias>}`"
+ppResError (AmbiguousPrivateOccurrence n subj mods _) =
+  "ambiguous occurrence: `\{n}` is private to `\{subj}`, the subject of this test module, and is also exported by \{ambigModPhrase mods}; import it from only one of them, or under an alias with `import <mod>.{\{n} as <alias>}`"
 -- An alias-qualified constructor spelling parses since #1287, but it does not
 -- SEPARATE two modules' constructors the way it separates their types: resolve
 -- strips the alias prefix before typecheck, whose constructor table is keyed by the
@@ -3049,6 +3075,7 @@ resErrorCode (ExternWithBody _ _) = RExternWithBody
 resErrorCode (PrivateNameAccess _ _ _ _) = RPrivateName
 resErrorCode (NoExportedConstructors _ _ _) = RNoExportedCtors
 resErrorCode (NewtypeCtorNotExported _ _ _) = RNewtypeCtorPrivate
+resErrorCode (PrivilegedReexport _ _ _) = RPrivilegedReexport
 resErrorCode (BareCtorImport _ _ _) = RBareCtorImport
 resErrorCode (AbstractCtorImport _ _ _ _) = RAbstractCtorImport
 resErrorCode (EffectLabelNoMembers _ _ _) = REffectLabelNoMembers
@@ -3064,6 +3091,7 @@ resErrorCode (AsPatternMisplaced _) = RAsPatternMisplaced
 resErrorCode (OrPatternMisplaced _) = ROrPatternMisplaced
 resErrorCode (OrPatternBinders _ _ _ _) = ROrPatternBinders
 resErrorCode (AmbiguousOccurrence _ _ _) = RAmbiguousOccurrence
+resErrorCode (AmbiguousPrivateOccurrence _ _ _ _) = RAmbiguousOccurrence
 resErrorCode (AmbiguousConstructor _ _ _) = RAmbiguousCtor
 resErrorCode (AmbiguousAliasCtor _ _ _) = RAmbiguousCtor
 resErrorCode (AmbiguousType _ _ _) = RAmbiguousType
@@ -3518,40 +3546,47 @@ strippedCtorKey p collisions n =
 -- unaliased import's constructor (`strippedCtorAmbiguity`).
 export
 importedCtorDecls : List Decl ->
+  List SiblingPair ->
   List (String, List Decl) ->
   List (String, List Decl) ->
   List (String, List Decl)
-importedCtorDecls preludeDecls mods pool =
+importedCtorDecls preludeDecls sibling mods pool =
   importedCtorDeclsGo
     (importedCtorDeclsStep
       (coreExports preludeDecls)
       (omFromPairs pool omEmpty))
+    (importerSubject sibling mods)
     omEmpty
     mods
 
 -- [step] is `importedCtorDeclsStep` with the prelude's exports and the pool bound.
-importedCtorDeclsGo : (OrdMap ModuleExports -> (String, List Decl) -> (List Decl, ModuleExports)) ->
+importedCtorDeclsGo : (Option (String, List Decl) -> OrdMap ModuleExports -> (String, List Decl) -> (List Decl, ModuleExports)) ->
+  (String -> Option (String, List Decl)) ->
   OrdMap ModuleExports ->
   List (String, List Decl) ->
   List (String, List Decl)
-importedCtorDeclsGo _ _ [] = []
-importedCtorDeclsGo step known ((mid, prog) :: rest) =
-  let (decls, exp) = step known (mid, prog)
-  (mid, decls) :: importedCtorDeclsGo step (omInsert exp.modId exp known) rest
+importedCtorDeclsGo _ _ _ [] = []
+importedCtorDeclsGo step subjectOf known ((mid, prog) :: rest) =
+  let (decls, exp) = step (subjectOf mid) known (mid, prog)
+  (mid, decls)
+    :: importedCtorDeclsGo step subjectOf (omInsert exp.modId exp known) rest
 
 -- One module of `importedCtorDecls`: the decls declaring a constructor its imports
--- bind, and its exports, which the modules after it read through [known].
+-- bind, and its exports, which the modules after it read through [known].  A test
+-- sibling's imports bind through its [subject]'s full view (`resolveModuleG`).
 export
 importedCtorDeclsStep : ModuleExports ->
   OrdMap (List Decl) ->
+  Option (String, List Decl) ->
   OrdMap ModuleExports ->
   (String, List Decl) ->
   (List Decl, ModuleExports)
-importedCtorDeclsStep coreExp pool known (mid, prog) =
+importedCtorDeclsStep coreExp pool subject known (mid, prog) =
   let paths = usePathsOf prog
+  let seen = withSubjectView coreExp known subject
   let decls =
-    ctorDeclsBoundBy pool known (filterList (p => not (isAliasPath p)) paths)
-      ++ ctorDeclsBoundBy pool known (filterList isAliasPath paths)
+    ctorDeclsBoundBy pool seen (filterList (p => not (isAliasPath p)) paths)
+      ++ ctorDeclsBoundBy pool seen (filterList isAliasPath paths)
   -- values are left without interface methods: they are read through `env`,
   -- and nothing a constructor answer reads depends on them
   (decls, buildExportsWith coreExp known mid prog [])
@@ -4272,12 +4307,17 @@ resolveModule : List Decl ->
   List Decl ->
   (ModuleExports, List ResError)
 resolveModule runtimeDecls preludeDecls known modId prog =
-  resolveModuleG [] None runtimeDecls preludeDecls known modId prog
+  resolveModuleG [] None None runtimeDecls preludeDecls known modId prog
 
 -- Like resolveModule but with an explicit internal-extern guard list for this
--- module (empty ⇒ trusted: a stdlib module, or `--allow-internal`).
+-- module (empty ⇒ trusted: a stdlib module, or `--allow-internal`) and the
+-- module's test subject, its id and decls, when the module is that subject's
+-- sibling (`importerSubject`).  The sibling's imports are judged against the
+-- subject's full view; its own exports are built from the exported views, so
+-- they never carry a name the subject withholds.
 export
 resolveModuleG : List String ->
+  Option (String, List Decl) ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
@@ -4285,17 +4325,91 @@ resolveModuleG : List String ->
   String ->
   List Decl ->
   (ModuleExports, List ResError)
-resolveModuleG internalGuard preludeKey runtimeDecls preludeDecls known modId prog =
+resolveModuleG internalGuard subject preludeKey runtimeDecls preludeDecls known modId prog =
   let _ = stageBump "resolve"
   let ps = preludeScopeFor preludeKey runtimeDecls preludeDecls
-  let (env, importErrs) = buildEnvMM ps known prog internalGuard
+  let seen = withSubjectView ps.psCoreExports known subject
+  let (env, importErrs) = buildEnvMM ps seen prog internalGuard
   let errs =
     dedupResErrors
-      (buildErrors preludeDecls ps.psCoreExports prog
-        ++ importErrs
-        ++ flatMap (checkDecl env) prog)
+      (map
+        (privateAmbiguity known subject)
+        (buildErrors preludeDecls ps.psCoreExports prog
+          ++ importErrs
+          ++ privilegedReexportErrors known seen subject prog
+          ++ flatMap (checkDecl env) prog))
   let exp = buildExports ps.psCoreExports known modId prog env
   (exp, errs)
+
+-- The test subject of importer [mid] among [siblings]: the subject's id and its
+-- decls among [mods].
+export
+importerSubject : List SiblingPair ->
+  List (String, List Decl) ->
+  String ->
+  Option (String, List Decl)
+importerSubject siblings mods mid =
+  flatMap
+    (subj => map (prog => (subj, prog)) (lookupAssoc subj mods))
+    (subjectOf siblings mid)
+
+-- An ambiguity that involves the sibling's subject holding the name privately
+-- is reported as such: the subject's exported view [known] lacks the name.
+privateAmbiguity : OrdMap ModuleExports ->
+  Option (String, List Decl) ->
+  ResError ->
+  ResError
+privateAmbiguity known (Some (subj, _)) (AmbiguousOccurrence n mods loc) =
+  match findExports subj known
+    Some exported =>
+      if contains subj mods && not (contains n exported.expValues) then
+        AmbiguousPrivateOccurrence
+          n
+          subj
+          (filterList (/= subj) (dedup mods))
+          loc
+      else
+        AmbiguousOccurrence n mods loc
+    None => AmbiguousOccurrence n mods loc
+privateAmbiguity _ _ e = e
+
+-- One `PrivilegedReexport` per name a sibling's `export import` of its subject
+-- carries only through the privilege: [known] holds the exported views and
+-- [seen] the views its imports are judged against.
+privilegedReexportErrors : OrdMap ModuleExports ->
+  OrdMap ModuleExports ->
+  Option (String, List Decl) ->
+  List Decl ->
+  List ResError
+privilegedReexportErrors _ _ None _ = []
+privilegedReexportErrors known seen (Some (subj, _)) prog = match (
+  findExports subj known,
+  findExports subj seen,
+)
+  (Some exported, Some full) =>
+    flatMap
+      (reexportLeaks exported full)
+      (filterList (u => useModId (fst u) == subj) (pubUsesLocated prog))
+  _ => []
+
+reexportLeaks : ModuleExports ->
+  ModuleExports ->
+  (UsePath, Loc) ->
+  List ResError
+reexportLeaks exported full (UseGroup ns members, _) =
+  flatMap
+    ((m@(UseMember _ _ loc _)) =>
+      map
+        (n => PrivilegedReexport n full.modId (Some loc))
+        (privilegedCarry exported full (UseGroup ns [m])))
+    members
+-- A glob re-exports the exported view alone (as Rust's `pub use super::*` skips
+-- private items), so it carries nothing privileged.
+reexportLeaks _ _ (UseWild _, _) = []
+reexportLeaks exported full (path, loc) =
+  map
+    (n => PrivilegedReexport n full.modId (Some loc))
+    (privilegedCarry exported full path)
 
 -- thread resolveModule over modules in dependency-first order, accumulating
 -- exports; collect the union of every module's errors (the harness sorts).
@@ -4305,7 +4419,7 @@ resolveModulesErrors : List Decl ->
   List (String, List Decl) ->
   List ResError
 resolveModulesErrors rt pre known mods =
-  resolveModulesErrorsG True [] None rt pre known mods
+  resolveModulesErrorsG True [] [] None rt pre known mods
 
 -- Guarded variant: a module is trusted (no internal-extern restriction) when
 -- `allowInternal` is set OR its modId is in `trustedMods` (the stdlib-owned
@@ -4318,24 +4432,47 @@ resolveModulesErrors rt pre known mods =
 -- There is one walker returning each module's RAW `(modId, errs)` pair;
 -- the two renderers (flat union of raw errors vs per-module `file:L:C:`
 -- located-by-path) are lifted to the two callers below instead of duplicated
--- here.
+-- here.  [sibling] is the graph's test sibling pairs.
 resolveModulesErrorsPairsG : Bool ->
   List String ->
+  List SiblingPair ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
   OrdMap ModuleExports ->
   List (String, List Decl) ->
   List (String, List ResError)
-resolveModulesErrorsPairsG _ _ _ _ _ _ [] = []
-resolveModulesErrorsPairsG allowInternal trustedMods preludeKey rt pre known ((mid, prog) :: rest) =
+resolveModulesErrorsPairsG allowInternal trustedMods sibling preludeKey rt pre known mods =
+  resolvePairsGo
+    allowInternal
+    trustedMods
+    (importerSubject sibling mods)
+    preludeKey
+    rt
+    pre
+    known
+    mods
+
+resolvePairsGo : Bool ->
+  List String ->
+  (String -> Option (String, List Decl)) ->
+  Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  OrdMap ModuleExports ->
+  List (String, List Decl) ->
+  List (String, List ResError)
+resolvePairsGo _ _ _ _ _ _ _ [] = []
+resolvePairsGo allowInternal trustedMods subjectOf preludeKey rt pre known ((mid, prog) :: rest) =
   let guard =
     if allowInternal || contains mid trustedMods then [] else internalExterns
-  let (exp, errs) = resolveModuleG guard preludeKey rt pre known mid prog
+  let (exp, errs) =
+    resolveModuleG guard (subjectOf mid) preludeKey rt pre known mid prog
   (mid, errs)
-    :: resolveModulesErrorsPairsG
+    :: resolvePairsGo
       allowInternal
       trustedMods
+      subjectOf
       preludeKey
       rt
       pre
@@ -4346,18 +4483,20 @@ resolveModulesErrorsPairsG allowInternal trustedMods preludeKey rt pre known ((m
 -- `resolveModulesErrors` wants.
 resolveModulesErrorsG : Bool ->
   List String ->
+  List SiblingPair ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
   OrdMap ModuleExports ->
   List (String, List Decl) ->
   List ResError
-resolveModulesErrorsG allowInternal trustedMods preludeKey rt pre known mods =
+resolveModulesErrorsG allowInternal trustedMods sibling preludeKey rt pre known mods =
   flatMap
     snd
     (resolveModulesErrorsPairsG
       allowInternal
       trustedMods
+      sibling
       preludeKey
       rt
       pre
@@ -4435,17 +4574,19 @@ export
 resolveModulesErrorsByFile : List (String, String) ->
   Bool ->
   List String ->
+  List SiblingPair ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   List (String, List ResError)
-resolveModulesErrorsByFile modPaths allowInternal trustedMods preludeKey runtimeDecls preludeDecls mods =
+resolveModulesErrorsByFile modPaths allowInternal trustedMods sibling preludeKey runtimeDecls preludeDecls mods =
   map
     (fileOfModuleErrors modPaths)
     (resolveModulesErrorsPairsG
       allowInternal
       trustedMods
+      sibling
       preludeKey
       runtimeDecls
       preludeDecls
@@ -5013,14 +5154,24 @@ typeOriginExports : OrdMap (List (String, String)) ->
 -- the same reasoning the `iface:` half is here: the importer has to be able to
 -- ask which namespace an alias-qualified `A.Leaf` belongs to, and only the
 -- DEFINING module can answer it.
-typeOriginExports known mid prog =
-  flatMap (importedTypeOrigins known) (pubUsePaths prog)
-    ++ flatMap (reexportedEffectOrigins known) (pubUsePaths prog)
-    ++ map (effectDeclaredIn mid) (directIn nsEffects prog)
-    ++ map (typeDeclaredIn mid) (directIn nsTypes prog)
-    ++ map (ifaceDeclaredIn mid) (directIn nsInterfaces prog)
-    ++ map (ctorDeclaredIn mid) (directIn nsCtors prog)
-    ++ flatMap ctorOwnedBy (directIn nsTypeCtors prog)
+typeOriginExports known mid prog = originsUnder ExportedView known mid prog
+
+-- `typeOriginExports` under either view: what module [mid]'s test sibling's
+-- occurrences are stamped against is its full view.
+originsUnder : ExportView ->
+  OrdMap (List (String, String)) ->
+  String ->
+  List Decl ->
+  List (String, String)
+originsUnder view known mid prog =
+  let paths = carriedPaths view prog
+  flatMap (importedTypeOrigins known) paths
+    ++ flatMap (reexportedEffectOrigins known) paths
+    ++ map (effectDeclaredIn mid) (directUnder view nsEffects prog)
+    ++ map (typeDeclaredIn mid) (directUnder view nsTypes prog)
+    ++ map (ifaceDeclaredIn mid) (directUnder view nsInterfaces prog)
+    ++ map (ctorDeclaredIn mid) (directUnder view nsCtors prog)
+    ++ flatMap ctorOwnedBy (directUnder view nsTypeCtors prog)
 
 typeDeclaredIn : String -> String -> (String, String)
 typeDeclaredIn mid n = (n, mid)
@@ -5989,17 +6140,21 @@ interfaceNamesOf (_ :: rest) = interfaceNamesOf rest
 -- module's exported type origins forward the way `resolveModulesErrorsG` threads
 -- `ModuleExports`.  Returns the stamped prelude and the stamped modules.
 export
-stampGraphTyOrigins : List Decl ->
+stampGraphTyOrigins : List SiblingPair ->
+  List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
-stampGraphTyOrigins coreDecls modules =
+stampGraphTyOrigins sibling coreDecls modules =
   let _ = stageBump "typecheck.drive"
   let coreTypes =
     map (typeDeclaredIn "core") (dataRecordNames coreDecls)
       ++ map (ifaceDeclaredIn "core") (interfaceNamesOf coreDecls)
       ++ map (effectDeclaredIn "core") (effectNames coreDecls)
   let coreS = stampOneModule coreTypes omEmpty "core" coreDecls
-  (coreS, stampModulesGo coreTypes omEmpty modules)
+  (
+    coreS,
+    stampModulesGo coreTypes (importerSubject sibling modules) omEmpty modules,
+  )
 
 -- Both identity layers for ONE module, in one place so the prelude pass above and
 -- the per-module walk below cannot drift apart — the `evalModulesWith`/`cevalModules`
@@ -6017,15 +6172,24 @@ stampOneModule coreTypes known mid prog =
     (tyOriginScope coreTypes known mid prog)
     (stampDeclOrigins mid prog)
 
+-- A test sibling's occurrences are stamped against its subject's full view
+-- ([subjectOf], `importerSubject`); every module's exports for the modules after it
+-- are its exported view.
 stampModulesGo : List (String, String) ->
+  (String -> Option (String, List Decl)) ->
   OrdMap (List (String, String)) ->
   List (String, List Decl) ->
   List (String, List Decl)
-stampModulesGo _ _ [] = []
-stampModulesGo coreTypes known ((mid, prog) :: rest) =
-  (mid, stampOneModule coreTypes known mid prog)
+stampModulesGo _ _ _ [] = []
+stampModulesGo coreTypes subjectOf known ((mid, prog) :: rest) =
+  let seen = match subjectOf mid
+    None => known
+    Some (subject, sprog) =>
+      omInsert subject (originsUnder FullView known subject sprog) known
+  (mid, stampOneModule coreTypes seen mid prog)
     :: stampModulesGo
       coreTypes
+      subjectOf
       (omInsert mid (typeOriginExports known mid prog) known)
       rest
 

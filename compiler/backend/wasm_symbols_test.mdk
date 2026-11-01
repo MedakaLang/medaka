@@ -10,7 +10,14 @@ import backend.extern_catalog.{RuntimeExternDomain(..)}
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{EmitPlan, prepareWasmPlan}
 import ir.core_ir.{CProgram}
-import test.{expectAll, expectEqual, expectSatisfies, labelFail}
+import test.{
+  expectAll, expectEqual, expectTrue, expectSatisfies, labelFail, fail
+}
+import test_process.{
+  withScratchDir, boundedVerbSeconds, expectSpawnOkLine, expectSpawnFailsAll,
+  underRoot, medakaBin
+}
+import string.{replace, contains}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
@@ -39,6 +46,7 @@ import backend.wasm_symbols.{
   emptyRegistry,
   excuseSymbol,
   unresolved,
+  unresolvedFunctions,
 }
 import support.symbol_origin.{SymbolOrigin(..)}
 
@@ -88,7 +96,7 @@ test "a function defined twice is refused; two names defined once each are not" 
       (expectEqual
         [DuplicateDefinition (WasmFunc "f") (at "body") (at "module")]
         (verdict [
-          declareSymbol (WasmFunc "f") FuncImported (at "module"),
+          declareSymbol (WasmFunc "f") (FuncImported 0) (at "module"),
           defineSymbol (WasmFunc "f") (FuncParams 0) (at "body"),
         ])),
     labelFail
@@ -191,6 +199,17 @@ test "a reference nothing defines is unresolved at the end; defined later, it is
           Ok reg => unresolved (excuseSymbol (WasmFunc "force_x") reg)
           Err d => [d])),
   ]
+
+test "census completes only the supplied function domain" = match steps [
+  checkCall (WasmFunc "helper") 1 (at "helper call"),
+  checkCall (WasmFunc "user") 1 (at "user call"),
+  checkRef (WasmElem "helper") (at "element"),
+]
+  Err _ => expectEqual True False
+  Ok reg =>
+    expectEqual
+      [UndefinedReference (WasmFunc "helper") (at "helper call")]
+      (unresolvedFunctions ["helper"] reg)
 
 test "a type use the type section does not declare is refused at the use" = expectAll
   [
@@ -353,3 +372,183 @@ test "a local named like a top-level function needs no closure wrapper" = expect
         (strictDefects
           "anchor = \"ref\"\ninc : Int -> Int\ninc x = x + 1\napply : (Int -> Int) -> Int -> Int\napply f x = f x\nmain = apply inc 4\n")),
   ]
+
+test "Wasm publication routes strip checked call receipts" =
+  let src = "id x = x\nmain = id 42\n"
+  let strict = withLowered emitProgram src
+  let record = withLowered emitProgramRecord src
+  match (strict, record)
+    (Ok text, Ok (recordText, _)) => expectAll [
+      expectEqual text recordText,
+      expectEqual None (stringIndexOf "\u{1e}" text),
+      expectEqual None (stringIndexOf "\u{1f}" text),
+    ]
+    (Err ds, _) => expectEqual [] (map defectFacts ds)
+    (_, Err ds) => expectEqual [] (map defectFacts ds)
+
+censusGuardProbe : String
+censusGuardProbe =
+  """
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import types.capability_manifest.{ManifestRequirement(..)}
+import backend.emit_plan.{prepareWasmPlan}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.tc_elab.{grantWholeDomain}
+import types.program_facts.{emptyFacts}
+import ir.core_ir_lower.{lowerProgramEmitWith, ctorFieldTypeNames}
+import backend.wasm_emit.{emitProgramGaps, inputCtorFloatFieldsW, makeWasmEmitInput}
+import backend.wasm_symbols.{defectCode}
+import support.diag_codes.{codeText}
+import test.{expectEqual, fail}
+
+test "census rejects injected raw direct call" =
+  let decls = grantWholeDomain (desugar (parse "f x = x + 1\\nmain = f 2\\n"))
+  let input = makeWasmEmitInput RawUnchecked PreludeFreeRuntime (ctorFieldTypeNames decls)
+  let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
+  let (plan, prepared) = prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
+  match emitProgramGaps input plan prepared
+    Err defects => expectEqual ["E-PHYS-UNCHECKED"] (map (d => codeText (defectCode d)) defects)
+    Ok _ => fail "census accepted a raw call"
+"""
+
+test "Wasm census rejects an injected raw call in a compiled child" = withScratchDir
+  (dir => match boundedVerbSeconds 30 "cp" [
+    "-R",
+    underRoot "compiler",
+    dir ++ "/compiler",
+  ]
+    Err e => fail e
+    Ok (0, _, _) =>
+      let emitter = dir ++ "/compiler/backend/wasm_emit.mdk"
+      let probe = dir ++ "/compiler/backend/census_guard_probe_test.mdk"
+      let hole = "  let fnDef =\n    [sig]"
+      let insert =
+        "  let fnDef =\n    [sig] ++ (if name == \"f\" then [\"    call $mdk_print_int\"] else [])"
+      match readFile emitter
+        Err e => fail e
+        Ok source =>
+          if not (contains hole source) then
+            fail "Wasm function mutation point missing"
+          else match (
+            writeFile emitter (replace hole insert source),
+            writeFile probe censusGuardProbe,
+          )
+            (Ok _, Ok _) =>
+              expectSpawnOkLine
+                "perl"
+                [
+                  "-e", "alarm 120; exec @ARGV or die qq(exec: $!)", "env",
+                  "-u", "MEDAKA_STRICT", medakaBin, "test", probe
+                ]
+                (probe ++ ": 1/1 passed")
+            (Err e, _) => fail e
+            (_, Err e) => fail e
+    Ok (code, _, err) =>
+      fail "copying compiler exited \{intToString code}: \{err}")
+
+test "wasm concatenated raw call refuses complete publication" = withScratchDir
+  (dir => match boundedVerbSeconds 30 "cp" [
+    "-R",
+    underRoot "compiler",
+    dir ++ "/compiler",
+  ]
+    Err e => fail e
+    Ok (0, _, _) =>
+      let emitter = dir ++ "/compiler/backend/wasm_emit.mdk"
+      let entry = dir ++ "/compiler/entries/wasm_emit_modules_main.mdk"
+      let sourcePath = dir ++ "/program.mdk"
+      let clean = dir ++ "/clean-emitter"
+      let mutant = dir ++ "/mutant-emitter"
+      let good = dir ++ "/good.wasm"
+      let bad = dir ++ "/bad.wasm"
+      let hole = "      ++ indent bodyLines\n      ++ [\"  )\"]"
+      let insert =
+        "      ++ (if isSome (stringIndexOf \"publicationprobe\" name) then [\"    i64.const 0\", \"    call \" ++ \"$mdk_print_int\"] else [])\n      ++ indent bodyLines\n      ++ [\"  )\"]"
+      match (
+        readFile emitter,
+        writeFile
+          sourcePath
+          "publicationprobe x = x + 1\nmain = publicationprobe 41\n",
+      )
+        (Ok source, Ok _) =>
+          if not (contains hole source) then
+            fail "wasm mutation point missing"
+          else match (boundedVerbSeconds 240 "env" [
+            "-u", "MEDAKA_STRICT", medakaBin, "build", "--allow-internal",
+            entry, "-o", clean
+          ])
+            Ok (0, _, _) => match writeFile emitter (replace hole insert source)
+              Err e => fail e
+              Ok _ =>
+                match (boundedVerbSeconds 240 "env" [
+                  "-u", "MEDAKA_STRICT", medakaBin, "build", "--allow-internal",
+                  entry, "-o", mutant
+                ])
+                  Ok (0, _, _) =>
+                    let goodArgs = [
+                      "MEDAKA_WASM_EMITTER=" ++ clean,
+                      medakaBin,
+                      "build",
+                      "--target",
+                      "wasm",
+                      sourcePath,
+                      "-o",
+                      good,
+                    ]
+                    let badArgs = [
+                      "MEDAKA_WASM_EMITTER=" ++ mutant,
+                      medakaBin,
+                      "build",
+                      "--target",
+                      "wasm",
+                      sourcePath,
+                      "-o",
+                      bad,
+                    ]
+                    match boundedVerbSeconds 240 "env" goodArgs
+                      Ok (0, _, _) =>
+                        let rejection = expectSpawnFailsAll "perl" ([
+                            "-e", "alarm 240; exec @ARGV or die qq(exec: $!)",
+                            "env"
+                          ]
+                          ++ badArgs) [
+                          "E-PHYS-UNCHECKED",
+                        ]
+                        match boundedVerbSeconds 240 "env" badArgs
+                          Err e => fail e
+                          Ok (_, out, err) =>
+                            if fileExists bad then
+                              fail "refused publication left an artifact"
+                            else
+                              expectAll [
+                                expectTrue (fileExists good),
+                                expectSpawnOkLine
+                                  "node"
+                                  [underRoot "test/wasm/run.js", good]
+                                  "42",
+                                rejection,
+                                expectEqual
+                                  None
+                                  (stringIndexOf "\u{1e}" (out ++ err)),
+                                expectEqual
+                                  None
+                                  (stringIndexOf "\u{1f}" (out ++ err)),
+                              ]
+                      Ok (code, out, err) =>
+                        fail
+                          "control build exited \{intToString code}: \{out} \{err}"
+                      Err e => fail e
+                  Ok (code, out, err) =>
+                    fail
+                      "mutant emitter build exited \{intToString code}: \{out} \{err}"
+                  Err e => fail e
+            Ok (code, out, err) =>
+              fail
+                "control emitter build exited \{intToString code}: \{out} \{err}"
+            Err e => fail e
+        (Err e, _) => fail e
+        (_, Err e) => fail e
+    Ok (code, _, err) =>
+      fail "copying compiler exited \{intToString code}: \{err}")

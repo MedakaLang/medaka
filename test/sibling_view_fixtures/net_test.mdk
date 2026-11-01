@@ -1,0 +1,6 @@
+-- A user-root `net_test.mdk` is not the sibling of stdlib `net`: its private
+-- `sendAllFrom` is rejected (R-PRIVATE-NAME).
+import test.{expectTrue}
+import net.{sendAllFrom}
+
+test "unreachable" = expectTrue True

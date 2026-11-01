@@ -1,0 +1,6 @@
+-- A subject that imports a constrained function without re-exporting it.
+import list.{sort}
+
+export
+sorted3 : Int -> Int -> Int -> List Int
+sorted3 a b c = sort [a, b, c]

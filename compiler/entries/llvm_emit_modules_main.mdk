@@ -54,7 +54,7 @@ import backend.llvm_emit.{
   withNoInlineFns,
 }
 import ir.dce.{dceFilter}
-import driver.diagnostics.{refuseLlvmSymbolDefects}
+import driver.emit_diagnostics.{refuseLlvmSymbolDefects}
 import entries.entry_support.{
   driveEmitLocated,
   stampSiteFiles,

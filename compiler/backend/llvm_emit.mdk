@@ -268,22 +268,23 @@ import backend.llvm_preamble.{
   declareLine, declareRuntime, ffiRuntimeDecls, preambleLines, runtimeDecls
 }
 import backend.llvm_symbols.{
-  CallShape(..),
   LlvmParam(..),
   LlvmSymbol(..),
   ModuleScope(..),
   Prototype(..),
   SymbolDefect,
   SymbolRegistry,
-  checkCall,
   checkRef,
   declareSymbol,
   defineSymbol,
   emptyRegistry,
   excuseSymbol,
   prototypeText,
-  symbolName,
   unresolved,
+}
+import backend.llvm_text_coverage.{
+  CallCoverage, CallModifier(..), CoveragePolicy(..), checkedCall,
+  emptyCoverage, finishCheckedText
 }
 import support.symbol_origin.{SymbolOrigin(..)}
 import backend.extern_catalog.{
@@ -954,6 +955,8 @@ data Emit = Emit {
   -- the module's physical symbols (backend/llvm_symbols.mdk), the defects found
   -- registering them, latest first, and the binding whose emission is running
   symbols : Ref SymbolRegistry,
+  coverage : Ref CallCoverage,
+  excusedCalls : Ref (List LlvmSymbol),
   symbolDefects : Ref (List SymbolDefect),
   symOrigin : Ref SymbolOrigin,
   -- inside `emitAsDeclares`: the top-level defines its walk wrote, latest first
@@ -1176,22 +1179,28 @@ defineHeaderAs e head site sym proto =
 wordProto : List LlvmParam -> Prototype
 wordProto ps = FuncProto "i64" ps ""
 
--- A direct call of the generated `@<sym>` on the i64 words [ops], returning one.
-checkWordCall : Emit -> String -> List String -> Unit
-checkWordCall e sym ops =
-  registerL
-    e
-    (checkCall
-      (Generated sym)
-      (CallShape "i64" (map (_ => "i64") ops))
-      !e.symOrigin)
+-- Render the checked instruction and retain its emission-local receipt.
+directCallWith : Emit ->
+  CallModifier ->
+  LlvmSymbol ->
+  String ->
+  List (String, String) ->
+  String
+directCallWith e modifier sym ret ops =
+  match checkedCall !e.symbols modifier sym ret ops !e.symOrigin !e.coverage
+    Ok (reg, coverage, text) =>
+      e.symbols := reg
+      e.coverage := coverage
+      text
+    Err defect =>
+      e.symbolDefects := defect :: !e.symbolDefects
+      ""
 
--- `call <ret> @<sym>(<type> <operand>, …)`, checked against the prototype the
--- module gives [sym].
 directCall : Emit -> LlvmSymbol -> String -> List (String, String) -> String
-directCall e sym ret ops =
-  let _ = registerL e (checkCall sym (CallShape ret (map fst ops)) !e.symOrigin)
-  "call \{ret} @\{symbolName sym}(\{rawArgDecls ops})"
+directCall e sym ret ops = directCallWith e OrdinaryCall sym ret ops
+
+wordCall : Emit -> String -> List String -> String
+wordCall e sym ops = directCall e (Generated sym) "i64" (i64Ops ops)
 
 -- The instruction line `  <r> = call …` of the runtime or foreign function
 -- [fn], or `  call …` when the call's result is not named ([r] is "").
@@ -1934,8 +1943,8 @@ lookupVarG e env x = match omLookup x env
     if isLazyGlobal e x then
       let r = freshReg e
       let forcer = LN.llvmName (LN.LGlobalForcer x)
-      let _ = checkWordCall e forcer []
-      let _ = emit e "  \{r} = call i64 @\{forcer}()"
+      let call = wordCall e forcer []
+      let _ = emit e "  \{r} = \{call}"
       (r, LTInt)
     else match lookupAssoc x (globalsRegRef e).value
       Some (True, ty) =>
@@ -3665,12 +3674,6 @@ emitRawAs e env RawU64 a = emitU64Raw e env a
 emitRawAs e env RawU32 a = emitU32Raw e env a
 emitRawAs e env RawI32 a = emitU32Raw e env a
 emitRawAs e env RawWord a = fst (emitExpr e env a)
-
--- typed call operands, `i32 %x, i64 %y`.
-rawArgDecls : List (String, String) -> String
-rawArgDecls [] = ""
-rawArgDecls [(t, x)] = "\{t} \{x}"
-rawArgDecls ((t, x) :: rest) = "\{t} \{x}, \{rawArgDecls rest}"
 
 -- The word result of a saturated call of a raw worker, for an ordinary (word)
 -- context: a raw `U64` result is boxed and a raw `U32` retagged, once, here.
@@ -7206,8 +7209,8 @@ emitIndirect e env hd args mode =
     -- float-returning local function keeps its LTFloat result.
     Some lam =>
       let r = freshReg e
-      let _ = checkWordCall e lam (cw :: argOps)
-      let _ = emit e "  \{r} = call i64 @\{lam}(\{argDecls (cw :: argOps)})"
+      let call = wordCall e lam (cw :: argOps)
+      let _ = emit e "  \{r} = \{call}"
       (r, indirectRetTy e cw hd)
     None => emitIndirectMode e cw argOps hd mode
 
@@ -7709,9 +7712,9 @@ isInheritedEntry _ = False
 -- a downstream `++`/`::` types its operand correctly (native backend).
 emitImplCall : Emit -> String -> List String -> LTy -> (String, LTy)
 emitImplCall e fname argOps resTy =
-  let _ = checkWordCall e fname argOps
+  let call = wordCall e fname argOps
   let r = freshReg e
-  let _ = emit e "  \{r} = call i64 @\{fname}(\{argDecls argOps})"
+  let _ = emit e "  \{r} = \{call}"
   (r, resTy)
 
 -- A direct call of define `sym` (already `mdk_`-prefixed) in [mode]: exact ⇒ the
@@ -7847,8 +7850,8 @@ emitPapDefine e papName fname supplied remaining =
   let capOps = loadPapCaptures e supplied 0
   let allArgs = capOps ++ argNames remaining 0
   let r = freshReg e
-  let _ = checkWordCall e fname allArgs
-  let _ = emit e "  \{r} = call i64 @\{fname}(\{argDecls allArgs})"
+  let call = wordCall e fname allArgs
+  let _ = emit e "  \{r} = \{call}"
   let _ = emit e ("  ret i64 " ++ r)
   let _ = emit e "}"
   let _ = emit e ""
@@ -8498,8 +8501,8 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     && isLazyGlobal e (memoGlobalName symTag name) then
     let rv = freshReg e
     let memoForcer = LN.llvmName (LN.LGlobalForcer (memoGlobalName symTag name))
-    let _ = checkWordCall e memoForcer []
-    let _ = emit e "  \{rv} = call i64 @\{memoForcer}()"
+    let call = wordCall e memoForcer []
+    let _ = emit e "  \{rv} = \{call}"
     let _ = emit e "  store i64 \{rv}, ptr \{slot}"
     emit e ("  br label %" ++ endL)
   else
@@ -11761,8 +11764,9 @@ emitFn e (CBind name (c :: rest) site _) = match dispGroupOf !e.gDispGroups name
       emitMultiClauseFn e name clauses site
 emitFn e (CBind name [] _ _) =
   -- in record mode the gap stands in for this function's define
-  e.symbols :=
-    excuseSymbol (Generated (LN.llvmName (LN.LUserFunction name))) !e.symbols
+  let sym = Generated (LN.llvmName (LN.LUserFunction name))
+  e.symbols := excuseSymbol sym !e.symbols
+  e.excusedCalls := sym :: !e.excusedCalls
   gapU e "top-level function with no clauses"
 
 -- a single-clause function with no raw U64 worker.
@@ -12834,8 +12838,8 @@ emitTailLeafD e env self worker fp arity _ (CVar f0 _, args)
   | f0 == self && lengthS args == arity =
     let ops = emitWorkerArgs e env fp 0 args
     let r = freshReg e
-    let call = directCall e (Generated worker) "double" ops
-    let _ = emit e "  \{r} = musttail \{call}"
+    let call = directCallWith e MustTailCall (Generated worker) "double" ops
+    let _ = emit e "  \{r} = \{call}"
     emit e ("  ret double " ++ r)
 emitTailLeafD e env _ _ _ _ other _ =
   let d = emitFloatD e env other
@@ -13172,8 +13176,8 @@ emitFnBodyRaw e env (RawTail self worker w) other = match flattenApp other []
       let ops = emitRawArgs e env (rawWorkerKinds w) args
       let rty = rawKindTy (rawWorkerRet w)
       let r = freshReg e
-      let call = directCall e (Generated worker) rty ops
-      let _ = emit e "  \{r} = musttail \{call}"
+      let call = directCallWith e MustTailCall (Generated worker) rty ops
+      let _ = emit e "  \{r} = \{call}"
       emit e "  ret \{rty} \{r}"
     else
       emitRawValueRet e env (RawTail self worker w) other
@@ -13512,10 +13516,11 @@ tailDefineSym (TailDefine sym _ _) = sym
 -- prototype differs, and the verifier then refuses the module.
 emitDirectTailCall : Emit -> TailDefine -> String -> List String -> Unit
 emitDirectTailCall e self sym ops =
-  let _ = checkWordCall e sym ops
+  let modifier =
+    if fillsTailDefine self sym ops then MustTailCall else OrdinaryCall
+  let call = directCallWith e modifier (Generated sym) "i64" (i64Ops ops)
   let r = freshReg e
-  let kw = if fillsTailDefine self sym ops then "musttail call" else "call"
-  let _ = emit e "  \{r} = \{kw} i64 @\{sym}(\{argDecls ops})"
+  let _ = emit e "  \{r} = \{call}"
   emit e ("  ret i64 " ++ r)
 
 -- Does a call of `sym` on `ops` fill the define `self` word for word?  Every
@@ -14744,7 +14749,10 @@ runStrictEmission e input plan groups implEntries =
   let siteFiles = siteFileTable e
   match symbolDefectsL e True
     [] =>
-      Ok
+      finishCheckedText
+        (RecordedGaps !e.excusedCalls)
+        !e.symbols
+        !e.coverage
         (joinNl
           (siteTrapDeclares e
             ++ reverseL !e.buf
@@ -14924,6 +14932,8 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
           WholeModule
         else
           ModuleHalf)),
+    coverage = Ref emptyCoverage,
+    excusedCalls = Ref [],
     symbolDefects = Ref [],
     symOrigin = Ref moduleOrigin,
     hiddenDefines = Ref None,
@@ -15362,12 +15372,24 @@ emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries facts
   let _ = noteUnprovidedExterns e found
   let _ = emitPreamble e
+  let _ = emitFfiDeclares e
+  let _ = emitGlobalDecls e (valBinds groups)
   let _ = emitFnsGaps e (fnBinds groups)
   let _ = emitImplsGaps e implEntries
   let _ = emitTopBindsGaps e omEmpty (valBinds groups)
-  -- no text is written, so a call need not meet its symbol here
   match symbolDefectsL e False
-    [] => Ok (reverseL !e.gapLog)
+    [] =>
+      map
+        (_ => reverseL !e.gapLog)
+        (finishCheckedText
+          (RecordedGaps !e.excusedCalls)
+          !e.symbols
+          !e.coverage
+          (joinNl
+            (siteTrapDeclares e
+              ++ reverseL !e.buf
+              ++ reverseL !e.lams
+              ++ siteFileTable e)))
     defects => Err defects
 
 emitFnsGaps : Emit -> List CBind -> Unit

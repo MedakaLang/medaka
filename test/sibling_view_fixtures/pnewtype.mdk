@@ -1,0 +1,6 @@
+-- An exported newtype: its constructor is module-private to every importer
+-- but the sibling.
+export newtype Meters = Meters Int
+
+export meters : Int -> Meters
+meters n = Meters n

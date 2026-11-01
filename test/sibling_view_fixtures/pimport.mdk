@@ -1,0 +1,5 @@
+-- A subject that imports a name without re-exporting it.
+import list.{last}
+
+export final : List Int -> Int
+final xs = optionOr 0 (last xs)

@@ -1,0 +1,6 @@
+-- A subject whose sibling re-exports it with a glob.
+export visible : Int
+visible = 1
+
+hidden : Int
+hidden = 2

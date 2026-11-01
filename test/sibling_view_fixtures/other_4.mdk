@@ -1,0 +1,5 @@
+-- Not the sibling: a newtype constructor.
+import pnewtype.{Meters(..), meters}
+
+main = match meters 3
+  Meters n => println n

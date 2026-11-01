@@ -5,7 +5,7 @@
 -- `ServeOps`, which `typecheck.mdk` builds once; this module imports nothing from it.
 import list.{drop, take, sort}
 import string.{lines}
-import frontend.visibility.{useModuleIds}
+import frontend.visibility.{isSubjectIn, useModuleIds}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 import support.util.{
   anyList, dedup, filterList, isNonEmptyL, joinNl, listLen, zipL
@@ -24,13 +24,14 @@ import types.module_interface.{
   freshModuleSerial,
   moduleCacheHit,
   moduleInterfaceIdentity,
+  privateBindingsOf,
   recordModuleInterface,
 }
 import types.publish.{ModDiags, PubScheme, TcDiag, freezeRows}
 import types.repr.{Mono}
 import types.tc_types.{
-  ExportBinding, GraphCtx(..), GraphRun(..), InvocationView, LiveGoal(..),
-  ModuleCtx(..), ModuleServe(..), ServeStep(..)
+  ExportBinding, GraphCtx(..), InvocationView, ModuleCtx(..), ModuleServe(..),
+  ServeStep(..)
 }
 import frontend.ast.{Decl}
 
@@ -158,6 +159,7 @@ serveStep st mid prog prev =
             applyModuleInterface prev.mcGraph mi
           ServeHit
             own
+            (if isSubject prev mid then privateBindingsOf mi else [])
             (
               servedTrees st prev mi,
               schemes,
@@ -172,13 +174,19 @@ serveStep st mid prog prev =
         None =>
           let before = captureModuleRows prev.mcGraph
           let mark = queueMarkOf prev.mcGraph
-          ServeCheck (mctx own done =>
+          ServeCheck (mctx own private done =>
             if anyList (m => omHasKey m st.ssUnrecorded) (map fst key.mkImports)
               || ownRootsOpen st.ssOps mctx.mcGraph mark then
               unrecorded done
             else
-              recordScoped next key before mctx own done mark)
-    _ => ServeCheck (_ _ done => unrecorded done)
+              recordScoped next key before mctx own private done mark)
+    _ => ServeCheck (_ _ _ done => unrecorded done)
+
+-- Whether [mid] is a test subject of the graph [prev] belongs to: a module its
+-- sibling sees in the full view, so one whose private bindings the drive keeps.
+export
+isSubject : ModuleCtx -> String -> Bool
+isSubject prev mid = isSubjectIn prev.mcGraph.config.value.tcSibling mid
 
 -- The key's graph part for the module [prev] precedes: the graph key and the
 -- interface declarations of the modules before it, whose method names it reads by
@@ -269,10 +277,11 @@ recordScoped : ServeState ->
   ModuleRows ->
   ModuleCtx ->
   List (String, ExportBinding) ->
+  List (String, ExportBinding) ->
   List (String, DiagsPayload) ->
   QueueMark ->
   (List (String, DiagsPayload), ModuleServe DiagsPayload)
-recordScoped st key before mctx own done mark =
+recordScoped st key before mctx own private done mark =
   let g = mctx.mcGraph.graphRun
   let mid = key.mkModule
   let ctxs = queueOlder mark.qmCtxs g.stampCtxs.value
@@ -290,7 +299,7 @@ recordScoped st key before mctx own done mark =
   g.binderPending := queueNewer mark.qmBinders g.binderPending.value
   g.liveGoals := filterList (lg => lg.lgModule == mid) g.liveGoals.value
   g.evJudged := from
-  let result = recordChecked st key before mctx own done
+  let result = recordChecked st key before mctx own private done
   g.evScopedJudged := (from, g.evCounter.value) :: g.evScopedJudged.value
   g.evJudged := judged
   g.stampCtxs := g.stampCtxs.value ++ ctxs
@@ -309,9 +318,10 @@ recordChecked : ServeState ->
   ModuleRows ->
   ModuleCtx ->
   List (String, ExportBinding) ->
+  List (String, ExportBinding) ->
   List (String, DiagsPayload) ->
   (List (String, DiagsPayload), ModuleServe DiagsPayload)
-recordChecked st key before mctx own done =
+recordChecked st key before mctx own private done =
   let drained = withModDiags (st.ssOps.soDrain mctx) done
   match drained
     [] => (drained, diagsServe st)
@@ -328,6 +338,7 @@ recordChecked st key before mctx own done =
           (freshModuleSerial ())
           (mid, (published, errs, warns))
           own
+          private
           before
           mctx
           trees

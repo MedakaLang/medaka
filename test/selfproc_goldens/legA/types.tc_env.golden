@@ -1,4 +1,5 @@
 addCtor : TcEnv -> String -> Scheme -> TcEnv
+aliasOrImplPub : Decl -> Bool
 aliasOwnAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasVisibleTo : Int -> AliasDecl -> Bool
@@ -83,6 +84,7 @@ declEnvMarkReached : List String -> Map String Unit -> Map String Unit
 declEnvModule : GraphCtx -> Int -> String -> List Decl -> DeclEnvModule
 declEnvReachFrom : Map String (List String) -> List String -> Map String Unit -> Map String Unit
 declEnvRowVisible : Int -> DeclEnvModule -> List Decl
+declEnvSiblingSees : Int -> DeclEnvModule -> Bool
 declEnvVisibleAt : Int -> Int -> Bool
 declEnvVisibleTo : Int -> Int -> Bool -> Bool
 declEnvsOrdOf : String -> DeclEnvs -> Int
@@ -281,9 +283,9 @@ rangedOver : GraphCtx -> EffLabel -> Bool -> Bool
 recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
 reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
 reexportedIfaceMethods : Map String (List (String, List String)) -> List Decl -> List (String, List String)
-reexportedIfaceMethodsOf : Map String (List (String, List String)) -> Decl -> List (String, List String)
+reexportedIfaceMethodsOf : Map String (List (String, List String)) -> UsePath -> List (String, List String)
 reexportedMethodIdents : Map String (List (String, Ident)) -> List Decl -> List (String, Ident)
-reexportedMethodIdentsOf : Map String (List (String, Ident)) -> Decl -> List (String, Ident)
+reexportedMethodIdentsOf : Map String (List (String, Ident)) -> UsePath -> List (String, Ident)
 removeAllS : List String -> List String -> List String
 requiredMethodNames : List IfaceMethod -> List String
 sameIfaceDecl : IfaceRef -> IfaceRef -> Bool

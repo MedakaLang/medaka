@@ -1,0 +1,9 @@
+-- Constructs and matches the private type's constructor.  Accepted.
+import test.{expectEqual}
+import ptype.{Hidden(..)}
+
+test "private constructor" = match Hidden 4
+  Hidden n => expectEqual 4 n
+
+main = match Hidden 4
+  Hidden n => println n

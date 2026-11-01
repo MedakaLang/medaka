@@ -100,6 +100,8 @@ import driver.loader.{
   loadProgramFilesLocatedCachedE,
   unknownModuleIdOf,
   findImportLoc,
+  loadErrorSite,
+  loadErrorMessage,
 }
 import driver.diagnostics.{
   analyzeProjectKeyed,
@@ -286,18 +288,6 @@ run emit runtimeP coreP entry roots exportsFor = match readFile runtimeP
             -- #100: a parse/lex error in an IMPORTED module squiggles THAT module,
             -- exactly as an entry-file parse error squiggles the entry.
             Err (LoadParseFailed mpath msrc pe) => emitParseError mpath msrc pe
-            Err (LoadCycle cmsg cpath csite) =>
-              let (cfile, csrc, cloc) = match csite
-                Some (s, l) => (cpath, s, Some l)
-                None => (entry, tsrc, None)
-              emitDiagnostics
-                (cjAllToJson [
-                  (
-                    cfile,
-                    csrc,
-                    [Diag SevError (Coded RModuleLoad) cmsg cloc None None],
-                  ),
-                ])
             Err (LoadMsg lmsg) =>
               -- Recover the failing import's own span so the squiggle lands on the
               -- bad `import` line, not line 1 (mirrors medaka_cli's F3 Chunk B
@@ -314,6 +304,17 @@ run emit runtimeP coreP entry roots exportsFor = match readFile runtimeP
                     [Diag SevError (Coded RModuleLoad) lmsg mloc None None],
                   ),
                 ])
+            Err le => match loadErrorSite entry le
+              Some (code, cmsg, cfile, csrc, cloc) =>
+                emitDiagnostics
+                  (cjAllToJson [
+                    (
+                      cfile,
+                      optionOr tsrc csrc,
+                      [Diag SevError (Coded code) cmsg cloc None None],
+                    ),
+                  ])
+              None => emitLoadFail entry (loadErrorMessage le)
             Ok triples =>
               let mods = map dropPath triples
               match mods

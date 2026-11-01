@@ -285,7 +285,8 @@ runPlugin fnName grants elab =
   -- The plugin runs ELABORATED, as `run` does: an interface default reaches an
   -- instance only through the elaboration's disposition table.  The stubs are
   -- plain prelude-level values the evaluator binds after the prelude.
-  let (coreE, modulesE) = mangleCtorCollisionsPair (elab.erCore, elab.erModules)
+  let (coreE, modulesE) =
+    mangleCtorCollisionsPair [] (elab.erCore, elab.erModules)
   let facts = factsOfElab elab
   withFacts facts (_ =>
     resetOutput ()

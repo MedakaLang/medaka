@@ -27,6 +27,7 @@ import frontend.parser.{
   parseErrorMessage,
 }
 import frontend.visibility.{useModId}
+import support.diag_codes.{DiagCode(..)}
 import string as Str
 import support.util.{
   contains,
@@ -39,6 +40,7 @@ import support.util.{
   splitNl,
   stringTrim,
   sortUniqS,
+  testFileSuffix,
 }
 
 -- ── small list helpers (no stdlib import — compiler is single-root) ──
@@ -80,13 +82,6 @@ slashToDot s = joinDot (splitOnChar "/" s)
 dropPrefix : Int -> String -> String
 dropPrefix k s = stringSlice k (stringLength s) s
 
-stripSuffixStr : String -> String -> String
-stripSuffixStr suf s =
-  if endsWith suf s then
-    stringSlice 0 (stringLength s - stringLength suf) s
-  else
-    s
-
 -- the file path a module ID maps to under a single root (no existence check).
 -- A dotted module ID maps to a nested path: split on `.`, join with `/`, append
 -- `.mdk` (mirrors loader.ml file_of_module_id).  A flat bare name (no `.`) →
@@ -117,7 +112,8 @@ relUnderRoots (r :: rs) path =
 export
 moduleIdOfPath : List String -> String -> String
 moduleIdOfPath roots path =
-  slashToDot (stripSuffixStr ".mdk" (relUnderRoots roots path))
+  let rel = relUnderRoots roots path
+  slashToDot (optionOr rel (Str.stripSuffix ".mdk" rel))
 
 -- The text of a Medaka source file, or why it could not be read: `Err None`
 -- for a file that is not valid UTF-8, `Err (Some msg)` with `readFile`'s own
@@ -619,6 +615,7 @@ public export data LoadError =
   | LoadMsg String
   | LoadParseFailed String String ParseError
   | LoadCycle String String (Option (String, Loc))
+  | LoadTestImport String String (Option (String, Loc))
 
 -- Flatten a LoadError to the free-text message the pre-#100 `Result String` API
 -- returned.  Keeps the ~15 callers that only report a string a one-line change,
@@ -628,8 +625,38 @@ export
 loadErrorMessage : LoadError -> String
 loadErrorMessage (LoadMsg m) = m
 loadErrorMessage (LoadCycle m _ _) = m
+loadErrorMessage (LoadTestImport m _ _) = m
 loadErrorMessage (LoadParseFailed path _ e) =
   "\{path}:\{parseErrorLine e}:\{parseErrorCol e}: \{parseErrorMessage e}"
+
+-- The diagnostic a load error that names an import stands for: its code, its message,
+-- the file it belongs to (the importing module, else [target]), the source the loader
+-- parsed for that file when it kept one, and the span of the import.  `None` for a
+-- failure that names no import (`LoadMsg`, `LoadParseFailed`).  Every surface that
+-- renders a cycle or a test-module import reads this, so the two cannot drift apart.
+export
+loadErrorSite : String ->
+  LoadError ->
+  Option (DiagCode, String, String, Option String, Option Loc)
+loadErrorSite target (LoadCycle m path site) = Some (
+  RModuleLoad,
+  m,
+  siteFile target path site,
+  map fst site,
+  map snd site,
+)
+loadErrorSite target (LoadTestImport m path site) = Some (
+  RTestModuleImport,
+  m,
+  siteFile target path site,
+  map fst site,
+  map snd site,
+)
+loadErrorSite _ _ = None
+
+siteFile : String -> String -> Option (String, Loc) -> String
+siteFile _ path (Some _) = path
+siteFile target _ None = target
 
 -- ── read-callback variant (B.10.5: unsaved-editor-buffer overrides) ──
 --
@@ -964,6 +991,44 @@ canonicalPathId deps roots path =
     Some cr =>
       let c = moduleIdOfPath [cr] cPath
       if canonRoundTrips deps roots c cPath then c else fallback
+
+-- The test-sibling relation: `path` is the sibling of the file `<dir>/<m>.mdk` exactly
+-- when it is `<dir>/<m>_test.mdk`, `m` does not itself end in `_test` (one level only),
+-- the subject exists, and both lie in one directory after `canonicalizePath` (so in
+-- one project).  Answers the subject's canonical module id.  The relation is
+-- physical, never a module-id comparison: stdlib ids are bare names, so a user root's
+-- `net_test.mdk` is not the sibling of stdlib `net`.
+export
+siblingSubjectId : List (String, String) ->
+  List String ->
+  String ->
+  <IO> Option String
+siblingSubjectId deps roots path =
+  let cPath = canonicalizePath path
+  let cDir = parentDir cPath
+  flatMap
+    (subject =>
+      let subjectPath = stringConcat [cDir, "/", subject]
+      if not (fileExists subjectPath) then
+        None
+      else
+        let cSubject = canonicalizePath subjectPath
+        if parentDir cSubject == cDir then
+          Some (canonicalPathId deps roots cSubject)
+        else
+          None)
+    (siblingSubjectName (dropPrefix (stringLength cDir + 1) cPath))
+
+-- `foo_test.mdk` → `foo.mdk`; a name without the `_test.mdk` suffix, or whose
+-- subject would itself be a test file, has no subject.
+siblingSubjectName : String -> Option String
+siblingSubjectName file =
+  Str.stripSuffix testFileSuffix file
+    |> flatMap (stem =>
+      if endsWith "_test" stem || stringLength stem == 0 then
+        None
+      else
+        Some "\{stem}.mdk")
 
 -- rewrite a UsePath so its `useModId` yields the canonical id `c`, preserving
 -- the imported member list / wildcard / alias / single name.  (For UseName the
@@ -1411,12 +1476,61 @@ cycleSite : List (String, String) ->
   String ->
   String ->
   <IO> Option (String, Loc)
-cycleSite deps roots importer modId = match loadedSourceOf importer
-  None => None
+cycleSite deps roots importer modId = snd (importSite deps roots importer modId)
+
+-- The import of `modId` inside `importer` as its author wrote it: the module
+-- spelling, and the site `cycleSite` answers.  The spelling is `modId` when the
+-- import is not found.
+importSite : List (String, String) ->
+  List String ->
+  String ->
+  String ->
+  <IO> (String, Option (String, Loc))
+importSite deps roots importer modId = match loadedSourceOf importer
+  None => (modId, None)
   Some src =>
-    map
-      (loc => (src, loc))
-      (findImportLoc modId (rewriteDecls deps roots (parseLocated src)))
+    let raw = parseLocated src
+    match writtenImport modId raw (rewriteDecls deps roots raw)
+      Some (spelling, loc) => (spelling, Some (src, loc))
+      None => (modId, None)
+
+-- [raw] and [rewritten] are one decl list before and after `rewriteDecls`, which
+-- keeps the decls in step.
+writtenImport : String -> List Decl -> List Decl -> Option (String, Loc)
+writtenImport mid ((DUse _ raw loc) :: rs) ((DUse _ canon _) :: cs) =
+  if useModId canon == mid then
+    Some (useModId raw, loc)
+  else
+    writtenImport mid rs cs
+writtenImport mid ((DAttrib _ a) :: rs) ((DAttrib _ b) :: cs) =
+  writtenImport mid (a :: rs) (b :: cs)
+writtenImport mid (_ :: rs) (_ :: cs) = writtenImport mid rs cs
+writtenImport _ _ _ = None
+
+-- A module whose file is not `*_test.mdk` may not import one whose file is.
+-- The decision reads the resolved FILE names, not the module id text.
+-- `importer` is "" only for the entry's own visit, which has no importer.
+testImportViolation : List (String, String) ->
+  List String ->
+  String ->
+  String ->
+  String ->
+  <IO> Option LoadError
+testImportViolation deps roots importer entry modId =
+  if importer == "" || endsWith testFileSuffix importer then
+    None
+  else match findModuleOrEntryFile deps roots entry modId
+    Some (path, _) =>
+      if endsWith testFileSuffix path then
+        let (written, site) = importSite deps roots importer modId
+        Some
+          (LoadTestImport
+            "import `\{written}` in \{importer}: `\{written}` is a test module; only `*_test.mdk` files may import one. Move the shared code out of the test file."
+            importer
+            site)
+      else
+        None
+    None => None
 
 visitModF : (String -> String -> Result ParseError (List Decl)) ->
   (String -> Option String) ->
@@ -1430,6 +1544,35 @@ visitModF : (String -> String -> Result ParseError (List Decl)) ->
   String ->
   <IO> Result LoadError (List String, List (String, String, List Decl))
 visitModF parseFn read deps roots stack visited acc importer entry modId =
+  match testImportViolation deps roots importer entry modId
+    Some e => Err e
+    None =>
+      visitModChecked
+        parseFn
+        read
+        deps
+        roots
+        stack
+        visited
+        acc
+        importer
+        entry
+        modId
+
+-- `visitModF` after the test-import check, which runs on every import edge,
+-- including edges to an already-visited module.
+visitModChecked : (String -> String -> Result ParseError (List Decl)) ->
+  (String -> Option String) ->
+  List (String, String) ->
+  List String ->
+  List String ->
+  List String ->
+  List (String, String, List Decl) ->
+  String ->
+  String ->
+  String ->
+  <IO> Result LoadError (List String, List (String, String, List Decl))
+visitModChecked parseFn read deps roots stack visited acc importer entry modId =
   if contains modId visited then
     Ok (visited, acc)
   else if contains modId stack then

@@ -1,0 +1,12 @@
+-- Exports a value built from its subject's private `step`.  The privilege holds
+-- whether this file is the entry or an import of another test module.  Accepted.
+import test.{expectEqual}
+import pchain.{step}
+
+export
+probe : Int
+probe = step 1
+
+test "probe goes through step" = expectEqual 2 probe
+
+main = println probe

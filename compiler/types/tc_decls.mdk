@@ -40,7 +40,9 @@ import types.tc_types.{
   PredicateSlot(..),
   SigVars(..),
   DeclEnvModule,
+  ExportBinding(..),
   GraphCtx,
+  ModuleBindings(..),
   ModuleCtx,
   RecordInfo,
   TcEnv,
@@ -81,11 +83,13 @@ import types.tc_env.{
   declEnvModule,
   declEnvReachFrom,
   declEnvRowVisible,
+  declEnvSiblingSees,
   declEnvVisibleTo,
   declGradedScope,
   declParamKinds,
   declTopFnNames,
   definersIn,
+  graphPubDefiners,
   dtopFor,
   effTailNames,
   implAccFinish,
@@ -161,6 +165,7 @@ import frontend.ast.{
   DataVis(..),
   Decl(..),
   EffAtomTy(..),
+  ExternDecl(..),
   Field(..),
   Ident(..),
   IfaceMethod(..),
@@ -171,6 +176,7 @@ import frontend.ast.{
   TyConOrigin(..),
   UseMember(..),
   Variant(..),
+  externDecls,
   firstTyLoc,
   firstTyLocList,
   identOriginFold,
@@ -194,6 +200,8 @@ import support.ordmap.{
   omKeys,
   omLookup,
   omMapValues,
+  omRestrict,
+  restrictedPairs,
   OrdMap,
 }
 import types.effect_domain.{Param(..)}
@@ -212,7 +220,18 @@ import support.util.{
 }
 import list.{elemIndex, findMap, head}
 import types.registry.{spFloor}
-import frontend.visibility.{useModId}
+import frontend.ast.{SiblingPair(..)}
+import frontend.visibility.{
+  ExportView(..),
+  useModId,
+  carriedPaths,
+  pubUsePaths,
+  directUnder,
+  nsValues,
+  subjectOf,
+  valueNamesUnder,
+  viewFor,
+}
 import frontend.resolve.{stampGraphTyOrigins}
 import map as IdMap
 
@@ -332,7 +351,8 @@ declEnvRowKindEntries : GraphCtx ->
   DeclEnvModule ->
   List (TabKey, List Kind)
 declEnvRowKindEntries gctx cur m
-  | declEnvVisibleTo cur m.demOrd False = declEnvKindEntries gctx m.demDecls
+  | declEnvVisibleTo cur m.demOrd False || declEnvSiblingSees cur m =
+    declEnvKindEntries gctx m.demDecls
   | declEnvVisibleTo cur m.demOrd True = m.demKindEntries
   | otherwise = []
 
@@ -2319,21 +2339,19 @@ ctorIdentRow tyName o cn = match mkIdent NsCtor o cn
 reexportedCtorIdents : OrdMap (List (String, String, Ident)) ->
   List Decl ->
   List (String, String, Ident)
-reexportedCtorIdents acc decls = flatMap (reexportedCtorIdentsOf acc) decls
+reexportedCtorIdents acc decls =
+  flatMap (reexportedCtorIdentsOf acc) (pubUsePaths decls)
 
 reexportedCtorIdentsOf : OrdMap (List (String, String, Ident)) ->
-  Decl ->
+  UsePath ->
   List (String, String, Ident)
-reexportedCtorIdentsOf acc (DAttrib _ d) = reexportedCtorIdentsOf acc d
-reexportedCtorIdentsOf acc (DUse True path _) =
-  match omLookup (useModId path) acc
-    None => []
-    Some src => match path
-      -- `export import src.*` re-exports every one of src's constructors
-      UseWild _ => src
-      UseGroup _ ms => flatMap (m => reexportCtorMember m src) ms
-      _ => []
-reexportedCtorIdentsOf _ _ = []
+reexportedCtorIdentsOf acc path = match omLookup (useModId path) acc
+  None => []
+  Some src => match path
+    -- `export import src.*` re-exports every one of src's constructors
+    UseWild _ => src
+    UseGroup _ ms => flatMap (m => reexportCtorMember m src) ms
+    _ => []
 
 reexportCtorMember : UseMember ->
   List (String, String, Ident) ->
@@ -2366,11 +2384,12 @@ implHeadNormalDecl _ d = d
 -- keyed by declaration identity, so a head expands with the aliases of the
 -- module that wrote it.
 export
-stampGraphDecls : List Decl ->
+stampGraphDecls : List SiblingPair ->
+  List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
-stampGraphDecls coreDecls0 modules0 =
-  let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
+stampGraphDecls sibling coreDecls0 modules0 =
+  let (coreDecls, modules) = stampGraphTyOrigins sibling coreDecls0 modules0
   let aliases = flatMap graphAliasRow (coreDecls ++ flatMap snd modules)
   if isEmptyL aliases then
     (coreDecls, modules)
@@ -2385,9 +2404,32 @@ declEnvModulesFrom : GraphCtx ->
   Int ->
   List (String, List Decl) ->
   List DeclEnvModule
-declEnvModulesFrom _gctx _ [] = []
-declEnvModulesFrom gctx k ((mid, decls) :: rest) =
-  declEnvModule gctx k mid decls :: declEnvModulesFrom gctx (k + 1) rest
+declEnvModulesFrom gctx k mods =
+  withSiblingOrd gctx.config.value.tcSibling (declEnvRowsFrom gctx k mods)
+
+declEnvRowsFrom : GraphCtx ->
+  Int ->
+  List (String, List Decl) ->
+  List DeclEnvModule
+declEnvRowsFrom _gctx _ [] = []
+declEnvRowsFrom gctx k ((mid, decls) :: rest) =
+  declEnvModule gctx k mid decls :: declEnvRowsFrom gctx (k + 1) rest
+
+-- [rows] with each test subject's row naming its sibling's ordinal
+-- (`declEnvSiblingSees`).  A pair whose sibling has no row changes nothing.
+withSiblingOrd : List SiblingPair -> List DeclEnvModule -> List DeclEnvModule
+withSiblingOrd [] rows = rows
+withSiblingOrd siblings rows =
+  let ords = omFromPairs (map (m => (m.demId, m.demOrd)) rows) omEmpty
+  let siblingOf =
+    omFromPairs (map (p => (p.spSubject, p.spSibling)) siblings) omEmpty
+  map
+    (m => match omLookup m.demId siblingOf
+      Some sib => match omLookup sib ords
+        Some ord => { m | demSiblingOrd = Some ord }
+        None => m
+      None => m)
+    rows
 
 declEnvOrdIndex : OrdMap Int -> List DeclEnvModule -> OrdMap Int
 declEnvOrdIndex acc [] = acc
@@ -2576,26 +2618,54 @@ modulePubDefiners : OrdMap (List (String, (String, String))) ->
   List Decl ->
   List (String, (String, String))
 modulePubDefiners before mid decls =
-  map (n => (n, (mid, n))) (pubTopFnNames decls)
-    ++ reexportDefiners before decls
+  moduleDefinersUnder ExportedView before mid decls
 
--- the rows a module's `export import` decls (`DUse True` — the same filter resolve's
--- `pubUsePaths` and `reexportSeed` use) add to its own export table.  A plain `import`
--- is not re-exported and contributes nothing downstream.
-reexportDefiners : OrdMap (List (String, (String, String))) ->
+-- A module's definer rows under [view]: its own functions, then the rows its
+-- carried paths add.
+moduleDefinersUnder : ExportView ->
+  OrdMap (List (String, (String, String))) ->
+  String ->
   List Decl ->
   List (String, (String, String))
-reexportDefiners _ [] = []
-reexportDefiners before ((DAttrib _ d) :: rest) =
-  reexportDefiners before [d] ++ reexportDefiners before rest
-reexportDefiners before ((DUse True path _) :: rest) =
+moduleDefinersUnder view before mid decls =
+  map (n => (n, (mid, n))) (topFnNamesUnder view decls)
+    ++ reexportDefiners before (carriedPaths view decls)
+
+-- the rows a module's carried paths (`carriedPaths`: its `export import`s, or every
+-- import for the full view) add to its table.  A plain `import` is not re-exported,
+-- so under the exported view it contributes nothing downstream.
+reexportDefiners : OrdMap (List (String, (String, String))) ->
+  List UsePath ->
+  List (String, (String, String))
+reexportDefiners before paths = flatMap (reexportDefinersOf before) paths
+
+-- What importer [importer] reads of [depId]'s export table: `graphPubDefiners`, or,
+-- when [importer] is [depId]'s test sibling, the rows of [depId]'s full view, so a
+-- name the subject imports keeps the module that defines it (and with it the
+-- constraint a call to it passes a dictionary for).
+export
+importerDefiners : GraphCtx ->
+  String ->
+  String ->
+  List (String, (String, String))
+importerDefiners gctx importer depId =
+  match viewFor gctx.config.value.tcSibling importer depId
+    ExportedView => graphPubDefiners gctx depId
+    FullView =>
+      let envs = gctx.declEnvsRef.value
+      match head (filterList (m => m.demId == depId) envs.deModules)
+        Some m =>
+          firstRowPerName
+            omEmpty
+            (moduleDefinersUnder FullView envs.deDefiners depId m.demDecls)
+        None => graphPubDefiners gctx depId
+
+reexportDefinersOf : OrdMap (List (String, (String, String))) ->
+  UsePath ->
+  List (String, (String, String))
+reexportDefinersOf before path =
   let depId = useModId path
-  if depId == "core" then
-    reexportDefiners before rest
-  else
-    importFormRows path (definersIn before depId)
-      ++ reexportDefiners before rest
-reexportDefiners before (_ :: rest) = reexportDefiners before rest
+  if depId == "core" then [] else importFormRows path (definersIn before depId)
 
 -- `declTopFnNames` restricted to the EXPORTED bindings — what a wildcard import can
 -- actually bind.  A private binding must not enter the definer map: it is unreachable
@@ -2607,19 +2677,88 @@ reexportDefiners before (_ :: rest) = reexportDefiners before rest
 -- Intersect with actual function definitions to exclude extern declarations.
 export
 pubTopFnNames : List Decl -> List String
-pubTopFnNames decls =
-  let fns = namesToSet (declTopFnNames decls) omEmpty
-  filterList (n => omHasKey n fns) (publicStandaloneNames decls)
+pubTopFnNames decls = topFnNamesUnder ExportedView decls
 
-publicStandaloneNames : List Decl -> List String
-publicStandaloneNames [] = []
-publicStandaloneNames ((DAttrib _ d) :: rest) =
-  publicStandaloneNames [d] ++ publicStandaloneNames rest
-publicStandaloneNames ((DFunDef True n _ _ _ _) :: rest) =
-  n :: publicStandaloneNames rest
-publicStandaloneNames ((DTypeSig True n _ _) :: rest) =
-  n :: publicStandaloneNames rest
-publicStandaloneNames (_ :: rest) = publicStandaloneNames rest
+topFnNamesUnder : ExportView -> List Decl -> List String
+topFnNamesUnder view decls =
+  let fns = namesToSet (declTopFnNames decls) omEmpty
+  filterList (n => omHasKey n fns) (directUnder view nsValues decls)
+
+-- The ordinary winner and standalone alternative travel together through
+-- import selection, aliases, re-exports, and graph memoization.
+export
+tagModuleExports : OrdMap Scheme ->
+  List (String, Scheme) ->
+  List (String, ExportBinding)
+tagModuleExports standalones schemes =
+  map
+    ((name, scheme) => (
+      name,
+      ExportBinding {
+        xbScheme = scheme,
+        xbStandalone = omLookup name standalones,
+        xbExtern = False,
+      },
+    ))
+    schemes
+
+-- [prog]'s own export bindings, out of the bindings its check produced.
+export
+publicModuleExports : List Decl ->
+  ModuleBindings ->
+  List (String, ExportBinding)
+publicModuleExports prog bindings =
+  moduleBindingsUnder ExportedView (pubTopFnNames prog) prog bindings
+
+-- The bindings of [prog]'s full view that its exports [own] leave out.
+export
+privateModuleExports : List Decl ->
+  ModuleBindings ->
+  List (String, ExportBinding) ->
+  List (String, ExportBinding)
+privateModuleExports prog bindings own =
+  let exported = omFromNames (map fst own) omEmpty
+  filterList
+    (b => not (omHasKey (fst b) exported))
+    (moduleBindingsUnder FullView (declTopFnNames prog) prog bindings)
+
+-- [envs]' export bindings, with the private bindings of [mid]'s test subject
+-- beside its exports when [mid] is a test sibling.
+export
+siblingDepEnv : ModuleCtx ->
+  String ->
+  (List (String, List (String, ExportBinding)), List (String, List (String, ExportBinding))) ->
+  List (String, List (String, ExportBinding))
+siblingDepEnv prev mid (depEnv, privEnv) =
+  match subjectOf prev.mcGraph.config.value.tcSibling mid
+    Some subject => match (
+      lookupAssoc subject depEnv,
+      lookupAssoc subject privEnv,
+    )
+      (Some own, Some priv) => (subject, own ++ priv) :: depEnv
+      _ => depEnv
+    None => depEnv
+
+-- [prog]'s value bindings under [view], [fns] the functions among them whose
+-- standalone alternative travels with them.
+moduleBindingsUnder : ExportView ->
+  List String ->
+  List Decl ->
+  ModuleBindings ->
+  List (String, ExportBinding)
+moduleBindingsUnder view fns prog bindings =
+  let standalones = omRestrict fns bindings.mbStandaloneSchemes
+  let externs = omFromNames (map (e => e.edName) (externDecls prog)) omEmpty
+  map
+    ((name, binding) => (
+      name,
+      ExportBinding { binding | xbExtern = omHasKey name externs },
+    ))
+    (tagModuleExports
+      standalones
+      (restrictedPairs
+        (valueNamesUnder view prog)
+        (omFromPairs (reverseL bindings.mbSchemes) omEmpty)))
 
 -- test-only observation: declarations whose only callers are tests and probes.
 

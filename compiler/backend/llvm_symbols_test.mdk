@@ -6,12 +6,19 @@
 -- `emitProgramRecord`, as `compiler/entries/llvm_emit_main.mdk` does.
 
 import support.diag_codes.{codeText}
+import string.{replace, contains}
+import test_process.{
+  withScratchDir, boundedVerbSeconds, expectSpawnOkLine, expectSpawnFailsAll,
+  underRoot, medakaBin
+}
 import backend.extern_catalog.{RuntimeExternDomain(..)}
 import backend.emit_target.{Backend(..)}
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{EmitPlan, buildEmitPlan}
 import ir.core_ir.{CProgram}
-import test.{expectAll, expectEqual, expectSatisfies, labelFail}
+import test.{
+  expectAll, expectEqual, expectTrue, expectSatisfies, labelFail, fail
+}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
@@ -19,7 +26,8 @@ import types.tc_elab.{grantWholeDomain}
 import types.program_facts.{emptyFacts}
 import ir.core_ir_lower.{lowerProgramEmitWith}
 import backend.llvm_emit.{
-  EmitInput, emitProgram, emitProgramRecord, makeEmitInput
+  EmitInput, emitProgram, emitProgramRecord, emitProgramWithStats,
+  emitProgramGaps, makeEmitInput
 }
 import backend.llvm_symbols.{
   CallShape(..),
@@ -458,3 +466,214 @@ test "record mode keeps a gap's census and finds no physical defect" =
         (any (e => isSome (stringIndexOf "assertSnapshot" e)))
         events
     Err _ => expectEqual [] (refusalFacts emitted)
+
+test "LLVM publication routes return identical receipt-free text" =
+  let src = "f : Int -> Int\nf x = x + 1\nmain = f 2\n"
+  match (
+    withLowered emitProgram src,
+    withLowered emitProgramRecord src,
+    withLowered emitProgramWithStats src,
+  )
+    (Ok text, Ok (record, _), Ok (stats, _)) => expectAll [
+      expectEqual text record,
+      expectEqual text stats,
+      expectEqual None (stringIndexOf "\u{1e}L" text),
+      expectSatisfies
+        "a named call was emitted"
+        isSome
+        (stringIndexOf "call " text),
+    ]
+    _ => fail "a publication route refused the valid program"
+
+test "gap census retains a valid global program's log" =
+  let src = "a = f 1\nb = 5\nc = 40\nf n = c + n\nmain = a\n"
+  match withLowered emitProgramGaps src
+    Ok events => expectEqual [] events
+    Err defects => expectEqual [] (map defectFacts defects)
+
+test "gap census retains a recorded unsupported extern event" =
+  let src = "f : Int -> Int\nf x = x + 1\nmain = assertSnapshot \"a\" (f 1)\n"
+  match withLowered emitProgramGaps src
+    Ok events =>
+      expectSatisfies
+        "a gap event names the refused extern"
+        (any (e => isSome (stringIndexOf "assertSnapshot" e)))
+        events
+    Err defects => expectEqual [] (map defectFacts defects)
+
+test "gap census accepts a captured indirect call before global declarations" =
+  let src =
+    """
+incFn x = x + 5
+base = 100
+viaCapture =
+  let incFn = y => incFn (y + base)
+  incFn 0
+main = viaCapture
+"""
+  match withLowered emitProgramGaps src
+    Ok events => expectEqual [] events
+    Err defects => expectEqual [] (map defectFacts defects)
+
+gapGuardProbe : String
+gapGuardProbe =
+  """
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import backend.emit_target.{Backend(..)}
+import types.capability_manifest.{ManifestRequirement(..)}
+import backend.emit_plan.{buildEmitPlan}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.tc_elab.{grantWholeDomain}
+import types.program_facts.{emptyFacts}
+import ir.core_ir_lower.{lowerProgramEmitWith}
+import backend.llvm_emit.{emitProgramGaps, makeEmitInput}
+import backend.llvm_symbols.{defectCode}
+import support.diag_codes.{codeText}
+import test.{expectEqual, fail}
+
+test "gap rejects injected raw direct call" =
+  let src = "f : Int -> Int\\nf x = x + 1\\nmain : Int\\nmain = f 2\\n"
+  let decls = annotateProgram (grantWholeDomain (desugar (parse src)))
+  let cp = lowerProgramEmitWith emptyFacts decls
+  let input = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
+  match emitProgramGaps input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
+    Err defects => expectEqual ["E-PHYS-UNCHECKED"] (map (d => codeText (defectCode d)) defects)
+    Ok _ => fail "gap census accepted a raw call"
+"""
+
+test "gap census rejects an injected raw call in a compiled child" = withScratchDir
+  (dir =>
+    let copy = boundedVerbSeconds 30 "cp" [
+      "-R",
+      underRoot "compiler",
+      dir ++ "/compiler",
+    ]
+    match copy
+      Err e => fail e
+      Ok (0, _, _) =>
+        let emitter = dir ++ "/compiler/backend/llvm_emit.mdk"
+        let probe = dir ++ "/compiler/backend/gap_guard_probe_test.mdk"
+        let hole = "  emit e \"\\{head} \\{prototypeText sym proto} {\""
+        let insert =
+          "  let _ = emit e \"\\{head} \\{prototypeText sym proto} {\"\n  if sym == LN.llvmName (LN.LUserFunction \"f\") then\n    emit e \"  call void @mdk_print_int(i64 0)\""
+        match readFile emitter
+          Err e => fail e
+          Ok source =>
+            if not (contains hole source) then
+              fail "LLVM define-header mutation point missing"
+            else match (
+              writeFile emitter (replace hole insert source),
+              writeFile probe gapGuardProbe,
+            )
+              (Ok _, Ok _) =>
+                expectSpawnOkLine
+                  "perl"
+                  [
+                    "-e", "alarm 120; exec @ARGV or die qq(exec: $!)", "env",
+                    "-u", "MEDAKA_STRICT", medakaBin, "test", probe
+                  ]
+                  (probe ++ ": 1/1 passed")
+              (Err e, _) => fail e
+              (_, Err e) => fail e
+      Ok (code, _, err) =>
+        fail "copying compiler exited \{intToString code}: \{err}")
+
+test "llvm concatenated raw call refuses complete publication" = withScratchDir
+  (dir => match boundedVerbSeconds 30 "cp" [
+    "-R",
+    underRoot "compiler",
+    dir ++ "/compiler",
+  ]
+    Err e => fail e
+    Ok (0, _, _) =>
+      let emitter = dir ++ "/compiler/backend/llvm_emit.mdk"
+      let entry = dir ++ "/compiler/entries/llvm_emit_modules_main.mdk"
+      let sourcePath = dir ++ "/program.mdk"
+      let clean = dir ++ "/clean-emitter"
+      let mutant = dir ++ "/mutant-emitter"
+      let good = dir ++ "/good.native"
+      let bad = dir ++ "/bad.native"
+      let hole = "  emit e \"\\{head} \\{prototypeText sym proto} {\""
+      let insert =
+        "  let _ = emit e \"\\{head} \\{prototypeText sym proto} {\"\n  if isSome (stringIndexOf (encodeComponent \"publicationprobe\") sym) then\n    emit e (\"  call \" ++ \"void @mdk_print_int(i64 0)\")"
+      match (
+        readFile emitter,
+        writeFile
+          sourcePath
+          "publicationprobe x = if x == 0 then 41 else 1 + publicationprobe (x - 1)\nmain = publicationprobe 1\n",
+      )
+        (Ok source, Ok _) =>
+          if not (contains hole source) then
+            fail "llvm mutation point missing"
+          else match (boundedVerbSeconds 240 "env" [
+            "-u", "MEDAKA_STRICT", medakaBin, "build", "--allow-internal",
+            entry, "-o", clean
+          ])
+            Ok (0, _, _) => match writeFile emitter (replace hole insert source)
+              Err e => fail e
+              Ok _ =>
+                match (boundedVerbSeconds 240 "env" [
+                  "-u", "MEDAKA_STRICT", medakaBin, "build", "--allow-internal",
+                  entry, "-o", mutant
+                ])
+                  Ok (0, _, _) =>
+                    let goodArgs = [
+                      "MEDAKA_EMITTER=" ++ clean,
+                      medakaBin,
+                      "build",
+                      sourcePath,
+                      "-o",
+                      good,
+                    ]
+                    let badArgs = [
+                      "MEDAKA_EMITTER=" ++ mutant,
+                      medakaBin,
+                      "build",
+                      sourcePath,
+                      "-o",
+                      bad,
+                    ]
+                    match boundedVerbSeconds 240 "env" goodArgs
+                      Ok (0, _, _) =>
+                        let rejection = expectSpawnFailsAll "perl" ([
+                            "-e", "alarm 240; exec @ARGV or die qq(exec: $!)",
+                            "env"
+                          ]
+                          ++ badArgs) [
+                          "E-PHYS-UNCHECKED",
+                        ]
+                        match boundedVerbSeconds 240 "env" badArgs
+                          Err e => fail e
+                          Ok (_, out, err) =>
+                            if fileExists bad then
+                              fail "refused publication left an artifact"
+                            else
+                              expectAll [
+                                expectTrue (fileExists good),
+                                expectSpawnOkLine good [] "42",
+                                rejection,
+                                expectEqual
+                                  None
+                                  (stringIndexOf "\u{1e}" (out ++ err)),
+                                expectEqual
+                                  None
+                                  (stringIndexOf "\u{1f}" (out ++ err)),
+                              ]
+                      Ok (code, out, err) =>
+                        fail
+                          "control build exited \{intToString code}: \{out} \{err}"
+                      Err e => fail e
+                  Ok (code, out, err) =>
+                    fail
+                      "mutant emitter build exited \{intToString code}: \{out} \{err}"
+                  Err e => fail e
+            Ok (code, out, err) =>
+              fail
+                "control emitter build exited \{intToString code}: \{out} \{err}"
+            Err e => fail e
+        (Err e, _) => fail e
+        (_, Err e) => fail e
+    Ok (code, _, err) =>
+      fail "copying compiler exited \{intToString code}: \{err}")

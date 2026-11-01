@@ -1,5 +1,5 @@
 # META
-source_lines=591
+source_lines=579
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls_variance: polarity and variance of declared types: occurrence polarity, polarity joins
@@ -25,6 +25,7 @@ import types.tc_types.{
 import types.tc_mono.{tyAppSpine}
 import types.tc_env.{declEnvVisibleTo, padAnns, tyTabKey}
 import types.tc_unify.{polarityAt}
+import frontend.visibility.{declExportsIn, nsTypes}
 import frontend.ast.{
   ConPayload(..),
   DataVis(..),
@@ -109,12 +110,7 @@ declEnvRowPolarityEntries cur m tab
   | otherwise = []
 
 -- The OUTPUT half of that split: keep only the entries whose declaration
--- this row actually exports.  The predicate is `kindPublicDataDecl`'s reading
--- of publicity plus the `DTypeAlias` arm `declEnvPolarityEntries` records
--- (#2108) — a peer projection rather than a widening of `kindPublicDataDecl`
--- itself, because that predicate has readers (`declEnvKindEntries`,
--- `declEnvSeedChain`) with no alias arm at all, and adding one there would
--- move an acceptance table.
+-- this row actually exports (`polarityPublicKeys`).
 polarityEntriesPublicOnly : List Decl ->
   List (TabKey, List Polarity) ->
   List (TabKey, List Polarity)
@@ -123,21 +119,13 @@ polarityEntriesPublicOnly decls entries =
   let index = tabKeyIndex keys
   filterList (e => tabKeyIndexHas index (fst e)) entries
 
--- The keys of [decls] that leave the module.  Arm for arm with
--- `kindPublicDataDecl`, plus `DTypeAlias`; `DAttrib` unwraps as everywhere else
--- in this file.
+-- The keys of [decls] that leave the module: `declExportsIn nsTypes`, `DAttrib` unwrapped.
 polarityPublicKeys : List Decl -> List TabKey
 polarityPublicKeys [] = []
 polarityPublicKeys ((DAttrib _ d) :: rest) = polarityPublicKeys (d :: rest)
-polarityPublicKeys ((DData { dataVis = VisPublic, dataName = n, dataOrigin = o }) :: rest) =
-  tyTabKey o n :: polarityPublicKeys rest
-polarityPublicKeys ((DData { dataVis = VisAbstract, dataName = n, dataOrigin = o }) :: rest) =
-  tyTabKey o n :: polarityPublicKeys rest
-polarityPublicKeys ((DNewtype { newtypePub = True, newtypeName = n, newtypeOrigin = o }) :: rest) =
-  tyTabKey o n :: polarityPublicKeys rest
-polarityPublicKeys ((DTypeAlias { tyAliasPub = True, tyAliasName = n, tyAliasOrigin = o }) :: rest) =
-  tyTabKey o n :: polarityPublicKeys rest
-polarityPublicKeys (_ :: rest) = polarityPublicKeys rest
+polarityPublicKeys (d :: rest) =
+  (if declExportsIn nsTypes d then declPolarityKeys [d] else [])
+    ++ polarityPublicKeys rest
 
 -- Membership index over a `TabKey` list, bucketed by the bare name: the probe
 -- reads the name already stored in the key (no rendering, no allocation), and
@@ -598,6 +586,7 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DUse false (UseGroup ("types" "tc_mono") ((mem "tyAppSpine" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "declEnvVisibleTo" false) (mem "padAnns" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "polarityAt" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "declExportsIn" false) (mem "nsTypes" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "DataVis" true) (mem "Decl" true) (mem "Field" true) (mem "KindAnn" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Variant" true) (mem "tabKeyEq" false) (mem "tabKeyName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false) (mem "listLen" false) (mem "reverseL" false) (mem "zipL" false))))
@@ -614,11 +603,7 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DTypeSig false "polarityPublicKeys" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "TabKey"))))
 (DFunDef false "polarityPublicKeys" ((PList)) (EListLit))
 (DFunDef false "polarityPublicKeys" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "polarityPublicKeys") (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "polarityPublicKeys" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n")) (rf "dataOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EVar "polarityPublicKeys") (EVar "rest"))))
-(DFunDef false "polarityPublicKeys" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n")) (rf "dataOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EVar "polarityPublicKeys") (EVar "rest"))))
-(DFunDef false "polarityPublicKeys" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n")) (rf "newtypeOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EVar "polarityPublicKeys") (EVar "rest"))))
-(DFunDef false "polarityPublicKeys" ((PCons (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True")) (rf "tyAliasName" (PVar "n")) (rf "tyAliasOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EVar "polarityPublicKeys") (EVar "rest"))))
-(DFunDef false "polarityPublicKeys" ((PCons PWild (PVar "rest"))) (EApp (EVar "polarityPublicKeys") (EVar "rest")))
+(DFunDef false "polarityPublicKeys" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "++" (EIf (EApp (EApp (EVar "declExportsIn") (EVar "nsTypes")) (EVar "d")) (EApp (EVar "declPolarityKeys") (EListLit (EVar "d"))) (EListLit)) (EApp (EVar "polarityPublicKeys") (EVar "rest"))))
 (DTypeSig false "tabKeyIndex" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "TabKey")))))
 (DFunDef false "tabKeyIndex" ((PVar "keys")) (EApp (EApp (EVar "tabKeyIndexGo") (EVar "keys")) (EVar "omEmpty")))
 (DTypeSig false "tabKeyIndexGo" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "TabKey"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "TabKey"))))))
@@ -740,6 +725,7 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DUse false (UseGroup ("types" "tc_mono") ((mem "tyAppSpine" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "declEnvVisibleTo" false) (mem "padAnns" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "polarityAt" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "declExportsIn" false) (mem "nsTypes" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "DataVis" true) (mem "Decl" true) (mem "Field" true) (mem "KindAnn" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Variant" true) (mem "tabKeyEq" false) (mem "tabKeyName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false) (mem "listLen" false) (mem "reverseL" false) (mem "zipL" false))))
@@ -756,11 +742,7 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DTypeSig false "polarityPublicKeys" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "TabKey"))))
 (DFunDef false "polarityPublicKeys" ((PList)) (EListLit))
 (DFunDef false "polarityPublicKeys" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "polarityPublicKeys") (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "polarityPublicKeys" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n")) (rf "dataOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EVar "polarityPublicKeys") (EVar "rest"))))
-(DFunDef false "polarityPublicKeys" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n")) (rf "dataOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EVar "polarityPublicKeys") (EVar "rest"))))
-(DFunDef false "polarityPublicKeys" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n")) (rf "newtypeOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EVar "polarityPublicKeys") (EVar "rest"))))
-(DFunDef false "polarityPublicKeys" ((PCons (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True")) (rf "tyAliasName" (PVar "n")) (rf "tyAliasOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EVar "polarityPublicKeys") (EVar "rest"))))
-(DFunDef false "polarityPublicKeys" ((PCons PWild (PVar "rest"))) (EApp (EVar "polarityPublicKeys") (EVar "rest")))
+(DFunDef false "polarityPublicKeys" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "++" (EIf (EApp (EApp (EVar "declExportsIn") (EVar "nsTypes")) (EVar "d")) (EApp (EVar "declPolarityKeys") (EListLit (EVar "d"))) (EListLit)) (EApp (EVar "polarityPublicKeys") (EVar "rest"))))
 (DTypeSig false "tabKeyIndex" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "TabKey")))))
 (DFunDef false "tabKeyIndex" ((PVar "keys")) (EApp (EApp (EVar "tabKeyIndexGo") (EVar "keys")) (EVar "omEmpty")))
 (DTypeSig false "tabKeyIndexGo" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "TabKey"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "TabKey"))))))

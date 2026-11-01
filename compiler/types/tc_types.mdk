@@ -7,6 +7,7 @@
 
 import frontend.ast.{
   BinderId(..),
+  SiblingPair(..),
   Ty(..),
   TyConOrigin(..),
   Ident(..),
@@ -371,6 +372,7 @@ public export data DeclEnvModule = DeclEnvModule {
   demDecls : List Decl,
   demPubDecls : List Decl,  -- A-3.2b (#1512): `publicDataDecls demDecls`, MEMOIZED — see `declEnvRowVisible`
   demKindEntries : List (TabKey, List Kind),  -- A-3.2b slice 2 (#1512): the KIND-public projection's entries, MEMOIZED — see `declEnvRowKindEntries`
+  demSiblingOrd : Option Int,  -- the ordinal of this row's test sibling, which sees every decl of it
 }
 
 public export data DeclEnvs = DeclEnvs {
@@ -948,13 +950,15 @@ public export data GraphCtx = GraphCtx {
 -- both ownership fields once, at construction (profile, flat flag, then the
 -- sorted owned module ids joined by `,`, separated by newlines); the chain
 -- memo keys on it, so a hit is only served to the configuration it was
--- computed under.
+-- computed under.  `tcSibling` is `DriveInputs.diSibling`; `tcKey` leaves it out,
+-- because what a module's interface records does not depend on who imports it.
 public export data TcConfig = TcConfig {
   tcIoJoin : List Atom,
   tcIoJoinProfile : String,
   tcStdlibOwned : OrdMap Unit,
   tcFlatEntryIsStdlib : Bool,
   tcKey : String,
+  tcSibling : List SiblingPair,
 }
 
 -- The trace gates and buffers a test builds before a drive and reads after it.
@@ -977,6 +981,9 @@ public export data TraceSink = TraceSink {
 -- module need not import `types.target_profile`.  [diPreludeKey] is the desugar-cache
 -- generation pair of the two prelude trees the drive is handed, when its driver
 -- knows it: the tree arm continues from the prelude's shipped trees only under it.
+-- [diSibling] holds one pair per module the driver's loader classified as its
+-- subject's test sibling: that importer sees the subject's full view
+-- (`frontend.visibility.viewOf`).
 public export data DriveInputs = DriveInputs {
   diExecutedMainDriver : Option EntryKey,
   diManifestRequests : List ManifestSelector,
@@ -986,6 +993,7 @@ public export data DriveInputs = DriveInputs {
   diIoJoinGrants : List (String, EffParamTy),
   diProfileName : String,
   diPreludeKey : Option (Int, Int),
+  diSibling : List SiblingPair,
 }
 
 -- What one graph drive is handed besides its output selection: [daValueMain] is the
@@ -3255,10 +3263,11 @@ public export data GraphOut = GOutDiags | GOutTrees
 -- ── serving modules from their interfaces ─────────────────────────────────────
 -- A drive's serve policy (`foldModules`), consulted once for each module before the
 -- entry.  It serves the module from a recorded interface (`ServeHit`: the module's
--- own export bindings and its payload, and the policy for the next module), or has
--- it checked (`ServeCheck`: given the module's record after its check, its own export
--- bindings and the payloads so far, newest first, it returns those payloads and the
--- policy for the next module).  `msServed` counts the modules served and `msFrozen`
+-- own export bindings, its private bindings when the drive's test sibling imports
+-- it and none otherwise, its payload, and the policy for the next module), or has it
+-- checked (`ServeCheck`: given the module's record after its check, its own export
+-- and private bindings and the payloads so far, newest first, it returns those
+-- payloads and the policy for the next module).  `msServed` counts the modules served and `msFrozen`
 -- the oldest payloads already frozen, which the drive's graph-end freeze skips.  The
 -- interfaces themselves are `types/module_interface.mdk`'s.
 public export data ModuleServe e = ModuleServe {
@@ -3268,8 +3277,8 @@ public export data ModuleServe e = ModuleServe {
 }
 
 public export data ServeStep e =
-  | ServeHit (List (String, ExportBinding)) e (ModuleServe e)
-  | ServeCheck (ModuleCtx -> List (String, ExportBinding) -> List (String, e) -> (List (String, e), ModuleServe e))
+  | ServeHit (List (String, ExportBinding)) (List (String, ExportBinding)) e (ModuleServe e)
+  | ServeCheck (ModuleCtx -> List (String, ExportBinding) -> List (String, ExportBinding) -> List (String, e) -> (List (String, e), ModuleServe e))
 
 -- ── THE graph driver ─────────────────────────────────────────────────────────
 -- What a whole-graph drive produces, for either output selection.  `gdPerMod`,
@@ -3589,7 +3598,7 @@ public export data PassMethod = PassMethod String Route (List Route)
 -- four (the miss would otherwise be path-specific — LSP-only or emit-only).  It
 -- owns: the IMPORT-SCOPED seed (`baseSeed ++ importSeed prog depEnv` — a flat
 -- union let `string.reverse` shadow the `list.reverse` a module imports), the
--- per-module PUBLIC accumulator (`pubV = pickSchemes (publicValNames prog) schemes
+-- per-module PUBLIC accumulator (`pubV = pickSchemes (exportedValueNames prog) schemes
 -- ++ reexportSeed coreV prog depEnv`), and the DEPENDENCY-FIRST threading of
 -- depEnv (PREPEND `(mid,pubV)::depEnv`, so importSeed's first-match picks the
 -- nearest dependency), accData (`++ publicDataDecls prog`) and accAll (`++ prog`,

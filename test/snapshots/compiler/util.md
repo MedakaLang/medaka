@@ -1,5 +1,5 @@
 # META
-source_lines=629
+source_lines=634
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -373,6 +373,11 @@ export
 startsWith : String -> String -> Bool
 startsWith pre s = stdStartsWith pre s
 
+-- The file-name suffix of a module's test sibling.
+export
+testFileSuffix : String
+testFileSuffix = "_test.mdk"
+
 export
 endsWith : String -> String -> Bool
 endsWith suf s =
@@ -736,6 +741,8 @@ hexDigits k n acc =
 (DFunDef false "editLastInt" ((PCons PWild (PVar "xs"))) (EApp (EVar "editLastInt") (EVar "xs")))
 (DTypeSig true "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "startsWith" ((PVar "pre") (PVar "s")) (EApp (EApp (EVar "stdStartsWith") (EVar "pre")) (EVar "s")))
+(DTypeSig true "testFileSuffix" (TyCon "String"))
+(DFunDef false "testFileSuffix" () (ELit (LString "_test.mdk")))
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "endsWith" ((PVar "suf") (PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "k") (EApp (EVar "stringLength") (EVar "suf"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "k") (EVar "n")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (EVar "k"))) (EVar "n")) (EVar "s")) (EVar "suf"))))))
 (DTypeSig true "schemeLineName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -914,6 +921,8 @@ hexDigits k n acc =
 (DFunDef false "editLastInt" ((PCons PWild (PVar "xs"))) (EApp (EVar "editLastInt") (EVar "xs")))
 (DTypeSig true "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "startsWith" ((PVar "pre") (PVar "s")) (EApp (EApp (EVar "stdStartsWith") (EVar "pre")) (EVar "s")))
+(DTypeSig true "testFileSuffix" (TyCon "String"))
+(DFunDef false "testFileSuffix" () (ELit (LString "_test.mdk")))
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "endsWith" ((PVar "suf") (PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "k") (EApp (EVar "stringLength") (EVar "suf"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "k") (EVar "n")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (EVar "k"))) (EVar "n")) (EVar "s")) (EVar "suf"))))))
 (DTypeSig true "schemeLineName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))

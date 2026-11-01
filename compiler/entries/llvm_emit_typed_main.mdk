@@ -47,7 +47,7 @@ import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import backend.llvm_emit.{emitProgram, emitProgramRecord, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
 import backend.llvm_symbols.{SymbolDefect}
-import driver.diagnostics.{refuseLlvmSymbolDefects}
+import driver.emit_diagnostics.{refuseLlvmSymbolDefects}
 
 import entries.entry_support.{driveRuntime, failWith}
 import support.util.{contains}

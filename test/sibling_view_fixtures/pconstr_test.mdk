@@ -1,0 +1,8 @@
+-- Calls, through its subject, a constrained function the subject imports: every
+-- engine passes the call its `Ord` dictionary.  Accepted.
+import test.{expectEqual}
+import pconstr.{sort}
+
+test "the subject's constrained import" = expectEqual [1, 2, 3] (sort [3, 1, 2])
+
+main = println (sort [3, 1, 2])

@@ -1,0 +1,5 @@
+countdown : Int -> Int
+countdown n = if intToString n == "0" then 7 else countdown (n - 1)
+
+export mval : Int
+mval = countdown 0 - 6

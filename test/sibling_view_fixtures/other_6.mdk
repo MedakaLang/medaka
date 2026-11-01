@@ -1,0 +1,7 @@
+-- Not the sibling: a private interface.
+import piface.{Sized, size, boxed}
+
+measure : Sized a => a -> Int
+measure x = size x
+
+main = println (measure (boxed 5))

@@ -73,6 +73,7 @@ import driver.diagnostics.{
   Diag,
   Severity(..),
   emitDiagExitCode,
+  siblingTargetEnv,
   mkDiag,
   parseErrDiag,
   ppDiag,
@@ -1329,6 +1330,7 @@ runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli quietEmitStder
     stampBuild
     BuildNormal
     frontGate
+    None
 
 -- Probe the C compiler before the link, so a missing/misconfigured `cc`
 -- (respects CC — never hardcodes "clang") is diagnosed as such instead of
@@ -1385,8 +1387,9 @@ runBuildNativeRoots : String ->
   Bool ->
   Bool ->
   BuildProfile ->
+  Option String ->
   <IO> Result BuildReport BuildReport
-runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild profile =
+runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild profile realTarget =
   -- The callers are `medaka test`'s native engines: the project profile gates
   -- the test verb's own typecheck, and these synthesized entries are an engine
   -- detail that runs under no profile, so the child is handed none.
@@ -1407,6 +1410,7 @@ runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots 
       stampBuild
       profile
       None
+      realTarget
   selectedProfile := held
   res
 
@@ -1425,8 +1429,9 @@ runBuildNativeRootsGo : String ->
   Bool ->
   BuildProfile ->
   Option GateAsk ->
+  Option String ->
   <IO> Result BuildReport BuildReport
-runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild profile frontGate =
+runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild profile frontGate realTarget =
   let emitter = joinPath root "compiler/entries/llvm_emit_modules_main.mdk"
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
@@ -1479,7 +1484,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   let perfOn = perfEnabled ()
   let tEmit0 = now ()
   let diagPath = joinPath tmpDir "diag.json"
-  let emitRes = runEmitterFor frontGate diagPath emitProg emitArgs
+  let emitRes = runEmitterFor frontGate realTarget diagPath emitProg emitArgs
   let tEmit1 = now ()
   let _ = emitPhase perfOn "emit-ir" (tEmit1 - tEmit0) inputAbs
   match emitRes
@@ -1496,7 +1501,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
         -- on stderr, before clang runs and before the `built <in> -> <out>` line
         -- — the order `check` uses and a build log reads in.  Not on the `--json`
         -- route, where the envelope already carries them; see `quietEmitStderr`.
-        let _ = forwardEmitterStderr quietEmitStderr emitErr
+        forwardEmitterStderr quietEmitStderr emitErr
         let ir = stripTrailingUnit irRaw
         if stringLength ir == 0 then
           buildErr
@@ -1650,40 +1655,43 @@ runBuildWasmIn root _medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr fr
     None =>
       buildErr
         "error: wasm-tools not found on PATH; install it with `cargo install wasm-tools`"
-    Some _ => match runEmitterFor frontGate diagPath wasmEmitter emitArgsBase
-      Err e =>
-        buildErr "error: could not run the wasm emitter `\{wasmEmitter}`: \{e}"
-      Ok (code, watRaw, emitRaw) =>
-        let emitErr = forwardStageLines emitRaw
-        let envelope = askedEnvelope frontGate diagPath
-        if code == emitDiagExitCode then
-          refusedWith envelope (dropTrailingNewline emitErr)
-        else if code /= 0 then
+    Some _ =>
+      match runEmitterFor frontGate None diagPath wasmEmitter emitArgsBase
+        Err e =>
           buildErr
-            "error: wasm emitter failed compiling \{inputAbs}\n\{emitErr}"
-        else
-          let _ = forwardEmitterStderr quietEmitStderr emitErr
-          let wat = stripTrailingUnit watRaw
-          if stringLength wat == 0 then
+            "error: could not run the wasm emitter `\{wasmEmitter}`: \{e}"
+        Ok (code, watRaw, emitRaw) =>
+          let emitErr = forwardStageLines emitRaw
+          let envelope = askedEnvelope frontGate diagPath
+          if code == emitDiagExitCode then
+            refusedWith envelope (dropTrailingNewline emitErr)
+          else if code /= 0 then
             buildErr
-              "error: wasm emitter produced empty WAT for \{inputAbs}\n\{emitErr}"
-          else match writeFile watPath wat
-            Err e => buildErr ("error: could not write WAT: " ++ e)
-            Ok _ =>
-              -- Same --keep-ir handling as the native path (.wat instead of
-              -- .ll), including the AFTER-assemble ordering — see the comment
-              -- on the native path's runBuildNativeIn for why.
-              let res = match wasmAssemble watPath outPath inputAbs
-                Ok r => match writeEdgeLoader root outPath
-                  Some e => buildErr e
-                  None => Ok r
-                Err r => Err r
-              let (keptIr, keepNotes) =
-                if effectiveKeepIr keepIrCli then
-                  keepIrOutcome (outPath ++ ".wat") wat
-                else
-                  (None, [])
-              withEnvelopeOk envelope (withBuildNotes keptIr "" keepNotes res)
+              "error: wasm emitter failed compiling \{inputAbs}\n\{emitErr}"
+          else
+            forwardEmitterStderr quietEmitStderr emitErr
+            let wat = stripTrailingUnit watRaw
+            if stringLength wat == 0 then
+              buildErr
+                "error: wasm emitter produced empty WAT for \{inputAbs}\n\{emitErr}"
+            else match writeFile watPath wat
+              Err e => buildErr ("error: could not write WAT: " ++ e)
+              Ok _ =>
+                -- Same --keep-ir handling as the native path (.wat instead of
+                -- .ll), including the AFTER-assemble ordering — see the comment
+                -- on the native path's runBuildNativeIn for why.
+                let res =
+                  flatMap
+                    (r => match writeEdgeLoader root outPath
+                      Some e => buildErr e
+                      None => Ok r)
+                    (wasmAssemble watPath outPath inputAbs)
+                let (keptIr, keepNotes) =
+                  if effectiveKeepIr keepIrCli then
+                    keepIrOutcome (outPath ++ ".wat") wat
+                  else
+                    (None, [])
+                withEnvelopeOk envelope (withBuildNotes keptIr "" keepNotes res)
 
 -- The emitter child writes the build's diagnostics to its own stderr.  On a
 -- clean emit that stream carries the WARNINGS `medaka build` prints, so it must
@@ -2547,19 +2555,26 @@ withPreludeCompiler prog args = match buildFingerprint ()
 -- never reaches an emitter.  With no profile selected (a caller other than the
 -- `build` verb) the child checks nothing.
 runEmitterFor : Option GateAsk ->
+  Option String ->
   String ->
   String ->
   List String ->
   <IO> Result String (Int, String, String)
-runEmitterFor frontGate diagPath prog args =
+runEmitterFor frontGate realTarget diagPath prog args =
   let profileSet = match !selectedProfile
     Some p => ["\{targetProfileEnv}=\{profileName p}"]
     None => []
+  -- A build with no sibling pair must not inherit one: the child would drive an
+  -- unrelated entry as a test sibling.
+  let siblingSet = match realTarget
+    Some real => ["\{siblingTargetEnv}=\{real}"]
+    None => ["-u", siblingTargetEnv]
   let ackPath = joinPath (dirOf diagPath) "gate.ack"
   let gateSet = match frontGate
     Some ask => gateAssignments ask diagPath ackPath
     None => noGateAssignments
-  let res = runCommand "env" (profileSet ++ gateSet ++ [prog] ++ args)
+  let res =
+    runCommand "env" (siblingSet ++ profileSet ++ gateSet ++ [prog] ++ args)
   match (frontGate, res)
     (Some _, Ok (0, _, _)) =>
       if fileExists ackPath then
