@@ -595,26 +595,25 @@ emitDemandW emit =
 
 seedPhysicalW : WasmEmit -> WasmDemandPlan -> Unit
 seedPhysicalW emit physical =
-  let _ = seedDemandW emit physical.representation
-  let _ =
-    forEachU
-      ((name, cell) => setRef cell (hasWasmHelper physical name))
-      [
-        ("strLeafRuntimeLines", emit.useStrLeaf),
-        ("strSearchRuntimeLines", emit.useStrSearch),
-        ("valueEqRuntimeLines", emit.useValueCmp),
-        ("valueCmpNumRuntimeLines", emit.useValueCmpNum),
-        ("valueAddRuntimeLines", emit.useValueAdd),
-        ("valueSubRuntimeLines", emit.useValueSub),
-        ("valueMulRuntimeLines", emit.useValueMul),
-        ("valueDivRuntimeLines", emit.useValueDiv),
-        ("valueModRuntimeLines", emit.useValueMod),
-        ("floatRuntimeLines", emit.useFloat),
-        ("stderrByteImportLines", emit.trapImportNeeded),
-        ("trapIntRuntimeLines", emit.trapIntNeeded),
-      ]
-  let _ = setRef emit.intRtUsed physical.intHelpers
-  let _ = setRef emit.siteRtUsed physical.siteRuntime
+  seedDemandW emit physical.representation
+  forEachU
+    ((name, cell) => setRef cell (hasWasmHelper physical name))
+    [
+      ("strLeafRuntimeLines", emit.useStrLeaf),
+      ("strSearchRuntimeLines", emit.useStrSearch),
+      ("valueEqRuntimeLines", emit.useValueCmp),
+      ("valueCmpNumRuntimeLines", emit.useValueCmpNum),
+      ("valueAddRuntimeLines", emit.useValueAdd),
+      ("valueSubRuntimeLines", emit.useValueSub),
+      ("valueMulRuntimeLines", emit.useValueMul),
+      ("valueDivRuntimeLines", emit.useValueDiv),
+      ("valueModRuntimeLines", emit.useValueMod),
+      ("floatRuntimeLines", emit.useFloat),
+      ("stderrByteImportLines", emit.trapImportNeeded),
+      ("trapIntRuntimeLines", emit.trapIntNeeded),
+    ]
+  setRef emit.intRtUsed physical.intHelpers
+  setRef emit.siteRtUsed physical.siteRuntime
   setRef emit.siteNonexhUsed physical.nonexhaustiveRuntime
 
 -- ── program info threaded through the ref-mode emitter ───────────────────────
@@ -919,18 +918,17 @@ emitFfiEtaW prog name = match jsImportForW prog name
       flatMap argLoadPosition (rangeList 0 arity)
         ++ map (p => "local.get $" ++ wParamId p) params
         ++ [callFnW prog CallValueW (jsffiWrapperW prog imp) arity, "return"]
-    let _ = noteFuncRef prog lamName
-    let _ =
-      addLiftedNamed
-        prog
-        lamName
-        codeShapeW
-        ([
-            "  (func \{lamName} (type $codety) (param \{syntheticLocalName WN.WAbiSelf 0} (ref eq)) (param \{syntheticLocalName WN.WAbiArgs 0} (ref $argarr)) (result (ref eq))",
-          ]
-          ++ map (wParamLocal >> ("    " ++ _)) params
-          ++ indent body
-          ++ ["  )"])
+    noteFuncRef prog lamName
+    addLiftedNamed
+      prog
+      lamName
+      codeShapeW
+      ([
+          "  (func \{lamName} (type $codety) (param \{syntheticLocalName WN.WAbiSelf 0} (ref eq)) (param \{syntheticLocalName WN.WAbiArgs 0} (ref $argarr)) (result (ref eq))",
+        ]
+        ++ map (wParamLocal >> ("    " ++ _)) params
+        ++ indent body
+        ++ ["  )"])
     wConstClos prog lamName arity
 
 -- The binding's wrapper, lifted once; its name without the `$`.  Its traps are
@@ -969,20 +967,19 @@ jsffiWrapperW prog imp =
       forEachU
         ((sym, _) => registerW emit (checkRef sym (progFnCtx prog).origin))
         (WD.jsWrapperUses imp)
-  let _ =
-    addLiftedNamed
-      prog
-      ("$" ++ name)
-      (FuncParams (listLen imp.params))
-      (jsffiWrapperLines
-        (target count =>
-          callFnAtW emit (progFnCtx prog).origin CallValueW target count)
-        (target count =>
-          callFnAtW emit (progFnCtx prog).origin CallTailW target count)
-        imp
-        intTrap
-        charTrap
-        copyTrap)
+  addLiftedNamed
+    prog
+    ("$" ++ name)
+    (FuncParams (listLen imp.params))
+    (jsffiWrapperLines
+      (target count =>
+        callFnAtW emit (progFnCtx prog).origin CallValueW target count)
+      (target count =>
+        callFnAtW emit (progFnCtx prog).origin CallTailW target count)
+      imp
+      intTrap
+      charTrap
+      copyTrap)
   name
 
 progFnMemberW : Prog -> String -> Bool
@@ -1353,16 +1350,15 @@ freshStrSeg prog bytes =
     Some i => i
     None =>
       let i = !emit.nextStringSegmentId
-      let _ = setRef emit.nextStringSegmentId (i + 1)
-      let _ = setRef emit.stringSegments ((i, bytes) :: !emit.stringSegments)
-      let _ = setRef emit.strSegIds (omInsert key i !emit.strSegIds)
-      let _ =
-        registerW
-          emit
-          (declareSymbol
-            (WasmData (strSegNameW i))
-            DataDecl
-            (progFnCtx prog).origin)
+      setRef emit.nextStringSegmentId (i + 1)
+      setRef emit.stringSegments ((i, bytes) :: !emit.stringSegments)
+      setRef emit.strSegIds (omInsert key i !emit.strSegIds)
+      registerW
+        emit
+        (declareSymbol
+          (WasmData (strSegNameW i))
+          DataDecl
+          (progFnCtx prog).origin)
       i
 
 -- the name of string segment [i], without its `$`
@@ -1372,10 +1368,9 @@ strSegNameW i = "strseg_" ++ intToString i
 -- `$strseg_<i>` read by a body
 strSegRefW : Prog -> Int -> String
 strSegRefW prog i =
-  let _ =
-    registerW
-      (progEmit prog)
-      (checkRef (WasmData (strSegNameW i)) (progFnCtx prog).origin)
+  registerW
+    (progEmit prog)
+    (checkRef (WasmData (strSegNameW i)) (progFnCtx prog).origin)
   "$" ++ strSegNameW i
 
 -- the `strSegIds` key of a payload: its byte values, comma-separated.  Distinct byte
@@ -1387,7 +1382,7 @@ strSegKey bytes = joinWith "," (map intToString bytes)
 freshLamId : WasmEmit -> Int
 freshLamId emit =
   let n = !emit.nextLambdaId
-  let _ = setRef emit.nextLambdaId (n + 1)
+  setRef emit.nextLambdaId (n + 1)
   n
 
 -- Lift the definition [def] of function [name], whose shape is [shape].  The
@@ -1408,10 +1403,9 @@ addLiftedNamed prog name shape def =
   if omHasKey name !emit.liftedDefinitionNames then
     ()
   else
-    let _ =
-      setRef
-        emit.liftedDefinitionNames
-        (omInsert name () !emit.liftedDefinitionNames)
+    setRef
+      emit.liftedDefinitionNames
+      (omInsert name () !emit.liftedDefinitionNames)
     addLifted prog name shape def
 
 -- the shape of a `$codety` function: its self and its argument array
@@ -1462,11 +1456,11 @@ callFnAtW emit origin end target operands =
     origin
     !emit.callCoverage)
     Ok (reg, coverage, text) =>
-      let _ = setRef emit.symbols reg
-      let _ = setRef emit.callCoverage coverage
+      setRef emit.symbols reg
+      setRef emit.callCoverage coverage
       text
     Err d =>
-      let _ = setRef emit.symbolDefects (d :: !emit.symbolDefects)
+      setRef emit.symbolDefects (d :: !emit.symbolDefects)
       ""
 
 -- `call $<name>` of a runtime helper or host import, with [operands] operands
@@ -1519,8 +1513,8 @@ rngSeededW = "$mdk_rng_seeded"
 refFuncW : Prog -> String -> String
 refFuncW prog name =
   let origin = (progFnCtx prog).origin
-  let _ = registerW (progEmit prog) (checkRef (WasmFunc (symNameW name)) origin)
-  let _ = registerW (progEmit prog) (checkRef (WasmElem (symNameW name)) origin)
+  registerW (progEmit prog) (checkRef (WasmFunc (symNameW name)) origin)
+  registerW (progEmit prog) (checkRef (WasmElem (symNameW name)) origin)
   "ref.func " ++ name
 
 -- the module-level identities, declared before any body is emitted: the type
@@ -1531,15 +1525,12 @@ seedSymbolsW prog physical globals =
   let emit = progEmit prog
   let origin = SymbolOrigin "module" "" 0 0
   let declare = sym shape => registerW emit (declareSymbol sym shape origin)
-  let _ =
-    forEachU (t => declare (WasmType t) TypeDecl) physical.representationTypes
-  let _ =
-    forEachU
-      (imp =>
-        declare (WasmFunc imp.watSymbol) (FuncImported imp.parameterCount))
-      physical.imports
-  let _ = forEachU (registerW emit) (declarePlannedHelpers physical)
-  let _ = forEachU (g => declare (WasmGlobal g) GlobalDecl) globals
+  forEachU (t => declare (WasmType t) TypeDecl) physical.representationTypes
+  forEachU
+    (imp => declare (WasmFunc imp.watSymbol) (FuncImported imp.parameterCount))
+    physical.imports
+  forEachU (registerW emit) (declarePlannedHelpers physical)
+  forEachU (g => declare (WasmGlobal g) GlobalDecl) globals
   let _ =
     if emit.closureChecked then
       forEachU (registerW emit) (checkPlannedHelperUses physical)
@@ -1601,10 +1592,10 @@ wConstClos prog lamName arity =
   let origin = (progFnCtx prog).origin
   -- a global's initializer declares its own function reference, so only the
   -- function and the `$clos` type have to exist
-  let _ = registerW emit (checkRef (WasmFunc (symNameW lamName)) origin)
+  registerW emit (checkRef (WasmFunc (symNameW lamName)) origin)
   let _ =
     if emit.closureChecked then
-      let _ = registerW emit (checkTypeUse "clos" (symNameW lamName) origin)
+      registerW emit (checkTypeUse "clos" (symNameW lamName) origin)
       registerW emit (checkTypeUse "argarr" (symNameW lamName) origin)
   let initBody =
     "(struct.new $clos (ref.func \{lamName}) (i32.const \{intToString arity}) (array.new_fixed $argarr 0))"
@@ -1612,13 +1603,10 @@ wConstClos prog lamName arity =
     Some g => [globalW prog "global.get" g]
     None =>
       let g = "$" ++ WN.wasmName (WN.WConstGlobal !emit.nextConstClosId)
-      let _ =
-        registerW
-          emit
-          (declareSymbol (WasmGlobal (symNameW g)) GlobalDecl origin)
-      let _ = setRef emit.nextConstClosId (!emit.nextConstClosId + 1)
-      let _ = setRef emit.constClosIdx (omInsert initBody g !emit.constClosIdx)
-      let _ = setRef emit.constClosCells ((g, initBody) :: !emit.constClosCells)
+      registerW emit (declareSymbol (WasmGlobal (symNameW g)) GlobalDecl origin)
+      setRef emit.nextConstClosId (!emit.nextConstClosId + 1)
+      setRef emit.constClosIdx (omInsert initBody g !emit.constClosIdx)
+      setRef emit.constClosCells ((g, initBody) :: !emit.constClosCells)
       [globalW prog "global.get" g]
 
 -- the hoisted globals, in emission order.  Drained by emitRefProgram AFTER every body
@@ -1746,9 +1734,9 @@ emitUniqueProgram : WasmEmit ->
   CProgram ->
   Result (List SymbolDefect) String
 emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _ facts)) =
-  let _ = refuseUnprovidedExternsW emit input plan cp
+  refuseUnprovidedExternsW emit input plan cp
   let physical = physicalPlanW plan
-  let _ = seedPhysicalW emit physical
+  seedPhysicalW emit physical
   let fnNames = collectFnNames groups
   let valNames = collectValNames groups
   let index =
@@ -1797,13 +1785,12 @@ emitProgramGaps input plan cp0 =
     physical = plan.wasmPhysical,
     closureChecked = False,
   }
-  let _ =
-    refuseUnprovidedExternsW
-      emit
-      input
-      plan
-      (CProgram groups ctorArs ctorTypes impls mctx facts)
-  let _ = seedPhysicalW emit (physicalPlanW plan)
+  refuseUnprovidedExternsW
+    emit
+    input
+    plan
+    (CProgram groups ctorArs ctorTypes impls mctx facts)
+  seedPhysicalW emit (physicalPlanW plan)
   let emit =
     { emit | physical = Some (WD.censusWasmDemand (physicalPlanW plan)) }
   let fnNames = collectFnNames groups
@@ -1835,11 +1822,11 @@ emitProgramGaps input plan cp0 =
       input
       emit
       (freshFnCtx ())
-  let _ = seedSymbolsW prog (WD.censusWasmDemand (physicalPlanW plan)) []
+  seedSymbolsW prog (WD.censusWasmDemand (physicalPlanW plan)) []
   let fragments = Ref []
-  let _ = emitFnsGapsW prog fragments (userFnBinds groups)
-  let _ = emitImplsGapsW prog fragments (progImplGroups prog)
-  let _ = emitValsGapsW prog fragments (filterList isValBind groups)
+  emitFnsGapsW prog fragments (userFnBinds groups)
+  emitImplsGapsW prog fragments (progImplGroups prog)
+  emitValsGapsW prog fragments (filterList isValBind groups)
   let lifted = flatMap (x => x) (reverseL !emit.liftedDefinitions)
   let text =
     joinNl
@@ -1856,25 +1843,25 @@ emitProgramGaps input plan cp0 =
 emitFnsGapsW : Prog -> Ref (List (List String)) -> List CBind -> Unit
 emitFnsGapsW _ _ [] = ()
 emitFnsGapsW prog fragments ((CBind name cs site bid) :: rest) =
-  let _ = setGapBindingOfW (progEmit prog) ("fn " ++ name)
+  setGapBindingOfW (progEmit prog) ("fn " ++ name)
   let lines = emitRefFnBind prog (CBind name cs site bid)
-  let _ = setRef fragments (lines :: !fragments)
+  setRef fragments (lines :: !fragments)
   emitFnsGapsW prog fragments rest
 
 emitImplsGapsW : Prog -> Ref (List (List String)) -> List ImplG -> Unit
 emitImplsGapsW _ _ [] = ()
 emitImplsGapsW prog fragments ((g@(ImplG method headTag _ _ _ _)) :: rest) =
-  let _ = setGapBindingOfW (progEmit prog) "impl \{method}@\{headTag}"
+  setGapBindingOfW (progEmit prog) "impl \{method}@\{headTag}"
   let lines = emitImplGroup prog g
-  let _ = setRef fragments (lines :: !fragments)
+  setRef fragments (lines :: !fragments)
   emitImplsGapsW prog fragments rest
 
 emitValsGapsW : Prog -> Ref (List (List String)) -> List CBind -> Unit
 emitValsGapsW _ _ [] = ()
 emitValsGapsW prog fragments (b :: rest) =
-  let _ = setGapBindingOfW (progEmit prog) ("val " ++ bindName b)
+  setGapBindingOfW (progEmit prog) ("val " ++ bindName b)
   let lines = emitRefValInit prog b
-  let _ = setRef fragments (lines :: !fragments)
+  setRef fragments (lines :: !fragments)
   emitValsGapsW prog fragments rest
 
 externFamilyW : WasmEmit -> String -> Option WasmFamily
@@ -1922,7 +1909,7 @@ fileBoundEnterW prog env d g mode keep =
 -- Local spellings retain legacy mode eligibility; extern binding uses facts.
 seedDemandW : WasmEmit -> WasmDemand -> Unit
 seedDemandW emit d =
-  let _ = forEachU (u => noteWasmUse emit u) d.uses
+  forEachU (u => noteWasmUse emit u) d.uses
   let _ = if d.refBox then setRef emit.useRefBox True
   let _ = if d.divGuard then setRef emit.useDivGuard True
   setRef emit.tupleArities (reverseL d.tupleArities)
@@ -2050,11 +2037,10 @@ mintLocalW prog bid =
     let ctx = progFnCtx prog
     let ord = intToString (binderOrdinal bid)
     let index = ctx.nextLocal.value
-    let _ = setRef ctx.nextLocal (index + 1)
-    let _ =
-      setRef
-        ctx.localSlots
-        (omInsert ord (LocalSlot index WInt63) ctx.localSlots.value)
+    setRef ctx.nextLocal (index + 1)
+    setRef
+      ctx.localSlots
+      (omInsert ord (LocalSlot index WInt63) ctx.localSlots.value)
     setRef ctx.localTypes (WInt63 :: ctx.localTypes.value)
 
 installRawParamsW : Prog -> Int -> List Pat -> Unit
@@ -2188,7 +2174,7 @@ emitRefProgram prog plan groups =
   -- BEFORE emitting fns, so emitRefFnBind can route a group member to the
   -- dest-passing reset-wrapper + inner-loop emit.
   let dispGroups = plan.dispGroups
-  let _ = setRef (progEmit prog).wDispGroups dispGroups
+  setRef (progEmit prog).wDispGroups dispGroups
   -- W8: the SplitMix64 seed lives in a mutable i64 global (emitted before the value globals).
   let rngGlobal =
     if (progEmit prog).useRng.value then rngStateGlobalLines else []
@@ -2202,17 +2188,16 @@ emitRefProgram prog plan groups =
       ++ dispGlobals
       ++ map (if rawProgramW prog then oneGlobalI32 else oneGlobalRef) valNames
       ++ lazyStateGlobals
-  let _ =
-    seedSymbolsW
-      prog
-      physical
-      ((if isEmptyL rngGlobal then
-          []
-        else
-          [symNameW rngStateW, symNameW rngSeededW])
-        ++ flatMap wDispGlobalNames dispGroups
-        ++ map userGlobalW valNames
-        ++ map stateGlobalW (filterList (isLazyGlobalW prog) valNames))
+  seedSymbolsW
+    prog
+    physical
+    ((if isEmptyL rngGlobal then
+        []
+      else
+        [symNameW rngStateW, symNameW rngSeededW])
+      ++ flatMap wDispGlobalNames dispGroups
+      ++ map userGlobalW valNames
+      ++ map stateGlobalW (filterList (isLazyGlobalW prog) valNames))
   -- emit user fns FIRST (this accumulates lifted lambdas into this WasmEmit).
   let fns = flatMap (emitRefFnBind prog) (userFnBinds groups)
   -- W5: the typeclass impl functions ($mdk_impl_<tag>_<method>), emitted as ordinary
@@ -2508,10 +2493,9 @@ emitRefInit prog plan groups =
   let valBinds = plannedValBinds plan groups
   let initProg = progWithOrigin "value initialization" (progInFn prog)
   let mainProg = progWithOrigin "main" (progInFn prog)
-  let _ =
-    forEachU
-      (f => defineFnW (progWithOrigin "module" prog) f (FuncParams 0))
-      ["__main", "__entry_split", "__init"]
+  forEachU
+    (f => defineFnW (progWithOrigin "module" prog) f (FuncParams 0))
+    ["__main", "__entry_split", "__init"]
   let initW7Outer = w7ScopeOpen (progEmit prog)
   let valInit = flatMap (emitRefValInit initProg) valBinds
   let initW7Used = w7ScopeClose (progEmit prog) initW7Outer
@@ -2604,7 +2588,7 @@ emitRefForceFn : Prog -> CBind -> List String
 emitRefForceFn prog (CBind name [CClause [] body] _ _) =
   let g = userGlobalW name
   let force = forcerW name
-  let _ = defineFnW prog force (FuncParams 0)
+  defineFnW prog force (FuncParams 0)
   let w7Outer = w7ScopeOpen (progEmit prog)
   let instrs = emitRefExpr prog envEmpty 0 body
   let bodyLocals = dedupKeep (collectExprLocals body)
@@ -2664,9 +2648,8 @@ emitRefForceFn prog (CBind name [CClause [] body] _ _) =
 emitRefForceFn prog (CBind name _ _ _) =
   -- in record mode the gap stands in for this force function
   let gap = WasmFunc (forcerW name)
-  let _ = setRef (progEmit prog).gapSymbols (gap :: !(progEmit prog).gapSymbols)
-  let _ =
-    setRef (progEmit prog).symbols (excuseSymbol gap !(progEmit prog).symbols)
+  setRef (progEmit prog).gapSymbols (gap :: !(progEmit prog).gapSymbols)
+  setRef (progEmit prog).symbols (excuseSymbol gap !(progEmit prog).symbols)
   gapLP prog "value binding must be a nullary clause"
 
 -- main: compute the body (a (ref eq)), then unbox to i32 and route to the print
@@ -2931,7 +2914,7 @@ emitOrdinaryFnW prog name params arity clauses =
     if rawProgramW prog then match clauses
       [CClause pats body] =>
         if allPlainParams pats then
-          let _ = installRawParamsW prog 0 pats
+          installRawParamsW prog 0 pats
           emitRefTail prog (paramEnv pats) arity body
         else
           gapLP
@@ -2961,7 +2944,7 @@ emitOrdinaryFnW prog name params arity clauses =
       map (_ => " (param i64)") params
     else
       map wParamDecl params
-  let _ = defineFnW prog (userFnW name) (FuncParams (listLen params))
+  defineFnW prog (userFnW name) (FuncParams (listLen params))
   let sig =
     "  (func $\{userFnW name}\{joinWith "" paramDecls} (result \{physicalType (programReprW prog)})"
   let localDecls =
@@ -3434,8 +3417,8 @@ needsClosWrapper prog name =
 emitFnClosWrapper : Prog -> String -> Int -> List String
 emitFnClosWrapper prog name arity =
   let wrapper = "$" ++ wrapperW name
-  let _ = noteFuncRef prog wrapper
-  let _ = defineFnW prog wrapper codeShapeW
+  noteFuncRef prog wrapper
+  defineFnW prog wrapper codeShapeW
   closWrapperLines wrapper (callFnW prog CallTailW (userFnW name) arity) arity
 
 -- A `$codety` function [wrapper] that loads [arity] arguments out of its argument
@@ -3784,16 +3767,15 @@ armClosureW prog arm =
   let wrapper =
     "$"
       ++ WN.wasmName (WN.WGenerated WN.WLambda "" (freshLamId (progEmit prog)))
-  let _ = noteFuncRef prog wrapper
-  let _ =
-    addLifted
-      prog
+  noteFuncRef prog wrapper
+  addLifted
+    prog
+    wrapper
+    codeShapeW
+    (closWrapperLines
       wrapper
-      codeShapeW
-      (closWrapperLines
-        wrapper
-        (callFnW prog CallTailW (armFnSymW arm) arity)
-        arity)
+      (callFnW prog CallTailW (armFnSymW arm) arity)
+      arity)
   wConstClos prog wrapper arity
 
 -- one comparison + call per candidate impl group.  loaded tag (i32) == dictTag
@@ -4268,7 +4250,7 @@ emitImplGroup outer (ImplG method _headTag key arity clauses fnName) =
       let extraLocals =
         filterList (notIn (sourceParams params)) (dedupKeep allLocals)
       let scratch = scratchLocals (clausesMaxDepth clauses)
-      let _ = defineFnW prog fnName (FuncParams arity)
+      defineFnW prog fnName (FuncParams arity)
       let sig =
         "  (func $\{fnName}\{joinWith "" (map wParamDecl params)} (result (ref eq))"
       let localDecls =
@@ -4743,7 +4725,7 @@ emitVarRefPlain prog env d x =
     else
       emitCtorEtaClosure prog x
   else if progFnMemberW prog x then
-    let _ = noteFuncRef prog ("$" ++ wrapperW x)
+    noteFuncRef prog ("$" ++ wrapperW x)
     -- S-4: captureless by construction (a top-level fn's wrapper closes over nothing)
     -- ⇒ one hoisted module global, not a fresh `$clos` on every evaluation of `x`.
     wConstClos prog ("$" ++ wrapperW x) (fnParamCountW prog x)
@@ -4775,13 +4757,12 @@ emitExternEtaClosure prog name =
       None => panic ("internal error: missing-extern-abi: " ++ name)
     None => panic ("internal error: missing-extern-requirement: " ++ name)
   let lamName = "$" ++ WN.wasmName (WN.WGenerated WN.WExternEta name 0)
-  let _ = noteFuncRef prog lamName
-  let _ =
-    addLiftedNamed
-      prog
-      lamName
-      codeShapeW
-      (emitExternEtaDefine prog lamName name arity)
+  noteFuncRef prog lamName
+  addLiftedNamed
+    prog
+    lamName
+    codeShapeW
+    (emitExternEtaDefine prog lamName name arity)
   -- S-4: an extern eta captures nothing (the comment above says so) ⇒ hoisted global.
   wConstClos prog lamName arity
 
@@ -4849,13 +4830,12 @@ emitCtorEtaClosure : Prog -> String -> List String
 emitCtorEtaClosure prog ctor =
   let arity = ctorArity prog ctor
   let lamName = "$" ++ WN.wasmName (WN.WGenerated WN.WCtorEta ctor 0)
-  let _ = noteFuncRef prog lamName
-  let _ =
-    addLiftedNamed
-      prog
-      lamName
-      codeShapeW
-      (emitCtorEtaDefine prog lamName ctor arity)
+  noteFuncRef prog lamName
+  addLiftedNamed
+    prog
+    lamName
+    codeShapeW
+    (emitCtorEtaDefine prog lamName ctor arity)
   -- S-4: a ctor eta is captureless ⇒ hoisted global, not a per-reference `$clos`.
   wConstClos prog lamName arity
 
@@ -5115,8 +5095,8 @@ siteFileNumW emit f = match omLookup f !emit.siteFileNums
     if n >= 65536 then
       None
     else
-      let _ = setRef emit.siteFileNums (omInsert f n !emit.siteFileNums)
-      let _ = setRef emit.siteFiles (f :: !emit.siteFiles)
+      setRef emit.siteFileNums (omInsert f n !emit.siteFileNums)
+      setRef emit.siteFiles (f :: !emit.siteFiles)
       Some n
 
 -- `<file>:<line>:<col>: ` for [site], nothing for 0.
@@ -5200,19 +5180,18 @@ trapMsgCall emit text = match omLookup text !emit.trapMsgIds
   Some k => [trapCallW emit ("trapmsg_" ++ intToString k) 0]
   None =>
     let k = omSize !emit.trapMsgIds
-    let _ = setRef emit.trapMsgIds (omInsert text k !emit.trapMsgIds)
+    setRef emit.trapMsgIds (omInsert text k !emit.trapMsgIds)
     let def =
       ["  (func $trapmsg_" ++ intToString k]
         ++ map ("    " ++ _) (flatMap (trapByteInstr emit) (strBytesW text))
         ++ ["  )"]
-    let _ = setRef emit.trapMsgFns (reverseL def ++ !emit.trapMsgFns)
-    let _ =
-      registerW
-        emit
-        (defineSymbol
-          (WasmFunc ("trapmsg_" ++ intToString k))
-          (FuncParams 0)
-          trapOriginW)
+    setRef emit.trapMsgFns (reverseL def ++ !emit.trapMsgFns)
+    registerW
+      emit
+      (defineSymbol
+        (WasmFunc ("trapmsg_" ++ intToString k))
+        (FuncParams 0)
+        trapOriginW)
     [trapCallW emit ("trapmsg_" ++ intToString k) 0]
 
 -- the `$trapmsg_K` helper definitions this emission made, in number order.
@@ -5460,7 +5439,7 @@ emitLetBindingW : Prog ->
   (List String, Env)
 emitLetBindingW prog env d False (PVar x _ bid) e1 =
   let rhs = emitRefExpr prog env d e1
-  let _ = mintLocalW prog bid
+  mintLocalW prog bid
   let env2 = envBind x bid env
   (rhs ++ ["local.set " ++ localTargetW prog env2 x], env2)
 emitLetBindingW prog env d False PWild e1 =
@@ -7808,7 +7787,7 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
     w7LocalDecls
       (w7ScopeClose (progEmit prog) w7Outer)
       (clausesMaxDepth clauses)
-  let _ = defineFnW prog funcSym (FuncParams (listLen params))
+  defineFnW prog funcSym (FuncParams (listLen params))
   let sig =
     "  (func $\{funcSym}\{joinWith "" (map wParamDecl params)} (result (ref eq))"
   wTmcMarker
@@ -7951,7 +7930,7 @@ emitWDispRoot prog grp arity clauses =
   let name = dispRootOf grp
   let params = synthWParams arity
   let loopName = wDispLoopName name
-  let _ = defineFnW prog (userFnW name) (FuncParams arity)
+  defineFnW prog (userFnW name) (FuncParams arity)
   let resetWrapper = wDispResetWrapper prog name loopName params arity
   let inner = emitWDispMemberFn prog grp loopName name arity clauses
   wTmcMarker name "group-root" :: resetWrapper ++ inner
@@ -8043,7 +8022,7 @@ emitWDispMemberFn prog grp emitName origName arity clauses =
     filterList (notIn (sourceParams params)) (dedupKeep allLocals)
   let scratch = scratchLocals (clausesMaxDepth clauses)
   let physicalName = if emitName == origName then userFnW origName else emitName
-  let _ = defineFnW prog physicalName (FuncParams arity)
+  defineFnW prog physicalName (FuncParams arity)
   let sig =
     "  (func $\{physicalName}\{joinWith "" (map wParamDecl params)} (result (ref eq))"
   -- census marker for a NON-root member (the root's marker is emitted by
@@ -8651,13 +8630,12 @@ emitClosure prog env _d pats body =
   let boundVars = flatMap patVars pats
   let captured =
     filterList (c => envHas c env) (dedupKeep (freeVarsExpr boundVars body))
-  let _ = noteFuncRef prog lamName
-  let _ =
-    addLifted
-      prog
-      lamName
-      codeShapeW
-      (emitLamDefine prog lamName pats captured (envRestrict captured env) body)
+  noteFuncRef prog lamName
+  addLifted
+    prog
+    lamName
+    codeShapeW
+    (emitLamDefine prog lamName pats captured (envRestrict captured env) body)
   -- build the closure struct at the use site: ref.func, arity, env array of captures.
   -- S-4: with NO captures every operand is constant, so hoist the struct to a module
   -- global (wConstClos) instead of rebuilding it on each evaluation of the `CLam`.
@@ -8821,7 +8799,7 @@ emitSelfRecLocalBind prog env x bid pats body =
       (c => envHas c env)
       (dedupKeep (filterList (notIn [x]) (freeVarsClauses [] bind)))
   let groupEnv = envBind x bid (envRestrict groupCaps env)
-  let _ = emitLgLifted prog gid [x] groupCaps groupEnv [bind] bind
+  emitLgLifted prog gid [x] groupCaps groupEnv [bind] bind
   -- one-member group: `useSiteRebuilds`'s later-sibling guard is vacuous here, so a
   -- capture-free `go` reaches the hoisted-global branch.  Self-reference is not a
   -- forward reference — the knot is tied inside the lifted prologue, not here.
@@ -8860,10 +8838,9 @@ emitLetGroupWith prog env d emitBody binds body =
     let groupCaps = freeCaps ++ valNames
     -- emit each lifted top-level fn (drained into the module like other lifted lams).
     let groupEnv = envBindGroups binds (envRestrict freeCaps env)
-    let _ =
-      forEachU
-        (b => emitLgLifted prog gid names groupCaps groupEnv fnBinds b)
-        fnBinds
+    forEachU
+      (b => emitLgLifted prog gid names groupCaps groupEnv fnBinds b)
+      fnBinds
     -- at the use site: compute the value bindings into their locals (each visible to the
     -- next), rebuild every FUNCTION member's closure, then emit the body with all bound.
     let valInit = emitLgValBinds prog env d valBinds
@@ -8962,7 +8939,7 @@ emitLgLifted prog gid names groupCaps groupEnv binds (CBind name clauses bindLoc
       (sitePackedW (progEmit prog) bindLoc)
       prog
   let lamName = "$" ++ WN.wasmName (WN.WGenerated WN.WGroup name gid)
-  let _ = noteFuncRef prog lamName
+  noteFuncRef prog lamName
   let arity = clauseArityOf clauses
   -- synthetic names: this member also declares its group captures and sibling
   -- names as locals, so a source-named param could collide with either.
@@ -10430,7 +10407,7 @@ collectStmtLocals (CSAssign _ ex) = collectExprLocals ex
 w7Local : WasmEmit -> WN.WasmGeneratedFamily -> Int -> String
 w7Local emit family depth =
   let name = WN.wasmName (WN.WSyntheticLocal family depth)
-  let _ = setRef emit.w7Used (omInsert name () !emit.w7Used)
+  setRef emit.w7Used (omInsert name () !emit.w7Used)
   "$" ++ name
 
 -- start recording a new function's W7 locals; returns the enclosing function's set,
@@ -10438,14 +10415,14 @@ w7Local emit family depth =
 w7ScopeOpen : WasmEmit -> OrdMap Unit
 w7ScopeOpen emit =
   let outer = !emit.w7Used
-  let _ = setRef emit.w7Used omEmpty
+  setRef emit.w7Used omEmpty
   outer
 
 -- the W7 locals recorded since the matching `w7ScopeOpen`; restores `outer`.
 w7ScopeClose : WasmEmit -> OrdMap Unit -> OrdMap Unit
 w7ScopeClose emit outer =
   let used = !emit.w7Used
-  let _ = setRef emit.w7Used outer
+  setRef emit.w7Used outer
   used
 
 -- The `(local …)` lines for the W7 locals in `used`, over depths 0..maxDepth (the

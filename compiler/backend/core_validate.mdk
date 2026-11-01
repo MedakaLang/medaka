@@ -365,7 +365,7 @@ isUnprovidedOn backend name = isSome (unprovidedOn backend name)
 export
 validateExterns : Backend -> List String -> CProgram -> List ExternFinding
 validateExterns backend runtimeExterns prog =
-  let _ = refuseMissingRows runtimeExterns
+  refuseMissingRows runtimeExterns
   match walkProgram backend prog
     Walk _ found _ _ _ _ _ _ => reverseL found
 
