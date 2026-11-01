@@ -709,3 +709,16 @@ test "LLVM quoted marker-looking names cannot leak control bytes into diagnostic
                 || contains "\u{1f}" (defectMessage d))
             ds),
       ])
+
+test "LLVM discarded census fragments keep indirect calls separate from following globals" =
+  let source = "  %r = call i64 %fn(i64 1)\n@g = global i64 0\n"
+  expectStep
+    (symbols =>
+      expectEqual
+        (Ok source)
+        (codes (finishCheckedText ClosedOutput symbols emptyCoverage source)))
+    (defineSymbol
+      (Generated "g")
+      (DataProto "i64")
+      at
+      (emptyRegistry WholeModule))

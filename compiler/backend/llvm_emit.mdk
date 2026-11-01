@@ -15380,12 +15380,24 @@ emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries facts
   let _ = noteUnprovidedExterns e found
   let _ = emitPreamble e
+  let _ = emitFfiDeclares e
+  let _ = emitGlobalDecls e (valBinds groups)
   let _ = emitFnsGaps e (fnBinds groups)
   let _ = emitImplsGaps e implEntries
   let _ = emitTopBindsGaps e omEmpty (valBinds groups)
-  -- no text is written, so a call need not meet its symbol here
   match symbolDefectsL e False
-    [] => Ok (reverseL !e.gapLog)
+    [] =>
+      map
+        (_ => reverseL !e.gapLog)
+        (finishCheckedText
+          (RecordedGaps !e.excusedCalls)
+          !e.symbols
+          !e.coverage
+          (joinNl
+            (siteTrapDeclares e
+              ++ reverseL !e.buf
+              ++ reverseL !e.lams
+              ++ siteFileTable e)))
     defects => Err defects
 
 emitFnsGaps : Emit -> List CBind -> Unit

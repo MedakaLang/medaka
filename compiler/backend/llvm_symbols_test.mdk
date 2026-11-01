@@ -21,7 +21,8 @@ import types.tc_elab.{grantWholeDomain}
 import types.program_facts.{emptyFacts}
 import ir.core_ir_lower.{lowerProgramEmitWith}
 import backend.llvm_emit.{
-  EmitInput, emitProgram, emitProgramRecord, emitProgramWithStats, makeEmitInput
+  EmitInput, emitProgram, emitProgramRecord, emitProgramWithStats,
+  emitProgramGaps, makeEmitInput
 }
 import backend.llvm_symbols.{
   CallShape(..),
@@ -478,3 +479,33 @@ test "LLVM publication routes return identical receipt-free text" =
         (stringIndexOf "call " text),
     ]
     _ => fail "a publication route refused the valid program"
+
+test "gap census retains a valid global program's log" =
+  let src = "a = f 1\nb = 5\nc = 40\nf n = c + n\nmain = a\n"
+  match withLowered emitProgramGaps src
+    Ok events => expectEqual [] events
+    Err defects => expectEqual [] (map defectFacts defects)
+
+test "gap census retains a recorded unsupported extern event" =
+  let src = "f : Int -> Int\nf x = x + 1\nmain = assertSnapshot \"a\" (f 1)\n"
+  match withLowered emitProgramGaps src
+    Ok events =>
+      expectSatisfies
+        "a gap event names the refused extern"
+        (any (e => isSome (stringIndexOf "assertSnapshot" e)))
+        events
+    Err defects => expectEqual [] (map defectFacts defects)
+
+test "gap census accepts a captured indirect call before global declarations" =
+  let src =
+    """
+incFn x = x + 5
+base = 100
+viaCapture =
+  let incFn = y => incFn (y + base)
+  incFn 0
+main = viaCapture
+"""
+  match withLowered emitProgramGaps src
+    Ok events => expectEqual [] events
+    Err defects => expectEqual [] (map defectFacts defects)

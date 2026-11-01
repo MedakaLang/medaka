@@ -456,8 +456,8 @@ namedCallee : List Token -> Option String
 namedCallee [] = None
 namedCallee ((Token text _ _) :: (Token "(" _ _) :: rest)
   | isLocal text = match afterParens rest 0
-    after@((Token name _ _) :: _) if isGlobal name || isLocal name =>
-      namedCallee after
+    after@((Token name _ _) :: (Token "(" _ _) :: _) if isGlobal name
+      || isLocal name => namedCallee after
     _ => None
 namedCallee ((Token text _ _) :: rest)
   | isGlobal text = Some text
@@ -893,7 +893,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DFunDef false "modifierOf" (PWild) (EVar "OrdinaryCall"))
 (DTypeSig false "namedCallee" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "namedCallee" ((PList)) (EVar "None"))
-(DFunDef false "namedCallee" ((PCons (PCon "Token" (PVar "text") PWild PWild) (PCons (PCon "Token" (PLit (LString "(")) PWild PWild) (PVar "rest")))) (EIf (EApp (EVar "isLocal") (EVar "text")) (EMatch (EApp (EApp (EVar "afterParens") (EVar "rest")) (ELit (LInt 0))) (arm (PAs "after" (PCons (PCon "Token" (PVar "name") PWild PWild) PWild)) ((GBool (EBinOp "||" (EApp (EVar "isGlobal") (EVar "name")) (EApp (EVar "isLocal") (EVar "name"))))) (EApp (EVar "namedCallee") (EVar "after"))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "namedCallee" ((PCons (PCon "Token" (PVar "text") PWild PWild) (PCons (PCon "Token" (PLit (LString "(")) PWild PWild) (PVar "rest")))) (EIf (EApp (EVar "isLocal") (EVar "text")) (EMatch (EApp (EApp (EVar "afterParens") (EVar "rest")) (ELit (LInt 0))) (arm (PAs "after" (PCons (PCon "Token" (PVar "name") PWild PWild) (PCons (PCon "Token" (PLit (LString "(")) PWild PWild) PWild))) ((GBool (EBinOp "||" (EApp (EVar "isGlobal") (EVar "name")) (EApp (EVar "isLocal") (EVar "name"))))) (EApp (EVar "namedCallee") (EVar "after"))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "namedCallee" ((PCons (PCon "Token" (PVar "text") PWild PWild) (PVar "rest"))) (EIf (EApp (EVar "isGlobal") (EVar "text")) (EApp (EVar "Some") (EVar "text")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "text") (ELit (LString "="))) (EBinOp "==" (EVar "text") (ELit (LString ";")))) (EBinOp "==" (EVar "text") (ELit (LString "call")))) (EBinOp "==" (EVar "text") (ELit (LString "invoke")))) (EBinOp "==" (EVar "text") (ELit (LString "callbr")))) (EBinOp "==" (EVar "text") (ELit (LString "ret")))) (EBinOp "==" (EVar "text") (ELit (LString "define")))) (EBinOp "==" (EVar "text") (ELit (LString "declare")))) (EVar "None") (EIf (EVar "otherwise") (EApp (EVar "namedCallee") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "afterParens" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Token")))))
 (DFunDef false "afterParens" ((PList) PWild) (EListLit))
@@ -1052,7 +1052,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DFunDef false "modifierOf" (PWild) (EVar "OrdinaryCall"))
 (DTypeSig false "namedCallee" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "namedCallee" ((PList)) (EVar "None"))
-(DFunDef false "namedCallee" ((PCons (PCon "Token" (PVar "text") PWild PWild) (PCons (PCon "Token" (PLit (LString "(")) PWild PWild) (PVar "rest")))) (EIf (EApp (EVar "isLocal") (EVar "text")) (EMatch (EApp (EApp (EVar "afterParens") (EVar "rest")) (ELit (LInt 0))) (arm (PAs "after" (PCons (PCon "Token" (PVar "name") PWild PWild) PWild)) ((GBool (EBinOp "||" (EApp (EVar "isGlobal") (EVar "name")) (EApp (EVar "isLocal") (EVar "name"))))) (EApp (EVar "namedCallee") (EVar "after"))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "namedCallee" ((PCons (PCon "Token" (PVar "text") PWild PWild) (PCons (PCon "Token" (PLit (LString "(")) PWild PWild) (PVar "rest")))) (EIf (EApp (EVar "isLocal") (EVar "text")) (EMatch (EApp (EApp (EVar "afterParens") (EVar "rest")) (ELit (LInt 0))) (arm (PAs "after" (PCons (PCon "Token" (PVar "name") PWild PWild) (PCons (PCon "Token" (PLit (LString "(")) PWild PWild) PWild))) ((GBool (EBinOp "||" (EApp (EVar "isGlobal") (EVar "name")) (EApp (EVar "isLocal") (EVar "name"))))) (EApp (EVar "namedCallee") (EVar "after"))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "namedCallee" ((PCons (PCon "Token" (PVar "text") PWild PWild) (PVar "rest"))) (EIf (EApp (EVar "isGlobal") (EVar "text")) (EApp (EVar "Some") (EVar "text")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "text") (ELit (LString "="))) (EBinOp "==" (EVar "text") (ELit (LString ";")))) (EBinOp "==" (EVar "text") (ELit (LString "call")))) (EBinOp "==" (EVar "text") (ELit (LString "invoke")))) (EBinOp "==" (EVar "text") (ELit (LString "callbr")))) (EBinOp "==" (EVar "text") (ELit (LString "ret")))) (EBinOp "==" (EVar "text") (ELit (LString "define")))) (EBinOp "==" (EVar "text") (ELit (LString "declare")))) (EVar "None") (EIf (EVar "otherwise") (EApp (EVar "namedCallee") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "afterParens" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Token")))))
 (DFunDef false "afterParens" ((PList) PWild) (EListLit))

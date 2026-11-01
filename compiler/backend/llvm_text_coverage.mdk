@@ -452,8 +452,8 @@ namedCallee : List Token -> Option String
 namedCallee [] = None
 namedCallee ((Token text _ _) :: (Token "(" _ _) :: rest)
   | isLocal text = match afterParens rest 0
-    after@((Token name _ _) :: _) if isGlobal name || isLocal name =>
-      namedCallee after
+    after@((Token name _ _) :: (Token "(" _ _) :: _) if isGlobal name
+      || isLocal name => namedCallee after
     _ => None
 namedCallee ((Token text _ _) :: rest)
   | isGlobal text = Some text
