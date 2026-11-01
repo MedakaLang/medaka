@@ -199,6 +199,8 @@ CEIL_test="${TEST_IR_CEIL:-840000000}"
 #   136,011,113  136,012,241  1,143,456,963                         165,000,000
 #
 # Building the index despite `--disable` drives the cell 7x over its ceiling.
+# Every rule that declares an index need must be named in the cell's `--disable`
+# list: rule-stdlib-reimpl (stdlib rows) and rule-let-underscore-unit (project rows).
 #
 # CHECK-POLICY cell — `medaka check-policy demo/plugin_good.mdk --allow
 # "Cache,Log,FFI" --fn transform` (S-prelude-on-the-cold-verbs, half (a)): converge
@@ -267,7 +269,7 @@ measure_ir() {
     build) set -- "$MEDAKA" build "$HELLO_FILE" -o "$WORK/hello.bin" ;;
     run)   set -- "$MEDAKA" run "$HELLO_FILE" ;;
     test)  set -- "$MEDAKA" test "$HELLO_FILE" ;;
-    lint)  set -- "$MEDAKA" lint --disable rule-stdlib-reimpl "$LINT_TARGET" ;;
+    lint)  set -- "$MEDAKA" lint --disable rule-stdlib-reimpl,rule-let-underscore-unit "$LINT_TARGET" ;;
     checkpolicy)
       set -- "$MEDAKA" check-policy "$POLICY_FILE" --allow "Cache,Log,FFI" --fn transform ;;
     *)     echo "measure_ir: unknown verb '$_verb'" >&2; return 1 ;;
@@ -291,7 +293,7 @@ for verb in check build run test lint checkpolicy; do
   eval "ceil=\$CEIL_$verb"
 
   case "$verb" in
-    lint)         workload="lint --disable rule-stdlib-reimpl compiler/tools/lint_cmd.mdk" ;;
+    lint)         workload="lint --disable rule-stdlib-reimpl,rule-let-underscore-unit compiler/tools/lint_cmd.mdk" ;;
     checkpolicy)  workload="check-policy demo/plugin_good.mdk (--allow Cache,Log,FFI --fn transform)" ;;
     *)            workload="hello-world \`$verb\`" ;;
   esac
