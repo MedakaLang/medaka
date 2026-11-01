@@ -4384,8 +4384,9 @@ testHelpText = stringConcat [
   "\n",
   "Random draws in the program under test use one seed per run: MEDAKA_SEED\n",
   "when set, else OS entropy. A run whose tests failed prints `seed: N (rerun with\n",
-  "MEDAKA_SEED=N)` after the summary. An uncaught panic under the eval\n",
-  "engine aborts the run with no summary and no seed line; set MEDAKA_SEED\n",
+  "MEDAKA_SEED=N)` after the summary; a failing --json run adds a top-level\n",
+  "`seed` member instead and keeps stderr empty. An uncaught panic under the\n",
+  "eval engine aborts the run with no summary and no seed; set MEDAKA_SEED\n",
   "to make such a run repeatable.\n", "\n",
   "--native and --engines are mutually exclusive. With neither, the default\n",
   "is the native backend alone.\n", "\n",
@@ -4899,6 +4900,21 @@ cliGradedTestReportJson path reportError engines runs props tests typecheckSkipp
           ],
         ),
       ])
+
+-- Adds the run seed as a top-level `seed` member when the run failed, the
+-- JSON twin of the failing run's seed line; a green run and a refusal (a type
+-- error, where nothing ran) keep their envelope unchanged.
+export
+cliSeedOnFailure : Option String -> Bool -> Json -> <IO> Json
+cliSeedOnFailure reportError ok report = match (
+  reportError,
+  ok,
+  report,
+  !testSeedRef,
+)
+  (None, False, JObject pairs, Some n) =>
+    jObject (toList pairs ++ [("seed", JInt n)])
+  _ => report
 
 -- #2589 item 2: roster-completeness for `*_test.mdk` discovery. The recursive
 -- walk (`expandLintTarget`/`collectMdkFiles` in

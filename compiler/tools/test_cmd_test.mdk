@@ -22,6 +22,8 @@ import test.{
   Expectation, expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue,
   fail, labelFail
 }
+import json.{Json(..)}
+import json as J
 import test_process.{medakaBin, underRoot, withScratchDir}
 
 noProps : List Decl
@@ -377,6 +379,13 @@ withSpawn (Err e) _ = fail "could not spawn medaka: \{e}"
 seedLines : List String -> List String
 seedLines = filter (startsWith "seed: ")
 
+-- A top-level member of the one JSON document `out` holds; None when `out` does
+-- not parse or the member is absent.
+jsonMember : String -> String -> Option Json
+jsonMember key out = match J.parse (trim out)
+  Ok doc => J.get key doc
+  Err _ => None
+
 lastWord : String -> String
 lastWord line = match reverse (words line)
   w :: _ => w
@@ -553,14 +562,36 @@ test "a malformed MEDAKA_SEED is a usage error" =
       expectEqual [] (seedLines (lines out)),
     ]))
 
-test "--json prints no seed line and leaves stderr empty" =
+test "--json carries the seed only when the run failed, and leaves stderr empty" =
   withFixtures
-    [("draw_test.mdk", drawTestSrc)]
+    [("draw_test.mdk", drawTestSrc), ("ok_test.mdk", passTestSrc)]
+    (dir => expectAll [
+      withSpawn (seededTest (Some 7) [
+        "--json",
+        "\{dir}/draw_test.mdk",
+      ]) ((code, out, err) => expectAll [
+        expectEqual 1 code,
+        expectEqual [] (seedLines (lines out)),
+        expectEqual (Some (JInt 7)) (jsonMember "seed" out),
+        expectEqual "" err,
+      ]),
+      withSpawn (seededTest (Some 7) [
+        "--json",
+        "\{dir}/ok_test.mdk",
+      ]) ((code, out, err) => expectAll [
+        expectEqual 0 code,
+        expectEqual None (jsonMember "seed" out),
+        expectEqual "" err,
+      ]),
+    ])
+
+test "a --json type-error refusal carries no seed" =
+  withFixtures
+    [("ill.mdk", illTypedSrc)]
     (dir => withSpawn (seededTest (Some 7) [
       "--json",
-      "\{dir}/draw_test.mdk",
-    ]) ((code, out, err) => expectAll [
+      "\{dir}/ill.mdk",
+    ]) ((code, out, _) => expectAll [
       expectEqual 1 code,
-      expectEqual [] (seedLines (lines out)),
-      expectEqual "" err,
+      expectEqual None (jsonMember "seed" out),
     ]))

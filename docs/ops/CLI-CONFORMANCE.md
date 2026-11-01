@@ -361,9 +361,9 @@ a usage error, exit 1), else OS entropy. Every engine uses it, the in-process ev
 spawned native probe, props worker and per-file child alike. A run in which tests, doctests or
 properties ran and something failed prints `seed: N (rerun with MEDAKA_SEED=N)` once after the
 summary; a green run, and a refusal before anything ran (a type error, a missing capability, a bad
-target), print nothing extra. `--json` carries no seed and keeps stderr empty, so a `--json` failure
-is replayable only when `MEDAKA_SEED` was set. An uncaught panic under the eval engine aborts the run
-without a summary or a seed line; set `MEDAKA_SEED` to make such a run repeatable. `medaka repl` draws from the same stream and honours `MEDAKA_SEED`, with no print.
+target), print nothing extra. A failing `--json` run adds the same N as a top-level integer `seed` member
+(a green run and a refusal add none) and keeps stderr empty. An uncaught panic under the eval engine aborts the run
+without a summary or a seed; set `MEDAKA_SEED` to make such a run repeatable. `medaka repl` draws from the same stream and honours `MEDAKA_SEED`, with no print.
 
 There is no residual C2 cell left in this table — `new` was the last one and S-5 drained it.
 

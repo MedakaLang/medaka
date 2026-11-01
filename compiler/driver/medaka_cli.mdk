@@ -260,6 +260,7 @@ import tools.test_cmd.{
   cliTestReportJson,
   cliGradedTestReportOk,
   cliGradedTestReportJson,
+  cliSeedOnFailure,
   checkTestMdkRoster,
   testFilesGo,
   runEvalPropsWorker,
@@ -3388,18 +3389,18 @@ runTestJsonCmd engines cases filterOpt target =
           cases
           filterOpt
           True
-      let _ =
-        putStrLn
-          (stringify
-            (cliGradedTestReportJson
-              target
-              typeError
-              engines
-              runs
-              props
-              tests
-              typecheckSkipped))
-      Ok (cliGradedTestReportOk typeError runs props tests)
+      let ok = cliGradedTestReportOk typeError runs props tests
+      let report =
+        cliGradedTestReportJson
+          target
+          typeError
+          engines
+          runs
+          props
+          tests
+          typecheckSkipped
+      let _ = putStrLn (stringify (cliSeedOnFailure typeError ok report))
+      Ok ok
   match r
     Err e => dieMsg e
     Ok ok => if ok then () else stageExit 1
