@@ -7,8 +7,8 @@
 # → DCE → wasm_emit) and that WAT must ASSEMBLE: every `$mdk_w_*` function referenced
 # (by a closure wrapper / ref.func) must also be DEFINED.
 #
-# The bug this guards against: the wasm emitter's pre-scan `scanFnValueUses` decides
-# which top-level fns get a closure WRAPPER (`$mdk_w_<f>`).  If that scan skips a CExpr
+# The bug this guards against: the Wasm demand plan decides which top-level fns get a
+# closure WRAPPER (`$mdk_w_<f>`). If its function-value set omits a CExpr
 # arm that `emitVarRef` descends into at emit time (CTuple/CRecord/CRecordUpdate/…),
 # a fn used as a VALUE inside such an arm gets its `ref.func $mdk_w_<f>` emitted but its
 # wrapper never DEFINED → wasm-tools parse fails with "unknown func".  15 such fns

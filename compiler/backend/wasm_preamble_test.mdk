@@ -141,6 +141,7 @@ planOf helpers ints nonexh = WasmDemandPlan {
   nonexhaustiveRuntime = nonexh,
   imports = [],
   catalogFamilies = [],
+  fnValues = omEmpty,
 }
 
 intNames : List String

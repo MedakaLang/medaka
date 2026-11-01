@@ -6,6 +6,7 @@ backend.global_plan
 backend.impl_groups
 backend.trmc_analysis
 backend.wasm_demand
+backend.wasm_fn_values
 backend.wasm_names
 backend.wasm_reach
 backend.wasm_symbol_names

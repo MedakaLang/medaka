@@ -1,0 +1,225 @@
+import frontend.ast.{Pat(..), Route(..), patBoundNames}
+import ir.core_ir.{
+  CProgram(..), CBind(..), CClause(..), CExpr(..), CImplEntry(..),
+  CImplBody(..), CArm(..), CGuard(..), CStmt(..), CField(..),
+  MethodEvidence(..), CallSite(..), CallMode(..)
+}
+import support.ordmap.{
+  OrdMap, omEmpty, omInsert, omLookup, omHasKey, omFromNames
+}
+import support.symbol_encoding.{encodePair}
+import support.util.{startsWith}
+
+data ValueScope = ValueScope {
+  functions : OrdMap String,
+  coreFunctions : OrdMap String,
+  selected : OrdMap Unit,
+  locals : OrdMap Unit,
+}
+
+-- The selected set is supplied by the catalog adapter; this leaf only follows
+-- the boxed renderer's precedence and lexical environments.
+export
+fnValueUses : OrdMap Unit -> CProgram -> OrdMap Unit
+fnValueUses selected (CProgram binds _ _ impls _ _) =
+  let prefix = encodePair "core" ""
+  let (functions, coreFunctions) =
+    fold
+      ((direct, core) bind =>
+        let name = bindName bind
+        if name == "main" || isValue bind then
+          (direct, core)
+        else
+          (
+            omInsert name name direct,
+            if startsWith prefix name then
+              omInsert
+                (stringSlice (stringLength prefix) (stringLength name) name)
+                name
+                core
+            else
+              core,
+          ))
+      (omEmpty, omEmpty)
+      binds
+  let scope = ValueScope {
+    functions = functions,
+    coreFunctions = coreFunctions,
+    selected = selected,
+    locals = omEmpty,
+  }
+  fold (walkImpl scope) (fold (walkBind scope) omEmpty binds) impls
+
+bindName : CBind -> String
+bindName (CBind name _ _ _) = name
+
+isValue : CBind -> Bool
+isValue (CBind _ [CClause [] _] _ _) = True
+isValue _ = False
+
+withPats : ValueScope -> List Pat -> ValueScope
+withPats scope pats = { scope |
+  locals = omFromNames (flatMap patBoundNames pats) scope.locals,
+}
+
+withBinds : ValueScope -> List CBind -> ValueScope
+withBinds scope binds = { scope |
+  locals = omFromNames (map bindName binds) scope.locals,
+}
+
+rawSentinel : String -> Bool
+rawSentinel name = name == "__fallthrough__" || startsWith "__ft__" name
+
+noteName : ValueScope -> OrdMap Unit -> String -> OrdMap Unit
+noteName scope acc name =
+  if omHasKey name scope.locals then
+    acc
+  else match omLookup name scope.functions
+    Some symbol => omInsert symbol () acc
+    None => match omLookup name scope.coreFunctions
+      Some symbol => omInsert symbol () acc
+      None => acc
+
+walkBind : ValueScope -> OrdMap Unit -> CBind -> OrdMap Unit
+walkBind scope acc (CBind _ clauses _ _) =
+  fold
+    (seen (CClause pats body) => walkExpr (withPats scope pats) seen body)
+    acc
+    clauses
+
+walkImpl : ValueScope -> OrdMap Unit -> CImplEntry -> OrdMap Unit
+walkImpl scope acc (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ pats body)) =
+  walkExpr (withPats scope pats) acc body
+walkImpl scope acc (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ pats body)) =
+  walkExpr (withPats scope pats) acc body
+
+walkExprs : ValueScope -> OrdMap Unit -> List CExpr -> OrdMap Unit
+walkExprs scope = fold (walkExpr scope)
+
+walkFields : ValueScope -> OrdMap Unit -> List CField -> OrdMap Unit
+walkFields scope = fold (acc (CField _ _ expr) => walkExpr scope acc expr)
+
+-- Flattened arguments inherit the outer application mode, as in appParts.
+walkApp : ValueScope ->
+  OrdMap Unit ->
+  Bool ->
+  CExpr ->
+  List (List CExpr) ->
+  OrdMap Unit
+walkApp scope acc exact (CApp head args _) pending =
+  walkApp scope acc exact head (args :: pending)
+walkApp scope acc exact (CVar name _) pending =
+  if rawSentinel name || omHasKey name scope.selected then
+    acc
+  else
+    fold
+      (walkExprs scope)
+      (if exact then acc else noteName scope acc name)
+      pending
+walkApp scope acc exact (CMethod method (MethodEvidence _ _ (RLocal sym dicts) _ _)) pending =
+  let target = if sym == "" then method else sym
+  let headUses = match dicts
+    [] =>
+      if not exact && omHasKey target scope.functions then
+        omInsert target () acc
+      else
+        acc
+    _ => acc
+  fold (walkExprs scope) headUses pending
+walkApp scope acc _ head pending =
+  fold (walkExprs scope) (walkExpr scope acc head) pending
+
+walkExpr : ValueScope -> OrdMap Unit -> CExpr -> OrdMap Unit
+walkExpr _ acc (CLit _) = acc
+walkExpr scope acc (CVar name _) =
+  if rawSentinel name
+    || not (omHasKey name scope.locals) && omHasKey name scope.selected then
+    acc
+  else
+    noteName scope acc name
+walkExpr scope acc (CApp head args (CallSite mode _)) =
+  let exact = match mode
+    CallExact => True
+    CallPartial _ => False
+    CallOver _ => False
+    CallDynamic => False
+  walkApp scope acc exact head [args]
+walkExpr scope acc (CLam pats body) = walkExpr (withPats scope pats) acc body
+walkExpr scope acc (CLet recursive pat rhs body) =
+  let inner = withPats scope [pat]
+  let rhsScope = if recursive then inner else scope
+  walkExpr inner (walkExpr rhsScope acc rhs) body
+walkExpr scope acc (CLetGroup binds body) =
+  let inner = withBinds scope binds
+  let functions = filter (b => not (isValue b)) binds
+  let values = filter isValue binds
+  let seen = fold (walkBind inner) acc functions
+  let (_, seenValues) =
+    fold
+      ((current, seen) bind => (
+        withBinds current [bind],
+        walkBind current seen bind,
+      ))
+      (scope, seen)
+      values
+  walkExpr inner seenValues body
+walkExpr scope acc (CMatch scrut arms) =
+  fold (walkArm scope) (walkExpr scope acc scrut) arms
+walkExpr scope acc (CDecision scrut arms _) =
+  fold (walkArm scope) (walkExpr scope acc scrut) arms
+walkExpr scope acc (CIf cond yes no) = walkExprs scope acc [cond, yes, no]
+walkExpr scope acc (CBinPrim _ left right _ _) =
+  walkExprs scope acc [left, right]
+walkExpr scope acc (CUnOp _ expr) = walkExpr scope acc expr
+walkExpr scope acc (CTuple exprs) = walkExprs scope acc exprs
+walkExpr scope acc (CList exprs) = walkExprs scope acc exprs
+walkExpr scope acc (CArray exprs) = walkExprs scope acc exprs
+walkExpr scope acc (CRecord _ fields) = walkFields scope acc fields
+walkExpr scope acc (CFieldAccess base _ _ _) = walkExpr scope acc base
+walkExpr scope acc (CRecordUpdate _ base fields) =
+  walkFields scope (walkExpr scope acc base) fields
+walkExpr scope acc (CVariantUpdate _ base fields) =
+  walkFields scope (walkExpr scope acc base) fields
+walkExpr scope acc (CRangeList lo hi _) = walkExprs scope acc [lo, hi]
+walkExpr scope acc (CRangeArray lo hi _) = walkExprs scope acc [lo, hi]
+walkExpr scope acc (CIndex base index) = walkExprs scope acc [base, index]
+walkExpr scope acc (CSlice base lo hi _) = walkExprs scope acc [base, lo, hi]
+walkExpr scope acc (CStringIndex base index) = walkExprs scope acc [base, index]
+walkExpr scope acc (CStringSlice base lo hi _) =
+  walkExprs scope acc [base, lo, hi]
+walkExpr scope acc (CListIndex base index) = walkExprs scope acc [base, index]
+walkExpr scope acc (CListSlice base lo hi _) =
+  walkExprs scope acc [base, lo, hi]
+walkExpr scope acc (CBlock stmts) = walkBlock scope acc stmts
+walkExpr _ acc (CMethod _ _) = acc
+walkExpr _ acc (CDict _ _) = acc
+
+walkGuards : ValueScope ->
+  OrdMap Unit ->
+  List CGuard ->
+  (ValueScope, OrdMap Unit)
+walkGuards scope acc [] = (scope, acc)
+walkGuards scope acc ((CGBool expr) :: rest) =
+  walkGuards scope (walkExpr scope acc expr) rest
+walkGuards scope acc ((CGBind pat expr) :: rest) =
+  walkGuards (withPats scope [pat]) (walkExpr scope acc expr) rest
+
+walkArm : ValueScope -> OrdMap Unit -> CArm -> OrdMap Unit
+walkArm scope acc (CArm pat guards body) =
+  let (inner, seen) = walkGuards (withPats scope [pat]) acc guards
+  walkExpr inner seen body
+walkArm scope acc (CArmAlt pat guards _) =
+  snd (walkGuards (withPats scope [pat]) acc guards)
+
+walkBlock : ValueScope -> OrdMap Unit -> List CStmt -> OrdMap Unit
+walkBlock _ acc [] = acc
+walkBlock scope acc ((CSExpr expr) :: rest) =
+  walkBlock scope (walkExpr scope acc expr) rest
+walkBlock scope acc ((CSAssign _ expr) :: rest) =
+  walkBlock scope (walkExpr scope acc expr) rest
+walkBlock scope acc ((CSLet _ pat expr) :: rest) =
+  let inner = withPats scope [pat]
+  let rhsScope = match (pat, expr)
+    (PVar _ _ _, CLam _ _) => inner
+    _ => scope
+  walkBlock inner (walkExpr rhsScope acc expr) rest
