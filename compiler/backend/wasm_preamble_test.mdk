@@ -228,7 +228,7 @@ seeded : List String ->
   List SymbolDefect
 seeded helpers more =
   verdict
-    ([declareSymbol (WasmFunc "mdk_write_byte") FuncImported (at "module")]
+    ([declareSymbol (WasmFunc "mdk_write_byte") (FuncImported 1) (at "module")]
       ++ declarePlannedHelpers (planOf helpers intNames True)
       ++ more)
 
@@ -341,8 +341,14 @@ intSteps ints =
   ]
   verdict
     ([
-        declareSymbol (WasmFunc "mdk_write_byte") FuncImported (at "module"),
-        declareSymbol (WasmFunc "mdk_write_err_byte") FuncImported (at "module"),
+        declareSymbol
+          (WasmFunc "mdk_write_byte")
+          (FuncImported 1)
+          (at "module"),
+        declareSymbol
+          (WasmFunc "mdk_write_err_byte")
+          (FuncImported 1)
+          (at "module"),
       ]
       ++ declarePlannedHelpers (planOf blocks ints True)
       ++ [
@@ -360,7 +366,7 @@ importSteps plan =
   let defined =
     omFromNames (flatMap ((HelperManifest ds _) => map fst ds) rows) omEmpty
   map
-    (f => declareSymbol (WasmFunc f) FuncImported (at "module"))
+    (f => declareSymbol (WasmFunc f) (FuncImported 0) (at "module"))
     (filter
       (f => not (omHasKey f defined))
       (setOf (flatMap ((HelperManifest _ cs) => cs) rows)))

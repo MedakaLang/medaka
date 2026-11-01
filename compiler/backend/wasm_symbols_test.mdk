@@ -89,7 +89,7 @@ test "a function defined twice is refused; two names defined once each are not" 
       (expectEqual
         [DuplicateDefinition (WasmFunc "f") (at "body") (at "module")]
         (verdict [
-          declareSymbol (WasmFunc "f") FuncImported (at "module"),
+          declareSymbol (WasmFunc "f") (FuncImported 0) (at "module"),
           defineSymbol (WasmFunc "f") (FuncParams 0) (at "body"),
         ])),
     labelFail

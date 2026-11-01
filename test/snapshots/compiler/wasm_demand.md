@@ -1,5 +1,5 @@
 # META
-source_lines=2781
+source_lines=2799
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_fn_values.{fnValueUses}
@@ -965,6 +965,7 @@ public export data PlannedImport = PlannedImport {
   field : String,
   watSymbol : String,
   signature : String,
+  parameterCount : Int,
 } deriving (Eq, Debug)
 
 public export data WasmDemandPlan = WasmDemandPlan {
@@ -2541,92 +2542,109 @@ physicalImports acc sourceKeys js =
       [])
 
 plannedEnv : String -> PlannedImport
-plannedEnv key = PlannedImport {
-  namespace = "env",
-  field = key,
-  watSymbol = key,
-  signature = optionOr "" (hostImportSigOf key),
-}
+plannedEnv key =
+  let (params, result) = optionOr ([], None) (hostImportAbiOf key)
+  PlannedImport {
+    namespace = "env",
+    field = key,
+    watSymbol = key,
+    signature = wireSignature params result,
+    parameterCount = listLen params,
+  }
 
 plannedJs : JsImport -> PlannedImport
-plannedJs imp = PlannedImport {
-  namespace = "jsffi",
-  field = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}",
-  watSymbol = WN.wasmName (WN.WJSImport imp.medakaName),
-  signature =
-    joinWith "" (map jsWireParam imp.params) ++ jsWireResult imp.result,
-}
+plannedJs imp =
+  let params = map jsWireTy (filterList (/= "Unit") imp.params)
+  PlannedImport {
+    namespace = "jsffi",
+    field = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}",
+    watSymbol = WN.wasmName (WN.WJSImport imp.medakaName),
+    signature =
+      joinWith "" (map (p => " (param \{p})") params)
+        ++ jsWireResult imp.result,
+    parameterCount = listLen params,
+  }
+
+wireSignature : List String -> Option String -> String
+wireSignature params result =
+  joinWith "" (map (p => " (param \{p})") params)
+    ++ (match result
+      Some r => " (result \{r})"
+      None => "")
 
 export
 hostImportSigOf : String -> Option String
-hostImportSigOf "mdk_write_byte" = Some " (param i32)"
-hostImportSigOf "mdk_write_err_byte" = Some " (param i32)"
-hostImportSigOf "mdk_float_fmt" = Some " (param f64) (result i32)"
-hostImportSigOf "mdk_float_fmt_byte" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_exit" = Some " (param i32)"
-hostImportSigOf "mdk_wall_time_sec" = Some " (result f64)"
-hostImportSigOf "mdk_monotonic_sec" = Some " (result f64)"
-hostImportSigOf "mdk_sleep_ms" = Some " (param i64)"
-hostImportSigOf "mdk_fetch_text" = Some " (result i32)"
-hostImportSigOf "mdk_cbrt" = Some unaryF64Sig
-hostImportSigOf "mdk_exp" = Some unaryF64Sig
-hostImportSigOf "mdk_log" = Some unaryF64Sig
-hostImportSigOf "mdk_log2" = Some unaryF64Sig
-hostImportSigOf "mdk_log10" = Some unaryF64Sig
-hostImportSigOf "mdk_sin" = Some unaryF64Sig
-hostImportSigOf "mdk_cos" = Some unaryF64Sig
-hostImportSigOf "mdk_tan" = Some unaryF64Sig
-hostImportSigOf "mdk_asin" = Some unaryF64Sig
-hostImportSigOf "mdk_acos" = Some unaryF64Sig
-hostImportSigOf "mdk_atan" = Some unaryF64Sig
-hostImportSigOf "mdk_sinh" = Some unaryF64Sig
-hostImportSigOf "mdk_cosh" = Some unaryF64Sig
-hostImportSigOf "mdk_tanh" = Some unaryF64Sig
-hostImportSigOf "mdk_pow" = Some binaryF64Sig
-hostImportSigOf "mdk_atan2" = Some binaryF64Sig
-hostImportSigOf "mdk_hypot" = Some binaryF64Sig
-hostImportSigOf "mdk_path_reset" = Some ""
-hostImportSigOf "mdk_path_push" = Some " (param i32)"
-hostImportSigOf "mdk_read_file" = Some " (result i32)"
-hostImportSigOf "mdk_file_exists" = Some " (result i32)"
-hostImportSigOf "mdk_get_env" = Some " (result i32)"
-hostImportSigOf "mdk_read_line" = Some " (result i32)"
-hostImportSigOf "mdk_read_all" = Some ""
-hostImportSigOf "mdk_read_exactly" = Some " (param i64) (result i32)"
-hostImportSigOf "mdk_os_entropy" = Some " (param i64) (result i32)"
-hostImportSigOf "mdk_rng_seed" = Some " (result i64)"
-hostImportSigOf "mdk_executable_path" = Some " (result i32)"
-hostImportSigOf "mdk_args_count" = Some " (result i32)"
-hostImportSigOf "mdk_arg_len" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_arg_byte" = Some " (param i32) (param i32) (result i32)"
-hostImportSigOf "mdk_result_len" = Some " (result i32)"
-hostImportSigOf "mdk_result_byte" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_write_file_reset" = Some ""
-hostImportSigOf "mdk_write_file_push" = Some " (param i32)"
-hostImportSigOf "mdk_write_file_commit" = Some " (result i32)"
-hostImportSigOf "mdk_float_fixed" = Some " (param i32) (param f64) (result i32)"
-hostImportSigOf "mdk_float_fixed_byte" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_str_to_float" = Some " (result f64)"
-hostImportSigOf "mdk_str_to_float_ok" = Some " (result i32)"
-hostImportSigOf "mdk_grant_reset" = Some ""
-hostImportSigOf "mdk_grant_push" = Some " (param i32)"
-hostImportSigOf "mdk_canonicalize_path" = Some " (result i32)"
-hostImportSigOf "mdk_write_file" = Some " (result i32)"
-hostImportSigOf "mdk_append_file" = Some " (result i32)"
-hostImportSigOf "mdk_make_dir" = Some " (result i32)"
-hostImportSigOf "mdk_remove_file" = Some " (result i32)"
-hostImportSigOf "mdk_remove_dir" = Some " (result i32)"
-hostImportSigOf "mdk_fsync" = Some " (result i32)"
-hostImportSigOf "mdk_file_mode" = Some " (result i32)"
-hostImportSigOf "mdk_write_file_mode" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_rename" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_list_dir" = Some " (result i32)"
-hostImportSigOf "mdk_stat_file" = Some " (result i32)"
-hostImportSigOf "mdk_stat_field" = Some " (param i32) (result f64)"
-hostImportSigOf "mdk_file_bound_enter" =
-  Some " (param i32) (param i32) (result i32)"
-hostImportSigOf "mdk_file_bound_exit" = Some ""
-hostImportSigOf _ = None
+hostImportSigOf key =
+  map ((params, result) => wireSignature params result) (hostImportAbiOf key)
+
+hostImportAbiOf : String -> Option (List String, Option String)
+hostImportAbiOf "mdk_write_byte" = Some (["i32"], None)
+hostImportAbiOf "mdk_write_err_byte" = Some (["i32"], None)
+hostImportAbiOf "mdk_float_fmt" = Some (["f64"], Some "i32")
+hostImportAbiOf "mdk_float_fmt_byte" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_exit" = Some (["i32"], None)
+hostImportAbiOf "mdk_wall_time_sec" = Some ([], Some "f64")
+hostImportAbiOf "mdk_monotonic_sec" = Some ([], Some "f64")
+hostImportAbiOf "mdk_sleep_ms" = Some (["i64"], None)
+hostImportAbiOf "mdk_fetch_text" = Some ([], Some "i32")
+hostImportAbiOf "mdk_cbrt" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_exp" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_log" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_log2" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_log10" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_sin" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_cos" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_tan" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_asin" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_acos" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_atan" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_sinh" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_cosh" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_tanh" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_pow" = Some (["f64", "f64"], Some "f64")
+hostImportAbiOf "mdk_atan2" = Some (["f64", "f64"], Some "f64")
+hostImportAbiOf "mdk_hypot" = Some (["f64", "f64"], Some "f64")
+hostImportAbiOf "mdk_path_reset" = Some ([], None)
+hostImportAbiOf "mdk_path_push" = Some (["i32"], None)
+hostImportAbiOf "mdk_read_file" = Some ([], Some "i32")
+hostImportAbiOf "mdk_file_exists" = Some ([], Some "i32")
+hostImportAbiOf "mdk_get_env" = Some ([], Some "i32")
+hostImportAbiOf "mdk_read_line" = Some ([], Some "i32")
+hostImportAbiOf "mdk_read_all" = Some ([], None)
+hostImportAbiOf "mdk_read_exactly" = Some (["i64"], Some "i32")
+hostImportAbiOf "mdk_os_entropy" = Some (["i64"], Some "i32")
+hostImportAbiOf "mdk_rng_seed" = Some ([], Some "i64")
+hostImportAbiOf "mdk_executable_path" = Some ([], Some "i32")
+hostImportAbiOf "mdk_args_count" = Some ([], Some "i32")
+hostImportAbiOf "mdk_arg_len" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_arg_byte" = Some (["i32", "i32"], Some "i32")
+hostImportAbiOf "mdk_result_len" = Some ([], Some "i32")
+hostImportAbiOf "mdk_result_byte" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_write_file_reset" = Some ([], None)
+hostImportAbiOf "mdk_write_file_push" = Some (["i32"], None)
+hostImportAbiOf "mdk_write_file_commit" = Some ([], Some "i32")
+hostImportAbiOf "mdk_float_fixed" = Some (["i32", "f64"], Some "i32")
+hostImportAbiOf "mdk_float_fixed_byte" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_str_to_float" = Some ([], Some "f64")
+hostImportAbiOf "mdk_str_to_float_ok" = Some ([], Some "i32")
+hostImportAbiOf "mdk_grant_reset" = Some ([], None)
+hostImportAbiOf "mdk_grant_push" = Some (["i32"], None)
+hostImportAbiOf "mdk_canonicalize_path" = Some ([], Some "i32")
+hostImportAbiOf "mdk_write_file" = Some ([], Some "i32")
+hostImportAbiOf "mdk_append_file" = Some ([], Some "i32")
+hostImportAbiOf "mdk_make_dir" = Some ([], Some "i32")
+hostImportAbiOf "mdk_remove_file" = Some ([], Some "i32")
+hostImportAbiOf "mdk_remove_dir" = Some ([], Some "i32")
+hostImportAbiOf "mdk_fsync" = Some ([], Some "i32")
+hostImportAbiOf "mdk_file_mode" = Some ([], Some "i32")
+hostImportAbiOf "mdk_write_file_mode" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_rename" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_list_dir" = Some ([], Some "i32")
+hostImportAbiOf "mdk_stat_file" = Some ([], Some "i32")
+hostImportAbiOf "mdk_stat_field" = Some (["i32"], Some "f64")
+hostImportAbiOf "mdk_file_bound_enter" = Some (["i32", "i32"], Some "i32")
+hostImportAbiOf "mdk_file_bound_exit" = Some ([], None)
+hostImportAbiOf _ = None
 
 export
 unaryF64Sig : String
@@ -3132,9 +3150,9 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "appHead" ((PCon "CApp" (PVar "f") PWild PWild)) (EApp (EVar "appHead") (EVar "f")))
 (DFunDef false "appHead" ((PVar "e")) (EVar "e"))
 (DData Public "WasmDemandInputs" () ((variant "WasmDemandInputs" (ConNamed (field "ctorFloatFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int")))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "globalInit" (TyCon "GlobalInitPlan")) (field "trmcVerdicts" (TyCon "TrmcVerdicts")) (field "dispatchGroups" (TyApp (TyCon "List") (TyCon "DispGroup")))))) ())
-(DData Public "PlannedImport" () ((variant "PlannedImport" (ConNamed (field "namespace" (TyCon "String")) (field "field" (TyCon "String")) (field "watSymbol" (TyCon "String")) (field "signature" (TyCon "String"))))) ())
-(DImpl true "Eq" ((TyCon "PlannedImport")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "PlannedImport" ((rf "namespace" (PVar "__a0")) (rf "field" (PVar "__a1")) (rf "watSymbol" (PVar "__a2")) (rf "signature" (PVar "__a3"))) false) (PRec "PlannedImport" ((rf "namespace" (PVar "__b0")) (rf "field" (PVar "__b1")) (rf "watSymbol" (PVar "__b2")) (rf "signature" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))))))))
-(DImpl true "Debug" ((TyCon "PlannedImport")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "PlannedImport" ((rf "namespace" (PVar "__a0")) (rf "field" (PVar "__a1")) (rf "watSymbol" (PVar "__a2")) (rf "signature" (PVar "__a3"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "PlannedImport {")) (ELit (LString " namespace = "))) (EApp (EVar "debug") (EVar "__a0"))) (ELit (LString ", field = "))) (EApp (EVar "debug") (EVar "__a1"))) (ELit (LString ", watSymbol = "))) (EApp (EVar "debug") (EVar "__a2"))) (ELit (LString ", signature = "))) (EApp (EVar "debug") (EVar "__a3"))) (ELit (LString " }"))))))))
+(DData Public "PlannedImport" () ((variant "PlannedImport" (ConNamed (field "namespace" (TyCon "String")) (field "field" (TyCon "String")) (field "watSymbol" (TyCon "String")) (field "signature" (TyCon "String")) (field "parameterCount" (TyCon "Int"))))) ())
+(DImpl true "Eq" ((TyCon "PlannedImport")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "PlannedImport" ((rf "namespace" (PVar "__a0")) (rf "field" (PVar "__a1")) (rf "watSymbol" (PVar "__a2")) (rf "signature" (PVar "__a3")) (rf "parameterCount" (PVar "__a4"))) false) (PRec "PlannedImport" ((rf "namespace" (PVar "__b0")) (rf "field" (PVar "__b1")) (rf "watSymbol" (PVar "__b2")) (rf "signature" (PVar "__b3")) (rf "parameterCount" (PVar "__b4"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EVar "eq") (EVar "__a4")) (EVar "__b4"))))))))
+(DImpl true "Debug" ((TyCon "PlannedImport")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "PlannedImport" ((rf "namespace" (PVar "__a0")) (rf "field" (PVar "__a1")) (rf "watSymbol" (PVar "__a2")) (rf "signature" (PVar "__a3")) (rf "parameterCount" (PVar "__a4"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "PlannedImport {")) (ELit (LString " namespace = "))) (EApp (EVar "debug") (EVar "__a0"))) (ELit (LString ", field = "))) (EApp (EVar "debug") (EVar "__a1"))) (ELit (LString ", watSymbol = "))) (EApp (EVar "debug") (EVar "__a2"))) (ELit (LString ", signature = "))) (EApp (EVar "debug") (EVar "__a3"))) (ELit (LString ", parameterCount = "))) (EApp (EVar "debug") (EVar "__a4"))) (ELit (LString " }"))))))))
 (DData Public "WasmDemandPlan" () ((variant "WasmDemandPlan" (ConNamed (field "sourceDemand" (TyCon "WasmDemand")) (field "sourceHostKeys" (TyApp (TyCon "List") (TyCon "String"))) (field "jsImports" (TyApp (TyCon "List") (TyCon "JsImport"))) (field "useRef" (TyCon "Bool")) (field "useClos" (TyCon "Bool")) (field "stringOps" (TyCon "Bool")) (field "representation" (TyCon "WasmDemand")) (field "representationTypes" (TyApp (TyCon "List") (TyCon "String"))) (field "helpers" (TyApp (TyCon "List") (TyCon "String"))) (field "intHelpers" (TyApp (TyCon "List") (TyCon "String"))) (field "censusHelpers" (TyApp (TyCon "List") (TyCon "String"))) (field "censusIntHelpers" (TyApp (TyCon "List") (TyCon "String"))) (field "siteRuntime" (TyCon "Bool")) (field "nonexhaustiveRuntime" (TyCon "Bool")) (field "imports" (TyApp (TyCon "List") (TyCon "PlannedImport"))) (field "catalogFamilies" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "WasmFamily")))) (field "fnValues" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DData Private "HelperAcc" () ((variant "HelperAcc" (ConNamed (field "helpers" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ints" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "site" (TyCon "Bool")) (field "nonexh" (TyCon "Bool")) (field "patternTuples" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "patternList" (TyCon "Bool")) (field "refRead" (TyCon "Bool"))))) ())
 (DTypeSig false "emptyHelpers" (TyCon "HelperAcc"))
@@ -3519,77 +3537,81 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "physicalImports" (TyFun (TyCon "HelperAcc") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "JsImport")) (TyApp (TyCon "List") (TyCon "PlannedImport"))))))
 (DFunDef false "physicalImports" ((PVar "acc") (PVar "sourceKeys") (PVar "js")) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EVar "sourceKeys") (EApp (EApp (EVar "flatMap") (EVar "helperHostKeys")) (EApp (EVar "omKeys") (EFieldAccess (EVar "acc") "helpers"))))) (EVar "omEmpty")))) (DoLet false false (PVar "first") (EBinOp "++" (EListLit (ELit (LString "mdk_write_byte"))) (EIf (EApp (EApp (EVar "contains") (ELit (LString "mdk_float_fmt"))) (EVar "keys")) (EListLit (ELit (LString "mdk_float_fmt")) (ELit (LString "mdk_float_fmt_byte"))) (EListLit)))) (DoLet false false (PVar "rest") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "k")) (EListLit (ELit (LString "mdk_write_byte")) (ELit (LString "mdk_float_fmt")) (ELit (LString "mdk_float_fmt_byte")) (ELit (LString "mdk_write_err_byte"))))))) (EVar "keys"))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "plannedEnv")) (EBinOp "++" (EVar "first") (EVar "rest"))) (EApp (EApp (EVar "map") (EVar "plannedJs")) (EVar "js"))) (EIf (EApp (EApp (EVar "contains") (ELit (LString "mdk_write_err_byte"))) (EVar "keys")) (EListLit (EApp (EVar "plannedEnv") (ELit (LString "mdk_write_err_byte")))) (EListLit))))))
 (DTypeSig false "plannedEnv" (TyFun (TyCon "String") (TyCon "PlannedImport")))
-(DFunDef false "plannedEnv" ((PVar "key")) (ERecordCreate "PlannedImport" ((fa "namespace" (ELit (LString "env"))) (fa "field" (EVar "key")) (fa "watSymbol" (EVar "key")) (fa "signature" (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "hostImportSigOf") (EVar "key")))))))
+(DFunDef false "plannedEnv" ((PVar "key")) (EBlock (DoLet false false (PTuple (PVar "params") (PVar "result")) (EApp (EApp (EVar "optionOr") (ETuple (EListLit) (EVar "None"))) (EApp (EVar "hostImportAbiOf") (EVar "key")))) (DoExpr (ERecordCreate "PlannedImport" ((fa "namespace" (ELit (LString "env"))) (fa "field" (EVar "key")) (fa "watSymbol" (EVar "key")) (fa "signature" (EApp (EApp (EVar "wireSignature") (EVar "params")) (EVar "result"))) (fa "parameterCount" (EApp (EVar "listLen") (EVar "params"))))))))
 (DTypeSig false "plannedJs" (TyFun (TyCon "JsImport") (TyCon "PlannedImport")))
-(DFunDef false "plannedJs" ((PVar "imp")) (ERecordCreate "PlannedImport" ((fa "namespace" (ELit (LString "jsffi"))) (fa "field" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString "")))) (fa "watSymbol" (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WJSImport") (EFieldAccess (EVar "imp") "medakaName")))) (fa "signature" (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (EVar "jsWireParam")) (EFieldAccess (EVar "imp") "params"))) (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))))))
+(DFunDef false "plannedJs" ((PVar "imp")) (EBlock (DoLet false false (PVar "params") (EApp (EApp (EVar "map") (EVar "jsWireTy")) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString "Unit"))))) (EFieldAccess (EVar "imp") "params")))) (DoExpr (ERecordCreate "PlannedImport" ((fa "namespace" (ELit (LString "jsffi"))) (fa "field" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString "")))) (fa "watSymbol" (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WJSImport") (EFieldAccess (EVar "imp") "medakaName")))) (fa "signature" (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EBinOp "++" (EBinOp "++" (ELit (LString " (param ")) (EApp (EVar "display") (EVar "p"))) (ELit (LString ")"))))) (EVar "params"))) (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))) (fa "parameterCount" (EApp (EVar "listLen") (EVar "params"))))))))
+(DTypeSig false "wireSignature" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "wireSignature" ((PVar "params") (PVar "result")) (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EBinOp "++" (EBinOp "++" (ELit (LString " (param ")) (EApp (EVar "display") (EVar "p"))) (ELit (LString ")"))))) (EVar "params"))) (EMatch (EVar "result") (arm (PCon "Some" (PVar "r")) () (EBinOp "++" (EBinOp "++" (ELit (LString " (result ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString ")")))) (arm (PCon "None") () (ELit (LString ""))))))
 (DTypeSig true "hostImportSigOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_err_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_float_fmt"))) (EApp (EVar "Some") (ELit (LString " (param f64) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_float_fmt_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_exit"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_wall_time_sec"))) (EApp (EVar "Some") (ELit (LString " (result f64)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_monotonic_sec"))) (EApp (EVar "Some") (ELit (LString " (result f64)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_sleep_ms"))) (EApp (EVar "Some") (ELit (LString " (param i64)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_fetch_text"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_cbrt"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_exp"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_log"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_log2"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_log10"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_sin"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_cos"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_tan"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_asin"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_acos"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_atan"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_sinh"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_cosh"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_tanh"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_pow"))) (EApp (EVar "Some") (EVar "binaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_atan2"))) (EApp (EVar "Some") (EVar "binaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_hypot"))) (EApp (EVar "Some") (EVar "binaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_path_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_path_push"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_exists"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_get_env"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_line"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_all"))) (EApp (EVar "Some") (ELit (LString ""))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_exactly"))) (EApp (EVar "Some") (ELit (LString " (param i64) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_os_entropy"))) (EApp (EVar "Some") (ELit (LString " (param i64) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_rng_seed"))) (EApp (EVar "Some") (ELit (LString " (result i64)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_executable_path"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_args_count"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_arg_len"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_arg_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_result_len"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_result_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_push"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_commit"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_float_fixed"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param f64) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_float_fixed_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_str_to_float"))) (EApp (EVar "Some") (ELit (LString " (result f64)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_str_to_float_ok"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_grant_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_grant_push"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_canonicalize_path"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_append_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_make_dir"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_remove_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_remove_dir"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_fsync"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_mode"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_mode"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_rename"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_list_dir"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_stat_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_stat_field"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result f64)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_enter"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_exit"))) (EApp (EVar "Some") (ELit (LString ""))))
-(DFunDef false "hostImportSigOf" (PWild) (EVar "None"))
+(DFunDef false "hostImportSigOf" ((PVar "key")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "params") (PVar "result"))) (EApp (EApp (EVar "wireSignature") (EVar "params")) (EVar "result")))) (EApp (EVar "hostImportAbiOf") (EVar "key"))))
+(DTypeSig false "hostImportAbiOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_write_byte"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_write_err_byte"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_float_fmt"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_float_fmt_byte"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_exit"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_wall_time_sec"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_monotonic_sec"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_sleep_ms"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i64"))) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_fetch_text"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_cbrt"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_exp"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_log"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_log2"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_log10"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_sin"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_cos"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_tan"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_asin"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_acos"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_atan"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_sinh"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_cosh"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_tanh"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_pow"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64")) (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_atan2"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64")) (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_hypot"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64")) (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_path_reset"))) (EApp (EVar "Some") (ETuple (EListLit) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_path_push"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_read_file"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_file_exists"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_get_env"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_read_line"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_read_all"))) (EApp (EVar "Some") (ETuple (EListLit) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_read_exactly"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i64"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_os_entropy"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i64"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_rng_seed"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_executable_path"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_args_count"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_arg_len"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_arg_byte"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32")) (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_result_len"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_result_byte"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_write_file_reset"))) (EApp (EVar "Some") (ETuple (EListLit) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_write_file_push"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_write_file_commit"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_float_fixed"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32")) (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_float_fixed_byte"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_str_to_float"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_str_to_float_ok"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_grant_reset"))) (EApp (EVar "Some") (ETuple (EListLit) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_grant_push"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_canonicalize_path"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_write_file"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_append_file"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_make_dir"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_remove_file"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_remove_dir"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_fsync"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_file_mode"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_write_file_mode"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_rename"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_list_dir"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_stat_file"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_stat_field"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_file_bound_enter"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32")) (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_file_bound_exit"))) (EApp (EVar "Some") (ETuple (EListLit) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" (PWild) (EVar "None"))
 (DTypeSig true "unaryF64Sig" (TyCon "String"))
 (DFunDef false "unaryF64Sig" () (ELit (LString " (param f64) (result f64)")))
 (DTypeSig true "binaryF64Sig" (TyCon "String"))
@@ -3979,9 +4001,9 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "appHead" ((PCon "CApp" (PVar "f") PWild PWild)) (EApp (EVar "appHead") (EVar "f")))
 (DFunDef false "appHead" ((PVar "e")) (EVar "e"))
 (DData Public "WasmDemandInputs" () ((variant "WasmDemandInputs" (ConNamed (field "ctorFloatFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int")))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "globalInit" (TyCon "GlobalInitPlan")) (field "trmcVerdicts" (TyCon "TrmcVerdicts")) (field "dispatchGroups" (TyApp (TyCon "List") (TyCon "DispGroup")))))) ())
-(DData Public "PlannedImport" () ((variant "PlannedImport" (ConNamed (field "namespace" (TyCon "String")) (field "field" (TyCon "String")) (field "watSymbol" (TyCon "String")) (field "signature" (TyCon "String"))))) ())
-(DImpl true "Eq" ((TyCon "PlannedImport")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "PlannedImport" ((rf "namespace" (PVar "__a0")) (rf "field" (PVar "__a1")) (rf "watSymbol" (PVar "__a2")) (rf "signature" (PVar "__a3"))) false) (PRec "PlannedImport" ((rf "namespace" (PVar "__b0")) (rf "field" (PVar "__b1")) (rf "watSymbol" (PVar "__b2")) (rf "signature" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))))))))
-(DImpl true "Debug" ((TyCon "PlannedImport")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "PlannedImport" ((rf "namespace" (PVar "__a0")) (rf "field" (PVar "__a1")) (rf "watSymbol" (PVar "__a2")) (rf "signature" (PVar "__a3"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "PlannedImport {")) (ELit (LString " namespace = "))) (EApp (EMethodRef "debug") (EVar "__a0"))) (ELit (LString ", field = "))) (EApp (EMethodRef "debug") (EVar "__a1"))) (ELit (LString ", watSymbol = "))) (EApp (EMethodRef "debug") (EVar "__a2"))) (ELit (LString ", signature = "))) (EApp (EMethodRef "debug") (EVar "__a3"))) (ELit (LString " }"))))))))
+(DData Public "PlannedImport" () ((variant "PlannedImport" (ConNamed (field "namespace" (TyCon "String")) (field "field" (TyCon "String")) (field "watSymbol" (TyCon "String")) (field "signature" (TyCon "String")) (field "parameterCount" (TyCon "Int"))))) ())
+(DImpl true "Eq" ((TyCon "PlannedImport")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "PlannedImport" ((rf "namespace" (PVar "__a0")) (rf "field" (PVar "__a1")) (rf "watSymbol" (PVar "__a2")) (rf "signature" (PVar "__a3")) (rf "parameterCount" (PVar "__a4"))) false) (PRec "PlannedImport" ((rf "namespace" (PVar "__b0")) (rf "field" (PVar "__b1")) (rf "watSymbol" (PVar "__b2")) (rf "signature" (PVar "__b3")) (rf "parameterCount" (PVar "__b4"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EMethodRef "eq") (EVar "__a4")) (EVar "__b4"))))))))
+(DImpl true "Debug" ((TyCon "PlannedImport")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "PlannedImport" ((rf "namespace" (PVar "__a0")) (rf "field" (PVar "__a1")) (rf "watSymbol" (PVar "__a2")) (rf "signature" (PVar "__a3")) (rf "parameterCount" (PVar "__a4"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "PlannedImport {")) (ELit (LString " namespace = "))) (EApp (EMethodRef "debug") (EVar "__a0"))) (ELit (LString ", field = "))) (EApp (EMethodRef "debug") (EVar "__a1"))) (ELit (LString ", watSymbol = "))) (EApp (EMethodRef "debug") (EVar "__a2"))) (ELit (LString ", signature = "))) (EApp (EMethodRef "debug") (EVar "__a3"))) (ELit (LString ", parameterCount = "))) (EApp (EMethodRef "debug") (EVar "__a4"))) (ELit (LString " }"))))))))
 (DData Public "WasmDemandPlan" () ((variant "WasmDemandPlan" (ConNamed (field "sourceDemand" (TyCon "WasmDemand")) (field "sourceHostKeys" (TyApp (TyCon "List") (TyCon "String"))) (field "jsImports" (TyApp (TyCon "List") (TyCon "JsImport"))) (field "useRef" (TyCon "Bool")) (field "useClos" (TyCon "Bool")) (field "stringOps" (TyCon "Bool")) (field "representation" (TyCon "WasmDemand")) (field "representationTypes" (TyApp (TyCon "List") (TyCon "String"))) (field "helpers" (TyApp (TyCon "List") (TyCon "String"))) (field "intHelpers" (TyApp (TyCon "List") (TyCon "String"))) (field "censusHelpers" (TyApp (TyCon "List") (TyCon "String"))) (field "censusIntHelpers" (TyApp (TyCon "List") (TyCon "String"))) (field "siteRuntime" (TyCon "Bool")) (field "nonexhaustiveRuntime" (TyCon "Bool")) (field "imports" (TyApp (TyCon "List") (TyCon "PlannedImport"))) (field "catalogFamilies" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "WasmFamily")))) (field "fnValues" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DData Private "HelperAcc" () ((variant "HelperAcc" (ConNamed (field "helpers" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ints" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "site" (TyCon "Bool")) (field "nonexh" (TyCon "Bool")) (field "patternTuples" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "patternList" (TyCon "Bool")) (field "refRead" (TyCon "Bool"))))) ())
 (DTypeSig false "emptyHelpers" (TyCon "HelperAcc"))
@@ -4366,77 +4388,81 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "physicalImports" (TyFun (TyCon "HelperAcc") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "JsImport")) (TyApp (TyCon "List") (TyCon "PlannedImport"))))))
 (DFunDef false "physicalImports" ((PVar "acc") (PVar "sourceKeys") (PVar "js")) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EVar "sourceKeys") (EApp (EApp (EDictApp "flatMap") (EVar "helperHostKeys")) (EApp (EVar "omKeys") (EFieldAccess (EVar "acc") "helpers"))))) (EVar "omEmpty")))) (DoLet false false (PVar "first") (EBinOp "++" (EListLit (ELit (LString "mdk_write_byte"))) (EIf (EApp (EApp (EVar "contains") (ELit (LString "mdk_float_fmt"))) (EVar "keys")) (EListLit (ELit (LString "mdk_float_fmt")) (ELit (LString "mdk_float_fmt_byte"))) (EListLit)))) (DoLet false false (PVar "rest") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "k")) (EListLit (ELit (LString "mdk_write_byte")) (ELit (LString "mdk_float_fmt")) (ELit (LString "mdk_float_fmt_byte")) (ELit (LString "mdk_write_err_byte"))))))) (EVar "keys"))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "plannedEnv")) (EBinOp "++" (EVar "first") (EVar "rest"))) (EApp (EApp (EMethodRef "map") (EVar "plannedJs")) (EVar "js"))) (EIf (EApp (EApp (EVar "contains") (ELit (LString "mdk_write_err_byte"))) (EVar "keys")) (EListLit (EApp (EVar "plannedEnv") (ELit (LString "mdk_write_err_byte")))) (EListLit))))))
 (DTypeSig false "plannedEnv" (TyFun (TyCon "String") (TyCon "PlannedImport")))
-(DFunDef false "plannedEnv" ((PVar "key")) (ERecordCreate "PlannedImport" ((fa "namespace" (ELit (LString "env"))) (fa "field" (EVar "key")) (fa "watSymbol" (EVar "key")) (fa "signature" (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "hostImportSigOf") (EVar "key")))))))
+(DFunDef false "plannedEnv" ((PVar "key")) (EBlock (DoLet false false (PTuple (PVar "params") (PVar "result")) (EApp (EApp (EVar "optionOr") (ETuple (EListLit) (EVar "None"))) (EApp (EVar "hostImportAbiOf") (EVar "key")))) (DoExpr (ERecordCreate "PlannedImport" ((fa "namespace" (ELit (LString "env"))) (fa "field" (EVar "key")) (fa "watSymbol" (EVar "key")) (fa "signature" (EApp (EApp (EVar "wireSignature") (EVar "params")) (EVar "result"))) (fa "parameterCount" (EApp (EVar "listLen") (EVar "params"))))))))
 (DTypeSig false "plannedJs" (TyFun (TyCon "JsImport") (TyCon "PlannedImport")))
-(DFunDef false "plannedJs" ((PVar "imp")) (ERecordCreate "PlannedImport" ((fa "namespace" (ELit (LString "jsffi"))) (fa "field" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString "")))) (fa "watSymbol" (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WJSImport") (EFieldAccess (EVar "imp") "medakaName")))) (fa "signature" (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (EVar "jsWireParam")) (EFieldAccess (EVar "imp") "params"))) (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))))))
+(DFunDef false "plannedJs" ((PVar "imp")) (EBlock (DoLet false false (PVar "params") (EApp (EApp (EMethodRef "map") (EVar "jsWireTy")) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString "Unit"))))) (EFieldAccess (EVar "imp") "params")))) (DoExpr (ERecordCreate "PlannedImport" ((fa "namespace" (ELit (LString "jsffi"))) (fa "field" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString "")))) (fa "watSymbol" (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WJSImport") (EFieldAccess (EVar "imp") "medakaName")))) (fa "signature" (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EBinOp "++" (EBinOp "++" (ELit (LString " (param ")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString ")"))))) (EVar "params"))) (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))) (fa "parameterCount" (EApp (EVar "listLen") (EVar "params"))))))))
+(DTypeSig false "wireSignature" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "wireSignature" ((PVar "params") (PVar "result")) (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EBinOp "++" (EBinOp "++" (ELit (LString " (param ")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString ")"))))) (EVar "params"))) (EMatch (EVar "result") (arm (PCon "Some" (PVar "r")) () (EBinOp "++" (EBinOp "++" (ELit (LString " (result ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString ")")))) (arm (PCon "None") () (ELit (LString ""))))))
 (DTypeSig true "hostImportSigOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_err_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_float_fmt"))) (EApp (EVar "Some") (ELit (LString " (param f64) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_float_fmt_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_exit"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_wall_time_sec"))) (EApp (EVar "Some") (ELit (LString " (result f64)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_monotonic_sec"))) (EApp (EVar "Some") (ELit (LString " (result f64)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_sleep_ms"))) (EApp (EVar "Some") (ELit (LString " (param i64)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_fetch_text"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_cbrt"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_exp"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_log"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_log2"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_log10"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_sin"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_cos"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_tan"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_asin"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_acos"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_atan"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_sinh"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_cosh"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_tanh"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_pow"))) (EApp (EVar "Some") (EVar "binaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_atan2"))) (EApp (EVar "Some") (EVar "binaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_hypot"))) (EApp (EVar "Some") (EVar "binaryF64Sig")))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_path_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_path_push"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_exists"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_get_env"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_line"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_all"))) (EApp (EVar "Some") (ELit (LString ""))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_exactly"))) (EApp (EVar "Some") (ELit (LString " (param i64) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_os_entropy"))) (EApp (EVar "Some") (ELit (LString " (param i64) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_rng_seed"))) (EApp (EVar "Some") (ELit (LString " (result i64)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_executable_path"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_args_count"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_arg_len"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_arg_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_result_len"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_result_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_push"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_commit"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_float_fixed"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param f64) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_float_fixed_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_str_to_float"))) (EApp (EVar "Some") (ELit (LString " (result f64)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_str_to_float_ok"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_grant_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_grant_push"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_canonicalize_path"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_append_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_make_dir"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_remove_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_remove_dir"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_fsync"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_mode"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_mode"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_rename"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_list_dir"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_stat_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_stat_field"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result f64)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_enter"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
-(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_exit"))) (EApp (EVar "Some") (ELit (LString ""))))
-(DFunDef false "hostImportSigOf" (PWild) (EVar "None"))
+(DFunDef false "hostImportSigOf" ((PVar "key")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "params") (PVar "result"))) (EApp (EApp (EVar "wireSignature") (EVar "params")) (EVar "result")))) (EApp (EVar "hostImportAbiOf") (EVar "key"))))
+(DTypeSig false "hostImportAbiOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_write_byte"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_write_err_byte"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_float_fmt"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_float_fmt_byte"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_exit"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_wall_time_sec"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_monotonic_sec"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_sleep_ms"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i64"))) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_fetch_text"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_cbrt"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_exp"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_log"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_log2"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_log10"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_sin"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_cos"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_tan"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_asin"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_acos"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_atan"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_sinh"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_cosh"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_tanh"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_pow"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64")) (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_atan2"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64")) (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_hypot"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "f64")) (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_path_reset"))) (EApp (EVar "Some") (ETuple (EListLit) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_path_push"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_read_file"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_file_exists"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_get_env"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_read_line"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_read_all"))) (EApp (EVar "Some") (ETuple (EListLit) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_read_exactly"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i64"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_os_entropy"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i64"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_rng_seed"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_executable_path"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_args_count"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_arg_len"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_arg_byte"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32")) (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_result_len"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_result_byte"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_write_file_reset"))) (EApp (EVar "Some") (ETuple (EListLit) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_write_file_push"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_write_file_commit"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_float_fixed"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32")) (ELit (LString "f64"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_float_fixed_byte"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_str_to_float"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_str_to_float_ok"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_grant_reset"))) (EApp (EVar "Some") (ETuple (EListLit) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_grant_push"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_canonicalize_path"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_write_file"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_append_file"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_make_dir"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_remove_file"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_remove_dir"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_fsync"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_file_mode"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_write_file_mode"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_rename"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_list_dir"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_stat_file"))) (EApp (EVar "Some") (ETuple (EListLit) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_stat_field"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "f64"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_file_bound_enter"))) (EApp (EVar "Some") (ETuple (EListLit (ELit (LString "i32")) (ELit (LString "i32"))) (EApp (EVar "Some") (ELit (LString "i32"))))))
+(DFunDef false "hostImportAbiOf" ((PLit (LString "mdk_file_bound_exit"))) (EApp (EVar "Some") (ETuple (EListLit) (EVar "None"))))
+(DFunDef false "hostImportAbiOf" (PWild) (EVar "None"))
 (DTypeSig true "unaryF64Sig" (TyCon "String"))
 (DFunDef false "unaryF64Sig" () (ELit (LString " (param f64) (result f64)")))
 (DTypeSig true "binaryF64Sig" (TyCon "String"))

@@ -492,7 +492,7 @@ actualCount (FuncOfType name n) types =
 actualCount _ _ = -1
 
 sameShape : WasmShape -> WasmShape -> OrdMap Int -> Bool
-sameShape FuncImported _ _ = True
+sameShape (FuncImported n) actual types = n == actualCount actual types
 sameShape (FuncParams n) actual types = n == actualCount actual types
 sameShape (FuncOfType name n) (actual@(FuncOfType found _)) types =
   name == found && n == actualCount actual types

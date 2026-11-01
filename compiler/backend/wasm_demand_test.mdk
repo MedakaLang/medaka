@@ -613,3 +613,30 @@ test "restricting to the captured names keeps their stamps and drops the rest" =
     expectEqual "unstamped" (refText (envLookup "scratch" captured)),
     expectFalse (envHas "b" captured),
   ]
+
+test "planned host and JS imports use physical wire parameter counts" =
+  let demand =
+    demandOf
+      """
+extern zero : Unit -> <FFI "js"> Int
+  bind js "zero"
+extern mixed : Int -> Float -> <FFI "js"> Int
+  bind js "mixed"
+main = (zero (), mixed 2 3.0)
+"""
+  let rows =
+    filter
+      (i => i.namespace == "jsffi" || i.field == "mdk_write_byte")
+      demand.imports
+  expectEqual
+    [
+      ("env", "mdk_write_byte", " (param i32)", 1),
+      ("jsffi", "zero:Unit->Int", " (result i64)", 0),
+      (
+        "jsffi",
+        "mixed:Int,Float->Int",
+        " (param i64) (param f64) (result i64)",
+        2,
+      ),
+    ]
+    (map (i => (i.namespace, i.field, i.signature, i.parameterCount)) rows)

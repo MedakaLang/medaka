@@ -1549,7 +1549,8 @@ seedSymbolsW prog physical globals =
     forEachU (t => declare (WasmType t) TypeDecl) physical.representationTypes
   let _ =
     forEachU
-      (imp => declare (WasmFunc imp.watSymbol) FuncImported)
+      (imp =>
+        declare (WasmFunc imp.watSymbol) (FuncImported imp.parameterCount))
       physical.imports
   let _ = forEachU (registerW emit) (declarePlannedHelpers physical)
   let _ = forEachU (g => declare (WasmGlobal g) GlobalDecl) globals

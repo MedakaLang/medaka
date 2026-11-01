@@ -961,6 +961,7 @@ public export data PlannedImport = PlannedImport {
   field : String,
   watSymbol : String,
   signature : String,
+  parameterCount : Int,
 } deriving (Eq, Debug)
 
 public export data WasmDemandPlan = WasmDemandPlan {
@@ -2537,92 +2538,109 @@ physicalImports acc sourceKeys js =
       [])
 
 plannedEnv : String -> PlannedImport
-plannedEnv key = PlannedImport {
-  namespace = "env",
-  field = key,
-  watSymbol = key,
-  signature = optionOr "" (hostImportSigOf key),
-}
+plannedEnv key =
+  let (params, result) = optionOr ([], None) (hostImportAbiOf key)
+  PlannedImport {
+    namespace = "env",
+    field = key,
+    watSymbol = key,
+    signature = wireSignature params result,
+    parameterCount = listLen params,
+  }
 
 plannedJs : JsImport -> PlannedImport
-plannedJs imp = PlannedImport {
-  namespace = "jsffi",
-  field = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}",
-  watSymbol = WN.wasmName (WN.WJSImport imp.medakaName),
-  signature =
-    joinWith "" (map jsWireParam imp.params) ++ jsWireResult imp.result,
-}
+plannedJs imp =
+  let params = map jsWireTy (filterList (/= "Unit") imp.params)
+  PlannedImport {
+    namespace = "jsffi",
+    field = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}",
+    watSymbol = WN.wasmName (WN.WJSImport imp.medakaName),
+    signature =
+      joinWith "" (map (p => " (param \{p})") params)
+        ++ jsWireResult imp.result,
+    parameterCount = listLen params,
+  }
+
+wireSignature : List String -> Option String -> String
+wireSignature params result =
+  joinWith "" (map (p => " (param \{p})") params)
+    ++ (match result
+      Some r => " (result \{r})"
+      None => "")
 
 export
 hostImportSigOf : String -> Option String
-hostImportSigOf "mdk_write_byte" = Some " (param i32)"
-hostImportSigOf "mdk_write_err_byte" = Some " (param i32)"
-hostImportSigOf "mdk_float_fmt" = Some " (param f64) (result i32)"
-hostImportSigOf "mdk_float_fmt_byte" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_exit" = Some " (param i32)"
-hostImportSigOf "mdk_wall_time_sec" = Some " (result f64)"
-hostImportSigOf "mdk_monotonic_sec" = Some " (result f64)"
-hostImportSigOf "mdk_sleep_ms" = Some " (param i64)"
-hostImportSigOf "mdk_fetch_text" = Some " (result i32)"
-hostImportSigOf "mdk_cbrt" = Some unaryF64Sig
-hostImportSigOf "mdk_exp" = Some unaryF64Sig
-hostImportSigOf "mdk_log" = Some unaryF64Sig
-hostImportSigOf "mdk_log2" = Some unaryF64Sig
-hostImportSigOf "mdk_log10" = Some unaryF64Sig
-hostImportSigOf "mdk_sin" = Some unaryF64Sig
-hostImportSigOf "mdk_cos" = Some unaryF64Sig
-hostImportSigOf "mdk_tan" = Some unaryF64Sig
-hostImportSigOf "mdk_asin" = Some unaryF64Sig
-hostImportSigOf "mdk_acos" = Some unaryF64Sig
-hostImportSigOf "mdk_atan" = Some unaryF64Sig
-hostImportSigOf "mdk_sinh" = Some unaryF64Sig
-hostImportSigOf "mdk_cosh" = Some unaryF64Sig
-hostImportSigOf "mdk_tanh" = Some unaryF64Sig
-hostImportSigOf "mdk_pow" = Some binaryF64Sig
-hostImportSigOf "mdk_atan2" = Some binaryF64Sig
-hostImportSigOf "mdk_hypot" = Some binaryF64Sig
-hostImportSigOf "mdk_path_reset" = Some ""
-hostImportSigOf "mdk_path_push" = Some " (param i32)"
-hostImportSigOf "mdk_read_file" = Some " (result i32)"
-hostImportSigOf "mdk_file_exists" = Some " (result i32)"
-hostImportSigOf "mdk_get_env" = Some " (result i32)"
-hostImportSigOf "mdk_read_line" = Some " (result i32)"
-hostImportSigOf "mdk_read_all" = Some ""
-hostImportSigOf "mdk_read_exactly" = Some " (param i64) (result i32)"
-hostImportSigOf "mdk_os_entropy" = Some " (param i64) (result i32)"
-hostImportSigOf "mdk_rng_seed" = Some " (result i64)"
-hostImportSigOf "mdk_executable_path" = Some " (result i32)"
-hostImportSigOf "mdk_args_count" = Some " (result i32)"
-hostImportSigOf "mdk_arg_len" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_arg_byte" = Some " (param i32) (param i32) (result i32)"
-hostImportSigOf "mdk_result_len" = Some " (result i32)"
-hostImportSigOf "mdk_result_byte" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_write_file_reset" = Some ""
-hostImportSigOf "mdk_write_file_push" = Some " (param i32)"
-hostImportSigOf "mdk_write_file_commit" = Some " (result i32)"
-hostImportSigOf "mdk_float_fixed" = Some " (param i32) (param f64) (result i32)"
-hostImportSigOf "mdk_float_fixed_byte" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_str_to_float" = Some " (result f64)"
-hostImportSigOf "mdk_str_to_float_ok" = Some " (result i32)"
-hostImportSigOf "mdk_grant_reset" = Some ""
-hostImportSigOf "mdk_grant_push" = Some " (param i32)"
-hostImportSigOf "mdk_canonicalize_path" = Some " (result i32)"
-hostImportSigOf "mdk_write_file" = Some " (result i32)"
-hostImportSigOf "mdk_append_file" = Some " (result i32)"
-hostImportSigOf "mdk_make_dir" = Some " (result i32)"
-hostImportSigOf "mdk_remove_file" = Some " (result i32)"
-hostImportSigOf "mdk_remove_dir" = Some " (result i32)"
-hostImportSigOf "mdk_fsync" = Some " (result i32)"
-hostImportSigOf "mdk_file_mode" = Some " (result i32)"
-hostImportSigOf "mdk_write_file_mode" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_rename" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_list_dir" = Some " (result i32)"
-hostImportSigOf "mdk_stat_file" = Some " (result i32)"
-hostImportSigOf "mdk_stat_field" = Some " (param i32) (result f64)"
-hostImportSigOf "mdk_file_bound_enter" =
-  Some " (param i32) (param i32) (result i32)"
-hostImportSigOf "mdk_file_bound_exit" = Some ""
-hostImportSigOf _ = None
+hostImportSigOf key =
+  map ((params, result) => wireSignature params result) (hostImportAbiOf key)
+
+hostImportAbiOf : String -> Option (List String, Option String)
+hostImportAbiOf "mdk_write_byte" = Some (["i32"], None)
+hostImportAbiOf "mdk_write_err_byte" = Some (["i32"], None)
+hostImportAbiOf "mdk_float_fmt" = Some (["f64"], Some "i32")
+hostImportAbiOf "mdk_float_fmt_byte" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_exit" = Some (["i32"], None)
+hostImportAbiOf "mdk_wall_time_sec" = Some ([], Some "f64")
+hostImportAbiOf "mdk_monotonic_sec" = Some ([], Some "f64")
+hostImportAbiOf "mdk_sleep_ms" = Some (["i64"], None)
+hostImportAbiOf "mdk_fetch_text" = Some ([], Some "i32")
+hostImportAbiOf "mdk_cbrt" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_exp" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_log" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_log2" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_log10" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_sin" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_cos" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_tan" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_asin" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_acos" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_atan" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_sinh" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_cosh" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_tanh" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_pow" = Some (["f64", "f64"], Some "f64")
+hostImportAbiOf "mdk_atan2" = Some (["f64", "f64"], Some "f64")
+hostImportAbiOf "mdk_hypot" = Some (["f64", "f64"], Some "f64")
+hostImportAbiOf "mdk_path_reset" = Some ([], None)
+hostImportAbiOf "mdk_path_push" = Some (["i32"], None)
+hostImportAbiOf "mdk_read_file" = Some ([], Some "i32")
+hostImportAbiOf "mdk_file_exists" = Some ([], Some "i32")
+hostImportAbiOf "mdk_get_env" = Some ([], Some "i32")
+hostImportAbiOf "mdk_read_line" = Some ([], Some "i32")
+hostImportAbiOf "mdk_read_all" = Some ([], None)
+hostImportAbiOf "mdk_read_exactly" = Some (["i64"], Some "i32")
+hostImportAbiOf "mdk_os_entropy" = Some (["i64"], Some "i32")
+hostImportAbiOf "mdk_rng_seed" = Some ([], Some "i64")
+hostImportAbiOf "mdk_executable_path" = Some ([], Some "i32")
+hostImportAbiOf "mdk_args_count" = Some ([], Some "i32")
+hostImportAbiOf "mdk_arg_len" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_arg_byte" = Some (["i32", "i32"], Some "i32")
+hostImportAbiOf "mdk_result_len" = Some ([], Some "i32")
+hostImportAbiOf "mdk_result_byte" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_write_file_reset" = Some ([], None)
+hostImportAbiOf "mdk_write_file_push" = Some (["i32"], None)
+hostImportAbiOf "mdk_write_file_commit" = Some ([], Some "i32")
+hostImportAbiOf "mdk_float_fixed" = Some (["i32", "f64"], Some "i32")
+hostImportAbiOf "mdk_float_fixed_byte" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_str_to_float" = Some ([], Some "f64")
+hostImportAbiOf "mdk_str_to_float_ok" = Some ([], Some "i32")
+hostImportAbiOf "mdk_grant_reset" = Some ([], None)
+hostImportAbiOf "mdk_grant_push" = Some (["i32"], None)
+hostImportAbiOf "mdk_canonicalize_path" = Some ([], Some "i32")
+hostImportAbiOf "mdk_write_file" = Some ([], Some "i32")
+hostImportAbiOf "mdk_append_file" = Some ([], Some "i32")
+hostImportAbiOf "mdk_make_dir" = Some ([], Some "i32")
+hostImportAbiOf "mdk_remove_file" = Some ([], Some "i32")
+hostImportAbiOf "mdk_remove_dir" = Some ([], Some "i32")
+hostImportAbiOf "mdk_fsync" = Some ([], Some "i32")
+hostImportAbiOf "mdk_file_mode" = Some ([], Some "i32")
+hostImportAbiOf "mdk_write_file_mode" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_rename" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_list_dir" = Some ([], Some "i32")
+hostImportAbiOf "mdk_stat_file" = Some ([], Some "i32")
+hostImportAbiOf "mdk_stat_field" = Some (["i32"], Some "f64")
+hostImportAbiOf "mdk_file_bound_enter" = Some (["i32", "i32"], Some "i32")
+hostImportAbiOf "mdk_file_bound_exit" = Some ([], None)
+hostImportAbiOf _ = None
 
 export
 unaryF64Sig : String

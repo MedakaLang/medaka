@@ -496,7 +496,7 @@ actualCount (FuncOfType name n) types =
 actualCount _ _ = -1
 
 sameShape : WasmShape -> WasmShape -> OrdMap Int -> Bool
-sameShape FuncImported _ _ = True
+sameShape (FuncImported n) actual types = n == actualCount actual types
 sameShape (FuncParams n) actual types = n == actualCount actual types
 sameShape (FuncOfType name n) (actual@(FuncOfType found _)) types =
   name == found && n == actualCount actual types
@@ -790,7 +790,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DFunDef false "actualCount" ((PCon "FuncOfType" (PVar "name") (PVar "n")) (PVar "types")) (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EVar "n") (EApp (EApp (EVar "optionOr") (ELit (LInt -1))) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "types")))))
 (DFunDef false "actualCount" (PWild PWild) (EUnOp "-" (ELit (LInt 1))))
 (DTypeSig false "sameShape" (TyFun (TyCon "WasmShape") (TyFun (TyCon "WasmShape") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyCon "Bool")))))
-(DFunDef false "sameShape" ((PCon "FuncImported") PWild PWild) (EVar "True"))
+(DFunDef false "sameShape" ((PCon "FuncImported" (PVar "n")) (PVar "actual") (PVar "types")) (EBinOp "==" (EVar "n") (EApp (EApp (EVar "actualCount") (EVar "actual")) (EVar "types"))))
 (DFunDef false "sameShape" ((PCon "FuncParams" (PVar "n")) (PVar "actual") (PVar "types")) (EBinOp "==" (EVar "n") (EApp (EApp (EVar "actualCount") (EVar "actual")) (EVar "types"))))
 (DFunDef false "sameShape" ((PCon "FuncOfType" (PVar "name") (PVar "n")) (PAs "actual" (PCon "FuncOfType" (PVar "found") PWild)) (PVar "types")) (EBinOp "&&" (EBinOp "==" (EVar "name") (EVar "found")) (EBinOp "==" (EVar "n") (EApp (EApp (EVar "actualCount") (EVar "actual")) (EVar "types")))))
 (DFunDef false "sameShape" ((PVar "a") (PVar "b") PWild) (EBinOp "==" (EVar "a") (EVar "b")))
@@ -946,7 +946,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DFunDef false "actualCount" ((PCon "FuncOfType" (PVar "name") (PVar "n")) (PVar "types")) (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EVar "n") (EApp (EApp (EVar "optionOr") (ELit (LInt -1))) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "types")))))
 (DFunDef false "actualCount" (PWild PWild) (EUnOp "-" (ELit (LInt 1))))
 (DTypeSig false "sameShape" (TyFun (TyCon "WasmShape") (TyFun (TyCon "WasmShape") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyCon "Bool")))))
-(DFunDef false "sameShape" ((PCon "FuncImported") PWild PWild) (EVar "True"))
+(DFunDef false "sameShape" ((PCon "FuncImported" (PVar "n")) (PVar "actual") (PVar "types")) (EBinOp "==" (EVar "n") (EApp (EApp (EVar "actualCount") (EVar "actual")) (EVar "types"))))
 (DFunDef false "sameShape" ((PCon "FuncParams" (PVar "n")) (PVar "actual") (PVar "types")) (EBinOp "==" (EVar "n") (EApp (EApp (EVar "actualCount") (EVar "actual")) (EVar "types"))))
 (DFunDef false "sameShape" ((PCon "FuncOfType" (PVar "name") (PVar "n")) (PAs "actual" (PCon "FuncOfType" (PVar "found") PWild)) (PVar "types")) (EBinOp "&&" (EBinOp "==" (EVar "name") (EVar "found")) (EBinOp "==" (EVar "n") (EApp (EApp (EVar "actualCount") (EVar "actual")) (EVar "types")))))
 (DFunDef false "sameShape" ((PVar "a") (PVar "b") PWild) (EBinOp "==" (EVar "a") (EVar "b")))

@@ -39,11 +39,11 @@ public export data WasmSymbol =
 -- What a declaration or definition says the identity is.  A function's shape is
 -- the operand count a direct `call` must supply: written inline (`FuncParams`),
 -- or through a declared function type (`FuncOfType`, the type and its count).  An
--- imported function's signature is the host plan's, so no count is recorded.
+-- imported function's physical count comes from the host plan.
 public export data WasmShape =
   | FuncParams Int
   | FuncOfType String Int
-  | FuncImported
+  | FuncImported Int
   | TypeDecl
   | GlobalDecl
   | DataDecl
@@ -104,6 +104,7 @@ symbolName (WasmData n) = n
 symbolName (WasmElem n) = n
 
 paramCount : WasmShape -> Option Int
+paramCount (FuncImported n) = Some n
 paramCount (FuncParams n) = Some n
 paramCount (FuncOfType _ n) = Some n
 paramCount _ = None

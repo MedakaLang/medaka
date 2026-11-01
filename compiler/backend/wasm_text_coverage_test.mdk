@@ -284,7 +284,33 @@ test "Wasm actual imports carry their physical parameter shape and cannot disapp
             (codes (finishCheckedText ClosedOutput reg2 coverage "(module)")),
         ])
         (checkedCall reg False "host" 1 at emptyCoverage))
-    (declareSymbol (WasmFunc "host") (FuncParams 1) at emptyRegistry)
+    (declareSymbol (WasmFunc "host") (FuncImported 1) at emptyRegistry)
+
+test "Wasm imported call descriptors reject the wrong wire arity" =
+  expectStep
+    (reg => expectAll [
+      expectEqual
+        ["E-PHYS-SHAPE"]
+        (match checkedCall reg False "host" 0 at emptyCoverage
+          Err d => [codeText (defectCode d)]
+          Ok _ => []),
+      expectStep
+        ((reg2, coverage, fragment) =>
+          expectErrContains
+            "E-PHYS-SHAPE"
+            (codes
+              (finishCheckedText
+                ClosedOutput
+                reg2
+                coverage
+                ("(module (import \"env\" \"host\" (func $host (param i64 i64))) (func $caller "
+                  ++ fragment
+                  ++ "))"))))
+        (checkedCall reg False "host" 1 at emptyCoverage),
+    ])
+    (do
+      reg <- declareSymbol (WasmFunc "host") (FuncImported 1) at emptyRegistry
+      defineSymbol (WasmFunc "caller") (FuncParams 0) at reg)
 
 test "Wasm named function types determine physical parameter counts" =
   let reg = do
