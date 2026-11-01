@@ -1,0 +1,6 @@
+-- Re-exporting the withheld constructor would hand the forge to every importer:
+-- R-PRIVILEGED-REEXPORT on `H2`.
+import test.{expectTrue}
+export import handle2.{H2(..)}
+
+test "unreachable" = expectTrue True

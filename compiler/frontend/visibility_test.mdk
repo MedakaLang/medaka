@@ -9,17 +9,28 @@
 -- module fixtures, not here.
 
 import test.{expectEach, expectEqual, expectFalse, expectTrue}
-import frontend.ast.{Decl}
+import frontend.ast.{Decl, Loc(..), UseMember(..), UsePath(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse}
 import frontend.visibility.{
+  ExportView(..),
+  ModuleExports,
+  buildExportsWith,
+  coreExports,
   declExportsCtors,
   declExportsIn,
   directIn,
   exportedValueNames,
+  expandMemberNames,
+  fullExportsOf,
+  isPubExp,
   nsTypes,
   nsValues,
+  privilegedCarry,
+  typeCtorsOf,
+  viewOf,
 }
+import support.ordmap.{OrdMap, omEmpty, omInsert}
 
 declsOf : String -> List Decl
 declsOf src = desugar (parse src)
@@ -156,3 +167,167 @@ test "the value namespace holds the binders of an exported let rec group, not a 
             "let rec countdown n = if n == 0 then 7 else countdown (n - 1)")),
     ),
   ]
+
+-- ── the two views ─────────────────────────────────────────────────────────
+-- The full view is what a module's test sibling sees: every top-level name of
+-- the module, and the names the module imports.
+
+subjectSrc : String
+subjectSrc =
+  """
+import lib.{shared}
+export data Counter = Counter Int
+data Hidden = Hidden Int
+export newtype Meters = Meters Int
+interface Sized a where
+  size : a -> Int
+effect Beep
+export tick : Counter -> Counter
+tick (Counter n) = Counter (step n)
+step : Int -> Int
+step n = n + 1
+"""
+
+-- The surfaces of a module `lib` exporting one value, as the known map an
+-- importer of `lib` judges against.
+libKnown : OrdMap ModuleExports
+libKnown =
+  omInsert
+    "lib"
+    (buildExportsWith
+      (coreExports [])
+      omEmpty
+      "lib"
+      (declsOf "export shared : Int\nexport shared = 1")
+      [])
+    omEmpty
+
+subjectExports : ExportView -> ModuleExports
+subjectExports ExportedView =
+  buildExportsWith (coreExports []) libKnown "subj" (declsOf subjectSrc) []
+subjectExports FullView =
+  fullExportsOf (coreExports []) libKnown "subj" (declsOf subjectSrc)
+
+isFull : ExportView -> Bool
+isFull FullView = True
+isFull ExportedView = False
+
+test "only the importer whose subject a module is sees it in the full view" = expectEach
+  [
+    ("the subject itself", expectTrue (isFull (viewOf (Some "subj") "subj"))),
+    ("another module", expectFalse (isFull (viewOf (Some "subj") "other"))),
+    ("an importer with no subject", expectFalse (isFull (viewOf None "subj"))),
+  ]
+
+test "the full view holds what the exported view withholds" = expectEach [
+  (
+    "the private value",
+    expectEqual
+      (False, True)
+      (
+        isPubExp (subjectExports ExportedView) "step",
+        isPubExp (subjectExports FullView) "step",
+      ),
+  ),
+  (
+    "the abstract type's constructor",
+    expectEqual
+      (None, Some ["Counter"])
+      (
+        typeCtorsOf "Counter" (subjectExports ExportedView),
+        typeCtorsOf "Counter" (subjectExports FullView),
+      ),
+  ),
+  (
+    "the private type and its constructor",
+    expectEqual
+      (None, Some ["Hidden"])
+      (
+        typeCtorsOf "Hidden" (subjectExports ExportedView),
+        typeCtorsOf "Hidden" (subjectExports FullView),
+      ),
+  ),
+  (
+    "the newtype's constructor, which `Meters(..)` binds beside the type",
+    expectEqual
+      (["Meters"], ["Meters", "Meters"])
+      (
+        boundNames
+          (expandMemberNames
+            (subjectExports ExportedView)
+            (UseMember "Meters" True noLoc None)),
+        boundNames
+          (expandMemberNames
+            (subjectExports FullView)
+            (UseMember "Meters" True noLoc None)),
+      ),
+  ),
+  (
+    "the private interface's method",
+    expectEqual
+      (False, True)
+      (
+        isPubExp (subjectExports ExportedView) "size",
+        isPubExp (subjectExports FullView) "size",
+      ),
+  ),
+  (
+    "the private effect label",
+    expectEqual
+      (False, True)
+      (
+        isPubExp (subjectExports ExportedView) "Beep",
+        isPubExp (subjectExports FullView) "Beep",
+      ),
+  ),
+  (
+    "a name the module imports",
+    expectEqual
+      (False, True)
+      (
+        isPubExp (subjectExports ExportedView) "shared",
+        isPubExp (subjectExports FullView) "shared",
+      ),
+  ),
+]
+
+test "a re-export of the subject carries a privileged name only from the full view" = expectEach
+  [
+    (
+      "a private value among exported ones",
+      expectEqual
+        ["step"]
+        (privilegedCarry
+          (subjectExports ExportedView)
+          (subjectExports FullView)
+          (UseGroup ["subj"] [member "tick", member "step"])),
+    ),
+    (
+      "an abstract type's constructors",
+      expectEqual
+        ["Counter"]
+        (privilegedCarry
+          (subjectExports ExportedView)
+          (subjectExports FullView)
+          (UseGroup ["subj"] [UseMember "Counter" True noLoc None])),
+    ),
+    (
+      "an exported value alone",
+      expectEqual
+        []
+        (privilegedCarry
+          (subjectExports ExportedView)
+          (subjectExports FullView)
+          (UseGroup ["subj"] [member "tick"])),
+    ),
+  ]
+
+member : String -> UseMember
+member n = UseMember n False noLoc None
+
+noLoc : Loc
+noLoc = Loc "" 0 0 0 0
+
+-- The names an expanded member list binds, in order.
+boundNames : List (String, String, Loc) -> List String
+boundNames = map ((name, _, _) => name)

@@ -19,12 +19,17 @@ import eval.eval.{
   buildMethodReqCounts,
   Value(..),
   evalModulesOutput,
+  evalModulesOutputFacts,
   ppValue,
   externBindings,
   ioExternBindings,
 }
 import list.{lookup}
-import ir.core_ir_eval.{cevalModulesOutput}
+import ir.core_ir_eval.{cevalModulesOutput, cevalModulesOutputFacts}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.program_facts.{ProgramFacts, emptyFacts, withSibling}
+import frontend.ast.{SiblingPair(..)}
 
 testLoc : Loc
 testLoc = Loc "" 1 0 1 0
@@ -162,4 +167,107 @@ test "run's random externs use a stream separate from the oracle's" =
     expectEqual "0" (ppValue oracleState),
     expectEqual (ppValue fromRun) (ppValue fromOracle),
     expectEqual "75817894" (ppValue fromOracle),
+  ]
+
+siblingSubjectSrc : String
+siblingSubjectSrc =
+  """export data Counter = Counter Int
+
+export tick : Counter -> Counter
+tick (Counter n) = Counter (step n)
+
+step : Int -> Int
+step n = n + 1
+"""
+
+siblingTestSrc : String
+siblingTestSrc =
+  """import counter.{Counter(..), step, tick}
+
+bump : Int -> Int
+bump n = match tick (Counter n)
+  Counter m => step m
+
+main = putStrLn (intToString (bump 1))
+"""
+
+pairOf : String -> String -> SiblingPair
+pairOf sib subj = SiblingPair { spSibling = sib, spSubject = subj }
+
+siblingModules : List (String, List Decl)
+siblingModules = [
+  ("counter", desugar (parse siblingSubjectSrc)),
+  ("counter_test", desugar (parse siblingTestSrc)),
+]
+
+siblingFacts : ProgramFacts
+siblingFacts = withSibling [pairOf "counter_test" "counter"] emptyFacts
+
+-- The sibling's own import of the subject's private `step` and abstract
+-- `Counter(..)` resolves in both interpreters; `step (tick (Counter 1))` is 3.
+test "a test sibling reads its subject's private names in both evaluators" = expectAll
+  [
+    expectEqual "3\n" (evalModulesOutputFacts siblingFacts [] siblingModules),
+    expectEqual "3\n" (cevalModulesOutputFacts siblingFacts [] siblingModules),
+  ]
+
+clashSubjectSrc : String
+clashSubjectSrc =
+  """data Color = Red Int | Blue
+
+colorVal : Color -> Int
+colorVal c = match c
+  Red n => n + 100
+  Blue => 7
+
+export tick : Int -> Int
+tick n = colorVal (Red n)
+"""
+
+clashTestSrc : String
+clashTestSrc =
+  """import clash.{Color(..), colorVal}
+import light.{Light}
+import counter_test.{probe}
+
+main = match Red probe
+  Red n => putStrLn (intToString (colorVal (Red n)))
+  Blue => putStrLn "blue"
+"""
+
+-- Two subjects and their siblings in one program, one sibling imported by the
+-- other, and a subject's private `Red` spelled like `light`'s public one.
+twoSiblingModules : List (String, List Decl)
+twoSiblingModules = [
+  ("light", desugar (parse "public export data Light = Red Int Int | Green\n")),
+  ("counter", desugar (parse siblingSubjectSrc)),
+  (
+    "counter_test",
+    desugar
+      (parse """import counter.{step}
+
+export probe : Int
+probe = step 1
+"""),
+  ),
+  ("clash", desugar (parse clashSubjectSrc)),
+  ("clash_test", desugar (parse clashTestSrc)),
+]
+
+twoSiblingFacts : ProgramFacts
+twoSiblingFacts =
+  withSibling
+    [pairOf "counter_test" "counter", pairOf "clash_test" "clash"]
+    emptyFacts
+
+-- Each sibling reads its own subject's names, and the colliding private
+-- constructor keeps its own declaration: `colorVal (Red (step 1))` is 102.
+test "each of two test siblings reads its own subject in both evaluators" = expectAll
+  [
+    expectEqual
+      "102\n"
+      (evalModulesOutputFacts twoSiblingFacts [] twoSiblingModules),
+    expectEqual
+      "102\n"
+      (cevalModulesOutputFacts twoSiblingFacts [] twoSiblingModules),
   ]

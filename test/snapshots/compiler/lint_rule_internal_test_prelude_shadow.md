@@ -7,7 +7,7 @@ stages=DESUGAR,MARK
 import frontend.ast.{Loc(..), Decl(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
-import support.util.{contains, endsWith}
+import support.util.{contains, endsWith, testFileSuffix}
 import tools.lint_core.{
   Category(..),
   FileFacts(..),
@@ -74,7 +74,7 @@ ruleTestPreludeShadow : StdlibIndex ->
   List Decl ->
   List Finding
 ruleTestPreludeShadow _ path _ pos prog
-  | not (endsWith "_test.mdk" path) = []
+  | not (endsWith testFileSuffix path) = []
   | otherwise =
     flatMap
       preludeShadowHit
@@ -98,7 +98,7 @@ preludeShadowFinding name loc = Finding {
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "endsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "endsWith" false) (mem "testFileSuffix" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "dedupeNamesLoc" false) (mem "declLocList" false) (mem "ruleNameTestPreludeShadow" false) (mem "topDefNameL" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
@@ -106,7 +106,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "preludeShadowedNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preludeShadowedNames" () (EListLit (ELit (LString "isOk")) (ELit (LString "isErr")) (ELit (LString "isSome")) (ELit (LString "isNone"))))
 (DTypeSig false "ruleTestPreludeShadow" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleTestPreludeShadow" (PWild (PVar "path") PWild (PVar "pos") (PVar "prog")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "path"))) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "flatMap") (EVar "preludeShadowHit")) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ruleTestPreludeShadow" (PWild (PVar "path") PWild (PVar "pos") (PVar "prog")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (EVar "testFileSuffix")) (EVar "path"))) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "flatMap") (EVar "preludeShadowHit")) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "preludeShadowHit" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "preludeShadowHit" ((PTuple (PVar "name") (PVar "loc"))) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "preludeShadowedNames")) (EListLit (EApp (EApp (EVar "preludeShadowFinding") (EVar "name")) (EVar "loc"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "preludeShadowFinding" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))
@@ -115,7 +115,7 @@ preludeShadowFinding name loc = Finding {
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "endsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "endsWith" false) (mem "testFileSuffix" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "dedupeNamesLoc" false) (mem "declLocList" false) (mem "ruleNameTestPreludeShadow" false) (mem "topDefNameL" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
@@ -123,7 +123,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "preludeShadowedNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preludeShadowedNames" () (EListLit (ELit (LString "isOk")) (ELit (LString "isErr")) (ELit (LString "isSome")) (ELit (LString "isNone"))))
 (DTypeSig false "ruleTestPreludeShadow" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleTestPreludeShadow" (PWild (PVar "path") PWild (PVar "pos") (PVar "prog")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "path"))) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EDictApp "flatMap") (EVar "preludeShadowHit")) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ruleTestPreludeShadow" (PWild (PVar "path") PWild (PVar "pos") (PVar "prog")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (EVar "testFileSuffix")) (EVar "path"))) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EDictApp "flatMap") (EVar "preludeShadowHit")) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "preludeShadowHit" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "preludeShadowHit" ((PTuple (PVar "name") (PVar "loc"))) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "preludeShadowedNames")) (EListLit (EApp (EApp (EVar "preludeShadowFinding") (EVar "name")) (EVar "loc"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "preludeShadowFinding" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))

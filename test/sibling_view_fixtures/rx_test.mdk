@@ -1,0 +1,6 @@
+-- A sibling may import `hidden` but not re-export it: R-PRIVILEGED-REEXPORT on
+-- `hidden`, and none on `visible`, which `rx` exports.
+import test.{expectEqual}
+export import rx.{visible, hidden}
+
+test "reads both" = expectEqual 3 (visible + hidden)

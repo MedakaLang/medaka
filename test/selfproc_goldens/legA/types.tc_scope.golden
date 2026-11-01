@@ -2,12 +2,12 @@ admittedIfaceWord : ModuleCtx -> String -> String
 admittedRowFor : ModuleCtx -> String -> Registry MethodSchemeRow -> Option MethodSchemeRow
 admittedSchemeFor : ModuleCtx -> String -> Registry MethodSchemeRow -> Option Scheme
 aliasAmbiguityMsg : String -> List (String, String, String, Ident, Loc) -> String
-aliasConstraintEntries : GraphCtx -> List Decl -> List ((String, String), a) -> List (String, a)
-aliasDictNames : GraphCtx -> List String -> List (String, List Decl) -> List (String, List Decl) -> List String
-aliasDictNamesOfDecl : GraphCtx -> Map String Unit -> List (String, List Decl) -> Decl -> List String
-aliasDictNamesOfPath : GraphCtx -> Map String Unit -> List (String, List Decl) -> String -> UsePath -> List String
-aliasDictNamesOfUnit : GraphCtx -> Map String Unit -> List (String, List Decl) -> List Decl -> List String
-aliasEntriesFor : GraphCtx -> String -> UsePath -> List ((String, String), a) -> List (String, a)
+aliasConstraintEntries : (String -> List (String, (String, String))) -> List Decl -> List ((String, String), a) -> List (String, a)
+aliasDictNames : (String -> String -> List (String, (String, String))) -> List String -> List (String, List Decl) -> List (String, List Decl) -> List String
+aliasDictNamesOfDecl : (String -> List (String, (String, String))) -> Map String Unit -> List (String, List Decl) -> Decl -> List String
+aliasDictNamesOfPath : (String -> List (String, (String, String))) -> Map String Unit -> List (String, List Decl) -> String -> UsePath -> List String
+aliasDictNamesOfUnit : (String -> List (String, (String, String))) -> Map String Unit -> List (String, List Decl) -> List Decl -> List String
+aliasEntriesFor : (String -> List (String, (String, String))) -> String -> UsePath -> List ((String, String), a) -> List (String, a)
 aliasImportSites : List Decl -> List (List String, Loc)
 aliasMethodKeyApply : ModuleCtx -> Map String (List (String, String, String, Ident, Loc)) -> List String -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
 aliasMethodKeyCands : GraphCtx -> List Decl -> List (String, String, String, Ident, Loc)

@@ -52,7 +52,7 @@ import types.tc_scope.{
   aliasConstraintEntries,
 }
 import types.tc_unify.{lookupQualPayload}
-import types.tc_decls.{methodDictArityOf}
+import types.tc_decls.{importerDefiners, methodDictArityOf}
 import types.tc_solve_givens.{lookupPredicateSlots}
 import types.tc_solve_entail.{
   entail, implDictRoutesForRow, rowRouteKey, selectedCallSupers
@@ -1853,7 +1853,7 @@ dictPassModulesScoped mctx idx dictNames promotedQ importerReach core2 allModule
       mid
       prog
       promotedQ
-      (aliasConstraintEntries mctx.mcGraph prog promotedQ
+      (aliasConstraintEntries (importerDefiners mctx.mcGraph mid) prog promotedQ
         ++ scopePredicateSlots promotedQ scopeMods scope))
   -- Cleared for the same reason as in `dictPassModulesIfEnabled`: a stale
   -- prefix table is worse than an empty one, because only the empty one answers

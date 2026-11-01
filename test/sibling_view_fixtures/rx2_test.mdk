@@ -1,0 +1,5 @@
+-- One R-PRIVILEGED-REEXPORT per named private name: `hidden` and `hidden2`.
+import test.{expectEqual}
+export import rx2.{visible, hidden, hidden2}
+
+test "reads all" = expectEqual 6 (visible + hidden + hidden2)

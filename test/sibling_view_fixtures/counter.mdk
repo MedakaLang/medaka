@@ -1,0 +1,9 @@
+-- The subject of the design's example (TEST-SIBLING-ACCESS-DESIGN.md §3.4): an
+-- abstract type and a private helper.
+export data Counter = Counter Int
+
+export tick : Counter -> Counter
+tick (Counter n) = Counter (step n)
+
+step : Int -> Int
+step n = n + 1

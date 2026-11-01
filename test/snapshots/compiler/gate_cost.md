@@ -1,5 +1,5 @@
 # META
-source_lines=724
+source_lines=730
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cost.mdk — the per-gate cost baseline reader (#2178, epic #2182).
@@ -34,7 +34,15 @@ stages=DESUGAR,MARK
    gate names — 0 missing, 0 duplicate keys, 0 unused baseline rows. -}
 
 import json.{Json(..), asArray, asBool, asInt, asString, get, parse}
-import support.util.{contains, joinWith, listLen, splitOnChar, startsWith}
+import support.util.{
+  contains,
+  endsWith,
+  joinWith,
+  listLen,
+  splitOnChar,
+  startsWith,
+  testFileSuffix,
+}
 
 {- | One gate's measured cost.  `medianMs` is the baseline's `medianMs` —
    the LOWER median of the retained raw samples, in milliseconds.  `samples`
@@ -131,11 +139,9 @@ dropDotSh s
 -- suffix FIRST (mirrors `gate_name`'s sed order) so a native gate's key
 -- collapses onto the same label its pre-migration `.sh` used.
 dropTestMdk : String -> String
-dropTestMdk s
-  | stringLength s > 9
-    && stringSlice (stringLength s - 9) (stringLength s) s == "_test.mdk" =
-    stringSlice 0 (stringLength s - 9) s
-  | otherwise = s
+dropTestMdk s =
+  let keep = stringLength s - stringLength testFileSuffix
+  if keep > 0 && endsWith testFileSuffix s then stringSlice 0 keep s else s
 
 dropTestPrefix : String -> String
 dropTestPrefix s
@@ -728,14 +734,14 @@ prop "gateSetDigest separates a same-size swap" (n : Int) =
     /= gateSetDigest ("a\{intToString n}" :: "c\{intToString n}" :: [])
 # DESUGAR
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "asArray" false) (mem "asBool" false) (mem "asInt" false) (mem "asString" false) (mem "get" false) (mem "parse" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinWith" false) (mem "listLen" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "endsWith" false) (mem "joinWith" false) (mem "listLen" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "testFileSuffix" false))))
 (DData Public "GateCost" () ((variant "GateCost" (ConNamed (field "name" (TyCon "String")) (field "medianMs" (TyCon "Int")) (field "samples" (TyCon "Int")) (field "ms" (TyApp (TyCon "List") (TyCon "Int"))) (field "sampleRuns" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "baselineKey" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "baselineKey" ((PVar "run")) (EBlock (DoLet false false (PVar "noExt") (EApp (EVar "dropDotSh") (EApp (EVar "dropTestMdk") (EVar "run")))) (DoLet false false (PVar "flat") (EApp (EApp (EVar "joinWith") (ELit (LString "_"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "noExt")))) (DoExpr (EApp (EVar "dropTestPrefix") (EVar "flat")))))
 (DTypeSig false "dropDotSh" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dropDotSh" ((PVar "s")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 3)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (ELit (LString ".sh")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 3)))) (EVar "s")) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dropTestMdk" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "dropTestMdk" ((PVar "s")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 9))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 9)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (ELit (LString "_test.mdk")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 9)))) (EVar "s")) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dropTestMdk" ((PVar "s")) (EBlock (DoLet false false (PVar "keep") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EVar "testFileSuffix")))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">" (EVar "keep") (ELit (LInt 0))) (EApp (EApp (EVar "endsWith") (EVar "testFileSuffix")) (EVar "s"))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "keep")) (EVar "s")) (EVar "s")))))
 (DTypeSig false "dropTestPrefix" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dropTestPrefix" ((PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "test_"))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 5))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "costSchema" (TyCon "String"))
@@ -839,14 +845,14 @@ prop "gateSetDigest separates a same-size swap" (n : Int) =
 (DProp false "gateSetDigest separates a same-size swap" ((pp "n" (TyCon "Int"))) (EBinOp "/=" (EApp (EVar "gateSetDigest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "b")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EListLit)))) (EApp (EVar "gateSetDigest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EListLit))))))
 # MARK
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "asArray" false) (mem "asBool" false) (mem "asInt" false) (mem "asString" false) (mem "get" false) (mem "parse" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinWith" false) (mem "listLen" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "endsWith" false) (mem "joinWith" false) (mem "listLen" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "testFileSuffix" false))))
 (DData Public "GateCost" () ((variant "GateCost" (ConNamed (field "name" (TyCon "String")) (field "medianMs" (TyCon "Int")) (field "samples" (TyCon "Int")) (field "ms" (TyApp (TyCon "List") (TyCon "Int"))) (field "sampleRuns" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "baselineKey" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "baselineKey" ((PVar "run")) (EBlock (DoLet false false (PVar "noExt") (EApp (EVar "dropDotSh") (EApp (EVar "dropTestMdk") (EVar "run")))) (DoLet false false (PVar "flat") (EApp (EApp (EVar "joinWith") (ELit (LString "_"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "noExt")))) (DoExpr (EApp (EVar "dropTestPrefix") (EDictApp "flat")))))
 (DTypeSig false "dropDotSh" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dropDotSh" ((PVar "s")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 3)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (ELit (LString ".sh")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 3)))) (EVar "s")) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dropTestMdk" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "dropTestMdk" ((PVar "s")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 9))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 9)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (ELit (LString "_test.mdk")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 9)))) (EVar "s")) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dropTestMdk" ((PVar "s")) (EBlock (DoLet false false (PVar "keep") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EVar "testFileSuffix")))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">" (EVar "keep") (ELit (LInt 0))) (EApp (EApp (EVar "endsWith") (EVar "testFileSuffix")) (EVar "s"))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "keep")) (EVar "s")) (EVar "s")))))
 (DTypeSig false "dropTestPrefix" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dropTestPrefix" ((PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "test_"))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 5))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "costSchema" (TyCon "String"))

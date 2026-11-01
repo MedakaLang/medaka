@@ -1,5 +1,5 @@
 # META
-source_lines=1199
+source_lines=1200
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_state: mints, copies and carries of the state records (including `emptyShadowDicts`, the
@@ -353,6 +353,7 @@ emptyTcConfig = TcConfig {
   tcStdlibOwned = omEmpty,
   tcFlatEntryIsStdlib = False,
   tcKey = "\n\n",
+  tcSibling = [],
 }
 
 -- A graph record with every field fresh and [run] as its graph run: the process's
@@ -1242,7 +1243,7 @@ defaultBodyBinderNamesProbe _ =
 (DTypeSig true "emptyMethodEnv" (TyCon "MethodEnv"))
 (DFunDef false "emptyMethodEnv" () (ERecordCreate "MethodEnv" ((fa "meByName" (EVar "omEmpty")) (fa "meExports" (EVar "omEmpty")) (fa "meIfaceExports" (EVar "omEmpty")))))
 (DTypeSig false "emptyTcConfig" (TyCon "TcConfig"))
-(DFunDef false "emptyTcConfig" () (ERecordCreate "TcConfig" ((fa "tcIoJoin" (EListLit)) (fa "tcIoJoinProfile" (ELit (LString ""))) (fa "tcStdlibOwned" (EVar "omEmpty")) (fa "tcFlatEntryIsStdlib" (EVar "False")) (fa "tcKey" (ELit (LString "\n\n"))))))
+(DFunDef false "emptyTcConfig" () (ERecordCreate "TcConfig" ((fa "tcIoJoin" (EListLit)) (fa "tcIoJoinProfile" (ELit (LString ""))) (fa "tcStdlibOwned" (EVar "omEmpty")) (fa "tcFlatEntryIsStdlib" (EVar "False")) (fa "tcKey" (ELit (LString "\n\n"))) (fa "tcSibling" (EListLit)))))
 (DTypeSig true "initialGraphCtx" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyFun (TyCon "GraphRun") (TyCon "GraphCtx"))))
 (DFunDef false "initialGraphCtx" ((PVar "ctors") (PVar "run")) (ERecordCreate "GraphCtx" ((fa "crossRun" (EApp (EVar "freshCrossRun") (EVar "ctors"))) (fa "graphRun" (EVar "run")) (fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "config" (EApp (EVar "Ref") (EVar "emptyTcConfig"))) (fa "trace" (EVar "None")) (fa "graphAdmittedMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EVar "False"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "markSetsRef" (EApp (EVar "Ref") (EVar "None"))) (fa "typeErrorsSticky" (EApp (EVar "Ref") (EVar "False"))) (fa "typeErrorsStickyDiags" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig true "interners" (TyApp (TyCon "Ref") (TyCon "Interners")))
@@ -1409,7 +1410,7 @@ defaultBodyBinderNamesProbe _ =
 (DTypeSig true "emptyMethodEnv" (TyCon "MethodEnv"))
 (DFunDef false "emptyMethodEnv" () (ERecordCreate "MethodEnv" ((fa "meByName" (EVar "omEmpty")) (fa "meExports" (EVar "omEmpty")) (fa "meIfaceExports" (EVar "omEmpty")))))
 (DTypeSig false "emptyTcConfig" (TyCon "TcConfig"))
-(DFunDef false "emptyTcConfig" () (ERecordCreate "TcConfig" ((fa "tcIoJoin" (EListLit)) (fa "tcIoJoinProfile" (ELit (LString ""))) (fa "tcStdlibOwned" (EVar "omEmpty")) (fa "tcFlatEntryIsStdlib" (EVar "False")) (fa "tcKey" (ELit (LString "\n\n"))))))
+(DFunDef false "emptyTcConfig" () (ERecordCreate "TcConfig" ((fa "tcIoJoin" (EListLit)) (fa "tcIoJoinProfile" (ELit (LString ""))) (fa "tcStdlibOwned" (EVar "omEmpty")) (fa "tcFlatEntryIsStdlib" (EVar "False")) (fa "tcKey" (ELit (LString "\n\n"))) (fa "tcSibling" (EListLit)))))
 (DTypeSig true "initialGraphCtx" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyFun (TyCon "GraphRun") (TyCon "GraphCtx"))))
 (DFunDef false "initialGraphCtx" ((PVar "ctors") (PVar "run")) (ERecordCreate "GraphCtx" ((fa "crossRun" (EApp (EVar "freshCrossRun") (EVar "ctors"))) (fa "graphRun" (EVar "run")) (fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "config" (EApp (EVar "Ref") (EVar "emptyTcConfig"))) (fa "trace" (EVar "None")) (fa "graphAdmittedMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EVar "False"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "markSetsRef" (EApp (EVar "Ref") (EVar "None"))) (fa "typeErrorsSticky" (EApp (EVar "Ref") (EVar "False"))) (fa "typeErrorsStickyDiags" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig true "interners" (TyApp (TyCon "Ref") (TyCon "Interners")))

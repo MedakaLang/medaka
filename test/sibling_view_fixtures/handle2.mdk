@@ -1,0 +1,5 @@
+-- A second phantom-authority handle, whose sibling tries to re-export its
+-- constructor.
+effect Dir2 Prefix
+
+export data H2 (p : Authority Dir2) = H2 Int

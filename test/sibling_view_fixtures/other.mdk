@@ -1,0 +1,5 @@
+-- Not the sibling of `counter.mdk`: the same imports are rejected as they are
+-- for any importer (R-NO-EXPORTED-CTORS, R-PRIVATE-NAME).
+import counter.{Counter(..), step}
+
+main = println (step 1)

@@ -1,0 +1,8 @@
+-- A phantom-authority handle: `H`'s constructor carries `p` in no field, so it
+-- may invent any authority, and only its declaring module is trusted with it.
+effect Dir Prefix
+
+export data H (p : Authority Dir) = H Int
+
+export openH : (path : String) -> H path
+openH _ = H 0

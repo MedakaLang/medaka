@@ -15,11 +15,13 @@
 
 import support.ordmap.{OrdMap, omEmpty, omSize, omLookup}
 import driver.diagnostics.{
-  analyzeToLines, analyzeProjectFull, analyzeProjectReport, analyzeProjectKeyed,
-  analyzeProjectKeyedSources, noStdlibExports, graphCheckDrive, CheckDrive(..),
-  CheckDump(..), analyzeFrom, frontEnd, checkFrontDrive, FrontInput(..),
-  FrontPolicy(..), FrontProgram(..), FrontOutput(..), Diag(..), diagIdText,
-  foldCachedIdentity, resolveCachedIdentity
+  projectEntryAnalysis, analyzeToLines, analyzeProjectFull,
+  analyzeProjectReport, analyzeProjectKeyed, analyzeProjectKeyedSources,
+  noStdlibExports, graphCheckDrive, CheckDrive(..), CheckDump(..), analyzeFrom,
+  frontEnd, checkFrontDrive, FrontInput(..), FrontPolicy(..), FrontProgram(..),
+  FrontOutput(..), Diag(..), diagIdText, foldCachedIdentity,
+  resolveCachedIdentity, checkJsonFileParts, ppCheckJson, stdlibExportsReader,
+  desugaredModPairs, ChainSteps(..)
 }
 import driver.loader.{loadProgramFilesLocatedCachedSourcesE}
 import support.source_index.{indexSource, offsetToUtf16Position}
@@ -28,12 +30,13 @@ import types.module_interface.{
   ModuleInterface(..), ModuleKey(..), currentModuleInterfaces
 }
 import frontend.ast.{Decl}
-import types.tc_types.{DriveOutputs(..), emptyDriveOutputs}
+import frontend.ast.{SiblingPair(..)}
+import types.tc_types.{DriveInputs(..), DriveOutputs(..), emptyDriveOutputs}
 import frontend.parser.{parseLocated}
 import fs.{fixtureFiles}
-import list.{sort}
+import list.{drop, head, sort}
 import path.{dirname, stem}
-import string.{contains, endsWith, lines, trim, unlines}
+import string.{contains, endsWith, lines, split, trim, unlines}
 import test.{
   Expectation, expectAll, expectEach, expectEqual, expectFalse, expectNotEqual,
   expectNoFindings, expectTrue, fail
@@ -43,6 +46,7 @@ import types.publish.{
 }
 import types.repr.{ppSchemeCon}
 import test_process.{withScratchDir}
+import io.{runVerb}
 
 sortedLines : String -> String
 sortedLines text = trim (unlines (sort (lines text)))
@@ -921,14 +925,18 @@ test "project diagnostic snapshots are scoped to each analysis" = match (
 
 -- ── refutable binders, do binds and defer binds ───────────────────────────
 
--- Runs [k] on the prelude pair every analysis below is checked against.
-withPrelude : (String -> String -> Expectation) -> <IO> Expectation
-withPrelude k = match (
+-- Runs [k] on the prelude pair every analysis below is checked against, or
+-- answers [unread] when the pair cannot be read.
+withPreludeOr : a -> (String -> String -> <IO> a) -> <IO> a
+withPreludeOr unread k = match (
   readFile "stdlib/runtime.mdk",
   readFile "stdlib/core.mdk",
 )
   (Ok rsrc, Ok csrc) => k rsrc csrc
-  _ => fail "could not read the prelude pair"
+  _ => unread
+
+withPrelude : (String -> String -> <IO> Expectation) -> <IO> Expectation
+withPrelude = withPreludeOr (fail "could not read the prelude pair")
 
 -- The diagnostics of the single-file program [src] whose text contains [needle].
 diagsContaining : String -> String -> String -> String -> List String
@@ -1129,3 +1137,321 @@ test "a defer bind is judged by the pattern the user wrote" = expectEach [
   ("unit bind is silent", deferBindCase 0 "()" "()"),
   ("refutable bind warns", deferBindCase 1 "Some v" "Some 1"),
 ]
+
+-- ── the test-sibling view (`test/sibling_view_fixtures`) ───────────────────
+-- `check --json`'s verdict on one fixture: whether it rejected it, and the codes
+-- it reported, sorted.  The fixture directory is its own project.
+
+data FixtureVerdict = FixtureVerdict {
+  fvRejected : Bool,
+  fvCodes : List String,
+} deriving (Eq, Debug)
+
+siblingFixture : String -> <IO> FixtureVerdict
+siblingFixture file =
+  withPreludeOr
+    FixtureVerdict {
+      fvRejected = True,
+      fvCodes = ["the prelude pair could not be read"],
+    }
+    (rsrc csrc =>
+      let (cj, rejected, _) =
+        checkJsonFileParts
+          False
+          rsrc
+          csrc
+          "test/sibling_view_fixtures/\{file}"
+          "stdlib"
+      FixtureVerdict {
+        fvRejected = rejected,
+        fvCodes = sort (jsonCodes (ppCheckJson cj)),
+      })
+
+-- The verdict of a fixture `check --json` rejects with exactly [codes].
+rejectedWith : List String -> FixtureVerdict
+rejectedWith codes = FixtureVerdict { fvRejected = True, fvCodes = codes }
+
+jsonCodes : String -> List String
+jsonCodes text =
+  map
+    (piece => optionOr "" (head (split "\"" piece)))
+    (drop 1 (split "\"code\":\"" text))
+
+accepted : FixtureVerdict
+accepted = FixtureVerdict { fvRejected = False, fvCodes = [] }
+
+test "a test sibling imports its subject's private names" = expectEach [
+  (
+    "private value, abstract constructor",
+    expectEqual accepted (siblingFixture "counter_test.mdk"),
+  ),
+  (
+    "private type's constructor",
+    expectEqual accepted (siblingFixture "ptype_test.mdk"),
+  ),
+  (
+    "newtype constructor",
+    expectEqual accepted (siblingFixture "pnewtype_test.mdk"),
+  ),
+  ("non-exported impl", expectEqual accepted (siblingFixture "pimpl_test.mdk")),
+  (
+    "private interface and its method",
+    expectEqual accepted (siblingFixture "piface_test.mdk"),
+  ),
+  (
+    "private effect label",
+    expectEqual accepted (siblingFixture "peffect_test.mdk"),
+  ),
+  (
+    "a name the subject imports",
+    expectEqual accepted (siblingFixture "pimport_test.mdk"),
+  ),
+  (
+    "the phantom-authority constructor",
+    expectEqual accepted (siblingFixture "handle_test.mdk"),
+  ),
+  (
+    "a name the subject imports beside the same name imported directly",
+    expectEqual accepted (siblingFixture "psame_test.mdk"),
+  ),
+  (
+    "private constructors through a module alias",
+    expectEqual accepted (siblingFixture "palias_test.mdk"),
+  ),
+  (
+    "a sibling that another test module imports",
+    expectEqual accepted (siblingFixture "pduo_test.mdk"),
+  ),
+]
+
+test "a name the subject imports under another spelling is not carried" =
+  expectEqual
+    (rejectedWith ["R-PRIVATE-NAME"])
+    (siblingFixture "rename_test.mdk")
+
+test "an importer that is not the subject's test sibling gets today's rejections" = expectEach
+  [
+    (
+      "the sibling of another subject",
+      expectEqual
+        (rejectedWith ["R-PRIVATE-NAME"])
+        (siblingFixture "xduo_test.mdk"),
+    ),
+    (
+      "a module beside the subject",
+      expectEqual
+        (rejectedWith ["R-NO-EXPORTED-CTORS", "R-PRIVATE-NAME"])
+        (siblingFixture "other.mdk"),
+    ),
+    (
+      "a test file of the same name in another directory",
+      expectEqual
+        (rejectedWith ["R-NO-EXPORTED-CTORS", "R-PRIVATE-NAME"])
+        (siblingFixture "sub/counter_test.mdk"),
+    ),
+    (
+      "a user-root net_test.mdk against stdlib net",
+      expectEqual
+        (rejectedWith ["R-PRIVATE-NAME"])
+        (siblingFixture "net_test.mdk"),
+    ),
+  ]
+
+test "a sibling cannot hand a privileged name on" = expectEach [
+  (
+    "re-exporting a private value",
+    expectEqual
+      (rejectedWith ["R-PRIVILEGED-REEXPORT"])
+      (siblingFixture "rx_test.mdk"),
+  ),
+  (
+    "re-exporting a withheld phantom-authority constructor",
+    expectEqual
+      (rejectedWith ["R-PRIVILEGED-REEXPORT"])
+      (siblingFixture "handle2_test.mdk"),
+  ),
+  (
+    "a non-test module importing the sibling's forge",
+    expectEqual
+      (rejectedWith ["R-TEST-MODULE-IMPORT"])
+      (siblingFixture "leak.mdk"),
+  ),
+  (
+    "one error per named private name",
+    expectEqual
+      (rejectedWith ["R-PRIVILEGED-REEXPORT", "R-PRIVILEGED-REEXPORT"])
+      (siblingFixture "rx2_test.mdk"),
+  ),
+]
+
+test "a glob re-export of the subject carries the exported view and raises no error" = expectEach
+  [
+    (
+      "the glob re-export itself",
+      expectEqual accepted (siblingFixture "rxg_test.mdk"),
+    ),
+    (
+      "an importer reads the exported name",
+      expectEqual accepted (siblingFixture "rxguse_test.mdk"),
+    ),
+    (
+      "an importer cannot read the private name",
+      expectEqual
+        (rejectedWith ["R-UNBOUND"])
+        (siblingFixture "rxgleak_test.mdk"),
+    ),
+  ]
+
+-- The codes `analyzeProjectKeyed` buckets for one fixture: the drive the LSP and
+-- the playground run.  It must agree with `siblingFixture`'s `check --json`.
+siblingBuckets : String -> <IO> List String
+siblingBuckets file =
+  withPreludeOr
+    ["the prelude pair could not be read"]
+    (rsrc csrc =>
+      let (_, buckets) =
+        analyzeProjectKeyed
+          (stdlibExportsReader "stdlib")
+          True
+          []
+          (Ref [])
+          (Ref omEmpty)
+          (_ => None)
+          "test/sibling_view_fixtures/\{file}"
+          ["test/sibling_view_fixtures", "stdlib"]
+          rsrc
+          csrc
+      sort (flatMap (b => map (d => diagCodeText d) (snd b)) buckets))
+
+diagCodeText : Diag -> String
+diagCodeText (Diag _ code _ _ _ _) = diagIdText code
+
+-- Whether the import seed `projectEntryAnalysis` (hover and completion) hands the
+-- last module of fixture [file] holds a binding for [name].
+analysisSeedHas : String -> String -> <IO> Bool
+analysisSeedHas file name = withPreludeOr False (rsrc csrc =>
+  let analysis =
+    projectEntryAnalysis
+      (Ref [])
+      (Ref omEmpty)
+      (_ => None)
+      "test/sibling_view_fixtures/\{file}"
+      ["test/sibling_view_fixtures", "stdlib"]
+      rsrc
+      csrc
+  optionOr False (map (pa => any (== name) (map fst pa.paSeed)) analysis))
+
+test "hover and completion analysis gives a test sibling its subject's private names" = expectEach
+  [
+    (
+      "the sibling's seed holds the private `step`",
+      expectTrue (analysisSeedHas "counter_test.mdk" "step"),
+    ),
+    (
+      "a module beside the subject is not seeded with it",
+      expectFalse (analysisSeedHas "other.mdk" "step"),
+    ),
+  ]
+
+test "the keyed drive gives a test sibling its subject's view, as check does" = expectEach
+  [
+    (
+      "the sibling is accepted",
+      expectEqual [] (siblingBuckets "counter_test.mdk"),
+    ),
+    (
+      "a module beside the subject gets check's rejection",
+      expectEqual
+        (siblingFixture "other.mdk").fvCodes
+        (siblingBuckets "other.mdk"),
+    ),
+  ]
+
+-- The fold entry of `bit_test` after one drive over its graph that was given
+-- [pairs] as its test sibling pairs.
+siblingFoldId : String -> String -> List SiblingPair -> <IO> Option Int
+siblingFoldId rsrc csrc pairs =
+  let target = "test/sibling_view_fixtures/bit_test.mdk"
+  let roots = ["test/sibling_view_fixtures", "stdlib"]
+  match (loadProgramFilesLocatedCachedSourcesE
+    (Ref omEmpty)
+    (_ => None)
+    target
+    roots)
+    (Ok mods, _) =>
+      let front = frontEnd (stdlibExportsReader "stdlib") (checkFrontDrive
+        "k"
+        []) FrontInput {
+        fiInputs = { defaultDriveInputs | diSibling = pairs },
+        fiAllowInternal = True,
+        fiTrusted = [],
+        fiRuntimeSrc = rsrc,
+        fiCoreSrc = csrc,
+        fiPolicy = DriveUnblocked "k" RecordSteps,
+        fiProgram = FrontGraph mods (desugaredModPairs mods),
+      }
+      let _ = front.foDiags
+      foldCachedIdentity "bit_test"
+    _ => None
+
+test "the fold pass does not share a module's verdict between a sibling drive and a plain one" = withPrelude
+  (rsrc csrc =>
+    let pairs = [SiblingPair { spSibling = "bit_test", spSubject = "bit" }]
+    let first = siblingFoldId rsrc csrc pairs
+    let again = siblingFoldId rsrc csrc pairs
+    let plain = siblingFoldId rsrc csrc []
+    expectEach [
+      ("the same drive is served", expectEqual first again),
+      ("a drive with another sibling set refolds", expectNotEqual again plain),
+    ])
+
+-- `check --json`'s message text for one fixture.
+siblingMessages : String -> <IO> String
+siblingMessages target = withPreludeOr
+  "the prelude pair could not be read"
+  (rsrc csrc =>
+    let (cj, _, _) = checkJsonFileParts False rsrc csrc target "stdlib"
+    ppCheckJson cj)
+
+test "a name private to the subject is not reported as a public ambiguity" =
+  let text = siblingMessages "test/sibling_view_fixtures/ambp_test.mdk"
+  expectEach [
+    (
+      "names the subject's privacy",
+      expectTrue (contains "private to `ambp`" text),
+    ),
+    ("names the other module", expectTrue (contains "`ambp_b`" text)),
+    (
+      "does not say both export it",
+      expectFalse (contains "is exported by both" text),
+    ),
+  ]
+
+-- A scratch project holding `thing_test.mdk` and `alias.mdk`, a link to it.
+aliasedTestImport : String -> <Exec, IO, FileRead, FileWrite> Expectation
+aliasedTestImport dir = match (
+  writeFile "\{dir}/medaka.toml" "[project]\nname = \"scratch\"\n",
+  writeFile "\{dir}/thing_test.mdk" "export forge = 1\n",
+  writeFile "\{dir}/user.mdk" "import alias.{forge}\n\nmain = println forge\n",
+  runVerb "ln" ["-s", "\{dir}/thing_test.mdk", "\{dir}/alias.mdk"],
+)
+  (Ok _, Ok _, Ok _, Ok _) =>
+    let text = siblingMessages "\{dir}/user.mdk"
+    expectEach [
+      (
+        "rejected as a test import",
+        expectTrue (contains "R-TEST-MODULE-IMPORT" text),
+      ),
+      (
+        "names the spelling the user wrote",
+        expectTrue (contains "import `alias` in" text),
+      ),
+      (
+        "not the canonical id",
+        expectFalse (contains "import `thing_test` in" text),
+      ),
+    ]
+  _ => fail "could not write the scratch project"
+
+test "the import ban names the module as the importer wrote it" =
+  withScratchDir aliasedTestImport

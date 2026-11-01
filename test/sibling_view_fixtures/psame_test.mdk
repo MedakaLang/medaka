@@ -1,0 +1,9 @@
+-- Imports `last` through its subject and directly: one declaration reached
+-- twice, so the occurrence is not ambiguous.  Accepted.
+import test.{expectEqual}
+import psame.{last}
+import list.{last}
+
+test "one declaration through two imports" = expectEqual (Some 6) (last [1, 6])
+
+main = println (last [1, 6])

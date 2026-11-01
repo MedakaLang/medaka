@@ -1,0 +1,6 @@
+-- A subject whose private `helper` collides with another module's export.
+export tick : Int -> Int
+tick n = helper n
+
+helper : Int -> Int
+helper n = n + 1

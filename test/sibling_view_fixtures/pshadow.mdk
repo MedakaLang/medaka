@@ -1,0 +1,6 @@
+-- A private standalone whose name is also a prelude interface method.
+export tick : Int -> Int
+tick n = display n
+
+display : Int -> Int
+display n = n + 1

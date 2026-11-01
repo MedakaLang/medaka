@@ -1,0 +1,88 @@
+-- Sibling test module for `compiler/driver/loader.mdk` ([P-TEST-SIBLING]).
+--
+-- The test-sibling relation `siblingSubjectId`: a `<m>_test.mdk` answers the
+-- canonical module id of `<m>.mdk` when both sit in one directory of one project,
+-- and `None` otherwise.  Rows read the fixture tree `test/loader_sibling_fixtures/proj`
+-- (a project with its own `medaka.toml`, a nested project, and two symlinks) and a
+-- real stdlib pair.  Paths are relative to the repository root, where `medaka test`
+-- runs.
+
+import test.{expectEqual, expectTrue}
+import driver.loader.{siblingSubjectId, loadProgramFilesE, LoadError(..)}
+import frontend.ast.{Loc(..)}
+
+proj : String
+proj = "test/loader_sibling_fixtures/proj"
+
+-- Resolution roots of a user project plus the stdlib tree, as an entry in `proj` sees them.
+sibling : String -> <IO> Option String
+sibling path = siblingSubjectId [] [proj, "stdlib"] path
+
+test "sibling in the same directory answers the subject's id" =
+  expectEqual (Some "a") (sibling "\{proj}/a_test.mdk")
+
+test "a subject in a subdirectory is named by its dotted id" =
+  expectEqual (Some "real.h") (sibling "\{proj}/real/h_test.mdk")
+
+test "a test file in another directory than its subject has no subject" =
+  expectEqual None (sibling "\{proj}/sub/f_test.mdk")
+
+test "a nested project's test file does not pair with the outer project's subject" =
+  expectEqual None (sibling "\{proj}/nested/x_test.mdk")
+
+test "a nested project's own pair is a sibling" =
+  expectEqual (Some "nested.g") (sibling "\{proj}/nested/g_test.mdk")
+
+test "a user-root net_test.mdk is not the sibling of stdlib net" =
+  expectEqual None (sibling "\{proj}/net_test.mdk")
+
+test "a test of a test file is not a sibling" =
+  expectEqual None (sibling "\{proj}/c_test_test.mdk")
+
+test "a test file with no subject file has no subject" =
+  expectEqual None (sibling "\{proj}/b_test.mdk")
+
+test "a file without the test suffix has no subject" =
+  expectEqual None (sibling "\{proj}/a.mdk")
+
+test "a symlinked directory decides as its target does" =
+  expectEqual
+    (sibling "\{proj}/real/h_test.mdk")
+    (sibling "\{proj}/ln/h_test.mdk")
+
+test "a symlinked test file decides as its target does" =
+  expectEqual (Some "real.j") (sibling "\{proj}/real/i_test.mdk")
+
+test "a subject symlinked into another directory is not in the test file's directory" =
+  expectEqual None (sibling "\{proj}/real/k_test.mdk")
+
+test "a real stdlib pair is a sibling" =
+  expectEqual (Some "json") (sibling "stdlib/json_test.mdk")
+
+-- The test-import rule: only a `*_test.mdk` file may import a `*_test.mdk` module.
+
+tifix : String
+tifix = "test/loader_test_import_fixtures"
+
+-- The offending importer file and the line of its `import`, or why there is none.
+testImportSite : String -> <IO> Result String (String, Int)
+testImportSite entry =
+  match loadProgramFilesE (_ => None) "\{tifix}/\{entry}" [tifix]
+    Ok _ => Err "loaded"
+    Err (LoadTestImport _ importer (Some (_, Loc _ line _ _ _))) =>
+      Ok (importer, line)
+    Err _ => Err "other error"
+
+test "a non-test entry importing a test module is rejected at its import line" =
+  expectEqual (Ok ("\{tifix}/entry.mdk", 2)) (testImportSite "entry.mdk")
+
+test "a non-test dependency importing a test module is rejected at the dependency's import" =
+  expectEqual (Ok ("\{tifix}/dep.mdk", 2)) (testImportSite "viadep.mdk")
+
+test "a non-test dependency importing an already-visited test module is still rejected" =
+  expectEqual (Ok ("\{tifix}/dep.mdk", 2)) (testImportSite "again_test.mdk")
+
+test "a test module importing a test module loads" = expectTrue
+  (match loadProgramFilesE (_ => None) "\{tifix}/foo_test.mdk" [tifix]
+    Ok _ => True
+    Err _ => False)

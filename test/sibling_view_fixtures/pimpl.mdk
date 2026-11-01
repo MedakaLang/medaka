@@ -1,0 +1,6 @@
+-- An impl written without `export`.
+public export data Color = Red | Green
+
+impl Display Color where
+  display Red = "red"
+  display Green = "green"

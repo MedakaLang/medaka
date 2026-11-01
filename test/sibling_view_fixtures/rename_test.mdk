@@ -1,0 +1,6 @@
+-- Imports the subject's renamed spelling.  The full view carries a plain import
+-- as an `export import` of the same path would, and an `export import` cannot
+-- rename, so `lst` is not carried.  Rejected.
+import rename.{lst}
+
+main = println (optionOr 0 (lst [1, 2, 3]))

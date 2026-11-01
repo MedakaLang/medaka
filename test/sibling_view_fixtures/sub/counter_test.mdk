@@ -1,0 +1,6 @@
+-- A `counter_test.mdk` in another directory than `counter.mdk` is not its
+-- sibling: the same imports are rejected (R-NO-EXPORTED-CTORS, R-PRIVATE-NAME).
+import test.{expectEqual}
+import counter.{Counter(..), step}
+
+test "step adds one" = expectEqual 2 (step 1)

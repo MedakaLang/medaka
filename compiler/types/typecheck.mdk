@@ -198,7 +198,7 @@ import frontend.desugar.{mapProg}
 import frontend.visibility.{
   useModId,
   pubUsePaths,
-  exportedValueNames,
+  plainUsePaths,
   nsAbstractData,
   directIn,
 }
@@ -284,7 +284,9 @@ import types.runtime_types.{
   RuntimeType(..),
 }
 import types.program_facts.{ProgramFacts, factsOfElab}
-import types.serve_policy.{ServeOps(..), serveStateOf, diagsServe, treeServe}
+import types.serve_policy.{
+  ServeOps(..), serveStateOf, diagsServe, treeServe, isSubject
+}
 import types.prelude_interface.{
   PreludeInterface,
   freezeInterface,
@@ -337,7 +339,6 @@ import types.tc_env.{
   declEnvModule,
   emptyDeclEnvAcc,
   funDefs,
-  graphPubDefiners,
   ieRowInst,
   ieRowMethodNames,
   ieRowOrd,
@@ -386,12 +387,15 @@ import types.tc_decls.{
   dataEnvFromDeclsGo,
   declEnvAccOf,
   declEnvModulesFrom,
-  pubTopFnNames,
+  importerDefiners,
+  privateModuleExports,
+  publicModuleExports,
+  siblingDepEnv,
   stampGraphDecls,
+  tagModuleExports,
   withDeclParamKinds,
 }
 import types.tc_foreign.{
-  directExternSigs,
   externDecls,
   externSigsToMap,
   ffiExternTypeRowsWith,
@@ -534,6 +538,7 @@ defaultDriveInputs = DriveInputs {
   diIoJoinGrants = ioJoinGrants None,
   diProfileName = "",
   diPreludeKey = None,
+  diSibling = [],
 }
 
 -- The drive inputs a driver builds from the profile it selected and the loader's
@@ -952,59 +957,6 @@ unitCarriesMangledFunDefs : String -> List (String, (List Pat, Expr)) -> Bool
 unitCarriesMangledFunDefs mid [] = False
 unitCarriesMangledFunDefs mid ((n, _) :: rest) =
   if isMangledFor mid n then True else unitCarriesMangledFunDefs mid rest
-
--- WS-1a fix: every impl in scope, EXPORT OR NOT.  Instances are GLOBAL (coherence
--- + dispatch leak across module boundaries regardless of `export`), so the
--- superinterface existence query (checkSuperImpls/superImplExists) must see an
--- imported module's `impl Semigroup T` even when it isn't `export`-marked — else
--- `impl Monoid T` in an importer is falsely rejected for a "missing" super impl.
-pickSchemes : List String -> OrdMap Scheme -> List (String, Scheme)
-pickSchemes [] _ = []
-pickSchemes (n :: ns) table = match omLookup n table
-  Some s => (n, s) :: pickSchemes ns table
-  None => pickSchemes ns table
-
--- The ordinary winner and standalone alternative travel together through
--- import selection, aliases, re-exports, and graph memoization.
-tagModuleExports : OrdMap Scheme ->
-  List (String, Scheme) ->
-  List (String, ExportBinding)
-tagModuleExports standalones schemes =
-  map
-    ((name, scheme) => (
-      name,
-      ExportBinding {
-        xbScheme = scheme,
-        xbStandalone = omLookup name standalones,
-        xbExtern = False,
-      },
-    ))
-    schemes
-
-publicModuleExports : List Decl ->
-  ModuleBindings ->
-  List (String, ExportBinding)
-publicModuleExports prog bindings =
-  let standalones =
-    omFromPairs
-      (flatMap
-        (name => match omLookup name bindings.mbStandaloneSchemes
-          Some scheme => [(name, scheme)]
-          None => [])
-        (pubTopFnNames prog))
-      omEmpty
-  let externs =
-    omFromNames (map fst (directExternSigs (externDecls prog))) omEmpty
-  map
-    ((name, binding) => (
-      name,
-      ExportBinding { binding | xbExtern = omHasKey name externs },
-    ))
-    (tagModuleExports
-      standalones
-      (pickSchemes
-        (exportedValueNames prog)
-        (omFromPairs (reverseL bindings.mbSchemes) omEmpty)))
 
 -- The first row for a name wins, unless a second import supplies a different
 -- declaration of the same name: then the occurrence is the ambiguity the
@@ -1454,26 +1406,27 @@ declMethodNamesOf _ = []
 -- (`import m.{a as b, b}`) gives both rows one key and the first row wins here;
 -- the resolver rejects that occurrence by declaration all the same.
 importSeed : GraphCtx ->
+  String ->
   List (String, a) ->
   List (String, String) ->
   List Decl ->
   List (String, List (String, a)) ->
   List (String, (Option String, a))
-importSeed gctx _ _ [] _ = []
-importSeed gctx coreV admitted ((DAttrib _ d) :: rest) depEnv =
-  importSeed gctx coreV admitted (d :: rest) depEnv
-importSeed gctx coreV admitted ((DUse _ path _) :: rest) depEnv =
+importSeed gctx _ _ _ [] _ = []
+importSeed gctx mid coreV admitted ((DAttrib _ d) :: rest) depEnv =
+  importSeed gctx mid coreV admitted (d :: rest) depEnv
+importSeed gctx mid coreV admitted ((DUse _ path _) :: rest) depEnv =
   let depId = useModId path
   if depId == "core" then
     map (suppliedBy None) (coreAliasSchemes path coreV)
-      ++ importSeed gctx coreV admitted rest depEnv
+      ++ importSeed gctx mid coreV admitted rest depEnv
   else match lookupAssoc depId depEnv
-    None => importSeed gctx coreV admitted rest depEnv
+    None => importSeed gctx mid coreV admitted rest depEnv
     Some depSchemes =>
       let bound = boundNames path
       let decls =
         omFromPairs
-          (reverseL (importFormRows path (graphPubDefiners gctx depId)))
+          (reverseL (importFormRows path (importerDefiners gctx mid depId)))
           omEmpty
       let methods =
         identKeysByName
@@ -1493,9 +1446,9 @@ importSeed gctx coreV admitted ((DUse _ path _) :: rest) depEnv =
                 None)
               row)
           (importFormSchemes depEnv path depSchemes)
-        ++ importSeed gctx coreV admitted rest depEnv
-importSeed gctx coreV admitted (_ :: rest) depEnv =
-  importSeed gctx coreV admitted rest depEnv
+        ++ importSeed gctx mid coreV admitted rest depEnv
+importSeed gctx mid coreV admitted (_ :: rest) depEnv =
+  importSeed gctx mid coreV admitted rest depEnv
 
 -- The identity one import's binding of `name` is compared by: the declaration
 -- it denotes.  A standalone value is `(defining module, name there)` from
@@ -1574,12 +1527,17 @@ coreRenameScheme coreV m = match useMemberAlias m
 -- `coreV` is consulted ONLY here, on `DUse True`: `importSeed` keeps taking the plain
 -- depEnv, so a plain `import core.{…}` still seeds nothing (its names are already in
 -- baseSeed — seeding them twice would only add duplicate assoc entries).
-reexportSeed : List (String, a) ->
+--
+-- [pathsOf] picks the use paths that bind: `pubUsePaths` for a module's own
+-- re-exports, `plainUsePaths` for the plain imports its test sibling sees as the
+-- module's own names (`frontend.visibility.FullView`).
+reexportSeed : (List Decl -> List UsePath) ->
+  List (String, a) ->
   List Decl ->
   List (String, List (String, a)) ->
   List (String, a)
-reexportSeed coreV decls depEnv =
-  flatMap (reexportSeedOf coreV depEnv) (pubUsePaths decls)
+reexportSeed pathsOf coreV decls depEnv =
+  flatMap (reexportSeedOf coreV depEnv) (pathsOf decls)
 
 reexportSeedOf : List (String, a) ->
   List (String, List (String, a)) ->
@@ -1603,16 +1561,18 @@ foldModules : FoldPlan e acc ->
   (acc, Option (ModuleServe e), ModuleCtx)
 foldModules plan serve base depEnv accData accAll prev modules =
   let (done, served, last) =
-    workModules plan serve depEnv accData accAll [] prev modules
+    workModules plan serve (depEnv, []) accData accAll [] prev modules
   (collectModules plan.fpCollect base done, served, last)
 
 -- `foldModules`' loop: runs the worker over [modules] head-first, threading the
 -- accumulators, the record and the serve policy, and returns each module's payload,
 -- newest first.  The recursive call is a tail call: a frame waiting on the rest would
--- keep its module's record reachable until the graph end.
+-- keep its module's record reachable until the graph end.  Beside each module's
+-- export bindings it keeps the private bindings of the drive's test subject, which
+-- only the subject's sibling is seeded with (`siblingDepEnv`).
 workModules : FoldPlan e acc ->
   Option (ModuleServe e) ->
-  List (String, List (String, ExportBinding)) ->
+  (List (String, List (String, ExportBinding)), List (String, List (String, ExportBinding))) ->
   List Decl ->
   List Decl ->
   List (String, e) ->
@@ -1620,29 +1580,39 @@ workModules : FoldPlan e acc ->
   List (String, List Decl) ->
   (List (String, e), Option (ModuleServe e), ModuleCtx)
 workModules _ serve _ _ _ done prev [] = (done, serve, prev)
-workModules plan serve depEnv accData accAll done prev [(mid, prog)] =
-  let seed = moduleSeedFor prev plan.fpBaseSeed plan.fpCoreV mid prog depEnv
+workModules plan serve envs accData accAll done prev [(mid, prog)] =
+  let seen = siblingDepEnv prev mid envs
+  let seed = moduleSeedFor prev plan.fpBaseSeed plan.fpCoreV mid prog seen
   let (_, extra, next) = plan.fpWorker prev mid seed accData accAll prog
   ((mid, extra) :: done, serve, next)
-workModules plan serve depEnv accData accAll done prev ((mid, prog) :: rest) =
+workModules plan serve (depEnv, privEnv) accData accAll done prev ((mid, prog) :: rest) =
   let step = map (policy => policy.msStep mid prog prev) serve
-  let (own, done2, serve2, next) = match step
-    Some (ServeHit own extra policy) =>
-      (own, (mid, extra) :: done, Some policy, prev)
+  let seen = siblingDepEnv prev mid (depEnv, privEnv)
+  let (own, priv, done2, serve2, next) = match step
+    Some (ServeHit own priv extra policy) =>
+      (own, priv, (mid, extra) :: done, Some policy, prev)
     _ =>
-      let seed = moduleSeedFor prev plan.fpBaseSeed plan.fpCoreV mid prog depEnv
+      let seed = moduleSeedFor prev plan.fpBaseSeed plan.fpCoreV mid prog seen
       let (schemes, extra, next) =
         plan.fpWorker prev mid seed accData accAll prog
       let own = publicModuleExports prog schemes
+      let priv = privateModuleExports prog schemes own
       match step
         Some (ServeCheck after) =>
-          let (done3, policy) = after next own ((mid, extra) :: done)
-          (own, done3, Some policy, next)
-        _ => (own, (mid, extra) :: done, serve, next)
+          let (done3, policy) = after next own priv ((mid, extra) :: done)
+          (own, priv, done3, Some policy, next)
+        _ => (own, priv, (mid, extra) :: done, serve, next)
   workModules
     plan
     serve2
-    ((mid, own ++ reexportSeed plan.fpCoreV prog depEnv) :: depEnv)
+    (
+      (mid, own ++ reexportSeed pubUsePaths plan.fpCoreV prog depEnv) :: depEnv,
+      if isSubject prev mid then
+        (mid, priv ++ reexportSeed plainUsePaths plan.fpCoreV prog depEnv)
+          :: privEnv
+      else
+        privEnv,
+    )
     (match plan.fpAccumulate
       AccumulateBoth => accData ++ publicDataDecls prog
       AccumulateNone => accData)
@@ -1666,7 +1636,13 @@ moduleSeedFor prev baseSeed coreV mid prog depEnv =
   moduleImportSeed
     prev
     baseSeed
-    (importSeed prev.mcGraph coreV (admittedIn prev.mcGraph mid) prog depEnv)
+    (importSeed
+      prev.mcGraph
+      mid
+      coreV
+      (admittedIn prev.mcGraph mid)
+      prog
+      depEnv)
 
 -- The right fold of `collect` over the payloads [done] (newest first): the last module
 -- first, the only one `collect` sees as last, onto [base].
@@ -1809,6 +1785,7 @@ tcConfigOf domains inputs = TcConfig {
   tcFlatEntryIsStdlib = inputs.diFlatEntryIsStdlib,
   tcKey =
     "\{inputs.diProfileName}\n\{inputs.diFlatEntryIsStdlib}\n\{joinWith "," (omKeys inputs.diStdlibOwned)}",
+  tcSibling = inputs.diSibling,
 }
 
 -- [admitted]: the per-module method admissions `renameAliasedMethods` computed for
@@ -2114,7 +2091,8 @@ checkModulesK inputs preludeKey runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  See `checkModulesPreambleK` for why it is here and not there.
-  let (coreDecls, modules) = stampGraphDecls coreDecls0 modules0
+  let (coreDecls, modules) =
+    stampGraphDecls inputs.diSibling coreDecls0 modules0
   let (runtimeSeed, coreSchemes, coreCtx) =
     checkModulesPreambleK inputs preludeKey runtimeDecls coreDecls modules
   fst (cmFold runtimeSeed coreSchemes coreCtx modules)
@@ -2143,7 +2121,8 @@ checkModulesPartialLast : DriveInputs ->
   List (String, List Decl) ->
   (PartialAnalysis, ModuleCtx)
 checkModulesPartialLast inputs preludeKey runtimeDecls coreDecls0 modules0 =
-  let (coreDecls, modules) = stampGraphDecls coreDecls0 modules0
+  let (coreDecls, modules) =
+    stampGraphDecls inputs.diSibling coreDecls0 modules0
   let GraphPreamble { gpRuntimeSeed = runtimeSeed, gpCoreSchemes = coreSchemes, gpCorePub = coreClosed, gpCoreContexts = coreContexts, gpCoreCtx = coreCtx, ... } =
     graphPreamble
       inputs
@@ -2685,7 +2664,8 @@ driveGraphK sel (DriveArgs inputs valueMain executes preludeKey keyed runtimeDec
   -- and `build` different trees.  Method-alias renaming comes first: it is a name
   -- rewrite on VALUES and cannot move a type head, so the graph reaches identity
   -- minting in its final shape and no later pass has to re-mint.
-  let (coreDecls, modules) = stampGraphDecls coreDecls0 modulesAliased
+  let (coreDecls, modules) =
+    stampGraphDecls inputs.diSibling coreDecls0 modulesAliased
   let GraphPreamble { gpRuntimeSeed = runtimeSeed, gpCoreSchemes = coreSchemes, gpCorePub = coreClosed, gpCoreContexts = coreContexts, gpCoreTree = coreTree, gpMarkSets = ms, gpCoreCtx = coreCtx } =
     graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules
   let capture =

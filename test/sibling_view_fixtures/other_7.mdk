@@ -1,0 +1,7 @@
+-- Not the sibling: a private effect label.
+import peffect.{Beep, quiet}
+
+loud : Int -> <Beep> Int
+loud n = quiet n
+
+main = println (quiet 2)

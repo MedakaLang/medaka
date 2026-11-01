@@ -68,6 +68,7 @@ import driver.loader.{
   loadProgramFilesLocatedCachedSourcesE,
   modIdToPath,
   loadErrorMessage,
+  loadErrorSite,
   LoadError(..),
   entrySearchRoots,
   canonicalPathId,
@@ -95,7 +96,8 @@ import types.module_interface.{retainModuleInterfaces}
 import types.target_profile.{selectedProfile}
 import driver.main_autoprint.{valueMainCandidate}
 import types.private_mangle.{mangleCtorCollisionsPair}
-import types.program_facts.{ProgramFacts, factsOfElab, withFacts}
+import types.program_facts.{ProgramFacts, factsOfElab, withFacts, withSibling}
+import frontend.ast.{SiblingPair}
 import frontend.marker.{declRefs}
 import eval.eval.{
   Value,
@@ -230,6 +232,7 @@ import driver.diagnostics.{
   FrontProgram(..),
   ChainSteps(..),
   noStdlibExports,
+  siblingPairsOf,
   chainKeyOf,
   graphIdOf,
   GraphId(..),
@@ -246,6 +249,7 @@ import driver.diagnostics.{
 export import support.util.{rootsOrDefault}
 import support.util.{
   listLen,
+  testFileSuffix,
   joinNl,
   isNonEmptyL,
   filterList,
@@ -404,9 +408,11 @@ reportTestLine =
     None
 
 -- A drive's inputs: keyed for the shipped trees when [coreDecls] are core's.
-testDriveInputs : List Decl -> DriveInputs
-testDriveInputs coreDecls =
-  withHeldPrelude coreDecls (driveInputsFor !selectedProfile False [])
+testDriveInputs : List SiblingPair -> List Decl -> DriveInputs
+testDriveInputs sibling coreDecls =
+  let held =
+    withHeldPrelude coreDecls (driveInputsFor !selectedProfile False [])
+  { held | diSibling = sibling }
 
 pinIndexForTarget : String -> List Decl -> <IO> Result String (String, PinIndex)
 pinIndexForTarget target userDecls = do
@@ -567,7 +573,7 @@ typecheckExempt target userDecls tsrc
 -- rather than naming a root.
 isNewVehiclePath : String -> <IO> Bool
 isNewVehiclePath target =
-  if endsWith "_test.mdk" target then
+  if endsWith testFileSuffix target then
     let canon = canonicalizePath target
     hasVehicleSegment canon
       || underProjectTestDir canon
@@ -674,20 +680,23 @@ singleFileTypeErrors target tsrc rsrc csrc =
 -- (#1897).  An admitted graph is driven by [drive], and its per-module
 -- diagnostics are bucketed by the fold `check` uses.  The elaboration is `None`
 -- exactly when resolve rejected the graph, and the gate is then an error.
-gatedDrive : String ->
+gatedDrive : List SiblingPair ->
+  String ->
   String ->
   String ->
   OrdMap String ->
   List (String, String, List Decl) ->
   (List (String, List Decl) -> (ElabResult, TcReport, DriveOutputs)) ->
   <IO> (Option TestReportError, Option ElabResult)
-gatedDrive rsrc csrc chainKey sources mods drive =
+gatedDrive sibling rsrc csrc chainKey sources mods drive =
   let front =
     frontEnd
       noStdlibExports
       (d => drive d.fdPairs)
       FrontInput {
-        fiInputs = driveInputsFor !selectedProfile False [],
+        fiInputs = { driveInputsFor !selectedProfile False [] |
+          diSibling = sibling,
+        },
         fiAllowInternal = True,
         fiTrusted = [],
         fiRuntimeSrc = rsrc,
@@ -705,18 +714,19 @@ loadGate True _ _ = None
 loadGate False target le =
   let sources = match le
     LoadParseFailed path src _ => omInsert path src omEmpty
-    LoadCycle _ path (Some (src, _)) => omInsert path src omEmpty
-    _ => omEmpty
+    _ => match loadErrorSite target le
+      Some (_, _, file, Some src, _) => omInsert file src omEmpty
+      _ => omEmpty
   diagnosticGate sources (loadErrorDiags target le)
 
 loadErrorDiags : String -> LoadError -> List (String, List Diag)
 loadErrorDiags _ (LoadParseFailed mpath _ pe) =
   [(mpath, [parseErrDiag mpath pe])]
-loadErrorDiags target (LoadCycle e cpath csite) = match csite
-  Some (_, loc) => [(cpath, [mkDiag SevError RModuleLoad e (Some loc)])]
-  None => [(target, [mkDiag SevError RModuleLoad e None])]
 loadErrorDiags target (LoadMsg e) =
   [(target, [mkDiag SevError RModuleLoad e None])]
+loadErrorDiags target le = match loadErrorSite target le
+  Some (code, e, file, _, loc) => [(file, [mkDiag SevError code e loc])]
+  None => []
 
 diagnosticGate : OrdMap String ->
   List (String, List Diag) ->
@@ -838,7 +848,7 @@ data DoctestTrees =
 -- so the filter cannot move a module's verdict.
 data Prepared =
   | PreparedPair TestPair
-  | PreparedInject String (List (String, String, List Decl)) (List Decl)
+  | PreparedInject (List SiblingPair) String (List (String, String, List Decl)) (List Decl)
 
 -- Load + elaborate, once, for an import-bearing target: the gate text (None when
 -- the module type-checks, or is exempt) beside the trees the three phases share.
@@ -875,13 +885,14 @@ data Prepared =
 prepareMultiParts : String ->
   String ->
   String ->
+  String ->
   List String ->
   Bool ->
   Bool ->
   Bool ->
   List Decl ->
   <IO> (Option TestReportError, Prepared)
-prepareMultiParts rsrc csrc target roots exempt unread hasDoctests synthDecls =
+prepareMultiParts stdlibDir rsrc csrc target roots exempt unread hasDoctests synthDecls =
   let (loaded, sources) = perfRow "test-load" target (_ =>
     loadProgramFilesLocatedCachedSourcesE
       (Ref omEmpty)
@@ -903,6 +914,7 @@ prepareMultiParts rsrc csrc target roots exempt unread hasDoctests synthDecls =
           (if hasDoctests then "check" else "elaborate")
           (_ =>
             elaborateFor
+              stdlibDir
               rsrc
               csrc
               target
@@ -916,15 +928,17 @@ prepareMultiParts rsrc csrc target roots exempt unread hasDoctests synthDecls =
 prepareMulti : String ->
   String ->
   String ->
+  String ->
   List String ->
   Bool ->
   Bool ->
   Bool ->
   List Decl ->
   <IO> (Option String, Prepared)
-prepareMulti rsrc csrc target roots exempt unread hasDoctests synthDecls =
+prepareMulti stdlibDir rsrc csrc target roots exempt unread hasDoctests synthDecls =
   let (gate, prepared) =
     prepareMultiParts
+      stdlibDir
       rsrc
       csrc
       target
@@ -938,6 +952,7 @@ prepareMulti rsrc csrc target roots exempt unread hasDoctests synthDecls =
 elaborateFor : String ->
   String ->
   String ->
+  String ->
   List String ->
   OrdMap String ->
   List (String, String, List Decl) ->
@@ -945,40 +960,55 @@ elaborateFor : String ->
   Bool ->
   List Decl ->
   <IO> (Option TestReportError, Prepared)
-elaborateFor rsrc csrc _ _ _ mods True False _ =
-  let rawModules = desugaredModPairs mods
-  let (elaborated, _, _) = oneShotElab rsrc csrc rawModules
-  (None, PreparedPair (pairOfElab rsrc csrc rawModules elaborated))
-elaborateFor rsrc csrc target roots sources mods False False _ =
-  let rawModules = desugaredModPairs mods
-  let (gate, elaborated) =
-    gatedDrive
-      rsrc
-      csrc
-      (chainKeyOf target roots)
-      sources
-      mods
-      (oneShotElab rsrc csrc)
-  (
-    gate,
-    PreparedPair
-      (option unelaboratedTrees (pairOfElab rsrc csrc rawModules) elaborated),
-  )
-elaborateFor rsrc csrc target roots sources mods exempt True synthDecls = (
-  gateOfVerbatim exempt rsrc csrc (chainKeyOf target roots) sources mods,
-  PreparedInject (chainKeyOf target roots) mods synthDecls,
-)
+elaborateFor stdlibDir rsrc csrc target roots sources mods exempt hasDoctests synthDecls =
+  let sibling = siblingPairsOf roots mods
+  if hasDoctests then
+    (
+      gateOfVerbatim
+        sibling
+        exempt
+        rsrc
+        csrc
+        (chainKeyOf target roots)
+        sources
+        mods,
+      PreparedInject sibling (chainKeyOf target roots) mods synthDecls,
+    )
+  else
+    let rawModules = desugaredModPairs mods
+    if exempt then
+      let (elaborated, _, _) = oneShotElab sibling rsrc csrc rawModules
+      (None, PreparedPair (pairOfElab sibling rsrc csrc rawModules elaborated))
+    else
+      let (gate, elaborated) =
+        gatedDrive
+          sibling
+          rsrc
+          csrc
+          (chainKeyOf target roots)
+          sources
+          mods
+          (oneShotElab sibling rsrc csrc)
+      (
+        gate,
+        PreparedPair
+          (option
+            unelaboratedTrees
+            (pairOfElab sibling rsrc csrc rawModules)
+            elaborated),
+      )
 
 -- The no-doctest arm's drive of [pairs].  It is the only drive of its
 -- invocation, so it is unkeyed and records nothing.
-oneShotElab : String ->
+oneShotElab : List SiblingPair ->
+  String ->
   String ->
   List (String, List Decl) ->
   (ElabResult, TcReport, DriveOutputs)
-oneShotElab rsrc csrc pairs =
+oneShotElab sibling rsrc csrc pairs =
   let coreDecls = desugaredPrelude csrc
   elaborateModulesWithReport
-    (testDriveInputs coreDecls)
+    (testDriveInputs sibling coreDecls)
     (valueMainCandidate coreDecls pairs)
     None
     (desugaredPrelude rsrc)
@@ -986,19 +1016,20 @@ oneShotElab rsrc csrc pairs =
     pairs
 
 -- The phases' trees: [modules] paired with their elaboration.
-pairOfElab : String ->
+pairOfElab : List SiblingPair ->
+  String ->
   String ->
   List (String, List Decl) ->
   ElabResult ->
   TestPair
-pairOfElab rsrc csrc modules elaborated = match elaborated
+pairOfElab sibling rsrc csrc modules elaborated = match elaborated
   ElabResult { erCore = coreE, erModules = modulesE, ... } =>
     uncurryPair
       (desugaredPrelude rsrc)
       (desugaredPrelude csrc)
       modules
-      (mangleCtorCollisionsPair (coreE, modulesE))
-      (factsOfElab elaborated)
+      (mangleCtorCollisionsPair sibling (coreE, modulesE))
+      (withSibling sibling (factsOfElab elaborated))
 
 -- Stands in for the trees of a graph resolve rejected.  Its gate is an error, so
 -- no phase reads them.
@@ -1011,18 +1042,19 @@ unelaboratedTrees =
 -- prelude generation and [chainKey]: a module before the entry that an earlier
 -- drive of the same graph recorded is served (`elaborateModulesChainReport`).  The
 -- cache keeps the interfaces of this graph's modules and no others.
-keyedElab : String ->
+keyedElab : List SiblingPair ->
+  String ->
   String ->
   String ->
   List (String, String, List Decl) ->
   Bool ->
   List (String, List Decl) ->
   (ElabResult, TcReport, DriveOutputs)
-keyedElab rsrc csrc chainKey mods valueMain pairs =
+keyedElab sibling rsrc csrc chainKey mods valueMain pairs =
   let coreDecls = desugaredPrelude csrc
   let _ = retainModuleInterfaces (map ((mid, _, _) => mid) mods)
   elaborateModulesChainReport
-    (testDriveInputs coreDecls)
+    (testDriveInputs sibling coreDecls)
     valueMain
     (preludeGeneration rsrc csrc)
     chainKey
@@ -1038,10 +1070,10 @@ forcePrepared : String -> String -> Prepared -> <IO> TestPair
 forcePrepared _ _ (PreparedPair pair) =
   injectedExampleDiags := omEmpty
   pair
-forcePrepared rsrc csrc (PreparedInject chainKey mods synthDecls) = perfRow
+forcePrepared rsrc csrc (PreparedInject sibling chainKey mods synthDecls) = perfRow
   "test-elab"
   "injected"
-  (_ => forceInjected rsrc csrc chainKey mods synthDecls)
+  (_ => forceInjected sibling rsrc csrc chainKey mods synthDecls)
 
 -- The doctest-injected elaboration's own errors on the examples, by doctest line
 -- (`exampleDiagLines`), written by the elaboration that built the trees the
@@ -1071,42 +1103,46 @@ exampleDiagLines perMod = match reverseL perMod
       errs
   [] => omEmpty
 
-forceInjected : String ->
+forceInjected : List SiblingPair ->
+  String ->
   String ->
   String ->
   List (String, String, List Decl) ->
   List Decl ->
   <IO> TestPair
-forceInjected rsrc csrc chainKey mods synthDecls =
+forceInjected sibling rsrc csrc chainKey mods synthDecls =
   let injected = injectIntoLast synthDecls (desugaredModPairs mods)
-  let (elab, _, _) = keyedElab rsrc csrc chainKey mods False injected
+  let (elab, _, _) = keyedElab sibling rsrc csrc chainKey mods False injected
   match elab
     ElabResult { erPerModule = perModule, ... } =>
       injectedExampleDiags := exampleDiagLines perModule
-      pairOfElab rsrc csrc injected elab
+      pairOfElab sibling rsrc csrc injected elab
 
 -- The doctest-bearing gate: the no-doctest arm's, over the graph as written,
 -- which this invocation already loaded.  Its drive records what the injected
 -- elaboration serves.
-gateOfVerbatim : Bool ->
+gateOfVerbatim : List SiblingPair ->
+  Bool ->
   String ->
   String ->
   String ->
   OrdMap String ->
   List (String, String, List Decl) ->
   <IO> Option TestReportError
-gateOfVerbatim True _ _ _ _ _ = None
-gateOfVerbatim False rsrc csrc chainKey sources mods =
+gateOfVerbatim _ True _ _ _ _ _ = None
+gateOfVerbatim sibling False rsrc csrc chainKey sources mods =
   let coreDecls = desugaredPrelude csrc
   let rawModules = desugaredModPairs mods
   let (gate, _) =
     gatedDrive
+      sibling
       rsrc
       csrc
       chainKey
       sources
       mods
       (keyedElab
+        sibling
         rsrc
         csrc
         chainKey
@@ -1291,6 +1327,7 @@ driveMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases filt
   let synthDecls = buildSynthDecls synthResults
   let gated =
     prepareMulti
+      stdlibDir
       rsrc
       csrc
       target
@@ -1859,6 +1896,7 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
   let rootId = singleRootId roots target
   modulePathMap := [("__main__", target)]
   let elab = elaborateModules (testDriveInputs
+    []
     livePrelude) runtimeDecls livePrelude [
     (rootId, allUser),
   ]
@@ -2071,10 +2109,14 @@ elaborateModulesMangled : List Decl ->
   ((List Decl, List (String, List Decl)), ProgramFacts, List (String, TcDiag))
 elaborateModulesMangled runtimeDecls coreDecls modules =
   let elab =
-    elaborateModules (testDriveInputs coreDecls) runtimeDecls coreDecls modules
+    elaborateModules
+      (testDriveInputs [] coreDecls)
+      runtimeDecls
+      coreDecls
+      modules
   match elab
     ElabResult { erCore = coreE, erModules = modulesE, erPerModule = perModule, erResidual = residual, ... } => (
-      mangleCtorCollisionsPair (coreE, modulesE),
+      mangleCtorCollisionsPair [] (coreE, modulesE),
       factsOfElab elab,
       residual ++ perModuleErrors perModule [],
     )
@@ -2696,6 +2738,7 @@ reportMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases fil
   let synthResults = buildSynthResults userDecls examples
   let prepared =
     prepareMultiParts
+      stdlibDir
       rsrc
       csrc
       target
@@ -3265,7 +3308,16 @@ runEvalPropsWorkerSource target nonce requests prelude tsrc userDecls =
   currentEvalFile := target
   if hasUseDecls userDecls then
     let prepared =
-      prepareMulti runtimeSrc coreSrc target roots exempt False False []
+      prepareMulti
+        stdlibDir
+        runtimeSrc
+        coreSrc
+        target
+        roots
+        exempt
+        False
+        False
+        []
     match prepared
       (Some message, _) => evalWorkerDie (typecheckGateFail target message)
       (None, work) =>
@@ -3594,7 +3646,7 @@ helperElabDiags : List Decl ->
   List (String, List Decl) ->
   List (String, TcDiag)
 helperElabDiags runtimeM rawCoreM rawM =
-  match elaborateModules (testDriveInputs rawCoreM) runtimeM rawCoreM rawM
+  match elaborateModules (testDriveInputs [] rawCoreM) runtimeM rawCoreM rawM
     ElabResult { erPerModule = perModule, erResidual = residual, ... } =>
       residual ++ perModuleErrors perModule []
 
@@ -4869,7 +4921,7 @@ checkTestMdkRoster root targets files =
     Err _ => True
     Ok (0, out, _) =>
       let tracked =
-        filterList (endsWith "_test.mdk") (filterList (/= "") (splitNl out))
+        filterList (endsWith testFileSuffix) (filterList (/= "") (splitNl out))
       let relFiles = map (stripRootPrefix root) files
       let missing = filterList (t => not (contains t relFiles)) tracked
       match missing

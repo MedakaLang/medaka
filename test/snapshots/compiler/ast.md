@@ -1,5 +1,5 @@
 # META
-source_lines=2907
+source_lines=2916
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -2909,6 +2909,15 @@ mapKvsB f ((k, v) :: rest) =
   let (v2, c2) = mapTyInExpr f v
   let (rest2, c3) = mapKvsB f rest
   ((k2, v2) :: rest2, c1 || c2 || c3)
+
+-- One test sibling and the subject whose full view it gets: both are module ids.
+-- A graph's pairs hold one per `*_test.mdk` module whose subject the graph
+-- loaded; the loader classifies each by location.  A subject has at most one
+-- sibling, so either id finds its pair (`frontend.visibility.subjectOf`).
+public export data SiblingPair = SiblingPair {
+  spSibling : String,
+  spSubject : String,
+}
 # DESUGAR
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DData Public "Lit" () ((variant "LInt" (ConPos (TyCon "Int"))) (variant "LFloat" (ConPos (TyCon "Float"))) (variant "LU64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "LI64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "LString" (ConPos (TyCon "String"))) (variant "LChar" (ConPos (TyCon "String"))) (variant "LByte" (ConPos (TyCon "Int"))) (variant "LBool" (ConPos (TyCon "Bool"))) (variant "LUnit" (ConPos))) ())
@@ -3459,6 +3468,7 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig false "mapKvsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Expr"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Expr"))) (TyCon "Bool")))))
 (DFunDef false "mapKvsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapKvsB" ((PVar "f") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "k2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "k"))) (DoLet false false (PTuple (PVar "v2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "v"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c3")) (EApp (EApp (EVar "mapKvsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (ETuple (EVar "k2") (EVar "v2")) (EVar "rest2")) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
+(DData Public "SiblingPair" () ((variant "SiblingPair" (ConNamed (field "spSibling" (TyCon "String")) (field "spSubject" (TyCon "String"))))) ())
 # MARK
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DData Public "Lit" () ((variant "LInt" (ConPos (TyCon "Int"))) (variant "LFloat" (ConPos (TyCon "Float"))) (variant "LU64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "LI64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "LString" (ConPos (TyCon "String"))) (variant "LChar" (ConPos (TyCon "String"))) (variant "LByte" (ConPos (TyCon "Int"))) (variant "LBool" (ConPos (TyCon "Bool"))) (variant "LUnit" (ConPos))) ())
@@ -4009,3 +4019,4 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig false "mapKvsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Expr"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Expr"))) (TyCon "Bool")))))
 (DFunDef false "mapKvsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapKvsB" ((PVar "f") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "k2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "k"))) (DoLet false false (PTuple (PVar "v2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "v"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c3")) (EApp (EApp (EVar "mapKvsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (ETuple (EVar "k2") (EVar "v2")) (EVar "rest2")) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
+(DData Public "SiblingPair" () ((variant "SiblingPair" (ConNamed (field "spSibling" (TyCon "String")) (field "spSubject" (TyCon "String"))))) ())

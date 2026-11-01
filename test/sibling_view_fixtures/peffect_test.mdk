@@ -1,0 +1,10 @@
+-- Writes the private label in a row.  Accepted.
+import test.{expectEqual}
+import peffect.{Beep, quiet}
+
+loud : Int -> <Beep> Int
+loud n = quiet n
+
+test "private effect label" = expectEqual 2 (quiet 2)
+
+main = println (quiet 2)

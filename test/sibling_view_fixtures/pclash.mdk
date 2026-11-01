@@ -1,0 +1,12 @@
+-- A subject whose private constructor `Red` is spelled like the public one
+-- `light.mdk` declares.
+data Color = Red Int | Blue
+
+colorVal : Color -> Int
+colorVal c = match c
+  Red n => n + 100
+  Blue => 7
+
+export
+tick : Int -> Int
+tick n = colorVal (Red n)

@@ -1,0 +1,7 @@
+-- A sibling, but not `pchain.mdk`'s: its own privilege does not reach another
+-- subject's private `step`.  Rejected.
+import xduo.{double}
+import pchain_test.{probe}
+import pchain.{step}
+
+main = println (double (step probe))

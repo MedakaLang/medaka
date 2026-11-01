@@ -1,0 +1,8 @@
+-- A public constructor spelled like `pclash.mdk`'s private one.
+public export data Light = Red Int Int | Green
+
+export
+lightVal : Light -> Int
+lightVal l = match l
+  Red a b => a * 10 + b
+  Green => 0
