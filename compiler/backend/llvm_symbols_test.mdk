@@ -11,7 +11,9 @@ import backend.emit_target.{Backend(..)}
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{EmitPlan, buildEmitPlan}
 import ir.core_ir.{CProgram}
-import test.{Expectation, expectAll, expectEqual, expectSatisfies, labelFail}
+import test.{
+  Expectation, expectAll, expectEqual, expectSatisfies, labelFail, fail
+}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
@@ -19,7 +21,7 @@ import types.tc_elab.{grantWholeDomain}
 import types.program_facts.{emptyFacts}
 import ir.core_ir_lower.{lowerProgramEmitWith}
 import backend.llvm_emit.{
-  EmitInput, emitProgram, emitProgramRecord, makeEmitInput
+  EmitInput, emitProgram, emitProgramRecord, emitProgramWithStats, makeEmitInput
 }
 import backend.llvm_symbols.{
   CallShape(..),
@@ -458,3 +460,21 @@ test "record mode keeps a gap's census and finds no physical defect" =
         (any (e => isSome (stringIndexOf "assertSnapshot" e)))
         events
     Err _ => expectEqual [] (refusalFacts emitted)
+
+test "LLVM publication routes return identical receipt-free text" =
+  let src = "f : Int -> Int\nf x = x + 1\nmain = f 2\n"
+  match (
+    withLowered emitProgram src,
+    withLowered emitProgramRecord src,
+    withLowered emitProgramWithStats src,
+  )
+    (Ok text, Ok (record, _), Ok (stats, _)) => expectAll [
+      expectEqual text record,
+      expectEqual text stats,
+      expectEqual None (stringIndexOf "\u{1e}L" text),
+      expectSatisfies
+        "a named call was emitted"
+        isSome
+        (stringIndexOf "call " text),
+    ]
+    _ => fail "a publication route refused the valid program"
