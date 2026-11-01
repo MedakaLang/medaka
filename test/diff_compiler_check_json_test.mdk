@@ -249,21 +249,29 @@ physicalJsonRow dir backend missing =
 
 physicalJsonBuild : String -> <Exec, IO, FileRead, FileWrite> Expectation
 physicalJsonBuild dir =
-  let _ = writeFile "\{dir}/input.mdk" "-- input\nmain = 1\n"
+  let input = "\{dir}/input.mdk"
+  match writeFile input "-- input\nmain = 1\n"
+    Err e => fail "physical input fixture write \{input}: \{e}"
+    Ok () => physicalJsonBuildTool dir
+
+physicalJsonBuildTool : String -> <Exec, IO, FileRead, FileWrite> Expectation
+physicalJsonBuildTool dir =
   let child = underRoot "compiler/entries/physical_diag_test_main.mdk"
   let tool = "\{dir}/wasm-tools"
-  let _ =
+  let written =
     writeFile
       tool
       "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf invoked > \"$PHYSICAL_WASM_PROBE\"\n"
-  match boundedVerb "chmod" ["+x", tool]
-    Err e => fail "wasm-tools fixture chmod: \{e}"
-    Ok (code, out, err) =>
-      if code /= 0 then
-        fail
-          "wasm-tools fixture chmod exited \{intToString code}: \{out ++ err}"
-      else
-        physicalJsonBuildChild dir child
+  match written
+    Err e => fail "wasm-tools fixture write \{tool}: \{e}"
+    Ok () => match boundedVerb "chmod" ["+x", tool]
+      Err e => fail "wasm-tools fixture chmod: \{e}"
+      Ok (code, out, err) =>
+        if code /= 0 then
+          fail
+            "wasm-tools fixture chmod exited \{intToString code}: \{out ++ err}"
+        else
+          physicalJsonBuildChild dir child
 
 physicalJsonBuildChild : String ->
   String ->
