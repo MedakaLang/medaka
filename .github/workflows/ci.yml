@@ -397,8 +397,11 @@ jobs:
             # test/CAPABILITY-EXCEPTIONS.txt. Its remaining lines are `medaka test` over
             # compiler/ and stdlib/ files, already covered by compiler_touched, except
             # that compiler/tools/lint_test.mdk also reads test/lint_internal_fixtures/.
+            # The guide page and its programs, and the two native tests the Makefile's
+            # test: target names for them, are not under compiler_touched, so they are
+            # listed here too.
             case "$f" in
-              test/ported/*|test/diff_compiler_ported.sh|test/CAPABILITY-EXCEPTIONS.txt|test/lint_internal_fixtures/*)
+              test/ported/*|test/diff_compiler_ported.sh|test/CAPABILITY-EXCEPTIONS.txt|test/lint_internal_fixtures/*|docs/guide/11-writing-scripts.md|test/guide_scripts/*|test/guide_scripts_test.mdk|test/run_opcount_test.mdk)
                 inlang_corpora=true ;;
             esac
 
