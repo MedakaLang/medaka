@@ -1,5 +1,5 @@
 # META
-source_lines=2508
+source_lines=2389
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve: one solving judgment over one goal store, above the entailment core: the exact-return
@@ -114,9 +114,7 @@ import types.tc_mono.{
 import types.tc_state.{
   callUOblsWindow,
   currentScopeStore,
-  initialModuleCtx,
   moduleWindow,
-  probeGraphCtx,
 }
 import types.tc_env.{
   anyArgMentions,
@@ -139,7 +137,6 @@ import types.tc_scope.{methodAdmittedHere, methodVisibleHere}
 import types.tc_unify.{
   enterLevel,
   exitLevel,
-  freshEffvar,
   freshTvMap,
   freshVar,
   instantiateMethodTracked,
@@ -152,13 +149,9 @@ import types.tc_decls_types.{fromAstType, reqTyToMono}
 import types.tc_solve_givens.{
   activeDictPredOf,
   activeDictVarOfEncl,
-  anyGivenMatches,
   assumAnswerEvidence,
   assumAnswerRoute,
   enclSlot,
-  firstPredForEncl,
-  firstPredForEnclAt,
-  firstPredForEnclResidual,
   givenInScope,
   givenRoute,
   givensForScope,
@@ -166,7 +159,6 @@ import types.tc_solve_givens.{
   noteAssumption,
   predicateRequestMatchesSlot,
   projectedGivenOf,
-  pushGiven,
 }
 import types.tc_solve_entail.{
   determinedGoalInstance,
@@ -2124,7 +2116,9 @@ siteKindMonos (SKOp _) = []
 siteKindMonos (SKPredicateOp _ _) = []
 siteKindMonos (SKRLocal _ _ ms _ vecs) = ms ++ flatMap identity vecs
 
--- test-only observation: declarations whose only callers are tests and probes.
+-- Observation declarations exported for readers outside this module: the method-return trace and
+-- memo views for the drive-level `typecheck_test`, and the method-slot and method-return probes
+-- `tc_occurrence` and `tc_module` read.
 
 -- Each entry with the evidence its goal published in [evidence], the table of the
 -- drive that recorded it.
@@ -2263,119 +2257,6 @@ methodReturnMemoSupers [] = ""
 methodReturnMemoSupers supers =
   "{\{join "," (map methodReturnMemoRoute supers)}}"
 
--- Private probe for the memo's goal equality: two goals `C (Int -> Int)` whose arrows
--- carry different effect rows are one predicate to `monoVecSameGiven` and two to
--- `walkGoalSame`, in either order; the same row is one goal to both.
-export
-walkGoalSameProbe : Unit -> List Bool
-walkGoalSameProbe _ =
-  let iface = ifaceRefBare "C"
-  let int = tconBuiltin "Int"
-  let mctx = initialModuleCtx (probeGraphCtx ())
-  let row1 = EffRow [] (Some (freshEffvar mctx ()))
-  let row2 = EffRow [] (Some (freshEffvar mctx ()))
-  let goal1 = [TFun int row1 int]
-  let goal2 = [TFun int row2 int]
-  [
-    monoVecSameGiven goal1 goal2,
-    monoVecSameGiven goal2 goal1,
-    walkGoalSame iface goal1 iface goal2,
-    walkGoalSame iface goal2 iface goal1,
-    walkGoalSame iface goal1 iface [TFun int row1 int],
-  ]
-
-isSemanticGivenAnswer : Option AssumAnswer -> Bool
-isSemanticGivenAnswer (Some (SemanticGiven (GivenEvidence _))) = True
-isSemanticGivenAnswer _ = False
-
-isLegacyPredicateAnswer : Option AssumAnswer -> Bool
-isLegacyPredicateAnswer (Some (LegacyPredicate _)) = True
-isLegacyPredicateAnswer _ = False
-
--- Private service check for the selection half of the scope adapter.  It keeps
--- the full-vector and id-witness eligibility rules observable independently of
--- production examples, and its sibling query fails if lexical filtering is
--- removed from `anyGivenMatches`.
-scopeGivenProbe : Unit -> List Bool
-scopeGivenProbe _ =
-  let gctx = probeGraphCtx ()
-  let store = currentScopeStore gctx ()
-  let root = Scopes.freshScope store None 0 "given-probe" ModuleOwner
-  let owner =
-    Scopes.freshScope store (Some root) 1 "given-probe" (BindingOwner "owner")
-  let sibling =
-    Scopes.freshScope store (Some root) 1 "given-probe" (BindingOwner "sibling")
-  let iface =
-    IfaceRef { irName = "PairGiven", irOrigin = OriginModule "given-probe" }
-  let args = [tconBuiltin "Int", tconBuiltin "Bool"]
-  let slot = PredicateSlot {
-    psIface = iface,
-    psArgs = PSArgsKnown args,
-    psBoundIds = [41],
-  }
-  pushGiven gctx GMPredicate DirectGiven slot (Scopes.binderAt owner 0)
-  let exact = PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
-  let unknown = PredicateRequest { prIface = iface, prArgs = PSArgsUnknown }
-  let truncated = PredicateRequest {
-    prIface = iface,
-    prArgs = PSArgsKnown [tconBuiltin "Int"],
-  }
-  let witnessIface = IfaceRef {
-    irName = "WitnessGiven",
-    irOrigin = OriginModule "given-probe",
-  }
-  let witnessSlot = PredicateSlot {
-    psIface = witnessIface,
-    psArgs = PSArgsKnown [tconBuiltin "Int"],
-    psBoundIds = [73],
-  }
-  let witnessRequest = PredicateRequest {
-    prIface = witnessIface,
-    prArgs = PSArgsKnown [tconBuiltin "Int"],
-  }
-  pushGiven gctx GMIdWitnessed DirectGiven witnessSlot (Scopes.binderAt owner 1)
-  let compatibleIface = IfaceRef {
-    irName = "CompatibleGiven",
-    irOrigin = OriginModule "given-probe",
-  }
-  let compatibleSlot = PredicateSlot {
-    psIface = compatibleIface,
-    psArgs = PSArgsUnknown,
-    psBoundIds = [89],
-  }
-  let compatibleRequest = PredicateRequest {
-    prIface = compatibleIface,
-    prArgs = PSArgsKnown [tconBuiltin "Int"],
-  }
-  pushGiven
-    gctx
-    GMPredicate
-    DirectGiven
-    compatibleSlot
-    (Scopes.binderAt owner 2)
-  let givens = givensForScope gctx owner
-  let result = [
-    anyGivenMatches gctx exact owner givens,
-    not (anyGivenMatches gctx exact sibling givens),
-    not (anyGivenMatches gctx truncated owner givens),
-    not (anyGivenMatches gctx witnessRequest owner givens),
-    isSome
-      (firstPredForEnclAt gctx GSImplRequires 73 witnessRequest owner givens),
-    isNone
-      (firstPredForEnclAt gctx GSImplRequires 74 witnessRequest owner givens),
-    isSemanticGivenAnswer (firstPredForEncl gctx exact owner givens),
-    isLegacyPredicateAnswer
-      (firstPredForEnclAt gctx GSPredicateOnly 41 unknown owner givens),
-    isLegacyPredicateAnswer
-      (firstPredForEnclResidual gctx "PairGiven" args owner givens),
-    isLegacyPredicateAnswer
-      (firstPredForEncl gctx compatibleRequest owner givens),
-  ]
-  result
-
--- > scopeGivenProbe ()
--- [True, True, True, True, True, True, True, True, True, True]
-
 export
 methodSlotBoundIds : List MethodPredicateSlot -> List (List Int)
 methodSlotBoundIds slots = map (slot => slot.mpsPredicate.psBoundIds) slots
@@ -2513,13 +2394,13 @@ methodReturnMemoCurrentViews gctx =
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_types") ((mem "Provenance" true) (mem "OblProjection" true) (mem "GoalReach" true) (mem "GoalPayload" true) (mem "GivenScope" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "AdmittedAnswer" true) (mem "AssumAnswer" true) (mem "BuiltinClass" true) (mem "EvDest" true) (mem "GoalKind" true) (mem "GoalWindow" true) (mem "GraphMarks" true) (mem "MethodReturnMemoView" true) (mem "MethodReturnResolution" true) (mem "MethodReturnTraceEntry" true) (mem "MethodReturnTraceStage" true) (mem "MethodTemplateGivenResult" true) (mem "Obligation" true) (mem "PendingDictApp" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "SolvedGoalEntry" true) (mem "Undetermined" true) (mem "UObligation" true) (mem "DynCtx" false) (mem "dynFor" false) (mem "GivenEntry" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "ImplRow" false) (mem "LocalAbs" false) (mem "MethodPredicateSlot" false) (mem "MethodPredicateTemplate" false) (mem "MethodReturnRequest" false) (mem "MethodRow" false) (mem "MethodSchemeRow" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "NumAnchorTestObservation" false) (mem "PendingEntry" false) (mem "PendingMethodDict" false) (mem "RecDictApp" false) (mem "ReqWalk" false) (mem "TraceSink" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "allConcreteHeads" false) (mem "anyListM" false) (mem "cohApply" false) (mem "cohOverlap" false) (mem "cohOverlapGo" false) (mem "containsI" false) (mem "dedupI" false) (mem "exactReturnRequestOfGoal" false) (mem "findTvarInMono" false) (mem "headTyconMono" false) (mem "matchEqMono" false) (mem "matchOneSided" false) (mem "matchStep" false) (mem "matchTyMono" false) (mem "monoHeadIsDecl" false) (mem "monoMintedBefore" false) (mem "monoSameGiven" false) (mem "monoSizes" false) (mem "monoTyvarIds" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVecSameGiven" false) (mem "monoVectorClosed" false) (mem "peelQual" false) (mem "rigidSigPairs" false) (mem "sigCellsOf" false) (mem "sigRigidBindings" false) (mem "stripArrows" false) (mem "stripTyConstraints" false) (mem "substMono" false) (mem "tconBuiltin" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "walkMonosSame" false) (mem "unrigidSig" false))))
-(DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "initialModuleCtx" false) (mem "moduleWindow" false) (mem "probeGraphCtx" false))))
+(DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "moduleWindow" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "anyArgMentions" false) (mem "dispatchTyparams" false) (mem "ieHeadRows" false) (mem "ieRowIfaceMatches" false) (mem "ieRowOfIface" false) (mem "ieRowsAll" false) (mem "ieRowTys" false) (mem "instRefSeq" false) (mem "methodArgs" false) (mem "methodRowIface" false) (mem "methodRowTestIface" false) (mem "methodSlotKey" false) (mem "originMethodName" false) (mem "sameIfaceDecl" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "erredDuring" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "methodAdmittedHere" false) (mem "methodVisibleHere" false))))
-(DUse false (UseGroup ("types" "tc_unify") ((mem "enterLevel" false) (mem "exitLevel" false) (mem "freshEffvar" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "instantiateMethodTracked" false) (mem "monoUnboundVarLevels" false) (mem "predicateSlotArgs" false) (mem "unify" false) (mem "unifyIn" false))))
+(DUse false (UseGroup ("types" "tc_unify") ((mem "enterLevel" false) (mem "exitLevel" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "instantiateMethodTracked" false) (mem "monoUnboundVarLevels" false) (mem "predicateSlotArgs" false) (mem "unify" false) (mem "unifyIn" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "fromAstType" false) (mem "reqTyToMono" false))))
-(DUse false (UseGroup ("types" "tc_solve_givens") ((mem "activeDictPredOf" false) (mem "activeDictVarOfEncl" false) (mem "anyGivenMatches" false) (mem "assumAnswerEvidence" false) (mem "assumAnswerRoute" false) (mem "enclSlot" false) (mem "firstPredForEncl" false) (mem "firstPredForEnclAt" false) (mem "firstPredForEnclResidual" false) (mem "givenInScope" false) (mem "givenRoute" false) (mem "givensForScope" false) (mem "goalMatchesGiven" false) (mem "noteAssumption" false) (mem "predicateRequestMatchesSlot" false) (mem "projectedGivenOf" false) (mem "pushGiven" false))))
+(DUse false (UseGroup ("types" "tc_solve_givens") ((mem "activeDictPredOf" false) (mem "activeDictVarOfEncl" false) (mem "assumAnswerEvidence" false) (mem "assumAnswerRoute" false) (mem "enclSlot" false) (mem "givenInScope" false) (mem "givenRoute" false) (mem "givensForScope" false) (mem "goalMatchesGiven" false) (mem "noteAssumption" false) (mem "predicateRequestMatchesSlot" false) (mem "projectedGivenOf" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "determinedGoalInstance" false) (mem "directSuperGoals" false) (mem "enteredGoalKey" false) (mem "freshRowHeads" false) (mem "goalCandidates" false) (mem "goalHeadCon" false) (mem "goalIsProjection" false) (mem "goalRows" false) (mem "ieSelectRowByIface" false) (mem "paramMonoOf" false) (mem "positionBindings" false) (mem "repeatedBindings" false) (mem "reqWalkMemo" false) (mem "reqWalkStart" false) (mem "routeOfD" false) (mem "rowCountsFor" false) (mem "rowHeadMatches" false) (mem "rowRouteKey" false) (mem "selectedCallSupers" false) (mem "selectedRowReqMatch" false) (mem "stableGoalReach" false) (mem "superRoutesAt" false) (mem "findMatchingImplReqsU" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "SolverFailure" true) (mem "ClassPredicate" true) (mem "GoalOrigin" true) (mem "Instantiation" true) (mem "InstantiationArgument" true) (mem "SolverBlocker" true) (mem "SolverOutcome" true) (mem "Wanted" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true) (mem "Ns" true) (mem "Lit" true) (mem "Expr" true) (mem "Decl" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvVal" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "Loc" true) (mem "Require" true) (mem "Route" true) (mem "Ty" true) (mem "EvTable" false) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "tyConBuiltin" false))))
@@ -2928,16 +2809,6 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig false "methodReturnMemoSupers" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "String")))
 (DFunDef false "methodReturnMemoSupers" ((PList)) (ELit (LString "")))
 (DFunDef false "methodReturnMemoSupers" ((PVar "supers")) (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EVar "display") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "methodReturnMemoRoute")) (EVar "supers"))))) (ELit (LString "}"))))
-(DTypeSig true "walkGoalSameProbe" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "Bool"))))
-(DFunDef false "walkGoalSameProbe" (PWild) (EBlock (DoLet false false (PVar "iface") (EApp (EVar "ifaceRefBare") (ELit (LString "C")))) (DoLet false false (PVar "int") (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (DoLet false false (PVar "mctx") (EApp (EVar "initialModuleCtx") (EApp (EVar "probeGraphCtx") (ELit LUnit)))) (DoLet false false (PVar "row1") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EApp (EApp (EVar "freshEffvar") (EVar "mctx")) (ELit LUnit))))) (DoLet false false (PVar "row2") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EApp (EApp (EVar "freshEffvar") (EVar "mctx")) (ELit LUnit))))) (DoLet false false (PVar "goal1") (EListLit (EApp (EApp (EApp (EVar "TFun") (EVar "int")) (EVar "row1")) (EVar "int")))) (DoLet false false (PVar "goal2") (EListLit (EApp (EApp (EApp (EVar "TFun") (EVar "int")) (EVar "row2")) (EVar "int")))) (DoExpr (EListLit (EApp (EApp (EVar "monoVecSameGiven") (EVar "goal1")) (EVar "goal2")) (EApp (EApp (EVar "monoVecSameGiven") (EVar "goal2")) (EVar "goal1")) (EApp (EApp (EApp (EApp (EVar "walkGoalSame") (EVar "iface")) (EVar "goal1")) (EVar "iface")) (EVar "goal2")) (EApp (EApp (EApp (EApp (EVar "walkGoalSame") (EVar "iface")) (EVar "goal2")) (EVar "iface")) (EVar "goal1")) (EApp (EApp (EApp (EApp (EVar "walkGoalSame") (EVar "iface")) (EVar "goal1")) (EVar "iface")) (EListLit (EApp (EApp (EApp (EVar "TFun") (EVar "int")) (EVar "row1")) (EVar "int"))))))))
-(DTypeSig false "isSemanticGivenAnswer" (TyFun (TyApp (TyCon "Option") (TyCon "AssumAnswer")) (TyCon "Bool")))
-(DFunDef false "isSemanticGivenAnswer" ((PCon "Some" (PCon "SemanticGiven" (PCon "GivenEvidence" PWild)))) (EVar "True"))
-(DFunDef false "isSemanticGivenAnswer" (PWild) (EVar "False"))
-(DTypeSig false "isLegacyPredicateAnswer" (TyFun (TyApp (TyCon "Option") (TyCon "AssumAnswer")) (TyCon "Bool")))
-(DFunDef false "isLegacyPredicateAnswer" ((PCon "Some" (PCon "LegacyPredicate" PWild))) (EVar "True"))
-(DFunDef false "isLegacyPredicateAnswer" (PWild) (EVar "False"))
-(DTypeSig false "scopeGivenProbe" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "Bool"))))
-(DFunDef false "scopeGivenProbe" (PWild) (EBlock (DoLet false false (PVar "gctx") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "store") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (DoLet false false (PVar "root") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EVar "None")) (ELit (LInt 0))) (ELit (LString "given-probe"))) (EVar "ModuleOwner"))) (DoLet false false (PVar "owner") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EApp (EVar "Some") (EVar "root"))) (ELit (LInt 1))) (ELit (LString "given-probe"))) (EApp (EVar "BindingOwner") (ELit (LString "owner"))))) (DoLet false false (PVar "sibling") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EApp (EVar "Some") (EVar "root"))) (ELit (LInt 1))) (ELit (LString "given-probe"))) (EApp (EVar "BindingOwner") (ELit (LString "sibling"))))) (DoLet false false (PVar "iface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "PairGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "args") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))) (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (DoLet false false (PVar "slot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "iface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EVar "args"))) (fa "psBoundIds" (EListLit (ELit (LInt 41))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "gctx")) (EVar "GMPredicate")) (EVar "DirectGiven")) (EVar "slot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 0))))) (DoLet false false (PVar "exact") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EVar "args")))))) (DoLet false false (PVar "unknown") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EVar "PSArgsUnknown"))))) (DoLet false false (PVar "truncated") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoLet false false (PVar "witnessIface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "WitnessGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "witnessSlot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "witnessIface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int")))))) (fa "psBoundIds" (EListLit (ELit (LInt 73))))))) (DoLet false false (PVar "witnessRequest") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "witnessIface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "gctx")) (EVar "GMIdWitnessed")) (EVar "DirectGiven")) (EVar "witnessSlot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 1))))) (DoLet false false (PVar "compatibleIface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "CompatibleGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "compatibleSlot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "compatibleIface")) (fa "psArgs" (EVar "PSArgsUnknown")) (fa "psBoundIds" (EListLit (ELit (LInt 89))))))) (DoLet false false (PVar "compatibleRequest") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "compatibleIface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "gctx")) (EVar "GMPredicate")) (EVar "DirectGiven")) (EVar "compatibleSlot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 2))))) (DoLet false false (PVar "givens") (EApp (EApp (EVar "givensForScope") (EVar "gctx")) (EVar "owner"))) (DoLet false false (PVar "result") (EListLit (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "exact")) (EVar "owner")) (EVar "givens")) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "exact")) (EVar "sibling")) (EVar "givens"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "truncated")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "gctx")) (EVar "GSImplRequires")) (ELit (LInt 73))) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isNone") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "gctx")) (EVar "GSImplRequires")) (ELit (LInt 74))) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isSemanticGivenAnswer") (EApp (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "gctx")) (EVar "exact")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "gctx")) (EVar "GSPredicateOnly")) (ELit (LInt 41))) (EVar "unknown")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclResidual") (EVar "gctx")) (ELit (LString "PairGiven"))) (EVar "args")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "gctx")) (EVar "compatibleRequest")) (EVar "owner")) (EVar "givens"))))) (DoExpr (EVar "result"))))
 (DTypeSig true "methodSlotBoundIds" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "methodSlotBoundIds" ((PVar "slots")) (EApp (EApp (EVar "map") (ELam ((PVar "slot")) (EFieldAccess (EFieldAccess (EVar "slot") "mpsPredicate") "psBoundIds"))) (EVar "slots")))
 (DTypeSig true "methodSlotPositions" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))
@@ -2980,13 +2851,13 @@ methodReturnMemoCurrentViews gctx =
 # MARK
 (DUse false (UseGroup ("types" "tc_types") ((mem "Provenance" true) (mem "OblProjection" true) (mem "GoalReach" true) (mem "GoalPayload" true) (mem "GivenScope" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "AdmittedAnswer" true) (mem "AssumAnswer" true) (mem "BuiltinClass" true) (mem "EvDest" true) (mem "GoalKind" true) (mem "GoalWindow" true) (mem "GraphMarks" true) (mem "MethodReturnMemoView" true) (mem "MethodReturnResolution" true) (mem "MethodReturnTraceEntry" true) (mem "MethodReturnTraceStage" true) (mem "MethodTemplateGivenResult" true) (mem "Obligation" true) (mem "PendingDictApp" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "SolvedGoalEntry" true) (mem "Undetermined" true) (mem "UObligation" true) (mem "DynCtx" false) (mem "dynFor" false) (mem "GivenEntry" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "ImplRow" false) (mem "LocalAbs" false) (mem "MethodPredicateSlot" false) (mem "MethodPredicateTemplate" false) (mem "MethodReturnRequest" false) (mem "MethodRow" false) (mem "MethodSchemeRow" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "NumAnchorTestObservation" false) (mem "PendingEntry" false) (mem "PendingMethodDict" false) (mem "RecDictApp" false) (mem "ReqWalk" false) (mem "TraceSink" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "allConcreteHeads" false) (mem "anyListM" false) (mem "cohApply" false) (mem "cohOverlap" false) (mem "cohOverlapGo" false) (mem "containsI" false) (mem "dedupI" false) (mem "exactReturnRequestOfGoal" false) (mem "findTvarInMono" false) (mem "headTyconMono" false) (mem "matchEqMono" false) (mem "matchOneSided" false) (mem "matchStep" false) (mem "matchTyMono" false) (mem "monoHeadIsDecl" false) (mem "monoMintedBefore" false) (mem "monoSameGiven" false) (mem "monoSizes" false) (mem "monoTyvarIds" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVecSameGiven" false) (mem "monoVectorClosed" false) (mem "peelQual" false) (mem "rigidSigPairs" false) (mem "sigCellsOf" false) (mem "sigRigidBindings" false) (mem "stripArrows" false) (mem "stripTyConstraints" false) (mem "substMono" false) (mem "tconBuiltin" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "walkMonosSame" false) (mem "unrigidSig" false))))
-(DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "initialModuleCtx" false) (mem "moduleWindow" false) (mem "probeGraphCtx" false))))
+(DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "moduleWindow" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "anyArgMentions" false) (mem "dispatchTyparams" false) (mem "ieHeadRows" false) (mem "ieRowIfaceMatches" false) (mem "ieRowOfIface" false) (mem "ieRowsAll" false) (mem "ieRowTys" false) (mem "instRefSeq" false) (mem "methodArgs" false) (mem "methodRowIface" false) (mem "methodRowTestIface" false) (mem "methodSlotKey" false) (mem "originMethodName" false) (mem "sameIfaceDecl" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "erredDuring" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "methodAdmittedHere" false) (mem "methodVisibleHere" false))))
-(DUse false (UseGroup ("types" "tc_unify") ((mem "enterLevel" false) (mem "exitLevel" false) (mem "freshEffvar" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "instantiateMethodTracked" false) (mem "monoUnboundVarLevels" false) (mem "predicateSlotArgs" false) (mem "unify" false) (mem "unifyIn" false))))
+(DUse false (UseGroup ("types" "tc_unify") ((mem "enterLevel" false) (mem "exitLevel" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "instantiateMethodTracked" false) (mem "monoUnboundVarLevels" false) (mem "predicateSlotArgs" false) (mem "unify" false) (mem "unifyIn" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "fromAstType" false) (mem "reqTyToMono" false))))
-(DUse false (UseGroup ("types" "tc_solve_givens") ((mem "activeDictPredOf" false) (mem "activeDictVarOfEncl" false) (mem "anyGivenMatches" false) (mem "assumAnswerEvidence" false) (mem "assumAnswerRoute" false) (mem "enclSlot" false) (mem "firstPredForEncl" false) (mem "firstPredForEnclAt" false) (mem "firstPredForEnclResidual" false) (mem "givenInScope" false) (mem "givenRoute" false) (mem "givensForScope" false) (mem "goalMatchesGiven" false) (mem "noteAssumption" false) (mem "predicateRequestMatchesSlot" false) (mem "projectedGivenOf" false) (mem "pushGiven" false))))
+(DUse false (UseGroup ("types" "tc_solve_givens") ((mem "activeDictPredOf" false) (mem "activeDictVarOfEncl" false) (mem "assumAnswerEvidence" false) (mem "assumAnswerRoute" false) (mem "enclSlot" false) (mem "givenInScope" false) (mem "givenRoute" false) (mem "givensForScope" false) (mem "goalMatchesGiven" false) (mem "noteAssumption" false) (mem "predicateRequestMatchesSlot" false) (mem "projectedGivenOf" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "determinedGoalInstance" false) (mem "directSuperGoals" false) (mem "enteredGoalKey" false) (mem "freshRowHeads" false) (mem "goalCandidates" false) (mem "goalHeadCon" false) (mem "goalIsProjection" false) (mem "goalRows" false) (mem "ieSelectRowByIface" false) (mem "paramMonoOf" false) (mem "positionBindings" false) (mem "repeatedBindings" false) (mem "reqWalkMemo" false) (mem "reqWalkStart" false) (mem "routeOfD" false) (mem "rowCountsFor" false) (mem "rowHeadMatches" false) (mem "rowRouteKey" false) (mem "selectedCallSupers" false) (mem "selectedRowReqMatch" false) (mem "stableGoalReach" false) (mem "superRoutesAt" false) (mem "findMatchingImplReqsU" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "SolverFailure" true) (mem "ClassPredicate" true) (mem "GoalOrigin" true) (mem "Instantiation" true) (mem "InstantiationArgument" true) (mem "SolverBlocker" true) (mem "SolverOutcome" true) (mem "Wanted" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true) (mem "Ns" true) (mem "Lit" true) (mem "Expr" true) (mem "Decl" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvVal" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "Loc" true) (mem "Require" true) (mem "Route" true) (mem "Ty" true) (mem "EvTable" false) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "tyConBuiltin" false))))
@@ -3395,16 +3266,6 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig false "methodReturnMemoSupers" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "String")))
 (DFunDef false "methodReturnMemoSupers" ((PList)) (ELit (LString "")))
 (DFunDef false "methodReturnMemoSupers" ((PVar "supers")) (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EMethodRef "display") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "methodReturnMemoRoute")) (EVar "supers"))))) (ELit (LString "}"))))
-(DTypeSig true "walkGoalSameProbe" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "Bool"))))
-(DFunDef false "walkGoalSameProbe" (PWild) (EBlock (DoLet false false (PVar "iface") (EApp (EVar "ifaceRefBare") (ELit (LString "C")))) (DoLet false false (PVar "int") (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (DoLet false false (PVar "mctx") (EApp (EVar "initialModuleCtx") (EApp (EVar "probeGraphCtx") (ELit LUnit)))) (DoLet false false (PVar "row1") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EApp (EApp (EVar "freshEffvar") (EVar "mctx")) (ELit LUnit))))) (DoLet false false (PVar "row2") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EApp (EApp (EVar "freshEffvar") (EVar "mctx")) (ELit LUnit))))) (DoLet false false (PVar "goal1") (EListLit (EApp (EApp (EApp (EVar "TFun") (EVar "int")) (EVar "row1")) (EVar "int")))) (DoLet false false (PVar "goal2") (EListLit (EApp (EApp (EApp (EVar "TFun") (EVar "int")) (EVar "row2")) (EVar "int")))) (DoExpr (EListLit (EApp (EApp (EVar "monoVecSameGiven") (EVar "goal1")) (EVar "goal2")) (EApp (EApp (EVar "monoVecSameGiven") (EVar "goal2")) (EVar "goal1")) (EApp (EApp (EApp (EApp (EVar "walkGoalSame") (EVar "iface")) (EVar "goal1")) (EVar "iface")) (EVar "goal2")) (EApp (EApp (EApp (EApp (EVar "walkGoalSame") (EVar "iface")) (EVar "goal2")) (EVar "iface")) (EVar "goal1")) (EApp (EApp (EApp (EApp (EVar "walkGoalSame") (EVar "iface")) (EVar "goal1")) (EVar "iface")) (EListLit (EApp (EApp (EApp (EVar "TFun") (EVar "int")) (EVar "row1")) (EVar "int"))))))))
-(DTypeSig false "isSemanticGivenAnswer" (TyFun (TyApp (TyCon "Option") (TyCon "AssumAnswer")) (TyCon "Bool")))
-(DFunDef false "isSemanticGivenAnswer" ((PCon "Some" (PCon "SemanticGiven" (PCon "GivenEvidence" PWild)))) (EVar "True"))
-(DFunDef false "isSemanticGivenAnswer" (PWild) (EVar "False"))
-(DTypeSig false "isLegacyPredicateAnswer" (TyFun (TyApp (TyCon "Option") (TyCon "AssumAnswer")) (TyCon "Bool")))
-(DFunDef false "isLegacyPredicateAnswer" ((PCon "Some" (PCon "LegacyPredicate" PWild))) (EVar "True"))
-(DFunDef false "isLegacyPredicateAnswer" (PWild) (EVar "False"))
-(DTypeSig false "scopeGivenProbe" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "Bool"))))
-(DFunDef false "scopeGivenProbe" (PWild) (EBlock (DoLet false false (PVar "gctx") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "store") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (DoLet false false (PVar "root") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EVar "None")) (ELit (LInt 0))) (ELit (LString "given-probe"))) (EVar "ModuleOwner"))) (DoLet false false (PVar "owner") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EApp (EVar "Some") (EVar "root"))) (ELit (LInt 1))) (ELit (LString "given-probe"))) (EApp (EVar "BindingOwner") (ELit (LString "owner"))))) (DoLet false false (PVar "sibling") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EApp (EVar "Some") (EVar "root"))) (ELit (LInt 1))) (ELit (LString "given-probe"))) (EApp (EVar "BindingOwner") (ELit (LString "sibling"))))) (DoLet false false (PVar "iface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "PairGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "args") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))) (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (DoLet false false (PVar "slot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "iface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EVar "args"))) (fa "psBoundIds" (EListLit (ELit (LInt 41))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "gctx")) (EVar "GMPredicate")) (EVar "DirectGiven")) (EVar "slot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 0))))) (DoLet false false (PVar "exact") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EVar "args")))))) (DoLet false false (PVar "unknown") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EVar "PSArgsUnknown"))))) (DoLet false false (PVar "truncated") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoLet false false (PVar "witnessIface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "WitnessGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "witnessSlot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "witnessIface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int")))))) (fa "psBoundIds" (EListLit (ELit (LInt 73))))))) (DoLet false false (PVar "witnessRequest") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "witnessIface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "gctx")) (EVar "GMIdWitnessed")) (EVar "DirectGiven")) (EVar "witnessSlot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 1))))) (DoLet false false (PVar "compatibleIface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "CompatibleGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "compatibleSlot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "compatibleIface")) (fa "psArgs" (EVar "PSArgsUnknown")) (fa "psBoundIds" (EListLit (ELit (LInt 89))))))) (DoLet false false (PVar "compatibleRequest") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "compatibleIface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "gctx")) (EVar "GMPredicate")) (EVar "DirectGiven")) (EVar "compatibleSlot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 2))))) (DoLet false false (PVar "givens") (EApp (EApp (EVar "givensForScope") (EVar "gctx")) (EVar "owner"))) (DoLet false false (PVar "result") (EListLit (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "exact")) (EVar "owner")) (EVar "givens")) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "exact")) (EVar "sibling")) (EVar "givens"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "truncated")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "gctx")) (EVar "GSImplRequires")) (ELit (LInt 73))) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isNone") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "gctx")) (EVar "GSImplRequires")) (ELit (LInt 74))) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isSemanticGivenAnswer") (EApp (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "gctx")) (EVar "exact")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "gctx")) (EVar "GSPredicateOnly")) (ELit (LInt 41))) (EVar "unknown")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclResidual") (EVar "gctx")) (ELit (LString "PairGiven"))) (EVar "args")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "gctx")) (EVar "compatibleRequest")) (EVar "owner")) (EVar "givens"))))) (DoExpr (EVar "result"))))
 (DTypeSig true "methodSlotBoundIds" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "methodSlotBoundIds" ((PVar "slots")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "slot")) (EFieldAccess (EFieldAccess (EVar "slot") "mpsPredicate") "psBoundIds"))) (EVar "slots")))
 (DTypeSig true "methodSlotPositions" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))

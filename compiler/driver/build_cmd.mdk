@@ -291,7 +291,6 @@ readPreludeSources stdlibDir =
 
 -- `readPreludeSources` for the files [compiler] wrote: a binary built without
 -- an identity of its own (a test) names the writer it trusts.
-export
 readPreludeSourcesAs : String -> String -> <IO> Result String PreludeInputs
 readPreludeSourcesAs compiler stdlibDir =
   let rtPath = joinPath stdlibDir "runtime.mdk"
@@ -786,7 +785,6 @@ isTmpRoot dir = dir == "/tmp" || dir == "/tmp/"
 isExplicitScratch : String -> Bool
 isExplicitScratch tmpdir = tmpdir /= "" && not (isTmpRoot tmpdir)
 
-export
 scratchCandidatesFrom : String -> String -> List String
 scratchCandidatesFrom tmpdir scratch =
   if isExplicitScratch tmpdir then [tmpdir] else [scratch, "/tmp"]
@@ -979,13 +977,11 @@ gcArchiveIn libDir =
 
 -- `pkg-config --static --libs` with `-lgc` replaced by the archive path, which
 -- keeps the archive's own dependencies (`-lpthread`, `-ldl` on older glibc).
-export
 gcStaticLibs : String -> List String -> List String
 gcStaticLibs archive libs = map (t => if t == "-lgc" then archive else t) libs
 
 -- The inverse, for the link retry: each libgc archive path becomes `-L<its dir>
 -- -lgc`.  Flags with no archive come back unchanged.
-export
 gcSharedLibs : List String -> List String
 gcSharedLibs libs = flatMap gcSharedFlag libs
 
@@ -1846,7 +1842,6 @@ public export data BuildProfile = BuildNormal | BuildProbe
 -- ignores MEDAKA_RT_OBJ, which is ThinLTO bitcode.  A probe at any other level
 -- takes it with the normal LTO detection, so `-O2` gives the same link as
 -- `BuildNormal`.
-export
 profileClang : BuildProfile -> String -> String -> (String, Bool)
 profileClang BuildNormal normalOpt _ = (normalOpt, True)
 profileClang BuildProbe _ probeOpt =

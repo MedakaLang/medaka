@@ -379,12 +379,6 @@ pinFromIndex : PinIndex ->
 pinFromIndex index file kind name engine =
   omLookup (selectorKey file kind name engine) index
 
-export
-pinFor : List TestPin -> String -> PinKind -> String -> String -> Option TestPin
-pinFor pins file kind name engine = match buildPinIndex pins
-  Err _ => None
-  Ok index => pinFromIndex index file kind name engine
-
 pinNamePresent : TestPin -> OrdMap Unit -> OrdMap Unit -> Bool
 pinNamePresent pin propNames testNames = match pin.pinKind
   PropPin => isSome (omLookup pin.pinName propNames)

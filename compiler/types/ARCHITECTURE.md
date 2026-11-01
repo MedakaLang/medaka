@@ -41,9 +41,9 @@ the side tables `ir/`, `eval/` and `backend/` read (dispositions, runtime types,
 | `publish.mdk` | The published shapes (`TcReport`, `CheckedProgram`, `PubScheme`, `TcDiag`, `ModDiags`), the deep zonk and freeze-by-copy over them, and the live-cell validator; imports no typechecker state | `freezePub`, `liveCells` |
 | `entry_outcome.mdk` | The checked `main` shape facts and `EntryOutcome` construction published at graph-drive completion | `entryOutcomeNow`, `mainIsUnitNow` |
 | `prelude_interface.mdk` | The prelude interface value (`PreludeInterface`: what a drive needs from the prelude's core pass), its process cache (`preludeCacheRef`, one entry per compiler generation), freeze and thaw, and the on-disk key (`InterfaceKey`) | `seedPreludeInterface`, `currentPreludeInterface`, `preludeCacheHit`, `freezeInterface`, `thawInterface`, `interfaceKeyOf` |
-| `prelude_elab.mdk` | The prelude's elaborated trees as a value (`PreludeElab`: dict-passed declarations, the evidence rows they reference, binder rows, id counters), its file (`core.mdke`, digest checked before decode) and its one process cache (`preludeElabCacheRef`); imports `prelude_interface`, `interface_sexp`, `runtime_types`, `evidence_coverage` and `frontend.ast_codec`, never `typecheck`; its header, digest and binder-span framing (`framedHeader`, `checkedFramed`, `binderSpan`) is shared with `prelude_decls` | `preludeElabOf`, `encodeElabFile`, `readElabFile`, `seedPreludeElab`, `preludeElabHit`, `elabKeyOf` |
+| `prelude_elab.mdk` | The prelude's elaborated trees as a value (`PreludeElab`: dict-passed declarations, the evidence rows they reference, binder rows, id counters), its file (`core.mdke`, digest checked before decode) and its one process cache (`preludeElabCacheRef`); imports `prelude_interface`, `interface_sexp`, `runtime_types`, `evidence_coverage` and `frontend.ast_codec`, never `typecheck`; its header, digest and binder-span framing (`framedHeader`, `checkedFramed`, `binderSpan`) is shared with `prelude_decls` | `preludeElabOf`, `encodeElabFile`, `readElabFile`, `seedPreludeElab`, `preludeElabFor`, `elabKeyOf` |
 | `prelude_decls.mdk` | The prelude's desugared declarations as a value (`PreludeDecls`: the runtime and core trees with the binder run each mints) and its file (`core.mdkd`, digest checked before decode); imports `frontend.ast_codec`, `interface_sexp`, `prelude_elab`'s framing and `prelude_interface`, never `typecheck` | `preludeDeclsOf`, `encodeDeclsFile`, `readDeclsFile`, `readDeclsKey`, `decodeDeclsBody`, `declsKeyOf` |
-| `interface_sexp.mdk` | The interface codec: the s-expression form of the prelude interface and of every scheme-level type it holds, and the file around it (header with format version, sources and compiler, then the sections, each a join list and an interface); decoding fails closed | `encodeInterface`, `decodeInterface`, `mergeSections`, `sectionsOfCache`, `formatVersion` |
+| `interface_sexp.mdk` | The interface codec: the s-expression form of the prelude interface and of every scheme-level type it holds, and the file around it (header with format version, sources and compiler, then the sections, each a join list and an interface); decoding fails closed | `encodeInterface`, `decodeInterface`, `mergeSections`, `cacheOfSections`, `interfaceFormatVersion` |
 | `interface_frame.mdk` | The framing every on-disk interface file shares (`.mdki`, `.mdke`, `.mdkd` and module files): one header line with tag, version, key fields and digest, then the body the SHA-256 digest covers; the key is read and gated before the body is hashed or decoded | `framedFile`, `openFramed`, `checkedFramed`, `verifyDigest`, `InterfaceFault` |
 | `module_interface.mdk` | One module's checked diagnostics-arm contribution as a frozen, Decl-free value (`ModuleInterface`), its key (`ModuleKey`: module, source, import identities, graph key), its replay into a graph (`applyModuleInterface`), the tree content a tree drive records beside it (`ModuleTrees`: marked trees and the rows the graph-end passes read for them), the per-node evidence cells read back as entries, and the one process cache, one interface per module id | `freezeModuleInterface`, `applyModuleInterface`, `ModuleTrees`, `freezeModuleTrees`, `applyModuleTrees`, `cellEntriesFrom`, `moduleCacheHit`, `recordModuleInterface`, `moduleInterfaceIdentity` |
 | `module_interface_sexp.mdk` | `ModuleInterface` as a file: a framed header carrying the whole `ModuleKey`, then join-tagged sections; the reader refuses a stale key before the digest and fails closed on a lying digest, torn text or other version; not yet wired to a CLI verb | `encodeModuleSections`, `decodeModuleSections`, `decodeModuleInterface`, `readModuleKey`, `moduleFormatVersion` |
@@ -55,7 +55,7 @@ the side tables `ir/`, `eval/` and `backend/` read (dispositions, runtime types,
 | `solver_contract.mdk` | Request-local contracts for scoped class solving and scheme instantiation; no inference state | `InstantiationServices` |
 | `superclass.mdk` | The superclass closure over declared `requires` clauses, parameterised by reader | superclass walk |
 | `evidence_complete.mdk` | The completeness judgment: does every dispatch destination name an instance or a given | `EvidenceRow` predicate |
-| `disposition.mdk` | Whole-graph table of which method each impl supplies or inherits from the default; importable by `ir/`, `eval/`, `backend/` without `typecheck.mdk` | `dispositionLookup`, `buildDispositionTable` |
+| `disposition.mdk` | Whole-graph table of which method each impl supplies or inherits from the default; importable by `ir/`, `eval/`, `backend/` without `typecheck.mdk` | `dispositionRows`, `buildDispositionTableWithShapes`, `validateDispositionTable` |
 | `route_key.mdk` | The only mint of an impl route word | `evMethodRoutesIn`, `numIntWord` |
 | `dispatch_keys.mdk` | Leaf: the pure projections of a declaration list that dispatch is keyed on (impl head tag, method dispatch positions, constructor to type), shared by `eval/` and `ir/core_ir_lower.mdk` so the lowering does not import the interpreter | `headTyconHead`, `buildIfaceDispatch` |
 | `expr_loc.mdk` | Leaf: where an expression starts, and the placeholder span for "no location known"; read by the interpreter's trap sites and the lowering's arithmetic nodes | `exprStartLoc`, `noTrapLoc` |
@@ -244,3 +244,64 @@ The Phase 4 layer table, moved from `compiler/ARCHITECTURE-PLAYBOOK.md` §6 when
 | 25 | `types/typecheck.mdk` (stays; P4-D4) | the entry module: the graph drive, the chain and core memos and interface continuation, serving, import seeding, publication, value-main judgment, configuration, the verb-facing API; the pre-inference alias rewrite, a driver step (`aliasSchemes`, `aliasSchemeEntry`, `coreAliasSchemes`, `renameAliasedMethods*`, `deAliasMethod*`, `resolveAliasMethodSpellings`); the `export import types.publish` facade | TYPECHECK-CONTRACTS §4, §5; DICT §7.1, §8 | typemod.ml type_implementation; GHC.Tc.Module tcRnModule + GHC.Driver.Make upsweep | 2,296 | forced above `tc_module`: 19 edges typecheck to module, 0 back | 49 names; most-shared: `bindingGrantArity`, `chainArgs`, `chainFullKey`, `checkModules`, `checkModulesAllLines`, `checkModulesChainReportFor`, `checkModulesChainReportForGraph`, `checkModulesDiagsChain`, `checkModulesEntryFullReportK` |
 
 Size cells of rows 2, 9, 10, 13, 15, 19, 21, 22, 23, 24 and 25 give the A8 file lines measured on the tree by `p4_prereview_sizes.py`, and no code-lines figure: the second number (production declarations, test-only rows excluded) was the plan's census estimate and no tool derives it from the current tree, so it is dropped there.
+
+Rulings that qualify the table:
+
+- New row, ratification pending (Val): `tc_diag_text` (between `tc_mono` and `tc_state`: the context-free
+  message text, keys and text rewrites; forced below `tc_env`, chosen against `tc_state`).
+- New rows, each ratified by Val: `tc_scope` (between `tc_diag` and `tc_unify`: name visibility across
+  imports, read off the envelopes, including the alias-qualified supply); `tc_foreign` (above
+  `tc_decls`: extern signatures against the FFI-ABI rules); `tc_infer_records` (below `tc_infer`, above
+  `tc_pat`; application and letrec are not cut); `tc_decls_variance` (below `tc_decls_types`);
+  `tc_decls_types` (AST types to `Mono`, apart from declarations proper, as OCaml's typetexp and
+  typedecl and GHC's Gen.HsType and TyCl are apart); and the solver cut into `tc_solve_givens`
+  (the given store, below), `tc_solve_entail` (entailment as routes and instance selection),
+  `tc_solve` (the goal store and the solving walks above entailment) and `tc_solve_check` (the
+  checks at a boundary, above, with the write side of a binder's dictionary parameters).
+- Ruling (Val, 2026-10-25/26): the registration of predicate slots, dict arity and the constraint
+  tables, which the table above cut as a row of its own (`tc_solve_register`, 34 declarations), is
+  merged into `tc_solve_check`. The two are the write side of a binder's dictionary parameters and
+  the judgments at the binder's boundary (DICT section 4 `gen`/`gen-sig`, section 8 I1); the merged
+  row holds 116 declarations in 1,861 A8 lines, under 3,000.
+- Sizes are the A8 file measure: non-blank, non-comment lines of the generated file, including the
+  import block, export markers, declarations and the probe sections that stay (P4-D8), with the
+  fixtures that move to the sibling test taken out. Over 3,000: no row of the table; `tc_infer`
+  measures 2,403 (the 64-declaration recursion plus its arm helpers), so no over-3,000 reason is owed.
+  `tc_module` (2,650) and `tc_occurrence` (2,900) carry no adopted reason: a sprint that would take
+  either over 3,000 stops for Val.
+- The D8 exception (narrow, named): the 14 trace and probe sinks consumed by drive-level tests stay
+  exported from their home modules and are imported directly by `typecheck_test.mdk`, with no
+  facade; `typecheck_test.mdk` is not their subject's sibling, so the R35 sibling privilege
+  (`docs/design/TEST-SIBLING-ACCESS-DESIGN.md`) does not reach them.
+- `tc_mono`'s holds is reworded to "pure except for minting effect-variable ids from the
+  graph-run counter"; lifting that mint is an idiom-slice option under the identity oracles.
+- The alias-qualified-method family (45 declarations across `tc_env`, `tc_scope` and `typecheck`)
+  has no row of its own: its declarations sit at the lowest legal layer, `tc_scope` holds 35 and
+  `typecheck` keeps the pre-inference rewrite as a driver step; each header names the slice it holds,
+  citing `docs/spec/language-design.md` Module System Import Details.
+- The `util` flag marks 39 stdlib-shaped helpers whose placement is unchanged and which do not count
+  as module API; an idiom slice replaces them with stdlib, and there is no `tc_util` module.
+- Doctest placement: a doctest runs in its owning module. One that calls a name in a higher module
+  moves to the sibling `*_test.mdk` of the highest module it calls; two doctests move this way
+  (the `tc_env` block that calls `deKindRow0` moves to `tc_decls_test.mdk`).
+
+*Position* says whether the graph forces the row's place (edges down, none up) or precedent
+chose it where either order is acyclic. Test-only probes stay in the module whose state they
+read, in a marked section exported to that module's sibling only; fixtures move to the
+siblings (P4-D8). Every module gets a `<module>_test.mdk` in its sprint, with the
+`typecheck_test.mdk` blocks whose subject moved plus API tests by the `write-tests` table; #3944's
+exclusion of white-box tests of `unify`, `generalize`, `instantiate` and `entail` is reversed by
+the split (P4-D7). A move is a source-order-preserving slice judged by identity oracles (IR
+identity with a plant control, wide-corpus output identity, the LEG A multiset check, an
+import-collision check, instruction counts within two percent); the idiom rewrite is a separate
+slice (P4-D6, D9, D11). No `Arch-Growth-Override:` is admitted in the phase (P4-D5).
+
+Sprints run serially under one orchestrator, extracting modules bottom-up in the Order column's
+sequence, each sprint ending with its own review. Sprint 0 (the partition pre-sprint; nothing
+lands) is done. The last two sprints are the exit (this document's §6 collapses to its criterion;
+`types/ARCHITECTURE.md` re-derived with a spec column; `TYPECHECK-ARCHITECTURE.md` to
+`archive/design/`; #4318) and the diagnostic code registry (`support/diag_codes.mdk`, one closed
+type for every stage's codes pinned to `DIAGNOSTIC-CODES-DESIGN.md` by a two-way test; P4-D3b,
+after the exit). Which modules each sprint extracts is set in the phase plan and its tracking
+issues (milestone 42), not here; reviews run on opus where a decision is taken and sonnet where a
+decided placement is executed (P4-D12).

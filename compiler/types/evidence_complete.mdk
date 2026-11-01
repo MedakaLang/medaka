@@ -36,7 +36,7 @@
 -- therefore reads only a row's top-level routes and the words of their children,
 -- and takes everything deeper from an `Inner` the solver noted while it built the
 -- destination: whether an `RNone`, or an `RKey` naming a head, occurs below that
--- depth.  `holeKindsOf` derives the same summary by walking, for a row built by
+-- depth.  the sibling test derives the same summary by walking, for a row built by
 -- hand.
 
 import frontend.ast.{Route(..)}
@@ -44,7 +44,7 @@ import list.{drop, findIndex}
 import string.{contains, split}
 import support.util.{anyList, filterList, splitLast}
 
-public export data HoleKind =
+export data HoleKind =
   | UnroutedMethod
   | HeadTagRoute
   | UnroutedPrerequisite
@@ -83,13 +83,7 @@ innerOfRoute : Route -> Inner
 innerOfRoute r = Inner (isUnrouted r) (wordNamesHead r)
 
 -- Every hole kind [row] exhibits, in `HoleKind` declaration order; `[]` for a
--- complete row.  The walk: for a row built by hand.
-export
-holeKindsOf : EvidenceRow -> List HoleKind
-holeKindsOf row = holeKindsWith (innerOfRow row) row
-
--- `holeKindsOf` with what lies below the children read from [inner].
-export
+-- complete row, with what lies below the children read from [inner].
 holeKindsWith : Inner -> EvidenceRow -> List HoleKind
 holeKindsWith (Inner below belowHead) (OccurrenceRow _ iface tag impls meths) =
   let dicts = impls ++ meths
@@ -117,38 +111,19 @@ holeKindsWith (Inner below belowHead) (SiteRow r) = kindsWhere [
 ]
 
 -- The row's first hole kind and the diagnostic text for it, or `None` for a
--- complete row.  One diagnostic per row: its later kinds describe the same
--- unselected instance.
-export
-rowHole : EvidenceRow -> Option (HoleKind, String)
-rowHole row = rowHoleWith (innerOfRow row) row
-
--- `rowHole` with what lies below the children read from [inner].  The text walks
--- the row, and is built only for a hole.
+-- complete row, with what lies below the children read from [inner].  One
+-- diagnostic per row: its later kinds describe the same unselected instance.  The
+-- text walks the row, and is built only for a hole.
 export
 rowHoleWith : Inner -> EvidenceRow -> Option (HoleKind, String)
 rowHoleWith inner row = match holeKindsWith inner row
   [] => None
   k :: _ => Some (k, holeMessage row k)
 
-innerOfRow : EvidenceRow -> Inner
-innerOfRow (OccurrenceRow _ _ tag impls meths) =
-  innerBelow (tag :: impls ++ meths)
-innerOfRow (DictAppRow _ _ routes) = innerBelow routes
-innerOfRow (SiteRow r) = innerBelow [r]
-
--- What lies below the children of [routes], by walking it.
-innerBelow : List Route -> Inner
-innerBelow routes =
-  let kids = flatMap routeChildren routes
-  Inner
-    (anyList hasUnroutedPart kids)
-    (anyList (k => anyList namesHead (routeChildren k)) kids)
-
 -- The `T-UNROUTED-DISPATCH` text for [kind] at [row].
 export
 holeMessage : EvidenceRow -> HoleKind -> String
--- A kind `holeKindsOf` never gives a row's shape takes that shape's prerequisite
+-- A kind a row's shape never gives takes that shape's prerequisite
 -- text.
 holeMessage (OccurrenceRow name iface _ _ _) UnroutedMethod =
   "no impl of `\{bareName "::" iface}` is selected for this use of `\{name}`; annotate the type it is used at"

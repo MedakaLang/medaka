@@ -1,5 +1,5 @@
 # META
-source_lines=5488
+source_lines=5477
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -479,7 +479,6 @@ isInheritedEntry mname word = match omLookup mname !inheritedEntryRef
   Some words => omHasKey word words
   None => False
 
-export
 buildMethodReqCounts : Option DispositionTable ->
   List Decl ->
   List ((String, String), Int)
@@ -5007,16 +5006,6 @@ firstOrEmpty : List String -> String
 firstOrEmpty [] = ""
 firstOrEmpty (x :: _) = x
 
--- Run a multi-module program for its OUTPUT (the loader-driven analog of
--- evalOutput): evaluate every module in dependency order, force the root
--- module's `main` for its IO side-effects, return the captured stdout.  Untyped
--- programs only: no evidence, no dispositions, no binders.  A typed program uses
--- `evalModulesOutputFacts`.
-export
-evalModulesOutput : List Decl -> List (String, List Decl) -> String
-evalModulesOutput preludeDecls modules =
-  evalModulesOutputFacts emptyFacts preludeDecls modules
-
 export
 evalModulesOutputFacts : ProgramFacts ->
   List Decl ->
@@ -5602,7 +5591,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "inheritedEntryRows" (PWild PWild) (EListLit))
 (DTypeSig false "isInheritedEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isInheritedEntry" ((PVar "mname") (PVar "word")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mname")) (EUnOp "!" (EVar "inheritedEntryRef"))) (arm (PCon "Some" (PVar "words")) () (EApp (EApp (EVar "omHasKey") (EVar "word")) (EVar "words"))) (arm (PCon "None") () (EVar "False"))))
-(DTypeSig true "buildMethodReqCounts" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))))))
+(DTypeSig false "buildMethodReqCounts" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))))))
 (DFunDef false "buildMethodReqCounts" ((PVar "dispositions") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EVar "implMethodReqCounts") (EVar "dispositions"))) (EVar "prog")))
 (DTypeSig false "implMethodReqCounts" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))))))
 (DFunDef false "implMethodReqCounts" ((PVar "dt") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "implMethodReqCounts") (EVar "dt")) (EVar "d")))
@@ -7142,8 +7131,6 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "firstOrEmpty" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstOrEmpty" ((PList)) (ELit (LString "")))
 (DFunDef false "firstOrEmpty" ((PCons (PVar "x") PWild)) (EVar "x"))
-(DTypeSig true "evalModulesOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))
-(DFunDef false "evalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "evalModulesOutputFacts") (EVar "emptyFacts")) (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig true "evalModulesOutputFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "evalModulesOutputFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoExpr (EApp (EVar "resetOutput") (ELit LUnit))) (DoLet false false (PVar "binds") (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EVar "facts")) (EListLit)) (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "runMainForEffect") (EVar "binds"))) (DoExpr (EApp (EVar "readOutput") (ELit LUnit)))))))
 (DTypeSig false "pReadFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
@@ -7406,7 +7393,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "inheritedEntryRows" (PWild PWild) (EListLit))
 (DTypeSig false "isInheritedEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isInheritedEntry" ((PVar "mname") (PVar "word")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mname")) (EUnOp "!" (EVar "inheritedEntryRef"))) (arm (PCon "Some" (PVar "words")) () (EApp (EApp (EVar "omHasKey") (EVar "word")) (EVar "words"))) (arm (PCon "None") () (EVar "False"))))
-(DTypeSig true "buildMethodReqCounts" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))))))
+(DTypeSig false "buildMethodReqCounts" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))))))
 (DFunDef false "buildMethodReqCounts" ((PVar "dispositions") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "implMethodReqCounts") (EVar "dispositions"))) (EVar "prog")))
 (DTypeSig false "implMethodReqCounts" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))))))
 (DFunDef false "implMethodReqCounts" ((PVar "dt") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "implMethodReqCounts") (EVar "dt")) (EVar "d")))
@@ -8946,8 +8933,6 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "firstOrEmpty" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstOrEmpty" ((PList)) (ELit (LString "")))
 (DFunDef false "firstOrEmpty" ((PCons (PVar "x") PWild)) (EVar "x"))
-(DTypeSig true "evalModulesOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))
-(DFunDef false "evalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "evalModulesOutputFacts") (EVar "emptyFacts")) (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig true "evalModulesOutputFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "evalModulesOutputFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoExpr (EApp (EVar "resetOutput") (ELit LUnit))) (DoLet false false (PVar "binds") (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EVar "facts")) (EListLit)) (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "runMainForEffect") (EVar "binds"))) (DoExpr (EApp (EVar "readOutput") (ELit LUnit)))))))
 (DTypeSig false "pReadFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))

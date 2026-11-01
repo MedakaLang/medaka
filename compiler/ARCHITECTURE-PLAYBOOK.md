@@ -219,7 +219,7 @@ sprints.
 tracked by #4604, which is an issue; no PR carries that number.
 
 Landed rows: B1 on 2026-10-14 (#4107, PR #4110); B5 on 2026-10-27 (P5.8, PR #4537); F1 in #4314;
-F2 in #4703. B2 to B4 and F3 have no landing line in this section; see #4206.
+F2 in #4703; F3 in #4717. B2 to B4 have no landing line in this section; see #4206.
 
 Named limits, as their rows state them: B3's fingerprint is a bounded historical-shape floor,
 and arbitrary algorithm rewrites can evade it; B5's guarantee is not independent Wasm

@@ -72,7 +72,6 @@ preludeDeclsOf runtime core = match (binderSpan runtime, binderSpan core)
 -- ── the file ────────────────────────────────────────────────────────────────
 
 -- Distinct from every other framed file's version.
-export
 declsFormatVersion : Int
 declsFormatVersion = 4
 

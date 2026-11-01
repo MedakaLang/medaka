@@ -34,14 +34,12 @@ checkModulesEntryFullReportKGraph : DriveArgs -> ((TcReport, DriveOutputs), Grap
 checkModulesEntryFullSplitK : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, PubScheme), List (String, PubScheme), List TcDiag, List TcDiag)
 checkModulesEntryHasErrors : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> Bool
 checkModulesEntryLines : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> String
-checkModulesEntryReport : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> String
 checkModulesEntryReportOut : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> (String, DriveOutputs)
 checkModulesK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, PubScheme))
 checkModulesPartialK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> PartialAnalysis
 checkModulesPartialLast : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (PartialAnalysis, ModuleCtx)
 checkModulesPreambleK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings, ModuleCtx)
 checkOneDiags : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
-checkOneDiagsGraph : DriveArgs -> ((List TcDiag, List TcDiag), GraphCtx)
 checkOneDiagsK : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
 checkOneErrorsWithRuntime : DriveInputs -> List Decl -> List Decl -> List Decl -> Bool
 checkOneMatchToLines : DriveInputs -> List Decl -> List Decl -> String
@@ -87,7 +85,6 @@ elabDriveResult : GraphDrive -> ((ElabResult, TcReport, DriveOutputs), GraphCtx)
 elabTreesDrive : DriveArgs -> ((ElabResult, TcReport, DriveOutputs), GraphCtx)
 elaborateModules : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> ElabResult
 elaborateModulesChainReport : DriveInputs -> Bool -> (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> (ElabResult, TcReport, DriveOutputs)
-elaborateModulesGraph : DriveArgs -> (ElabResult, GraphCtx)
 elaborateModulesReport : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> TcReport
 elaborateModulesWithReport : DriveInputs -> Bool -> Option String -> List Decl -> List Decl -> List (String, List Decl) -> (ElabResult, TcReport, DriveOutputs)
 elaborateModulesWithSchemes : DriveInputs -> Bool -> List Decl -> List Decl -> List (String, List Decl) -> (ElabResult, List (String, PubScheme), List (String, PubScheme))
@@ -148,7 +145,6 @@ seedContext : ModuleCtx -> Map String (List VecObl) -> String -> List VecObl
 serveOps : ServeOps
 setDictEligible : GraphCtx -> List String -> Unit
 setMainSchemeIfEntry : GraphCtx -> ModulePlace -> List (String, PubScheme) -> Unit
-stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
 suppliedBy : Option String -> (String, a) -> (String, (Option String, a))
 synthesizedAdmissions : List (String, List String) -> List Decl -> List (String, String)
 tcConfigOf : List (String, Param) -> DriveInputs -> TcConfig

@@ -116,7 +116,7 @@ import types.interface_frame.{
 import types.prelude_interface.{PreludeInterface(..), InterfaceKey(..)}
 import types.publish.{
   PubScheme(..), ZState(..), LiveCell(..), emptyZonk, zonkMono, zonkRow,
-  zonkAuthority, zonkVecObl, zonkScheme, freezePub, liveCells
+  zonkAuthority, zonkVecObl, freezePub, liveCells
 }
 import types.registry.{
   SpellingPop, spRows, spFloor, spCollided, spFromProjections
@@ -255,14 +255,6 @@ pubNode p =
   tagged "pub" [schemeNode p.psScheme, SList (map oblNode p.psContext)]
 
 export
-monoSExp : Mono -> SExp
-monoSExp m = monoNode (snd (zonkMono emptyZonk m))
-
-export
-schemeSExp : Scheme -> SExp
-schemeSExp s = schemeNode (snd (zonkScheme emptyZonk s))
-
-export
 effRowSExp : EffRow -> SExp
 effRowSExp row = rowNode (snd (zonkRow emptyZonk row))
 
@@ -278,10 +270,6 @@ effLabelSExp = labelNode
 export
 authoritySExp : Authority -> SExp
 authoritySExp auth = authNode (snd (zonkAuthority emptyZonk auth))
-
-export
-paramSExp : Param -> SExp
-paramSExp = paramNode
 
 export
 authResidualSExp : AuthResidual -> SExp
@@ -301,10 +289,6 @@ pubSchemeSExp p = pubNode (freezePub p.psScheme p.psContext)
 export
 ifaceRefSExp : IfaceRef -> SExp
 ifaceRefSExp = ifaceNode
-
-export
-tyConOriginSExp : TyConOrigin -> SExp
-tyConOriginSExp = originNode
 
 -- A weak variable (`FreeMeta`) is a legal frozen inhabitant; a link or an open
 -- summary in a published row is a bug in whatever froze it.
@@ -338,18 +322,15 @@ optionSExp : (a -> SExp) -> Option a -> SExp
 optionSExp _ None = SAtom "none"
 optionSExp f (Some x) = tagged "some" [f x]
 
-export
 unitSExp : Unit -> SExp
 unitSExp _ = SList []
 
 mapNode : (k -> SExp) -> (v -> SExp) -> Map k v -> SExp
 mapNode key value m = listSExp (pairSExp key value) (IdMap.entries m)
 
-export
 ordMapSExp : (a -> SExp) -> OrdMap a -> SExp
 ordMapSExp value m = mapNode SAtom value m
 
-export
 intMapSExp : (a -> SExp) -> Map Int a -> SExp
 intMapSExp value m = mapNode intNode value m
 
@@ -493,7 +474,6 @@ zonkSlotArgs s = match s.psArgs
   PSArgsKnown args =>
     { s | psArgs = PSArgsKnown (snd (mapAccumL zonkMono emptyZonk args)) }
 
-export
 surfaceTySExp : Ty -> SExp
 surfaceTySExp = surfaceNode
 
@@ -532,7 +512,6 @@ export
 cDeclaredPrefixSExp : CDeclaredPrefix -> SExp
 cDeclaredPrefixSExp = prefixNode
 
-export
 builtinClassesSExp : BuiltinClasses -> SExp
 builtinClassesSExp = classesNode
 
@@ -860,18 +839,6 @@ rooted : (ZState -> String -> SExp -> Dec a) ->
 rooted dec root node = map snd (dec emptyZonk root node)
 
 export
-monoOfSExp : SExp -> Result SexpError Mono
-monoOfSExp = rooted decMono "mono"
-
-export
-schemeOfSExp : SExp -> Result SexpError Scheme
-schemeOfSExp = rooted decScheme "scheme"
-
-export
-effRowOfSExp : SExp -> Result SexpError EffRow
-effRowOfSExp = rooted decRow "row"
-
-export
 atomOfSExp : SExp -> Result SexpError Atom
 atomOfSExp = rooted decAtom "atom"
 
@@ -882,10 +849,6 @@ effLabelOfSExp = decLabel "label"
 export
 authorityOfSExp : SExp -> Result SexpError Authority
 authorityOfSExp = rooted decAuth "authority"
-
-export
-paramOfSExp : SExp -> Result SexpError Param
-paramOfSExp = decParam "param"
 
 export
 authResidualOfSExp : SExp -> Result SexpError AuthResidual
@@ -902,10 +865,6 @@ pubSchemeOfSExp = rooted decPub "pub"
 export
 ifaceRefOfSExp : SExp -> Result SexpError IfaceRef
 ifaceRefOfSExp = decIface "iface"
-
-export
-tyConOriginOfSExp : SExp -> Result SexpError TyConOrigin
-tyConOriginOfSExp = decOrigin "origin"
 
 export
 bindingOfSExp : SExp -> Result SexpError (String, PubScheme)
@@ -953,7 +912,6 @@ optionOfSExp item path (SList [SAtom "some", x]) =
   map Some (item (at path "some" 1) x)
 optionOfSExp _ path node = misfit path [("none", 0), ("some", 1)] node
 
-export
 unitOfSExp : Reader Unit
 unitOfSExp _ (SList []) = Ok ()
 unitOfSExp path node = refuse path node "expected ()"
@@ -976,11 +934,9 @@ decMap key value path node = do
   pairs <- decList (pairOfSExp key value) path node
   keyed path node pairs
 
-export
 ordMapOfSExp : Reader a -> Reader (OrdMap a)
 ordMapOfSExp value path node = decMap expectAtom value path node
 
-export
 intMapOfSExp : Reader a -> Reader (Map Int a)
 intMapOfSExp value path node = decMap atomInt value path node
 
@@ -1240,7 +1196,6 @@ spellingPopOfSExp payload path (SList [SAtom "pop", rows, floor, collided]) = do
   Ok (spFromProjections rows1 floor1 collided1)
 spellingPopOfSExp _ path node = misfit path [("pop", 3)] node
 
-export
 surfaceTyOfSExp : SExp -> Result SexpError Ty
 surfaceTyOfSExp = decSurface "ty"
 
@@ -1272,10 +1227,6 @@ export
 cDeclaredPrefixOfSExp : SExp -> Result SexpError CDeclaredPrefix
 cDeclaredPrefixOfSExp = decPrefix "prefix"
 
-export
-builtinClassesOfSExp : SExp -> Result SexpError BuiltinClasses
-builtinClassesOfSExp = decClasses "classes"
-
 -- ── the whole file ──────────────────────────────────────────────────────────
 
 -- [isJoins] are the IO joins the section's interface is valid for.
@@ -1292,14 +1243,6 @@ public export data PreludeInterfaceFile = PreludeInterfaceFile {
 export
 interfaceFormatVersion : Int
 interfaceFormatVersion = 3
-
-export
-sectionsOfCache : List (List (List Atom), PreludeInterface) ->
-  List InterfaceSection
-sectionsOfCache = map (s => InterfaceSection {
-  isJoins = fst s,
-  isInterface = snd s,
-})
 
 export
 cacheOfSections : List InterfaceSection ->

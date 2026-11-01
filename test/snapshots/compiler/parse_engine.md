@@ -1,12 +1,12 @@
 # META
-source_lines=356
+source_lines=348
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.lex_token.{Token(..), describeToken, peekTok as tokenPeekTok}
 import frontend.ast.{Loc(..)}
 import frontend.parse_diagnostic.{ParseDiagnosticKind(..), renderParseProblem}
 import frontend.parse_positions.{locOfSpanWith}
-import support.source_index.{lineStartsOf, offsetToLineColFast}
+import support.source_index.{lineStartsOf}
 import support.util.{reverseL}
 
 public export data PR a = POk a Int | PErr PFail Int | PFatal PFail Int
@@ -282,14 +282,6 @@ spanLoc : Int -> Int -> ParserE e Loc
 spanLoc start end = ParserE (ctx pos => POk (locOfSpan ctx start end) pos)
 
 export
-tokLineCol : ParseContext -> Int -> (Int, Int)
-tokLineCol ctx i =
-  if ctx.pcGuardPositions && i >= 0 && i < arrayLength ctx.pcOffsets then
-    offsetToLineColFast ctx.pcLineStarts (fst (arrayGetUnsafe i ctx.pcOffsets))
-  else
-    (0, 0)
-
-export
 depthOf : ParseContext -> Int
 depthOf ctx = !ctx.pcDepth
 
@@ -363,7 +355,7 @@ expectedTokenMsg t = describeToken t
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnosticKind" true) (mem "renderParseProblem" false))))
 (DUse false (UseGroup ("frontend" "parse_positions") ((mem "locOfSpanWith" false))))
-(DUse false (UseGroup ("support" "source_index") ((mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
+(DUse false (UseGroup ("support" "source_index") ((mem "lineStartsOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "PR" ("a") ((variant "POk" (ConPos (TyVar "a") (TyCon "Int"))) (variant "PErr" (ConPos (TyCon "PFail") (TyCon "Int"))) (variant "PFatal" (ConPos (TyCon "PFail") (TyCon "Int")))) ())
 (DData Public "PFail" () ((variant "FailMsg" (ConPos (TyCon "String"))) (variant "FailExpect" (ConPos (TyCon "Token") (TyCon "Token"))) (variant "FailProblem" (ConPos (TyCon "ParseDiagnosticKind")))) ())
@@ -451,8 +443,6 @@ expectedTokenMsg t = describeToken t
 (DFunDef false "locOfSpan" ((PVar "ctx") (PVar "start") (PVar "end")) (EIf (EFieldAccess (EVar "ctx") "pcLocated") (EApp (EApp (EApp (EApp (EVar "locOfSpanWith") (EFieldAccess (EVar "ctx") "pcOffsets")) (EFieldAccess (EVar "ctx") "pcLineStarts")) (EVar "start")) (EVar "end")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0)))))
 (DTypeSig true "spanLoc" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyCon "Loc")))))
 (DFunDef false "spanLoc" ((PVar "start") (PVar "end")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EApp (EApp (EVar "POk") (EApp (EApp (EApp (EVar "locOfSpan") (EVar "ctx")) (EVar "start")) (EVar "end"))) (EVar "pos")))))
-(DTypeSig true "tokLineCol" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "tokLineCol" ((PVar "ctx") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "&&" (EFieldAccess (EVar "ctx") "pcGuardPositions") (EBinOp ">=" (EVar "i") (ELit (LInt 0)))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EFieldAccess (EVar "ctx") "pcOffsets")))) (EApp (EApp (EVar "offsetToLineColFast") (EFieldAccess (EVar "ctx") "pcLineStarts")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "ctx") "pcOffsets")))) (ETuple (ELit (LInt 0)) (ELit (LInt 0)))))
 (DTypeSig true "depthOf" (TyFun (TyCon "ParseContext") (TyCon "Int")))
 (DFunDef false "depthOf" ((PVar "ctx")) (EUnOp "!" (EFieldAccess (EVar "ctx") "pcDepth")))
 (DTypeSig true "withDepth" (TyFun (TyCon "Int") (TyFun (TyCon "PFail") (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a"))))))
@@ -490,7 +480,7 @@ expectedTokenMsg t = describeToken t
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnosticKind" true) (mem "renderParseProblem" false))))
 (DUse false (UseGroup ("frontend" "parse_positions") ((mem "locOfSpanWith" false))))
-(DUse false (UseGroup ("support" "source_index") ((mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
+(DUse false (UseGroup ("support" "source_index") ((mem "lineStartsOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "PR" ("a") ((variant "POk" (ConPos (TyVar "a") (TyCon "Int"))) (variant "PErr" (ConPos (TyCon "PFail") (TyCon "Int"))) (variant "PFatal" (ConPos (TyCon "PFail") (TyCon "Int")))) ())
 (DData Public "PFail" () ((variant "FailMsg" (ConPos (TyCon "String"))) (variant "FailExpect" (ConPos (TyCon "Token") (TyCon "Token"))) (variant "FailProblem" (ConPos (TyCon "ParseDiagnosticKind")))) ())
@@ -578,8 +568,6 @@ expectedTokenMsg t = describeToken t
 (DFunDef false "locOfSpan" ((PVar "ctx") (PVar "start") (PVar "end")) (EIf (EFieldAccess (EVar "ctx") "pcLocated") (EApp (EApp (EApp (EApp (EVar "locOfSpanWith") (EFieldAccess (EVar "ctx") "pcOffsets")) (EFieldAccess (EVar "ctx") "pcLineStarts")) (EVar "start")) (EVar "end")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0)))))
 (DTypeSig true "spanLoc" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyCon "Loc")))))
 (DFunDef false "spanLoc" ((PVar "start") (PVar "end")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EApp (EApp (EVar "POk") (EApp (EApp (EApp (EVar "locOfSpan") (EVar "ctx")) (EVar "start")) (EVar "end"))) (EVar "pos")))))
-(DTypeSig true "tokLineCol" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "tokLineCol" ((PVar "ctx") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "&&" (EFieldAccess (EVar "ctx") "pcGuardPositions") (EBinOp ">=" (EVar "i") (ELit (LInt 0)))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EFieldAccess (EVar "ctx") "pcOffsets")))) (EApp (EApp (EVar "offsetToLineColFast") (EFieldAccess (EVar "ctx") "pcLineStarts")) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "ctx") "pcOffsets")))) (ETuple (ELit (LInt 0)) (ELit (LInt 0)))))
 (DTypeSig true "depthOf" (TyFun (TyCon "ParseContext") (TyCon "Int")))
 (DFunDef false "depthOf" ((PVar "ctx")) (EUnOp "!" (EFieldAccess (EVar "ctx") "pcDepth")))
 (DTypeSig true "withDepth" (TyFun (TyCon "Int") (TyFun (TyCon "PFail") (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a"))))))

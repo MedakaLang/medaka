@@ -11,7 +11,7 @@ Core IR and the Plan rather than reaching for a mangling module of its own.
 ## Parts
 | Module | Owns | Entry points |
 |---|---|---|
-| `core_validate.mdk` | Checks a lowered program must pass before an emitter writes any of it: records, calls, extern coverage, impl symbols, dict tags | `validateExterns`, `validateRecords`, `validateCalls`, `validateForEmission` |
+| `core_validate.mdk` | Checks a lowered program must pass before an emitter writes any of it: records, calls, extern coverage, impl symbols, dict tags | `validateForEmission`, `validateImplSymbolInjectivity`, `validateDictTags`, `validateBinderStamps` |
 | `emit_target.mdk` | Backend identity shared by validation, plans and the runtime catalog | `Backend`, `backendName`, `profileColumn` |
 | `emit_plan.mdk` | The per-emission plan: facts about the lowered program both backends read and neither recomputes | `buildEmitPlan`, `buildEmitPlanReached` |
 | `impl_groups.mdk` | Ordered partition of Core implementation clauses by method and key, with indices into the original program list | `groupImplEntries`, `validateImplGroups` |

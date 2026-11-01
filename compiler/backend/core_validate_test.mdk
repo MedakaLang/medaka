@@ -88,8 +88,8 @@ import backend.core_validate.{
   validateForEmission, coreDefectMessage, validateMethodResults
 }
 import backend.core_validate.{
-  CheckedTarget, checkedTarget, checkedTargetOf, findingExtern, isUnprovidedOn,
-  missingCatalogRows, missingRowsMessage, renderExternFinding,
+  CheckedTarget, checkedTarget, checkedTargetOf, ExternFinding(..),
+  isUnprovidedOn, missingCatalogRows, missingRowsMessage, renderExternFinding,
   renderExternRefusalUnder, validateCalls, validateDispatchEvidence,
   validateExterns, validateImplSymbols, implSymbolCollision, dictTagCollision,
   validateMethodContexts, validateRecords, validateTails, validateBinderStamps,
@@ -3760,3 +3760,6 @@ test "physical groups keep concatenation-colliding method and key pairs distinct
     ("llvm bodies", expectTextContainsAll ["i64 143", "i64 145"] l),
     ("wasm bodies", expectTextContainsAll ["i32.const 71", "i32.const 72"] w),
   ]
+
+findingExtern : ExternFinding -> String
+findingExtern (ExternFinding name _ _ _ _) = name

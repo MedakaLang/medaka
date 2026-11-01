@@ -1,5 +1,5 @@
 # META
-source_lines=1685
+source_lines=1560
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -117,9 +117,9 @@ stages=DESUGAR,MARK
 -- ── Where the tests are ────────────────────────────────────────────────────
 -- The doctests kept in this file ILLUSTRATE a return value to a reader. The
 -- boolean assertions about the same machinery — the ones standing in for unit
--- tests — live in the sibling `compiler/types/registry_test.mdk`, which
--- redeclares the fixtures it needs rather than importing them, so no doctest
--- fixture reaches this module's public surface. Three of those boolean
+-- tests — live in the sibling `compiler/types/registry_test.mdk`, which reads
+-- the doctest fixtures below through its view of this module, so no fixture
+-- reaches the public surface. Three of those boolean
 -- assertions could not move: the ones naming `OriginUnresolved`, because
 -- `test/typecheck_compiler_source.sh`'s #1110 producer ratchet pins the set of
 -- tracked files carrying a live mention of that sentinel.
@@ -221,22 +221,15 @@ identKey (Ident ns origin name) =
 -- The empty third netstring is the same fixed-width filler `identKey`'s
 -- builtin arm uses (`lenKey "" = "0:"` is a real netstring); it is not a
 -- module id, forbidden or otherwise.
-export
 tabKeyRender : TabKey -> String
 tabKeyRender (TkIdent ident) = identKey ident
 tabKeyRender (TkBare ns name) =
   lenKey (nsTag ns) ++ lenKey "bare" ++ lenKey "" ++ lenKey name
 
--- A tuple of identities, rendered by plain concatenation. Injective on its
--- own: each element contributes exactly four netstrings, so a stream of `4n`
--- netstrings decodes to exactly one list, and two lists of different length
--- render to strings of different length.
-export
-identKeys : List Ident -> String
-identKeys idents = joinWith "" (map identKey idents)
-
--- The `TabKey` peer of `identKeys`, and the one `regKeyRender` actually calls.
--- Same argument: four netstrings per element, on BOTH `TabKey` arms.
+-- A tuple of keys, rendered by plain concatenation, and the one `regKeyRender`
+-- calls.  Injective on its own: each element contributes exactly four
+-- netstrings, on BOTH `TabKey` arms, so a stream of `4n` netstrings decodes to
+-- exactly one list.
 export
 tabKeys : List TabKey -> String
 tabKeys keys = joinWith "" (map tabKeyRender keys)
@@ -302,25 +295,22 @@ ordKey n = lenKey "\{n}"
 -- a declaration and must not be assigned an identity, and A-2.2's whole reason
 -- for splitting `HkRigid` out of `TabKey` was that folding it in would destroy
 -- A-1's greppability. A dispatch key whose positions can be rigid therefore
--- carries the rigid positions OUTSIDE this type — see `dispKeyRender` below.
+-- carries the rigid positions OUTSIDE this type.
 public export data RegKey =
   RegKey (List TabKey) (List Int)
   deriving (Eq, Ord, Debug)
 
 -- The one-identity case — by far the most common, and the shape the
 -- `Ident`-taking convenience wrappers below all go through.
-export
 regKeyOf : Ident -> RegKey
 regKeyOf ident = RegKey [TkIdent ident] []
 
 -- An identity TUPLE (`ImplUniverse`'s concrete bucket, `ifaceDispatchRef`,
 -- `checkCallObligationsU`'s dedup key).
-export
 regKeyN : List Ident -> RegKey
 regKeyN idents = RegKey (map TkIdent idents) []
 
 -- An identity plus an ordinal (`universeIfaceParamKinds`' `<iface>@<slot>`).
-export
 regKeyAt : Ident -> Int -> RegKey
 regKeyAt ident slot = RegKey [TkIdent ident] [slot]
 
@@ -332,7 +322,6 @@ regKeyAt ident slot = RegKey [TkIdent ident] [slot]
 -- present identities. Neither `regKeyN` (no ordinals) nor `regKeyAt` (one
 -- ident, one ordinal) can express that, so the conversion would otherwise
 -- have had to spell `RegKey` by hand and re-derive the injectivity argument.
-export
 regKeyNAt : List Ident -> List Int -> RegKey
 regKeyNAt idents ords = RegKey (map TkIdent idents) ords
 
@@ -349,7 +338,6 @@ regKeyOfTab key = RegKey [key] []
 -- `universeIfaceParamKinds`' (interface × slot) key, in the shape that keeps
 -- the slot an ORDINAL rather than text spliced into a name. This is the direct
 -- replacement for `ifaceSlotKey`'s `"\{iface}@\{i}"` (`types/typecheck.mdk`).
-export
 regKeyTabAt : TabKey -> Int -> RegKey
 regKeyTabAt key slot = RegKey [key] [slot]
 
@@ -373,10 +361,6 @@ regKeyNTab keys = RegKey keys []
 export
 regKeyNTabAt : List TabKey -> List Int -> RegKey
 regKeyNTabAt keys ords = RegKey keys ords
-
-export
-regKeyTabs : RegKey -> List TabKey
-regKeyTabs (RegKey keys _) = keys
 
 export
 regKeyOrdinals : RegKey -> List Int
@@ -414,10 +398,6 @@ export
 regInsertCheckedK : RegKey -> v -> Registry v -> (Registry v, Bool)
 regInsertCheckedK k v (Registry m) = (Registry (set k (k, v) m), has k m)
 
-export
-regInsertChecked : Ident -> v -> Registry v -> (Registry v, Bool)
-regInsertChecked ident v r = regInsertCheckedK (regKeyOf ident) v r
-
 -- NOT `fst (regInsertCheckedK …)`: that form did the `has` tree walk
 -- and threw the answer away. The overwrite signal costs a lookup, so the
 -- caller who does not want it does not pay for it.
@@ -425,7 +405,6 @@ export
 regInsertK : RegKey -> v -> Registry v -> Registry v
 regInsertK k v (Registry m) = Registry (set k (k, v) m)
 
-export
 regInsert : Ident -> v -> Registry v -> Registry v
 regInsert ident v r = regInsertK (regKeyOf ident) v r
 
@@ -433,25 +412,14 @@ export
 regDeleteK : RegKey -> Registry v -> Registry v
 regDeleteK k (Registry m) = Registry (delete k m)
 
-export
 regDelete : Ident -> Registry v -> Registry v
 regDelete ident r = regDeleteK (regKeyOf ident) r
 
 -- Enumeration order is `RegKey`'s derived `Ord` order (a sorted `Map`), which is
 -- NEITHER declaration order NOR alphabetical by name — see "What a conversion
 -- still has to review" in the module doc-comment. It IS deterministic.
-export
 regEntries : Registry v -> List (RegKey, v)
 regEntries (Registry m) = map snd (entries m)
-
--- Symmetry with `mregKeys`/`sregKeys`. Derivable (`map fst (regEntries r)`),
--- added anyway because an API where two of three registry types can enumerate
--- their keys and the third cannot is a papercut every conversion pays, and
--- because a caller who wants only the keys should not have to know that the
--- values come along for free. Same order caveat as `regEntries`.
-export
-regKeys : Registry v -> List RegKey
-regKeys r = map fst (regEntries r)
 
 export
 regSize : Registry v -> Int
@@ -503,7 +471,6 @@ mregAddK k v (MultiRegistry m) = match get k m
   Some (_, vs) => MultiRegistry (set k (k, v :: vs) m)
   None => MultiRegistry (set k (k, [v]) m)
 
-export
 mregAdd : Ident -> v -> MultiRegistry v -> MultiRegistry v
 mregAdd ident v mr = mregAddK (regKeyOf ident) v mr
 
@@ -574,30 +541,22 @@ mregLookupK k (MultiRegistry m) = match get k m
   Some (_, vs) => vs
   None => []
 
-export
 mregLookup : Ident -> MultiRegistry v -> List v
 mregLookup ident mr = mregLookupK (regKeyOf ident) mr
 
 -- `MultiRegistry` needs an enumeration: without one, a
 -- conversion can write a table it can never walk. Same order caveat as
 -- `regEntries`.
-export
 mregEntries : MultiRegistry v -> List (RegKey, List v)
 mregEntries (MultiRegistry m) = map snd (entries m)
 
-export
-mregKeys : MultiRegistry v -> List RegKey
-mregKeys mr = map fst (mregEntries mr)
-
 -- Number of DISTINCT keys, not the total number of values added.
-export
 mregSize : MultiRegistry v -> Int
 mregSize (MultiRegistry m) = size m
 
 -- Bucket-CONCATENATING union: no value from either side is dropped, which is
 -- the invariant that makes this type worth having. `newer`'s values for a
 -- shared key are prepended, matching `mregAdd`'s own prepend.
-export
 mregMerge : MultiRegistry v -> MultiRegistry v -> MultiRegistry v
 mregMerge older newer = mregMergeGo (mregEntries newer) older
 
@@ -612,34 +571,21 @@ mregAddAll k (v :: vs) acc = mregAddAll k vs (mregAddK k v acc)
 -- ── SetRegistry: membership only ──────────────────────────────────────────
 -- Stores the `RegKey` as its value so the set can be ENUMERATED, which a
 -- size query (`sregSize`) and any "did you mean" candidate list need.
-public export data SetRegistry = SetRegistry (Map RegKey RegKey)
+export data SetRegistry = SetRegistry (Map RegKey RegKey)
 
-export
 sregEmpty : SetRegistry
 sregEmpty = SetRegistry Tip
 
-export
 sregAddK : RegKey -> SetRegistry -> SetRegistry
 sregAddK k (SetRegistry m) = SetRegistry (set k k m)
 
-export
 sregAdd : Ident -> SetRegistry -> SetRegistry
 sregAdd ident s = sregAddK (regKeyOf ident) s
 
-export
-sregMemberK : RegKey -> SetRegistry -> Bool
-sregMemberK k (SetRegistry m) = has k m
-
-export
-sregMember : Ident -> SetRegistry -> Bool
-sregMember ident s = sregMemberK (regKeyOf ident) s
-
 -- The number of members; a count cannot be written against this type without it.
-export
 sregSize : SetRegistry -> Int
 sregSize (SetRegistry m) = size m
 
-export
 sregKeys : SetRegistry -> List RegKey
 sregKeys (SetRegistry m) = map snd (entries m)
 
@@ -1002,52 +948,6 @@ headBucketKey None = Some (RegKey [] [])
 headBucketKey (Some (HkDecl key)) = Some (regKeyOfTab key)
 headBucketKey (Some (HkRigid _)) = None
 
--- ── A dispatch key over a whole ARGUMENT VECTOR ───────────────────────────
--- `checkCallObligationsU`'s dedup key (`types/typecheck.mdk`) is a vector, not
--- a single key: an interface plus one projected head PER argument, where a
--- position can be a declaration, absent, OR rigid. `RegKey` alone cannot
--- express it, and widening `RegKey` to admit a rigid is precisely what §8
--- I6.1 forbids (see `RegKey`'s own doc-comment). So the two halves are
--- rendered SEPARATELY and concatenated:
---
---   [base]   a `RegKey` whose identity block is the interface key followed by
---            the DECLARATION positions' keys, and whose ordinal block is the
---            vector's ARITY followed by those positions' indices. Every
---            position that is neither in the ordinal block nor in [rigids] is
---            absent, and the arity says how many positions there are, so the
---            classification of every position is recoverable ⇒ two vectors
---            differing only in WHICH position is absent get different keys.
---            That is #607's property, kept structurally rather than by a
---            positional `""` placeholder that a name could in principle equal.
---   [rigids] the §8 I6.1 RESIDUAL, as `(position, parameter name)` pairs in
---            ascending position order. It is a separate argument, and a
---            separate netstring group, for one reason: **deleting the residual
---            is deleting this argument**, and until then `grep -n
---            dispKeyRender` names every site that still keys on one.
---
--- ⚠️ INJECTIVITY ACROSS THE JOIN. `regKeyRender`'s output is wrapped in a
--- netstring of its own (`lenKey`) rather than concatenated raw, because the
--- ordinal block is NOT count-prefixed — an ordinal netstring and a rigid
--- position netstring are indistinguishable, so a raw join could read one as
--- the other. Wrapping fixes the boundary: `lenKey s ++ t` determines `s`
--- because a valid-UTF-8 byte-prefix of a valid-UTF-8 string is a codepoint
--- prefix, so equal codepoint counts force equal strings.
---
--- ⚠️ TWO RIGIDS OF THE SAME NAME AT THE SAME POSITION DO COMPARE EQUAL, and
--- that is deliberate: it is what the bare-name key did, and A-2.2b's bar is
--- answer-preservation. Making distinct occurrences of one rigid name
--- never-equal would need an occurrence identity that does not exist at the
--- call site, and inventing one is the I6.3 violation A-2.0's review already
--- rejected. What this rendering DOES guarantee is that a rigid never compares
--- equal to a DECLARATION of the same spelling, and never to a rigid at a
--- different position — the two conflations a bare-name vector admits.
-export
-dispKeyRender : RegKey -> List (Int, String) -> String
-dispKeyRender base rigids =
-  lenKey (regKeyRender base)
-    ++ lenKey "\{listLen rigids}"
-    ++ joinWith "" (map ((i, name) => ordKey i ++ lenKey name) rigids)
-
 -- ── Deliberately NOT added, with the table each omission affects ───────────
 --   * NO `Display` for `Ident`/`RegKey` — see `Ident` in `frontend/ast.mdk`:
 --     user-facing rendering is A-2.8's decision, and a derived instance would
@@ -1082,13 +982,6 @@ dispKeyRender base rigids =
 -- (Ns, IdentOrigin, or name) so each doctest isolates one collision
 -- dimension.
 --
--- ⚠️ Nine of them carry a `rule-duplicate-body` directive because
--- `compiler/types/registry_test.mdk` declares the same fixture for the
--- assertions that moved there. The rule's remedy — consolidate into a shared
--- module — would put doctest fixtures on a module's public surface, so the
--- duplication is deliberate and the directive is per-binding rather than
--- file-wide, to keep a genuine duplicate elsewhere in this file visible.
---
 -- ⚠️ Every module-origin fixture is minted through `mkIdent`, because that is
 -- now the ONLY way to obtain a module origin at all — `IdentModule` is
 -- private to `frontend/ast.mdk`. `mkIdent` is partial, so the fixtures need a
@@ -1102,8 +995,6 @@ identBuiltinFixture : Ns -> String -> Ident
 identBuiltinFixture ns name = Ident ns identOriginBuiltin name
 
 identIn : Ns -> String -> String -> Ident
--- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
--- lint-disable-next-line rule-duplicate-body
 identIn ns mid name =
   optionOrElse
     (_ => identBuiltinFixture ns "__fixture_fallback__")
@@ -1146,8 +1037,6 @@ identShiftB : Ident
 identShiftB = identIn NsType "a" "bc"
 
 regBothNs : Registry Int
--- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
--- lint-disable-next-line rule-duplicate-body
 regBothNs = regInsert identIfaceFooM 2 (regInsert identTypeFooM 1 regEmpty)
 
 regBothOrigin : Registry Int
@@ -1178,14 +1067,10 @@ identTypeIntM = identIn NsType "m" "Int"
 
 -- `Ix Int b0` — argument 0 present (head `Int`), argument 1 undetermined.
 keyIxIntUndet : RegKey
--- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
--- lint-disable-next-line rule-duplicate-body
 keyIxIntUndet = regKeyNAt [identIfaceIxM, identTypeIntM] [2, 0]
 
 -- `Ix a0 Int` — argument 0 undetermined, argument 1 present (head `Int`).
 keyIxUndetInt : RegKey
--- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
--- lint-disable-next-line rule-duplicate-body
 keyIxUndetInt = regKeyNAt [identIfaceIxM, identTypeIntM] [2, 1]
 
 -- What the `[Ident]` shape would have produced for BOTH of the above: the
@@ -1229,13 +1114,9 @@ regPairs =
 -- mregAdd, called in OPPOSITE orders under the SAME Ident with the SAME two
 -- values — demonstrates no registration is lost to call order.
 mregOrderA : MultiRegistry Int
--- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
--- lint-disable-next-line rule-duplicate-body
 mregOrderA = mregAdd identTypeFooM 2 (mregAdd identTypeFooM 1 mregEmpty)
 
 mregOrderB : MultiRegistry Int
--- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
--- lint-disable-next-line rule-duplicate-body
 mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 
 -- ── F1: neither non-identity can become an identity ────────────────────────
@@ -1459,13 +1340,9 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- shape verbatim; `tabU` is what a flat/single-file driver mints for that same
 -- name (no identity at all).
 tabA : TabKey
--- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
--- lint-disable-next-line rule-duplicate-body
 tabA = tabKeyOf NsType (OriginModule "apub") "Box"
 
 tabZ : TabKey
--- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
--- lint-disable-next-line rule-duplicate-body
 tabZ = tabKeyOf NsType (OriginModule "zopapub") "Box"
 
 -- ⚠️ Spelled with the CONSTRUCTOR rather than as `tabKeyOf NsType
@@ -1546,8 +1423,6 @@ ifaceG : TabKey
 ifaceG = tabKeyOf NsIface (OriginModule "gmod") "Same"
 
 ifaceP : TabKey
--- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
--- lint-disable-next-line rule-duplicate-body
 ifaceP = tabKeyOf NsIface (OriginModule "pmod") "Same"
 
 -- Spelled with the CONSTRUCTOR, not `tabKeyOf NsIface OriginUnresolved "Same"`,
@@ -1706,11 +1581,9 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "originModuleOf" ((PVar "origin")) (EApp (EApp (EApp (EVar "identOriginFold") (ELit (LString ""))) (ELam ((PVar "m")) (EVar "m"))) (EVar "origin")))
 (DTypeSig true "identKey" (TyFun (TyCon "Ident") (TyCon "String")))
 (DFunDef false "identKey" ((PCon "Ident" (PVar "ns") (PVar "origin") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "lenKey") (EApp (EVar "nsTag") (EVar "ns"))) (EApp (EVar "lenKey") (EApp (EVar "originTag") (EVar "origin")))) (EApp (EVar "lenKey") (EApp (EVar "originModuleOf") (EVar "origin")))) (EApp (EVar "lenKey") (EVar "name"))))
-(DTypeSig true "tabKeyRender" (TyFun (TyCon "TabKey") (TyCon "String")))
+(DTypeSig false "tabKeyRender" (TyFun (TyCon "TabKey") (TyCon "String")))
 (DFunDef false "tabKeyRender" ((PCon "TkIdent" (PVar "ident"))) (EApp (EVar "identKey") (EVar "ident")))
 (DFunDef false "tabKeyRender" ((PCon "TkBare" (PVar "ns") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "lenKey") (EApp (EVar "nsTag") (EVar "ns"))) (EApp (EVar "lenKey") (ELit (LString "bare")))) (EApp (EVar "lenKey") (ELit (LString "")))) (EApp (EVar "lenKey") (EVar "name"))))
-(DTypeSig true "identKeys" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyCon "String")))
-(DFunDef false "identKeys" ((PVar "idents")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (EVar "identKey")) (EVar "idents"))))
 (DTypeSig true "tabKeys" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyCon "String")))
 (DFunDef false "tabKeys" ((PVar "keys")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (EVar "tabKeyRender")) (EVar "keys"))))
 (DTypeSig false "ordKey" (TyFun (TyCon "Int") (TyCon "String")))
@@ -1719,24 +1592,22 @@ headU = HkDecl (TkBare NsType "Box")
 (DImpl true "Eq" ((TyCon "RegKey")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RegKey" (PVar "__a0") (PVar "__a1")) (PCon "RegKey" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))))))))
 (DImpl true "Ord" ((TyCon "RegKey")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RegKey" (PVar "__a0") (PVar "__a1")) (PCon "RegKey" (PVar "__b0") (PVar "__b1"))) () (EMatch (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0")) (arm (PCon "Eq") () (EApp (EApp (EVar "compare") (EVar "__a1")) (EVar "__b1"))) (arm (PVar "__c") () (EVar "__c"))))))))
 (DImpl true "Debug" ((TyCon "RegKey")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RegKey" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "RegKey ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))))))))
-(DTypeSig true "regKeyOf" (TyFun (TyCon "Ident") (TyCon "RegKey")))
+(DTypeSig false "regKeyOf" (TyFun (TyCon "Ident") (TyCon "RegKey")))
 (DFunDef false "regKeyOf" ((PVar "ident")) (EApp (EApp (EVar "RegKey") (EListLit (EApp (EVar "TkIdent") (EVar "ident")))) (EListLit)))
-(DTypeSig true "regKeyN" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyCon "RegKey")))
+(DTypeSig false "regKeyN" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyCon "RegKey")))
 (DFunDef false "regKeyN" ((PVar "idents")) (EApp (EApp (EVar "RegKey") (EApp (EApp (EVar "map") (EVar "TkIdent")) (EVar "idents"))) (EListLit)))
-(DTypeSig true "regKeyAt" (TyFun (TyCon "Ident") (TyFun (TyCon "Int") (TyCon "RegKey"))))
+(DTypeSig false "regKeyAt" (TyFun (TyCon "Ident") (TyFun (TyCon "Int") (TyCon "RegKey"))))
 (DFunDef false "regKeyAt" ((PVar "ident") (PVar "slot")) (EApp (EApp (EVar "RegKey") (EListLit (EApp (EVar "TkIdent") (EVar "ident")))) (EListLit (EVar "slot"))))
-(DTypeSig true "regKeyNAt" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "RegKey"))))
+(DTypeSig false "regKeyNAt" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "RegKey"))))
 (DFunDef false "regKeyNAt" ((PVar "idents") (PVar "ords")) (EApp (EApp (EVar "RegKey") (EApp (EApp (EVar "map") (EVar "TkIdent")) (EVar "idents"))) (EVar "ords")))
 (DTypeSig true "regKeyOfTab" (TyFun (TyCon "TabKey") (TyCon "RegKey")))
 (DFunDef false "regKeyOfTab" ((PVar "key")) (EApp (EApp (EVar "RegKey") (EListLit (EVar "key"))) (EListLit)))
-(DTypeSig true "regKeyTabAt" (TyFun (TyCon "TabKey") (TyFun (TyCon "Int") (TyCon "RegKey"))))
+(DTypeSig false "regKeyTabAt" (TyFun (TyCon "TabKey") (TyFun (TyCon "Int") (TyCon "RegKey"))))
 (DFunDef false "regKeyTabAt" ((PVar "key") (PVar "slot")) (EApp (EApp (EVar "RegKey") (EListLit (EVar "key"))) (EListLit (EVar "slot"))))
 (DTypeSig true "regKeyNTab" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyCon "RegKey")))
 (DFunDef false "regKeyNTab" ((PVar "keys")) (EApp (EApp (EVar "RegKey") (EVar "keys")) (EListLit)))
 (DTypeSig true "regKeyNTabAt" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "RegKey"))))
 (DFunDef false "regKeyNTabAt" ((PVar "keys") (PVar "ords")) (EApp (EApp (EVar "RegKey") (EVar "keys")) (EVar "ords")))
-(DTypeSig true "regKeyTabs" (TyFun (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "TabKey"))))
-(DFunDef false "regKeyTabs" ((PCon "RegKey" (PVar "keys") PWild)) (EVar "keys"))
 (DTypeSig true "regKeyOrdinals" (TyFun (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "regKeyOrdinals" ((PCon "RegKey" PWild (PVar "ords"))) (EVar "ords"))
 (DTypeSig true "regKeyRender" (TyFun (TyCon "RegKey") (TyCon "String")))
@@ -1750,20 +1621,16 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "regLookup" ((PVar "ident") (PVar "r")) (EApp (EApp (EVar "regLookupK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "r")))
 (DTypeSig true "regInsertCheckedK" (TyFun (TyCon "RegKey") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyTuple (TyApp (TyCon "Registry") (TyVar "v")) (TyCon "Bool"))))))
 (DFunDef false "regInsertCheckedK" ((PVar "k") (PVar "v") (PCon "Registry" (PVar "m"))) (ETuple (EApp (EVar "Registry") (EApp (EApp (EApp (EVar "set") (EVar "k")) (ETuple (EVar "k") (EVar "v"))) (EVar "m"))) (EApp (EApp (EVar "has") (EVar "k")) (EVar "m"))))
-(DTypeSig true "regInsertChecked" (TyFun (TyCon "Ident") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyTuple (TyApp (TyCon "Registry") (TyVar "v")) (TyCon "Bool"))))))
-(DFunDef false "regInsertChecked" ((PVar "ident") (PVar "v") (PVar "r")) (EApp (EApp (EApp (EVar "regInsertCheckedK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "v")) (EVar "r")))
 (DTypeSig true "regInsertK" (TyFun (TyCon "RegKey") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v"))))))
 (DFunDef false "regInsertK" ((PVar "k") (PVar "v") (PCon "Registry" (PVar "m"))) (EApp (EVar "Registry") (EApp (EApp (EApp (EVar "set") (EVar "k")) (ETuple (EVar "k") (EVar "v"))) (EVar "m"))))
-(DTypeSig true "regInsert" (TyFun (TyCon "Ident") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v"))))))
+(DTypeSig false "regInsert" (TyFun (TyCon "Ident") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v"))))))
 (DFunDef false "regInsert" ((PVar "ident") (PVar "v") (PVar "r")) (EApp (EApp (EApp (EVar "regInsertK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "v")) (EVar "r")))
 (DTypeSig true "regDeleteK" (TyFun (TyCon "RegKey") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v")))))
 (DFunDef false "regDeleteK" ((PVar "k") (PCon "Registry" (PVar "m"))) (EApp (EVar "Registry") (EApp (EApp (EVar "delete") (EVar "k")) (EVar "m"))))
-(DTypeSig true "regDelete" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v")))))
+(DTypeSig false "regDelete" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v")))))
 (DFunDef false "regDelete" ((PVar "ident") (PVar "r")) (EApp (EApp (EVar "regDeleteK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "r")))
-(DTypeSig true "regEntries" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyVar "v")))))
+(DTypeSig false "regEntries" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyVar "v")))))
 (DFunDef false "regEntries" ((PCon "Registry" (PVar "m"))) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "entries") (EVar "m"))))
-(DTypeSig true "regKeys" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "List") (TyCon "RegKey"))))
-(DFunDef false "regKeys" ((PVar "r")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "regEntries") (EVar "r"))))
 (DTypeSig true "regSize" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyCon "Int")))
 (DFunDef false "regSize" ((PCon "Registry" (PVar "m"))) (EApp (EVar "size") (EVar "m")))
 (DTypeSig true "regFilter" (TyFun (TyFun (TyTuple (TyCon "RegKey") (TyVar "v")) (TyCon "Bool")) (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v")))))
@@ -1780,21 +1647,19 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "mregEmpty" () (EApp (EVar "MultiRegistry") (EVar "Tip")))
 (DTypeSig true "mregAddK" (TyFun (TyCon "RegKey") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v"))))))
 (DFunDef false "mregAddK" ((PVar "k") (PVar "v") (PCon "MultiRegistry" (PVar "m"))) (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "vs"))) () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "set") (EVar "k")) (ETuple (EVar "k") (EBinOp "::" (EVar "v") (EVar "vs")))) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "set") (EVar "k")) (ETuple (EVar "k") (EListLit (EVar "v")))) (EVar "m"))))))
-(DTypeSig true "mregAdd" (TyFun (TyCon "Ident") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v"))))))
+(DTypeSig false "mregAdd" (TyFun (TyCon "Ident") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v"))))))
 (DFunDef false "mregAdd" ((PVar "ident") (PVar "v") (PVar "mr")) (EApp (EApp (EApp (EVar "mregAddK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "v")) (EVar "mr")))
 (DTypeSig true "mregAppendK" (TyFun (TyCon "RegKey") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v"))))))
 (DFunDef false "mregAppendK" ((PVar "k") (PVar "v") (PCon "MultiRegistry" (PVar "m"))) (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "vs"))) () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "set") (EVar "k")) (ETuple (EVar "k") (EBinOp "++" (EVar "vs") (EListLit (EVar "v"))))) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "set") (EVar "k")) (ETuple (EVar "k") (EListLit (EVar "v")))) (EVar "m"))))))
 (DTypeSig true "mregLookupK" (TyFun (TyCon "RegKey") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyVar "v")))))
 (DFunDef false "mregLookupK" ((PVar "k") (PCon "MultiRegistry" (PVar "m"))) (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "vs"))) () (EVar "vs")) (arm (PCon "None") () (EListLit))))
-(DTypeSig true "mregLookup" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyVar "v")))))
+(DTypeSig false "mregLookup" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyVar "v")))))
 (DFunDef false "mregLookup" ((PVar "ident") (PVar "mr")) (EApp (EApp (EVar "mregLookupK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "mr")))
-(DTypeSig true "mregEntries" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyVar "v"))))))
+(DTypeSig false "mregEntries" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyVar "v"))))))
 (DFunDef false "mregEntries" ((PCon "MultiRegistry" (PVar "m"))) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "entries") (EVar "m"))))
-(DTypeSig true "mregKeys" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyCon "RegKey"))))
-(DFunDef false "mregKeys" ((PVar "mr")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "mregEntries") (EVar "mr"))))
-(DTypeSig true "mregSize" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyCon "Int")))
+(DTypeSig false "mregSize" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyCon "Int")))
 (DFunDef false "mregSize" ((PCon "MultiRegistry" (PVar "m"))) (EApp (EVar "size") (EVar "m")))
-(DTypeSig true "mregMerge" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v")))))
+(DTypeSig false "mregMerge" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v")))))
 (DFunDef false "mregMerge" ((PVar "older") (PVar "newer")) (EApp (EApp (EVar "mregMergeGo") (EApp (EVar "mregEntries") (EVar "newer"))) (EVar "older")))
 (DTypeSig false "mregMergeGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyVar "v")))) (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v")))))
 (DFunDef false "mregMergeGo" ((PList) (PVar "acc")) (EVar "acc"))
@@ -1802,20 +1667,16 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig false "mregAddAll" (TyFun (TyCon "RegKey") (TyFun (TyApp (TyCon "List") (TyVar "v")) (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v"))))))
 (DFunDef false "mregAddAll" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "mregAddAll" ((PVar "k") (PCons (PVar "v") (PVar "vs")) (PVar "acc")) (EApp (EApp (EApp (EVar "mregAddAll") (EVar "k")) (EVar "vs")) (EApp (EApp (EApp (EVar "mregAddK") (EVar "k")) (EVar "v")) (EVar "acc"))))
-(DData Public "SetRegistry" () ((variant "SetRegistry" (ConPos (TyApp (TyApp (TyCon "Map") (TyCon "RegKey")) (TyCon "RegKey"))))) ())
-(DTypeSig true "sregEmpty" (TyCon "SetRegistry"))
+(DData Abstract "SetRegistry" () ((variant "SetRegistry" (ConPos (TyApp (TyApp (TyCon "Map") (TyCon "RegKey")) (TyCon "RegKey"))))) ())
+(DTypeSig false "sregEmpty" (TyCon "SetRegistry"))
 (DFunDef false "sregEmpty" () (EApp (EVar "SetRegistry") (EVar "Tip")))
-(DTypeSig true "sregAddK" (TyFun (TyCon "RegKey") (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
+(DTypeSig false "sregAddK" (TyFun (TyCon "RegKey") (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregAddK" ((PVar "k") (PCon "SetRegistry" (PVar "m"))) (EApp (EVar "SetRegistry") (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "k")) (EVar "m"))))
-(DTypeSig true "sregAdd" (TyFun (TyCon "Ident") (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
+(DTypeSig false "sregAdd" (TyFun (TyCon "Ident") (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregAdd" ((PVar "ident") (PVar "s")) (EApp (EApp (EVar "sregAddK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "s")))
-(DTypeSig true "sregMemberK" (TyFun (TyCon "RegKey") (TyFun (TyCon "SetRegistry") (TyCon "Bool"))))
-(DFunDef false "sregMemberK" ((PVar "k") (PCon "SetRegistry" (PVar "m"))) (EApp (EApp (EVar "has") (EVar "k")) (EVar "m")))
-(DTypeSig true "sregMember" (TyFun (TyCon "Ident") (TyFun (TyCon "SetRegistry") (TyCon "Bool"))))
-(DFunDef false "sregMember" ((PVar "ident") (PVar "s")) (EApp (EApp (EVar "sregMemberK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "s")))
-(DTypeSig true "sregSize" (TyFun (TyCon "SetRegistry") (TyCon "Int")))
+(DTypeSig false "sregSize" (TyFun (TyCon "SetRegistry") (TyCon "Int")))
 (DFunDef false "sregSize" ((PCon "SetRegistry" (PVar "m"))) (EApp (EVar "size") (EVar "m")))
-(DTypeSig true "sregKeys" (TyFun (TyCon "SetRegistry") (TyApp (TyCon "List") (TyCon "RegKey"))))
+(DTypeSig false "sregKeys" (TyFun (TyCon "SetRegistry") (TyApp (TyCon "List") (TyCon "RegKey"))))
 (DFunDef false "sregKeys" ((PCon "SetRegistry" (PVar "m"))) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "entries") (EVar "m"))))
 (DTypeSig true "sregMerge" (TyFun (TyCon "SetRegistry") (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregMerge" ((PVar "older") (PVar "newer")) (EApp (EApp (EVar "sregMergeGo") (EApp (EVar "sregKeys") (EVar "newer"))) (EVar "older")))
@@ -1885,8 +1746,6 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "headBucketKey" ((PCon "None")) (EApp (EVar "Some") (EApp (EApp (EVar "RegKey") (EListLit)) (EListLit))))
 (DFunDef false "headBucketKey" ((PCon "Some" (PCon "HkDecl" (PVar "key")))) (EApp (EVar "Some") (EApp (EVar "regKeyOfTab") (EVar "key"))))
 (DFunDef false "headBucketKey" ((PCon "Some" (PCon "HkRigid" PWild))) (EVar "None"))
-(DTypeSig true "dispKeyRender" (TyFun (TyCon "RegKey") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyCon "String"))))
-(DFunDef false "dispKeyRender" ((PVar "base") (PVar "rigids")) (EBinOp "++" (EBinOp "++" (EApp (EVar "lenKey") (EApp (EVar "regKeyRender") (EVar "base"))) (EApp (EVar "lenKey") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "listLen") (EVar "rigids")))) (ELit (LString ""))))) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "i") (PVar "name"))) (EBinOp "++" (EApp (EVar "ordKey") (EVar "i")) (EApp (EVar "lenKey") (EVar "name"))))) (EVar "rigids")))))
 (DTypeSig false "identBuiltinFixture" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyCon "Ident"))))
 (DFunDef false "identBuiltinFixture" ((PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EVar "identOriginBuiltin")) (EVar "name")))
 (DTypeSig false "identIn" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ident")))))
@@ -1993,11 +1852,9 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "originModuleOf" ((PVar "origin")) (EApp (EApp (EApp (EVar "identOriginFold") (ELit (LString ""))) (ELam ((PVar "m")) (EVar "m"))) (EVar "origin")))
 (DTypeSig true "identKey" (TyFun (TyCon "Ident") (TyCon "String")))
 (DFunDef false "identKey" ((PCon "Ident" (PVar "ns") (PVar "origin") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "lenKey") (EApp (EVar "nsTag") (EVar "ns"))) (EApp (EVar "lenKey") (EApp (EVar "originTag") (EVar "origin")))) (EApp (EVar "lenKey") (EApp (EVar "originModuleOf") (EVar "origin")))) (EApp (EVar "lenKey") (EVar "name"))))
-(DTypeSig true "tabKeyRender" (TyFun (TyCon "TabKey") (TyCon "String")))
+(DTypeSig false "tabKeyRender" (TyFun (TyCon "TabKey") (TyCon "String")))
 (DFunDef false "tabKeyRender" ((PCon "TkIdent" (PVar "ident"))) (EApp (EVar "identKey") (EVar "ident")))
 (DFunDef false "tabKeyRender" ((PCon "TkBare" (PVar "ns") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "lenKey") (EApp (EVar "nsTag") (EVar "ns"))) (EApp (EVar "lenKey") (ELit (LString "bare")))) (EApp (EVar "lenKey") (ELit (LString "")))) (EApp (EVar "lenKey") (EVar "name"))))
-(DTypeSig true "identKeys" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyCon "String")))
-(DFunDef false "identKeys" ((PVar "idents")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (EVar "identKey")) (EVar "idents"))))
 (DTypeSig true "tabKeys" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyCon "String")))
 (DFunDef false "tabKeys" ((PVar "keys")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (EVar "tabKeyRender")) (EVar "keys"))))
 (DTypeSig false "ordKey" (TyFun (TyCon "Int") (TyCon "String")))
@@ -2006,24 +1863,22 @@ headU = HkDecl (TkBare NsType "Box")
 (DImpl true "Eq" ((TyCon "RegKey")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RegKey" (PVar "__a0") (PVar "__a1")) (PCon "RegKey" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))))))))
 (DImpl true "Ord" ((TyCon "RegKey")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RegKey" (PVar "__a0") (PVar "__a1")) (PCon "RegKey" (PVar "__b0") (PVar "__b1"))) () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0")) (arm (PCon "Eq") () (EApp (EApp (EMethodRef "compare") (EVar "__a1")) (EVar "__b1"))) (arm (PVar "__c") () (EVar "__c"))))))))
 (DImpl true "Debug" ((TyCon "RegKey")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RegKey" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "RegKey ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))))))))
-(DTypeSig true "regKeyOf" (TyFun (TyCon "Ident") (TyCon "RegKey")))
+(DTypeSig false "regKeyOf" (TyFun (TyCon "Ident") (TyCon "RegKey")))
 (DFunDef false "regKeyOf" ((PVar "ident")) (EApp (EApp (EVar "RegKey") (EListLit (EApp (EVar "TkIdent") (EVar "ident")))) (EListLit)))
-(DTypeSig true "regKeyN" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyCon "RegKey")))
+(DTypeSig false "regKeyN" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyCon "RegKey")))
 (DFunDef false "regKeyN" ((PVar "idents")) (EApp (EApp (EVar "RegKey") (EApp (EApp (EMethodRef "map") (EVar "TkIdent")) (EVar "idents"))) (EListLit)))
-(DTypeSig true "regKeyAt" (TyFun (TyCon "Ident") (TyFun (TyCon "Int") (TyCon "RegKey"))))
+(DTypeSig false "regKeyAt" (TyFun (TyCon "Ident") (TyFun (TyCon "Int") (TyCon "RegKey"))))
 (DFunDef false "regKeyAt" ((PVar "ident") (PVar "slot")) (EApp (EApp (EVar "RegKey") (EListLit (EApp (EVar "TkIdent") (EVar "ident")))) (EListLit (EVar "slot"))))
-(DTypeSig true "regKeyNAt" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "RegKey"))))
+(DTypeSig false "regKeyNAt" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "RegKey"))))
 (DFunDef false "regKeyNAt" ((PVar "idents") (PVar "ords")) (EApp (EApp (EVar "RegKey") (EApp (EApp (EMethodRef "map") (EVar "TkIdent")) (EVar "idents"))) (EVar "ords")))
 (DTypeSig true "regKeyOfTab" (TyFun (TyCon "TabKey") (TyCon "RegKey")))
 (DFunDef false "regKeyOfTab" ((PVar "key")) (EApp (EApp (EVar "RegKey") (EListLit (EVar "key"))) (EListLit)))
-(DTypeSig true "regKeyTabAt" (TyFun (TyCon "TabKey") (TyFun (TyCon "Int") (TyCon "RegKey"))))
+(DTypeSig false "regKeyTabAt" (TyFun (TyCon "TabKey") (TyFun (TyCon "Int") (TyCon "RegKey"))))
 (DFunDef false "regKeyTabAt" ((PVar "key") (PVar "slot")) (EApp (EApp (EVar "RegKey") (EListLit (EVar "key"))) (EListLit (EVar "slot"))))
 (DTypeSig true "regKeyNTab" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyCon "RegKey")))
 (DFunDef false "regKeyNTab" ((PVar "keys")) (EApp (EApp (EVar "RegKey") (EVar "keys")) (EListLit)))
 (DTypeSig true "regKeyNTabAt" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "RegKey"))))
 (DFunDef false "regKeyNTabAt" ((PVar "keys") (PVar "ords")) (EApp (EApp (EVar "RegKey") (EVar "keys")) (EVar "ords")))
-(DTypeSig true "regKeyTabs" (TyFun (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "TabKey"))))
-(DFunDef false "regKeyTabs" ((PCon "RegKey" (PVar "keys") PWild)) (EVar "keys"))
 (DTypeSig true "regKeyOrdinals" (TyFun (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "regKeyOrdinals" ((PCon "RegKey" PWild (PVar "ords"))) (EVar "ords"))
 (DTypeSig true "regKeyRender" (TyFun (TyCon "RegKey") (TyCon "String")))
@@ -2037,20 +1892,16 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "regLookup" ((PVar "ident") (PVar "r")) (EApp (EApp (EVar "regLookupK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "r")))
 (DTypeSig true "regInsertCheckedK" (TyFun (TyCon "RegKey") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyTuple (TyApp (TyCon "Registry") (TyVar "v")) (TyCon "Bool"))))))
 (DFunDef false "regInsertCheckedK" ((PVar "k") (PVar "v") (PCon "Registry" (PVar "m"))) (ETuple (EApp (EVar "Registry") (EApp (EApp (EApp (EVar "set") (EVar "k")) (ETuple (EVar "k") (EVar "v"))) (EVar "m"))) (EApp (EApp (EVar "has") (EVar "k")) (EVar "m"))))
-(DTypeSig true "regInsertChecked" (TyFun (TyCon "Ident") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyTuple (TyApp (TyCon "Registry") (TyVar "v")) (TyCon "Bool"))))))
-(DFunDef false "regInsertChecked" ((PVar "ident") (PVar "v") (PVar "r")) (EApp (EApp (EApp (EVar "regInsertCheckedK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "v")) (EVar "r")))
 (DTypeSig true "regInsertK" (TyFun (TyCon "RegKey") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v"))))))
 (DFunDef false "regInsertK" ((PVar "k") (PVar "v") (PCon "Registry" (PVar "m"))) (EApp (EVar "Registry") (EApp (EApp (EApp (EVar "set") (EVar "k")) (ETuple (EVar "k") (EVar "v"))) (EVar "m"))))
-(DTypeSig true "regInsert" (TyFun (TyCon "Ident") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v"))))))
+(DTypeSig false "regInsert" (TyFun (TyCon "Ident") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v"))))))
 (DFunDef false "regInsert" ((PVar "ident") (PVar "v") (PVar "r")) (EApp (EApp (EApp (EVar "regInsertK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "v")) (EVar "r")))
 (DTypeSig true "regDeleteK" (TyFun (TyCon "RegKey") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v")))))
 (DFunDef false "regDeleteK" ((PVar "k") (PCon "Registry" (PVar "m"))) (EApp (EVar "Registry") (EApp (EApp (EVar "delete") (EVar "k")) (EVar "m"))))
-(DTypeSig true "regDelete" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v")))))
+(DTypeSig false "regDelete" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v")))))
 (DFunDef false "regDelete" ((PVar "ident") (PVar "r")) (EApp (EApp (EVar "regDeleteK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "r")))
-(DTypeSig true "regEntries" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyVar "v")))))
+(DTypeSig false "regEntries" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyVar "v")))))
 (DFunDef false "regEntries" ((PCon "Registry" (PVar "m"))) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "entries") (EVar "m"))))
-(DTypeSig true "regKeys" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "List") (TyCon "RegKey"))))
-(DFunDef false "regKeys" ((PVar "r")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "regEntries") (EVar "r"))))
 (DTypeSig true "regSize" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyCon "Int")))
 (DFunDef false "regSize" ((PCon "Registry" (PVar "m"))) (EApp (EVar "size") (EVar "m")))
 (DTypeSig true "regFilter" (TyFun (TyFun (TyTuple (TyCon "RegKey") (TyVar "v")) (TyCon "Bool")) (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v")))))
@@ -2067,21 +1918,19 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "mregEmpty" () (EApp (EVar "MultiRegistry") (EVar "Tip")))
 (DTypeSig true "mregAddK" (TyFun (TyCon "RegKey") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v"))))))
 (DFunDef false "mregAddK" ((PVar "k") (PVar "v") (PCon "MultiRegistry" (PVar "m"))) (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "vs"))) () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "set") (EVar "k")) (ETuple (EVar "k") (EBinOp "::" (EVar "v") (EVar "vs")))) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "set") (EVar "k")) (ETuple (EVar "k") (EListLit (EVar "v")))) (EVar "m"))))))
-(DTypeSig true "mregAdd" (TyFun (TyCon "Ident") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v"))))))
+(DTypeSig false "mregAdd" (TyFun (TyCon "Ident") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v"))))))
 (DFunDef false "mregAdd" ((PVar "ident") (PVar "v") (PVar "mr")) (EApp (EApp (EApp (EVar "mregAddK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "v")) (EVar "mr")))
 (DTypeSig true "mregAppendK" (TyFun (TyCon "RegKey") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v"))))))
 (DFunDef false "mregAppendK" ((PVar "k") (PVar "v") (PCon "MultiRegistry" (PVar "m"))) (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "vs"))) () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "set") (EVar "k")) (ETuple (EVar "k") (EBinOp "++" (EVar "vs") (EListLit (EVar "v"))))) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "set") (EVar "k")) (ETuple (EVar "k") (EListLit (EVar "v")))) (EVar "m"))))))
 (DTypeSig true "mregLookupK" (TyFun (TyCon "RegKey") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyVar "v")))))
 (DFunDef false "mregLookupK" ((PVar "k") (PCon "MultiRegistry" (PVar "m"))) (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "vs"))) () (EVar "vs")) (arm (PCon "None") () (EListLit))))
-(DTypeSig true "mregLookup" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyVar "v")))))
+(DTypeSig false "mregLookup" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyVar "v")))))
 (DFunDef false "mregLookup" ((PVar "ident") (PVar "mr")) (EApp (EApp (EVar "mregLookupK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "mr")))
-(DTypeSig true "mregEntries" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyVar "v"))))))
+(DTypeSig false "mregEntries" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyVar "v"))))))
 (DFunDef false "mregEntries" ((PCon "MultiRegistry" (PVar "m"))) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "entries") (EVar "m"))))
-(DTypeSig true "mregKeys" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyCon "RegKey"))))
-(DFunDef false "mregKeys" ((PVar "mr")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "mregEntries") (EVar "mr"))))
-(DTypeSig true "mregSize" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyCon "Int")))
+(DTypeSig false "mregSize" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyCon "Int")))
 (DFunDef false "mregSize" ((PCon "MultiRegistry" (PVar "m"))) (EApp (EVar "size") (EVar "m")))
-(DTypeSig true "mregMerge" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v")))))
+(DTypeSig false "mregMerge" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v")))))
 (DFunDef false "mregMerge" ((PVar "older") (PVar "newer")) (EApp (EApp (EVar "mregMergeGo") (EApp (EVar "mregEntries") (EVar "newer"))) (EVar "older")))
 (DTypeSig false "mregMergeGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyVar "v")))) (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v")))))
 (DFunDef false "mregMergeGo" ((PList) (PVar "acc")) (EVar "acc"))
@@ -2089,20 +1938,16 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig false "mregAddAll" (TyFun (TyCon "RegKey") (TyFun (TyApp (TyCon "List") (TyVar "v")) (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v"))))))
 (DFunDef false "mregAddAll" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "mregAddAll" ((PVar "k") (PCons (PVar "v") (PVar "vs")) (PVar "acc")) (EApp (EApp (EApp (EVar "mregAddAll") (EVar "k")) (EVar "vs")) (EApp (EApp (EApp (EVar "mregAddK") (EVar "k")) (EVar "v")) (EVar "acc"))))
-(DData Public "SetRegistry" () ((variant "SetRegistry" (ConPos (TyApp (TyApp (TyCon "Map") (TyCon "RegKey")) (TyCon "RegKey"))))) ())
-(DTypeSig true "sregEmpty" (TyCon "SetRegistry"))
+(DData Abstract "SetRegistry" () ((variant "SetRegistry" (ConPos (TyApp (TyApp (TyCon "Map") (TyCon "RegKey")) (TyCon "RegKey"))))) ())
+(DTypeSig false "sregEmpty" (TyCon "SetRegistry"))
 (DFunDef false "sregEmpty" () (EApp (EVar "SetRegistry") (EVar "Tip")))
-(DTypeSig true "sregAddK" (TyFun (TyCon "RegKey") (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
+(DTypeSig false "sregAddK" (TyFun (TyCon "RegKey") (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregAddK" ((PVar "k") (PCon "SetRegistry" (PVar "m"))) (EApp (EVar "SetRegistry") (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "k")) (EVar "m"))))
-(DTypeSig true "sregAdd" (TyFun (TyCon "Ident") (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
+(DTypeSig false "sregAdd" (TyFun (TyCon "Ident") (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregAdd" ((PVar "ident") (PVar "s")) (EApp (EApp (EVar "sregAddK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "s")))
-(DTypeSig true "sregMemberK" (TyFun (TyCon "RegKey") (TyFun (TyCon "SetRegistry") (TyCon "Bool"))))
-(DFunDef false "sregMemberK" ((PVar "k") (PCon "SetRegistry" (PVar "m"))) (EApp (EApp (EVar "has") (EVar "k")) (EVar "m")))
-(DTypeSig true "sregMember" (TyFun (TyCon "Ident") (TyFun (TyCon "SetRegistry") (TyCon "Bool"))))
-(DFunDef false "sregMember" ((PVar "ident") (PVar "s")) (EApp (EApp (EVar "sregMemberK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "s")))
-(DTypeSig true "sregSize" (TyFun (TyCon "SetRegistry") (TyCon "Int")))
+(DTypeSig false "sregSize" (TyFun (TyCon "SetRegistry") (TyCon "Int")))
 (DFunDef false "sregSize" ((PCon "SetRegistry" (PVar "m"))) (EApp (EVar "size") (EVar "m")))
-(DTypeSig true "sregKeys" (TyFun (TyCon "SetRegistry") (TyApp (TyCon "List") (TyCon "RegKey"))))
+(DTypeSig false "sregKeys" (TyFun (TyCon "SetRegistry") (TyApp (TyCon "List") (TyCon "RegKey"))))
 (DFunDef false "sregKeys" ((PCon "SetRegistry" (PVar "m"))) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "entries") (EVar "m"))))
 (DTypeSig true "sregMerge" (TyFun (TyCon "SetRegistry") (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregMerge" ((PVar "older") (PVar "newer")) (EApp (EApp (EVar "sregMergeGo") (EApp (EVar "sregKeys") (EVar "newer"))) (EVar "older")))
@@ -2172,8 +2017,6 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "headBucketKey" ((PCon "None")) (EApp (EVar "Some") (EApp (EApp (EVar "RegKey") (EListLit)) (EListLit))))
 (DFunDef false "headBucketKey" ((PCon "Some" (PCon "HkDecl" (PVar "key")))) (EApp (EVar "Some") (EApp (EVar "regKeyOfTab") (EVar "key"))))
 (DFunDef false "headBucketKey" ((PCon "Some" (PCon "HkRigid" PWild))) (EVar "None"))
-(DTypeSig true "dispKeyRender" (TyFun (TyCon "RegKey") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyCon "String"))))
-(DFunDef false "dispKeyRender" ((PVar "base") (PVar "rigids")) (EBinOp "++" (EBinOp "++" (EApp (EVar "lenKey") (EApp (EVar "regKeyRender") (EVar "base"))) (EApp (EVar "lenKey") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "listLen") (EVar "rigids")))) (ELit (LString ""))))) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "i") (PVar "name"))) (EBinOp "++" (EApp (EVar "ordKey") (EVar "i")) (EApp (EVar "lenKey") (EVar "name"))))) (EVar "rigids")))))
 (DTypeSig false "identBuiltinFixture" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyCon "Ident"))))
 (DFunDef false "identBuiltinFixture" ((PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EVar "identOriginBuiltin")) (EVar "name")))
 (DTypeSig false "identIn" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ident")))))
