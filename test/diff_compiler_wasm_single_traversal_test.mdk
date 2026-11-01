@@ -579,6 +579,47 @@ f n = if n > 0 then 1.25 else 2.5
 main = f 0 + f 1
 """
 
+fallthroughWitness : String
+fallthroughWitness =
+  """
+apply __fallthrough__ = (__fallthrough__, 1)
+main = apply 42
+"""
+
+fallthroughControls : String -> <IO, Exec, FileWrite> Expectation
+fallthroughControls dir =
+  let source = dir ++ "/typed-issue-4697.mdk"
+  let binary = dir ++ "/issue-4697-native"
+  match writeFile source fallthroughWitness
+    Err e => fail e
+    Ok _ =>
+      let built =
+        expectSpawnOk
+          "env"
+          (strictArgs medakaBin ["build", source, "-o", binary])
+      if expectationTag built == "Fail" then
+        built
+      else
+        expectAll [
+          expectSpawnOkLine
+            "env"
+            (strictArgs medakaBin ["run", source])
+            "(42, 1)",
+          expectSpawnOkLine "env" (strictArgs binary []) "(42, 1)",
+          valueRow
+            dir
+            "typed"
+            (ValueCase
+              "issue-4697-neighbor"
+              """
+apply x = (x, 1)
+main = match apply 42
+  (a, b) => a + b
+"""
+              "43"),
+          trapRow dir "typed" "issue-4697" fallthroughWitness "unreachable",
+        ]
+
 runJudges : String -> <IO, Exec, FileRead, FileWrite> Expectation
 runJudges dir =
   let built =
@@ -640,6 +681,7 @@ main =
 """
           "42"),
       baseline dir,
+      fallthroughControls dir,
       expectEach
         (map (route => (route, slotLifetimeRow dir route)) ["raw", "typed"]),
       refusalRow
@@ -682,6 +724,132 @@ test "current entry routes preserve values, physical ABIs, first traps and named
     Some dir => match mkdirAll dir
       Err e => fail e
       Ok _ => runJudges dir
+
+primitiveControl : String ->
+  String ->
+  String ->
+  <IO, Exec, FileWrite> Expectation
+primitiveControl dir name source =
+  let path = "\{dir}/primitive-\{name}.mdk"
+  let binary = "\{dir}/primitive-\{name}"
+  match writeFile path source
+    Err e => fail e
+    Ok _ =>
+      let built =
+        expectSpawnOk "env" (strictArgs medakaBin ["build", path, "-o", binary])
+      if expectationTag built == "Fail" then
+        built
+      else
+        expectAll [
+          expectSpawnOkLine "env" (strictArgs medakaBin ["run", path]) "0.12",
+          expectSpawnOkLine "env" (strictArgs binary []) "0.12",
+          valueRow
+            dir
+            "modules"
+            (ValueCase ("primitive-" ++ name) source "0.12"),
+        ]
+
+primitiveWitness : String -> <IO, Exec, FileWrite> Expectation
+primitiveWitness dir =
+  let source = dir ++ "/primitive-partial.mdk"
+  let binary = dir ++ "/primitive-partial"
+  let src = """
+main =
+  let fixed = floatToFixed 2
+  println (fixed 0.125)
+"""
+  match writeFile source src
+    Err e => fail e
+    Ok _ =>
+      let built = buildEntry dir "wasm_emit_modules_main"
+      if expectationTag built == "Fail" then
+        built
+      else
+        expectAll [
+          expectSpawnOk "env" (strictArgs medakaBin ["check", source]),
+          expectSpawnOkLine "env" (strictArgs medakaBin ["run", source]) "0.12",
+          expectSpawnFailsAll "env" (strictArgs medakaBin [
+            "build", source, "-o", binary
+          ]) [
+            "E-PANIC", "llvm: floatToFixed takes exactly two arguments"
+          ],
+          expectFalse (fileExists binary),
+          refusalRow
+            dir
+            "modules"
+            "primitive-partial"
+            src
+            "wasm: floatToFixed takes exactly two arguments",
+          primitiveControl dir "full" "main = println (floatToFixed 2 0.125)",
+          primitiveControl
+            dir
+            "bare"
+            "main = let fixed = floatToFixed in println (fixed 2 0.125)",
+        ]
+
+test "#4683 partial primitive applications currently panic in both emitters" =
+  withScratchDir primitiveWitness
+
+interpretedEmitterWitness : String -> <IO, Exec, FileWrite> Expectation
+interpretedEmitterWitness dir =
+  let runtime = underRoot "stdlib/runtime.mdk"
+  let fixture = underRoot "test/llvm_fixtures_typed/disp_ord_default_lt.mdk"
+  let built = buildEntry dir "llvm_emit_typed_main"
+  if expectationTag built == "Fail" then
+    built
+  else
+    let failures =
+      expectEach
+        (map
+          (backend => (
+            backend,
+            expectSpawnFailsAll "env" (strictArgs medakaBin [
+              "run",
+              underRoot
+                ("compiler/entries/" ++ backend ++ "_emit_typed_main.mdk"),
+              runtime,
+              fixture,
+            ]) [
+              "E-PANIC", "field access on non-record"
+            ],
+          ))
+          ["llvm", "wasm"])
+    match (boundedVerbSeconds
+      180
+      "env"
+      (strictArgs (dir ++ "/llvm_emit_typed_main") [runtime, fixture]))
+      Err e => fail e
+      Ok (code, ir, err) =>
+        let emitted = expectAll [
+          expectEqual (0, "") (code, err),
+          expectTextContainsAll ["define"] ir,
+        ]
+        if expectationTag emitted == "Fail" then
+          emitted
+        else match writeFile (dir ++ "/issue-4689.ll") ir
+          Err e => fail e
+          Ok _ =>
+            let linked = expectSpawnOk "sh" [
+              "-c",
+              "if pkg-config --exists bdw-gc 2>/dev/null; then clang \"$1\" \"$2\" $(pkg-config --cflags --libs bdw-gc) -lm -o \"$3\"; elif p=$(brew --prefix bdw-gc 2>/dev/null); then clang \"$1\" \"$2\" -I\"$p/include\" -L\"$p/lib\" -lgc -lm -o \"$3\"; else clang \"$1\" \"$2\" -lgc -lm -o \"$3\"; fi",
+              "sh",
+              dir ++ "/issue-4689.ll",
+              underRoot "runtime/medaka_rt.c",
+              dir ++ "/issue-4689",
+            ]
+            if expectationTag linked == "Fail" then
+              linked
+            else
+              expectAll [
+                failures,
+                expectSpawnOkLine
+                  "env"
+                  (strictArgs (dir ++ "/issue-4689") [])
+                  "1",
+              ]
+
+test "#4689 interpreted typed emitters currently panic on default method fixture" =
+  withScratchDir interpretedEmitterWitness
 
 test "wrapped gate exec failure remains observable through the native test runner" =
   withScratchDir execVehicleJudge
