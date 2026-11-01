@@ -1,0 +1,111 @@
+import test.{expectTrue}
+
+-- A `let _ =` on a call whose declared result is Unit, in a plain block, is
+-- flagged on its `let`; the fix leaves the bare call.
+plainStdlib : Int -> Unit
+plainStdlib n =
+  -- expect-next-line rule-let-underscore-unit
+  println "a"
+  ()
+
+-- A host primitive has no export, yet its declared signature is read.
+plainExtern : Int -> Unit
+plainExtern n =
+  -- expect-next-line rule-let-underscore-unit
+  ePutStrLn "b"
+  ()
+
+-- Brackets around the call stay.
+parenthesised : Int -> Unit
+parenthesised n =
+  -- expect-next-line rule-let-underscore-unit
+  (println "c")
+  ()
+
+-- The statement is also reached inside a let-group binding and a test body.
+inWhere : Int -> Unit
+inWhere n = go n
+  where
+    go k =
+      -- expect-next-line rule-let-underscore-unit
+      println "d"
+      ()
+
+test "a discard in a test body" =
+  -- expect-next-line rule-let-underscore-unit
+  println "e"
+  expectTrue True
+
+-- A `let _ =` that is the last statement of a block is flagged: the call is
+-- Unit, so the block is Unit with or without the binding.
+lastStatement : Int -> Unit
+lastStatement n =
+  -- expect-next-line rule-let-underscore-unit
+  println "f"
+
+-- A `do` block keeps `let _ =`.
+inDo : Int -> <Stdout> Unit
+inDo n = do
+  let _ = println "g"
+  pure ()
+
+-- A Result is a value somebody may want: not this rule.
+resultCall : Int -> <FileWrite "x"> Unit
+resultCall n =
+  let _ = writeFile "x" "y"
+  ()
+
+-- A partial application has no Unit result yet.
+partial : Ref Int -> Unit
+partial r =
+  let _ = setRef r
+  ()
+
+-- A name the file binds is not the stdlib's.
+shadowed : Int -> Unit
+shadowed n =
+  let println = k => k
+  let _ = println 1
+  ()
+
+-- A parameter named like the callee is the parameter.
+shadowedParam : (Int -> Int) -> Unit
+shadowedParam println =
+  let _ = println 1
+  ()
+
+-- A callee with no signature declares no result.
+unsignedCallee n = n
+
+useUnsigned : Int -> Unit
+useUnsigned n =
+  let _ = unsignedCallee n
+  ()
+
+-- Not a call.
+bare : Int -> Unit
+bare n =
+  let _ = n
+  ()
+
+-- A comment inside the text the fix deletes would be lost, so the fix is only
+-- suggested.
+commentInside : Int -> Unit
+commentInside n =
+  -- expect-next-line rule-let-underscore-unit unfixed
+  let _ = {- kept -} println "i"
+  ()
+
+-- A directive that silences a finding silences its fix too.
+suppressed : Int -> Unit
+suppressed n =
+  -- lint-disable-next-line rule-let-underscore-unit
+  let _ = println "j"
+  ()
+
+-- A call on a later line than the `let` moves up to the statement's column.
+nextLine : Int -> Unit
+nextLine n =
+  -- expect-next-line rule-let-underscore-unit
+  println "h"
+  ()

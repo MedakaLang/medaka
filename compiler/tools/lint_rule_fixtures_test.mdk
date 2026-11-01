@@ -114,6 +114,7 @@ fixtureNames = [
   "hand-rolled-derivable",
   "if-max-min",
   "lambda-section",
+  "let-underscore-unit",
   "match-on-param",
   "match-to-map",
   "missing-signature",
@@ -244,9 +245,6 @@ lintLinesAt idx path rule src = match lintParseSource src
           src
           (lintProgram idx (selectRules [rule] []) path src pos decls)))
 
-lintLines : String -> String -> Result String (List Int)
-lintLines rule src = lintLinesAt emptyStdlibIndex (fixturePath src) rule src
-
 readOr : String -> <FileRead> Result String String
 readOr path = match readFile path
   Ok s => Ok s
@@ -292,7 +290,7 @@ fixOutcome idx rule src expected =
     Err e => fail "the fix: \{e}"
     Ok run =>
       let fixed = fst (runParts run)
-      match lintLines rule fixed
+      match lintLinesAt idx (fixturePath src) rule fixed
         Err e => fail "the fixed source: \{e}"
         Ok remaining => expectAll [
           labelFail "fix output" (expectEqual expected fixed),
@@ -382,6 +380,8 @@ test "rule-hand-rolled-derivable fixture" = fixtureHolds "hand-rolled-derivable"
 test "rule-if-max-min fixture" = fixtureHolds "if-max-min"
 
 test "rule-lambda-section fixture" = fixtureHolds "lambda-section"
+
+test "rule-let-underscore-unit fixture" = fixtureHolds "let-underscore-unit"
 
 test "rule-match-on-param fixture" = fixtureHolds "match-on-param"
 

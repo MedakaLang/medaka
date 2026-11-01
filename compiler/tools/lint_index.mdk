@@ -334,6 +334,18 @@ exportedRows rows = filterList rowIsExported rows
 rowIsExported : IndexRow -> Bool
 rowIsExported r = r.ixrExported
 
+-- The rows the stdlib scope keeps: the exported ones, plus the host primitives
+-- of `runtime`.  A primitive is in scope in every program though `runtime.mdk`
+-- does not export it, so a call to one has a declared signature to read.  Its
+-- row stays `ixrExported = False`, which keeps it out of `ixsNames` and
+-- `ixsModules` (the names a rule treats as importable stdlib API).
+export
+stdlibKeptRows : List IndexRow -> List IndexRow
+stdlibKeptRows rows = filterList keptInStdlib rows
+
+keptInStdlib : IndexRow -> Bool
+keptInStdlib r = r.ixrExported || r.ixrModule == "runtime"
+
 -- ── the row digest ──────────────────────────────────────────────────────────
 
 kindTag : RowKind -> String
@@ -557,7 +569,7 @@ rowContentHash src = hashStringHex src
 -- this exact content, else from a parse (and the shard is rewritten).  `Err`
 -- carries the source and the parse error for the caller's diagnostic.  An
 -- unreadable file has no rows.  `dir` "" means no cache.  `exportedOnly` keeps
--- only the exported rows, in the shard and in the result.
+-- the exported rows and the `runtime` primitives, in the shard and in the result.
 export
 fileRows : Bool ->
   (String -> Result ParseError (List Decl, Positions)) ->
@@ -584,7 +596,7 @@ fileRows exportedOnly parse dir stamp modId path = match readFile path
         Err e => Err (src, e)
         Ok (decls, _) =>
           let all = map (atPath path) (rowsOfDecls modId decls)
-          let rows = if exportedOnly then exportedRows all else all
+          let rows = if exportedOnly then stdlibKeptRows all else all
           let _ =
             if dir == "" then
               ()

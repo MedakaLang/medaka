@@ -144,6 +144,10 @@ ruleNameUnusedLocal : String
 ruleNameUnusedLocal = "rule-unused-local"
 
 export
+ruleNameLetUnderscoreUnit : String
+ruleNameLetUnderscoreUnit = "rule-let-underscore-unit"
+
+export
 ruleNamePreferAssignOp : String
 ruleNamePreferAssignOp = "rule-prefer-assign-op"
 

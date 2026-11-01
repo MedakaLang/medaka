@@ -33,6 +33,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-concat-to-interp`](#rule-concat-to-interp) | universal | style | gated | fixable | file |
 | [`rule-self-shadow-extern`](#rule-self-shadow-extern) | universal | correctness | gated | not-fixable | file |
 | [`rule-prefer-assign-op`](#rule-prefer-assign-op) | universal | style | gated | fixable | file |
+| [`rule-let-underscore-unit`](#rule-let-underscore-unit) | universal | style | gated | fixable | file |
 | [`rule-promissory-reader`](#rule-promissory-reader) | internal | style | gated | not-fixable | file |
 | [`rule-orelse-staircase`](#rule-orelse-staircase) | universal | complexity | gated | not-fixable | file |
 | [`rule-clone-type`](#rule-clone-type) | universal | style | baselined | not-fixable | file |
@@ -426,6 +427,21 @@ Before:
   setRef counter 1
 After:
   counter := 1
+```
+
+## rule-let-underscore-unit
+
+`let _ = e` on a call that returns Unit, in a plain block. Write the bare statement `e`
+
+A call whose declared result is Unit has no value to bind, so `let _ =` in front of it says nothing. In a plain block the call is a statement on its own; `do` blocks keep `let _ =`. Only a saturated call to a signed function is checked: the declared result decides, so a partial application, a method, a shadowed name and an unsigned function are not reported.
+
+```
+Before:
+  let _ = writeLine out "done"
+  count xs
+After:
+  writeLine out "done"
+  count xs
 ```
 
 ## rule-promissory-reader
