@@ -278,14 +278,6 @@ spanLoc : Int -> Int -> ParserE e Loc
 spanLoc start end = ParserE (ctx pos => POk (locOfSpan ctx start end) pos)
 
 export
-tokLineCol : ParseContext -> Int -> (Int, Int)
-tokLineCol ctx i =
-  if ctx.pcGuardPositions && i >= 0 && i < arrayLength ctx.pcOffsets then
-    offsetToLineColFast ctx.pcLineStarts (fst (arrayGetUnsafe i ctx.pcOffsets))
-  else
-    (0, 0)
-
-export
 depthOf : ParseContext -> Int
 depthOf ctx = !ctx.pcDepth
 

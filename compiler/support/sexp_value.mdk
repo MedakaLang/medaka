@@ -444,14 +444,6 @@ atomBool path node = match expectAtom path node
   Ok "false" => Ok False
   Ok _ => shapeError path "expected true or false"
 
-export
-expectList : Int -> String -> SExp -> Result SexpError (List SExp)
-expectList arity path (SList items)
-  | length items == arity = Ok items
-  | otherwise =
-    shapeError path ("expected a list of " ++ intToString arity ++ " items")
-expectList _ path _ = shapeError path "expected a list"
-
 -- ── skipping ────────────────────────────────────────────────────────────────
 
 -- Steps over one node without building it.  A decoder that stores a sub-tree

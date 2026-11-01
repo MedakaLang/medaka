@@ -123,7 +123,6 @@ evalMain : List Decl -> String
 evalMatch : Loc -> EvalEnv (Value a) -> Value a -> List Arm -> <a> Value a
 evalMethodAt : EvalEnv (Value a) -> String -> String -> Route -> List Route -> List Route -> <a> Value a
 evalMethodAtEv : EvalEnv (Value a) -> String -> (String, Int, Route, List Route, List Route) -> <a> Value a
-evalModulesOutput : List Decl -> List (String, List Decl) -> String
 evalModulesOutputFacts : ProgramFacts -> List Decl -> List (String, List Decl) -> String
 evalModulesOutputRunFacts : ProgramFacts -> List Decl -> List (String, List Decl) -> <IO> String
 evalModulesRootEnvFacts : ProgramFacts -> List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> List (String, Value a)

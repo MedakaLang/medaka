@@ -717,7 +717,6 @@ public export data CheckDump = CheckDump {
 -- The drive of a multi-module check, taken from the report that drive returned:
 -- `modPairs` is the desugared graph it read and `paths` the loader's
 -- module-to-file map.
-export
 graphCheckDrive : TcReport ->
   DriveOutputs ->
   List (String, List Decl) ->
@@ -1460,7 +1459,6 @@ analyzeProject exportsFor allowInternal trustedMods cacheRef parseCacheRef read 
 -- graph driver produced — see `typecheckPassFull`.  A load failure never reaches a
 -- typecheck, so its per-module list is empty and only the diagnostics it attributes
 -- to the entry file carry any verdict.
-export
 analyzeProjectFull : (List String -> <e> List (String, List String)) ->
   Bool ->
   List String ->
@@ -1744,7 +1742,6 @@ projectEntrySchemes cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
 
 -- `projectEntrySchemes` handing back its drive's `PartialAnalysis`: every
 -- module's schemes, the prelude's, and the last-checked module's locals and seed.
-export
 projectEntryAnalysis : Ref (List (String, String)) ->
   Ref (OrdMap (List Decl)) ->
   (String -> Option String) ->
@@ -2453,19 +2450,6 @@ freshPassIdentity _ =
   let next = c.pcSerial + 1
   passCacheRef := { c | pcSerial = next }
   next
-
--- The identity of the entry the bucketing fold's cache holds for module [mid]:
--- unchanged across analyzes that serve the module, new whenever one folds it.
-export
-foldCachedIdentity : String -> Option Int
-foldCachedIdentity mid =
-  map (e => e.peIdentity) (omLookup mid passCacheRef.value.pcFold)
-
--- The same for the resolve pass's cache.
-export
-resolveCachedIdentity : String -> Option Int
-resolveCachedIdentity mid =
-  map (e => e.peIdentity) (omLookup mid passCacheRef.value.pcResolve)
 
 -- [compute] of one module with its identity in [kind]'s pass: served when [graph]
 -- is `Some` and the module's entry was recorded under the same graph part, path,

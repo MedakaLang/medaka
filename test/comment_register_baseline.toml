@@ -327,7 +327,7 @@ count = 1
 [[entry]]
 file = "compiler/ir/core_ir_lower.mdk"
 class = "shout"
-count = 6
+count = 5
 
 [[entry]]
 file = "compiler/support/opcount.mdk"

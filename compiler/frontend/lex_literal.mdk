@@ -546,7 +546,6 @@ asciiByte src pos next s = match stringToChars s
       (NonAsciiByte (copyCharRange src (pos + 2) (next - 1)) (utf8FixIt s))
 
 -- `b'\xC3'`, `b'\xA9'` for the UTF-8 bytes of `s`.
-export
 utf8FixIt : String -> String
 utf8FixIt s = joinWith ", " (map byteLiteralText (toList (toUtf8 s)))
 

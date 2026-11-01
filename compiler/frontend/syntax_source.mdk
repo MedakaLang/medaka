@@ -14,9 +14,9 @@ import support.source_index.{SourceIndex, indexSource, sourcePositionToOffset}
 
 public export data SourceSpan = SourceSpan Int Int
 public export data TriviaKind = LineComment | BlockComment
-public export data Trivia = Trivia TriviaKind SourceSpan
+export data Trivia = Trivia TriviaKind SourceSpan
 public export data PieceKind = TokenCoverage | CommentCoverage | SourceGap
-public export data SourcePiece = SourcePiece PieceKind SourceSpan
+export data SourcePiece = SourcePiece PieceKind SourceSpan
 -- Source and token limits identify distinct admission failures.
 -- lint-disable-next-line rule-clone-type
 public export data SyntaxAdmission =
@@ -149,39 +149,8 @@ syntaxTokenSpans (SyntaxSource _ _ _ spans _ _ _ _ _) =
   arrayFromList (toList spans)
 
 export
-syntaxTrivia : SyntaxSource -> Array Trivia
-syntaxTrivia (SyntaxSource _ _ _ _ trivia _ _ _ _) =
-  arrayFromList (toList trivia)
-
-export
-syntaxPieces : SyntaxSource -> Array SourcePiece
-syntaxPieces (SyntaxSource _ _ _ _ _ pieces _ _ _) =
-  arrayFromList (toList pieces)
-
-export
-syntaxStrict : SyntaxSource -> Result ParseDiagnostic ParsedSource
-syntaxStrict (SyntaxSource _ _ _ _ _ _ strict _ _) = strict
-
-export
 syntaxRecovered : SyntaxSource -> RecoveredSource
 syntaxRecovered (SyntaxSource _ _ _ _ _ _ _ _ recovered) = recovered
-
-export
-syntaxSlice : SyntaxSource -> SourceSpan -> Option String
-syntaxSlice syntax (SourceSpan lo hi) =
-  let src = syntaxSourceText syntax
-  if lo < 0 || hi < lo || hi > stringLength src then
-    None
-  else
-    Some (stringSlice lo hi src)
-
-export
-spanFromLoc : SyntaxSource -> Loc -> Option SourceSpan
-spanFromLoc syntax (Loc _ line col endLine endCol) = do
-  let index = syntaxIndex syntax
-  lo <- sourcePositionToOffset index line col
-  hi <- sourcePositionToOffset index endLine endCol
-  if lo <= hi then Some (SourceSpan lo hi) else None
 
 export
 syntaxStructural : SyntaxSource -> Option ParsedSource
