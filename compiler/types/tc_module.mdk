@@ -152,7 +152,6 @@ import types.tc_env.{
   extendTermBindings,
   extendVars,
   funDefs,
-  graphPubDefiners,
   ieUniverseAt,
   ifaceMethodNames,
   ifaceTabKey,
@@ -174,6 +173,7 @@ import types.tc_decls.{
   builtinClassesOf,
   declEnvSeedDataUniverse,
   ifaceMethodSchemeRows,
+  importerDefiners,
   isAliasDecl,
   loadDataUniverse,
   recordDeclKinds,
@@ -1297,13 +1297,13 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- this source identity.
   mctx.mcCells.funPredicateSlotsRef :=
     aliasConstraintEntries
-        gctx
+        (importerDefiners gctx mid)
         prog
         gctx.crossRun.crossModuleFunPredicateSlotsQualRef.value
       ++ mctx.mcCells.funPredicateSlotsRef.value
   mctx.mcCells.funConstraintDeclaredRef :=
     aliasConstraintEntries
-        gctx
+        (importerDefiners gctx mid)
         prog
         gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value
       ++ mctx.mcCells.funConstraintDeclaredRef.value
@@ -1329,7 +1329,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- ONE derivation, two projections.  The two refs are read together
   -- (`qualConstraintKey` assembles a `(definer, origin)` key out of both), so they
   -- must not be derived by two independent walks that could admit different rows.
-  let admitted = importDefinersOf gctx prog
+  let admitted = importDefinersOf gctx mid prog
   mctx.mcCells.currentImportDefinersRef :=
     omFromPairs (reverseL (definerRowsOf admitted)) omEmpty
   mctx.mcCells.currentImportOriginsRef :=
@@ -3140,7 +3140,23 @@ importedCtorTypeDeclsLastWins : List Decl ->
   List DeclEnvModule ->
   List Decl
 importedCtorTypeDeclsLastWins unitDecls cur rows =
-  overlayHalf True unitDecls cur rows ++ overlayHalf False unitDecls cur rows
+  flatMap (aliasOverlayDecls cur rows) unitDecls
+    ++ overlayHalf True unitDecls cur rows
+    ++ overlayHalf False unitDecls cur rows
+
+-- A module alias import's overlay rows: the decls of the aliased module the reader at
+-- ordinal `cur` sees beyond the `publicDataDecl`s the universe floor already holds,
+-- which is what a test sibling sees of its subject's private and newtype types (resolve
+-- strips `A.` before inference, so the sibling's `A.Hidden` reaches the bare table).  For
+-- any other reader the visible row is the public projection and this adds nothing.  The
+-- rows come first so that a named or wildcard row for the same spelling outranks them.
+aliasOverlayDecls : Int -> List DeclEnvModule -> Decl -> List Decl
+aliasOverlayDecls cur rows (DAttrib _ d) = aliasOverlayDecls cur rows d
+aliasOverlayDecls cur rows (DUse _ (p@(UseAlias _ _)) _) =
+  filterList
+    (d => not (publicDataDecl d))
+    (wildOverlayDecls cur rows (useModId p))
+aliasOverlayDecls _ _ _ = []
 
 -- One half of the partition, in the unit's own source order.  `wildHalf` selects which:
 -- True = `UseWild` rows only, False = `UseGroup` rows only.
@@ -3485,43 +3501,51 @@ declOwnedBy mid tyName o = match mkIdent NsType (OriginModule mid) tyName
 -- with the local spelling, MISS, and — via `hasImportDefiner` — read that miss as
 -- "genuinely unconstrained", silently dropping the callee's dict.  Both halves of the
 -- key come out of one derivation; they cannot disagree.
-importDefinersOf : GraphCtx -> List Decl -> List (String, (String, String))
-importDefinersOf gctx prog =
-  let named = useAdmittedRows gctx False prog
+importDefinersOf : GraphCtx ->
+  String ->
+  List Decl ->
+  List (String, (String, String))
+importDefinersOf gctx mid prog =
+  let defs = importerDefiners gctx mid
+  let named = useAdmittedRows defs False prog
   let taken = namesToSet (map fst named ++ declTopFnNames prog) omEmpty
   named
     ++ filterList
       (e => not (omHasKey (fst e) taken))
-      (useAdmittedRows gctx True prog)
+      (useAdmittedRows defs True prog)
 
 -- one precedence TIER of the walk above — [wild] selects the wildcard-form rows or the
 -- named-form rows.  This is a precedence split, not a re-enumeration of the forms:
--- WHICH names a form admits is `importFormRows`' answer in both tiers.
-useAdmittedRows : GraphCtx ->
+-- WHICH names a form admits is `importFormRows`' answer in both tiers.  [defs] is the
+-- importing module's `importerDefiners`.
+useAdmittedRows : (String -> List (String, (String, String))) ->
   Bool ->
   List Decl ->
   List (String, (String, String))
-useAdmittedRows gctx _ [] = []
-useAdmittedRows gctx wild ((DAttrib _ d) :: rest) =
-  useAdmittedRows gctx wild [d] ++ useAdmittedRows gctx wild rest
-useAdmittedRows gctx wild ((DUse _ path _) :: rest) =
-  useDefinerRows gctx wild path ++ useAdmittedRows gctx wild rest
-useAdmittedRows gctx wild (_ :: rest) = useAdmittedRows gctx wild rest
+useAdmittedRows defs _ [] = []
+useAdmittedRows defs wild ((DAttrib _ d) :: rest) =
+  useAdmittedRows defs wild [d] ++ useAdmittedRows defs wild rest
+useAdmittedRows defs wild ((DUse _ path _) :: rest) =
+  useDefinerRows defs wild path ++ useAdmittedRows defs wild rest
+useAdmittedRows defs wild (_ :: rest) = useAdmittedRows defs wild rest
 
 -- `core` is skipped: the implicit prelude is never an explicit provenance (every reader
 -- of these rows relies on that — see `declaredConstraintFor`).
-useDefinerRows : GraphCtx -> Bool -> UsePath -> List (String, (String, String))
-useDefinerRows gctx wild path =
+useDefinerRows : (String -> List (String, (String, String))) ->
+  Bool ->
+  UsePath ->
+  List (String, (String, String))
+useDefinerRows defs wild path =
   let depId = useModId path
   if depId == "core" then
     []
   else match importedBindings path
-    None => if wild then graphPubDefiners gctx depId else []
+    None => if wild then defs depId else []
     Some bindings =>
       if wild then
         []
       else
-        flatMap (memberDefinerRow depId (graphPubDefiners gctx depId)) bindings
+        flatMap (memberDefinerRow depId (defs depId)) bindings
 
 -- resolve ONE named member against the dependency's export table.  The fallback is the
 -- load-bearing part: on the Flat / loader-less drivers `deModules` is EMPTY, so the
@@ -4304,7 +4328,10 @@ beginModuleMarking mctx mid prog top seed =
   let known = match mid
     "" => constrainedSigNames prog
     _ => dedup (ms.msBareDictNames ++ mctx.mcGraph.promotionHarvestRef.value)
-  let aliases = aliasDictNames mctx.mcGraph known ms.msUnits [(mid, prog)]
+  let aliases = aliasDictNames (importerDefiners
+    mctx.mcGraph) known ms.msUnits [
+    (mid, prog),
+  ]
   mctx.mcGraph.graphRun.localAbs.lasNext := (mid, 0)
   mctx.mcGraph.graphRun.localAbs.lasMinted := []
   mctx.mcCells.markingRef := Some ModuleMarking {

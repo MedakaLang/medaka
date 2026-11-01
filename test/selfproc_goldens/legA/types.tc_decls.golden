@@ -112,6 +112,7 @@ groupDefinerPairs : Map String (List (String, String)) -> List (String, (String,
 headAnnotTy : ModuleCtx -> Ty -> Mono
 ifaceMethodSchemeRows : ModuleCtx -> List Decl -> List MethodSchemeRow
 implHeadNormalDecl : List (TabKey, (List String, Ty)) -> Decl -> Decl
+importerDefiners : GraphCtx -> String -> String -> List (String, (String, String))
 inferParamRowAtoms : GraphCtx -> List String -> List Variant -> List (List Atom)
 installMethodPredicateSlots : ModuleCtx -> String -> List MethodPredicateSlot -> Unit
 instantiateSigTracked : ModuleCtx -> Ty -> (Mono, List (String, Mono), Option EffRow)
@@ -133,6 +134,7 @@ methodSchemeRows : ModuleCtx -> List (String, List Kind) -> IfaceRef -> List Str
 methodSchemesPure : ModuleCtx -> List (String, List Kind) -> List IfaceMethod -> List (String, Scheme)
 mintParamReprs : ModuleCtx -> List String -> List Kind -> List Mono
 moduleBindingsUnder : ExportView -> List String -> List Decl -> ModuleBindings -> List (String, ExportBinding)
+moduleDefinersUnder : ExportView -> Map String (List (String, (String, String))) -> String -> List Decl -> List (String, (String, String))
 modulePubDefiners : Map String (List (String, (String, String))) -> String -> List Decl -> List (String, (String, String))
 padCtorBinders : List Variant -> List (List (String, KindAnn)) -> List (List (String, KindAnn))
 paramEtbl : List String -> List Kind -> List Mono -> SigVars
@@ -152,7 +154,7 @@ recordExistentials : GraphCtx -> List (String, Ref Authvar) -> Unit
 recordParamKinds : ModuleCtx -> TyConOrigin -> String -> List Kind -> Unit
 recordParamRowAtoms : ModuleCtx -> TyConOrigin -> String -> List (List Atom) -> Unit
 reexportCtorMember : UseMember -> List (String, String, Ident) -> List (String, String, Ident)
-reexportDefiners : Map String (List (String, (String, String))) -> List Decl -> List (String, (String, String))
+reexportDefiners : Map String (List (String, (String, String))) -> List UsePath -> List (String, (String, String))
 reexportDefinersOf : Map String (List (String, (String, String))) -> UsePath -> List (String, (String, String))
 reexportedCtorIdents : Map String (List (String, String, Ident)) -> List Decl -> List (String, String, Ident)
 reexportedCtorIdentsOf : Map String (List (String, String, Ident)) -> UsePath -> List (String, String, Ident)
@@ -173,16 +175,18 @@ rowArgAtomsVarApp : ModuleCtx -> List (String, List Kind) -> String -> List Ty -
 rowBoundByMember : UseMember -> (String, String, Ident) -> Bool
 seedNumLitFromIntAnchor : ModuleCtx -> List MethodSchemeRow -> Unit
 setMethodPredicateSlotEntry : ModuleCtx -> String -> List MethodPredicateSlot -> Unit
+siblingDepEnv : ModuleCtx -> String -> (List (String, List (String, ExportBinding)), List (String, List (String, ExportBinding))) -> List (String, List (String, ExportBinding))
 sigToScheme : ModuleCtx -> Ty -> Scheme
 sigToSchemeTvs : ModuleCtx -> Ty -> (Scheme, List (String, Mono))
 sigToSchemeTvsIn : ModuleCtx -> List (String, List Kind) -> Ty -> (Scheme, List (String, Mono))
 sigTyVarNames : Ty -> List String -> List String -> List String
 sigVarsFor : ModuleCtx -> Ty -> List String -> SigVars
 sigVarsForWith : ModuleCtx -> Ty -> List String -> List (String, Param) -> SigVars
-stampGraphDecls : Option (String, String) -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+stampGraphDecls : List (String, String) -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 tabKeyModule : TabKey -> Option String
 tagModuleExports : Map String Scheme -> List (String, Scheme) -> List (String, ExportBinding)
 takeUntilInclusiveS : String -> List String -> List String
+topFnNamesUnder : ExportView -> List Decl -> List String
 tyAliasNormalForm : List (TabKey, (List String, Ty)) -> List TabKey -> Ty -> Ty
 tyAliasNormalFormKids : List (TabKey, (List String, Ty)) -> List TabKey -> Ty -> Ty
 tyConNamesInConstraint : Constraint -> List String
@@ -190,4 +194,4 @@ tyConNamesInTy : Ty -> List String
 tyVarNamesWithConstraints : Ty -> List String
 variantIdentRow : String -> TyConOrigin -> Variant -> List (String, String, Ident)
 withDeclParamKinds : ModuleCtx -> List Decl -> (Unit -> a) -> a
-withSiblingOrd : Option (String, String) -> List DeclEnvModule -> List DeclEnvModule
+withSiblingOrd : List (String, String) -> List DeclEnvModule -> List DeclEnvModule

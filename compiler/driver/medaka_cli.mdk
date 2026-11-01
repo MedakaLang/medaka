@@ -193,7 +193,7 @@ import driver.diagnostics.{
   cjFixJson,
   mkDiag,
   checkJsonFileParts,
-  siblingPairOf,
+  siblingPairsOf,
   CheckJson(..),
   ppCheckJson,
   cjFoldIntoFile,
@@ -859,7 +859,7 @@ runCheckCmd argv =
                 let (flatStdlib, ownedStdlib) =
                   stdlibOwnership target roots stdlibDir mods
                 let inputs = { driveInputsFor !selectedProfile flatStdlib ownedStdlib |
-                  diSibling = siblingPairOf roots stdlibDir modsWithPath,
+                  diSibling = siblingPairsOf roots stdlibDir modsWithPath,
                 }
                 let perfTLoad = now ()
                 let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
@@ -1178,7 +1178,7 @@ checkProjectReport : String ->
   String ->
   String ->
   String ->
-  Option (String, String) ->
+  List (String, String) ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   FrontOutput CheckDump ->
@@ -2957,7 +2957,7 @@ runRunCmd argv =
         stdlibOwnership target roots stdlibDir mods
       let inputs = { driveInputsFor !selectedProfile flatStdlib ownedStdlib |
         diPreludeKey = Some (preludeGeneration rsrc csrc),
-        diSibling = siblingPairOf roots stdlibDir modsWithPath,
+        diSibling = siblingPairsOf roots stdlibDir modsWithPath,
       }
       let perfTLoad = now ()
       let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target

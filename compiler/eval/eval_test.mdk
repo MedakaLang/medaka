@@ -183,7 +183,7 @@ siblingModules = [
 ]
 
 siblingFacts : ProgramFacts
-siblingFacts = withSibling (Some ("counter_test", "counter")) emptyFacts
+siblingFacts = withSibling [("counter_test", "counter")] emptyFacts
 
 -- The sibling's own import of the subject's private `step` and abstract
 -- `Counter(..)` resolves in both interpreters; `step (tick (Counter 1))` is 3.
@@ -191,4 +191,43 @@ test "a test sibling reads its subject's private names in both evaluators" = exp
   [
     expectEqual "3\n" (evalModulesOutputFacts siblingFacts [] siblingModules),
     expectEqual "3\n" (cevalModulesOutputFacts siblingFacts [] siblingModules),
+  ]
+
+clashSubjectSrc : String
+clashSubjectSrc =
+  "data Color = Red Int | Blue\n\ncolorVal : Color -> Int\ncolorVal c = match c\n  Red n => n + 100\n  Blue => 7\n\nexport tick : Int -> Int\ntick n = colorVal (Red n)\n"
+
+clashTestSrc : String
+clashTestSrc =
+  "import clash.{Color(..), colorVal}\nimport light.{Light}\nimport counter_test.{probe}\n\nmain = match Red probe\n  Red n => putStrLn (intToString (colorVal (Red n)))\n  Blue => putStrLn \"blue\"\n"
+
+-- Two subjects and their siblings in one program, one sibling imported by the
+-- other, and a subject's private `Red` spelled like `light`'s public one.
+twoSiblingModules : List (String, List Decl)
+twoSiblingModules = [
+  ("light", desugar (parse "public export data Light = Red Int Int | Green\n")),
+  ("counter", desugar (parse siblingSubjectSrc)),
+  (
+    "counter_test",
+    desugar
+      (parse "import counter.{step}\n\nexport probe : Int\nprobe = step 1\n"),
+  ),
+  ("clash", desugar (parse clashSubjectSrc)),
+  ("clash_test", desugar (parse clashTestSrc)),
+]
+
+twoSiblingFacts : ProgramFacts
+twoSiblingFacts =
+  withSibling [("counter_test", "counter"), ("clash_test", "clash")] emptyFacts
+
+-- Each sibling reads its own subject's names, and the colliding private
+-- constructor keeps its own declaration: `colorVal (Red (step 1))` is 102.
+test "each of two test siblings reads its own subject in both evaluators" = expectAll
+  [
+    expectEqual
+      "102\n"
+      (evalModulesOutputFacts twoSiblingFacts [] twoSiblingModules),
+    expectEqual
+      "102\n"
+      (cevalModulesOutputFacts twoSiblingFacts [] twoSiblingModules),
   ]

@@ -105,7 +105,7 @@ routeFacts = ProgramFacts {
   pfBinders = None,
   pfEntryOutcome = None,
   pfExternSources = None,
-  pfSibling = None,
+  pfSibling = [],
 }
 
 isTyped : ProgramFacts -> Bool

@@ -409,11 +409,15 @@ compilerSelfCheck =
       else
         pass
 
--- Run `medaka` with MEDAKA_ROOT pointed at a scratch root.
+-- Run `medaka` with MEDAKA_ROOT pointed at a scratch root.  The scratch root's
+-- stale warning is expected, so an inherited MEDAKA_STRICT is dropped.
 spawnIn : String ->
   List String ->
   <Exec, IO, FileRead> Result String (Int, String)
-spawnIn root args = runWith "env" (["MEDAKA_ROOT=\{root}", medakaBin] ++ args)
+spawnIn root args =
+  runWith
+    "env"
+    (["-u", "MEDAKA_STRICT", "MEDAKA_ROOT=\{root}", medakaBin] ++ args)
 
 -- Scratch root = the real stdlib (each file symlinked) plus `nest/`, and the
 -- real compiler/ tree, so its fingerprint never matches and the stale warning fires.

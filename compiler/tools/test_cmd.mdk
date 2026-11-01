@@ -230,7 +230,7 @@ import driver.diagnostics.{
   FrontProgram(..),
   ChainSteps(..),
   noStdlibExports,
-  siblingPairOf,
+  siblingPairsOf,
   chainKeyOf,
   graphIdOf,
   GraphId(..),
@@ -405,7 +405,7 @@ reportTestLine =
     None
 
 -- A drive's inputs: keyed for the shipped trees when [coreDecls] are core's.
-testDriveInputs : Option (String, String) -> List Decl -> DriveInputs
+testDriveInputs : List (String, String) -> List Decl -> DriveInputs
 testDriveInputs sibling coreDecls =
   let held =
     withHeldPrelude coreDecls (driveInputsFor !selectedProfile False [])
@@ -677,7 +677,7 @@ singleFileTypeErrors target tsrc rsrc csrc =
 -- (#1897).  An admitted graph is driven by [drive], and its per-module
 -- diagnostics are bucketed by the fold `check` uses.  The elaboration is `None`
 -- exactly when resolve rejected the graph, and the gate is then an error.
-gatedDrive : Option (String, String) ->
+gatedDrive : List (String, String) ->
   String ->
   String ->
   String ->
@@ -848,7 +848,7 @@ data DoctestTrees =
 -- so the filter cannot move a module's verdict.
 data Prepared =
   | PreparedPair TestPair
-  | PreparedInject (Option (String, String)) String (List (String, String, List Decl)) (List Decl)
+  | PreparedInject (List (String, String)) String (List (String, String, List Decl)) (List Decl)
 
 -- Load + elaborate, once, for an import-bearing target: the gate text (None when
 -- the module type-checks, or is exempt) beside the trees the three phases share.
@@ -961,12 +961,12 @@ elaborateFor : String ->
   List Decl ->
   <IO> (Option TestReportError, Prepared)
 elaborateFor stdlibDir rsrc csrc _ roots _ mods True False _ =
-  let sibling = siblingPairOf roots stdlibDir mods
+  let sibling = siblingPairsOf roots stdlibDir mods
   let rawModules = desugaredModPairs mods
   let (elaborated, _, _) = oneShotElab sibling rsrc csrc rawModules
   (None, PreparedPair (pairOfElab sibling rsrc csrc rawModules elaborated))
 elaborateFor stdlibDir rsrc csrc target roots sources mods False False _ =
-  let sibling = siblingPairOf roots stdlibDir mods
+  let sibling = siblingPairsOf roots stdlibDir mods
   let rawModules = desugaredModPairs mods
   let (gate, elaborated) =
     gatedDrive
@@ -986,7 +986,7 @@ elaborateFor stdlibDir rsrc csrc target roots sources mods False False _ =
         elaborated),
   )
 elaborateFor stdlibDir rsrc csrc target roots sources mods exempt True synthDecls =
-  let sibling = siblingPairOf roots stdlibDir mods
+  let sibling = siblingPairsOf roots stdlibDir mods
   (
     gateOfVerbatim
       sibling
@@ -1001,7 +1001,7 @@ elaborateFor stdlibDir rsrc csrc target roots sources mods exempt True synthDecl
 
 -- The no-doctest arm's drive of [pairs].  It is the only drive of its
 -- invocation, so it is unkeyed and records nothing.
-oneShotElab : Option (String, String) ->
+oneShotElab : List (String, String) ->
   String ->
   String ->
   List (String, List Decl) ->
@@ -1017,7 +1017,7 @@ oneShotElab sibling rsrc csrc pairs =
     pairs
 
 -- The phases' trees: [modules] paired with their elaboration.
-pairOfElab : Option (String, String) ->
+pairOfElab : List (String, String) ->
   String ->
   String ->
   List (String, List Decl) ->
@@ -1029,7 +1029,7 @@ pairOfElab sibling rsrc csrc modules elaborated = match elaborated
       (desugaredPrelude rsrc)
       (desugaredPrelude csrc)
       modules
-      (mangleCtorCollisionsPair (coreE, modulesE))
+      (mangleCtorCollisionsPair sibling (coreE, modulesE))
       (withSibling sibling (factsOfElab elaborated))
 
 -- Stands in for the trees of a graph resolve rejected.  Its gate is an error, so
@@ -1043,7 +1043,7 @@ unelaboratedTrees =
 -- prelude generation and [chainKey]: a module before the entry that an earlier
 -- drive of the same graph recorded is served (`elaborateModulesChainReport`).  The
 -- cache keeps the interfaces of this graph's modules and no others.
-keyedElab : Option (String, String) ->
+keyedElab : List (String, String) ->
   String ->
   String ->
   String ->
@@ -1104,7 +1104,7 @@ exampleDiagLines perMod = match reverseL perMod
       errs
   [] => omEmpty
 
-forceInjected : Option (String, String) ->
+forceInjected : List (String, String) ->
   String ->
   String ->
   String ->
@@ -1122,7 +1122,7 @@ forceInjected sibling rsrc csrc chainKey mods synthDecls =
 -- The doctest-bearing gate: the no-doctest arm's, over the graph as written,
 -- which this invocation already loaded.  Its drive records what the injected
 -- elaboration serves.
-gateOfVerbatim : Option (String, String) ->
+gateOfVerbatim : List (String, String) ->
   Bool ->
   String ->
   String ->
@@ -1897,7 +1897,7 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
   let rootId = singleRootId roots target
   modulePathMap := [("__main__", target)]
   let elab = elaborateModules (testDriveInputs
-    None
+    []
     livePrelude) runtimeDecls livePrelude [
     (rootId, allUser),
   ]
@@ -2111,13 +2111,13 @@ elaborateModulesMangled : List Decl ->
 elaborateModulesMangled runtimeDecls coreDecls modules =
   let elab =
     elaborateModules
-      (testDriveInputs None coreDecls)
+      (testDriveInputs [] coreDecls)
       runtimeDecls
       coreDecls
       modules
   match elab
     ElabResult { erCore = coreE, erModules = modulesE, erPerModule = perModule, erResidual = residual, ... } => (
-      mangleCtorCollisionsPair (coreE, modulesE),
+      mangleCtorCollisionsPair [] (coreE, modulesE),
       factsOfElab elab,
       residual ++ perModuleErrors perModule [],
     )
@@ -3647,7 +3647,7 @@ helperElabDiags : List Decl ->
   List (String, List Decl) ->
   List (String, TcDiag)
 helperElabDiags runtimeM rawCoreM rawM =
-  match elaborateModules (testDriveInputs None rawCoreM) runtimeM rawCoreM rawM
+  match elaborateModules (testDriveInputs [] rawCoreM) runtimeM rawCoreM rawM
     ElabResult { erPerModule = perModule, erResidual = residual, ... } =>
       residual ++ perModuleErrors perModule []
 

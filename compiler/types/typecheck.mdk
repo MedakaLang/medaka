@@ -339,7 +339,6 @@ import types.tc_env.{
   declEnvModule,
   emptyDeclEnvAcc,
   funDefs,
-  graphPubDefiners,
   ieRowInst,
   ieRowMethodNames,
   ieRowOrd,
@@ -388,8 +387,10 @@ import types.tc_decls.{
   dataEnvFromDeclsGo,
   declEnvAccOf,
   declEnvModulesFrom,
+  importerDefiners,
   privateModuleExports,
   publicModuleExports,
+  siblingDepEnv,
   stampGraphDecls,
   tagModuleExports,
   withDeclParamKinds,
@@ -537,7 +538,7 @@ defaultDriveInputs = DriveInputs {
   diIoJoinGrants = ioJoinGrants None,
   diProfileName = "",
   diPreludeKey = None,
-  diSibling = None,
+  diSibling = [],
 }
 
 -- The drive inputs a driver builds from the profile it selected and the loader's
@@ -1405,26 +1406,27 @@ declMethodNamesOf _ = []
 -- (`import m.{a as b, b}`) gives both rows one key and the first row wins here;
 -- the resolver rejects that occurrence by declaration all the same.
 importSeed : GraphCtx ->
+  String ->
   List (String, a) ->
   List (String, String) ->
   List Decl ->
   List (String, List (String, a)) ->
   List (String, (Option String, a))
-importSeed gctx _ _ [] _ = []
-importSeed gctx coreV admitted ((DAttrib _ d) :: rest) depEnv =
-  importSeed gctx coreV admitted (d :: rest) depEnv
-importSeed gctx coreV admitted ((DUse _ path _) :: rest) depEnv =
+importSeed gctx _ _ _ [] _ = []
+importSeed gctx mid coreV admitted ((DAttrib _ d) :: rest) depEnv =
+  importSeed gctx mid coreV admitted (d :: rest) depEnv
+importSeed gctx mid coreV admitted ((DUse _ path _) :: rest) depEnv =
   let depId = useModId path
   if depId == "core" then
     map (suppliedBy None) (coreAliasSchemes path coreV)
-      ++ importSeed gctx coreV admitted rest depEnv
+      ++ importSeed gctx mid coreV admitted rest depEnv
   else match lookupAssoc depId depEnv
-    None => importSeed gctx coreV admitted rest depEnv
+    None => importSeed gctx mid coreV admitted rest depEnv
     Some depSchemes =>
       let bound = boundNames path
       let decls =
         omFromPairs
-          (reverseL (importFormRows path (graphPubDefiners gctx depId)))
+          (reverseL (importFormRows path (importerDefiners gctx mid depId)))
           omEmpty
       let methods =
         identKeysByName
@@ -1444,9 +1446,9 @@ importSeed gctx coreV admitted ((DUse _ path _) :: rest) depEnv =
                 None)
               row)
           (importFormSchemes depEnv path depSchemes)
-        ++ importSeed gctx coreV admitted rest depEnv
-importSeed gctx coreV admitted (_ :: rest) depEnv =
-  importSeed gctx coreV admitted rest depEnv
+        ++ importSeed gctx mid coreV admitted rest depEnv
+importSeed gctx mid coreV admitted (_ :: rest) depEnv =
+  importSeed gctx mid coreV admitted rest depEnv
 
 -- The identity one import's binding of `name` is compared by: the declaration
 -- it denotes.  A standalone value is `(defining module, name there)` from
@@ -1540,22 +1542,6 @@ importedSeed : List (String, a) ->
   List (String, a)
 importedSeed coreV decls depEnv =
   flatMap (reexportSeedOf coreV depEnv) (plainUsePaths decls)
-
--- [envs]' export bindings, with the drive's test subject's private bindings
--- beside its exports when [mid] is the subject's sibling.
-siblingDepEnv : ModuleCtx ->
-  String ->
-  (List (String, List (String, ExportBinding)), List (String, List (String, ExportBinding))) ->
-  List (String, List (String, ExportBinding))
-siblingDepEnv prev mid (depEnv, privEnv) =
-  match prev.mcGraph.config.value.tcSibling
-    Some (sib, subject) if sib == mid => match (
-      lookupAssoc subject depEnv,
-      lookupAssoc subject privEnv,
-    )
-      (Some own, Some priv) => (subject, own ++ priv) :: depEnv
-      _ => depEnv
-    _ => depEnv
 
 reexportSeedOf : List (String, a) ->
   List (String, List (String, a)) ->
@@ -1653,7 +1639,13 @@ moduleSeedFor prev baseSeed coreV mid prog depEnv =
   moduleImportSeed
     prev
     baseSeed
-    (importSeed prev.mcGraph coreV (admittedIn prev.mcGraph mid) prog depEnv)
+    (importSeed
+      prev.mcGraph
+      mid
+      coreV
+      (admittedIn prev.mcGraph mid)
+      prog
+      depEnv)
 
 -- The right fold of `collect` over the payloads [done] (newest first): the last module
 -- first, the only one `collect` sees as last, onto [base].

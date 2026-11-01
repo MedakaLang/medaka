@@ -1,0 +1,6 @@
+-- A subject that imports `last` without re-exporting it.
+import list.{last}
+
+export
+lastOr : Int -> List Int -> Int
+lastOr d xs = optionOr d (last xs)

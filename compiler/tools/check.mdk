@@ -192,7 +192,7 @@ checkModulesReport exWarns perMod =
 export
 entryExhaust : List Decl ->
   List Decl ->
-  Option (String, String) ->
+  List (String, String) ->
   List (String, List Decl) ->
   String
 entryExhaust rtD coreD sibling mods =

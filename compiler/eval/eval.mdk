@@ -111,6 +111,8 @@ import frontend.visibility.{
   nsIfaceMethods,
   nsTypeCtors,
   declExportsCtors,
+  subjectOf,
+  isSubjectIn,
 }
 import list.{drop, findMap}
 import eval.u64_halves as H
@@ -4438,7 +4440,8 @@ evalModulesWith facts extraExterns preludeDecls0 modules0 = withFacts
     -- is every program without the bug.  Idempotent, so a caller that had to rename
     -- earlier (tools/test_cmd.mdk, whose `test`/prop bodies come out of this same
     -- module list) costs nothing here.
-    let (preludeDecls, modules) = mangleCtorCollisions preludeDecls0 modules0
+    let (preludeDecls, modules) =
+      mangleCtorCollisions facts.pfSibling preludeDecls0 modules0
     let externs = externBindings () ++ extraExterns
     let moduleDecls = flatMap snd modules
     let allDecls = preludeDecls ++ moduleDecls
@@ -4498,7 +4501,7 @@ evalModulesWith facts extraExterns preludeDecls0 modules0 = withFacts
 buildModInfos : EnvFrame (Value e) ->
   EnvFrame (Value e) ->
   ModExports (Value e) ->
-  Option (String, String) ->
+  List (String, String) ->
   List (String, ModExports (Value e)) ->
   List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
@@ -4578,28 +4581,32 @@ moduleExports view coreExports exportsMap globalFrame runtimeFrame localCells de
       ++ flatMap (reexport coreExports exportsMap) (carriedPaths view decls))
     ctorsByType
 
--- The exports map the module [mid] imports against: [fulls] (the subject's
--- full view) ahead of [exportsMap] when [mid] is the test sibling, so the
--- sibling reads the subject's private cells and every other module is
--- untouched.  Both module drivers call this, so they cannot disagree.
+-- The exports map the module [mid] imports against: its subject's full view
+-- (from [fulls], the full views of the graph's subjects) ahead of [exportsMap]
+-- when [mid] is a test sibling, so the sibling reads its own subject's private
+-- cells and every other module is untouched.  Both module drivers call this, so
+-- they cannot disagree.
 export
-importsMapFor : Option (String, String) ->
+importsMapFor : List (String, String) ->
   String ->
   List (String, ModExports (Value e)) ->
   List (String, ModExports (Value e)) ->
   List (String, ModExports (Value e))
-importsMapFor sibling mid fulls exportsMap =
-  if map fst sibling == Some mid then fulls ++ exportsMap else exportsMap
+importsMapFor siblings mid fulls exportsMap = match subjectOf siblings mid
+  Some subj => match lookupAssoc subj fulls
+    Some full => (subj, full) :: exportsMap
+    None => exportsMap
+  None => exportsMap
 
--- [fulls] extended with module [mid]'s full view when [mid] is the subject.
+-- [fulls] extended with module [mid]'s full view when [mid] is a subject.
 export
-withSubjectFull : Option (String, String) ->
+withSubjectFull : List (String, String) ->
   String ->
   ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
   List (String, ModExports (Value e))
-withSubjectFull sibling mid full fulls =
-  if map snd sibling == Some mid then (mid, full) :: fulls else fulls
+withSubjectFull siblings mid full fulls =
+  if isSubjectIn siblings mid then (mid, full) :: fulls else fulls
 
 -- Runtime externs retain one canonical cell. An exported extern must expose that
 -- cell under an import spelling, rather than allocate a module-local placeholder
@@ -4737,7 +4744,8 @@ buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 = withFacts
   facts
   (_ =>
     -- same rename, same reason as evalModulesWith.
-    let (preludeDecls, modules) = mangleCtorCollisions preludeDecls0 modules0
+    let (preludeDecls, modules) =
+      mangleCtorCollisions facts.pfSibling preludeDecls0 modules0
     let externs = externBindings () ++ extraExterns
     let moduleDecls = flatMap snd modules
     let allDecls = preludeDecls ++ moduleDecls

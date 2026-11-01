@@ -81,7 +81,7 @@ rowOf ord mid src = declEnvModule (probeGraphCtx ()) ord mid (parse src)
 envsOf : List (String, String) -> DeclEnvs
 envsOf mods =
   let (_, stamped) =
-    stampGraphTyOrigins None [] (map (m => (fst m, parse (snd m))) mods)
+    stampGraphTyOrigins [] [] (map (m => (fst m, parse (snd m))) mods)
   let g = probeGraphCtx ()
   let rows =
     map
@@ -455,7 +455,7 @@ headName (TyCon { tyConName = c, ... }) = Some c
 headName _ = None
 
 test "an impl head that names an alias is rewritten to the type the alias stands for" =
-  let (_, mods) = stampGraphDecls None [] [
+  let (_, mods) = stampGraphDecls [] [] [
     (
       "m",
       declsOf
@@ -472,5 +472,5 @@ impl Sz A where
   expectEqual [Some "Int"] (implHeads (flatMap snd mods))
 
 test "a graph with no alias keeps the heads it came with" =
-  let (core, mods) = stampGraphDecls None [] [("m", declsOf "m" sizeable)]
+  let (core, mods) = stampGraphDecls [] [] [("m", declsOf "m" sizeable)]
   expectEqual ([], [Some "Int"]) (implHeads core, implHeads (flatMap snd mods))

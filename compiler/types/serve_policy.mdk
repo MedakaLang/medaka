@@ -5,7 +5,7 @@
 -- `ServeOps`, which `typecheck.mdk` builds once; this module imports nothing from it.
 import list.{drop, take, sort}
 import string.{lines}
-import frontend.visibility.{ExportView(..), useModuleIds, viewOf}
+import frontend.visibility.{isSubjectIn, useModuleIds}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 import support.util.{
   anyList, dedup, filterList, isNonEmptyL, isSome, joinNl, listLen, zipL
@@ -182,14 +182,11 @@ serveStep st mid prog prev =
               recordScoped next key before mctx own private done mark)
     _ => ServeCheck (_ _ _ done => unrecorded done)
 
--- Whether [mid] is the test subject of the drive [prev] belongs to: the module its
--- sibling sees in the full view, so the one whose private bindings the drive keeps.
+-- Whether [mid] is a test subject of the graph [prev] belongs to: a module its
+-- sibling sees in the full view, so one whose private bindings the drive keeps.
 export
 isSubject : ModuleCtx -> String -> Bool
-isSubject prev mid =
-  match viewOf (map snd prev.mcGraph.config.value.tcSibling) mid
-    FullView => True
-    ExportedView => False
+isSubject prev mid = isSubjectIn prev.mcGraph.config.value.tcSibling mid
 
 -- The key's graph part for the module [prev] precedes: the graph key and the
 -- interface declarations of the modules before it, whose method names it reads by
