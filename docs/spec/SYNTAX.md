@@ -1323,6 +1323,29 @@ collision is rejected (`Ambiguous constructor`) rather than silently picking one
 A qualified interface has no such gap — interface identity already includes its
 declaring module.
 
+### Test siblings
+
+A `foo_test.mdk` beside `foo.mdk` is the test sibling of `foo`: same directory, the file
+name with `.mdk` replaced by `_test.mdk`, one level only. A sibling may import any top-level
+name of `foo`, exported or not: private values and types, the constructors of `export data`
+types, private interfaces, and the names `foo` itself imports. It sees only its own subject's
+names. Two errors guard that privilege.
+
+A file whose name does not end in `_test.mdk` cannot import a `*_test.mdk` module. The
+import is rejected with `R-TEST-MODULE-IMPORT`, located at the `import`:
+
+```text
+import `foo_test` in <file>: `foo_test` is a test module; only `*_test.mdk` files may import one. Move the shared code out of the test file.
+```
+
+A sibling may import a private name but may not re-export it. A selective
+`export import foo.{helper}` in `foo_test.mdk`, where `foo` keeps `helper` private, is
+rejected with `R-PRIVILEGED-REEXPORT`:
+
+```text
+module `foo` does not export `helper`, and its test sibling may import it but not re-export it; drop `helper` from this `export import` or import it without `export`
+```
+
 ## Externs (primitive declarations — see stdlib/runtime.mdk)
 
 An `extern` you declare in your own code is a **foreign C call**. Its declared
