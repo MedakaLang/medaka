@@ -1,0 +1,72 @@
+-- Fixture for rule-unused-import.  The line below each `expect-next-line`
+-- marker is the member that nothing in the file uses.  Every other import in
+-- the file is used by a different class of mention and must not be reported.
+
+import list.{takeDoc}
+import set.{Set}
+import core.{Display}
+import json.{Json(..)}
+import test.{expectEqual}
+import list.{reverseAs as revAs}
+import record_mod.{punned}
+import string.{interpHole}
+export import public_reexport.{neverUsed}
+import wild.*
+import bare_mod
+import aliased_mod as Am
+import list.{blockOne, blockTwo}
+
+-- expect-next-line rule-unused-import
+import list.{useA, useB}
+-- expect-next-line rule-unused-import
+import list.{useC, useD}
+-- expect-next-line rule-unused-import
+import list.{useE, useF}
+-- expect-next-line rule-unused-import x2
+import string
+-- expect-next-line rule-unused-import
+import math
+-- expect-next-line rule-unused-import
+import list.{useJ}
+-- expect-next-line rule-unused-import unfixed
+import set.{dropWithComment, -- kept note
+  useI}
+-- expect-next-line rule-unused-import unfixed
+import crypto.sha256.{dropDotted}
+-- lint-disable-next-line rule-unused-import
+import set.{dropSuppressed}
+import list.{
+  useG,
+  -- expect-next-line rule-unused-import
+  useH,
+}
+
+-- > takeDoc 1 [1, 2]
+
+{- > blockOne 1
+   1
+-}
+
+{-
+  Prose that mentions blockProse is no use of it.
+  > blockTwo 2
+  2
+-}
+
+sigUser : Set Int -> Int
+sigUser _ = 0
+
+constraintUser : Display a => a -> Int
+constraintUser _ = 0
+
+ctorUser = JNull
+
+revUser xs = revAs xs
+
+punUser = P { punned }
+
+interpUser = "a\{interpHole}b"
+
+test "uses the verb" = expectEqual 1 1
+
+useAll = (useA, useB, useC, useD, useE, useF, useG, useH, useI, useJ)

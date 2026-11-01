@@ -1,5 +1,5 @@
 # META
-source_lines=5080
+source_lines=5071
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_locate.{locateOffset, locateTokenDiagnostic}
@@ -102,11 +102,7 @@ import frontend.ast.{
 import frontend.lexer.{
   Token(..),
   tokenize,
-  tokenizeWithOffsets,
   tokenizeWithOffsetPairs,
-  offsetToLineCol,
-  lineStartsOf,
-  offsetToLineColFast,
   isThenTok,
 }
 export import frontend.parse_positions.{
@@ -115,12 +111,7 @@ export import frontend.parse_positions.{
   declPosNameLoc, declPosChildLocs
 }
 import frontend.parse_positions.{positionsFromSpans}
-import frontend.lex_token.{
-  isColonTok, isConsTok, isDedentTok, isDeferTok, isEofTok, isEqualTok,
-  isExportTok, isImplTok, isInTok, isIndentTok, isLBraceTok, isLetTok,
-  isNewlineTok, isOfTok, isPipeTok, isPublicTok, isRBraceTok, isRequiresTok,
-  isStarTok, isOpenDelim, isCloseDelim, isTStringTok, isTUpperTok
-}
+import frontend.lex_token.{isDeferTok, isEofTok, isEqualTok, isCloseDelim}
 import support.util.{reverseL, joinWith}
 import list.{last}
 import support.char.{isUpper}
@@ -1067,7 +1058,7 @@ dottedGo cur (f :: fs) value =
     cur
     [FieldAssign f (dottedGo (EFieldAccess cur f unminted) fs value)]
     unminted
-dottedGo cur [] value = value
+dottedGo _cur [] value = value
 
 -- interpolated string: INTERP_OPEN <expr> (INTERP_MID <expr>)* INTERP_END,
 -- assembled into alternating InterpStr / InterpExpr parts
@@ -1100,7 +1091,7 @@ interpRestFor e (TInterpMid s) = defer
 interpRestFor e (TInterpEnd s) = defer
   advance
   deferPure [InterpExpr e, InterpStr s]
-interpRestFor e _ = failP "expected interpolation mid/end"
+interpRestFor _ _ = failP "expected interpolation mid/end"
 
 -- Bracket block-expressions (LAYOUT-BRACKETS-DESIGN.md, Gate B).  The locked
 -- herald set is match/do/record/bare-INDENT block.  All of those
@@ -4284,7 +4275,7 @@ parseDefer : Parser Expr
 parseDefer = parseDoBlock TDefer True
 
 parseDoBlock : Token -> Bool -> Parser Expr
-parseDoBlock herald deferred = defer
+parseDoBlock herald _deferred = defer
   expectTok herald
   expectTok TIndent
   p0 <- getPos
@@ -4980,7 +4971,7 @@ trailingArrowLeftoverMsg _ base = base
 -- real fix: put `->` at the end of the previous line instead, where it
 -- heralds the indented continuation the writer wanted.
 leadingIndentMsg : Token -> String -> Int -> String
-leadingIndentMsg TArrow base col =
+leadingIndentMsg TArrow base _col =
   "\{base}; a line cannot start with `->`, so put it at the end of the previous line, as in `f : Int ->` then an indented `Int`"
 leadingIndentMsg _ base col =
   "\{base}; this line is indented to column \{intToString col}, which matches no enclosing block"
@@ -5092,10 +5083,10 @@ parseResultWith mode src tokList offList =
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "unminted" false) (mem "negateLiteral" false) (mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "effAtomAt" false) (mem "effectDeclUnstamped" false) (mem "KindAnn" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "externDataUnresolved" false) (mem "kindAnnSource" false) (mem "kindAuthorityUnstamped" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "setDeclNameLoc" false) (mem "dImplUnresolved" false) (mem "constraintUnresolved" false) (mem "superUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "Route" true))))
-(DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "isThenTok" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsetPairs" false) (mem "isThenTok" false))))
 (DUse true (UseGroup ("frontend" "parse_positions") ((mem "DeclPos" true) (mem "Positions" true) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "positionsChainLines" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "parse_positions") ((mem "positionsFromSpans" false))))
-(DUse false (UseGroup ("frontend" "lex_token") ((mem "isColonTok" false) (mem "isConsTok" false) (mem "isDedentTok" false) (mem "isDeferTok" false) (mem "isEofTok" false) (mem "isEqualTok" false) (mem "isExportTok" false) (mem "isImplTok" false) (mem "isInTok" false) (mem "isIndentTok" false) (mem "isLBraceTok" false) (mem "isLetTok" false) (mem "isNewlineTok" false) (mem "isOfTok" false) (mem "isPipeTok" false) (mem "isPublicTok" false) (mem "isRBraceTok" false) (mem "isRequiresTok" false) (mem "isStarTok" false) (mem "isOpenDelim" false) (mem "isCloseDelim" false) (mem "isTStringTok" false) (mem "isTUpperTok" false))))
+(DUse false (UseGroup ("frontend" "lex_token") ((mem "isDeferTok" false) (mem "isEofTok" false) (mem "isEqualTok" false) (mem "isCloseDelim" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -5452,7 +5443,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "dottedGo" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "dottedGo" ((PVar "cur") (PList (PVar "f")) (PVar "value")) (EApp (EApp (EApp (EVar "ERecordUpdate") (EVar "cur")) (EListLit (EApp (EApp (EVar "FieldAssign") (EVar "f")) (EVar "value")))) (EVar "unminted")))
 (DFunDef false "dottedGo" ((PVar "cur") (PCons (PVar "f") (PVar "fs")) (PVar "value")) (EApp (EApp (EApp (EVar "ERecordUpdate") (EVar "cur")) (EListLit (EApp (EApp (EVar "FieldAssign") (EVar "f")) (EApp (EApp (EApp (EVar "dottedGo") (EApp (EApp (EApp (EVar "EFieldAccess") (EVar "cur")) (EVar "f")) (EVar "unminted"))) (EVar "fs")) (EVar "value"))))) (EVar "unminted")))
-(DFunDef false "dottedGo" ((PVar "cur") (PList) (PVar "value")) (EVar "value"))
+(DFunDef false "dottedGo" ((PVar "_cur") (PList) (PVar "value")) (EVar "value"))
 (DTypeSig false "parseInterp" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseInterp" () (EApp (EApp (EVar "deferThen") (EVar "interpOpenStr")) (ELam ((PVar "s0")) (EApp (EApp (EVar "deferThen") (EVar "interpRest")) (ELam ((PVar "rest")) (EApp (EVar "deferPure") (EApp (EVar "EStringInterp") (EBinOp "::" (EApp (EVar "InterpStr") (EVar "s0")) (EVar "rest")))))))))
 (DTypeSig false "interpOpenStr" (TyApp (TyCon "Parser") (TyCon "String")))
@@ -5465,7 +5456,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "interpRestFor" (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "InterpPart"))))))
 (DFunDef false "interpRestFor" ((PVar "e") (PCon "TInterpMid" (PVar "s"))) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "interpRest")) (ELam ((PVar "rest")) (EApp (EVar "deferPure") (EBinOp "::" (EApp (EVar "InterpExpr") (EVar "e")) (EBinOp "::" (EApp (EVar "InterpStr") (EVar "s")) (EVar "rest")))))))))
 (DFunDef false "interpRestFor" ((PVar "e") (PCon "TInterpEnd" (PVar "s"))) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "deferPure") (EListLit (EApp (EVar "InterpExpr") (EVar "e")) (EApp (EVar "InterpStr") (EVar "s")))))))
-(DFunDef false "interpRestFor" ((PVar "e") PWild) (EApp (EVar "failP") (ELit (LString "expected interpolation mid/end"))))
+(DFunDef false "interpRestFor" (PWild PWild) (EApp (EVar "failP") (ELit (LString "expected interpolation mid/end"))))
 (DTypeSig false "parseBracketBlock" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseBracketBlock" () (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseStmts")) (ELam ((PVar "stmts")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EVar "unrecordSoleStmt") (EVar "stmts"))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EVar "blockOrExpr") (EVar "stmts"))))))))))))
 (DTypeSig false "unrecordSoleStmt" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Parser") (TyCon "Unit"))))
@@ -6410,7 +6401,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "parseDefer" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseDefer" () (EApp (EApp (EVar "parseDoBlock") (EVar "TDefer")) (EVar "True")))
 (DTypeSig false "parseDoBlock" (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr")))))
-(DFunDef false "parseDoBlock" ((PVar "herald") (PVar "deferred")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "herald"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "p0")) (EApp (EApp (EVar "deferThen") (EApp (EVar "doStmtsFrom") (EVar "p0"))) (ELam ((PVar "r")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EApp (EApp (EVar "doBlockResult") (EVar "herald")) (EApp (EVar "fst") (EVar "r"))) (EApp (EVar "snd") (EVar "r"))))))))))))))
+(DFunDef false "parseDoBlock" ((PVar "herald") (PVar "_deferred")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "herald"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "p0")) (EApp (EApp (EVar "deferThen") (EApp (EVar "doStmtsFrom") (EVar "p0"))) (ELam ((PVar "r")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EApp (EApp (EVar "doBlockResult") (EVar "herald")) (EApp (EVar "fst") (EVar "r"))) (EApp (EVar "snd") (EVar "r"))))))))))))))
 (DTypeSig false "doStmtsFrom" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
 (DFunDef false "doStmtsFrom" ((PVar "p0")) (EApp (EApp (EVar "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EVar "doStmtsLoop") (EVar "p0")))))
 (DTypeSig false "doStmtsLoop" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
@@ -6565,7 +6556,7 @@ parseResultWith mode src tokList offList =
 (DFunDef false "trailingArrowLeftoverMsg" ((PCon "TArrow") (PVar "base")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString "; a later line of this type signature dedents past its first continuation line, so indent every wrapped line at least that far"))))
 (DFunDef false "trailingArrowLeftoverMsg" (PWild (PVar "base")) (EVar "base"))
 (DTypeSig false "leadingIndentMsg" (TyFun (TyCon "Token") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "leadingIndentMsg" ((PCon "TArrow") (PVar "base") (PVar "col")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString "; a line cannot start with `->`, so put it at the end of the previous line, as in `f : Int ->` then an indented `Int`"))))
+(DFunDef false "leadingIndentMsg" ((PCon "TArrow") (PVar "base") (PVar "_col")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString "; a line cannot start with `->`, so put it at the end of the previous line, as in `f : Int ->` then an indented `Int`"))))
 (DFunDef false "leadingIndentMsg" (PWild (PVar "base") (PVar "col")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString "; this line is indented to column "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "col")))) (ELit (LString ", which matches no enclosing block"))))
 (DTypeSig false "firstLexError" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "ParseDiagnosticKind"))))))
 (DFunDef false "firstLexError" ((PVar "toks") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (arm (PCon "TLexError" (PVar "msg")) () (EApp (EVar "Some") (ETuple (EVar "i") (EVar "msg")))) (arm PWild () (EApp (EApp (EVar "firstLexError") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -6593,10 +6584,10 @@ parseResultWith mode src tokList offList =
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "unminted" false) (mem "negateLiteral" false) (mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "effAtomAt" false) (mem "effectDeclUnstamped" false) (mem "KindAnn" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "externDataUnresolved" false) (mem "kindAnnSource" false) (mem "kindAuthorityUnstamped" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "setDeclNameLoc" false) (mem "dImplUnresolved" false) (mem "constraintUnresolved" false) (mem "superUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "Route" true))))
-(DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "isThenTok" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsetPairs" false) (mem "isThenTok" false))))
 (DUse true (UseGroup ("frontend" "parse_positions") ((mem "DeclPos" true) (mem "Positions" true) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "positionsChainLines" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "parse_positions") ((mem "positionsFromSpans" false))))
-(DUse false (UseGroup ("frontend" "lex_token") ((mem "isColonTok" false) (mem "isConsTok" false) (mem "isDedentTok" false) (mem "isDeferTok" false) (mem "isEofTok" false) (mem "isEqualTok" false) (mem "isExportTok" false) (mem "isImplTok" false) (mem "isInTok" false) (mem "isIndentTok" false) (mem "isLBraceTok" false) (mem "isLetTok" false) (mem "isNewlineTok" false) (mem "isOfTok" false) (mem "isPipeTok" false) (mem "isPublicTok" false) (mem "isRBraceTok" false) (mem "isRequiresTok" false) (mem "isStarTok" false) (mem "isOpenDelim" false) (mem "isCloseDelim" false) (mem "isTStringTok" false) (mem "isTUpperTok" false))))
+(DUse false (UseGroup ("frontend" "lex_token") ((mem "isDeferTok" false) (mem "isEofTok" false) (mem "isEqualTok" false) (mem "isCloseDelim" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -6953,7 +6944,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "dottedGo" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "dottedGo" ((PVar "cur") (PList (PVar "f")) (PVar "value")) (EApp (EApp (EApp (EVar "ERecordUpdate") (EVar "cur")) (EListLit (EApp (EApp (EVar "FieldAssign") (EVar "f")) (EVar "value")))) (EVar "unminted")))
 (DFunDef false "dottedGo" ((PVar "cur") (PCons (PVar "f") (PVar "fs")) (PVar "value")) (EApp (EApp (EApp (EVar "ERecordUpdate") (EVar "cur")) (EListLit (EApp (EApp (EVar "FieldAssign") (EVar "f")) (EApp (EApp (EApp (EVar "dottedGo") (EApp (EApp (EApp (EVar "EFieldAccess") (EVar "cur")) (EVar "f")) (EVar "unminted"))) (EVar "fs")) (EVar "value"))))) (EVar "unminted")))
-(DFunDef false "dottedGo" ((PVar "cur") (PList) (PVar "value")) (EVar "value"))
+(DFunDef false "dottedGo" ((PVar "_cur") (PList) (PVar "value")) (EVar "value"))
 (DTypeSig false "parseInterp" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseInterp" () (EApp (EApp (EMethodRef "deferThen") (EVar "interpOpenStr")) (ELam ((PVar "s0")) (EApp (EApp (EMethodRef "deferThen") (EVar "interpRest")) (ELam ((PVar "rest")) (EApp (EMethodRef "deferPure") (EApp (EVar "EStringInterp") (EBinOp "::" (EApp (EVar "InterpStr") (EVar "s0")) (EVar "rest")))))))))
 (DTypeSig false "interpOpenStr" (TyApp (TyCon "Parser") (TyCon "String")))
@@ -6966,7 +6957,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "interpRestFor" (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "InterpPart"))))))
 (DFunDef false "interpRestFor" ((PVar "e") (PCon "TInterpMid" (PVar "s"))) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "interpRest")) (ELam ((PVar "rest")) (EApp (EMethodRef "deferPure") (EBinOp "::" (EApp (EVar "InterpExpr") (EVar "e")) (EBinOp "::" (EApp (EVar "InterpStr") (EVar "s")) (EVar "rest")))))))))
 (DFunDef false "interpRestFor" ((PVar "e") (PCon "TInterpEnd" (PVar "s"))) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EListLit (EApp (EVar "InterpExpr") (EVar "e")) (EApp (EVar "InterpStr") (EVar "s")))))))
-(DFunDef false "interpRestFor" ((PVar "e") PWild) (EApp (EVar "failP") (ELit (LString "expected interpolation mid/end"))))
+(DFunDef false "interpRestFor" (PWild PWild) (EApp (EVar "failP") (ELit (LString "expected interpolation mid/end"))))
 (DTypeSig false "parseBracketBlock" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseBracketBlock" () (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseStmts")) (ELam ((PVar "stmts")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "unrecordSoleStmt") (EVar "stmts"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EVar "blockOrExpr") (EVar "stmts"))))))))))))
 (DTypeSig false "unrecordSoleStmt" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Parser") (TyCon "Unit"))))
@@ -7911,7 +7902,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "parseDefer" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseDefer" () (EApp (EApp (EVar "parseDoBlock") (EVar "TDefer")) (EVar "True")))
 (DTypeSig false "parseDoBlock" (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr")))))
-(DFunDef false "parseDoBlock" ((PVar "herald") (PVar "deferred")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "herald"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "p0")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "doStmtsFrom") (EVar "p0"))) (ELam ((PVar "r")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EApp (EApp (EVar "doBlockResult") (EVar "herald")) (EApp (EVar "fst") (EVar "r"))) (EApp (EVar "snd") (EVar "r"))))))))))))))
+(DFunDef false "parseDoBlock" ((PVar "herald") (PVar "_deferred")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "herald"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "p0")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "doStmtsFrom") (EVar "p0"))) (ELam ((PVar "r")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EApp (EApp (EVar "doBlockResult") (EVar "herald")) (EApp (EVar "fst") (EVar "r"))) (EApp (EVar "snd") (EVar "r"))))))))))))))
 (DTypeSig false "doStmtsFrom" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
 (DFunDef false "doStmtsFrom" ((PVar "p0")) (EApp (EApp (EMethodRef "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EVar "doStmtsLoop") (EVar "p0")))))
 (DTypeSig false "doStmtsLoop" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
@@ -8066,7 +8057,7 @@ parseResultWith mode src tokList offList =
 (DFunDef false "trailingArrowLeftoverMsg" ((PCon "TArrow") (PVar "base")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString "; a later line of this type signature dedents past its first continuation line, so indent every wrapped line at least that far"))))
 (DFunDef false "trailingArrowLeftoverMsg" (PWild (PVar "base")) (EVar "base"))
 (DTypeSig false "leadingIndentMsg" (TyFun (TyCon "Token") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "leadingIndentMsg" ((PCon "TArrow") (PVar "base") (PVar "col")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString "; a line cannot start with `->`, so put it at the end of the previous line, as in `f : Int ->` then an indented `Int`"))))
+(DFunDef false "leadingIndentMsg" ((PCon "TArrow") (PVar "base") (PVar "_col")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString "; a line cannot start with `->`, so put it at the end of the previous line, as in `f : Int ->` then an indented `Int`"))))
 (DFunDef false "leadingIndentMsg" (PWild (PVar "base") (PVar "col")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString "; this line is indented to column "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "col")))) (ELit (LString ", which matches no enclosing block"))))
 (DTypeSig false "firstLexError" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "ParseDiagnosticKind"))))))
 (DFunDef false "firstLexError" ((PVar "toks") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (arm (PCon "TLexError" (PVar "msg")) () (EApp (EVar "Some") (ETuple (EVar "i") (EVar "msg")))) (arm PWild () (EApp (EApp (EVar "firstLexError") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

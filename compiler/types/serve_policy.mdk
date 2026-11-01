@@ -8,7 +8,7 @@ import string.{lines}
 import frontend.visibility.{isSubjectIn, useModuleIds}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 import support.util.{
-  anyList, dedup, filterList, isNonEmptyL, isSome, joinNl, listLen, zipL
+  anyList, dedup, filterList, isNonEmptyL, joinNl, listLen, zipL
 }
 import types.chain_key.{chainGraphKey, interfaceRows}
 import types.invocation_basis.{readInvocationView}

@@ -13,7 +13,7 @@ import ir.core_ir.{
   CProgram(..), DeclFacts(..), EntryFact(..), CBind(..), CClause(..), CExpr(..),
   CField(..), CGuard(..), CImplEntry(..), CImplBody(..), CStmt(..), CArm(..),
   CHead(..), CTree(..), CTBranch(..), CallSite(..), CallMode(..), FailSite(..),
-  litRuntimeType, siteSentinelName
+  litRuntimeType
 }
 import ir.extern_types.{ExternDeclFact(..)}
 import ir.extern_lower.{externRuntimeKey}
@@ -35,7 +35,7 @@ import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import types.private_mangle.{injectiveIdent}
 import support.ordmap.{
   OrdMap, omEmpty, omInsert, omLookup, omHasKey, omKeys, omFromNames,
-  omFromPairs, omDelete, omRestrict
+  omFromPairs, omRestrict
 }
 import support.util.{
   reverseL, filterList, listLen, contains, startsWith, isEmptyL, isNonEmptyL,
@@ -497,12 +497,12 @@ clauseUsesClosures fnNames ctorArs (CClause pats body) =
 -- with a top-level `eq` in scope) is mis-judged "saturated direct call, no closure" and
 -- the closure types are never emitted though emit uses them (parse/validate failure).
 exprUsesClosures : OrdMap Unit -> List (String, Int) -> Env -> CExpr -> Bool
-exprUsesClosures fnNames ctorArs locals (CLam _ _) = True
+exprUsesClosures _fnNames _ctorArs _locals (CLam _ _) = True
 exprUsesClosures fnNames ctorArs locals (app@(CApp _ _ _)) =
   appUsesClosures fnNames ctorArs locals app
-exprUsesClosures fnNames ctorArs locals (CVar x _) =
+exprUsesClosures fnNames _ctorArs locals (CVar x _) =
   not (envHas x locals) && fnMemberIndexW fnNames x
-exprUsesClosures fnNames ctorArs locals (CLit _) = False
+exprUsesClosures _fnNames _ctorArs _locals (CLit _) = False
 exprUsesClosures fnNames ctorArs locals (CBinPrim _ l r _ _) =
   exprUsesClosures fnNames ctorArs locals l
     || exprUsesClosures fnNames ctorArs locals r
@@ -527,7 +527,7 @@ exprUsesClosures fnNames ctorArs locals (CDecision scrut arms _) =
 exprUsesClosures fnNames ctorArs locals (CMatch scrut arms) =
   exprUsesClosures fnNames ctorArs locals scrut
     || anyList (a => exprUsesClosures fnNames ctorArs locals (armBody a)) arms
-exprUsesClosures fnNames ctorArs locals _ = False
+exprUsesClosures _fnNames _ctorArs _locals _ = False
 
 -- thread let-bound names through a block so a later statement's shadowing local is seen.
 blockUsesClosures : OrdMap Unit ->
@@ -1471,7 +1471,7 @@ hExpr ctx refMode str acc env (app@(CApp f args _)) =
       CVar _ _ => acc
       _ => hExpr ctx refMode str acc env f)
     args
-hExpr ctx refMode str acc env (CVar name _) =
+hExpr ctx refMode _str acc env (CVar name _) =
   let acc =
     if refMode
       && not (envHas name env)

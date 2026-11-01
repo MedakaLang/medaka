@@ -39,7 +39,7 @@ import frontend.ast.{
 import ir.extern_types.{ExternDeclFact(..)}
 import types.extern_source.{ExternBindingKind(..), ExternProvenance(..)}
 import types.runtime_abi_types.{CallableShape(..)}
-import support.ordmap.{OrdMap, omEmpty, omFromPairs, omLookup, omInsert}
+import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
@@ -865,7 +865,7 @@ toManifestString other =
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true) (mem "ExternProvenance" true))))
 (DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omLookup" false) (mem "omInsert" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "mapProgramBinders" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" false) (mem "runtimeTypeFromName" false))))
 (DUse false (UseAlias ("map") "BM"))
@@ -1177,7 +1177,7 @@ toManifestString other =
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true) (mem "ExternProvenance" true))))
 (DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omLookup" false) (mem "omInsert" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "mapProgramBinders" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" false) (mem "runtimeTypeFromName" false))))
 (DUse false (UseAlias ("map") "BM"))

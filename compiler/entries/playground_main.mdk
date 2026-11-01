@@ -112,11 +112,6 @@ import driver.diagnostics.{
   Diag(..),
   DiagId(..),
   Severity(..),
-  cjPosition,
-  cjRange,
-  cjRangeOfLoc,
-  cjDiagnostic,
-  cjFileEntry,
   cjAllToJson,
   readDiagSrc,
   missingMainDiag,
@@ -159,8 +154,6 @@ import types.typecheck.{
 import ir.core_ir_lower.{
   lowerProgramEmitWith,
   validateFfiExternTypeNames,
-  methodIfaceTable,
-  declaredRecordFieldOrders,
   ctorFieldTypeNames,
 }
 import types.private_mangle.{mangleUnitsEv}
@@ -399,7 +392,7 @@ analyzeSingle : Bool ->
   List (String, String, List Decl) ->
   (List String -> <IO> List (String, List String)) ->
   <IO> Unit
-analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP loaded exportsFor =
+analyzeSingle emit rsrc csrc tsrc entry _runtimeP _coreP loaded exportsFor =
   let mods = map dropPath loaded
   let paths = map ((mid, path, _) => (mid, path)) loaded
   let front = fileFront exportsFor "" True rsrc csrc (parseLocated tsrc)
@@ -425,7 +418,7 @@ analyzeMulti : Bool ->
   List (String, String, List Decl) ->
   (List String -> <IO> List (String, List String)) ->
   <IO> Unit
-analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots loaded exportsFor =
+analyzeMulti emit rsrc csrc tsrc entry _runtimeP _coreP roots loaded exportsFor =
   let mods = map dropPath loaded
   let paths = map ((mid, path, _) => (mid, path)) loaded
   let cacheRef = Ref []
@@ -644,7 +637,7 @@ finishClean : Bool ->
 finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
   let executionDriver =
     EntryKey { moduleId = "async", binding = "runAsyncMain" }
-  let (analysis, report, outputs) =
+  let (analysis, _, outputs) =
     analyzeProgramReport
       (executedMainInputs
         (driveInputsFor !selectedProfile False [])

@@ -29,7 +29,7 @@ stages=DESUGAR,MARK
 -- pair decodes to its astral scalar value, and a lone surrogate is a parse
 -- error, not silent corruption.
 
-import core.{Ordering(..), Debug, Display, Option, Result, Thenable, map}
+import core.{Ordering(..), Debug, Display, Option, Result, map}
 import list.{reverse}
 import array
 import string.{contains, fromChars, isDigit, join, repeat, toInt}
@@ -286,7 +286,7 @@ parseUnicodeAt : Array Char ->
   List Char ->
   Option Int ->
   Result String (String, Int)
-parseUnicodeAt arr i acc None = Err "invalid \\u escape"
+parseUnicodeAt _arr _i _acc None = Err "invalid \\u escape"
 parseUnicodeAt arr i acc (Some k)
   | isHighSurrogate k = parseLowSurrogate arr i acc k
   | otherwise = parseUnicodeScalar arr (i + 4) acc k
@@ -315,7 +315,7 @@ parseLowSurrogateAt : Array Char ->
 parseLowSurrogateAt arr i acc hi (Some lo)
   | isLowSurrogate lo =
     parseUnicodeScalar arr (i + 10) acc (combineSurrogates hi lo)
-parseLowSurrogateAt arr i acc hi _ = Err "invalid \\u escape"
+parseLowSurrogateAt _arr _i _acc _hi _ = Err "invalid \\u escape"
 
 -- A codepoint that isn't a surrogate (a lone low surrogate lands here too,
 -- via the `otherwise` arm of `parseUnicodeAt` — `charFromCode` rejects it)
@@ -1029,7 +1029,7 @@ prop "at k recovers the k-th element of a JArray" (n : Int) =
 prop "get finds an inserted key" (k : Int) (v : Int) =
   get (intToString k) (jObject [(intToString k, JInt v)]) == Some (JInt v)
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "Thenable" false) (mem "map" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "map" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseName ("array")))
 (DUse false (UseGroup ("string") ((mem "contains" false) (mem "fromChars" false) (mem "isDigit" false) (mem "join" false) (mem "repeat" false) (mem "toInt" false))))
@@ -1102,13 +1102,13 @@ prop "get finds an inserted key" (k : Int) (v : Int) =
 (DTypeSig false "parseUnicode" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Int")))))))
 (DFunDef false "parseUnicode" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 4))) (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "parseUnicodeAt") (EVar "arr")) (EVar "i")) (EVar "acc")) (EApp (EApp (EVar "hex4") (EVar "arr")) (EVar "i"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "parseUnicodeAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "parseUnicodeAt" ((PVar "arr") (PVar "i") (PVar "acc") (PCon "None")) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))))
+(DFunDef false "parseUnicodeAt" ((PVar "_arr") (PVar "_i") (PVar "_acc") (PCon "None")) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))))
 (DFunDef false "parseUnicodeAt" ((PVar "arr") (PVar "i") (PVar "acc") (PCon "Some" (PVar "k"))) (EIf (EApp (EVar "isHighSurrogate") (EVar "k")) (EApp (EApp (EApp (EApp (EVar "parseLowSurrogate") (EVar "arr")) (EVar "i")) (EVar "acc")) (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "parseUnicodeScalar") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 4)))) (EVar "acc")) (EVar "k")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "parseLowSurrogate" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Int"))))))))
 (DFunDef false "parseLowSurrogate" ((PVar "arr") (PVar "i") (PVar "acc") (PVar "hi")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 10))) (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))) (EIf (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 4)))) (EVar "arr")) (ELit (LChar "\\"))) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))) (EIf (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 5)))) (EVar "arr")) (ELit (LChar "u"))) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "parseLowSurrogateAt") (EVar "arr")) (EVar "i")) (EVar "acc")) (EVar "hi")) (EApp (EApp (EVar "hex4") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 6))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "parseLowSurrogateAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Int")))))))))
 (DFunDef false "parseLowSurrogateAt" ((PVar "arr") (PVar "i") (PVar "acc") (PVar "hi") (PCon "Some" (PVar "lo"))) (EIf (EApp (EVar "isLowSurrogate") (EVar "lo")) (EApp (EApp (EApp (EApp (EVar "parseUnicodeScalar") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 10)))) (EVar "acc")) (EApp (EApp (EVar "combineSurrogates") (EVar "hi")) (EVar "lo"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "parseLowSurrogateAt" ((PVar "arr") (PVar "i") (PVar "acc") (PVar "hi") PWild) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))))
+(DFunDef false "parseLowSurrogateAt" ((PVar "_arr") (PVar "_i") (PVar "_acc") (PVar "_hi") PWild) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))))
 (DTypeSig false "parseUnicodeScalar" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Int"))))))))
 (DFunDef false "parseUnicodeScalar" ((PVar "arr") (PVar "j") (PVar "acc") (PVar "k")) (EMatch (EApp (EVar "charFromCode") (EVar "k")) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EVar "parseStr") (EVar "arr")) (EVar "j")) (EBinOp "::" (EVar "c") (EVar "acc")))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))))))
 (DTypeSig false "skipSign" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
@@ -1280,7 +1280,7 @@ prop "get finds an inserted key" (k : Int) (v : Int) =
 (DProp false "at k recovers the k-th element of a JArray" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "k") (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n"))) (DoExpr (EBinOp "==" (EApp (EApp (EVar "at") (EVar "k")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JInt")) (ERangeList (ELit (LInt 0)) (EVar "k") true)))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "k")))))))
 (DProp false "get finds an inserted key" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "get") (EApp (EVar "intToString") (EVar "k"))) (EApp (EVar "jObject") (EListLit (ETuple (EApp (EVar "intToString") (EVar "k")) (EApp (EVar "JInt") (EVar "v")))))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "v")))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "Thenable" false) (mem "map" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "map" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseName ("array")))
 (DUse false (UseGroup ("string") ((mem "contains" false) (mem "fromChars" false) (mem "isDigit" false) (mem "join" false) (mem "repeat" false) (mem "toInt" false))))
@@ -1353,13 +1353,13 @@ prop "get finds an inserted key" (k : Int) (v : Int) =
 (DTypeSig false "parseUnicode" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Int")))))))
 (DFunDef false "parseUnicode" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 4))) (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "parseUnicodeAt") (EVar "arr")) (EVar "i")) (EVar "acc")) (EApp (EApp (EVar "hex4") (EVar "arr")) (EVar "i"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "parseUnicodeAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "parseUnicodeAt" ((PVar "arr") (PVar "i") (PVar "acc") (PCon "None")) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))))
+(DFunDef false "parseUnicodeAt" ((PVar "_arr") (PVar "_i") (PVar "_acc") (PCon "None")) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))))
 (DFunDef false "parseUnicodeAt" ((PVar "arr") (PVar "i") (PVar "acc") (PCon "Some" (PVar "k"))) (EIf (EApp (EVar "isHighSurrogate") (EVar "k")) (EApp (EApp (EApp (EApp (EVar "parseLowSurrogate") (EVar "arr")) (EVar "i")) (EVar "acc")) (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "parseUnicodeScalar") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 4)))) (EVar "acc")) (EVar "k")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "parseLowSurrogate" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Int"))))))))
 (DFunDef false "parseLowSurrogate" ((PVar "arr") (PVar "i") (PVar "acc") (PVar "hi")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 10))) (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))) (EIf (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 4)))) (EVar "arr")) (ELit (LChar "\\"))) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))) (EIf (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 5)))) (EVar "arr")) (ELit (LChar "u"))) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "parseLowSurrogateAt") (EVar "arr")) (EVar "i")) (EVar "acc")) (EVar "hi")) (EApp (EApp (EVar "hex4") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 6))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "parseLowSurrogateAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Int")))))))))
 (DFunDef false "parseLowSurrogateAt" ((PVar "arr") (PVar "i") (PVar "acc") (PVar "hi") (PCon "Some" (PVar "lo"))) (EIf (EApp (EVar "isLowSurrogate") (EVar "lo")) (EApp (EApp (EApp (EApp (EVar "parseUnicodeScalar") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 10)))) (EVar "acc")) (EApp (EApp (EVar "combineSurrogates") (EVar "hi")) (EVar "lo"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "parseLowSurrogateAt" ((PVar "arr") (PVar "i") (PVar "acc") (PVar "hi") PWild) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))))
+(DFunDef false "parseLowSurrogateAt" ((PVar "_arr") (PVar "_i") (PVar "_acc") (PVar "_hi") PWild) (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))))
 (DTypeSig false "parseUnicodeScalar" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Int"))))))))
 (DFunDef false "parseUnicodeScalar" ((PVar "arr") (PVar "j") (PVar "acc") (PVar "k")) (EMatch (EApp (EVar "charFromCode") (EVar "k")) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EVar "parseStr") (EVar "arr")) (EVar "j")) (EBinOp "::" (EVar "c") (EVar "acc")))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "invalid \\u escape"))))))
 (DTypeSig false "skipSign" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))

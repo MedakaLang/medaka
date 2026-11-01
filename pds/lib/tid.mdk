@@ -4,7 +4,7 @@
    digits.  The constructor is private so every value has the canonical
    thirteen-character spelling and a representable non-negative timestamp. -}
 
-import string.{fromChar, indexOf, sliceClamped, toChars}
+import string.{fromChar, indexOf, toChars}
 
 tidAlphabet : String
 tidAlphabet = "234567abcdefghijklmnopqrstuvwxyz"

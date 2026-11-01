@@ -99,7 +99,7 @@ runRow counts lineNo text = match split " " (trim text)
   _ => fail counts "line \{intToString lineNo} malformed signing row"
 
 runRows : Array Int -> List String -> Int -> <IO> Unit
-runRows counts [] _ = ()
+runRows _counts [] _ = ()
 runRows counts (row :: rest) lineNo =
   let () = runRow counts lineNo row
   runRows counts rest (lineNo + 1)

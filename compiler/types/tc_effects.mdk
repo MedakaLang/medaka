@@ -178,7 +178,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   joinWith,
   listLen,
   lookupAssoc,
@@ -206,7 +205,7 @@ effectSiteOf : ModuleCtx ->
   Option String ->
   Option Authority ->
   Option Loc
-effectSiteOf mctx _ None _ = None
+effectSiteOf _mctx _ None _ = None
 effectSiteOf mctx fn (Some label) bound =
   match omLookup (effectSiteKey fn label) mctx.mcCells.effectSitesRef.value
     Some sites =>
@@ -242,7 +241,7 @@ recordEffectBody mctx summary lower =
   EffectSolver.recordBodyLower mctx.mcCells.effectSummaries summary lower
 
 summaryEscape : GraphCtx -> Bool -> List Atom -> List Atom -> List Atom
-summaryEscape gctx True lower upper = atomsDiff lower upper
+summaryEscape _gctx True lower upper = atomsDiff lower upper
 summaryEscape gctx False lower upper = atomsEscape gctx lower upper
 
 finishEffectSummaryScope : ModuleCtx ->
@@ -292,7 +291,7 @@ export
 reportEffectSummaryFailures : ModuleCtx ->
   List (SummaryFailure ObligationSite) ->
   Unit
-reportEffectSummaryFailures mctx [] = ()
+reportEffectSummaryFailures _mctx [] = ()
 reportEffectSummaryFailures outer (failure :: rest) =
   let fn = failure.esfContext.osFn
   let mctx =
@@ -415,7 +414,7 @@ finishEffectContract dyn (saved, savedAuths) =
 -- registration — would leave the table empty and spuriously reject `Async e a`.
 export
 checkUndeterminedRetEffVars : ModuleCtx -> List Decl -> Unit
-checkUndeterminedRetEffVars mctx [] = ()
+checkUndeterminedRetEffVars _mctx [] = ()
 checkUndeterminedRetEffVars mctx (d :: rest) =
   checkUndeterminedRetEffVarsDecl mctx d
   checkUndeterminedRetEffVars mctx rest
@@ -444,14 +443,14 @@ checkUndeterminedRetEffVarsDecl mctx (DTypeSig _ n t _) =
   checkArgEffVarCoverage mctx None [] n t
 checkUndeterminedRetEffVarsDecl mctx (DAttrib _ d) =
   checkUndeterminedRetEffVarsDecl mctx d
-checkUndeterminedRetEffVarsDecl mctx _ = ()
+checkUndeterminedRetEffVarsDecl _mctx _ = ()
 
 checkIfaceMethodEffs : ModuleCtx ->
   String ->
   List (String, List Kind) ->
   List IfaceMethod ->
   Unit
-checkIfaceMethodEffs mctx _ _ [] = ()
+checkIfaceMethodEffs _mctx _ _ [] = ()
 checkIfaceMethodEffs mctx iface scope ((IfaceMethod mname mty _ _) :: rest) =
   match undeterminedRetEffVars mctx scope mty
     [] => ()
@@ -541,7 +540,7 @@ checkArgEffVars : ModuleCtx ->
   List (String, List Atom) ->
   List String ->
   Unit
-checkArgEffVars mctx _ _ _ _ _ [] = ()
+checkArgEffVars _mctx _ _ _ _ _ [] = ()
 checkArgEffVars mctx iface mname mty argOccs retOccs (v :: rest) =
   let vrets = filterList (o => fst o == v) retOccs
   let vatoms = flatMap snd (filterList (o => fst o == v) argOccs)
@@ -566,7 +565,7 @@ checkArgEffVars mctx iface mname mty argOccs retOccs (v :: rest) =
 -- first non-empty escape of the argument-side atoms against a non-argument
 -- occurrence's declared atoms (IO-expanded via atomsEscape)
 retOccsEscape : GraphCtx -> List Atom -> List (String, List Atom) -> List Atom
-retOccsEscape gctx _ [] = []
+retOccsEscape _gctx _ [] = []
 retOccsEscape gctx vatoms ((_, declAtoms) :: rest) =
   if isNonEmptyL (atomsEscape gctx vatoms declAtoms) then
     atomsEscape gctx vatoms declAtoms
@@ -596,7 +595,7 @@ methodEffArgOccs mctx scope (TyConstrained _ t) = methodEffArgOccs mctx scope t
 methodEffArgOccs mctx scope (TyEffect _ _ t) = methodEffArgOccs mctx scope t
 methodEffArgOccs mctx scope (TyFun a b) =
   argPerformableOccs mctx scope True a ++ methodEffArgOccs mctx scope b
-methodEffArgOccs mctx _ _ = []
+methodEffArgOccs _mctx _ _ = []
 
 -- One `(tail var, the row's written atoms)` occurrence per tail variable.  A
 -- row is a JOIN when it names several (#821, `<Stdout | e | e2>`), and every
@@ -647,7 +646,7 @@ argPerformableOccs mctx scope perf (TyApp a b) = match tyAppSpine (TyApp a b)
     argPerformableOccs mctx scope perf a ++ argPerformableOccs mctx scope perf b
 argPerformableOccs mctx scope perf (TyConstrained _ t) =
   argPerformableOccs mctx scope perf t
-argPerformableOccs mctx _ _ _ = []
+argPerformableOccs _mctx _ _ _ = []
 
 -- one ctor node: its bare row-kinded slots (if performable) + recurse the args
 --
@@ -817,7 +816,7 @@ declaredEffects : GraphCtx -> Ty -> List Atom
 declaredEffects gctx (TyFun _ ret) = declaredEffects gctx ret
 declaredEffects gctx (TyEffect effs _ _) = atomsOfWritten gctx effs
 declaredEffects gctx (TyConstrained _ t) = declaredEffects gctx t
-declaredEffects gctx _ = []
+declaredEffects _gctx _ = []
 
 -- #797: the TAIL of that same first `<…>` — the field `declaredEffects` drops.
 -- No names is a genuinely CLOSED row (`<>`, `<Stdout>`); one or more is an OPEN
@@ -847,7 +846,7 @@ declaredArgEffNames : ModuleCtx -> Ty -> List String
 declaredArgEffNames mctx (TyFun a ret) =
   effTailNames a ++ rowArgNames mctx a ++ declaredArgEffNames mctx ret
 declaredArgEffNames mctx (TyConstrained _ t) = declaredArgEffNames mctx t
-declaredArgEffNames mctx _ = []
+declaredArgEffNames _mctx _ = []
 
 -- #797: is the declared return row genuinely OPEN — a free tail var that appears
 -- NOWHERE on the argument side?  Such a var is chosen by nothing but the callee's
@@ -1252,8 +1251,8 @@ registerLocalGroupAbs : TcEnv ->
   Int ->
   List (LetBind, Option ScopeId) ->
   Unit
-registerLocalGroupAbs env _ _ [] = ()
-registerLocalGroupAbs genv oblN0 callN0 ((bind@(LetBind name _ _ _), lscope) :: rest) =
+registerLocalGroupAbs _env _ _ [] = ()
+registerLocalGroupAbs genv oblN0 callN0 ((LetBind name _ _ _, lscope) :: rest) =
   match lookupVar genv name
     Some sch =>
       registerLocalAbsIf genv.teDyn.dcModule name lscope sch oblN0 callN0
@@ -1481,7 +1480,7 @@ argumentAuthority env top (Some e) xt =
   let q = alphaOf top (envVarType env) prelude (envAlphaLets env) e xt
   noteArgumentShape env top prelude q e xt
   q
-argumentAuthority env top None xt = typeAuthority top xt
+argumentAuthority _env top None xt = typeAuthority top xt
 
 -- Record, for a report of a bound this argument fails (`boundFailureMsg`),
 -- the authority variables it extends on the right, and those it would reach
@@ -1629,8 +1628,8 @@ launderEscapeFromLog : GraphCtx ->
   List EffRow ->
   List AbsorptionEvent ->
   List Atom
-launderEscapeFromLog gctx [] _ _ = []
-launderEscapeFromLog gctx _ [] _ = []
+launderEscapeFromLog _gctx [] _ _ = []
+launderEscapeFromLog _gctx _ [] _ = []
 launderEscapeFromLog gctx (der :: dRest) (aer :: aRest) evts =
   let here = match aer
     EffRow _ None => []
@@ -1647,7 +1646,7 @@ launderOpenActualArrow gctx (EffRow declAtoms (Some cell)) evts =
     []
   else
     atomsEscape gctx (atomsAbsorbedInto tid evts) declAtoms
-launderOpenActualArrow gctx (EffRow _ None) _ = []
+launderOpenActualArrow _gctx (EffRow _ None) _ = []
 
 -- the concrete atoms the window recorded as absorbed into the live tail [tid]
 -- (resolving each event's stored cell live, per risk 2).
@@ -1858,7 +1857,7 @@ checkIndexOnlyGo : ModuleCtx ->
   Option Loc ->
   List String ->
   Unit
-checkIndexOnlyGo mctx _ _ _ [] = ()
+checkIndexOnlyGo _mctx _ _ _ [] = ()
 checkIndexOnlyGo mctx subject effMap loc (v :: rest) =
   -- [eager] already holds only the vars the body performed on a method arrow
   -- (`eagerIndexOnlyVars`); whether the cell then closed (the pre-#821 unify)
@@ -1915,7 +1914,7 @@ effVarChargedOccs gctx (TyFun a b) =
   effVarChargedOccs gctx a ++ effVarChargedOccs gctx b
 effVarChargedOccs gctx (TyTuple ts) = flatMap (effVarChargedOccs gctx) ts
 effVarChargedOccs gctx (TyConstrained _ t) = effVarChargedOccs gctx t
-effVarChargedOccs gctx _ = []
+effVarChargedOccs _gctx _ = []
 
 checkEffVarAtoms : ModuleCtx ->
   String ->
@@ -1923,7 +1922,7 @@ checkEffVarAtoms : ModuleCtx ->
   List (String, Ref Effvar) ->
   Option Loc ->
   Unit
-checkEffVarAtoms mctx _ _ [] _ = ()
+checkEffVarAtoms _mctx _ _ [] _ = ()
 checkEffVarAtoms mctx subject occs ((n, cell) :: rest) loc =
   let esc =
     effVarOccEscape mctx.mcGraph n (effrowLabels (EffRow [] (Some cell))) occs
@@ -1939,8 +1938,8 @@ effVarOccEscape : GraphCtx ->
   List Atom ->
   List (String, List Atom) ->
   List Atom
-effVarOccEscape gctx _ [] _ = []
-effVarOccEscape gctx _ _ [] = []
+effVarOccEscape _gctx _ [] _ = []
+effVarOccEscape _gctx _ _ [] = []
 effVarOccEscape gctx n instAtoms ((m, declAtoms) :: rest) =
   if m == n && isNonEmptyL (atomsEscape gctx instAtoms declAtoms) then
     atomsEscape gctx instAtoms declAtoms
@@ -1965,7 +1964,7 @@ effVarOccAtoms gctx (TyApp a b) = effVarOccAtoms gctx a ++ effVarOccAtoms gctx b
 effVarOccAtoms gctx (TyFun a b) = effVarOccAtoms gctx a ++ effVarOccAtoms gctx b
 effVarOccAtoms gctx (TyTuple ts) = flatMap (effVarOccAtoms gctx) ts
 effVarOccAtoms gctx (TyConstrained _ t) = effVarOccAtoms gctx t
-effVarOccAtoms gctx _ = []
+effVarOccAtoms _gctx _ = []
 
 export
 clausesAt : String -> OrdMap (List (List Pat, Expr)) -> List (List Pat, Expr)
@@ -2005,7 +2004,7 @@ checkEffectEscapeIn : ModuleCtx ->
   String ->
   List Atom ->
   Unit
-checkEffectEscapeIn mctx group sigs m effs =
+checkEffectEscapeIn mctx group _sigs m effs =
   match omLookup m mctx.mcCells.sigTyMapRef.value
     None => ()
     -- #797: a genuinely open declared row (free return-position tail var, no
@@ -2043,7 +2042,7 @@ checkEffectEscapeIn mctx group sigs m effs =
 -- member the solver said nothing about, and drop it for one it reported.
 export
 flushPendingEscapes : ModuleCtx -> Option GroupCtx -> Unit
-flushPendingEscapes mctx None = ()
+flushPendingEscapes _mctx None = ()
 flushPendingEscapes mctx (Some group) =
   let pending = reverseL group.gcPendingEscapes.value
   group.gcPendingEscapes := []

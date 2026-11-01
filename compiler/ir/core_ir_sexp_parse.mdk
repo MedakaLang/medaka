@@ -35,7 +35,7 @@ import frontend.ast.{
 import ir.extern_types.{ExternDeclFact(..)}
 import types.extern_source.{ExternBindingKind(..), ExternProvenance(..)}
 import types.runtime_abi_types.{CallableShape(..)}
-import support.ordmap.{OrdMap, omEmpty, omFromPairs, omLookup, omInsert}
+import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),

@@ -1,13 +1,9 @@
 import array
 import frontend.ast.{
-  unminted,
-  negateLiteral,
   DeriveRef(..),
   Ty(..),
   EffAtomTy(..),
   EffParamTy(..),
-  effAtomAt,
-  effectDeclUnstamped,
   KindAnn(..),
   Constraint(..),
   Pat(..),
@@ -23,16 +19,8 @@ import frontend.ast.{
   LetBind(..),
   Expr(..),
   Loc(..),
-  noDeclLoc,
   UseMember(..),
   UsePath(..),
-  useMemberOrigin,
-  useMemberAlias,
-  qualifiedLocal,
-  tyConBuiltin,
-  kindAnnSource,
-  kindAuthorityUnstamped,
-  setDeclNameLoc,
   PropParam(..),
   MethodDefault(..),
   IfaceMethod(..),
@@ -50,14 +38,11 @@ import frontend.ast.{
   Route(..),
 }
 import frontend.lex_token.{
-  Token(..), isCommaTok, isNoiseTok, isColonTok, isConsTok, isDedentTok,
-  isDeferTok, isEofTok, isEqualTok, isExportTok, isImplTok, isInTok,
-  isIndentTok, isLBraceTok, isNewlineTok, isOfTok, isPipeTok, isPublicTok,
-  isRBraceTok, isRequiresTok, isStarTok, isWhereTok, isLayoutTok, isOpenDelim,
+  Token(..), isCommaTok, isNoiseTok, isDedentTok, isEqualTok, isIndentTok,
+  isNewlineTok, isPipeTok, isRequiresTok, isWhereTok, isLayoutTok, isOpenDelim,
   isCloseDelim, isTStringTok, isTUpperTok
 }
 import support.source_index.{lineStartIndex, offsetToLineColFast}
-import support.util.{reverseL, joinWith}
 
 public export data DeclPos = DeclPos Int Int (Option Loc) (List (Option Loc))
 public export data Positions =
@@ -184,7 +169,7 @@ declNameTokIdxAt toks (DLetGroup _ _) i =
 declNameTokIdxAt toks (DImpl { ... }) i = match implHeadTokIdx toks (i + 2)
   Some headIdx => Some headIdx
   None => Some i  -- fully-parametric head: fall back to the `impl` keyword
-declNameTokIdxAt toks (DUse _ _ _) i = None
+declNameTokIdxAt _toks (DUse _ _ _) _i = None
 declNameTokIdx : Array Token -> Decl -> Int -> Option Int
 declNameTokIdx toks d i = declNameTokIdxAt toks d (skipLeadingModifiers toks i)
 declNameSpanOf : Array Token ->
@@ -378,7 +363,7 @@ isDataDecl : Decl -> Bool
 isDataDecl (DData { dataOrigin = _ }) = True
 isDataDecl _ = False
 allVariantLines : Array Token -> Array Int -> List (Decl, Int, Int) -> List Int
-allVariantLines toks lines [] = []
+allVariantLines _toks _lines [] = []
 allVariantLines toks lines ((d, s, e) :: rest)
   | isDataDecl d =
     variantStartsIn toks lines s e ++ allVariantLines toks lines rest
@@ -507,7 +492,7 @@ allChainLines : Array Token ->
   Array Int ->
   List (Decl, Int, Int) ->
   List (List Int)
-allChainLines toks lines [] = []
+allChainLines _toks _lines [] = []
 allChainLines toks lines ((d, s, e) :: rest) =
   declChainLines toks lines d s e :: allChainLines toks lines rest
 lastContentLineOf : Array Token -> Array Int -> List (Decl, Int, Int) -> Int
@@ -518,8 +503,8 @@ lastContentLineGo : Array Token ->
   List (Decl, Int, Int) ->
   Int ->
   Int
-lastContentLineGo toks lines [] acc = acc
-lastContentLineGo toks lines ((_, s, e) :: rest) acc =
+lastContentLineGo _toks _lines [] acc = acc
+lastContentLineGo toks lines ((_, s, e) :: rest) _acc =
   lastContentLineGo
     toks
     lines

@@ -11,7 +11,7 @@ import tools.lint_rule_not_eq as NotEq
 import tools.lint_rule_double_reverse as DoubleReverse
 import tools.lint_rule_fuse_list_pipeline as FuseListPipeline
 import tools.lint_rule_self_shadow_extern as SelfShadowExtern
-import tools.lint_rule_internal_test_prelude_shadow as TestPreludeShadow
+import tools.lint_rule_prelude_shadow as PreludeShadow
 import tools.lint_rule_andthen_pure_map as AndThenPureMap
 import tools.lint_rule_missing_signature as MissingSignature
 import tools.lint_rule_match_to_map as MatchToMap
@@ -40,6 +40,9 @@ import tools.lint_rule_if_max_min as IfMaxMin
 import tools.lint_rule_bool_simplify as BoolSimplify
 import tools.lint_rule_regex_literal as RegexLiteral
 import tools.lint_rule_internal_test_equal_in_true as TestEqualInTrue
+import tools.lint_rule_unused_import as UnusedImport
+import tools.lint_rule_unused_param as UnusedParam
+import tools.lint_rule_unused_local as UnusedLocal
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- The list position is the output order of findings.  Each entry is the `rule`
@@ -68,6 +71,9 @@ allRules = [
   EagerDefault.rule,
   BindChainToDo.rule,
   DeadCode.rule,
+  UnusedImport.rule,
+  UnusedParam.rule,
+  UnusedLocal.rule,
   ConcatToInterp.rule,
   SelfShadowExtern.rule,
   PreferAssignOp.rule,
@@ -80,7 +86,7 @@ allRules = [
   RegexLiteral.rule,
   TestBoolLiteralEqual.rule,
   TestEqualInTrue.rule,
-  TestPreludeShadow.rule,
+  PreludeShadow.rule,
 ]
 
 -- ── the project registry ──────────────────────────────────────────────────────

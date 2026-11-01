@@ -151,7 +151,7 @@ beU16 bytes off = do
 --   Module-private (no export).
 bStep : String -> BResult a -> (a -> Int -> Result String b) -> Result String b
 bStep label (BErr m ep) _ = Err "\{label}: \{m} at \{intToString ep}"
-bStep label (BOk a pos) k = k a pos
+bStep _label (BOk a pos) k = k a pos
 
 -- | Decode all rows of a TABLE-LEAF page.
 --
@@ -672,7 +672,7 @@ seekTablePage bytes pageSize usable pageNum hdrOffset target = do
 
 -- Find the row (if any) whose rowid equals `target` among a leaf's decoded rows.
 findRowid : Int -> List Row -> Option Row
-findRowid target [] = None
+findRowid _target [] = None
 findRowid target (r :: rest) =
   if rowRowid r == target then Some r else findRowid target rest
 

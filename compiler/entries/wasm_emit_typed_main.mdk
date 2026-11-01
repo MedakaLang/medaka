@@ -75,8 +75,6 @@ import ir.core_ir_lower.{
   stampImplSymbols,
   stampUntypedBindersWith,
   ctorFieldTypeNames,
-  declaredRecordFieldOrders,
-  methodIfaceTable,
 }
 import backend.wasm_emit.{
   WasmEmitInput,
@@ -92,7 +90,7 @@ import driver.diagnostics.{renderSymbolDefects}
 import driver.emit_diagnostics.{refuseSymbolDefects}
 import backend.wasm_symbols.{SymbolDefect}
 import support.util.{joinNl}
-import backend.emit_plan.{EmitPlan(..), buildEmitPlan}
+import backend.emit_plan.{EmitPlan(..)}
 import ir.extern_lower.{externVar, implicitRuntimeFacts}
 import ir.extern_types.{ExternDeclFact(..)}
 import types.extern_source.{runtimeExternSymbol}

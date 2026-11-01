@@ -666,7 +666,7 @@ dedupInts ns =
   map (n => optionOr 0 (stringToInt n)) (dedup (map intToString ns))
 
 ranked : List String -> OrdMap String -> OrdMap String -> SExp -> SExp
-ranked mids ordinals grants (SList [SAtom m, SAtom n])
+ranked mids ordinals _grants (SList [SAtom m, SAtom n])
   | contains m mids = SList [SAtom m, SAtom (optionOr n (omLookup n ordinals))]
 ranked mids ordinals grants (SList items) =
   SList (map (ranked mids ordinals grants) items)

@@ -20,7 +20,6 @@
 
 import backend.extern_catalog.{
   Disposition(..),
-  ExternRow,
   catalogRows,
   rowLlvm,
   rowName,

@@ -9,9 +9,9 @@
 -- Anything else is not proven, never assumed.
 
 import types.effect_domain.{
-  Param(..), dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
-  appendParam, dantichain, dsubAny, djoinN, setCardCap, productNorm,
-  renderAxisVal, lookupAxis, domainKey, retagParam
+  Param(..), dsub, drender, isSubTop, subTopOf, extendParam, appendParam,
+  dantichain, dsubAny, djoinN, setCardCap, productNorm, renderAxisVal,
+  lookupAxis, domainKey, retagParam
 }
 import support.util.{
   joinWith, reverseL, listLen, anyList, allList, dedupBy, filterList

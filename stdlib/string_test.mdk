@@ -536,7 +536,7 @@ refParseDigitStep : Array Char ->
   Bool ->
   Char ->
   Option Int
-refParseDigitStep a n i acc seen negative c =
+refParseDigitStep a n i acc _seen negative c =
   if refIsDigit c then
     let d = charCode c - 48
     let limit = if negative then intMinBound else 0 - intMaxBound

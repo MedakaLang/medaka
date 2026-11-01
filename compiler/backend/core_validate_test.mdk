@@ -27,7 +27,7 @@ import backend.extern_catalog.{RuntimeExternDomain(..), runtimeDomain}
 import frontend.ast.{externDecls, Decl(..), Attr(..), Ty(..)}
 import backend.emit_target.{Backend(..), backendName}
 import ir.extern_types.{ExternDeclFact(..)}
-import ir.extern_lower.{externVar, externHeadRows}
+import ir.extern_lower.{externVar}
 import types.extern_source.{runtimeExternSymbol}
 import support.ordmap.{omLookup}
 import test.{
@@ -81,7 +81,6 @@ import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import frontend.ast.{BinderId(..)}
 import ir.core_ir_lower.{
   ctorFieldTypeNames,
-  declaredRecordFieldOrders,
   lowerProgramEmitWith,
 }
 import backend.extern_catalog.{catalogRow, ledgerEntry, rowLlvm, rowWasm}
@@ -115,14 +114,12 @@ import backend.llvm_emit.{
 }
 import backend.llvm_symbols as LlvmSymbols
 import backend.emit_plan.{EmitPlan(..), buildEmitPlan}
-import backend.wasm_demand.{WasmDemandPlan, PlannedImport}
+import backend.wasm_demand as WasmDemand
 import backend.global_plan.{GlobalInitPlan(..)}
 
 import types.target_profile.{lookupProfile}
-import test_process.{
-  underRoot, boundedVerbSeconds, withScratchDir, expectSpawnFailsAll
-}
-import string.{contains, split, stripPrefix}
+import test_process.{underRoot, boundedVerbSeconds, withScratchDir}
+import string.{contains, split}
 import types.tc_elab.{grantWholeDomain}
 
 -- The Wasm emitters as these tests read them.  None of the programs here has a
@@ -208,8 +205,7 @@ test "gateway emission seams refuse F1-F6 and a mismatched target before returni
             ["llvm-strict", "wasm-strict", "wasm-unchecked"])
 
 test "missing-extern-abi is a fatal metadata defect before target gaps" =
-  let (cp@(CProgram groups ca ct impls mc facts)) =
-    lowered "main = intToString 42"
+  let (CProgram groups ca ct impls mc facts) = lowered "main = intToString 42"
   let symbol = runtimeExternSymbol "intToString"
   match omLookup symbol facts.factExterns
     None => fail "lowering omitted the runtime declaration"

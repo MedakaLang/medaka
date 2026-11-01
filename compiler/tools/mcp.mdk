@@ -71,7 +71,6 @@ import driver.diagnostics.{
 import tools.lsp.{
   typeAtPoint,
   typeAtPointsWithIndex,
-  documentSymbols,
   structuralParsed,
   definitionResultParsed,
   definitionResultsParsed,

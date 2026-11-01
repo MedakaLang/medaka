@@ -24,7 +24,7 @@ import eval.eval.{
   Value(..), EvalEnv(..), EnvFrame(..), apply, eval, extendEnv, envFrameCells,
   force, lookupEnv, lookupRuntimeBinding, ppValue
 }
-import support.util.{listLen, lookupAssoc, isEmptyL, filterList, anyList}
+import support.util.{listLen, lookupAssoc, isEmptyL}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
 import tools.prop_plan.{
   deleteEach,
@@ -1401,7 +1401,7 @@ runPropRequest : PropRequest ->
   EvalEnv (Value e) ->
   List Decl ->
   <e> PropResult
-runPropRequest (request@(PropRequest name seed cases)) propLines genEnv evalEnv rootEnv props =
+runPropRequest (request@(PropRequest name seed cases)) propLines genEnv _ rootEnv props =
   let matches = propsNamed name props
   if cases <= 0 then
     PropResult
@@ -1572,7 +1572,7 @@ renderCounterexample : PlanEnv ->
   List (String, Value e) ->
   String
 renderCounterexample _ _ [] = ""
-renderCounterexample env (plan :: plans) [(name, value)] =
+renderCounterexample env (plan :: _plans) [(name, value)] =
   "\{name} = \{renderPlanValue env plan value}"
 renderCounterexample env (plan :: plans) ((name, value) :: rest) = stringConcat
   [

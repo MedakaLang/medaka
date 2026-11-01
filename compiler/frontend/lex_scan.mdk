@@ -457,7 +457,7 @@ radixTok : ScanCursor ->
   Int ->
   LexFrame ->
   RawTok
-radixTok ctx src len pos e k depth id
+radixTok ctx src _len pos e k depth id
   | radixLitOverflows src (pos + 2) e k =
     wideIntTok ctx src pos e depth id (sigRadixDigits src (pos + 2) e)
   | otherwise =
@@ -924,35 +924,38 @@ singleOp : ScanCursor ->
   LexFrame ->
   Char ->
   RawTok
-singleOp ctx src len pos depth id '+' = emit ctx pos depth id TPlus 1 0
+singleOp ctx _src _len pos depth id '+' = emit ctx pos depth id TPlus 1 0
 singleOp ctx src len pos depth id '-' =
   emit ctx pos depth id (minusTok src len pos) 1 0
-singleOp ctx src len pos depth id '*' = emit ctx pos depth id TStar 1 0
-singleOp ctx src len pos depth id '/' = emit ctx pos depth id TSlash 1 0
-singleOp ctx src len pos depth id '<' = emit ctx pos depth id TLt 1 0
-singleOp ctx src len pos depth id '>' = emit ctx pos depth id TGt 1 0
-singleOp ctx src len pos depth id '=' = emit ctx pos depth id TEqual 1 0
-singleOp ctx src len pos depth id ':' = emit ctx pos depth id TColon 1 0
-singleOp ctx src len pos depth id ',' = emit ctx pos depth id TComma 1 0
+singleOp ctx _src _len pos depth id '*' = emit ctx pos depth id TStar 1 0
+singleOp ctx _src _len pos depth id '/' = emit ctx pos depth id TSlash 1 0
+singleOp ctx _src _len pos depth id '<' = emit ctx pos depth id TLt 1 0
+singleOp ctx _src _len pos depth id '>' = emit ctx pos depth id TGt 1 0
+singleOp ctx _src _len pos depth id '=' = emit ctx pos depth id TEqual 1 0
+singleOp ctx _src _len pos depth id ':' = emit ctx pos depth id TColon 1 0
+singleOp ctx _src _len pos depth id ',' = emit ctx pos depth id TComma 1 0
 singleOp ctx src len pos depth id '.'
   | isMalformedLeadingDot src len pos = malformedLeadingDotTok ctx src len pos
   | otherwise = emit ctx pos depth id TDot 1 0
-singleOp ctx src len pos depth id '|' = emit ctx pos depth id TPipe 1 0
-singleOp ctx src len pos depth id '(' = emit ctx pos depth id TLParen 1 1
-singleOp ctx src len pos depth id ')' = emit ctx pos depth id TRParen 1 (0 - 1)
-singleOp ctx src len pos depth id '[' =
+singleOp ctx _src _len pos depth id '|' = emit ctx pos depth id TPipe 1 0
+singleOp ctx _src _len pos depth id '(' = emit ctx pos depth id TLParen 1 1
+singleOp ctx _src _len pos depth id ')' =
+  emit ctx pos depth id TRParen 1 (0 - 1)
+singleOp ctx src _len pos depth id '[' =
   emit ctx pos depth id (bracketTok src pos) 1 1
-singleOp ctx src len pos depth id ']' =
+singleOp ctx _src _len pos depth id ']' =
   emit ctx pos depth id TRBracket 1 (0 - 1)
 singleOp ctx src len pos depth id '{' = openBrace ctx src len pos depth id
 singleOp ctx src len pos depth id '}' = closeBrace ctx src len pos depth id
-singleOp ctx src len pos depth id '!' = emit ctx pos depth id TBang 1 0
-singleOp ctx src len pos depth id '%' = emit ctx pos depth id TMod 1 0
-singleOp ctx src len pos depth id '@' =
+singleOp ctx _src _len pos depth id '!' = emit ctx pos depth id TBang 1 0
+singleOp ctx _src _len pos depth id '%' = emit ctx pos depth id TMod 1 0
+singleOp ctx src _len pos depth id '@' =
   emit ctx pos depth id (atToken src pos) 1 0
-singleOp ctx src len pos depth id '\\' = lexErrorTok ctx pos (pos + 1) HsLambda
-singleOp ctx src len pos depth id '$' = lexErrorTok ctx pos (pos + 1) HsDollar
-singleOp ctx src len pos depth id c =
+singleOp ctx _src _len pos _depth _id '\\' =
+  lexErrorTok ctx pos (pos + 1) HsLambda
+singleOp ctx _src _len pos _depth _id '$' =
+  lexErrorTok ctx pos (pos + 1) HsDollar
+singleOp ctx _src _len pos _depth _id c =
   lexErrorTok ctx pos (pos + 1) (UnexpectedCharacter (charToStr c))
 
 bracketTok : Array Char -> Int -> Token
@@ -991,9 +994,9 @@ minusTok src len pos
   | otherwise = TMinus
 
 openBrace : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
-openBrace ctx src len pos depth CodeFrame =
+openBrace ctx _src _len pos depth CodeFrame =
   emitOne ctx (RTok TLBrace pos (pos + 1)) (pos + 1) (depth + 1) CodeFrame
-openBrace ctx src len pos depth (HoleFrame flavor opener braces) =
+openBrace ctx _src _len pos depth (HoleFrame flavor opener braces) =
   emitOne
     ctx
     (RTok TLBrace pos (pos + 1))
@@ -1001,9 +1004,9 @@ openBrace ctx src len pos depth (HoleFrame flavor opener braces) =
     depth
     (HoleFrame flavor opener (braces + 1))
 closeBrace : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
-closeBrace ctx src len pos depth CodeFrame =
+closeBrace ctx _src _len pos depth CodeFrame =
   emitOne ctx (RTok TRBrace pos (pos + 1)) (pos + 1) (depth - 1) CodeFrame
-closeBrace ctx src len pos depth (HoleFrame flavor opener braces)
+closeBrace ctx src _len pos depth (HoleFrame flavor opener braces)
   | braces > 1 =
     emitOne
       ctx

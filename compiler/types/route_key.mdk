@@ -46,7 +46,6 @@ import frontend.ast.{
   qualifierSource,
   EffParamTy(..),
   effAtomSurface,
-  authTermSurface,
   effAtomBare,
   effAtomWith,
   Route(..),

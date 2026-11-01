@@ -36,7 +36,6 @@ import frontend.ast.{
   Addr(..),
   Decl(..),
   ExternDecl(..),
-  externRowCons,
   hostRows,
   Attr(..),
   Variant(..),
@@ -2084,7 +2083,7 @@ siteTrapDecl twins d =
     _ => d
 
 siteTrapExpr : Bool -> OrdMap String -> Expr -> Expr
-siteTrapExpr panicFree twins (e@(EApp h m))
+siteTrapExpr panicFree _twins (e@(EApp h m))
   | panicFree && isPanicHead h =
     sitedCall (exprStartLoc e) (EVar "panicAt") [m] e
 siteTrapExpr _ twins (e@(EApp (EApp h a) i)) = match indexTwinOf twins h

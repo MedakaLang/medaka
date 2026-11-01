@@ -67,7 +67,7 @@ grantFindings host =
       (filter (p => not (elem p compilerProfiles)) (map fst host))
 
 lookupOr : String -> List (String, List String) -> List String
-lookupOr key [] = []
+lookupOr _key [] = []
 lookupOr key ((k, v) :: rest) = if k == key then v else lookupOr key rest
 
 -- (slice, process-only?, needs)

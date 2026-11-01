@@ -7,7 +7,6 @@
 --
 --   medaka run compiler/entries/check_all_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]
 
-import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import driver.loader.{loadProgram}

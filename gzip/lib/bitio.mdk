@@ -321,13 +321,13 @@ test "putCodeMSB, non-byte-aligned width 5: code 13 (0b01101) -> 22 (0b10110), z
 -- ---------------------------------------------------------------------------
 
 writeAllFixed : List Int -> Int -> BitWriter -> Unit
-writeAllFixed [] width w = ()
+writeAllFixed [] _width _w = ()
 writeAllFixed (v :: rest) width w =
   let _ = putBits v width w
   writeAllFixed rest width w
 
 readAllFixed : List Int -> Int -> BitReader -> Result String (List Int)
-readAllFixed [] width r = Ok []
+readAllFixed [] _width _r = Ok []
 readAllFixed (_ :: rest) width r = do
   v <- getBits width r
   vs <- readAllFixed rest width r
@@ -350,7 +350,7 @@ prop "putBits/getBits round-trip: arbitrary Int values (incl. negative) at a sha
     Err _ => False
 
 writeAllCodesMSB : List Int -> Int -> BitWriter -> Unit
-writeAllCodesMSB [] width w = ()
+writeAllCodesMSB [] _width _w = ()
 writeAllCodesMSB (v :: rest) width w =
   let _ = putCodeMSB v width w
   writeAllCodesMSB rest width w
@@ -371,7 +371,7 @@ readCodeMSBGo remaining acc r =
     readCodeMSBGo (remaining - 1) (acc * 2 + bit) r
 
 readAllCodesMSB : List Int -> Int -> BitReader -> Result String (List Int)
-readAllCodesMSB [] width r = Ok []
+readAllCodesMSB [] _width _r = Ok []
 readAllCodesMSB (_ :: rest) width r = do
   v <- readCodeMSB width r
   vs <- readAllCodesMSB rest width r
@@ -399,7 +399,7 @@ ceilDiv : Int -> Int -> Int
 ceilDiv a b = (a + b - 1) / b
 
 consumeWidths : List Int -> BitReader -> Result String Unit
-consumeWidths [] r = Ok ()
+consumeWidths [] _r = Ok ()
 consumeWidths (width :: rest) r = do
   _ <- getBits width r
   consumeWidths rest r

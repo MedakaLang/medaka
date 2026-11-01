@@ -38,7 +38,7 @@ import frontend.ast.{
 import support.ordmap.{
   omEmpty, omFromNames, omHasKey, omInsert, omLookup, OrdMap
 }
-import support.util.{anyList, filterList, isSome, listLen, reverseL, zipL}
+import support.util.{anyList, filterList, listLen, reverseL, zipL}
 import list.{indexed, sortOn}
 import types.invocation_basis.{paramPolaritiesIn}
 import support.scc.{tarjanSCCs}

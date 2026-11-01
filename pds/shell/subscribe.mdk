@@ -275,7 +275,7 @@ sendEntries : Duration ->
   List EventLogEntry ->
   Async <Clock, Net h | e> (Result String Int)
 sendEntries _ _ delivered [] = deferPure (Ok delivered)
-sendEntries budget conn delivered (entry :: rest) =
+sendEntries budget conn _delivered (entry :: rest) =
   match Hex.decode entry.frameHex
     Err message =>
       deferPure

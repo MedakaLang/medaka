@@ -32,7 +32,7 @@
 -- the caller, which is what a `--changes`-style flag would print).  That is what
 -- lets `sqlite/main.mdk`'s output be diffed byte-for-byte against `sqlite3`.
 
-import lib.sqlite.{Db, openDb}
+import lib.sqlite.{openDb}
 import lib.rowtype.{tCells}
 import lib.recordfmt.{Cell}
 import lib.sqlparse.{renderSqlExpr}

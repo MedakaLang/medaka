@@ -21,9 +21,7 @@ import hex.{encode}
 import io.{writeFilePrivate}
 import lib.did_key.{didKeyFromPublicKey}
 import lib.jwt.{serverSecretBytes}
-import lib.sign.{
-  SecretKey, publicKeyCompressed, publicKeyForSecret, secretKeyFromBytes
-}
+import lib.sign.{publicKeyCompressed, publicKeyForSecret, secretKeyFromBytes}
 
 {- | How many candidate scalars `keygen` will draw before giving up.
 

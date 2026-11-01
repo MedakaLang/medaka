@@ -20,7 +20,6 @@ import lib.httpclient as HC
 import lib.httpclient.{HttpClientParseFailure(..)}
 import lib.resource_limits.{
   maxHttpClientBodyBytes,
-  maxHttpClientChunkBytes,
   maxHttpClientHeaderBytes,
   maxHttpClientHeaderFields,
   maxHttpClientStatusLineBytes,

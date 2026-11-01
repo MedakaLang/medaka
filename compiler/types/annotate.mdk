@@ -32,7 +32,6 @@
 
 import frontend.ast.{
   patBindings,
-  recFieldBindings,
   isHint,
   letBindName,
   propParamName,

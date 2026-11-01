@@ -653,14 +653,17 @@ IDENT "project"
 LBRACKET
 RBRACKET
 IDENT "stack"
-IDENT "frames"
-IDENT "prev"
-IDENT "opener"
+IDENT "_frames"
+IDENT "_prev"
+IDENT "_opener"
 EQUAL
+INDENT
 IDENT "closeAllPairs"
 IDENT "project"
 IDENT "stack"
 INT 0
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "layoutWith"
 IDENT "project"
@@ -676,7 +679,7 @@ IDENT "rest"
 RPAREN
 IDENT "stack"
 IDENT "frames"
-IDENT "prev"
+IDENT "_prev"
 IDENT "opener"
 INDENT
 PIPE
@@ -931,7 +934,7 @@ IDENT "clauseOpenPairs"
 IDENT "project"
 IDENT "col"
 IDENT "off"
-IDENT "base"
+IDENT "_base"
 IDENT "rest"
 LBRACKET
 RBRACKET
@@ -1434,7 +1437,7 @@ IDENT "e"
 IDENT "rest"
 LBRACKET
 RBRACKET
-IDENT "f"
+IDENT "_f"
 IDENT "fs"
 IDENT "opener"
 EQUAL
@@ -1582,14 +1585,14 @@ DEDENT
 NEWLINE
 IDENT "applyNlPairs"
 IDENT "project"
-IDENT "col"
+IDENT "_col"
 IDENT "off"
 IDENT "rest"
 LBRACKET
 RBRACKET
 IDENT "frames"
-IDENT "prev"
-IDENT "opener"
+IDENT "_prev"
+IDENT "_opener"
 EQUAL
 INDENT
 IDENT "project"
@@ -2091,7 +2094,7 @@ NEWLINE
 IDENT "resolveContPairs"
 IDENT "project"
 IDENT "col"
-IDENT "off"
+IDENT "_off"
 IDENT "stack"
 LPAREN
 LPAREN
@@ -2210,13 +2213,13 @@ DEDENT
 NEWLINE
 IDENT "resolveContPairs"
 IDENT "project"
-IDENT "col"
-IDENT "off"
+IDENT "_col"
+IDENT "_off"
 IDENT "stack"
 IDENT "rest"
 IDENT "frames"
-IDENT "prev"
-IDENT "opener"
+IDENT "_prev"
+IDENT "_opener"
 EQUAL
 INDENT
 IDENT "layoutWith"
@@ -2267,8 +2270,8 @@ DEDENT
 NEWLINE
 IDENT "popDedentsPairs"
 IDENT "project"
-IDENT "col"
-IDENT "off"
+IDENT "_col"
+IDENT "_off"
 LBRACKET
 RBRACKET
 IDENT "rest"

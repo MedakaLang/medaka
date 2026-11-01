@@ -360,7 +360,7 @@ functionShape ((Token "(" _ _) :: (Token "type" _ _) :: (Token name _ _) :: rest
 functionShape ((Token "(" _ _) :: (Token op _ _) :: rest) count explicit typeName
   | op == "result" || op == "local" || op == "export" || op == "import" =
     functionShape (skipGroup rest 0) count explicit typeName
-functionShape _ count explicit None = Ok (FuncParams count)
+functionShape _ count _explicit None = Ok (FuncParams count)
 functionShape _ count explicit (Some name) =
   Ok (FuncOfType name (if explicit then count else -1))
 
@@ -475,7 +475,7 @@ inventory ((Token "(" _ _) :: (Token op _ _) :: rest) context seen types =
         moduleOrigin)
   else
     inventory rest (op :: context) seen types
-inventory ((Token ")" _ _) :: rest) [] seen types =
+inventory ((Token ")" _ _) :: _rest) [] _seen _types =
   Err (UncheckedText "unmatched expression end" moduleOrigin)
 inventory ((Token ")" _ _) :: rest) (_ :: outer) seen types =
   inventory rest outer seen types

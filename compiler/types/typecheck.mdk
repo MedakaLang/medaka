@@ -240,7 +240,6 @@ import support.util.{
   filterList,
   anyList,
   isNonEmptyL,
-  isSome,
   dedup,
   lenKey,
   sortUniqS,
@@ -954,7 +953,7 @@ graphCarriesMangledFunDefs ((mid, decls) :: rest) =
     graphCarriesMangledFunDefs rest
 
 unitCarriesMangledFunDefs : String -> List (String, (List Pat, Expr)) -> Bool
-unitCarriesMangledFunDefs mid [] = False
+unitCarriesMangledFunDefs _mid [] = False
 unitCarriesMangledFunDefs mid ((n, _) :: rest) =
   if isMangledFor mid n then True else unitCarriesMangledFunDefs mid rest
 
@@ -971,7 +970,7 @@ importedBindingWinners : ModuleCtx ->
   OrdMap Unit ->
   OrdMap Unit ->
   List (String, ExportBinding)
-importedBindingWinners mctx [] _ _ = []
+importedBindingWinners _mctx [] _ _ = []
 importedBindingWinners mctx ((name, (_, binding)) :: rest) seen ambiguous =
   if omHasKey name seen then
     importedBindingWinners mctx rest seen ambiguous
@@ -1412,7 +1411,7 @@ importSeed : GraphCtx ->
   List Decl ->
   List (String, List (String, a)) ->
   List (String, (Option String, a))
-importSeed gctx _ _ _ [] _ = []
+importSeed _gctx _ _ _ [] _ = []
 importSeed gctx mid coreV admitted ((DAttrib _ d) :: rest) depEnv =
   importSeed gctx mid coreV admitted (d :: rest) depEnv
 importSeed gctx mid coreV admitted ((DUse _ path _) :: rest) depEnv =
@@ -2354,7 +2353,7 @@ setMainSchemeIfEntry : GraphCtx ->
   ModulePlace ->
   List (String, PubScheme) ->
   Unit
-setMainSchemeIfEntry gctx NotLastModule _ = ()
+setMainSchemeIfEntry _gctx NotLastModule _ = ()
 setMainSchemeIfEntry gctx LastModule schemes =
   gctx.mainSchemeRef := map (p => p.psScheme) (lookupAssoc "main" schemes)
 
@@ -2914,7 +2913,7 @@ autoPrintWanted : ModuleCtx ->
   List Decl ->
   List (String, List Decl) ->
   (List DrainFinding, Option EvId)
-autoPrintWanted mctx False _ _ _ _ _ = ([], None)
+autoPrintWanted _mctx False _ _ _ _ _ = ([], None)
 autoPrintWanted mctx True executes findings perMod coreDecls modules =
   let decls = coreDecls ++ flatMap snd modules
   match (

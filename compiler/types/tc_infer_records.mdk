@@ -83,7 +83,6 @@ import support.util.{
   editDistance,
   filterList,
   isEmptyL,
-  isSome,
   listLen,
   orElseOpt,
   sortUniqS,
@@ -110,7 +109,7 @@ assignedFieldNames fields = map (fa => fst (fieldAssignNamePair fa)) fields
 -- in order, so the missing-field errors are pushed in exactly the old order.
 export
 checkMissingFields : ModuleCtx -> String -> List String -> OrdMap Unit -> Unit
-checkMissingFields mctx _ [] _ = ()
+checkMissingFields _mctx _ [] _ = ()
 checkMissingFields mctx rname (fname :: rest) supplied
   | omHasKey fname supplied = checkMissingFields mctx rname rest supplied
   | otherwise =
@@ -316,7 +315,7 @@ firstTypeDisagreement : GraphCtx ->
   String ->
   List (String, Int, RecordInfo) ->
   Option CtorFieldConflict
-firstTypeDisagreement gctx _ [] = None
+firstTypeDisagreement _gctx _ [] = None
 firstTypeDisagreement gctx fname ((a, _, ra) :: rest) =
   match omLookup fname (recordFieldMap ra)
     None => None
@@ -329,7 +328,7 @@ typeOtherThan : GraphCtx ->
   Mono ->
   List (String, Int, RecordInfo) ->
   Option CtorFieldConflict
-typeOtherThan gctx _ _ _ _ [] = None
+typeOtherThan _gctx _ _ _ _ [] = None
 typeOtherThan gctx fname a ra ta ((b, _, rb) :: rest) =
   match omLookup fname (recordFieldMap rb)
     Some tb =>
@@ -481,7 +480,7 @@ fieldOwnerReachable mctx key =
     Some mids => fieldOwnerAnyReachable mctx mids
 
 fieldOwnerAnyReachable : ModuleCtx -> List String -> Bool
-fieldOwnerAnyReachable mctx [] = False
+fieldOwnerAnyReachable _mctx [] = False
 fieldOwnerAnyReachable mctx (m :: rest) =
   omHasKey m mctx.mcCells.fieldOwnerReachRef.value
     || fieldOwnerAnyReachable mctx rest
@@ -855,7 +854,7 @@ ownerDeclOfReceiver : ModuleCtx ->
   String ->
   List String ->
   Option (String, RecordInfo)
-ownerDeclOfReceiver mctx _ _ [] = None
+ownerDeclOfReceiver _mctx _ _ [] = None
 ownerDeclOfReceiver mctx te fname owners = match receiverTypeIdent te
   None => None
   Some ident =>
@@ -870,7 +869,7 @@ ownerDeclOfReceiver mctx te fname owners = match receiverTypeIdent te
 -- Every owner key whose companion rows hold the declaration `ident` names, with
 -- that row's `RecordInfo`.
 ownerDeclMatches : GraphCtx -> Ident -> List String -> List (String, RecordInfo)
-ownerDeclMatches gctx _ [] = []
+ownerDeclMatches _gctx _ [] = []
 ownerDeclMatches gctx ident (k :: rest) =
   match omLookup k (spRows gctx.crossRun.universeRecordPop.value)
     None => ownerDeclMatches gctx ident rest
@@ -1020,7 +1019,7 @@ ctorSiblingWithholdingName : ModuleCtx ->
   String ->
   String ->
   Option String
-ctorSiblingWithholdingName mctx None _ _ = None
+ctorSiblingWithholdingName _mctx None _ _ = None
 ctorSiblingWithholdingName mctx (Some hk) fname survivorKey =
   match ctorsOfHead mctx hk
     None => None
@@ -1056,7 +1055,7 @@ firstCtorSiblingWithholding : ModuleCtx ->
   String ->
   List String ->
   Option String
-firstCtorSiblingWithholding mctx _ _ _ [] = None
+firstCtorSiblingWithholding _mctx _ _ _ [] = None
 firstCtorSiblingWithholding mctx hk fname skey (k :: rest)
   | k == skey = firstCtorSiblingWithholding mctx hk fname skey rest
   | ctorSiblingWithholds mctx hk fname k = Some k
@@ -1095,7 +1094,7 @@ ctorRecordFromCompanion gctx hk k = match headKeyIdent hk
 -- Each owner key paired with its `RecordInfo`; a key with no entry is dropped
 -- rather than defaulted, so the filter above only ever sees real declarations.
 ownerCandidates : ModuleCtx -> List String -> List (String, RecordInfo)
-ownerCandidates mctx [] = []
+ownerCandidates _mctx [] = []
 ownerCandidates mctx (key :: rest) = match lookupRecordByName mctx key
   Some ri => (key, ri) :: ownerCandidates mctx rest
   None => ownerCandidates mctx rest

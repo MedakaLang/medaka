@@ -231,7 +231,7 @@ carryDigitIntoBytes buf size i carry length =
     carryDigitIntoBytes buf size (i + 1) (cur / 256) length
 
 foldDigitsIntoBytes : List Int -> Array Int -> Int -> Int -> Int
-foldDigitsIntoBytes [] buf size length = length
+foldDigitsIntoBytes [] _buf _size length = length
 foldDigitsIntoBytes (d :: rest) buf size length =
   let newLength = carryDigitIntoBytes buf size 0 d length
   foldDigitsIntoBytes rest buf size newLength

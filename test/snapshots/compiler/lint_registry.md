@@ -1,5 +1,5 @@
 # META
-source_lines=167
+source_lines=173
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_registry.mdk — THE REGISTRY: `allRules`, the project-rule
@@ -15,7 +15,7 @@ import tools.lint_rule_not_eq as NotEq
 import tools.lint_rule_double_reverse as DoubleReverse
 import tools.lint_rule_fuse_list_pipeline as FuseListPipeline
 import tools.lint_rule_self_shadow_extern as SelfShadowExtern
-import tools.lint_rule_internal_test_prelude_shadow as TestPreludeShadow
+import tools.lint_rule_prelude_shadow as PreludeShadow
 import tools.lint_rule_andthen_pure_map as AndThenPureMap
 import tools.lint_rule_missing_signature as MissingSignature
 import tools.lint_rule_match_to_map as MatchToMap
@@ -44,6 +44,9 @@ import tools.lint_rule_if_max_min as IfMaxMin
 import tools.lint_rule_bool_simplify as BoolSimplify
 import tools.lint_rule_regex_literal as RegexLiteral
 import tools.lint_rule_internal_test_equal_in_true as TestEqualInTrue
+import tools.lint_rule_unused_import as UnusedImport
+import tools.lint_rule_unused_param as UnusedParam
+import tools.lint_rule_unused_local as UnusedLocal
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- The list position is the output order of findings.  Each entry is the `rule`
@@ -72,6 +75,9 @@ allRules = [
   EagerDefault.rule,
   BindChainToDo.rule,
   DeadCode.rule,
+  UnusedImport.rule,
+  UnusedParam.rule,
+  UnusedLocal.rule,
   ConcatToInterp.rule,
   SelfShadowExtern.rule,
   PreferAssignOp.rule,
@@ -84,7 +90,7 @@ allRules = [
   RegexLiteral.rule,
   TestBoolLiteralEqual.rule,
   TestEqualInTrue.rule,
-  TestPreludeShadow.rule,
+  PreludeShadow.rule,
 ]
 
 -- ── the project registry ──────────────────────────────────────────────────────
@@ -178,7 +184,7 @@ projectRuleActive only disable r =
 (DUse false (UseAlias ("tools" "lint_rule_double_reverse") "DoubleReverse"))
 (DUse false (UseAlias ("tools" "lint_rule_fuse_list_pipeline") "FuseListPipeline"))
 (DUse false (UseAlias ("tools" "lint_rule_self_shadow_extern") "SelfShadowExtern"))
-(DUse false (UseAlias ("tools" "lint_rule_internal_test_prelude_shadow") "TestPreludeShadow"))
+(DUse false (UseAlias ("tools" "lint_rule_prelude_shadow") "PreludeShadow"))
 (DUse false (UseAlias ("tools" "lint_rule_andthen_pure_map") "AndThenPureMap"))
 (DUse false (UseAlias ("tools" "lint_rule_missing_signature") "MissingSignature"))
 (DUse false (UseAlias ("tools" "lint_rule_match_to_map") "MatchToMap"))
@@ -207,8 +213,11 @@ projectRuleActive only disable r =
 (DUse false (UseAlias ("tools" "lint_rule_bool_simplify") "BoolSimplify"))
 (DUse false (UseAlias ("tools" "lint_rule_regex_literal") "RegexLiteral"))
 (DUse false (UseAlias ("tools" "lint_rule_internal_test_equal_in_true") "TestEqualInTrue"))
+(DUse false (UseAlias ("tools" "lint_rule_unused_import") "UnusedImport"))
+(DUse false (UseAlias ("tools" "lint_rule_unused_param") "UnusedParam"))
+(DUse false (UseAlias ("tools" "lint_rule_unused_local") "UnusedLocal"))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "MatchOnParam.rule") (EVar "HandRolledDerivable.rule") (EVar "StdlibReimpl.rule") (EVar "BindThenDestructure.rule") (EVar "LambdaSection.rule") (EVar "IfMaxMin.rule") (EVar "AndThenPureMap.rule") (EVar "DestructureInParam.rule") (EVar "MissingSignature.rule") (EVar "NotEq.rule") (EVar "BoolSimplify.rule") (EVar "RemParity.rule") (EVar "DoubleReverse.rule") (EVar "FuseListPipeline.rule") (EVar "WhenUnless.rule") (EVar "ComplementPredicate.rule") (EVar "MatchToMap.rule") (EVar "OptionEliminators.rule") (EVar "EagerDefault.rule") (EVar "BindChainToDo.rule") (EVar "DeadCode.rule") (EVar "ConcatToInterp.rule") (EVar "SelfShadowExtern.rule") (EVar "PreferAssignOp.rule") (EVar "PromissoryReader.rule") (EVar "OrElseStaircase.rule") (EVar "CloneType.rule") (EVar "ClauseMap.rule") (EVar "DuplicateBodySameFile.rule") (EVar "DirectiveReason.rule") (EVar "RegexLiteral.rule") (EVar "TestBoolLiteralEqual.rule") (EVar "TestEqualInTrue.rule") (EVar "TestPreludeShadow.rule")))
+(DFunDef false "allRules" () (EListLit (EVar "MatchOnParam.rule") (EVar "HandRolledDerivable.rule") (EVar "StdlibReimpl.rule") (EVar "BindThenDestructure.rule") (EVar "LambdaSection.rule") (EVar "IfMaxMin.rule") (EVar "AndThenPureMap.rule") (EVar "DestructureInParam.rule") (EVar "MissingSignature.rule") (EVar "NotEq.rule") (EVar "BoolSimplify.rule") (EVar "RemParity.rule") (EVar "DoubleReverse.rule") (EVar "FuseListPipeline.rule") (EVar "WhenUnless.rule") (EVar "ComplementPredicate.rule") (EVar "MatchToMap.rule") (EVar "OptionEliminators.rule") (EVar "EagerDefault.rule") (EVar "BindChainToDo.rule") (EVar "DeadCode.rule") (EVar "UnusedImport.rule") (EVar "UnusedParam.rule") (EVar "UnusedLocal.rule") (EVar "ConcatToInterp.rule") (EVar "SelfShadowExtern.rule") (EVar "PreferAssignOp.rule") (EVar "PromissoryReader.rule") (EVar "OrElseStaircase.rule") (EVar "CloneType.rule") (EVar "ClauseMap.rule") (EVar "DuplicateBodySameFile.rule") (EVar "DirectiveReason.rule") (EVar "RegexLiteral.rule") (EVar "TestBoolLiteralEqual.rule") (EVar "TestEqualInTrue.rule") (EVar "PreludeShadow.rule")))
 (DTypeSig true "allProjectRules" (TyApp (TyCon "List") (TyCon "ProjectRule")))
 (DFunDef false "allProjectRules" () (EListLit (EVar "DuplicateBody.rule")))
 (DTypeSig true "projectRuleMetaProblems" (TyFun (TyApp (TyCon "List") (TyCon "ProjectRule")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -238,7 +247,7 @@ projectRuleActive only disable r =
 (DUse false (UseAlias ("tools" "lint_rule_double_reverse") "DoubleReverse"))
 (DUse false (UseAlias ("tools" "lint_rule_fuse_list_pipeline") "FuseListPipeline"))
 (DUse false (UseAlias ("tools" "lint_rule_self_shadow_extern") "SelfShadowExtern"))
-(DUse false (UseAlias ("tools" "lint_rule_internal_test_prelude_shadow") "TestPreludeShadow"))
+(DUse false (UseAlias ("tools" "lint_rule_prelude_shadow") "PreludeShadow"))
 (DUse false (UseAlias ("tools" "lint_rule_andthen_pure_map") "AndThenPureMap"))
 (DUse false (UseAlias ("tools" "lint_rule_missing_signature") "MissingSignature"))
 (DUse false (UseAlias ("tools" "lint_rule_match_to_map") "MatchToMap"))
@@ -267,8 +276,11 @@ projectRuleActive only disable r =
 (DUse false (UseAlias ("tools" "lint_rule_bool_simplify") "BoolSimplify"))
 (DUse false (UseAlias ("tools" "lint_rule_regex_literal") "RegexLiteral"))
 (DUse false (UseAlias ("tools" "lint_rule_internal_test_equal_in_true") "TestEqualInTrue"))
+(DUse false (UseAlias ("tools" "lint_rule_unused_import") "UnusedImport"))
+(DUse false (UseAlias ("tools" "lint_rule_unused_param") "UnusedParam"))
+(DUse false (UseAlias ("tools" "lint_rule_unused_local") "UnusedLocal"))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "MatchOnParam.rule") (EVar "HandRolledDerivable.rule") (EVar "StdlibReimpl.rule") (EVar "BindThenDestructure.rule") (EVar "LambdaSection.rule") (EVar "IfMaxMin.rule") (EVar "AndThenPureMap.rule") (EVar "DestructureInParam.rule") (EVar "MissingSignature.rule") (EVar "NotEq.rule") (EVar "BoolSimplify.rule") (EVar "RemParity.rule") (EVar "DoubleReverse.rule") (EVar "FuseListPipeline.rule") (EVar "WhenUnless.rule") (EVar "ComplementPredicate.rule") (EVar "MatchToMap.rule") (EVar "OptionEliminators.rule") (EVar "EagerDefault.rule") (EVar "BindChainToDo.rule") (EVar "DeadCode.rule") (EVar "ConcatToInterp.rule") (EVar "SelfShadowExtern.rule") (EVar "PreferAssignOp.rule") (EVar "PromissoryReader.rule") (EVar "OrElseStaircase.rule") (EVar "CloneType.rule") (EVar "ClauseMap.rule") (EVar "DuplicateBodySameFile.rule") (EVar "DirectiveReason.rule") (EVar "RegexLiteral.rule") (EVar "TestBoolLiteralEqual.rule") (EVar "TestEqualInTrue.rule") (EVar "TestPreludeShadow.rule")))
+(DFunDef false "allRules" () (EListLit (EVar "MatchOnParam.rule") (EVar "HandRolledDerivable.rule") (EVar "StdlibReimpl.rule") (EVar "BindThenDestructure.rule") (EVar "LambdaSection.rule") (EVar "IfMaxMin.rule") (EVar "AndThenPureMap.rule") (EVar "DestructureInParam.rule") (EVar "MissingSignature.rule") (EVar "NotEq.rule") (EVar "BoolSimplify.rule") (EVar "RemParity.rule") (EVar "DoubleReverse.rule") (EVar "FuseListPipeline.rule") (EVar "WhenUnless.rule") (EVar "ComplementPredicate.rule") (EVar "MatchToMap.rule") (EVar "OptionEliminators.rule") (EVar "EagerDefault.rule") (EVar "BindChainToDo.rule") (EVar "DeadCode.rule") (EVar "UnusedImport.rule") (EVar "UnusedParam.rule") (EVar "UnusedLocal.rule") (EVar "ConcatToInterp.rule") (EVar "SelfShadowExtern.rule") (EVar "PreferAssignOp.rule") (EVar "PromissoryReader.rule") (EVar "OrElseStaircase.rule") (EVar "CloneType.rule") (EVar "ClauseMap.rule") (EVar "DuplicateBodySameFile.rule") (EVar "DirectiveReason.rule") (EVar "RegexLiteral.rule") (EVar "TestBoolLiteralEqual.rule") (EVar "TestEqualInTrue.rule") (EVar "PreludeShadow.rule")))
 (DTypeSig true "allProjectRules" (TyApp (TyCon "List") (TyCon "ProjectRule")))
 (DFunDef false "allProjectRules" () (EListLit (EVar "DuplicateBody.rule")))
 (DTypeSig true "projectRuleMetaProblems" (TyFun (TyApp (TyCon "List") (TyCon "ProjectRule")) (TyApp (TyCon "List") (TyCon "String"))))

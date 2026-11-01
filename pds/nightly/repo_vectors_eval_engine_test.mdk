@@ -33,7 +33,7 @@ import test.vector_runner.{
   spawn,
   spawnFindings,
 }
-import test.{Expectation, expectNoFindings}
+import test.{expectNoFindings}
 import test_process.{medakaBin, medakaRoot}
 
 gate : String

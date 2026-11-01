@@ -2,7 +2,7 @@
 -- frame types intentionally have no Eq/Debug instances, so assertions compare
 -- projected immutable views and booleans.
 
-import test.{expectEqual, expectTrue}
+import test.{expectEqual}
 import frontend.ast.{TyConOrigin(..)}
 import types.evidence.{ScopeId(..)}
 import types.repr.{IfaceRef(..)}

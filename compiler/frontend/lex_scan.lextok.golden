@@ -2725,7 +2725,7 @@ NEWLINE
 IDENT "radixTok"
 IDENT "ctx"
 IDENT "src"
-IDENT "len"
+IDENT "_len"
 IDENT "pos"
 IDENT "e"
 IDENT "k"
@@ -6088,8 +6088,8 @@ DEDENT
 NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -6132,8 +6132,8 @@ DEDENT
 NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -6150,8 +6150,8 @@ INT 0
 NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -6168,8 +6168,8 @@ INT 0
 NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -6186,8 +6186,8 @@ INT 0
 NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -6204,8 +6204,8 @@ INT 0
 NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -6222,8 +6222,8 @@ INT 0
 NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -6240,8 +6240,8 @@ INT 0
 NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -6293,8 +6293,8 @@ DEDENT
 NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -6311,8 +6311,8 @@ INT 0
 NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -6329,13 +6329,14 @@ INT 1
 NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
 CHAR ")"
 EQUAL
+INDENT
 IDENT "emit"
 IDENT "ctx"
 IDENT "pos"
@@ -6349,10 +6350,12 @@ MINUS
 INT 1
 RPAREN
 NEWLINE
+DEDENT
+NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
 IDENT "src"
-IDENT "len"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -6376,8 +6379,8 @@ DEDENT
 NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -6435,8 +6438,8 @@ IDENT "id"
 NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -6453,8 +6456,8 @@ INT 0
 NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -6472,7 +6475,7 @@ NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
 IDENT "src"
-IDENT "len"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
@@ -6496,13 +6499,14 @@ DEDENT
 NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
-IDENT "depth"
-IDENT "id"
+IDENT "_depth"
+IDENT "_id"
 CHAR "\\"
 EQUAL
+INDENT
 IDENT "lexErrorTok"
 IDENT "ctx"
 IDENT "pos"
@@ -6513,15 +6517,18 @@ INT 1
 RPAREN
 UPPER "HsLambda"
 NEWLINE
+DEDENT
+NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
-IDENT "depth"
-IDENT "id"
+IDENT "_depth"
+IDENT "_id"
 CHAR "$"
 EQUAL
+INDENT
 IDENT "lexErrorTok"
 IDENT "ctx"
 IDENT "pos"
@@ -6532,13 +6539,15 @@ INT 1
 RPAREN
 UPPER "HsDollar"
 NEWLINE
+DEDENT
+NEWLINE
 IDENT "singleOp"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
-IDENT "depth"
-IDENT "id"
+IDENT "_depth"
+IDENT "_id"
 IDENT "c"
 EQUAL
 INDENT
@@ -6861,8 +6870,8 @@ UPPER "RawTok"
 NEWLINE
 IDENT "openBrace"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 UPPER "CodeFrame"
@@ -6896,8 +6905,8 @@ DEDENT
 NEWLINE
 IDENT "openBrace"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 LPAREN
@@ -6958,8 +6967,8 @@ UPPER "RawTok"
 NEWLINE
 IDENT "closeBrace"
 IDENT "ctx"
-IDENT "src"
-IDENT "len"
+IDENT "_src"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 UPPER "CodeFrame"
@@ -6994,7 +7003,7 @@ NEWLINE
 IDENT "closeBrace"
 IDENT "ctx"
 IDENT "src"
-IDENT "len"
+IDENT "_len"
 IDENT "pos"
 IDENT "depth"
 LPAREN

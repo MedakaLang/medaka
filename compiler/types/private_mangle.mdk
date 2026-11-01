@@ -166,8 +166,6 @@ import support.util.{
   reverseL,
   isEmptyL,
   filterList,
-  initList,
-  joinDot,
   dedup,
   dedupBy,
   lenKey,

@@ -58,7 +58,6 @@ import support.util.{
   anyList,
   contains,
   filterList,
-  isSome,
   listLen,
   lookupAssoc,
   reverseL,
@@ -199,11 +198,11 @@ ffiCrossableConName n =
 -- ownership test that could disagree with the first.
 export
 ffiCheckExternsCrossable : ModuleCtx -> Bool -> List Decl -> Unit
-ffiCheckExternsCrossable mctx False _ = ()
+ffiCheckExternsCrossable _mctx False _ = ()
 ffiCheckExternsCrossable mctx True ds = ffiCheckExternsGo mctx (externDecls ds)
 
 ffiCheckExternsGo : ModuleCtx -> List Decl -> Unit
-ffiCheckExternsGo mctx [] = ()
+ffiCheckExternsGo _mctx [] = ()
 ffiCheckExternsGo mctx ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
   if ffiIsBuiltinExternName mctx.mcGraph n then
     ()
@@ -300,11 +299,11 @@ ffiIsBuiltinExternName gctx n = omHasKey n gctx.builtinExternNamesRef.value
 -- instantiated by the same match.
 export
 ffiCheckExternsShadow : ModuleCtx -> Bool -> List Decl -> Unit
-ffiCheckExternsShadow mctx False _ = ()
+ffiCheckExternsShadow _mctx False _ = ()
 ffiCheckExternsShadow mctx True ds = ffiCheckShadowGo mctx (externDecls ds)
 
 ffiCheckShadowGo : ModuleCtx -> List Decl -> Unit
-ffiCheckShadowGo mctx [] = ()
+ffiCheckShadowGo _mctx [] = ()
 ffiCheckShadowGo mctx ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
   match omLookup n mctx.mcGraph.builtinExternNamesRef.value
     Some (cat, _) => match ffiSigInstance mctx cat ty
@@ -621,12 +620,12 @@ ffiInstAtom sub a = match a.eatParam
 -- rule is silent for them by construction rather than by an exemption list.
 export
 ffiCheckExternsCatalogRow : ModuleCtx -> Bool -> List Decl -> Unit
-ffiCheckExternsCatalogRow mctx False _ = ()
+ffiCheckExternsCatalogRow _mctx False _ = ()
 ffiCheckExternsCatalogRow mctx True ds =
   ffiCheckCatalogRowGo mctx (externDecls ds)
 
 ffiCheckCatalogRowGo : ModuleCtx -> List Decl -> Unit
-ffiCheckCatalogRowGo mctx [] = ()
+ffiCheckCatalogRowGo _mctx [] = ()
 ffiCheckCatalogRowGo mctx ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
   match omLookup n mctx.mcGraph.builtinExternNamesRef.value
     Some (cat, catNames) => match ffiSigInstance mctx cat ty
@@ -737,7 +736,7 @@ ffiCheckCatalogRowOne mctx n ty arrow catRow catNames declRow =
 -- One variable per argument position named by either row, carrying the
 -- first binder spelling seen for that position so a message reads as written.
 positionCells : ModuleCtx -> List (String, Int) -> List (Int, Ref Authvar)
-positionCells mctx [] = []
+positionCells _mctx [] = []
 positionCells mctx ((binder, pos) :: rest) =
   let others = positionCells mctx rest
   if isSome (lookupAssocI pos others) then
@@ -880,11 +879,11 @@ ffiCheckExternPos mctx n fb t
 -- on one Bool and one exemption is deliberate: two ownership tests could disagree.
 export
 ffiCheckExternsLabelled : ModuleCtx -> Bool -> List Decl -> Unit
-ffiCheckExternsLabelled mctx False _ = ()
+ffiCheckExternsLabelled _mctx False _ = ()
 ffiCheckExternsLabelled mctx True ds = ffiCheckLabelsGo mctx (externDecls ds)
 
 ffiCheckLabelsGo : ModuleCtx -> List Decl -> Unit
-ffiCheckLabelsGo mctx [] = ()
+ffiCheckLabelsGo _mctx [] = ()
 ffiCheckLabelsGo mctx ((DExtern d) :: rest) =
   let diags =
     ffiDeclarationDiags

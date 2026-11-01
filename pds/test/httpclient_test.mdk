@@ -53,7 +53,7 @@ chunkedResponseOf n =
 allocForParse : Bytes -> <IO> Float
 allocForParse input =
   let before = allocBytes ()
-  let result = parseResponse input
+  let _ = parseResponse input
   let after = allocBytes ()
   after - before
 

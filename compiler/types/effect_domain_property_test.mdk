@@ -11,7 +11,7 @@
 import test.{expectTrue, expectAll, expectFalse}
 import support.util.{allList, anyList, contains, sortUniqS}
 import types.effect_domain.{Param(..), dantichain, djoin, dsub}
-import types.effect_authority.{Authority(..), authConsts, authJoinAll, authSub}
+import types.effect_authority.{Authority(..), authJoinAll, authSub}
 
 bounded : Int -> Int -> Int
 bounded n width = (n % width + width) % width

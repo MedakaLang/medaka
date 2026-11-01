@@ -23,12 +23,10 @@ import frontend.ast.{Lit(..), Loc(..), Pat}
 import backend.trmc_analysis.{patVars, bindNames, bindName}
 import support.util.{
   contains,
-  lookupAssoc,
   startsWith,
   fallthroughName,
   dedup,
   filterList,
-  reverseL,
   anyList,
 }
 import support.ordmap.{
@@ -38,7 +36,6 @@ import support.ordmap.{
   omLookup,
   omHasKey,
   omFromNames,
-  omFromPairs,
   omMapValues,
 }
 import support.scc.{tarjanSCCs}

@@ -1,5 +1,5 @@
 # META
-source_lines=4156
+source_lines=4155
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -40,7 +40,6 @@ import frontend.ast.{
   Addr(..),
   Decl(..),
   ExternDecl(..),
-  externRowCons,
   hostRows,
   Attr(..),
   Variant(..),
@@ -2088,7 +2087,7 @@ siteTrapDecl twins d =
     _ => d
 
 siteTrapExpr : Bool -> OrdMap String -> Expr -> Expr
-siteTrapExpr panicFree twins (e@(EApp h m))
+siteTrapExpr panicFree _twins (e@(EApp h m))
   | panicFree && isPanicHead h =
     sitedCall (exprStartLoc e) (EVar "panicAt") [m] e
 siteTrapExpr _ twins (e@(EApp (EApp h a) i)) = match indexTwinOf twins h
@@ -4162,7 +4161,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false) (mem "SymbolOrigin" true) (mem "CoreSymbolOrigins" true) (mem "originKey" false) (mem "functionOrigin" false) (mem "singleProgramOrigins" false))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "lowerExterns" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "externRowCons" false) (mem "hostRows" false) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false) (mem "patHasOr" false) (mem "orCandidates" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "hostRows" false) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false) (mem "patHasOr" false) (mem "orCandidates" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "evSiteHeadIn" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "leadingDictParams" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "freshBinderId" false))))
@@ -4859,7 +4858,7 @@ nodeTag _ = "?"
 (DTypeSig false "siteTrapDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "siteTrapDecl" ((PVar "twins") (PVar "d")) (EBlock (DoLet false false (PVar "panicFree") (EApp (EVar "not") (EApp (EApp (EVar "contains") (ELit (LString "panic"))) (EApp (EVar "declBinders") (EVar "d"))))) (DoExpr (EMatch (EApp (EApp (EVar "mapProg") (EApp (EApp (EVar "siteTrapExpr") (EVar "panicFree")) (EVar "twins"))) (EListLit (EVar "d"))) (arm (PList (PVar "d2")) () (EVar "d2")) (arm PWild () (EVar "d"))))))
 (DTypeSig false "siteTrapExpr" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "siteTrapExpr" ((PVar "panicFree") (PVar "twins") (PAs "e" (PCon "EApp" (PVar "h") (PVar "m")))) (EIf (EBinOp "&&" (EVar "panicFree") (EApp (EVar "isPanicHead") (EVar "h"))) (EApp (EApp (EApp (EApp (EVar "sitedCall") (EApp (EVar "exprStartLoc") (EVar "e"))) (EApp (EVar "EVar") (ELit (LString "panicAt")))) (EListLit (EVar "m"))) (EVar "e")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "siteTrapExpr" ((PVar "panicFree") (PVar "_twins") (PAs "e" (PCon "EApp" (PVar "h") (PVar "m")))) (EIf (EBinOp "&&" (EVar "panicFree") (EApp (EVar "isPanicHead") (EVar "h"))) (EApp (EApp (EApp (EApp (EVar "sitedCall") (EApp (EVar "exprStartLoc") (EVar "e"))) (EApp (EVar "EVar") (ELit (LString "panicAt")))) (EListLit (EVar "m"))) (EVar "e")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "siteTrapExpr" (PWild (PVar "twins") (PAs "e" (PCon "EApp" (PCon "EApp" (PVar "h") (PVar "a")) (PVar "i")))) (EMatch (EApp (EApp (EVar "indexTwinOf") (EVar "twins")) (EVar "h")) (arm (PCon "Some" (PVar "twin")) () (EApp (EApp (EApp (EApp (EVar "sitedCall") (EApp (EVar "exprStartLoc") (EVar "e"))) (EApp (EVar "EVar") (EVar "twin"))) (EListLit (EVar "a") (EVar "i"))) (EVar "e"))) (arm (PCon "None") () (EVar "e"))))
 (DFunDef false "siteTrapExpr" (PWild PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "sitedCall" (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))))
@@ -5544,7 +5543,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false) (mem "SymbolOrigin" true) (mem "CoreSymbolOrigins" true) (mem "originKey" false) (mem "functionOrigin" false) (mem "singleProgramOrigins" false))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "lowerExterns" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "externRowCons" false) (mem "hostRows" false) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false) (mem "patHasOr" false) (mem "orCandidates" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "hostRows" false) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false) (mem "patHasOr" false) (mem "orCandidates" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "evSiteHeadIn" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "leadingDictParams" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "freshBinderId" false))))
@@ -6241,7 +6240,7 @@ nodeTag _ = "?"
 (DTypeSig false "siteTrapDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "siteTrapDecl" ((PVar "twins") (PVar "d")) (EBlock (DoLet false false (PVar "panicFree") (EApp (EVar "not") (EApp (EApp (EVar "contains") (ELit (LString "panic"))) (EApp (EVar "declBinders") (EVar "d"))))) (DoExpr (EMatch (EApp (EApp (EVar "mapProg") (EApp (EApp (EVar "siteTrapExpr") (EVar "panicFree")) (EVar "twins"))) (EListLit (EVar "d"))) (arm (PList (PVar "d2")) () (EVar "d2")) (arm PWild () (EVar "d"))))))
 (DTypeSig false "siteTrapExpr" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "siteTrapExpr" ((PVar "panicFree") (PVar "twins") (PAs "e" (PCon "EApp" (PVar "h") (PVar "m")))) (EIf (EBinOp "&&" (EVar "panicFree") (EApp (EVar "isPanicHead") (EVar "h"))) (EApp (EApp (EApp (EApp (EVar "sitedCall") (EApp (EVar "exprStartLoc") (EVar "e"))) (EApp (EVar "EVar") (ELit (LString "panicAt")))) (EListLit (EVar "m"))) (EVar "e")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "siteTrapExpr" ((PVar "panicFree") (PVar "_twins") (PAs "e" (PCon "EApp" (PVar "h") (PVar "m")))) (EIf (EBinOp "&&" (EVar "panicFree") (EApp (EVar "isPanicHead") (EVar "h"))) (EApp (EApp (EApp (EApp (EVar "sitedCall") (EApp (EVar "exprStartLoc") (EVar "e"))) (EApp (EVar "EVar") (ELit (LString "panicAt")))) (EListLit (EVar "m"))) (EVar "e")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "siteTrapExpr" (PWild (PVar "twins") (PAs "e" (PCon "EApp" (PCon "EApp" (PVar "h") (PVar "a")) (PVar "i")))) (EMatch (EApp (EApp (EVar "indexTwinOf") (EVar "twins")) (EVar "h")) (arm (PCon "Some" (PVar "twin")) () (EApp (EApp (EApp (EApp (EVar "sitedCall") (EApp (EVar "exprStartLoc") (EVar "e"))) (EApp (EVar "EVar") (EVar "twin"))) (EListLit (EVar "a") (EVar "i"))) (EVar "e"))) (arm (PCon "None") () (EVar "e"))))
 (DFunDef false "siteTrapExpr" (PWild PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "sitedCall" (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))))

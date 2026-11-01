@@ -18,12 +18,12 @@ import frontend.lex_layout.{
 }
 
 layoutWithOffsets : Array Char -> Int -> List (Token, Int)
-layoutWithOffsets src len =
+layoutWithOffsets src _len =
   let _ = stageBump "lex.offsets"
   applyLayoutStarts (scanRawChars src)
 
 layoutWithOffsetPairs : Array Char -> Int -> List (Token, Int, Int)
-layoutWithOffsetPairs src len =
+layoutWithOffsetPairs src _len =
   let _ = stageBump "lex.pairs"
   applyLayoutRanges (scanRawChars src)
 
@@ -96,7 +96,7 @@ offsetsToLines : Array Char -> List Int -> List Int
 offsetsToLines src offs = offsetsToLinesGo src offs 0 1
 
 offsetsToLinesGo : Array Char -> List Int -> Int -> Int -> List Int
-offsetsToLinesGo src [] p line = []
+offsetsToLinesGo _src [] _p _line = []
 offsetsToLinesGo src (off :: rest) p line = match advanceLine src off p line
   (line2, p2) => line2 :: offsetsToLinesGo src rest p2 line2
 
@@ -176,5 +176,4 @@ collectComments s =
   -- Valid only while lint is the single caller; a second caller must move this bump.
   let _ = stageBump "lint.comments"
   let src = stringToChars s
-  let len = arrayLength src
   rawToComments src (scanRawUndedentedChars src)

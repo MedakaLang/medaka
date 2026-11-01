@@ -252,7 +252,6 @@ for required in \
 done
 for required in \
   'let physical = physicalPlanW plan' \
-  'let useRef = physical.useRef' \
   'let useClos = physical.useClos' \
   'let imports = plannedImportLines physical.imports' \
   'let _ = forEachU (registerW emit) (declarePlannedHelpers physical)' \
@@ -284,7 +283,7 @@ for block in \
   ioArgsLines floatStrLines charClassRuntimeLines randomFloatRuntimeLines \
   strCodecRuntimeLines charFromCodeRuntimeLines hashFloatRuntimeLines \
   readFileBytesLines writeFileBytesLines; do
-  has_preamble_pin "plannedHelperBlock callW tailW plan files \"$block\"" || {
+  has_preamble_pin "_plan _files \"$block\" =" || {
     echo "FAIL WASM-DEMAND-HELPERS: missing planned $block renderer"
     exit 1
   }

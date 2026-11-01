@@ -36,7 +36,6 @@ import types.typecheck.{
 }
 import types.tc_types.{DriveInputs(..)}
 import ir.core_ir_lower.{
-  declaredRecordFieldOrders,
   lowerProgramEmitWith,
   methodIfaceTable,
   ctorFieldTypeNames,

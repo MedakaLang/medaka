@@ -1,5 +1,5 @@
 # META
-source_lines=1041
+source_lines=1053
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -16,7 +16,7 @@ import support.util.{
   contains, filterList, splitOnChar, joinWith, startsWith, listLen, anyList,
   joinNl, dedupBy
 }
-import list.{drop, sortBy, last, reverse}
+import list.{sortBy, last, reverse}
 import array.{get as arrayGet}
 import string.{split, isUpper, words, unwords}
 import support.path.{stripMdk}
@@ -136,6 +136,18 @@ ruleNameSelfShadowExtern : String
 ruleNameSelfShadowExtern = "rule-self-shadow-extern"
 
 export
+ruleNameUnusedImport : String
+ruleNameUnusedImport = "rule-unused-import"
+
+export
+ruleNameUnusedParam : String
+ruleNameUnusedParam = "rule-unused-param"
+
+export
+ruleNameUnusedLocal : String
+ruleNameUnusedLocal = "rule-unused-local"
+
+export
 ruleNamePreferAssignOp : String
 ruleNamePreferAssignOp = "rule-prefer-assign-op"
 
@@ -172,8 +184,8 @@ ruleNameTestEqualInTrue : String
 ruleNameTestEqualInTrue = "rule-test-equal-in-true"
 
 export
-ruleNameTestPreludeShadow : String
-ruleNameTestPreludeShadow = "rule-test-prelude-shadow"
+ruleNamePreludeShadow : String
+ruleNamePreludeShadow = "rule-prelude-shadow"
 
 -- Is the target file part of the stdlib itself?  A `stdlib` path SEGMENT (so
 -- `stdlib/core.mdk`, `./stdlib/list.mdk`, `/abs/medaka/stdlib/map.mdk` all match,
@@ -1047,7 +1059,7 @@ lastArmSpan arms = match last arms
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "listLen" false) (mem "anyList" false) (mem "joinNl" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "sortBy" false) (mem "last" false) (mem "reverse" false))))
+(DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false) (mem "reverse" false))))
 (DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "isUpper" false) (mem "words" false) (mem "unwords" false))))
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
@@ -1110,6 +1122,12 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameConcatToInterp" () (ELit (LString "rule-concat-to-interp")))
 (DTypeSig true "ruleNameSelfShadowExtern" (TyCon "String"))
 (DFunDef false "ruleNameSelfShadowExtern" () (ELit (LString "rule-self-shadow-extern")))
+(DTypeSig true "ruleNameUnusedImport" (TyCon "String"))
+(DFunDef false "ruleNameUnusedImport" () (ELit (LString "rule-unused-import")))
+(DTypeSig true "ruleNameUnusedParam" (TyCon "String"))
+(DFunDef false "ruleNameUnusedParam" () (ELit (LString "rule-unused-param")))
+(DTypeSig true "ruleNameUnusedLocal" (TyCon "String"))
+(DFunDef false "ruleNameUnusedLocal" () (ELit (LString "rule-unused-local")))
 (DTypeSig true "ruleNamePreferAssignOp" (TyCon "String"))
 (DFunDef false "ruleNamePreferAssignOp" () (ELit (LString "rule-prefer-assign-op")))
 (DTypeSig true "ruleNamePromissoryReader" (TyCon "String"))
@@ -1128,8 +1146,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameTestBoolLiteralEqual" () (ELit (LString "rule-test-bool-literal-equal")))
 (DTypeSig true "ruleNameTestEqualInTrue" (TyCon "String"))
 (DFunDef false "ruleNameTestEqualInTrue" () (ELit (LString "rule-test-equal-in-true")))
-(DTypeSig true "ruleNameTestPreludeShadow" (TyCon "String"))
-(DFunDef false "ruleNameTestPreludeShadow" () (ELit (LString "rule-test-prelude-shadow")))
+(DTypeSig true "ruleNamePreludeShadow" (TyCon "String"))
+(DFunDef false "ruleNamePreludeShadow" () (ELit (LString "rule-prelude-shadow")))
 (DTypeSig true "isStdlibPath" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isStdlibPath" ((PVar "path")) (EApp (EApp (EVar "contains") (ELit (LString "stdlib"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path"))))
 (DTypeSig true "stdlibModuleOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -1390,7 +1408,7 @@ lastArmSpan arms = match last arms
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "listLen" false) (mem "anyList" false) (mem "joinNl" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "sortBy" false) (mem "last" false) (mem "reverse" false))))
+(DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false) (mem "reverse" false))))
 (DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "isUpper" false) (mem "words" false) (mem "unwords" false))))
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
@@ -1453,6 +1471,12 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameConcatToInterp" () (ELit (LString "rule-concat-to-interp")))
 (DTypeSig true "ruleNameSelfShadowExtern" (TyCon "String"))
 (DFunDef false "ruleNameSelfShadowExtern" () (ELit (LString "rule-self-shadow-extern")))
+(DTypeSig true "ruleNameUnusedImport" (TyCon "String"))
+(DFunDef false "ruleNameUnusedImport" () (ELit (LString "rule-unused-import")))
+(DTypeSig true "ruleNameUnusedParam" (TyCon "String"))
+(DFunDef false "ruleNameUnusedParam" () (ELit (LString "rule-unused-param")))
+(DTypeSig true "ruleNameUnusedLocal" (TyCon "String"))
+(DFunDef false "ruleNameUnusedLocal" () (ELit (LString "rule-unused-local")))
 (DTypeSig true "ruleNamePreferAssignOp" (TyCon "String"))
 (DFunDef false "ruleNamePreferAssignOp" () (ELit (LString "rule-prefer-assign-op")))
 (DTypeSig true "ruleNamePromissoryReader" (TyCon "String"))
@@ -1471,8 +1495,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameTestBoolLiteralEqual" () (ELit (LString "rule-test-bool-literal-equal")))
 (DTypeSig true "ruleNameTestEqualInTrue" (TyCon "String"))
 (DFunDef false "ruleNameTestEqualInTrue" () (ELit (LString "rule-test-equal-in-true")))
-(DTypeSig true "ruleNameTestPreludeShadow" (TyCon "String"))
-(DFunDef false "ruleNameTestPreludeShadow" () (ELit (LString "rule-test-prelude-shadow")))
+(DTypeSig true "ruleNamePreludeShadow" (TyCon "String"))
+(DFunDef false "ruleNamePreludeShadow" () (ELit (LString "rule-prelude-shadow")))
 (DTypeSig true "isStdlibPath" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isStdlibPath" ((PVar "path")) (EApp (EApp (EVar "contains") (ELit (LString "stdlib"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path"))))
 (DTypeSig true "stdlibModuleOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))

@@ -822,10 +822,10 @@ list form of `string.split`; `splitAt` is the positional split.
 
 ```
 startsWith : Eq a => List a -> List a -> Bool
-startsWith prefix _
+startsWith _prefix _
 ```
 
-Whether the list begins with `prefix`.
+Whether the second list begins with the first.
 
 Every list begins with the empty list. `elem` is the test for a single
 element.

@@ -1507,7 +1507,7 @@ RPAREN
 CONS
 IDENT "rest"
 RPAREN
-IDENT "prev"
+IDENT "_prev"
 IDENT "cur"
 IDENT "acc"
 INDENT

@@ -51,7 +51,6 @@ import types.target_profile.{
   TargetProfile,
   lookupProfile,
   profileBackend,
-  profileGrants,
   profileName,
   profileNames,
   withheldLabels,

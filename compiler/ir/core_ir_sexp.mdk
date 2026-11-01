@@ -135,8 +135,8 @@ callModeSexp CallDynamic = "CallDynamic"
 
 export
 cexprSexp : SexpMode -> CExpr -> String
-cexprSexp m (CLit l) = node "CLit" [litSexp l]
-cexprSexp m (CVar x addr) = node "CVar" [escStr x, addrSexp addr]
+cexprSexp _m (CLit l) = node "CLit" [litSexp l]
+cexprSexp _m (CVar x addr) = node "CVar" [escStr x, addrSexp addr]
 cexprSexp m (CApp f args (CallSite mode tailPos)) = node "CApp" [
   cexprSexp m f,
   slist (map (cexprSexp m) args),

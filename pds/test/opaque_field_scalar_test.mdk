@@ -58,7 +58,6 @@ import string.{
   trimLeft,
   trimRight,
   unlines,
-  unwords,
 }
 import io.{runVerb}
 import test.{Expectation(..), expectNoFindings}

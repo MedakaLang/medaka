@@ -1264,7 +1264,7 @@ runBuild root medaka cc TNative inputAbs outPath keepIrCli quietEmitStderr stamp
     quietEmitStderr
     stampBuild
     frontGate
-runBuild root medaka cc TWasm inputAbs outPath keepIrCli quietEmitStderr _ frontGate =
+runBuild root medaka _cc TWasm inputAbs outPath keepIrCli quietEmitStderr _ frontGate =
   let _ = sweepStaleTempDirs ()
   runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr frontGate
 
@@ -1624,7 +1624,7 @@ runBuildWasmIn : String ->
   Bool ->
   Option GateAsk ->
   <IO> Result BuildReport BuildReport
-runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr frontGate =
+runBuildWasmIn root _medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr frontGate =
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
   let compilerDir = joinPath root "compiler"
@@ -1787,7 +1787,7 @@ writeEdgeFiles : String ->
   TargetProfile ->
   (String, String) ->
   <IO> Option String
-writeEdgeFiles root outPath p (sourceForm, bytesForm) =
+writeEdgeFiles root outPath _p (sourceForm, bytesForm) =
   let hostSrc = joinPath root "playground/medaka_host.mjs"
   match readFile hostSrc
     Err e =>

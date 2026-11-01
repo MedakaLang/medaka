@@ -17,8 +17,6 @@ import core.{
   Foldable,
   Traversable,
   Semigroup,
-  Applicative,
-  Thenable,
   Option(..),
 }
 
