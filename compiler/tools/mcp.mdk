@@ -1956,8 +1956,9 @@ handleToolsCall state runtimeSrc coreSrc stdlibDir idJson params stalenessCheck 
 selectToolProfile : Json -> <IO> Unit
 selectToolProfile args = match fieldStr "file" args
   Some path =>
-    let _ = carryProjectProfile None path
-    ()
+    bestEffort
+      "an unreadable [target] leaves no profile selected, and medaka_check reports it"
+      (carryProjectProfile None path)
   None => selectedProfile := None
 
 -- ── request dispatch ─────────────────────────────────────────────────────────

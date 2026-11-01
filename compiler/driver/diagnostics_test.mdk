@@ -38,8 +38,8 @@ import list.{drop, head, sort}
 import path.{dirname, stem}
 import string.{contains, endsWith, lines, split, trim, unlines}
 import test.{
-  Expectation, expectAll, expectEach, expectEqual, expectFalse, expectNotEqual,
-  expectNoFindings, expectTrue, fail
+  Expectation, expectOk, expectAll, expectEach, expectEqual, expectFalse,
+  expectNotEqual, expectNoFindings, expectTrue, fail
 }
 import types.publish.{
   PubScheme(..), LiveCell(..), TcReport(..), graphCells, pubSchemes
@@ -800,7 +800,7 @@ main = 1
         loadProgramFilesLocatedCachedSourcesE cache (_ => None) entry [dir]
       let (again, same) =
         loadProgramFilesLocatedCachedSourcesE cache (_ => None) entry [dir]
-      let _ = removeFile dep
+      let removed = removeFile dep
       let (missing, missingSources) =
         loadProgramFilesLocatedCachedSourcesE cache (_ => None) entry [dir]
       let broken = "main = (\n"
@@ -811,6 +811,7 @@ main = 1
           entry
           [dir]
       expectEach [
+        ("dependency removed", expectOk removed),
         ("success", expectTrue (isOk first)),
         ("entry captured", expectEqual (Some good) (omLookup entry sources)),
         ("astral captured", expectEqual (Some astral) (omLookup dep sources)),
@@ -878,7 +879,7 @@ main = 1
           [dir, "stdlib"]
           rsrc
           csrc
-      let _ = removeFile dep
+      let removed = removeFile dep
       let (failed, buckets, failedSources) =
         analyzeProjectKeyedSources
           noStdlibExports
@@ -892,6 +893,7 @@ main = 1
           rsrc
           csrc
       expectEach [
+        ("dependency removed", expectOk removed),
         ("success", expectTrue (isSome keyed)),
         (
           "unchanged diagnostics",

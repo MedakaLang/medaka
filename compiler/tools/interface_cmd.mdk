@@ -271,7 +271,9 @@ writeAllAtomically (files@((first, _) :: _)) =
         _ <- traverse stageFile staged
         traverse moveFile staged
       let _ = map (st => removeFile st.stStaging) staged
-      let _ = removeDir dir
+      bestEffort
+        "removing the staging dir after the moves; one left non-empty by a failed move is kept on purpose"
+        (removeDir dir)
       map (_ => ()) result
 
 -- One text on its way to its target through a staging file.

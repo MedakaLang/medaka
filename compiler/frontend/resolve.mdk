@@ -156,7 +156,7 @@ import frontend.visibility.{
   directUnder,
   carriedPaths,
 }
-import test.{expectTrue}
+import test.{expectAll, expectNone, expectTrue}
 
 -- ── Errors ──────────────────────────────────────────────────────────────
 -- Stage B (WS-4 / F6): every ctor carries a trailing `Option Loc` — the source
@@ -1530,14 +1530,20 @@ storeSugPool cell pool =
 test "the value pool memo is empty until the first fuzzy lookup, then holds one" =
   let env = buildEnv [] [] [] []
   let beforeLookup = isNone !env.sugValuesMemo
-  let _ = suggestNameFuzzy env (Scope [] omEmpty) "widgetish"
-  expectTrue (beforeLookup && isSome !env.sugValuesMemo)
+  let suggestion = suggestNameFuzzy env (Scope [] omEmpty) "widgetish"
+  expectAll [
+    expectNone suggestion,
+    expectTrue (beforeLookup && isSome !env.sugValuesMemo),
+  ]
 
 test "the type pool memo is empty until the first fuzzy lookup, then holds one" =
   let env = buildEnv [] [] [] []
   let beforeLookup = isNone !env.sugTypesMemo
-  let _ = suggestTypeFuzzy env "widgetish"
-  expectTrue (beforeLookup && isSome !env.sugTypesMemo)
+  let suggestion = suggestTypeFuzzy env "widgetish"
+  expectAll [
+    expectNone suggestion,
+    expectTrue (beforeLookup && isSome !env.sugTypesMemo),
+  ]
 
 sugCandOf : String -> SugCand
 sugCandOf n =

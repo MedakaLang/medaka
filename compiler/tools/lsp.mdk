@@ -1211,9 +1211,11 @@ logFilePath _ = match getEnv "MEDAKA_LSP_LOG"
 logLine : String -> <IO> Unit
 logLine s =
   let ts = wallTimeSec ()
-  let _ =
-    appendFile (logFilePath ()) (stringConcat [floatToString ts, " ", s, "\n"])
-  ()
+  bestEffort
+    "the log is diagnostic only; a failed append must not take the language server down"
+    (appendFile
+      (logFilePath ())
+      (stringConcat [floatToString ts, " ", s, "\n"]))
 
 -- ── JSON-RPC framing ────────────────────────────────────────────────────────
 

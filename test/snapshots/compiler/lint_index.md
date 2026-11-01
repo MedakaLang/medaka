@@ -1,5 +1,5 @@
 # META
-source_lines=1071
+source_lines=1073
 stages=DESUGAR,MARK
 # SOURCE
 -- The declaration index lint rules query about modules other than the one they
@@ -615,14 +615,15 @@ atPath path r = match r.ixrLoc
   None => r
 
 writeShard : String -> String -> String -> <IO> Unit
-writeShard dir sp text =
-  let _ = mkdirAll dir
-  match makeStagingDir dir
+writeShard dir sp text = match mkdirAll dir
+  Err _ => ()
+  Ok _ => match makeStagingDir dir
     Err _ => ()
     Ok tmp =>
       stageAndRename tmp sp text
-      let _ = removeDir tmp
-      ()
+      bestEffort
+        "removing the staging dir; one left non-empty by a failed rename is kept on purpose"
+        (removeDir tmp)
 
 -- A staging dir unique to THIS process, inside `dir`: `rename(2)` fails across
 -- filesystems, so it cannot be in /tmp.  `mktemp -d` makes the name because the
@@ -648,8 +649,9 @@ stageAndRename tmp dest text =
     Err _ => ()
     Ok _ => match rename staged dest
       Err _ =>
-        let _ = removeFile staged
-        ()
+        bestEffort
+          "removing the staged file after a failed rename; the shard is simply not written"
+          (removeFile staged)
       Ok _ => ()
 
 -- ── the index ───────────────────────────────────────────────────────────────
@@ -1238,11 +1240,11 @@ localModOfKey key = match readQuery key
 (DTypeSig false "atPath" (TyFun (TyCon "String") (TyFun (TyCon "IndexRow") (TyCon "IndexRow"))))
 (DFunDef false "atPath" ((PVar "path") (PVar "r")) (EMatch (EFieldAccess (EVar "r") "ixrLoc") (arm (PCon "Some" (PCon "Loc" PWild (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) () (ERecordUpdate (EVar "r") ((fa "ixrLoc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d"))))))) (arm (PCon "None") () (EVar "r"))))
 (DTypeSig false "writeShard" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "writeShard" ((PVar "dir") (PVar "sp") (PVar "text")) (EBlock (DoLet false false PWild (EApp (EVar "mkdirAll") (EVar "dir"))) (DoExpr (EMatch (EApp (EVar "makeStagingDir") (EVar "dir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "tmp")) () (EBlock (DoExpr (EApp (EApp (EApp (EVar "stageAndRename") (EVar "tmp")) (EVar "sp")) (EVar "text"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "tmp"))) (DoExpr (ELit LUnit))))))))
+(DFunDef false "writeShard" ((PVar "dir") (PVar "sp") (PVar "text")) (EMatch (EApp (EVar "mkdirAll") (EVar "dir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EVar "makeStagingDir") (EVar "dir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "tmp")) () (EBlock (DoExpr (EApp (EApp (EApp (EVar "stageAndRename") (EVar "tmp")) (EVar "sp")) (EVar "text"))) (DoExpr (EApp (EApp (EVar "bestEffort") (ELit (LString "removing the staging dir; one left non-empty by a failed rename is kept on purpose"))) (EApp (EVar "removeDir") (EVar "tmp"))))))))))
 (DTypeSig true "makeStagingDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "makeStagingDir" ((PVar "dir")) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/.staging_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "made") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "made") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "made")))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString "")))))))
 (DTypeSig true "stageAndRename" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "stageAndRename" ((PVar "tmp") (PVar "dest") (PVar "text")) (EBlock (DoLet false false (PVar "staged") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "tmp"))) (ELit (LString "/shard.sx")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "staged")) (EVar "text")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "rename") (EVar "staged")) (EVar "dest")) (arm (PCon "Err" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EVar "staged"))) (DoExpr (ELit LUnit)))) (arm (PCon "Ok" PWild) () (ELit LUnit))))))))
+(DFunDef false "stageAndRename" ((PVar "tmp") (PVar "dest") (PVar "text")) (EBlock (DoLet false false (PVar "staged") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "tmp"))) (ELit (LString "/shard.sx")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "staged")) (EVar "text")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "rename") (EVar "staged")) (EVar "dest")) (arm (PCon "Err" PWild) () (EApp (EApp (EVar "bestEffort") (ELit (LString "removing the staged file after a failed rename; the shard is simply not written"))) (EApp (EVar "removeFile") (EVar "staged")))) (arm (PCon "Ok" PWild) () (ELit LUnit))))))))
 (DData Private "IndexScope" () ((variant "IndexScope" (ConNamed (field "ixsByName" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow")))) (field "ixsRows" (TyApp (TyCon "List") (TyCon "IndexRow"))) (field "ixsNames" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsModules" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsDigest" (TyCon "String"))))) ())
 (DData Abstract "ProjectIndex" () ((variant "ProjectIndex" (ConPos (TyCon "IndexScope") (TyCon "IndexScope") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))) (TyApp (TyCon "Option") (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")))))) ())
 (DTypeSig false "emptyScope" (TyCon "IndexScope"))
@@ -1542,11 +1544,11 @@ localModOfKey key = match readQuery key
 (DTypeSig false "atPath" (TyFun (TyCon "String") (TyFun (TyCon "IndexRow") (TyCon "IndexRow"))))
 (DFunDef false "atPath" ((PVar "path") (PVar "r")) (EMatch (EFieldAccess (EVar "r") "ixrLoc") (arm (PCon "Some" (PCon "Loc" PWild (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) () (ERecordUpdate (EVar "r") ((fa "ixrLoc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d"))))))) (arm (PCon "None") () (EVar "r"))))
 (DTypeSig false "writeShard" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "writeShard" ((PVar "dir") (PVar "sp") (PVar "text")) (EBlock (DoLet false false PWild (EApp (EVar "mkdirAll") (EVar "dir"))) (DoExpr (EMatch (EApp (EVar "makeStagingDir") (EVar "dir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "tmp")) () (EBlock (DoExpr (EApp (EApp (EApp (EVar "stageAndRename") (EVar "tmp")) (EVar "sp")) (EVar "text"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "tmp"))) (DoExpr (ELit LUnit))))))))
+(DFunDef false "writeShard" ((PVar "dir") (PVar "sp") (PVar "text")) (EMatch (EApp (EVar "mkdirAll") (EVar "dir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EVar "makeStagingDir") (EVar "dir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "tmp")) () (EBlock (DoExpr (EApp (EApp (EApp (EVar "stageAndRename") (EVar "tmp")) (EVar "sp")) (EVar "text"))) (DoExpr (EApp (EApp (EVar "bestEffort") (ELit (LString "removing the staging dir; one left non-empty by a failed rename is kept on purpose"))) (EApp (EVar "removeDir") (EVar "tmp"))))))))))
 (DTypeSig true "makeStagingDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "makeStagingDir" ((PVar "dir")) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/.staging_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "made") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "made") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "made")))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString "")))))))
 (DTypeSig true "stageAndRename" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "stageAndRename" ((PVar "tmp") (PVar "dest") (PVar "text")) (EBlock (DoLet false false (PVar "staged") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "tmp"))) (ELit (LString "/shard.sx")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "staged")) (EVar "text")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "rename") (EVar "staged")) (EVar "dest")) (arm (PCon "Err" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EVar "staged"))) (DoExpr (ELit LUnit)))) (arm (PCon "Ok" PWild) () (ELit LUnit))))))))
+(DFunDef false "stageAndRename" ((PVar "tmp") (PVar "dest") (PVar "text")) (EBlock (DoLet false false (PVar "staged") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "tmp"))) (ELit (LString "/shard.sx")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "staged")) (EVar "text")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "rename") (EVar "staged")) (EVar "dest")) (arm (PCon "Err" PWild) () (EApp (EApp (EVar "bestEffort") (ELit (LString "removing the staged file after a failed rename; the shard is simply not written"))) (EApp (EVar "removeFile") (EVar "staged")))) (arm (PCon "Ok" PWild) () (ELit LUnit))))))))
 (DData Private "IndexScope" () ((variant "IndexScope" (ConNamed (field "ixsByName" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow")))) (field "ixsRows" (TyApp (TyCon "List") (TyCon "IndexRow"))) (field "ixsNames" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsModules" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsDigest" (TyCon "String"))))) ())
 (DData Abstract "ProjectIndex" () ((variant "ProjectIndex" (ConPos (TyCon "IndexScope") (TyCon "IndexScope") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))) (TyApp (TyCon "Option") (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")))))) ())
 (DTypeSig false "emptyScope" (TyCon "IndexScope"))

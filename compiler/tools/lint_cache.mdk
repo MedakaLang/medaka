@@ -477,8 +477,9 @@ storeEntries cacheDir stamp entries =
       Err _ => ()
       Ok tmp =>
         storeGo cacheDir tmp stamp dirty
-        let _ = removeDir tmp
-        ()
+        bestEffort
+          "removing the staging dir; one left non-empty by a failed write is kept on purpose (see storeOne)"
+          (removeDir tmp)
 
 entryDirty : LintEntry -> Bool
 entryDirty e = e.dirty
@@ -503,6 +504,10 @@ storeOne cacheDir tmp stamp e =
 -- the result is judged by `fileExists`, not by makeDir's own status.
 ensureCacheDir : String -> <IO> Result String Unit
 ensureCacheDir cacheDir =
-  let _ = makeDir (dirname cacheDir)
-  let _ = makeDir cacheDir
+  bestEffort
+    "makeDir fails with EEXIST on an existing dir, which is success here; fileExists below judges"
+    (makeDir (dirname cacheDir))
+  bestEffort
+    "makeDir fails with EEXIST on an existing dir, which is success here; fileExists below judges"
+    (makeDir cacheDir)
   if fileExists cacheDir then Ok () else Err "cannot create \{cacheDir}"
