@@ -103,6 +103,7 @@ import support.util.{
 import support.ordmap.{
   OrdMap, omEmpty, omFromNames, omFromPairs, omHasKey, omInsert, omLookup
 }
+import frontend.ast.{SiblingPair}
 import frontend.visibility.{
   ExportView(..),
   directUnder,
@@ -4501,7 +4502,7 @@ evalModulesWith facts extraExterns preludeDecls0 modules0 = withFacts
 buildModInfos : EnvFrame (Value e) ->
   EnvFrame (Value e) ->
   ModExports (Value e) ->
-  List (String, String) ->
+  List SiblingPair ->
   List (String, ModExports (Value e)) ->
   List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
@@ -4587,7 +4588,7 @@ moduleExports view coreExports exportsMap globalFrame runtimeFrame localCells de
 -- cells and every other module is untouched.  Both module drivers call this, so
 -- they cannot disagree.
 export
-importsMapFor : List (String, String) ->
+importsMapFor : List SiblingPair ->
   String ->
   List (String, ModExports (Value e)) ->
   List (String, ModExports (Value e)) ->
@@ -4600,7 +4601,7 @@ importsMapFor siblings mid fulls exportsMap = match subjectOf siblings mid
 
 -- [fulls] extended with module [mid]'s full view when [mid] is a subject.
 export
-withSubjectFull : List (String, String) ->
+withSubjectFull : List SiblingPair ->
   String ->
   ModExports (Value e) ->
   List (String, ModExports (Value e)) ->

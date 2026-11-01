@@ -14,6 +14,7 @@
 -- predicates do not unwrap `DAttrib`; the list readers do.
 
 import frontend.ast.{
+  SiblingPair(..),
   variantName,
   letBindName,
   Loc(..),
@@ -40,6 +41,7 @@ import support.ordmap.{
   omFromPairs,
 }
 import support.util.{
+  anyList,
   contains,
   listLen,
   lookupAssoc,
@@ -309,10 +311,9 @@ pubUsePaths decls = map fst (pubUsesLocated decls)
 -- The `export import` decls of a module with their locs.
 export
 pubUsesLocated : List Decl -> List (UsePath, Loc)
-pubUsesLocated [] = []
-pubUsesLocated ((DUse True path loc) :: rest) =
-  (path, loc) :: pubUsesLocated rest
-pubUsesLocated (_ :: rest) = pubUsesLocated rest
+pubUsesLocated = filterMap (d => match d
+  DUse True path loc => Some (path, loc)
+  _ => None)
 
 -- The paths of a module's plain imports, the complement of `pubUsePaths`: what
 -- its full view carries beyond its exported one.  The full view carries a plain
@@ -320,10 +321,9 @@ pubUsesLocated (_ :: rest) = pubUsesLocated rest
 -- cannot rename, so a renamed member (`import m.{a as b}`) is not carried.
 export
 plainUsePaths : List Decl -> List UsePath
-plainUsePaths [] = []
-plainUsePaths ((DUse False path _) :: rest) =
-  unrenamedPath path :: plainUsePaths rest
-plainUsePaths (_ :: rest) = plainUsePaths rest
+plainUsePaths = filterMap (d => match d
+  DUse False path _ => Some (unrenamedPath path)
+  _ => None)
 
 unrenamedPath : UsePath -> UsePath
 unrenamedPath (UseGroup ns members) =
@@ -613,12 +613,13 @@ nsInterfaces = ExpNs {
     d => match d
       DInterface { name = n, ... } => [n]
       _ => [],
-  nsCarry =
-    path src =>
-      filterInSet
-        (omFromNames src.expInterfaces omEmpty)
-        (reexportOrigins path src),
+  nsCarry = carriedInterfaceNames,
 }
+
+-- The interface names a re-export of [src] under [path] carries.
+carriedInterfaceNames : UsePath -> ModuleExports -> List String
+carriedInterfaceNames path src =
+  filterInSet (omFromNames src.expInterfaces omEmpty) (reexportOrigins path src)
 
 export
 nsIfaceMethods : ExpNs (String, List String)
@@ -633,13 +634,7 @@ nsIfaceMethods = ExpNs {
     d => match d
       DInterface { name = n, methods, ... } => [(n, map ifaceMethodNm methods)]
       _ => [],
-  nsCarry =
-    path src =>
-      ifaceMethodPairs
-        src
-        (filterInSet
-          (omFromNames src.expInterfaces omEmpty)
-          (reexportOrigins path src)),
+  nsCarry = path src => ifaceMethodPairs src (carriedInterfaceNames path src),
 }
 
 -- The identity-carrying twin of `nsInterfaces`: each carried interface name
@@ -872,23 +867,21 @@ export
 viewOf : Option String -> String -> ExportView
 viewOf subject mid = if subject == Some mid then FullView else ExportedView
 
--- The graph's test siblings are a list of (sibling, subject) module-id pairs, one
--- per `*_test.mdk` module whose subject the graph loaded; the loader classifies
--- each by location.  A subject has at most one sibling, so either id finds its pair.
 -- The test subject of importer [mid], if [mid] is a sibling.
 export
-subjectOf : List (String, String) -> String -> Option String
-subjectOf siblings mid = lookupAssoc mid siblings
+subjectOf : List SiblingPair -> String -> Option String
+subjectOf siblings mid =
+  map (p => p.spSubject) (find (p => p.spSibling == mid) siblings)
 
 -- The view importer [importer] gets of module [mid] under [siblings].
 export
-viewFor : List (String, String) -> String -> String -> ExportView
+viewFor : List SiblingPair -> String -> String -> ExportView
 viewFor siblings importer mid = viewOf (subjectOf siblings importer) mid
 
 -- Whether some sibling in [siblings] sees [mid]'s full view.
 export
-isSubjectIn : List (String, String) -> String -> Bool
-isSubjectIn siblings mid = contains mid (map snd siblings)
+isSubjectIn : List SiblingPair -> String -> Bool
+isSubjectIn siblings mid = anyList (p => p.spSubject == mid) siblings
 
 -- One namespace's own-decl rule under [view], for one decl and for a decl list.
 ruleOf : ExportView -> ExpNs a -> Decl -> List a
@@ -965,6 +958,9 @@ buildSurface : ExportView ->
   ModuleExports
 buildSurface view coreExp known modId prog ifaceVals =
   let paths = carriedPaths view prog
+  let carried ns = carriedIn ns coreExp known paths
+  let both ns = directUnder view ns prog ++ carried ns
+  let originsOf names ns = map (n => (n, modId)) names ++ carried ns
   let values = directUnder view nsValues prog
   let types = directUnder view nsTypes prog
   let ctors = directUnder view nsCtors prog
@@ -972,38 +968,22 @@ buildSurface view coreExp known modId prog ifaceVals =
   let effects = directUnder view nsEffects prog
   indexExports ModuleExports {
     modId = modId,
-    expValues = values ++ ifaceVals ++ carriedIn nsValues coreExp known paths,
-    expTypes = types ++ carriedIn nsTypes coreExp known paths,
-    expAbstractData =
-      directUnder view nsAbstractData prog
-        ++ carriedIn nsAbstractData coreExp known paths,
-    expCtors = ctors ++ carriedIn nsCtors coreExp known paths,
-    expTypeCtors =
-      directUnder view nsTypeCtors prog
-        ++ carriedIn nsTypeCtors coreExp known paths,
-    expFieldOwners =
-      directUnder view nsFieldOwners prog
-        ++ carriedIn nsFieldOwners coreExp known paths,
-    expInterfaces = ifaces ++ carriedIn nsInterfaces coreExp known paths,
-    expIfaceMethods =
-      directUnder view nsIfaceMethods prog
-        ++ carriedIn nsIfaceMethods coreExp known paths,
-    expIfaceOrigins =
-      map (n => (n, modId)) ifaces
-        ++ carriedIn nsIfaceOrigins coreExp known paths,
-    expTypeOrigins =
-      map (n => (n, modId)) types
-        ++ carriedIn nsTypeOrigins coreExp known paths,
-    expCtorOrigins =
-      map (n => (n, modId)) ctors
-        ++ carriedIn nsCtorOrigins coreExp known paths,
+    expValues = values ++ ifaceVals ++ carried nsValues,
+    expTypes = types ++ carried nsTypes,
+    expAbstractData = both nsAbstractData,
+    expCtors = ctors ++ carried nsCtors,
+    expTypeCtors = both nsTypeCtors,
+    expFieldOwners = both nsFieldOwners,
+    expInterfaces = ifaces ++ carried nsInterfaces,
+    expIfaceMethods = both nsIfaceMethods,
+    expIfaceOrigins = originsOf ifaces nsIfaceOrigins,
+    expTypeOrigins = originsOf types nsTypeOrigins,
+    expCtorOrigins = originsOf ctors nsCtorOrigins,
     expValueOrigins =
       map (n => (n, (modId, n))) (values ++ ifaceVals)
-        ++ carriedIn nsValueOrigins coreExp known paths,
-    expEffects = effects ++ carriedIn nsEffects coreExp known paths,
-    expEffectOrigins =
-      map (n => (n, modId)) effects
-        ++ carriedIn nsEffectOrigins coreExp known paths,
+        ++ carried nsValueOrigins,
+    expEffects = effects ++ carried nsEffects,
+    expEffectOrigins = originsOf effects nsEffectOrigins,
     expNewtypeCtors = directUnder view nsNewtypeCtors prog,
     expAbstractCtors = directUnder view nsAbstractCtors prog,
     nameSet = omEmpty,

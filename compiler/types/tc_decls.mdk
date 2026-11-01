@@ -200,6 +200,8 @@ import support.ordmap.{
   omKeys,
   omLookup,
   omMapValues,
+  omRestrict,
+  restrictedPairs,
   OrdMap,
 }
 import types.effect_domain.{Param(..)}
@@ -219,6 +221,7 @@ import support.util.{
 }
 import list.{elemIndex, findMap, head}
 import types.registry.{spFloor}
+import frontend.ast.{SiblingPair(..)}
 import frontend.visibility.{
   ExportView(..),
   useModId,
@@ -2382,7 +2385,7 @@ implHeadNormalDecl _ d = d
 -- keyed by declaration identity, so a head expands with the aliases of the
 -- module that wrote it.
 export
-stampGraphDecls : List (String, String) ->
+stampGraphDecls : List SiblingPair ->
   List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
@@ -2415,18 +2418,16 @@ declEnvRowsFrom gctx k ((mid, decls) :: rest) =
 
 -- [rows] with each test subject's row naming its sibling's ordinal
 -- (`declEnvSiblingSees`).  A pair whose sibling has no row changes nothing.
-withSiblingOrd : List (String, String) ->
-  List DeclEnvModule ->
-  List DeclEnvModule
+withSiblingOrd : List SiblingPair -> List DeclEnvModule -> List DeclEnvModule
 withSiblingOrd [] rows = rows
 withSiblingOrd siblings rows =
   let ords = omFromPairs (map (m => (m.demId, m.demOrd)) rows) omEmpty
   let siblingOf =
-    omFromPairs (map ((sib, subj) => (subj, sib)) siblings) omEmpty
+    omFromPairs (map (p => (p.spSubject, p.spSibling)) siblings) omEmpty
   map
     (m => match omLookup m.demId siblingOf
       Some sib => match omLookup sib ords
-        Some ord => { m | demSiblingOrd = ord }
+        Some ord => { m | demSiblingOrd = Some ord }
         None => m
       None => m)
     rows
@@ -2684,13 +2685,6 @@ topFnNamesUnder view decls =
   let fns = namesToSet (declTopFnNames decls) omEmpty
   filterList (n => omHasKey n fns) (directUnder view nsValues decls)
 
--- The schemes [table] holds for [names], in their order, skipping a name it lacks.
-pickSchemes : List String -> OrdMap Scheme -> List (String, Scheme)
-pickSchemes [] _ = []
-pickSchemes (n :: ns) table = match omLookup n table
-  Some s => (n, s) :: pickSchemes ns table
-  None => pickSchemes ns table
-
 -- The ordinary winner and standalone alternative travel together through
 -- import selection, aliases, re-exports, and graph memoization.
 export
@@ -2754,14 +2748,7 @@ moduleBindingsUnder : ExportView ->
   ModuleBindings ->
   List (String, ExportBinding)
 moduleBindingsUnder view fns prog bindings =
-  let standalones =
-    omFromPairs
-      (flatMap
-        (name => match omLookup name bindings.mbStandaloneSchemes
-          Some scheme => [(name, scheme)]
-          None => [])
-        fns)
-      omEmpty
+  let standalones = omRestrict fns bindings.mbStandaloneSchemes
   let externs = omFromNames (map (e => e.edName) (externDecls prog)) omEmpty
   map
     ((name, binding) => (
@@ -2770,7 +2757,7 @@ moduleBindingsUnder view fns prog bindings =
     ))
     (tagModuleExports
       standalones
-      (pickSchemes
+      (restrictedPairs
         (valueNamesUnder view prog)
         (omFromPairs (reverseL bindings.mbSchemes) omEmpty)))
 

@@ -140,6 +140,7 @@ import frontend.ast.{
   EvId(..),
   EvTable,
 }
+import frontend.ast.{SiblingPair(..)}
 import frontend.visibility.{
   ModuleExports(..),
   useModId,
@@ -293,11 +294,10 @@ mangleUnitsEv : EvTable ->
   (List Decl, List (String, List Decl), EvTable, SymbolOrigins)
 mangleUnitsEv = mangleUnitsEvFor []
 
--- `mangleUnitsEv` for a graph whose (test sibling, subject) pairs are
--- [siblings]: each sibling's unit reads its subject's full view, every other
+-- `mangleUnitsEv` for a graph whose test sibling pairs are [siblings]: each sibling's unit reads its subject's full view, every other
 -- unit the exported ones.
 export
-mangleUnitsEvFor : List (String, String) ->
+mangleUnitsEvFor : List SiblingPair ->
   EvTable ->
   List Decl ->
   List (String, List Decl) ->
@@ -366,12 +366,13 @@ exportsPerUnitOf viewOfUnit coreDecls allUnits surfaces =
 siblingUnitMaps : List Decl ->
   List (String, List Decl) ->
   List (String, ModuleExports) ->
-  (String, String) ->
+  SiblingPair ->
   (String, ExportMaps)
-siblingUnitMaps coreDecls allUnits surfaces (sib, subj) =
+siblingUnitMaps coreDecls allUnits surfaces pair =
+  let subj = pair.spSubject
   let full = fullSurfaces subj allUnits surfaces
   (
-    sib,
+    pair.spSibling,
     (
       exportsPerUnitOf (viewOf (Some subj)) coreDecls allUnits full,
       ctorExportsFrom full,
@@ -387,9 +388,7 @@ fullSurfaces : String ->
   List (String, ModuleExports) ->
   List (String, ModuleExports)
 fullSurfaces subj allUnits surfaces =
-  let coreExp = match lookupAssoc "core" allUnits
-    Some coreDecls => coreExports coreDecls
-    None => coreExports []
+  let coreExp = coreExportsOf allUnits
   let known = omFromPairs (reverseL surfaces) omEmpty
   map (fullSurfaceOf subj coreExp known allUnits) surfaces
 
@@ -533,7 +532,7 @@ mangleRoute _ (r@(RScalar _)) = r
 -- [siblings] are the graph's (test sibling, subject) pairs: a sibling's unit binds
 -- its subject's constructors through the full view, as `mangleUnitsEvFor` does.
 export
-mangleCtorCollisions : List (String, String) ->
+mangleCtorCollisions : List SiblingPair ->
   List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
@@ -547,8 +546,10 @@ mangleCtorCollisions siblings coreDecls modules =
     let ctorExportsPerUnit = ctorExportsFrom surfaces
     let siblingCtors =
       map
-        ((sib, subj) =>
-          (sib, ctorExportsFrom (fullSurfaces subj allUnits surfaces)))
+        (p => (
+          p.spSibling,
+          ctorExportsFrom (fullSurfaces p.spSubject allUnits surfaces),
+        ))
         siblings
     let coreOut =
       mangleCtorUnitU collided ctorExportsPerUnit ("core", coreDecls)
@@ -566,7 +567,7 @@ mangleCtorCollisions siblings coreDecls modules =
 -- and every caller that needs the renamed decls back (not just a renamed env)
 -- wraps its result.
 export
-mangleCtorCollisionsPair : List (String, String) ->
+mangleCtorCollisionsPair : List SiblingPair ->
   (List Decl, List (String, List Decl)) ->
   (List Decl, List (String, List Decl))
 mangleCtorCollisionsPair siblings (coreDecls, modules) =
@@ -661,11 +662,13 @@ renameKeyCollides collided (n, _) = omHasKey n collided
 -- bound ones (`keepBoundMethods`), so a re-export carries those as resolve's
 -- surface would once it has them.
 unitSurfaces : List (String, List Decl) -> List (String, ModuleExports)
-unitSurfaces units =
-  let coreExp = match lookupAssoc "core" units
-    Some coreDecls => coreExports coreDecls
-    None => coreExports []
-  surfacesGo coreExp omEmpty units
+unitSurfaces units = surfacesGo (coreExportsOf units) omEmpty units
+
+-- The prelude's surface among [units]; an empty one when no unit is named "core".
+coreExportsOf : List (String, List Decl) -> ModuleExports
+coreExportsOf units = match lookupAssoc "core" units
+  Some coreDecls => coreExports coreDecls
+  None => coreExports []
 
 surfacesGo : ModuleExports ->
   OrdMap ModuleExports ->

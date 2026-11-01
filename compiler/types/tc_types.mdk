@@ -7,6 +7,7 @@
 
 import frontend.ast.{
   BinderId(..),
+  SiblingPair(..),
   Ty(..),
   TyConOrigin(..),
   Ident(..),
@@ -371,7 +372,7 @@ public export data DeclEnvModule = DeclEnvModule {
   demDecls : List Decl,
   demPubDecls : List Decl,  -- A-3.2b (#1512): `publicDataDecls demDecls`, MEMOIZED — see `declEnvRowVisible`
   demKindEntries : List (TabKey, List Kind),  -- A-3.2b slice 2 (#1512): the KIND-public projection's entries, MEMOIZED — see `declEnvRowKindEntries`
-  demSiblingOrd : Int,  -- the ordinal of this row's test sibling, which sees every decl of it; `0 - 1` for none
+  demSiblingOrd : Option Int,  -- the ordinal of this row's test sibling, which sees every decl of it
 }
 
 public export data DeclEnvs = DeclEnvs {
@@ -957,7 +958,7 @@ public export data TcConfig = TcConfig {
   tcStdlibOwned : OrdMap Unit,
   tcFlatEntryIsStdlib : Bool,
   tcKey : String,
-  tcSibling : List (String, String),
+  tcSibling : List SiblingPair,
 }
 
 -- The trace gates and buffers a test builds before a drive and reads after it.
@@ -980,9 +981,9 @@ public export data TraceSink = TraceSink {
 -- module need not import `types.target_profile`.  [diPreludeKey] is the desugar-cache
 -- generation pair of the two prelude trees the drive is handed, when its driver
 -- knows it: the tree arm continues from the prelude's shipped trees only under it.
--- [diSibling] is the (test sibling, subject) module-id pair when the driver's
--- loader classified the entry as its subject's sibling: that one importer sees
--- the subject's full view (`frontend.visibility.viewOf`).
+-- [diSibling] holds one pair per module the driver's loader classified as its
+-- subject's test sibling: that importer sees the subject's full view
+-- (`frontend.visibility.viewOf`).
 public export data DriveInputs = DriveInputs {
   diExecutedMainDriver : Option EntryKey,
   diManifestRequests : List ManifestSelector,
@@ -992,7 +993,7 @@ public export data DriveInputs = DriveInputs {
   diIoJoinGrants : List (String, EffParamTy),
   diProfileName : String,
   diPreludeKey : Option (Int, Int),
-  diSibling : List (String, String),
+  diSibling : List SiblingPair,
 }
 
 -- What one graph drive is handed besides its output selection: [daValueMain] is the

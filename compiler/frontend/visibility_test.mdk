@@ -250,13 +250,13 @@ test "the full view holds what the exported view withholds" = expectEach [
   (
     "the newtype's constructor, which `Meters(..)` binds beside the type",
     expectEqual
-      (1, 2)
+      (["Meters"], ["Meters", "Meters"])
       (
-        length
+        boundNames
           (expandMemberNames
             (subjectExports ExportedView)
             (UseMember "Meters" True noLoc None)),
-        length
+        boundNames
           (expandMemberNames
             (subjectExports FullView)
             (UseMember "Meters" True noLoc None)),
@@ -327,3 +327,7 @@ member n = UseMember n False noLoc None
 
 noLoc : Loc
 noLoc = Loc "" 0 0 0 0
+
+-- The names an expanded member list binds, in order.
+boundNames : List (String, String, Loc) -> List String
+boundNames = map ((name, _, _) => name)

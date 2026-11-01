@@ -1,5 +1,5 @@
 # META
-source_lines=872
+source_lines=870
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR evaluator — STAGE2-DESIGN §2.1's "trivial Core-IR tree-walker" that
@@ -30,9 +30,7 @@ stages=DESUGAR,MARK
 -- on the typed lowering path.
 
 import frontend.visibility.{ExportView(..)}
-import frontend.ast.{
-  Lit(..), Pat(..), Addr(..), Route(..), Decl, Loc(..), noBinderId
-}
+import frontend.ast.{Lit(..), Pat(..), Addr(..), Decl, Loc(..), noBinderId}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
@@ -876,7 +874,7 @@ cevalModulesOutputFacts facts preludeDecls modules = withFacts facts (_ =>
   readOutput ())
 # DESUGAR
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ExportView" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Decl" false) (mem "Loc" true) (mem "noBinderId" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Decl" false) (mem "Loc" true) (mem "noBinderId" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "lowerGroupsWith" false) (mem "lowerImplsWithFacts" false) (mem "instanceReqCounts" false) (mem "declaredMethodArities" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "emptyFacts" false) (mem "withFacts" false))))
@@ -1090,7 +1088,7 @@ cevalModulesOutputFacts facts preludeDecls modules = withFacts facts (_ =>
 (DFunDef false "cevalModulesOutputFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoExpr (EApp (EVar "resetOutput") (ELit LUnit))) (DoLet false false (PVar "binds") (EApp (EApp (EApp (EVar "cevalModules") (EVar "facts")) (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "cRunMainForEffect") (EVar "binds"))) (DoExpr (EApp (EVar "readOutput") (ELit LUnit)))))))
 # MARK
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ExportView" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Decl" false) (mem "Loc" true) (mem "noBinderId" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Decl" false) (mem "Loc" true) (mem "noBinderId" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "lowerGroupsWith" false) (mem "lowerImplsWithFacts" false) (mem "instanceReqCounts" false) (mem "declaredMethodArities" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "emptyFacts" false) (mem "withFacts" false))))

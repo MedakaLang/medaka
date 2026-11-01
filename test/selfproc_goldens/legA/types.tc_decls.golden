@@ -142,7 +142,6 @@ paramRowAtomOccs : GraphCtx -> String -> Ty -> List (List Atom)
 paramRowAtomsFor : GraphCtx -> String -> List String -> List EffAtomTy -> List (List Atom)
 paramRowAtomsOf : ModuleCtx -> TabKey -> Option (List (List Atom))
 pickNumLitRow : IfaceRef -> String -> List MethodSchemeRow -> Option MethodSchemeRow
-pickSchemes : List String -> Map String Scheme -> List (String, Scheme)
 privateModuleExports : List Decl -> ModuleBindings -> List (String, ExportBinding) -> List (String, ExportBinding)
 pubTopFnNames : List Decl -> List String
 publicModuleExports : List Decl -> ModuleBindings -> List (String, ExportBinding)
@@ -182,7 +181,7 @@ sigToSchemeTvsIn : ModuleCtx -> List (String, List Kind) -> Ty -> (Scheme, List 
 sigTyVarNames : Ty -> List String -> List String -> List String
 sigVarsFor : ModuleCtx -> Ty -> List String -> SigVars
 sigVarsForWith : ModuleCtx -> Ty -> List String -> List (String, Param) -> SigVars
-stampGraphDecls : List (String, String) -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+stampGraphDecls : List SiblingPair -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 tabKeyModule : TabKey -> Option String
 tagModuleExports : Map String Scheme -> List (String, Scheme) -> List (String, ExportBinding)
 takeUntilInclusiveS : String -> List String -> List String
@@ -194,4 +193,4 @@ tyConNamesInTy : Ty -> List String
 tyVarNamesWithConstraints : Ty -> List String
 variantIdentRow : String -> TyConOrigin -> Variant -> List (String, String, Ident)
 withDeclParamKinds : ModuleCtx -> List Decl -> (Unit -> a) -> a
-withSiblingOrd : List (String, String) -> List DeclEnvModule -> List DeclEnvModule
+withSiblingOrd : List SiblingPair -> List DeclEnvModule -> List DeclEnvModule

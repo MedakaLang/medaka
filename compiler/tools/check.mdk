@@ -24,6 +24,7 @@
 -- batch/modules harnesses.
 
 import frontend.ast.{Decl}
+import frontend.ast.{SiblingPair}
 import frontend.parser.{parse}
 import frontend.parse_cache.{parsePrelude}
 import frontend.desugar.{desugar}
@@ -192,7 +193,7 @@ checkModulesReport exWarns perMod =
 export
 entryExhaust : List Decl ->
   List Decl ->
-  List (String, String) ->
+  List SiblingPair ->
   List (String, List Decl) ->
   String
 entryExhaust rtD coreD sibling mods =

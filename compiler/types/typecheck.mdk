@@ -1527,21 +1527,17 @@ coreRenameScheme coreV m = match useMemberAlias m
 -- `coreV` is consulted ONLY here, on `DUse True`: `importSeed` keeps taking the plain
 -- depEnv, so a plain `import core.{…}` still seeds nothing (its names are already in
 -- baseSeed — seeding them twice would only add duplicate assoc entries).
-reexportSeed : List (String, a) ->
+--
+-- [pathsOf] picks the use paths that bind: `pubUsePaths` for a module's own
+-- re-exports, `plainUsePaths` for the plain imports its test sibling sees as the
+-- module's own names (`frontend.visibility.FullView`).
+reexportSeed : (List Decl -> List UsePath) ->
+  List (String, a) ->
   List Decl ->
   List (String, List (String, a)) ->
   List (String, a)
-reexportSeed coreV decls depEnv =
-  flatMap (reexportSeedOf coreV depEnv) (pubUsePaths decls)
-
--- The (key, scheme) pairs a module's plain imports bind, which its test sibling
--- sees as the module's own names (`frontend.visibility.FullView`).
-importedSeed : List (String, a) ->
-  List Decl ->
-  List (String, List (String, a)) ->
-  List (String, a)
-importedSeed coreV decls depEnv =
-  flatMap (reexportSeedOf coreV depEnv) (plainUsePaths decls)
+reexportSeed pathsOf coreV decls depEnv =
+  flatMap (reexportSeedOf coreV depEnv) (pathsOf decls)
 
 reexportSeedOf : List (String, a) ->
   List (String, List (String, a)) ->
@@ -1610,9 +1606,10 @@ workModules plan serve (depEnv, privEnv) accData accAll done prev ((mid, prog) :
     plan
     serve2
     (
-      (mid, own ++ reexportSeed plan.fpCoreV prog depEnv) :: depEnv,
+      (mid, own ++ reexportSeed pubUsePaths plan.fpCoreV prog depEnv) :: depEnv,
       if isSubject prev mid then
-        (mid, priv ++ importedSeed plan.fpCoreV prog depEnv) :: privEnv
+        (mid, priv ++ reexportSeed plainUsePaths plan.fpCoreV prog depEnv)
+          :: privEnv
       else
         privEnv,
     )

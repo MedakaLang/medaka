@@ -57,6 +57,7 @@ import driver.build_cmd.{
 }
 import support.util.{
   reverseL,
+  testFileSuffix,
   joinNl,
   joinWith,
   splitNl,
@@ -154,6 +155,7 @@ import driver.front_gate.{
   moduleLoadErrText,
   ppParseError,
 }
+import frontend.ast.{SiblingPair}
 import driver.diagnostics.{
   desugaredModPairs,
   CheckDrive(..),
@@ -1178,7 +1180,7 @@ checkProjectReport : String ->
   String ->
   String ->
   String ->
-  List (String, String) ->
+  List SiblingPair ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   FrontOutput CheckDump ->
@@ -3518,7 +3520,7 @@ runDocLibraryTargets outDir targets =
       prelude.pnRuntimeSrc
       prelude.pnCoreSrc
       stdlibDir
-      (filter (t => not (endsWith "_test.mdk" t)) targets)
+      (filter (t => not (endsWith testFileSuffix t)) targets)
     -- `rebucketLibraryImpls` runs at the `List ModuleDoc` level, after
     -- every module is computed and before ANY output is written, so the
     -- pages, the index and the inventory all read the same (already

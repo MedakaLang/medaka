@@ -11,6 +11,7 @@ import types.route_key.{
   EvIndex, entriesAboveSegment, evidenceLookup, evIndexOf, evIndexSlotCount
 }
 import frontend.ast.{Decl, EvEntry(..), EvId(..)}
+import frontend.ast.{SiblingPair(..)}
 import frontend.ast_codec.{declsSExp, evEntriesSExp}
 import eval.eval.{evalModulesOutputFacts}
 import types.program_facts.{factsOfChecked}
@@ -1134,7 +1135,8 @@ viewWarmSrc subject = joinNl ["import \{subject}.{tick}", "warm = tick"]
 viewUserSrc : String -> String
 viewUserSrc subject = joinNl ["import \{subject}.{step}", "entry = step 1"]
 
--- One keyed drive of [subject] and an entry [entry] whose source is [entryText];
+-- One keyed drive of [subject] and an entry [entry], whose source is the warm
+-- importer's when its name ends `_warm` and the private-name user's otherwise;
 -- [sibling] names the entry the subject's test sibling.  The entry's error codes
 -- and the number of modules served.
 viewDrive : String -> String -> String -> Bool -> (List String, Int)
@@ -1150,14 +1152,21 @@ viewDrive chainKey subject entry sibling =
     ),
   ]
   let (errs, served) =
-    graphViewDrive chainKey (if sibling then [(entry, subject)] else []) mods
+    graphViewDrive
+      chainKey
+      (if sibling then [sibPair entry subject] else [])
+      mods
   (filter (line => S.startsWith "\{entry} error" line) errs, served)
 
+-- The pair that makes module [sib] the test sibling of module [subj].
+sibPair : String -> String -> SiblingPair
+sibPair sib subj = SiblingPair { spSibling = sib, spSubject = subj }
+
 -- One keyed drive of [mods], (module id, source) in dependency order, whose
--- (test sibling, subject) pairs are [siblings]: every module's error codes and
--- the number of modules served.
+-- test sibling pairs are [siblings]: every module's error codes and the number
+-- of modules served.
 graphViewDrive : String ->
-  List (String, String) ->
+  List SiblingPair ->
   List (String, String) ->
   (List String, Int)
 graphViewDrive chainKey siblings mods =
@@ -1211,7 +1220,7 @@ test "one drive gives a served subject's sibling the private view and its other 
   let (errs, served) =
     graphViewDrive
       "vg-k"
-      [("vg_s_test", "vg_s")]
+      [sibPair "vg_s_test" "vg_s"]
       [
         ("vg_s", viewSubjectSrc),
         ("vg_s_test", viewUserSrc "vg_s"),
@@ -1229,7 +1238,7 @@ test "two siblings of two subjects in one drive each see only their own subject"
   let (errs, _) =
     graphViewDrive
       "vt-k"
-      [("vt_a_test", "vt_a"), ("vt_b_test", "vt_b")]
+      [sibPair "vt_a_test" "vt_a", sibPair "vt_b_test" "vt_b"]
       [
         ("vt_a", viewSubjectSrc),
         ("vt_a_test", viewUserSrc "vt_a"),

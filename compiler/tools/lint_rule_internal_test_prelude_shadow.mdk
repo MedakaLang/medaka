@@ -3,7 +3,7 @@
 import frontend.ast.{Loc(..), Decl(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
-import support.util.{contains, endsWith}
+import support.util.{contains, endsWith, testFileSuffix}
 import tools.lint_core.{
   Category(..),
   FileFacts(..),
@@ -70,7 +70,7 @@ ruleTestPreludeShadow : StdlibIndex ->
   List Decl ->
   List Finding
 ruleTestPreludeShadow _ path _ pos prog
-  | not (endsWith "_test.mdk" path) = []
+  | not (endsWith testFileSuffix path) = []
   | otherwise =
     flatMap
       preludeShadowHit

@@ -4,6 +4,7 @@ buildSurface : ExportView -> ModuleExports -> Map String ModuleExports -> String
 carriedEffectOrigins : List (String, String) -> List (String, String) -> List (String, String)
 carriedIfaceVals : ModuleExports -> List String -> List String
 carriedIn : ExpNs a -> ModuleExports -> Map String ModuleExports -> List UsePath -> List a
+carriedInterfaceNames : UsePath -> ModuleExports -> List String
 carriedOnlyBy : ExpNs String -> ModuleExports -> ModuleExports -> UsePath -> List String
 carriedOriginsFrom : UsePath -> ModuleExports -> List (String, String) -> List (String, String)
 carriedPaths : ExportView -> List Decl -> List UsePath
@@ -36,7 +37,7 @@ indexExports : ModuleExports -> ModuleExports
 interfaceList : List Decl -> List (String, List String)
 isNewtypeExport : String -> ModuleExports -> Bool
 isPubExp : ModuleExports -> String -> Bool
-isSubjectIn : List (String, String) -> String -> Bool
+isSubjectIn : List SiblingPair -> String -> Bool
 localsExportedFrom : List String -> List (String, String) -> List String
 newtypeTypeOfCtor : String -> ModuleExports -> Option String
 noCarry : UsePath -> ModuleExports -> List a
@@ -69,7 +70,7 @@ reexportBindings : UsePath -> ModuleExports -> List (String, String)
 reexportOrigins : UsePath -> ModuleExports -> List String
 ruleOf : ExportView -> ExpNs a -> Decl -> List a
 scanDecls : (Decl -> List a) -> List Decl -> List a
-subjectOf : List (String, String) -> String -> Option String
+subjectOf : List SiblingPair -> String -> Option String
 typeCtorsAllOf : List Decl -> List (String, List String)
 typeCtorsOf : String -> ModuleExports -> Option (List String)
 typeOfCtor : String -> ModuleExports -> Option String
@@ -81,6 +82,6 @@ valueDeclOf : ModuleExports -> Map String (String, String) -> String -> (String,
 valueDeclsOf : ModuleExports -> Map String (String, String)
 valueNamesUnder : ExportView -> List Decl -> List String
 variantFieldOwners : Variant -> List (String, String)
-viewFor : List (String, String) -> String -> String -> ExportView
+viewFor : List SiblingPair -> String -> String -> ExportView
 viewOf : Option String -> String -> ExportView
 withSubjectView : ModuleExports -> Map String ModuleExports -> Option (String, List Decl) -> Map String ModuleExports

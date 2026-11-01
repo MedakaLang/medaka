@@ -611,7 +611,7 @@ declEnvModule gctx k mid decls = DeclEnvModule {
   demPubDecls = publicDataDecls decls,
   demKindEntries =
     declEnvKindEntries gctx (filterList kindPublicDataDecl decls),
-  demSiblingOrd = 0 - 1,
+  demSiblingOrd = None,
 }
 
 -- Whether the reader at ordinal [cur] is row [m]'s test sibling, which sees the row
@@ -620,7 +620,7 @@ declEnvModule gctx k mid decls = DeclEnvModule {
 export
 declEnvSiblingSees : Int -> DeclEnvModule -> Bool
 declEnvSiblingSees cur m =
-  cur == m.demSiblingOrd && declEnvVisibleAt cur m.demOrd
+  m.demSiblingOrd == Some cur && declEnvVisibleAt cur m.demOrd
 
 -- The graph's decls in ordinal order.  `++` is associative, so this is the same
 -- LIST VALUE the two drivers built as `coreDecls ++ flatMap snd modules` — that

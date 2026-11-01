@@ -53,7 +53,12 @@ import frontend.resolve.{
   hintableUnboundNames,
   exportedValueNames,
 }
-import frontend.visibility.{ModuleExports, coreExports, useModuleIds}
+import frontend.ast.{SiblingPair(..)}
+import frontend.visibility.{
+  ModuleExports,
+  coreExports,
+  useModuleIds,
+}
 import list.{drop, last}
 import support.ordmap.{
   OrdMap,
@@ -1787,7 +1792,9 @@ projectEntryAnalysisOr kept cacheRef parseCacheRef read entry roots runtimeSrc c
       None =>
         Some
           (checkModulesPartialK
-            (driveInputsFor !selectedProfile False [])
+            { driveInputsFor !selectedProfile False [] |
+              diSibling = siblingPairsOf roots mods,
+            }
             preludeKey
             runtimeP
             coreP
@@ -2065,7 +2072,7 @@ stepKeysFor NoSteps _ = []
 -- whose analyze serves each module's raw-tree diagnostics from `passCacheRef`
 -- (`foldServeKey`), `None` for one that folds every module afresh.
 typecheckDiagsFold : DriveOutputs ->
-  List (String, String) ->
+  List SiblingPair ->
   Option String ->
   List Decl ->
   List Decl ->
@@ -2140,7 +2147,7 @@ foldServeKey _ _ _ = None
 resolvedBuckets : (List String -> <e> List (String, List String)) ->
   Bool ->
   List String ->
-  List (String, String) ->
+  List SiblingPair ->
   Option (Int, Int) ->
   String ->
   List Decl ->
@@ -3409,13 +3416,13 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
         _ => cjGraphParts target stdlibDir mods front.foDiags
       (cj, hasErr, front.foDriven)
 
--- The graph's (test sibling, subject) module-id pairs: every module, wherever it
+-- The graph's test sibling pairs: every module, wherever it
 -- sits in the graph, whose file is the test sibling of a module the graph loaded
 -- (`siblingSubjectId`, with the dependency roots the loader read for it).
 export
 siblingPairsOf : List String ->
   List (String, String, List Decl) ->
-  <IO> List (String, String)
+  <IO> List SiblingPair
 siblingPairsOf roots mods =
   flatMap ((mid, path, _) => siblingPairFor roots mods mid path) mods
 
@@ -3427,7 +3434,7 @@ export
 siblingPairsAt : String ->
   List String ->
   List (String, String, List Decl) ->
-  <IO> List (String, String)
+  <IO> List SiblingPair
 siblingPairsAt path roots mods = match last mods
   None => []
   Some (entry, _, _) =>
@@ -3442,14 +3449,14 @@ siblingPairFor : List String ->
   List (String, String, List Decl) ->
   String ->
   String ->
-  <IO> List (String, String)
+  <IO> List SiblingPair
 siblingPairFor roots mods mid path =
   if endsWith "_test.mdk" (canonicalizePath path) then
     let deps = readDeps (findProjectRootOrSelf (dirOf path))
     match siblingSubjectId deps roots path
       Some subject =>
         if anyList ((m, _, _) => m == subject) mods then
-          [(mid, subject)]
+          [SiblingPair { spSibling = mid, spSubject = subject }]
         else
           []
       None => []

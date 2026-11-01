@@ -97,6 +97,7 @@ import types.target_profile.{selectedProfile}
 import driver.main_autoprint.{valueMainCandidate}
 import types.private_mangle.{mangleCtorCollisionsPair}
 import types.program_facts.{ProgramFacts, factsOfElab, withFacts, withSibling}
+import frontend.ast.{SiblingPair}
 import frontend.marker.{declRefs}
 import eval.eval.{
   Value,
@@ -248,6 +249,7 @@ import driver.diagnostics.{
 export import support.util.{rootsOrDefault}
 import support.util.{
   listLen,
+  testFileSuffix,
   joinNl,
   isNonEmptyL,
   filterList,
@@ -406,7 +408,7 @@ reportTestLine =
     None
 
 -- A drive's inputs: keyed for the shipped trees when [coreDecls] are core's.
-testDriveInputs : List (String, String) -> List Decl -> DriveInputs
+testDriveInputs : List SiblingPair -> List Decl -> DriveInputs
 testDriveInputs sibling coreDecls =
   let held =
     withHeldPrelude coreDecls (driveInputsFor !selectedProfile False [])
@@ -571,7 +573,7 @@ typecheckExempt target userDecls tsrc
 -- rather than naming a root.
 isNewVehiclePath : String -> <IO> Bool
 isNewVehiclePath target =
-  if endsWith "_test.mdk" target then
+  if endsWith testFileSuffix target then
     let canon = canonicalizePath target
     hasVehicleSegment canon
       || underProjectTestDir canon
@@ -678,7 +680,7 @@ singleFileTypeErrors target tsrc rsrc csrc =
 -- (#1897).  An admitted graph is driven by [drive], and its per-module
 -- diagnostics are bucketed by the fold `check` uses.  The elaboration is `None`
 -- exactly when resolve rejected the graph, and the gate is then an error.
-gatedDrive : List (String, String) ->
+gatedDrive : List SiblingPair ->
   String ->
   String ->
   String ->
@@ -846,7 +848,7 @@ data DoctestTrees =
 -- so the filter cannot move a module's verdict.
 data Prepared =
   | PreparedPair TestPair
-  | PreparedInject (List (String, String)) String (List (String, String, List Decl)) (List Decl)
+  | PreparedInject (List SiblingPair) String (List (String, String, List Decl)) (List Decl)
 
 -- Load + elaborate, once, for an import-bearing target: the gate text (None when
 -- the module type-checks, or is exempt) beside the trees the three phases share.
@@ -958,48 +960,47 @@ elaborateFor : String ->
   Bool ->
   List Decl ->
   <IO> (Option TestReportError, Prepared)
-elaborateFor stdlibDir rsrc csrc _ roots _ mods True False _ =
+elaborateFor stdlibDir rsrc csrc target roots sources mods exempt hasDoctests synthDecls =
   let sibling = siblingPairsOf roots mods
-  let rawModules = desugaredModPairs mods
-  let (elaborated, _, _) = oneShotElab sibling rsrc csrc rawModules
-  (None, PreparedPair (pairOfElab sibling rsrc csrc rawModules elaborated))
-elaborateFor stdlibDir rsrc csrc target roots sources mods False False _ =
-  let sibling = siblingPairsOf roots mods
-  let rawModules = desugaredModPairs mods
-  let (gate, elaborated) =
-    gatedDrive
-      sibling
-      rsrc
-      csrc
-      (chainKeyOf target roots)
-      sources
-      mods
-      (oneShotElab sibling rsrc csrc)
-  (
-    gate,
-    PreparedPair
-      (option
-        unelaboratedTrees
-        (pairOfElab sibling rsrc csrc rawModules)
-        elaborated),
-  )
-elaborateFor stdlibDir rsrc csrc target roots sources mods exempt True synthDecls =
-  let sibling = siblingPairsOf roots mods
-  (
-    gateOfVerbatim
-      sibling
-      exempt
-      rsrc
-      csrc
-      (chainKeyOf target roots)
-      sources
-      mods,
-    PreparedInject sibling (chainKeyOf target roots) mods synthDecls,
-  )
+  if hasDoctests then
+    (
+      gateOfVerbatim
+        sibling
+        exempt
+        rsrc
+        csrc
+        (chainKeyOf target roots)
+        sources
+        mods,
+      PreparedInject sibling (chainKeyOf target roots) mods synthDecls,
+    )
+  else
+    let rawModules = desugaredModPairs mods
+    if exempt then
+      let (elaborated, _, _) = oneShotElab sibling rsrc csrc rawModules
+      (None, PreparedPair (pairOfElab sibling rsrc csrc rawModules elaborated))
+    else
+      let (gate, elaborated) =
+        gatedDrive
+          sibling
+          rsrc
+          csrc
+          (chainKeyOf target roots)
+          sources
+          mods
+          (oneShotElab sibling rsrc csrc)
+      (
+        gate,
+        PreparedPair
+          (option
+            unelaboratedTrees
+            (pairOfElab sibling rsrc csrc rawModules)
+            elaborated),
+      )
 
 -- The no-doctest arm's drive of [pairs].  It is the only drive of its
 -- invocation, so it is unkeyed and records nothing.
-oneShotElab : List (String, String) ->
+oneShotElab : List SiblingPair ->
   String ->
   String ->
   List (String, List Decl) ->
@@ -1015,7 +1016,7 @@ oneShotElab sibling rsrc csrc pairs =
     pairs
 
 -- The phases' trees: [modules] paired with their elaboration.
-pairOfElab : List (String, String) ->
+pairOfElab : List SiblingPair ->
   String ->
   String ->
   List (String, List Decl) ->
@@ -1041,7 +1042,7 @@ unelaboratedTrees =
 -- prelude generation and [chainKey]: a module before the entry that an earlier
 -- drive of the same graph recorded is served (`elaborateModulesChainReport`).  The
 -- cache keeps the interfaces of this graph's modules and no others.
-keyedElab : List (String, String) ->
+keyedElab : List SiblingPair ->
   String ->
   String ->
   String ->
@@ -1102,7 +1103,7 @@ exampleDiagLines perMod = match reverseL perMod
       errs
   [] => omEmpty
 
-forceInjected : List (String, String) ->
+forceInjected : List SiblingPair ->
   String ->
   String ->
   String ->
@@ -1120,7 +1121,7 @@ forceInjected sibling rsrc csrc chainKey mods synthDecls =
 -- The doctest-bearing gate: the no-doctest arm's, over the graph as written,
 -- which this invocation already loaded.  Its drive records what the injected
 -- elaboration serves.
-gateOfVerbatim : List (String, String) ->
+gateOfVerbatim : List SiblingPair ->
   Bool ->
   String ->
   String ->
@@ -4920,7 +4921,7 @@ checkTestMdkRoster root targets files =
     Err _ => True
     Ok (0, out, _) =>
       let tracked =
-        filterList (endsWith "_test.mdk") (filterList (/= "") (splitNl out))
+        filterList (endsWith testFileSuffix) (filterList (/= "") (splitNl out))
       let relFiles = map (stripRootPrefix root) files
       let missing = filterList (t => not (contains t relFiles)) tracked
       match missing
