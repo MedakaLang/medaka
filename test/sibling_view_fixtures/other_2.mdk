@@ -1,0 +1,5 @@
+-- Not the sibling: the withheld abstract constructor.
+import counter.{Counter(..), tick}
+
+main = match tick (Counter 1)
+  Counter n => println n

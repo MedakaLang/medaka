@@ -108,7 +108,7 @@ hadTypeErrors : DriveOutputs -> Bool
 identKeysByName : Map String (List String) -> List (String, Ident) -> Map String (List String)
 ifaceSuperCountOfRow : GraphCtx -> ImplRow -> (String, Int)
 importFormSchemes : List (String, List (String, a)) -> UsePath -> List (String, a) -> List (String, a)
-importSeed : GraphCtx -> List (String, a) -> List (String, String) -> List Decl -> List (String, List (String, a)) -> List (String, (Option String, a))
+importSeed : GraphCtx -> String -> List (String, a) -> List (String, String) -> List Decl -> List (String, List (String, a)) -> List (String, (Option String, a))
 importSupplierKey : String -> Map String (String, String) -> Map String (List String) -> String -> String
 importedBindingWinners : ModuleCtx -> List (String, (Option String, ExportBinding)) -> Map String Unit -> Map String Unit -> List (String, ExportBinding)
 ioJoinAtoms : List (String, Param) -> List (String, EffParamTy) -> List Atom
@@ -126,7 +126,6 @@ moduleSeedFor : ModuleCtx -> List (String, Scheme) -> List (String, ExportBindin
 moduleUserFnNames : List (String, List Decl) -> List String
 noteBuiltinExternNames : GraphCtx -> List Decl -> Unit
 ownContext : ModuleCtx -> String -> List VecObl
-pickSchemes : List String -> Map String Scheme -> List (String, Scheme)
 preludeArgPosDictNames : List Decl -> List Decl -> List String
 preludeMarkFactsOf : List Decl -> PreludeMarkFacts
 preludePreambleFor : GraphCtx -> Option (Int, Int) -> List Decl -> DeclEnvModule -> PreludePreamble
@@ -134,9 +133,8 @@ preludePreambleMemoRef : Ref (Option (((Int, Int), String), PreludePreamble))
 preludePreambleOf : GraphCtx -> List Decl -> DeclEnvModule -> PreludePreamble
 preludePreambleStore : GraphCtx -> (Int, Int) -> List Decl -> DeclEnvModule -> PreludePreamble
 preludeReturnPosDictNames : List Decl -> List Decl -> List String
-publicModuleExports : List Decl -> ModuleBindings -> List (String, ExportBinding)
 publishOwn : ModuleCtx -> List (String, Scheme) -> List (String, PubScheme)
-reexportSeed : List (String, a) -> List Decl -> List (String, List (String, a)) -> List (String, a)
+reexportSeed : (List Decl -> List UsePath) -> List (String, a) -> List Decl -> List (String, List (String, a)) -> List (String, a)
 reexportSeedOf : List (String, a) -> List (String, List (String, a)) -> UsePath -> List (String, a)
 reexportedMethodNames : List (String, List String) -> List Decl -> List String
 reexportedMethodsOf : List (String, List String) -> UsePath -> List String
@@ -153,10 +151,9 @@ setMainSchemeIfEntry : GraphCtx -> ModulePlace -> List (String, PubScheme) -> Un
 stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
 suppliedBy : Option String -> (String, a) -> (String, (Option String, a))
 synthesizedAdmissions : List (String, List String) -> List Decl -> List (String, String)
-tagModuleExports : Map String Scheme -> List (String, Scheme) -> List (String, ExportBinding)
 tcConfigOf : List (String, Param) -> DriveInputs -> TcConfig
 treeArmElab : DriveInputs -> List Decl -> Option PreludeElab
 treeArmHit : DriveInputs -> List Decl -> GraphCtx -> Option (PreludeElab, PreludeInterface)
 typeErrorLines : List String -> List String
 unitCarriesMangledFunDefs : String -> List (String, (List Pat, Expr)) -> Bool
-workModules : FoldPlan a b -> Option (ModuleServe a) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> List (String, a) -> ModuleCtx -> List (String, List Decl) -> (List (String, a), Option (ModuleServe a), ModuleCtx)
+workModules : FoldPlan a b -> Option (ModuleServe a) -> (List (String, List (String, ExportBinding)), List (String, List (String, ExportBinding))) -> List Decl -> List Decl -> List (String, a) -> ModuleCtx -> List (String, List Decl) -> (List (String, a), Option (ModuleServe a), ModuleCtx)

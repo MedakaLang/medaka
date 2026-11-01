@@ -1,0 +1,6 @@
+-- fixture for loader_test.mdk: a non-test dependency importing a test module
+import foo_test
+
+export
+value : Int
+value = 1

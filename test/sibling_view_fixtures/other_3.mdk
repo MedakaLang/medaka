@@ -1,0 +1,5 @@
+-- Not the sibling: a private type constructor.
+import ptype.{Hidden(..)}
+
+main = match Hidden 4
+  Hidden n => println n

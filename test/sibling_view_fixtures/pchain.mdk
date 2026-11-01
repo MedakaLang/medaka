@@ -1,0 +1,7 @@
+-- A subject whose sibling another test module imports.
+export
+tick : Int -> Int
+tick n = step n
+
+step : Int -> Int
+step n = n + 1

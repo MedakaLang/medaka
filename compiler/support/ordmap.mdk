@@ -75,6 +75,8 @@ export
 omRestrict : List String -> OrdMap a -> OrdMap a
 omRestrict ids m = omFromPairs (restrictedPairs ids m) omEmpty
 
+-- The entries of [m] for [ks], in the order of [ks], skipping a key it lacks.
+export
 restrictedPairs : List String -> OrdMap a -> List (String, a)
 restrictedPairs [] _ = []
 restrictedPairs (k :: ks) m = match omLookup k m

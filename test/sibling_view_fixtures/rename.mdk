@@ -1,0 +1,6 @@
+-- A subject that imports a name under another spelling.
+import list.{last as lst}
+
+export
+final : List Int -> Int
+final xs = optionOr 0 (lst xs)

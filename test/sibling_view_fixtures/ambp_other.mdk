@@ -1,0 +1,7 @@
+-- Not the sibling of `ambp`: `helper` is only `ambp_b`'s, so this builds and
+-- prints 3.  A child that took `ambp_test.mdk`'s privilege from the environment
+-- would see `ambp`'s private `helper` too and reject the call as ambiguous.
+import ambp.*
+import ambp_b.*
+
+main = println (helper 1)

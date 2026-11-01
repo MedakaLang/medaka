@@ -1,0 +1,4 @@
+-- Reads `bit`'s export alone: accepted as a sibling and as a plain importer.
+import bit.{tick}
+
+main = println (tick 1)

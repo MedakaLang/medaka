@@ -1,0 +1,14 @@
+-- Builds and matches its subject's private `Red` beside an import of `light`,
+-- whose public `Red` collides with it by name.  Accepted.
+import test.{expectEqual}
+import pclash.{Color(..), colorVal}
+import light.{Light, lightVal}
+
+test "the subject's constructor, not light's" =
+  expectEqual 105 (colorVal (Red 5))
+
+main =
+  let _ = println (colorVal (Red 5))
+  match Red 3
+    Red n => println n
+    Blue => println 0

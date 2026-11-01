@@ -10,7 +10,7 @@
 -- written.  A section is one interface valid under the joins it lists (the
 -- join is a section tag, not a key field), one line per section:
 --   (section (joins (<join> ...)) <interface>)   a join is a list of `atom`
---   (module-interface <field> x24)               `ModuleInterface`, field
+--   (module-interface <field> x26)               `ModuleInterface`, field
 --                                                order, less its key and
 --                                                its trees, which no file holds
 -- Every number in an interface is a plain integer: binder and evidence
@@ -69,7 +69,7 @@ public export data ModuleSection = ModuleSection {
 
 export
 moduleFormatVersion : Int
-moduleFormatVersion = 2
+moduleFormatVersion = 3
 
 fileTag : String
 fileTag = "medaka-module"
@@ -136,7 +136,7 @@ optionList (Some x) = SList [x]
 -- file's header carries the identity) and neither is `miTrees`: an interface file
 -- carries no trees.
 interfaceNode : ModuleInterface -> SExp
-interfaceNode (ModuleInterface _key _keyText serial row exports funNames dispatchIdx dataCtors ctorPop recordPop funSlots funSlotsQual declared declaredQual methodSlots methodSlotsQual schemeObls existentials patternAuth anyEx evTable binders topIds grants takers sticky view _trees) = tagged
+interfaceNode (ModuleInterface _key _keyText serial row exports private funNames dispatchIdx dataCtors ctorPop recordPop funSlots funSlotsQual declared declaredQual methodSlots methodSlotsQual schemeObls existentials patternAuth anyEx evTable binders topIds grants takers sticky view _trees) = tagged
   "module-interface"
   [
     intNode serial,
@@ -170,6 +170,7 @@ interfaceNode (ModuleInterface _key _keyText serial row exports funNames dispatc
     listSExp SAtom takers,
     listSExp (pairSExp SAtom diagNode) sticky,
     invocationViewSExp view,
+    listSExp (pairSExp SAtom exportNode) private,
   ]
 
 sectionLine : ModuleSection -> String
@@ -296,7 +297,7 @@ decEvTable path node =
     (decodeEvEntries (renderSExp node))
 
 decInterface : ModuleKey -> Reader ModuleInterface
-decInterface key path (SList [SAtom "module-interface", n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12, n13, n14, n15, n16, n17, n18, n19, n20, n21, n22, n23, n24, n25]) =
+decInterface key path (SList [SAtom "module-interface", n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12, n13, n14, n15, n16, n17, n18, n19, n20, n21, n22, n23, n24, n25, n26]) =
   do
     let p = at path "module-interface"
     serial <- atomInt (p 1) n1
@@ -356,12 +357,14 @@ decInterface key path (SList [SAtom "module-interface", n1, n2, n3, n4, n5, n6, 
     takers <- listOfSExp expectAtom (p 23) n23
     sticky <- listOfSExp (pairOfSExp expectAtom decDiag) (p 24) n24
     view <- nested invocationViewOfSExp (p 25) n25
+    private <- listOfSExp (pairOfSExp expectAtom decExport) (p 26) n26
     Ok ModuleInterface {
       miKey = key,
       miKeyText = moduleKeyText key,
       miSerial = serial,
       miRow = row,
       miExports = exports,
+      miPrivate = private,
       miFunNames = funNames,
       miDispatchIdx = dispatchIdx,
       miDataCtors = dataCtors,
@@ -386,7 +389,7 @@ decInterface key path (SList [SAtom "module-interface", n1, n2, n3, n4, n5, n6, 
       miInvocationView = view,
       miTrees = None,
     }
-decInterface _ path node = misfit path [("module-interface", 25)] node
+decInterface _ path node = misfit path [("module-interface", 26)] node
 
 decSection : ModuleKey -> Reader ModuleSection
 decSection key path (SList [SAtom "section", js, i]) = do

@@ -1,0 +1,5 @@
+-- A non-test module cannot reach the sibling's forging function, so it cannot
+-- forge a handle: R-TEST-MODULE-IMPORT.
+import handle_test.{forge}
+
+main = println 1

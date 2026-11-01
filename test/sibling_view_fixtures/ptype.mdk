@@ -1,0 +1,6 @@
+-- A private type: its constructor is in no importer's scope but its sibling's.
+data Hidden = Hidden Int
+
+export unwrap : Int -> Int
+unwrap n = match Hidden n
+  Hidden m => m

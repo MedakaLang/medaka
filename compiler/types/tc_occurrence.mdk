@@ -158,6 +158,7 @@ import types.tc_decls.{
   constraintIsMethodLevel,
   constraintVarNames,
   ifaceMethodSchemeRows,
+  importerDefiners,
   methodRowNumObservation,
 }
 import types.tc_solve_givens.{predicateSlotIds, predicateSlotIdsAt}
@@ -3063,7 +3064,11 @@ markDictNames : GraphCtx ->
 markDictNames gctx names coreDecls modules =
   dedup
     (names
-      ++ aliasDictNames gctx names (("core", coreDecls) :: modules) modules)
+      ++ aliasDictNames
+        (importerDefiners gctx)
+        names
+        (("core", coreDecls) :: modules)
+        modules)
 
 -- Mark one binding group's clauses (in the stored, newest-first order the map keeps)
 -- with the dict-name set as it stands when the schedule reaches the group.  A use
