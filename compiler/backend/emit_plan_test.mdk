@@ -45,7 +45,7 @@ import string.{
   contains, endsWith, lines, split, trimLeft, startsWith, words, join,
   sliceClamped
 }
-import list.{drop, sort, take, mapWithIndex, reverse}
+import list.{drop, sort, take, mapWithIndex, reverse, head}
 import frontend.ast.{
   Addr(..), Lit(..), Pat(..), Route(..), Decl(..), noDeclLoc, noBinderId,
   declBinderNames
@@ -325,6 +325,58 @@ withBackendCode file check =
   match readFile "\{medakaRoot}/compiler/backend/\{file}"
     Err e => fail "cannot read compiler/backend/\{file}: \{e}"
     Ok text => check (codeLinesOf text)
+
+-- Supplemental partial-name checks retain the earlier spelling-based refusals.
+-- They do not recognize renamed partial restorations.
+partialGroupNames : String -> List String
+partialGroupNames target =
+  if target == "llvm" then
+    ["distinctImplKeys :", "gatherGroup :"]
+  else
+    ["distinctImplKeys :", "gatherImplGroup :"]
+
+partialValueNames : List String
+partialValueNames = [
+  "scanFnValueUses",
+  "scanImplValueUses",
+  "scanImplEntryValueUses",
+  "scanBindValueUses",
+  "scanExprValueUses",
+  "scanArmValueUses",
+  "scanGuardValueUses",
+  "scanBlockValueUses",
+]
+
+partialNameFindings : List String -> String -> List String
+partialNameFindings names text = filter (name => contains name text) names
+
+test "supplemental partial-name checks reject historical spellings" = match (
+  readFile "\{medakaRoot}/compiler/backend/llvm_emit.mdk",
+  readFile "\{medakaRoot}/compiler/backend/wasm_emit.mdk",
+  retirementFixture "group-llvm",
+)
+  (Ok llvm, Ok wasm, Ok historical) =>
+    let partial = optionOr "" (head (split "gatherGroup :" historical))
+    let restored = "\{llvm}\n\{partial}"
+    expectAll [
+      expectEqual [] (partialNameFindings (partialGroupNames "llvm") llvm),
+      expectEqual [] (partialNameFindings (partialGroupNames "wasm") wasm),
+      expectEqual
+        []
+        (partialNameFindings partialValueNames (join "\n" (codeLinesOf wasm))),
+      expectEqual
+        ["distinctImplKeys :"]
+        (partialNameFindings (partialGroupNames "llvm") restored),
+      expectEqual (Ok []) (checkRetirement "R-GROUP LLVM" historical restored),
+      expectEqual
+        ["scanExprValueUses"]
+        (partialNameFindings
+          partialValueNames
+          "scanExprValueUses fnNames ctorArs"),
+    ]
+  (Err e, _, _) => fail e
+  (_, Err e, _) => fail e
+  (_, _, Err e) => fail e
 
 -- This bounded fingerprint recognizes the retained historical families under
 -- consistent identifier substitutions. It does not decide semantic equivalence:
