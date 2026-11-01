@@ -62,8 +62,8 @@ Each fact has one producer; a carrier moves it; a validator or fixture fails whe
 
 Phase 5's B1–B5 evidence is bounded by these producer/carrier/consumer checks. The listed
 fixtures are judges; historical P5 reports are evidence of their execution on their recorded
-heads, not a claim that this documentation slice reran them. Final phase exit still requires
-the integrated head's standing checks and review.
+heads, not a claim that this documentation slice reran them. The final integrated checks
+and phase disposition are tracked by #4604.
 
 | Rule | Producer / carrier | Consumers | Validator | Independent fixture / deletion |
 |---|---|---|---|---|
