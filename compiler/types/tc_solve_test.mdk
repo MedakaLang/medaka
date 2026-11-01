@@ -14,16 +14,16 @@ import test.{
 }
 import frontend.ast.{Loc(..), Route(..)}
 import frontend.parser.{parse}
-import types.effect_rows.{pureRow}
+import types.effect_rows.{EffRow(..), pureRow}
 import types.repr.{Mono(..), Tyvar(..), normalize, ppMono}
 import types.tc_types.{
   GoalKind(..), ImplRow(..), InstRef(..), MethodPredicateSlot(..),
   ModuleCtx(..), PredicateSlot(..), PredicateSlotArgs(..)
 }
-import types.tc_unify.{freshVar, unify}
-import types.tc_mono.{tyvarId}
+import types.tc_unify.{freshEffvar, freshVar, unify}
+import types.tc_mono.{monoVecSameGiven, tyvarId}
 import map as IdMap
-import types.tc_state.{probeGraphCtx}
+import types.tc_state.{initialModuleCtx, probeGraphCtx}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omKeys}
 import support.util.{joinNl, listLen}
 import types.tc_solve.{
@@ -55,7 +55,7 @@ import types.tc_solve.{
   sitesFor,
   walkDispatch,
   walkGoalDischarged,
-  walkGoalSameProbe,
+  walkGoalSame,
 }
 import types.tc_solve_entail.{reqWalkSeed}
 import list.{nub, sort}
@@ -428,3 +428,24 @@ test "a graph with no determined row is left with none" =
   let m = fresh ()
   refileDeterminedRows m ()
   expectEqual [] (filedUnder m)
+
+-- Private probe for the memo's goal equality: two goals `C (Int -> Int)` whose arrows
+-- carry different effect rows are one predicate to `monoVecSameGiven` and two to
+-- `walkGoalSame`, in either order; the same row is one goal to both.
+export
+walkGoalSameProbe : Unit -> List Bool
+walkGoalSameProbe _ =
+  let iface = ifaceRefBare "C"
+  let int = tconBuiltin "Int"
+  let mctx = initialModuleCtx (probeGraphCtx ())
+  let row1 = EffRow [] (Some (freshEffvar mctx ()))
+  let row2 = EffRow [] (Some (freshEffvar mctx ()))
+  let goal1 = [TFun int row1 int]
+  let goal2 = [TFun int row2 int]
+  [
+    monoVecSameGiven goal1 goal2,
+    monoVecSameGiven goal2 goal1,
+    walkGoalSame iface goal1 iface goal2,
+    walkGoalSame iface goal2 iface goal1,
+    walkGoalSame iface goal1 iface [TFun int row1 int],
+  ]

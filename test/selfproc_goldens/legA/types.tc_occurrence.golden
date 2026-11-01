@@ -20,7 +20,6 @@ boundOfList : List String -> Map String String
 calleeIsGeneralized : ModuleCtx -> String -> Option (List CSlot) -> List (Int, Mono) -> Bool
 cellGoalInnerAliasing : GraphCtx -> List (String, Bool)
 cellOfGoal : List EvCell -> Obligation -> Option EvCell
-cellStoreMisses : GraphCtx -> EvId -> (String, String)
 cellsFrom : Array (Option EvCell) -> Int -> List EvCell -> List EvCell
 constrainedSigNames : List Decl -> List String
 constraintsHaveMethodLevel : List String -> List Constraint -> Bool
@@ -82,9 +81,7 @@ methodReturnProbeCodes : ModuleCtx -> MethodSchemeRow -> List Decl -> (List Stri
 methodReturnProbeRequest : ModuleCtx -> MethodSchemeRow -> MethodReturnRequest
 methodReturnProbeSlotCase : ModuleCtx -> MethodSchemeRow -> MethodSchemeRow -> Bool -> ((List String, List String), ModuleCtx)
 methodReturnRequest : ModuleCtx -> MethodSchemeRow -> Mono -> MethodInstantiationSubst -> Option EvId -> MethodReturnRequest
-methodReturnResolutionMutationProbe : Unit -> (Bool, Bool, Bool, Bool)
 methodReturnSlotOwnershipProbe : Unit -> ((List String, List String), (List String, List String), (List String, List String))
-methodReturnTemplatePresenceProbe : Unit -> (List Bool, List Bool)
 methodReturnVectorCompletenessProbe : Unit -> (Option (List String), Option (List String), Bool, Bool)
 methodRowDeclarationProbe : Unit -> (List (String, String, Int, Int), List (String, String, Int, Int), (Int, Int, Bool, Int))
 methodRowFreshnessProbe : Unit -> ((Int, Int, Int, List Int, List Int), (List (List Int), List (List Int), List (List Int)))
@@ -100,7 +97,6 @@ mintMethodCellRaw : ModuleCtx -> String -> Option Int -> Route -> List Route -> 
 mintOpSite : ModuleCtx -> Unit -> EvId
 mintSite : ModuleCtx -> SiteCell -> EvId
 mintedOr : (Unit -> EvId) -> EvId -> EvId
-missText : Result String a -> String
 mkMethodOccObl : IfaceRef -> List String -> Ty -> Mono -> List (String, Mono) -> Provenance -> Option Loc -> ScopeId -> UObligation
 moduleDictNames : List String -> List (String, List Decl) -> List String
 noDictHook : String -> EvId -> Unit

@@ -1,5 +1,5 @@
 # META
-source_lines=3387
+source_lines=3386
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls: declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs`
@@ -2680,7 +2680,6 @@ reexportDefinersOf before path =
 -- Standalone visibility includes an exported signature with a private body,
 -- but never visibility donated by a same-named public interface method.
 -- Intersect with actual function definitions to exclude extern declarations.
-export
 pubTopFnNames : List Decl -> List String
 pubTopFnNames decls = topFnNamesUnder ExportedView decls
 
@@ -3842,7 +3841,7 @@ distinctIdentsIn2 _ = False
 (DFunDef false "importerDefiners" ((PVar "gctx") (PVar "importer") (PVar "depId")) (EMatch (EApp (EApp (EApp (EVar "viewFor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "config") "value") "tcSibling")) (EVar "importer")) (EVar "depId")) (arm (PCon "ExportedView") () (EApp (EApp (EVar "graphPubDefiners") (EVar "gctx")) (EVar "depId"))) (arm (PCon "FullView") () (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EVar "gctx") "declEnvsRef") "value")) (DoExpr (EMatch (EApp (EVar "head") (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EBinOp "==" (EFieldAccess (EVar "m") "demId") (EVar "depId")))) (EFieldAccess (EVar "envs") "deModules"))) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "firstRowPerName") (EVar "omEmpty")) (EApp (EApp (EApp (EApp (EVar "moduleDefinersUnder") (EVar "FullView")) (EFieldAccess (EVar "envs") "deDefiners")) (EVar "depId")) (EFieldAccess (EVar "m") "demDecls")))) (arm (PCon "None") () (EApp (EApp (EVar "graphPubDefiners") (EVar "gctx")) (EVar "depId")))))))))
 (DTypeSig false "reexportDefinersOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "reexportDefinersOf" ((PVar "before") (PVar "path")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EListLit) (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EApp (EVar "definersIn") (EVar "before")) (EVar "depId")))))))
-(DTypeSig true "pubTopFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "pubTopFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "pubTopFnNames" ((PVar "decls")) (EApp (EApp (EVar "topFnNamesUnder") (EVar "ExportedView")) (EVar "decls")))
 (DTypeSig false "topFnNamesUnder" (TyFun (TyCon "ExportView") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "topFnNamesUnder" ((PVar "view") (PVar "decls")) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "decls"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "fns")))) (EApp (EApp (EApp (EVar "directUnder") (EVar "view")) (EVar "nsValues")) (EVar "decls"))))))
@@ -4397,7 +4396,7 @@ distinctIdentsIn2 _ = False
 (DFunDef false "importerDefiners" ((PVar "gctx") (PVar "importer") (PVar "depId")) (EMatch (EApp (EApp (EApp (EVar "viewFor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "config") "value") "tcSibling")) (EVar "importer")) (EVar "depId")) (arm (PCon "ExportedView") () (EApp (EApp (EVar "graphPubDefiners") (EVar "gctx")) (EVar "depId"))) (arm (PCon "FullView") () (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EVar "gctx") "declEnvsRef") "value")) (DoExpr (EMatch (EApp (EVar "head") (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EBinOp "==" (EFieldAccess (EVar "m") "demId") (EVar "depId")))) (EFieldAccess (EVar "envs") "deModules"))) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "firstRowPerName") (EVar "omEmpty")) (EApp (EApp (EApp (EApp (EVar "moduleDefinersUnder") (EVar "FullView")) (EFieldAccess (EVar "envs") "deDefiners")) (EVar "depId")) (EFieldAccess (EVar "m") "demDecls")))) (arm (PCon "None") () (EApp (EApp (EVar "graphPubDefiners") (EVar "gctx")) (EVar "depId")))))))))
 (DTypeSig false "reexportDefinersOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "reexportDefinersOf" ((PVar "before") (PVar "path")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EListLit) (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EApp (EVar "definersIn") (EVar "before")) (EVar "depId")))))))
-(DTypeSig true "pubTopFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "pubTopFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "pubTopFnNames" ((PVar "decls")) (EApp (EApp (EVar "topFnNamesUnder") (EVar "ExportedView")) (EVar "decls")))
 (DTypeSig false "topFnNamesUnder" (TyFun (TyCon "ExportView") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "topFnNamesUnder" ((PVar "view") (PVar "decls")) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "decls"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "fns")))) (EApp (EApp (EApp (EVar "directUnder") (EVar "view")) (EVar "nsValues")) (EVar "decls"))))))

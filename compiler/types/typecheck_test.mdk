@@ -66,6 +66,7 @@ import types.tc_types.{
   EvidenceOutcomeKind(..),
   NumericPredicateTraceEntry(..),
   NumericPredicateTraceStage(..),
+  DriveArgs(..),
   DriveInputs(..),
   DriveOutputs(..),
   GraphCtx(..),
@@ -74,6 +75,7 @@ import types.tc_types.{
   MethodReturnTraceStage(..),
 }
 import types.module_interface_test_support.{noValueMain}
+import types.tc_diag_text.{stickyDiagsInPushOrder}
 import types.tc_state.{
   beginAssumptionTrace,
   beginEvidenceObservation,
@@ -109,21 +111,21 @@ import types.typecheck.{
   checkModulesChainReportForGraph,
   checkModulesDiagsChain,
   checkModulesEntryFullReportK,
-  checkModulesEntryReport,
   checkModulesPartialLast,
   checkOneDiags,
-  checkOneDiagsGraph,
   checkOneSchemeFullK,
   checkOneSchemeFullKGraph,
   defaultDriveInputs,
   driveArgs,
   driveInputsFor,
   elaborateModules,
-  elaborateModulesGraph,
   elaborateOne,
   elaborateOneFacts,
   ModDiags,
-  stickyTypeErrorDiags,
+  checkModulesEntryReportOut,
+  checkOneReportKGraph,
+  elabTreesDrive,
+  entrySplit,
   tcCode,
   tcMsg,
 }
@@ -6583,3 +6585,38 @@ test "an attributed abstract record is as abstract to an importer as the bare on
       (r => S.contains "exported abstractly" r)
       (reportFor "@deprecated \"old\""),
   ]
+
+-- `elaborateModules` beside the graph record its drive ends in, for a test that
+-- observes that record after the drive.
+elaborateModulesGraph : DriveArgs -> (ElabResult, GraphCtx)
+elaborateModulesGraph args =
+  let ((result, _, _), gctx) = elabTreesDrive args
+  (result, gctx)
+
+-- `checkOneDiags` beside the graph record its drive ends in, for a test that observes
+-- that record after the drive.
+checkOneDiagsGraph : DriveArgs -> ((List TcDiag, List TcDiag), GraphCtx)
+checkOneDiagsGraph args =
+  let (report, gctx) = checkOneReportKGraph args
+  let (_, _, errs, warns) = entrySplit report
+  ((errs, warns), gctx)
+
+-- render the entry report: type errors win (each `TYPE ERROR: …`), else the
+-- entry's `name : scheme` lines followed by its non-exhaustive-match warnings.
+-- The harness sorts, so scheme/warn relative order is not load-bearing.  Mirrors
+-- runCheck's single-file shape, but over the entry module of a resolved graph.
+checkModulesEntryReport : DriveInputs ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  String
+checkModulesEntryReport inputs runtimeDecls coreDecls modules =
+  fst (checkModulesEntryReportOut inputs runtimeDecls coreDecls modules)
+
+-- #2544 (M4): every diagnostic that armed the sticky gate in the drive, each tagged
+-- with the module it was recorded in, in push order, deduplicated PER GOAL —
+-- module, code, location and text together — never by text alone (a text key would
+-- re-introduce the suppressed-check shape OD5 forbids: two goals at two sites with
+-- the same rendering are two findings).
+stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
+stickyTypeErrorDiags o = stickyDiagsInPushOrder o.doStickyDiags

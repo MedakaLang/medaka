@@ -1,5 +1,5 @@
 # META
-source_lines=2509
+source_lines=2490
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve: one solving judgment over one goal store, above the entailment core: the exact-return
@@ -2125,7 +2125,9 @@ siteKindMonos (SKOp _) = []
 siteKindMonos (SKPredicateOp _ _) = []
 siteKindMonos (SKRLocal _ _ ms _ vecs) = ms ++ flatMap identity vecs
 
--- test-only observation: declarations whose only callers are tests and probes.
+-- Observation declarations exported for readers outside this module: the method-return trace and
+-- memo views for the drive-level `typecheck_test`, and the method-slot and method-return probes
+-- `tc_occurrence` and `tc_module` read.
 
 -- Each entry with the evidence its goal published in [evidence], the table of the
 -- drive that recorded it.
@@ -2263,27 +2265,6 @@ methodReturnMemoSupers : List Route -> String
 methodReturnMemoSupers [] = ""
 methodReturnMemoSupers supers =
   "{\{join "," (map methodReturnMemoRoute supers)}}"
-
--- Private probe for the memo's goal equality: two goals `C (Int -> Int)` whose arrows
--- carry different effect rows are one predicate to `monoVecSameGiven` and two to
--- `walkGoalSame`, in either order; the same row is one goal to both.
-export
-walkGoalSameProbe : Unit -> List Bool
-walkGoalSameProbe _ =
-  let iface = ifaceRefBare "C"
-  let int = tconBuiltin "Int"
-  let mctx = initialModuleCtx (probeGraphCtx ())
-  let row1 = EffRow [] (Some (freshEffvar mctx ()))
-  let row2 = EffRow [] (Some (freshEffvar mctx ()))
-  let goal1 = [TFun int row1 int]
-  let goal2 = [TFun int row2 int]
-  [
-    monoVecSameGiven goal1 goal2,
-    monoVecSameGiven goal2 goal1,
-    walkGoalSame iface goal1 iface goal2,
-    walkGoalSame iface goal2 iface goal1,
-    walkGoalSame iface goal1 iface [TFun int row1 int],
-  ]
 
 isSemanticGivenAnswer : Option AssumAnswer -> Bool
 isSemanticGivenAnswer (Some (SemanticGiven (GivenEvidence _))) = True
@@ -2929,8 +2910,6 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig false "methodReturnMemoSupers" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "String")))
 (DFunDef false "methodReturnMemoSupers" ((PList)) (ELit (LString "")))
 (DFunDef false "methodReturnMemoSupers" ((PVar "supers")) (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EVar "display") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "methodReturnMemoRoute")) (EVar "supers"))))) (ELit (LString "}"))))
-(DTypeSig true "walkGoalSameProbe" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "Bool"))))
-(DFunDef false "walkGoalSameProbe" (PWild) (EBlock (DoLet false false (PVar "iface") (EApp (EVar "ifaceRefBare") (ELit (LString "C")))) (DoLet false false (PVar "int") (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (DoLet false false (PVar "mctx") (EApp (EVar "initialModuleCtx") (EApp (EVar "probeGraphCtx") (ELit LUnit)))) (DoLet false false (PVar "row1") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EApp (EApp (EVar "freshEffvar") (EVar "mctx")) (ELit LUnit))))) (DoLet false false (PVar "row2") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EApp (EApp (EVar "freshEffvar") (EVar "mctx")) (ELit LUnit))))) (DoLet false false (PVar "goal1") (EListLit (EApp (EApp (EApp (EVar "TFun") (EVar "int")) (EVar "row1")) (EVar "int")))) (DoLet false false (PVar "goal2") (EListLit (EApp (EApp (EApp (EVar "TFun") (EVar "int")) (EVar "row2")) (EVar "int")))) (DoExpr (EListLit (EApp (EApp (EVar "monoVecSameGiven") (EVar "goal1")) (EVar "goal2")) (EApp (EApp (EVar "monoVecSameGiven") (EVar "goal2")) (EVar "goal1")) (EApp (EApp (EApp (EApp (EVar "walkGoalSame") (EVar "iface")) (EVar "goal1")) (EVar "iface")) (EVar "goal2")) (EApp (EApp (EApp (EApp (EVar "walkGoalSame") (EVar "iface")) (EVar "goal2")) (EVar "iface")) (EVar "goal1")) (EApp (EApp (EApp (EApp (EVar "walkGoalSame") (EVar "iface")) (EVar "goal1")) (EVar "iface")) (EListLit (EApp (EApp (EApp (EVar "TFun") (EVar "int")) (EVar "row1")) (EVar "int"))))))))
 (DTypeSig false "isSemanticGivenAnswer" (TyFun (TyApp (TyCon "Option") (TyCon "AssumAnswer")) (TyCon "Bool")))
 (DFunDef false "isSemanticGivenAnswer" ((PCon "Some" (PCon "SemanticGiven" (PCon "GivenEvidence" PWild)))) (EVar "True"))
 (DFunDef false "isSemanticGivenAnswer" (PWild) (EVar "False"))
@@ -3396,8 +3375,6 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig false "methodReturnMemoSupers" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "String")))
 (DFunDef false "methodReturnMemoSupers" ((PList)) (ELit (LString "")))
 (DFunDef false "methodReturnMemoSupers" ((PVar "supers")) (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EMethodRef "display") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "methodReturnMemoRoute")) (EVar "supers"))))) (ELit (LString "}"))))
-(DTypeSig true "walkGoalSameProbe" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "Bool"))))
-(DFunDef false "walkGoalSameProbe" (PWild) (EBlock (DoLet false false (PVar "iface") (EApp (EVar "ifaceRefBare") (ELit (LString "C")))) (DoLet false false (PVar "int") (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (DoLet false false (PVar "mctx") (EApp (EVar "initialModuleCtx") (EApp (EVar "probeGraphCtx") (ELit LUnit)))) (DoLet false false (PVar "row1") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EApp (EApp (EVar "freshEffvar") (EVar "mctx")) (ELit LUnit))))) (DoLet false false (PVar "row2") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EApp (EApp (EVar "freshEffvar") (EVar "mctx")) (ELit LUnit))))) (DoLet false false (PVar "goal1") (EListLit (EApp (EApp (EApp (EVar "TFun") (EVar "int")) (EVar "row1")) (EVar "int")))) (DoLet false false (PVar "goal2") (EListLit (EApp (EApp (EApp (EVar "TFun") (EVar "int")) (EVar "row2")) (EVar "int")))) (DoExpr (EListLit (EApp (EApp (EVar "monoVecSameGiven") (EVar "goal1")) (EVar "goal2")) (EApp (EApp (EVar "monoVecSameGiven") (EVar "goal2")) (EVar "goal1")) (EApp (EApp (EApp (EApp (EVar "walkGoalSame") (EVar "iface")) (EVar "goal1")) (EVar "iface")) (EVar "goal2")) (EApp (EApp (EApp (EApp (EVar "walkGoalSame") (EVar "iface")) (EVar "goal2")) (EVar "iface")) (EVar "goal1")) (EApp (EApp (EApp (EApp (EVar "walkGoalSame") (EVar "iface")) (EVar "goal1")) (EVar "iface")) (EListLit (EApp (EApp (EApp (EVar "TFun") (EVar "int")) (EVar "row1")) (EVar "int"))))))))
 (DTypeSig false "isSemanticGivenAnswer" (TyFun (TyApp (TyCon "Option") (TyCon "AssumAnswer")) (TyCon "Bool")))
 (DFunDef false "isSemanticGivenAnswer" ((PCon "Some" (PCon "SemanticGiven" (PCon "GivenEvidence" PWild)))) (EVar "True"))
 (DFunDef false "isSemanticGivenAnswer" (PWild) (EVar "False"))

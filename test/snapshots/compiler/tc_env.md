@@ -1,5 +1,5 @@
 # META
-source_lines=4455
+source_lines=4453
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -1466,7 +1466,6 @@ ceLookupAt key cur env = match regLookupK key env.ceByKey
 -- resolve at a site that could see the declaration, so no ordinal filter applies.
 -- Reached from the superclass closure, whose seeds are resolved predicate
 -- interfaces and whose edges are `Super` occurrences stamped by resolve.
-export
 ceLookupGraph : RegKey -> ClassEnv -> Option CeRow
 ceLookupGraph key env = regLookupK key env.ceByKey
 
@@ -3561,7 +3560,6 @@ useModuleId : Decl -> List String
 useModuleId (DUse _ path _) = [useModId path]
 useModuleId _ = []
 
-export
 lastComponent : List String -> String
 lastComponent ns = optionOr "" (last ns)
 
@@ -4673,7 +4671,7 @@ methodRowSameNameView rows =
 (DFunDef false "ceInsertRow" ((PVar "r") (PVar "env")) (EVariantUpdate "ClassEnv" (EVar "env") ((fa "ceRows" (EBinOp "::" (EVar "r") (EFieldAccess (EVar "env") "ceRows"))) (fa "ceByKey" (EApp (EApp (EApp (EVar "regInsertK") (EApp (EVar "ceRowKey") (EVar "r"))) (EVar "r")) (EFieldAccess (EVar "env") "ceByKey"))))))
 (DTypeSig true "ceLookupAt" (TyFun (TyCon "RegKey") (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyCon "CeRow"))))))
 (DFunDef false "ceLookupAt" ((PVar "key") (PVar "cur") (PVar "env")) (EMatch (EApp (EApp (EVar "regLookupK") (EVar "key")) (EFieldAccess (EVar "env") "ceByKey")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "r")) () (EIf (EApp (EApp (EVar "declEnvVisibleAt") (EVar "cur")) (EApp (EVar "ceRowOrd") (EVar "r"))) (EApp (EVar "Some") (EVar "r")) (EVar "None")))))
-(DTypeSig true "ceLookupGraph" (TyFun (TyCon "RegKey") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyCon "CeRow")))))
+(DTypeSig false "ceLookupGraph" (TyFun (TyCon "RegKey") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyCon "CeRow")))))
 (DFunDef false "ceLookupGraph" ((PVar "key") (PVar "env")) (EApp (EApp (EVar "regLookupK") (EVar "key")) (EFieldAccess (EVar "env") "ceByKey")))
 (DTypeSig true "ceRowsVisibleAt" (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "List") (TyCon "CeRow")))))
 (DFunDef false "ceRowsVisibleAt" ((PVar "cur") (PVar "env")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "declEnvVisibleAt") (EVar "cur")) (EApp (EVar "ceRowOrd") (EVar "r"))))) (EFieldAccess (EVar "env") "ceRows")))
@@ -5087,7 +5085,7 @@ methodRowSameNameView rows =
 (DTypeSig true "useModuleId" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "useModuleId" ((PCon "DUse" PWild (PVar "path") PWild)) (EListLit (EApp (EVar "useModId") (EVar "path"))))
 (DFunDef false "useModuleId" (PWild) (EListLit))
-(DTypeSig true "lastComponent" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DTypeSig false "lastComponent" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "lastComponent" ((PVar "ns")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "last") (EVar "ns"))))
 (DTypeSig true "importLocFor" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "importLocFor" ((PVar "reach") (PVar "prog") (PVar "owner")) (EApp (EApp (EVar "orElseLoc") (EApp (EApp (EVar "findMap") (EApp (EVar "importLocOf") (EVar "owner"))) (EVar "prog"))) (EApp (EApp (EVar "findMap") (EApp (EApp (EVar "importLocReaching") (EVar "reach")) (EVar "owner"))) (EVar "prog"))))
@@ -5444,7 +5442,7 @@ methodRowSameNameView rows =
 (DFunDef false "ceInsertRow" ((PVar "r") (PVar "env")) (EVariantUpdate "ClassEnv" (EVar "env") ((fa "ceRows" (EBinOp "::" (EVar "r") (EFieldAccess (EVar "env") "ceRows"))) (fa "ceByKey" (EApp (EApp (EApp (EVar "regInsertK") (EApp (EVar "ceRowKey") (EVar "r"))) (EVar "r")) (EFieldAccess (EVar "env") "ceByKey"))))))
 (DTypeSig true "ceLookupAt" (TyFun (TyCon "RegKey") (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyCon "CeRow"))))))
 (DFunDef false "ceLookupAt" ((PVar "key") (PVar "cur") (PVar "env")) (EMatch (EApp (EApp (EVar "regLookupK") (EVar "key")) (EFieldAccess (EVar "env") "ceByKey")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "r")) () (EIf (EApp (EApp (EVar "declEnvVisibleAt") (EVar "cur")) (EApp (EVar "ceRowOrd") (EVar "r"))) (EApp (EVar "Some") (EVar "r")) (EVar "None")))))
-(DTypeSig true "ceLookupGraph" (TyFun (TyCon "RegKey") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyCon "CeRow")))))
+(DTypeSig false "ceLookupGraph" (TyFun (TyCon "RegKey") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyCon "CeRow")))))
 (DFunDef false "ceLookupGraph" ((PVar "key") (PVar "env")) (EApp (EApp (EVar "regLookupK") (EVar "key")) (EFieldAccess (EVar "env") "ceByKey")))
 (DTypeSig true "ceRowsVisibleAt" (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "List") (TyCon "CeRow")))))
 (DFunDef false "ceRowsVisibleAt" ((PVar "cur") (PVar "env")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "declEnvVisibleAt") (EVar "cur")) (EApp (EVar "ceRowOrd") (EVar "r"))))) (EFieldAccess (EVar "env") "ceRows")))
@@ -5858,7 +5856,7 @@ methodRowSameNameView rows =
 (DTypeSig true "useModuleId" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "useModuleId" ((PCon "DUse" PWild (PVar "path") PWild)) (EListLit (EApp (EVar "useModId") (EVar "path"))))
 (DFunDef false "useModuleId" (PWild) (EListLit))
-(DTypeSig true "lastComponent" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DTypeSig false "lastComponent" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "lastComponent" ((PVar "ns")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "last") (EVar "ns"))))
 (DTypeSig true "importLocFor" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "importLocFor" ((PVar "reach") (PVar "prog") (PVar "owner")) (EApp (EApp (EVar "orElseLoc") (EApp (EApp (EVar "findMap") (EApp (EVar "importLocOf") (EVar "owner"))) (EVar "prog"))) (EApp (EApp (EVar "findMap") (EApp (EApp (EVar "importLocReaching") (EVar "reach")) (EVar "owner"))) (EVar "prog"))))

@@ -344,9 +344,10 @@ twenty-five modules below it plus the entry, 27 rows with `tc_types` and `typech
   measures 2,403 (the 64-declaration recursion plus its arm helpers), so no over-3,000 reason is owed.
   `tc_module` (2,650) and `tc_occurrence` (2,900) carry no adopted reason: a sprint that would take
   either over 3,000 stops for Val.
-- The D8 exception (narrow, named): the 15 trace and probe sinks consumed by drive-level tests stay
-  in their home modules in the test-only section and are imported directly by `typecheck_test.mdk`,
-  with no facade; the exception ends with R35 (`docs/design/TEST-SIBLING-ACCESS-DESIGN.md`).
+- The D8 exception (narrow, named): the 14 trace and probe sinks consumed by drive-level tests stay
+  exported from their home modules and are imported directly by `typecheck_test.mdk`, with no
+  facade; `typecheck_test.mdk` is not their subject's sibling, so the R35 sibling privilege
+  (`docs/design/TEST-SIBLING-ACCESS-DESIGN.md`) does not reach them.
 - `tc_mono`'s holds is reworded to "pure except for minting effect-variable ids from the
   graph-run counter"; lifting that mint is an idiom-slice option under the identity oracles.
 - The alias-qualified-method family (45 declarations across `tc_env`, `tc_scope` and `typecheck`)

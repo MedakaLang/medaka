@@ -2989,7 +2989,6 @@ matchWarningLoc None _ = None
 -- and wildcard patterns, e.g. a lambda's parameter matched against integer
 -- literals) is checked at the module's end instead, once `settleDeferredPatLits`
 -- has given it its type, so the warning names it (`non-exhaustive match on U8`).
-export
 checkMatchChecks : ModuleCtx -> Mono -> List Arm -> Unit
 checkMatchChecks mctx scrutTy arms =
   checkMatchExhaustive mctx scrutTy arms

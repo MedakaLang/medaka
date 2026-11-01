@@ -27,18 +27,29 @@ import frontend.ast.{
   Decl(..),
   EvId(..),
   Expr(..),
+  IfaceMethod(..),
   Pat(..),
   Route(..),
+  Ty(..),
   isUnminted,
+  tyConBuiltin,
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parse}
-import types.evidence.{ScopeId(..)}
+import types.evidence.{
+  PrerequisiteEvidence(..),
+  RequestInstanceId(..),
+  ScopeId(..),
+  SolverEvidence(..),
+}
+import types.solver_contract.{SolverOutcome(..), Wanted(..)}
 import types.evidence_complete.{Inner, innerNone}
 import support.ordmap.{omFromNames}
 import types.repr.{Mono(..), Scheme(..), VecObl(..), ppMono}
 import types.tc_env.{
   bindingWithStandalone,
+  buildFlatImplEnv,
+  methodRowTestIface,
   envFor,
   extendBindings,
   ordinaryEnvBinding,
@@ -52,17 +63,23 @@ import types.tc_occurrence.{
   binopMethod,
   constrainedSigNames,
   ctorHeadShaped,
-  cellStoreMisses,
   evIdModule,
+  firstMethodRow,
   freshEvId,
+  ifaceMethodSchemeRows,
+  initialModuleCtx,
   inferNumLit,
   instantiateVarTrackedId,
   isGrantOnlyEv,
   mapGroupClauses,
   markDictNames,
   methodConstraintNames,
-  methodReturnResolutionMutationProbe,
-  methodReturnTemplatePresenceProbe,
+  methodReturnProbeIface,
+  methodReturnProbeImpl,
+  methodReturnProbeRequest,
+  methodReturnProbeScope,
+  methodReturnResolutionValid,
+  methodReturnSelectedIdentity,
   markGroupClauses,
   mintMethodCellRaw,
   mkMethodOccObl,
@@ -73,7 +90,10 @@ import types.tc_occurrence.{
   standaloneOccurrence,
   rebuildGroupDecls,
   recordUnopSite,
+  siteCellLookup,
+  siteFor,
   siteHeadCell,
+  solveExactReturnOnce,
   standaloneSchemeFor,
   siteRouteCell,
   unopMethod,
@@ -98,6 +118,8 @@ import types.tc_test_support.{
 import types.tc_unify.{unifyIn}
 import types.tc_types.{
   BuiltinClass(..),
+  GraphCtx(..),
+  MethodReturnResolution(..),
   MarkCtx(..),
   ModuleCtx(..),
   ModuleMarking(..),
@@ -835,3 +857,128 @@ test "ordinary return template records present and absent interface formals" =
   expectEqual
     ([True, True], [True, False])
     (methodReturnTemplatePresenceProbe ())
+
+export
+methodReturnResolutionMutationProbe : Unit -> (Bool, Bool, Bool, Bool)
+methodReturnResolutionMutationProbe _ =
+  let gctx = probeGraphCtx ()
+  let mctx = initialModuleCtx gctx
+  let _ = methodReturnProbeScope mctx "return-outcome-validation"
+  let ownedDecl =
+    methodReturnProbeIface
+      "return-owner"
+      "Owner"
+      (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
+  let ownedRow = firstMethodRow (ifaceMethodSchemeRows mctx [ownedDecl])
+  let ownedImpl = methodReturnProbeImpl "return-owner" "Owner"
+  mctx.mcCells.bodyImplEnvRef := buildFlatImplEnv [ownedImpl]
+  let request = methodReturnProbeRequest mctx ownedRow
+  let resolution = solveExactReturnOnce (siteFor mctx) request
+  let valid = methodReturnResolutionValid mctx request resolution
+  let (wrongSelection, wrongPrerequisites) = match resolution.mrrOutcome
+    Solved (InstanceEvidence _ args prerequisites supers) => (
+      MethodReturnResolution {
+        mrrWanted = resolution.mrrWanted,
+        mrrOutcome =
+          Solved
+            (InstanceEvidence
+              (RequestInstanceId (-1))
+              args
+              prerequisites
+              supers),
+        mrrSelectedRow = resolution.mrrSelectedRow,
+      },
+      MethodReturnResolution {
+        mrrWanted = resolution.mrrWanted,
+        mrrOutcome =
+          Solved
+            (InstanceEvidence
+              (RequestInstanceId (methodReturnSelectedIdentity resolution))
+              args
+              (PrerequisiteEvidence {
+                  prerequisiteInterface =
+                    resolution.mrrWanted.predicate.predicateInterface,
+                  prerequisiteArguments = args,
+                }
+                :: prerequisites)
+              supers),
+        mrrSelectedRow = resolution.mrrSelectedRow,
+      },
+    )
+    _ => panic "ordinary return mutation probe expected instance evidence"
+  let wanted = resolution.mrrWanted
+  let wrongWanted = Wanted {
+    id = wanted.id,
+    predicate = wanted.predicate,
+    origin = wanted.origin,
+    scope = ScopeId 999999,
+    destination = wanted.destination,
+  }
+  let disagreement = MethodReturnResolution {
+    mrrWanted = wrongWanted,
+    mrrOutcome = resolution.mrrOutcome,
+    mrrSelectedRow = resolution.mrrSelectedRow,
+  }
+  let observed = (
+    valid,
+    not (methodReturnResolutionValid mctx request wrongSelection),
+    not (methodReturnResolutionValid mctx request wrongPrerequisites),
+    not (methodReturnResolutionValid mctx request disagreement),
+  )
+  observed
+
+export
+methodReturnTemplatePresenceProbe : Unit -> (List Bool, List Bool)
+methodReturnTemplatePresenceProbe _ =
+  let gctx = probeGraphCtx ()
+  let mctx = initialModuleCtx gctx
+  let present =
+    firstMethodRow
+      (ifaceMethodSchemeRows mctx [
+        methodRowTestIface
+          "return-template-present"
+          "Present"
+          ["a", "b"]
+          [
+            IfaceMethod
+              "make"
+              (TyFun
+                (tyConBuiltin "Unit" None)
+                (TyTuple [TyVar "a", TyVar "b"]))
+              None
+              None,
+          ],
+      ])
+  let absent =
+    firstMethodRow
+      (ifaceMethodSchemeRows mctx [
+        methodRowTestIface
+          "return-template-absent"
+          "Absent"
+          ["a", "b"]
+          [
+            IfaceMethod
+              "make"
+              (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
+              None
+              None,
+          ],
+      ])
+  let observed = (
+    map isSome present.msrPredicateTemplate.mptArguments,
+    map isSome absent.msrPredicateTemplate.mptArguments,
+  )
+  observed
+
+-- Test visibility (`tc_occurrence_test.mdk`): why [gctx]'s site and method cell stores
+-- hold no cell for [ev], each "" where one does.
+export
+cellStoreMisses : GraphCtx -> EvId -> (String, String)
+cellStoreMisses gctx ev = (
+  missText (siteCellLookup gctx ev),
+  missText (methodCellLookup gctx ev),
+)
+
+missText : Result String a -> String
+missText (Ok _) = ""
+missText (Err message) = message
