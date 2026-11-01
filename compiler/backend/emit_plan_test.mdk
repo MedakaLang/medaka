@@ -356,24 +356,31 @@ test "supplemental partial-name checks reject historical spellings" = match (
   retirementFixture "group-llvm",
 )
   (Ok llvm, Ok wasm, Ok historical) =>
-    let partial = optionOr "" (head (split "gatherGroup :" historical))
-    let restored = "\{llvm}\n\{partial}"
-    expectAll [
-      expectEqual [] (partialNameFindings (partialGroupNames "llvm") llvm),
-      expectEqual [] (partialNameFindings (partialGroupNames "wasm") wasm),
-      expectEqual
-        []
-        (partialNameFindings partialValueNames (join "\n" (codeLinesOf wasm))),
-      expectEqual
-        ["distinctImplKeys :"]
-        (partialNameFindings (partialGroupNames "llvm") restored),
-      expectEqual (Ok []) (checkRetirement "R-GROUP LLVM" historical restored),
-      expectEqual
-        ["scanExprValueUses"]
-        (partialNameFindings
-          partialValueNames
-          "scanExprValueUses fnNames ctorArs"),
-    ]
+    match head (split "gatherGroup :" historical)
+      None => fail "retirement: empty partial fixture"
+      Some "" => fail "retirement: empty partial fixture"
+      Some partial =>
+        let restored = "\{llvm}\n\{partial}"
+        expectAll [
+          expectEqual [] (partialNameFindings (partialGroupNames "llvm") llvm),
+          expectEqual [] (partialNameFindings (partialGroupNames "wasm") wasm),
+          expectEqual
+            []
+            (partialNameFindings
+              partialValueNames
+              (join "\n" (codeLinesOf wasm))),
+          expectEqual
+            ["distinctImplKeys :"]
+            (partialNameFindings (partialGroupNames "llvm") restored),
+          expectEqual
+            (Ok [])
+            (checkRetirement "R-GROUP LLVM" historical restored),
+          expectEqual
+            ["scanExprValueUses"]
+            (partialNameFindings
+              partialValueNames
+              "scanExprValueUses fnNames ctorArs"),
+        ]
   (Err e, _, _) => fail e
   (_, Err e, _) => fail e
   (_, _, Err e) => fail e
@@ -409,9 +416,10 @@ retirementFunctions ds = fold (acc d => retirementMerge d acc) omEmpty ds
 
 retirementMerge : Decl -> OrdMap (List Decl) -> OrdMap (List Decl)
 retirementMerge (DFunDef _ n ps body _ _) acc =
+  let privateVisibility = False
   omInsert
     n
-    (DFunDef False n ps body noDeclLoc noBinderId
+    (DFunDef privateVisibility n ps body noDeclLoc noBinderId
       :: optionOr [] (omLookup n acc))
     acc
 retirementMerge (DAttrib _ inner) acc = retirementMerge inner acc
@@ -443,9 +451,16 @@ canonicalRetirementNames ((TIdent n) :: rest) names =
   canonicalRetirementNames rest (omInsert n "identifier" names)
 canonicalRetirementNames (_ :: rest) names = canonicalRetirementNames rest names
 
-retirementShapes : String -> Result String (OrdMap Int)
+-- Parse failure and an empty historical family require different test verdicts.
+-- lint-disable-next-line rule-clone-type
+data RetirementError =
+  | RetirementParse
+  | RetirementEmpty String
+  deriving (Eq, Debug)
+
+retirementShapes : String -> Result RetirementError (OrdMap Int)
 retirementShapes text = match parseResult text
-  Err _ => Err "retirement: source does not parse"
+  Err _ => Err RetirementParse
   Ok ds =>
     let funcs = retirementFunctions ds
     Ok
@@ -459,10 +474,10 @@ retirementShapes text = match parseResult text
 retirementFindings : String ->
   OrdMap Int ->
   OrdMap Int ->
-  Result String (List String)
+  Result RetirementError (List String)
 retirementFindings family historical actual =
   if isEmpty (omKeys historical) then
-    Err "retirement: empty historical family \{family}"
+    Err (RetirementEmpty family)
   else
     Ok (if all
       (shape =>
@@ -473,11 +488,22 @@ retirementFindings family historical actual =
     else
       [])
 
-checkRetirement : String -> String -> String -> Result String (List String)
+checkRetirement : String ->
+  String ->
+  String ->
+  Result RetirementError (List String)
 checkRetirement family historical actual = do
   required <- retirementShapes historical
   found <- retirementShapes actual
   retirementFindings family required found
+
+retirementVerdict : Result RetirementError (List String) ->
+  Result String (List String)
+retirementVerdict (Ok findings) = Ok findings
+retirementVerdict (Err RetirementParse) =
+  Err "retirement: source does not parse"
+retirementVerdict (Err (RetirementEmpty family)) =
+  Err "retirement: empty historical family \{family}"
 
 -- Rename only lexical identifier tokens belonging to declarations or binders;
 -- strings, comments, constructors and imported callees remain intact. The set
@@ -516,7 +542,11 @@ renameRetirementTokens text _ [] [] offset =
   [sliceClamped offset (stringLength text) text]
 renameRetirementTokens _ _ _ _ _ = panic "retirement: token/span mismatch"
 
-expectRetirementRestored : String -> Bool -> <IO, FileRead> Expectation
+data RestorationMode = Original | Renamed deriving (Eq)
+
+expectRetirementRestored : String ->
+  RestorationMode ->
+  <IO, FileRead> Expectation
 expectRetirementRestored fixture renamed =
   match filter ((_, name, _) => name == fixture) retirementFixtures
     [(family, _, emitter)] => match (
@@ -524,7 +554,10 @@ expectRetirementRestored fixture renamed =
       readFile "\{medakaRoot}/compiler/backend/\{emitter}",
     )
       (Ok historical, Ok current) =>
-        match if renamed then renamedRetirement historical else Ok historical
+        match (if renamed == Renamed then
+          renamedRetirement historical
+        else
+          Ok historical)
           Err e => fail e
           Ok restored =>
             let verdict =
@@ -533,14 +566,14 @@ expectRetirementRestored fixture renamed =
               expectAtLeast
                 1
                 (length (omKeys (retirementFunctions (parse restored)))),
-              if renamed then
+              if renamed == Renamed then
                 expectNotEqual historical restored
               else
                 expectEqual historical restored,
               expectEqual
                 (retirementShapes historical)
                 (retirementShapes restored),
-              expectFindings family verdict,
+              expectFindings family (retirementVerdict verdict),
               expectEqual (Ok [family]) verdict,
             ]
       (Err e, _) => fail e
@@ -548,33 +581,33 @@ expectRetirementRestored fixture renamed =
     _ => fail "retirement: unknown fixture \{fixture}"
 
 test "R-ROSTER Wasm complete original restoration" =
-  expectRetirementRestored "roster-wasm" False
+  expectRetirementRestored "roster-wasm" Original
 test "R-ROSTER Wasm complete renamed restoration" =
-  expectRetirementRestored "roster-wasm" True
+  expectRetirementRestored "roster-wasm" Renamed
 test "R-ORD Wasm complete original restoration" =
-  expectRetirementRestored "ordinal-wasm" False
+  expectRetirementRestored "ordinal-wasm" Original
 test "R-ORD Wasm complete renamed restoration" =
-  expectRetirementRestored "ordinal-wasm" True
+  expectRetirementRestored "ordinal-wasm" Renamed
 test "R-GROUP Wasm complete original restoration" =
-  expectRetirementRestored "group-wasm" False
+  expectRetirementRestored "group-wasm" Original
 test "R-GROUP Wasm complete renamed restoration" =
-  expectRetirementRestored "group-wasm" True
+  expectRetirementRestored "group-wasm" Renamed
 test "R-VALUSE Wasm complete original restoration" =
-  expectRetirementRestored "valuse-wasm" False
+  expectRetirementRestored "valuse-wasm" Original
 test "R-VALUSE Wasm complete renamed restoration" =
-  expectRetirementRestored "valuse-wasm" True
+  expectRetirementRestored "valuse-wasm" Renamed
 test "R-ROSTER LLVM complete original restoration" =
-  expectRetirementRestored "roster-llvm" False
+  expectRetirementRestored "roster-llvm" Original
 test "R-ROSTER LLVM complete renamed restoration" =
-  expectRetirementRestored "roster-llvm" True
+  expectRetirementRestored "roster-llvm" Renamed
 test "R-ORD LLVM complete original restoration" =
-  expectRetirementRestored "ordinal-llvm" False
+  expectRetirementRestored "ordinal-llvm" Original
 test "R-ORD LLVM complete renamed restoration" =
-  expectRetirementRestored "ordinal-llvm" True
+  expectRetirementRestored "ordinal-llvm" Renamed
 test "R-GROUP LLVM complete original restoration" =
-  expectRetirementRestored "group-llvm" False
+  expectRetirementRestored "group-llvm" Original
 test "R-GROUP LLVM complete renamed restoration" =
-  expectRetirementRestored "group-llvm" True
+  expectRetirementRestored "group-llvm" Renamed
 
 test "current target physical adapters contain no historical semantic producer family" = expectAll
   [
@@ -590,7 +623,7 @@ test "current target physical adapters contain no historical semantic producer f
             (Ok historical, Ok current) =>
               expectNoFindings
                 family
-                (checkRetirement family historical current)
+                (retirementVerdict (checkRetirement family historical current))
             (Err e, _) => fail e
             (_, Err e) => fail e,
         ))
@@ -632,14 +665,12 @@ test "retirement fingerprints erase identifiers and retain semantic tokens" =
     ),
     (
       "parser errors cannot count as retirement findings",
-      expectEqual
-        (Err "retirement: source does not parse")
-        (retirementShapes "broken = ("),
+      expectEqual (Err RetirementParse) (retirementShapes "broken = ("),
     ),
     (
       "empty reference cannot pass",
       expectEqual
-        (Err "retirement: empty historical family empty")
+        (Err (RetirementEmpty "empty"))
         (checkRetirement "empty" "" "main = 42"),
     ),
   ]
@@ -668,7 +699,9 @@ test "similar physical tables and method buckets are lawful retirement neighbors
         match retirementFixture fixture
           Err e => fail e
           Ok historical =>
-            expectNoFindings family (checkRetirement family historical physical),
+            expectNoFindings
+              family
+              (retirementVerdict (checkRetirement family historical physical)),
       ))
       retirementFixtures)
 
