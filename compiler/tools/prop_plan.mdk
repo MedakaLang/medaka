@@ -1398,11 +1398,6 @@ listBoundDecays env plan =
   let truth = finiteTruth env plan
   abstractFinite env truth plan && cyclesThroughListUnder env truth plan
 
-export
-planCyclesThroughList : PlanEnv -> GenPlan -> Bool
-planCyclesThroughList env plan =
-  cyclesThroughListUnder env (finiteTruth env plan) plan
-
 -- A carrier state is a node; an edge records whether the field path leading to
 -- the next state crosses a list. A cycle through a list is a closed walk using
 -- at least one list edge. Building the graph visits each state once and the

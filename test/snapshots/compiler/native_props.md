@@ -1,5 +1,5 @@
 # META
-source_lines=2215
+source_lines=2180
 stages=DESUGAR,MARK
 # SOURCE
 -- Native property runner.  It deliberately compiles one probe per target, then
@@ -165,32 +165,6 @@ propResultsFromRun nonce (NativePropsToRun _ outcomes runnable) code stdout stde
     outcomes
     runnable
     (plannedRendered nonce runnable code stdout stderr)
--- Expose the rendered probe without compiling it so the registry shape can be
--- checked directly.  The execution path above and this renderer share the
--- same planning and closed-graph construction.
-export
-renderNativePlannedProbe : String ->
-  String ->
-  List PlanModule ->
-  List PropRequest ->
-  Result String String
-renderNativePlannedProbe target tsrc modules requests =
-  let props = filterProps (desugarProps tsrc)
-  match requestIndex requests omEmpty
-    Err e => Err e
-    Ok index => match duplicateSelectedPropName props index omEmpty
-      Some duplicate =>
-        Err "duplicate property declaration name \"\{duplicate}\""
-      None => match buildPlanEnvModules (plannedRoot modules) modules
-        Err e => Err (planErrorText e)
-        Ok env =>
-          let jobs = plannedRunnable (plannedOutcomes env modules props index)
-          if listLen jobs == 0 then
-            Err "native property runner: no selected property could be rendered"
-          else
-            let nonce = freshProbeNonce "source_check" propProbePrefixes tsrc
-            Ok (plannedProbeSource nonce target tsrc modules env jobs)
-
 plannedRoot : List PlanModule -> String
 plannedRoot [] = ""
 plannedRoot [PlanModule name _ _] = name
@@ -557,15 +531,6 @@ renderIndexed _ _ _ [] = []
 renderIndexed chunks note i ((_, request) :: rest) =
   classifyNativeFields chunks note request i
     :: renderIndexed chunks note (i + 1) rest
-
-export
-classifyNativeTranscript : List Chunk ->
-  String ->
-  PropRequest ->
-  Int ->
-  PropResult
-classifyNativeTranscript chunks note request i =
-  classifyNativeFields (indexNativeChunks chunks omEmpty) note request i
 
 classifyNativeFields : OrdMap Chunk ->
   String ->
@@ -2261,8 +2226,6 @@ paramName (PropParam n _ _) = n
 (DTypeSig true "propResultsFromRun" (TyFun (TyCon "String") (TyFun (TyCon "NativePropPlan") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "PropResult"))))))))
 (DFunDef false "propResultsFromRun" (PWild (PCon "NativePropsSettled" (PVar "rows")) PWild PWild PWild) (EVar "rows"))
 (DFunDef false "propResultsFromRun" ((PVar "nonce") (PCon "NativePropsToRun" PWild (PVar "outcomes") (PVar "runnable")) (PVar "code") (PVar "stdout") (PVar "stderr")) (EApp (EApp (EApp (EVar "plannedRowsFrom") (EVar "outcomes")) (EVar "runnable")) (EApp (EApp (EApp (EApp (EApp (EVar "plannedRendered") (EVar "nonce")) (EVar "runnable")) (EVar "code")) (EVar "stdout")) (EVar "stderr"))))
-(DTypeSig true "renderNativePlannedProbe" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PlanModule")) (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))
-(DFunDef false "renderNativePlannedProbe" ((PVar "target") (PVar "tsrc") (PVar "modules") (PVar "requests")) (EBlock (DoLet false false (PVar "props") (EApp (EVar "filterProps") (EApp (EVar "desugarProps") (EVar "tsrc")))) (DoExpr (EMatch (EApp (EApp (EVar "requestIndex") (EVar "requests")) (EVar "omEmpty")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "index")) () (EMatch (EApp (EApp (EApp (EVar "duplicateSelectedPropName") (EVar "props")) (EVar "index")) (EVar "omEmpty")) (arm (PCon "Some" (PVar "duplicate")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "duplicate property declaration name \"")) (EApp (EVar "display") (EVar "duplicate"))) (ELit (LString "\""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "buildPlanEnvModules") (EApp (EVar "plannedRoot") (EVar "modules"))) (EVar "modules")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "planErrorText") (EVar "e")))) (arm (PCon "Ok" (PVar "env")) () (EBlock (DoLet false false (PVar "jobs") (EApp (EVar "plannedRunnable") (EApp (EApp (EApp (EApp (EVar "plannedOutcomes") (EVar "env")) (EVar "modules")) (EVar "props")) (EVar "index")))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "jobs")) (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "native property runner: no selected property could be rendered"))) (EBlock (DoLet false false (PVar "nonce") (EApp (EApp (EApp (EVar "freshProbeNonce") (ELit (LString "source_check"))) (EVar "propProbePrefixes")) (EVar "tsrc"))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "plannedProbeSource") (EVar "nonce")) (EVar "target")) (EVar "tsrc")) (EVar "modules")) (EVar "env")) (EVar "jobs")))))))))))))))))
 (DTypeSig false "plannedRoot" (TyFun (TyApp (TyCon "List") (TyCon "PlanModule")) (TyCon "String")))
 (DFunDef false "plannedRoot" ((PList)) (ELit (LString "")))
 (DFunDef false "plannedRoot" ((PList (PCon "PlanModule" (PVar "name") PWild PWild))) (EVar "name"))
@@ -2356,8 +2319,6 @@ paramName (PropParam n _ _) = n
 (DTypeSig false "renderIndexed" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Chunk")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "PropRequest"))) (TyApp (TyCon "List") (TyCon "PropResult")))))))
 (DFunDef false "renderIndexed" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "renderIndexed" ((PVar "chunks") (PVar "note") (PVar "i") (PCons (PTuple PWild (PVar "request")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "classifyNativeFields") (EVar "chunks")) (EVar "note")) (EVar "request")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "renderIndexed") (EVar "chunks")) (EVar "note")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
-(DTypeSig true "classifyNativeTranscript" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "String") (TyFun (TyCon "PropRequest") (TyFun (TyCon "Int") (TyCon "PropResult"))))))
-(DFunDef false "classifyNativeTranscript" ((PVar "chunks") (PVar "note") (PVar "request") (PVar "i")) (EApp (EApp (EApp (EApp (EVar "classifyNativeFields") (EApp (EApp (EVar "indexNativeChunks") (EVar "chunks")) (EVar "omEmpty"))) (EVar "note")) (EVar "request")) (EVar "i")))
 (DTypeSig false "classifyNativeFields" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Chunk")) (TyFun (TyCon "String") (TyFun (TyCon "PropRequest") (TyFun (TyCon "Int") (TyCon "PropResult"))))))
 (DFunDef false "classifyNativeFields" ((PVar "chunks") (PVar "note") (PVar "request") (PVar "i")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "propRequestName") (EVar "request"))) (DoLet false false (PVar "seed") (EApp (EVar "propRequestSeed") (EVar "request"))) (DoLet false false (PVar "cases") (EApp (EVar "propRequestCases") (EVar "request"))) (DoExpr (EMatch (ETuple (EApp (EApp (EVar "transcriptField") (EApp (EVar "seedTag") (EVar "i"))) (EVar "chunks")) (EApp (EApp (EVar "transcriptField") (EApp (EVar "boolTag") (EVar "i"))) (EVar "chunks")) (EApp (EApp (EVar "transcriptField") (EApp (EVar "detailTag") (EVar "i"))) (EVar "chunks"))) (arm (PTuple (PCon "FieldMalformed") PWild PWild) () (EApp (EApp (EVar "nativeProtocolError") (ELit (LString "malformed replay seed in native transcript"))) (EVar "request"))) (arm (PTuple PWild (PCon "FieldMalformed") PWild) () (EApp (EApp (EVar "nativeProtocolError") (ELit (LString "malformed result value in native transcript"))) (EVar "request"))) (arm (PTuple PWild PWild (PCon "FieldMalformed")) () (EApp (EApp (EVar "nativeProtocolError") (ELit (LString "malformed detail in native transcript"))) (EVar "request"))) (arm (PTuple (PCon "FieldDecoded" (PVar "seedText")) PWild PWild) ((GBool (EBinOp "/=" (EApp (EVar "toInt") (EVar "seedText")) (EApp (EVar "Some") (EVar "seed"))))) (EApp (EApp (EVar "nativeProtocolError") (ELit (LString "invalid replay seed in native transcript"))) (EVar "request"))) (arm (PTuple PWild (PCon "FieldDecoded" (PVar "boolText")) PWild) ((GBool (EBinOp "&&" (EBinOp "/=" (EVar "boolText") (ELit (LString "True"))) (EBinOp "/=" (EVar "boolText") (ELit (LString "False")))))) (EApp (EApp (EVar "nativeProtocolError") (ELit (LString "invalid result value in native transcript"))) (EVar "request"))) (arm (PTuple (PCon "FieldDecoded" PWild) (PCon "FieldDecoded" (PLit (LString "True"))) (PCon "FieldDecoded" (PVar "detail"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (ELit (LString "native"))) (EVar "name")) (EVar "PropPassedResult")) (EVar "None")) (EVar "detail")) (EVar "seed")) (EVar "cases"))) (arm (PTuple (PCon "FieldDecoded" PWild) (PCon "FieldDecoded" (PLit (LString "False"))) (PCon "FieldDecoded" (PVar "detail"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (ELit (LString "native"))) (EVar "name")) (EVar "PropFailedResult")) (EApp (EVar "Some") (EVar "PropLawFalse"))) (EVar "detail")) (EVar "seed")) (EVar "cases"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (ELit (LString "native"))) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropRuntimeError"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "note"))) (ELit (LString "; this property was not fully reported")))) (EVar "seed")) (EVar "cases")))))))
 (DTypeSig true "propProbePrefixes" (TyApp (TyCon "List") (TyCon "String")))
@@ -2864,8 +2825,6 @@ paramName (PropParam n _ _) = n
 (DTypeSig true "propResultsFromRun" (TyFun (TyCon "String") (TyFun (TyCon "NativePropPlan") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "PropResult"))))))))
 (DFunDef false "propResultsFromRun" (PWild (PCon "NativePropsSettled" (PVar "rows")) PWild PWild PWild) (EVar "rows"))
 (DFunDef false "propResultsFromRun" ((PVar "nonce") (PCon "NativePropsToRun" PWild (PVar "outcomes") (PVar "runnable")) (PVar "code") (PVar "stdout") (PVar "stderr")) (EApp (EApp (EApp (EVar "plannedRowsFrom") (EVar "outcomes")) (EVar "runnable")) (EApp (EApp (EApp (EApp (EApp (EVar "plannedRendered") (EVar "nonce")) (EVar "runnable")) (EVar "code")) (EVar "stdout")) (EVar "stderr"))))
-(DTypeSig true "renderNativePlannedProbe" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PlanModule")) (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))
-(DFunDef false "renderNativePlannedProbe" ((PVar "target") (PVar "tsrc") (PVar "modules") (PVar "requests")) (EBlock (DoLet false false (PVar "props") (EApp (EVar "filterProps") (EApp (EVar "desugarProps") (EVar "tsrc")))) (DoExpr (EMatch (EApp (EApp (EVar "requestIndex") (EVar "requests")) (EVar "omEmpty")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "index")) () (EMatch (EApp (EApp (EApp (EVar "duplicateSelectedPropName") (EVar "props")) (EMethodRef "index")) (EVar "omEmpty")) (arm (PCon "Some" (PVar "duplicate")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "duplicate property declaration name \"")) (EApp (EMethodRef "display") (EVar "duplicate"))) (ELit (LString "\""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "buildPlanEnvModules") (EApp (EVar "plannedRoot") (EVar "modules"))) (EVar "modules")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "planErrorText") (EVar "e")))) (arm (PCon "Ok" (PVar "env")) () (EBlock (DoLet false false (PVar "jobs") (EApp (EVar "plannedRunnable") (EApp (EApp (EApp (EApp (EVar "plannedOutcomes") (EVar "env")) (EVar "modules")) (EVar "props")) (EMethodRef "index")))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "jobs")) (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "native property runner: no selected property could be rendered"))) (EBlock (DoLet false false (PVar "nonce") (EApp (EApp (EApp (EVar "freshProbeNonce") (ELit (LString "source_check"))) (EVar "propProbePrefixes")) (EVar "tsrc"))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "plannedProbeSource") (EVar "nonce")) (EVar "target")) (EVar "tsrc")) (EVar "modules")) (EVar "env")) (EVar "jobs")))))))))))))))))
 (DTypeSig false "plannedRoot" (TyFun (TyApp (TyCon "List") (TyCon "PlanModule")) (TyCon "String")))
 (DFunDef false "plannedRoot" ((PList)) (ELit (LString "")))
 (DFunDef false "plannedRoot" ((PList (PCon "PlanModule" (PVar "name") PWild PWild))) (EVar "name"))
@@ -2959,8 +2918,6 @@ paramName (PropParam n _ _) = n
 (DTypeSig false "renderIndexed" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Chunk")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "PropRequest"))) (TyApp (TyCon "List") (TyCon "PropResult")))))))
 (DFunDef false "renderIndexed" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "renderIndexed" ((PVar "chunks") (PVar "note") (PVar "i") (PCons (PTuple PWild (PVar "request")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "classifyNativeFields") (EVar "chunks")) (EVar "note")) (EVar "request")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "renderIndexed") (EVar "chunks")) (EVar "note")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
-(DTypeSig true "classifyNativeTranscript" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "String") (TyFun (TyCon "PropRequest") (TyFun (TyCon "Int") (TyCon "PropResult"))))))
-(DFunDef false "classifyNativeTranscript" ((PVar "chunks") (PVar "note") (PVar "request") (PVar "i")) (EApp (EApp (EApp (EApp (EVar "classifyNativeFields") (EApp (EApp (EVar "indexNativeChunks") (EVar "chunks")) (EVar "omEmpty"))) (EVar "note")) (EVar "request")) (EVar "i")))
 (DTypeSig false "classifyNativeFields" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Chunk")) (TyFun (TyCon "String") (TyFun (TyCon "PropRequest") (TyFun (TyCon "Int") (TyCon "PropResult"))))))
 (DFunDef false "classifyNativeFields" ((PVar "chunks") (PVar "note") (PVar "request") (PVar "i")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "propRequestName") (EVar "request"))) (DoLet false false (PVar "seed") (EApp (EVar "propRequestSeed") (EVar "request"))) (DoLet false false (PVar "cases") (EApp (EVar "propRequestCases") (EVar "request"))) (DoExpr (EMatch (ETuple (EApp (EApp (EVar "transcriptField") (EApp (EVar "seedTag") (EVar "i"))) (EVar "chunks")) (EApp (EApp (EVar "transcriptField") (EApp (EVar "boolTag") (EVar "i"))) (EVar "chunks")) (EApp (EApp (EVar "transcriptField") (EApp (EVar "detailTag") (EVar "i"))) (EVar "chunks"))) (arm (PTuple (PCon "FieldMalformed") PWild PWild) () (EApp (EApp (EVar "nativeProtocolError") (ELit (LString "malformed replay seed in native transcript"))) (EVar "request"))) (arm (PTuple PWild (PCon "FieldMalformed") PWild) () (EApp (EApp (EVar "nativeProtocolError") (ELit (LString "malformed result value in native transcript"))) (EVar "request"))) (arm (PTuple PWild PWild (PCon "FieldMalformed")) () (EApp (EApp (EVar "nativeProtocolError") (ELit (LString "malformed detail in native transcript"))) (EVar "request"))) (arm (PTuple (PCon "FieldDecoded" (PVar "seedText")) PWild PWild) ((GBool (EBinOp "/=" (EApp (EVar "toInt") (EVar "seedText")) (EApp (EVar "Some") (EVar "seed"))))) (EApp (EApp (EVar "nativeProtocolError") (ELit (LString "invalid replay seed in native transcript"))) (EVar "request"))) (arm (PTuple PWild (PCon "FieldDecoded" (PVar "boolText")) PWild) ((GBool (EBinOp "&&" (EBinOp "/=" (EVar "boolText") (ELit (LString "True"))) (EBinOp "/=" (EVar "boolText") (ELit (LString "False")))))) (EApp (EApp (EVar "nativeProtocolError") (ELit (LString "invalid result value in native transcript"))) (EVar "request"))) (arm (PTuple (PCon "FieldDecoded" PWild) (PCon "FieldDecoded" (PLit (LString "True"))) (PCon "FieldDecoded" (PVar "detail"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (ELit (LString "native"))) (EVar "name")) (EVar "PropPassedResult")) (EVar "None")) (EVar "detail")) (EVar "seed")) (EVar "cases"))) (arm (PTuple (PCon "FieldDecoded" PWild) (PCon "FieldDecoded" (PLit (LString "False"))) (PCon "FieldDecoded" (PVar "detail"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (ELit (LString "native"))) (EVar "name")) (EVar "PropFailedResult")) (EApp (EVar "Some") (EVar "PropLawFalse"))) (EVar "detail")) (EVar "seed")) (EVar "cases"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (ELit (LString "native"))) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropRuntimeError"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "note"))) (ELit (LString "; this property was not fully reported")))) (EVar "seed")) (EVar "cases")))))))
 (DTypeSig true "propProbePrefixes" (TyApp (TyCon "List") (TyCon "String")))

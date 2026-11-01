@@ -190,8 +190,8 @@ scattered places, moved rather than reinvented:
 Declaration method-result facts are produced in Core lowering as
 `CProgram`'s `factMethodResults` and indexed once in `EmitPlan.methodResults`;
 the native emitter reads the indexed return-head and callback-position rows.
-`methodConstraintIfaces` remains a separate declaration-introspection helper
-used by `compiler/types/typecheck_test.mdk`, not an emitter input. Checked entry
+`methodConstraintIfaces` is a declaration-introspection helper defined in
+`compiler/ir/core_ir_lower_test.mdk`, not an emitter input. Checked entry
 behavior is carried as `factEntryOutcome` on `CProgram` and `entryOutcome` on
 `EmitPlan`; the plan accessors derive the main-is-Unit and main-is-Float
 decisions consumed by entry emission.

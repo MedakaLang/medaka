@@ -1,5 +1,5 @@
 # META
-source_lines=254
+source_lines=238
 stages=DESUGAR,MARK
 # SOURCE
 -- The whole-graph per-method disposition table (#1112 A-3, #1403 X-E's future
@@ -35,7 +35,6 @@ export
 instIdMid : InstId -> String
 instIdMid (InstId m _) = m
 
-export
 instIdSeq : InstId -> Int
 instIdSeq (InstId _ s) = s
 
@@ -115,19 +114,6 @@ emptyDispositionTable = DispositionTable {
 export
 dispositionRows : DispositionTable -> List MethodDisposition
 dispositionRows table = table.dtRows
-
--- Fold [rows] into the table's map index, panicking on the first duplicate
--- (instance, method) key — two rows publishing the same slot is a producer
--- bug, never a case with a policy: `dispositionLookup` below must answer with
--- exactly one row or none.
-export
-buildDispositionTable : List MethodDisposition -> DispositionTable
-buildDispositionTable rows = DispositionTable {
-  dtRows = rows,
-  dtIndex = insertDispositions rows omEmpty,
-  dtInheritors = omEmpty,
-  dtIfaceSuperCounts = omEmpty,
-}
 
 -- The producer's builder: each row with its instance's shape and its interface's
 -- word (`route_key.ifaceWordOf`), which also fills the inheritor index, and each
@@ -209,7 +195,6 @@ insertDispositions (d :: rest) acc =
 -- A map lookup, never a List scan.  (`MethodDisposition` derives no `Debug`,
 -- so this is exercised as a `test` in `disposition_test.mdk` rather than a
 -- doctest that would print one.)
-export
 dispositionLookup : InstId ->
   String ->
   DispositionTable ->
@@ -229,7 +214,6 @@ ifaceRefSameSpelling a b = a.irName == b.irName
 -- iface, method) slots: a slot with no row, or a slot answered by a different
 -- interface.  Empty when every slot is disposed.  (A second row for one slot never
 -- reaches here: building the table refuses it.)
-export
 dispositionProblems : List (InstId, IfaceRef, String) ->
   DispositionTable ->
   List String
@@ -264,7 +248,7 @@ validateDispositionTable expected table =
 (DData Public "InstId" () ((variant "InstId" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DTypeSig true "instIdMid" (TyFun (TyCon "InstId") (TyCon "String")))
 (DFunDef false "instIdMid" ((PCon "InstId" (PVar "m") PWild)) (EVar "m"))
-(DTypeSig true "instIdSeq" (TyFun (TyCon "InstId") (TyCon "Int")))
+(DTypeSig false "instIdSeq" (TyFun (TyCon "InstId") (TyCon "Int")))
 (DFunDef false "instIdSeq" ((PCon "InstId" PWild (PVar "s"))) (EVar "s"))
 (DData Public "MethodDisposition" () ((variant "Supplied" (ConNamed (field "instance" (TyCon "InstId")) (field "iface" (TyCon "IfaceRef")) (field "method" (TyCon "String")))) (variant "InheritedDefault" (ConNamed (field "instance" (TyCon "InstId")) (field "iface" (TyCon "IfaceRef")) (field "method" (TyCon "String"))))) ())
 (DTypeSig true "dispositionInstance" (TyFun (TyCon "MethodDisposition") (TyCon "InstId")))
@@ -284,8 +268,6 @@ validateDispositionTable expected table =
 (DFunDef false "emptyDispositionTable" () (ERecordCreate "DispositionTable" ((fa "dtRows" (EListLit)) (fa "dtIndex" (EVar "omEmpty")) (fa "dtInheritors" (EVar "omEmpty")) (fa "dtIfaceSuperCounts" (EVar "omEmpty")))))
 (DTypeSig true "dispositionRows" (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyCon "MethodDisposition"))))
 (DFunDef false "dispositionRows" ((PVar "table")) (EFieldAccess (EVar "table") "dtRows"))
-(DTypeSig true "buildDispositionTable" (TyFun (TyApp (TyCon "List") (TyCon "MethodDisposition")) (TyCon "DispositionTable")))
-(DFunDef false "buildDispositionTable" ((PVar "rows")) (ERecordCreate "DispositionTable" ((fa "dtRows" (EVar "rows")) (fa "dtIndex" (EApp (EApp (EVar "insertDispositions") (EVar "rows")) (EVar "omEmpty"))) (fa "dtInheritors" (EVar "omEmpty")) (fa "dtIfaceSuperCounts" (EVar "omEmpty")))))
 (DTypeSig true "buildDispositionTableWithShapes" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstanceShape") (TyCon "String") (TyCon "MethodDisposition"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "DispositionTable"))))
 (DFunDef false "buildDispositionTableWithShapes" ((PVar "shaped") (PVar "superCounts")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "map") (ELam ((PTuple PWild PWild (PVar "d"))) (EVar "d"))) (EVar "shaped"))) (DoExpr (ERecordCreate "DispositionTable" ((fa "dtRows" (EVar "rows")) (fa "dtIndex" (EApp (EApp (EVar "insertDispositions") (EVar "rows")) (EVar "omEmpty"))) (fa "dtInheritors" (EApp (EApp (EVar "insertInheritors") (EApp (EVar "reverseL") (EVar "shaped"))) (EVar "omEmpty"))) (fa "dtIfaceSuperCounts" (EApp (EApp (EVar "insertSuperCounts") (EVar "superCounts")) (EVar "omEmpty"))))))))
 (DTypeSig false "insertSuperCounts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
@@ -308,11 +290,11 @@ validateDispositionTable expected table =
 (DTypeSig false "insertDispositions" (TyFun (TyApp (TyCon "List") (TyCon "MethodDisposition")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition")) (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition")))))
 (DFunDef false "insertDispositions" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "insertDispositions" ((PCons (PVar "d") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "dispositionKey") (EApp (EVar "dispositionInstance") (EVar "d"))) (EApp (EVar "dispositionMethod") (EVar "d")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "acc")) (arm (PCon "Some" PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: two rows published for ")) (EApp (EVar "display") (EVar "key"))) (ELit (LString ""))))) (arm (PCon "None") () (EApp (EApp (EVar "insertDispositions") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "d")) (EVar "acc"))))))))
-(DTypeSig true "dispositionLookup" (TyFun (TyCon "InstId") (TyFun (TyCon "String") (TyFun (TyCon "DispositionTable") (TyApp (TyCon "Option") (TyCon "MethodDisposition"))))))
+(DTypeSig false "dispositionLookup" (TyFun (TyCon "InstId") (TyFun (TyCon "String") (TyFun (TyCon "DispositionTable") (TyApp (TyCon "Option") (TyCon "MethodDisposition"))))))
 (DFunDef false "dispositionLookup" ((PVar "inst") (PVar "method") (PVar "table")) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "dispositionKey") (EVar "inst")) (EVar "method"))) (EFieldAccess (EVar "table") "dtIndex")))
 (DTypeSig false "ifaceRefSameSpelling" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "IfaceRef") (TyCon "Bool"))))
 (DFunDef false "ifaceRefSameSpelling" ((PVar "a") (PVar "b")) (EBinOp "==" (EFieldAccess (EVar "a") "irName") (EFieldAccess (EVar "b") "irName")))
-(DTypeSig true "dispositionProblems" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstId") (TyCon "IfaceRef") (TyCon "String"))) (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "dispositionProblems" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstId") (TyCon "IfaceRef") (TyCon "String"))) (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "dispositionProblems" ((PList) PWild) (EListLit))
 (DFunDef false "dispositionProblems" ((PCons (PTuple (PVar "inst") (PVar "iface") (PVar "method")) (PVar "rest")) (PVar "table")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "dispositionKey") (EVar "inst")) (EVar "method"))) (DoLet false false (PVar "here") (EMatch (EApp (EApp (EApp (EVar "dispositionLookup") (EVar "inst")) (EVar "method")) (EVar "table")) (arm (PCon "None") () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "missing disposition for ")) (EApp (EVar "display") (EVar "key"))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "row")) () (EIf (EApp (EApp (EVar "ifaceRefSameSpelling") (EVar "iface")) (EApp (EVar "dispositionIface") (EVar "row"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "key"))) (ELit (LString " answered by a different interface")))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EVar "dispositionProblems") (EVar "rest")) (EVar "table"))))))
 (DTypeSig true "validateDispositionTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstId") (TyCon "IfaceRef") (TyCon "String"))) (TyFun (TyCon "DispositionTable") (TyCon "Unit"))))
@@ -325,7 +307,7 @@ validateDispositionTable expected table =
 (DData Public "InstId" () ((variant "InstId" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DTypeSig true "instIdMid" (TyFun (TyCon "InstId") (TyCon "String")))
 (DFunDef false "instIdMid" ((PCon "InstId" (PVar "m") PWild)) (EVar "m"))
-(DTypeSig true "instIdSeq" (TyFun (TyCon "InstId") (TyCon "Int")))
+(DTypeSig false "instIdSeq" (TyFun (TyCon "InstId") (TyCon "Int")))
 (DFunDef false "instIdSeq" ((PCon "InstId" PWild (PVar "s"))) (EVar "s"))
 (DData Public "MethodDisposition" () ((variant "Supplied" (ConNamed (field "instance" (TyCon "InstId")) (field "iface" (TyCon "IfaceRef")) (field "method" (TyCon "String")))) (variant "InheritedDefault" (ConNamed (field "instance" (TyCon "InstId")) (field "iface" (TyCon "IfaceRef")) (field "method" (TyCon "String"))))) ())
 (DTypeSig true "dispositionInstance" (TyFun (TyCon "MethodDisposition") (TyCon "InstId")))
@@ -345,8 +327,6 @@ validateDispositionTable expected table =
 (DFunDef false "emptyDispositionTable" () (ERecordCreate "DispositionTable" ((fa "dtRows" (EListLit)) (fa "dtIndex" (EVar "omEmpty")) (fa "dtInheritors" (EVar "omEmpty")) (fa "dtIfaceSuperCounts" (EVar "omEmpty")))))
 (DTypeSig true "dispositionRows" (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyCon "MethodDisposition"))))
 (DFunDef false "dispositionRows" ((PVar "table")) (EFieldAccess (EVar "table") "dtRows"))
-(DTypeSig true "buildDispositionTable" (TyFun (TyApp (TyCon "List") (TyCon "MethodDisposition")) (TyCon "DispositionTable")))
-(DFunDef false "buildDispositionTable" ((PVar "rows")) (ERecordCreate "DispositionTable" ((fa "dtRows" (EVar "rows")) (fa "dtIndex" (EApp (EApp (EVar "insertDispositions") (EVar "rows")) (EVar "omEmpty"))) (fa "dtInheritors" (EVar "omEmpty")) (fa "dtIfaceSuperCounts" (EVar "omEmpty")))))
 (DTypeSig true "buildDispositionTableWithShapes" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstanceShape") (TyCon "String") (TyCon "MethodDisposition"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "DispositionTable"))))
 (DFunDef false "buildDispositionTableWithShapes" ((PVar "shaped") (PVar "superCounts")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild PWild (PVar "d"))) (EVar "d"))) (EVar "shaped"))) (DoExpr (ERecordCreate "DispositionTable" ((fa "dtRows" (EVar "rows")) (fa "dtIndex" (EApp (EApp (EVar "insertDispositions") (EVar "rows")) (EVar "omEmpty"))) (fa "dtInheritors" (EApp (EApp (EVar "insertInheritors") (EApp (EVar "reverseL") (EVar "shaped"))) (EVar "omEmpty"))) (fa "dtIfaceSuperCounts" (EApp (EApp (EVar "insertSuperCounts") (EVar "superCounts")) (EVar "omEmpty"))))))))
 (DTypeSig false "insertSuperCounts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
@@ -369,11 +349,11 @@ validateDispositionTable expected table =
 (DTypeSig false "insertDispositions" (TyFun (TyApp (TyCon "List") (TyCon "MethodDisposition")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition")) (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition")))))
 (DFunDef false "insertDispositions" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "insertDispositions" ((PCons (PVar "d") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "dispositionKey") (EApp (EVar "dispositionInstance") (EVar "d"))) (EApp (EVar "dispositionMethod") (EVar "d")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "acc")) (arm (PCon "Some" PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: two rows published for ")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString ""))))) (arm (PCon "None") () (EApp (EApp (EVar "insertDispositions") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "d")) (EVar "acc"))))))))
-(DTypeSig true "dispositionLookup" (TyFun (TyCon "InstId") (TyFun (TyCon "String") (TyFun (TyCon "DispositionTable") (TyApp (TyCon "Option") (TyCon "MethodDisposition"))))))
+(DTypeSig false "dispositionLookup" (TyFun (TyCon "InstId") (TyFun (TyCon "String") (TyFun (TyCon "DispositionTable") (TyApp (TyCon "Option") (TyCon "MethodDisposition"))))))
 (DFunDef false "dispositionLookup" ((PVar "inst") (PVar "method") (PVar "table")) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "dispositionKey") (EVar "inst")) (EVar "method"))) (EFieldAccess (EVar "table") "dtIndex")))
 (DTypeSig false "ifaceRefSameSpelling" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "IfaceRef") (TyCon "Bool"))))
 (DFunDef false "ifaceRefSameSpelling" ((PVar "a") (PVar "b")) (EBinOp "==" (EFieldAccess (EVar "a") "irName") (EFieldAccess (EVar "b") "irName")))
-(DTypeSig true "dispositionProblems" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstId") (TyCon "IfaceRef") (TyCon "String"))) (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "dispositionProblems" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstId") (TyCon "IfaceRef") (TyCon "String"))) (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "dispositionProblems" ((PList) PWild) (EListLit))
 (DFunDef false "dispositionProblems" ((PCons (PTuple (PVar "inst") (PVar "iface") (PVar "method")) (PVar "rest")) (PVar "table")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "dispositionKey") (EVar "inst")) (EVar "method"))) (DoLet false false (PVar "here") (EMatch (EApp (EApp (EApp (EVar "dispositionLookup") (EVar "inst")) (EVar "method")) (EVar "table")) (arm (PCon "None") () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "missing disposition for ")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "row")) () (EIf (EApp (EApp (EVar "ifaceRefSameSpelling") (EVar "iface")) (EApp (EVar "dispositionIface") (EVar "row"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString " answered by a different interface")))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EVar "dispositionProblems") (EVar "rest")) (EVar "table"))))))
 (DTypeSig true "validateDispositionTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstId") (TyCon "IfaceRef") (TyCon "String"))) (TyFun (TyCon "DispositionTable") (TyCon "Unit"))))

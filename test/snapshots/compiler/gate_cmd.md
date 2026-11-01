@@ -1,5 +1,5 @@
 # META
-source_lines=3767
+source_lines=3761
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -595,7 +595,6 @@ indentedNames (o :: os) = "  \{o}" :: indentedNames os
 -- The rebuild commands for the stale names, `mc` being the names the multicall
 -- oracle serves: they share one binary, so one multicall rebuild refreshes all
 -- of them, and every other name is rebuilt alone.
-export
 staleBannerLines : List String -> List String -> List String
 staleBannerLines mc stale =
   let served = filterList (o => contains o mc) stale
@@ -1470,7 +1469,6 @@ staleShareFrom all (g :: gs) =
     "\{g.name}: stale shares_baseline_with '\{g.sharesBaselineWith}' — it must name another entry deriving the same baselineKey; remove it once the old entry is gone"
       :: rest
 
-export
 duplicateBaselineKeyViolations : List Gate -> List String
 duplicateBaselineKeyViolations gates =
   dupKeyFrom gates (sortUniqS (map (g => baselineKey g.run) gates))
@@ -2313,10 +2311,7 @@ siteError name c =
    ungraded site. `Unresolvable` is an import that names no module file at
    all: the analysis cannot see what it does, and saying so is the difference
    between "nothing to grade" and "nothing was looked at". -}
-public export data ImportTarget =
-  | Followed String String
-  | Elsewhere
-  | Unresolvable
+export data ImportTarget = Followed String String | Elsewhere | Unresolvable
 
 {- | The module ids a source file imports, in source order.
 
@@ -2544,7 +2539,6 @@ nativeGradeViolations root (g :: gs) =
 
 -- ── assembling and rendering the violation classes ──────────────────────────
 
-export
 verifyClasses : String ->
   List Gate ->
   List Shard ->
@@ -3870,7 +3864,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "indentedNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "indentedNames" ((PList)) (EListLit))
 (DFunDef false "indentedNames" ((PCons (PVar "o") (PVar "os"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "o"))) (ELit (LString ""))) (EApp (EVar "indentedNames") (EVar "os"))))
-(DTypeSig true "staleBannerLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "staleBannerLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "staleBannerLines" ((PVar "mc") (PVar "stale")) (EBlock (DoLet false false (PVar "served") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EApp (EApp (EVar "contains") (EVar "o")) (EVar "mc")))) (EVar "stale"))) (DoLet false false (PVar "multi") (EIf (EApp (EVar "isEmptyStrs") (EVar "served")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    FORCE=1 sh test/build_oracles.sh --build-multicall   # ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "served"))))) (ELit (LString " multicall-served name(s)")))))) (DoExpr (EBinOp "++" (EVar "multi") (EApp (EVar "staleSingleLines") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "o")) (EVar "mc"))))) (EVar "stale")))))))
 (DTypeSig false "staleSingleLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "staleSingleLines" ((PList)) (EListLit))
@@ -4052,7 +4046,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "staleShareFrom" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "staleShareFrom" (PWild (PList)) (EListLit))
 (DFunDef false "staleShareFrom" ((PVar "all") (PCons (PVar "g") (PVar "gs"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "staleShareFrom") (EVar "all")) (EVar "gs"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "g") "sharesBaselineWith") (ELit (LString ""))) (EApp (EApp (EVar "declaresLiveShare") (EVar "all")) (EVar "g"))) (EVar "rest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": stale shares_baseline_with '"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "sharesBaselineWith"))) (ELit (LString "' — it must name another entry deriving the same baselineKey; remove it once the old entry is gone"))) (EVar "rest"))))))
-(DTypeSig true "duplicateBaselineKeyViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "duplicateBaselineKeyViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "duplicateBaselineKeyViolations" ((PVar "gates")) (EBinOp "++" (EApp (EApp (EVar "dupKeyFrom") (EVar "gates")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (ELam ((PVar "g")) (EApp (EVar "baselineKey") (EFieldAccess (EVar "g") "run")))) (EVar "gates")))) (EApp (EVar "staleShareViolations") (EVar "gates"))))
 (DTypeSig false "nameCharOk" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "nameCharOk" ((PVar "c")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "a"))) (EBinOp "<=" (EVar "c") (ELit (LString "z")))) (EVar "True") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "A"))) (EBinOp "<=" (EVar "c") (ELit (LString "Z")))) (EVar "True") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9")))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "_"))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "."))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "/"))) (EVar "True") (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
@@ -4240,7 +4234,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "namesOther" ((PVar "a") (PVar "b")) (EMatch (EFieldAccess (EVar "b") "callName") (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "nm")) () (EApp (EApp (EVar "containsWord") (EVar "nm")) (EFieldAccess (EVar "a") "text")))))
 (DTypeSig false "siteError" (TyFun (TyCon "String") (TyFun (TyCon "GateChunk") (TyCon "String"))))
 (DFunDef false "siteError" ((PVar "name") (PVar "c")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ": "))) (EApp (EVar "display") (EFieldAccess (EVar "c") "file"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EFieldAccess (EVar "c") "line")))) (ELit (LString ": `"))) (EApp (EVar "display") (EFieldAccess (EVar "c") "name"))) (ELit (LString "` spawns a process (via runVerb/boundedVerb/boundedInTree/runMedaka/checkRunBuild) but neither it, anything it calls, nor anything calling it reads the exit code or stderr that spawn returned — grade them too, e.g. via compiler_cli_test_support's expectCheck*/expectVerbExitStartsWith*/binaryRanClean or test_process's expectSpawnFails/expectSpawnOkLine"))))
-(DData Public "ImportTarget" () ((variant "Followed" (ConPos (TyCon "String") (TyCon "String"))) (variant "Elsewhere" (ConPos)) (variant "Unresolvable" (ConPos))) ())
+(DData Abstract "ImportTarget" () ((variant "Followed" (ConPos (TyCon "String") (TyCon "String"))) (variant "Elsewhere" (ConPos)) (variant "Unresolvable" (ConPos))) ())
 (DTypeSig false "importedModules" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "importedModules" ((PVar "src")) (EApp (EVar "importedGo") (EApp (EVar "splitNl") (EVar "src"))))
 (DTypeSig false "importedGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -4287,7 +4281,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "nativeGradeViolations" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "nativeGradeViolations" (PWild (PList)) (EListLit))
 (DFunDef false "nativeGradeViolations" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "nativeGradeErrors") (EVar "root")) (EVar "g")) (EApp (EApp (EVar "nativeGradeViolations") (EVar "root")) (EVar "gs"))))
-(DTypeSig true "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))))
+(DTypeSig false "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "verifyClasses" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))) (ETuple (ELit (LString "duplicate entry names")) (EApp (EVar "duplicateNameViolations") (EVar "gates"))) (ETuple (ELit (LString "duplicate baselineKeys")) (EApp (EVar "duplicateBaselineKeyViolations") (EVar "gates"))) (ETuple (ELit (LString "unsafe entry names")) (EApp (EApp (EVar "unsafeNameViolations") (EVar "gates")) (EVar "shs"))) (ETuple (ELit (LString "invalid cost class")) (EApp (EVar "invalidCostViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid tiers")) (EApp (EVar "invalidTiersViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid migration class")) (EApp (EVar "invalidMigrationViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid link profile")) (EApp (EVar "invalidLinkViolations") (EVar "gates"))) (ETuple (ELit (LString "unpaired shell-because")) (EApp (EApp (EApp (EVar "pairedHeaderViolations") (EVar "shellPairing")) (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unpaired blocked-because")) (EApp (EApp (EApp (EVar "pairedHeaderViolations") (EVar "blockedPairing")) (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "native gate stdout-only grading")) (EApp (EApp (EVar "nativeGradeViolations") (EVar "root")) (EVar "gates"))))))))))
 (DTypeSig false "renderClass" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "OK    ")) (EApp (EVar "display") (EVar "title"))) (ELit (LString ": 0\n"))))
@@ -4651,7 +4645,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "indentedNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "indentedNames" ((PList)) (EListLit))
 (DFunDef false "indentedNames" ((PCons (PVar "o") (PVar "os"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "o"))) (ELit (LString ""))) (EApp (EVar "indentedNames") (EVar "os"))))
-(DTypeSig true "staleBannerLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "staleBannerLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "staleBannerLines" ((PVar "mc") (PVar "stale")) (EBlock (DoLet false false (PVar "served") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EApp (EApp (EVar "contains") (EVar "o")) (EVar "mc")))) (EVar "stale"))) (DoLet false false (PVar "multi") (EIf (EApp (EVar "isEmptyStrs") (EVar "served")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    FORCE=1 sh test/build_oracles.sh --build-multicall   # ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "served"))))) (ELit (LString " multicall-served name(s)")))))) (DoExpr (EBinOp "++" (EVar "multi") (EApp (EVar "staleSingleLines") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "o")) (EVar "mc"))))) (EVar "stale")))))))
 (DTypeSig false "staleSingleLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "staleSingleLines" ((PList)) (EListLit))
@@ -4833,7 +4827,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "staleShareFrom" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "staleShareFrom" (PWild (PList)) (EListLit))
 (DFunDef false "staleShareFrom" ((PVar "all") (PCons (PVar "g") (PVar "gs"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "staleShareFrom") (EDictApp "all")) (EVar "gs"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "g") "sharesBaselineWith") (ELit (LString ""))) (EApp (EApp (EVar "declaresLiveShare") (EDictApp "all")) (EVar "g"))) (EVar "rest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": stale shares_baseline_with '"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "sharesBaselineWith"))) (ELit (LString "' — it must name another entry deriving the same baselineKey; remove it once the old entry is gone"))) (EVar "rest"))))))
-(DTypeSig true "duplicateBaselineKeyViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "duplicateBaselineKeyViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "duplicateBaselineKeyViolations" ((PVar "gates")) (EBinOp "++" (EApp (EApp (EVar "dupKeyFrom") (EVar "gates")) (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (ELam ((PVar "g")) (EApp (EVar "baselineKey") (EFieldAccess (EVar "g") "run")))) (EVar "gates")))) (EApp (EVar "staleShareViolations") (EVar "gates"))))
 (DTypeSig false "nameCharOk" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "nameCharOk" ((PVar "c")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "a"))) (EBinOp "<=" (EVar "c") (ELit (LString "z")))) (EVar "True") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "A"))) (EBinOp "<=" (EVar "c") (ELit (LString "Z")))) (EVar "True") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9")))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "_"))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "."))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "/"))) (EVar "True") (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
@@ -5021,7 +5015,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "namesOther" ((PVar "a") (PVar "b")) (EMatch (EFieldAccess (EVar "b") "callName") (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "nm")) () (EApp (EApp (EVar "containsWord") (EVar "nm")) (EFieldAccess (EVar "a") "text")))))
 (DTypeSig false "siteError" (TyFun (TyCon "String") (TyFun (TyCon "GateChunk") (TyCon "String"))))
 (DFunDef false "siteError" ((PVar "name") (PVar "c")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "c") "file"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EFieldAccess (EVar "c") "line")))) (ELit (LString ": `"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "c") "name"))) (ELit (LString "` spawns a process (via runVerb/boundedVerb/boundedInTree/runMedaka/checkRunBuild) but neither it, anything it calls, nor anything calling it reads the exit code or stderr that spawn returned — grade them too, e.g. via compiler_cli_test_support's expectCheck*/expectVerbExitStartsWith*/binaryRanClean or test_process's expectSpawnFails/expectSpawnOkLine"))))
-(DData Public "ImportTarget" () ((variant "Followed" (ConPos (TyCon "String") (TyCon "String"))) (variant "Elsewhere" (ConPos)) (variant "Unresolvable" (ConPos))) ())
+(DData Abstract "ImportTarget" () ((variant "Followed" (ConPos (TyCon "String") (TyCon "String"))) (variant "Elsewhere" (ConPos)) (variant "Unresolvable" (ConPos))) ())
 (DTypeSig false "importedModules" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "importedModules" ((PVar "src")) (EApp (EVar "importedGo") (EApp (EVar "splitNl") (EVar "src"))))
 (DTypeSig false "importedGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -5068,7 +5062,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "nativeGradeViolations" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "nativeGradeViolations" (PWild (PList)) (EListLit))
 (DFunDef false "nativeGradeViolations" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "nativeGradeErrors") (EVar "root")) (EVar "g")) (EApp (EApp (EVar "nativeGradeViolations") (EVar "root")) (EVar "gs"))))
-(DTypeSig true "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))))
+(DTypeSig false "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "verifyClasses" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))) (ETuple (ELit (LString "duplicate entry names")) (EApp (EVar "duplicateNameViolations") (EVar "gates"))) (ETuple (ELit (LString "duplicate baselineKeys")) (EApp (EVar "duplicateBaselineKeyViolations") (EVar "gates"))) (ETuple (ELit (LString "unsafe entry names")) (EApp (EApp (EVar "unsafeNameViolations") (EVar "gates")) (EVar "shs"))) (ETuple (ELit (LString "invalid cost class")) (EApp (EVar "invalidCostViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid tiers")) (EApp (EVar "invalidTiersViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid migration class")) (EApp (EVar "invalidMigrationViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid link profile")) (EApp (EVar "invalidLinkViolations") (EVar "gates"))) (ETuple (ELit (LString "unpaired shell-because")) (EApp (EApp (EApp (EVar "pairedHeaderViolations") (EVar "shellPairing")) (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unpaired blocked-because")) (EApp (EApp (EApp (EVar "pairedHeaderViolations") (EVar "blockedPairing")) (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "native gate stdout-only grading")) (EApp (EApp (EVar "nativeGradeViolations") (EVar "root")) (EVar "gates"))))))))))
 (DTypeSig false "renderClass" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "OK    ")) (EApp (EMethodRef "display") (EVar "title"))) (ELit (LString ": 0\n"))))

@@ -344,9 +344,10 @@ twenty-five modules below it plus the entry, 27 rows with `tc_types` and `typech
   measures 2,403 (the 64-declaration recursion plus its arm helpers), so no over-3,000 reason is owed.
   `tc_module` (2,650) and `tc_occurrence` (2,900) carry no adopted reason: a sprint that would take
   either over 3,000 stops for Val.
-- The D8 exception (narrow, named): the 15 trace and probe sinks consumed by drive-level tests stay
-  in their home modules in the test-only section and are imported directly by `typecheck_test.mdk`,
-  with no facade; the exception ends with R35 (`docs/design/TEST-SIBLING-ACCESS-DESIGN.md`).
+- The D8 exception (narrow, named): the 14 trace and probe sinks consumed by drive-level tests stay
+  exported from their home modules and are imported directly by `typecheck_test.mdk`, with no
+  facade; `typecheck_test.mdk` is not their subject's sibling, so the R35 sibling privilege
+  (`docs/design/TEST-SIBLING-ACCESS-DESIGN.md`) does not reach them.
 - `tc_mono`'s holds is reworded to "pure except for minting effect-variable ids from the
   graph-run counter"; lifting that mint is an idiom-slice option under the identity oracles.
 - The alias-qualified-method family (45 declarations across `tc_env`, `tc_scope` and `typecheck`)
@@ -412,7 +413,7 @@ exists when F3 lands, F3 adds the full view to the interface under a format-vers
 |---|---|---|
 | **F1** (landed in #4314) | A `frontend/` module, seeded from `resolve.mdk`'s `ExpNs` block, answers "may this importer see this name" from declarations plus a loader-supplied sibling flag; resolve and `private_mangle`'s import map read it. | Two-arm IR identity and the LEG A goldens unchanged; `resolve.mdk` shrinks. |
 | **F2** (landed in #4703) | The sites were the `tc_*` modules, not `types/typecheck.mdk` itself. `publicDataDecl(s)`, `kindPublicDataDecl`, `publicStandaloneNames` and `publicValNames` (deleted) and the re-export walkers in `tc_env`, `tc_decls`, `tc_module`, `tc_shadow` and `typecheck` read `frontend/visibility`; the M-IDENTITY ladders are untouched. `eval` and `core_ir_eval` moved in from F3: `eval.moduleExports` narrows `ModExports` to the producer's names, so `run` no longer binds an unexported name through an import (#4710). The producer gained `declExportsIn`, `declExportsCtors`, `exportedValueNames`, `nsAbstractData` (exported), `nsIfaceMethods` (exported) and the `DLetGroup True` arm of `nsValues`. Re-export walkers read `pubUsePaths`, which drops the `DAttrib` arm (only `@attr export import` reaches it). The one-decl predicates still do not unwrap `DAttrib`; that gap is #3765's. #4312 is ruled an ambiguity error, and #4316's pin now counts the missing `pub` spellings. | `test/arch_goldens/visibility.golden` fell for the `tc_*` modules and `eval.eval` (rows removed where a module no longer reads a spelling) and rose for `frontend.visibility` (the producer gained facets). What remains in `tc_decls` and `typecheck` is the V3 selections and V4 rebuilds the census classified, pinned, not zeroed. `types/typecheck.mdk` did not grow. |
-| **F3** | Test siblings see their subject's private names (the design's slice 3). | The design's slice 3 evidence. |
+| **F3** (landed in #4717) | Test siblings see their subject's private names (the design's slice 3). | The relation is the `SiblingPair` record (`frontend/ast.mdk`), built by `siblingPairOf` in `driver/diagnostics.mdk` from the loader's sibling classification; every `_test` module in a loaded graph is privileged toward its own subject (`siblingPairsOf`, `compiler/driver/diagnostics.mdk`), wherever it sits in the graph (S-full-view). The test-import ban is `R-TEST-MODULE-IMPORT`, in the loader (S-test-import-ban). The backends, the interpreter engines and `medaka test` read the full view (S-full-view-backends, S-full-view-engines, S-full-view-test); LSP diagnostics do too after FIX-2's F6 fix, while the hover and completion helpers went to the migration (FIX-2, S-sibling-lsp). Evidence: S-sibling-relation's `loader_test` rows (13/13; three of four mutations turn rows red, the fourth is entailed by the directory clause), S-test-import-ban's (17/17, three rows red under mutation); the end review (REVIEW.md) found 12 findings, 4 of them S0/S1, and FIX-1 to FIX-3 followed. |
 
 ---
 

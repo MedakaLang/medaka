@@ -1,4 +1,4 @@
--- Sibling test module for `compiler/types/disposition.mdk` (#1112 A-3). See
+-- Sibling test module for `compiler/types/disposition.mdk`. See
 -- `registry_test.mdk`'s own header for why a `*_test.mdk` sibling exists at
 -- all: excluded from both build fingerprints and the snapshot corpus, so this
 -- file never makes `./medaka` warn stale and never owes a golden.
@@ -17,10 +17,12 @@
 import test.{expectTrue, expectEqual, expectAll}
 import frontend.ast.{TyConOrigin(..)}
 import types.repr.{IfaceRef(..)}
+import support.ordmap.{omEmpty}
 import types.disposition.{
+  DispositionTable(..),
   InstId(..),
   MethodDisposition(..),
-  buildDispositionTable,
+  insertDispositions,
   dispositionKey,
   dispositionLookup,
   dispositionRows,
@@ -28,6 +30,18 @@ import types.disposition.{
   instIdMid,
   instIdSeq,
   dispositionProblems,
+}
+
+-- Fold [rows] into the table's map index, panicking on the first duplicate
+-- (instance, method) key: two rows publishing the same slot is a producer bug,
+-- never a case with a policy, so `dispositionLookup` must answer with exactly
+-- one row or none.
+buildDispositionTable : List MethodDisposition -> DispositionTable
+buildDispositionTable rows = DispositionTable {
+  dtRows = rows,
+  dtIndex = insertDispositions rows omEmpty,
+  dtInheritors = omEmpty,
+  dtIfaceSuperCounts = omEmpty,
 }
 
 speakIface : IfaceRef
@@ -73,7 +87,7 @@ test "buildDispositionTable answers a supplied row by exact key" =
   expectTrue
     (isSuppliedFor dogInst "speak" (dispositionLookup dogInst "speak" table))
 
--- #1265's shape: the SAME method spelling, inherited on the SAME underlying
+-- The shape: the SAME method spelling, inherited on the SAME underlying
 -- type, but under two impls of two differently-named interfaces — two
 -- separate instance identities (separate `impl` declarations), so the table
 -- must keep both rows distinct rather than collapsing them onto one

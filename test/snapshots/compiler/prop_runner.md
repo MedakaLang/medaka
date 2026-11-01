@@ -1,5 +1,5 @@
 # META
-source_lines=1754
+source_lines=1752
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -140,7 +140,6 @@ randIntRange lo hi = structuralRngRange (rngNextLocal ()) lo hi
 -- Exported so a distribution regression test can seed the runner's private
 -- RNG (`seedPropRng`) and draw a raw sequence directly, without going through
 -- a `prop`'s randomized-length `List Bool` generation.
-export
 randBoolL : Unit -> Bool
 randBoolL _ = structuralRngChoose (rngNextLocal ()) 2 == 1
 
@@ -148,7 +147,7 @@ randBoolL _ = structuralRngChoose (rngNextLocal ()) 2 == 1
 -- The shared PlanEnv makes every structural and capability decision. GenEnv
 -- maps a selected custom carrier to compiler-typed helper bindings.
 public export data PropHelper = PropHelper String String String
-public export data GenEnv = GenEnv PlanEnv (OrdMap PropHelper)
+export data GenEnv = GenEnv PlanEnv (OrdMap PropHelper)
 export
 buildGenEnv : List Decl -> List Decl -> GenEnv
 buildGenEnv _ allDecls = GenEnv (buildPlanEnv allDecls) omEmpty
@@ -359,7 +358,6 @@ genParam (ge@(GenEnv planEnv _)) evalEnv ty =
 
 -- Interpret the same finite plan the native runner renders. Imported nominals
 -- resolve through PlanEnv by TypeKey, never through a spelling-only registry.
-export
 genFromPlan : GenEnv -> EvalEnv (Value e) -> Int -> GenPlan -> <e> Value e
 genFromPlan _ _ _ GInt = VInt (randIntRange intMin intMax)
 genFromPlan _ _ _ GBool = VBool (randBoolL ())
@@ -1784,10 +1782,10 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EApp (EVar "structuralRngAdvance") (EUnOp "!" (EVar "propRngStateRef")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoExpr (EApp (EVar "structuralRngMix") (EVar "s")))))
 (DTypeSig false "randIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "randIntRange" ((PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "structuralRngRange") (EApp (EVar "rngNextLocal") (ELit LUnit))) (EVar "lo")) (EVar "hi")))
-(DTypeSig true "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DTypeSig false "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "randBoolL" (PWild) (EBinOp "==" (EApp (EApp (EVar "structuralRngChoose") (EApp (EVar "rngNextLocal") (ELit LUnit))) (ELit (LInt 2))) (ELit (LInt 1))))
 (DData Public "PropHelper" () ((variant "PropHelper" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
-(DData Public "GenEnv" () ((variant "GenEnv" (ConPos (TyCon "PlanEnv") (TyApp (TyCon "OrdMap") (TyCon "PropHelper"))))) ())
+(DData Abstract "GenEnv" () ((variant "GenEnv" (ConPos (TyCon "PlanEnv") (TyApp (TyCon "OrdMap") (TyCon "PropHelper"))))) ())
 (DTypeSig true "buildGenEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "GenEnv"))))
 (DFunDef false "buildGenEnv" (PWild (PVar "allDecls")) (EApp (EApp (EVar "GenEnv") (EApp (EVar "buildPlanEnv") (EVar "allDecls"))) (EVar "omEmpty")))
 (DTypeSig false "buildGenEnvWithPlan" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "PlanEnv") (TyCon "GenEnv"))))
@@ -1840,7 +1838,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "genInputsPlanned" (PWild PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "property runner: prepared parameter plan mismatch"))))
 (DTypeSig false "genParam" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Ty") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "genParam" ((PAs "ge" (PCon "GenEnv" (PVar "planEnv") PWild)) (PVar "evalEnv") (PVar "ty")) (EMatch (EApp (EApp (EApp (EApp (EVar "planFor") (EVar "planEnv")) (ELit (LString ""))) (ELit (LString "property parameter"))) (EVar "ty")) (arm (PCon "Ok" (PVar "plan")) () (EApp (EApp (EApp (EApp (EVar "genFromPlan") (EVar "ge")) (EVar "evalEnv")) (ELit (LInt 0))) (EVar "plan"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "panic") (EApp (EVar "planErrorText") (EVar "e"))))))
-(DTypeSig true "genFromPlan" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
+(DTypeSig false "genFromPlan" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "genFromPlan" (PWild PWild PWild (PCon "GInt")) (EApp (EVar "VInt") (EApp (EApp (EVar "randIntRange") (EVar "intMin")) (EVar "intMax"))))
 (DFunDef false "genFromPlan" (PWild PWild PWild (PCon "GBool")) (EApp (EVar "VBool") (EApp (EVar "randBoolL") (ELit LUnit))))
 (DFunDef false "genFromPlan" (PWild PWild PWild (PCon "GFloat")) (EApp (EVar "genFloat") (ELit LUnit)))
@@ -2260,10 +2258,10 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EApp (EVar "structuralRngAdvance") (EUnOp "!" (EVar "propRngStateRef")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoExpr (EApp (EVar "structuralRngMix") (EVar "s")))))
 (DTypeSig false "randIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "randIntRange" ((PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "structuralRngRange") (EApp (EVar "rngNextLocal") (ELit LUnit))) (EVar "lo")) (EVar "hi")))
-(DTypeSig true "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DTypeSig false "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "randBoolL" (PWild) (EBinOp "==" (EApp (EApp (EVar "structuralRngChoose") (EApp (EVar "rngNextLocal") (ELit LUnit))) (ELit (LInt 2))) (ELit (LInt 1))))
 (DData Public "PropHelper" () ((variant "PropHelper" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
-(DData Public "GenEnv" () ((variant "GenEnv" (ConPos (TyCon "PlanEnv") (TyApp (TyCon "OrdMap") (TyCon "PropHelper"))))) ())
+(DData Abstract "GenEnv" () ((variant "GenEnv" (ConPos (TyCon "PlanEnv") (TyApp (TyCon "OrdMap") (TyCon "PropHelper"))))) ())
 (DTypeSig true "buildGenEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "GenEnv"))))
 (DFunDef false "buildGenEnv" (PWild (PVar "allDecls")) (EApp (EApp (EVar "GenEnv") (EApp (EVar "buildPlanEnv") (EVar "allDecls"))) (EVar "omEmpty")))
 (DTypeSig false "buildGenEnvWithPlan" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "PlanEnv") (TyCon "GenEnv"))))
@@ -2316,7 +2314,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "genInputsPlanned" (PWild PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "property runner: prepared parameter plan mismatch"))))
 (DTypeSig false "genParam" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Ty") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "genParam" ((PAs "ge" (PCon "GenEnv" (PVar "planEnv") PWild)) (PVar "evalEnv") (PVar "ty")) (EMatch (EApp (EApp (EApp (EApp (EVar "planFor") (EVar "planEnv")) (ELit (LString ""))) (ELit (LString "property parameter"))) (EVar "ty")) (arm (PCon "Ok" (PVar "plan")) () (EApp (EApp (EApp (EApp (EVar "genFromPlan") (EVar "ge")) (EVar "evalEnv")) (ELit (LInt 0))) (EVar "plan"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "panic") (EApp (EVar "planErrorText") (EVar "e"))))))
-(DTypeSig true "genFromPlan" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
+(DTypeSig false "genFromPlan" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "genFromPlan" (PWild PWild PWild (PCon "GInt")) (EApp (EVar "VInt") (EApp (EApp (EVar "randIntRange") (EVar "intMin")) (EVar "intMax"))))
 (DFunDef false "genFromPlan" (PWild PWild PWild (PCon "GBool")) (EApp (EVar "VBool") (EApp (EVar "randBoolL") (ELit LUnit))))
 (DFunDef false "genFromPlan" (PWild PWild PWild (PCon "GFloat")) (EApp (EVar "genFloat") (ELit LUnit)))

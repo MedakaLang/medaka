@@ -8,11 +8,37 @@ import types.evidence_complete.{
   EvidenceRow(..),
   HoleKind(..),
   Inner(..),
-  holeKindsOf,
+  hasUnroutedPart,
   holeKindsWith,
   innerNone,
-  rowHole,
+  namesHead,
+  routeChildren,
+  rowHoleWith,
 }
+import support.util.{anyList}
+
+-- Every hole kind [row] exhibits; the walk, for a row built by hand.
+holeKindsOf : EvidenceRow -> List HoleKind
+holeKindsOf row = holeKindsWith (innerOfRow row) row
+
+-- The row's first hole kind and the diagnostic text for it, or `None` for a
+-- complete row.
+rowHole : EvidenceRow -> Option (HoleKind, String)
+rowHole row = rowHoleWith (innerOfRow row) row
+
+innerOfRow : EvidenceRow -> Inner
+innerOfRow (OccurrenceRow _ _ tag impls meths) =
+  innerBelow (tag :: impls ++ meths)
+innerOfRow (DictAppRow _ _ routes) = innerBelow routes
+innerOfRow (SiteRow r) = innerBelow [r]
+
+-- What lies below the children of [routes], by walking it.
+innerBelow : List Route -> Inner
+innerBelow routes =
+  let kids = flatMap routeChildren routes
+  Inner
+    (anyList hasUnroutedPart kids)
+    (anyList (k => anyList namesHead (routeChildren k)) kids)
 
 instanceKey : Route
 instanceKey = RKey "m::K|m.Box|" [] []

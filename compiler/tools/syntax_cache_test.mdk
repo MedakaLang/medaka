@@ -5,7 +5,7 @@ import tools.snapshot_syntax.{
 }
 import tools.syntax_cache.{
   SyntaxCacheLimits(..), emptySyntaxCache, insertSyntax, lookupSyntax,
-  invalidateSyntax, clearSyntax, syntaxCacheSize, syntaxCacheWeight
+  invalidateSyntax, syntaxCacheSize, SyntaxCache
 }
 import frontend.syntax_source.{syntaxSourceText}
 import frontend.parse_recovery.{RecoveryLimits(..)}
@@ -156,3 +156,9 @@ test "aggregate budgets evict oldest and negative limits retain nothing" =
     expectEqual 0 (syntaxCacheSize negativeTotal),
     expectEqual 0 (syntaxCacheSize negativeTokens),
   ]
+
+clearSyntax : SyntaxCache -> SyntaxCache
+clearSyntax (SyntaxCache limits _ _ _ _) = emptySyntaxCache limits
+
+syntaxCacheWeight : SyntaxCache -> (Int, Int)
+syntaxCacheWeight (SyntaxCache _ _ _ source tokens) = (source, tokens)

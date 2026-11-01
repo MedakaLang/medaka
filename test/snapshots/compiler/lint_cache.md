@@ -1,5 +1,5 @@
 # META
-source_lines=508
+source_lines=507
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cache.mdk — the on-disk cache behind `medaka lint --cache` (#395).
@@ -179,7 +179,6 @@ cacheDirOf root = "\{root}/.medaka/lint-cache"
 -- `a/b.mdk` with `a_b.mdk`.  The hash is only a filename disambiguator, never a
 -- correctness argument: the full path is stored INSIDE the shard and checked on
 -- load, so a collision costs both files a permanent miss, never a wrong hit.
-export
 shardPathOf : String -> String -> String
 shardPathOf cacheDir srcPath =
   "\{cacheDir}/\{sanitizePath srcPath}-\{hashString srcPath}.sx"
@@ -536,7 +535,7 @@ ensureCacheDir cacheDir =
 (DFunDef false "ruleSetStamp" (PWild) (EApp (EApp (EVar "resultOr") (ELit (LString ""))) (EApp (EVar "hashFile") (EApp (EVar "executablePath") (ELit LUnit)))))
 (DTypeSig true "cacheDirOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "cacheDirOf" ((PVar "root")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/.medaka/lint-cache"))))
-(DTypeSig true "shardPathOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DTypeSig false "shardPathOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "shardPathOf" ((PVar "cacheDir") (PVar "srcPath")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "cacheDir"))) (ELit (LString "/"))) (EApp (EVar "display") (EApp (EVar "sanitizePath") (EVar "srcPath")))) (ELit (LString "-"))) (EApp (EVar "display") (EApp (EVar "hashString") (EVar "srcPath")))) (ELit (LString ".sx"))))
 (DTypeSig false "sanitizePath" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "sanitizePath" ((PVar "p")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "p"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoLet false false (PVar "start") (EIf (EBinOp ">" (EVar "n") (ELit (LInt 60))) (EBinOp "-" (EVar "n") (ELit (LInt 60))) (ELit (LInt 0)))) (DoExpr (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "sanitizeGo") (EVar "cs")) (EVar "start")) (EVar "n")))))))
@@ -630,7 +629,7 @@ ensureCacheDir cacheDir =
 (DFunDef false "ruleSetStamp" (PWild) (EApp (EApp (EVar "resultOr") (ELit (LString ""))) (EApp (EVar "hashFile") (EApp (EVar "executablePath") (ELit LUnit)))))
 (DTypeSig true "cacheDirOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "cacheDirOf" ((PVar "root")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/.medaka/lint-cache"))))
-(DTypeSig true "shardPathOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DTypeSig false "shardPathOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "shardPathOf" ((PVar "cacheDir") (PVar "srcPath")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "cacheDir"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EApp (EVar "sanitizePath") (EVar "srcPath")))) (ELit (LString "-"))) (EApp (EMethodRef "display") (EApp (EVar "hashString") (EVar "srcPath")))) (ELit (LString ".sx"))))
 (DTypeSig false "sanitizePath" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "sanitizePath" ((PVar "p")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "p"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoLet false false (PVar "start") (EIf (EBinOp ">" (EVar "n") (ELit (LInt 60))) (EBinOp "-" (EVar "n") (ELit (LInt 60))) (ELit (LInt 0)))) (DoExpr (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "sanitizeGo") (EVar "cs")) (EVar "start")) (EVar "n")))))))

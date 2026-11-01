@@ -8,7 +8,6 @@ callUOblsWindow : ModuleCtx -> Int -> List UObligation
 carryModuleCtx : GraphCtx -> ModuleCtx -> ModuleCtx
 checkRunResidue : ModuleCtx -> CheckRunSeed
 currentScopeStore : GraphCtx -> Unit -> ScopeStore
-defaultBodyBinderNamesProbe : Unit -> List String
 defaultReceiverOrdinal : Int
 dictParamName : String -> Int -> String
 dynAt : Option Loc -> DynCtx -> DynCtx

@@ -1,5 +1,5 @@
 # META
-source_lines=3626
+source_lines=3625
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_infer: the expression inference recursion (variables, application, lambda, let and rec-let,
@@ -2993,7 +2993,6 @@ matchWarningLoc None _ = None
 -- and wildcard patterns, e.g. a lambda's parameter matched against integer
 -- literals) is checked at the module's end instead, once `settleDeferredPatLits`
 -- has given it its type, so the warning names it (`non-exhaustive match on U8`).
-export
 checkMatchChecks : ModuleCtx -> Mono -> List Arm -> Unit
 checkMatchChecks mctx scrutTy arms =
   checkMatchExhaustive mctx scrutTy arms
@@ -4058,7 +4057,7 @@ matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
 (DTypeSig false "matchWarningLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "matchWarningLoc" ((PCon "Some" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (PVar "arms")) (EMatch (EApp (EVar "last") (EVar "arms")) (arm (PCon "Some" (PCon "Arm" PWild PWild (PVar "body"))) () (EMatch (EApp (EVar "exprSpanLoc") (EVar "body")) (arm (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "bel") (PVar "bec"))) ((GBool (EBinOp "<" (EVar "bel") (EVar "el")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "bel")) (EVar "bec")))) (arm PWild () (EMatch (EApp (EVar "exprLoc") (EVar "body")) (arm (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "bel") (PVar "bec"))) ((GBool (EBinOp "&&" (EBinOp "==" (EVar "bel") (EVar "el")) (EBinOp "<" (EVar "bec") (EVar "ec"))))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "bel")) (EVar "bec")))) (arm PWild () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")))))))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))))
 (DFunDef false "matchWarningLoc" ((PCon "None") PWild) (EVar "None"))
-(DTypeSig true "checkMatchChecks" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit")))))
+(DTypeSig false "checkMatchChecks" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit")))))
 (DFunDef false "checkMatchChecks" ((PVar "mctx") (PVar "scrutTy") (PVar "arms")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "checkMatchExhaustive") (EVar "mctx")) (EVar "scrutTy")) (EVar "arms"))) (DoExpr (EApp (EApp (EApp (EVar "checkMatchRedundant") (EVar "mctx")) (EVar "scrutTy")) (EVar "arms")))))
 (DTypeSig true "checkDeferredMatches" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Option") (TyCon "Loc")))) (TyCon "Unit"))))
 (DFunDef false "checkDeferredMatches" ((PVar "_mctx") (PList)) (ELit LUnit))
@@ -4582,7 +4581,7 @@ matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
 (DTypeSig false "matchWarningLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "matchWarningLoc" ((PCon "Some" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (PVar "arms")) (EMatch (EApp (EVar "last") (EVar "arms")) (arm (PCon "Some" (PCon "Arm" PWild PWild (PVar "body"))) () (EMatch (EApp (EVar "exprSpanLoc") (EVar "body")) (arm (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "bel") (PVar "bec"))) ((GBool (EBinOp "<" (EVar "bel") (EVar "el")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "bel")) (EVar "bec")))) (arm PWild () (EMatch (EApp (EVar "exprLoc") (EVar "body")) (arm (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "bel") (PVar "bec"))) ((GBool (EBinOp "&&" (EBinOp "==" (EVar "bel") (EVar "el")) (EBinOp "<" (EVar "bec") (EVar "ec"))))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "bel")) (EVar "bec")))) (arm PWild () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")))))))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))))
 (DFunDef false "matchWarningLoc" ((PCon "None") PWild) (EVar "None"))
-(DTypeSig true "checkMatchChecks" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit")))))
+(DTypeSig false "checkMatchChecks" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit")))))
 (DFunDef false "checkMatchChecks" ((PVar "mctx") (PVar "scrutTy") (PVar "arms")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "checkMatchExhaustive") (EVar "mctx")) (EVar "scrutTy")) (EVar "arms"))) (DoExpr (EApp (EApp (EApp (EVar "checkMatchRedundant") (EVar "mctx")) (EVar "scrutTy")) (EVar "arms")))))
 (DTypeSig true "checkDeferredMatches" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Option") (TyCon "Loc")))) (TyCon "Unit"))))
 (DFunDef false "checkDeferredMatches" ((PVar "_mctx") (PList)) (ELit LUnit))
