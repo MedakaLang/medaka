@@ -1,0 +1,813 @@
+-- Receipts are reusable values: their presence in a buffer, rather than the
+-- history of writes to that buffer, determines which calls are authorized.
+import backend.llvm_symbols.{
+  LlvmSymbol(..),
+  ModuleScope(..),
+  registryScope,
+  LlvmParam(..),
+  Prototype(..),
+  CallShape(..),
+  SymbolRegistry,
+  SymbolDefect(..),
+  SymbolDeclaration(..),
+  SymbolLinkage(..),
+  checkCall,
+  symbolName,
+  declarations,
+  isExcused,
+}
+import support.ordmap.{
+  OrdMap, omEmpty, omInsert, omLookup, omHasKey, omKeys, omFromNames
+}
+import support.symbol_origin.{SymbolOrigin(..)}
+import support.util.{joinWith, reverseL}
+
+public export data CallModifier =
+  | OrdinaryCall
+  | TailCall
+  | MustTailCall
+  | NoTailCall
+  deriving (Eq, Debug)
+
+-- Closed output and previously justified gaps are distinct audit obligations.
+-- lint-disable-next-line rule-clone-type
+public export data CoveragePolicy =
+  | ClosedOutput
+  | RecordedGaps (List LlvmSymbol)
+
+data Token = Token String Bool SymbolOrigin
+data Receipt = Receipt {
+  text : String,
+  sym : LlvmSymbol,
+  shape : CallShape,
+  modifier : CallModifier,
+  origin : SymbolOrigin,
+  tokens : List Token,
+}
+
+export data CallCoverage = CallCoverage Int (OrdMap Receipt)
+
+export
+emptyCoverage : CallCoverage
+-- Empty ledgers have distinct nominal receipt types on the two targets.
+-- lint-disable-next-line rule-duplicate-body
+emptyCoverage = CallCoverage 0 omEmpty
+
+moduleOrigin : SymbolOrigin
+-- The no-binding origin keeps the documented physical diagnostic sentinel.
+-- lint-disable-next-line rule-duplicate-body
+moduleOrigin = SymbolOrigin "module" "" 0 0
+
+modifierText : CallModifier -> String
+modifierText OrdinaryCall = ""
+modifierText TailCall = "tail "
+modifierText MustTailCall = "musttail "
+modifierText NoTailCall = "notail "
+
+export
+checkedCall : SymbolRegistry ->
+  CallModifier ->
+  LlvmSymbol ->
+  String ->
+  List (String, String) ->
+  SymbolOrigin ->
+  CallCoverage ->
+  Result SymbolDefect (SymbolRegistry, CallCoverage, String)
+checkedCall reg modifier sym ret ops origin (CallCoverage next entries) = do
+  let shape = CallShape ret (map fst ops)
+  reg2 <- checkCall sym shape origin reg
+  let arguments = joinWith ", " (map ((ty, operand) => "\{ty} \{operand}") ops)
+  let text =
+    "\{modifierText modifier}call \{ret} @\{symbolName sym}(\{arguments})"
+  tokens <- match rawTokens text
+    Err (UncheckedText reason _) => Err (UncheckedText reason origin)
+    result => result
+  if callFacts tokens
+    /= [(modifier, canonicalName ("@" ++ symbolName sym))] then
+    Err
+      (UncheckedText
+        "checked instruction must contain exactly one matching named call"
+        origin)
+  else
+    let key = intToString next
+    let receipt = Receipt {
+      text = text,
+      sym = sym,
+      shape = shape,
+      modifier = modifier,
+      origin = origin,
+      tokens = tokens,
+    }
+    Ok (
+      reg2,
+      CallCoverage (next + 1) (omInsert key receipt entries),
+      "\u{1e}L\{key}:\{text}\u{1f}",
+    )
+
+byte : Array Int -> Int -> Int
+-- Target-local scanners retain independent token and receipt operations.
+-- lint-disable-next-line rule-duplicate-body
+byte bytes i =
+  if i < 0 || i >= arrayLength bytes then -1 else arrayGetUnsafe i bytes
+
+space : Int -> Bool
+space c = c == 0 || c == 32 || c == 9 || c == 10 || c == 13
+
+punct : Int -> Bool
+punct c =
+  c == 40
+    || c == 41
+    || c == 91
+    || c == 93
+    || c == 123
+    || c == 125
+    || c == 60
+    || c == 62
+    || c == 44
+    || c == 61
+    || c == 58
+    || c == 42
+
+boundary : Int -> Bool
+boundary c = c == -1 || space c || punct c || c == 59
+
+wordEnd : Array Int -> Int -> Int
+wordEnd bytes i =
+  let c = byte bytes i
+  if c >= 97 && c <= 122
+    || c >= 65 && c <= 90
+    || c >= 48 && c <= 57
+    || c == 95 then
+    wordEnd bytes (i + 1)
+  else if c == -1
+    || space c
+    || punct c
+    || c == 59
+    || c == 34
+    || c == 30
+    || c == 31 then
+    i
+  else
+    wordEnd bytes (i + 1)
+
+quotedEnd : Array Int -> Int -> Result SymbolDefect Int
+quotedEnd bytes i = match byte bytes i
+  c if c == -1 => Err (UncheckedText "unterminated quoted text" moduleOrigin)
+  34 => Ok (i + 1)
+  92 =>
+    if byte bytes (i + 1) == -1 then
+      Err (UncheckedText "unterminated escape" moduleOrigin)
+    else
+      quotedEnd bytes (i + 2)
+  _ => quotedEnd bytes (i + 1)
+
+lineEnd : Array Int -> Int -> Int
+-- Target-local scanners retain independent token and receipt operations.
+-- lint-disable-next-line rule-duplicate-body
+lineEnd bytes i =
+  let c = byte bytes i
+  if c == -1 || c == 10 || c == 13 then i else lineEnd bytes (i + 1)
+
+keyEnd : Array Int -> Int -> Int
+-- Target-local scanners retain independent token and receipt operations.
+-- lint-disable-next-line rule-duplicate-body
+keyEnd bytes i =
+  let c = byte bytes i
+  if c >= 48 && c <= 57 then keyEnd bytes (i + 1) else i
+
+prependChecked : List Token -> SymbolOrigin -> List Token -> List Token
+-- Target-local scanners retain independent token and receipt operations.
+-- lint-disable-next-line rule-duplicate-body
+prependChecked [] _ acc = acc
+-- Target-local scanners retain independent token and receipt operations.
+-- lint-disable-next-line rule-duplicate-body
+prependChecked ((Token text _ _) :: rest) origin acc =
+  prependChecked rest origin (Token text True origin :: acc)
+
+rawTokens : String -> Result SymbolDefect (List Token)
+-- Target-local scanners retain independent token and receipt operations.
+-- lint-disable-next-line rule-duplicate-body
+rawTokens text = do
+  (tokens, _) <- scan text (stringToUtf8Bytes text) omEmpty False None 0 0 [] []
+  Ok tokens
+
+-- Byte offsets avoid a Unicode prefix walk at every token. Each copied slice
+-- is disjoint; receipt comparison reads only that occurrence's exact bytes.
+scan : String ->
+  Array Int ->
+  OrdMap Receipt ->
+  Bool ->
+  Option (SymbolRegistry, OrdMap Expected) ->
+  Int ->
+  Int ->
+  List Token ->
+  List String ->
+  Result SymbolDefect (List Token, String)
+scan text bytes entries markers registry i copied tokens chunks =
+  let c = byte bytes i
+  if c == -1 then
+    Ok (
+      reverseL tokens,
+      joinWith "" (reverseL (stringSliceBytes copied i text :: chunks)),
+    )
+  else if c == 30 then
+    if not markers
+      || byte bytes (i + 1) /= 76
+      || not (boundary (byte bytes (i - 1))) then
+      Err (UncheckedText "malformed or nested receipt" moduleOrigin)
+    else
+      let endKey = keyEnd bytes (i + 2)
+      let key = stringSliceBytes (i + 2) endKey text
+      if key == "" || byte bytes endKey /= 58 then
+        Err (UncheckedText "malformed receipt key" moduleOrigin)
+      else match omLookup key entries
+        None => Err (UncheckedText "unknown receipt" moduleOrigin)
+        Some receipt =>
+          let start = endKey + 1
+          let end = start + stringByteLength receipt.text
+          if end >= arrayLength bytes
+            || byte bytes end /= 31
+            || not (boundary (byte bytes (end + 1))) then
+            Err (UncheckedText "changed or unterminated receipt" receipt.origin)
+          else if stringSliceBytes start end text /= receipt.text then
+            Err (UncheckedText "changed receipt text" receipt.origin)
+          else match recheck registry receipt
+            Err d => Err d
+            Ok _ =>
+              scan
+                text
+                bytes
+                entries
+                markers
+                registry
+                (end + 1)
+                (end + 1)
+                (prependChecked receipt.tokens receipt.origin tokens)
+                (receipt.text :: stringSliceBytes copied i text :: chunks)
+  else if c == 31 then
+    Err (UncheckedText "unmatched receipt end" moduleOrigin)
+  else if space c then
+    scan text bytes entries markers registry (i + 1) copied tokens chunks
+  else if c == 59 then
+    let end = lineEnd bytes i
+    if not markers && end == arrayLength bytes then
+      Err (UncheckedText "receipt ends inside a line comment" moduleOrigin)
+    else
+      scan text bytes entries markers registry end copied tokens chunks
+  else if c == 34 then do
+    end <- quotedEnd bytes (i + 1)
+    scan
+      text
+      bytes
+      entries
+      markers
+      registry
+      end
+      copied
+      (Token "\"\"" False moduleOrigin :: tokens)
+      chunks
+  else if (c == 64 || c == 37) && byte bytes (i + 1) == 34 then do
+    end <- quotedEnd bytes (i + 2)
+    if c == 64 && end == i + 3 then
+      Err
+        (UncheckedText
+          "empty global name requests implicit LLVM numbering"
+          moduleOrigin)
+    else
+      scan
+        text
+        bytes
+        entries
+        markers
+        registry
+        end
+        copied
+        (Token (canonicalName (stringSliceBytes i end text)) False moduleOrigin
+          :: tokens)
+        chunks
+  else
+    let end = if punct c then i + 1 else wordEnd bytes i
+    scan
+      text
+      bytes
+      entries
+      markers
+      registry
+      end
+      copied
+      (Token
+          (if c == 64 then
+            canonicalName (stringSliceBytes i end text)
+          else
+            stringSliceBytes i end text)
+          False
+          moduleOrigin
+        :: tokens)
+      chunks
+
+recheck : Option (SymbolRegistry, OrdMap Expected) ->
+  Receipt ->
+  Result SymbolDefect Unit
+recheck None _ = Ok ()
+recheck (Some (reg, expected)) receipt =
+  let actual =
+    match omLookup (canonicalName ("@" ++ symbolName receipt.sym)) expected
+      Some (Expected sym _ _ _) => sym
+      None => receipt.sym
+  map (_ => ()) (checkCall actual receipt.shape receipt.origin reg)
+
+tokenText : Token -> String
+tokenText (Token text _ _) = text
+
+hex : Int -> Int
+hex c
+  | c >= 48 && c <= 57 = c - 48
+  | c >= 65 && c <= 70 = c - 55
+  | c >= 97 && c <= 102 = c - 87
+  | otherwise = -1
+
+nameBytes : Array Int -> Int -> List Int -> List Int
+nameBytes bytes i acc =
+  if i >= arrayLength bytes - 1 then
+    reverseL acc
+  else if byte bytes i == 92
+    && hex (byte bytes (i + 1)) >= 0
+    && hex (byte bytes (i + 2)) >= 0 then
+    nameBytes
+      bytes
+      (i + 3)
+      (hex (byte bytes (i + 1)) * 16 + hex (byte bytes (i + 2)) :: acc)
+  else
+    nameBytes bytes (i + 1) (byte bytes i :: acc)
+
+sameBytes : Array Int -> List Int -> Int -> Bool
+sameBytes bytes [] i = i == arrayLength bytes
+sameBytes bytes (c :: rest) i =
+  byte bytes i == c && sameBytes bytes rest (i + 1)
+
+escapedNameBytes : Array Int -> Int -> List String -> String
+escapedNameBytes bytes i acc =
+  if i >= arrayLength bytes then
+    joinWith "" (reverseL acc)
+  else
+    let c = byte bytes i
+    let digits = "0123456789abcdef"
+    let hi = stringSlice (c / 16) (c / 16 + 1) digits
+    let lo = stringSlice (c % 16) (c % 16 + 1) digits
+    escapedNameBytes bytes (i + 1) ("\\\{hi}\{lo}" :: acc)
+
+decimalTail : Array Int -> Int -> Bool
+decimalTail bytes i =
+  if i >= arrayLength bytes then
+    True
+  else
+    byte bytes i >= 48 && byte bytes i <= 57 && decimalTail bytes (i + 1)
+
+zeroEnd : Array Int -> Int -> Int
+zeroEnd bytes i =
+  if i < arrayLength bytes - 1 && byte bytes i == 48 then
+    zeroEnd bytes (i + 1)
+  else
+    i
+
+-- Quoted names are byte strings; numeric slots and invalid UTF-8 need disjoint
+-- keys. The private colon-bearing tags cannot be lexical global identifiers.
+canonicalName : String -> String
+canonicalName name =
+  if stringSlice 0 2 name == "@\"" then
+    let decoded = nameBytes (stringToUtf8Bytes name) 2 []
+    let bytes = arrayFromList decoded
+    let value = stringFromUtf8Bytes bytes
+    if sameBytes (stringToUtf8Bytes value) decoded 0 then
+      "@" ++ value
+    else
+      "!llvm-id:" ++ escapedNameBytes bytes 0 []
+  else if stringSlice 0 1 name == "@" then
+    let first = stringSlice 1 2 name
+    if first >= "0" && first <= "9" then
+      let bytes = stringToUtf8Bytes name
+      if decimalTail bytes 1 then
+        "!llvm-slot:"
+          ++ stringSliceBytes (zeroEnd bytes 1) (arrayLength bytes) name
+      else
+        name
+    else
+      name
+  else
+    name
+
+isGlobal : String -> Bool
+isGlobal s =
+  let prefix = stringSlice 0 1 s
+  prefix == "@"
+    || prefix == "!"
+      && (stringSlice 0 9 s == "!llvm-id:"
+        || stringSlice 0 11 s == "!llvm-slot:")
+
+needsQuotes : Array Int -> Int -> Bool
+needsQuotes bytes i =
+  if i >= arrayLength bytes then
+    arrayLength bytes == 0
+  else
+    let c = byte bytes i
+    let digit = c >= 48 && c <= 57
+    let letter = c >= 65 && c <= 90 || c >= 97 && c <= 122
+    if i == 0 && digit
+      || not (digit || letter || c == 36 || c == 45 || c == 46 || c == 95) then
+      True
+    else
+      needsQuotes bytes (i + 1)
+
+needsEscape : Array Int -> Int -> Bool
+needsEscape bytes i =
+  if i >= arrayLength bytes then
+    False
+  else
+    let c = byte bytes i
+    c < 32 || c == 127 || c == 34 || c == 92 || needsEscape bytes (i + 1)
+
+-- Render a real LLVM spelling, escaping controls rather than leaking receipt
+-- bytes from a quoted identifier into a diagnostic.
+errorName : String -> String
+errorName name =
+  if stringSlice 0 9 name == "!llvm-id:" then
+    "\"" ++ stringSlice 9 (stringLength name) name ++ "\""
+  else if stringSlice 0 11 name == "!llvm-slot:" then
+    stringSlice 11 (stringLength name) name
+  else
+    let value = stringSlice 1 (stringLength name) name
+    let bytes = stringToUtf8Bytes value
+    if needsEscape bytes 0 then
+      "\"" ++ escapedNameBytes bytes 0 [] ++ "\""
+    else if needsQuotes bytes 0 then
+      "\"" ++ value ++ "\""
+    else
+      value
+
+isLocal : String -> Bool
+isLocal s = stringSlice 0 1 s == "%"
+
+modifierOf : String -> CallModifier
+modifierOf "tail" = TailCall
+modifierOf "musttail" = MustTailCall
+modifierOf "notail" = NoTailCall
+modifierOf _ = OrdinaryCall
+
+namedCallee : List Token -> Option String
+namedCallee [] = None
+namedCallee ((Token text _ _) :: (Token "(" _ _) :: rest)
+  | isLocal text = match afterParens rest 0
+    after@((Token name _ _) :: (Token "(" _ _) :: _) if isGlobal name
+      || isLocal name => namedCallee after
+    _ => None
+namedCallee ((Token text _ _) :: rest)
+  | isGlobal text = Some text
+  | text == "="
+    || text == ";"
+    || text == "call"
+    || text == "invoke"
+    || text == "callbr"
+    || text == "ret"
+    || text == "define"
+    || text == "declare" = None
+  | otherwise = namedCallee rest
+
+-- `%T (...)` may be an explicit function type returning the named type `%T`.
+-- A callee register's argument list ends the call instead; its global operands
+-- must not become the apparent named callee.
+afterParens : List Token -> Int -> List Token
+afterParens [] _ = []
+afterParens ((Token text _ _) :: rest) depth =
+  if text == "call" || text == "invoke" || text == "callbr" then
+    []
+  else if text == ")" && depth == 0 then
+    rest
+  else
+    afterParens
+      rest
+      (depth + (if text == "(" then 1 else if text == ")" then -1 else 0))
+
+callFacts : List Token -> List (CallModifier, String)
+callFacts tokens = reverseL (callFactsGo tokens "" [])
+
+callFactsGo : List Token ->
+  String ->
+  List (CallModifier, String) ->
+  List (CallModifier, String)
+callFactsGo [] _ acc = acc
+callFactsGo ((Token text _ _) :: rest) previous acc =
+  if text == "call"
+    || text == "invoke"
+    || text == "callbr" then match namedCallee rest
+    Some name => callFactsGo rest text ((modifierOf previous, name) :: acc)
+    None => callFactsGo rest text acc
+  else
+    callFactsGo rest text acc
+
+coverageDefects : List Token -> List SymbolDefect
+coverageDefects tokens = reverseL (coverageGo tokens [])
+
+coverageGo : List Token -> List SymbolDefect -> List SymbolDefect
+coverageGo [] acc = acc
+coverageGo ((Token text checked origin) :: rest) acc =
+  let direct =
+    (text == "call" || text == "invoke" || text == "callbr")
+      && isSome (namedCallee rest)
+  let modifier = text == "tail" || text == "musttail" || text == "notail"
+  if (direct || modifier) && not checked then
+    coverageGo
+      rest
+      (UncheckedText "uncovered named call or call modifier" origin :: acc)
+  else
+    coverageGo rest acc
+
+data Expected = Expected LlvmSymbol Prototype SymbolLinkage SymbolOrigin
+
+expectedMap : List SymbolDeclaration ->
+  OrdMap Expected ->
+  Result SymbolDefect (OrdMap Expected)
+expectedMap [] acc = Ok acc
+expectedMap ((SymbolDeclaration sym proto linkage origin) :: rest) acc =
+  let key = canonicalName ("@" ++ symbolName sym)
+  if omHasKey key acc then
+    Err (DuplicateDefinition (symbolName sym) origin origin)
+  else
+    expectedMap rest (omInsert key (Expected sym proto linkage origin) acc)
+
+texts : List Token -> List String
+texts ts = map tokenText ts
+
+typeWords : String -> List String
+-- LLVM type punctuation is significant; whitespace splitting loses array and function types.
+-- lint-disable-next-line rule-stdlib-reimpl
+typeWords s = match rawTokens s
+  Ok ts => texts ts
+  Err _ => [s]
+
+suffix : List String -> List String -> Bool
+suffix wanted actual = starts (reverseL wanted) (reverseL actual)
+
+starts : List String -> List String -> Bool
+starts [] _ = True
+starts _ [] = False
+starts (x :: xs) (y :: ys) = x == y && starts xs ys
+
+-- A parameter name is optional and follows its type; a named type by itself
+-- is not a parameter name.
+paramWords : List String -> List String
+paramWords words = match reverseL words
+  last :: earlier =>
+    if not (isEmpty earlier) && isLocal last then reverseL earlier else words
+  _ => words
+
+paramType : LlvmParam -> List String
+paramType (LlvmParam ty _) = typeWords ty
+
+params : List Token ->
+  Int ->
+  List String ->
+  List (List String) ->
+  Result SymbolDefect (List (List String), List Token)
+params [] _ _ _ =
+  Err (UncheckedText "unterminated function parameter list" moduleOrigin)
+params ((Token text _ _) :: rest) depth current acc =
+  if text == ")" && depth == 0 then
+    Ok (
+      reverseL (if isEmpty current then
+        acc
+      else
+        paramWords (reverseL current) :: acc),
+      rest,
+    )
+  else if text == "," && depth == 0 then
+    params rest depth [] (paramWords (reverseL current) :: acc)
+  else
+    let delta =
+      if text == "(" || text == "[" || text == "{" || text == "<" then
+        1
+      else if text == ")" || text == "]" || text == "}" || text == ">" then
+        -1
+      else
+        0
+    params rest (depth + delta) (text :: current) acc
+
+functionHead : List Token ->
+  List String ->
+  Result SymbolDefect (String, List String, List (List String), List Token)
+functionHead [] _ =
+  Err (UncheckedText "function header without a name" moduleOrigin)
+functionHead ((Token name _ _) :: (Token "(" _ _) :: rest) before
+  | isGlobal name = do
+    (ps, after) <- params rest 0 [] []
+    Ok (name, reverseL before, ps, after)
+functionHead ((Token text _ _) :: rest) before =
+  if text == "define" || text == "declare" then
+    Err (UncheckedText "nested function header" moduleOrigin)
+  else
+    functionHead rest (text :: before)
+
+shapeDefect : String -> Prototype -> SymbolOrigin -> SymbolDefect
+shapeDefect name proto at =
+  PrototypeConflict
+    (errorName name)
+    (DataProto "incompatible materialized declaration")
+    proto
+    at
+    at
+
+admitFunction : String ->
+  List String ->
+  List (List String) ->
+  SymbolLinkage ->
+  OrdMap Expected ->
+  OrdMap Unit ->
+  Result SymbolDefect (OrdMap Unit)
+admitFunction name ret ps linkage expected seen =
+  if omHasKey name seen then
+    Err (DuplicateDefinition (errorName name) moduleOrigin moduleOrigin)
+  else match omLookup name expected
+    None => Err (UndefinedReference (errorName name) moduleOrigin)
+    Some (Expected _ proto registered at) => match proto
+      FuncProto r parameters _ =>
+        if not (suffix (typeWords r) ret) || ps /= map paramType parameters then
+          Err (shapeDefect name proto at)
+        else if linkage /= registered then
+          Err (UndefinedReference (errorName name) at)
+        else
+          Ok (omInsert name () seen)
+      _ => Err (shapeDefect name proto at)
+
+prefixTokens : List String -> List Token -> Bool
+prefixTokens [] _ = True
+prefixTokens _ [] = False
+prefixTokens (word :: rest) ((Token found _ _) :: after) =
+  word == found && prefixTokens rest after
+
+dataHead : List Token -> Bool -> Option (Bool, List Token)
+dataHead [] _ = None
+dataHead ((Token text _ _) :: rest) external
+  | text == "external" = dataHead rest True
+  | text == "global" || text == "constant" = Some (external, rest)
+  | text == "define" || text == "declare" || isGlobal text = None
+  | otherwise = dataHead rest external
+
+inventory : List Token ->
+  OrdMap Expected ->
+  OrdMap Unit ->
+  Result SymbolDefect (OrdMap Unit)
+inventory [] _ seen = Ok seen
+inventory ((Token keyword _ _) :: rest) expected seen
+  | keyword == "define" || keyword == "declare" = do
+    (name, ret, ps, after) <- functionHead rest []
+    next <- admitFunction
+      name
+      ret
+      ps
+      (if keyword == "define" then SymbolDefined else SymbolDeclared)
+      expected
+      seen
+    inventory after expected next
+inventory ((Token name _ _) :: (Token "=" _ _) :: rest) expected seen
+  | isGlobal name =
+    if omHasKey name seen then
+      Err (DuplicateDefinition (errorName name) moduleOrigin moduleOrigin)
+    else match (omLookup name expected, dataHead rest False)
+      (Some (Expected _ (proto@(DataProto ty)) linkage at), Some (external, after)) =>
+        if not (prefixTokens (typeWords ty) after) then
+          Err (shapeDefect name proto at)
+        else if external /= (linkage == SymbolDeclared) then
+          Err (UndefinedReference (errorName name) at)
+        else
+          inventory rest expected (omInsert name () seen)
+      (Some (Expected _ proto _ at), _) => Err (shapeDefect name proto at)
+      _ => Err (UndefinedReference (errorName name) moduleOrigin)
+inventory (_ :: rest) expected seen = inventory rest expected seen
+
+gapNames : CoveragePolicy -> SymbolRegistry -> OrdMap Unit
+gapNames ClosedOutput _ = omEmpty
+gapNames (RecordedGaps syms) reg =
+  omFromNames
+    (map
+      (s => canonicalName ("@" ++ symbolName s))
+      (filter (s => isExcused s reg) syms))
+    omEmpty
+
+missingDeclarations : OrdMap Expected ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  List SymbolDefect
+missingDeclarations expected seen gaps =
+  flatMap
+    (name =>
+      if omHasKey name seen || omHasKey name gaps then
+        []
+      else match omLookup name expected
+        Some (Expected sym _ _ at) => [UndefinedReference (symbolName sym) at]
+        None => [])
+    (omKeys expected)
+
+referenceDefects : List Token -> OrdMap Unit -> OrdMap Unit -> List SymbolDefect
+referenceDefects tokens seen gaps = reverseL (referencesGo tokens seen gaps [])
+
+wholeDeclarations : ModuleScope ->
+  List SymbolDeclaration ->
+  OrdMap Unit ->
+  List SymbolDefect
+wholeDeclarations ModuleHalf _ _ = []
+wholeDeclarations WholeModule entries gaps =
+  flatMap
+    (entry => match entry
+      SymbolDeclaration (sym@(Generated _)) _ SymbolDeclared at =>
+        if omHasKey (canonicalName ("@" ++ symbolName sym)) gaps then
+          []
+        else
+          [UndefinedReference (symbolName sym) at]
+      _ => [])
+    entries
+
+referencesGo : List Token ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  List SymbolDefect ->
+  List SymbolDefect
+referencesGo [] _ _ acc = acc
+referencesGo ((Token name _ at) :: rest) seen gaps acc =
+  if isGlobal name && not (omHasKey name seen || omHasKey name gaps) then
+    referencesGo rest seen gaps (UndefinedReference (errorName name) at :: acc)
+  else
+    referencesGo rest seen gaps acc
+
+attributeOrigins : List Token ->
+  OrdMap Expected ->
+  SymbolOrigin ->
+  List Token ->
+  List Token
+-- Origin attribution preserves each target’s nominal token type.
+-- lint-disable-next-line rule-duplicate-body
+attributeOrigins [] _ _ acc = reverseL acc
+attributeOrigins ((Token "define" covered origin) :: rest) expected current acc =
+  let next = match functionHead rest []
+    Ok (name, _, _, _) => match omLookup name expected
+      Some (Expected _ _ _ at) => at
+      None => moduleOrigin
+    Err _ => current
+  attributeOrigins
+    rest
+    expected
+    next
+    (Token "define" covered (if covered then origin else next) :: acc)
+attributeOrigins ((Token name covered origin) :: (equals@(Token "=" _ _)) :: rest) expected current acc
+  | isGlobal name =
+    let next = match omLookup name expected
+      Some (Expected _ _ _ at) => at
+      None => moduleOrigin
+    attributeOrigins
+      (equals :: rest)
+      expected
+      next
+      (Token name covered (if covered then origin else next) :: acc)
+-- Origin attribution preserves each target’s nominal token type.
+-- lint-disable-next-line rule-duplicate-body
+attributeOrigins ((Token text covered origin) :: rest) expected current acc =
+  attributeOrigins
+    rest
+    expected
+    current
+    (Token text covered (if covered then origin else current) :: acc)
+
+export
+finishCheckedText : CoveragePolicy ->
+  SymbolRegistry ->
+  CallCoverage ->
+  String ->
+  Result (List SymbolDefect) String
+finishCheckedText policy reg (CallCoverage _ entries) text =
+  match expectedMap (declarations reg) omEmpty
+    Err d => Err [d]
+    Ok expected =>
+      match (scan
+        text
+        (stringToUtf8Bytes text)
+        entries
+        True
+        (Some (reg, expected))
+        0
+        0
+        []
+        [])
+        Err d => Err [d]
+        Ok (raw, stripped) =>
+          let tokens = attributeOrigins raw expected moduleOrigin []
+          match inventory tokens expected omEmpty
+            Err d => Err [d]
+            Ok seen =>
+              let gaps = gapNames policy reg
+              let defects =
+                coverageDefects tokens
+                  ++ missingDeclarations expected seen gaps
+                  ++ referenceDefects tokens seen gaps
+                  ++ wholeDeclarations
+                    (registryScope reg)
+                    (declarations reg)
+                    gaps
+              if isEmpty defects then Ok stripped else Err defects

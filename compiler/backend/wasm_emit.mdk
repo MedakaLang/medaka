@@ -357,7 +357,6 @@ import backend.wasm_symbols.{
   SymbolRegistry,
   WasmShape(..),
   WasmSymbol(..),
-  checkCall,
   checkRef,
   checkTypeUse,
   declareSymbol,
@@ -369,11 +368,16 @@ import backend.wasm_symbols.{
   unresolvedFunctions,
 }
 import support.symbol_origin.{SymbolOrigin(..)}
+import backend.wasm_text_coverage.{
+  CallCoverage, CoveragePolicy(..), emptyCoverage, checkedCall,
+  finishCheckedText, checkCheckedFragment
+}
 import backend.wasm_preamble.{
   preambleHeadLines,
   plannedImportLines,
   plannedHelperLines,
   declarePlannedHelpers,
+  checkPlannedHelperUses,
   closTypeLines,
   closApplyLines,
   ioByteImportLines,
@@ -481,6 +485,8 @@ data WasmEmit = WasmEmit {
   -- still waiting once it is complete go unjudged.
   symbols : Ref SymbolRegistry,
   symbolDefects : Ref (List SymbolDefect),
+  callCoverage : Ref CallCoverage,
+  gapSymbols : Ref (List WasmSymbol),
   closureChecked : Bool,
   completionChecked : Bool,
   trapImportNeeded : Ref Bool,
@@ -561,6 +567,8 @@ freshWasmEmit mode = WasmEmit {
   nextConstClosId = Ref 0,
   symbols = Ref emptyRegistry,
   symbolDefects = Ref [],
+  callCoverage = Ref emptyCoverage,
+  gapSymbols = Ref [],
   closureChecked = True,
   completionChecked = True,
   trapImportNeeded = Ref False,
@@ -1014,11 +1022,24 @@ jsffiWrapperW prog imp =
     else
       []
   let _ =
+    if emit.closureChecked then
+      forEachU
+        ((sym, _) => registerW emit (checkRef sym (progFnCtx prog).origin))
+        (WD.jsWrapperUses imp)
+  let _ =
     addLiftedNamed
       prog
       ("$" ++ name)
       (FuncParams (listLen imp.params))
-      (jsffiWrapperLines imp intTrap charTrap copyTrap)
+      (jsffiWrapperLines
+        (target count =>
+          callFnAtW emit (progFnCtx prog).origin CallValueW target count)
+        (target count =>
+          callFnAtW emit (progFnCtx prog).origin CallTailW target count)
+        imp
+        intTrap
+        charTrap
+        copyTrap)
   name
 
 progFnMemberW : Prog -> String -> Bool
@@ -1490,8 +1511,20 @@ callFnW prog end target operands =
 -- `callFnW` for code no binding's body owns, its uses attributed to [origin]
 callFnAtW : WasmEmit -> SymbolOrigin -> CallEndW -> String -> Int -> String
 callFnAtW emit origin end target operands =
-  let _ = registerW emit (checkCall (WasmFunc target) operands origin)
-  callInstrW end target
+  match (checkedCall
+    !emit.symbols
+    (end == CallTailW)
+    target
+    operands
+    origin
+    !emit.callCoverage)
+    Ok (reg, coverage, text) =>
+      let _ = setRef emit.symbols reg
+      let _ = setRef emit.callCoverage coverage
+      text
+    Err d =>
+      let _ = setRef emit.symbolDefects (d :: !emit.symbolDefects)
+      ""
 
 -- `call $<name>` of a runtime helper or host import, with [operands] operands
 rtCallW : Prog -> String -> Int -> String
@@ -1519,6 +1552,16 @@ globalW prog op name =
         emit
         (checkRef (WasmGlobal (symNameW name)) (progFnCtx prog).origin)
   "\{op} \{name}"
+
+-- Computed type identities pass the same closed-type registry as signatures.
+-- Census fragments have no complete type section to judge them against.
+typeNameW : Prog -> String -> String
+typeNameW prog name =
+  let emit = progEmit prog
+  let _ =
+    if emit.closureChecked then
+      registerW emit (checkTypeUse name name (progFnCtx prog).origin)
+  name
 
 -- the SplitMix64 state global `rngStateGlobalLines` declares
 rngStateW : String
@@ -1549,10 +1592,14 @@ seedSymbolsW prog physical globals =
     forEachU (t => declare (WasmType t) TypeDecl) physical.representationTypes
   let _ =
     forEachU
-      (imp => declare (WasmFunc imp.watSymbol) FuncImported)
+      (imp =>
+        declare (WasmFunc imp.watSymbol) (FuncImported imp.parameterCount))
       physical.imports
   let _ = forEachU (registerW emit) (declarePlannedHelpers physical)
   let _ = forEachU (g => declare (WasmGlobal g) GlobalDecl) globals
+  let _ =
+    if emit.closureChecked then
+      forEachU (registerW emit) (checkPlannedHelperUses physical)
   if progUseClos prog then
     let _ = declare (WasmElem "mdk_pap") ElemDecl
     registerW emit (checkRef (WasmFunc "mdk_pap") origin)
@@ -1614,7 +1661,8 @@ wConstClos prog lamName arity =
   let _ = registerW emit (checkRef (WasmFunc (symNameW lamName)) origin)
   let _ =
     if emit.closureChecked then
-      registerW emit (checkTypeUse "clos" (symNameW lamName) origin)
+      let _ = registerW emit (checkTypeUse "clos" (symNameW lamName) origin)
+      registerW emit (checkTypeUse "argarr" (symNameW lamName) origin)
   let initBody =
     "(struct.new $clos (ref.func \{lamName}) (i32.const \{intToString arity}) (array.new_fixed $argarr 0))"
   match omLookup initBody !emit.constClosIdx
@@ -1677,7 +1725,7 @@ emitProgramUnchecked : WasmEmitInput ->
   CProgram ->
   Result (List SymbolDefect) String
 emitProgramUnchecked input plan cp =
-  emitProgramCore
+  emitProgramWith
     { freshWasmEmit WGapStrict | completionChecked = False }
     input
     plan
@@ -1702,15 +1750,11 @@ emitProgramWith : WasmEmit ->
 emitProgramWith emit input plan cp = match emitProgramCore emit input plan cp
   Err defects => Err defects
   Ok text =>
-    -- WGapRecord is the tolerant/census mode (mirrors emitProgramGaps below): it
-    -- continues past an unsupported node by RECORDING a gap event instead of
-    -- aborting, so its assembled text is intentionally allowed to be incomplete/
-    -- self-inconsistent -- not a real module, so not this check's business.
-    -- Only WGapStrict (the real, on-by-default production path) is asserted.
-    let _ = match emit.gapMode
-      WGapStrict => assertEmittedClosureW text
-      WGapRecord => ()
-    Ok text
+    finishCheckedText
+      (RecordedGaps !emit.gapSymbols)
+      !emit.symbols
+      !emit.callCoverage
+      text
 
 -- Strict and record modes share one semantic gateway; only target gaps may
 -- become record events instead of a refusal.
@@ -1790,144 +1834,6 @@ emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _
       (freshFnCtx ())
   emitRefProgram prog plan groups
 
--- ── emit-time closure check (#392) ──────────────────────────────────────────
--- The runtime-line gating graph (which WAT helper block a program's use-flags
--- pull in) is hand-maintained; S1-S3 each narrowed it (fewer impls, per-operator
--- splits, dropped names), and a wrongly-narrowed gate would otherwise surface only as a
--- downstream `wasm-tools validate` "unknown func $x" on whichever fixture
--- happened to exercise the gap (#388: `$mdk_value_mod` called `$mdk_float_rem`
--- with only `useValueArith` set, silently broke 21 int-only fixtures). Run on
--- every emit (not a flag) so a gate that gets narrowed wrong fails HERE, in
--- process, naming the missing symbol, instead of downstream and silently.
---
--- Operates on the FINAL assembled text, granularity-agnostic to whatever flags
--- gated what -- it only asserts every directly-named callee resolves within
--- this module, either as a `(func $name ...)` definition or an
--- `(import "env" "..." (func $name ...))` declaration (see
--- `stderrByteImportLines`, wasm_preamble.mdk, for the import text shape).
--- `call_ref`/`return_call_ref` are exempt: they dispatch dynamically through a
--- `(ref $codety)` table value, never naming a callee symbol directly, and
--- their literal text never matches the `call $` needle below (`call_ref`/
--- `return_call_ref` both have `_ref` where this needle expects a space).
---
--- NOT one call per line: wasm_emit.mdk's own call sites are each their own
--- list element (flat, unfolded -- operands already on the stack), but the
--- hand-written runtime blocks in wasm_preamble.mdk are FOLDED s-expr WAT
--- with a call site anywhere inside a line, sometimes several per line (e.g.
--- valueAddRuntimeLines' `(call $mdk_box_int (i64.add (call $mdk_unbox_int
--- ...) (call $mdk_unbox_int ...)))`) -- an earlier draft of this check that
--- assumed startsWith missed exactly this shape. So this scans every line for
--- ALL occurrences of the `call $` needle, not just a line-leading one.
--- `return_call $NAME` is caught by the SAME needle -- "return_call $NAME"
--- literally contains "call $NAME" as a substring (right after `return_`), so
--- no separate needle is needed.
--- A string literal can never spoof either needle: `escWatBytes` hex-escapes
--- EVERY byte of a data segment (`oneDataSeg`), so no literal ASCII ever
--- reaches the assembled text from user data.
-assertEmittedClosureW : String -> Unit
-assertEmittedClosureW text =
-  let lines = splitNl text
-  let defined = omFromNames (collectDefinedNamesW lines) omEmpty
-  let called = collectCalledNamesW lines
-  checkCalledNamesW defined called
-
--- ⚠️ ACCUMULATOR-PASSING, DELIBERATELY (#392 follow-up).  The three walkers
--- below (`collectCalledNamesGoW`, `collectDefinedNamesGoW`, `identsAfterAllGoW`)
--- would otherwise build their result AFTER the recursive call returns (`idents ++
--- recurse rest` / `name :: recurse ...`), i.e. one live stack frame per WAT line
--- and per `call $` occurrence within a line.  That is fine on the native path
--- (a 256 MB GC-aware worker thread, runtime/medaka_rt.c) but FATAL on the wasm
--- path: `compiler/entries/playground_main.mdk` compiles this very code to
--- WasmGC, and the guest then runs on the HOST JS engine's ~1 MB stack, so the
--- check's own depth is proportional to the emitted module's text size.  It
--- overflowed at 15,739 lines -- i.e. on `main = 42`, the smallest program there
--- is -- taking every browser compile down with `Maximum call stack size
--- exceeded`.  Threading an accumulator makes each self-call a TRUE tail call,
--- which W4's TCO (§4.2) emits as `return_call`: constant stack, any module size.
--- Keep them tail-recursive.  The `Rev` suffix marks the reversed intermediate:
--- each `xxxRevW` returns its names LAST-FIRST, and the single `reverseL` at the
--- public entry restores the exact pre-rewrite order (per line, and across
--- lines), so the collected lists are element-for-element identical to what the
--- non-tail version produced.
-collectCalledNamesW : List String -> List String
-collectCalledNamesW lines = reverseL (collectCalledNamesGoW lines [])
-
-collectCalledNamesGoW : List String -> List String -> List String
-collectCalledNamesGoW [] acc = acc
-collectCalledNamesGoW (line :: rest) acc =
-  if startsWith ";;" (stringTrimLeft line) then
-    collectCalledNamesGoW rest acc
-  else
-    collectCalledNamesGoW rest (identsAfterAllRevW "call $" 6 line ++ acc)
-
--- `(func $NAME` appears exactly once per defining line -- a plain top-level
--- function's own def line AND an import's `(import "env" "..." (func $NAME
--- ...))` line alike -- so one needle covers both (a) and (b) of the closure
--- requirement.
-collectDefinedNamesW : List String -> List String
-collectDefinedNamesW lines = reverseL (collectDefinedNamesGoW lines [])
-
-collectDefinedNamesGoW : List String -> List String -> List String
-collectDefinedNamesGoW [] acc = acc
-collectDefinedNamesGoW (line :: rest) acc =
-  collectDefinedNamesGoW rest (identsAfterAllRevW "(func $" 7 line ++ acc)
-
--- every occurrence of `needle` in `line`, mapped to the identifier
--- immediately following it (skipping `skipLen` chars of the needle itself,
--- e.g. `call $` -> 6, so the scan resumes right after the `$`), in REVERSE
--- order of occurrence.  The callers above prepend this onto their own reversed
--- accumulator, so one `reverseL` at the public entry un-reverses both levels at
--- once: acc = revLn ++ ... ++ revL1, and `reverseL acc` = L1 ++ ... ++ Ln,
--- exactly the old `L1 ++ ... ++ Ln`.
-identsAfterAllRevW : String -> Int -> String -> List String
-identsAfterAllRevW needle skipLen line =
-  identsAfterAllGoW needle skipLen line 0 []
-
-identsAfterAllGoW : String -> Int -> String -> Int -> List String -> List String
-identsAfterAllGoW needle skipLen line from acc =
-  let n = stringLength line
-  if from >= n then
-    acc
-  else match stringIndexOf needle (stringSlice from n line)
-    None => acc
-    Some rel =>
-      let hit = from + rel
-      let name = identAfterW line (hit + skipLen)
-      identsAfterAllGoW
-        needle
-        skipLen
-        line
-        (hit + stringLength needle)
-        (name :: acc)
-
--- read a bare identifier (word chars only -- `$` already consumed) forward
--- from `from` until a non-identifier char or end of line.
-identAfterW : String -> Int -> String
-identAfterW line from = identAfterGoW line from (stringLength line) from
-
-identAfterGoW : String -> Int -> Int -> Int -> String
-identAfterGoW line i n from =
-  if i >= n then
-    stringSlice from n line
-  else if isIdentCharW (stringSlice i (i + 1) line) then
-    identAfterGoW line (i + 1) n from
-  else
-    stringSlice from i line
-
-isIdentCharW : String -> Bool
-isIdentCharW c = c /= " " && c /= "(" && c /= ")" && c /= "\""
-
-checkCalledNamesW : OrdMap Unit -> List String -> Unit
-checkCalledNamesW _ [] = ()
-checkCalledNamesW defined (name :: rest) =
-  if omHasKey name defined then
-    checkCalledNamesW defined rest
-  else
-    panic
-      ("wasm emit: call to undefined/unimported $"
-        ++ name
-        ++ " -- a runtime-line gate is missing this helper's dependency (#392)")
-
 -- ── gap census driver ────────────────────────────────────────────────────────
 -- The WasmGC peer of llvm_emit's emitProgramGaps: emit EVERY binding (fns +
 -- impls + top-level values) in record mode and return the recorded gap events,
@@ -1988,33 +1894,46 @@ emitProgramGaps input plan cp0 =
       emit
       (freshFnCtx ())
   let _ = seedSymbolsW prog (WD.censusWasmDemand (physicalPlanW plan)) []
-  let _ = emitFnsGapsW prog (userFnBinds groups)
-  let _ = emitImplsGapsW prog (progImplGroups prog)
-  let _ = emitValsGapsW prog (filterList isValBind groups)
+  let fragments = Ref []
+  let _ = emitFnsGapsW prog fragments (userFnBinds groups)
+  let _ = emitImplsGapsW prog fragments (progImplGroups prog)
+  let _ = emitValsGapsW prog fragments (filterList isValBind groups)
+  let lifted = flatMap (x => x) (reverseL !emit.liftedDefinitions)
+  let text =
+    joinNl
+      (flatMap (x => x) (reverseL !fragments)
+        ++ lifted
+        ++ trapMsgRuntimeOf emit)
   match symbolDefectsW emit
-    [] => Ok (gapEventsOfW emit)
+    [] =>
+      map
+        (_ => gapEventsOfW emit)
+        (checkCheckedFragment !emit.symbols !emit.callCoverage text)
     defects => Err defects
 
-emitFnsGapsW : Prog -> List CBind -> Unit
-emitFnsGapsW _ [] = ()
-emitFnsGapsW prog ((CBind name cs site bid) :: rest) =
+emitFnsGapsW : Prog -> Ref (List (List String)) -> List CBind -> Unit
+emitFnsGapsW _ _ [] = ()
+emitFnsGapsW prog fragments ((CBind name cs site bid) :: rest) =
   let _ = setGapBindingOfW (progEmit prog) ("fn " ++ name)
-  let _ = emitRefFnBind prog (CBind name cs site bid)
-  emitFnsGapsW prog rest
+  let lines = emitRefFnBind prog (CBind name cs site bid)
+  let _ = setRef fragments (lines :: !fragments)
+  emitFnsGapsW prog fragments rest
 
-emitImplsGapsW : Prog -> List ImplG -> Unit
-emitImplsGapsW _ [] = ()
-emitImplsGapsW prog ((g@(ImplG method headTag _ _ _ _)) :: rest) =
+emitImplsGapsW : Prog -> Ref (List (List String)) -> List ImplG -> Unit
+emitImplsGapsW _ _ [] = ()
+emitImplsGapsW prog fragments ((g@(ImplG method headTag _ _ _ _)) :: rest) =
   let _ = setGapBindingOfW (progEmit prog) "impl \{method}@\{headTag}"
-  let _ = emitImplGroup prog g
-  emitImplsGapsW prog rest
+  let lines = emitImplGroup prog g
+  let _ = setRef fragments (lines :: !fragments)
+  emitImplsGapsW prog fragments rest
 
-emitValsGapsW : Prog -> List CBind -> Unit
-emitValsGapsW _ [] = ()
-emitValsGapsW prog (b :: rest) =
+emitValsGapsW : Prog -> Ref (List (List String)) -> List CBind -> Unit
+emitValsGapsW _ _ [] = ()
+emitValsGapsW prog fragments (b :: rest) =
   let _ = setGapBindingOfW (progEmit prog) ("val " ++ bindName b)
-  let _ = emitRefValInit prog b
-  emitValsGapsW prog rest
+  let lines = emitRefValInit prog b
+  let _ = setRef fragments (lines :: !fragments)
+  emitValsGapsW prog fragments rest
 
 externFamilyW : WasmEmit -> String -> Option WasmFamily
 externFamilyW emit name =
@@ -2373,6 +2292,10 @@ emitRefProgram prog plan groups =
     if progUseClos prog then [emitElemDeclare (progEmit prog)] else []
   let runtime =
     plannedHelperLines
+      (target count =>
+        callFnAtW (progEmit prog) trapOriginW CallValueW target count)
+      (target count =>
+        callFnAtW (progEmit prog) trapOriginW CallTailW target count)
       physical
       (map strBytesW (reverseL (progEmit prog).siteFiles.value))
   let dataSegs = emitDataSegs (progEmit prog)
@@ -2798,10 +2721,10 @@ emitRefForceFn prog (CBind name [CClause [] body] _ _) =
     ++ ["    end", "    end", "  )"]
 emitRefForceFn prog (CBind name _ _ _) =
   -- in record mode the gap stands in for this force function
+  let gap = WasmFunc (forcerW name)
+  let _ = setRef (progEmit prog).gapSymbols (gap :: !(progEmit prog).gapSymbols)
   let _ =
-    setRef
-      (progEmit prog).symbols
-      (excuseSymbol (WasmFunc (forcerW name)) !(progEmit prog).symbols)
+    setRef (progEmit prog).symbols (excuseSymbol gap !(progEmit prog).symbols)
   gapLP prog "value binding must be a nullary clause"
 
 -- main: compute the body (a (ref eq)), then unbox to i32 and route to the print
@@ -3395,7 +3318,7 @@ patTestBind prog (PLit (LString s)) occ clLabel env =
 -- for refutable nested ctors — mirror PCons/PTuple/PList, which recurse via patTestBind.
 patTestBind prog (PCon c args) occ clLabel env =
   let ctest =
-    discrimReadOf occ (ctorTypeName prog c)
+    discrimReadOf prog occ (ctorTypeName prog c)
       ++ [
         "i32.const " ++ intToString (ctorOrdinal prog c),
         "i32.ne",
@@ -3413,7 +3336,8 @@ patTestBind prog (PAs x _ bid p) occ clLabel env =
 -- refutable, e.g. `[x] = (x :: [])`).
 patTestBind prog (PCons h t) occ clLabel env =
   let consTest =
-    discrimReadOf occ "List" ++ ["i32.const 0", "i32.ne", "br_if " ++ clLabel]
+    discrimReadOf prog occ "List"
+      ++ ["i32.const 0", "i32.ne", "br_if " ++ clLabel]
   let hSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 1"]
   let tSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 2"]
   let (ht, hb, env2) = patTestBind prog h hSnip clLabel env
@@ -3476,14 +3400,16 @@ patTestBindList : Prog ->
   String ->
   Env ->
   (List String, List String, Env)
-patTestBindList _ [] occ clLabel env = (
-  discrimReadOf occ "List" ++ ["i32.const 1", "i32.ne", "br_if " ++ clLabel],
+patTestBindList prog [] occ clLabel env = (
+  discrimReadOf prog occ "List"
+    ++ ["i32.const 1", "i32.ne", "br_if " ++ clLabel],
   [],
   env,
 )
 patTestBindList prog (p :: ps) occ clLabel env =
   let consTest =
-    discrimReadOf occ "List" ++ ["i32.const 0", "i32.ne", "br_if " ++ clLabel]
+    discrimReadOf prog occ "List"
+      ++ ["i32.const 0", "i32.ne", "br_if " ++ clLabel]
   let hSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 1"]
   let tSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 2"]
   let (ht, hb, env2) = patTestBind prog p hSnip clLabel env
@@ -3505,8 +3431,8 @@ patTestBindTuple prog tc (p :: rest) occ clLabel env i =
   let fieldSnip =
     occ
       ++ [
-        "ref.cast (ref $" ++ ctorStructName tc ++ ")",
-        "struct.get $\{ctorStructName tc} \{intToString (i + 1)}",
+        "ref.cast (ref $" ++ typeNameW prog (ctorStructName tc) ++ ")",
+        "struct.get $\{typeNameW prog (ctorStructName tc)} \{intToString (i + 1)}",
       ]
   let (ft, fb, env2) = patTestBind prog p fieldSnip clLabel env
   let (rt, rb, env3) = patTestBindTuple prog tc rest occ clLabel env2 (i + 1)
@@ -3528,8 +3454,8 @@ patTestBindCon prog c (p :: rest) occ clLabel env i =
   let fieldSnip =
     occ
       ++ [
-        "ref.cast (ref $" ++ ctorStructName c ++ ")",
-        "struct.get $\{ctorStructName c} \{intToString (i + 1)}",
+        "ref.cast (ref $" ++ typeNameW prog (ctorStructName c) ++ ")",
+        "struct.get $\{typeNameW prog (ctorStructName c)} \{intToString (i + 1)}",
       ]
   let (ft, fb, env2) = patTestBind prog p fieldSnip clLabel env
   let (rt, rb, env3) = patTestBindCon prog c rest occ clLabel env2 (i + 1)
@@ -7236,12 +7162,7 @@ emitIndirectApp prog env d hd args end =
 
 -- How an application's final call is made: for its value, which the code after it
 -- consumes, or as the tail call that replaces the enclosing function's frame.
-data CallEndW = CallValueW | CallTailW
-
--- the instruction that makes a call of `$<target>`
-callInstrW : CallEndW -> String -> String
-callInstrW CallValueW target = "call $" ++ target
-callInstrW CallTailW target = "return_call $" ++ target
+data CallEndW = CallValueW | CallTailW deriving (Eq)
 
 -- what follows a value an application computes without a call to end on
 endValueW : CallEndW -> List String
@@ -7517,11 +7438,14 @@ emitWasmTrmcCtor prog env self arity pslots ctorSet isBuiltinList ctorName selfI
   -- placeholder for the recursive slot (overwritten next iter / by the base leaf).
   let placeholder = ["i32.const 1", "ref.i31"]
   let buildCell =
-    tag ++ leadInstrs ++ placeholder ++ ["struct.new $" ++ cellStruct]
+    tag
+      ++ leadInstrs
+      ++ placeholder
+      ++ ["struct.new $" ++ typeNameW prog cellStruct]
   -- stash new cell in temp 0; link into prev dest (or seed head); advance dest := new.
   let stashNew = buildCell ++ ["local.set " ++ wTrmcTempL 0]
   let cellVal = ["local.get " ++ wTrmcTempL 0, "ref.as_non_null"]
-  let linkSet = wTrmcLinkParent isBuiltinList ctorSet cellVal
+  let linkSet = wTrmcLinkParent prog isBuiltinList ctorSet cellVal
   let linkSeed = [
     "local.get " ++ wTrmcTempL 0,
     "local.set " ++ wTrmcHeadL,
@@ -7570,28 +7494,40 @@ trmcCellOrdinal : Bool -> Prog -> String -> Int
 trmcCellOrdinal True _ ctorName = syntheticCtorOrdinal ctorName
 trmcCellOrdinal False prog ctorName = ctorOrdinal prog ctorName
 
-wTrmcLinkParent : Bool -> List (String, Int) -> List String -> List String
-wTrmcLinkParent isBuiltinList [(ctorName, selfIdx)] valInstrs =
-  wTrmcLinkOne isBuiltinList ctorName selfIdx valInstrs
-wTrmcLinkParent isBuiltinList ctorSet valInstrs =
-  wTrmcLinkChain isBuiltinList ctorSet 0 valInstrs
+wTrmcLinkParent : Prog ->
+  Bool ->
+  List (String, Int) ->
+  List String ->
+  List String
+wTrmcLinkParent prog isBuiltinList [(ctorName, selfIdx)] valInstrs =
+  wTrmcLinkOne prog isBuiltinList ctorName selfIdx valInstrs
+wTrmcLinkParent prog isBuiltinList ctorSet valInstrs =
+  wTrmcLinkChain prog isBuiltinList ctorSet 0 valInstrs
 
-wTrmcLinkOne : Bool -> String -> Int -> List String -> List String
-wTrmcLinkOne isBuiltinList ctorName selfIdx valInstrs =
+wTrmcLinkOne : Prog -> Bool -> String -> Int -> List String -> List String
+wTrmcLinkOne prog isBuiltinList ctorName selfIdx valInstrs =
   let cellStruct = trmcCellStruct isBuiltinList ctorName
-  ["local.get " ++ wTrmcDestL, "ref.cast (ref $" ++ cellStruct ++ ")"]
+  [
+      "local.get " ++ wTrmcDestL,
+      "ref.cast (ref $" ++ typeNameW prog cellStruct ++ ")",
+    ]
     ++ valInstrs
-    ++ ["struct.set $\{cellStruct} \{intToString (selfIdx + 1)}"]
+    ++ ["struct.set $\{typeNameW prog cellStruct} \{intToString (selfIdx + 1)}"]
 
-wTrmcLinkChain : Bool -> List (String, Int) -> Int -> List String -> List String
-wTrmcLinkChain _ [] _ _ = []
-wTrmcLinkChain isBuiltinList [(ctorName, selfIdx)] _ valInstrs =
-  wTrmcLinkOne isBuiltinList ctorName selfIdx valInstrs
-wTrmcLinkChain isBuiltinList ((ctorName, selfIdx) :: rest) k valInstrs =
+wTrmcLinkChain : Prog ->
+  Bool ->
+  List (String, Int) ->
+  Int ->
+  List String ->
+  List String
+wTrmcLinkChain _ _ [] _ _ = []
+wTrmcLinkChain prog isBuiltinList [(ctorName, selfIdx)] _ valInstrs =
+  wTrmcLinkOne prog isBuiltinList ctorName selfIdx valInstrs
+wTrmcLinkChain prog isBuiltinList ((ctorName, selfIdx) :: rest) k valInstrs =
   ["local.get " ++ wTrmcDctorL, "i32.const " ++ intToString k, "i32.eq", "if"]
-    ++ indent (wTrmcLinkOne isBuiltinList ctorName selfIdx valInstrs)
+    ++ indent (wTrmcLinkOne prog isBuiltinList ctorName selfIdx valInstrs)
     ++ ["else"]
-    ++ indent (wTrmcLinkChain isBuiltinList rest (k + 1) valInstrs)
+    ++ indent (wTrmcLinkChain prog isBuiltinList rest (k + 1) valInstrs)
     ++ ["end"]
 
 -- record which ctor the NEW dest cell is (mixed sets only; a singleton set needs
@@ -7637,7 +7573,7 @@ emitWasmTrmcBase prog env exitLbl e =
   -- $s.tmcdctor.0 — wTrmcLinkParent).  Fetch the set from the ctx.
   match (progFnCtx prog).trmc
     WTrmcOn _ _ _ ctorSet isBuiltinList _ _ =>
-      let storeBranch = wTrmcLinkParent isBuiltinList ctorSet valInstrs
+      let storeBranch = wTrmcLinkParent prog isBuiltinList ctorSet valInstrs
       let seedBranch = valInstrs ++ ["local.set " ++ wTrmcHeadL]
       ["local.get " ++ wTrmcFirstL, "if"]
         ++ indent seedBranch
@@ -8224,7 +8160,10 @@ emitWDispCell prog env root head =
   let headInstrs = emitRefExpr prog env 0 head
   let placeholder = ["i32.const 1", "ref.i31"]
   let buildCell =
-    tag ++ headInstrs ++ placeholder ++ ["struct.new $" ++ cellStruct]
+    tag
+      ++ headInstrs
+      ++ placeholder
+      ++ ["struct.new $" ++ typeNameW prog cellStruct]
   let stashNew = buildCell ++ ["local.set " ++ wTrmcTempL 0]
   -- link: first cell → head:=cell, first:=0 ; else struct.set dest.tail := cell.
   let linkSeed = [
@@ -8235,10 +8174,10 @@ emitWDispCell prog env root head =
   ]
   let linkSet = [
     globalW prog "global.get" (wDispDestL root),
-    "ref.cast (ref $" ++ cellStruct ++ ")",
+    "ref.cast (ref $" ++ typeNameW prog cellStruct ++ ")",
     "local.get " ++ wTrmcTempL 0,
     "ref.as_non_null",
-    "struct.set $" ++ cellStruct ++ " 2",
+    "struct.set $" ++ typeNameW prog cellStruct ++ " 2",
   ]
   let linkInstrs =
     [globalW prog "global.get" (wDispFirstL root), "if"]
@@ -8262,10 +8201,10 @@ emitWDispBase prog env root e =
   let storeBranch =
     [
         globalW prog "global.get" (wDispDestL root),
-        "ref.cast (ref $" ++ cellStruct ++ ")",
+        "ref.cast (ref $" ++ typeNameW prog cellStruct ++ ")",
       ]
       ++ valInstrs
-      ++ ["struct.set $" ++ cellStruct ++ " 2"]
+      ++ ["struct.set $" ++ typeNameW prog cellStruct ++ " 2"]
   let seedBranch = valInstrs ++ [globalW prog "global.set" (wDispHeadL root)]
   [globalW prog "global.get" (wDispFirstL root), "if"]
     ++ indent seedBranch
@@ -8591,7 +8530,7 @@ emitBrTableTowerTail prog env arity d root svRead rest arms branches dft ty sd n
       ++ map
         (k => "block " ++ labelBranch WN.WSwitchTail sd k)
         (rangeList 0 nOrd)
-  let pick = discrimReadOf svRead ty ++ [tableInstr]
+  let pick = discrimReadOf prog svRead ty ++ [tableInstr]
   opens
     ++ pick
     ++ towerBodiesTail
@@ -8682,8 +8621,8 @@ emitOrdinalSlotTail prog env arity d root svRead rest arms branches ty sd k =
           (i =>
             svRead
               ++ [
-                "ref.cast (ref $" ++ cs ++ ")",
-                "struct.get $\{cs} \{intToString (i + 1)}",
+                "ref.cast (ref $" ++ typeNameW prog cs ++ ")",
+                "struct.get $\{typeNameW prog cs} \{intToString (i + 1)}",
               ])
           (rangeList 0 a)
       emitTreeTail prog env arity d root (fieldOccs ++ rest) arms sub
@@ -9268,7 +9207,9 @@ emitCtorConstruct prog env d ctor args =
   else
     let tagField = ["i32.const " ++ intToString (ctorOrdinal prog ctor)]
     let argInstrs = flatMap (a => emitRefExpr prog env d a) args
-    tagField ++ argInstrs ++ ["struct.new $" ++ ctorStructName ctor]
+    tagField
+      ++ argInstrs
+      ++ ["struct.new $" ++ typeNameW prog (ctorStructName ctor)]
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- W7 — collections (§3.3): List / Tuple / Array / Record / Ref, ranges, index/slice
@@ -9283,7 +9224,7 @@ emitTupleRef prog env d es =
   let argInstrs = flatMap (a => emitRefExpr prog env d a) es
   ["i32.const 0"]
     ++ argInstrs
-    ++ ["struct.new $" ++ ctorStructName (tupleCtorName n)]
+    ++ ["struct.new $" ++ typeNameW prog (ctorStructName (tupleCtorName n))]
 
 -- a list literal: a right-nested cons spine ending in the Nil i31.  Built
 -- back-to-front so the emitted struct.news nest correctly (Cons head tail).
@@ -9587,7 +9528,9 @@ emitRecordRef : Prog -> Env -> Int -> String -> List CField -> List String
 emitRecordRef prog env d name fields =
   let tagField = ["i32.const " ++ intToString (ctorOrdinal prog name)]
   let argInstrs = flatMap (f => emitRefExpr prog env d (cFieldExpr f)) fields
-  tagField ++ argInstrs ++ ["struct.new $" ++ ctorStructName name]
+  tagField
+    ++ argInstrs
+    ++ ["struct.new $" ++ typeNameW prog (ctorStructName name)]
 
 -- field access `r.label`: cast to the record's ctor struct and struct.get the field
 -- at index (1 + its declared ordinal), both stamped by `core_ir_lower`.  The label
@@ -9609,8 +9552,8 @@ emitFieldAccessRef prog env d ex label recName ord =
   else if ord >= 0 then
     emitRefExpr prog env d ex
       ++ [
-        "ref.cast (ref $" ++ ctorStructName recName ++ ")",
-        "struct.get $\{ctorStructName recName} \{intToString (ord + 1)}",
+        "ref.cast (ref $" ++ typeNameW prog (ctorStructName recName) ++ ")",
+        "struct.get $\{typeNameW prog (ctorStructName recName)} \{intToString (ord + 1)}",
       ]
   else
     gapLP
@@ -9660,14 +9603,17 @@ emitUpdateCopy prog env d ctor base fields =
   let bL = w7Local (progEmit prog) WN.W7Rub d
   let baseI =
     emitRefExpr prog env d base
-      ++ ["ref.cast (ref $" ++ ctorStructName ctor ++ ")", "local.set " ++ bL]
+      ++ [
+        "ref.cast (ref $" ++ typeNameW prog (ctorStructName ctor) ++ ")",
+        "local.set " ++ bL,
+      ]
   let tagField = ["i32.const " ++ intToString (ctorOrdinal prog ctor)]
   baseI
     ++ tagField
     ++ flatMap
       (idx => oneUpdateField prog env d ctor bL fields idx)
       (rangeList 0 (ctorArity prog ctor))
-    ++ ["struct.new $" ++ ctorStructName ctor]
+    ++ ["struct.new $" ++ typeNameW prog (ctorStructName ctor)]
 
 oneUpdateField : Prog ->
   Env ->
@@ -9681,8 +9627,8 @@ oneUpdateField prog env d ctor bL fields idx = match findUpdateExpr idx fields
   Some ex => emitRefExpr prog env (d + 1) ex
   None => [
     "local.get " ++ bL,
-    "ref.cast (ref $" ++ ctorStructName ctor ++ ")",
-    "struct.get $\{ctorStructName ctor} \{intToString (idx + 1)}",
+    "ref.cast (ref $" ++ typeNameW prog (ctorStructName ctor) ++ ")",
+    "struct.get $\{typeNameW prog (ctorStructName ctor)} \{intToString (idx + 1)}",
   ]
 
 findUpdateExpr : Int -> List CField -> Option CExpr
@@ -10052,8 +9998,8 @@ emitConSwitchRef prog env d decLabel root foc rest arms branches dft =
 -- the discriminant: from a value that is EITHER an i31 nullary (its per-type ordinal,
 -- set at construction) OR a payload struct (the per-type ordinal in field 0).
 -- `ref.test (ref i31)` selects the rep; both yield the SAME dense ordinal.
-discrimReadOf : List String -> String -> List String
-discrimReadOf svRead ty =
+discrimReadOf : Prog -> List String -> String -> List String
+discrimReadOf prog svRead ty =
   -- W9: Bool is always an i31 (0/1) — it has no $T_Bool root struct, so emit the i31
   -- read directly (the generic two-branch form would reference an undeclared type in
   -- its dead struct branch and fail wasm-tools validation).
@@ -10067,8 +10013,8 @@ discrimReadOf svRead ty =
       ++ indent
         (svRead
           ++ [
-            "ref.cast (ref $" ++ typeRootName ty ++ ")",
-            "struct.get $" ++ typeRootName ty ++ " 0",
+            "ref.cast (ref $" ++ typeNameW prog (typeRootName ty) ++ ")",
+            "struct.get $" ++ typeNameW prog (typeRootName ty) ++ " 0",
           ])
       ++ ["end"]
 
@@ -10106,7 +10052,7 @@ emitBrTableTower prog env d decLabel root svRead rest arms branches dft ty sd nO
   let opens =
     ["block " ++ labelName WN.WSwitch sd]
       ++ map (k => "block " ++ labelBranch WN.WSwitch sd k) (rangeList 0 nOrd)
-  let pick = discrimReadOf svRead ty ++ [tableInstr]
+  let pick = discrimReadOf prog svRead ty ++ [tableInstr]
   opens
     ++ pick
     ++ towerBodies
@@ -10202,8 +10148,8 @@ emitOrdinalSlot prog env d decLabel root svRead rest arms branches ty sd k =
           (i =>
             svRead
               ++ [
-                "ref.cast (ref $" ++ cs ++ ")",
-                "struct.get $\{cs} \{intToString (i + 1)}",
+                "ref.cast (ref $" ++ typeNameW prog cs ++ ")",
+                "struct.get $\{typeNameW prog cs} \{intToString (i + 1)}",
               ])
           (rangeList 0 a)
       emitTreeRef prog env d decLabel root (fieldOccs ++ rest) arms sub
@@ -10391,8 +10337,8 @@ bindTupleFields prog env tc (p :: rest) v i =
   let fieldSnippet =
     v
       ++ [
-        "ref.cast (ref $" ++ ctorStructName tc ++ ")",
-        "struct.get $\{ctorStructName tc} \{intToString (i + 1)}",
+        "ref.cast (ref $" ++ typeNameW prog (ctorStructName tc) ++ ")",
+        "struct.get $\{typeNameW prog (ctorStructName tc)} \{intToString (i + 1)}",
       ]
   let (cur, env2) = bindPatRef prog env p fieldSnippet
   let (more, env3) = bindTupleFields prog env2 tc rest v (i + 1)
@@ -10420,8 +10366,8 @@ bindConFieldsGo prog env c (p :: rest) v i =
   let fieldSnippet =
     v
       ++ [
-        "ref.cast (ref $" ++ ctorStructName c ++ ")",
-        "struct.get $\{ctorStructName c} \{intToString (i + 1)}",
+        "ref.cast (ref $" ++ typeNameW prog (ctorStructName c) ++ ")",
+        "struct.get $\{typeNameW prog (ctorStructName c)} \{intToString (i + 1)}",
       ]
   let (cur, env2) = bindPatRef prog env p fieldSnippet
   let (more, env3) = bindConFieldsGo prog env2 c rest v (i + 1)
@@ -10886,7 +10832,7 @@ reservedCtorArity name =
 typeRootName : String -> String
 typeRootName ty =
   if ty == "List" || isReservedType ty || startsWith "$Tuple" ty then
-    "T_" ++ injectiveIdent ty
+    WD.reservedTypeRootName ty
   else
     WN.wasmName (WN.WUserType ty)
 

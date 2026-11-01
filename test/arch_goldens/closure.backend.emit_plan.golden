@@ -10,6 +10,7 @@ backend.wasm_fn_values
 backend.wasm_names
 backend.wasm_reach
 backend.wasm_symbol_names
+backend.wasm_symbols
 frontend.ast
 frontend.exhaust
 frontend.runtime_constructors

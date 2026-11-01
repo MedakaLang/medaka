@@ -320,6 +320,7 @@ inlang-backend-llvm-emit-bytelit-test:
 ## The Wasm physical-identity registry (backend/wasm_symbols.mdk): each defect
 ## beside a valid same-name control, plus whole programs through the emitter.
 inlang-backend-wasm-symbols-test:
+	./medaka test compiler/backend/wasm_text_coverage_test.mdk
 	./medaka test compiler/backend/wasm_symbols_test.mdk compiler/backend/wasm_symbol_names_test.mdk
 
 ## The Wasm runtime helper blocks (backend/wasm_preamble.mdk): each block's text
@@ -331,6 +332,7 @@ inlang-backend-wasm-preamble-test:
 ## The LLVM physical-symbol registry (backend/llvm_symbols.mdk): each defect
 ## beside a valid same-name control, plus whole programs through the emitter.
 inlang-backend-llvm-symbols-test:
+	./medaka test compiler/backend/llvm_text_coverage_test.mdk
 	./medaka test compiler/backend/llvm_symbols_test.mdk compiler/backend/llvm_symbol_names_test.mdk
 
 ## The LLVM runtime preamble (backend/llvm_preamble.mdk): each row renders as

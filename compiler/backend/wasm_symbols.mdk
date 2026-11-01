@@ -39,11 +39,11 @@ public export data WasmSymbol =
 -- What a declaration or definition says the identity is.  A function's shape is
 -- the operand count a direct `call` must supply: written inline (`FuncParams`),
 -- or through a declared function type (`FuncOfType`, the type and its count).  An
--- imported function's signature is the host plan's, so no count is recorded.
+-- imported function's physical count comes from the host plan.
 public export data WasmShape =
   | FuncParams Int
   | FuncOfType String Int
-  | FuncImported
+  | FuncImported Int
   | TypeDecl
   | GlobalDecl
   | DataDecl
@@ -55,6 +55,7 @@ public export data SymbolDefect =
   -- the function, its parameter count, the operands the call supplies, the
   -- call, the definition
   | ShapeMismatch String Int Int SymbolOrigin SymbolOrigin
+  | NamedTypeShapeMismatch String String Int Int SymbolOrigin
   -- a function some call or `ref.func` names, or a global some access names,
   -- that nothing defined
   | UndefinedReference WasmSymbol SymbolOrigin
@@ -62,6 +63,7 @@ public export data SymbolDefect =
   | UndeclaredType String String SymbolOrigin
   -- a function taken by `ref.func` that no element declaration lists
   | UndeclaredFuncRef String SymbolOrigin
+  | UncheckedText String SymbolOrigin
   deriving (Eq, Debug)
 
 data Entry = Entry WasmShape SymbolOrigin
@@ -94,6 +96,7 @@ symbolKey (WasmGlobal n) = "g:" ++ n
 symbolKey (WasmData n) = "d:" ++ n
 symbolKey (WasmElem n) = "e:" ++ n
 
+export
 symbolName : WasmSymbol -> String
 symbolName (WasmFunc n) = n
 symbolName (WasmType n) = n
@@ -102,6 +105,7 @@ symbolName (WasmData n) = n
 symbolName (WasmElem n) = n
 
 paramCount : WasmShape -> Option Int
+paramCount (FuncImported n) = Some n
 paramCount (FuncParams n) = Some n
 paramCount (FuncOfType _ n) = Some n
 paramCount _ = None
@@ -287,18 +291,24 @@ export
 defectCode : SymbolDefect -> DiagCode
 defectCode (DuplicateDefinition _ _ _) = EPhysDuplicate
 defectCode (ShapeMismatch _ _ _ _ _) = EPhysShape
+defectCode (NamedTypeShapeMismatch _ _ _ _ _) = EPhysShape
 defectCode (UndefinedReference _ _) = EPhysUndefined
 defectCode (UndeclaredType _ _ _) = EPhysUndeclaredType
 defectCode (UndeclaredFuncRef _ _) = EPhysUndeclaredFuncref
+
+defectCode (UncheckedText _ _) = EPhysUnchecked
 
 -- The binding and position the defect is reported at.
 export
 defectOrigin : SymbolDefect -> SymbolOrigin
 defectOrigin (DuplicateDefinition _ at _) = at
 defectOrigin (ShapeMismatch _ _ _ at _) = at
+defectOrigin (NamedTypeShapeMismatch _ _ _ _ at) = at
 defectOrigin (UndefinedReference _ at) = at
 defectOrigin (UndeclaredType _ _ at) = at
 defectOrigin (UndeclaredFuncRef _ at) = at
+
+defectOrigin (UncheckedText _ at) = at
 
 export
 defectMessage : SymbolDefect -> String
@@ -306,6 +316,8 @@ defectMessage (DuplicateDefinition sym at first) =
   "in \{bindingOf at}: the WebAssembly module would define \{describe sym} twice, here and in \{placeOf first}; a module may name it once"
 defectMessage (ShapeMismatch f params operands at defined) =
   "in \{bindingOf at}: a call of function `$\{f}` supplies \{intToString operands} operand(s), but its definition in \{placeOf defined} takes \{intToString params}"
+defectMessage (NamedTypeShapeMismatch f ty explicit named at) =
+  "in \{bindingOf at}: function `$\{f}` declares \{intToString explicit} explicit parameter(s), but named type `$\{ty}` declares \{intToString named}"
 defectMessage (UndefinedReference sym at) =
   "in \{bindingOf at}: the WebAssembly module refers to \{describe sym}, which nothing in it defines"
 defectMessage (UndeclaredType t user at) =
@@ -313,9 +325,39 @@ defectMessage (UndeclaredType t user at) =
 defectMessage (UndeclaredFuncRef f at) =
   "in \{bindingOf at}: `ref.func $\{f}` names a function no element declaration lists"
 
+defectMessage (UncheckedText reason at) =
+  "in \{bindingOf at}: WebAssembly text has no valid checked-call receipt (\{reason})"
+
 describe : WasmSymbol -> String
 describe (WasmFunc n) = "function `$\{n}`"
 describe (WasmType n) = "type `$\{n}`"
 describe (WasmGlobal n) = "global `$\{n}`"
 describe (WasmData n) = "data segment `$\{n}`"
 describe (WasmElem n) = "element entry `$\{n}`"
+
+public export data SymbolDeclaration =
+  SymbolDeclaration WasmSymbol WasmShape SymbolOrigin
+  deriving (Eq, Debug)
+
+export
+declarations : SymbolRegistry -> List SymbolDeclaration
+-- Each target has a nominal declaration inventory and registry entry type.
+-- lint-disable-next-line rule-duplicate-body
+declarations reg = flatMap (declarationAt reg) (omKeys reg.entries)
+
+declarationAt : SymbolRegistry -> String -> List SymbolDeclaration
+declarationAt reg key = match omLookup key reg.entries
+  None => []
+  Some (Entry shape origin) =>
+    let name = stringSlice 2 (stringLength key) key
+    let sym = match stringSlice 0 2 key
+      "f:" => WasmFunc name
+      "t:" => WasmType name
+      "g:" => WasmGlobal name
+      "d:" => WasmData name
+      _ => WasmElem name
+    [SymbolDeclaration sym shape origin]
+
+export
+isExcused : WasmSymbol -> SymbolRegistry -> Bool
+isExcused sym reg = omHasKey (symbolKey sym) reg.excused

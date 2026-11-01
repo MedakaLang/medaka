@@ -1,0 +1,873 @@
+import backend.wasm_text_coverage.{
+  CoveragePolicy(..), CallCoverage, checkedCall, emptyCoverage,
+  finishCheckedText, checkCheckedFragment
+}
+import backend.wasm_symbols.{
+  WasmSymbol(..), WasmShape(..), SymbolDefect(..), SymbolDeclaration(..),
+  declarations, defectOrigin, defectMessage, SymbolRegistry, emptyRegistry,
+  defineSymbol, declareSymbol, excuseSymbol, defectCode
+}
+import support.diag_codes.{codeText}
+import support.symbol_origin.{SymbolOrigin(..)}
+import string.{replace, repeat}
+import test.{
+  Expectation, expectAll, expectEqual, expectEach, expectErrContains,
+  expectOkThen, expectLessThan, expectGreaterThan, fail
+}
+
+at : SymbolOrigin
+at = SymbolOrigin "caller" "coverage.mdk" 7 3
+
+registry : Result SymbolDefect SymbolRegistry
+registry = defineSymbol (WasmFunc "f") (FuncParams 1) at emptyRegistry
+
+moduleText : String -> String
+moduleText body =
+  "(module (func $f (param i64) (result i64) " ++ body ++ " local.get 0))"
+
+codes : Result (List SymbolDefect) String -> Result (List String) String
+-- The two backends have distinct nominal defect types.
+-- lint-disable-next-line rule-duplicate-body
+codes (Ok text) = Ok text
+-- The two backends have distinct nominal defect types.
+-- lint-disable-next-line rule-duplicate-body
+codes (Err ds) = Err (map (d => codeText (defectCode d)) ds)
+
+expectStep : (a -> Expectation) -> Result SymbolDefect a -> Expectation
+-- The two backends have distinct nominal defect types.
+-- lint-disable-next-line rule-duplicate-body
+expectStep grade result = expectOkThen grade (match result
+  Ok value => Ok value
+  Err d => Err (codeText (defectCode d)))
+
+withCall : Bool ->
+  (SymbolRegistry -> CallCoverage -> String -> Expectation) ->
+  Expectation
+withCall tailCall grade =
+  expectStep
+    (reg =>
+      expectStep
+        ((reg2, coverage, text) => grade reg2 coverage text)
+        (checkedCall reg tailCall "f" 1 at emptyCoverage))
+    registry
+
+formCase : (Bool, String) -> (String, Expectation)
+formCase (tailCall, instruction) = (
+  instruction,
+  withCall tailCall (reg coverage fragment => expectAll [
+    expectEqual
+      (Ok (moduleText (instruction ++ " $f")))
+      (codes
+        (finishCheckedText ClosedOutput reg coverage (moduleText fragment))),
+    expectEqual
+      (Ok (moduleText ("(" ++ instruction ++ " $f (i64.const 1))")))
+      (codes
+        (finishCheckedText
+          ClosedOutput
+          reg
+          coverage
+          (moduleText ("(" ++ fragment ++ " (i64.const 1))")))),
+  ]),
+)
+
+test "Wasm ordinary and tail receipts preserve flat and folded calls" =
+  expectEach (map formCase [(False, "call"), (True, "return_call")])
+
+test "Wasm typed operand counts are checked before rendering" =
+  expectStep
+    (reg =>
+      expectEqual
+        ["E-PHYS-SHAPE"]
+        (match checkedCall reg False "f" 2 at emptyCoverage
+          Err d => [codeText (defectCode d)]
+          Ok _ => []))
+    registry
+
+test "Wasm valid known-target, unknown and concatenated raw bypasses refuse" = withCall
+  False
+  (reg coverage _ =>
+    expectEach
+      (map
+        (raw => (
+          raw,
+          expectErrContains
+            "E-PHYS-UNCHECKED"
+            (codes
+              (finishCheckedText ClosedOutput reg coverage (moduleText raw))),
+        ))
+        [
+          "call $f",
+          "return_call $f",
+          "call $missing",
+          "(call $f (i64.const 1))",
+          "call" ++ " $f",
+        ]))
+
+test "Wasm reuse, discard and section reorder are valid" = withCall
+  False
+  (reg coverage fragment =>
+    expectStep
+      ((reg2, cov2, tailFragment) => expectAll [
+        expectEqual
+          (Ok (moduleText ""))
+          (codes (finishCheckedText ClosedOutput reg2 cov2 (moduleText ""))),
+        expectEqual
+          (Ok (moduleText "call $f call $f"))
+          (codes
+            (finishCheckedText
+              ClosedOutput
+              reg2
+              cov2
+              (moduleText "\{fragment} \{fragment}"))),
+        expectEqual
+          (Ok (moduleText "return_call $f call $f"))
+          (codes
+            (finishCheckedText
+              ClosedOutput
+              reg2
+              cov2
+              (moduleText "\{tailFragment} \{fragment}"))),
+      ])
+      (checkedCall reg True "f" 1 at coverage))
+
+test "Wasm forged, malformed, nested and edited receipts refuse" = withCall
+  False
+  (reg coverage fragment =>
+    expectEach
+      (map
+        ((label, changed) => (
+          label,
+          expectErrContains
+            "E-PHYS-UNCHECKED"
+            (codes
+              (finishCheckedText
+                ClosedOutput
+                reg
+                coverage
+                (moduleText changed))),
+        ))
+        [
+          ("changed name", replace "$f" "$g" fragment),
+          ("forged id", replace "W0:" "W99:" fragment),
+          ("nested", replace "call" fragment fragment),
+          ("truncated", stringSlice 0 (stringLength fragment - 1) fragment),
+          ("wrong form", "return_" ++ fragment),
+          ("token continuation", fragment ++ "suffix"),
+        ]))
+
+test "Wasm strings, escaped quotes and nested comment lookalikes are inert" =
+  let source =
+    "(module (; call $absent (; \u{1e}W999:fake\u{1f} ;) ;) ;; return_call $absent\n (data $d \"call $absent \\\" \u{1e}W999:fake\u{1f}\"))"
+  expectStep
+    (reg =>
+      expectEqual
+        (Ok source)
+        (codes (finishCheckedText ClosedOutput reg emptyCoverage source)))
+    (declareSymbol (WasmData "d") DataDecl at emptyRegistry)
+
+test "Wasm preseeded helper names are no proof that helper text survived assembly" = withCall
+  False
+  (reg coverage fragment => expectAll [
+    expectErrContains
+      "E-PHYS-UNDEFINED"
+      (codes
+        (finishCheckedText
+          ClosedOutput
+          reg
+          coverage
+          ("(module (" ++ fragment ++ "))"))),
+    expectErrContains
+      "E-PHYS-UNDEFINED"
+      (codes (finishCheckedText ClosedOutput reg coverage "(module)")),
+    expectErrContains
+      "E-PHYS-DUPLICATE"
+      (codes
+        (finishCheckedText
+          ClosedOutput
+          reg
+          coverage
+          "(module (func $f (param i64)) (func $f (param i64)))")),
+    expectErrContains
+      "E-PHYS-SHAPE"
+      (codes
+        (finishCheckedText
+          ClosedOutput
+          reg
+          coverage
+          "(module (func $f (param i64 i64)))")),
+  ])
+
+dependencyRegistry : Result SymbolDefect SymbolRegistry
+dependencyRegistry = do
+  r1 <- defineSymbol (WasmFunc "f") (FuncParams 1) at emptyRegistry
+  r2 <- declareSymbol (WasmType "T") TypeDecl at r1
+  r3 <- declareSymbol (WasmGlobal "g") GlobalDecl at r2
+  r4 <- declareSymbol (WasmData "d") DataDecl at r3
+  declareSymbol (WasmElem "f") ElemDecl at r4
+
+dependencyText : String
+dependencyText =
+  "(module (type $T (struct)) (global $g (mut i64) (i64.const 0)) (data $d \"x\") (elem declare func $f) (func $f (param i64) ref.null $T global.get $g data.drop $d ref.func $f))"
+
+test "Wasm actual type, global, data and element inventory closes named uses" =
+  expectStep
+    (reg => expectAll [
+      expectEqual
+        (Ok dependencyText)
+        (codes
+          (finishCheckedText ClosedOutput reg emptyCoverage dependencyText)),
+      expectEach
+        (map
+          ((label, needle) => (
+            label,
+            expectErrContains
+              "E-PHYS-UNDEFINED"
+              (codes
+                (finishCheckedText
+                  ClosedOutput
+                  reg
+                  emptyCoverage
+                  (replace needle "" dependencyText))),
+          ))
+          [
+            ("dropped type", "(type $T (struct))"),
+            ("dropped global", "(global $g (mut i64) (i64.const 0))"),
+            ("dropped data", "(data $d \"x\")"),
+          ]),
+      expectErrContains
+        "E-PHYS-UNDECLARED-FUNCREF"
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            reg
+            emptyCoverage
+            (replace "(elem declare func $f)" "" dependencyText))),
+      expectErrContains
+        "E-PHYS-UNDEFINED"
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            reg
+            emptyCoverage
+            (replace "global.get $g" "global.get $unknown" dependencyText))),
+    ])
+    dependencyRegistry
+
+test "Wasm actual imports carry their physical parameter shape and cannot disappear" =
+  expectStep
+    (reg =>
+      expectStep
+        ((reg2, coverage, fragment) => expectAll [
+          expectEqual
+            (Ok
+              ("(module (import \"env\" \"host\" (func $host (param i64))) ("
+                ++ "call $host"
+                ++ " (i64.const 1)))"))
+            (codes
+              (finishCheckedText
+                ClosedOutput
+                reg2
+                coverage
+                ("(module (import \"env\" \"host\" (func $host (param i64))) ("
+                  ++ fragment
+                  ++ " (i64.const 1)))"))),
+          expectErrContains
+            "E-PHYS-SHAPE"
+            (codes
+              (finishCheckedText
+                ClosedOutput
+                reg2
+                coverage
+                "(module (import \"env\" \"host\" (func $host (param i64 i64))))")),
+          expectErrContains
+            "E-PHYS-UNDEFINED"
+            (codes (finishCheckedText ClosedOutput reg2 coverage "(module)")),
+        ])
+        (checkedCall reg False "host" 1 at emptyCoverage))
+    (declareSymbol (WasmFunc "host") (FuncImported 1) at emptyRegistry)
+
+test "Wasm imported call descriptors reject the wrong wire arity" =
+  expectStep
+    (reg => expectAll [
+      expectEqual
+        ["E-PHYS-SHAPE"]
+        (match checkedCall reg False "host" 0 at emptyCoverage
+          Err d => [codeText (defectCode d)]
+          Ok _ => []),
+      expectStep
+        ((reg2, coverage, fragment) =>
+          expectErrContains
+            "E-PHYS-SHAPE"
+            (codes
+              (finishCheckedText
+                ClosedOutput
+                reg2
+                coverage
+                ("(module (import \"env\" \"host\" (func $host (param i64 i64))) (func $caller "
+                  ++ fragment
+                  ++ "))"))))
+        (checkedCall reg False "host" 1 at emptyCoverage),
+    ])
+    (do
+      reg <- declareSymbol (WasmFunc "host") (FuncImported 1) at emptyRegistry
+      defineSymbol (WasmFunc "caller") (FuncParams 0) at reg)
+
+test "Wasm named function types determine physical parameter counts" =
+  let reg = do
+    r1 <- declareSymbol (WasmType "sig") TypeDecl at emptyRegistry
+    defineSymbol (WasmFunc "f") (FuncOfType "sig" 1) at r1
+  expectStep
+    (r => expectAll [
+      expectEqual
+        (Ok
+          "(module (type $sig (func (param (ref null any)))) (func $f (type $sig)))")
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            r
+            emptyCoverage
+            "(module (type $sig (func (param (ref null any)))) (func $f (type $sig)))")),
+      expectErrContains
+        "E-PHYS-SHAPE"
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            r
+            emptyCoverage
+            "(module (type $sig (func (param i64 i64))) (func $f (type $sig)))")),
+    ])
+    reg
+
+test "Wasm materialized function linkage distinguishes imports and definitions" =
+  let imported =
+    declareSymbol (WasmFunc "host") (FuncImported 0) at emptyRegistry
+  let defined = defineSymbol (WasmFunc "host") (FuncParams 0) at emptyRegistry
+  let importText = "(module (import \"env\" \"host\" (func $host)))"
+  let inlineText = "(module (func $host (import \"env\" \"host\")))"
+  let localText = "(module (func $host))"
+  expectAll [
+    expectStep
+      (reg => expectAll [
+        expectEqual
+          (Ok importText)
+          (codes (finishCheckedText ClosedOutput reg emptyCoverage importText)),
+        expectEqual
+          (Ok inlineText)
+          (codes (finishCheckedText ClosedOutput reg emptyCoverage inlineText)),
+        expectErrContains
+          "E-PHYS-SHAPE"
+          (codes (finishCheckedText ClosedOutput reg emptyCoverage localText)),
+      ])
+      imported,
+    expectStep
+      (reg => expectAll [
+        expectEqual
+          (Ok localText)
+          (codes (finishCheckedText ClosedOutput reg emptyCoverage localText)),
+        expectErrContains
+          "E-PHYS-SHAPE"
+          (codes (finishCheckedText ClosedOutput reg emptyCoverage importText)),
+        expectErrContains
+          "E-PHYS-SHAPE"
+          (codes (finishCheckedText ClosedOutput reg emptyCoverage inlineText)),
+      ])
+      defined,
+  ]
+
+test "Wasm receipted host call refuses a substituted local body" =
+  let setup = do
+    r <- declareSymbol (WasmFunc "host") (FuncImported 0) at emptyRegistry
+    defineSymbol (WasmFunc "caller") (FuncParams 0) at r
+  expectStep
+    (reg =>
+      expectStep
+        ((next, coverage, fragment) =>
+          let local =
+            "(module (func $host (result i64) i64.const 7) (func $caller (export \"run\") (result i64) "
+              ++ fragment
+              ++ "))"
+          let imported =
+            "(module (import \"env\" \"host\" (func $host (result i64))) (func $caller (export \"run\") (result i64) "
+              ++ fragment
+              ++ "))"
+          expectAll [
+            expectErrContains
+              "E-PHYS-SHAPE"
+              (codes (finishCheckedText ClosedOutput next coverage local)),
+            expectEqual
+              (Ok (replace fragment "call $host" imported))
+              (codes (finishCheckedText ClosedOutput next coverage imported)),
+          ])
+        (checkedCall reg False "host" 0 at emptyCoverage))
+    setup
+
+test "Wasm explicit and forward named function types agree with registry" =
+  let reg = do
+    r <- declareSymbol (WasmType "sig") TypeDecl at emptyRegistry
+    defineSymbol (WasmFunc "f") (FuncOfType "sig" 1) at r
+  expectStep
+    (r => expectAll [
+      expectEach
+        (map
+          (source => (
+            source,
+            expectEqual
+              (Ok source)
+              (codes (finishCheckedText ClosedOutput r emptyCoverage source)),
+          ))
+          [
+            "(module (type $sig (func (param i64))) (func $f (type $sig) (param i64)))",
+            "(module (func $f (type $sig)) (type $sig (func (param i64))))",
+            "(module (func $f (type $sig) (param i64)) (type $sig (func (param i64))))",
+          ]),
+      expectEach
+        (map
+          (source => (
+            source,
+            expectErrContains
+              "E-PHYS-SHAPE"
+              (codes (finishCheckedText ClosedOutput r emptyCoverage source)),
+          ))
+          [
+            "(module (type $sig (func (param i64 i64))) (func $f (type $sig) (param i64)))",
+            "(module (func $f (type $sig) (param i64)) (type $sig (func (param i64 i64))))",
+            "(module (type $sig (func (param i64))) (func $f (type $sig) (param i64 i64)))",
+          ]),
+      expectErrContains
+        "E-PHYS-UNDEFINED"
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            r
+            emptyCoverage
+            "(module (func $f (type $unknown) (param i64)) (type $sig (func (param i64))))")),
+    ])
+    reg
+
+shapeDetails : Result (List SymbolDefect) String ->
+  List (String, String, SymbolOrigin)
+shapeDetails (Ok _) = []
+shapeDetails (Err ds) =
+  map (d => (codeText (defectCode d), defectMessage d, defectOrigin d)) ds
+
+test "Wasm named type conflict reports explicit and named counts" =
+  let reg = do
+    r <- declareSymbol (WasmType "sig") TypeDecl at emptyRegistry
+    defineSymbol (WasmFunc "f") (FuncOfType "sig" 1) at r
+  expectStep
+    (r => expectAll [
+      expectEqual
+        [
+          (
+            "E-PHYS-SHAPE",
+            "in `caller`: function `$f` declares 1 explicit parameter(s), but named type `$sig` declares 2",
+            at,
+          ),
+        ]
+        (shapeDetails
+          (finishCheckedText
+            ClosedOutput
+            r
+            emptyCoverage
+            "(module (type $sig (func (param i64 i64))) (func $f (type $sig) (param i64)))")),
+      expectEqual
+        [
+          (
+            "E-PHYS-SHAPE",
+            "in `caller`: function `$f` declares 2 explicit parameter(s), but named type `$sig` declares 1",
+            at,
+          ),
+        ]
+        (shapeDetails
+          (finishCheckedText
+            ClosedOutput
+            r
+            emptyCoverage
+            "(module (func $f (type $sig) (param i64 i64)) (type $sig (func (param i64))))")),
+    ])
+    reg
+
+test "Wasm imported named types preserve linkage and resolve forward declarations" =
+  let setup = do
+    r <- declareSymbol (WasmType "sig") TypeDecl at emptyRegistry
+    declareSymbol (WasmFunc "host") (FuncImported 1) at r
+  expectStep
+    (reg => expectAll [
+      expectEqual
+        (Ok
+          "(module (import \"env\" \"host\" (func $host (type $sig))) (type $sig (func (param i64))))")
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            reg
+            emptyCoverage
+            "(module (import \"env\" \"host\" (func $host (type $sig))) (type $sig (func (param i64))))")),
+      expectErrContains
+        "E-PHYS-SHAPE"
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            reg
+            emptyCoverage
+            "(module (import \"env\" \"host\" (func $host (type $sig) (param i64))) (type $sig (func (param i64 i64))))")),
+      expectErrContains
+        "E-PHYS-SHAPE"
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            reg
+            emptyCoverage
+            "(module (func $host (type $sig) (param i64)) (type $sig (func (param i64))))")),
+    ])
+    setup
+
+test "Wasm final registry rechecks the exact stored call descriptor" = withCall
+  False
+  (_ coverage fragment =>
+    expectStep
+      (wrong =>
+        expectErrContains
+          "E-PHYS-SHAPE"
+          (codes
+            (finishCheckedText
+              ClosedOutput
+              wrong
+              coverage
+              ("(module (func $f (param i64 i64) " ++ fragment ++ "))"))))
+      (defineSymbol (WasmFunc "f") (FuncParams 2) at emptyRegistry))
+
+test "Wasm gaps exempt only the named previously excused obligation" = withCall
+  False
+  (reg coverage fragment =>
+    let excused = excuseSymbol (WasmFunc "f") reg
+    expectAll [
+      expectEqual
+        (Ok "call $f")
+        (codes
+          (finishCheckedText
+            (RecordedGaps [WasmFunc "f"])
+            excused
+            coverage
+            fragment)),
+      expectErrContains
+        "E-PHYS-UNDEFINED"
+        (codes
+          (finishCheckedText
+            (RecordedGaps [WasmFunc "f"])
+            reg
+            coverage
+            fragment)),
+      expectErrContains
+        "E-PHYS-UNDEFINED"
+        (codes
+          (finishCheckedText
+            (RecordedGaps [WasmFunc "other"])
+            excused
+            coverage
+            fragment)),
+      expectErrContains
+        "E-PHYS-UNCHECKED"
+        (codes
+          (finishCheckedText
+            (RecordedGaps [WasmFunc "f"])
+            excused
+            coverage
+            "call $f")),
+      expectErrContains
+        "E-PHYS-DUPLICATE"
+        (codes
+          (finishCheckedText
+            (RecordedGaps [WasmFunc "f"])
+            excused
+            coverage
+            "(module (func $f (param i64)) (func $f (param i64)))")),
+      expectErrContains
+        "E-PHYS-SHAPE"
+        (codes
+          (finishCheckedText
+            (RecordedGaps [WasmFunc "f"])
+            excused
+            coverage
+            "(module (func $f (param i64 i64)))")),
+    ])
+
+test "Wasm large folded and flat products have bounded allocation and stack use" =
+  match registry
+    Err d => fail (codeText (defectCode d))
+    Ok reg => match checkedCall reg False "f" 1 at emptyCoverage
+      Err d => fail (codeText (defectCode d))
+      Ok (reg2, coverage, fragment) =>
+        let small =
+          moduleText (repeat 10000 ("(" ++ fragment ++ " (i64.const 1)) "))
+        let large =
+          moduleText (repeat 20000 ("(" ++ fragment ++ " (i64.const 1)) "))
+        let before = allocBytes ()
+        let first = finishCheckedText ClosedOutput reg2 coverage small
+        let mid = allocBytes ()
+        let second = finishCheckedText ClosedOutput reg2 coverage large
+        let end = allocBytes ()
+        expectAll [
+          expectEqual
+            (Ok (moduleText (repeat 10000 "(call $f (i64.const 1)) ")))
+            (codes first),
+          expectEqual
+            (Ok (moduleText (repeat 20000 "(call $f (i64.const 1)) ")))
+            (codes second),
+          expectGreaterThan 0 (mid - before),
+          expectLessThan ((mid - before) * 3) (end - mid),
+        ]
+
+test "Wasm declaration inventory and unchecked diagnostic retain typed facts" =
+  expectStep
+    (reg => expectAll [
+      expectEqual
+        [SymbolDeclaration (WasmFunc "f") (FuncParams 1) at]
+        (declarations reg),
+      expectEqual at (defectOrigin (UncheckedText "changed bytes" at)),
+      expectEqual
+        "E-PHYS-UNCHECKED"
+        (codeText (defectCode (UncheckedText "changed bytes" at))),
+      expectEqual
+        "in `caller`: WebAssembly text has no valid checked-call receipt (changed bytes)"
+        (defectMessage (UncheckedText "changed bytes" at)),
+    ])
+    registry
+
+test "Wasm discarded forward calls leave no materialized obligation" =
+  expectStep
+    ((reg, coverage, _) =>
+      expectEqual
+        (Ok "")
+        (codes (finishCheckedText ClosedOutput reg coverage "")))
+    (checkedCall emptyRegistry False "future" 0 at emptyCoverage)
+
+test "wasm uncovered calls use the enclosing registered binding origin" = withCall
+  False
+  (reg coverage _ =>
+    match finishCheckedText ClosedOutput reg coverage (moduleText "call $f")
+      Err ds => expectEqual [at] (map defectOrigin ds)
+      Ok _ => fail "raw call accepted")
+
+test "Wasm named heap types, supertypes, exports and starts require actual targets" = expectAll
+  [
+    withCall False (reg coverage _ =>
+      expectEach
+        (map
+          (body => (
+            body,
+            expectErrContains
+              "E-PHYS-UNDEFINED"
+              (codes
+                (finishCheckedText ClosedOutput reg coverage (moduleText body))),
+          ))
+          ["ref.null $unknown", "ref.cast (ref null $unknown)"])),
+    expectStep
+      (reg =>
+        expectErrContains
+          "E-PHYS-UNDEFINED"
+          (codes
+            (finishCheckedText
+              ClosedOutput
+              reg
+              emptyCoverage
+              "(module (type $T (sub $unknown (struct))))")))
+      (declareSymbol (WasmType "T") TypeDecl at emptyRegistry),
+    expectErrContains
+      "E-PHYS-UNDEFINED"
+      (codes
+        (finishCheckedText
+          ClosedOutput
+          emptyRegistry
+          emptyCoverage
+          "(module (start $unknown))")),
+    expectErrContains
+      "E-PHYS-UNDEFINED"
+      (codes
+        (finishCheckedText
+          ClosedOutput
+          emptyRegistry
+          emptyCoverage
+          "(module (export \"f\" (func $unknown)))")),
+    expectStep
+      (reg =>
+        expectErrContains
+          "E-PHYS-UNDEFINED"
+          (codes
+            (finishCheckedText
+              ClosedOutput
+              reg
+              emptyCoverage
+              "(module (elem declare func $unknown))")))
+      (declareSymbol (WasmElem "unknown") ElemDecl at emptyRegistry),
+  ]
+
+test "Wasm same-name namespaces and declaration permutations stay independent" =
+  let reg = do
+    a <- defineSymbol (WasmFunc "same") (FuncParams 0) at emptyRegistry
+    b <- declareSymbol (WasmType "same") TypeDecl at a
+    c <- declareSymbol (WasmGlobal "same") GlobalDecl at b
+    d <- declareSymbol (WasmData "same") DataDecl at c
+    declareSymbol (WasmElem "same") ElemDecl at d
+  let head =
+    "(type $same (struct)) (global $same i64 (i64.const 0)) (data $same \"x\") (elem declare func $same)"
+  let body =
+    "(func $same global.get $same drop data.drop $same ref.null $same drop ref.func $same drop)"
+  expectStep
+    (symbols =>
+      expectEach
+        (map
+          (source => (
+            source,
+            expectEqual
+              (Ok source)
+              (codes
+                (finishCheckedText ClosedOutput symbols emptyCoverage source)),
+          ))
+          [
+            "(module \{head}\{body})",
+            "(module \{body}\{head})",
+          ]))
+    reg
+
+test "Wasm lexical receipt errors retain the supplied binding origin" =
+  expectStep
+    (reg => match checkedCall reg False "\"" 0 at emptyCoverage
+      Err d => expectAll [
+        expectEqual at (defectOrigin d),
+        expectEqual "E-PHYS-UNCHECKED" (codeText (defectCode d)),
+      ]
+      Ok _ => fail "malformed checked call accepted")
+    registry
+
+test "Wasm numeric and incomplete direct calls cannot bypass coverage" = withCall
+  False
+  (reg coverage _ =>
+    expectEach
+      (map
+        (body => (
+          body,
+          expectErrContains
+            "E-PHYS-UNCHECKED"
+            (codes
+              (finishCheckedText ClosedOutput reg coverage (moduleText body))),
+        ))
+        ["local.get 0 call 0 drop", "local.get 0 return_call 0", "call"]))
+
+test "Wasm anonymous function declarations cannot bypass the registry inventory" = expectAll
+  [
+    expectErrContains
+      "E-PHYS-UNCHECKED"
+      (codes
+        (finishCheckedText
+          ClosedOutput
+          emptyRegistry
+          emptyCoverage
+          "(module (func))")),
+    expectErrContains
+      "E-PHYS-UNCHECKED"
+      (codes
+        (finishCheckedText
+          ClosedOutput
+          emptyRegistry
+          emptyCoverage
+          "(module (import \"env\" \"host\" (func)))")),
+    expectStep
+      (reg =>
+        expectEqual
+          (Ok "(module (type $sig (func)))")
+          (codes
+            (finishCheckedText
+              ClosedOutput
+              reg
+              emptyCoverage
+              "(module (type $sig (func)))")))
+      (declareSymbol (WasmType "sig") TypeDecl at emptyRegistry),
+  ]
+
+test "census fragments check coverage, materialized shape and duplicates" =
+  expectStep
+    (reg =>
+      expectStep
+        ((reg2, coverage, fragment) => expectAll [
+          expectEqual
+            (Ok ())
+            (checkCheckedFragment
+              reg2
+              coverage
+              ("(func $f (param i64) " ++ fragment ++ ")")),
+          expectEqual
+            ["E-PHYS-UNCHECKED"]
+            (fragmentCodes
+              (checkCheckedFragment
+                reg2
+                coverage
+                "(func $f (param i64) call $f)")),
+          expectEqual
+            ["E-PHYS-SHAPE"]
+            (fragmentCodes
+              (checkCheckedFragment reg2 coverage "(func $f (param i64 i64))")),
+          expectEqual
+            ["E-PHYS-DUPLICATE"]
+            (fragmentCodes
+              (checkCheckedFragment
+                reg2
+                coverage
+                "(func $f (param i64)) (func $f (param i64))")),
+        ])
+        (checkedCall reg False "f" 1 at emptyCoverage))
+    registry
+
+fragmentCodes : Result (List SymbolDefect) Unit -> List String
+fragmentCodes (Ok _) = []
+fragmentCodes (Err ds) = map (d => codeText (defectCode d)) ds
+
+test "Wasm import shape diagnostics report both physical counts" =
+  expectStep
+    (reg =>
+      let result =
+        finishCheckedText
+          ClosedOutput
+          reg
+          emptyCoverage
+          "(module (import \"env\" \"host\" (func $host (param i64 i64))))"
+      expectEqual [(1, 2)] (importShapeCounts result))
+    (declareSymbol (WasmFunc "host") (FuncImported 1) at emptyRegistry)
+
+importShapeCounts : Result (List SymbolDefect) String -> List (Int, Int)
+importShapeCounts (Ok _) = []
+importShapeCounts (Err ds) =
+  flatMap
+    (d => match d
+      ShapeMismatch "host" expected actual _ _ => [(expected, actual)]
+      _ => [])
+    ds
+
+-- Receipts must not let a missing body pass for flat, folded, nested or tail calls.
+test "Wasm finalizer retains every named-call form the legacy closure judge rejected" =
+  expectStep
+    ((reg, coverage, direct) =>
+      expectStep
+        ((reg2, coverage2, tail) =>
+          expectEach
+            (map
+              (body => (
+                body,
+                expectErrContains
+                  "E-PHYS-UNDEFINED"
+                  (codes
+                    (finishCheckedText
+                      ClosedOutput
+                      reg2
+                      coverage2
+                      ("(module (func $caller " ++ body ++ "))"))),
+              ))
+              [
+                direct,
+                tail,
+                "(" ++ direct ++ " (i64.const 1))",
+                "(\{direct} (\{direct} (i64.const 1)))",
+              ]))
+        (checkedCall reg True "absent" 1 at coverage))
+    (do
+      reg <- defineSymbol (WasmFunc "caller") (FuncParams 0) at emptyRegistry
+      checkedCall reg False "absent" 1 at emptyCoverage)

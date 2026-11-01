@@ -1,3 +1,4 @@
+import backend.wasm_symbols.{WasmSymbol(..)}
 import backend.wasm_fn_values.{fnValueUses}
 import ir.constructor_facts.{ConstructorFacts, declaredCtorArity}
 import frontend.runtime_constructors.{
@@ -961,6 +962,7 @@ public export data PlannedImport = PlannedImport {
   field : String,
   watSymbol : String,
   signature : String,
+  parameterCount : Int,
 } deriving (Eq, Debug)
 
 public export data WasmDemandPlan = WasmDemandPlan {
@@ -1774,6 +1776,10 @@ representationOf source str acc =
     tupleArities = source.tupleArities ++ extraTuples,
   }
 
+export
+reservedTypeRootName : String -> String
+reservedTypeRootName name = "T_" ++ injectiveIdent name
+
 physicalTypes : ConstructorFacts ->
   CProgram ->
   Bool ->
@@ -1792,7 +1798,10 @@ physicalTypes constructors (CProgram _ _ ctorTypes _ _ _) True clos rep =
         ++ (if hasUse rep UseStr then ["str", "u8arr"] else [])
         ++ (if hasUse rep UseList then ["T_List", "C_Cons"] else [])
         ++ flatMap
-          (n => ["T_Tup" ++ intToString n, "C_Tup" ++ intToString n])
+          (n => [
+            reservedTypeRootName ("$Tuple" ++ intToString n),
+            "C_Tup" ++ intToString n,
+          ])
           rep.tupleArities
         ++ (if hasUse rep UseArray then ["arr"] else [])
         ++ (if rep.refBox then ["refbox"] else [])
@@ -1894,23 +1903,29 @@ helperOrder = [
 -- any body (`declarePlannedHelpers`, wasm_preamble.mdk); the sibling test
 -- `wasm_preamble_test.mdk` holds each row to the text the block renders.
 public export data HelperManifest =
-  HelperManifest (List (String, Int)) (List String)
+  HelperManifest (List (String, Int)) (List String) (List (WasmSymbol, Int))
   deriving (Eq, Debug)
+
+helperFunctions : List (String, Int) -> List String -> HelperManifest
+helperFunctions defines calls = HelperManifest defines calls []
 
 -- [name]'s manifest as [plan] selects its text.
 export
 helperManifest : WasmDemandPlan -> String -> HelperManifest
-helperManifest plan =
-  helperManifestWith
-    (hasWasmHelper plan "i64RuntimeLines")
-    plan.intHelpers
-    plan.nonexhaustiveRuntime
+helperManifest plan name =
+  let (HelperManifest defines calls _) =
+    helperManifestWith
+      (hasWasmHelper plan "i64RuntimeLines")
+      plan.intHelpers
+      plan.nonexhaustiveRuntime
+      name
+  HelperManifest defines calls (helperNamedUses plan name)
 
 helperManifestWith : Bool -> List String -> Bool -> String -> HelperManifest
 helperManifestWith _ _ _ "closApplyLines" =
-  HelperManifest [("mdk_pap", 2), ("__mdk_apply", 2)] []
+  helperFunctions [("mdk_pap", 2), ("__mdk_apply", 2)] []
 helperManifestWith _ _ _ "ioRuntimeLines" =
-  HelperManifest
+  helperFunctions
     [
       ("mdk_unbox_int", 1),
       ("mdk_box_int", 1),
@@ -1920,11 +1935,11 @@ helperManifestWith _ _ _ "ioRuntimeLines" =
     ]
     ["mdk_write_byte"]
 helperManifestWith _ _ _ "ioStrRuntimeLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_print_str", 1), ("mdk_print_strln", 1), ("mdk_int_to_str", 1)]
     ["mdk_write_byte"]
 helperManifestWith _ _ _ "strLeafRuntimeLines" =
-  HelperManifest
+  helperFunctions
     [
       ("mdk_cp_count", 2),
       ("mdk_byte_off", 3),
@@ -1945,11 +1960,11 @@ helperManifestWith _ _ _ "strLeafRuntimeLines" =
     ]
     []
 helperManifestWith _ _ _ "strConcatRuntimeLines" =
-  HelperManifest [("mdk_str_concat", 1)] []
+  helperFunctions [("mdk_str_concat", 1)] []
 helperManifestWith _ _ _ "appendRuntimeLines" =
-  HelperManifest [("mdk_append", 2)] ["mdk_str_append"]
+  helperFunctions [("mdk_append", 2)] ["mdk_str_append"]
 helperManifestWith _ _ _ "valueEqRuntimeLines" =
-  HelperManifest
+  helperFunctions
     [
       ("mdk_value_eq", 2),
       ("mdk_value_cmp", 2),
@@ -1973,7 +1988,7 @@ helperManifestWith i64 _ _ "valueDivRuntimeLines" =
 helperManifestWith _ _ _ "valueModRuntimeLines" =
   valueArithManifest "mod" ["mdk_float_rem", "mdk_write_err_byte"]
 helperManifestWith _ _ _ "valueCmpNumRuntimeLines" =
-  HelperManifest
+  helperFunctions
     [
       ("mdk_value_eq_num", 2),
       ("mdk_value_cmp_num", 2),
@@ -1984,17 +1999,17 @@ helperManifestWith _ _ _ "valueCmpNumRuntimeLines" =
     ]
     ["mdk_unbox_int"]
 helperManifestWith _ _ _ "u64RuntimeLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_u64_shl", 2), ("mdk_u64_shr", 2), ("mdk_u64_mulhi", 2)]
     []
 helperManifestWith _ _ _ "i64RuntimeLines" =
-  HelperManifest [("mdk_i64_div", 2)] []
+  helperFunctions [("mdk_i64_div", 2)] []
 helperManifestWith _ _ _ "stderrRuntimeLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_eprint_str", 1), ("mdk_eprint_strln", 1)]
     ["mdk_write_err_byte"]
 helperManifestWith _ _ _ "rngRuntimeLines" =
-  HelperManifest
+  helperFunctions
     [
       ("mdk_rng_ensure", 0),
       ("mdk_next_u64", 0),
@@ -2004,15 +2019,15 @@ helperManifestWith _ _ _ "rngRuntimeLines" =
     ]
     ["mdk_rng_seed"]
 helperManifestWith _ _ _ "hashRuntimeLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_hash_mix64", 1), ("mdk_hash_int", 1), ("mdk_hash_bool", 1)]
     []
 helperManifestWith _ _ _ "hashStringRuntimeLines" =
-  HelperManifest [("mdk_hash_string", 1)] []
+  helperFunctions [("mdk_hash_string", 1)] []
 helperManifestWith _ _ _ "floatRemRuntimeLines" =
-  HelperManifest [("mdk_float_rem", 2)] []
+  helperFunctions [("mdk_float_rem", 2)] []
 helperManifestWith _ _ _ "floatRuntimeLines" =
-  HelperManifest
+  helperFunctions
     [
       ("mdk_int_to_float", 1),
       ("mdk_float_to_int", 1),
@@ -2021,11 +2036,11 @@ helperManifestWith _ _ _ "floatRuntimeLines" =
     ]
     ["mdk_float_fmt", "mdk_float_fmt_byte"]
 helperManifestWith _ _ _ "hashFloatRuntimeLines" =
-  HelperManifest [("mdk_hash_float", 1)] ["mdk_hash_mix64"]
+  helperFunctions [("mdk_hash_float", 1)] ["mdk_hash_mix64"]
 helperManifestWith _ _ _ "randomFloatRuntimeLines" =
-  HelperManifest [("mdk_random_float", 0)] ["mdk_next_u64"]
+  helperFunctions [("mdk_random_float", 0)] ["mdk_next_u64"]
 helperManifestWith _ _ _ "strSearchRuntimeLines" =
-  HelperManifest
+  helperFunctions
     [
       ("mdk_str_index_of", 2),
       ("mdk_str_count_occ", 2),
@@ -2034,13 +2049,13 @@ helperManifestWith _ _ _ "strSearchRuntimeLines" =
     ]
     ["mdk_cp_count", "mdk_bytes_match_at"]
 helperManifestWith _ _ _ "strToIntRuntimeLines" =
-  HelperManifest [("mdk_str_to_int", 1)] ["mdk_box_int"]
+  helperFunctions [("mdk_str_to_int", 1)] ["mdk_box_int"]
 helperManifestWith _ _ _ "strReverseRuntimeLines" =
-  HelperManifest [("mdk_str_reverse", 1)] []
+  helperFunctions [("mdk_str_reverse", 1)] []
 helperManifestWith _ _ _ "strJoinRuntimeLines" =
-  HelperManifest [("mdk_str_join", 2)] []
+  helperFunctions [("mdk_str_join", 2)] []
 helperManifestWith _ _ _ "utf8LossyRuntimeLines" =
-  HelperManifest
+  helperFunctions
     [
       ("mdk_utf8_step", 3),
       ("mdk_utf8_valid_count", 1),
@@ -2048,7 +2063,7 @@ helperManifestWith _ _ _ "utf8LossyRuntimeLines" =
     ]
     []
 helperManifestWith _ _ _ "strCodecRuntimeLines" =
-  HelperManifest
+  helperFunctions
     [
       ("mdk_str_to_chars", 1),
       ("mdk_utf8_nbytes", 1),
@@ -2059,7 +2074,7 @@ helperManifestWith _ _ _ "strCodecRuntimeLines" =
     ]
     ["mdk_u8_to_str_lossy"]
 helperManifestWith _ _ _ "byteBlockRuntimeLines" =
-  HelperManifest
+  helperFunctions
     [
       ("mdk_bb_copy", 2),
       ("mdk_bb_from_int_array", 1),
@@ -2075,9 +2090,9 @@ helperManifestWith _ _ _ "byteBlockRuntimeLines" =
     ]
     ["mdk_unbox_int", "mdk_u8_to_str_lossy", "mdk_write_byte"]
 helperManifestWith _ _ _ "charFromCodeRuntimeLines" =
-  HelperManifest [("mdk_char_from_code", 1)] []
+  helperFunctions [("mdk_char_from_code", 1)] []
 helperManifestWith _ _ _ "charClassRuntimeLines" =
-  HelperManifest
+  helperFunctions
     [
       ("mdk_char_is_alpha", 1),
       ("mdk_char_is_space", 1),
@@ -2089,104 +2104,104 @@ helperManifestWith _ _ _ "charClassRuntimeLines" =
     ]
     []
 helperManifestWith _ _ _ "ioPushPathLines" =
-  HelperManifest [("mdk_push_path", 1)] ["mdk_path_reset", "mdk_path_push"]
+  helperFunctions [("mdk_push_path", 1)] ["mdk_path_reset", "mdk_path_push"]
 helperManifestWith _ _ _ "ioPushPathMoreLines" =
-  HelperManifest [("mdk_push_path_more", 1)] ["mdk_path_push"]
+  helperFunctions [("mdk_push_path_more", 1)] ["mdk_path_push"]
 helperManifestWith _ _ _ "ioPushGrantLines" =
-  HelperManifest [("mdk_push_grant", 1)] ["mdk_grant_reset", "mdk_grant_push"]
+  helperFunctions [("mdk_push_grant", 1)] ["mdk_grant_reset", "mdk_grant_push"]
 helperManifestWith _ _ _ "ioPushGrantMoreLines" =
-  HelperManifest [("mdk_push_grant_more", 1)] ["mdk_grant_push"]
+  helperFunctions [("mdk_push_grant_more", 1)] ["mdk_grant_push"]
 helperManifestWith _ _ _ "ioResultLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_io_result_bytes", 0), ("mdk_io_result_to_str", 0)]
     ["mdk_result_len", "mdk_result_byte", "mdk_u8_to_str_lossy"]
 helperManifestWith _ _ _ "ioRefusedPanicLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_refused_panic", 0), ("mdk_err_u8arr", 1)]
     ["mdk_io_result_bytes", "mdk_write_err_byte"]
 helperManifestWith _ _ _ "ioReadFileLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_str_not_utf8", 1), ("mdk_read_file_io", 2)]
     (grantedPathCalls [
       "mdk_read_file", "mdk_io_result_bytes", "mdk_utf8_valid_count"
     ])
 helperManifestWith _ _ _ "ioFetchTextLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_fetch_text_io", 1)]
     ["mdk_push_path", "mdk_fetch_text", "mdk_io_result_to_str"]
 helperManifestWith _ _ _ "ioFileExistsLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_file_exists_io", 2)]
     ["mdk_push_grant", "mdk_push_path", "mdk_file_exists", "mdk_refused_panic"]
 helperManifestWith _ _ _ "ioCanonicalizeLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_canonicalize_path_io", 2)]
     (grantedPathCalls ["mdk_canonicalize_path", "mdk_refused_panic"])
 helperManifestWith _ _ _ "ioWriteFileLines" =
-  HelperManifest [("mdk_write_file_io", 3)] (writtenPathCalls "mdk_write_file")
+  helperFunctions [("mdk_write_file_io", 3)] (writtenPathCalls "mdk_write_file")
 helperManifestWith _ _ _ "ioAppendFileLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_append_file_io", 3)]
     (writtenPathCalls "mdk_append_file")
 helperManifestWith _ _ _ "ioRenameLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_rename_io", 4)]
     (grantedPathCalls [
       "mdk_grant_push", "mdk_push_grant_more", "mdk_push_path_more",
       "mdk_rename"
     ])
 helperManifestWith _ _ _ "ioListDirLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_list_dir_io", 2)]
     (grantedPathCalls [
       "mdk_list_dir", "mdk_io_result_bytes", "mdk_u8_to_str_lossy"
     ])
 helperManifestWith _ _ _ "ioStatFileLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_stat_file_io", 2)]
     (grantedPathCalls ["mdk_stat_file", "mdk_box_int", "mdk_stat_field"])
 helperManifestWith _ _ _ "ioMakeDirLines" =
-  HelperManifest [("mdk_make_dir_io", 2)] (grantedPathCalls ["mdk_make_dir"])
+  helperFunctions [("mdk_make_dir_io", 2)] (grantedPathCalls ["mdk_make_dir"])
 helperManifestWith _ _ _ "ioRemoveFileLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_remove_file_io", 2)]
     (grantedPathCalls ["mdk_remove_file"])
 helperManifestWith _ _ _ "ioRemoveDirLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_remove_dir_io", 2)]
     (grantedPathCalls ["mdk_remove_dir"])
 helperManifestWith _ _ _ "ioFsyncLines" =
-  HelperManifest [("mdk_fsync_io", 2)] (grantedPathCalls ["mdk_fsync"])
+  helperFunctions [("mdk_fsync_io", 2)] (grantedPathCalls ["mdk_fsync"])
 helperManifestWith _ _ _ "ioFileModeLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_file_mode_io", 2)]
     (grantedPathCalls ["mdk_file_mode", "mdk_box_int", "mdk_stat_field"])
 helperManifestWith _ _ _ "ioWriteFileModeLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_write_file_mode_io", 4)]
     ("mdk_unbox_int" :: writtenPathCalls "mdk_write_file_mode")
 helperManifestWith _ _ _ "ioGetEnvLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_get_env_io", 1)]
     ["mdk_push_path", "mdk_get_env", "mdk_io_result_to_str"]
 helperManifestWith _ _ _ "ioReadLineLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_read_line_io", 0), ("mdk_read_line_opt_io", 0)]
     ["mdk_read_line", "mdk_io_result_to_str"]
 helperManifestWith _ _ _ "ioReadAllLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_read_all_io", 0)]
     ["mdk_read_all", "mdk_io_result_to_str"]
 helperManifestWith _ _ _ "ioReadExactlyLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_read_exactly_io", 1)]
     ["mdk_read_exactly", "mdk_io_result_to_str"]
 helperManifestWith _ _ _ "ioExecutablePathLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_executable_path_io", 0)]
     ["mdk_executable_path", "mdk_io_result_to_str"]
 helperManifestWith _ _ _ "jsffiArrayLines" =
-  HelperManifest
+  helperFunctions
     [
       ("mdk_jsffi_push_ints", 1),
       ("mdk_jsffi_result_i64", 1),
@@ -2194,42 +2209,42 @@ helperManifestWith _ _ _ "jsffiArrayLines" =
     ]
     ["mdk_unbox_int", "mdk_path_push", "mdk_result_byte", "mdk_box_int"]
 helperManifestWith _ _ _ "jsffiResultStrLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_jsffi_result_str", 1)]
     ["mdk_result_len", "mdk_result_byte", "mdk_u8_to_str_lossy"]
 helperManifestWith _ _ _ "ioArgsLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_arg_to_str", 1), ("mdk_args_io", 0)]
     ["mdk_arg_len", "mdk_arg_byte", "mdk_u8_to_str_lossy", "mdk_args_count"]
 helperManifestWith _ _ _ "writeFileBytesLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_write_file_bytes_io", 3)]
     (writtenPathCalls "mdk_write_file_commit")
 helperManifestWith _ _ _ "osEntropyLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_os_entropy_io", 1)]
     ["mdk_os_entropy", "mdk_refused_panic", "mdk_result_len", "mdk_result_byte"]
 helperManifestWith _ _ _ "readFileBytesLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_read_file_bytes_io", 2)]
     (grantedPathCalls ["mdk_read_file", "mdk_result_len", "mdk_result_byte"])
 helperManifestWith _ _ _ "floatStrLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_string_to_float", 1)]
     [
       "mdk_path_reset", "mdk_path_push", "mdk_str_to_float",
       "mdk_str_to_float_ok"
     ]
 helperManifestWith _ _ _ "floatFixedLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_float_to_fixed", 2)]
     ["mdk_float_fixed", "mdk_float_fixed_byte"]
 helperManifestWith _ _ _ "trapIntRuntimeLines" =
-  HelperManifest
+  helperFunctions
     [("mdk_write_err_digits", 1), ("mdk_write_err_int", 1)]
     ["mdk_write_err_byte"]
 helperManifestWith _ ints _ "intRuntimeLines" = intHelperManifest ints
-helperManifestWith _ _ nonexhaustive "siteRuntimeLines" = HelperManifest ((
+helperManifestWith _ _ nonexhaustive "siteRuntimeLines" = helperFunctions ((
     "mdk_write_err_loc",
     1,
   )
@@ -2249,13 +2264,13 @@ helperFunctionNames =
         ["add", "sub", "mul", "div", "neg", "left", "right"]
         True
         name)
-        HelperManifest defs _ => map fst defs)
+        HelperManifest defs _ _ => map fst defs)
     helperOrder
 
 -- a `$mdk_value_<op>` helper: the Int arm through the box seam and [more]
 valueArithManifest : String -> List String -> HelperManifest
 valueArithManifest op more =
-  HelperManifest
+  helperFunctions
     [("mdk_value_" ++ op, 2)]
     (["mdk_box_int", "mdk_unbox_int"] ++ more)
 
@@ -2288,7 +2303,7 @@ intHelperManifest used =
       []
     else
       ["mdk_write_err_byte", "mdk_write_err_int"]
-  HelperManifest
+  helperFunctions
     (core
       ++ map intOpFunc arith
       ++ map (dir => ("mdk_shift_" ++ dir, 2)) shifts)
@@ -2297,6 +2312,199 @@ intHelperManifest used =
 intOpFunc : String -> (String, Int)
 intOpFunc "neg" = ("mdk_int_neg", 1)
 intOpFunc op = ("mdk_int_" ++ op, 3)
+
+-- Counts include signatures, locals and instructions, so repeated uses cannot
+-- disappear behind a set-valued dependency. These rows never read rendered text.
+helperNamedUses : WasmDemandPlan -> String -> List (WasmSymbol, Int)
+helperNamedUses _ "closApplyLines" =
+  [(WasmType "argarr", 23), (WasmType "clos", 9), (WasmType "codety", 3)]
+helperNamedUses _ "ioRuntimeLines" = [(WasmType "boxint", 3)]
+helperNamedUses _ "ioStrRuntimeLines" =
+  [(WasmType "str", 5), (WasmType "u8arr", 6)]
+helperNamedUses _ "strLeafRuntimeLines" =
+  [(WasmType "str", 52), (WasmType "u8arr", 71)]
+helperNamedUses _ "strConcatRuntimeLines" =
+  [(WasmType "C_Cons", 9), (WasmType "str", 8), (WasmType "u8arr", 5)]
+helperNamedUses _ "appendRuntimeLines" =
+  [(WasmType "C_Cons", 15), (WasmType "str", 3)]
+helperNamedUses _ "stderrRuntimeLines" =
+  [(WasmType "str", 3), (WasmType "u8arr", 2)]
+helperNamedUses _ "hashStringRuntimeLines" =
+  [(WasmType "str", 2), (WasmType "u8arr", 2)]
+helperNamedUses _ "floatRuntimeLines" =
+  [(WasmType "float", 4), (WasmType "str", 2), (WasmType "u8arr", 3)]
+helperNamedUses _ "hashFloatRuntimeLines" = [(WasmType "float", 2)]
+helperNamedUses _ "randomFloatRuntimeLines" = [(WasmType "float", 2)]
+helperNamedUses _ "strSearchRuntimeLines" =
+  [(WasmType "C_Some", 4), (WasmType "str", 17), (WasmType "u8arr", 12)]
+helperNamedUses _ "strToIntRuntimeLines" =
+  [(WasmType "C_Some", 1), (WasmType "str", 2), (WasmType "u8arr", 3)]
+helperNamedUses _ "strReverseRuntimeLines" =
+  [(WasmType "str", 5), (WasmType "u8arr", 6)]
+helperNamedUses _ "strJoinRuntimeLines" =
+  [(WasmType "C_Cons", 9), (WasmType "str", 11), (WasmType "u8arr", 8)]
+helperNamedUses _ "utf8LossyRuntimeLines" =
+  [(WasmType "str", 3), (WasmType "u8arr", 15)]
+helperNamedUses _ "strCodecRuntimeLines" =
+  [(WasmType "arr", 13), (WasmType "str", 8), (WasmType "u8arr", 21)]
+helperNamedUses _ "byteBlockRuntimeLines" =
+  [(WasmType "arr", 6), (WasmType "str", 3), (WasmType "u8arr", 60)]
+helperNamedUses _ "charFromCodeRuntimeLines" = [(WasmType "C_Some", 1)]
+helperNamedUses _ "ioPushPathLines" =
+  [(WasmType "str", 2), (WasmType "u8arr", 2)]
+helperNamedUses _ "ioPushPathMoreLines" =
+  [(WasmType "str", 2), (WasmType "u8arr", 2)]
+helperNamedUses _ "ioPushGrantLines" =
+  [(WasmType "C_Cons", 5), (WasmType "str", 2), (WasmType "u8arr", 2)]
+helperNamedUses _ "ioPushGrantMoreLines" =
+  [(WasmType "C_Cons", 5), (WasmType "str", 2), (WasmType "u8arr", 2)]
+helperNamedUses _ "ioResultLines" = [(WasmType "str", 1), (WasmType "u8arr", 4)]
+helperNamedUses _ "ioRefusedPanicLines" = [(WasmType "u8arr", 3)]
+helperNamedUses _ "ioReadFileLines" = [
+  (WasmType "C_Err", 2),
+  (WasmType "C_Ok", 1),
+  (WasmType "str", 7),
+  (WasmType "u8arr", 10),
+]
+helperNamedUses _ "ioFetchTextLines" =
+  [(WasmType "C_Err", 1), (WasmType "C_Ok", 1), (WasmType "str", 1)]
+helperNamedUses _ "ioFileExistsLines" = [(WasmType "str", 1)]
+helperNamedUses _ "ioCanonicalizeLines" = [(WasmType "str", 1)]
+helperNamedUses _ "ioWriteFileLines" = [
+  (WasmType "C_Err", 1),
+  (WasmType "C_Ok", 1),
+  (WasmType "str", 3),
+  (WasmType "u8arr", 2),
+]
+helperNamedUses _ "ioAppendFileLines" = [
+  (WasmType "C_Err", 1),
+  (WasmType "C_Ok", 1),
+  (WasmType "str", 3),
+  (WasmType "u8arr", 2),
+]
+helperNamedUses _ "ioRenameLines" =
+  [(WasmType "C_Err", 1), (WasmType "C_Ok", 1), (WasmType "str", 3)]
+helperNamedUses _ "ioListDirLines" = [
+  (WasmType "C_Cons", 1),
+  (WasmType "C_Err", 1),
+  (WasmType "C_Ok", 1),
+  (WasmType "str", 1),
+  (WasmType "u8arr", 6),
+]
+helperNamedUses _ "ioStatFileLines" = [
+  (WasmType "C_Err", 1),
+  (WasmType "C_Ok", 1),
+  (WasmType "C_Tup4", 1),
+  (WasmType "float", 1),
+  (WasmType "str", 1),
+]
+helperNamedUses _ "ioMakeDirLines" =
+  [(WasmType "C_Err", 1), (WasmType "C_Ok", 1), (WasmType "str", 1)]
+helperNamedUses _ "ioRemoveFileLines" =
+  [(WasmType "C_Err", 1), (WasmType "C_Ok", 1), (WasmType "str", 1)]
+helperNamedUses _ "ioRemoveDirLines" =
+  [(WasmType "C_Err", 1), (WasmType "C_Ok", 1), (WasmType "str", 1)]
+helperNamedUses _ "ioFsyncLines" =
+  [(WasmType "C_Err", 1), (WasmType "C_Ok", 1), (WasmType "str", 1)]
+helperNamedUses _ "ioFileModeLines" =
+  [(WasmType "C_Err", 1), (WasmType "C_Ok", 1), (WasmType "str", 1)]
+helperNamedUses _ "ioWriteFileModeLines" = [
+  (WasmType "C_Err", 1),
+  (WasmType "C_Ok", 1),
+  (WasmType "str", 3),
+  (WasmType "u8arr", 2),
+]
+helperNamedUses _ "ioGetEnvLines" =
+  [(WasmType "C_Some", 1), (WasmType "str", 1)]
+helperNamedUses _ "ioReadLineLines" = [(WasmType "C_Some", 1)]
+helperNamedUses _ "ioReadExactlyLines" = [(WasmType "C_Some", 1)]
+helperNamedUses _ "jsffiArrayLines" = [(WasmType "arr", 4)]
+helperNamedUses _ "jsffiResultStrLines" =
+  [(WasmType "str", 1), (WasmType "u8arr", 3)]
+helperNamedUses _ "ioArgsLines" =
+  [(WasmType "C_Cons", 1), (WasmType "str", 1), (WasmType "u8arr", 3)]
+helperNamedUses _ "writeFileBytesLines" = [
+  (WasmType "C_Err", 1),
+  (WasmType "C_Ok", 1),
+  (WasmType "arr", 2),
+  (WasmType "str", 1),
+]
+helperNamedUses _ "osEntropyLines" = [(WasmType "arr", 3)]
+helperNamedUses _ "readFileBytesLines" = [
+  (WasmType "C_Err", 1),
+  (WasmType "C_Ok", 1),
+  (WasmType "arr", 3),
+  (WasmType "str", 1),
+]
+helperNamedUses _ "floatStrLines" = [
+  (WasmType "C_Some", 1),
+  (WasmType "float", 1),
+  (WasmType "str", 2),
+  (WasmType "u8arr", 2),
+]
+helperNamedUses _ "floatFixedLines" =
+  [(WasmType "str", 2), (WasmType "u8arr", 3)]
+helperNamedUses _ "rngRuntimeLines" =
+  [(WasmGlobal "mdk_rng_seeded", 2), (WasmGlobal "mdk_rng_state", 4)]
+helperNamedUses plan "valueEqRuntimeLines" =
+  [(WasmType "boxint", 2), (WasmType "float", 31)]
+    ++ wideNamedUses plan 10
+    ++ [(WasmType "str", 8)]
+helperNamedUses plan "valueCmpNumRuntimeLines" =
+  [(WasmType "float", 30)] ++ wideNamedUses plan 10
+helperNamedUses plan "valueAddRuntimeLines" =
+  [(WasmType "float", 6)] ++ wideNamedUses plan 6
+helperNamedUses plan "valueSubRuntimeLines" =
+  [(WasmType "float", 6)] ++ wideNamedUses plan 6
+helperNamedUses plan "valueMulRuntimeLines" =
+  [(WasmType "float", 6)] ++ wideNamedUses plan 6
+helperNamedUses plan "valueDivRuntimeLines" =
+  [(WasmType "float", 6)] ++ wideNamedUses plan 6
+helperNamedUses plan "valueModRuntimeLines" =
+  [(WasmType "float", 6)] ++ wideNamedUses plan 6
+helperNamedUses _ "u64RuntimeLines" = []
+helperNamedUses _ "i64RuntimeLines" = []
+helperNamedUses _ "hashRuntimeLines" = []
+helperNamedUses _ "floatRemRuntimeLines" = []
+helperNamedUses _ "charClassRuntimeLines" = []
+helperNamedUses _ "ioReadAllLines" = []
+helperNamedUses _ "ioExecutablePathLines" = []
+helperNamedUses _ "trapIntRuntimeLines" = []
+helperNamedUses _ "intRuntimeLines" = []
+helperNamedUses _ "siteRuntimeLines" = []
+helperNamedUses _ name =
+  panic ("internal error: unknown-wasm-helper-uses: " ++ name)
+
+wideNamedUses : WasmDemandPlan -> Int -> List (WasmSymbol, Int)
+wideNamedUses plan count =
+  (if hasWasmHelper plan "i64RuntimeLines" then
+      [(WasmType "i64", count)]
+    else
+      [])
+    ++ (if hasWasmHelper plan "u64RuntimeLines" then
+      [(WasmType "u64", count)]
+    else
+      [])
+
+-- Each parameter crosses through its own conversion, including repeated heads.
+-- Array copy-back and String channel packing add uses beyond the wire value.
+export
+jsWrapperUses : JsImport -> List (WasmSymbol, Int)
+jsWrapperUses imp = flatMap jsParamUses imp.params ++ jsResultUses imp.result
+
+jsParamUses : String -> List (WasmSymbol, Int)
+jsParamUses "Array" = [(WasmType "arr", 3)]
+jsParamUses "String" = [(WasmType "str", 3)]
+jsParamUses "Float" = [(WasmType "float", 2)]
+jsParamUses "U64" = [(WasmType "u64", 2)]
+jsParamUses "I64" = [(WasmType "i64", 2)]
+jsParamUses _ = []
+
+jsResultUses : String -> List (WasmSymbol, Int)
+jsResultUses "Float" = [(WasmType "float", 1)]
+jsResultUses "U64" = [(WasmType "u64", 1)]
+jsResultUses "I64" = [(WasmType "i64", 1)]
+jsResultUses _ = []
 
 helperDependencies : Bool -> String -> List String
 helperDependencies _ "appendRuntimeLines" = ["strLeafRuntimeLines"]
@@ -2537,92 +2745,107 @@ physicalImports acc sourceKeys js =
       [])
 
 plannedEnv : String -> PlannedImport
-plannedEnv key = PlannedImport {
-  namespace = "env",
-  field = key,
-  watSymbol = key,
-  signature = optionOr "" (hostImportSigOf key),
-}
+plannedEnv key =
+  let (params, result) = optionOr ([], None) (hostImportAbiOf key)
+  PlannedImport {
+    namespace = "env",
+    field = key,
+    watSymbol = key,
+    signature = wireSignature params result,
+    parameterCount = listLen params,
+  }
 
 plannedJs : JsImport -> PlannedImport
-plannedJs imp = PlannedImport {
-  namespace = "jsffi",
-  field = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}",
-  watSymbol = WN.wasmName (WN.WJSImport imp.medakaName),
-  signature =
-    joinWith "" (map jsWireParam imp.params) ++ jsWireResult imp.result,
-}
+plannedJs imp =
+  let params = filterList (/= "") (map jsWireParam imp.params)
+  PlannedImport {
+    namespace = "jsffi",
+    field = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}",
+    watSymbol = WN.wasmName (WN.WJSImport imp.medakaName),
+    signature = joinWith "" params ++ jsWireResult imp.result,
+    parameterCount = listLen params,
+  }
+
+wireSignature : List String -> Option String -> String
+wireSignature params result =
+  joinWith "" (map (p => " (param \{p})") params)
+    ++ (match result
+      Some r => " (result \{r})"
+      None => "")
 
 export
 hostImportSigOf : String -> Option String
-hostImportSigOf "mdk_write_byte" = Some " (param i32)"
-hostImportSigOf "mdk_write_err_byte" = Some " (param i32)"
-hostImportSigOf "mdk_float_fmt" = Some " (param f64) (result i32)"
-hostImportSigOf "mdk_float_fmt_byte" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_exit" = Some " (param i32)"
-hostImportSigOf "mdk_wall_time_sec" = Some " (result f64)"
-hostImportSigOf "mdk_monotonic_sec" = Some " (result f64)"
-hostImportSigOf "mdk_sleep_ms" = Some " (param i64)"
-hostImportSigOf "mdk_fetch_text" = Some " (result i32)"
-hostImportSigOf "mdk_cbrt" = Some unaryF64Sig
-hostImportSigOf "mdk_exp" = Some unaryF64Sig
-hostImportSigOf "mdk_log" = Some unaryF64Sig
-hostImportSigOf "mdk_log2" = Some unaryF64Sig
-hostImportSigOf "mdk_log10" = Some unaryF64Sig
-hostImportSigOf "mdk_sin" = Some unaryF64Sig
-hostImportSigOf "mdk_cos" = Some unaryF64Sig
-hostImportSigOf "mdk_tan" = Some unaryF64Sig
-hostImportSigOf "mdk_asin" = Some unaryF64Sig
-hostImportSigOf "mdk_acos" = Some unaryF64Sig
-hostImportSigOf "mdk_atan" = Some unaryF64Sig
-hostImportSigOf "mdk_sinh" = Some unaryF64Sig
-hostImportSigOf "mdk_cosh" = Some unaryF64Sig
-hostImportSigOf "mdk_tanh" = Some unaryF64Sig
-hostImportSigOf "mdk_pow" = Some binaryF64Sig
-hostImportSigOf "mdk_atan2" = Some binaryF64Sig
-hostImportSigOf "mdk_hypot" = Some binaryF64Sig
-hostImportSigOf "mdk_path_reset" = Some ""
-hostImportSigOf "mdk_path_push" = Some " (param i32)"
-hostImportSigOf "mdk_read_file" = Some " (result i32)"
-hostImportSigOf "mdk_file_exists" = Some " (result i32)"
-hostImportSigOf "mdk_get_env" = Some " (result i32)"
-hostImportSigOf "mdk_read_line" = Some " (result i32)"
-hostImportSigOf "mdk_read_all" = Some ""
-hostImportSigOf "mdk_read_exactly" = Some " (param i64) (result i32)"
-hostImportSigOf "mdk_os_entropy" = Some " (param i64) (result i32)"
-hostImportSigOf "mdk_rng_seed" = Some " (result i64)"
-hostImportSigOf "mdk_executable_path" = Some " (result i32)"
-hostImportSigOf "mdk_args_count" = Some " (result i32)"
-hostImportSigOf "mdk_arg_len" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_arg_byte" = Some " (param i32) (param i32) (result i32)"
-hostImportSigOf "mdk_result_len" = Some " (result i32)"
-hostImportSigOf "mdk_result_byte" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_write_file_reset" = Some ""
-hostImportSigOf "mdk_write_file_push" = Some " (param i32)"
-hostImportSigOf "mdk_write_file_commit" = Some " (result i32)"
-hostImportSigOf "mdk_float_fixed" = Some " (param i32) (param f64) (result i32)"
-hostImportSigOf "mdk_float_fixed_byte" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_str_to_float" = Some " (result f64)"
-hostImportSigOf "mdk_str_to_float_ok" = Some " (result i32)"
-hostImportSigOf "mdk_grant_reset" = Some ""
-hostImportSigOf "mdk_grant_push" = Some " (param i32)"
-hostImportSigOf "mdk_canonicalize_path" = Some " (result i32)"
-hostImportSigOf "mdk_write_file" = Some " (result i32)"
-hostImportSigOf "mdk_append_file" = Some " (result i32)"
-hostImportSigOf "mdk_make_dir" = Some " (result i32)"
-hostImportSigOf "mdk_remove_file" = Some " (result i32)"
-hostImportSigOf "mdk_remove_dir" = Some " (result i32)"
-hostImportSigOf "mdk_fsync" = Some " (result i32)"
-hostImportSigOf "mdk_file_mode" = Some " (result i32)"
-hostImportSigOf "mdk_write_file_mode" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_rename" = Some " (param i32) (result i32)"
-hostImportSigOf "mdk_list_dir" = Some " (result i32)"
-hostImportSigOf "mdk_stat_file" = Some " (result i32)"
-hostImportSigOf "mdk_stat_field" = Some " (param i32) (result f64)"
-hostImportSigOf "mdk_file_bound_enter" =
-  Some " (param i32) (param i32) (result i32)"
-hostImportSigOf "mdk_file_bound_exit" = Some ""
-hostImportSigOf _ = None
+hostImportSigOf key =
+  map ((params, result) => wireSignature params result) (hostImportAbiOf key)
+
+hostImportAbiOf : String -> Option (List String, Option String)
+hostImportAbiOf "mdk_write_byte" = Some (["i32"], None)
+hostImportAbiOf "mdk_write_err_byte" = Some (["i32"], None)
+hostImportAbiOf "mdk_float_fmt" = Some (["f64"], Some "i32")
+hostImportAbiOf "mdk_float_fmt_byte" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_exit" = Some (["i32"], None)
+hostImportAbiOf "mdk_wall_time_sec" = Some ([], Some "f64")
+hostImportAbiOf "mdk_monotonic_sec" = Some ([], Some "f64")
+hostImportAbiOf "mdk_sleep_ms" = Some (["i64"], None)
+hostImportAbiOf "mdk_fetch_text" = Some ([], Some "i32")
+hostImportAbiOf "mdk_cbrt" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_exp" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_log" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_log2" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_log10" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_sin" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_cos" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_tan" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_asin" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_acos" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_atan" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_sinh" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_cosh" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_tanh" = Some (["f64"], Some "f64")
+hostImportAbiOf "mdk_pow" = Some (["f64", "f64"], Some "f64")
+hostImportAbiOf "mdk_atan2" = Some (["f64", "f64"], Some "f64")
+hostImportAbiOf "mdk_hypot" = Some (["f64", "f64"], Some "f64")
+hostImportAbiOf "mdk_path_reset" = Some ([], None)
+hostImportAbiOf "mdk_path_push" = Some (["i32"], None)
+hostImportAbiOf "mdk_read_file" = Some ([], Some "i32")
+hostImportAbiOf "mdk_file_exists" = Some ([], Some "i32")
+hostImportAbiOf "mdk_get_env" = Some ([], Some "i32")
+hostImportAbiOf "mdk_read_line" = Some ([], Some "i32")
+hostImportAbiOf "mdk_read_all" = Some ([], None)
+hostImportAbiOf "mdk_read_exactly" = Some (["i64"], Some "i32")
+hostImportAbiOf "mdk_os_entropy" = Some (["i64"], Some "i32")
+hostImportAbiOf "mdk_rng_seed" = Some ([], Some "i64")
+hostImportAbiOf "mdk_executable_path" = Some ([], Some "i32")
+hostImportAbiOf "mdk_args_count" = Some ([], Some "i32")
+hostImportAbiOf "mdk_arg_len" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_arg_byte" = Some (["i32", "i32"], Some "i32")
+hostImportAbiOf "mdk_result_len" = Some ([], Some "i32")
+hostImportAbiOf "mdk_result_byte" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_write_file_reset" = Some ([], None)
+hostImportAbiOf "mdk_write_file_push" = Some (["i32"], None)
+hostImportAbiOf "mdk_write_file_commit" = Some ([], Some "i32")
+hostImportAbiOf "mdk_float_fixed" = Some (["i32", "f64"], Some "i32")
+hostImportAbiOf "mdk_float_fixed_byte" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_str_to_float" = Some ([], Some "f64")
+hostImportAbiOf "mdk_str_to_float_ok" = Some ([], Some "i32")
+hostImportAbiOf "mdk_grant_reset" = Some ([], None)
+hostImportAbiOf "mdk_grant_push" = Some (["i32"], None)
+hostImportAbiOf "mdk_canonicalize_path" = Some ([], Some "i32")
+hostImportAbiOf "mdk_write_file" = Some ([], Some "i32")
+hostImportAbiOf "mdk_append_file" = Some ([], Some "i32")
+hostImportAbiOf "mdk_make_dir" = Some ([], Some "i32")
+hostImportAbiOf "mdk_remove_file" = Some ([], Some "i32")
+hostImportAbiOf "mdk_remove_dir" = Some ([], Some "i32")
+hostImportAbiOf "mdk_fsync" = Some ([], Some "i32")
+hostImportAbiOf "mdk_file_mode" = Some ([], Some "i32")
+hostImportAbiOf "mdk_write_file_mode" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_rename" = Some (["i32"], Some "i32")
+hostImportAbiOf "mdk_list_dir" = Some ([], Some "i32")
+hostImportAbiOf "mdk_stat_file" = Some ([], Some "i32")
+hostImportAbiOf "mdk_stat_field" = Some (["i32"], Some "f64")
+hostImportAbiOf "mdk_file_bound_enter" = Some (["i32", "i32"], Some "i32")
+hostImportAbiOf "mdk_file_bound_exit" = Some ([], None)
+hostImportAbiOf _ = None
 
 export
 unaryF64Sig : String
