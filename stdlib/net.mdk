@@ -234,7 +234,7 @@ recvLineLoop conn buf = match recv conn 1
       if b == 10 then
         Ok (Some (fromUtf8 (toArray buf)))
       else
-        let _ = push b buf
+        push b buf
         recvLineLoop conn buf
 
 {- | Receives one line, without its newline.

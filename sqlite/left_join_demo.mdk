@@ -64,7 +64,7 @@ runUO : Db -> String -> Select -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 runUO db label sel =
-  let _ = println label
+  println label
   match query db sel uoRow
     Err e => println "query error: \{e}"
     Ok rows => printUO rows
@@ -108,7 +108,7 @@ runABC : Db -> String -> Select -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 runABC db label sel =
-  let _ = println label
+  println label
   match query db sel abcRow
     Err e => println "query error: \{e}"
     Ok rows => printABC rows
@@ -120,35 +120,33 @@ main = match args ()
     Err e => println "open error: \{e}"
     Ok db =>
       -- Plain LEFT JOIN, unmatched left rows -> NULLs on the right side.
-      let _ =
-        runUO
-          db
-          "-- left join users/orders --"
+      runUO
+        db
+        "-- left join users/orders --"
+        (withOrderBy
+          "orders.oid"
+          True
           (withOrderBy
-            "orders.oid"
+            "users.id"
             True
-            (withOrderBy
-              "users.id"
-              True
-              (leftJoin
-                "orders"
-                (eEq (eColInt "users.id") (eColInt "orders.uid"))
-                (selectFrom "users"))))
+            (leftJoin
+              "orders"
+              (eEq (eColInt "users.id") (eColInt "orders.uid"))
+              (selectFrom "users"))))
       -- LEFT JOIN + WHERE on a right-table column: drops null-padded rows,
       -- matching sqlite3's real behaviour (WHERE runs post-join).
-      let _ =
-        runUO
-          db
-          "-- left join where amount>100 order amount --"
-          (withOrderBy
-            "orders.amount"
-            True
-            (withWhere
-              (eGt (eColInt "orders.amount") (eLitI 100))
-              (leftJoin
-                "orders"
-                (eEq (eColInt "users.id") (eColInt "orders.uid"))
-                (selectFrom "users"))))
+      runUO
+        db
+        "-- left join where amount>100 order amount --"
+        (withOrderBy
+          "orders.amount"
+          True
+          (withWhere
+            (eGt (eColInt "orders.amount") (eLitI 100))
+            (leftJoin
+              "orders"
+              (eEq (eColInt "users.id") (eColInt "orders.uid"))
+              (selectFrom "users"))))
       -- Mixed 3-table chain: INNER JOIN then LEFT JOIN.
       runABC
         db

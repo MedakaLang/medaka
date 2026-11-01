@@ -2772,10 +2772,10 @@ recordMemoRef st sel key method =
 hoistDictNullary : LowerState -> String -> String -> Route -> CExpr
 hoistDictNullary st name iface route = match lookupAssoc name st.soleKeys
   Some (key, sel) =>
-    let _ = recordMemoRef st sel key name
+    recordMemoRef st sel key name
     CVar (memoBindName sel name) AGlobal
   None =>
-    let _ = recordMultiImplMemo st name
+    recordMultiImplMemo st name
     CMethod name (MethodEvidence iface 0 route [] [])
 
 -- #747: synthesize one per-tag CAF for every nullary/return-position impl of a
@@ -2794,7 +2794,7 @@ recordMultiImplMemoGo : LowerState ->
 recordMultiImplMemoGo _ _ [] = ()
 recordMultiImplMemoGo st name ((m, key, sel) :: rest)
   | m == name =
-    let _ = recordMemoRef st sel key name
+    recordMemoRef st sel key name
     recordMultiImplMemoGo st name rest
   | otherwise = recordMultiImplMemoGo st name rest
 
@@ -2889,7 +2889,7 @@ hoistExpr : LowerState -> CExpr -> CExpr
 hoistExpr st (CMethod name (MethodEvidence iface 0 (RKey key [] sups) [] [])) =
   match memoSelectorOf st.memoKeysAll name key
     Some sel =>
-      let _ = recordMemoRef st sel key name
+      recordMemoRef st sel key name
       CVar (memoBindName sel name) AGlobal
     None => CMethod name (MethodEvidence iface 0 (RKey key [] sups) [] [])
 -- #731 item 1: a nullary return-position method reached via a runtime-dict route
@@ -4021,7 +4021,7 @@ validateFfiExternTypeNames rows =
   -- The guard is over the finished projection so duplicate C symbols are rejected.
   let declared =
     map (r => (externDeclaredName (fst r) (fst (snd r)), snd r)) rows
-  let _ = ffiCheckExternRowsDistinct omEmpty (hostRows "c" declared)
+  ffiCheckExternRowsDistinct omEmpty (hostRows "c" declared)
   rows
 
 -- One C symbol is one C function, so it has one signature, however many

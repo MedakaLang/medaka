@@ -147,7 +147,7 @@ fromU8ArrayFill : Array U8 -> ByteBlock -> Int -> Unit
 fromU8ArrayFill arr bb i
   | i >= arrayLength arr = ()
   | otherwise =
-    let _ = byteBlockSetUnsafe i (u8ToInt arr[i]) bb
+    byteBlockSetUnsafe i (u8ToInt arr[i]) bb
     fromU8ArrayFill arr bb (i + 1)
 
 {- | The byte string holding the elements of `arr`, in order.
@@ -163,7 +163,7 @@ export
 fromU8Array : Array U8 -> Bytes
 fromU8Array arr =
   let bb = byteBlockMake (arrayLength arr)
-  let _ = fromU8ArrayFill arr bb 0
+  fromU8ArrayFill arr bb 0
   Bytes bb
 
 {- | The bytes of `b` as an array of `U8`, in order.
@@ -244,7 +244,7 @@ export impl Slice Bytes where
       sliceError lo (sliceLastIndex hi)
     else
       let dst = byteBlockMake (hi - lo)
-      let _ = byteBlockBlit bb lo dst 0 (hi - lo)
+      byteBlockBlit bb lo dst 0 (hi - lo)
       Bytes dst
 
 {- | The bytes over `[lo, hi)`, copied into a new byte string, with both
@@ -267,7 +267,7 @@ sliceClamped lo hi (Bytes bb) =
   let lo' = if lo < 0 then 0 else min lo n
   let hi' = if hi < lo' then lo' else min hi n
   let dst = byteBlockMake (hi' - lo')
-  let _ = byteBlockBlit bb lo' dst 0 (hi' - lo')
+  byteBlockBlit bb lo' dst 0 (hi' - lo')
   Bytes dst
 
 {- | The first `n` bytes of `b`, or all of them when `b` is shorter. Empty
@@ -583,7 +583,7 @@ mapGo f src dst i n =
   if i >= n then
     ()
   else
-    let _ = byteBlockSetUnsafe i (u8ToInt (f (byteAt i src))) dst
+    byteBlockSetUnsafe i (u8ToInt (f (byteAt i src))) dst
     mapGo f src dst (i + 1) n
 
 {- | The byte string of the same length holding `f` applied to each byte of
@@ -599,7 +599,7 @@ map : (U8 -> <e> U8) -> Bytes -> <e> Bytes
 map f (Bytes bb) =
   let n = byteBlockLength bb
   let dst = byteBlockMake n
-  let _ = mapGo f bb dst 0 n
+  mapGo f bb dst 0 n
   Bytes dst
 
 -- # Combining
@@ -622,8 +622,8 @@ export impl Semigroup Bytes where
     let na = byteBlockLength a
     let nb = byteBlockLength b
     let dst = byteBlockMake (na + nb)
-    let _ = byteBlockBlit a 0 dst 0 na
-    let _ = byteBlockBlit b 0 dst na nb
+    byteBlockBlit a 0 dst 0 na
+    byteBlockBlit b 0 dst na nb
     Bytes dst
 
 {- | The byte string of no bytes, the identity for `append` and `++`.
@@ -646,7 +646,7 @@ concatFill : List Bytes -> ByteBlock -> Int -> Unit
 concatFill [] _ _ = ()
 concatFill ((Bytes src) :: rest) dst off =
   let n = byteBlockLength src
-  let _ = byteBlockBlit src 0 dst off n
+  byteBlockBlit src 0 dst off n
   concatFill rest dst (off + n)
 
 {- | The byte strings joined end to end, in one new byte string.
@@ -659,7 +659,7 @@ export
 concat : List Bytes -> Bytes
 concat parts =
   let dst = byteBlockMake (concatLength parts 0)
-  let _ = concatFill parts dst 0
+  concatFill parts dst 0
   Bytes dst
 
 -- > toArray (concat ([] : List Bytes))
@@ -1021,9 +1021,9 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "toArray" (TyFun (TyCon "Bytes") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "toArray" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockToIntArray") (EVar "bb")))
 (DTypeSig false "fromU8ArrayFill" (TyFun (TyApp (TyCon "Array") (TyCon "U8")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Unit")))))
-(DFunDef false "fromU8ArrayFill" ((PVar "arr") (PVar "bb") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EApp (EApp (EVar "index") (EVar "arr")) (EVar "i")))) (EVar "bb"))) (DoExpr (EApp (EApp (EApp (EVar "fromU8ArrayFill") (EVar "arr")) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "fromU8ArrayFill" ((PVar "arr") (PVar "bb") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EApp (EApp (EVar "index") (EVar "arr")) (EVar "i")))) (EVar "bb"))) (DoExpr (EApp (EApp (EApp (EVar "fromU8ArrayFill") (EVar "arr")) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "fromU8Array" (TyFun (TyApp (TyCon "Array") (TyCon "U8")) (TyCon "Bytes")))
-(DFunDef false "fromU8Array" ((PVar "arr")) (EBlock (DoLet false false (PVar "bb") (EApp (EVar "byteBlockMake") (EApp (EVar "arrayLength") (EVar "arr")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fromU8ArrayFill") (EVar "arr")) (EVar "bb")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "Bytes") (EVar "bb")))))
+(DFunDef false "fromU8Array" ((PVar "arr")) (EBlock (DoLet false false (PVar "bb") (EApp (EVar "byteBlockMake") (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EVar "fromU8ArrayFill") (EVar "arr")) (EVar "bb")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "Bytes") (EVar "bb")))))
 (DTypeSig true "toU8Array" (TyFun (TyCon "Bytes") (TyApp (TyCon "Array") (TyCon "U8"))))
 (DFunDef false "toU8Array" ((PCon "Bytes" (PVar "bb"))) (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "byteBlockLength") (EVar "bb"))) (ELam ((PVar "i")) (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bb")))))
 (DTypeSig true "length" (TyFun (TyCon "Bytes") (TyCon "Int")))
@@ -1033,9 +1033,9 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "get" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "U8")))))
 (DFunDef false "get" ((PVar "i") (PCon "Bytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bb")))))
 (DImpl true "Index" ((TyCon "Bytes") (TyCon "Int") (TyCon "U8")) () ((im "index" ((PCon "Bytes" (PVar "bb")) (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bb"))))))
-(DImpl true "Slice" ((TyCon "Bytes")) () ((im "slice" ((PCon "Bytes" (PVar "bb")) (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst"))))))))
+(DImpl true "Slice" ((TyCon "Bytes")) () ((im "slice" ((PCon "Bytes" (PVar "bb")) (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst"))))))))
 (DTypeSig true "sliceClamped" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Bytes")))))
-(DFunDef false "sliceClamped" ((PVar "lo") (PVar "hi") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EVar "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EVar "min") (EVar "hi")) (EVar "n")))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo'")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
+(DFunDef false "sliceClamped" ((PVar "lo") (PVar "hi") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EVar "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EVar "min") (EVar "hi")) (EVar "n")))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo'")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
 (DTypeSig true "take" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Bytes"))))
 (DFunDef false "take" ((PVar "n") (PVar "b")) (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 0))) (EVar "n")) (EVar "b")))
 (DTypeSig true "drop" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Bytes"))))
@@ -1083,19 +1083,19 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "all" (TyFun (TyFun (TyCon "U8") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyCon "Bytes") (TyEffect () (Some "e") (TyCon "Bool")))))
 (DFunDef false "all" ((PVar "f") (PCon "Bytes" (PVar "bb"))) (EApp (EApp (EApp (EApp (EVar "allGo") (EVar "f")) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))
 (DTypeSig false "mapGo" (TyFun (TyFun (TyCon "U8") (TyEffect () (Some "e") (TyCon "U8"))) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyCon "Unit"))))))))
-(DFunDef false "mapGo" ((PVar "f") (PVar "src") (PVar "dst") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EApp (EVar "f") (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "src"))))) (EVar "dst"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "mapGo") (EVar "f")) (EVar "src")) (EVar "dst")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))))
+(DFunDef false "mapGo" ((PVar "f") (PVar "src") (PVar "dst") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EApp (EVar "f") (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "src"))))) (EVar "dst"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "mapGo") (EVar "f")) (EVar "src")) (EVar "dst")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))))
 (DTypeSig true "map" (TyFun (TyFun (TyCon "U8") (TyEffect () (Some "e") (TyCon "U8"))) (TyFun (TyCon "Bytes") (TyEffect () (Some "e") (TyCon "Bytes")))))
-(DFunDef false "map" ((PVar "f") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EVar "n"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "mapGo") (EVar "f")) (EVar "bb")) (EVar "dst")) (ELit (LInt 0))) (EVar "n"))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
-(DImpl true "Semigroup" ((TyCon "Bytes")) () ((im "append" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EBlock (DoLet false false (PVar "na") (EApp (EVar "byteBlockLength") (EVar "a"))) (DoLet false false (PVar "nb") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "+" (EVar "na") (EVar "nb")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "a")) (ELit (LInt 0))) (EVar "dst")) (ELit (LInt 0))) (EVar "na"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "b")) (ELit (LInt 0))) (EVar "dst")) (EVar "na")) (EVar "nb"))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))))
+(DFunDef false "map" ((PVar "f") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EVar "n"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "mapGo") (EVar "f")) (EVar "bb")) (EVar "dst")) (ELit (LInt 0))) (EVar "n"))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
+(DImpl true "Semigroup" ((TyCon "Bytes")) () ((im "append" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EBlock (DoLet false false (PVar "na") (EApp (EVar "byteBlockLength") (EVar "a"))) (DoLet false false (PVar "nb") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "+" (EVar "na") (EVar "nb")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "a")) (ELit (LInt 0))) (EVar "dst")) (ELit (LInt 0))) (EVar "na"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "b")) (ELit (LInt 0))) (EVar "dst")) (EVar "na")) (EVar "nb"))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))))
 (DImpl true "Monoid" ((TyCon "Bytes")) () ((im "empty" () (EApp (EVar "Bytes") (EApp (EVar "byteBlockMake") (ELit (LInt 0)))))))
 (DTypeSig false "concatLength" (TyFun (TyApp (TyCon "List") (TyCon "Bytes")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "concatLength" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "concatLength" ((PCons (PVar "b") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "concatLength") (EVar "rest")) (EBinOp "+" (EVar "acc") (EApp (EVar "length") (EVar "b")))))
 (DTypeSig false "concatFill" (TyFun (TyApp (TyCon "List") (TyCon "Bytes")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Unit")))))
 (DFunDef false "concatFill" ((PList) PWild PWild) (ELit LUnit))
-(DFunDef false "concatFill" ((PCons (PCon "Bytes" (PVar "src")) (PVar "rest")) (PVar "dst") (PVar "off")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "src"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "src")) (ELit (LInt 0))) (EVar "dst")) (EVar "off")) (EVar "n"))) (DoExpr (EApp (EApp (EApp (EVar "concatFill") (EVar "rest")) (EVar "dst")) (EBinOp "+" (EVar "off") (EVar "n"))))))
+(DFunDef false "concatFill" ((PCons (PCon "Bytes" (PVar "src")) (PVar "rest")) (PVar "dst") (PVar "off")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "src"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "src")) (ELit (LInt 0))) (EVar "dst")) (EVar "off")) (EVar "n"))) (DoExpr (EApp (EApp (EApp (EVar "concatFill") (EVar "rest")) (EVar "dst")) (EBinOp "+" (EVar "off") (EVar "n"))))))
 (DTypeSig true "concat" (TyFun (TyApp (TyCon "List") (TyCon "Bytes")) (TyCon "Bytes")))
-(DFunDef false "concat" ((PVar "parts")) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EApp (EApp (EVar "concatLength") (EVar "parts")) (ELit (LInt 0))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "concatFill") (EVar "parts")) (EVar "dst")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
+(DFunDef false "concat" ((PVar "parts")) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EApp (EApp (EVar "concatLength") (EVar "parts")) (ELit (LInt 0))))) (DoExpr (EApp (EApp (EApp (EVar "concatFill") (EVar "parts")) (EVar "dst")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
 (DTypeSig false "eqGo" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "eqGo" ((PVar "a") (PVar "b") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EIf (EBinOp "==" (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "a")) (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "b"))) (EApp (EApp (EApp (EApp (EVar "eqGo") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "False"))))
 (DImpl true "Eq" ((TyCon "Bytes")) () ((im "eq" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "a"))) (DoExpr (EIf (EBinOp "/=" (EVar "n") (EApp (EVar "byteBlockLength") (EVar "b"))) (EVar "False") (EApp (EApp (EApp (EApp (EVar "eqGo") (EVar "a")) (EVar "b")) (ELit (LInt 0))) (EVar "n"))))))))
@@ -1155,9 +1155,9 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "toArray" (TyFun (TyCon "Bytes") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "toArray" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockToIntArray") (EVar "bb")))
 (DTypeSig false "fromU8ArrayFill" (TyFun (TyApp (TyCon "Array") (TyCon "U8")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Unit")))))
-(DFunDef false "fromU8ArrayFill" ((PVar "arr") (PVar "bb") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EApp (EApp (EMethodRef "index") (EVar "arr")) (EVar "i")))) (EVar "bb"))) (DoExpr (EApp (EApp (EApp (EVar "fromU8ArrayFill") (EVar "arr")) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "fromU8ArrayFill" ((PVar "arr") (PVar "bb") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EApp (EApp (EMethodRef "index") (EVar "arr")) (EVar "i")))) (EVar "bb"))) (DoExpr (EApp (EApp (EApp (EVar "fromU8ArrayFill") (EVar "arr")) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "fromU8Array" (TyFun (TyApp (TyCon "Array") (TyCon "U8")) (TyCon "Bytes")))
-(DFunDef false "fromU8Array" ((PVar "arr")) (EBlock (DoLet false false (PVar "bb") (EApp (EVar "byteBlockMake") (EApp (EVar "arrayLength") (EVar "arr")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fromU8ArrayFill") (EVar "arr")) (EVar "bb")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "Bytes") (EVar "bb")))))
+(DFunDef false "fromU8Array" ((PVar "arr")) (EBlock (DoLet false false (PVar "bb") (EApp (EVar "byteBlockMake") (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EVar "fromU8ArrayFill") (EVar "arr")) (EVar "bb")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "Bytes") (EVar "bb")))))
 (DTypeSig true "toU8Array" (TyFun (TyCon "Bytes") (TyApp (TyCon "Array") (TyCon "U8"))))
 (DFunDef false "toU8Array" ((PCon "Bytes" (PVar "bb"))) (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "byteBlockLength") (EVar "bb"))) (ELam ((PVar "i")) (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bb")))))
 (DTypeSig true "length#shadow" (TyFun (TyCon "Bytes") (TyCon "Int")))
@@ -1167,9 +1167,9 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "get" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "U8")))))
 (DFunDef false "get" ((PVar "i") (PCon "Bytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bb")))))
 (DImpl true "Index" ((TyCon "Bytes") (TyCon "Int") (TyCon "U8")) () ((im "index" ((PCon "Bytes" (PVar "bb")) (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bb"))))))
-(DImpl true "Slice" ((TyCon "Bytes")) () ((im "slice" ((PCon "Bytes" (PVar "bb")) (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst"))))))))
+(DImpl true "Slice" ((TyCon "Bytes")) () ((im "slice" ((PCon "Bytes" (PVar "bb")) (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst"))))))))
 (DTypeSig true "sliceClamped" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Bytes")))))
-(DFunDef false "sliceClamped" ((PVar "lo") (PVar "hi") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EMethodRef "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EMethodRef "min") (EVar "hi")) (EVar "n")))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo'")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
+(DFunDef false "sliceClamped" ((PVar "lo") (PVar "hi") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EMethodRef "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EMethodRef "min") (EVar "hi")) (EVar "n")))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo'")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
 (DTypeSig true "take" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Bytes"))))
 (DFunDef false "take" ((PVar "n") (PVar "b")) (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 0))) (EVar "n")) (EVar "b")))
 (DTypeSig true "drop" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Bytes"))))
@@ -1217,19 +1217,19 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "all" (TyFun (TyFun (TyCon "U8") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyCon "Bytes") (TyEffect () (Some "e") (TyCon "Bool")))))
 (DFunDef false "all" ((PVar "f") (PCon "Bytes" (PVar "bb"))) (EApp (EApp (EApp (EApp (EVar "allGo") (EVar "f")) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))
 (DTypeSig false "mapGo" (TyFun (TyFun (TyCon "U8") (TyEffect () (Some "e") (TyCon "U8"))) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyCon "Unit"))))))))
-(DFunDef false "mapGo" ((PVar "f") (PVar "src") (PVar "dst") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EApp (EVar "f") (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "src"))))) (EVar "dst"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "mapGo") (EVar "f")) (EVar "src")) (EVar "dst")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))))
+(DFunDef false "mapGo" ((PVar "f") (PVar "src") (PVar "dst") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EApp (EVar "f") (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "src"))))) (EVar "dst"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "mapGo") (EVar "f")) (EVar "src")) (EVar "dst")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))))
 (DTypeSig true "map#shadow" (TyFun (TyFun (TyCon "U8") (TyEffect () (Some "e") (TyCon "U8"))) (TyFun (TyCon "Bytes") (TyEffect () (Some "e") (TyCon "Bytes")))))
-(DFunDef false "map#shadow" ((PVar "f") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EVar "n"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "mapGo") (EVar "f")) (EVar "bb")) (EVar "dst")) (ELit (LInt 0))) (EVar "n"))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
-(DImpl true "Semigroup" ((TyCon "Bytes")) () ((im "append" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EBlock (DoLet false false (PVar "na") (EApp (EVar "byteBlockLength") (EVar "a"))) (DoLet false false (PVar "nb") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "+" (EVar "na") (EVar "nb")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "a")) (ELit (LInt 0))) (EVar "dst")) (ELit (LInt 0))) (EVar "na"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "b")) (ELit (LInt 0))) (EVar "dst")) (EVar "na")) (EVar "nb"))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))))
+(DFunDef false "map#shadow" ((PVar "f") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EVar "n"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "mapGo") (EVar "f")) (EVar "bb")) (EVar "dst")) (ELit (LInt 0))) (EVar "n"))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
+(DImpl true "Semigroup" ((TyCon "Bytes")) () ((im "append" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EBlock (DoLet false false (PVar "na") (EApp (EVar "byteBlockLength") (EVar "a"))) (DoLet false false (PVar "nb") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "+" (EVar "na") (EVar "nb")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "a")) (ELit (LInt 0))) (EVar "dst")) (ELit (LInt 0))) (EVar "na"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "b")) (ELit (LInt 0))) (EVar "dst")) (EVar "na")) (EVar "nb"))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))))
 (DImpl true "Monoid" ((TyCon "Bytes")) () ((im "empty" () (EApp (EVar "Bytes") (EApp (EVar "byteBlockMake") (ELit (LInt 0)))))))
 (DTypeSig false "concatLength" (TyFun (TyApp (TyCon "List") (TyCon "Bytes")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "concatLength" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "concatLength" ((PCons (PVar "b") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "concatLength") (EVar "rest")) (EBinOp "+" (EVar "acc") (EApp (EVar "length#shadow") (EVar "b")))))
 (DTypeSig false "concatFill" (TyFun (TyApp (TyCon "List") (TyCon "Bytes")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Unit")))))
 (DFunDef false "concatFill" ((PList) PWild PWild) (ELit LUnit))
-(DFunDef false "concatFill" ((PCons (PCon "Bytes" (PVar "src")) (PVar "rest")) (PVar "dst") (PVar "off")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "src"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "src")) (ELit (LInt 0))) (EVar "dst")) (EVar "off")) (EVar "n"))) (DoExpr (EApp (EApp (EApp (EVar "concatFill") (EVar "rest")) (EVar "dst")) (EBinOp "+" (EVar "off") (EVar "n"))))))
+(DFunDef false "concatFill" ((PCons (PCon "Bytes" (PVar "src")) (PVar "rest")) (PVar "dst") (PVar "off")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "src"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "src")) (ELit (LInt 0))) (EVar "dst")) (EVar "off")) (EVar "n"))) (DoExpr (EApp (EApp (EApp (EVar "concatFill") (EVar "rest")) (EVar "dst")) (EBinOp "+" (EVar "off") (EVar "n"))))))
 (DTypeSig true "concat" (TyFun (TyApp (TyCon "List") (TyCon "Bytes")) (TyCon "Bytes")))
-(DFunDef false "concat" ((PVar "parts")) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EApp (EApp (EVar "concatLength") (EVar "parts")) (ELit (LInt 0))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "concatFill") (EVar "parts")) (EVar "dst")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
+(DFunDef false "concat" ((PVar "parts")) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EApp (EApp (EVar "concatLength") (EVar "parts")) (ELit (LInt 0))))) (DoExpr (EApp (EApp (EApp (EVar "concatFill") (EVar "parts")) (EVar "dst")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
 (DTypeSig false "eqGo" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "eqGo" ((PVar "a") (PVar "b") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EIf (EBinOp "==" (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "a")) (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "b"))) (EApp (EApp (EApp (EApp (EDictApp "eqGo") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "False"))))
 (DImpl true "Eq" ((TyCon "Bytes")) () ((im "eq" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "a"))) (DoExpr (EIf (EBinOp "/=" (EVar "n") (EApp (EVar "byteBlockLength") (EVar "b"))) (EVar "False") (EApp (EApp (EApp (EApp (EDictApp "eqGo") (EVar "a")) (EVar "b")) (ELit (LInt 0))) (EVar "n"))))))))

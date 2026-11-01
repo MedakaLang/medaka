@@ -33,7 +33,7 @@ export
 contains : String -> List String -> Bool
 contains _ [] = False
 contains x (y :: ys) =
-  let _ = opBump ()
+  opBump ()
   x == y || contains x ys
 
 -- DECLINED (Foldable dispatch, see `contains` above — AGENTS.md names `length`

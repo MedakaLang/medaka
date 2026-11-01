@@ -341,16 +341,13 @@ main =
   let rejBad = rejFailures rejects
   let shapeBad = shapeFailures shapeCases
   let bad = length rtBad + length rejBad + length shapeBad
-  let _ =
-    println
-      "round-trip (parseSelect . renderSelect == id): \{length corpus - length rtBad}/\{length corpus} \{verdict (length rtBad)}"
-  let _ = print (bullet rtBad)
-  let _ =
-    println
-      "rejection  (unsupported SQL is a clean Err):   \{length rejects - length rejBad}/\{length rejects} \{verdict (length rejBad)}"
-  let _ = print (bullet rejBad)
-  let _ =
-    println
-      "shape      (exact canonical rendering):        \{length shapeCases - length shapeBad}/\{length shapeCases} \{verdict (length shapeBad)}"
-  let _ = print (bullet shapeBad)
+  println
+    "round-trip (parseSelect . renderSelect == id): \{length corpus - length rtBad}/\{length corpus} \{verdict (length rtBad)}"
+  print (bullet rtBad)
+  println
+    "rejection  (unsupported SQL is a clean Err):   \{length rejects - length rejBad}/\{length rejects} \{verdict (length rejBad)}"
+  print (bullet rejBad)
+  println
+    "shape      (exact canonical rendering):        \{length shapeCases - length shapeBad}/\{length shapeCases} \{verdict (length shapeBad)}"
+  print (bullet shapeBad)
   println "TOTAL: \{verdict bad}"

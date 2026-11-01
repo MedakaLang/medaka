@@ -109,7 +109,7 @@ sweep xs ys n m off v d k
     let left = arrayGetUnsafe (off + k - 1) v
     let x0 = if comesFromAbove d k left up then up else left + 1
     let x = snake xs ys n m x0 (x0 - k)
-    let _ = arraySetUnsafe (off + k) x v
+    arraySetUnsafe (off + k) x v
     if x >= n && x - k >= m then True else sweep xs ys n m off v d (k + 2)
 
 -- Diagonal k is reached from diagonal k + 1 by an insertion, or from k - 1 by

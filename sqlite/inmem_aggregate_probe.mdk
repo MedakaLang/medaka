@@ -54,49 +54,46 @@ runQ : Db -> String -> AggQuery -> RowType a -> (a -> String) -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 runQ db label q rt shw =
-  let _ = println label
+  println label
   match queryAgg db q rt
     Err e => println "query error: \{e}"
     Ok rows => printRows shw rows
 
 runAll : Db -> <IO> Unit
 runAll db =
-  let _ = runQ
-    db
-    "-- whole: count* count(sal) sum avg min max --"
-    (aggFrom "emp" [
-      AggCountStar,
-      AggCount "salary",
-      AggSum "salary",
-      AggAvg "salary",
-      AggMin "salary",
-      AggMax "salary",
-    ])
-    (t2 (t3 tInt tInt tInt) (t3 tFloat tInt tInt))
-    (((cs, cn, sm), (av, mn, mx)) =>
-      "\{cs}|\{cn}|\{sm}|\{floatToString av}|\{mn}|\{mx}")
-  let _ = runQ db "-- group dept: count* sum(sal) --" (withGroupBy
+  runQ db "-- whole: count* count(sal) sum avg min max --" (aggFrom "emp" [
+    AggCountStar,
+    AggCount "salary",
+    AggSum "salary",
+    AggAvg "salary",
+    AggMin "salary",
+    AggMax "salary",
+  ]) (t2
+    (t3 tInt tInt tInt)
+    (t3 tFloat tInt tInt)) (((cs, cn, sm), (av, mn, mx)) =>
+    "\{cs}|\{cn}|\{sm}|\{floatToString av}|\{mn}|\{mx}")
+  runQ db "-- group dept: count* sum(sal) --" (withGroupBy
     ["dept"]
     (aggFrom "emp" [AggCountStar, AggSum "salary"])) (t3
     tText
     tInt
     (tOption tInt)) ((d, c, s) =>
     "\{d}|\{c}|\{showOptI s}")
-  let _ = runQ db "-- group dept: avg(sal) --" (withGroupBy
+  runQ db "-- group dept: avg(sal) --" (withGroupBy
     ["dept"]
     (aggFrom "emp" [AggAvg "salary"])) (t2 tText (tOption tFloat)) ((d, a) =>
     "\{d}|\{showOptF a}")
-  let _ = runQ db "-- group dept having count* > 1 --" (withHaving
+  runQ db "-- group dept having count* > 1 --" (withHaving
     (eGt eCountStar (eLitI 1))
     (withGroupBy ["dept"] (aggFrom "emp" [AggCountStar]))) (t2
     tText
     tInt) ((d, c) =>
     "\{d}|\{c}")
-  let _ = runQ db "-- group dept,salary: count* --" (withGroupBy
+  runQ db "-- group dept,salary: count* --" (withGroupBy
     ["dept", "salary"]
     (aggFrom "emp" [AggCountStar])) (t3 tText (tOption tInt) tInt) ((d, s, c) =>
     "\{d}|\{showOptI s}|\{c}")
-  let _ = runQ db "-- group dept: sum(bonus) [real] --" (withGroupBy
+  runQ db "-- group dept: sum(bonus) [real] --" (withGroupBy
     ["dept"]
     (aggFrom "emp" [AggSum "bonus"])) (t2 tText (tOption tFloat)) ((d, s) =>
     "\{d}|\{showOptF s}")
@@ -110,7 +107,7 @@ runAll db =
 
 main : <IO> Unit
 main =
-  let _ = println "-- CREATE emp (in-memory) --"
+  println "-- CREATE emp (in-memory) --"
   match buildDatabase "emp" empSql 4 ipk empRows
     Err e => println "build error: \{e}"
     Ok bytes => match fromBytes bytes

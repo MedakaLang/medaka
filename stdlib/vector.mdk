@@ -204,7 +204,7 @@ setInPlace i x (Vector backing len)
 export impl IndexMut (Vector a) Int a where
   setIndex (Vector backing len) i v =
     if i >= 0 && i < !len then
-      let _ = arraySetUnsafe i v !backing
+      arraySetUnsafe i v !backing
       Vector backing len
     else
       indexErrorAt i
@@ -266,7 +266,7 @@ shiftUpGo arr hi lo =
   if hi <= lo then
     ()
   else
-    let _ = arraySetUnsafe hi (arrayGetUnsafe (hi - 1) arr) arr
+    arraySetUnsafe hi (arrayGetUnsafe (hi - 1) arr) arr
     shiftUpGo arr (hi - 1) lo
 
 -- Moves `arr[k + 1]` to `arr[k]` for k from `lo` up to `hi - 1`, closing the
@@ -276,7 +276,7 @@ shiftDownGo arr lo hi =
   if lo >= hi then
     ()
   else
-    let _ = arraySetUnsafe lo (arrayGetUnsafe (lo + 1) arr) arr
+    arraySetUnsafe lo (arrayGetUnsafe (lo + 1) arr) arr
     shiftDownGo arr (lo + 1) hi
 
 {- | Inserts `x` at index `i`, shifting the following elements right.

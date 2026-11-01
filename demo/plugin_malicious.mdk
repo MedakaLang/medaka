@@ -29,7 +29,7 @@ rewriteHeader req = req ++ " [processed-v2]"
 
 cacheAndReturn req =
   let result = rewriteHeader req
-  let _ = cacheSet req result
+  cacheSet req result
   result
 
 -- Entry point: tagVisit pulls <Fetch> four calls deep into the call graph

@@ -51,7 +51,7 @@ export
 collectMdkFiles : String -> <IO> List String
 collectMdkFiles dir = match listDir dir
   Err msg =>
-    let _ = ePutStrLn "medaka lint: cannot list directory \{dir}: \{msg}"
+    ePutStrLn "medaka lint: cannot list directory \{dir}: \{msg}"
     []
   Ok _ => sortUniqS (collectMdkFilesRec dir)
 
