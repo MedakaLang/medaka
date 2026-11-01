@@ -973,10 +973,6 @@ progFnMemberW prog n = omHasKey n (indexFnNamesW (progIndex prog))
 progValMemberW : Prog -> String -> Bool
 progValMemberW prog x = omHasKey x (indexValNamesW (progIndex prog))
 
--- Pre-Prog scans receive this invocation's locally-built fn index directly.
-fnMemberIndexW : OrdMap Unit -> String -> Bool
-fnMemberIndexW fnNames n = omHasKey n fnNames
-
 -- ── impl INDEX by method name (perf #382 — the #350/#349 twins) ───────────────
 -- Dispatch scans use the per-method index, preserving input order within each
 -- bucket. The separate plan partition supplies the emitted physical groups.
@@ -1018,6 +1014,7 @@ makeWasmProgramIndex plan facts groups ctorArs ctorTypes impls fnNames valNames 
     valNames
     plan.lazyGlobals
     plan.trmc
+    (physicalPlanW plan).fnValues
 
 makeWasmProgramIndexGaps : ConstructorFacts ->
   OrdMap (List Int) ->
@@ -1029,8 +1026,9 @@ makeWasmProgramIndexGaps : ConstructorFacts ->
   List CImplEntry ->
   List String ->
   List String ->
+  OrdMap Unit ->
   WasmProgramIndex
-makeWasmProgramIndexGaps constructors ctorFields trmc facts groups ctorArs ctorTypes impls fnNames valNames =
+makeWasmProgramIndexGaps constructors ctorFields trmc facts groups ctorArs ctorTypes impls fnNames valNames fnValues =
   makeWasmProgramIndexWithLazy
     constructors
     ctorFields
@@ -1043,6 +1041,7 @@ makeWasmProgramIndexGaps constructors ctorFields trmc facts groups ctorArs ctorT
     valNames
     []
     trmc
+    fnValues
 
 makeWasmProgramIndexWithLazy : ConstructorFacts ->
   OrdMap (List Int) ->
@@ -1055,13 +1054,11 @@ makeWasmProgramIndexWithLazy : ConstructorFacts ->
   List String ->
   List String ->
   TrmcVerdicts ->
+  OrdMap Unit ->
   WasmProgramIndex
-makeWasmProgramIndexWithLazy constructors ctorFields facts groups ctorArs ctorTypes impls fnNames valNames lazyNames trmc =
+makeWasmProgramIndexWithLazy constructors ctorFields facts groups ctorArs ctorTypes impls fnNames valNames lazyNames trmc fnValues =
   let fnIndex = omFromNames fnNames omEmpty
   let valIndex = omFromNames valNames omEmpty
-  let usedFns =
-    scanFnValueUses fnIndex ctorArs groups
-      ++ scanImplValueUses fnIndex ctorArs impls
   WasmProgramIndex {
     fnImpl = WasmFnImplIndex {
       fnNames = fnIndex,
@@ -1074,7 +1071,7 @@ makeWasmProgramIndexWithLazy constructors ctorFields facts groups ctorArs ctorTy
       trmc = trmc,
     },
     recordValue = WasmRecordValueIndex {
-      fnValues = omFromNames usedFns omEmpty,
+      fnValues = fnValues,
     },
     ctor = constructors,
     stamps = makeWasmStamps groups facts.factBinders,
@@ -1917,6 +1914,7 @@ emitProgramGaps input plan cp0 =
       impls
       fnNames
       valNames
+      (physicalPlanW plan).fnValues
   let useClos = (physicalPlanW plan).useClos
   -- force the ref path: the census measures the full (ref eq) emitter surface.
   let typeNames = plan.constructorFacts.typeOrder
@@ -2039,212 +2037,6 @@ noteWasmUse emit UseStrReverse = setRef emit.useStrReverse True
 noteWasmUse emit UseStrJoin = setRef emit.useStrJoin True
 cFieldExpr : CField -> CExpr
 cFieldExpr (CField _ _ e) = e
-
--- the set of top-level fn names that appear as VALUES (bare ref in a non-call
--- position, or partially / over applied) anywhere in the program — these need a
--- closure wrapper so they can flow through `(ref eq)` slots / be applied indirectly.
-scanFnValueUses : OrdMap Unit -> List (String, Int) -> List CBind -> List String
-scanFnValueUses fnNames ctorArs groups =
-  dedupKeep (flatMap (scanBindValueUses fnNames ctorArs envEmpty) groups)
-
--- W9: the impl method bodies + interface defaults also use top-level fns as values
--- (e.g. `toList = identity` in `impl Foldable List`), so their fn-value uses must seed
--- the closure-wrapper set too — else `$mdk_w_<f>` is referenced but never emitted.
-scanImplValueUses : OrdMap Unit ->
-  List (String, Int) ->
-  List CImplEntry ->
-  List String
-scanImplValueUses fnNames ctorArs impls =
-  dedupKeep (flatMap (e => scanImplEntryValueUses fnNames ctorArs e) impls)
-
-scanImplEntryValueUses : OrdMap Unit ->
-  List (String, Int) ->
-  CImplEntry ->
-  List String
-scanImplEntryValueUses fnNames ctorArs (ent@(CImplEntry _ _ _ body)) =
-  let locals =
-    envExtendUnstamped (flatMap patVars (implEntryPatsW ent)) envEmpty
-  match body
-    CImplTagged _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs locals b
-    CImplDefault _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs locals b
-
--- `locals` is the scope's locally-bound names (parameters, let, lambda and
--- let-group binders): a local named like a top-level fn shadows it, so it is not a
--- value use of the fn (emitVarRef and emitAppRef consult the env first), the same
--- rule `exprUsesClosures` applies.
-scanBindValueUses : OrdMap Unit ->
-  List (String, Int) ->
-  Env ->
-  CBind ->
-  List String
-scanBindValueUses fnNames ctorArs locals (CBind _ clauses _ _) =
-  flatMap
-    ((CClause pats body) =>
-      scanExprValueUses
-        fnNames
-        ctorArs
-        (envExtendUnstamped (flatMap patVars pats) locals)
-        body)
-    clauses
-
-scanExprValueUses : OrdMap Unit ->
-  List (String, Int) ->
-  Env ->
-  CExpr ->
-  List String
-scanExprValueUses fnNames _ctorArs locals (CVar x _) =
-  if envHas x locals then
-    []
-  else if fnMemberIndexW fnNames x then
-    [x]
-  else if fnMemberIndexW fnNames (encodePair "core" x) then
-    [encodePair "core" x]
-  else
-    []
-scanExprValueUses fnNames ctorArs locals (app@(CApp _ _ _)) =
-  let (hd, args, mode) = appParts app
-  let here = match hd
-    CVar fn0 _ =>
-      let fn =
-        if fnMemberIndexW fnNames fn0 then
-          fn0
-        else if fnMemberIndexW fnNames (encodePair "core" fn0) then
-          encodePair "core" fn0
-        else
-          fn0
-      if not (envHas fn0 locals)
-        && fnMemberIndexW fnNames fn
-        && not (isExactCall mode) then
-        [fn]
-      else
-        []
-    -- P1: an RLocal method-ref head is a DIRECT call to a shadowing standalone top-level
-    -- fn — the same direct call the CVar arm above describes, reached by a different
-    -- route.  So it needs the SAME rule: when the call is not exact, emitMethodRef
-    -- falls back to the closure/$__mdk_apply path, which references `$mdk_w_<fn>` — and
-    -- that wrapper is only DEFINED for a fn this scan reports.  Missing it emitted the
-    -- ref.func and never the func: "unknown func $mdk_w_…" at assemble (exactly the
-    -- failure the composite-arm comment below records).  Kept in lockstep with
-    -- emitMethodRef's RLocal arm, including the `sym == ""` bare-name fallback.
-    CMethod mname (MethodEvidence _ _ (RLocal sym dicts) _ _) =>
-      let target = if sym == "" then mname else sym
-      if isEmpty dicts
-        && fnMemberIndexW fnNames target
-        && not (isExactCall mode) then
-        [target]
-      else
-        []
-    _ => scanExprValueUses fnNames ctorArs locals hd
-  here ++ flatMap (scanExprValueUses fnNames ctorArs locals) args
-scanExprValueUses fnNames ctorArs locals (CLam pats b) =
-  scanExprValueUses
-    fnNames
-    ctorArs
-    (envExtendUnstamped (flatMap patVars pats) locals)
-    b
-scanExprValueUses fnNames ctorArs locals (CBinPrim _ l r _ _) =
-  scanExprValueUses fnNames ctorArs locals l
-    ++ scanExprValueUses fnNames ctorArs locals r
-scanExprValueUses fnNames ctorArs locals (CUnOp _ x) =
-  scanExprValueUses fnNames ctorArs locals x
-scanExprValueUses fnNames ctorArs locals (CIf c t f) =
-  scanExprValueUses fnNames ctorArs locals c
-    ++ scanExprValueUses fnNames ctorArs locals t
-    ++ scanExprValueUses fnNames ctorArs locals f
-scanExprValueUses fnNames ctorArs locals (CLet _ pat a b) =
-  scanExprValueUses fnNames ctorArs locals a
-    ++ scanExprValueUses
-      fnNames
-      ctorArs
-      (envExtendUnstamped (patVars pat) locals)
-      b
-scanExprValueUses fnNames ctorArs locals (CBlock stmts) =
-  scanBlockValueUses fnNames ctorArs locals stmts
-scanExprValueUses fnNames ctorArs locals (CDecision scrut arms _) =
-  scanExprValueUses fnNames ctorArs locals scrut
-    ++ flatMap (a => scanArmValueUses fnNames ctorArs locals a) arms
-scanExprValueUses fnNames ctorArs locals (CMatch scrut arms) =
-  scanExprValueUses fnNames ctorArs locals scrut
-    ++ flatMap (a => scanArmValueUses fnNames ctorArs locals a) arms
-scanExprValueUses fnNames ctorArs locals (CLetGroup binds b) =
-  let inGroup = envExtendUnstamped (map bindName binds) locals
-  flatMap (bd => scanBindValueUses fnNames ctorArs inGroup bd) binds
-    ++ scanExprValueUses fnNames ctorArs inGroup b
--- Composite arms emitVarRef descends into at emit time — each can hold a fn-VALUE
--- use (`map (mapIfaceMethod f) ms` lives in a CRecordUpdate; `map (substField s) fs`
--- in a CTuple; `flatMap dataArity prog` in a CRecord field).  Missing these here
--- under-counted fn-value uses → the closure wrapper `$mdk_w_<f>` was referenced
--- (ref.func emitted) but never DEFINED → "unknown func" at assemble.
-scanExprValueUses fnNames ctorArs locals (CTuple xs) =
-  flatMap (scanExprValueUses fnNames ctorArs locals) xs
-scanExprValueUses fnNames ctorArs locals (CList xs) =
-  flatMap (scanExprValueUses fnNames ctorArs locals) xs
-scanExprValueUses fnNames ctorArs locals (CArray xs) =
-  flatMap (scanExprValueUses fnNames ctorArs locals) xs
-scanExprValueUses fnNames ctorArs locals (CRecord _ fs) =
-  flatMap (fd => scanExprValueUses fnNames ctorArs locals (cFieldExpr fd)) fs
-scanExprValueUses fnNames ctorArs locals (CFieldAccess r _ _ _) =
-  scanExprValueUses fnNames ctorArs locals r
-scanExprValueUses fnNames ctorArs locals (CRecordUpdate _ r fs) =
-  scanExprValueUses fnNames ctorArs locals r
-    ++ flatMap
-      (fd => scanExprValueUses fnNames ctorArs locals (cFieldExpr fd))
-      fs
-scanExprValueUses fnNames ctorArs locals (CVariantUpdate _ r fs) =
-  scanExprValueUses fnNames ctorArs locals r
-    ++ flatMap
-      (fd => scanExprValueUses fnNames ctorArs locals (cFieldExpr fd))
-      fs
-scanExprValueUses fnNames ctorArs locals (CRangeList lo hi _) =
-  scanExprValueUses fnNames ctorArs locals lo
-    ++ scanExprValueUses fnNames ctorArs locals hi
-scanExprValueUses fnNames ctorArs locals (CRangeArray lo hi _) =
-  scanExprValueUses fnNames ctorArs locals lo
-    ++ scanExprValueUses fnNames ctorArs locals hi
-scanExprValueUses _ _ _ _ = []
-
--- scan an arm's guards (refutable `Pat <- e` / boolean `if e`) AND its body — a
--- guard scrutinee can carry a fn-value use just like the body.
-scanArmValueUses : OrdMap Unit ->
-  List (String, Int) ->
-  Env ->
-  CArm ->
-  List String
-scanArmValueUses fnNames ctorArs locals (CArm _ guards body) =
-  flatMap (g => scanGuardValueUses fnNames ctorArs locals g) guards
-    ++ scanExprValueUses fnNames ctorArs locals body
-scanArmValueUses fnNames ctorArs locals (CArmAlt _ guards _) =
-  flatMap (g => scanGuardValueUses fnNames ctorArs locals g) guards
-
-scanGuardValueUses : OrdMap Unit ->
-  List (String, Int) ->
-  Env ->
-  CGuard ->
-  List String
-scanGuardValueUses fnNames ctorArs locals (CGBool e) =
-  scanExprValueUses fnNames ctorArs locals e
-scanGuardValueUses fnNames ctorArs locals (CGBind _ e) =
-  scanExprValueUses fnNames ctorArs locals e
-
--- a block's statements, each later one seeing the names an earlier `let` bound
-scanBlockValueUses : OrdMap Unit ->
-  List (String, Int) ->
-  Env ->
-  List CStmt ->
-  List String
-scanBlockValueUses _ _ _ [] = []
-scanBlockValueUses fnNames ctorArs locals ((CSLet _ pat e) :: rest) =
-  scanExprValueUses fnNames ctorArs locals e
-    ++ scanBlockValueUses
-      fnNames
-      ctorArs
-      (envExtendUnstamped (patVars pat) locals)
-      rest
-scanBlockValueUses fnNames ctorArs locals ((CSExpr e) :: rest) =
-  scanExprValueUses fnNames ctorArs locals e
-    ++ scanBlockValueUses fnNames ctorArs locals rest
-scanBlockValueUses fnNames ctorArs locals (_ :: rest) =
-  scanBlockValueUses fnNames ctorArs locals rest
 
 anyList : (a -> Bool) -> List a -> Bool
 anyList _ [] = False

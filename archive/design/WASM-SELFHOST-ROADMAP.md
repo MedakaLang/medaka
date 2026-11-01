@@ -84,6 +84,8 @@ front-end) emits a **6.77 MB WAT** and `wasm-tools parse` now succeeds (0 refere
 funcs). Root was the SAME compound-value-node bug as the closure-capture fix, but in
 `scanFnValueUses` (value-uses inside CTuple/CRecord/CRecordUpdate weren't scanned → no closure
 wrapper emitted → ref-to-undefined). Gate: `test/wasm/assemble_check_main.sh`.
+That paragraph records the original fix. P5.12 later retired the recursive scanner: the
+selected program's function-value set is carried by `WasmDemandPlan` and checked before emission.
 
 **LAYER 12 — `wasm-tools validate` (peeling class-by-class toward VALIDATE_OK):**
 - ✅ func 20 — eta-saturation of PLAIN constrained fns (`elem = fold … `): `etaSaturateFnClause` +

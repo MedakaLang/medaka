@@ -2117,6 +2117,8 @@ emissionVictim "not-provided" =
   match omLookup (runtimeExternSymbol "assertSnapshot") facts.factExterns
     Some fact => replaceMain (externVar fact) emissionControl
     None => panic "emission control omitted assertSnapshot extern fact"
+emissionVictim "physical-values-missing" = lowered "f x = x\nmain = (f, 1)"
+emissionVictim "physical-values-paired" = lowered "f x = x\nmain = (f, 1)"
 emissionVictim "physical-type" = lowered "main = \"type-neighbor\""
 emissionVictim victim =
   if contains "ctor-" victim then
@@ -2336,6 +2338,9 @@ emissionNeedle "ctor-raw-order" = "constructor-fact: runtime roster"
 emissionNeedle "ctor-raw-owner" = "constructor-fact: runtime owner"
 emissionNeedle "ctor-raw-ambiguous" =
   "constructor-fact: ambiguous owner ordinal"
+emissionNeedle "physical-values-missing" = "wasm-function-value-demand-mismatch"
+emissionNeedle "physical-values-extra" = "wasm-function-value-demand-mismatch"
+emissionNeedle "physical-values-paired" = "wasm-function-value-demand-mismatch"
 emissionNeedle "physical-mode" = "wasm-mode-mismatch"
 emissionNeedle "physical-paired-mode" = "wasm-mode-mismatch"
 emissionNeedle "physical-helper" = "missing-wasm-helper-prerequisite"
@@ -2409,7 +2414,8 @@ physicalVictims : List String
 physicalVictims = [
   "physical-mode", "physical-paired-mode", "physical-helper",
   "physical-int-helper", "physical-type", "physical-import",
-  "physical-signature"
+  "physical-signature", "physical-values-missing", "physical-values-extra",
+  "physical-values-paired"
 ]
 
 corruptPhysicalPlan : String -> EmitPlan -> EmitPlan
@@ -2417,6 +2423,11 @@ corruptPhysicalPlan victim plan = match plan.wasmPhysical
   None => plan
   Some d =>
     let changed = match victim
+      "physical-values-missing" => { d | fnValues = omEmpty }
+      "physical-values-extra" =>
+        { d | fnValues = omInsert "bogus" () d.fnValues }
+      "physical-values-paired" =>
+        { d | fnValues = omEmpty, useClos = not d.useClos }
       "physical-mode" => { d | useRef = not d.useRef }
       "physical-paired-mode" =>
         { d | useRef = not d.useRef, helpers = [], representationTypes = [] }

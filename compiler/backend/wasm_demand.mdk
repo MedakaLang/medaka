@@ -1,3 +1,4 @@
+import backend.wasm_fn_values.{fnValueUses}
 import ir.constructor_facts.{ConstructorFacts, declaredCtorArity}
 import frontend.runtime_constructors.{
   RuntimeOwner(..), namedRuntimeCtor, runtimeCtorFact
@@ -979,6 +980,7 @@ public export data WasmDemandPlan = WasmDemandPlan {
   nonexhaustiveRuntime : Bool,
   imports : List PlannedImport,
   catalogFamilies : List (String, WasmFamily),
+  fnValues : OrdMap Unit,
 }
 
 data HelperAcc = HelperAcc {
@@ -1040,6 +1042,21 @@ catalogFamilies req =
     req.rows
 
 export
+selectedFallthroughSymbols : ExternRequirements ->
+  List (String, WasmFamily) ->
+  OrdMap Unit
+selectedFallthroughSymbols requirements families =
+  let index = omFromPairs families omEmpty
+  fold
+    (selected row => match row.selectedBinding
+      RuntimeRequirement key => match omLookup key index
+        Some WasmFallthrough => omInsert row.declaration.symbol () selected
+        _ => selected
+      ForeignRequirement _ _ => selected)
+    omEmpty
+    requirements.rows
+
+export
 planWasmDemand : ConstructorFacts ->
   WasmDemandInputs ->
   CProgram ->
@@ -1095,6 +1112,8 @@ planWasmDemand constructors inputs (cp@(CProgram groups ctorArs _ impls _ facts)
     else
       roots
   let families = catalogFamilies req
+  let selected = selectedFallthroughSymbols req families
+  let values = fnValueUses selected cp
   let closed = closeHelpers (hasUse source UseI64) roots
   let census =
     if refMode then
@@ -1127,6 +1146,7 @@ planWasmDemand constructors inputs (cp@(CProgram groups ctorArs _ impls _ facts)
     nonexhaustiveRuntime = closed.nonexh,
     imports = imports,
     catalogFamilies = families,
+    fnValues = values,
   }
 
 hasUse : WasmDemand -> WasmUse -> Bool
@@ -2623,7 +2643,11 @@ validateWasmDemand constructors inputs cp requirements actual =
   let actualKeys = map (i => "\{i.namespace}:\{i.field}") actual.imports
   let expectedSet = omFromNames expectedKeys omEmpty
   let actualSet = omFromNames actualKeys omEmpty
-  (if expected.useRef /= actual.useRef
+  (if omKeys expected.fnValues /= omKeys actual.fnValues then
+      ["wasm-function-value-demand-mismatch"]
+    else
+      [])
+    ++ (if expected.useRef /= actual.useRef
       || expected.useClos /= actual.useClos
       || expected.stringOps /= actual.stringOps then
       ["wasm-mode-mismatch"]
