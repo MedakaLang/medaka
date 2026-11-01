@@ -59,7 +59,7 @@ import entries.entry_support.{
   stampSiteFiles,
 }
 import support.timer.{statsEnabled, emitStats}
-import driver.diagnostics.{refuseSymbolDefects}
+import driver.emit_diagnostics.{refuseSymbolDefects}
 import types.program_facts.{ProgramFacts}
 import types.tc_occurrence.{constrainedSigNames}
 

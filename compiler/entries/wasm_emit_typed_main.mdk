@@ -88,7 +88,8 @@ import backend.wasm_emit.{
   inputRuntimeExternsW,
 }
 import entries.entry_support.{driveRuntime}
-import driver.diagnostics.{refuseSymbolDefects, renderSymbolDefects}
+import driver.diagnostics.{renderSymbolDefects}
+import driver.emit_diagnostics.{refuseSymbolDefects}
 import backend.wasm_symbols.{SymbolDefect}
 import support.util.{joinNl}
 import backend.emit_plan.{EmitPlan(..), buildEmitPlan}

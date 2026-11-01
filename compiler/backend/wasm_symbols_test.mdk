@@ -39,6 +39,7 @@ import backend.wasm_symbols.{
   emptyRegistry,
   excuseSymbol,
   unresolved,
+  unresolvedFunctions,
 }
 import support.symbol_origin.{SymbolOrigin(..)}
 
@@ -191,6 +192,17 @@ test "a reference nothing defines is unresolved at the end; defined later, it is
           Ok reg => unresolved (excuseSymbol (WasmFunc "force_x") reg)
           Err d => [d])),
   ]
+
+test "census completes only the supplied function domain" = match steps [
+  checkCall (WasmFunc "helper") 1 (at "helper call"),
+  checkCall (WasmFunc "user") 1 (at "user call"),
+  checkRef (WasmElem "helper") (at "element"),
+]
+  Err _ => expectEqual True False
+  Ok reg =>
+    expectEqual
+      [UndefinedReference (WasmFunc "helper") (at "helper call")]
+      (unresolvedFunctions ["helper"] reg)
 
 test "a type use the type section does not declare is refused at the use" = expectAll
   [

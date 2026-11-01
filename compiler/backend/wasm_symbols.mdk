@@ -22,7 +22,7 @@
 
 import support.diag_codes.{DiagCode(..)}
 import support.ordmap.{
-  OrdMap, omDelete, omEmpty, omHasKey, omInsert, omKeys, omLookup
+  OrdMap, omDelete, omEmpty, omHasKey, omInsert, omKeys, omLookup, omFromNames
 }
 import support.symbol_origin.{SymbolOrigin, bindingOf, placeOf}
 import support.util.{reverseL}
@@ -253,6 +253,14 @@ excuseSymbol sym reg =
 export
 unresolved : SymbolRegistry -> List SymbolDefect
 unresolved reg = flatMap (unresolvedAt reg) (omKeys reg.waiting)
+
+export
+unresolvedFunctions : List String -> SymbolRegistry -> List SymbolDefect
+unresolvedFunctions names reg =
+  let domain = omFromNames (map (n => symbolKey (WasmFunc n)) names) omEmpty
+  flatMap
+    (key => if omHasKey key domain then unresolvedAt reg key else [])
+    (omKeys reg.waiting)
 
 unresolvedAt : SymbolRegistry -> String -> List SymbolDefect
 unresolvedAt reg key =

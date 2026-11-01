@@ -1,8 +1,9 @@
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.wasm_demand.{
   WasmDemandPlan, WasmDemand(..), censusWasmDemand, wasmTypeContext,
-  returnStamp, cexprStamp, Env, EnvRef(..), envEmpty, envBind, envBindUnstamped,
-  envExtendUnstamped, envRestrict, envLookup, envHas, selectedFallthroughSymbols
+  helperFunctionNames, returnStamp, cexprStamp, Env, EnvRef(..), envEmpty,
+  envBind, envBindUnstamped, envExtendUnstamped, envRestrict, envLookup, envHas,
+  selectedFallthroughSymbols
 }
 import frontend.ast.{BinderId(..)}
 import backend.emit_plan.{EmitPlan, prepareWasmPlan}
@@ -22,10 +23,10 @@ import ir.extern_lower.{walkExternVars, externVar, implicitRuntimeFacts}
 import ir.extern_types.{ExternDeclFact(..)}
 import types.extern_source.{ExternBindingKind(..)}
 import support.ordmap.{omEmpty, omFromNames, omKeys, omFromPairs, omInsert}
-import support.util.{joinNl}
+import support.util.{joinNl, contains}
 import test.{
   Expectation, expectAll, expectEach, expectEqual, expectErrContains,
-  expectFalse, expectTextContainsAll, fail
+  expectFalse, expectTrue, expectTextContainsAll, fail
 }
 import types.capability_manifest.{
   EntryKey(..),
@@ -549,6 +550,25 @@ test "gap census preserves its forced reference walk without requiring main" =
       (makeWasmEmitInput RawUnchecked PreludeFreeRuntime [])
       plan
       cp)
+
+test "census helper domain and no-main neighbors" =
+  let run =
+    src =>
+      let (plan, cp) = prepared src
+      emitProgramGaps
+        (makeWasmEmitInput RawUnchecked PreludeFreeRuntime [])
+        plan
+        cp
+  expectAll [
+    expectTrue (contains "mdk_int_add" helperFunctionNames),
+    expectTrue (contains "mdk_str_concat" helperFunctionNames),
+    expectEqual (Ok []) (run "f x y = x + y"),
+    expectEqual (Ok []) (run "f x = x ++ \"z\""),
+    expectEqual (Ok []) (run "f x = y => x + y"),
+    match run "f x = missing x"
+      Ok gaps => expectTextContainsAll ["missing"] (joinNl gaps)
+      Err _ => fail "unknown user call must remain a census gap",
+  ]
 
 test "ordinary spellings cannot acquire a runtime declaration's result stamp" =
   let (_, cp) = prepared "main = 42"

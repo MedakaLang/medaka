@@ -1,5 +1,5 @@
 # META
-source_lines=313
+source_lines=321
 stages=DESUGAR,MARK
 # SOURCE
 -- The physical identities of one WasmGC module under emission: each function,
@@ -26,7 +26,7 @@ stages=DESUGAR,MARK
 
 import support.diag_codes.{DiagCode(..)}
 import support.ordmap.{
-  OrdMap, omDelete, omEmpty, omHasKey, omInsert, omKeys, omLookup
+  OrdMap, omDelete, omEmpty, omHasKey, omInsert, omKeys, omLookup, omFromNames
 }
 import support.symbol_origin.{SymbolOrigin, bindingOf, placeOf}
 import support.util.{reverseL}
@@ -258,6 +258,14 @@ export
 unresolved : SymbolRegistry -> List SymbolDefect
 unresolved reg = flatMap (unresolvedAt reg) (omKeys reg.waiting)
 
+export
+unresolvedFunctions : List String -> SymbolRegistry -> List SymbolDefect
+unresolvedFunctions names reg =
+  let domain = omFromNames (map (n => symbolKey (WasmFunc n)) names) omEmpty
+  flatMap
+    (key => if omHasKey key domain then unresolvedAt reg key else [])
+    (omKeys reg.waiting)
+
 unresolvedAt : SymbolRegistry -> String -> List SymbolDefect
 unresolvedAt reg key =
   if omHasKey key reg.excused then
@@ -317,7 +325,7 @@ describe (WasmData n) = "data segment `$\{n}`"
 describe (WasmElem n) = "element entry `$\{n}`"
 # DESUGAR
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omDelete" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omDelete" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omFromNames" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false) (mem "bindingOf" false) (mem "placeOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "WasmSymbol" () ((variant "WasmFunc" (ConPos (TyCon "String"))) (variant "WasmType" (ConPos (TyCon "String"))) (variant "WasmGlobal" (ConPos (TyCon "String"))) (variant "WasmData" (ConPos (TyCon "String"))) (variant "WasmElem" (ConPos (TyCon "String")))) ())
@@ -381,6 +389,8 @@ describe (WasmElem n) = "element entry `$\{n}`"
 (DFunDef false "excuseSymbol" ((PVar "sym") (PVar "reg")) (ERecordUpdate (EVar "reg") ((fa "excused" (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "symbolKey") (EVar "sym"))) (ELit LUnit)) (EFieldAccess (EVar "reg") "excused"))))))
 (DTypeSig true "unresolved" (TyFun (TyCon "SymbolRegistry") (TyApp (TyCon "List") (TyCon "SymbolDefect"))))
 (DFunDef false "unresolved" ((PVar "reg")) (EApp (EApp (EVar "flatMap") (EApp (EVar "unresolvedAt") (EVar "reg"))) (EApp (EVar "omKeys") (EFieldAccess (EVar "reg") "waiting"))))
+(DTypeSig true "unresolvedFunctions" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "SymbolRegistry") (TyApp (TyCon "List") (TyCon "SymbolDefect")))))
+(DFunDef false "unresolvedFunctions" ((PVar "names") (PVar "reg")) (EBlock (DoLet false false (PVar "domain") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EVar "symbolKey") (EApp (EVar "WasmFunc") (EVar "n"))))) (EVar "names"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "key")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "key")) (EVar "domain")) (EApp (EApp (EVar "unresolvedAt") (EVar "reg")) (EVar "key")) (EListLit)))) (EApp (EVar "omKeys") (EFieldAccess (EVar "reg") "waiting"))))))
 (DTypeSig false "unresolvedAt" (TyFun (TyCon "SymbolRegistry") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "SymbolDefect")))))
 (DFunDef false "unresolvedAt" ((PVar "reg") (PVar "key")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "key")) (EFieldAccess (EVar "reg") "excused")) (EListLit) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "reg") "waiting")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "uses")) () (EMatch (EApp (EVar "reverseL") (EVar "uses")) (arm (PList) () (EListLit)) (arm (PCons (PCon "Waiting" (PVar "sym") PWild (PVar "at")) PWild) () (EListLit (EApp (EApp (EVar "missingDefect") (EVar "sym")) (EVar "at")))))))))
 (DTypeSig false "missingDefect" (TyFun (TyCon "WasmSymbol") (TyFun (TyCon "SymbolOrigin") (TyCon "SymbolDefect"))))
@@ -414,7 +424,7 @@ describe (WasmElem n) = "element entry `$\{n}`"
 (DFunDef false "describe" ((PCon "WasmElem" (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "element entry `$")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`"))))
 # MARK
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omDelete" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omDelete" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omFromNames" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false) (mem "bindingOf" false) (mem "placeOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "WasmSymbol" () ((variant "WasmFunc" (ConPos (TyCon "String"))) (variant "WasmType" (ConPos (TyCon "String"))) (variant "WasmGlobal" (ConPos (TyCon "String"))) (variant "WasmData" (ConPos (TyCon "String"))) (variant "WasmElem" (ConPos (TyCon "String")))) ())
@@ -478,6 +488,8 @@ describe (WasmElem n) = "element entry `$\{n}`"
 (DFunDef false "excuseSymbol" ((PVar "sym") (PVar "reg")) (ERecordUpdate (EVar "reg") ((fa "excused" (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "symbolKey") (EVar "sym"))) (ELit LUnit)) (EFieldAccess (EVar "reg") "excused"))))))
 (DTypeSig true "unresolved" (TyFun (TyCon "SymbolRegistry") (TyApp (TyCon "List") (TyCon "SymbolDefect"))))
 (DFunDef false "unresolved" ((PVar "reg")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "unresolvedAt") (EVar "reg"))) (EApp (EVar "omKeys") (EFieldAccess (EVar "reg") "waiting"))))
+(DTypeSig true "unresolvedFunctions" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "SymbolRegistry") (TyApp (TyCon "List") (TyCon "SymbolDefect")))))
+(DFunDef false "unresolvedFunctions" ((PVar "names") (PVar "reg")) (EBlock (DoLet false false (PVar "domain") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EVar "symbolKey") (EApp (EVar "WasmFunc") (EVar "n"))))) (EVar "names"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "key")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "key")) (EVar "domain")) (EApp (EApp (EVar "unresolvedAt") (EVar "reg")) (EVar "key")) (EListLit)))) (EApp (EVar "omKeys") (EFieldAccess (EVar "reg") "waiting"))))))
 (DTypeSig false "unresolvedAt" (TyFun (TyCon "SymbolRegistry") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "SymbolDefect")))))
 (DFunDef false "unresolvedAt" ((PVar "reg") (PVar "key")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "key")) (EFieldAccess (EVar "reg") "excused")) (EListLit) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "reg") "waiting")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "uses")) () (EMatch (EApp (EVar "reverseL") (EVar "uses")) (arm (PList) () (EListLit)) (arm (PCons (PCon "Waiting" (PVar "sym") PWild (PVar "at")) PWild) () (EListLit (EApp (EApp (EVar "missingDefect") (EVar "sym")) (EVar "at")))))))))
 (DTypeSig false "missingDefect" (TyFun (TyCon "WasmSymbol") (TyFun (TyCon "SymbolOrigin") (TyCon "SymbolDefect"))))

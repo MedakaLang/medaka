@@ -7,7 +7,10 @@ import test_process.{
   expectSpawnOk, expectSpawnOkLine, expectSpawnFailsAll
 }
 import fs.{mkdirAll}
-import string.{contains, startsWith, lines, join, stripPrefix, split}
+import io.{runVerb}
+import string.{
+  contains, startsWith, lines, join, stripPrefix, split, replaceOnce
+}
 
 data ValueCase = ValueCase String String String
 
@@ -200,6 +203,50 @@ strictArgs exe argv =
       exe,
     ]
     ++ argv
+
+execVehicleChild : String
+execVehicleChild =
+  """
+import test.{expectAll}
+import test_process.{expectSpawnOkLine, expectSpawnFailsAll}
+
+strictArgs : String -> List String -> List String
+strictArgs exe argv =
+  ["perl", "-e", "alarm 15; exec @ARGV or die qq(exec: $!)", exe] ++ argv
+
+test "strict exec wrapper observes a missing executable and controls" =
+  expectAll [
+    expectSpawnFailsAll "env" (strictArgs "/medaka-p513-absent-executable" [])
+      ["exec:", "No such file or directory"],
+    expectSpawnOkLine "env" (strictArgs "printf" ["child-ok\\n"]) "child-ok",
+    expectSpawnFailsAll "env" (strictArgs "sh" ["-c", "echo child-fail >&2; exit 7"])
+      ["child-fail"]
+  ]
+"""
+
+execVehicleJudge : String -> <IO, Exec, FileWrite> Expectation
+execVehicleJudge dir =
+  match writeFile (dir ++ "/exec_vehicle_test.mdk") execVehicleChild
+    Err e => fail e
+    Ok _ => expectAll [
+      expectSpawnFailsAll "env" (strictArgs
+        "/medaka-p513-absent-executable"
+        []) [
+        "exec:", "No such file or directory"
+      ],
+      expectSpawnOkLine
+        "env"
+        (strictArgs "printf" ["parent-ok\\n"])
+        "parent-ok",
+      expectSpawnFailsAll "env" (strictArgs "sh" [
+        "-c", "echo parent-fail >&2; exit 7"
+      ]) [
+        "parent-fail",
+      ],
+      expectSpawnOk
+        "env"
+        (strictArgs medakaBin ["test", dir ++ "/exec_vehicle_test.mdk"]),
+    ]
 
 buildEntry : String -> String -> <IO, Exec> Expectation
 buildEntry dir name =
@@ -635,3 +682,136 @@ test "current entry routes preserve values, physical ABIs, first traps and named
     Some dir => match mkdirAll dir
       Err e => fail e
       Ok _ => runJudges dir
+
+test "wrapped gate exec failure remains observable through the native test runner" =
+  withScratchDir execVehicleJudge
+
+manifestProbe : String
+manifestProbe = join "\n" [
+  "import backend.wasm_demand.{helperManifest, HelperManifest(..)}",
+  "import backend.emit_plan.{prepareWasmPlan}",
+  "import backend.extern_catalog.{RuntimeExternDomain(..)}",
+  "import frontend.parser.{parse}",
+  "import frontend.desugar.{desugar}",
+  "import types.annotate.{annotateProgram}",
+  "import types.program_facts.{emptyFacts}",
+  "import ir.core_ir_lower.{lowerProgramEmitWith}",
+  "import support.ordmap.{omEmpty}",
+  "main =",
+  "  let cp = lowerProgramEmitWith emptyFacts (annotateProgram (desugar (parse \"main = 1\")))",
+  "  let (plan, _) = prepareWasmPlan PreludeFreeRuntime omEmpty cp",
+  "  let physical = optionOrPanic \"missing plan\" plan.wasmPhysical",
+  "  match helperManifest physical \"notAHelper\"",
+  "    HelperManifest defs _ => length defs",
+]
+
+test "unknown helper manifests refuse by name" = withScratchDir
+  (dir =>
+    match (runVerb "sh" [
+      "-c",
+      "root=$(cd \"$1\" && pwd -P) || exit 1; for d in backend frontend types ir support driver eval tools; do ln -s \"$root/compiler/$d\" \"$2/$d\" || exit 1; done; cp \"$root/compiler/medaka.toml\" \"$2/medaka.toml\"",
+      "sh", medakaRoot, dir
+    ])
+      Err e => fail e
+      Ok (code, _, err) =>
+        if code /= 0 then
+          fail err
+        else match (
+          writeFile (dir ++ "/probe.mdk") manifestProbe,
+          writeFile (dir ++ "/good.mdk") "main = 1",
+        )
+          (Ok _, Ok _) => expectAll [
+            expectSpawnFailsAll "env" (strictArgs medakaBin [
+              "run",
+              dir ++ "/probe.mdk",
+            ]) [
+              "unknown-wasm-helper-manifest: notAHelper",
+            ],
+            expectSpawnOkLine
+              "env"
+              (strictArgs medakaBin ["run", dir ++ "/good.mdk"])
+              "1",
+          ]
+          _ => fail "could not write manifest probes")
+
+-- Copy the compiler project so that both census consumers see the same
+-- deliberately incomplete producer result, after the unchanged plan gateway.
+censusProbe : String -> String -> String
+censusProbe src symbol = join "\n" [
+  "import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInput}",
+  "import backend.emit_plan.{prepareWasmPlan}",
+  "import backend.extern_catalog.{RuntimeExternDomain(..)}",
+  "import types.capability_manifest.{ManifestRequirement(..)}",
+  "import frontend.parser.{parse}",
+  "import frontend.desugar.{desugar}",
+  "import types.annotate.{annotateProgram}",
+  "import types.program_facts.{emptyFacts}",
+  "import ir.core_ir_lower.{lowerProgramEmitWith}",
+  "import support.ordmap.{omEmpty}",
+  "import driver.diagnostics.{renderSymbolDefects}",
+  "import string.{contains, join}",
+  "main =",
+  "  let cp = lowerProgramEmitWith emptyFacts (annotateProgram (desugar (parse \""
+    ++ src
+    ++ "\")))",
+  "  let (plan, core) = prepareWasmPlan PreludeFreeRuntime omEmpty cp",
+  "  match emitProgramGaps (makeWasmEmitInput RawUnchecked PreludeFreeRuntime []) plan core",
+  "    Ok _ => panic \"missing census defect\"",
+  "    Err defects =>",
+  "      let text = join \" \" (renderSymbolDefects \"probe.mdk\" defects)",
+  "      if contains \"E-PHYS-UNDEFINED\" text && contains \""
+    ++ symbol
+    ++ "\" text then 513 else panic text",
+]
+
+censusOmission : String ->
+  String ->
+  String ->
+  String ->
+  <IO, Exec, FileRead, FileWrite> Expectation
+censusOmission dir original target replacement =
+  match replaceOnce target replacement original
+    Err e => fail "census producer mutation did not match: \{e}"
+    Ok mutated => match writeFile (dir ++ "/backend/wasm_demand.mdk") mutated
+      Err e => fail e
+      Ok _ =>
+        expectSpawnOkLine medakaBin ["run", dir ++ "/census_probe.mdk"] "513"
+
+censusDisagreement : String -> <IO, Exec, FileRead, FileWrite> Expectation
+censusDisagreement dir =
+  match runVerb "cp" ["-R", medakaRoot ++ "/compiler", dir ++ "/compiler"]
+    Err e => fail e
+    Ok (code, _, err) =>
+      if code /= 0 then
+        fail err
+      else
+        let project = dir ++ "/compiler"
+        match readFile (project ++ "/backend/wasm_demand.mdk")
+          Err e => fail e
+          Ok original =>
+            match (writeFile
+              (project ++ "/census_probe.mdk")
+              (censusProbe "f x y = x + y" "mdk_int_add"))
+              Err e => fail e
+              Ok _ =>
+                let intCheck =
+                  censusOmission
+                    project
+                    original
+                    "intHelpers = plan.censusIntHelpers,"
+                    "intHelpers = filter (/= \"add\") plan.censusIntHelpers,"
+                match (writeFile
+                  (project ++ "/census_probe.mdk")
+                  (censusProbe "f x = x ++ \\\"z\\\"" "mdk_append"))
+                  Err e => fail e
+                  Ok _ => expectAll [
+                    intCheck,
+                    censusOmission
+                      project
+                      original
+                      "helpers = plan.censusHelpers,"
+                      "helpers = filter (/= \"appendRuntimeLines\") plan.censusHelpers,",
+                  ]
+
+test "census detects omitted Int and string helper definitions" =
+  withScratchDir censusDisagreement

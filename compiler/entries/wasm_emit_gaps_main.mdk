@@ -56,7 +56,7 @@ import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInput}
 import backend.emit_plan.{buildEmitPlan}
 
 import entries.entry_support.{driveModules}
-import driver.diagnostics.{refuseSymbolDefects}
+import driver.emit_diagnostics.{refuseSymbolDefects}
 import types.tc_occurrence.{constrainedSigNames}
 
 main : <IO> Unit
