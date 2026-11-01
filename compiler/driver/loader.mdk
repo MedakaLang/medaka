@@ -27,6 +27,7 @@ import frontend.parser.{
   parseErrorMessage,
 }
 import frontend.visibility.{useModId}
+import support.diag_codes.{DiagCode(..)}
 import string as Str
 import support.util.{
   contains,
@@ -635,6 +636,35 @@ loadErrorMessage (LoadTestImport m _ _) = m
 loadErrorMessage (LoadParseFailed path _ e) =
   "\{path}:\{parseErrorLine e}:\{parseErrorCol e}: \{parseErrorMessage e}"
 
+-- The diagnostic a load error that names an import stands for: its code, its message,
+-- the file it belongs to (the importing module, else [target]), the source the loader
+-- parsed for that file when it kept one, and the span of the import.  `None` for a
+-- failure that names no import (`LoadMsg`, `LoadParseFailed`).  Every surface that
+-- renders a cycle or a test-module import reads this, so the two cannot drift apart.
+export
+loadErrorSite : String ->
+  LoadError ->
+  Option (DiagCode, String, String, Option String, Option Loc)
+loadErrorSite target (LoadCycle m path site) = Some (
+  RModuleLoad,
+  m,
+  siteFile target path site,
+  map fst site,
+  map snd site,
+)
+loadErrorSite target (LoadTestImport m path site) = Some (
+  RTestModuleImport,
+  m,
+  siteFile target path site,
+  map fst site,
+  map snd site,
+)
+loadErrorSite _ _ = None
+
+siteFile : String -> String -> Option (String, Loc) -> String
+siteFile _ path (Some _) = path
+siteFile target _ None = target
+
 -- ── read-callback variant (B.10.5: unsaved-editor-buffer overrides) ──
 --
 -- A `String -> Option String` callback keyed by FILE PATH (`read : string ->
@@ -971,17 +1001,16 @@ canonicalPathId deps roots path =
 
 -- The test-sibling relation: `path` is the sibling of the file `<dir>/<m>.mdk` exactly
 -- when it is `<dir>/<m>_test.mdk`, `m` does not itself end in `_test` (one level only),
--- the subject exists, and both lie in one directory of one project after
--- `canonicalizePath`.  Answers the subject's canonical module id.  The relation is
+-- the subject exists, and both lie in one directory after `canonicalizePath` (so in
+-- one project).  Answers the subject's canonical module id.  The relation is
 -- physical, never a module-id comparison: stdlib ids are bare names, so a user root's
 -- `net_test.mdk` is not the sibling of stdlib `net`.
 export
 siblingSubjectId : List (String, String) ->
   List String ->
   String ->
-  String ->
   <IO> Option String
-siblingSubjectId deps roots stdlibDir path =
+siblingSubjectId deps roots path =
   let cPath = canonicalizePath path
   let cDir = parentDir cPath
   match siblingSubjectName (dropPrefix (stringLength cDir + 1) cPath)
@@ -992,8 +1021,7 @@ siblingSubjectId deps roots stdlibDir path =
         None
       else
         let cSubject = canonicalizePath subjectPath
-        let cStd = canonicalizePath stdlibDir
-        if parentDir cSubject == cDir && sameProjectDir cStd cDir cSubject then
+        if parentDir cSubject == cDir then
           Some (canonicalPathId deps roots cSubject)
         else
           None
@@ -1010,19 +1038,6 @@ siblingSubjectName file =
       Some (stringConcat [stem, ".mdk"])
   else
     None
-
--- Both files (one directory, canonical) belong to one project: the same
--- `medaka.toml` directory, or the stdlib tree.
-sameProjectDir : String -> String -> String -> <IO> Bool
-sameProjectDir cStd cDir cSubject =
-  let subjectDir = parentDir cSubject
-  if inStdlib cStd cDir && inStdlib cStd subjectDir then
-    True
-  else
-    findProjectRoot cDir == findProjectRoot subjectDir
-
-inStdlib : String -> String -> Bool
-inStdlib cStd dir = dir == cStd || underDir cStd dir
 
 -- rewrite a UsePath so its `useModId` yields the canonical id `c`, preserving
 -- the imported member list / wildcard / alias / single name.  (For UseName the
@@ -1470,12 +1485,36 @@ cycleSite : List (String, String) ->
   String ->
   String ->
   <IO> Option (String, Loc)
-cycleSite deps roots importer modId = match loadedSourceOf importer
-  None => None
+cycleSite deps roots importer modId = snd (importSite deps roots importer modId)
+
+-- The import of `modId` inside `importer` as its author wrote it: the module
+-- spelling, and the site `cycleSite` answers.  The spelling is `modId` when the
+-- import is not found.
+importSite : List (String, String) ->
+  List String ->
+  String ->
+  String ->
+  <IO> (String, Option (String, Loc))
+importSite deps roots importer modId = match loadedSourceOf importer
+  None => (modId, None)
   Some src =>
-    map
-      (loc => (src, loc))
-      (findImportLoc modId (rewriteDecls deps roots (parseLocated src)))
+    let raw = parseLocated src
+    match writtenImport modId raw (rewriteDecls deps roots raw)
+      Some (spelling, loc) => (spelling, Some (src, loc))
+      None => (modId, None)
+
+-- [raw] and [rewritten] are one decl list before and after `rewriteDecls`, which
+-- keeps the decls in step.
+writtenImport : String -> List Decl -> List Decl -> Option (String, Loc)
+writtenImport mid ((DUse _ raw loc) :: rs) ((DUse _ canon _) :: cs) =
+  if useModId canon == mid then
+    Some (useModId raw, loc)
+  else
+    writtenImport mid rs cs
+writtenImport mid ((DAttrib _ a) :: rs) ((DAttrib _ b) :: cs) =
+  writtenImport mid (a :: rs) (b :: cs)
+writtenImport mid (_ :: rs) (_ :: cs) = writtenImport mid rs cs
+writtenImport _ _ _ = None
 
 -- A module whose file is not `*_test.mdk` may not import one whose file is.
 -- The decision reads the resolved FILE names, not the module id text.
@@ -1492,19 +1531,20 @@ testImportViolation deps roots importer entry modId =
   else match findModuleOrEntryFile deps roots entry modId
     Some (path, _) =>
       if endsWith "_test.mdk" path then
+        let (written, site) = importSite deps roots importer modId
         Some
           (LoadTestImport
             (stringConcat [
               "import `",
-              modId,
+              written,
               "` in ",
               importer,
               ": `",
-              modId,
+              written,
               "` is a test module; only `*_test.mdk` files may import one. Move the shared code out of the test file.",
             ])
             importer
-            (cycleSite deps roots importer modId))
+            site)
       else
         None
     None => None

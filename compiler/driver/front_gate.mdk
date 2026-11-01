@@ -44,6 +44,7 @@ import driver.diagnostics.{
 }
 import driver.loader.{
   LoadError(..),
+  loadErrorSite,
   dropPathTriple,
   entrySearchRoots,
   loadProgramFilesLocatedE,
@@ -98,20 +99,6 @@ export
 moduleLoadErrText : String -> String -> String -> LoadError -> <IO> String
 moduleLoadErrText _ _ _ (LoadParseFailed mpath msrc e) =
   ppParseError msrc mpath e
-moduleLoadErrText _ _ _ (LoadCycle lmsg cpath csite) = match csite
-  None => lmsg
-  Some (csrc, loc) =>
-    ppDiagCliSrc
-      csrc
-      cpath
-      (Diag SevError (Coded RModuleLoad) lmsg (Some loc) None None)
-moduleLoadErrText _ _ _ (LoadTestImport lmsg cpath csite) = match csite
-  None => lmsg
-  Some (csrc, loc) =>
-    ppDiagCliSrc
-      csrc
-      cpath
-      (Diag SevError (Coded RTestModuleImport) lmsg (Some loc) None None)
 moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
   match unknownModuleIdOf lmsg
     None => lmsg
@@ -124,6 +111,14 @@ moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
             tsrc
             target
             (Diag SevError (Coded RModuleLoad) msg (Some loc) None None)
+moduleLoadErrText _ target _ le = match loadErrorSite target le
+  Some (code, lmsg, file, Some csrc, Some loc) =>
+    ppDiagCliSrc
+      csrc
+      file
+      (Diag SevError (Coded code) lmsg (Some loc) None None)
+  Some (_, lmsg, _, _, _) => lmsg
+  None => ""
 
 -- ── the `build` front-end gate ───────────────────────────────────────────────
 -- `medaka build` sets this variable on the `medaka_emitter` child it spawns, and
@@ -253,7 +248,7 @@ resolveRefusal allowInternal stdlibDir trusted rsrc csrc entry g =
               (map modIdToPath g.fgMods)
               allowInternal
               trusted
-              (siblingPairsOf g.fgRoots stdlibDir g.fgMods)
+              (siblingPairsOf g.fgRoots g.fgMods)
               (Some (preludeGeneration rsrc csrc))
               g.fgRuntimeD
               g.fgCoreD

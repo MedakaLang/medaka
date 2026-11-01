@@ -1,5 +1,5 @@
 # META
-source_lines=1177
+source_lines=1183
 stages=DESUGAR,MARK
 # SOURCE
 -- A module's export surface, built from its declarations and the surfaces of
@@ -308,9 +308,15 @@ bindsNonCtorExport exp name =
 
 export
 pubUsePaths : List Decl -> List UsePath
-pubUsePaths [] = []
-pubUsePaths ((DUse True path _) :: rest) = path :: pubUsePaths rest
-pubUsePaths (_ :: rest) = pubUsePaths rest
+pubUsePaths decls = map fst (pubUsesLocated decls)
+
+-- The `export import` decls of a module with their locs.
+export
+pubUsesLocated : List Decl -> List (UsePath, Loc)
+pubUsesLocated [] = []
+pubUsesLocated ((DUse True path loc) :: rest) =
+  (path, loc) :: pubUsesLocated rest
+pubUsesLocated (_ :: rest) = pubUsesLocated rest
 
 -- The paths of a module's plain imports, the complement of `pubUsePaths`: what
 -- its full view carries beyond its exported one.  The full view carries a plain
@@ -1262,9 +1268,11 @@ overPubUse coreExp known f path =
 (DTypeSig true "bindsNonCtorExport" (TyFun (TyCon "ModuleExports") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "bindsNonCtorExport" ((PVar "exp") (PVar "name")) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EFieldAccess (EVar "exp") "expTypes")) (EApp (EApp (EVar "contains") (EVar "name")) (EFieldAccess (EVar "exp") "expInterfaces"))) (EApp (EApp (EVar "contains") (EVar "name")) (EFieldAccess (EVar "exp") "expEffects"))))
 (DTypeSig true "pubUsePaths" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "UsePath"))))
-(DFunDef false "pubUsePaths" ((PList)) (EListLit))
-(DFunDef false "pubUsePaths" ((PCons (PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "rest"))) (EBinOp "::" (EVar "path") (EApp (EVar "pubUsePaths") (EVar "rest"))))
-(DFunDef false "pubUsePaths" ((PCons PWild (PVar "rest"))) (EApp (EVar "pubUsePaths") (EVar "rest")))
+(DFunDef false "pubUsePaths" ((PVar "decls")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "pubUsesLocated") (EVar "decls"))))
+(DTypeSig true "pubUsesLocated" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "UsePath") (TyCon "Loc")))))
+(DFunDef false "pubUsesLocated" ((PList)) (EListLit))
+(DFunDef false "pubUsesLocated" ((PCons (PCon "DUse" (PCon "True") (PVar "path") (PVar "loc")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "path") (EVar "loc")) (EApp (EVar "pubUsesLocated") (EVar "rest"))))
+(DFunDef false "pubUsesLocated" ((PCons PWild (PVar "rest"))) (EApp (EVar "pubUsesLocated") (EVar "rest")))
 (DTypeSig true "plainUsePaths" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "UsePath"))))
 (DFunDef false "plainUsePaths" ((PList)) (EListLit))
 (DFunDef false "plainUsePaths" ((PCons (PCon "DUse" (PCon "False") (PVar "path") PWild) (PVar "rest"))) (EBinOp "::" (EApp (EVar "unrenamedPath") (EVar "path")) (EApp (EVar "plainUsePaths") (EVar "rest"))))
@@ -1495,9 +1503,11 @@ overPubUse coreExp known f path =
 (DTypeSig true "bindsNonCtorExport" (TyFun (TyCon "ModuleExports") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "bindsNonCtorExport" ((PVar "exp") (PVar "name")) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EFieldAccess (EVar "exp") "expTypes")) (EApp (EApp (EVar "contains") (EVar "name")) (EFieldAccess (EVar "exp") "expInterfaces"))) (EApp (EApp (EVar "contains") (EVar "name")) (EFieldAccess (EVar "exp") "expEffects"))))
 (DTypeSig true "pubUsePaths" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "UsePath"))))
-(DFunDef false "pubUsePaths" ((PList)) (EListLit))
-(DFunDef false "pubUsePaths" ((PCons (PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "rest"))) (EBinOp "::" (EVar "path") (EApp (EVar "pubUsePaths") (EVar "rest"))))
-(DFunDef false "pubUsePaths" ((PCons PWild (PVar "rest"))) (EApp (EVar "pubUsePaths") (EVar "rest")))
+(DFunDef false "pubUsePaths" ((PVar "decls")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "pubUsesLocated") (EVar "decls"))))
+(DTypeSig true "pubUsesLocated" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "UsePath") (TyCon "Loc")))))
+(DFunDef false "pubUsesLocated" ((PList)) (EListLit))
+(DFunDef false "pubUsesLocated" ((PCons (PCon "DUse" (PCon "True") (PVar "path") (PVar "loc")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "path") (EVar "loc")) (EApp (EVar "pubUsesLocated") (EVar "rest"))))
+(DFunDef false "pubUsesLocated" ((PCons PWild (PVar "rest"))) (EApp (EVar "pubUsesLocated") (EVar "rest")))
 (DTypeSig true "plainUsePaths" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "UsePath"))))
 (DFunDef false "plainUsePaths" ((PList)) (EListLit))
 (DFunDef false "plainUsePaths" ((PCons (PCon "DUse" (PCon "False") (PVar "path") PWild) (PVar "rest"))) (EBinOp "::" (EApp (EVar "unrenamedPath") (EVar "path")) (EApp (EVar "plainUsePaths") (EVar "rest"))))

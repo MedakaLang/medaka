@@ -2563,15 +2563,17 @@ runEmitterFor frontGate realTarget diagPath prog args =
   let profileSet = match !selectedProfile
     Some p => ["\{targetProfileEnv}=\{profileName p}"]
     None => []
+  -- A build with no sibling pair must not inherit one: the child would drive an
+  -- unrelated entry as a test sibling.
   let siblingSet = match realTarget
     Some real => ["\{siblingTargetEnv}=\{real}"]
-    None => []
+    None => ["-u", siblingTargetEnv]
   let ackPath = joinPath (dirOf diagPath) "gate.ack"
   let gateSet = match frontGate
     Some ask => gateAssignments ask diagPath ackPath
     None => noGateAssignments
   let res =
-    runCommand "env" (profileSet ++ siblingSet ++ gateSet ++ [prog] ++ args)
+    runCommand "env" (siblingSet ++ profileSet ++ gateSet ++ [prog] ++ args)
   match (frontGate, res)
     (Some _, Ok (0, _, _)) =>
       if fileExists ackPath then

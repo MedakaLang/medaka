@@ -129,6 +129,7 @@ import frontend.visibility.{
   isNewtypeExport,
   bindsNonCtorExport,
   pubUsePaths,
+  pubUsesLocated,
   expandMemberNames,
   coreExports,
   nsValues,
@@ -281,6 +282,9 @@ public export data ResError =
   -- name USED unqualified, exported by ≥2 non-`core` modules (use-time
   -- ambiguity; MAP-SET-AMBIGUITY-DESIGN.md)
   | AmbiguousOccurrence String (List String) (Option Loc)
+  -- the same, when the name is private to the importing test sibling's subject
+  -- (the subject, then the other exporting modules)
+  | AmbiguousPrivateOccurrence String String (List String) (Option Loc)
   -- CONSTRUCTOR (in a pattern or an expression) that ≥2 explicitly-imported
   -- non-`core` modules bring into scope under the same name (#674).  The
   -- constructor peer of AmbiguousOccurrence: without it a cross-module duplicate
@@ -403,6 +407,7 @@ resErrorLoc (AsPatternMisplaced l) = l
 resErrorLoc (OrPatternMisplaced l) = l
 resErrorLoc (OrPatternBinders _ _ _ l) = l
 resErrorLoc (AmbiguousOccurrence _ _ l) = l
+resErrorLoc (AmbiguousPrivateOccurrence _ _ _ l) = l
 resErrorLoc (AmbiguousConstructor _ _ l) = l
 resErrorLoc (AmbiguousAliasCtor _ _ l) = l
 resErrorLoc (AmbiguousType _ _ l) = l
@@ -2811,6 +2816,10 @@ resErrorSexp (OrPatternBinders xs ys _ _) =
   "(OrPatternBinders \{joinWith " " (map escStr xs)} | \{joinWith " " (map escStr ys)})"
 resErrorSexp (AmbiguousOccurrence n mods _) =
   "(AmbiguousOccurrence " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
+resErrorSexp (AmbiguousPrivateOccurrence n subj mods _) =
+  "(AmbiguousPrivateOccurrence "
+    ++ joinWith " " (escStr n :: escStr subj :: map escStr mods)
+    ++ ")"
 resErrorSexp (AmbiguousConstructor n mods _) =
   "(AmbiguousConstructor " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
 resErrorSexp (AmbiguousAliasCtor n mid _) =
@@ -2992,6 +3001,8 @@ ppResError (AmbiguousOccurrence n mods _) = match dedup mods
     "ambiguous occurrence: `\{n}` is bound to \{intToString (listLen mods)} declarations imported from `\{m}`; import one of them under an alias with `import \{m}.{<name> as <alias>}`"
   distinct =>
     "ambiguous occurrence: `\{n}` is exported by \{ambigModPhrase distinct}; import it from one of them under an alias with `import <mod>.{\{n} as <alias>}`"
+ppResError (AmbiguousPrivateOccurrence n subj mods _) =
+  "ambiguous occurrence: `\{n}` is private to `\{subj}`, the subject of this test module, and is also exported by \{ambigModPhrase mods}; import it from only one of them, or under an alias with `import <mod>.{\{n} as <alias>}`"
 -- An alias-qualified constructor spelling parses since #1287, but it does not
 -- SEPARATE two modules' constructors the way it separates their types: resolve
 -- strips the alias prefix before typecheck, whose constructor table is keyed by the
@@ -3081,6 +3092,7 @@ resErrorCode (AsPatternMisplaced _) = RAsPatternMisplaced
 resErrorCode (OrPatternMisplaced _) = ROrPatternMisplaced
 resErrorCode (OrPatternBinders _ _ _ _) = ROrPatternBinders
 resErrorCode (AmbiguousOccurrence _ _ _) = RAmbiguousOccurrence
+resErrorCode (AmbiguousPrivateOccurrence _ _ _ _) = RAmbiguousOccurrence
 resErrorCode (AmbiguousConstructor _ _ _) = RAmbiguousCtor
 resErrorCode (AmbiguousAliasCtor _ _ _) = RAmbiguousCtor
 resErrorCode (AmbiguousType _ _ _) = RAmbiguousType
@@ -4324,10 +4336,12 @@ resolveModuleG internalGuard subject preludeKey runtimeDecls preludeDecls known 
   let (env, importErrs) = buildEnvMM ps seen prog internalGuard
   let errs =
     dedupResErrors
-      (buildErrors preludeDecls ps.psCoreExports prog
-        ++ importErrs
-        ++ privilegedReexportErrors known seen subject prog
-        ++ flatMap (checkDecl env) prog)
+      (map
+        (privateAmbiguity known subject)
+        (buildErrors preludeDecls ps.psCoreExports prog
+          ++ importErrs
+          ++ privilegedReexportErrors known seen subject prog
+          ++ flatMap (checkDecl env) prog))
   let exp = buildExports ps.psCoreExports known modId prog env
   (exp, errs)
 
@@ -4341,6 +4355,26 @@ importerSubject : List (String, String) ->
 importerSubject siblings mods mid = match subjectOf siblings mid
   None => None
   Some subj => map (prog => (subj, prog)) (lookupAssoc subj mods)
+
+-- An ambiguity that involves the sibling's subject holding the name privately
+-- is reported as such: the subject's exported view [known] lacks the name.
+privateAmbiguity : OrdMap ModuleExports ->
+  Option (String, List Decl) ->
+  ResError ->
+  ResError
+privateAmbiguity known (Some (subj, _)) (AmbiguousOccurrence n mods loc) =
+  match findExports subj known
+    Some exported =>
+      if contains subj mods && not (contains n exported.expValues) then
+        AmbiguousPrivateOccurrence
+          n
+          subj
+          (filterList (/= subj) (dedup mods))
+          loc
+      else
+        AmbiguousOccurrence n mods loc
+    None => AmbiguousOccurrence n mods loc
+privateAmbiguity _ _ e = e
 
 -- One `PrivilegedReexport` per name a sibling's `export import` of its subject
 -- carries only through the privilege: [known] holds the exported views and
@@ -4356,18 +4390,10 @@ privilegedReexportErrors known seen (Some (subj, _)) prog = match (
   findExports subj seen,
 )
   (Some exported, Some full) =>
-    flatMap (reexportLeaks exported full) (pubUseLocs subj prog)
+    flatMap
+      (reexportLeaks exported full)
+      (filterList (u => useModId (fst u) == subj) (pubUsesLocated prog))
   _ => []
-
--- The `export import` decls of [prog] naming module [mid], with their locs.
-pubUseLocs : String -> List Decl -> List (UsePath, Loc)
-pubUseLocs _ [] = []
-pubUseLocs mid ((DUse True path loc) :: rest) =
-  if useModId path == mid then
-    (path, loc) :: pubUseLocs mid rest
-  else
-    pubUseLocs mid rest
-pubUseLocs mid (_ :: rest) = pubUseLocs mid rest
 
 reexportLeaks : ModuleExports ->
   ModuleExports ->
@@ -4380,6 +4406,9 @@ reexportLeaks exported full (UseGroup ns members, _) =
         (n => PrivilegedReexport n full.modId (Some loc))
         (privilegedCarry exported full (UseGroup ns [m])))
     members
+-- A glob re-exports the exported view alone (as Rust's `pub use super::*` skips
+-- private items), so it carries nothing privileged.
+reexportLeaks _ _ (UseWild _, _) = []
 reexportLeaks exported full (path, loc) =
   map
     (n => PrivilegedReexport n full.modId (Some loc))

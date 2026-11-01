@@ -1,0 +1,9 @@
+-- Importing the subject's private `display` is shadowed by `Display.display`
+-- at an `Int` receiver, as the same import of an exported one is
+-- (SHADOW-SEMANTICS): every engine prints 5, not 6.
+import test.{expectEqual}
+import pshadow.{display}
+
+test "the method wins at an Int receiver" = expectEqual "5" (display 5)
+
+main = println (display 5)

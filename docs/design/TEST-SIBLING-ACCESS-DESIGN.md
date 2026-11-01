@@ -58,7 +58,7 @@ Val, 2026-10-18: follow Rust's decisions, and deviate only with a good reason.
 | What the sibling sees | The subject's whole top-level scope: values, types, the constructors of abstract (`export data`) and private types, newtype constructors, private interfaces and their methods, non-exported impls, effect labels, and the names the subject itself imports | `use super::*` in a child module, including the parent's private `use` imports |
 | How access is granted | By position. Ordinary `import` syntax, no new keyword | Visibility follows the tree; the `use` line is ordinary |
 | Whose private names | Its own subject only, not other files in the directory | A child sees its ancestors, not its siblings |
-| Re-exporting a name reached only through the privilege | Error | E0364/E0365 |
+| Re-exporting a name reached only through the privilege | A named re-export (`export import subject.{step}`) is an error, once per named name; a glob re-export (`export import subject.*`) re-exports the exported view only and raises no error | E0364/E0365 for a named `pub use`; `pub use super::*` skips the private items silently |
 | A module whose file is not `*_test.mdk` importing one that is | Error | `#[cfg(test)]` items do not exist in a non-test build |
 | A sibling's own new exports, including ones whose types mention the subject's private types | Allowed (only `_test` modules can import them) | A child's `pub fn` may return a parent-private type; `private_interfaces` is a lint, not an error |
 | A private helper used only by the sibling | Still reported by `rule-dead-code`; the remedy is to move it into the sibling | Reported dead in a non-test build |
@@ -81,8 +81,8 @@ Val, 2026-10-18: follow Rust's decisions, and deviate only with a good reason.
 `S` is the sibling of `M` exactly when all of these hold:
 
 - `S`'s file name is `M`'s file name with `.mdk` replaced by `_test.mdk`;
-- both files are in the same directory, compared after canonicalization;
-- both resolve to the same project root (the same `medaka.toml`, or both in the stdlib tree).
+- both files are in the same directory, compared after canonicalization (so they also share
+  one project root).
 
 The relation is physical, not a comparison of module ids. Stdlib module ids are bare names, so
 an id rule would let a user's root-level `net_test.mdk` see stdlib `net`'s private names. The
@@ -103,7 +103,7 @@ step n = n + 1
 
 -- file: counter_test.mdk
 import test.{expectEqual}
-import counter.{Counter(..), step}
+import counter.{Counter(..), step, tick}
 
 test "step adds one" = expectEqual 2 (step 1)
 

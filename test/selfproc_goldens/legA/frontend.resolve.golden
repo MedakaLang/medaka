@@ -280,6 +280,7 @@ preludeScopeOf : List Decl -> List Decl -> PreludeScope
 preludeScopeStore : (Int, Int) -> List Decl -> List Decl -> PreludeScope
 primitiveConstructors : List String
 primitiveTypes : List String
+privateAmbiguity : Map String ModuleExports -> Option (String, List Decl) -> ResError -> ResError
 privilegedReexportErrors : Map String ModuleExports -> Map String ModuleExports -> Option (String, List Decl) -> List Decl -> List ResError
 programIsCore : List Decl -> Bool
 provMidsOf : String -> Map String (List String) -> List String
@@ -287,7 +288,6 @@ provToPairs : Map String (List String) -> List (String, List String)
 pubErr : ModuleExports -> String -> List ResError
 pubErrExpanded : ModuleExports -> (String, String, Loc) -> List ResError
 pubErrLoc : ModuleExports -> (String, Loc) -> List ResError
-pubUseLocs : String -> List Decl -> List (UsePath, Loc)
 publicIfaceMethodVals : List Decl -> Env -> List String
 realImport : ModuleExports -> UsePath -> Loc -> ImportAdds
 recCreateField : Option Loc -> Env -> String -> FieldAssign -> List ResError
