@@ -304,7 +304,7 @@ test "words splits on a no-break space and an ideographic space" =
   expectEqual ["a", "b", "c"] (words "a b　c")
 
 test "isSpace accepts exactly the 29 whitespace code points" =
-  expectEqual spaceCodePoints (acceptedCodePoints 1114111 [])
+  expectEqual spaceCodePoints acceptedCodePoints
 
 -- Python's whitespace set, written out from its definition.
 spaceCodePoints : List Int
@@ -313,13 +313,27 @@ spaceCodePoints =
     ++ [8192..=8202]
     ++ [8232, 8233, 8239, 8287, 12288]
 
--- The code points from `k` down to 0 that `isSpace` accepts, ascending.
-acceptedCodePoints : Int -> List Int -> List Int
-acceptedCodePoints k acc
-  | k < 0 = acc
-  | otherwise = match charFromCode k
-    Some c => acceptedCodePoints (k - 1) (if isSpace c then k :: acc else acc)
-    None => acceptedCodePoints (k - 1) acc
+-- Every code point 0..=1114111, swept in blocks so that no recursion is
+-- deeper than one block (the eval engine has no tail calls).
+acceptedCodePoints : List Int
+acceptedCodePoints = acceptedBlocks 271 []
+
+-- The accepted code points of blocks `b` down to 0, ascending, onto `acc`.
+acceptedBlocks : Int -> List Int -> List Int
+acceptedBlocks b acc
+  | b < 0 = acc
+  | otherwise =
+    acceptedBlocks
+      (b - 1)
+      (acceptedIn (b * 4096) (min (b * 4096 + 4095) 1114111) acc)
+
+-- The code points from `hi` down to `lo` that `isSpace` accepts, ascending.
+acceptedIn : Int -> Int -> List Int -> List Int
+acceptedIn lo hi acc
+  | hi < lo = acc
+  | otherwise = match charFromCode hi
+    Some c => acceptedIn lo (hi - 1) (if isSpace c then hi :: acc else acc)
+    None => acceptedIn lo (hi - 1) acc
 
 test "trim of a single space character" =
   expectEqual ("", "", "") (trim " ", trimLeft " ", trimRight " ")

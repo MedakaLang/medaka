@@ -8,7 +8,8 @@ import list.{sort}
 import string.{contains, endsWith}
 import path.{joinPath, matchGlob}
 import test.{
-  Expectation, expectEach, expectEqual, expectErrContains, fail, pass
+  Expectation, expectAll, expectEach, expectEqual, expectErrContains,
+  expectOkThen, fail, pass
 }
 import io.{runVerb}
 import test_process.{scratchDir, withScratchDir}
@@ -506,8 +507,11 @@ test "glob of a trailing-slash pattern under a missing prefix is an Err" = withD
 -- The dangling link sits inside a dot directory the pattern cannot reach, so
 -- a walk that entered it would report an `Err`.
 test "glob does not enter a dot directory its pattern cannot reach" = withDangling
-  (dir =>
-    let _ = runVerb "mv" [joinPath dir "dang/deep", joinPath dir "dang/.deep"]
+  (dir => expectAll [
+    expectOkThen
+      ((code, _, _) => expectEqual 0 code)
+      (runVerb "mv" [joinPath dir "dang/deep", joinPath dir "dang/.deep"]),
     expectEqual
       (Ok [joinPath dir "dang/top.txt"])
-      (glob (joinPath dir "dang/**/*.txt")))
+      (glob (joinPath dir "dang/**/*.txt")),
+  ])

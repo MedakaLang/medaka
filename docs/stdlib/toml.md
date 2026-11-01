@@ -183,9 +183,9 @@ Every `[[name]]` entry in the document, in document order.
 
 Entry `i` is what `tableEntry name i` returns, but the document is read
 once for all of them. The list is empty when there are no entries. The
-result is an `Err` when the largest entry index is 100000 or more, so a
-document holds at most 100000 entries. The message names the table and
-that index.
+result is an `Err` when the largest entry index is 100000 or more, so the
+function reads at most 100000 entries; `medaka run` cannot build a list that
+long. The message names the table and that index.
 
 ```medaka
 > map (map (getString "name")) (tableEntries "gate" (Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")]))

@@ -1,5 +1,5 @@
 # META
-source_lines=534
+source_lines=539
 stages=DESUGAR,MARK
 # SOURCE
 {- | Filesystem helpers built on the host file primitives.
@@ -227,22 +227,29 @@ export
 walkFilesSkipping : (String -> Bool) ->
   String ->
   <FileRead> Result String (List String)
-walkFilesSkipping skip root = walkFilesTo False (-1) skip root
+walkFilesSkipping skip root = walkFilesTo FilesOnly (-1) skip root
+
+-- What a walk reports: only the files, or the directories as well.
+data WalkKind = FilesOnly | FilesAndDirs
+
+listsDirs : WalkKind -> Bool
+listsDirs FilesOnly = False
+listsDirs FilesAndDirs = True
 
 -- The walk of `walkFilesSkipping`, descending at most `levels` directories
 -- below `root` when `levels` is positive and without limit when it is
 -- negative. Files in `root` are one level down, so a bound of 1 stats only
--- `root`'s own entries. With `dirs`, the result lists directories (each as
+-- `root`'s own entries. With `FilesAndDirs`, the result lists directories (each as
 -- its path plus a `/`, ahead of its contents) instead of files, and a
 -- directory at the last level is listed without being entered.
-walkFilesTo : Bool ->
+walkFilesTo : WalkKind ->
   Int ->
   (String -> Bool) ->
   String ->
   <FileRead> Result String (List String)
-walkFilesTo dirs levels skip root = match listDir root
+walkFilesTo kind levels skip root = match listDir root
   Err e => Err (namePath root e)
-  Ok names => walkDirSorted dirs levels skip root names
+  Ok names => walkDirSorted kind levels skip root names
 
 -- A directory's entries, kept when a file or a directory not skipped, each as
 -- (sort key, full path, is a directory). A directory's key ends in `/`, so
@@ -254,7 +261,7 @@ type WalkEntry = (String, String, Bool)
 -- pass as deep as one directory is wide: `run` has no tail calls, and a sort
 -- of the full result would overflow on a large tree.  Each directory's result
 -- is built forward by explicit `match` chains, as in `walkEntries`.
-collectEntries : Bool ->
+collectEntries : WalkKind ->
   Int ->
   (String -> Bool) ->
   String ->
@@ -262,42 +269,42 @@ collectEntries : Bool ->
   <FileRead> Result String (List WalkEntry)
 collectEntries _ _ _ _ [] = Ok []
 -- lint-disable-next-line rule-bind-chain-to-do
-collectEntries dirs levels skip root (name :: rest) =
+collectEntries kind levels skip root (name :: rest) =
   let full = joinPath root name
   match stat full
     Err e => Err (namePath full e)
     Ok st =>
       if st.isDir then
-        if skip full || levels == 1 && not dirs then
-          collectEntries dirs levels skip root rest
+        if skip full || levels == 1 && not (listsDirs kind) then
+          collectEntries kind levels skip root rest
         else
           map
             (("\{name}/", full, True) :: _)
-            (collectEntries dirs levels skip root rest)
+            (collectEntries kind levels skip root rest)
       else if st.isFile then
         map
           ((name, full, False) :: _)
-          (collectEntries dirs levels skip root rest)
+          (collectEntries kind levels skip root rest)
       else
-        collectEntries dirs levels skip root rest
+        collectEntries kind levels skip root rest
 
 -- A `do` chain would cost more frames per entry than the explicit `match`
 -- chains here, lowering the widest directory `run` can walk; the pass-through
 -- `Err` arms stay for that reason.
-walkDirSorted : Bool ->
+walkDirSorted : WalkKind ->
   Int ->
   (String -> Bool) ->
   String ->
   List String ->
   <FileRead> Result String (List String)
 -- lint-disable-next-line rule-bind-chain-to-do
-walkDirSorted dirs levels skip root names =
-  match collectEntries dirs levels skip root names
+walkDirSorted kind levels skip root names =
+  match collectEntries kind levels skip root names
     Err e => Err e
     Ok entries =>
-      walkSorted dirs levels skip (sortOn ((key, _, _) => key) entries)
+      walkSorted kind levels skip (sortOn ((key, _, _) => key) entries)
 
-walkSorted : Bool ->
+walkSorted : WalkKind ->
   Int ->
   (String -> Bool) ->
   List WalkEntry ->
@@ -306,21 +313,21 @@ walkSorted _ _ _ [] = Ok []
 -- A `do` chain per entry would cost more frames per entry than this `match`
 -- chain, lowering the widest directory `run` can walk.
 -- lint-disable-next-line rule-bind-chain-to-do
-walkSorted dirs levels skip ((_, full, isDirectory) :: rest) =
+walkSorted kind levels skip ((_, full, isDirectory) :: rest) =
   if isDirectory then
-    if dirs && levels == 1 then
-      map ("\{full}/" :: _) (walkSorted dirs levels skip rest)
+    if listsDirs kind && levels == 1 then
+      map ("\{full}/" :: _) (walkSorted kind levels skip rest)
     else match listDir full
       Err e => Err (namePath full e)
-      Ok subs => match walkDirSorted dirs (belowLevel levels) skip full subs
+      Ok subs => match walkDirSorted kind (belowLevel levels) skip full subs
         Err e => Err e
         Ok inner =>
-          let here = if dirs then "\{full}/" :: inner else inner
-          map (here ++ _) (walkSorted dirs levels skip rest)
-  else if dirs then
-    walkSorted dirs levels skip rest
+          let here = if listsDirs kind then "\{full}/" :: inner else inner
+          map (here ++ _) (walkSorted kind levels skip rest)
+  else if listsDirs kind then
+    walkSorted kind levels skip rest
   else
-    map (full :: _) (walkSorted dirs levels skip rest)
+    map (full :: _) (walkSorted kind levels skip rest)
 
 belowLevel : Int -> Int
 belowLevel levels = if levels < 0 then levels else levels - 1
@@ -368,13 +375,11 @@ glob pattern =
       map
         (paths =>
           own ++ filter (matchGlob pattern) (map (dropDotSlash prefix) paths))
-        (walkFilesTo dirs (globLevels prefix pattern) (globSkip
-          dirs
-          prefix
-          pattern) (if prefix == "" then
-          "."
-        else
-          prefix))
+        (walkFilesTo
+          (if dirs then FilesAndDirs else FilesOnly)
+          (globLevels prefix pattern)
+          (globSkip dirs prefix pattern)
+          (if prefix == "" then "." else prefix))
 
 -- How many directory levels below the prefix a match can lie: the pattern's
 -- segments past the prefix's, or unbounded (-1) when a segment is `**`.
@@ -573,22 +578,26 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 (DTypeSig true "walkFiles" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "walkFiles" ((PVar "root")) (EApp (EApp (EVar "walkFilesSkipping") (ELam (PWild) (EVar "False"))) (EVar "root")))
 (DTypeSig true "walkFilesSkipping" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "walkFilesSkipping" ((PVar "skip") (PVar "root")) (EApp (EApp (EApp (EApp (EVar "walkFilesTo") (EVar "False")) (EUnOp "-" (ELit (LInt 1)))) (EVar "skip")) (EVar "root")))
-(DTypeSig false "walkFilesTo" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "walkFilesTo" ((PVar "dirs") (PVar "levels") (PVar "skip") (PVar "root")) (EMatch (EApp (EVar "listDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EVar "namePath") (EVar "root")) (EVar "e")))) (arm (PCon "Ok" (PVar "names")) () (EApp (EApp (EApp (EApp (EApp (EVar "walkDirSorted") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "names")))))
+(DFunDef false "walkFilesSkipping" ((PVar "skip") (PVar "root")) (EApp (EApp (EApp (EApp (EVar "walkFilesTo") (EVar "FilesOnly")) (EUnOp "-" (ELit (LInt 1)))) (EVar "skip")) (EVar "root")))
+(DData Private "WalkKind" () ((variant "FilesOnly" (ConPos)) (variant "FilesAndDirs" (ConPos))) ())
+(DTypeSig false "listsDirs" (TyFun (TyCon "WalkKind") (TyCon "Bool")))
+(DFunDef false "listsDirs" ((PCon "FilesOnly")) (EVar "False"))
+(DFunDef false "listsDirs" ((PCon "FilesAndDirs")) (EVar "True"))
+(DTypeSig false "walkFilesTo" (TyFun (TyCon "WalkKind") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "walkFilesTo" ((PVar "kind") (PVar "levels") (PVar "skip") (PVar "root")) (EMatch (EApp (EVar "listDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EVar "namePath") (EVar "root")) (EVar "e")))) (arm (PCon "Ok" (PVar "names")) () (EApp (EApp (EApp (EApp (EApp (EVar "walkDirSorted") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "names")))))
 (DTypeAlias false "WalkEntry" () (TyTuple (TyCon "String") (TyCon "String") (TyCon "Bool")))
-(DTypeSig false "collectEntries" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "WalkEntry"))))))))))
+(DTypeSig false "collectEntries" (TyFun (TyCon "WalkKind") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "WalkEntry"))))))))))
 (DFunDef false "collectEntries" (PWild PWild PWild PWild (PList)) (EApp (EVar "Ok") (EListLit)))
-(DFunDef false "collectEntries" ((PVar "dirs") (PVar "levels") (PVar "skip") (PVar "root") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "full") (EApp (EApp (EVar "joinPath") (EVar "root")) (EVar "name"))) (DoExpr (EMatch (EApp (EVar "stat") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EVar "namePath") (EVar "full")) (EVar "e")))) (arm (PCon "Ok" (PVar "st")) () (EIf (EFieldAccess (EVar "st") "isDir") (EIf (EBinOp "||" (EApp (EVar "skip") (EVar "full")) (EBinOp "&&" (EBinOp "==" (EVar "levels") (ELit (LInt 1))) (EApp (EVar "not") (EVar "dirs")))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "/"))) (EVar "full") (EVar "True")) (EVar "_s")))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest")))) (EIf (EFieldAccess (EVar "st") "isFile") (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "name") (EVar "full") (EVar "False")) (EVar "_s")))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest")))))))))
-(DTypeSig false "walkDirSorted" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "walkDirSorted" ((PVar "dirs") (PVar "levels") (PVar "skip") (PVar "root") (PVar "names")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "names")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EApp (EApp (EVar "sortOn") (ELam ((PTuple (PVar "key") PWild PWild)) (EVar "key"))) (EVar "entries"))))))
-(DTypeSig false "walkSorted" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "WalkEntry")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "collectEntries" ((PVar "kind") (PVar "levels") (PVar "skip") (PVar "root") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "full") (EApp (EApp (EVar "joinPath") (EVar "root")) (EVar "name"))) (DoExpr (EMatch (EApp (EVar "stat") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EVar "namePath") (EVar "full")) (EVar "e")))) (arm (PCon "Ok" (PVar "st")) () (EIf (EFieldAccess (EVar "st") "isDir") (EIf (EBinOp "||" (EApp (EVar "skip") (EVar "full")) (EBinOp "&&" (EBinOp "==" (EVar "levels") (ELit (LInt 1))) (EApp (EVar "not") (EApp (EVar "listsDirs") (EVar "kind"))))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "/"))) (EVar "full") (EVar "True")) (EVar "_s")))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest")))) (EIf (EFieldAccess (EVar "st") "isFile") (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "name") (EVar "full") (EVar "False")) (EVar "_s")))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest")))))))))
+(DTypeSig false "walkDirSorted" (TyFun (TyCon "WalkKind") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))
+(DFunDef false "walkDirSorted" ((PVar "kind") (PVar "levels") (PVar "skip") (PVar "root") (PVar "names")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "names")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EApp (EApp (EVar "sortOn") (ELam ((PTuple (PVar "key") PWild PWild)) (EVar "key"))) (EVar "entries"))))))
+(DTypeSig false "walkSorted" (TyFun (TyCon "WalkKind") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "WalkEntry")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "walkSorted" (PWild PWild PWild (PList)) (EApp (EVar "Ok") (EListLit)))
-(DFunDef false "walkSorted" ((PVar "dirs") (PVar "levels") (PVar "skip") (PCons (PTuple PWild (PVar "full") (PVar "isDirectory")) (PVar "rest"))) (EIf (EVar "isDirectory") (EIf (EBinOp "&&" (EVar "dirs") (EBinOp "==" (EVar "levels") (ELit (LInt 1)))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "full"))) (ELit (LString "/"))) (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "rest"))) (EMatch (EApp (EVar "listDir") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EVar "namePath") (EVar "full")) (EVar "e")))) (arm (PCon "Ok" (PVar "subs")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "walkDirSorted") (EVar "dirs")) (EApp (EVar "belowLevel") (EVar "levels"))) (EVar "skip")) (EVar "full")) (EVar "subs")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "inner")) () (EBlock (DoLet false false (PVar "here") (EIf (EVar "dirs") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "full"))) (ELit (LString "/"))) (EVar "inner")) (EVar "inner"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (EVar "here") (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "rest")))))))))) (EIf (EVar "dirs") (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "rest")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "full") (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "rest"))))))
+(DFunDef false "walkSorted" ((PVar "kind") (PVar "levels") (PVar "skip") (PCons (PTuple PWild (PVar "full") (PVar "isDirectory")) (PVar "rest"))) (EIf (EVar "isDirectory") (EIf (EBinOp "&&" (EApp (EVar "listsDirs") (EVar "kind")) (EBinOp "==" (EVar "levels") (ELit (LInt 1)))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "full"))) (ELit (LString "/"))) (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "rest"))) (EMatch (EApp (EVar "listDir") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EVar "namePath") (EVar "full")) (EVar "e")))) (arm (PCon "Ok" (PVar "subs")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "walkDirSorted") (EVar "kind")) (EApp (EVar "belowLevel") (EVar "levels"))) (EVar "skip")) (EVar "full")) (EVar "subs")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "inner")) () (EBlock (DoLet false false (PVar "here") (EIf (EApp (EVar "listsDirs") (EVar "kind")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "full"))) (ELit (LString "/"))) (EVar "inner")) (EVar "inner"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (EVar "here") (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "rest")))))))))) (EIf (EApp (EVar "listsDirs") (EVar "kind")) (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "rest")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "full") (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "rest"))))))
 (DTypeSig false "belowLevel" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "belowLevel" ((PVar "levels")) (EIf (EBinOp "<" (EVar "levels") (ELit (LInt 0))) (EVar "levels") (EBinOp "-" (EVar "levels") (ELit (LInt 1)))))
 (DTypeSig true "glob" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "glob" ((PVar "pattern")) (EBlock (DoLet false false (PVar "dirs") (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "pattern"))) (DoExpr (EMatch (EApp (EVar "wildcardIndex") (EVar "pattern")) (arm (PCon "None") () (EMatch (EApp (EVar "stat") (EVar "pattern")) (arm (PCon "Ok" (PVar "st")) () (EApp (EVar "Ok") (EIf (EIf (EVar "dirs") (EFieldAccess (EVar "st") "isDir") (EFieldAccess (EVar "st") "isFile")) (EListLit (EVar "pattern")) (EListLit)))) (arm (PCon "Err" PWild) () (EApp (EVar "Ok") (EListLit))))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "prefix") (EApp (EVar "dirPrefix") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "pattern")))) (DoLet false false (PVar "prefixDir") (EIf (EBinOp "==" (EVar "prefix") (ELit (LString "/"))) (ELit (LString "/")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString "/"))))) (DoLet false false (PVar "own") (EIf (EBinOp "&&" (EBinOp "&&" (EVar "dirs") (EBinOp "/=" (EVar "prefix") (ELit (LString "")))) (EApp (EApp (EVar "matchGlob") (EVar "pattern")) (EVar "prefixDir"))) (EListLit (EVar "prefixDir")) (EListLit))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "paths")) (EBinOp "++" (EVar "own") (EApp (EApp (EVar "filter") (EApp (EVar "matchGlob") (EVar "pattern"))) (EApp (EApp (EVar "map") (EApp (EVar "dropDotSlash") (EVar "prefix"))) (EVar "paths")))))) (EApp (EApp (EApp (EApp (EVar "walkFilesTo") (EVar "dirs")) (EApp (EApp (EVar "globLevels") (EVar "prefix")) (EVar "pattern"))) (EApp (EApp (EApp (EVar "globSkip") (EVar "dirs")) (EVar "prefix")) (EVar "pattern"))) (EIf (EBinOp "==" (EVar "prefix") (ELit (LString ""))) (ELit (LString ".")) (EVar "prefix")))))))))))
+(DFunDef false "glob" ((PVar "pattern")) (EBlock (DoLet false false (PVar "dirs") (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "pattern"))) (DoExpr (EMatch (EApp (EVar "wildcardIndex") (EVar "pattern")) (arm (PCon "None") () (EMatch (EApp (EVar "stat") (EVar "pattern")) (arm (PCon "Ok" (PVar "st")) () (EApp (EVar "Ok") (EIf (EIf (EVar "dirs") (EFieldAccess (EVar "st") "isDir") (EFieldAccess (EVar "st") "isFile")) (EListLit (EVar "pattern")) (EListLit)))) (arm (PCon "Err" PWild) () (EApp (EVar "Ok") (EListLit))))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "prefix") (EApp (EVar "dirPrefix") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "pattern")))) (DoLet false false (PVar "prefixDir") (EIf (EBinOp "==" (EVar "prefix") (ELit (LString "/"))) (ELit (LString "/")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString "/"))))) (DoLet false false (PVar "own") (EIf (EBinOp "&&" (EBinOp "&&" (EVar "dirs") (EBinOp "/=" (EVar "prefix") (ELit (LString "")))) (EApp (EApp (EVar "matchGlob") (EVar "pattern")) (EVar "prefixDir"))) (EListLit (EVar "prefixDir")) (EListLit))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "paths")) (EBinOp "++" (EVar "own") (EApp (EApp (EVar "filter") (EApp (EVar "matchGlob") (EVar "pattern"))) (EApp (EApp (EVar "map") (EApp (EVar "dropDotSlash") (EVar "prefix"))) (EVar "paths")))))) (EApp (EApp (EApp (EApp (EVar "walkFilesTo") (EIf (EVar "dirs") (EVar "FilesAndDirs") (EVar "FilesOnly"))) (EApp (EApp (EVar "globLevels") (EVar "prefix")) (EVar "pattern"))) (EApp (EApp (EApp (EVar "globSkip") (EVar "dirs")) (EVar "prefix")) (EVar "pattern"))) (EIf (EBinOp "==" (EVar "prefix") (ELit (LString ""))) (ELit (LString ".")) (EVar "prefix")))))))))))
 (DTypeSig false "globLevels" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "globLevels" ((PVar "prefix") (PVar "pattern")) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (ELit (LString "**"))))) (EApp (EVar "segments") (EVar "pattern"))) (EUnOp "-" (ELit (LInt 1))) (EBinOp "-" (EApp (EVar "length") (EApp (EVar "segments") (EVar "pattern"))) (EApp (EVar "length") (EApp (EVar "segments") (EVar "prefix"))))))
 (DTypeSig false "globSkip" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))))
@@ -654,22 +663,26 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 (DTypeSig true "walkFiles" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "walkFiles" ((PVar "root")) (EApp (EApp (EVar "walkFilesSkipping") (ELam (PWild) (EVar "False"))) (EVar "root")))
 (DTypeSig true "walkFilesSkipping" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "walkFilesSkipping" ((PVar "skip") (PVar "root")) (EApp (EApp (EApp (EApp (EVar "walkFilesTo") (EVar "False")) (EUnOp "-" (ELit (LInt 1)))) (EVar "skip")) (EVar "root")))
-(DTypeSig false "walkFilesTo" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "walkFilesTo" ((PVar "dirs") (PVar "levels") (PVar "skip") (PVar "root")) (EMatch (EApp (EVar "listDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EVar "namePath") (EVar "root")) (EVar "e")))) (arm (PCon "Ok" (PVar "names")) () (EApp (EApp (EApp (EApp (EApp (EVar "walkDirSorted") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "names")))))
+(DFunDef false "walkFilesSkipping" ((PVar "skip") (PVar "root")) (EApp (EApp (EApp (EApp (EVar "walkFilesTo") (EVar "FilesOnly")) (EUnOp "-" (ELit (LInt 1)))) (EVar "skip")) (EVar "root")))
+(DData Private "WalkKind" () ((variant "FilesOnly" (ConPos)) (variant "FilesAndDirs" (ConPos))) ())
+(DTypeSig false "listsDirs" (TyFun (TyCon "WalkKind") (TyCon "Bool")))
+(DFunDef false "listsDirs" ((PCon "FilesOnly")) (EVar "False"))
+(DFunDef false "listsDirs" ((PCon "FilesAndDirs")) (EVar "True"))
+(DTypeSig false "walkFilesTo" (TyFun (TyCon "WalkKind") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "walkFilesTo" ((PVar "kind") (PVar "levels") (PVar "skip") (PVar "root")) (EMatch (EApp (EVar "listDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EVar "namePath") (EVar "root")) (EVar "e")))) (arm (PCon "Ok" (PVar "names")) () (EApp (EApp (EApp (EApp (EApp (EVar "walkDirSorted") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "names")))))
 (DTypeAlias false "WalkEntry" () (TyTuple (TyCon "String") (TyCon "String") (TyCon "Bool")))
-(DTypeSig false "collectEntries" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "WalkEntry"))))))))))
+(DTypeSig false "collectEntries" (TyFun (TyCon "WalkKind") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "WalkEntry"))))))))))
 (DFunDef false "collectEntries" (PWild PWild PWild PWild (PList)) (EApp (EVar "Ok") (EListLit)))
-(DFunDef false "collectEntries" ((PVar "dirs") (PVar "levels") (PVar "skip") (PVar "root") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "full") (EApp (EApp (EVar "joinPath") (EVar "root")) (EVar "name"))) (DoExpr (EMatch (EApp (EVar "stat") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EVar "namePath") (EVar "full")) (EVar "e")))) (arm (PCon "Ok" (PVar "st")) () (EIf (EFieldAccess (EVar "st") "isDir") (EIf (EBinOp "||" (EApp (EVar "skip") (EVar "full")) (EBinOp "&&" (EBinOp "==" (EVar "levels") (ELit (LInt 1))) (EApp (EVar "not") (EVar "dirs")))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "/"))) (EVar "full") (EVar "True")) (EVar "_s")))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest")))) (EIf (EFieldAccess (EVar "st") "isFile") (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "name") (EVar "full") (EVar "False")) (EVar "_s")))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest")))))))))
-(DTypeSig false "walkDirSorted" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "walkDirSorted" ((PVar "dirs") (PVar "levels") (PVar "skip") (PVar "root") (PVar "names")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "names")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EApp (EApp (EVar "sortOn") (ELam ((PTuple (PVar "key") PWild PWild)) (EVar "key"))) (EVar "entries"))))))
-(DTypeSig false "walkSorted" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "WalkEntry")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "collectEntries" ((PVar "kind") (PVar "levels") (PVar "skip") (PVar "root") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "full") (EApp (EApp (EVar "joinPath") (EVar "root")) (EVar "name"))) (DoExpr (EMatch (EApp (EVar "stat") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EVar "namePath") (EVar "full")) (EVar "e")))) (arm (PCon "Ok" (PVar "st")) () (EIf (EFieldAccess (EVar "st") "isDir") (EIf (EBinOp "||" (EApp (EVar "skip") (EVar "full")) (EBinOp "&&" (EBinOp "==" (EVar "levels") (ELit (LInt 1))) (EApp (EVar "not") (EApp (EVar "listsDirs") (EVar "kind"))))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "/"))) (EVar "full") (EVar "True")) (EVar "_s")))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest")))) (EIf (EFieldAccess (EVar "st") "isFile") (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "name") (EVar "full") (EVar "False")) (EVar "_s")))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "rest")))))))))
+(DTypeSig false "walkDirSorted" (TyFun (TyCon "WalkKind") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))
+(DFunDef false "walkDirSorted" ((PVar "kind") (PVar "levels") (PVar "skip") (PVar "root") (PVar "names")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "collectEntries") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "root")) (EVar "names")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EApp (EApp (EVar "sortOn") (ELam ((PTuple (PVar "key") PWild PWild)) (EVar "key"))) (EVar "entries"))))))
+(DTypeSig false "walkSorted" (TyFun (TyCon "WalkKind") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "WalkEntry")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "walkSorted" (PWild PWild PWild (PList)) (EApp (EVar "Ok") (EListLit)))
-(DFunDef false "walkSorted" ((PVar "dirs") (PVar "levels") (PVar "skip") (PCons (PTuple PWild (PVar "full") (PVar "isDirectory")) (PVar "rest"))) (EIf (EVar "isDirectory") (EIf (EBinOp "&&" (EVar "dirs") (EBinOp "==" (EVar "levels") (ELit (LInt 1)))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "full"))) (ELit (LString "/"))) (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "rest"))) (EMatch (EApp (EVar "listDir") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EVar "namePath") (EVar "full")) (EVar "e")))) (arm (PCon "Ok" (PVar "subs")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "walkDirSorted") (EVar "dirs")) (EApp (EVar "belowLevel") (EVar "levels"))) (EVar "skip")) (EVar "full")) (EVar "subs")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "inner")) () (EBlock (DoLet false false (PVar "here") (EIf (EVar "dirs") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "full"))) (ELit (LString "/"))) (EVar "inner")) (EVar "inner"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (EVar "here") (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "rest")))))))))) (EIf (EVar "dirs") (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "rest")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "full") (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "dirs")) (EVar "levels")) (EVar "skip")) (EVar "rest"))))))
+(DFunDef false "walkSorted" ((PVar "kind") (PVar "levels") (PVar "skip") (PCons (PTuple PWild (PVar "full") (PVar "isDirectory")) (PVar "rest"))) (EIf (EVar "isDirectory") (EIf (EBinOp "&&" (EApp (EVar "listsDirs") (EVar "kind")) (EBinOp "==" (EVar "levels") (ELit (LInt 1)))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "full"))) (ELit (LString "/"))) (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "rest"))) (EMatch (EApp (EVar "listDir") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EVar "namePath") (EVar "full")) (EVar "e")))) (arm (PCon "Ok" (PVar "subs")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "walkDirSorted") (EVar "kind")) (EApp (EVar "belowLevel") (EVar "levels"))) (EVar "skip")) (EVar "full")) (EVar "subs")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "inner")) () (EBlock (DoLet false false (PVar "here") (EIf (EApp (EVar "listsDirs") (EVar "kind")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "full"))) (ELit (LString "/"))) (EVar "inner")) (EVar "inner"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (EVar "here") (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "rest")))))))))) (EIf (EApp (EVar "listsDirs") (EVar "kind")) (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "rest")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "full") (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "walkSorted") (EVar "kind")) (EVar "levels")) (EVar "skip")) (EVar "rest"))))))
 (DTypeSig false "belowLevel" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "belowLevel" ((PVar "levels")) (EIf (EBinOp "<" (EVar "levels") (ELit (LInt 0))) (EVar "levels") (EBinOp "-" (EVar "levels") (ELit (LInt 1)))))
 (DTypeSig true "glob" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "glob" ((PVar "pattern")) (EBlock (DoLet false false (PVar "dirs") (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "pattern"))) (DoExpr (EMatch (EApp (EVar "wildcardIndex") (EVar "pattern")) (arm (PCon "None") () (EMatch (EApp (EVar "stat") (EVar "pattern")) (arm (PCon "Ok" (PVar "st")) () (EApp (EVar "Ok") (EIf (EIf (EVar "dirs") (EFieldAccess (EVar "st") "isDir") (EFieldAccess (EVar "st") "isFile")) (EListLit (EVar "pattern")) (EListLit)))) (arm (PCon "Err" PWild) () (EApp (EVar "Ok") (EListLit))))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "prefix") (EApp (EVar "dirPrefix") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "pattern")))) (DoLet false false (PVar "prefixDir") (EIf (EBinOp "==" (EVar "prefix") (ELit (LString "/"))) (ELit (LString "/")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString "/"))))) (DoLet false false (PVar "own") (EIf (EBinOp "&&" (EBinOp "&&" (EVar "dirs") (EBinOp "/=" (EVar "prefix") (ELit (LString "")))) (EApp (EApp (EVar "matchGlob") (EVar "pattern")) (EVar "prefixDir"))) (EListLit (EVar "prefixDir")) (EListLit))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "paths")) (EBinOp "++" (EVar "own") (EApp (EApp (EMethodRef "filter") (EApp (EVar "matchGlob") (EVar "pattern"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "dropDotSlash") (EVar "prefix"))) (EVar "paths")))))) (EApp (EApp (EApp (EApp (EVar "walkFilesTo") (EVar "dirs")) (EApp (EApp (EVar "globLevels") (EVar "prefix")) (EVar "pattern"))) (EApp (EApp (EApp (EVar "globSkip") (EVar "dirs")) (EVar "prefix")) (EVar "pattern"))) (EIf (EBinOp "==" (EVar "prefix") (ELit (LString ""))) (ELit (LString ".")) (EVar "prefix")))))))))))
+(DFunDef false "glob" ((PVar "pattern")) (EBlock (DoLet false false (PVar "dirs") (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "pattern"))) (DoExpr (EMatch (EApp (EVar "wildcardIndex") (EVar "pattern")) (arm (PCon "None") () (EMatch (EApp (EVar "stat") (EVar "pattern")) (arm (PCon "Ok" (PVar "st")) () (EApp (EVar "Ok") (EIf (EIf (EVar "dirs") (EFieldAccess (EVar "st") "isDir") (EFieldAccess (EVar "st") "isFile")) (EListLit (EVar "pattern")) (EListLit)))) (arm (PCon "Err" PWild) () (EApp (EVar "Ok") (EListLit))))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "prefix") (EApp (EVar "dirPrefix") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "pattern")))) (DoLet false false (PVar "prefixDir") (EIf (EBinOp "==" (EVar "prefix") (ELit (LString "/"))) (ELit (LString "/")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString "/"))))) (DoLet false false (PVar "own") (EIf (EBinOp "&&" (EBinOp "&&" (EVar "dirs") (EBinOp "/=" (EVar "prefix") (ELit (LString "")))) (EApp (EApp (EVar "matchGlob") (EVar "pattern")) (EVar "prefixDir"))) (EListLit (EVar "prefixDir")) (EListLit))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "paths")) (EBinOp "++" (EVar "own") (EApp (EApp (EMethodRef "filter") (EApp (EVar "matchGlob") (EVar "pattern"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "dropDotSlash") (EVar "prefix"))) (EVar "paths")))))) (EApp (EApp (EApp (EApp (EVar "walkFilesTo") (EIf (EVar "dirs") (EVar "FilesAndDirs") (EVar "FilesOnly"))) (EApp (EApp (EVar "globLevels") (EVar "prefix")) (EVar "pattern"))) (EApp (EApp (EApp (EVar "globSkip") (EVar "dirs")) (EVar "prefix")) (EVar "pattern"))) (EIf (EBinOp "==" (EVar "prefix") (ELit (LString ""))) (ELit (LString ".")) (EVar "prefix")))))))))))
 (DTypeSig false "globLevels" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "globLevels" ((PVar "prefix") (PVar "pattern")) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (ELit (LString "**"))))) (EApp (EVar "segments") (EVar "pattern"))) (EUnOp "-" (ELit (LInt 1))) (EBinOp "-" (EApp (EMethodRef "length") (EApp (EVar "segments") (EVar "pattern"))) (EApp (EMethodRef "length") (EApp (EVar "segments") (EVar "prefix"))))))
 (DTypeSig false "globSkip" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))))

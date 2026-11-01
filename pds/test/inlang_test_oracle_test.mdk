@@ -297,6 +297,7 @@ libRosterNames = map ((_, name, _) => name) libSuites
    `"summary":{"passed":0,...}`. -}
 libExempt : List (String, String)
 libExempt = [
+  ("asciitrim", "0 assertions"),
   ("atsyntax", "0 assertions"),
   ("blockstore", "0 assertions"),
   ("car", "0 assertions"),
@@ -511,6 +512,9 @@ data RowKind = SuiteRow | LibRow deriving (Eq)
 
 -- The `allResults` rows of one roster, in roster order.
 resultsOfKind : RowKind -> <Exec, IO> List (String, (Int, Result String Int))
+-- The pds and sqlite oracle tests each carry this helper: the two projects
+-- share no test-support module that could host it.
+-- lint-disable-next-line rule-duplicate-body -- an independence requirement: pds and sqlite are separate projects and share no test-support module to host this helper
 resultsOfKind kind = map snd (filter ((k, _) => k == kind) allResults)
 
 -- Every non-excluded suite's floor and count.
@@ -640,6 +644,9 @@ ranCountOf (_, (_, Ok n)) = n
 ranCountOf (_, (_, Err _)) = 0
 
 totalRan : <Exec, IO> Int
+-- The pds and sqlite oracle tests each carry this helper: the two projects
+-- share no test-support module that could host it.
+-- lint-disable-next-line rule-duplicate-body -- an independence requirement: pds and sqlite are separate projects and share no test-support module to host this helper
 totalRan = sum (map ranCountOf results) + sum (map ranCountOf libResults)
 
 test "pds in-language suite ran at least one assertion" =

@@ -2384,7 +2384,7 @@ DEDENT
 NEWLINE
 DEDENT
 NEWLINE
-IDENT "tableCountGo"
+IDENT "tableLastGo"
 COLON
 UPPER "String"
 ARROW
@@ -2399,7 +2399,7 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 NEWLINE
-IDENT "tableCountGo"
+IDENT "tableLastGo"
 UNDERSCORE
 LBRACKET
 RBRACKET
@@ -2407,7 +2407,7 @@ IDENT "best"
 EQUAL
 IDENT "best"
 NEWLINE
-IDENT "tableCountGo"
+IDENT "tableLastGo"
 IDENT "prefix"
 LPAREN
 LPAREN
@@ -2427,7 +2427,7 @@ IDENT "k"
 INDENT
 UPPER "None"
 FAT_ARROW
-IDENT "tableCountGo"
+IDENT "tableLastGo"
 IDENT "prefix"
 IDENT "rest"
 IDENT "best"
@@ -2435,16 +2435,12 @@ NEWLINE
 UPPER "Some"
 IDENT "i"
 FAT_ARROW
-IDENT "tableCountGo"
+IDENT "tableLastGo"
 IDENT "prefix"
 IDENT "rest"
 LPAREN
 IDENT "max"
-LPAREN
 IDENT "i"
-PLUS
-INT 1
-RPAREN
 IDENT "best"
 RPAREN
 NEWLINE
@@ -2467,7 +2463,11 @@ UPPER "Toml"
 IDENT "kvs"
 RPAREN
 EQUAL
-IDENT "tableCountGo"
+INDENT
+LET
+IDENT "last"
+EQUAL
+IDENT "tableLastGo"
 LPAREN
 IDENT "stringConcat"
 LBRACKET
@@ -2477,7 +2477,24 @@ STRING "."
 RBRACKET
 RPAREN
 IDENT "kvs"
+LPAREN
 INT 0
+MINUS
+INT 1
+RPAREN
+NEWLINE
+IF
+IDENT "last"
+EQ_EQ
+IDENT "intMaxBound"
+THEN
+IDENT "last"
+ELSE
+IDENT "last"
+PLUS
+INT 1
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "tableEntryGo"
 COLON
@@ -2565,11 +2582,7 @@ UPPER "Some"
 IDENT "j"
 FAT_ARROW
 IDENT "max"
-LPAREN
 IDENT "j"
-PLUS
-INT 1
-RPAREN
 IDENT "best"
 NEWLINE
 DEDENT
@@ -2663,7 +2676,7 @@ RBRACKET
 NEWLINE
 LET
 LPAREN
-IDENT "count"
+IDENT "last"
 COMMA
 IDENT "entry"
 RPAREN
@@ -2680,7 +2693,11 @@ RBRACKET
 RPAREN
 IDENT "entryPrefix"
 IDENT "kvs"
+LPAREN
 INT 0
+MINUS
+INT 1
+RPAREN
 LBRACKET
 RBRACKET
 NEWLINE
@@ -2688,8 +2705,8 @@ DEDENT
 NEWLINE
 IF
 IDENT "i"
-GEQ
-IDENT "count"
+GT
+IDENT "last"
 THEN
 UPPER "None"
 ELSE
@@ -2911,12 +2928,16 @@ STRING "."
 RBRACKET
 NEWLINE
 LET
-IDENT "count"
+IDENT "last"
 EQUAL
-IDENT "tableCountGo"
+IDENT "tableLastGo"
 IDENT "prefix"
 IDENT "kvs"
+LPAREN
 INT 0
+MINUS
+INT 1
+RPAREN
 NEWLINE
 LET
 IDENT "groups"
@@ -2926,8 +2947,8 @@ IDENT "prefix"
 IDENT "kvs"
 NEWLINE
 MATCH
-IDENT "count"
-GT
+IDENT "last"
+GEQ
 IDENT "tableEntryLimit"
 INDENT
 UPPER "True"
@@ -2937,9 +2958,7 @@ UPPER "Err"
 INTERP_OPEN "too many [["
 IDENT "name"
 INTERP_MID "]] entries: index "
-IDENT "count"
-MINUS
-INT 1
+IDENT "last"
 INTERP_MID " is past the limit of "
 IDENT "tableEntryLimit"
 INTERP_END ""
@@ -2968,8 +2987,8 @@ RPAREN
 RPAREN
 LBRACKET
 INT 0
-DOTDOT
-IDENT "count"
+DOTDOT_EQ
+IDENT "last"
 RBRACKET
 RPAREN
 NEWLINE

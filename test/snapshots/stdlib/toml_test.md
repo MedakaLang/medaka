@@ -1,5 +1,5 @@
 # META
-source_lines=82
+source_lines=101
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the array-of-tables readers in `stdlib/toml.mdk`.
@@ -68,6 +68,25 @@ test "tableEntries refuses the first index past the limit" =
     (Err "too many [[gate]] entries: index 100000 is past the limit of 100000")
     (tableEntries "gate" (load "[gate.100000]\nname = \"x\""))
 
+test "tableEntries refuses the largest index an Int holds" =
+  expectEqual
+    (Err
+      "too many [[gate]] entries: index 4611686018427387903 is past the limit of 100000")
+    (tableEntries "gate" (load "[gate.4611686018427387903]\nname = \"x\""))
+
+test "tableCount of the largest index an Int holds does not overflow" =
+  expectEqual
+    4611686018427387903
+    (tableCount "gate" (load "[gate.4611686018427387903]\nname = \"x\""))
+
+test "tableEntry of the largest index an Int holds is present" =
+  expectEqual
+    (Some (Toml [("name", TString "x")]))
+    (tableEntry
+      "gate"
+      4611686018427387903
+      (load "[gate.4611686018427387903]\nname = \"x\""))
+
 test "tableEntry of a negative index is None" =
   expectEqual None (tableEntry "gate" (0 - 1) (load multi))
 
@@ -101,6 +120,9 @@ test "a table header with a no-break space inside the brackets keeps it" =
 (DTest false "tableEntries does not take a longer table name for a prefix" (EApp (EApp (EVar "expectOkThen") (ELam ((PVar "es")) (EApp (EApp (EVar "expectEqual") (ELit (LInt 1))) (EApp (EVar "length") (EVar "es"))))) (EApp (EApp (EVar "tableEntries") (ELit (LString "gate"))) (EApp (EVar "load") (ELit (LString "[[gate]]\nname = \"a\"\n[[gates]]\nname = \"b\""))))))
 (DTest false "tableEntries refuses an index past the limit, naming the table and the index" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "too many [[gate]] entries: index 5000000 is past the limit of 100000")))) (EApp (EApp (EVar "tableEntries") (ELit (LString "gate"))) (EApp (EVar "load") (ELit (LString "[gate.5000000]\nname = \"x\""))))))
 (DTest false "tableEntries refuses the first index past the limit" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "too many [[gate]] entries: index 100000 is past the limit of 100000")))) (EApp (EApp (EVar "tableEntries") (ELit (LString "gate"))) (EApp (EVar "load") (ELit (LString "[gate.100000]\nname = \"x\""))))))
+(DTest false "tableEntries refuses the largest index an Int holds" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "too many [[gate]] entries: index 4611686018427387903 is past the limit of 100000")))) (EApp (EApp (EVar "tableEntries") (ELit (LString "gate"))) (EApp (EVar "load") (ELit (LString "[gate.4611686018427387903]\nname = \"x\""))))))
+(DTest false "tableCount of the largest index an Int holds does not overflow" (EApp (EApp (EVar "expectEqual") (ELit (LInt 4611686018427387903))) (EApp (EApp (EVar "tableCount") (ELit (LString "gate"))) (EApp (EVar "load") (ELit (LString "[gate.4611686018427387903]\nname = \"x\""))))))
+(DTest false "tableEntry of the largest index an Int holds is present" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "TString") (ELit (LString "x")))))))) (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (ELit (LInt 4611686018427387903))) (EApp (EVar "load") (ELit (LString "[gate.4611686018427387903]\nname = \"x\""))))))
 (DTest false "tableEntry of a negative index is None" (EApp (EApp (EVar "expectEqual") (EVar "None")) (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EApp (EVar "load") (EVar "multi")))))
 (DTest false "tableEntry one past the last entry is None" (EApp (EApp (EVar "expectEqual") (EVar "None")) (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (ELit (LInt 3))) (EApp (EVar "load") (EVar "multi")))))
 (DTest false "tableEntry of the last entry is present" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LString "c")))) (EBinOp "|>" (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (ELit (LInt 2))) (EApp (EVar "load") (EVar "multi"))) (EApp (EVar "flatMap") (EApp (EVar "getString") (ELit (LString "name")))))))
@@ -123,6 +145,9 @@ test "a table header with a no-break space inside the brackets keeps it" =
 (DTest false "tableEntries does not take a longer table name for a prefix" (EApp (EApp (EVar "expectOkThen") (ELam ((PVar "es")) (EApp (EApp (EVar "expectEqual") (ELit (LInt 1))) (EApp (EMethodRef "length") (EVar "es"))))) (EApp (EApp (EVar "tableEntries") (ELit (LString "gate"))) (EApp (EVar "load") (ELit (LString "[[gate]]\nname = \"a\"\n[[gates]]\nname = \"b\""))))))
 (DTest false "tableEntries refuses an index past the limit, naming the table and the index" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "too many [[gate]] entries: index 5000000 is past the limit of 100000")))) (EApp (EApp (EVar "tableEntries") (ELit (LString "gate"))) (EApp (EVar "load") (ELit (LString "[gate.5000000]\nname = \"x\""))))))
 (DTest false "tableEntries refuses the first index past the limit" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "too many [[gate]] entries: index 100000 is past the limit of 100000")))) (EApp (EApp (EVar "tableEntries") (ELit (LString "gate"))) (EApp (EVar "load") (ELit (LString "[gate.100000]\nname = \"x\""))))))
+(DTest false "tableEntries refuses the largest index an Int holds" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "too many [[gate]] entries: index 4611686018427387903 is past the limit of 100000")))) (EApp (EApp (EVar "tableEntries") (ELit (LString "gate"))) (EApp (EVar "load") (ELit (LString "[gate.4611686018427387903]\nname = \"x\""))))))
+(DTest false "tableCount of the largest index an Int holds does not overflow" (EApp (EApp (EVar "expectEqual") (ELit (LInt 4611686018427387903))) (EApp (EApp (EVar "tableCount") (ELit (LString "gate"))) (EApp (EVar "load") (ELit (LString "[gate.4611686018427387903]\nname = \"x\""))))))
+(DTest false "tableEntry of the largest index an Int holds is present" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "TString") (ELit (LString "x")))))))) (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (ELit (LInt 4611686018427387903))) (EApp (EVar "load") (ELit (LString "[gate.4611686018427387903]\nname = \"x\""))))))
 (DTest false "tableEntry of a negative index is None" (EApp (EApp (EVar "expectEqual") (EVar "None")) (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EApp (EVar "load") (EVar "multi")))))
 (DTest false "tableEntry one past the last entry is None" (EApp (EApp (EVar "expectEqual") (EVar "None")) (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (ELit (LInt 3))) (EApp (EVar "load") (EVar "multi")))))
 (DTest false "tableEntry of the last entry is present" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LString "c")))) (EBinOp "|>" (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (ELit (LInt 2))) (EApp (EVar "load") (EVar "multi"))) (EApp (EDictApp "flatMap") (EApp (EVar "getString") (ELit (LString "name")))))))

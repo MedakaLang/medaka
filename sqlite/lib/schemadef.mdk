@@ -869,14 +869,15 @@ commaSepStep p (Some _) = defer
   xs <- commaSepRest p
   deferPure (x :: xs)
 
--- Trims ASCII whitespace only. SQLite converts text to a number after skipping ASCII whitespace
--- (its own isspace: space, tab, newline, vertical tab, form feed, return).
--- A non-ASCII space such as U+00A0 is data here, so `string.trim` (which strips
--- it) would be wrong.
+-- Trims code points 9-13 and 32 (tab through carriage return, and space) on
+-- purpose: a non-ASCII space such as U+00A0 and the ASCII separators 28-31
+-- stay data here, and `string.trim` (which strips them) would be wrong.
+-- SQLite converts text to a number after skipping its own isspace set (space,
+-- tab, newline, vertical tab, form feed, return), which is exactly 9-13 and 32.
 asciiTrim : String -> String
 -- The same few lines live in each package that needs a spec-bound trim; the
 -- packages share no module that could host them, and string must not export it.
--- lint-disable-next-line rule-stdlib-reimpl, rule-duplicate-body
+-- lint-disable-next-line rule-stdlib-reimpl, rule-duplicate-body -- an independence requirement: the packages share no module that could host a spec-bound trim, and string must not export one
 asciiTrim s =
   let chars = stringToChars s
   let n = arrayLength chars
@@ -885,7 +886,7 @@ asciiTrim s =
 
 asciiTrimFront : Array Char -> Int -> Int -> Int
 -- Part of asciiTrim, duplicated with it for the same reason.
--- lint-disable-next-line rule-duplicate-body
+-- lint-disable-next-line rule-duplicate-body -- an independence requirement: part of asciiTrim, copied with it because the packages share no module to host it
 asciiTrimFront chars i n
   | i >= n = n
   | charIsSpace chars[i] = asciiTrimFront chars (i + 1) n
@@ -893,7 +894,7 @@ asciiTrimFront chars i n
 
 asciiTrimBack : Array Char -> Int -> Int -> Int
 -- Part of asciiTrim, duplicated with it for the same reason.
--- lint-disable-next-line rule-duplicate-body
+-- lint-disable-next-line rule-duplicate-body -- an independence requirement: part of asciiTrim, copied with it because the packages share no module to host it
 asciiTrimBack chars i lo
   | i < lo = lo - 1
   | charIsSpace chars[i] = asciiTrimBack chars (i - 1) lo

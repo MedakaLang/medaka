@@ -223,22 +223,29 @@ export
 walkFilesSkipping : (String -> Bool) ->
   String ->
   <FileRead> Result String (List String)
-walkFilesSkipping skip root = walkFilesTo False (-1) skip root
+walkFilesSkipping skip root = walkFilesTo FilesOnly (-1) skip root
+
+-- What a walk reports: only the files, or the directories as well.
+data WalkKind = FilesOnly | FilesAndDirs
+
+listsDirs : WalkKind -> Bool
+listsDirs FilesOnly = False
+listsDirs FilesAndDirs = True
 
 -- The walk of `walkFilesSkipping`, descending at most `levels` directories
 -- below `root` when `levels` is positive and without limit when it is
 -- negative. Files in `root` are one level down, so a bound of 1 stats only
--- `root`'s own entries. With `dirs`, the result lists directories (each as
+-- `root`'s own entries. With `FilesAndDirs`, the result lists directories (each as
 -- its path plus a `/`, ahead of its contents) instead of files, and a
 -- directory at the last level is listed without being entered.
-walkFilesTo : Bool ->
+walkFilesTo : WalkKind ->
   Int ->
   (String -> Bool) ->
   String ->
   <FileRead> Result String (List String)
-walkFilesTo dirs levels skip root = match listDir root
+walkFilesTo kind levels skip root = match listDir root
   Err e => Err (namePath root e)
-  Ok names => walkDirSorted dirs levels skip root names
+  Ok names => walkDirSorted kind levels skip root names
 
 -- A directory's entries, kept when a file or a directory not skipped, each as
 -- (sort key, full path, is a directory). A directory's key ends in `/`, so
@@ -250,7 +257,7 @@ type WalkEntry = (String, String, Bool)
 -- pass as deep as one directory is wide: `run` has no tail calls, and a sort
 -- of the full result would overflow on a large tree.  Each directory's result
 -- is built forward by explicit `match` chains, as in `walkEntries`.
-collectEntries : Bool ->
+collectEntries : WalkKind ->
   Int ->
   (String -> Bool) ->
   String ->
@@ -258,42 +265,42 @@ collectEntries : Bool ->
   <FileRead> Result String (List WalkEntry)
 collectEntries _ _ _ _ [] = Ok []
 -- lint-disable-next-line rule-bind-chain-to-do
-collectEntries dirs levels skip root (name :: rest) =
+collectEntries kind levels skip root (name :: rest) =
   let full = joinPath root name
   match stat full
     Err e => Err (namePath full e)
     Ok st =>
       if st.isDir then
-        if skip full || levels == 1 && not dirs then
-          collectEntries dirs levels skip root rest
+        if skip full || levels == 1 && not (listsDirs kind) then
+          collectEntries kind levels skip root rest
         else
           map
             (("\{name}/", full, True) :: _)
-            (collectEntries dirs levels skip root rest)
+            (collectEntries kind levels skip root rest)
       else if st.isFile then
         map
           ((name, full, False) :: _)
-          (collectEntries dirs levels skip root rest)
+          (collectEntries kind levels skip root rest)
       else
-        collectEntries dirs levels skip root rest
+        collectEntries kind levels skip root rest
 
 -- A `do` chain would cost more frames per entry than the explicit `match`
 -- chains here, lowering the widest directory `run` can walk; the pass-through
 -- `Err` arms stay for that reason.
-walkDirSorted : Bool ->
+walkDirSorted : WalkKind ->
   Int ->
   (String -> Bool) ->
   String ->
   List String ->
   <FileRead> Result String (List String)
 -- lint-disable-next-line rule-bind-chain-to-do
-walkDirSorted dirs levels skip root names =
-  match collectEntries dirs levels skip root names
+walkDirSorted kind levels skip root names =
+  match collectEntries kind levels skip root names
     Err e => Err e
     Ok entries =>
-      walkSorted dirs levels skip (sortOn ((key, _, _) => key) entries)
+      walkSorted kind levels skip (sortOn ((key, _, _) => key) entries)
 
-walkSorted : Bool ->
+walkSorted : WalkKind ->
   Int ->
   (String -> Bool) ->
   List WalkEntry ->
@@ -302,21 +309,21 @@ walkSorted _ _ _ [] = Ok []
 -- A `do` chain per entry would cost more frames per entry than this `match`
 -- chain, lowering the widest directory `run` can walk.
 -- lint-disable-next-line rule-bind-chain-to-do
-walkSorted dirs levels skip ((_, full, isDirectory) :: rest) =
+walkSorted kind levels skip ((_, full, isDirectory) :: rest) =
   if isDirectory then
-    if dirs && levels == 1 then
-      map ("\{full}/" :: _) (walkSorted dirs levels skip rest)
+    if listsDirs kind && levels == 1 then
+      map ("\{full}/" :: _) (walkSorted kind levels skip rest)
     else match listDir full
       Err e => Err (namePath full e)
-      Ok subs => match walkDirSorted dirs (belowLevel levels) skip full subs
+      Ok subs => match walkDirSorted kind (belowLevel levels) skip full subs
         Err e => Err e
         Ok inner =>
-          let here = if dirs then "\{full}/" :: inner else inner
-          map (here ++ _) (walkSorted dirs levels skip rest)
-  else if dirs then
-    walkSorted dirs levels skip rest
+          let here = if listsDirs kind then "\{full}/" :: inner else inner
+          map (here ++ _) (walkSorted kind levels skip rest)
+  else if listsDirs kind then
+    walkSorted kind levels skip rest
   else
-    map (full :: _) (walkSorted dirs levels skip rest)
+    map (full :: _) (walkSorted kind levels skip rest)
 
 belowLevel : Int -> Int
 belowLevel levels = if levels < 0 then levels else levels - 1
@@ -364,13 +371,11 @@ glob pattern =
       map
         (paths =>
           own ++ filter (matchGlob pattern) (map (dropDotSlash prefix) paths))
-        (walkFilesTo dirs (globLevels prefix pattern) (globSkip
-          dirs
-          prefix
-          pattern) (if prefix == "" then
-          "."
-        else
-          prefix))
+        (walkFilesTo
+          (if dirs then FilesAndDirs else FilesOnly)
+          (globLevels prefix pattern)
+          (globSkip dirs prefix pattern)
+          (if prefix == "" then "." else prefix))
 
 -- How many directory levels below the prefix a match can lie: the pattern's
 -- segments past the prefix's, or unbounded (-1) when a segment is `**`.

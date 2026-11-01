@@ -86,7 +86,7 @@ the tree before you act on the item.
 1. **LLVM preamble goldens.** An extern whose LLVM lowering calls a C runtime
    function adds an `fn` row to `runtimeDecls` in `compiler/backend/llvm_preamble.mdk`,
    so every typed golden gains that `declare` line. Proof:
-   `ls test/llvm_fixtures_typed/*.ll.golden | wc -l` (63 at the time of writing).
+   `ls test/llvm_fixtures_typed/*.ll.golden | wc -l`.
 2. **Two seed re-mints, catalog row first.** The cold seed emitter panics on a
    `runtime.mdk` extern with no catalog row: `internal error: runtime extern '<name>'
    has no row in the extern catalog`. Add the `compiler/backend/extern_catalog.mdk` row
@@ -103,7 +103,7 @@ the tree before you act on the item.
 4. **The ABI row and count.** An extern gets a `CallableShape` row in
    `compiler/types/runtime_abi_data.mdk`, and the count pin in
    `compiler/types/runtime_abi_test.mdk` moves with it. Read the number from the
-   `expectEqual` line that counts `runtimeAbiRows`; do not copy a figure. Proof:
+   `expectEqual <N> (listLen projected)` line; do not copy a figure. Proof:
    `grep -n "listLen projected" compiler/types/runtime_abi_test.mdk`.
 5. **The grants row.** An extern taking a path gets a `runtimePathCount` row in
    `compiler/types/runtime_grants.mdk`. The default arm is `runtimePathCount _ = 0`.

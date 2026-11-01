@@ -1,15 +1,17 @@
 -- Whitespace trimming for network-facing values, where the grammar admits
 -- ASCII whitespace only.
 
--- Trims ASCII whitespace only. HTTP header values and URL query values (RFC 9110 section 5.6.3)
--- admit ASCII whitespace only.
--- A non-ASCII space such as U+00A0 is data here, so `string.trim` (which strips
--- it) would be wrong.
+-- Trims code points 9-13 and 32 (tab through carriage return, and space) on
+-- purpose: a non-ASCII space such as U+00A0 and the ASCII separators 28-31
+-- stay data here, and `string.trim` (which strips them) would be wrong.
+-- HTTP header values and URL query values (RFC 9110 section 5.6.3) delimit
+-- optional whitespace as SP and HTAB only; the wider 9-13 set is leniency
+-- toward stray newline-class controls.
 export
 asciiTrim : String -> String
 -- The same few lines live in each package that needs a spec-bound trim; the
 -- packages share no module that could host them, and string must not export it.
--- lint-disable-next-line rule-stdlib-reimpl, rule-duplicate-body
+-- lint-disable-next-line rule-stdlib-reimpl, rule-duplicate-body -- an independence requirement: the packages share no module that could host a spec-bound trim, and string must not export one
 asciiTrim s =
   let chars = stringToChars s
   let n = arrayLength chars
@@ -18,7 +20,7 @@ asciiTrim s =
 
 asciiTrimFront : Array Char -> Int -> Int -> Int
 -- Part of asciiTrim, duplicated with it for the same reason.
--- lint-disable-next-line rule-duplicate-body
+-- lint-disable-next-line rule-duplicate-body -- an independence requirement: part of asciiTrim, copied with it because the packages share no module to host it
 asciiTrimFront chars i n
   | i >= n = n
   | charIsSpace chars[i] = asciiTrimFront chars (i + 1) n
@@ -26,7 +28,7 @@ asciiTrimFront chars i n
 
 asciiTrimBack : Array Char -> Int -> Int -> Int
 -- Part of asciiTrim, duplicated with it for the same reason.
--- lint-disable-next-line rule-duplicate-body
+-- lint-disable-next-line rule-duplicate-body -- an independence requirement: part of asciiTrim, copied with it because the packages share no module to host it
 asciiTrimBack chars i lo
   | i < lo = lo - 1
   | charIsSpace chars[i] = asciiTrimBack chars (i - 1) lo

@@ -64,6 +64,25 @@ test "tableEntries refuses the first index past the limit" =
     (Err "too many [[gate]] entries: index 100000 is past the limit of 100000")
     (tableEntries "gate" (load "[gate.100000]\nname = \"x\""))
 
+test "tableEntries refuses the largest index an Int holds" =
+  expectEqual
+    (Err
+      "too many [[gate]] entries: index 4611686018427387903 is past the limit of 100000")
+    (tableEntries "gate" (load "[gate.4611686018427387903]\nname = \"x\""))
+
+test "tableCount of the largest index an Int holds does not overflow" =
+  expectEqual
+    4611686018427387903
+    (tableCount "gate" (load "[gate.4611686018427387903]\nname = \"x\""))
+
+test "tableEntry of the largest index an Int holds is present" =
+  expectEqual
+    (Some (Toml [("name", TString "x")]))
+    (tableEntry
+      "gate"
+      4611686018427387903
+      (load "[gate.4611686018427387903]\nname = \"x\""))
+
 test "tableEntry of a negative index is None" =
   expectEqual None (tableEntry "gate" (0 - 1) (load multi))
 

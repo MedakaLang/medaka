@@ -1,5 +1,5 @@
 # META
-source_lines=1182
+source_lines=1196
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -308,7 +308,7 @@ test "words splits on a no-break space and an ideographic space" =
   expectEqual ["a", "b", "c"] (words "a b　c")
 
 test "isSpace accepts exactly the 29 whitespace code points" =
-  expectEqual spaceCodePoints (acceptedCodePoints 1114111 [])
+  expectEqual spaceCodePoints acceptedCodePoints
 
 -- Python's whitespace set, written out from its definition.
 spaceCodePoints : List Int
@@ -317,13 +317,27 @@ spaceCodePoints =
     ++ [8192..=8202]
     ++ [8232, 8233, 8239, 8287, 12288]
 
--- The code points from `k` down to 0 that `isSpace` accepts, ascending.
-acceptedCodePoints : Int -> List Int -> List Int
-acceptedCodePoints k acc
-  | k < 0 = acc
-  | otherwise = match charFromCode k
-    Some c => acceptedCodePoints (k - 1) (if isSpace c then k :: acc else acc)
-    None => acceptedCodePoints (k - 1) acc
+-- Every code point 0..=1114111, swept in blocks so that no recursion is
+-- deeper than one block (the eval engine has no tail calls).
+acceptedCodePoints : List Int
+acceptedCodePoints = acceptedBlocks 271 []
+
+-- The accepted code points of blocks `b` down to 0, ascending, onto `acc`.
+acceptedBlocks : Int -> List Int -> List Int
+acceptedBlocks b acc
+  | b < 0 = acc
+  | otherwise =
+    acceptedBlocks
+      (b - 1)
+      (acceptedIn (b * 4096) (min (b * 4096 + 4095) 1114111) acc)
+
+-- The code points from `hi` down to `lo` that `isSpace` accepts, ascending.
+acceptedIn : Int -> Int -> List Int -> List Int
+acceptedIn lo hi acc
+  | hi < lo = acc
+  | otherwise = match charFromCode hi
+    Some c => acceptedIn lo (hi - 1) (if isSpace c then hi :: acc else acc)
+    None => acceptedIn lo (hi - 1) acc
 
 test "trim of a single space character" =
   expectEqual ("", "", "") (trim " ", trimLeft " ", trimRight " ")
@@ -1273,11 +1287,15 @@ test "indent with an empty prefix leaves the text alone" =
 (DTest false "trim treats tab, newline, carriage return and vertical tab as space" (EApp (EApp (EVar "expectEqual") (ELit (LString "x"))) (EApp (EVar "trim") (ELit (LString "\r\n\t\u{0b}\u{0c} x \r\n")))))
 (DTest false "trim removes a no-break space" (EApp (EApp (EVar "expectEqual") (ELit (LString "x"))) (EApp (EVar "trim") (ELit (LString " x")))))
 (DTest false "words splits on a no-break space and an ideographic space" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "c")))) (EApp (EVar "words") (ELit (LString "a b　c")))))
-(DTest false "isSpace accepts exactly the 29 whitespace code points" (EApp (EApp (EVar "expectEqual") (EVar "spaceCodePoints")) (EApp (EApp (EVar "acceptedCodePoints") (ELit (LInt 1114111))) (EListLit))))
+(DTest false "isSpace accepts exactly the 29 whitespace code points" (EApp (EApp (EVar "expectEqual") (EVar "spaceCodePoints")) (EVar "acceptedCodePoints")))
 (DTypeSig false "spaceCodePoints" (TyApp (TyCon "List") (TyCon "Int")))
 (DFunDef false "spaceCodePoints" () (EBinOp "++" (EBinOp "++" (EListLit (ELit (LInt 9)) (ELit (LInt 10)) (ELit (LInt 11)) (ELit (LInt 12)) (ELit (LInt 13)) (ELit (LInt 28)) (ELit (LInt 29)) (ELit (LInt 30)) (ELit (LInt 31)) (ELit (LInt 32)) (ELit (LInt 133)) (ELit (LInt 160)) (ELit (LInt 5760))) (ERangeList (ELit (LInt 8192)) (ELit (LInt 8202)) true)) (EListLit (ELit (LInt 8232)) (ELit (LInt 8233)) (ELit (LInt 8239)) (ELit (LInt 8287)) (ELit (LInt 12288)))))
-(DTypeSig false "acceptedCodePoints" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")))))
-(DFunDef false "acceptedCodePoints" ((PVar "k") (PVar "acc")) (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EVar "charFromCode") (EVar "k")) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EVar "acceptedCodePoints") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EIf (EApp (EVar "isSpace") (EVar "c")) (EBinOp "::" (EVar "k") (EVar "acc")) (EVar "acc")))) (arm (PCon "None") () (EApp (EApp (EVar "acceptedCodePoints") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "acceptedCodePoints" (TyApp (TyCon "List") (TyCon "Int")))
+(DFunDef false "acceptedCodePoints" () (EApp (EApp (EVar "acceptedBlocks") (ELit (LInt 271))) (EListLit)))
+(DTypeSig false "acceptedBlocks" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "acceptedBlocks" ((PVar "b") (PVar "acc")) (EIf (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EVar "acceptedBlocks") (EBinOp "-" (EVar "b") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "acceptedIn") (EBinOp "*" (EVar "b") (ELit (LInt 4096)))) (EApp (EApp (EVar "min") (EBinOp "+" (EBinOp "*" (EVar "b") (ELit (LInt 4096))) (ELit (LInt 4095)))) (ELit (LInt 1114111)))) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "acceptedIn" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int"))))))
+(DFunDef false "acceptedIn" ((PVar "lo") (PVar "hi") (PVar "acc")) (EIf (EBinOp "<" (EVar "hi") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EVar "charFromCode") (EVar "hi")) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EVar "acceptedIn") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EIf (EApp (EVar "isSpace") (EVar "c")) (EBinOp "::" (EVar "hi") (EVar "acc")) (EVar "acc")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "acceptedIn") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTest false "trim of a single space character" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "")) (ELit (LString "")))) (ETuple (EApp (EVar "trim") (ELit (LString " "))) (EApp (EVar "trimLeft") (ELit (LString " "))) (EApp (EVar "trimRight") (ELit (LString " "))))))
 (DTypeSig false "trimPool" (TyApp (TyCon "Array") (TyCon "Char")))
 (DFunDef false "trimPool" () (EApp (EVar "arrayFromList") (EApp (EApp (EVar "flatMap") (ELam ((PVar "k")) (EMatch (EApp (EVar "charFromCode") (EVar "k")) (arm (PCon "Some" (PVar "c")) () (EListLit (EVar "c"))) (arm (PCon "None") () (EListLit))))) (EListLit (ELit (LInt 97)) (ELit (LInt 98)) (ELit (LInt 9)) (ELit (LInt 10)) (ELit (LInt 11)) (ELit (LInt 13)) (ELit (LInt 28)) (ELit (LInt 31)) (ELit (LInt 32)) (ELit (LInt 133)) (ELit (LInt 160)) (ELit (LInt 1680)) (ELit (LInt 6158)) (ELit (LInt 8192)) (ELit (LInt 8202)) (ELit (LInt 8203)) (ELit (LInt 8232)) (ELit (LInt 8239)) (ELit (LInt 8287)) (ELit (LInt 12288)) (ELit (LInt 65279)) (ELit (LInt 173))))))
@@ -1575,11 +1593,15 @@ test "indent with an empty prefix leaves the text alone" =
 (DTest false "trim treats tab, newline, carriage return and vertical tab as space" (EApp (EApp (EVar "expectEqual") (ELit (LString "x"))) (EApp (EVar "trim") (ELit (LString "\r\n\t\u{0b}\u{0c} x \r\n")))))
 (DTest false "trim removes a no-break space" (EApp (EApp (EVar "expectEqual") (ELit (LString "x"))) (EApp (EVar "trim") (ELit (LString " x")))))
 (DTest false "words splits on a no-break space and an ideographic space" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "c")))) (EApp (EVar "words") (ELit (LString "a b　c")))))
-(DTest false "isSpace accepts exactly the 29 whitespace code points" (EApp (EApp (EVar "expectEqual") (EVar "spaceCodePoints")) (EApp (EApp (EVar "acceptedCodePoints") (ELit (LInt 1114111))) (EListLit))))
+(DTest false "isSpace accepts exactly the 29 whitespace code points" (EApp (EApp (EVar "expectEqual") (EVar "spaceCodePoints")) (EVar "acceptedCodePoints")))
 (DTypeSig false "spaceCodePoints" (TyApp (TyCon "List") (TyCon "Int")))
 (DFunDef false "spaceCodePoints" () (EBinOp "++" (EBinOp "++" (EListLit (ELit (LInt 9)) (ELit (LInt 10)) (ELit (LInt 11)) (ELit (LInt 12)) (ELit (LInt 13)) (ELit (LInt 28)) (ELit (LInt 29)) (ELit (LInt 30)) (ELit (LInt 31)) (ELit (LInt 32)) (ELit (LInt 133)) (ELit (LInt 160)) (ELit (LInt 5760))) (ERangeList (ELit (LInt 8192)) (ELit (LInt 8202)) true)) (EListLit (ELit (LInt 8232)) (ELit (LInt 8233)) (ELit (LInt 8239)) (ELit (LInt 8287)) (ELit (LInt 12288)))))
-(DTypeSig false "acceptedCodePoints" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")))))
-(DFunDef false "acceptedCodePoints" ((PVar "k") (PVar "acc")) (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EVar "charFromCode") (EVar "k")) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EVar "acceptedCodePoints") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EIf (EApp (EVar "isSpace") (EVar "c")) (EBinOp "::" (EVar "k") (EVar "acc")) (EVar "acc")))) (arm (PCon "None") () (EApp (EApp (EVar "acceptedCodePoints") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "acceptedCodePoints" (TyApp (TyCon "List") (TyCon "Int")))
+(DFunDef false "acceptedCodePoints" () (EApp (EApp (EVar "acceptedBlocks") (ELit (LInt 271))) (EListLit)))
+(DTypeSig false "acceptedBlocks" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "acceptedBlocks" ((PVar "b") (PVar "acc")) (EIf (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EVar "acceptedBlocks") (EBinOp "-" (EVar "b") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "acceptedIn") (EBinOp "*" (EVar "b") (ELit (LInt 4096)))) (EApp (EApp (EMethodRef "min") (EBinOp "+" (EBinOp "*" (EVar "b") (ELit (LInt 4096))) (ELit (LInt 4095)))) (ELit (LInt 1114111)))) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "acceptedIn" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int"))))))
+(DFunDef false "acceptedIn" ((PVar "lo") (PVar "hi") (PVar "acc")) (EIf (EBinOp "<" (EVar "hi") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EVar "charFromCode") (EVar "hi")) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EVar "acceptedIn") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EIf (EApp (EVar "isSpace") (EVar "c")) (EBinOp "::" (EVar "hi") (EVar "acc")) (EVar "acc")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "acceptedIn") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTest false "trim of a single space character" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "")) (ELit (LString "")))) (ETuple (EApp (EVar "trim") (ELit (LString " "))) (EApp (EVar "trimLeft") (ELit (LString " "))) (EApp (EVar "trimRight") (ELit (LString " "))))))
 (DTypeSig false "trimPool" (TyApp (TyCon "Array") (TyCon "Char")))
 (DFunDef false "trimPool" () (EApp (EVar "arrayFromList") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "k")) (EMatch (EApp (EVar "charFromCode") (EVar "k")) (arm (PCon "Some" (PVar "c")) () (EListLit (EVar "c"))) (arm (PCon "None") () (EListLit))))) (EListLit (ELit (LInt 97)) (ELit (LInt 98)) (ELit (LInt 9)) (ELit (LInt 10)) (ELit (LInt 11)) (ELit (LInt 13)) (ELit (LInt 28)) (ELit (LInt 31)) (ELit (LInt 32)) (ELit (LInt 133)) (ELit (LInt 160)) (ELit (LInt 1680)) (ELit (LInt 6158)) (ELit (LInt 8192)) (ELit (LInt 8202)) (ELit (LInt 8203)) (ELit (LInt 8232)) (ELit (LInt 8239)) (ELit (LInt 8287)) (ELit (LInt 12288)) (ELit (LInt 65279)) (ELit (LInt 173))))))

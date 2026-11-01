@@ -57,8 +57,10 @@ isSpace c
 
 Whether `c` is whitespace, as Python counts it.
 
-Besides the ASCII spaces this includes the no-break space, the Unicode
-space separators and the line and paragraph separators.
+The set has 29 members: the ASCII spaces (tab through carriage return and
+the space itself), the ASCII separators 28 through 31, the next-line
+control U+0085, the no-break space, the Unicode space separators and the
+line and paragraph separators.
 
 ```medaka
 > isSpace '\u{00A0}'

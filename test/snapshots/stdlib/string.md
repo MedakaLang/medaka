@@ -1,5 +1,5 @@
 # META
-source_lines=1161
+source_lines=1163
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -62,8 +62,10 @@ isAlphaNum c = charIsAlpha c || isDigit c
 
 {- | Whether `c` is whitespace, as Python counts it.
 
-   Besides the ASCII spaces this includes the no-break space, the Unicode
-   space separators and the line and paragraph separators.
+   The set has 29 members: the ASCII spaces (tab through carriage return and
+   the space itself), the ASCII separators 28 through 31, the next-line
+   control U+0085, the no-break space, the Unicode space separators and the
+   line and paragraph separators.
 
    > isSpace '\u{00A0}'
    True -}
