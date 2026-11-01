@@ -1,5 +1,5 @@
 # META
-source_lines=919
+source_lines=918
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_foreign: extern signatures checked against the FFI-ABI crossable set and the FFI-ABI rules on
@@ -62,7 +62,6 @@ import support.util.{
   anyList,
   contains,
   filterList,
-  isSome,
   listLen,
   lookupAssoc,
   reverseL,
@@ -933,7 +932,7 @@ declExternNames decls = map fst (directExternSigs decls)
 (DUse false (UseGroup ("types" "ffi_bindings") ((mem "FfiDiag" true) (mem "ffiCatalogNarrowMsg" false) (mem "ffiCatalogTailMsg" false) (mem "ffiDeclarationDiags" false) (mem "ffiNonCrossableMsg" false) (mem "ffiShadowMsg" false))))
 (DUse false (UseGroup ("list") ((mem "range" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "lookupAssocI" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DTypeSig true "externSigsToMap" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))))
@@ -1101,7 +1100,7 @@ declExternNames decls = map fst (directExternSigs decls)
 (DUse false (UseGroup ("types" "ffi_bindings") ((mem "FfiDiag" true) (mem "ffiCatalogNarrowMsg" false) (mem "ffiCatalogTailMsg" false) (mem "ffiDeclarationDiags" false) (mem "ffiNonCrossableMsg" false) (mem "ffiShadowMsg" false))))
 (DUse false (UseGroup ("list") ((mem "range" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "lookupAssocI" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DTypeSig true "externSigsToMap" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))))

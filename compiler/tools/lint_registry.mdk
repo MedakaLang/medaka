@@ -11,7 +11,7 @@ import tools.lint_rule_not_eq as NotEq
 import tools.lint_rule_double_reverse as DoubleReverse
 import tools.lint_rule_fuse_list_pipeline as FuseListPipeline
 import tools.lint_rule_self_shadow_extern as SelfShadowExtern
-import tools.lint_rule_internal_test_prelude_shadow as TestPreludeShadow
+import tools.lint_rule_prelude_shadow as PreludeShadow
 import tools.lint_rule_andthen_pure_map as AndThenPureMap
 import tools.lint_rule_missing_signature as MissingSignature
 import tools.lint_rule_match_to_map as MatchToMap
@@ -86,7 +86,7 @@ allRules = [
   RegexLiteral.rule,
   TestBoolLiteralEqual.rule,
   TestEqualInTrue.rule,
-  TestPreludeShadow.rule,
+  PreludeShadow.rule,
 ]
 
 -- ── the project registry ──────────────────────────────────────────────────────

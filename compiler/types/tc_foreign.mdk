@@ -58,7 +58,6 @@ import support.util.{
   anyList,
   contains,
   filterList,
-  isSome,
   listLen,
   lookupAssoc,
   reverseL,

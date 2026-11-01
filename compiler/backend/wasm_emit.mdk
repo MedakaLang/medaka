@@ -11343,10 +11343,6 @@ dedupGo (x :: xs) seen acc =
 fst : (a, b) -> a
 fst (x, _) = x
 
-isSome : Option a -> Bool
-isSome (Some _) = True
-isSome None = False
-
 -- inclusive-exclusive integer range [lo, hi) as a list.
 rangeList : Int -> Int -> List Int
 rangeList lo hi = if lo >= hi then [] else lo :: rangeList (lo + 1) hi

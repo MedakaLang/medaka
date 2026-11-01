@@ -132,7 +132,6 @@ import support.util.{
   dedup,
   filterList,
   isEmptyL,
-  isSome,
   listLen,
   lookupAssoc,
   isNonEmptyL,

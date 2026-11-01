@@ -184,8 +184,8 @@ ruleNameTestEqualInTrue : String
 ruleNameTestEqualInTrue = "rule-test-equal-in-true"
 
 export
-ruleNameTestPreludeShadow : String
-ruleNameTestPreludeShadow = "rule-test-prelude-shadow"
+ruleNamePreludeShadow : String
+ruleNamePreludeShadow = "rule-prelude-shadow"
 
 -- Is the target file part of the stdlib itself?  A `stdlib` path SEGMENT (so
 -- `stdlib/core.mdk`, `./stdlib/list.mdk`, `/abs/medaka/stdlib/map.mdk` all match,
@@ -1146,8 +1146,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameTestBoolLiteralEqual" () (ELit (LString "rule-test-bool-literal-equal")))
 (DTypeSig true "ruleNameTestEqualInTrue" (TyCon "String"))
 (DFunDef false "ruleNameTestEqualInTrue" () (ELit (LString "rule-test-equal-in-true")))
-(DTypeSig true "ruleNameTestPreludeShadow" (TyCon "String"))
-(DFunDef false "ruleNameTestPreludeShadow" () (ELit (LString "rule-test-prelude-shadow")))
+(DTypeSig true "ruleNamePreludeShadow" (TyCon "String"))
+(DFunDef false "ruleNamePreludeShadow" () (ELit (LString "rule-prelude-shadow")))
 (DTypeSig true "isStdlibPath" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isStdlibPath" ((PVar "path")) (EApp (EApp (EVar "contains") (ELit (LString "stdlib"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path"))))
 (DTypeSig true "stdlibModuleOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -1495,8 +1495,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameTestBoolLiteralEqual" () (ELit (LString "rule-test-bool-literal-equal")))
 (DTypeSig true "ruleNameTestEqualInTrue" (TyCon "String"))
 (DFunDef false "ruleNameTestEqualInTrue" () (ELit (LString "rule-test-equal-in-true")))
-(DTypeSig true "ruleNameTestPreludeShadow" (TyCon "String"))
-(DFunDef false "ruleNameTestPreludeShadow" () (ELit (LString "rule-test-prelude-shadow")))
+(DTypeSig true "ruleNamePreludeShadow" (TyCon "String"))
+(DFunDef false "ruleNamePreludeShadow" () (ELit (LString "rule-prelude-shadow")))
 (DTypeSig true "isStdlibPath" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isStdlibPath" ((PVar "path")) (EApp (EApp (EVar "contains") (ELit (LString "stdlib"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path"))))
 (DTypeSig true "stdlibModuleOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))

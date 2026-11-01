@@ -1,5 +1,5 @@
 # META
-source_lines=4497
+source_lines=4496
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -123,7 +123,6 @@ import support.util.{
   dedup,
   filterList,
   isEmptyL,
-  isSome,
   listLen,
   reverseL,
   selfBinding,
@@ -4513,7 +4512,7 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "last" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "reverseL" false) (mem "selfBinding" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "listLen" false) (mem "reverseL" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "MultiRegistry" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "GoalOrigin" true))))
@@ -5290,7 +5289,7 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "last" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "reverseL" false) (mem "selfBinding" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "listLen" false) (mem "reverseL" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "MultiRegistry" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "GoalOrigin" true))))

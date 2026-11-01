@@ -1,5 +1,5 @@
 # META
-source_lines=2226
+source_lines=2225
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_groups: binding-group analysis and the generalization policy at a binding boundary: the
@@ -177,7 +177,6 @@ import support.util.{
   dedupBy,
   filterList,
   isEmptyL,
-  isSome,
   joinWith,
   lenKey,
   listLen,
@@ -2254,7 +2253,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "effect_solver") ((mem "ScopeRoles" true))))
 (DUse false (UseGroup ("types" "superclass") ((mem "SuperNode" true) (mem "lookupPos" false) (mem "mapAll" false) (mem "superClosure" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "exprSpanLoc" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false) (mem "regKeyRender" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
@@ -2792,7 +2791,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "effect_solver") ((mem "ScopeRoles" true))))
 (DUse false (UseGroup ("types" "superclass") ((mem "SuperNode" true) (mem "lookupPos" false) (mem "mapAll" false) (mem "superClosure" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "exprSpanLoc" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false) (mem "regKeyRender" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))

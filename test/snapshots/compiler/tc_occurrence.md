@@ -1,5 +1,5 @@
 # META
-source_lines=3827
+source_lines=3826
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_occurrence: method and literal occurrence inference, operator dispatch-site recording
@@ -272,7 +272,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   listLen,
   lookupAssoc,
   reverseL,
@@ -3851,7 +3850,7 @@ methodReturnSlotOwnershipProbe _ =
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "Inner" true) (mem "innerNone" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "SolverEvidence" true) (mem "PrerequisiteEvidence" true) (mem "RequestInstanceId" true) (mem "ScopeId" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("types" "chain_key") ((mem "constrainedSigName" false))))
 (DUse false (UseGroup ("list") ((mem "get" false) (mem "reverse" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -4393,7 +4392,7 @@ methodReturnSlotOwnershipProbe _ =
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "Inner" true) (mem "innerNone" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "SolverEvidence" true) (mem "PrerequisiteEvidence" true) (mem "RequestInstanceId" true) (mem "ScopeId" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("types" "chain_key") ((mem "constrainedSigName" false))))
 (DUse false (UseGroup ("list") ((mem "get" false) (mem "reverse" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))

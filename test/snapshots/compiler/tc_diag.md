@@ -33,7 +33,7 @@ import types.tc_types.{
 import map as IdMap
 export import types.publish.{tcCode, TcDiag(..), tcLoc, tcMsg}
 import support.ordmap.{omHasKey, omInsert, omLookup, OrdMap}
-import support.util.{anyList, filterList, isSome}
+import support.util.{anyList, filterList}
 import types.registry.{HeadKey(..)}
 import types.tc_diag_text.{
   derivableIface,
@@ -435,7 +435,7 @@ pushNoImplError mctx iface loc args = match firstTupleCallHint mctx args
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse true (UseGroup ("types" "publish") ((mem "tcCode" false) (mem "TcDiag" true) (mem "tcLoc" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false) (mem "isSome" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "derivableIface" false) (mem "findTupleCand" false) (mem "locKey" false) (mem "msgAtKey" false) (mem "noImplAdvice" false) (mem "noImplFoundMsg" false) (mem "writtenDiag" false))))
 (DTypeSig true "typeErrorsArmed" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Bool"))))
@@ -497,7 +497,7 @@ pushNoImplError mctx iface loc args = match firstTupleCallHint mctx args
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse true (UseGroup ("types" "publish") ((mem "tcCode" false) (mem "TcDiag" true) (mem "tcLoc" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false) (mem "isSome" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "derivableIface" false) (mem "findTupleCand" false) (mem "locKey" false) (mem "msgAtKey" false) (mem "noImplAdvice" false) (mem "noImplFoundMsg" false) (mem "writtenDiag" false))))
 (DTypeSig true "typeErrorsArmed" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Bool"))))

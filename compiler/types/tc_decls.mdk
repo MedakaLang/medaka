@@ -205,7 +205,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   listLen,
   lookupAssoc,
   reverseL,

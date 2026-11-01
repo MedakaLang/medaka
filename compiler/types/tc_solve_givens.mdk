@@ -52,7 +52,7 @@ import types.evidence.{EvidenceBinderId(..), ScopeId(..), SolverEvidence(..)}
 import types.repr.{IfaceRef(..), Mono(..), lookupAssocI, normalize}
 import support.ordmap.{omInsert, omLookup, OrdMap}
 import types.superclass.{SuperNode(..), lookupPos, mapAll, superClosure}
-import support.util.{allList, isSome, listLen, lookupAssoc, orElseOpt}
+import support.util.{allList, listLen, lookupAssoc, orElseOpt}
 import list.{drop, elemIndex}
 import string.{join}
 import types.registry.{regKeyOfTab, regKeyRender}

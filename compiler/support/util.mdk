@@ -395,16 +395,6 @@ schemeLineNameGo l i n
   | stringSlice i (i + 3) l == " : " = Some (stringSlice 0 i l)
   | otherwise = schemeLineNameGo l (i + 1) n
 
--- NOTE (#243): this `isSome` duplicates the prelude's `isSome` (stdlib/core.mdk)
--- byte-identically and is a deletion candidate — BUT the LOCKED typecheck.mdk
--- imports it by name (`import support.util.{… isSome …}`, typecheck.mdk:94), so
--- deleting it here breaks that import.  Blocked on the ws:typecheck arc (#160)
--- dropping `isSome` from typecheck.mdk's import list first; then delete this.
-export
-isSome : Option a -> Bool
-isSome (Some _) = True
-isSome None = False
-
 export
 mapOption : (a -> b) -> Option a -> Option b
 mapOption _ None = None

@@ -404,7 +404,7 @@ buildDetailsFrom renderedResult synthResults examples =
   let details = detailsGoFrom renderedResult synthResults examples
   let passed = countResult isPass details
   let failed = countResult isFail details
-  let errors = countResult isErr details
+  let errors = countResult isErrored details
   RunResult (listLen examples) passed failed errors details
 
 detailsGoFrom : Result String (List (Result String String)) ->
@@ -499,9 +499,9 @@ isFail : ExResult -> Bool
 isFail (Fail _ _ _) = True
 isFail _ = False
 
-isErr : ExResult -> Bool
-isErr (Errored _) = True
-isErr _ = False
+isErrored : ExResult -> Bool
+isErrored (Errored _) = True
+isErrored _ = False
 
 countResult : (ExResult -> Bool) -> List (Example, ExResult) -> Int
 countResult _ [] = 0

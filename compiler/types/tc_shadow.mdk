@@ -127,7 +127,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   joinWith,
   listLen,
   lookupAssoc,

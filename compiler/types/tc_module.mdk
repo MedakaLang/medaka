@@ -224,7 +224,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   joinWith,
   lenKey,
   listLen,

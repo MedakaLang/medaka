@@ -42,7 +42,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-regex-literal`](#rule-regex-literal) | universal | correctness | gated | not-fixable | file |
 | [`rule-test-bool-literal-equal`](#rule-test-bool-literal-equal) | internal | style | gated | fixable | file |
 | [`rule-test-equal-in-true`](#rule-test-equal-in-true) | internal | style | gated | fixable | file |
-| [`rule-test-prelude-shadow`](#rule-test-prelude-shadow) | internal | suspicious | gated | not-fixable | file |
+| [`rule-prelude-shadow`](#rule-prelude-shadow) | universal | suspicious | gated | not-fixable | file |
 
 ## rule-match-on-param
 
@@ -557,15 +557,15 @@ After:
   expectEqual a b
 ```
 
-## rule-test-prelude-shadow
+## rule-prelude-shadow
 
-a `*_test.mdk` file declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)
+a module declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)
 
-A `*_test.mdk` file that declares a top-level `isOk`, `isErr`, `isSome` or `isNone` shadows the prelude function of that name for the rest of the file. Suggest-only; this guards the repository test-helper convention.
+A module that declares a top-level `isOk`, `isErr`, `isSome` or `isNone` shadows the prelude function of that name for the rest of the file, while every other module keeps calling the prelude one. Suggest-only. Delete the local copy when it behaves like the prelude one; otherwise rename it to say what it tests.
 
 ```
 Before:
-  isOk r = ...   -- in foo_test.mdk
+  isSome o = o == 1
 After:
-  rename the helper
+  isOne o = o == 1
 ```

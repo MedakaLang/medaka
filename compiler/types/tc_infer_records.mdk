@@ -83,7 +83,6 @@ import support.util.{
   editDistance,
   filterList,
   isEmptyL,
-  isSome,
   listLen,
   orElseOpt,
   sortUniqS,

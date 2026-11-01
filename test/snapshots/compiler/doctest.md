@@ -408,7 +408,7 @@ buildDetailsFrom renderedResult synthResults examples =
   let details = detailsGoFrom renderedResult synthResults examples
   let passed = countResult isPass details
   let failed = countResult isFail details
-  let errors = countResult isErr details
+  let errors = countResult isErrored details
   RunResult (listLen examples) passed failed errors details
 
 detailsGoFrom : Result String (List (Result String String)) ->
@@ -503,9 +503,9 @@ isFail : ExResult -> Bool
 isFail (Fail _ _ _) = True
 isFail _ = False
 
-isErr : ExResult -> Bool
-isErr (Errored _) = True
-isErr _ = False
+isErrored : ExResult -> Bool
+isErrored (Errored _) = True
+isErrored _ = False
 
 countResult : (ExResult -> Bool) -> List (Example, ExResult) -> Int
 countResult _ [] = 0
@@ -632,7 +632,7 @@ isUse _ = False
 (DFunDef false "concatOkDecls" ((PCons (PCon "Ok" (PVar "ds")) (PVar "rest"))) (EBinOp "++" (EVar "ds") (EApp (EVar "concatOkDecls") (EVar "rest"))))
 (DFunDef false "concatOkDecls" ((PCons (PCon "Err" PWild) (PVar "rest"))) (EApp (EVar "concatOkDecls") (EVar "rest")))
 (DTypeSig true "buildDetailsFrom" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyCon "RunResult")))))
-(DFunDef false "buildDetailsFrom" ((PVar "renderedResult") (PVar "synthResults") (PVar "examples")) (EBlock (DoLet false false (PVar "details") (EApp (EApp (EApp (EVar "detailsGoFrom") (EVar "renderedResult")) (EVar "synthResults")) (EVar "examples"))) (DoLet false false (PVar "passed") (EApp (EApp (EVar "countResult") (EVar "isPass")) (EVar "details"))) (DoLet false false (PVar "failed") (EApp (EApp (EVar "countResult") (EVar "isFail")) (EVar "details"))) (DoLet false false (PVar "errors") (EApp (EApp (EVar "countResult") (EVar "isErr")) (EVar "details"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "RunResult") (EApp (EVar "listLen") (EVar "examples"))) (EVar "passed")) (EVar "failed")) (EVar "errors")) (EVar "details")))))
+(DFunDef false "buildDetailsFrom" ((PVar "renderedResult") (PVar "synthResults") (PVar "examples")) (EBlock (DoLet false false (PVar "details") (EApp (EApp (EApp (EVar "detailsGoFrom") (EVar "renderedResult")) (EVar "synthResults")) (EVar "examples"))) (DoLet false false (PVar "passed") (EApp (EApp (EVar "countResult") (EVar "isPass")) (EVar "details"))) (DoLet false false (PVar "failed") (EApp (EApp (EVar "countResult") (EVar "isFail")) (EVar "details"))) (DoLet false false (PVar "errors") (EApp (EApp (EVar "countResult") (EVar "isErrored")) (EVar "details"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "RunResult") (EApp (EVar "listLen") (EVar "examples"))) (EVar "passed")) (EVar "failed")) (EVar "errors")) (EVar "details")))))
 (DTypeSig false "detailsGoFrom" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))))
 (DFunDef false "detailsGoFrom" ((PCon "Err" (PVar "msg")) (PVar "synthResults") (PVar "examples")) (EApp (EApp (EApp (EVar "detailsGoErr") (EVar "msg")) (EVar "synthResults")) (EVar "examples")))
 (DFunDef false "detailsGoFrom" ((PCon "Ok" (PVar "rendered")) (PVar "synthResults") (PVar "examples")) (EApp (EApp (EApp (EVar "detailsGoOk") (EVar "rendered")) (EVar "synthResults")) (EVar "examples")))
@@ -664,9 +664,9 @@ isUse _ = False
 (DTypeSig false "isFail" (TyFun (TyCon "ExResult") (TyCon "Bool")))
 (DFunDef false "isFail" ((PCon "Fail" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isFail" (PWild) (EVar "False"))
-(DTypeSig false "isErr" (TyFun (TyCon "ExResult") (TyCon "Bool")))
-(DFunDef false "isErr" ((PCon "Errored" PWild)) (EVar "True"))
-(DFunDef false "isErr" (PWild) (EVar "False"))
+(DTypeSig false "isErrored" (TyFun (TyCon "ExResult") (TyCon "Bool")))
+(DFunDef false "isErrored" ((PCon "Errored" PWild)) (EVar "True"))
+(DFunDef false "isErrored" (PWild) (EVar "False"))
 (DTypeSig false "countResult" (TyFun (TyFun (TyCon "ExResult") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult"))) (TyCon "Int"))))
 (DFunDef false "countResult" (PWild (PList)) (ELit (LInt 0)))
 (DFunDef false "countResult" ((PVar "p") (PCons (PTuple PWild (PVar "r")) (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "r")) (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "countResult") (EVar "p")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "countResult") (EVar "p")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -786,7 +786,7 @@ isUse _ = False
 (DFunDef false "concatOkDecls" ((PCons (PCon "Ok" (PVar "ds")) (PVar "rest"))) (EBinOp "++" (EVar "ds") (EApp (EVar "concatOkDecls") (EVar "rest"))))
 (DFunDef false "concatOkDecls" ((PCons (PCon "Err" PWild) (PVar "rest"))) (EApp (EVar "concatOkDecls") (EVar "rest")))
 (DTypeSig true "buildDetailsFrom" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyCon "RunResult")))))
-(DFunDef false "buildDetailsFrom" ((PVar "renderedResult") (PVar "synthResults") (PVar "examples")) (EBlock (DoLet false false (PVar "details") (EApp (EApp (EApp (EVar "detailsGoFrom") (EVar "renderedResult")) (EVar "synthResults")) (EVar "examples"))) (DoLet false false (PVar "passed") (EApp (EApp (EVar "countResult") (EVar "isPass")) (EVar "details"))) (DoLet false false (PVar "failed") (EApp (EApp (EVar "countResult") (EVar "isFail")) (EVar "details"))) (DoLet false false (PVar "errors") (EApp (EApp (EVar "countResult") (EVar "isErr")) (EVar "details"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "RunResult") (EApp (EVar "listLen") (EVar "examples"))) (EVar "passed")) (EVar "failed")) (EVar "errors")) (EVar "details")))))
+(DFunDef false "buildDetailsFrom" ((PVar "renderedResult") (PVar "synthResults") (PVar "examples")) (EBlock (DoLet false false (PVar "details") (EApp (EApp (EApp (EVar "detailsGoFrom") (EVar "renderedResult")) (EVar "synthResults")) (EVar "examples"))) (DoLet false false (PVar "passed") (EApp (EApp (EVar "countResult") (EVar "isPass")) (EVar "details"))) (DoLet false false (PVar "failed") (EApp (EApp (EVar "countResult") (EVar "isFail")) (EVar "details"))) (DoLet false false (PVar "errors") (EApp (EApp (EVar "countResult") (EVar "isErrored")) (EVar "details"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "RunResult") (EApp (EVar "listLen") (EVar "examples"))) (EVar "passed")) (EVar "failed")) (EVar "errors")) (EVar "details")))))
 (DTypeSig false "detailsGoFrom" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))))
 (DFunDef false "detailsGoFrom" ((PCon "Err" (PVar "msg")) (PVar "synthResults") (PVar "examples")) (EApp (EApp (EApp (EVar "detailsGoErr") (EVar "msg")) (EVar "synthResults")) (EVar "examples")))
 (DFunDef false "detailsGoFrom" ((PCon "Ok" (PVar "rendered")) (PVar "synthResults") (PVar "examples")) (EApp (EApp (EApp (EVar "detailsGoOk") (EVar "rendered")) (EVar "synthResults")) (EVar "examples")))
@@ -818,9 +818,9 @@ isUse _ = False
 (DTypeSig false "isFail" (TyFun (TyCon "ExResult") (TyCon "Bool")))
 (DFunDef false "isFail" ((PCon "Fail" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isFail" (PWild) (EVar "False"))
-(DTypeSig false "isErr" (TyFun (TyCon "ExResult") (TyCon "Bool")))
-(DFunDef false "isErr" ((PCon "Errored" PWild)) (EVar "True"))
-(DFunDef false "isErr" (PWild) (EVar "False"))
+(DTypeSig false "isErrored" (TyFun (TyCon "ExResult") (TyCon "Bool")))
+(DFunDef false "isErrored" ((PCon "Errored" PWild)) (EVar "True"))
+(DFunDef false "isErrored" (PWild) (EVar "False"))
 (DTypeSig false "countResult" (TyFun (TyFun (TyCon "ExResult") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult"))) (TyCon "Int"))))
 (DFunDef false "countResult" (PWild (PList)) (ELit (LInt 0)))
 (DFunDef false "countResult" ((PVar "p") (PCons (PTuple PWild (PVar "r")) (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "r")) (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "countResult") (EVar "p")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "countResult") (EVar "p")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

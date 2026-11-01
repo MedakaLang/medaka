@@ -41,7 +41,7 @@ import frontend.ast.{
 import support.ordmap.{
   omEmpty, omFromNames, omHasKey, omInsert, omLookup, OrdMap
 }
-import support.util.{anyList, filterList, isSome, listLen, reverseL, zipL}
+import support.util.{anyList, filterList, listLen, reverseL, zipL}
 import list.{indexed, sortOn}
 import types.invocation_basis.{paramPolaritiesIn}
 import support.scc.{tarjanSCCs}
@@ -600,7 +600,7 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DUse false (UseGroup ("types" "tc_unify") ((mem "polarityAt" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "DataVis" true) (mem "Decl" true) (mem "Field" true) (mem "KindAnn" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Variant" true) (mem "tabKeyEq" false) (mem "tabKeyName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false) (mem "isSome" false) (mem "listLen" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false) (mem "listLen" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("list") ((mem "indexed" false) (mem "sortOn" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "paramPolaritiesIn" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
@@ -742,7 +742,7 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DUse false (UseGroup ("types" "tc_unify") ((mem "polarityAt" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "DataVis" true) (mem "Decl" true) (mem "Field" true) (mem "KindAnn" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Variant" true) (mem "tabKeyEq" false) (mem "tabKeyName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false) (mem "isSome" false) (mem "listLen" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false) (mem "listLen" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("list") ((mem "indexed" false) (mem "sortOn" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "paramPolaritiesIn" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))

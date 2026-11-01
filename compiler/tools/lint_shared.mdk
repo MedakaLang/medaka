@@ -180,8 +180,8 @@ ruleNameTestEqualInTrue : String
 ruleNameTestEqualInTrue = "rule-test-equal-in-true"
 
 export
-ruleNameTestPreludeShadow : String
-ruleNameTestPreludeShadow = "rule-test-prelude-shadow"
+ruleNamePreludeShadow : String
+ruleNamePreludeShadow = "rule-prelude-shadow"
 
 -- Is the target file part of the stdlib itself?  A `stdlib` path SEGMENT (so
 -- `stdlib/core.mdk`, `./stdlib/list.mdk`, `/abs/medaka/stdlib/map.mdk` all match,

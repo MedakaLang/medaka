@@ -1,5 +1,5 @@
 # META
-source_lines=3741
+source_lines=3740
 stages=DESUGAR,MARK
 # SOURCE
 -- typecheck: the entry module: the graph drive (`driveGraphK`), the chain and core memos and
@@ -238,7 +238,6 @@ import support.util.{
   filterList,
   anyList,
   isNonEmptyL,
-  isSome,
   dedup,
   lenKey,
   sortUniqS,
@@ -3767,7 +3766,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "take" false) (mem "last" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "filterList" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "dedup" false) (mem "lenKey" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "filterList" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false) (mem "lenKey" false) (mem "sortUniqS" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "identKey" false) (mem "regKeyOfTab" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "validateDispositionTable" false))))
@@ -4199,7 +4198,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "take" false) (mem "last" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "filterList" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "dedup" false) (mem "lenKey" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "filterList" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false) (mem "lenKey" false) (mem "sortUniqS" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "identKey" false) (mem "regKeyOfTab" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "validateDispositionTable" false))))

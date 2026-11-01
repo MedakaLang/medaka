@@ -1,5 +1,5 @@
 # META
-source_lines=1747
+source_lines=1746
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_walk.mdk — the lint runner: `lintProgram*` and the one
@@ -81,7 +81,6 @@ import support.util.{
   startsWith,
   endsWith,
   dedup,
-  isSome,
 }
 import hash_map.{HashMap, new, get, setInPlace, has}
 import list.{take, drop, indexed, nub}
@@ -1758,7 +1757,7 @@ appendIfPath file diag (path, src, diags) =
 (DUse false (UseGroup ("tools" "lint_cache") ((mem "ruleSetStamp" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" false) (mem "ProjectIndex" false) (mem "combineDigests" false) (mem "emptyProjectIndex" false) (mem "fileRows" false) (mem "stdlibShardDir" false) (mem "projectShardDir" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "DiagId" true) (mem "ppSeverity" false) (mem "readFileSafe" false) (mem "parseErrDiag" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "endsWith" false) (mem "dedup" false) (mem "isSome" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "endsWith" false) (mem "dedup" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false))))
 (DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false) (mem "indexed" false) (mem "nub" false))))
 (DUse false (UseGroup ("string") ((mem "indexOf" false) (mem "lines" false))))
@@ -2159,7 +2158,7 @@ appendIfPath file diag (path, src, diags) =
 (DUse false (UseGroup ("tools" "lint_cache") ((mem "ruleSetStamp" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" false) (mem "ProjectIndex" false) (mem "combineDigests" false) (mem "emptyProjectIndex" false) (mem "fileRows" false) (mem "stdlibShardDir" false) (mem "projectShardDir" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "DiagId" true) (mem "ppSeverity" false) (mem "readFileSafe" false) (mem "parseErrDiag" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "endsWith" false) (mem "dedup" false) (mem "isSome" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "endsWith" false) (mem "dedup" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false))))
 (DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false) (mem "indexed" false) (mem "nub" false))))
 (DUse false (UseGroup ("string") ((mem "indexOf" false) (mem "lines" false))))

@@ -234,7 +234,6 @@ import support.util.{
   filterList,
   anyList,
   isNonEmptyL,
-  isSome,
   dedup,
   lenKey,
   sortUniqS,

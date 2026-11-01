@@ -1,5 +1,5 @@
 # META
-source_lines=1775
+source_lines=1774
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_scope: name visibility across imports, read off the envelopes: the method-scope ladder (the
@@ -102,7 +102,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   joinDot,
   joinWith,
   listLen,
@@ -1786,7 +1785,7 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "ambigReexportHelp" false) (mem "ambigReexportMsg" false) (mem "backticked" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "Decl" true) (mem "Ident" true) (mem "Loc" true) (mem "Ns" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "qualifiedLocal" false) (mem "useMemberAlias" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" true) (mem "VecObl" true))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinDot" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinDot" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "sortUniqS" false))))
 (DUse false (UseGroup ("string") ((mem "endsWith" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "Registry" false) (mem "spCollided" false) (mem "SpellingPop" false) (mem "spInsert" false) (mem "spRows" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "OrdMap" false))))
@@ -2098,7 +2097,7 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "ambigReexportHelp" false) (mem "ambigReexportMsg" false) (mem "backticked" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "Decl" true) (mem "Ident" true) (mem "Loc" true) (mem "Ns" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "qualifiedLocal" false) (mem "useMemberAlias" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" true) (mem "VecObl" true))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinDot" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinDot" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "sortUniqS" false))))
 (DUse false (UseGroup ("string") ((mem "endsWith" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "Registry" false) (mem "spCollided" false) (mem "SpellingPop" false) (mem "spInsert" false) (mem "spRows" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "OrdMap" false))))

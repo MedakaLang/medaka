@@ -1,5 +1,5 @@
 # META
-source_lines=2402
+source_lines=2401
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve_entail: entailment as routes: the judgment `P ⊢ π ⇝ e` at a site (`entail` and its
@@ -136,7 +136,6 @@ import support.util.{
   dedup,
   filterList,
   isEmptyL,
-  isSome,
   listLen,
   lookupAssoc,
   isNonEmptyL,
@@ -2421,7 +2420,7 @@ implHeadMatchesArgs mctx tys args = isSome (implHeadSubst mctx tys args)
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Require" true) (mem "Route" true) (mem "Super" true) (mem "Ty" true) (mem "isBoxed64Head" false) (mem "isFixedIntHead" false) (mem "isTaggedFixedHead" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "isNonEmptyL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("types" "runtime_ops") ((mem "arithmeticTag" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseGroup ("types" "superclass") ((mem "lookupPos" false) (mem "mapAll" false) (mem "superIfaceRef" false))))
@@ -2719,7 +2718,7 @@ implHeadMatchesArgs mctx tys args = isSome (implHeadSubst mctx tys args)
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Require" true) (mem "Route" true) (mem "Super" true) (mem "Ty" true) (mem "isBoxed64Head" false) (mem "isFixedIntHead" false) (mem "isTaggedFixedHead" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "isNonEmptyL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("types" "runtime_ops") ((mem "arithmeticTag" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseGroup ("types" "superclass") ((mem "lookupPos" false) (mem "mapAll" false) (mem "superIfaceRef" false))))

@@ -1,5 +1,5 @@
 # META
-source_lines=1277
+source_lines=1276
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_infer_records: the helpers the record arms call: field-owner resolution, field-shape
@@ -87,7 +87,6 @@ import support.util.{
   editDistance,
   filterList,
   isEmptyL,
-  isSome,
   listLen,
   orElseOpt,
   sortUniqS,
@@ -1295,7 +1294,7 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedupBy" false) (mem "editDistance" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "orElseOpt" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedupBy" false) (mem "editDistance" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "listLen" false) (mem "orElseOpt" false) (mem "sortUniqS" false))))
 (DUse false (UseGroup ("list") ((mem "elemIndex" false) (mem "head" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "isReservedCtor" false) (mem "mangledName" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "oGetCtors" false))))
@@ -1479,7 +1478,7 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedupBy" false) (mem "editDistance" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "orElseOpt" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedupBy" false) (mem "editDistance" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "listLen" false) (mem "orElseOpt" false) (mem "sortUniqS" false))))
 (DUse false (UseGroup ("list") ((mem "elemIndex" false) (mem "head" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "isReservedCtor" false) (mem "mangledName" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "oGetCtors" false))))

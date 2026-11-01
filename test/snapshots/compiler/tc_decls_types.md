@@ -1,5 +1,5 @@
 # META
-source_lines=2277
+source_lines=2276
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls_types: the written-type layer of declaration analysis: AST types to `Mono`
@@ -176,7 +176,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   listLen,
   lookupAssoc,
   reverseL,
@@ -2294,7 +2293,7 @@ spliceRowTails sub (n :: rest) =
 (DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "ExternDecl" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "KindAnn" true) (mem "Loc" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Variant" true) (mem "authTermNames" false) (mem "authTermsSurface" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "lookupTab" false) (mem "mapTyFull" false) (mem "orElseLoc" false) (mem "patternMark" false) (mem "qualifierSource" false) (mem "tabKeyEq" false) (mem "variantName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "ppAuthArg" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "domainKey" false) (mem "extendParam" false) (mem "lookupAxis" false) (mem "subTopOf" false) (mem "writtenSetProblem" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "escStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "escStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("list") ((mem "get" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "atomicLabelParamText" false) (mem "effectParamMsg" false) (mem "effectParamProblems" false) (mem "repeatedNames" false) (mem "writtenAxis" false) (mem "writtenParam" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false))))
@@ -2776,7 +2775,7 @@ spliceRowTails sub (n :: rest) =
 (DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "ExternDecl" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "KindAnn" true) (mem "Loc" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Variant" true) (mem "authTermNames" false) (mem "authTermsSurface" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "lookupTab" false) (mem "mapTyFull" false) (mem "orElseLoc" false) (mem "patternMark" false) (mem "qualifierSource" false) (mem "tabKeyEq" false) (mem "variantName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "ppAuthArg" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "domainKey" false) (mem "extendParam" false) (mem "lookupAxis" false) (mem "subTopOf" false) (mem "writtenSetProblem" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "escStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "escStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("list") ((mem "get" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "atomicLabelParamText" false) (mem "effectParamMsg" false) (mem "effectParamProblems" false) (mem "repeatedNames" false) (mem "writtenAxis" false) (mem "writtenParam" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false))))

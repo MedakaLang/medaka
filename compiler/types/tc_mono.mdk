@@ -82,7 +82,6 @@ import support.util.{
   contains,
   eqStr,
   filterList,
-  isSome,
   joinWith,
   lenKey,
   listLen,

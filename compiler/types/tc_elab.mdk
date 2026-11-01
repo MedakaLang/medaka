@@ -165,7 +165,6 @@ import support.util.{
   int64Halves,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   listLen,
   splitOnChar,
 }
