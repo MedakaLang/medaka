@@ -1,5 +1,5 @@
 # META
-source_lines=504
+source_lines=503
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka REPL (Stage 4, Phase B.9)
@@ -78,7 +78,6 @@ preludeNamesRef = Ref []
 -- ── Initialise session ────────────────────────────────────────────────────
 -- The names a whole-graph check of the prelude would list: top-level binders
 -- plus interface method names (the check lists methods as schemes too).
-export
 preludeBinderNames : List Decl -> List String
 preludeBinderNames decls = funNamesOf decls ++ flatMap ifaceMethodNames decls
 
@@ -532,7 +531,7 @@ stringSplitOn sep s start cur len
 (DFunDef false "preludeDeclsRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "preludeNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "preludeNamesRef" () (EApp (EVar "Ref") (EListLit)))
-(DTypeSig true "preludeBinderNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "preludeBinderNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "preludeBinderNames" ((PVar "decls")) (EBinOp "++" (EApp (EVar "funNamesOf") (EVar "decls")) (EApp (EApp (EVar "flatMap") (EVar "ifaceMethodNames")) (EVar "decls"))))
 (DTypeSig false "ifaceMethodNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "ifaceMethodNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ifaceMethodNames") (EVar "d")))
@@ -690,7 +689,7 @@ stringSplitOn sep s start cur len
 (DFunDef false "preludeDeclsRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "preludeNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "preludeNamesRef" () (EApp (EVar "Ref") (EListLit)))
-(DTypeSig true "preludeBinderNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "preludeBinderNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "preludeBinderNames" ((PVar "decls")) (EBinOp "++" (EApp (EVar "funNamesOf") (EVar "decls")) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceMethodNames")) (EVar "decls"))))
 (DTypeSig false "ifaceMethodNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "ifaceMethodNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ifaceMethodNames") (EVar "d")))

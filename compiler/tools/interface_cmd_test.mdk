@@ -12,8 +12,8 @@ import test_process.{underRoot, withScratchDir, medakaBin}
 import list.{zipWith, take, drop}
 import string as S
 import tools.interface_cmd.{
-  buildInterfaceFile, buildBoth, showLines, showDeclsLines, verdictOf,
-  verdictText
+  buildBoth, showLines, showDeclsLines, verdictOf, verdictText,
+  buildInterfaceFileFrom, runtimePathOf
 }
 import types.prelude_decls.{
   PreludeDecls(..), PreludeTree(..), encodeDeclsFile, readDeclsFile,
@@ -24,7 +24,7 @@ import types.prelude_elab.{
   renderElabFault
 }
 import driver.build_cmd.{
-  readPreludeInterface, PreludeInputs(..), FileVerdict(..)
+  readPreludeInterface, PreludeInputs(..), FileVerdict(..), readPreludeFile
 }
 import types.interface_frame.{sha256Hex}
 import types.interface_sexp.{
@@ -758,3 +758,13 @@ test "verify names the key component before it refuses a bad declarations body" 
             (expectEqual (declared "file") (verifyDecls dir lying)),
         ]
     _ => fail "write run failed")
+
+-- The file for [modulePath] checked under [targets] (profile names, "" for the
+-- full join; none given means the default targets).
+buildInterfaceFile : String ->
+  List String ->
+  <IO> Result String PreludeInterfaceFile
+buildInterfaceFile modulePath targets = do
+  runtimeSrc <- readPreludeFile (runtimePathOf modulePath)
+  coreSrc <- readPreludeFile modulePath
+  buildInterfaceFileFrom modulePath runtimeSrc coreSrc targets

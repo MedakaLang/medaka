@@ -317,7 +317,6 @@ runTest engines runtimeP coreP target roots cases filterOpt
 -- Is [coreP] the `core.mdk` in the directory [runtimeP] is in?  The directories
 -- are compared resolved, so `//`, `.` and a symlinked directory name the same
 -- place however they are spelled.
-export
 besideRuntime : String -> String -> <IO> Bool
 besideRuntime runtimeP coreP =
   baseOf coreP == "core.mdk"
@@ -1164,7 +1163,6 @@ phaseTrees engines userDecls rsrc csrc prepared =
 -- Only the prop planner (`planModules`) and the interpreter arms read the
 -- elaborated trees.  The native doctest and `test "…"` arms compile the
 -- target's source in a child process and ignore them.
-export
 treesUnread : List Engine -> List Decl -> Bool
 treesUnread engines userDecls =
   not (hasInterpEngine engines) && not (hasProps userDecls)
@@ -3637,7 +3635,6 @@ helperElaboration runtimeM rawCoreM rawM decls =
 -- The program's own elaboration diagnostics: the baseline a helper pass is
 -- measured against.  A diagnostics-only drive, so it restores the evidence
 -- table the trees evaluated after it were elaborated under.
-export
 helperElabDiags : List Decl ->
   List Decl ->
   List (String, List Decl) ->
@@ -5005,7 +5002,6 @@ testFilesGo engines _ _ _ cases filterOpt seedOpt files acc =
 -- The `env` assignment that splits the core budget (an explicit
 -- MEDAKA_TEST_JOBS, else every core) between the `outer` children that run at
 -- once, so what each child fans out to itself does not multiply it.
-export
 childJobsPrefix : Int -> Int -> List String
 childJobsPrefix outer budget =
   ["MEDAKA_TEST_JOBS=\{intToString (max 1 (budget / max 1 outer))}"]
@@ -5013,7 +5009,6 @@ childJobsPrefix outer budget =
 -- Concurrent children already keep every core busy, so Boehm's per-core marker
 -- threads add CPU without shortening wall. The caller's own GC_MARKERS (any
 -- non-empty value) wins; a serial run (budget 1) is left on the runtime default.
-export
 childGcMarkersPrefix : String -> Int -> List String
 childGcMarkersPrefix caller budget =
   if caller /= "" || budget <= 1 then [] else ["GC_MARKERS=1"]

@@ -119,14 +119,6 @@ export
 binderOf : FileScopes -> Loc -> Option Binder
 binderOf fs loc = get (siteKey loc) fs.fsSites
 
-export
-allBinders : FileScopes -> List Binder
-allBinders fs = fs.fsBinders
-
-export
-allUses : FileScopes -> List Use
-allUses fs = fs.fsUses
-
 -- The modules a file imports with `import m.*`.
 export
 wildImports : FileScopes -> List (List String)
