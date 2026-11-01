@@ -107,9 +107,11 @@ data Frame = Frame (List Binder) (Option (HashMap String Binder))
 -- (name, name token, kind, import module path, import origin name)
 data Site = Site String Loc BinderKind (List String) String
 
--- A position as one Int: no per-site string, and columns stay under 2^20.
+-- A position as one Int: no per-site string.  Distinct for every column below
+-- 2^32 and line below 2^30, which holds a 4 GiB line and stays inside `Int`'s
+-- 63 bits; a source string larger than that cannot be held.
 siteKey : Loc -> Int
-siteKey (Loc _ l c _ _) = l * 1048576 + c
+siteKey (Loc _ l c _ _) = l * 4294967296 + c
 
 -- The binder a position stands for: a use resolves to what it names, a binder
 -- site (or an alternate site of the same binder) to itself.

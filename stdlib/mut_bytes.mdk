@@ -63,7 +63,7 @@ make n =
    4 -}
 export
 length : MutBytes -> Int
-length (_mb@(MutBytes bb)) = byteBlockLength bb
+length (MutBytes bb) = byteBlockLength bb
 
 {- | The byte at index `i` of `mb`, or `None` when `i` is out of range.
 
@@ -78,7 +78,7 @@ length (_mb@(MutBytes bb)) = byteBlockLength bb
    None -}
 export
 get : Int -> MutBytes -> Option U8
-get i (_mb@(MutBytes bb)) =
+get i (MutBytes bb) =
   if i < 0 || i >= byteBlockLength bb then
     None
   else
@@ -108,7 +108,7 @@ export impl Index MutBytes Int U8 where
    65 -}
 export
 setInPlace : Int -> U8 -> MutBytes -> Unit
-setInPlace i v (_mb@(MutBytes bb)) =
+setInPlace i v (MutBytes bb) =
   if i < 0 || i >= byteBlockLength bb then
     panic "MutBytes.setInPlace: index out of bounds"
   else
@@ -120,7 +120,7 @@ setInPlace i v (_mb@(MutBytes bb)) =
    "MutBytes \"070707\"" -}
 export
 fill : U8 -> MutBytes -> Unit
-fill v (_mb@(MutBytes bb)) = fillFrom (u8ToInt v) bb 0 (byteBlockLength bb)
+fill v (MutBytes bb) = fillFrom (u8ToInt v) bb 0 (byteBlockLength bb)
 
 -- The runtime has no block-fill primitive, so the bytes go one at a time
 -- through the unchecked setter, with the bounds established by `fill`
@@ -147,7 +147,7 @@ fillFrom v bb i n
    "MutBytes \"01010200\"" -}
 export
 blit : MutBytes -> Int -> MutBytes -> Int -> Int -> Unit
-blit (_src@(MutBytes sb)) srcOff (_dst@(MutBytes db)) dstOff len =
+blit (MutBytes sb) srcOff (MutBytes db) dstOff len =
   if len < 0 then
     panic "MutBytes.blit: negative length"
   else if srcOff < 0 then
@@ -173,7 +173,7 @@ blit (_src@(MutBytes sb)) srcOff (_dst@(MutBytes db)) dstOff len =
    [|0|] -}
 export
 freeze : MutBytes -> Bytes
-freeze (_mb@(MutBytes bb)) =
+freeze (MutBytes bb) =
   B.adoptByteBlockUnsafe (byteBlockCopyUnsafe (byteBlockLength bb) bb)
 
 {- | A mutable copy of `b`.
@@ -220,7 +220,7 @@ adoptByteBlockUnsafe bb = MutBytes bb
    5 -}
 export
 lendByteBlockUnsafe : MutBytes -> ByteBlock
-lendByteBlockUnsafe (_mb@(MutBytes bb)) = bb
+lendByteBlockUnsafe (MutBytes bb) = bb
 
 {- | Renders as `MutBytes "<hex>"`, in the lowercase hex form `Debug Bytes`
    uses, from the buffer's current contents.

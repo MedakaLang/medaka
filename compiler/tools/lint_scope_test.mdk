@@ -4,6 +4,7 @@
 
 import test.{expectEach, expectEqual, expectTrue}
 import frontend.ast.{Loc(..)}
+import string.{repeat}
 import support.util.{listLen}
 import frontend.parser.{parseLocated}
 import tools.lint_scope.{
@@ -38,6 +39,18 @@ unusedNames src =
 
 test "a record pun is a use of the binder it names" =
   expectEqual (Some ("r", BParam, 1, 2)) (resolved "k r = P { r }\n" 1 10)
+
+-- Column 1048578 of line 1 and column 2 of line 2 are 2^20 columns apart plus
+-- one line, the pair a `line * 2^20 + col` key would merge.
+test "positions a line of 2^20 columns apart keep distinct keys" =
+  let src = "f {-" ++ repeat 1048571 "a" ++ "-} x = 1\ng x = 2\n"
+  expectEach [
+    (
+      "first line",
+      expectEqual (Some ("x", BParam, 1, 1048578)) (resolved src 1 1048578),
+    ),
+    ("second line", expectEqual (Some ("x", BParam, 2, 2)) (resolved src 2 2)),
+  ]
 
 test "an interpolation hole is a use" =
   expectEqual (Some ("n", BParam, 1, 2)) (resolved "g n = \"a\\{n}b\"\n" 1 10)

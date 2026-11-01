@@ -454,7 +454,7 @@ contains needle haystack = isSome (indexOf needle haystack)
    False -}
 export
 startsWith : Bytes -> Bytes -> Bool
-startsWith (_prefix@(Bytes nb)) (_b@(Bytes bb)) =
+startsWith (Bytes nb) (Bytes bb) =
   let nlen = byteBlockLength nb
   nlen <= byteBlockLength bb && matchesAtGo nb bb 0 0 nlen
 
@@ -471,7 +471,7 @@ startsWith (_prefix@(Bytes nb)) (_b@(Bytes bb)) =
    False -}
 export
 endsWith : Bytes -> Bytes -> Bool
-endsWith (_suffix@(Bytes nb)) (_b@(Bytes bb)) =
+endsWith (Bytes nb) (Bytes bb) =
   let nlen = byteBlockLength nb
   let hlen = byteBlockLength bb
   nlen <= hlen && matchesAtGo nb bb 0 (hlen - nlen) nlen

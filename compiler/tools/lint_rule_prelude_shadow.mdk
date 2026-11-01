@@ -3,7 +3,8 @@
 import frontend.ast.{Loc(..), Decl(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
-import support.util.{contains, endsWith}
+import list.{lookup}
+import support.util.{contains}
 import tools.lint_core.{
   Category(..),
   FileFacts(..),
@@ -32,7 +33,7 @@ rule =
       summary =
         "a module declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)",
       doc =
-        "A module that declares a top-level `isOk`, `isErr`, `isSome` or `isNone` shadows the prelude function of that name for the rest of the file, while every other module keeps calling the prelude one. Suggest-only. Delete the local copy when it behaves like the prelude one; otherwise rename it to say what it tests.\n\nBefore:\n  isSome o = o == 1\nAfter:\n  isOne o = o == 1",
+        "A module that declares a top-level `isOk`, `isErr`, `isSome` or `isNone` shadows the prelude function of that name for the rest of the file, while every other module keeps calling the prelude one. A module that declares the `Option` or `Result` type itself, as the prelude does, is not shadowing the names over that type. Suggest-only. Delete the local copy when it behaves like the prelude one; otherwise rename it to say what it tests.\n\nBefore:\n  isSome o = o == 1\nAfter:\n  isOne o = o == 1",
       category = Suspicious,
       scope = Universal,
       ratchet = Gated,
@@ -51,16 +52,24 @@ rule =
 -- question and no diagnostic ever fires, because both spellings are individually
 -- well-typed.
 --
--- `stdlib/core.mdk` is exempt: it is the prelude, so its definitions of these
--- names are the originals rather than shadows.
+-- A declaration is the original rather than a shadow in the module that declares
+-- the type it tests: the prelude declares `Option` and `Result`, so its `isSome`
+-- and `isOk` are exempt.  The test reads the declarations, not the file name, so
+-- it holds from any working directory and for a file merely named `core.mdk`.
 --
 -- Suggest-only (`fix = None`), for two independent reasons: (a) the local body
 -- may not be the prelude's body, so deleting it changes behaviour rather than
 -- preserving it, and lint has no type environment to prove otherwise; (b) `fix`
 -- rewrites ONE `Decl`, and a binding's `name : Type` signature is a SEPARATE
 -- `Decl`, so any deletion this rule could express leaves an orphan signature.
-preludeShadowedNames : List String
-preludeShadowedNames = ["isOk", "isErr", "isSome", "isNone"]
+-- Each shadowed name with the prelude type it tests.
+preludeShadowedNames : List (String, String)
+preludeShadowedNames = [
+  ("isOk", "Result"),
+  ("isErr", "Result"),
+  ("isSome", "Option"),
+  ("isNone", "Option"),
+]
 
 rulePreludeShadow : StdlibIndex ->
   String ->
@@ -68,17 +77,22 @@ rulePreludeShadow : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-rulePreludeShadow _ path _ pos prog
-  | endsWith "stdlib/core.mdk" path = []
-  | otherwise =
-    flatMap
-      preludeShadowHit
-      (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
+rulePreludeShadow _ _ _ pos prog =
+  flatMap
+    (preludeShadowHit (declaredTypes prog))
+    (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
 
-preludeShadowHit : (String, Option Loc) -> List Finding
-preludeShadowHit (name, loc)
-  | contains name preludeShadowedNames = [preludeShadowFinding name loc]
-  | otherwise = []
+declaredTypes : List Decl -> List String
+declaredTypes prog = flatMap declaredType prog
+
+declaredType : Decl -> List String
+declaredType (DData { dataName = n }) = [n]
+declaredType _ = []
+
+preludeShadowHit : List String -> (String, Option Loc) -> List Finding
+preludeShadowHit owned (name, loc) = match lookup name preludeShadowedNames
+  Some ty => if contains ty owned then [] else [preludeShadowFinding name loc]
+  None => []
 
 preludeShadowFinding : String -> Option Loc -> Finding
 preludeShadowFinding name loc = Finding {

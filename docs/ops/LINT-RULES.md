@@ -351,7 +351,7 @@ After:
 
 an imported name that nothing in the file uses
 
-A name listed in `import m.{…}` that no expression, signature, constraint, pattern, doctest, `test` or `prop` body of the file uses is dead weight and hides which imports matter. `public import` re-exports, `import m.*`, bare `import m` and `import m as A` list no names and are not checked. The fix drops the name and its comma; when no name of the line is used it leaves a bare `import m`, which still brings the module's `impl`s into scope.
+A name listed in `import m.{…}` that no expression, signature, constraint, pattern, doctest, `test` or `prop` body of the file uses is dead weight and hides which imports matter. `public import` re-exports, `import m.*`, bare `import m` and `import m as A` list no names and are not checked, and a `T(..)` member is never reported, since a constructor use is not tied to `T`. The fix drops the name and its comma; when no name of the line is used it leaves a bare `import m`, which still brings the module's `impl`s into scope.
 
 ```
 Before:
@@ -366,7 +366,7 @@ After:
 
 a function, method or `prop` parameter that nothing in its clause uses
 
-A parameter that no use in its clause resolves to is dead weight, and a reader cannot tell it from one that matters. Renaming it `_name` says it is intentionally unused, and a name starting with `_` is not reported. Function, impl-method, interface-default, `prop` and `where`/`let rec` clause parameters are checked; lambda, `let`, match-arm and `do`-bind binders are not. The fix renames every place the binder is written (each alternative of an or-pattern names it). It is only suggested, not applied, when `_name` is already used in the file, and for a record pun, where renaming the binder would rename the field: the suggestion then reads `field = _name`.
+A parameter that no use in its clause resolves to is dead weight, and a reader cannot tell it from one that matters. Renaming it `_name` says it is intentionally unused, and a name starting with `_` is not reported. Function, impl-method, interface-default, `prop`, `where` and top-level `let rec` clause parameters are checked; the parameters of a `let rec` written inside a block, and lambda, `let`, match-arm and `do`-bind binders, are not. The fix renames every place the binder is written (each alternative of an or-pattern names it). An unused as-binder `x@p` is not renamed: the fix drops `x@` and keeps the pattern. The rename is only suggested, not applied, when `_name` is already used in the declaration, and for a record pun, where renaming the binder would rename the field: the suggestion then reads `field = _name`.
 
 ```
 Before:
@@ -561,7 +561,7 @@ After:
 
 a module declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)
 
-A module that declares a top-level `isOk`, `isErr`, `isSome` or `isNone` shadows the prelude function of that name for the rest of the file, while every other module keeps calling the prelude one. Suggest-only. Delete the local copy when it behaves like the prelude one; otherwise rename it to say what it tests.
+A module that declares a top-level `isOk`, `isErr`, `isSome` or `isNone` shadows the prelude function of that name for the rest of the file, while every other module keeps calling the prelude one. A module that declares the `Option` or `Result` type itself, as the prelude does, is not shadowing the names over that type. Suggest-only. Delete the local copy when it behaves like the prelude one; otherwise rename it to say what it tests.
 
 ```
 Before:
