@@ -148,6 +148,10 @@ ruleNameLetUnderscoreUnit : String
 ruleNameLetUnderscoreUnit = "rule-let-underscore-unit"
 
 export
+ruleNameDiscardedResult : String
+ruleNameDiscardedResult = "rule-discarded-result"
+
+export
 ruleNamePreferAssignOp : String
 ruleNamePreferAssignOp = "rule-prefer-assign-op"
 

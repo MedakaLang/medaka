@@ -148,7 +148,11 @@ test "the edit rules ask for the index only on a wildcard import" = expectEach [
   (
     "reimpl disabled",
     expectFalse
-      (stdlibIndexNeeded [] ["rule-stdlib-reimpl", "rule-let-underscore-unit"]),
+      (stdlibIndexNeeded [] [
+        "rule-stdlib-reimpl",
+        "rule-let-underscore-unit",
+        "rule-discarded-result",
+      ]),
   ),
   ("reimpl active", expectTrue (stdlibIndexNeeded [] [])),
   ("edit rules active", expectTrue (wildIndexNeeded [] ["rule-stdlib-reimpl"])),
