@@ -10,7 +10,13 @@ import backend.extern_catalog.{RuntimeExternDomain(..)}
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{EmitPlan, prepareWasmPlan}
 import ir.core_ir.{CProgram}
-import test.{Expectation, expectAll, expectEqual, expectSatisfies, labelFail}
+import test.{
+  Expectation, expectAll, expectEqual, expectSatisfies, labelFail, fail
+}
+import test_process.{
+  withScratchDir, boundedVerbSeconds, expectSpawnOkLine, underRoot, medakaBin
+}
+import string.{replace, contains}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
@@ -365,3 +371,78 @@ test "a local named like a top-level function needs no closure wrapper" = expect
         (strictDefects
           "anchor = \"ref\"\ninc : Int -> Int\ninc x = x + 1\napply : (Int -> Int) -> Int -> Int\napply f x = f x\nmain = apply inc 4\n")),
   ]
+
+test "Wasm publication routes strip checked call receipts" =
+  let src = "id x = x\nmain = id 42\n"
+  let strict = withLowered emitProgram src
+  let record = withLowered emitProgramRecord src
+  match (strict, record)
+    (Ok text, Ok (recordText, _)) => expectAll [
+      expectEqual text recordText,
+      expectEqual None (stringIndexOf "\u{1e}" text),
+      expectEqual None (stringIndexOf "\u{1f}" text),
+    ]
+    (Err ds, _) => expectEqual [] (map defectFacts ds)
+    (_, Err ds) => expectEqual [] (map defectFacts ds)
+
+censusGuardProbe : String
+censusGuardProbe =
+  """
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import types.capability_manifest.{ManifestRequirement(..)}
+import backend.emit_plan.{prepareWasmPlan}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.tc_elab.{grantWholeDomain}
+import types.program_facts.{emptyFacts}
+import ir.core_ir_lower.{lowerProgramEmitWith, ctorFieldTypeNames}
+import backend.wasm_emit.{emitProgramGaps, inputCtorFloatFieldsW, makeWasmEmitInput}
+import backend.wasm_symbols.{defectCode}
+import support.diag_codes.{codeText}
+import test.{expectEqual, fail}
+
+test "census rejects injected raw direct call" =
+  let decls = grantWholeDomain (desugar (parse "f x = x + 1\\nmain = f 2\\n"))
+  let input = makeWasmEmitInput RawUnchecked PreludeFreeRuntime (ctorFieldTypeNames decls)
+  let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
+  let (plan, prepared) = prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
+  match emitProgramGaps input plan prepared
+    Err defects => expectEqual ["E-PHYS-UNCHECKED"] (map (d => codeText (defectCode d)) defects)
+    Ok _ => fail "census accepted a raw call"
+"""
+
+test "Wasm census rejects an injected raw call in a compiled child" = withScratchDir
+  (dir => match boundedVerbSeconds 30 "cp" [
+    "-R",
+    underRoot "compiler",
+    dir ++ "/compiler",
+  ]
+    Err e => fail e
+    Ok (0, _, _) =>
+      let emitter = dir ++ "/compiler/backend/wasm_emit.mdk"
+      let probe = dir ++ "/compiler/backend/census_guard_probe_test.mdk"
+      let hole = "  let fnDef =\n    [sig]"
+      let insert =
+        "  let fnDef =\n    [sig] ++ (if name == \"f\" then [\"    call $mdk_print_int\"] else [])"
+      match readFile emitter
+        Err e => fail e
+        Ok source =>
+          if not (contains hole source) then
+            fail "Wasm function mutation point missing"
+          else match (
+            writeFile emitter (replace hole insert source),
+            writeFile probe censusGuardProbe,
+          )
+            (Ok _, Ok _) =>
+              expectSpawnOkLine
+                "perl"
+                [
+                  "-e", "alarm 120; exec @ARGV or die qq(exec: $!)", "env",
+                  "-u", "MEDAKA_STRICT", medakaBin, "test", probe
+                ]
+                (probe ++ ": 1/1 passed")
+            (Err e, _) => fail e
+            (_, Err e) => fail e
+    Ok (code, _, err) =>
+      fail "copying compiler exited \{intToString code}: \{err}")

@@ -1,5 +1,5 @@
 # META
-source_lines=662
+source_lines=716
 stages=DESUGAR,MARK
 # SOURCE
 -- This audits named identities and checked descriptors. It does not reconstruct
@@ -490,6 +490,7 @@ gapsGo (sym :: rest) reg acc =
   gapsGo rest reg (if isExcused sym reg then symbolInsert sym () acc else acc)
 
 actualCount : WasmShape -> OrdMap Int -> Int
+actualCount (FuncImported n) _ = n
 actualCount (FuncParams n) _ = n
 actualCount (FuncOfType name n) types =
   if n >= 0 then n else optionOr -1 (omLookup name types)
@@ -637,6 +638,59 @@ attributeOrigins ((Token text covered origin) :: rest) expected current acc =
     expected
     current
     (Token text covered (if covered then origin else current) :: acc)
+
+-- Census fragments are not a module. Check their receipts and declarations,
+-- but return no text and require no absent declaration or cross-fragment use.
+export
+checkCheckedFragment : SymbolRegistry ->
+  CallCoverage ->
+  String ->
+  Result (List SymbolDefect) Unit
+checkCheckedFragment reg (CallCoverage _ entries) text =
+  match scan text (stringToUtf8Bytes text) entries True (Some reg) 0 0 [] []
+    Err d => Err [d]
+    Ok (tokens, _) => match inventory tokens [] omEmpty omEmpty
+      Err d => Err [d]
+      Ok (seen, types) =>
+        let expected = expectedMap (declarations reg) omEmpty
+        let defects =
+          fragmentDeclarations expected seen types ++ uncovered tokens
+        if isEmpty defects then Ok () else Err defects
+
+fragmentDeclarations : SymbolIndex Expected ->
+  SymbolIndex Materialized ->
+  OrdMap Int ->
+  List SymbolDefect
+fragmentDeclarations expected seen types =
+  flatMap
+    (sym => match symbolLookup sym expected
+      None => [UndefinedReference sym moduleOrigin]
+      Some (Expected _ shape at) => match symbolLookup sym seen
+        Some (Materialized _ actual) =>
+          if sameShape shape actual types then
+            []
+          else
+            [
+              ShapeMismatch
+                (symbolName sym)
+                (actualCount shape types)
+                (actualCount actual types)
+                at
+                at,
+            ]
+        None => [])
+    (symbolKeys seen)
+
+uncovered : List Token -> List SymbolDefect
+uncovered tokens = reverseL (uncoveredGo tokens [])
+
+uncoveredGo : List Token -> List SymbolDefect -> List SymbolDefect
+uncoveredGo [] acc = acc
+uncoveredGo ((Token op covered at) :: rest) acc =
+  if (op == "call" || op == "return_call") && not covered then
+    uncoveredGo rest (UncheckedText "uncovered direct call" at :: acc)
+  else
+    uncoveredGo rest acc
 
 export
 finishCheckedText : CoveragePolicy ->
@@ -786,6 +840,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DFunDef false "gapsGo" ((PList) PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "gapsGo" ((PCons (PVar "sym") (PVar "rest")) (PVar "reg") (PVar "acc")) (EApp (EApp (EApp (EVar "gapsGo") (EVar "rest")) (EVar "reg")) (EIf (EApp (EApp (EVar "isExcused") (EVar "sym")) (EVar "reg")) (EApp (EApp (EApp (EVar "symbolInsert") (EVar "sym")) (ELit LUnit)) (EVar "acc")) (EVar "acc"))))
 (DTypeSig false "actualCount" (TyFun (TyCon "WasmShape") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyCon "Int"))))
+(DFunDef false "actualCount" ((PCon "FuncImported" (PVar "n")) PWild) (EVar "n"))
 (DFunDef false "actualCount" ((PCon "FuncParams" (PVar "n")) PWild) (EVar "n"))
 (DFunDef false "actualCount" ((PCon "FuncOfType" (PVar "name") (PVar "n")) (PVar "types")) (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EVar "n") (EApp (EApp (EVar "optionOr") (ELit (LInt -1))) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "types")))))
 (DFunDef false "actualCount" (PWild PWild) (EUnOp "-" (ELit (LInt 1))))
@@ -818,6 +873,15 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DFunDef false "attributeOrigins" ((PList) PWild PWild (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
 (DFunDef false "attributeOrigins" ((PCons (PCon "Token" (PLit (LString "func")) (PVar "covered") (PVar "origin")) (PCons (PAs "target" (PCon "Token" (PVar "name") PWild PWild)) (PVar "rest"))) (PVar "expected") (PVar "current") (PVar "acc")) (EIf (EApp (EVar "named") (EVar "name")) (EBlock (DoLet false false (PVar "next") (EMatch (EApp (EApp (EVar "symbolLookup") (EApp (EVar "WasmFunc") (EApp (EVar "bare") (EVar "name")))) (EVar "expected")) (arm (PCon "Some" (PCon "Expected" PWild PWild (PVar "at"))) () (EVar "at")) (arm (PCon "None") () (EVar "current")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "attributeOrigins") (EBinOp "::" (EVar "target") (EVar "rest"))) (EVar "expected")) (EVar "next")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (ELit (LString "func"))) (EVar "covered")) (EIf (EVar "covered") (EVar "origin") (EVar "next"))) (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "attributeOrigins" ((PCons (PCon "Token" (PVar "text") (PVar "covered") (PVar "origin")) (PVar "rest")) (PVar "expected") (PVar "current") (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "attributeOrigins") (EVar "rest")) (EVar "expected")) (EVar "current")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (EVar "text")) (EVar "covered")) (EIf (EVar "covered") (EVar "origin") (EVar "current"))) (EVar "acc"))))
+(DTypeSig true "checkCheckedFragment" (TyFun (TyCon "SymbolRegistry") (TyFun (TyCon "CallCoverage") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyCon "Unit"))))))
+(DFunDef false "checkCheckedFragment" ((PVar "reg") (PCon "CallCoverage" PWild (PVar "entries")) (PVar "text")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EApp (EVar "stringToUtf8Bytes") (EVar "text"))) (EVar "entries")) (EVar "True")) (EApp (EVar "Some") (EVar "reg"))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)) (EListLit)) (arm (PCon "Err" (PVar "d")) () (EApp (EVar "Err") (EListLit (EVar "d")))) (arm (PCon "Ok" (PTuple (PVar "tokens") PWild)) () (EMatch (EApp (EApp (EApp (EApp (EVar "inventory") (EVar "tokens")) (EListLit)) (EVar "omEmpty")) (EVar "omEmpty")) (arm (PCon "Err" (PVar "d")) () (EApp (EVar "Err") (EListLit (EVar "d")))) (arm (PCon "Ok" (PTuple (PVar "seen") (PVar "types"))) () (EBlock (DoLet false false (PVar "expected") (EApp (EApp (EVar "expectedMap") (EApp (EVar "declarations") (EVar "reg"))) (EVar "omEmpty"))) (DoLet false false (PVar "defects") (EBinOp "++" (EApp (EApp (EApp (EVar "fragmentDeclarations") (EVar "expected")) (EVar "seen")) (EVar "types")) (EApp (EVar "uncovered") (EVar "tokens")))) (DoExpr (EIf (EApp (EVar "isEmpty") (EVar "defects")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EVar "defects"))))))))))
+(DTypeSig false "fragmentDeclarations" (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Expected")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Materialized")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "SymbolDefect"))))))
+(DFunDef false "fragmentDeclarations" ((PVar "expected") (PVar "seen") (PVar "types")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "sym")) (EMatch (EApp (EApp (EVar "symbolLookup") (EVar "sym")) (EVar "expected")) (arm (PCon "None") () (EListLit (EApp (EApp (EVar "UndefinedReference") (EVar "sym")) (EVar "moduleOrigin")))) (arm (PCon "Some" (PCon "Expected" PWild (PVar "shape") (PVar "at"))) () (EMatch (EApp (EApp (EVar "symbolLookup") (EVar "sym")) (EVar "seen")) (arm (PCon "Some" (PCon "Materialized" PWild (PVar "actual"))) () (EIf (EApp (EApp (EApp (EVar "sameShape") (EVar "shape")) (EVar "actual")) (EVar "types")) (EListLit) (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "ShapeMismatch") (EApp (EVar "symbolName") (EVar "sym"))) (EApp (EApp (EVar "actualCount") (EVar "shape")) (EVar "types"))) (EApp (EApp (EVar "actualCount") (EVar "actual")) (EVar "types"))) (EVar "at")) (EVar "at"))))) (arm (PCon "None") () (EListLit))))))) (EApp (EVar "symbolKeys") (EVar "seen"))))
+(DTypeSig false "uncovered" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "SymbolDefect"))))
+(DFunDef false "uncovered" ((PVar "tokens")) (EApp (EVar "reverseL") (EApp (EApp (EVar "uncoveredGo") (EVar "tokens")) (EListLit))))
+(DTypeSig false "uncoveredGo" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyCon "SymbolDefect")))))
+(DFunDef false "uncoveredGo" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "uncoveredGo" ((PCons (PCon "Token" (PVar "op") (PVar "covered") (PVar "at")) (PVar "rest")) (PVar "acc")) (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "call"))) (EBinOp "==" (EVar "op") (ELit (LString "return_call")))) (EApp (EVar "not") (EVar "covered"))) (EApp (EApp (EVar "uncoveredGo") (EVar "rest")) (EBinOp "::" (EApp (EApp (EVar "UncheckedText") (ELit (LString "uncovered direct call"))) (EVar "at")) (EVar "acc"))) (EApp (EApp (EVar "uncoveredGo") (EVar "rest")) (EVar "acc"))))
 (DTypeSig true "finishCheckedText" (TyFun (TyCon "CoveragePolicy") (TyFun (TyCon "SymbolRegistry") (TyFun (TyCon "CallCoverage") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyCon "String")))))))
 (DFunDef false "finishCheckedText" ((PVar "policy") (PVar "reg") (PCon "CallCoverage" PWild (PVar "entries")) (PVar "text")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EApp (EVar "stringToUtf8Bytes") (EVar "text"))) (EVar "entries")) (EVar "True")) (EApp (EVar "Some") (EVar "reg"))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)) (EListLit)) (arm (PCon "Err" (PVar "d")) () (EApp (EVar "Err") (EListLit (EVar "d")))) (arm (PCon "Ok" (PTuple (PVar "raw") (PVar "stripped"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "inventory") (EVar "raw")) (EListLit)) (EVar "omEmpty")) (EVar "omEmpty")) (arm (PCon "Err" (PVar "d")) () (EApp (EVar "Err") (EListLit (EVar "d")))) (arm (PCon "Ok" (PTuple (PVar "seen") (PVar "types"))) () (EBlock (DoLet false false (PVar "expected") (EApp (EApp (EVar "expectedMap") (EApp (EVar "declarations") (EVar "reg"))) (EVar "omEmpty"))) (DoLet false false (PVar "tokens") (EApp (EApp (EApp (EApp (EVar "attributeOrigins") (EVar "raw")) (EVar "expected")) (EVar "moduleOrigin")) (EListLit))) (DoLet false false (PVar "gaps") (EApp (EApp (EVar "gapNames") (EVar "policy")) (EVar "reg"))) (DoLet false false (PVar "elementUses") (EApp (EApp (EVar "flatMap") (ELam ((PVar "sym")) (EMatch (EVar "sym") (arm (PCon "WasmElem" (PVar "name")) () (EApp (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "moduleOrigin")) (EApp (EVar "WasmFunc") (EVar "name")))) (arm PWild () (EListLit))))) (EApp (EVar "symbolKeys") (EVar "seen")))) (DoLet false false (PVar "defects") (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "declarationDefects") (EVar "expected")) (EVar "seen")) (EVar "types")) (EVar "gaps")) (EApp (EApp (EApp (EVar "uses") (EVar "tokens")) (EVar "seen")) (EVar "gaps"))) (EVar "elementUses"))) (DoExpr (EIf (EApp (EVar "isEmpty") (EVar "defects")) (EApp (EVar "Ok") (EVar "stripped")) (EApp (EVar "Err") (EVar "defects"))))))))))
 # MARK
@@ -942,6 +1006,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DFunDef false "gapsGo" ((PList) PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "gapsGo" ((PCons (PVar "sym") (PVar "rest")) (PVar "reg") (PVar "acc")) (EApp (EApp (EApp (EVar "gapsGo") (EVar "rest")) (EVar "reg")) (EIf (EApp (EApp (EVar "isExcused") (EVar "sym")) (EVar "reg")) (EApp (EApp (EApp (EVar "symbolInsert") (EVar "sym")) (ELit LUnit)) (EVar "acc")) (EVar "acc"))))
 (DTypeSig false "actualCount" (TyFun (TyCon "WasmShape") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyCon "Int"))))
+(DFunDef false "actualCount" ((PCon "FuncImported" (PVar "n")) PWild) (EVar "n"))
 (DFunDef false "actualCount" ((PCon "FuncParams" (PVar "n")) PWild) (EVar "n"))
 (DFunDef false "actualCount" ((PCon "FuncOfType" (PVar "name") (PVar "n")) (PVar "types")) (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EVar "n") (EApp (EApp (EVar "optionOr") (ELit (LInt -1))) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "types")))))
 (DFunDef false "actualCount" (PWild PWild) (EUnOp "-" (ELit (LInt 1))))
@@ -974,5 +1039,14 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DFunDef false "attributeOrigins" ((PList) PWild PWild (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
 (DFunDef false "attributeOrigins" ((PCons (PCon "Token" (PLit (LString "func")) (PVar "covered") (PVar "origin")) (PCons (PAs "target" (PCon "Token" (PVar "name") PWild PWild)) (PVar "rest"))) (PVar "expected") (PVar "current") (PVar "acc")) (EIf (EApp (EVar "named") (EVar "name")) (EBlock (DoLet false false (PVar "next") (EMatch (EApp (EApp (EVar "symbolLookup") (EApp (EVar "WasmFunc") (EApp (EVar "bare") (EVar "name")))) (EVar "expected")) (arm (PCon "Some" (PCon "Expected" PWild PWild (PVar "at"))) () (EVar "at")) (arm (PCon "None") () (EVar "current")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "attributeOrigins") (EBinOp "::" (EVar "target") (EVar "rest"))) (EVar "expected")) (EVar "next")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (ELit (LString "func"))) (EVar "covered")) (EIf (EVar "covered") (EVar "origin") (EVar "next"))) (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "attributeOrigins" ((PCons (PCon "Token" (PVar "text") (PVar "covered") (PVar "origin")) (PVar "rest")) (PVar "expected") (PVar "current") (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "attributeOrigins") (EVar "rest")) (EVar "expected")) (EVar "current")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (EVar "text")) (EVar "covered")) (EIf (EVar "covered") (EVar "origin") (EVar "current"))) (EVar "acc"))))
+(DTypeSig true "checkCheckedFragment" (TyFun (TyCon "SymbolRegistry") (TyFun (TyCon "CallCoverage") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyCon "Unit"))))))
+(DFunDef false "checkCheckedFragment" ((PVar "reg") (PCon "CallCoverage" PWild (PVar "entries")) (PVar "text")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EApp (EVar "stringToUtf8Bytes") (EVar "text"))) (EVar "entries")) (EVar "True")) (EApp (EVar "Some") (EVar "reg"))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)) (EListLit)) (arm (PCon "Err" (PVar "d")) () (EApp (EVar "Err") (EListLit (EVar "d")))) (arm (PCon "Ok" (PTuple (PVar "tokens") PWild)) () (EMatch (EApp (EApp (EApp (EApp (EVar "inventory") (EVar "tokens")) (EListLit)) (EVar "omEmpty")) (EVar "omEmpty")) (arm (PCon "Err" (PVar "d")) () (EApp (EVar "Err") (EListLit (EVar "d")))) (arm (PCon "Ok" (PTuple (PVar "seen") (PVar "types"))) () (EBlock (DoLet false false (PVar "expected") (EApp (EApp (EVar "expectedMap") (EApp (EVar "declarations") (EVar "reg"))) (EVar "omEmpty"))) (DoLet false false (PVar "defects") (EBinOp "++" (EApp (EApp (EApp (EVar "fragmentDeclarations") (EVar "expected")) (EVar "seen")) (EVar "types")) (EApp (EVar "uncovered") (EVar "tokens")))) (DoExpr (EIf (EApp (EMethodRef "isEmpty") (EVar "defects")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EVar "defects"))))))))))
+(DTypeSig false "fragmentDeclarations" (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Expected")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Materialized")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "SymbolDefect"))))))
+(DFunDef false "fragmentDeclarations" ((PVar "expected") (PVar "seen") (PVar "types")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "sym")) (EMatch (EApp (EApp (EVar "symbolLookup") (EVar "sym")) (EVar "expected")) (arm (PCon "None") () (EListLit (EApp (EApp (EVar "UndefinedReference") (EVar "sym")) (EVar "moduleOrigin")))) (arm (PCon "Some" (PCon "Expected" PWild (PVar "shape") (PVar "at"))) () (EMatch (EApp (EApp (EVar "symbolLookup") (EVar "sym")) (EVar "seen")) (arm (PCon "Some" (PCon "Materialized" PWild (PVar "actual"))) () (EIf (EApp (EApp (EApp (EVar "sameShape") (EVar "shape")) (EVar "actual")) (EVar "types")) (EListLit) (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "ShapeMismatch") (EApp (EVar "symbolName") (EVar "sym"))) (EApp (EApp (EVar "actualCount") (EVar "shape")) (EVar "types"))) (EApp (EApp (EVar "actualCount") (EVar "actual")) (EVar "types"))) (EVar "at")) (EVar "at"))))) (arm (PCon "None") () (EListLit))))))) (EApp (EVar "symbolKeys") (EVar "seen"))))
+(DTypeSig false "uncovered" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "SymbolDefect"))))
+(DFunDef false "uncovered" ((PVar "tokens")) (EApp (EVar "reverseL") (EApp (EApp (EVar "uncoveredGo") (EVar "tokens")) (EListLit))))
+(DTypeSig false "uncoveredGo" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyCon "SymbolDefect")))))
+(DFunDef false "uncoveredGo" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "uncoveredGo" ((PCons (PCon "Token" (PVar "op") (PVar "covered") (PVar "at")) (PVar "rest")) (PVar "acc")) (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "call"))) (EBinOp "==" (EVar "op") (ELit (LString "return_call")))) (EApp (EVar "not") (EVar "covered"))) (EApp (EApp (EVar "uncoveredGo") (EVar "rest")) (EBinOp "::" (EApp (EApp (EVar "UncheckedText") (ELit (LString "uncovered direct call"))) (EVar "at")) (EVar "acc"))) (EApp (EApp (EVar "uncoveredGo") (EVar "rest")) (EVar "acc"))))
 (DTypeSig true "finishCheckedText" (TyFun (TyCon "CoveragePolicy") (TyFun (TyCon "SymbolRegistry") (TyFun (TyCon "CallCoverage") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyCon "String")))))))
 (DFunDef false "finishCheckedText" ((PVar "policy") (PVar "reg") (PCon "CallCoverage" PWild (PVar "entries")) (PVar "text")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EApp (EVar "stringToUtf8Bytes") (EVar "text"))) (EVar "entries")) (EVar "True")) (EApp (EVar "Some") (EVar "reg"))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)) (EListLit)) (arm (PCon "Err" (PVar "d")) () (EApp (EVar "Err") (EListLit (EVar "d")))) (arm (PCon "Ok" (PTuple (PVar "raw") (PVar "stripped"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "inventory") (EVar "raw")) (EListLit)) (EVar "omEmpty")) (EVar "omEmpty")) (arm (PCon "Err" (PVar "d")) () (EApp (EVar "Err") (EListLit (EVar "d")))) (arm (PCon "Ok" (PTuple (PVar "seen") (PVar "types"))) () (EBlock (DoLet false false (PVar "expected") (EApp (EApp (EVar "expectedMap") (EApp (EVar "declarations") (EVar "reg"))) (EVar "omEmpty"))) (DoLet false false (PVar "tokens") (EApp (EApp (EApp (EApp (EVar "attributeOrigins") (EVar "raw")) (EVar "expected")) (EVar "moduleOrigin")) (EListLit))) (DoLet false false (PVar "gaps") (EApp (EApp (EVar "gapNames") (EVar "policy")) (EVar "reg"))) (DoLet false false (PVar "elementUses") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "sym")) (EMatch (EVar "sym") (arm (PCon "WasmElem" (PVar "name")) () (EApp (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "moduleOrigin")) (EApp (EVar "WasmFunc") (EVar "name")))) (arm PWild () (EListLit))))) (EApp (EVar "symbolKeys") (EVar "seen")))) (DoLet false false (PVar "defects") (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "declarationDefects") (EVar "expected")) (EVar "seen")) (EVar "types")) (EVar "gaps")) (EApp (EApp (EApp (EVar "uses") (EVar "tokens")) (EVar "seen")) (EVar "gaps"))) (EVar "elementUses"))) (DoExpr (EIf (EApp (EMethodRef "isEmpty") (EVar "defects")) (EApp (EVar "Ok") (EVar "stripped")) (EApp (EVar "Err") (EVar "defects"))))))))))

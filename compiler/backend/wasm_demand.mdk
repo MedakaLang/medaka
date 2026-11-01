@@ -1775,6 +1775,10 @@ representationOf source str acc =
     tupleArities = source.tupleArities ++ extraTuples,
   }
 
+export
+reservedTypeRootName : String -> String
+reservedTypeRootName name = "T_" ++ injectiveIdent name
+
 physicalTypes : ConstructorFacts ->
   CProgram ->
   Bool ->
@@ -1793,7 +1797,10 @@ physicalTypes constructors (CProgram _ _ ctorTypes _ _ _) True clos rep =
         ++ (if hasUse rep UseStr then ["str", "u8arr"] else [])
         ++ (if hasUse rep UseList then ["T_List", "C_Cons"] else [])
         ++ flatMap
-          (n => ["T_Tup" ++ intToString n, "C_Tup" ++ intToString n])
+          (n => [
+            reservedTypeRootName ("$Tuple" ++ intToString n),
+            "C_Tup" ++ intToString n,
+          ])
           rep.tupleArities
         ++ (if hasUse rep UseArray then ["arr"] else [])
         ++ (if rep.refBox then ["refbox"] else [])
@@ -2550,14 +2557,12 @@ plannedEnv key =
 
 plannedJs : JsImport -> PlannedImport
 plannedJs imp =
-  let params = map jsWireTy (filterList (/= "Unit") imp.params)
+  let params = filterList (/= "") (map jsWireParam imp.params)
   PlannedImport {
     namespace = "jsffi",
     field = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}",
     watSymbol = WN.wasmName (WN.WJSImport imp.medakaName),
-    signature =
-      joinWith "" (map (p => " (param \{p})") params)
-        ++ jsWireResult imp.result,
+    signature = joinWith "" params ++ jsWireResult imp.result,
     parameterCount = listLen params,
   }
 

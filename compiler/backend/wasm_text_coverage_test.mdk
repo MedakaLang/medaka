@@ -1,6 +1,6 @@
 import backend.wasm_text_coverage.{
   CoveragePolicy(..), CallCoverage, checkedCall, emptyCoverage,
-  finishCheckedText
+  finishCheckedText, checkCheckedFragment
 }
 import backend.wasm_symbols.{
   WasmSymbol(..), WasmShape(..), SymbolDefect(..), SymbolDeclaration(..),
@@ -600,3 +600,61 @@ test "Wasm anonymous function declarations cannot bypass the registry inventory"
               "(module (type $sig (func)))")))
       (declareSymbol (WasmType "sig") TypeDecl at emptyRegistry),
   ]
+
+test "census fragments check coverage, materialized shape and duplicates" =
+  expectStep
+    (reg =>
+      expectStep
+        ((reg2, coverage, fragment) => expectAll [
+          expectEqual
+            (Ok ())
+            (checkCheckedFragment
+              reg2
+              coverage
+              ("(func $f (param i64) " ++ fragment ++ ")")),
+          expectEqual
+            ["E-PHYS-UNCHECKED"]
+            (fragmentCodes
+              (checkCheckedFragment
+                reg2
+                coverage
+                "(func $f (param i64) call $f)")),
+          expectEqual
+            ["E-PHYS-SHAPE"]
+            (fragmentCodes
+              (checkCheckedFragment reg2 coverage "(func $f (param i64 i64))")),
+          expectEqual
+            ["E-PHYS-DUPLICATE"]
+            (fragmentCodes
+              (checkCheckedFragment
+                reg2
+                coverage
+                "(func $f (param i64)) (func $f (param i64))")),
+        ])
+        (checkedCall reg False "f" 1 at emptyCoverage))
+    registry
+
+fragmentCodes : Result (List SymbolDefect) Unit -> List String
+fragmentCodes (Ok _) = []
+fragmentCodes (Err ds) = map (d => codeText (defectCode d)) ds
+
+test "Wasm import shape diagnostics report both physical counts" =
+  expectStep
+    (reg =>
+      let result =
+        finishCheckedText
+          ClosedOutput
+          reg
+          emptyCoverage
+          "(module (import \"env\" \"host\" (func $host (param i64 i64))))"
+      expectEqual [(1, 2)] (importShapeCounts result))
+    (declareSymbol (WasmFunc "host") (FuncImported 1) at emptyRegistry)
+
+importShapeCounts : Result (List SymbolDefect) String -> List (Int, Int)
+importShapeCounts (Ok _) = []
+importShapeCounts (Err ds) =
+  flatMap
+    (d => match d
+      ShapeMismatch "host" expected actual _ _ => [(expected, actual)]
+      _ => [])
+    ds

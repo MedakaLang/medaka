@@ -486,6 +486,7 @@ gapsGo (sym :: rest) reg acc =
   gapsGo rest reg (if isExcused sym reg then symbolInsert sym () acc else acc)
 
 actualCount : WasmShape -> OrdMap Int -> Int
+actualCount (FuncImported n) _ = n
 actualCount (FuncParams n) _ = n
 actualCount (FuncOfType name n) types =
   if n >= 0 then n else optionOr -1 (omLookup name types)
@@ -633,6 +634,59 @@ attributeOrigins ((Token text covered origin) :: rest) expected current acc =
     expected
     current
     (Token text covered (if covered then origin else current) :: acc)
+
+-- Census fragments are not a module. Check their receipts and declarations,
+-- but return no text and require no absent declaration or cross-fragment use.
+export
+checkCheckedFragment : SymbolRegistry ->
+  CallCoverage ->
+  String ->
+  Result (List SymbolDefect) Unit
+checkCheckedFragment reg (CallCoverage _ entries) text =
+  match scan text (stringToUtf8Bytes text) entries True (Some reg) 0 0 [] []
+    Err d => Err [d]
+    Ok (tokens, _) => match inventory tokens [] omEmpty omEmpty
+      Err d => Err [d]
+      Ok (seen, types) =>
+        let expected = expectedMap (declarations reg) omEmpty
+        let defects =
+          fragmentDeclarations expected seen types ++ uncovered tokens
+        if isEmpty defects then Ok () else Err defects
+
+fragmentDeclarations : SymbolIndex Expected ->
+  SymbolIndex Materialized ->
+  OrdMap Int ->
+  List SymbolDefect
+fragmentDeclarations expected seen types =
+  flatMap
+    (sym => match symbolLookup sym expected
+      None => [UndefinedReference sym moduleOrigin]
+      Some (Expected _ shape at) => match symbolLookup sym seen
+        Some (Materialized _ actual) =>
+          if sameShape shape actual types then
+            []
+          else
+            [
+              ShapeMismatch
+                (symbolName sym)
+                (actualCount shape types)
+                (actualCount actual types)
+                at
+                at,
+            ]
+        None => [])
+    (symbolKeys seen)
+
+uncovered : List Token -> List SymbolDefect
+uncovered tokens = reverseL (uncoveredGo tokens [])
+
+uncoveredGo : List Token -> List SymbolDefect -> List SymbolDefect
+uncoveredGo [] acc = acc
+uncoveredGo ((Token op covered at) :: rest) acc =
+  if (op == "call" || op == "return_call") && not covered then
+    uncoveredGo rest (UncheckedText "uncovered direct call" at :: acc)
+  else
+    uncoveredGo rest acc
 
 export
 finishCheckedText : CoveragePolicy ->

@@ -212,7 +212,7 @@ main =
   42
 """
         ["closApplyLines", "stderrByteImportLines"]
-        ["C_Tup2", "T_Tup2", "argarr", "clos", "codety"],
+        ["C_Tup2", "T_zZ_24_Tuple2", "argarr", "clos", "codety"],
     ),
     (
       "list",
@@ -640,3 +640,11 @@ main = (zero (), mixed 2 3.0)
       ),
     ]
     (map (i => (i.namespace, i.field, i.signature, i.parameterCount)) rows)
+
+test "tuple physical type identities match emitted root and constructor" =
+  let demand = demandOf "main = (1, 2)"
+  expectEqual
+    ["C_Tup2", "T_zZ_24_Tuple2"]
+    (filter
+      (t => t == "T_zZ_24_Tuple2" || t == "C_Tup2" || t == "T_Tup2")
+      demand.representationTypes)

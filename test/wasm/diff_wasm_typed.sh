@@ -284,7 +284,7 @@ for block in \
   ioArgsLines floatStrLines charClassRuntimeLines randomFloatRuntimeLines \
   strCodecRuntimeLines charFromCodeRuntimeLines hashFloatRuntimeLines \
   readFileBytesLines writeFileBytesLines; do
-  has_preamble_pin "plannedHelperBlock plan files \"$block\"" || {
+  has_preamble_pin "plannedHelperBlock callW tailW plan files \"$block\"" || {
     echo "FAIL WASM-DEMAND-HELPERS: missing planned $block renderer"
     exit 1
   }

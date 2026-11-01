@@ -28,10 +28,12 @@ import backend.wasm_symbols.{
   unresolved,
 }
 import list.{subsequences}
-import support.ordmap.{omEmpty, omFromNames, omHasKey, omKeys}
+import support.ordmap.{
+  omEmpty, omFromNames, omHasKey, omKeys, omFromPairs, omLookup
+}
 import support.symbol_origin.{SymbolOrigin(..)}
-import support.util.{contains, joinWith, stringTrimLeft}
-import test.{Expectation, expectAll, expectEqual, labelFail}
+import support.util.{contains, joinWith, stringTrimLeft, reverseL}
+import test.{Expectation, expectAll, expectEach, expectEqual, labelFail}
 
 -- ── reading a block's text ──────────────────────────────────────────────────
 
@@ -161,7 +163,12 @@ driftUnder plan name =
     (line => "\{name}: \{line}")
     (blockDrift
       (helperManifest plan name)
-      (plannedHelperBlock plan [[97, 46, 109]] name))
+      (plannedHelperBlock
+        (n _ => "call $" ++ n)
+        (n _ => "return_call $" ++ n)
+        plan
+        [[97, 46, 109]]
+        name))
 
 test "each helper block's text defines and calls what its manifest row states" = expectAll
   [
@@ -420,3 +427,35 @@ test "a helper defined twice is refused" = expectAll [
 
 allBlocks : WasmDemandPlan -> List SymbolDefect
 allBlocks plan = verdict (importSteps plan ++ declarePlannedHelpers plan)
+
+helperCallArityDrift : WasmDemandPlan -> List String
+helperCallArityDrift plan =
+  let defs =
+    omFromPairs
+      (flatMap
+        ((HelperManifest ds _) => ds)
+        (map (helperManifest plan) helperOrder))
+      omEmpty
+  let bad = Ref []
+  let check =
+    name count =>
+      let _ = match omLookup name defs
+        Some expected =>
+          if count /= expected then
+            bad :=
+              "\{name}: expected \{intToString expected}, got \{intToString count}"
+                :: !bad
+        None => ()
+      "call $" ++ name
+  let _ =
+    flatMap (plannedHelperBlock check check plan [[97, 46, 109]]) helperOrder
+  reverseL !bad
+
+test "helper callbacks carry the independent manifest operand counts" =
+  expectEach
+    (map
+      (helpers => (
+        "selected \{intToString (length helpers)} helpers",
+        expectEqual [] (helperCallArityDrift (planOf helpers intNames True)),
+      ))
+      wideVariants)

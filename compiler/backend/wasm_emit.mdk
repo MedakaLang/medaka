@@ -357,7 +357,6 @@ import backend.wasm_symbols.{
   SymbolRegistry,
   WasmShape(..),
   WasmSymbol(..),
-  checkCall,
   checkRef,
   checkTypeUse,
   declareSymbol,
@@ -369,6 +368,10 @@ import backend.wasm_symbols.{
   unresolvedFunctions,
 }
 import support.symbol_origin.{SymbolOrigin(..)}
+import backend.wasm_text_coverage.{
+  CallCoverage, CoveragePolicy(..), emptyCoverage, checkedCall,
+  finishCheckedText, checkCheckedFragment
+}
 import backend.wasm_preamble.{
   preambleHeadLines,
   plannedImportLines,
@@ -481,6 +484,8 @@ data WasmEmit = WasmEmit {
   -- still waiting once it is complete go unjudged.
   symbols : Ref SymbolRegistry,
   symbolDefects : Ref (List SymbolDefect),
+  callCoverage : Ref CallCoverage,
+  gapSymbols : Ref (List WasmSymbol),
   closureChecked : Bool,
   completionChecked : Bool,
   trapImportNeeded : Ref Bool,
@@ -561,6 +566,8 @@ freshWasmEmit mode = WasmEmit {
   nextConstClosId = Ref 0,
   symbols = Ref emptyRegistry,
   symbolDefects = Ref [],
+  callCoverage = Ref emptyCoverage,
+  gapSymbols = Ref [],
   closureChecked = True,
   completionChecked = True,
   trapImportNeeded = Ref False,
@@ -1018,7 +1025,15 @@ jsffiWrapperW prog imp =
       prog
       ("$" ++ name)
       (FuncParams (listLen imp.params))
-      (jsffiWrapperLines imp intTrap charTrap copyTrap)
+      (jsffiWrapperLines
+        (target count =>
+          callFnAtW emit (progFnCtx prog).origin CallValueW target count)
+        (target count =>
+          callFnAtW emit (progFnCtx prog).origin CallTailW target count)
+        imp
+        intTrap
+        charTrap
+        copyTrap)
   name
 
 progFnMemberW : Prog -> String -> Bool
@@ -1490,8 +1505,20 @@ callFnW prog end target operands =
 -- `callFnW` for code no binding's body owns, its uses attributed to [origin]
 callFnAtW : WasmEmit -> SymbolOrigin -> CallEndW -> String -> Int -> String
 callFnAtW emit origin end target operands =
-  let _ = registerW emit (checkCall (WasmFunc target) operands origin)
-  callInstrW end target
+  match (checkedCall
+    !emit.symbols
+    (end == CallTailW)
+    target
+    operands
+    origin
+    !emit.callCoverage)
+    Ok (reg, coverage, text) =>
+      let _ = setRef emit.symbols reg
+      let _ = setRef emit.callCoverage coverage
+      text
+    Err d =>
+      let _ = setRef emit.symbolDefects (d :: !emit.symbolDefects)
+      ""
 
 -- `call $<name>` of a runtime helper or host import, with [operands] operands
 rtCallW : Prog -> String -> Int -> String
@@ -1678,7 +1705,7 @@ emitProgramUnchecked : WasmEmitInput ->
   CProgram ->
   Result (List SymbolDefect) String
 emitProgramUnchecked input plan cp =
-  emitProgramCore
+  emitProgramWith
     { freshWasmEmit WGapStrict | completionChecked = False }
     input
     plan
@@ -1703,15 +1730,19 @@ emitProgramWith : WasmEmit ->
 emitProgramWith emit input plan cp = match emitProgramCore emit input plan cp
   Err defects => Err defects
   Ok text =>
-    -- WGapRecord is the tolerant/census mode (mirrors emitProgramGaps below): it
-    -- continues past an unsupported node by RECORDING a gap event instead of
-    -- aborting, so its assembled text is intentionally allowed to be incomplete/
-    -- self-inconsistent -- not a real module, so not this check's business.
-    -- Only WGapStrict (the real, on-by-default production path) is asserted.
-    let _ = match emit.gapMode
-      WGapStrict => assertEmittedClosureW text
-      WGapRecord => ()
-    Ok text
+    match (finishCheckedText
+      (RecordedGaps !emit.gapSymbols)
+      !emit.symbols
+      !emit.callCoverage
+      text)
+      -- The legacy closure check remains independent of the receipt audit.
+      -- Record mode instead permits its exact recorded gap symbols.
+      Err defects => Err defects
+      Ok clean =>
+        let _ = match emit.gapMode
+          WGapStrict => assertEmittedClosureW clean
+          WGapRecord => ()
+        Ok clean
 
 -- Strict and record modes share one semantic gateway; only target gaps may
 -- become record events instead of a refusal.
@@ -1989,33 +2020,46 @@ emitProgramGaps input plan cp0 =
       emit
       (freshFnCtx ())
   let _ = seedSymbolsW prog (WD.censusWasmDemand (physicalPlanW plan)) []
-  let _ = emitFnsGapsW prog (userFnBinds groups)
-  let _ = emitImplsGapsW prog (progImplGroups prog)
-  let _ = emitValsGapsW prog (filterList isValBind groups)
+  let fragments = Ref []
+  let _ = emitFnsGapsW prog fragments (userFnBinds groups)
+  let _ = emitImplsGapsW prog fragments (progImplGroups prog)
+  let _ = emitValsGapsW prog fragments (filterList isValBind groups)
+  let lifted = flatMap (x => x) (reverseL !emit.liftedDefinitions)
+  let text =
+    joinNl
+      (flatMap (x => x) (reverseL !fragments)
+        ++ lifted
+        ++ trapMsgRuntimeOf emit)
   match symbolDefectsW emit
-    [] => Ok (gapEventsOfW emit)
+    [] =>
+      map
+        (_ => gapEventsOfW emit)
+        (checkCheckedFragment !emit.symbols !emit.callCoverage text)
     defects => Err defects
 
-emitFnsGapsW : Prog -> List CBind -> Unit
-emitFnsGapsW _ [] = ()
-emitFnsGapsW prog ((CBind name cs site bid) :: rest) =
+emitFnsGapsW : Prog -> Ref (List (List String)) -> List CBind -> Unit
+emitFnsGapsW _ _ [] = ()
+emitFnsGapsW prog fragments ((CBind name cs site bid) :: rest) =
   let _ = setGapBindingOfW (progEmit prog) ("fn " ++ name)
-  let _ = emitRefFnBind prog (CBind name cs site bid)
-  emitFnsGapsW prog rest
+  let lines = emitRefFnBind prog (CBind name cs site bid)
+  let _ = setRef fragments (lines :: !fragments)
+  emitFnsGapsW prog fragments rest
 
-emitImplsGapsW : Prog -> List ImplG -> Unit
-emitImplsGapsW _ [] = ()
-emitImplsGapsW prog ((g@(ImplG method headTag _ _ _ _)) :: rest) =
+emitImplsGapsW : Prog -> Ref (List (List String)) -> List ImplG -> Unit
+emitImplsGapsW _ _ [] = ()
+emitImplsGapsW prog fragments ((g@(ImplG method headTag _ _ _ _)) :: rest) =
   let _ = setGapBindingOfW (progEmit prog) "impl \{method}@\{headTag}"
-  let _ = emitImplGroup prog g
-  emitImplsGapsW prog rest
+  let lines = emitImplGroup prog g
+  let _ = setRef fragments (lines :: !fragments)
+  emitImplsGapsW prog fragments rest
 
-emitValsGapsW : Prog -> List CBind -> Unit
-emitValsGapsW _ [] = ()
-emitValsGapsW prog (b :: rest) =
+emitValsGapsW : Prog -> Ref (List (List String)) -> List CBind -> Unit
+emitValsGapsW _ _ [] = ()
+emitValsGapsW prog fragments (b :: rest) =
   let _ = setGapBindingOfW (progEmit prog) ("val " ++ bindName b)
-  let _ = emitRefValInit prog b
-  emitValsGapsW prog rest
+  let lines = emitRefValInit prog b
+  let _ = setRef fragments (lines :: !fragments)
+  emitValsGapsW prog fragments rest
 
 externFamilyW : WasmEmit -> String -> Option WasmFamily
 externFamilyW emit name =
@@ -2374,6 +2418,10 @@ emitRefProgram prog plan groups =
     if progUseClos prog then [emitElemDeclare (progEmit prog)] else []
   let runtime =
     plannedHelperLines
+      (target count =>
+        callFnAtW (progEmit prog) trapOriginW CallValueW target count)
+      (target count =>
+        callFnAtW (progEmit prog) trapOriginW CallTailW target count)
       physical
       (map strBytesW (reverseL (progEmit prog).siteFiles.value))
   let dataSegs = emitDataSegs (progEmit prog)
@@ -2799,10 +2847,10 @@ emitRefForceFn prog (CBind name [CClause [] body] _ _) =
     ++ ["    end", "    end", "  )"]
 emitRefForceFn prog (CBind name _ _ _) =
   -- in record mode the gap stands in for this force function
+  let gap = WasmFunc (forcerW name)
+  let _ = setRef (progEmit prog).gapSymbols (gap :: !(progEmit prog).gapSymbols)
   let _ =
-    setRef
-      (progEmit prog).symbols
-      (excuseSymbol (WasmFunc (forcerW name)) !(progEmit prog).symbols)
+    setRef (progEmit prog).symbols (excuseSymbol gap !(progEmit prog).symbols)
   gapLP prog "value binding must be a nullary clause"
 
 -- main: compute the body (a (ref eq)), then unbox to i32 and route to the print
@@ -7237,12 +7285,7 @@ emitIndirectApp prog env d hd args end =
 
 -- How an application's final call is made: for its value, which the code after it
 -- consumes, or as the tail call that replaces the enclosing function's frame.
-data CallEndW = CallValueW | CallTailW
-
--- the instruction that makes a call of `$<target>`
-callInstrW : CallEndW -> String -> String
-callInstrW CallValueW target = "call $" ++ target
-callInstrW CallTailW target = "return_call $" ++ target
+data CallEndW = CallValueW | CallTailW deriving (Eq)
 
 -- what follows a value an application computes without a call to end on
 endValueW : CallEndW -> List String
@@ -10887,7 +10930,7 @@ reservedCtorArity name =
 typeRootName : String -> String
 typeRootName ty =
   if ty == "List" || isReservedType ty || startsWith "$Tuple" ty then
-    "T_" ++ injectiveIdent ty
+    WD.reservedTypeRootName ty
   else
     WN.wasmName (WN.WUserType ty)
 
