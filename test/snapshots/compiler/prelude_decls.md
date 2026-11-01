@@ -1,5 +1,5 @@
 # META
-source_lines=214
+source_lines=213
 stages=DESUGAR,MARK
 # SOURCE
 -- The prelude's desugared declarations as a file.
@@ -76,7 +76,6 @@ preludeDeclsOf runtime core = match (binderSpan runtime, binderSpan core)
 -- ── the file ────────────────────────────────────────────────────────────────
 
 -- Distinct from every other framed file's version.
-export
 declsFormatVersion : Int
 declsFormatVersion = 4
 
@@ -232,7 +231,7 @@ negativeRun run = run.brFirst < 0 || run.brCount < 0
 (DFunDef false "treeRun" ((PVar "tree")) (ERecordCreate "BinderRun" ((fa "brFirst" (EFieldAccess (EVar "tree") "ptBase")) (fa "brCount" (EFieldAccess (EVar "tree") "ptBinders")))))
 (DTypeSig true "preludeDeclsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeDecls")))))
 (DFunDef false "preludeDeclsOf" ((PVar "runtime") (PVar "core")) (EMatch (ETuple (EApp (EVar "binderSpan") (EVar "runtime")) (EApp (EVar "binderSpan") (EVar "core"))) (arm (PTuple (PCon "Some" (PVar "rr")) (PCon "Some" (PVar "cr"))) () (EApp (EVar "Ok") (ERecordCreate "PreludeDecls" ((fa "pdRuntime" (EApp (EApp (EVar "treeOf") (EVar "runtime")) (EVar "rr"))) (fa "pdCore" (EApp (EApp (EVar "treeOf") (EVar "core")) (EVar "cr"))))))) (arm (PTuple (PCon "None") PWild) () (EApp (EVar "Err") (ELit (LString "the binder ordinals of runtime.mdk are not one run")))) (arm (PTuple PWild (PCon "None")) () (EApp (EVar "Err") (ELit (LString "the binder ordinals of core.mdk are not one run"))))))
-(DTypeSig true "declsFormatVersion" (TyCon "Int"))
+(DTypeSig false "declsFormatVersion" (TyCon "Int"))
 (DFunDef false "declsFormatVersion" () (ELit (LInt 4)))
 (DTypeSig true "declsKeyOf" (TyFun (TyCon "InterfaceKey") (TyCon "InterfaceKey")))
 (DFunDef false "declsKeyOf" ((PVar "key")) (ERecordCreate "InterfaceKey" ((fa "ikFormat" (EVar "declsFormatVersion")) (fa "ikSources" (EFieldAccess (EVar "key") "ikSources")) (fa "ikCompiler" (EFieldAccess (EVar "key") "ikCompiler")))))
@@ -279,7 +278,7 @@ negativeRun run = run.brFirst < 0 || run.brCount < 0
 (DFunDef false "treeRun" ((PVar "tree")) (ERecordCreate "BinderRun" ((fa "brFirst" (EFieldAccess (EVar "tree") "ptBase")) (fa "brCount" (EFieldAccess (EVar "tree") "ptBinders")))))
 (DTypeSig true "preludeDeclsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeDecls")))))
 (DFunDef false "preludeDeclsOf" ((PVar "runtime") (PVar "core")) (EMatch (ETuple (EApp (EVar "binderSpan") (EVar "runtime")) (EApp (EVar "binderSpan") (EVar "core"))) (arm (PTuple (PCon "Some" (PVar "rr")) (PCon "Some" (PVar "cr"))) () (EApp (EVar "Ok") (ERecordCreate "PreludeDecls" ((fa "pdRuntime" (EApp (EApp (EVar "treeOf") (EVar "runtime")) (EVar "rr"))) (fa "pdCore" (EApp (EApp (EVar "treeOf") (EVar "core")) (EVar "cr"))))))) (arm (PTuple (PCon "None") PWild) () (EApp (EVar "Err") (ELit (LString "the binder ordinals of runtime.mdk are not one run")))) (arm (PTuple PWild (PCon "None")) () (EApp (EVar "Err") (ELit (LString "the binder ordinals of core.mdk are not one run"))))))
-(DTypeSig true "declsFormatVersion" (TyCon "Int"))
+(DTypeSig false "declsFormatVersion" (TyCon "Int"))
 (DFunDef false "declsFormatVersion" () (ELit (LInt 4)))
 (DTypeSig true "declsKeyOf" (TyFun (TyCon "InterfaceKey") (TyCon "InterfaceKey")))
 (DFunDef false "declsKeyOf" ((PVar "key")) (ERecordCreate "InterfaceKey" ((fa "ikFormat" (EVar "declsFormatVersion")) (fa "ikSources" (EFieldAccess (EVar "key") "ikSources")) (fa "ikCompiler" (EFieldAccess (EVar "key") "ikCompiler")))))

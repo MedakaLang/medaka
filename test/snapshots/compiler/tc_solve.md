@@ -1,5 +1,5 @@
 # META
-source_lines=2490
+source_lines=2398
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve: one solving judgment over one goal store, above the entailment core: the exact-return
@@ -2266,98 +2266,6 @@ methodReturnMemoSupers [] = ""
 methodReturnMemoSupers supers =
   "{\{join "," (map methodReturnMemoRoute supers)}}"
 
-isSemanticGivenAnswer : Option AssumAnswer -> Bool
-isSemanticGivenAnswer (Some (SemanticGiven (GivenEvidence _))) = True
-isSemanticGivenAnswer _ = False
-
-isLegacyPredicateAnswer : Option AssumAnswer -> Bool
-isLegacyPredicateAnswer (Some (LegacyPredicate _)) = True
-isLegacyPredicateAnswer _ = False
-
--- Private service check for the selection half of the scope adapter.  It keeps
--- the full-vector and id-witness eligibility rules observable independently of
--- production examples, and its sibling query fails if lexical filtering is
--- removed from `anyGivenMatches`.
-scopeGivenProbe : Unit -> List Bool
-scopeGivenProbe _ =
-  let gctx = probeGraphCtx ()
-  let store = currentScopeStore gctx ()
-  let root = Scopes.freshScope store None 0 "given-probe" ModuleOwner
-  let owner =
-    Scopes.freshScope store (Some root) 1 "given-probe" (BindingOwner "owner")
-  let sibling =
-    Scopes.freshScope store (Some root) 1 "given-probe" (BindingOwner "sibling")
-  let iface =
-    IfaceRef { irName = "PairGiven", irOrigin = OriginModule "given-probe" }
-  let args = [tconBuiltin "Int", tconBuiltin "Bool"]
-  let slot = PredicateSlot {
-    psIface = iface,
-    psArgs = PSArgsKnown args,
-    psBoundIds = [41],
-  }
-  pushGiven gctx GMPredicate DirectGiven slot (Scopes.binderAt owner 0)
-  let exact = PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
-  let unknown = PredicateRequest { prIface = iface, prArgs = PSArgsUnknown }
-  let truncated = PredicateRequest {
-    prIface = iface,
-    prArgs = PSArgsKnown [tconBuiltin "Int"],
-  }
-  let witnessIface = IfaceRef {
-    irName = "WitnessGiven",
-    irOrigin = OriginModule "given-probe",
-  }
-  let witnessSlot = PredicateSlot {
-    psIface = witnessIface,
-    psArgs = PSArgsKnown [tconBuiltin "Int"],
-    psBoundIds = [73],
-  }
-  let witnessRequest = PredicateRequest {
-    prIface = witnessIface,
-    prArgs = PSArgsKnown [tconBuiltin "Int"],
-  }
-  pushGiven gctx GMIdWitnessed DirectGiven witnessSlot (Scopes.binderAt owner 1)
-  let compatibleIface = IfaceRef {
-    irName = "CompatibleGiven",
-    irOrigin = OriginModule "given-probe",
-  }
-  let compatibleSlot = PredicateSlot {
-    psIface = compatibleIface,
-    psArgs = PSArgsUnknown,
-    psBoundIds = [89],
-  }
-  let compatibleRequest = PredicateRequest {
-    prIface = compatibleIface,
-    prArgs = PSArgsKnown [tconBuiltin "Int"],
-  }
-  pushGiven
-    gctx
-    GMPredicate
-    DirectGiven
-    compatibleSlot
-    (Scopes.binderAt owner 2)
-  let givens = givensForScope gctx owner
-  let result = [
-    anyGivenMatches gctx exact owner givens,
-    not (anyGivenMatches gctx exact sibling givens),
-    not (anyGivenMatches gctx truncated owner givens),
-    not (anyGivenMatches gctx witnessRequest owner givens),
-    isSome
-      (firstPredForEnclAt gctx GSImplRequires 73 witnessRequest owner givens),
-    isNone
-      (firstPredForEnclAt gctx GSImplRequires 74 witnessRequest owner givens),
-    isSemanticGivenAnswer (firstPredForEncl gctx exact owner givens),
-    isLegacyPredicateAnswer
-      (firstPredForEnclAt gctx GSPredicateOnly 41 unknown owner givens),
-    isLegacyPredicateAnswer
-      (firstPredForEnclResidual gctx "PairGiven" args owner givens),
-    isLegacyPredicateAnswer
-      (firstPredForEncl gctx compatibleRequest owner givens),
-  ]
-  result
-
--- > scopeGivenProbe ()
--- [True, True, True, True, True, True, True, True, True, True]
-
 export
 methodSlotBoundIds : List MethodPredicateSlot -> List (List Int)
 methodSlotBoundIds slots = map (slot => slot.mpsPredicate.psBoundIds) slots
@@ -2910,14 +2818,6 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig false "methodReturnMemoSupers" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "String")))
 (DFunDef false "methodReturnMemoSupers" ((PList)) (ELit (LString "")))
 (DFunDef false "methodReturnMemoSupers" ((PVar "supers")) (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EVar "display") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "methodReturnMemoRoute")) (EVar "supers"))))) (ELit (LString "}"))))
-(DTypeSig false "isSemanticGivenAnswer" (TyFun (TyApp (TyCon "Option") (TyCon "AssumAnswer")) (TyCon "Bool")))
-(DFunDef false "isSemanticGivenAnswer" ((PCon "Some" (PCon "SemanticGiven" (PCon "GivenEvidence" PWild)))) (EVar "True"))
-(DFunDef false "isSemanticGivenAnswer" (PWild) (EVar "False"))
-(DTypeSig false "isLegacyPredicateAnswer" (TyFun (TyApp (TyCon "Option") (TyCon "AssumAnswer")) (TyCon "Bool")))
-(DFunDef false "isLegacyPredicateAnswer" ((PCon "Some" (PCon "LegacyPredicate" PWild))) (EVar "True"))
-(DFunDef false "isLegacyPredicateAnswer" (PWild) (EVar "False"))
-(DTypeSig false "scopeGivenProbe" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "Bool"))))
-(DFunDef false "scopeGivenProbe" (PWild) (EBlock (DoLet false false (PVar "gctx") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "store") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (DoLet false false (PVar "root") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EVar "None")) (ELit (LInt 0))) (ELit (LString "given-probe"))) (EVar "ModuleOwner"))) (DoLet false false (PVar "owner") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EApp (EVar "Some") (EVar "root"))) (ELit (LInt 1))) (ELit (LString "given-probe"))) (EApp (EVar "BindingOwner") (ELit (LString "owner"))))) (DoLet false false (PVar "sibling") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EApp (EVar "Some") (EVar "root"))) (ELit (LInt 1))) (ELit (LString "given-probe"))) (EApp (EVar "BindingOwner") (ELit (LString "sibling"))))) (DoLet false false (PVar "iface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "PairGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "args") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))) (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (DoLet false false (PVar "slot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "iface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EVar "args"))) (fa "psBoundIds" (EListLit (ELit (LInt 41))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "gctx")) (EVar "GMPredicate")) (EVar "DirectGiven")) (EVar "slot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 0))))) (DoLet false false (PVar "exact") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EVar "args")))))) (DoLet false false (PVar "unknown") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EVar "PSArgsUnknown"))))) (DoLet false false (PVar "truncated") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoLet false false (PVar "witnessIface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "WitnessGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "witnessSlot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "witnessIface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int")))))) (fa "psBoundIds" (EListLit (ELit (LInt 73))))))) (DoLet false false (PVar "witnessRequest") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "witnessIface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "gctx")) (EVar "GMIdWitnessed")) (EVar "DirectGiven")) (EVar "witnessSlot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 1))))) (DoLet false false (PVar "compatibleIface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "CompatibleGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "compatibleSlot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "compatibleIface")) (fa "psArgs" (EVar "PSArgsUnknown")) (fa "psBoundIds" (EListLit (ELit (LInt 89))))))) (DoLet false false (PVar "compatibleRequest") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "compatibleIface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "gctx")) (EVar "GMPredicate")) (EVar "DirectGiven")) (EVar "compatibleSlot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 2))))) (DoLet false false (PVar "givens") (EApp (EApp (EVar "givensForScope") (EVar "gctx")) (EVar "owner"))) (DoLet false false (PVar "result") (EListLit (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "exact")) (EVar "owner")) (EVar "givens")) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "exact")) (EVar "sibling")) (EVar "givens"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "truncated")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "gctx")) (EVar "GSImplRequires")) (ELit (LInt 73))) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isNone") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "gctx")) (EVar "GSImplRequires")) (ELit (LInt 74))) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isSemanticGivenAnswer") (EApp (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "gctx")) (EVar "exact")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "gctx")) (EVar "GSPredicateOnly")) (ELit (LInt 41))) (EVar "unknown")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclResidual") (EVar "gctx")) (ELit (LString "PairGiven"))) (EVar "args")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "gctx")) (EVar "compatibleRequest")) (EVar "owner")) (EVar "givens"))))) (DoExpr (EVar "result"))))
 (DTypeSig true "methodSlotBoundIds" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "methodSlotBoundIds" ((PVar "slots")) (EApp (EApp (EVar "map") (ELam ((PVar "slot")) (EFieldAccess (EFieldAccess (EVar "slot") "mpsPredicate") "psBoundIds"))) (EVar "slots")))
 (DTypeSig true "methodSlotPositions" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))
@@ -3375,14 +3275,6 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig false "methodReturnMemoSupers" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "String")))
 (DFunDef false "methodReturnMemoSupers" ((PList)) (ELit (LString "")))
 (DFunDef false "methodReturnMemoSupers" ((PVar "supers")) (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EMethodRef "display") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "methodReturnMemoRoute")) (EVar "supers"))))) (ELit (LString "}"))))
-(DTypeSig false "isSemanticGivenAnswer" (TyFun (TyApp (TyCon "Option") (TyCon "AssumAnswer")) (TyCon "Bool")))
-(DFunDef false "isSemanticGivenAnswer" ((PCon "Some" (PCon "SemanticGiven" (PCon "GivenEvidence" PWild)))) (EVar "True"))
-(DFunDef false "isSemanticGivenAnswer" (PWild) (EVar "False"))
-(DTypeSig false "isLegacyPredicateAnswer" (TyFun (TyApp (TyCon "Option") (TyCon "AssumAnswer")) (TyCon "Bool")))
-(DFunDef false "isLegacyPredicateAnswer" ((PCon "Some" (PCon "LegacyPredicate" PWild))) (EVar "True"))
-(DFunDef false "isLegacyPredicateAnswer" (PWild) (EVar "False"))
-(DTypeSig false "scopeGivenProbe" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "Bool"))))
-(DFunDef false "scopeGivenProbe" (PWild) (EBlock (DoLet false false (PVar "gctx") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "store") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (DoLet false false (PVar "root") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EVar "None")) (ELit (LInt 0))) (ELit (LString "given-probe"))) (EVar "ModuleOwner"))) (DoLet false false (PVar "owner") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EApp (EVar "Some") (EVar "root"))) (ELit (LInt 1))) (ELit (LString "given-probe"))) (EApp (EVar "BindingOwner") (ELit (LString "owner"))))) (DoLet false false (PVar "sibling") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EApp (EVar "Some") (EVar "root"))) (ELit (LInt 1))) (ELit (LString "given-probe"))) (EApp (EVar "BindingOwner") (ELit (LString "sibling"))))) (DoLet false false (PVar "iface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "PairGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "args") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))) (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (DoLet false false (PVar "slot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "iface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EVar "args"))) (fa "psBoundIds" (EListLit (ELit (LInt 41))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "gctx")) (EVar "GMPredicate")) (EVar "DirectGiven")) (EVar "slot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 0))))) (DoLet false false (PVar "exact") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EVar "args")))))) (DoLet false false (PVar "unknown") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EVar "PSArgsUnknown"))))) (DoLet false false (PVar "truncated") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoLet false false (PVar "witnessIface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "WitnessGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "witnessSlot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "witnessIface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int")))))) (fa "psBoundIds" (EListLit (ELit (LInt 73))))))) (DoLet false false (PVar "witnessRequest") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "witnessIface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "gctx")) (EVar "GMIdWitnessed")) (EVar "DirectGiven")) (EVar "witnessSlot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 1))))) (DoLet false false (PVar "compatibleIface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "CompatibleGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "compatibleSlot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "compatibleIface")) (fa "psArgs" (EVar "PSArgsUnknown")) (fa "psBoundIds" (EListLit (ELit (LInt 89))))))) (DoLet false false (PVar "compatibleRequest") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "compatibleIface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "gctx")) (EVar "GMPredicate")) (EVar "DirectGiven")) (EVar "compatibleSlot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 2))))) (DoLet false false (PVar "givens") (EApp (EApp (EVar "givensForScope") (EVar "gctx")) (EVar "owner"))) (DoLet false false (PVar "result") (EListLit (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "exact")) (EVar "owner")) (EVar "givens")) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "exact")) (EVar "sibling")) (EVar "givens"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "truncated")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "gctx")) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "gctx")) (EVar "GSImplRequires")) (ELit (LInt 73))) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isNone") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "gctx")) (EVar "GSImplRequires")) (ELit (LInt 74))) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isSemanticGivenAnswer") (EApp (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "gctx")) (EVar "exact")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "gctx")) (EVar "GSPredicateOnly")) (ELit (LInt 41))) (EVar "unknown")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclResidual") (EVar "gctx")) (ELit (LString "PairGiven"))) (EVar "args")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "gctx")) (EVar "compatibleRequest")) (EVar "owner")) (EVar "givens"))))) (DoExpr (EVar "result"))))
 (DTypeSig true "methodSlotBoundIds" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "methodSlotBoundIds" ((PVar "slots")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "slot")) (EFieldAccess (EFieldAccess (EVar "slot") "mpsPredicate") "psBoundIds"))) (EVar "slots")))
 (DTypeSig true "methodSlotPositions" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))

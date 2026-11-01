@@ -1,5 +1,5 @@
 # META
-source_lines=257
+source_lines=254
 stages=DESUGAR,MARK
 # SOURCE
 -- The one table of target profiles: a profile is a backend, the host ABI that
@@ -33,7 +33,6 @@ export
 profileBackend : TargetProfile -> Backend
 profileBackend (TargetProfile _ b _ _) = b
 
-export
 profileAbi : TargetProfile -> String
 profileAbi (TargetProfile _ _ a _) = a
 
@@ -52,7 +51,6 @@ profileBindingHost p = match profileBackend p
   BackendEval => None
 
 -- Does the profile grant any part of this label's domain?
-export
 grantsLabel : TargetProfile -> String -> Bool
 grantsLabel p label = any (g => fst g == label) (profileGrants p)
 
@@ -189,7 +187,6 @@ profileNames : List String
 profileNames = map profileName profileRows
 
 -- Every name a user can write: the profile names, then the aliases.
-export
 knownNames : List String
 knownNames = profileNames ++ map fst aliasRows
 
@@ -272,13 +269,13 @@ targetProfileEnv = "MEDAKA_TARGET_PROFILE"
 (DFunDef false "profileName" ((PCon "TargetProfile" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig true "profileBackend" (TyFun (TyCon "TargetProfile") (TyCon "Backend")))
 (DFunDef false "profileBackend" ((PCon "TargetProfile" PWild (PVar "b") PWild PWild)) (EVar "b"))
-(DTypeSig true "profileAbi" (TyFun (TyCon "TargetProfile") (TyCon "String")))
+(DTypeSig false "profileAbi" (TyFun (TyCon "TargetProfile") (TyCon "String")))
 (DFunDef false "profileAbi" ((PCon "TargetProfile" PWild PWild (PVar "a") PWild)) (EVar "a"))
 (DTypeSig true "profileGrants" (TyFun (TyCon "TargetProfile") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
 (DFunDef false "profileGrants" ((PCon "TargetProfile" PWild PWild PWild (PVar "g"))) (EVar "g"))
 (DTypeSig true "profileBindingHost" (TyFun (TyCon "TargetProfile") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "profileBindingHost" ((PVar "p")) (EMatch (EApp (EVar "profileBackend") (EVar "p")) (arm (PCon "BackendLlvm") () (EApp (EVar "Some") (ELit (LString "c")))) (arm (PCon "BackendWasmgc") () (EApp (EVar "Some") (ELit (LString "js")))) (arm (PCon "BackendEval") () (EVar "None"))))
-(DTypeSig true "grantsLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DTypeSig false "grantsLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "grantsLabel" ((PVar "p") (PVar "label")) (EApp (EApp (EVar "any") (ELam ((PVar "g")) (EBinOp "==" (EApp (EVar "fst") (EVar "g")) (EVar "label")))) (EApp (EVar "profileGrants") (EVar "p"))))
 (DTypeSig true "reachesLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "reachesLabel" ((PVar "p") (PLit (LString "IO"))) (EApp (EVar "isNonEmptyL") (EApp (EVar "ioJoinGrants") (EApp (EVar "Some") (EVar "p")))))
@@ -310,7 +307,7 @@ targetProfileEnv = "MEDAKA_TARGET_PROFILE"
 (DFunDef false "aliased" ((PTuple (PVar "alias") (PVar "target")) (PVar "idx")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EVar "alias") (EVar "p")))) (EApp (EApp (EVar "omLookup") (EVar "target")) (EVar "idx"))))
 (DTypeSig true "profileNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "profileNames" () (EApp (EApp (EVar "map") (EVar "profileName")) (EVar "profileRows")))
-(DTypeSig true "knownNames" (TyApp (TyCon "List") (TyCon "String")))
+(DTypeSig false "knownNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "knownNames" () (EBinOp "++" (EVar "profileNames") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "aliasRows"))))
 (DTypeSig true "lookupProfile" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "TargetProfile"))))
 (DFunDef false "lookupProfile" ((PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "profileIndex")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "Ok") (EVar "p"))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "unknown target `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` (known: "))) (EApp (EVar "display") (EApp (EApp (EVar "join") (ELit (LString ", "))) (EVar "knownNames")))) (ELit (LString ")")))))))
@@ -344,13 +341,13 @@ targetProfileEnv = "MEDAKA_TARGET_PROFILE"
 (DFunDef false "profileName" ((PCon "TargetProfile" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig true "profileBackend" (TyFun (TyCon "TargetProfile") (TyCon "Backend")))
 (DFunDef false "profileBackend" ((PCon "TargetProfile" PWild (PVar "b") PWild PWild)) (EVar "b"))
-(DTypeSig true "profileAbi" (TyFun (TyCon "TargetProfile") (TyCon "String")))
+(DTypeSig false "profileAbi" (TyFun (TyCon "TargetProfile") (TyCon "String")))
 (DFunDef false "profileAbi" ((PCon "TargetProfile" PWild PWild (PVar "a") PWild)) (EVar "a"))
 (DTypeSig true "profileGrants" (TyFun (TyCon "TargetProfile") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
 (DFunDef false "profileGrants" ((PCon "TargetProfile" PWild PWild PWild (PVar "g"))) (EVar "g"))
 (DTypeSig true "profileBindingHost" (TyFun (TyCon "TargetProfile") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "profileBindingHost" ((PVar "p")) (EMatch (EApp (EVar "profileBackend") (EVar "p")) (arm (PCon "BackendLlvm") () (EApp (EVar "Some") (ELit (LString "c")))) (arm (PCon "BackendWasmgc") () (EApp (EVar "Some") (ELit (LString "js")))) (arm (PCon "BackendEval") () (EVar "None"))))
-(DTypeSig true "grantsLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DTypeSig false "grantsLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "grantsLabel" ((PVar "p") (PVar "label")) (EApp (EApp (EDictApp "any") (ELam ((PVar "g")) (EBinOp "==" (EApp (EVar "fst") (EVar "g")) (EVar "label")))) (EApp (EVar "profileGrants") (EVar "p"))))
 (DTypeSig true "reachesLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "reachesLabel" ((PVar "p") (PLit (LString "IO"))) (EApp (EVar "isNonEmptyL") (EApp (EVar "ioJoinGrants") (EApp (EVar "Some") (EVar "p")))))
@@ -382,7 +379,7 @@ targetProfileEnv = "MEDAKA_TARGET_PROFILE"
 (DFunDef false "aliased" ((PTuple (PVar "alias") (PVar "target")) (PVar "idx")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EVar "alias") (EVar "p")))) (EApp (EApp (EVar "omLookup") (EVar "target")) (EVar "idx"))))
 (DTypeSig true "profileNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "profileNames" () (EApp (EApp (EMethodRef "map") (EVar "profileName")) (EVar "profileRows")))
-(DTypeSig true "knownNames" (TyApp (TyCon "List") (TyCon "String")))
+(DTypeSig false "knownNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "knownNames" () (EBinOp "++" (EVar "profileNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "aliasRows"))))
 (DTypeSig true "lookupProfile" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "TargetProfile"))))
 (DFunDef false "lookupProfile" ((PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "profileIndex")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "Ok") (EVar "p"))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "unknown target `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` (known: "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "join") (ELit (LString ", "))) (EVar "knownNames")))) (ELit (LString ")")))))))

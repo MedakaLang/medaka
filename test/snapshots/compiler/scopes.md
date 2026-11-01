@@ -1,5 +1,5 @@
 # META
-source_lines=195
+source_lines=187
 stages=DESUGAR,MARK
 # SOURCE
 -- Nominal lexical scope storage for one typechecking graph.  Raw ScopeIds are
@@ -48,13 +48,6 @@ freshScopeStore : Unit -> ScopeStore
 freshScopeStore _ = ScopeStore {
   ssFrames = Ref (arrayMake 0 None),
   ssNext = Ref 0,
-}
-
-export
-copyScopeStore : ScopeStore -> ScopeStore
-copyScopeStore store = ScopeStore {
-  ssFrames = Ref (arrayCopy store.ssFrames.value),
-  ssNext = Ref store.ssNext.value,
 }
 
 scopeOrdinal : ScopeId -> Int
@@ -175,7 +168,6 @@ closeScopeCursor store (ScopeOpen sid) = match (scopeFrame store sid).sfParent
   Some parent => ScopeOpen parent
   None => ScopeClosed
 
-export
 scopeOwnerLabel : ScopeOwner -> String
 scopeOwnerLabel ModuleOwner = "module"
 scopeOwnerLabel (BindingOwner name) = "binding:" ++ name
@@ -208,8 +200,6 @@ scopeFrameStats store = (store.ssNext.value, arrayLength store.ssFrames.value)
 (DData Abstract "ScopeStore" () ((variant "ScopeStore" (ConNamed (field "ssFrames" (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "ScopeFrame"))))) (field "ssNext" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DTypeSig true "freshScopeStore" (TyFun (TyCon "Unit") (TyCon "ScopeStore")))
 (DFunDef false "freshScopeStore" (PWild) (ERecordCreate "ScopeStore" ((fa "ssFrames" (EApp (EVar "Ref") (EApp (EApp (EVar "arrayMake") (ELit (LInt 0))) (EVar "None")))) (fa "ssNext" (EApp (EVar "Ref") (ELit (LInt 0)))))))
-(DTypeSig true "copyScopeStore" (TyFun (TyCon "ScopeStore") (TyCon "ScopeStore")))
-(DFunDef false "copyScopeStore" ((PVar "store")) (ERecordCreate "ScopeStore" ((fa "ssFrames" (EApp (EVar "Ref") (EApp (EVar "arrayCopy") (EFieldAccess (EFieldAccess (EVar "store") "ssFrames") "value")))) (fa "ssNext" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "store") "ssNext") "value"))))))
 (DTypeSig false "scopeOrdinal" (TyFun (TyCon "ScopeId") (TyCon "Int")))
 (DFunDef false "scopeOrdinal" ((PCon "ScopeId" (PVar "i"))) (EVar "i"))
 (DTypeSig true "scopeFrame" (TyFun (TyCon "ScopeStore") (TyFun (TyCon "ScopeId") (TyCon "ScopeFrame"))))
@@ -241,7 +231,7 @@ scopeFrameStats store = (store.ssNext.value, arrayLength store.ssFrames.value)
 (DTypeSig true "closeScopeCursor" (TyFun (TyCon "ScopeStore") (TyFun (TyCon "ScopeCursor") (TyCon "ScopeCursor"))))
 (DFunDef false "closeScopeCursor" (PWild (PCon "ScopeClosed")) (EApp (EVar "panic") (ELit (LString "scope close outside inference"))))
 (DFunDef false "closeScopeCursor" ((PVar "store") (PCon "ScopeOpen" (PVar "sid"))) (EMatch (EFieldAccess (EApp (EApp (EVar "scopeFrame") (EVar "store")) (EVar "sid")) "sfParent") (arm (PCon "Some" (PVar "parent")) () (EApp (EVar "ScopeOpen") (EVar "parent"))) (arm (PCon "None") () (EVar "ScopeClosed"))))
-(DTypeSig true "scopeOwnerLabel" (TyFun (TyCon "ScopeOwner") (TyCon "String")))
+(DTypeSig false "scopeOwnerLabel" (TyFun (TyCon "ScopeOwner") (TyCon "String")))
 (DFunDef false "scopeOwnerLabel" ((PCon "ModuleOwner")) (ELit (LString "module")))
 (DFunDef false "scopeOwnerLabel" ((PCon "BindingOwner" (PVar "name"))) (EBinOp "++" (ELit (LString "binding:")) (EVar "name")))
 (DFunDef false "scopeOwnerLabel" ((PCon "LocalBindingOwner" (PVar "name"))) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "name")) (arm (PCons (PVar "written") PWild) () (EBinOp "++" (ELit (LString "local:")) (EVar "written"))) (arm (PList) () (EBinOp "++" (ELit (LString "local:")) (EVar "name")))))
@@ -263,8 +253,6 @@ scopeFrameStats store = (store.ssNext.value, arrayLength store.ssFrames.value)
 (DData Abstract "ScopeStore" () ((variant "ScopeStore" (ConNamed (field "ssFrames" (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "ScopeFrame"))))) (field "ssNext" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DTypeSig true "freshScopeStore" (TyFun (TyCon "Unit") (TyCon "ScopeStore")))
 (DFunDef false "freshScopeStore" (PWild) (ERecordCreate "ScopeStore" ((fa "ssFrames" (EApp (EVar "Ref") (EApp (EApp (EVar "arrayMake") (ELit (LInt 0))) (EVar "None")))) (fa "ssNext" (EApp (EVar "Ref") (ELit (LInt 0)))))))
-(DTypeSig true "copyScopeStore" (TyFun (TyCon "ScopeStore") (TyCon "ScopeStore")))
-(DFunDef false "copyScopeStore" ((PVar "store")) (ERecordCreate "ScopeStore" ((fa "ssFrames" (EApp (EVar "Ref") (EApp (EVar "arrayCopy") (EFieldAccess (EFieldAccess (EVar "store") "ssFrames") "value")))) (fa "ssNext" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "store") "ssNext") "value"))))))
 (DTypeSig false "scopeOrdinal" (TyFun (TyCon "ScopeId") (TyCon "Int")))
 (DFunDef false "scopeOrdinal" ((PCon "ScopeId" (PVar "i"))) (EVar "i"))
 (DTypeSig true "scopeFrame" (TyFun (TyCon "ScopeStore") (TyFun (TyCon "ScopeId") (TyCon "ScopeFrame"))))
@@ -296,7 +284,7 @@ scopeFrameStats store = (store.ssNext.value, arrayLength store.ssFrames.value)
 (DTypeSig true "closeScopeCursor" (TyFun (TyCon "ScopeStore") (TyFun (TyCon "ScopeCursor") (TyCon "ScopeCursor"))))
 (DFunDef false "closeScopeCursor" (PWild (PCon "ScopeClosed")) (EApp (EVar "panic") (ELit (LString "scope close outside inference"))))
 (DFunDef false "closeScopeCursor" ((PVar "store") (PCon "ScopeOpen" (PVar "sid"))) (EMatch (EFieldAccess (EApp (EApp (EVar "scopeFrame") (EVar "store")) (EVar "sid")) "sfParent") (arm (PCon "Some" (PVar "parent")) () (EApp (EVar "ScopeOpen") (EVar "parent"))) (arm (PCon "None") () (EVar "ScopeClosed"))))
-(DTypeSig true "scopeOwnerLabel" (TyFun (TyCon "ScopeOwner") (TyCon "String")))
+(DTypeSig false "scopeOwnerLabel" (TyFun (TyCon "ScopeOwner") (TyCon "String")))
 (DFunDef false "scopeOwnerLabel" ((PCon "ModuleOwner")) (ELit (LString "module")))
 (DFunDef false "scopeOwnerLabel" ((PCon "BindingOwner" (PVar "name"))) (EBinOp "++" (ELit (LString "binding:")) (EVar "name")))
 (DFunDef false "scopeOwnerLabel" ((PCon "LocalBindingOwner" (PVar "name"))) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "name")) (arm (PCons (PVar "written") PWild) () (EBinOp "++" (ELit (LString "local:")) (EVar "written"))) (arm (PList) () (EBinOp "++" (ELit (LString "local:")) (EVar "name")))))

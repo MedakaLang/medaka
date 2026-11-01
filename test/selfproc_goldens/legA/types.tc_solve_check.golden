@@ -58,12 +58,8 @@ implGoalResiduals : SiteCtx -> ReqWalk -> Map String Unit -> List PredicateSlot 
 inferredConstraintIds : ModuleCtx -> String -> List Int -> List Int
 inferredPredLead : (IfaceRef, Int, List Mono) -> Int
 inferredPredicatePair : (IfaceRef, Int, List Mono) -> List (CSlot, List Mono)
-inferredPredicateSlotIdTag : Int -> Int -> Int -> Int -> String
-inferredPredicateSlotMonoTag : Int -> Int -> Int -> Mono -> String
-inferredPredicateSlotProbeRow : Int -> Int -> Int -> PredicateSlot -> (String, List String, List String)
 inferredPredicateSlots : ModuleCtx -> String -> List Int -> List (IfaceRef, Int, List Mono) -> List PredicateSlot
 inferredPredicateSlotsGo : ModuleCtx -> String -> List Int -> Map String (List PredicateSlot) -> Map String Unit -> List PredicateSlot -> List PredicateSlot
-inferredPredicateSlotsProbe : ModuleCtx -> Unit -> List (String, List String, List String)
 inferredSlotBuckets : List PredicateSlot -> Map String (List PredicateSlot) -> Map String (List PredicateSlot)
 inferredSlotCoveredIds : List PredicateSlot -> Map String Unit -> Map String Unit
 keepBoundResidualPred : ModuleCtx -> List Int -> (IfaceRef, List Mono) -> List (IfaceRef, List Int, List Mono)

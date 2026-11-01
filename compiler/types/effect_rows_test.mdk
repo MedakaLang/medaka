@@ -1,11 +1,28 @@
 import test.{expectAll, expectEqual, expectTrue}
 import types.effect_domain.{Param(..)}
 import types.effect_rows.{
-  Atom(..), atomBuiltin, renderAtoms, EffRow(..), Effvar(..), dedupCells,
-  effrowLabels, rowFlat, joinRows, effvarId, effrowNorm, isJoinCell, linkRow
+  Atom(..), atomBuiltin, renderAtoms, EffRow(..), Effvar(..), effrowLabels,
+  rowFlat, joinRows, effvarId, effrowNorm, isJoinCell, linkRow
 }
-import support.util.{listLen}
+import support.util.{listLen, reverseL}
+import map.{Map(..), has, set}
 import support.opcount.{setOpCounting, opSnap}
+
+dedupCells : List (Ref Effvar) -> List (Ref Effvar)
+dedupCells cells = reverseL (dedupCellsGo cells Tip [])
+
+-- Keep the first cell for each stable identity.
+dedupCellsGo : List (Ref Effvar) ->
+  Map Int Unit ->
+  List (Ref Effvar) ->
+  List (Ref Effvar)
+dedupCellsGo [] _ acc = acc
+dedupCellsGo (cell :: cells) seen acc =
+  let id = effvarId cell
+  if has id seen then
+    dedupCellsGo cells seen acc
+  else
+    dedupCellsGo cells (set id () seen) (cell :: acc)
 
 deepDiamond : Int -> Ref Effvar -> Ref Effvar
 deepDiamond 0 leaf = leaf

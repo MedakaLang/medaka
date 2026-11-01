@@ -11,12 +11,9 @@
 -- doctests, which illustrate a real return value, stay in `registry.mdk`
 -- beside the function they document.
 --
--- ⚠️ THE FIXTURES BELOW ARE DECLARED TWICE, HERE AND IN `registry.mdk`, and
--- that is forced rather than sloppy: the documentary doctests left behind in
--- `registry.mdk` still consume the originals, and exporting a doctest fixture
--- would put `identTypeFooM` and its siblings on the module's public surface.
--- Both copies are the same expressions; a divergence shows up as a test
--- asserting something the doctests no longer illustrate.
+-- The doctest fixtures of `registry.mdk` (`identTypeFooM` and its siblings) are
+-- private to it; this file reads them through the sibling's view of its subject
+-- instead of redeclaring them, so a fixture has one definition.
 --
 -- ⚠️ THREE ASSERTIONS COULD NOT COME WITH THE REST and are still doctests in
 -- `registry.mdk`: the ones naming `OriginUnresolved` in the expression.
@@ -24,37 +21,56 @@
 -- TRACKED FILES carrying a non-comment `OriginUnresolved` mention, and a
 -- `test` block is live code — moving them here adds this file to that set and
 -- reds the ratchet.
---
--- `rule-duplicate-body` is disabled file-wide for the fixture duplication the
--- paragraph above describes. Its remedy — "consolidate into a shared module" —
--- would be a third module whose only purpose is to export doctest fixtures
--- into `registry.mdk`'s public surface, which is the thing this arrangement
--- exists to avoid.
--- lint-disable-file rule-duplicate-body
 
 import test.{expectEqual, expectNotEqual, expectTrue}
 import types.registry.{
   HeadKey(..),
+  headA,
+  regInsertCheckedK,
+  headU,
+  headZ,
+  identBuiltinFixture,
+  identIfaceFooM,
+  identIfaceIxM,
+  identIn,
+  identShiftA,
+  identShiftB,
+  identSizeIn,
+  identTypeBarM,
+  identTypeFooBuiltin,
+  identTypeFooM,
+  identTypeIntM,
+  ifaceP,
+  ifaceU,
+  keyIxIntUndet,
+  keyIxUndetInt,
+  mregOrderA,
+  mregOrderB,
+  regBothNs,
+  slotPA,
+  slotUA,
+  tabA,
+  tabTable,
+  tabU,
+  tabZ,
+  lenKey,
+  ordKey,
   MultiRegistry,
   RegKey,
   Registry,
-  dispKeyRender,
   headBucketKey,
   headKeyIdent,
   headKeyOfCon,
   identKey,
-  identKeys,
   mregAdd,
   mregEmpty,
   mregEntries,
-  mregKeys,
   mregLookup,
   mregMerge,
   mregSize,
   regEmpty,
   regEntries,
   regInsert,
-  regInsertChecked,
   regInsertK,
   regDelete,
   regKeyAt,
@@ -64,18 +80,14 @@ import types.registry.{
   regKeyOfTab,
   regKeyRender,
   regKeyTabAt,
-  regKeyTabs,
-  regKeys,
   regLookupK,
   regSize,
   sregAdd,
   sregAddK,
   sregEmpty,
   sregKeys,
-  sregMember,
-  sregMemberK,
   sregSize,
-  SetRegistry,
+  SetRegistry(..),
   tabKeyRender,
   SpellingPop,
   spEmpty,
@@ -96,11 +108,85 @@ import frontend.ast.{
   tabHasName,
   tabKeyOf,
 }
-import support.util.{filterList, startsWith, listLen}
+import support.util.{filterList, startsWith, listLen, joinWith}
 import support.ordmap.{omLookup}
 import list.{sort}
+import map.{has}
 
--- ── Fixtures — mirrors of `registry.mdk`'s own doctest fixtures ────────────
+-- A tuple of identities, rendered by plain concatenation. Injective on its
+-- own: each element contributes exactly four netstrings, so a stream of `4n`
+-- netstrings decodes to exactly one list, and two lists of different length
+-- render to strings of different length.
+identKeys : List Ident -> String
+identKeys idents = joinWith "" (map identKey idents)
+
+regKeyTabs : RegKey -> List TabKey
+regKeyTabs (RegKey keys _) = keys
+
+regInsertChecked : Ident -> v -> Registry v -> (Registry v, Bool)
+regInsertChecked ident v r = regInsertCheckedK (regKeyOf ident) v r
+
+-- Same order caveat as `regEntries`.
+regKeys : Registry v -> List RegKey
+regKeys r = map fst (regEntries r)
+
+mregKeys : MultiRegistry v -> List RegKey
+mregKeys mr = map fst (mregEntries mr)
+
+sregMemberK : RegKey -> SetRegistry -> Bool
+sregMemberK k (SetRegistry m) = has k m
+
+sregMember : Ident -> SetRegistry -> Bool
+sregMember ident s = sregMemberK (regKeyOf ident) s
+
+-- ── A dispatch key over a whole ARGUMENT VECTOR ───────────────────────────
+-- `checkCallObligationsU`'s dedup key (`types/typecheck.mdk`) is a vector, not
+-- a single key: an interface plus one projected head PER argument, where a
+-- position can be a declaration, absent, OR rigid. `RegKey` alone cannot
+-- express it, and widening `RegKey` to admit a rigid is precisely what §8
+-- I6.1 forbids (see `RegKey`'s own doc-comment). So the two halves are
+-- rendered SEPARATELY and concatenated:
+--
+--   [base]   a `RegKey` whose identity block is the interface key followed by
+--            the DECLARATION positions' keys, and whose ordinal block is the
+--            vector's ARITY followed by those positions' indices. Every
+--            position that is neither in the ordinal block nor in [rigids] is
+--            absent, and the arity says how many positions there are, so the
+--            classification of every position is recoverable ⇒ two vectors
+--            differing only in WHICH position is absent get different keys.
+--            That is #607's property, kept structurally rather than by a
+--            positional `""` placeholder that a name could in principle equal.
+--   [rigids] the §8 I6.1 RESIDUAL, as `(position, parameter name)` pairs in
+--            ascending position order. It is a separate argument, and a
+--            separate netstring group, for one reason: **deleting the residual
+--            is deleting this argument**, and until then `grep -n
+--            dispKeyRender` names every site that still keys on one.
+--
+-- Injectivity across the join: `regKeyRender`'s output is wrapped in a
+-- netstring of its own (`lenKey`) rather than concatenated raw, because the
+-- ordinal block is NOT count-prefixed — an ordinal netstring and a rigid
+-- position netstring are indistinguishable, so a raw join could read one as
+-- the other. Wrapping fixes the boundary: `lenKey s ++ t` determines `s`
+-- because a valid-UTF-8 byte-prefix of a valid-UTF-8 string is a codepoint
+-- prefix, so equal codepoint counts force equal strings.
+--
+-- Two rigids of the same name at the same position do compare equal, and
+-- that is deliberate: it is what the bare-name key did, and A-2.2b's bar is
+-- answer-preservation. Making distinct occurrences of one rigid name
+-- never-equal would need an occurrence identity that does not exist at the
+-- call site, and inventing one is the I6.3 violation A-2.0's review already
+-- rejected. What this rendering DOES guarantee is that a rigid never compares
+-- equal to a DECLARATION of the same spelling, and never to a rigid at a
+-- different position — the two conflations a bare-name vector admits.
+dispKeyRender : RegKey -> List (Int, String) -> String
+dispKeyRender base rigids =
+  lenKey (regKeyRender base)
+    ++ lenKey "\{listLen rigids}"
+    ++ joinWith "" (map ((i, name) => ordKey i ++ lenKey name) rigids)
+
+-- ── Fixtures ──────────────────────────────────────────────────────────────
+-- The fixtures shared with `registry.mdk`'s doctests (`identTypeFooM`,
+-- `identIn`, `tabTable`, `headA`, ...) are the subject's own, imported above.
 -- Each pair differs from its sibling along exactly ONE axis (Ns, IdentOrigin,
 -- or name), so each assertion below isolates one collision dimension.
 --
@@ -108,58 +194,6 @@ import list.{sort}
 -- `identBuiltinFixture` is a WELL-FORMED identity under a name no assertion
 -- uses, so a fixture that silently fell back shows up as the WRONG identity
 -- rather than as a crash — checked by the `mkIdent`-is-`Some` block below.
-identBuiltinFixture : Ns -> String -> Ident
-identBuiltinFixture ns name = Ident ns identOriginBuiltin name
-
-identIn : Ns -> String -> String -> Ident
-identIn ns mid name =
-  optionOrElse
-    (_ => identBuiltinFixture ns "__fixture_fallback__")
-    (mkIdent ns (OriginModule mid) name)
-
-identTypeFooM : Ident
-identTypeFooM = identIn NsType "m" "Foo"
-
-identIfaceFooM : Ident
-identIfaceFooM = identIn NsIface "m" "Foo"
-
-identTypeBarM : Ident
-identTypeBarM = identIn NsType "m" "Bar"
-
-identTypeFooBuiltin : Ident
-identTypeFooBuiltin = identBuiltinFixture NsType "Foo"
-
--- The same origin and name in every namespace — `size` is the exact spelling
--- `Ns`'s doc-comment gives for the field-vs-method collision.
-identSizeIn : Ns -> Ident
-identSizeIn ns = identIn ns "m" "size"
-
--- Two identities whose (module, name) pair shifts a character across the
--- field boundary: `"ab" ++ "c" == "a" ++ "bc"`. A naive un-prefixed
--- concatenation would collide them.
-identShiftA : Ident
-identShiftA = identIn NsType "ab" "c"
-
-identShiftB : Ident
-identShiftB = identIn NsType "a" "bc"
-
-regBothNs : Registry Int
-regBothNs = regInsert identIfaceFooM 2 (regInsert identTypeFooM 1 regEmpty)
-
--- #607: two vectors carrying the SAME identities and differing only in which
--- argument position the present head came from.
-identIfaceIxM : Ident
-identIfaceIxM = identIn NsIface "m" "Ix"
-
-identTypeIntM : Ident
-identTypeIntM = identIn NsType "m" "Int"
-
-keyIxIntUndet : RegKey
-keyIxIntUndet = regKeyNAt [identIfaceIxM, identTypeIntM] [2, 0]
-
-keyIxUndetInt : RegKey
-keyIxUndetInt = regKeyNAt [identIfaceIxM, identTypeIntM] [2, 1]
-
 -- The vector with NO declaration position at all, so a rigid can sit at
 -- position 0 or 1 without colliding with a declaration slot.
 keyIxNoDecl : RegKey
@@ -189,63 +223,6 @@ headBareFoo = Some (HkDecl (TkBare NsType "Foo"))
 
 headRigidA : Option HeadKey
 headRigidA = Some (HkRigid "a")
-
--- The same `Ident` registered twice under opposite call orders.
-mregOrderA : MultiRegistry Int
-mregOrderA = mregAdd identTypeFooM 2 (mregAdd identTypeFooM 1 mregEmpty)
-
-mregOrderB : MultiRegistry Int
-mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
-
--- The assoc-list half: the SAME bare name `Box` declared by two unrelated
--- modules, plus what a flat driver mints for it (no identity at all).
-tabA : TabKey
-tabA = tabKeyOf NsType (OriginModule "apub") "Box"
-
-tabZ : TabKey
-tabZ = tabKeyOf NsType (OriginModule "zopapub") "Box"
-
--- ⚠️ Spelled with the CONSTRUCTOR rather than `tabKeyOf NsType
--- OriginUnresolved "Box"`, for the reason the module header gives: the #1110
--- producer ratchet pins the file set carrying a live `OriginUnresolved`
--- mention.
-tabU : TabKey
-tabU = TkBare NsType "Box"
-
--- `zopapub` registered LAST, so it is at the FRONT of the prepend.
-tabTable : List (TabKey, Int)
-tabTable = [(tabZ, 2), (tabA, 1)]
-
--- The composite half: one parameter SLOT of two same-named interfaces from
--- two unrelated modules, and the flat driver's identity-less mint for it.
-ifaceP : TabKey
-ifaceP = tabKeyOf NsIface (OriginModule "pmod") "Same"
-
--- ⚠️ Spelled with the CONSTRUCTOR rather than `tabKeyOf NsIface
--- OriginUnresolved "Same"`, for the reason the module header gives: the
--- #1110 producer ratchet pins the file set carrying a live `OriginUnresolved`
--- mention.
-ifaceU : TabKey
-ifaceU = TkBare NsIface "Same"
-
-slotPA : RegKey
-slotPA = regKeyTabAt ifaceP 0
-
-slotUA : RegKey
-slotUA = regKeyTabAt ifaceU 0
-
--- `HeadKey`'s peers of `tabA`/`tabZ`/`tabU`.
-headA : HeadKey
-headA = headKeyOfCon (OriginModule "apub") "Box"
-
-headZ : HeadKey
-headZ = headKeyOfCon (OriginModule "zopapub") "Box"
-
--- ⚠️ Spelled with the CONSTRUCTORS, not as `headKeyOfCon OriginUnresolved
--- "Box"`, for the reason the module header gives: the #1110 producer ratchet
--- pins the file set carrying a live `OriginUnresolved` mention.
-headU : HeadKey
-headU = HkDecl (TkBare NsType "Box")
 
 -- ── The namespace half of `regKeyRender` ──────────────────────────────────
 -- A `Registry` distinguishes two keys that differ ONLY in their namespace.

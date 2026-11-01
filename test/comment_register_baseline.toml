@@ -52,7 +52,7 @@ count = 13
 [[entry]]
 file = "compiler/backend/llvm_emit.mdk"
 class = "shout"
-count = 16
+count = 14
 
 [[entry]]
 file = "compiler/backend/trmc_analysis.mdk"
@@ -77,7 +77,7 @@ count = 2
 [[entry]]
 file = "compiler/backend/wasm_emit.mdk"
 class = "emoji"
-count = 5
+count = 4
 
 [[entry]]
 file = "compiler/backend/wasm_emit.mdk"
@@ -185,11 +185,6 @@ class = "shout"
 count = 1
 
 [[entry]]
-file = "compiler/entries/entry_support.mdk"
-class = "shout"
-count = 1
-
-[[entry]]
 file = "compiler/entries/fuzz_gen_main.mdk"
 class = "shout"
 count = 1
@@ -257,12 +252,12 @@ count = 1
 [[entry]]
 file = "compiler/eval/eval.mdk"
 class = "emoji"
-count = 19
+count = 13
 
 [[entry]]
 file = "compiler/eval/eval.mdk"
 class = "shout"
-count = 26
+count = 17
 
 [[entry]]
 file = "compiler/frontend/ast.mdk"
@@ -420,11 +415,6 @@ class = "history"
 count = 1
 
 [[entry]]
-file = "compiler/tools/lint_shared.mdk"
-class = "history"
-count = 1
-
-[[entry]]
 file = "compiler/tools/lsp.mdk"
 class = "emoji"
 count = 1
@@ -522,7 +512,7 @@ count = 10
 [[entry]]
 file = "compiler/types/registry.mdk"
 class = "emoji"
-count = 39
+count = 36
 
 [[entry]]
 file = "compiler/types/registry.mdk"
@@ -532,17 +522,17 @@ count = 1
 [[entry]]
 file = "compiler/types/registry.mdk"
 class = "shout"
-count = 35
+count = 33
 
 [[entry]]
 file = "compiler/types/registry_test.mdk"
 class = "emoji"
-count = 6
+count = 2
 
 [[entry]]
 file = "compiler/types/registry_test.mdk"
 class = "shout"
-count = 4
+count = 3
 
 [[entry]]
 file = "compiler/types/repr.mdk"
@@ -567,7 +557,7 @@ count = 1
 [[entry]]
 file = "compiler/types/tc_env.mdk"
 class = "history"
-count = 11
+count = 9
 
 [[entry]]
 file = "compiler/types/tc_env.mdk"
@@ -582,7 +572,7 @@ count = 3
 [[entry]]
 file = "compiler/types/tc_env.mdk"
 class = "draft"
-count = 3
+count = 2
 
 [[entry]]
 file = "compiler/types/tc_scope.mdk"
@@ -627,7 +617,7 @@ count = 15
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 17
+count = 16
 
 [[entry]]
 file = "pds/lib/accesslog.mdk"

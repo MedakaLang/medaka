@@ -1,5 +1,5 @@
 # META
-source_lines=442
+source_lines=424
 stages=DESUGAR,MARK
 # SOURCE
 -- Effect atoms and rows. An atom is a resolved label refined by an authority
@@ -426,24 +426,6 @@ finishChunks : List (List Atom) -> List Atom
 finishChunks [] = []
 finishChunks [labels] = labels
 finishChunks chunks = atomsUnion [] (flattenChunks chunks [])
-
-export
-dedupCells : List (Ref Effvar) -> List (Ref Effvar)
-dedupCells cells = reverseL (dedupCellsGo cells Tip [])
-
--- `rowFlat` returns unbound cells, but this public helper is also used while
--- constructing joins. Keep the first cell for each stable identity.
-dedupCellsGo : List (Ref Effvar) ->
-  Map Int Unit ->
-  List (Ref Effvar) ->
-  List (Ref Effvar)
-dedupCellsGo [] _ acc = acc
-dedupCellsGo (cell :: cells) seen acc =
-  let id = effvarId cell
-  if has id seen then
-    dedupCellsGo cells seen acc
-  else
-    dedupCellsGo cells (set id () seen) (cell :: acc)
 # DESUGAR
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
@@ -598,11 +580,6 @@ dedupCellsGo (cell :: cells) seen acc =
 (DFunDef false "finishChunks" ((PList)) (EListLit))
 (DFunDef false "finishChunks" ((PList (PVar "labels"))) (EVar "labels"))
 (DFunDef false "finishChunks" ((PVar "chunks")) (EApp (EApp (EVar "atomsUnion") (EListLit)) (EApp (EApp (EVar "flattenChunks") (EVar "chunks")) (EListLit))))
-(DTypeSig true "dedupCells" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar")))))
-(DFunDef false "dedupCells" ((PVar "cells")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "dedupCellsGo") (EVar "cells")) (EVar "Tip")) (EListLit))))
-(DTypeSig false "dedupCellsGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar")))))))
-(DFunDef false "dedupCellsGo" ((PList) PWild (PVar "acc")) (EVar "acc"))
-(DFunDef false "dedupCellsGo" ((PCons (PVar "cell") (PVar "cells")) (PVar "seen") (PVar "acc")) (EBlock (DoLet false false (PVar "id") (EApp (EVar "effvarId") (EVar "cell"))) (DoExpr (EIf (EApp (EApp (EVar "has") (EVar "id")) (EVar "seen")) (EApp (EApp (EApp (EVar "dedupCellsGo") (EVar "cells")) (EVar "seen")) (EVar "acc")) (EApp (EApp (EApp (EVar "dedupCellsGo") (EVar "cells")) (EApp (EApp (EApp (EVar "set") (EVar "id")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EVar "cell") (EVar "acc")))))))
 # MARK
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
@@ -757,8 +734,3 @@ dedupCellsGo (cell :: cells) seen acc =
 (DFunDef false "finishChunks" ((PList)) (EListLit))
 (DFunDef false "finishChunks" ((PList (PVar "labels"))) (EVar "labels"))
 (DFunDef false "finishChunks" ((PVar "chunks")) (EApp (EApp (EVar "atomsUnion") (EListLit)) (EApp (EApp (EVar "flattenChunks") (EVar "chunks")) (EListLit))))
-(DTypeSig true "dedupCells" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar")))))
-(DFunDef false "dedupCells" ((PVar "cells")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "dedupCellsGo") (EVar "cells")) (EVar "Tip")) (EListLit))))
-(DTypeSig false "dedupCellsGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar")))))))
-(DFunDef false "dedupCellsGo" ((PList) PWild (PVar "acc")) (EVar "acc"))
-(DFunDef false "dedupCellsGo" ((PCons (PVar "cell") (PVar "cells")) (PVar "seen") (PVar "acc")) (EBlock (DoLet false false (PVar "id") (EApp (EVar "effvarId") (EVar "cell"))) (DoExpr (EIf (EApp (EApp (EVar "has") (EVar "id")) (EVar "seen")) (EApp (EApp (EApp (EVar "dedupCellsGo") (EVar "cells")) (EVar "seen")) (EVar "acc")) (EApp (EApp (EApp (EVar "dedupCellsGo") (EVar "cells")) (EApp (EApp (EApp (EVar "set") (EVar "id")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EVar "cell") (EVar "acc")))))))

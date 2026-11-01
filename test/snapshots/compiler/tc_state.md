@@ -1,5 +1,5 @@
 # META
-source_lines=1200
+source_lines=1172
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_state: mints, copies and carries of the state records (including `emptyShadowDicts`, the
@@ -1174,34 +1174,6 @@ scopeTraceContext gctx sid =
 export
 scopeFrameStats : GraphCtx -> (Int, Int)
 scopeFrameStats gctx = Scopes.scopeFrameStats (currentScopeStore gctx ())
-
--- Test-only seam: the names a default body's evidence binders render to.  Its
--- method-level slots are dictionary parameters of the lowered body; its receiver is
--- never a parameter -- lowering and eval rebind it per instance (`defaultReceiverDict`).
-defaultBodyBinderNamesProbe : Unit -> List String
-defaultBodyBinderNamesProbe _ =
-  let gctx = probeGraphCtx ()
-  let iface =
-    IfaceRef { irName = "Supply", irOrigin = OriginModule "owner-module" }
-  let owner = DefaultBodyIdentity { dbiIface = iface, dbiMethod = "copy" }
-  let store = currentScopeStore gctx ()
-  let root = Scopes.freshScope store None 0 "owner-module" ModuleOwner
-  let body =
-    Scopes.freshScope
-      store
-      (Some root)
-      1
-      "owner-module"
-      (DefaultBodyOwner owner)
-  let rendered = [
-    renderEvidenceBinder gctx (Scopes.binderAt body 0),
-    renderEvidenceBinder gctx (Scopes.binderAt body 1),
-    renderEvidenceBinder gctx (Scopes.binderAt body defaultReceiverOrdinal),
-  ]
-  rendered
-
--- > defaultBodyBinderNamesProbe ()
--- ["$dict_copy_0", "$dict_copy_1", "$self_copy"]
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_mono") ((mem "locEq" false) (mem "monoScheme" false) (mem "tconBuiltin" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "TyConOrigin" true) (mem "defaultReceiverDict" false))))
@@ -1367,8 +1339,6 @@ defaultBodyBinderNamesProbe _ =
 (DFunDef false "scopeTraceContext" ((PVar "gctx") (PVar "sid")) (EApp (EApp (EVar "Scopes.scopeTraceContext") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (EVar "sid")))
 (DTypeSig true "scopeFrameStats" (TyFun (TyCon "GraphCtx") (TyTuple (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "scopeFrameStats" ((PVar "gctx")) (EApp (EVar "Scopes.scopeFrameStats") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))))
-(DTypeSig false "defaultBodyBinderNamesProbe" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "defaultBodyBinderNamesProbe" (PWild) (EBlock (DoLet false false (PVar "gctx") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "iface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "Supply"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "owner-module"))))))) (DoLet false false (PVar "owner") (ERecordCreate "DefaultBodyIdentity" ((fa "dbiIface" (EVar "iface")) (fa "dbiMethod" (ELit (LString "copy")))))) (DoLet false false (PVar "store") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (DoLet false false (PVar "root") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EVar "None")) (ELit (LInt 0))) (ELit (LString "owner-module"))) (EVar "ModuleOwner"))) (DoLet false false (PVar "body") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EApp (EVar "Some") (EVar "root"))) (ELit (LInt 1))) (ELit (LString "owner-module"))) (EApp (EVar "DefaultBodyOwner") (EVar "owner")))) (DoLet false false (PVar "rendered") (EListLit (EApp (EApp (EVar "renderEvidenceBinder") (EVar "gctx")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "body")) (ELit (LInt 0)))) (EApp (EApp (EVar "renderEvidenceBinder") (EVar "gctx")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "body")) (ELit (LInt 1)))) (EApp (EApp (EVar "renderEvidenceBinder") (EVar "gctx")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "body")) (EVar "defaultReceiverOrdinal"))))) (DoExpr (EVar "rendered"))))
 # MARK
 (DUse false (UseGroup ("types" "tc_mono") ((mem "locEq" false) (mem "monoScheme" false) (mem "tconBuiltin" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "TyConOrigin" true) (mem "defaultReceiverDict" false))))
@@ -1534,5 +1504,3 @@ defaultBodyBinderNamesProbe _ =
 (DFunDef false "scopeTraceContext" ((PVar "gctx") (PVar "sid")) (EApp (EApp (EVar "Scopes.scopeTraceContext") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (EVar "sid")))
 (DTypeSig true "scopeFrameStats" (TyFun (TyCon "GraphCtx") (TyTuple (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "scopeFrameStats" ((PVar "gctx")) (EApp (EVar "Scopes.scopeFrameStats") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))))
-(DTypeSig false "defaultBodyBinderNamesProbe" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "defaultBodyBinderNamesProbe" (PWild) (EBlock (DoLet false false (PVar "gctx") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "iface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "Supply"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "owner-module"))))))) (DoLet false false (PVar "owner") (ERecordCreate "DefaultBodyIdentity" ((fa "dbiIface" (EVar "iface")) (fa "dbiMethod" (ELit (LString "copy")))))) (DoLet false false (PVar "store") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (DoLet false false (PVar "root") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EVar "None")) (ELit (LInt 0))) (ELit (LString "owner-module"))) (EVar "ModuleOwner"))) (DoLet false false (PVar "body") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EApp (EVar "Some") (EVar "root"))) (ELit (LInt 1))) (ELit (LString "owner-module"))) (EApp (EVar "DefaultBodyOwner") (EVar "owner")))) (DoLet false false (PVar "rendered") (EListLit (EApp (EApp (EVar "renderEvidenceBinder") (EVar "gctx")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "body")) (ELit (LInt 0)))) (EApp (EApp (EVar "renderEvidenceBinder") (EVar "gctx")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "body")) (ELit (LInt 1)))) (EApp (EApp (EVar "renderEvidenceBinder") (EVar "gctx")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "body")) (EVar "defaultReceiverOrdinal"))))) (DoExpr (EVar "rendered"))))

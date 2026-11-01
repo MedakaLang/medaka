@@ -464,7 +464,6 @@ export
 letters : String
 letters = "abcdefghijklmnopqrstuvwxyz"
 
-export
 nameOf : Ref (List (Int, String)) -> Ref Int -> Int -> String
 nameOf ctx cnt id = match lookupAssocI id !ctx
   Some s => s

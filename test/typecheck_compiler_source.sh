@@ -305,6 +305,9 @@ compiler/tools/prop_runner_test.mdk"
 # same sprint. A filename entry granted on "nothing calls this file" cannot survive
 # the file acquiring callers, so the exemption is pinned to its four actual lines
 # the way the typecheck family's is.
+# `types/tc_env_test.mdk` holds the impl-environment probe corpus (the `ieByHead` immunity
+# probe row carries an unresolved impl origin) that used to sit in `tc_env.mdk` beside the
+# doctests it served; the fixture is a test input and the file feeds no pipeline stage.
 # The scope and typecheck sibling tests observe unresolved default-owner origins
 # in total matches. Their sole eliminator lines are pinned below; this grants no
 # new constructor mint.
@@ -329,6 +332,7 @@ compiler/types/route_key.mdk
 compiler/types/scopes_test.mdk
 compiler/types/tc_diag_text.mdk
 compiler/types/tc_env.mdk
+compiler/types/tc_env_test.mdk
 compiler/types/tc_module.mdk
 compiler/types/tc_mono.mdk
 compiler/types/tc_solve.mdk

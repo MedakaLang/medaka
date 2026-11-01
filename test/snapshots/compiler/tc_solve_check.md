@@ -1,5 +1,5 @@
 # META
-source_lines=3487
+source_lines=3429
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve_check: the solver boundary judgments and the write side of a binder's dictionary
@@ -11,9 +11,9 @@ stages=DESUGAR,MARK
 -- `maybeInferConstraint`); and the registration of what the sites read back: predicate slots, dict
 -- arity and the constraint tables (`registerReqSlots`, `registerImplRequires`, `registerMember`,
 -- `registerConstraintRegs`, `registerInferredFor`, `inferredPredicateSlots`,
--- `declaredPredicateSlots`, `setFunConstraintEntry`, the slot keys `cslotKey` and `cslotVecKey`,
--- the test-only probe `inferredPredicateSlotsProbe`), with the lookups of an interface by
--- constraint id they use (`ifaceForConstraintId`, `ifaceForInferredId`).
+-- `declaredPredicateSlots`, `setFunConstraintEntry`, the slot keys `cslotKey` and `cslotVecKey`),
+-- with the lookups of an interface by constraint id they use (`ifaceForConstraintId`,
+-- `ifaceForInferredId`).
 --
 -- Spec: DICT section 3 (the residual walk), section 4 `gen`/`gen-sig` (the point of evidence
 -- abstraction; inferred-constraint promotion: the inferred P' becomes the scheme's context),
@@ -3431,64 +3431,6 @@ ifaceForConstraintIdGo id (o :: rest) = match o.oblProj
       else
         ifaceForConstraintIdGo id rest
     _ => ifaceForConstraintIdGo id rest
-
--- test-only observation: declarations whose only callers are tests and probes.
-
--- Private producer probe: same-lead predicates stay distinct, an exact duplicate
--- collapses, a multi-argument predicate owns one slot, a vector whose lead is another
--- predicate's non-lead survives, and a trace-only id retains PSArgsUnknown.
--- > inferredPredicateSlotsProbe (initialModuleCtx (probeGraphCtx ())) ()
--- [("Tweak", ["a", "Int"], ["a"]), ("Tweak", ["a", "Bool"], ["a"]), ("Ix", ["a", "b"], ["a", "b"]), ("Num", ["b"], ["b"]), ("", ["?"], ["c"])]
-inferredPredicateSlotsProbe : ModuleCtx ->
-  Unit ->
-  List (String, List String, List String)
-inferredPredicateSlotsProbe mctx _ =
-  let a = freshVar mctx ()
-  let b = freshVar mctx ()
-  let c = freshVar mctx ()
-  let aid = firstOrZero (monoTyvarIds a)
-  let bid = firstOrZero (monoTyvarIds b)
-  let cid = firstOrZero (monoTyvarIds c)
-  let tweak = ifaceRefBare "Tweak"
-  let slots =
-    inferredPredicateSlots
-      mctx
-      "__inferred_predicate_slot_probe__"
-      [aid, bid, cid]
-      [
-        (tweak, aid, [a, tconBuiltin "Int"]),
-        (tweak, aid, [a, tconBuiltin "Bool"]),
-        (tweak, aid, [a, tconBuiltin "Int"]),
-        (ifaceRefBare "Ix", aid, [a, b]),
-        (ifaceRefBare "Num", bid, [b]),
-      ]
-  map (inferredPredicateSlotProbeRow aid bid cid) slots
-
-inferredPredicateSlotProbeRow : Int ->
-  Int ->
-  Int ->
-  PredicateSlot ->
-  (String, List String, List String)
-inferredPredicateSlotProbeRow aid bid cid slot = (
-  slot.psIface.irName,
-  match slot.psArgs
-    PSArgsUnknown => ["?"]
-    PSArgsKnown args => map (inferredPredicateSlotMonoTag aid bid cid) args,
-  map (inferredPredicateSlotIdTag aid bid cid) slot.psBoundIds,
-)
-
-inferredPredicateSlotMonoTag : Int -> Int -> Int -> Mono -> String
-inferredPredicateSlotMonoTag aid bid cid mono = match peelQual mono
-  TVar cell => inferredPredicateSlotIdTag aid bid cid (tyvarId cell)
-  TCon name _ => name
-  _ => "_"
-
-inferredPredicateSlotIdTag : Int -> Int -> Int -> Int -> String
-inferredPredicateSlotIdTag aid bid cid id
-  | id == aid = "a"
-  | id == bid = "b"
-  | id == cid = "c"
-  | otherwise = "_"
 # DESUGAR
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "Provenance" true) (mem "PredicateSlotArgs" true) (mem "OblProjection" true) (mem "NumericPredicateTraceStage" true) (mem "NumBoundaryDisposition" true) (mem "MethodReturnTraceStage" true) (mem "GoalReach" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "CDeclaredPrefix" true) (mem "BuiltinClass" true) (mem "ArmedGuard" true) (mem "CSlot" true) (mem "JoinContext" true) (mem "LocalAbs" true) (mem "NumGuard" true) (mem "Predicate" true) (mem "PredicateSlot" true) (mem "ReqStep" true) (mem "SiteCtx" true) (mem "SuperGoalEntry" true) (mem "UObligation" true) (mem "ClassEnv" false) (mem "ConstraintReg" false) (mem "DeclaringBinder" false) (mem "DynCtx" false) (mem "dynFor" false) (mem "GoalWindow" false) (mem "GraphCtx" false) (mem "ImplRow" false) (mem "ImplUniverse" false) (mem "MethodReturnRequest" false) (mem "MethodReturnResolution" false) (mem "ModuleCtx" false) (mem "NumBoundary" false) (mem "PendingDictApp" false) (mem "ReqWalk" false) (mem "ScopedImplMethod" false) (mem "ScopedScheme" false) (mem "siteFor" false))))
@@ -3861,14 +3803,6 @@ inferredPredicateSlotIdTag aid bid cid id
 (DTypeSig false "ifaceForConstraintIdGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "IfaceRef"))))
 (DFunDef false "ifaceForConstraintIdGo" (PWild (PList)) (EVar "ifaceRefNone"))
 (DFunDef false "ifaceForConstraintIdGo" ((PVar "id") (PCons (PVar "o") (PVar "rest"))) (EMatch (EFieldAccess (EVar "o") "oblProj") (arm (PCon "OpMethodOcc" PWild PWild (PVar "occ") PWild) () (EMatch (EApp (EVar "normalize") (EVar "occ")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface") (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EVar "rest")))) (arm PWild () (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EVar "rest"))))) (arm (PCon "OpExactReturn" (PVar "request")) () (EMatch (EApp (EVar "normalize") (EFieldAccess (EVar "request") "mrrOccurrence")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EFieldAccess (EVar "request") "mrrIface") (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EVar "rest")))) (arm PWild () (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EVar "rest"))))) (arm (PCon "OpProjected") () (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EVar "rest"))) (arm (PCon "OpNumLit" (PVar "occ")) () (EMatch (EApp (EVar "normalize") (EVar "occ")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface") (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EVar "rest")))) (arm PWild () (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EVar "rest")))))))
-(DTypeSig false "inferredPredicateSlotsProbe" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "inferredPredicateSlotsProbe" ((PVar "mctx") PWild) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "freshVar") (EVar "mctx")) (ELit LUnit))) (DoLet false false (PVar "b") (EApp (EApp (EVar "freshVar") (EVar "mctx")) (ELit LUnit))) (DoLet false false (PVar "c") (EApp (EApp (EVar "freshVar") (EVar "mctx")) (ELit LUnit))) (DoLet false false (PVar "aid") (EApp (EVar "firstOrZero") (EApp (EVar "monoTyvarIds") (EVar "a")))) (DoLet false false (PVar "bid") (EApp (EVar "firstOrZero") (EApp (EVar "monoTyvarIds") (EVar "b")))) (DoLet false false (PVar "cid") (EApp (EVar "firstOrZero") (EApp (EVar "monoTyvarIds") (EVar "c")))) (DoLet false false (PVar "tweak") (EApp (EVar "ifaceRefBare") (ELit (LString "Tweak")))) (DoLet false false (PVar "slots") (EApp (EApp (EApp (EApp (EVar "inferredPredicateSlots") (EVar "mctx")) (ELit (LString "__inferred_predicate_slot_probe__"))) (EListLit (EVar "aid") (EVar "bid") (EVar "cid"))) (EListLit (ETuple (EVar "tweak") (EVar "aid") (EListLit (EVar "a") (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))) (ETuple (EVar "tweak") (EVar "aid") (EListLit (EVar "a") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (ETuple (EVar "tweak") (EVar "aid") (EListLit (EVar "a") (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))) (ETuple (EApp (EVar "ifaceRefBare") (ELit (LString "Ix"))) (EVar "aid") (EListLit (EVar "a") (EVar "b"))) (ETuple (EApp (EVar "ifaceRefBare") (ELit (LString "Num"))) (EVar "bid") (EListLit (EVar "b")))))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "inferredPredicateSlotProbeRow") (EVar "aid")) (EVar "bid")) (EVar "cid"))) (EVar "slots")))))
-(DTypeSig false "inferredPredicateSlotProbeRow" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "PredicateSlot") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "inferredPredicateSlotProbeRow" ((PVar "aid") (PVar "bid") (PVar "cid") (PVar "slot")) (ETuple (EFieldAccess (EFieldAccess (EVar "slot") "psIface") "irName") (EMatch (EFieldAccess (EVar "slot") "psArgs") (arm (PCon "PSArgsUnknown") () (EListLit (ELit (LString "?")))) (arm (PCon "PSArgsKnown" (PVar "args")) () (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "inferredPredicateSlotMonoTag") (EVar "aid")) (EVar "bid")) (EVar "cid"))) (EVar "args")))) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "inferredPredicateSlotIdTag") (EVar "aid")) (EVar "bid")) (EVar "cid"))) (EFieldAccess (EVar "slot") "psBoundIds"))))
-(DTypeSig false "inferredPredicateSlotMonoTag" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "String"))))))
-(DFunDef false "inferredPredicateSlotMonoTag" ((PVar "aid") (PVar "bid") (PVar "cid") (PVar "mono")) (EMatch (EApp (EVar "peelQual") (EVar "mono")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EApp (EApp (EApp (EVar "inferredPredicateSlotIdTag") (EVar "aid")) (EVar "bid")) (EVar "cid")) (EApp (EVar "tyvarId") (EVar "cell")))) (arm (PCon "TCon" (PVar "name") PWild) () (EVar "name")) (arm PWild () (ELit (LString "_")))))
-(DTypeSig false "inferredPredicateSlotIdTag" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))))
-(DFunDef false "inferredPredicateSlotIdTag" ((PVar "aid") (PVar "bid") (PVar "cid") (PVar "id")) (EIf (EBinOp "==" (EVar "id") (EVar "aid")) (ELit (LString "a")) (EIf (EBinOp "==" (EVar "id") (EVar "bid")) (ELit (LString "b")) (EIf (EBinOp "==" (EVar "id") (EVar "cid")) (ELit (LString "c")) (EIf (EVar "otherwise") (ELit (LString "_")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 # MARK
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "Provenance" true) (mem "PredicateSlotArgs" true) (mem "OblProjection" true) (mem "NumericPredicateTraceStage" true) (mem "NumBoundaryDisposition" true) (mem "MethodReturnTraceStage" true) (mem "GoalReach" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "CDeclaredPrefix" true) (mem "BuiltinClass" true) (mem "ArmedGuard" true) (mem "CSlot" true) (mem "JoinContext" true) (mem "LocalAbs" true) (mem "NumGuard" true) (mem "Predicate" true) (mem "PredicateSlot" true) (mem "ReqStep" true) (mem "SiteCtx" true) (mem "SuperGoalEntry" true) (mem "UObligation" true) (mem "ClassEnv" false) (mem "ConstraintReg" false) (mem "DeclaringBinder" false) (mem "DynCtx" false) (mem "dynFor" false) (mem "GoalWindow" false) (mem "GraphCtx" false) (mem "ImplRow" false) (mem "ImplUniverse" false) (mem "MethodReturnRequest" false) (mem "MethodReturnResolution" false) (mem "ModuleCtx" false) (mem "NumBoundary" false) (mem "PendingDictApp" false) (mem "ReqWalk" false) (mem "ScopedImplMethod" false) (mem "ScopedScheme" false) (mem "siteFor" false))))
@@ -4241,11 +4175,3 @@ inferredPredicateSlotIdTag aid bid cid id
 (DTypeSig false "ifaceForConstraintIdGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "IfaceRef"))))
 (DFunDef false "ifaceForConstraintIdGo" (PWild (PList)) (EVar "ifaceRefNone"))
 (DFunDef false "ifaceForConstraintIdGo" ((PVar "id") (PCons (PVar "o") (PVar "rest"))) (EMatch (EFieldAccess (EVar "o") "oblProj") (arm (PCon "OpMethodOcc" PWild PWild (PVar "occ") PWild) () (EMatch (EApp (EVar "normalize") (EVar "occ")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface") (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EVar "rest")))) (arm PWild () (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EVar "rest"))))) (arm (PCon "OpExactReturn" (PVar "request")) () (EMatch (EApp (EVar "normalize") (EFieldAccess (EVar "request") "mrrOccurrence")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EFieldAccess (EVar "request") "mrrIface") (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EVar "rest")))) (arm PWild () (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EVar "rest"))))) (arm (PCon "OpProjected") () (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EVar "rest"))) (arm (PCon "OpNumLit" (PVar "occ")) () (EMatch (EApp (EVar "normalize") (EVar "occ")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface") (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EVar "rest")))) (arm PWild () (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EVar "rest")))))))
-(DTypeSig false "inferredPredicateSlotsProbe" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "inferredPredicateSlotsProbe" ((PVar "mctx") PWild) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "freshVar") (EVar "mctx")) (ELit LUnit))) (DoLet false false (PVar "b") (EApp (EApp (EVar "freshVar") (EVar "mctx")) (ELit LUnit))) (DoLet false false (PVar "c") (EApp (EApp (EVar "freshVar") (EVar "mctx")) (ELit LUnit))) (DoLet false false (PVar "aid") (EApp (EVar "firstOrZero") (EApp (EVar "monoTyvarIds") (EVar "a")))) (DoLet false false (PVar "bid") (EApp (EVar "firstOrZero") (EApp (EVar "monoTyvarIds") (EVar "b")))) (DoLet false false (PVar "cid") (EApp (EVar "firstOrZero") (EApp (EVar "monoTyvarIds") (EVar "c")))) (DoLet false false (PVar "tweak") (EApp (EVar "ifaceRefBare") (ELit (LString "Tweak")))) (DoLet false false (PVar "slots") (EApp (EApp (EApp (EApp (EVar "inferredPredicateSlots") (EVar "mctx")) (ELit (LString "__inferred_predicate_slot_probe__"))) (EListLit (EVar "aid") (EVar "bid") (EVar "cid"))) (EListLit (ETuple (EVar "tweak") (EVar "aid") (EListLit (EVar "a") (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))) (ETuple (EVar "tweak") (EVar "aid") (EListLit (EVar "a") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (ETuple (EVar "tweak") (EVar "aid") (EListLit (EVar "a") (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))) (ETuple (EApp (EVar "ifaceRefBare") (ELit (LString "Ix"))) (EVar "aid") (EListLit (EVar "a") (EVar "b"))) (ETuple (EApp (EVar "ifaceRefBare") (ELit (LString "Num"))) (EVar "bid") (EListLit (EVar "b")))))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "inferredPredicateSlotProbeRow") (EVar "aid")) (EVar "bid")) (EVar "cid"))) (EVar "slots")))))
-(DTypeSig false "inferredPredicateSlotProbeRow" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "PredicateSlot") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "inferredPredicateSlotProbeRow" ((PVar "aid") (PVar "bid") (PVar "cid") (PVar "slot")) (ETuple (EFieldAccess (EFieldAccess (EVar "slot") "psIface") "irName") (EMatch (EFieldAccess (EVar "slot") "psArgs") (arm (PCon "PSArgsUnknown") () (EListLit (ELit (LString "?")))) (arm (PCon "PSArgsKnown" (PVar "args")) () (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "inferredPredicateSlotMonoTag") (EVar "aid")) (EVar "bid")) (EVar "cid"))) (EVar "args")))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "inferredPredicateSlotIdTag") (EVar "aid")) (EVar "bid")) (EVar "cid"))) (EFieldAccess (EVar "slot") "psBoundIds"))))
-(DTypeSig false "inferredPredicateSlotMonoTag" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "String"))))))
-(DFunDef false "inferredPredicateSlotMonoTag" ((PVar "aid") (PVar "bid") (PVar "cid") (PVar "mono")) (EMatch (EApp (EVar "peelQual") (EVar "mono")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EApp (EApp (EApp (EVar "inferredPredicateSlotIdTag") (EVar "aid")) (EVar "bid")) (EVar "cid")) (EApp (EVar "tyvarId") (EVar "cell")))) (arm (PCon "TCon" (PVar "name") PWild) () (EVar "name")) (arm PWild () (ELit (LString "_")))))
-(DTypeSig false "inferredPredicateSlotIdTag" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))))
-(DFunDef false "inferredPredicateSlotIdTag" ((PVar "aid") (PVar "bid") (PVar "cid") (PVar "id")) (EIf (EBinOp "==" (EVar "id") (EVar "aid")) (ELit (LString "a")) (EIf (EBinOp "==" (EVar "id") (EVar "bid")) (ELit (LString "b")) (EIf (EBinOp "==" (EVar "id") (EVar "cid")) (ELit (LString "c")) (EIf (EVar "otherwise") (ELit (LString "_")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))

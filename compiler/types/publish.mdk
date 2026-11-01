@@ -649,7 +649,6 @@ liveCells name (PubScheme { psScheme = (Forall ids effIds authIds residuals row 
 
 -- At graph end nothing in the graph can fix an unquantified cell: it is a
 -- weak variable.
-export
 atGraphEnd : List LiveCell -> List LiveCell
 atGraphEnd = map toWeak
 

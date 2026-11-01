@@ -1,5 +1,5 @@
 # META
-source_lines=3708
+source_lines=3361
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_occurrence: method and literal occurrence inference, operator dispatch-site recording
@@ -3321,205 +3321,6 @@ firstMethodRow : List MethodSchemeRow -> MethodSchemeRow
 firstMethodRow (row :: _) = row
 firstMethodRow [] = panic "method-row observer expected a row"
 
-observeMethodSchemeRowsForTest : Unit -> MethodRowTestObservation
-observeMethodSchemeRowsForTest _ =
-  let graph1 = probeGraphCtx ()
-
-  let rows1 = initialModuleCtx graph1
-  let constrainedRow =
-    firstMethodRow (ifaceMethodSchemeRows rows1 [methodRowTestFoldMapDecl])
-  let constrainedIds = schemeIds constrainedRow.msrScheme
-  let constrainedSlots = constrainedRow.msrMethodSlots
-  let constrainedBoundIds = methodSlotBoundIds constrainedSlots
-  let constrainedPositions = methodSlotPositions constrainedSlots
-  let constrainedIdsAtPositions =
-    methodSlotIdsAtPositions constrainedIds constrainedSlots
-  let constrainedArgumentIds = methodSlotArgumentIds constrainedSlots
-
-  let graph2 = freshSubRecordsOf graph1
-  let rows2 = carryModuleCtx graph2 rows1
-  let counterBefore = graph2.graphRun.tyvarCounter.value
-  let firstRow =
-    firstMethodRow (ifaceMethodSchemeRows rows2 [methodRowTestFoldMapDecl])
-  let counterAfterFirst = graph2.graphRun.tyvarCounter.value
-  let secondRow =
-    firstMethodRow (ifaceMethodSchemeRows rows2 [methodRowTestFoldMapDecl])
-  let counterAfterSecond = graph2.graphRun.tyvarCounter.value
-  let firstSchemeIds = schemeIds firstRow.msrScheme
-  let secondSchemeIds = schemeIds secondRow.msrScheme
-  let firstRowSlotIds = methodSlotBoundIds firstRow.msrMethodSlots
-  let secondRowSlotIds = methodSlotBoundIds secondRow.msrMethodSlots
-  let registryAfterSecondSlotIds =
-    methodRowRegistrySlotIds rows2 (methodSlotKey firstRow.msrIface "foldMap")
-
-  let graph3 = freshSubRecordsOf graph1
-  let rows3 = carryModuleCtx graph3 rows2
-  let sameNameForward =
-    methodRowSameNameView
-      (ifaceMethodSchemeRows rows3 [methodRowTestSameA, methodRowTestSameB])
-  let graph4 = freshSubRecordsOf graph1
-  let rows4 = carryModuleCtx graph4 rows3
-  let sameNameReverse =
-    methodRowSameNameView
-      (ifaceMethodSchemeRows rows4 [methodRowTestSameB, methodRowTestSameA])
-
-  let graph5 = freshSubRecordsOf graph1
-  let rows5 = carryModuleCtx graph5 rows4
-  let constantRows = ifaceMethodSchemeRows rows5 [methodRowTestConstantDecl]
-  let constantRow = firstMethodRow constantRows
-  let constantBodyIsFunction =
-    match normalize (schemeBodyOf constantRow.msrScheme)
-      TFun _ _ _ => True
-      _ => False
-
-  let graph6 = freshSubRecordsOf graph1
-  let rows6 = carryModuleCtx graph6 rows5
-  let attributed = DAttrib [] methodRowTestFoldMapDecl
-  let attributedRows = ifaceMethodSchemeRows rows6 [attributed]
-  let attributedMethods =
-    methodEnvGo
-      graph6
-      [declEnvModule graph6 0 "foldable-test" [attributed]]
-      emptyMethodEnv
-  let (attributedParamIface, attributedParamTyparams) =
-    match optionOr [] (omLookup "foldMap" attributedMethods.meByName)
-      [] => ("", [])
-      r :: _ => match r.mrEntry
-        (iface, typarams, _, _) => (iface.irName, typarams)
-
-  let directNum =
-    methodRowTestNum
-      "direct-num"
-      (TyFun (tyConBuiltin "String" None) (TyVar "a"))
-  let attributedNum =
-    DAttrib
-      []
-      (methodRowTestNum
-        "attributed-num"
-        (TyFun (tyConBuiltin "Int" None) (TyVar "a")))
-  let builtinNum =
-    methodRowTestNum "builtin-num" (TyFun (tyConBuiltin "Int" None) (TyVar "a"))
-  let numAnchors = [
-    methodRowNumObservation rows6 "attrOnly" [attributedNum] [attributedNum],
-    methodRowNumObservation rows6 "directOnly" [directNum] [directNum],
-    methodRowNumObservation
-      rows6
-      "attrThenDirect"
-      [attributedNum, directNum]
-      [attributedNum, directNum],
-    methodRowNumObservation
-      rows6
-      "directThenAttr"
-      [directNum, attributedNum]
-      [directNum, attributedNum],
-    methodRowNumObservation
-      rows6
-      "builtinThenUser"
-      [builtinNum]
-      [builtinNum, methodRowTestUserFromInt],
-    methodRowNumObservation
-      rows6
-      "userThenBuiltin"
-      [builtinNum]
-      [methodRowTestUserFromInt, builtinNum],
-  ]
-
-  let observation = MethodRowTestObservation {
-    mrtoSchemeIds = constrainedIds,
-    mrtoSlotBoundIds = constrainedBoundIds,
-    mrtoSlotPositions = constrainedPositions,
-    mrtoSlotIdsAtPositions = constrainedIdsAtPositions,
-    mrtoSlotArgumentIds = constrainedArgumentIds,
-    mrtoCounterBefore = counterBefore,
-    mrtoCounterAfterFirst = counterAfterFirst,
-    mrtoCounterAfterSecond = counterAfterSecond,
-    mrtoFirstSchemeIds = firstSchemeIds,
-    mrtoSecondSchemeIds = secondSchemeIds,
-    mrtoFirstRowSlotIds = firstRowSlotIds,
-    mrtoSecondRowSlotIds = secondRowSlotIds,
-    mrtoRegistryAfterSecondSlotIds = registryAfterSecondSlotIds,
-    mrtoSameNameForward = sameNameForward,
-    mrtoSameNameReverse = sameNameReverse,
-    mrtoConstantRowCount = listLen constantRows,
-    mrtoConstantSchemeIdCount = listLen (schemeIds constantRow.msrScheme),
-    mrtoConstantBodyIsFunction = constantBodyIsFunction,
-    mrtoConstantSlotCount = listLen constantRow.msrMethodSlots,
-    mrtoAttributedRowCount = listLen attributedRows,
-    mrtoAttributedParamIface = attributedParamIface,
-    mrtoAttributedParamTyparams = attributedParamTyparams,
-    mrtoNumAnchors = numAnchors,
-  }
-  observation
-
-methodRowSlotAllocationProbe : Unit ->
-  (List Int, List (List Int), List (List Int), List (List Int), List (List Int))
-methodRowSlotAllocationProbe _ =
-  let observed = observeMethodSchemeRowsForTest ()
-  (
-    observed.mrtoSchemeIds,
-    observed.mrtoSlotBoundIds,
-    observed.mrtoSlotPositions,
-    observed.mrtoSlotIdsAtPositions,
-    observed.mrtoSlotArgumentIds,
-  )
-
--- > methodRowSlotAllocationProbe ()
--- ([0, 1, 2], [[1]], [[1]], [[1]], [[1]])
-
-methodRowFreshnessProbe : Unit ->
-  ((Int, Int, Int, List Int, List Int), (List (List Int), List (List Int), List (List Int)))
-methodRowFreshnessProbe _ =
-  let observed = observeMethodSchemeRowsForTest ()
-  (
-    (
-      observed.mrtoCounterBefore,
-      observed.mrtoCounterAfterFirst,
-      observed.mrtoCounterAfterSecond,
-      observed.mrtoFirstSchemeIds,
-      observed.mrtoSecondSchemeIds,
-    ),
-    (
-      observed.mrtoFirstRowSlotIds,
-      observed.mrtoSecondRowSlotIds,
-      observed.mrtoRegistryAfterSecondSlotIds,
-    ),
-  )
-
--- > methodRowFreshnessProbe ()
--- ((0, 3, 6, [0, 1, 2], [3, 4, 5]), ([[1]], [[4]], [[1]]))
-
-methodRowDeclarationProbe : Unit ->
-  (List (String, String, Int, Int), List (String, String, Int, Int), (Int, Int, Bool, Int))
-methodRowDeclarationProbe _ =
-  let observed = observeMethodSchemeRowsForTest ()
-  (
-    observed.mrtoSameNameForward,
-    observed.mrtoSameNameReverse,
-    (
-      observed.mrtoConstantRowCount,
-      observed.mrtoConstantSchemeIdCount,
-      observed.mrtoConstantBodyIsFunction,
-      observed.mrtoConstantSlotCount,
-    ),
-  )
-
--- > methodRowDeclarationProbe ()
--- ([("A", "same", 0, 0), ("A", "extra", 0, 0), ("B", "same", 1, 1)], [("B", "same", 1, 1), ("A", "same", 0, 0), ("A", "extra", 0, 0)], (1, 0, False, 0))
-
-methodRowNumericAnchorProbe : Unit ->
-  (Int, String, List String, List (String, Bool, Bool, String, String))
-methodRowNumericAnchorProbe _ =
-  let observed = observeMethodSchemeRowsForTest ()
-  (
-    observed.mrtoAttributedRowCount,
-    observed.mrtoAttributedParamIface,
-    observed.mrtoAttributedParamTyparams,
-    map numAnchorObservationView observed.mrtoNumAnchors,
-  )
-
--- > methodRowNumericAnchorProbe ()
--- (0, "Foldable", ["t"], [("attrOnly", False, False, "", ""), ("directOnly", True, True, "String -> a", "String -> a"), ("attrThenDirect", False, False, "", ""), ("directThenAttr", True, True, "String -> a", "String -> a"), ("builtinThenUser", True, True, "Int -> a", "Int -> a"), ("userThenBuiltin", True, True, "Int -> a", "Int -> a")])
-
 export
 methodReturnProbeRequest : ModuleCtx -> MethodSchemeRow -> MethodReturnRequest
 methodReturnProbeRequest mctx row =
@@ -3530,58 +3331,6 @@ methodReturnProbeRequest mctx row =
     inst.mtiBody
     inst.mtiSubstitution
     (Some (freshEvId mctx ()))
-
-methodReturnVectorCompletenessProbe : Unit ->
-  (Option (List String), Option (List String), Bool, Bool)
-methodReturnVectorCompletenessProbe _ =
-  let gctx = probeGraphCtx ()
-  let mctx = initialModuleCtx gctx
-  let _ = methodReturnProbeScope mctx "return-vector"
-  let zeroRow =
-    firstMethodRow
-      (ifaceMethodSchemeRows mctx [
-        methodRowTestIface "return-zero" "Zero" [] [
-          IfaceMethod
-            "make"
-            (TyFun (tyConBuiltin "Unit" None) (tyConBuiltin "Int" None))
-            None
-            None,
-        ],
-      ])
-  let partialRow =
-    firstMethodRow
-      (ifaceMethodSchemeRows mctx [
-        methodRowTestIface
-          "return-partial"
-          "Partial"
-          ["a", "b"]
-          [
-            IfaceMethod
-              "make"
-              (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
-              None
-              None,
-          ],
-      ])
-  let zeroArgs =
-    map
-      (map ppMono)
-      (methodReturnArgs gctx (methodReturnProbeRequest mctx zeroRow))
-  let partialArgs =
-    map
-      (map ppMono)
-      (methodReturnArgs gctx (methodReturnProbeRequest mctx partialRow))
-  let observed = (
-    zeroArgs,
-    partialArgs,
-    allMethodParamsMentioned zeroRow.msrTyparams zeroRow.msrType,
-    allMethodParamsMentioned partialRow.msrTyparams partialRow.msrType,
-  )
-  observed
-
--- The absent `b` of `Partial` reads the occurrence's own unbound variable.
--- > methodReturnVectorCompletenessProbe ()
--- (Some [], Some ["Int", "a"], True, False)
 
 -- Runs in a carry of [prev], the caller's record, in its graph record with a fresh
 -- graph run, and returns it beside the codes: it is the record left current.
@@ -3614,102 +3363,6 @@ methodReturnProbeCodes prev ownedRow impls =
       (reverseL mctx.mcCells.typeErrors.items.value),
     mctx,
   )
-
--- Runs in a carry of [prev], the caller's record, in its graph record with a fresh
--- graph run, and returns it beside the observation: it is the record left current.
-methodReturnProbeSlotCase : ModuleCtx ->
-  MethodSchemeRow ->
-  MethodSchemeRow ->
-  Bool ->
-  ((List String, List String), ModuleCtx)
-methodReturnProbeSlotCase prev ownedRow foreignRow retainOwner =
-  let gctx = GraphCtx { prev.mcGraph | graphRun = freshGraphRun () }
-  let mctx = carryModuleCtx gctx prev
-  let _ = methodReturnProbeScope mctx "return-owner-slots"
-  mctx.mcCells.methodPredicateSlotsRef :=
-    [(methodSlotKey foreignRow.msrIface "make", foreignRow.msrMethodSlots)]
-  methodReturnProbeSpelling mctx foreignRow
-  let env =
-    if retainOwner then
-      extendMethodRow (envFor mctx) "make" ownedRow
-    else
-      extendVar (envFor mctx) "make" ownedRow.msrScheme
-  let inst = instantiateMethodTracked mctx ownedRow.msrScheme
-  unify
-    mctx
-    (stripArrows inst.mtiBody)
-    (tupleMono [tconBuiltin "Int", tconBuiltin "Int"])
-  let _ =
-    recordSite
-      env
-      "make"
-      ownedRow.msrScheme
-      (Ref "")
-      (Ref RNone)
-      (Ref [])
-      (Ref [])
-      (Ref innerNone)
-      inst.mtiBody
-      inst.mtiSubstitution
-  (
-    (
-      methodReturnProbeOblIfaces (wAll mctx.mcCells.obls),
-      methodReturnProbeGoalIfaces gctx.graphRun.goals.value,
-    ),
-    mctx,
-  )
-
--- The retained row owns Seed, the same-name legacy table owns Decoy, and an empty
--- retained row is a known empty answer.  Only the missing-row compatibility control
--- may fall back to Decoy.
-methodReturnSlotOwnershipProbe : Unit ->
-  ((List String, List String), (List String, List String), (List String, List String))
-methodReturnSlotOwnershipProbe _ =
-  let ownedGraph = probeGraphCtx ()
-  let ownedCtx = initialModuleCtx ownedGraph
-  let ownedRow =
-    firstMethodRow
-      (ifaceMethodSchemeRows ownedCtx [
-        methodReturnProbeIface
-          "return-owner-slots"
-          "OwnedSlots"
-          (TyConstrained
-            [methodRowTestConstraint "return-seed" "Seed" [TyVar "b"]]
-            (TyFun (tyConBuiltin "Unit" None) (TyTuple [TyVar "b", TyVar "a"]))),
-      ])
-  let emptyGraph = GraphCtx { ownedGraph | graphRun = freshGraphRun () }
-  let emptyCtx = carryModuleCtx emptyGraph ownedCtx
-  let emptyRow =
-    firstMethodRow
-      (ifaceMethodSchemeRows emptyCtx [
-        methodReturnProbeIface
-          "return-empty-slots"
-          "EmptySlots"
-          (TyFun (tyConBuiltin "Unit" None) (TyVar "a")),
-      ])
-  let foreignGraph = GraphCtx { ownedGraph | graphRun = freshGraphRun () }
-  let foreignCtx = carryModuleCtx foreignGraph emptyCtx
-  let foreignRow =
-    firstMethodRow
-      (ifaceMethodSchemeRows foreignCtx [
-        methodReturnProbeIface
-          "return-foreign-slots"
-          "ForeignSlots"
-          (TyConstrained
-            [methodRowTestConstraint "return-decoy" "Decoy" [TyVar "b"]]
-            (TyFun (tyConBuiltin "Unit" None) (TyTuple [TyVar "b", TyVar "a"]))),
-      ])
-  let (retained, retainedCtx) =
-    methodReturnProbeSlotCase foreignCtx ownedRow foreignRow True
-  let (emptied, emptiedCtx) =
-    methodReturnProbeSlotCase retainedCtx emptyRow foreignRow True
-  let (missing, _) =
-    methodReturnProbeSlotCase emptiedCtx ownedRow foreignRow False
-  let observed = (retained, emptied, missing)
-  observed
-
--- > methodReturnSlotOwnershipProbe ()
--- ((["Seed"], ["Seed"]), ([], []), (["Decoy"], ["Decoy"]))
 # DESUGAR
 (DUse false (UseGroup ("support" "diag_codes") ((mem "codeText" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "SiteKind" true) (mem "OblProjection" true) (mem "NumericPredicateTraceStage" true) (mem "MethodReturnTraceStage" true) (mem "GoalPayload" true) (mem "EvDest" true) (mem "BuiltinClass" true) (mem "EvCell" true) (mem "GoalKind" true) (mem "GraphCtx" true) (mem "MarkSets" true) (mem "MethodPredicateTemplate" true) (mem "MethodReturnRequest" true) (mem "MethodReturnResolution" true) (mem "MethodRowTestObservation" true) (mem "Obligation" true) (mem "PendingDictApp" true) (mem "PendingMethodDict" true) (mem "Predicate" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "Provenance" true) (mem "SelectedValueOccurrence" true) (mem "SiteCell" true) (mem "UObligation" true) (mem "ArgRw" false) (mem "CDeclared" false) (mem "CSlot" false) (mem "MarkCtx" false) (mem "MethodInstantiationSubst" false) (mem "MethodPredicateSlot" false) (mem "MethodSchemeRow" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "ModuleMarking" false) (mem "PendingEntry" false) (mem "PreludeMarkFacts" false) (mem "RecDictApp" false) (mem "ScopedMember" false) (mem "ShadowDicts" false) (mem "siteFor" false) (mem "TcEnv" false) (mem "ValueScheme" false))))
@@ -4223,26 +3876,10 @@ methodReturnSlotOwnershipProbe _ =
 (DTypeSig true "firstMethodRow" (TyFun (TyApp (TyCon "List") (TyCon "MethodSchemeRow")) (TyCon "MethodSchemeRow")))
 (DFunDef false "firstMethodRow" ((PCons (PVar "row") PWild)) (EVar "row"))
 (DFunDef false "firstMethodRow" ((PList)) (EApp (EVar "panic") (ELit (LString "method-row observer expected a row"))))
-(DTypeSig false "observeMethodSchemeRowsForTest" (TyFun (TyCon "Unit") (TyCon "MethodRowTestObservation")))
-(DFunDef false "observeMethodSchemeRowsForTest" (PWild) (EBlock (DoLet false false (PVar "graph1") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "rows1") (EApp (EVar "initialModuleCtx") (EVar "graph1"))) (DoLet false false (PVar "constrainedRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "rows1")) (EListLit (EVar "methodRowTestFoldMapDecl"))))) (DoLet false false (PVar "constrainedIds") (EApp (EVar "schemeIds") (EFieldAccess (EVar "constrainedRow") "msrScheme"))) (DoLet false false (PVar "constrainedSlots") (EFieldAccess (EVar "constrainedRow") "msrMethodSlots")) (DoLet false false (PVar "constrainedBoundIds") (EApp (EVar "methodSlotBoundIds") (EVar "constrainedSlots"))) (DoLet false false (PVar "constrainedPositions") (EApp (EVar "methodSlotPositions") (EVar "constrainedSlots"))) (DoLet false false (PVar "constrainedIdsAtPositions") (EApp (EApp (EVar "methodSlotIdsAtPositions") (EVar "constrainedIds")) (EVar "constrainedSlots"))) (DoLet false false (PVar "constrainedArgumentIds") (EApp (EVar "methodSlotArgumentIds") (EVar "constrainedSlots"))) (DoLet false false (PVar "graph2") (EApp (EVar "freshSubRecordsOf") (EVar "graph1"))) (DoLet false false (PVar "rows2") (EApp (EApp (EVar "carryModuleCtx") (EVar "graph2")) (EVar "rows1"))) (DoLet false false (PVar "counterBefore") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graph2") "graphRun") "tyvarCounter") "value")) (DoLet false false (PVar "firstRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "rows2")) (EListLit (EVar "methodRowTestFoldMapDecl"))))) (DoLet false false (PVar "counterAfterFirst") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graph2") "graphRun") "tyvarCounter") "value")) (DoLet false false (PVar "secondRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "rows2")) (EListLit (EVar "methodRowTestFoldMapDecl"))))) (DoLet false false (PVar "counterAfterSecond") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graph2") "graphRun") "tyvarCounter") "value")) (DoLet false false (PVar "firstSchemeIds") (EApp (EVar "schemeIds") (EFieldAccess (EVar "firstRow") "msrScheme"))) (DoLet false false (PVar "secondSchemeIds") (EApp (EVar "schemeIds") (EFieldAccess (EVar "secondRow") "msrScheme"))) (DoLet false false (PVar "firstRowSlotIds") (EApp (EVar "methodSlotBoundIds") (EFieldAccess (EVar "firstRow") "msrMethodSlots"))) (DoLet false false (PVar "secondRowSlotIds") (EApp (EVar "methodSlotBoundIds") (EFieldAccess (EVar "secondRow") "msrMethodSlots"))) (DoLet false false (PVar "registryAfterSecondSlotIds") (EApp (EApp (EVar "methodRowRegistrySlotIds") (EVar "rows2")) (EApp (EApp (EVar "methodSlotKey") (EFieldAccess (EVar "firstRow") "msrIface")) (ELit (LString "foldMap"))))) (DoLet false false (PVar "graph3") (EApp (EVar "freshSubRecordsOf") (EVar "graph1"))) (DoLet false false (PVar "rows3") (EApp (EApp (EVar "carryModuleCtx") (EVar "graph3")) (EVar "rows2"))) (DoLet false false (PVar "sameNameForward") (EApp (EVar "methodRowSameNameView") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "rows3")) (EListLit (EVar "methodRowTestSameA") (EVar "methodRowTestSameB"))))) (DoLet false false (PVar "graph4") (EApp (EVar "freshSubRecordsOf") (EVar "graph1"))) (DoLet false false (PVar "rows4") (EApp (EApp (EVar "carryModuleCtx") (EVar "graph4")) (EVar "rows3"))) (DoLet false false (PVar "sameNameReverse") (EApp (EVar "methodRowSameNameView") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "rows4")) (EListLit (EVar "methodRowTestSameB") (EVar "methodRowTestSameA"))))) (DoLet false false (PVar "graph5") (EApp (EVar "freshSubRecordsOf") (EVar "graph1"))) (DoLet false false (PVar "rows5") (EApp (EApp (EVar "carryModuleCtx") (EVar "graph5")) (EVar "rows4"))) (DoLet false false (PVar "constantRows") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "rows5")) (EListLit (EVar "methodRowTestConstantDecl")))) (DoLet false false (PVar "constantRow") (EApp (EVar "firstMethodRow") (EVar "constantRows"))) (DoLet false false (PVar "constantBodyIsFunction") (EMatch (EApp (EVar "normalize") (EApp (EVar "schemeBodyOf") (EFieldAccess (EVar "constantRow") "msrScheme"))) (arm (PCon "TFun" PWild PWild PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (DoLet false false (PVar "graph6") (EApp (EVar "freshSubRecordsOf") (EVar "graph1"))) (DoLet false false (PVar "rows6") (EApp (EApp (EVar "carryModuleCtx") (EVar "graph6")) (EVar "rows5"))) (DoLet false false (PVar "attributed") (EApp (EApp (EVar "DAttrib") (EListLit)) (EVar "methodRowTestFoldMapDecl"))) (DoLet false false (PVar "attributedRows") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "rows6")) (EListLit (EVar "attributed")))) (DoLet false false (PVar "attributedMethods") (EApp (EApp (EApp (EVar "methodEnvGo") (EVar "graph6")) (EListLit (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "graph6")) (ELit (LInt 0))) (ELit (LString "foldable-test"))) (EListLit (EVar "attributed"))))) (EVar "emptyMethodEnv"))) (DoLet false false (PTuple (PVar "attributedParamIface") (PVar "attributedParamTyparams")) (EMatch (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (ELit (LString "foldMap"))) (EFieldAccess (EVar "attributedMethods") "meByName"))) (arm (PList) () (ETuple (ELit (LString "")) (EListLit))) (arm (PCons (PVar "r") PWild) () (EMatch (EFieldAccess (EVar "r") "mrEntry") (arm (PTuple (PVar "iface") (PVar "typarams") PWild PWild) () (ETuple (EFieldAccess (EVar "iface") "irName") (EVar "typarams"))))))) (DoLet false false (PVar "directNum") (EApp (EApp (EVar "methodRowTestNum") (ELit (LString "direct-num"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "String"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (DoLet false false (PVar "attributedNum") (EApp (EApp (EVar "DAttrib") (EListLit)) (EApp (EApp (EVar "methodRowTestNum") (ELit (LString "attributed-num"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a"))))))) (DoLet false false (PVar "builtinNum") (EApp (EApp (EVar "methodRowTestNum") (ELit (LString "builtin-num"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (DoLet false false (PVar "numAnchors") (EListLit (EApp (EApp (EApp (EApp (EVar "methodRowNumObservation") (EVar "rows6")) (ELit (LString "attrOnly"))) (EListLit (EVar "attributedNum"))) (EListLit (EVar "attributedNum"))) (EApp (EApp (EApp (EApp (EVar "methodRowNumObservation") (EVar "rows6")) (ELit (LString "directOnly"))) (EListLit (EVar "directNum"))) (EListLit (EVar "directNum"))) (EApp (EApp (EApp (EApp (EVar "methodRowNumObservation") (EVar "rows6")) (ELit (LString "attrThenDirect"))) (EListLit (EVar "attributedNum") (EVar "directNum"))) (EListLit (EVar "attributedNum") (EVar "directNum"))) (EApp (EApp (EApp (EApp (EVar "methodRowNumObservation") (EVar "rows6")) (ELit (LString "directThenAttr"))) (EListLit (EVar "directNum") (EVar "attributedNum"))) (EListLit (EVar "directNum") (EVar "attributedNum"))) (EApp (EApp (EApp (EApp (EVar "methodRowNumObservation") (EVar "rows6")) (ELit (LString "builtinThenUser"))) (EListLit (EVar "builtinNum"))) (EListLit (EVar "builtinNum") (EVar "methodRowTestUserFromInt"))) (EApp (EApp (EApp (EApp (EVar "methodRowNumObservation") (EVar "rows6")) (ELit (LString "userThenBuiltin"))) (EListLit (EVar "builtinNum"))) (EListLit (EVar "methodRowTestUserFromInt") (EVar "builtinNum"))))) (DoLet false false (PVar "observation") (ERecordCreate "MethodRowTestObservation" ((fa "mrtoSchemeIds" (EVar "constrainedIds")) (fa "mrtoSlotBoundIds" (EVar "constrainedBoundIds")) (fa "mrtoSlotPositions" (EVar "constrainedPositions")) (fa "mrtoSlotIdsAtPositions" (EVar "constrainedIdsAtPositions")) (fa "mrtoSlotArgumentIds" (EVar "constrainedArgumentIds")) (fa "mrtoCounterBefore" (EVar "counterBefore")) (fa "mrtoCounterAfterFirst" (EVar "counterAfterFirst")) (fa "mrtoCounterAfterSecond" (EVar "counterAfterSecond")) (fa "mrtoFirstSchemeIds" (EVar "firstSchemeIds")) (fa "mrtoSecondSchemeIds" (EVar "secondSchemeIds")) (fa "mrtoFirstRowSlotIds" (EVar "firstRowSlotIds")) (fa "mrtoSecondRowSlotIds" (EVar "secondRowSlotIds")) (fa "mrtoRegistryAfterSecondSlotIds" (EVar "registryAfterSecondSlotIds")) (fa "mrtoSameNameForward" (EVar "sameNameForward")) (fa "mrtoSameNameReverse" (EVar "sameNameReverse")) (fa "mrtoConstantRowCount" (EApp (EVar "listLen") (EVar "constantRows"))) (fa "mrtoConstantSchemeIdCount" (EApp (EVar "listLen") (EApp (EVar "schemeIds") (EFieldAccess (EVar "constantRow") "msrScheme")))) (fa "mrtoConstantBodyIsFunction" (EVar "constantBodyIsFunction")) (fa "mrtoConstantSlotCount" (EApp (EVar "listLen") (EFieldAccess (EVar "constantRow") "msrMethodSlots"))) (fa "mrtoAttributedRowCount" (EApp (EVar "listLen") (EVar "attributedRows"))) (fa "mrtoAttributedParamIface" (EVar "attributedParamIface")) (fa "mrtoAttributedParamTyparams" (EVar "attributedParamTyparams")) (fa "mrtoNumAnchors" (EVar "numAnchors"))))) (DoExpr (EVar "observation"))))
-(DTypeSig false "methodRowSlotAllocationProbe" (TyFun (TyCon "Unit") (TyTuple (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "methodRowSlotAllocationProbe" (PWild) (EBlock (DoLet false false (PVar "observed") (EApp (EVar "observeMethodSchemeRowsForTest") (ELit LUnit))) (DoExpr (ETuple (EFieldAccess (EVar "observed") "mrtoSchemeIds") (EFieldAccess (EVar "observed") "mrtoSlotBoundIds") (EFieldAccess (EVar "observed") "mrtoSlotPositions") (EFieldAccess (EVar "observed") "mrtoSlotIdsAtPositions") (EFieldAccess (EVar "observed") "mrtoSlotArgumentIds")))))
-(DTypeSig false "methodRowFreshnessProbe" (TyFun (TyCon "Unit") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int"))) (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))))
-(DFunDef false "methodRowFreshnessProbe" (PWild) (EBlock (DoLet false false (PVar "observed") (EApp (EVar "observeMethodSchemeRowsForTest") (ELit LUnit))) (DoExpr (ETuple (ETuple (EFieldAccess (EVar "observed") "mrtoCounterBefore") (EFieldAccess (EVar "observed") "mrtoCounterAfterFirst") (EFieldAccess (EVar "observed") "mrtoCounterAfterSecond") (EFieldAccess (EVar "observed") "mrtoFirstSchemeIds") (EFieldAccess (EVar "observed") "mrtoSecondSchemeIds")) (ETuple (EFieldAccess (EVar "observed") "mrtoFirstRowSlotIds") (EFieldAccess (EVar "observed") "mrtoSecondRowSlotIds") (EFieldAccess (EVar "observed") "mrtoRegistryAfterSecondSlotIds"))))))
-(DTypeSig false "methodRowDeclarationProbe" (TyFun (TyCon "Unit") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int") (TyCon "Int"))) (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Bool") (TyCon "Int")))))
-(DFunDef false "methodRowDeclarationProbe" (PWild) (EBlock (DoLet false false (PVar "observed") (EApp (EVar "observeMethodSchemeRowsForTest") (ELit LUnit))) (DoExpr (ETuple (EFieldAccess (EVar "observed") "mrtoSameNameForward") (EFieldAccess (EVar "observed") "mrtoSameNameReverse") (ETuple (EFieldAccess (EVar "observed") "mrtoConstantRowCount") (EFieldAccess (EVar "observed") "mrtoConstantSchemeIdCount") (EFieldAccess (EVar "observed") "mrtoConstantBodyIsFunction") (EFieldAccess (EVar "observed") "mrtoConstantSlotCount"))))))
-(DTypeSig false "methodRowNumericAnchorProbe" (TyFun (TyCon "Unit") (TyTuple (TyCon "Int") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool") (TyCon "Bool") (TyCon "String") (TyCon "String"))))))
-(DFunDef false "methodRowNumericAnchorProbe" (PWild) (EBlock (DoLet false false (PVar "observed") (EApp (EVar "observeMethodSchemeRowsForTest") (ELit LUnit))) (DoExpr (ETuple (EFieldAccess (EVar "observed") "mrtoAttributedRowCount") (EFieldAccess (EVar "observed") "mrtoAttributedParamIface") (EFieldAccess (EVar "observed") "mrtoAttributedParamTyparams") (EApp (EApp (EVar "map") (EVar "numAnchorObservationView")) (EFieldAccess (EVar "observed") "mrtoNumAnchors"))))))
 (DTypeSig true "methodReturnProbeRequest" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "MethodSchemeRow") (TyCon "MethodReturnRequest"))))
 (DFunDef false "methodReturnProbeRequest" ((PVar "mctx") (PVar "row")) (EBlock (DoLet false false (PVar "inst") (EApp (EApp (EVar "methodReturnProbeOccurrence") (EVar "mctx")) (EVar "row"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "methodReturnRequest") (EVar "mctx")) (EVar "row")) (EFieldAccess (EVar "inst") "mtiBody")) (EFieldAccess (EVar "inst") "mtiSubstitution")) (EApp (EVar "Some") (EApp (EApp (EVar "freshEvId") (EVar "mctx")) (ELit LUnit)))))))
-(DTypeSig false "methodReturnVectorCompletenessProbe" (TyFun (TyCon "Unit") (TyTuple (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Bool") (TyCon "Bool"))))
-(DFunDef false "methodReturnVectorCompletenessProbe" (PWild) (EBlock (DoLet false false (PVar "gctx") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "mctx") (EApp (EVar "initialModuleCtx") (EVar "gctx"))) (DoLet false false PWild (EApp (EApp (EVar "methodReturnProbeScope") (EVar "mctx")) (ELit (LString "return-vector")))) (DoLet false false (PVar "zeroRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "mctx")) (EListLit (EApp (EApp (EApp (EApp (EVar "methodRowTestIface") (ELit (LString "return-zero"))) (ELit (LString "Zero"))) (EListLit)) (EListLit (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "make"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None")))) (EVar "None")) (EVar "None")))))))) (DoLet false false (PVar "partialRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "mctx")) (EListLit (EApp (EApp (EApp (EApp (EVar "methodRowTestIface") (ELit (LString "return-partial"))) (ELit (LString "Partial"))) (EListLit (ELit (LString "a")) (ELit (LString "b")))) (EListLit (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "make"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a"))))) (EVar "None")) (EVar "None")))))))) (DoLet false false (PVar "zeroArgs") (EApp (EApp (EVar "map") (EApp (EVar "map") (EVar "ppMono"))) (EApp (EApp (EVar "methodReturnArgs") (EVar "gctx")) (EApp (EApp (EVar "methodReturnProbeRequest") (EVar "mctx")) (EVar "zeroRow"))))) (DoLet false false (PVar "partialArgs") (EApp (EApp (EVar "map") (EApp (EVar "map") (EVar "ppMono"))) (EApp (EApp (EVar "methodReturnArgs") (EVar "gctx")) (EApp (EApp (EVar "methodReturnProbeRequest") (EVar "mctx")) (EVar "partialRow"))))) (DoLet false false (PVar "observed") (ETuple (EVar "zeroArgs") (EVar "partialArgs") (EApp (EApp (EVar "allMethodParamsMentioned") (EFieldAccess (EVar "zeroRow") "msrTyparams")) (EFieldAccess (EVar "zeroRow") "msrType")) (EApp (EApp (EVar "allMethodParamsMentioned") (EFieldAccess (EVar "partialRow") "msrTyparams")) (EFieldAccess (EVar "partialRow") "msrType")))) (DoExpr (EVar "observed"))))
 (DTypeSig true "methodReturnProbeCodes" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "MethodSchemeRow") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "ModuleCtx"))))))
 (DFunDef false "methodReturnProbeCodes" ((PVar "prev") (PVar "ownedRow") (PVar "impls")) (EBlock (DoLet false false (PVar "gctx") (EVariantUpdate "GraphCtx" (EFieldAccess (EVar "prev") "mcGraph") ((fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit)))))) (DoLet false false (PVar "mctx") (EApp (EApp (EVar "carryModuleCtx") (EVar "gctx")) (EVar "prev"))) (DoLet false false PWild (EApp (EApp (EVar "methodReturnProbeScope") (EVar "mctx")) (ELit (LString "return-owner-checker")))) (DoLet false false (PVar "foreignRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "mctx")) (EListLit (EApp (EApp (EApp (EVar "methodReturnProbeIface") (ELit (LString "return-foreign"))) (ELit (LString "Foreign"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a"))))))))) (DoLet false false (PVar "request") (EApp (EApp (EVar "methodReturnProbeRequest") (EVar "mctx")) (EVar "ownedRow"))) (DoExpr (EApp (EApp (EVar "methodReturnProbeSpelling") (EVar "mctx")) (EVar "foreignRow"))) (DoLet false false PWild (EApp (EApp (EVar "recordExactMethodObligation") (EVar "mctx")) (EVar "request"))) (DoLet false false (PVar "universe") (EApp (EVar "buildImplUniverse") (EVar "impls"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "bodyImplEnvRef")) (EApp (EVar "buildFlatImplEnv") (EVar "impls")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "mctx")) (EVar "True")) (EVar "universe")) (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "implObls")))) (DoExpr (ETuple (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EVar "codeText") (EApp (EVar "tcCode") (EVar "d"))))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrors") "items") "value"))) (EVar "mctx")))))
-(DTypeSig false "methodReturnProbeSlotCase" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "Bool") (TyTuple (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "ModuleCtx")))))))
-(DFunDef false "methodReturnProbeSlotCase" ((PVar "prev") (PVar "ownedRow") (PVar "foreignRow") (PVar "retainOwner")) (EBlock (DoLet false false (PVar "gctx") (EVariantUpdate "GraphCtx" (EFieldAccess (EVar "prev") "mcGraph") ((fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit)))))) (DoLet false false (PVar "mctx") (EApp (EApp (EVar "carryModuleCtx") (EVar "gctx")) (EVar "prev"))) (DoLet false false PWild (EApp (EApp (EVar "methodReturnProbeScope") (EVar "mctx")) (ELit (LString "return-owner-slots")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodPredicateSlotsRef")) (EListLit (ETuple (EApp (EApp (EVar "methodSlotKey") (EFieldAccess (EVar "foreignRow") "msrIface")) (ELit (LString "make"))) (EFieldAccess (EVar "foreignRow") "msrMethodSlots"))))) (DoExpr (EApp (EApp (EVar "methodReturnProbeSpelling") (EVar "mctx")) (EVar "foreignRow"))) (DoLet false false (PVar "env") (EIf (EVar "retainOwner") (EApp (EApp (EApp (EVar "extendMethodRow") (EApp (EVar "envFor") (EVar "mctx"))) (ELit (LString "make"))) (EVar "ownedRow")) (EApp (EApp (EApp (EVar "extendVar") (EApp (EVar "envFor") (EVar "mctx"))) (ELit (LString "make"))) (EFieldAccess (EVar "ownedRow") "msrScheme")))) (DoLet false false (PVar "inst") (EApp (EApp (EVar "instantiateMethodTracked") (EVar "mctx")) (EFieldAccess (EVar "ownedRow") "msrScheme"))) (DoExpr (EApp (EApp (EApp (EVar "unify") (EVar "mctx")) (EApp (EVar "stripArrows") (EFieldAccess (EVar "inst") "mtiBody"))) (EApp (EVar "tupleMono") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))) (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordSite") (EVar "env")) (ELit (LString "make"))) (EFieldAccess (EVar "ownedRow") "msrScheme")) (EApp (EVar "Ref") (ELit (LString "")))) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EVar "innerNone"))) (EFieldAccess (EVar "inst") "mtiBody")) (EFieldAccess (EVar "inst") "mtiSubstitution"))) (DoExpr (ETuple (ETuple (EApp (EVar "methodReturnProbeOblIfaces") (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "obls"))) (EApp (EVar "methodReturnProbeGoalIfaces") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "goals") "value"))) (EVar "mctx")))))
-(DTypeSig false "methodReturnSlotOwnershipProbe" (TyFun (TyCon "Unit") (TyTuple (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "methodReturnSlotOwnershipProbe" (PWild) (EBlock (DoLet false false (PVar "ownedGraph") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "ownedCtx") (EApp (EVar "initialModuleCtx") (EVar "ownedGraph"))) (DoLet false false (PVar "ownedRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "ownedCtx")) (EListLit (EApp (EApp (EApp (EVar "methodReturnProbeIface") (ELit (LString "return-owner-slots"))) (ELit (LString "OwnedSlots"))) (EApp (EApp (EVar "TyConstrained") (EListLit (EApp (EApp (EApp (EVar "methodRowTestConstraint") (ELit (LString "return-seed"))) (ELit (LString "Seed"))) (EListLit (EApp (EVar "TyVar") (ELit (LString "b"))))))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyTuple") (EListLit (EApp (EVar "TyVar") (ELit (LString "b"))) (EApp (EVar "TyVar") (ELit (LString "a")))))))))))) (DoLet false false (PVar "emptyGraph") (EVariantUpdate "GraphCtx" (EVar "ownedGraph") ((fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit)))))) (DoLet false false (PVar "emptyCtx") (EApp (EApp (EVar "carryModuleCtx") (EVar "emptyGraph")) (EVar "ownedCtx"))) (DoLet false false (PVar "emptyRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "emptyCtx")) (EListLit (EApp (EApp (EApp (EVar "methodReturnProbeIface") (ELit (LString "return-empty-slots"))) (ELit (LString "EmptySlots"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a"))))))))) (DoLet false false (PVar "foreignGraph") (EVariantUpdate "GraphCtx" (EVar "ownedGraph") ((fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit)))))) (DoLet false false (PVar "foreignCtx") (EApp (EApp (EVar "carryModuleCtx") (EVar "foreignGraph")) (EVar "emptyCtx"))) (DoLet false false (PVar "foreignRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "foreignCtx")) (EListLit (EApp (EApp (EApp (EVar "methodReturnProbeIface") (ELit (LString "return-foreign-slots"))) (ELit (LString "ForeignSlots"))) (EApp (EApp (EVar "TyConstrained") (EListLit (EApp (EApp (EApp (EVar "methodRowTestConstraint") (ELit (LString "return-decoy"))) (ELit (LString "Decoy"))) (EListLit (EApp (EVar "TyVar") (ELit (LString "b"))))))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyTuple") (EListLit (EApp (EVar "TyVar") (ELit (LString "b"))) (EApp (EVar "TyVar") (ELit (LString "a")))))))))))) (DoLet false false (PTuple (PVar "retained") (PVar "retainedCtx")) (EApp (EApp (EApp (EApp (EVar "methodReturnProbeSlotCase") (EVar "foreignCtx")) (EVar "ownedRow")) (EVar "foreignRow")) (EVar "True"))) (DoLet false false (PTuple (PVar "emptied") (PVar "emptiedCtx")) (EApp (EApp (EApp (EApp (EVar "methodReturnProbeSlotCase") (EVar "retainedCtx")) (EVar "emptyRow")) (EVar "foreignRow")) (EVar "True"))) (DoLet false false (PTuple (PVar "missing") PWild) (EApp (EApp (EApp (EApp (EVar "methodReturnProbeSlotCase") (EVar "emptiedCtx")) (EVar "ownedRow")) (EVar "foreignRow")) (EVar "False"))) (DoLet false false (PVar "observed") (ETuple (EVar "retained") (EVar "emptied") (EVar "missing"))) (DoExpr (EVar "observed"))))
 # MARK
 (DUse false (UseGroup ("support" "diag_codes") ((mem "codeText" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "SiteKind" true) (mem "OblProjection" true) (mem "NumericPredicateTraceStage" true) (mem "MethodReturnTraceStage" true) (mem "GoalPayload" true) (mem "EvDest" true) (mem "BuiltinClass" true) (mem "EvCell" true) (mem "GoalKind" true) (mem "GraphCtx" true) (mem "MarkSets" true) (mem "MethodPredicateTemplate" true) (mem "MethodReturnRequest" true) (mem "MethodReturnResolution" true) (mem "MethodRowTestObservation" true) (mem "Obligation" true) (mem "PendingDictApp" true) (mem "PendingMethodDict" true) (mem "Predicate" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "Provenance" true) (mem "SelectedValueOccurrence" true) (mem "SiteCell" true) (mem "UObligation" true) (mem "ArgRw" false) (mem "CDeclared" false) (mem "CSlot" false) (mem "MarkCtx" false) (mem "MethodInstantiationSubst" false) (mem "MethodPredicateSlot" false) (mem "MethodSchemeRow" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "ModuleMarking" false) (mem "PendingEntry" false) (mem "PreludeMarkFacts" false) (mem "RecDictApp" false) (mem "ScopedMember" false) (mem "ShadowDicts" false) (mem "siteFor" false) (mem "TcEnv" false) (mem "ValueScheme" false))))
@@ -4756,23 +4393,7 @@ methodReturnSlotOwnershipProbe _ =
 (DTypeSig true "firstMethodRow" (TyFun (TyApp (TyCon "List") (TyCon "MethodSchemeRow")) (TyCon "MethodSchemeRow")))
 (DFunDef false "firstMethodRow" ((PCons (PVar "row") PWild)) (EVar "row"))
 (DFunDef false "firstMethodRow" ((PList)) (EApp (EVar "panic") (ELit (LString "method-row observer expected a row"))))
-(DTypeSig false "observeMethodSchemeRowsForTest" (TyFun (TyCon "Unit") (TyCon "MethodRowTestObservation")))
-(DFunDef false "observeMethodSchemeRowsForTest" (PWild) (EBlock (DoLet false false (PVar "graph1") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "rows1") (EApp (EVar "initialModuleCtx") (EVar "graph1"))) (DoLet false false (PVar "constrainedRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "rows1")) (EListLit (EVar "methodRowTestFoldMapDecl"))))) (DoLet false false (PVar "constrainedIds") (EApp (EVar "schemeIds") (EFieldAccess (EVar "constrainedRow") "msrScheme"))) (DoLet false false (PVar "constrainedSlots") (EFieldAccess (EVar "constrainedRow") "msrMethodSlots")) (DoLet false false (PVar "constrainedBoundIds") (EApp (EVar "methodSlotBoundIds") (EVar "constrainedSlots"))) (DoLet false false (PVar "constrainedPositions") (EApp (EVar "methodSlotPositions") (EVar "constrainedSlots"))) (DoLet false false (PVar "constrainedIdsAtPositions") (EApp (EApp (EVar "methodSlotIdsAtPositions") (EVar "constrainedIds")) (EVar "constrainedSlots"))) (DoLet false false (PVar "constrainedArgumentIds") (EApp (EVar "methodSlotArgumentIds") (EVar "constrainedSlots"))) (DoLet false false (PVar "graph2") (EApp (EVar "freshSubRecordsOf") (EVar "graph1"))) (DoLet false false (PVar "rows2") (EApp (EApp (EVar "carryModuleCtx") (EVar "graph2")) (EVar "rows1"))) (DoLet false false (PVar "counterBefore") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graph2") "graphRun") "tyvarCounter") "value")) (DoLet false false (PVar "firstRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "rows2")) (EListLit (EVar "methodRowTestFoldMapDecl"))))) (DoLet false false (PVar "counterAfterFirst") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graph2") "graphRun") "tyvarCounter") "value")) (DoLet false false (PVar "secondRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "rows2")) (EListLit (EVar "methodRowTestFoldMapDecl"))))) (DoLet false false (PVar "counterAfterSecond") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graph2") "graphRun") "tyvarCounter") "value")) (DoLet false false (PVar "firstSchemeIds") (EApp (EVar "schemeIds") (EFieldAccess (EVar "firstRow") "msrScheme"))) (DoLet false false (PVar "secondSchemeIds") (EApp (EVar "schemeIds") (EFieldAccess (EVar "secondRow") "msrScheme"))) (DoLet false false (PVar "firstRowSlotIds") (EApp (EVar "methodSlotBoundIds") (EFieldAccess (EVar "firstRow") "msrMethodSlots"))) (DoLet false false (PVar "secondRowSlotIds") (EApp (EVar "methodSlotBoundIds") (EFieldAccess (EVar "secondRow") "msrMethodSlots"))) (DoLet false false (PVar "registryAfterSecondSlotIds") (EApp (EApp (EVar "methodRowRegistrySlotIds") (EVar "rows2")) (EApp (EApp (EVar "methodSlotKey") (EFieldAccess (EVar "firstRow") "msrIface")) (ELit (LString "foldMap"))))) (DoLet false false (PVar "graph3") (EApp (EVar "freshSubRecordsOf") (EVar "graph1"))) (DoLet false false (PVar "rows3") (EApp (EApp (EVar "carryModuleCtx") (EVar "graph3")) (EVar "rows2"))) (DoLet false false (PVar "sameNameForward") (EApp (EVar "methodRowSameNameView") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "rows3")) (EListLit (EVar "methodRowTestSameA") (EVar "methodRowTestSameB"))))) (DoLet false false (PVar "graph4") (EApp (EVar "freshSubRecordsOf") (EVar "graph1"))) (DoLet false false (PVar "rows4") (EApp (EApp (EVar "carryModuleCtx") (EVar "graph4")) (EVar "rows3"))) (DoLet false false (PVar "sameNameReverse") (EApp (EVar "methodRowSameNameView") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "rows4")) (EListLit (EVar "methodRowTestSameB") (EVar "methodRowTestSameA"))))) (DoLet false false (PVar "graph5") (EApp (EVar "freshSubRecordsOf") (EVar "graph1"))) (DoLet false false (PVar "rows5") (EApp (EApp (EVar "carryModuleCtx") (EVar "graph5")) (EVar "rows4"))) (DoLet false false (PVar "constantRows") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "rows5")) (EListLit (EVar "methodRowTestConstantDecl")))) (DoLet false false (PVar "constantRow") (EApp (EVar "firstMethodRow") (EVar "constantRows"))) (DoLet false false (PVar "constantBodyIsFunction") (EMatch (EApp (EVar "normalize") (EApp (EVar "schemeBodyOf") (EFieldAccess (EVar "constantRow") "msrScheme"))) (arm (PCon "TFun" PWild PWild PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (DoLet false false (PVar "graph6") (EApp (EVar "freshSubRecordsOf") (EVar "graph1"))) (DoLet false false (PVar "rows6") (EApp (EApp (EVar "carryModuleCtx") (EVar "graph6")) (EVar "rows5"))) (DoLet false false (PVar "attributed") (EApp (EApp (EVar "DAttrib") (EListLit)) (EVar "methodRowTestFoldMapDecl"))) (DoLet false false (PVar "attributedRows") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "rows6")) (EListLit (EVar "attributed")))) (DoLet false false (PVar "attributedMethods") (EApp (EApp (EApp (EVar "methodEnvGo") (EVar "graph6")) (EListLit (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "graph6")) (ELit (LInt 0))) (ELit (LString "foldable-test"))) (EListLit (EVar "attributed"))))) (EVar "emptyMethodEnv"))) (DoLet false false (PTuple (PVar "attributedParamIface") (PVar "attributedParamTyparams")) (EMatch (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (ELit (LString "foldMap"))) (EFieldAccess (EVar "attributedMethods") "meByName"))) (arm (PList) () (ETuple (ELit (LString "")) (EListLit))) (arm (PCons (PVar "r") PWild) () (EMatch (EFieldAccess (EVar "r") "mrEntry") (arm (PTuple (PVar "iface") (PVar "typarams") PWild PWild) () (ETuple (EFieldAccess (EVar "iface") "irName") (EVar "typarams"))))))) (DoLet false false (PVar "directNum") (EApp (EApp (EVar "methodRowTestNum") (ELit (LString "direct-num"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "String"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (DoLet false false (PVar "attributedNum") (EApp (EApp (EVar "DAttrib") (EListLit)) (EApp (EApp (EVar "methodRowTestNum") (ELit (LString "attributed-num"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a"))))))) (DoLet false false (PVar "builtinNum") (EApp (EApp (EVar "methodRowTestNum") (ELit (LString "builtin-num"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (DoLet false false (PVar "numAnchors") (EListLit (EApp (EApp (EApp (EApp (EVar "methodRowNumObservation") (EVar "rows6")) (ELit (LString "attrOnly"))) (EListLit (EVar "attributedNum"))) (EListLit (EVar "attributedNum"))) (EApp (EApp (EApp (EApp (EVar "methodRowNumObservation") (EVar "rows6")) (ELit (LString "directOnly"))) (EListLit (EVar "directNum"))) (EListLit (EVar "directNum"))) (EApp (EApp (EApp (EApp (EVar "methodRowNumObservation") (EVar "rows6")) (ELit (LString "attrThenDirect"))) (EListLit (EVar "attributedNum") (EVar "directNum"))) (EListLit (EVar "attributedNum") (EVar "directNum"))) (EApp (EApp (EApp (EApp (EVar "methodRowNumObservation") (EVar "rows6")) (ELit (LString "directThenAttr"))) (EListLit (EVar "directNum") (EVar "attributedNum"))) (EListLit (EVar "directNum") (EVar "attributedNum"))) (EApp (EApp (EApp (EApp (EVar "methodRowNumObservation") (EVar "rows6")) (ELit (LString "builtinThenUser"))) (EListLit (EVar "builtinNum"))) (EListLit (EVar "builtinNum") (EVar "methodRowTestUserFromInt"))) (EApp (EApp (EApp (EApp (EVar "methodRowNumObservation") (EVar "rows6")) (ELit (LString "userThenBuiltin"))) (EListLit (EVar "builtinNum"))) (EListLit (EVar "methodRowTestUserFromInt") (EVar "builtinNum"))))) (DoLet false false (PVar "observation") (ERecordCreate "MethodRowTestObservation" ((fa "mrtoSchemeIds" (EVar "constrainedIds")) (fa "mrtoSlotBoundIds" (EVar "constrainedBoundIds")) (fa "mrtoSlotPositions" (EVar "constrainedPositions")) (fa "mrtoSlotIdsAtPositions" (EVar "constrainedIdsAtPositions")) (fa "mrtoSlotArgumentIds" (EVar "constrainedArgumentIds")) (fa "mrtoCounterBefore" (EVar "counterBefore")) (fa "mrtoCounterAfterFirst" (EVar "counterAfterFirst")) (fa "mrtoCounterAfterSecond" (EVar "counterAfterSecond")) (fa "mrtoFirstSchemeIds" (EVar "firstSchemeIds")) (fa "mrtoSecondSchemeIds" (EVar "secondSchemeIds")) (fa "mrtoFirstRowSlotIds" (EVar "firstRowSlotIds")) (fa "mrtoSecondRowSlotIds" (EVar "secondRowSlotIds")) (fa "mrtoRegistryAfterSecondSlotIds" (EVar "registryAfterSecondSlotIds")) (fa "mrtoSameNameForward" (EVar "sameNameForward")) (fa "mrtoSameNameReverse" (EVar "sameNameReverse")) (fa "mrtoConstantRowCount" (EApp (EVar "listLen") (EVar "constantRows"))) (fa "mrtoConstantSchemeIdCount" (EApp (EVar "listLen") (EApp (EVar "schemeIds") (EFieldAccess (EVar "constantRow") "msrScheme")))) (fa "mrtoConstantBodyIsFunction" (EVar "constantBodyIsFunction")) (fa "mrtoConstantSlotCount" (EApp (EVar "listLen") (EFieldAccess (EVar "constantRow") "msrMethodSlots"))) (fa "mrtoAttributedRowCount" (EApp (EVar "listLen") (EVar "attributedRows"))) (fa "mrtoAttributedParamIface" (EVar "attributedParamIface")) (fa "mrtoAttributedParamTyparams" (EVar "attributedParamTyparams")) (fa "mrtoNumAnchors" (EVar "numAnchors"))))) (DoExpr (EVar "observation"))))
-(DTypeSig false "methodRowSlotAllocationProbe" (TyFun (TyCon "Unit") (TyTuple (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "methodRowSlotAllocationProbe" (PWild) (EBlock (DoLet false false (PVar "observed") (EApp (EVar "observeMethodSchemeRowsForTest") (ELit LUnit))) (DoExpr (ETuple (EFieldAccess (EVar "observed") "mrtoSchemeIds") (EFieldAccess (EVar "observed") "mrtoSlotBoundIds") (EFieldAccess (EVar "observed") "mrtoSlotPositions") (EFieldAccess (EVar "observed") "mrtoSlotIdsAtPositions") (EFieldAccess (EVar "observed") "mrtoSlotArgumentIds")))))
-(DTypeSig false "methodRowFreshnessProbe" (TyFun (TyCon "Unit") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int"))) (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))))
-(DFunDef false "methodRowFreshnessProbe" (PWild) (EBlock (DoLet false false (PVar "observed") (EApp (EVar "observeMethodSchemeRowsForTest") (ELit LUnit))) (DoExpr (ETuple (ETuple (EFieldAccess (EVar "observed") "mrtoCounterBefore") (EFieldAccess (EVar "observed") "mrtoCounterAfterFirst") (EFieldAccess (EVar "observed") "mrtoCounterAfterSecond") (EFieldAccess (EVar "observed") "mrtoFirstSchemeIds") (EFieldAccess (EVar "observed") "mrtoSecondSchemeIds")) (ETuple (EFieldAccess (EVar "observed") "mrtoFirstRowSlotIds") (EFieldAccess (EVar "observed") "mrtoSecondRowSlotIds") (EFieldAccess (EVar "observed") "mrtoRegistryAfterSecondSlotIds"))))))
-(DTypeSig false "methodRowDeclarationProbe" (TyFun (TyCon "Unit") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int") (TyCon "Int"))) (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Bool") (TyCon "Int")))))
-(DFunDef false "methodRowDeclarationProbe" (PWild) (EBlock (DoLet false false (PVar "observed") (EApp (EVar "observeMethodSchemeRowsForTest") (ELit LUnit))) (DoExpr (ETuple (EFieldAccess (EVar "observed") "mrtoSameNameForward") (EFieldAccess (EVar "observed") "mrtoSameNameReverse") (ETuple (EFieldAccess (EVar "observed") "mrtoConstantRowCount") (EFieldAccess (EVar "observed") "mrtoConstantSchemeIdCount") (EFieldAccess (EVar "observed") "mrtoConstantBodyIsFunction") (EFieldAccess (EVar "observed") "mrtoConstantSlotCount"))))))
-(DTypeSig false "methodRowNumericAnchorProbe" (TyFun (TyCon "Unit") (TyTuple (TyCon "Int") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool") (TyCon "Bool") (TyCon "String") (TyCon "String"))))))
-(DFunDef false "methodRowNumericAnchorProbe" (PWild) (EBlock (DoLet false false (PVar "observed") (EApp (EVar "observeMethodSchemeRowsForTest") (ELit LUnit))) (DoExpr (ETuple (EFieldAccess (EVar "observed") "mrtoAttributedRowCount") (EFieldAccess (EVar "observed") "mrtoAttributedParamIface") (EFieldAccess (EVar "observed") "mrtoAttributedParamTyparams") (EApp (EApp (EMethodRef "map") (EVar "numAnchorObservationView")) (EFieldAccess (EVar "observed") "mrtoNumAnchors"))))))
 (DTypeSig true "methodReturnProbeRequest" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "MethodSchemeRow") (TyCon "MethodReturnRequest"))))
 (DFunDef false "methodReturnProbeRequest" ((PVar "mctx") (PVar "row")) (EBlock (DoLet false false (PVar "inst") (EApp (EApp (EVar "methodReturnProbeOccurrence") (EVar "mctx")) (EVar "row"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "methodReturnRequest") (EVar "mctx")) (EVar "row")) (EFieldAccess (EVar "inst") "mtiBody")) (EFieldAccess (EVar "inst") "mtiSubstitution")) (EApp (EVar "Some") (EApp (EApp (EVar "freshEvId") (EVar "mctx")) (ELit LUnit)))))))
-(DTypeSig false "methodReturnVectorCompletenessProbe" (TyFun (TyCon "Unit") (TyTuple (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Bool") (TyCon "Bool"))))
-(DFunDef false "methodReturnVectorCompletenessProbe" (PWild) (EBlock (DoLet false false (PVar "gctx") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "mctx") (EApp (EVar "initialModuleCtx") (EVar "gctx"))) (DoLet false false PWild (EApp (EApp (EVar "methodReturnProbeScope") (EVar "mctx")) (ELit (LString "return-vector")))) (DoLet false false (PVar "zeroRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "mctx")) (EListLit (EApp (EApp (EApp (EApp (EVar "methodRowTestIface") (ELit (LString "return-zero"))) (ELit (LString "Zero"))) (EListLit)) (EListLit (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "make"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None")))) (EVar "None")) (EVar "None")))))))) (DoLet false false (PVar "partialRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "mctx")) (EListLit (EApp (EApp (EApp (EApp (EVar "methodRowTestIface") (ELit (LString "return-partial"))) (ELit (LString "Partial"))) (EListLit (ELit (LString "a")) (ELit (LString "b")))) (EListLit (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "make"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a"))))) (EVar "None")) (EVar "None")))))))) (DoLet false false (PVar "zeroArgs") (EApp (EApp (EMethodRef "map") (EApp (EMethodRef "map") (EVar "ppMono"))) (EApp (EApp (EVar "methodReturnArgs") (EVar "gctx")) (EApp (EApp (EVar "methodReturnProbeRequest") (EVar "mctx")) (EVar "zeroRow"))))) (DoLet false false (PVar "partialArgs") (EApp (EApp (EMethodRef "map") (EApp (EMethodRef "map") (EVar "ppMono"))) (EApp (EApp (EVar "methodReturnArgs") (EVar "gctx")) (EApp (EApp (EVar "methodReturnProbeRequest") (EVar "mctx")) (EVar "partialRow"))))) (DoLet false false (PVar "observed") (ETuple (EVar "zeroArgs") (EVar "partialArgs") (EApp (EApp (EVar "allMethodParamsMentioned") (EFieldAccess (EVar "zeroRow") "msrTyparams")) (EFieldAccess (EVar "zeroRow") "msrType")) (EApp (EApp (EVar "allMethodParamsMentioned") (EFieldAccess (EVar "partialRow") "msrTyparams")) (EFieldAccess (EVar "partialRow") "msrType")))) (DoExpr (EVar "observed"))))
 (DTypeSig true "methodReturnProbeCodes" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "MethodSchemeRow") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "ModuleCtx"))))))
 (DFunDef false "methodReturnProbeCodes" ((PVar "prev") (PVar "ownedRow") (PVar "impls")) (EBlock (DoLet false false (PVar "gctx") (EVariantUpdate "GraphCtx" (EFieldAccess (EVar "prev") "mcGraph") ((fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit)))))) (DoLet false false (PVar "mctx") (EApp (EApp (EVar "carryModuleCtx") (EVar "gctx")) (EVar "prev"))) (DoLet false false PWild (EApp (EApp (EVar "methodReturnProbeScope") (EVar "mctx")) (ELit (LString "return-owner-checker")))) (DoLet false false (PVar "foreignRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "mctx")) (EListLit (EApp (EApp (EApp (EVar "methodReturnProbeIface") (ELit (LString "return-foreign"))) (ELit (LString "Foreign"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a"))))))))) (DoLet false false (PVar "request") (EApp (EApp (EVar "methodReturnProbeRequest") (EVar "mctx")) (EVar "ownedRow"))) (DoExpr (EApp (EApp (EVar "methodReturnProbeSpelling") (EVar "mctx")) (EVar "foreignRow"))) (DoLet false false PWild (EApp (EApp (EVar "recordExactMethodObligation") (EVar "mctx")) (EVar "request"))) (DoLet false false (PVar "universe") (EApp (EVar "buildImplUniverse") (EVar "impls"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "bodyImplEnvRef")) (EApp (EVar "buildFlatImplEnv") (EVar "impls")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "mctx")) (EVar "True")) (EVar "universe")) (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "implObls")))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EVar "codeText") (EApp (EVar "tcCode") (EVar "d"))))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrors") "items") "value"))) (EVar "mctx")))))
-(DTypeSig false "methodReturnProbeSlotCase" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "Bool") (TyTuple (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "ModuleCtx")))))))
-(DFunDef false "methodReturnProbeSlotCase" ((PVar "prev") (PVar "ownedRow") (PVar "foreignRow") (PVar "retainOwner")) (EBlock (DoLet false false (PVar "gctx") (EVariantUpdate "GraphCtx" (EFieldAccess (EVar "prev") "mcGraph") ((fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit)))))) (DoLet false false (PVar "mctx") (EApp (EApp (EVar "carryModuleCtx") (EVar "gctx")) (EVar "prev"))) (DoLet false false PWild (EApp (EApp (EVar "methodReturnProbeScope") (EVar "mctx")) (ELit (LString "return-owner-slots")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodPredicateSlotsRef")) (EListLit (ETuple (EApp (EApp (EVar "methodSlotKey") (EFieldAccess (EVar "foreignRow") "msrIface")) (ELit (LString "make"))) (EFieldAccess (EVar "foreignRow") "msrMethodSlots"))))) (DoExpr (EApp (EApp (EVar "methodReturnProbeSpelling") (EVar "mctx")) (EVar "foreignRow"))) (DoLet false false (PVar "env") (EIf (EVar "retainOwner") (EApp (EApp (EApp (EVar "extendMethodRow") (EApp (EVar "envFor") (EVar "mctx"))) (ELit (LString "make"))) (EVar "ownedRow")) (EApp (EApp (EApp (EVar "extendVar") (EApp (EVar "envFor") (EVar "mctx"))) (ELit (LString "make"))) (EFieldAccess (EVar "ownedRow") "msrScheme")))) (DoLet false false (PVar "inst") (EApp (EApp (EVar "instantiateMethodTracked") (EVar "mctx")) (EFieldAccess (EVar "ownedRow") "msrScheme"))) (DoExpr (EApp (EApp (EApp (EVar "unify") (EVar "mctx")) (EApp (EVar "stripArrows") (EFieldAccess (EVar "inst") "mtiBody"))) (EApp (EVar "tupleMono") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))) (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordSite") (EVar "env")) (ELit (LString "make"))) (EFieldAccess (EVar "ownedRow") "msrScheme")) (EApp (EVar "Ref") (ELit (LString "")))) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EVar "innerNone"))) (EFieldAccess (EVar "inst") "mtiBody")) (EFieldAccess (EVar "inst") "mtiSubstitution"))) (DoExpr (ETuple (ETuple (EApp (EVar "methodReturnProbeOblIfaces") (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "obls"))) (EApp (EVar "methodReturnProbeGoalIfaces") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "goals") "value"))) (EVar "mctx")))))
-(DTypeSig false "methodReturnSlotOwnershipProbe" (TyFun (TyCon "Unit") (TyTuple (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "methodReturnSlotOwnershipProbe" (PWild) (EBlock (DoLet false false (PVar "ownedGraph") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "ownedCtx") (EApp (EVar "initialModuleCtx") (EVar "ownedGraph"))) (DoLet false false (PVar "ownedRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "ownedCtx")) (EListLit (EApp (EApp (EApp (EVar "methodReturnProbeIface") (ELit (LString "return-owner-slots"))) (ELit (LString "OwnedSlots"))) (EApp (EApp (EVar "TyConstrained") (EListLit (EApp (EApp (EApp (EVar "methodRowTestConstraint") (ELit (LString "return-seed"))) (ELit (LString "Seed"))) (EListLit (EApp (EVar "TyVar") (ELit (LString "b"))))))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyTuple") (EListLit (EApp (EVar "TyVar") (ELit (LString "b"))) (EApp (EVar "TyVar") (ELit (LString "a")))))))))))) (DoLet false false (PVar "emptyGraph") (EVariantUpdate "GraphCtx" (EVar "ownedGraph") ((fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit)))))) (DoLet false false (PVar "emptyCtx") (EApp (EApp (EVar "carryModuleCtx") (EVar "emptyGraph")) (EVar "ownedCtx"))) (DoLet false false (PVar "emptyRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "emptyCtx")) (EListLit (EApp (EApp (EApp (EVar "methodReturnProbeIface") (ELit (LString "return-empty-slots"))) (ELit (LString "EmptySlots"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a"))))))))) (DoLet false false (PVar "foreignGraph") (EVariantUpdate "GraphCtx" (EVar "ownedGraph") ((fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit)))))) (DoLet false false (PVar "foreignCtx") (EApp (EApp (EVar "carryModuleCtx") (EVar "foreignGraph")) (EVar "emptyCtx"))) (DoLet false false (PVar "foreignRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "foreignCtx")) (EListLit (EApp (EApp (EApp (EVar "methodReturnProbeIface") (ELit (LString "return-foreign-slots"))) (ELit (LString "ForeignSlots"))) (EApp (EApp (EVar "TyConstrained") (EListLit (EApp (EApp (EApp (EVar "methodRowTestConstraint") (ELit (LString "return-decoy"))) (ELit (LString "Decoy"))) (EListLit (EApp (EVar "TyVar") (ELit (LString "b"))))))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyTuple") (EListLit (EApp (EVar "TyVar") (ELit (LString "b"))) (EApp (EVar "TyVar") (ELit (LString "a")))))))))))) (DoLet false false (PTuple (PVar "retained") (PVar "retainedCtx")) (EApp (EApp (EApp (EApp (EVar "methodReturnProbeSlotCase") (EVar "foreignCtx")) (EVar "ownedRow")) (EVar "foreignRow")) (EVar "True"))) (DoLet false false (PTuple (PVar "emptied") (PVar "emptiedCtx")) (EApp (EApp (EApp (EApp (EVar "methodReturnProbeSlotCase") (EVar "retainedCtx")) (EVar "emptyRow")) (EVar "foreignRow")) (EVar "True"))) (DoLet false false (PTuple (PVar "missing") PWild) (EApp (EApp (EApp (EApp (EVar "methodReturnProbeSlotCase") (EVar "emptiedCtx")) (EVar "ownedRow")) (EVar "foreignRow")) (EVar "False"))) (DoLet false false (PVar "observed") (ETuple (EVar "retained") (EVar "emptied") (EVar "missing"))) (DoExpr (EVar "observed"))))
