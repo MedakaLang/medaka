@@ -5,16 +5,14 @@ import frontend.ast.{Decl, DoStmt(..), Expr(..), Loc(..), Pat(..)}
 import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..)}
 import tools.lint_calls.{
-  BlockKind(..),
   DiscardClass(..),
   Verdict(..),
-  blockOf,
   discardClass,
   discardVerdict,
+  plainBlockVisitors,
 }
 import tools.lint_core.{
   Category(..),
-  Ctx,
   FileFacts,
   Finding(..),
   Fixability(..),
@@ -25,9 +23,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   Visitor(..),
-  factScopes,
   mkVisitorRule,
-  projectIndexOf,
 }
 import tools.lint_index.{ProjectIndex}
 import tools.lint_scope.{FileScopes}
@@ -59,16 +55,10 @@ ruleDiscardedResult : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleDiscardedResult idx path facts _ _ =
-  [OnExpr [KBlock] (blockAt (projectIndexOf idx) (factScopes facts) path)]
+ruleDiscardedResult = plainBlockVisitors resultStmt
 
-blockAt : ProjectIndex -> FileScopes -> String -> Ctx -> Expr -> List Finding
-blockAt ix scopes path _ e = match blockOf e
-  Some (PlainBlock, stmts) => flatMap (stmtFindings ix scopes path) stmts
-  _ => []
-
-stmtFindings : ProjectIndex -> FileScopes -> String -> DoStmt -> List Finding
-stmtFindings ix scopes path (s@(DoLet _ _ PWild _ (Loc f sl sc el ec))) =
+resultStmt : ProjectIndex -> FileScopes -> String -> DoStmt -> List Finding
+resultStmt ix scopes path (s@(DoLet _ _ PWild _ (Loc f sl sc el ec))) =
   if sl == el && sc == ec then
     []
   else match discardVerdict ix scopes path s
@@ -77,7 +67,7 @@ stmtFindings ix scopes path (s@(DoLet _ _ PWild _ (Loc f sl sc el ec))) =
       ClassOption => [finding optionMessage (Loc f sl sc el ec)]
       _ => []
     Abstain _ => []
-stmtFindings _ _ _ _ = []
+resultStmt _ _ _ _ = []
 
 finding : String -> Loc -> Finding
 finding message loc = Finding {

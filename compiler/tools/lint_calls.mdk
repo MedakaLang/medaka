@@ -10,13 +10,22 @@
 -- a plain name all abstain.  No `types.*` import: the index holds signatures as
 -- written.
 
-import frontend.ast.{DoStmt(..), Expr(..), Loc, Pat(..), Ty(..)}
+import frontend.ast.{Decl, DoStmt(..), Expr(..), Loc, Pat(..), Ty(..)}
 import frontend.ast_walk.{ExprKind(..)}
+import frontend.parser.{Positions(..)}
 import list.{last}
 import string.{endsWith, split, stripPrefix}
 import support.util.{joinWith}
 import tools.printer.{ppTy}
-import tools.lint_core.{Ctx(..)}
+import tools.lint_core.{
+  Ctx(..),
+  FileFacts,
+  Finding,
+  StdlibIndex,
+  Visitor(..),
+  factScopes,
+  projectIndexOf,
+}
 import tools.lint_index.{
   IndexRow(..),
   Ns(..),
@@ -108,6 +117,34 @@ blockOf e = match unwrapLoc e
   EDo _ stmts => Some (DoBlock, stmts)
   _ => None
 
+-- The visitor of a rule that reads the discards of bare blocks: every statement
+-- of a bare block goes to `stmtFindings`, which gets the index, the file's scope
+-- model and the file path.
+export
+plainBlockVisitors : (ProjectIndex -> FileScopes -> String -> DoStmt -> List Finding) ->
+  StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Visitor
+plainBlockVisitors stmtFindings idx path facts _ _ = [
+  OnExpr
+    [KBlock]
+    (plainBlockAt stmtFindings (projectIndexOf idx) (factScopes facts) path),
+]
+
+plainBlockAt : (ProjectIndex -> FileScopes -> String -> DoStmt -> List Finding) ->
+  ProjectIndex ->
+  FileScopes ->
+  String ->
+  Ctx ->
+  Expr ->
+  List Finding
+plainBlockAt stmtFindings ix scopes path _ e = match blockOf e
+  Some (PlainBlock, stmts) => flatMap (stmtFindings ix scopes path) stmts
+  _ => []
+
 -- Whether the node a visitor stands on is a direct child of a bare block.  The
 -- walk records the nearest enclosing expression kind once per node
 -- (`ctxParent`), so this is a field read.
@@ -157,7 +194,8 @@ nameVerdict _ _ _ _ None _ = Abstain NoSite
 nameVerdict ix scopes file name (Some l) n = match binderOf scopes l
   None => rowsVerdict n (rowsNamed ix NsValue name)
   Some b => match b.binderKind
-    BTopLevel => rowsVerdict n (rowsInFile file (projectRowsNamed ix NsValue name))
+    BTopLevel =>
+      rowsVerdict n (rowsInFile file (projectRowsNamed ix NsValue name))
     BImport =>
       rowsVerdict
         n
@@ -175,7 +213,7 @@ rowsInFile file rows =
 
 declaredIn : String -> Option Loc -> Bool
 declaredIn file (Some (Loc path _ _ _ _)) =
-  path == file || (file /= "" && endsWith "/\{file}" path)
+  path == file || file /= "" && endsWith "/\{file}" path
 declaredIn _ None = False
 
 dropDotSlash : String -> String

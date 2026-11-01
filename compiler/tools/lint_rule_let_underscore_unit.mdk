@@ -5,17 +5,15 @@ import frontend.ast.{Decl, DoStmt(..), Expr(..), Loc(..), Pat(..)}
 import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..)}
 import tools.lint_calls.{
-  BlockKind(..),
   DiscardClass(..),
   Verdict(..),
-  blockOf,
   discardClass,
   discardVerdict,
+  plainBlockVisitors,
 }
 import tools.lint_core.{
   Applicability(..),
   Category(..),
-  Ctx,
   FileFacts,
   Finding(..),
   Fix(..),
@@ -28,9 +26,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   Visitor(..),
-  factScopes,
   mkVisitorRule,
-  projectIndexOf,
 }
 import tools.lint_index.{ProjectIndex}
 import tools.lint_scope.{FileScopes}
@@ -62,17 +58,10 @@ ruleLetUnderscoreUnit : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleLetUnderscoreUnit idx path facts _ _ = [
-  OnExpr [KBlock] (blockAt (projectIndexOf idx) (factScopes facts) path),
-]
+ruleLetUnderscoreUnit = plainBlockVisitors unitStmt
 
-blockAt : ProjectIndex -> FileScopes -> String -> Ctx -> Expr -> List Finding
-blockAt ix scopes path _ e = match blockOf e
-  Some (PlainBlock, stmts) => flatMap (stmtFindings ix scopes path) stmts
-  _ => []
-
-stmtFindings : ProjectIndex -> FileScopes -> String -> DoStmt -> List Finding
-stmtFindings ix scopes path (s@(DoLet _ _ PWild rhs (Loc f sl sc el ec))) =
+unitStmt : ProjectIndex -> FileScopes -> String -> DoStmt -> List Finding
+unitStmt ix scopes path (s@(DoLet _ _ PWild rhs (Loc f sl sc el ec))) =
   if sl == el && sc == ec then
     []
   else match discardVerdict ix scopes path s
@@ -82,7 +71,7 @@ stmtFindings ix scopes path (s@(DoLet _ _ PWild rhs (Loc f sl sc el ec))) =
       else
         []
     Abstain _ => []
-stmtFindings _ _ _ _ = []
+unitStmt _ _ _ _ = []
 
 finding : Loc -> Option Fix -> Finding
 finding loc fix = Finding {
@@ -131,4 +120,4 @@ outerStart _ = None
 earlier : Loc -> Loc -> Loc
 earlier a b = match (a, b)
   (Loc _ al ac _ _, Loc _ bl bc _ _) =>
-    if al < bl || (al == bl && ac <= bc) then a else b
+    if al < bl || al == bl && ac <= bc then a else b

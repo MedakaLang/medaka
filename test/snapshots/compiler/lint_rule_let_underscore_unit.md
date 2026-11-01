@@ -1,5 +1,5 @@
 # META
-source_lines=134
+source_lines=123
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-let-underscore-unit: `let _ = e` on a call whose declared result is Unit, in a plain block. Write the bare statement `e`.
@@ -9,17 +9,15 @@ import frontend.ast.{Decl, DoStmt(..), Expr(..), Loc(..), Pat(..)}
 import frontend.ast_walk.{ExprKind(..)}
 import frontend.parser.{Positions(..)}
 import tools.lint_calls.{
-  BlockKind(..),
   DiscardClass(..),
   Verdict(..),
-  blockOf,
   discardClass,
   discardVerdict,
+  plainBlockVisitors,
 }
 import tools.lint_core.{
   Applicability(..),
   Category(..),
-  Ctx,
   FileFacts,
   Finding(..),
   Fix(..),
@@ -32,9 +30,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   Visitor(..),
-  factScopes,
   mkVisitorRule,
-  projectIndexOf,
 }
 import tools.lint_index.{ProjectIndex}
 import tools.lint_scope.{FileScopes}
@@ -66,17 +62,10 @@ ruleLetUnderscoreUnit : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleLetUnderscoreUnit idx path facts _ _ = [
-  OnExpr [KBlock] (blockAt (projectIndexOf idx) (factScopes facts) path),
-]
+ruleLetUnderscoreUnit = plainBlockVisitors unitStmt
 
-blockAt : ProjectIndex -> FileScopes -> String -> Ctx -> Expr -> List Finding
-blockAt ix scopes path _ e = match blockOf e
-  Some (PlainBlock, stmts) => flatMap (stmtFindings ix scopes path) stmts
-  _ => []
-
-stmtFindings : ProjectIndex -> FileScopes -> String -> DoStmt -> List Finding
-stmtFindings ix scopes path (s@(DoLet _ _ PWild rhs (Loc f sl sc el ec))) =
+unitStmt : ProjectIndex -> FileScopes -> String -> DoStmt -> List Finding
+unitStmt ix scopes path (s@(DoLet _ _ PWild rhs (Loc f sl sc el ec))) =
   if sl == el && sc == ec then
     []
   else match discardVerdict ix scopes path s
@@ -86,7 +75,7 @@ stmtFindings ix scopes path (s@(DoLet _ _ PWild rhs (Loc f sl sc el ec))) =
       else
         []
     Abstain _ => []
-stmtFindings _ _ _ _ = []
+unitStmt _ _ _ _ = []
 
 finding : Loc -> Option Fix -> Finding
 finding loc fix = Finding {
@@ -135,26 +124,24 @@ outerStart _ = None
 earlier : Loc -> Loc -> Loc
 earlier a b = match (a, b)
   (Loc _ al ac _ _, Loc _ bl bc _ _) =>
-    if al < bl || (al == bl && ac <= bc) then a else b
+    if al < bl || al == bl && ac <= bc then a else b
 # DESUGAR
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DoStmt" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" true))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
-(DUse false (UseGroup ("tools" "lint_calls") ((mem "BlockKind" true) (mem "DiscardClass" true) (mem "Verdict" true) (mem "blockOf" false) (mem "discardClass" false) (mem "discardVerdict" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" false) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false) (mem "projectIndexOf" false))))
+(DUse false (UseGroup ("tools" "lint_calls") ((mem "DiscardClass" true) (mem "Verdict" true) (mem "discardClass" false) (mem "discardVerdict" false) (mem "plainBlockVisitors" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "ProjectIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameLetUnderscoreUnit" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameLetUnderscoreUnit")) (fa "summary" (ELit (LString "`let _ = e` on a call that returns Unit, in a plain block. Write the bare statement `e`"))) (fa "doc" (ELit (LString "A call whose declared result is Unit has no value to bind, so `let _ =` in front of it says nothing. In a plain block the call is a statement on its own; `do` blocks keep `let _ =`. Only a saturated call to a signed function is checked: the declared result decides, so a partial application, a method, a shadowed name and an unsigned function are not reported.\n\nBefore:\n  let _ = writeLine out \"done\"\n  count xs\nAfter:\n  writeLine out \"done\"\n  count xs"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsProjectIndex")))))) (EVar "ruleLetUnderscoreUnit")) (EVar "None")))
 (DTypeSig false "ruleLetUnderscoreUnit" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
-(DFunDef false "ruleLetUnderscoreUnit" ((PVar "idx") (PVar "path") (PVar "facts") PWild PWild) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KBlock"))) (EApp (EApp (EApp (EVar "blockAt") (EApp (EVar "projectIndexOf") (EVar "idx"))) (EApp (EVar "factScopes") (EVar "facts"))) (EVar "path")))))
-(DTypeSig false "blockAt" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "blockAt" ((PVar "ix") (PVar "scopes") (PVar "path") PWild (PVar "e")) (EMatch (EApp (EVar "blockOf") (EVar "e")) (arm (PCon "Some" (PTuple (PCon "PlainBlock") (PVar "stmts"))) () (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "stmtFindings") (EVar "ix")) (EVar "scopes")) (EVar "path"))) (EVar "stmts"))) (arm PWild () (EListLit))))
-(DTypeSig false "stmtFindings" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "stmtFindings" ((PVar "ix") (PVar "scopes") (PVar "path") (PAs "s" (PCon "DoLet" PWild PWild (PCon "PWild") (PVar "rhs") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "sl") (EVar "el")) (EBinOp "==" (EVar "sc") (EVar "ec"))) (EListLit) (EMatch (EApp (EApp (EApp (EApp (EVar "discardVerdict") (EVar "ix")) (EVar "scopes")) (EVar "path")) (EVar "s")) (arm (PCon "Discard" (PVar "ty")) () (EIf (EBinOp "==" (EApp (EVar "discardClass") (EVar "ty")) (EVar "ClassUnit")) (EListLit (EApp (EApp (EVar "finding") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))) (EApp (EApp (EApp (EApp (EVar "dropFix") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "rhs")))) (EListLit))) (arm (PCon "Abstain" PWild) () (EListLit)))))
-(DFunDef false "stmtFindings" (PWild PWild PWild PWild) (EListLit))
+(DFunDef false "ruleLetUnderscoreUnit" () (EApp (EVar "plainBlockVisitors") (EVar "unitStmt")))
+(DTypeSig false "unitStmt" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "unitStmt" ((PVar "ix") (PVar "scopes") (PVar "path") (PAs "s" (PCon "DoLet" PWild PWild (PCon "PWild") (PVar "rhs") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "sl") (EVar "el")) (EBinOp "==" (EVar "sc") (EVar "ec"))) (EListLit) (EMatch (EApp (EApp (EApp (EApp (EVar "discardVerdict") (EVar "ix")) (EVar "scopes")) (EVar "path")) (EVar "s")) (arm (PCon "Discard" (PVar "ty")) () (EIf (EBinOp "==" (EApp (EVar "discardClass") (EVar "ty")) (EVar "ClassUnit")) (EListLit (EApp (EApp (EVar "finding") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))) (EApp (EApp (EApp (EApp (EVar "dropFix") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "rhs")))) (EListLit))) (arm (PCon "Abstain" PWild) () (EListLit)))))
+(DFunDef false "unitStmt" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "finding" (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding"))))
 (DFunDef false "finding" ((PVar "loc") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameLetUnderscoreUnit")) (fa "message" (ELit (LString "`let _ = e` binds a Unit result to nothing. In a plain block write the bare statement `e` (`do` blocks keep `let _ =`). Before: `let _ = f x`; after: `f x`"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EVar "fix")))))
 (DTypeSig false "dropFix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix")))))))
@@ -175,20 +162,18 @@ earlier a b = match (a, b)
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DoStmt" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" true))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
-(DUse false (UseGroup ("tools" "lint_calls") ((mem "BlockKind" true) (mem "DiscardClass" true) (mem "Verdict" true) (mem "blockOf" false) (mem "discardClass" false) (mem "discardVerdict" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" false) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false) (mem "projectIndexOf" false))))
+(DUse false (UseGroup ("tools" "lint_calls") ((mem "DiscardClass" true) (mem "Verdict" true) (mem "discardClass" false) (mem "discardVerdict" false) (mem "plainBlockVisitors" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "ProjectIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameLetUnderscoreUnit" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameLetUnderscoreUnit")) (fa "summary" (ELit (LString "`let _ = e` on a call that returns Unit, in a plain block. Write the bare statement `e`"))) (fa "doc" (ELit (LString "A call whose declared result is Unit has no value to bind, so `let _ =` in front of it says nothing. In a plain block the call is a statement on its own; `do` blocks keep `let _ =`. Only a saturated call to a signed function is checked: the declared result decides, so a partial application, a method, a shadowed name and an unsigned function are not reported.\n\nBefore:\n  let _ = writeLine out \"done\"\n  count xs\nAfter:\n  writeLine out \"done\"\n  count xs"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsProjectIndex")))))) (EVar "ruleLetUnderscoreUnit")) (EVar "None")))
 (DTypeSig false "ruleLetUnderscoreUnit" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
-(DFunDef false "ruleLetUnderscoreUnit" ((PVar "idx") (PVar "path") (PVar "facts") PWild PWild) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KBlock"))) (EApp (EApp (EApp (EVar "blockAt") (EApp (EVar "projectIndexOf") (EVar "idx"))) (EApp (EVar "factScopes") (EVar "facts"))) (EVar "path")))))
-(DTypeSig false "blockAt" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "blockAt" ((PVar "ix") (PVar "scopes") (PVar "path") PWild (PVar "e")) (EMatch (EApp (EVar "blockOf") (EVar "e")) (arm (PCon "Some" (PTuple (PCon "PlainBlock") (PVar "stmts"))) () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "stmtFindings") (EVar "ix")) (EVar "scopes")) (EVar "path"))) (EVar "stmts"))) (arm PWild () (EListLit))))
-(DTypeSig false "stmtFindings" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "stmtFindings" ((PVar "ix") (PVar "scopes") (PVar "path") (PAs "s" (PCon "DoLet" PWild PWild (PCon "PWild") (PVar "rhs") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "sl") (EVar "el")) (EBinOp "==" (EVar "sc") (EVar "ec"))) (EListLit) (EMatch (EApp (EApp (EApp (EApp (EVar "discardVerdict") (EVar "ix")) (EVar "scopes")) (EVar "path")) (EVar "s")) (arm (PCon "Discard" (PVar "ty")) () (EIf (EBinOp "==" (EApp (EVar "discardClass") (EVar "ty")) (EVar "ClassUnit")) (EListLit (EApp (EApp (EVar "finding") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))) (EApp (EApp (EApp (EApp (EVar "dropFix") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "rhs")))) (EListLit))) (arm (PCon "Abstain" PWild) () (EListLit)))))
-(DFunDef false "stmtFindings" (PWild PWild PWild PWild) (EListLit))
+(DFunDef false "ruleLetUnderscoreUnit" () (EApp (EVar "plainBlockVisitors") (EVar "unitStmt")))
+(DTypeSig false "unitStmt" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "unitStmt" ((PVar "ix") (PVar "scopes") (PVar "path") (PAs "s" (PCon "DoLet" PWild PWild (PCon "PWild") (PVar "rhs") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "sl") (EVar "el")) (EBinOp "==" (EVar "sc") (EVar "ec"))) (EListLit) (EMatch (EApp (EApp (EApp (EApp (EVar "discardVerdict") (EVar "ix")) (EVar "scopes")) (EVar "path")) (EVar "s")) (arm (PCon "Discard" (PVar "ty")) () (EIf (EBinOp "==" (EApp (EVar "discardClass") (EVar "ty")) (EVar "ClassUnit")) (EListLit (EApp (EApp (EVar "finding") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))) (EApp (EApp (EApp (EApp (EVar "dropFix") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "rhs")))) (EListLit))) (arm (PCon "Abstain" PWild) () (EListLit)))))
+(DFunDef false "unitStmt" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "finding" (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding"))))
 (DFunDef false "finding" ((PVar "loc") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameLetUnderscoreUnit")) (fa "message" (ELit (LString "`let _ = e` binds a Unit result to nothing. In a plain block write the bare statement `e` (`do` blocks keep `let _ =`). Before: `let _ = f x`; after: `f x`"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EVar "fix")))))
 (DTypeSig false "dropFix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix")))))))
