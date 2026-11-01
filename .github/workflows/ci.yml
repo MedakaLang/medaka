@@ -1731,10 +1731,11 @@ jobs:
       # output-only guard reads a FAILED `detect`'s empty outputs as "narrow to
       # nothing" and reports this required context GREEN having run nothing. Full
       # rationale at the head of `compiler-soundness` (fix F1).
-      - name: Setup medaka (toolchain + downloaded binary)
+      - name: Setup medaka (toolchain + wasm + downloaded binary)
         if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.inlang_corpora == 'true')) }}
         uses: ./.github/actions/setup-medaka
         with:
+          wasm: 'true'
           binary: artifact
       # ⚠️ THE ONE CONSUMER JOB THAT RUNS `make`. `make test` depends on the `.PHONY`
       # `medaka` target, so it re-enters test/build_native_medaka.sh, whose stage B
