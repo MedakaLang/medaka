@@ -106,6 +106,7 @@ The tables below stay as narrative.
 | `E-PHYS-SHAPE` | live | a direct call supplies a different operand count from the definition's parameter count |
 | `E-PHYS-UNDECLARED-FUNCREF` | live | a `ref.func` in a body names a function no `(elem declare func …)` lists |
 | `E-PHYS-UNDECLARED-TYPE` | live | a function is declared `(type $T)` and the type section declares no `$T` (#4528) |
+| `E-PHYS-UNCHECKED` | live | materialized physical text has a missing, changed or malformed call receipt |
 | `E-PHYS-UNDEFINED` | live | a call, `ref.func` or global access names an identity nothing in the module defines |
 | `E-SLICE-OOB` | live | slice bounds out of range |
 | `E-STACK-OVERFLOW` | live | evaluation recursion past the depth guard |
@@ -718,6 +719,7 @@ shape disagrees with the prototype it does not refuse at all.
 |---|---|
 | `E-PHYS-DUPLICATE` | one function, type or global is declared or defined twice (for example `self` and `u__self`, which `gname` spells alike; in LLVM, the value global `@mdk_g_foo` and a function `g_foo`) |
 | `E-PHYS-SHAPE` | a direct call supplies a different operand count from the definition's parameter count; in LLVM, a call's return or operand types disagree with the prototype, or a second declaration gives the name another prototype |
+| `E-PHYS-UNCHECKED` | materialized physical text has a missing, changed or malformed call receipt, or a checked fragment contains another named call |
 | `E-PHYS-UNDEFINED` | a call, `ref.func` or global access names an identity nothing in the module defines; in a whole LLVM module, also a generated symbol it only declares |
 | `E-PHYS-UNDECLARED-TYPE` | a function is declared `(type $T)` and the type section declares no `$T` (#4528) |
 | `E-PHYS-UNDECLARED-FUNCREF` | a `ref.func` in a body names a function no `(elem declare func …)` lists |

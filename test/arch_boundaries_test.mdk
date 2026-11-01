@@ -1299,3 +1299,9 @@ test "arch_boundaries: the module-field partition classifies every ModuleCtx fie
         (filter (r => not (elem (snd r) (drop 1 partitionClasses))) cellRows),
       expectEqual [] (filter (r => not (elem (snd r) partitionClasses)) ctxRows),
     ]
+
+test "arch_boundaries: LLVM text coverage remains a target-local leaf" =
+  closurePin "backend.llvm_text_coverage"
+
+test "arch_boundaries: Wasm text coverage remains a target-local leaf" =
+  closurePin "backend.wasm_text_coverage"

@@ -1,0 +1,711 @@
+import backend.llvm_text_coverage.{
+  CallModifier(..), CoveragePolicy(..), CallCoverage, checkedCall,
+  emptyCoverage, finishCheckedText
+}
+import backend.llvm_symbols.{
+  LlvmSymbol(..), LlvmParam(..), Prototype(..), ModuleScope(..),
+  SymbolDefect(..), SymbolDeclaration(..), SymbolLinkage(..), declarations,
+  defectOrigin, defectMessage, SymbolRegistry, emptyRegistry, defineSymbol,
+  declareSymbol, excuseSymbol, defectCode
+}
+import support.diag_codes.{codeText}
+import support.symbol_origin.{SymbolOrigin(..)}
+import string.{replace, repeat, contains}
+import test.{
+  Expectation, expectAll, expectEqual, expectEach, expectErrContains,
+  expectOkThen, expectLessThan, expectGreaterThan, expectFalse, fail
+}
+
+at : SymbolOrigin
+at = SymbolOrigin "caller" "coverage.mdk" 7 3
+
+registry : Result SymbolDefect SymbolRegistry
+registry =
+  defineSymbol
+    (Generated "f")
+    (FuncProto "i64" [LlvmParam "i64" "%x"] "")
+    at
+    (emptyRegistry WholeModule)
+
+moduleText : String -> String
+moduleText body = "define i64 @f(i64 %x) {\n" ++ body ++ "\n  ret i64 %x\n}\n"
+
+codes : Result (List SymbolDefect) String -> Result (List String) String
+-- The two backends have distinct nominal defect types.
+-- lint-disable-next-line rule-duplicate-body
+codes (Ok text) = Ok text
+-- The two backends have distinct nominal defect types.
+-- lint-disable-next-line rule-duplicate-body
+codes (Err ds) = Err (map (d => codeText (defectCode d)) ds)
+
+expectStep : (a -> Expectation) -> Result SymbolDefect a -> Expectation
+-- The two backends have distinct nominal defect types.
+-- lint-disable-next-line rule-duplicate-body
+expectStep grade result = expectOkThen grade (match result
+  Ok value => Ok value
+  Err d => Err (codeText (defectCode d)))
+
+withCall : CallModifier ->
+  (SymbolRegistry -> CallCoverage -> String -> Expectation) ->
+  Expectation
+withCall modifier grade =
+  expectStep
+    (reg =>
+      expectStep
+        ((reg2, coverage, text) => grade reg2 coverage text)
+        (checkedCall
+          reg
+          modifier
+          (Generated "f")
+          "i64"
+          [("i64", "%x")]
+          at
+          emptyCoverage))
+    registry
+
+modifierCase : (CallModifier, String) -> (String, Expectation)
+modifierCase (modifier, prefix) = (
+  prefix,
+  withCall modifier (reg coverage fragment =>
+    expectEqual
+      (Ok (moduleText ("  %r = " ++ prefix ++ "call i64 @f(i64 %x)")))
+      (codes
+        (finishCheckedText
+          ClosedOutput
+          reg
+          coverage
+          (moduleText ("  %r = " ++ fragment))))),
+)
+
+test "LLVM receipts preserve ordinary and every tail modifier byte for byte" =
+  expectEach
+    (map modifierCase [
+      (OrdinaryCall, ""),
+      (TailCall, "tail "),
+      (MustTailCall, "musttail "),
+      (NoTailCall, "notail "),
+    ])
+
+test "LLVM shape checking precedes receipt creation" =
+  expectStep
+    (reg =>
+      expectEqual
+        ["E-PHYS-SHAPE"]
+        (match (checkedCall
+          reg
+          OrdinaryCall
+          (Generated "f")
+          "double"
+          []
+          at
+          emptyCoverage)
+          Err d => [codeText (defectCode d)]
+          Ok _ => []))
+    registry
+
+test "LLVM known, unknown and nearby checked raw bypasses refuse" = withCall
+  OrdinaryCall
+  (reg coverage _ =>
+    expectEach
+      (map
+        (raw => (
+          raw,
+          expectErrContains
+            "E-PHYS-UNCHECKED"
+            (codes
+              (finishCheckedText ClosedOutput reg coverage (moduleText raw))),
+        ))
+        [
+          "  %r = call i64 @f(i64 %x)",
+          "  %r = call i64 @unknown(i64 %x)",
+          "  %r = " ++ "call" ++ " i64 @f(i64 %x)",
+        ]))
+
+test "LLVM receipts can be reused, discarded and reordered" = withCall
+  OrdinaryCall
+  (reg coverage fragment =>
+    expectStep
+      ((reg2, cov2, second) => expectAll [
+        expectEqual
+          (Ok (moduleText ""))
+          (codes (finishCheckedText ClosedOutput reg2 cov2 (moduleText ""))),
+        expectEqual
+          (Ok
+            (moduleText
+              "  %a = call i64 @f(i64 %x)\n  %b = call i64 @f(i64 %x)"))
+          (codes
+            (finishCheckedText
+              ClosedOutput
+              reg2
+              cov2
+              (moduleText "  %a = \{fragment}\n  %b = \{fragment}"))),
+        expectEqual
+          (Ok
+            (moduleText
+              "  %a = tail call i64 @f(i64 %x)\n  %b = call i64 @f(i64 %x)"))
+          (codes
+            (finishCheckedText
+              ClosedOutput
+              reg2
+              cov2
+              (moduleText "  %a = \{second}\n  %b = \{fragment}"))),
+      ])
+      (checkedCall
+        reg
+        TailCall
+        (Generated "f")
+        "i64"
+        [("i64", "%x")]
+        at
+        coverage))
+
+test "LLVM forged, changed, nested and outside-modifier receipts refuse" = withCall
+  OrdinaryCall
+  (reg coverage fragment =>
+    expectEach
+      (map
+        ((label, changed) => (
+          label,
+          expectErrContains
+            "E-PHYS-UNCHECKED"
+            (codes
+              (finishCheckedText
+                ClosedOutput
+                reg
+                coverage
+                (moduleText ("  %r = " ++ changed)))),
+        ))
+        [
+          ("changed operand", replace "%x" "%y" fragment),
+          ("changed callee", replace "@f" "@g" fragment),
+          ("forged id", replace "L0:" "L99:" fragment),
+          ("nested", replace "call" fragment fragment),
+          ("truncated", stringSlice 0 (stringLength fragment - 1) fragment),
+          ("outer musttail", "musttail " ++ fragment),
+          ("token splice", "not" ++ fragment),
+        ]))
+
+test "LLVM an authentic operand cannot receipt a second named call" =
+  expectStep
+    (reg =>
+      expectEach
+        (map
+          ((label, operand) => (
+            label,
+            expectEqual
+              ["E-PHYS-UNCHECKED"]
+              (match (checkedCall
+                reg
+                MustTailCall
+                (Generated "f")
+                "i64"
+                [("i64", operand)]
+                at
+                emptyCoverage)
+                Err d => [codeText (defectCode d)]
+                Ok _ => []),
+          ))
+          [
+            ("plain", "%x)\n %y = call i64 @f(i64 %x"),
+            ("quoted multiline", "%x)\n %y = tail call i64 @\"f\"(\n i64 %x"),
+          ]))
+    registry
+
+test "LLVM quoted escaped identifiers, multiline operands and comment lookalikes work" =
+  expectStep
+    (reg =>
+      expectStep
+        ((reg2, coverage, fragment) =>
+          let before = "; call i64 @missing() \u{1e}L99:fake\u{1f}\n"
+          let source =
+            "define i64 @\"f\\20space\"(i64 %x) {\n  %r = "
+              ++ fragment
+              ++ "\n  ret i64 %x\n}\n"
+          let expected =
+            before
+              ++ replace fragment "call i64 @\"f\\20space\"(i64 \n%x)" source
+          expectEqual
+            (Ok expected)
+            (codes
+              (finishCheckedText
+                ClosedOutput
+                reg2
+                coverage
+                (before ++ source))))
+        (checkedCall
+          reg
+          OrdinaryCall
+          (Generated "\"f\\20space\"")
+          "i64"
+          [("i64", "\n%x")]
+          at
+          emptyCoverage))
+    (defineSymbol
+      (Generated "\"f\\20space\"")
+      (FuncProto "i64" [LlvmParam "i64" "%x"] "")
+      at
+      (emptyRegistry WholeModule))
+
+test "LLVM string and marker lookalikes are inert and exact" =
+  let source = "@s = constant [27 x i8] c\"call @f() \u{1e}L99:fake\u{1f}\"\n"
+  expectStep
+    (reg =>
+      expectEqual
+        (Ok source)
+        (codes (finishCheckedText ClosedOutput reg emptyCoverage source)))
+    (defineSymbol
+      (Generated "s")
+      (DataProto "[27 x i8]")
+      at
+      (emptyRegistry WholeModule))
+
+test "LLVM actual declarations, references, duplication and materialized shape are judged" = withCall
+  OrdinaryCall
+  (reg coverage fragment => expectAll [
+    expectErrContains
+      "E-PHYS-UNDEFINED"
+      (codes
+        (finishCheckedText ClosedOutput reg coverage ("  %r = " ++ fragment))),
+    expectErrContains
+      "E-PHYS-UNDEFINED"
+      (codes
+        (finishCheckedText
+          ClosedOutput
+          reg
+          coverage
+          (moduleText "  %p = ptrtoint ptr @missing to i64"))),
+    expectErrContains
+      "E-PHYS-DUPLICATE"
+      (codes
+        (finishCheckedText
+          ClosedOutput
+          reg
+          coverage
+          (moduleText "" ++ moduleText ""))),
+    expectErrContains
+      "E-PHYS-SHAPE"
+      (codes
+        (finishCheckedText
+          ClosedOutput
+          reg
+          coverage
+          "define double @f(i64 %x) { ret double 0.0 }")),
+    expectErrContains
+      "E-PHYS-SHAPE"
+      (codes
+        (finishCheckedText
+          ClosedOutput
+          reg
+          coverage
+          "define i64 @f(double %x) { ret i64 0 }")),
+  ])
+
+test "LLVM final registry cannot replace a receipt descriptor with another shape" = withCall
+  OrdinaryCall
+  (_ coverage fragment =>
+    expectStep
+      (wrong =>
+        expectErrContains
+          "E-PHYS-SHAPE"
+          (codes
+            (finishCheckedText
+              ClosedOutput
+              wrong
+              coverage
+              ("declare double @f()\n" ++ fragment))))
+      (declareSymbol
+        (Foreign "f")
+        (FuncProto "double" [] "")
+        at
+        (emptyRegistry ModuleHalf)))
+
+test "LLVM half modules accept actual declares, and exact gaps never exempt coverage" =
+  expectStep
+    (reg =>
+      expectStep
+        ((reg2, coverage, fragment) => expectAll [
+          expectEqual
+            (Ok ("declare i64 @f(i64)\n" ++ "call i64 @f(i64 0)"))
+            (codes
+              (finishCheckedText
+                ClosedOutput
+                reg2
+                coverage
+                ("declare i64 @f(i64)\n" ++ fragment))),
+          expectEqual
+            (Ok "call i64 @f(i64 0)")
+            (codes
+              (finishCheckedText
+                (RecordedGaps [Foreign "f"])
+                (excuseSymbol (Foreign "f") reg2)
+                coverage
+                fragment)),
+          expectErrContains
+            "E-PHYS-UNDEFINED"
+            (codes
+              (finishCheckedText
+                (RecordedGaps [Foreign "other"])
+                (excuseSymbol (Foreign "f") reg2)
+                coverage
+                fragment)),
+          expectErrContains
+            "E-PHYS-UNCHECKED"
+            (codes
+              (finishCheckedText
+                (RecordedGaps [Foreign "f"])
+                (excuseSymbol (Foreign "f") reg2)
+                coverage
+                "call i64 @f(i64 0)")),
+        ])
+        (checkedCall
+          reg
+          OrdinaryCall
+          (Foreign "f")
+          "i64"
+          [("i64", "0")]
+          at
+          emptyCoverage))
+    (declareSymbol
+      (Foreign "f")
+      (FuncProto "i64" [LlvmParam "i64" ""] "")
+      at
+      (emptyRegistry ModuleHalf))
+
+test "LLVM large receipt reuse remains stack safe with bounded allocation growth" =
+  match registry
+    Err d => fail (codeText (defectCode d))
+    Ok reg =>
+      match (checkedCall
+        reg
+        OrdinaryCall
+        (Generated "f")
+        "i64"
+        [("i64", "%x")]
+        at
+        emptyCoverage)
+        Err d => fail (codeText (defectCode d))
+        Ok (reg2, coverage, fragment) =>
+          let small = moduleText (repeat 10000 ("  %r = " ++ fragment ++ "\n"))
+          let large = moduleText (repeat 20000 ("  %r = " ++ fragment ++ "\n"))
+          let before = allocBytes ()
+          let first = finishCheckedText ClosedOutput reg2 coverage small
+          let mid = allocBytes ()
+          let second = finishCheckedText ClosedOutput reg2 coverage large
+          let end = allocBytes ()
+          expectAll [
+            expectEqual
+              (Ok (moduleText (repeat 10000 "  %r = call i64 @f(i64 %x)\n")))
+              (codes first),
+            expectEqual
+              (Ok (moduleText (repeat 20000 "  %r = call i64 @f(i64 %x)\n")))
+              (codes second),
+            expectGreaterThan 0 (mid - before),
+            expectLessThan ((mid - before) * 3) (end - mid),
+          ]
+
+test "LLVM declaration inventory and unchecked diagnostic retain typed facts" =
+  expectStep
+    (reg => expectAll [
+      expectEqual
+        [
+          SymbolDeclaration
+            (Generated "f")
+            (FuncProto "i64" [LlvmParam "i64" "%x"] "")
+            SymbolDefined
+            at,
+        ]
+        (declarations reg),
+      expectEqual at (defectOrigin (UncheckedText "changed bytes" at)),
+      expectEqual
+        "E-PHYS-UNCHECKED"
+        (codeText (defectCode (UncheckedText "changed bytes" at))),
+      expectEqual
+        "in `caller`: LLVM text has no valid checked-call receipt (changed bytes)"
+        (defectMessage (UncheckedText "changed bytes" at)),
+    ])
+    registry
+
+test "LLVM quoted aliases cannot hide duplicate materialized definitions" =
+  expectStep
+    (reg => expectAll [
+      expectErrContains
+        "E-PHYS-DUPLICATE"
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            reg
+            emptyCoverage
+            (moduleText "" ++ "define i64 @\"\\66\"(i64 %x) { ret i64 %x }"))),
+      expectStep
+        (aliases =>
+          expectErrContains
+            "E-PHYS-DUPLICATE"
+            (codes
+              (finishCheckedText
+                ClosedOutput
+                aliases
+                emptyCoverage
+                (moduleText ""))))
+        (defineSymbol
+          (Generated "\"f\"")
+          (FuncProto "i64" [LlvmParam "i64" ""] "")
+          at
+          reg),
+    ])
+    registry
+
+test "LLVM discarded forward calls leave no materialized obligation" =
+  expectStep
+    ((reg, coverage, _) =>
+      expectEqual
+        (Ok "")
+        (codes (finishCheckedText ClosedOutput reg coverage "")))
+    (checkedCall
+      (emptyRegistry WholeModule)
+      OrdinaryCall
+      (Generated "future")
+      "i64"
+      []
+      at
+      emptyCoverage)
+
+test "LLVM a receipt cannot end in a comment that swallows its closing marker" =
+  expectStep
+    (reg =>
+      expectEqual
+        ["E-PHYS-UNCHECKED"]
+        (match (checkedCall
+          reg
+          OrdinaryCall
+          (Generated "f")
+          "i64"
+          [("i64", "%x) ; swallowed")]
+          at
+          emptyCoverage)
+          Err d => [codeText (defectCode d)]
+          Ok _ => []))
+    registry
+
+test "LLVM whole modules require generated definitions even when a declare exists" =
+  expectStep
+    (reg =>
+      expectErrContains
+        "E-PHYS-UNDEFINED"
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            reg
+            emptyCoverage
+            "declare i64 @f(i64)")))
+    (declareSymbol
+      (Generated "f")
+      (FuncProto "i64" [LlvmParam "i64" ""] "")
+      at
+      (emptyRegistry WholeModule))
+
+test "LLVM quoted aliases cannot bypass final descriptor checking" = withCall
+  OrdinaryCall
+  (_ coverage fragment =>
+    expectStep
+      (wrong =>
+        expectErrContains
+          "E-PHYS-SHAPE"
+          (codes
+            (finishCheckedText
+              ClosedOutput
+              wrong
+              coverage
+              ("declare double @\"f\"()\n" ++ fragment))))
+      (declareSymbol
+        (Foreign "\"f\"")
+        (FuncProto "double" [] "")
+        at
+        (emptyRegistry ModuleHalf)))
+
+test "LLVM NUL is opcode whitespace, not a way around call coverage" = withCall
+  OrdinaryCall
+  (reg coverage _ =>
+    expectErrContains
+      "E-PHYS-UNCHECKED"
+      (codes
+        (finishCheckedText
+          ClosedOutput
+          reg
+          coverage
+          (moduleText "  %r = call\0i64 @f(i64 %x)"))))
+
+test "llvm uncovered calls use the enclosing registered binding origin" = withCall
+  OrdinaryCall
+  (reg coverage _ =>
+    match (finishCheckedText
+      ClosedOutput
+      reg
+      coverage
+      (moduleText "  %r = call i64 @f(i64 %x)"))
+      Err ds => expectEqual [at] (map defectOrigin ds)
+      Ok _ => fail "raw call accepted")
+
+test "LLVM explicit function types returning named types cannot conceal a direct call" =
+  expectStep
+    (reg =>
+      expectErrContains
+        "E-PHYS-UNCHECKED"
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            reg
+            emptyCoverage
+            "%T = type { i64 }\ndefine %T @f(i64 %x) { %r = call %T (i64) @f(i64 %x) ret %T %r }")))
+    (defineSymbol
+      (Generated "f")
+      (FuncProto "%T" [LlvmParam "i64" "%x"] "")
+      at
+      (emptyRegistry WholeModule))
+
+test "LLVM indirect calls with global operands remain indirect" =
+  let source =
+    "@g = global i64 0\ndefine i64 @f(ptr %fn) { %r = call i64 %fn(ptr @g) ret i64 %r }"
+  let reg = do
+    first <- defineSymbol
+      (Generated "f")
+      (FuncProto "i64" [LlvmParam "ptr" "%fn"] "")
+      at
+      (emptyRegistry WholeModule)
+    defineSymbol (Generated "g") (DataProto "i64") at first
+  expectStep
+    (symbols =>
+      expectEqual
+        (Ok source)
+        (codes (finishCheckedText ClosedOutput symbols emptyCoverage source)))
+    reg
+
+test "LLVM malformed repeated headers refuse without rescanning the suffix" =
+  expectErrContains
+    "E-PHYS-UNCHECKED"
+    (codes
+      (finishCheckedText
+        ClosedOutput
+        (emptyRegistry WholeModule)
+        emptyCoverage
+        (repeat 20000 "define ")))
+
+test "LLVM unrelated definitions and declaration permutations preserve receipts" = withCall
+  OrdinaryCall
+  (reg coverage fragment =>
+    expectStep
+      (symbols =>
+        let f = moduleText ("  %r = " ++ fragment)
+        let g = "define i64 @g() { ret i64 0 }\n"
+        expectEach
+          (map
+            ((source, expected) => (
+              expected,
+              expectEqual
+                (Ok expected)
+                (codes (finishCheckedText ClosedOutput symbols coverage source)),
+            ))
+            [
+              (f ++ g, moduleText "  %r = call i64 @f(i64 %x)" ++ g),
+              (g ++ f, g ++ moduleText "  %r = call i64 @f(i64 %x)"),
+            ]))
+      (defineSymbol (Generated "g") (FuncProto "i64" [] "") at reg))
+
+test "LLVM invalid UTF-8 names stay distinct from valid escape-looking names" =
+  let bytesName = "\"\\ff\""
+  let textName = "\"\\22\\5cff\\22\""
+  let proto = FuncProto "i64" [] ""
+  let head name body = "define i64 @\{name}() { \{body} }\n"
+  let reg =
+    defineSymbol (Generated bytesName) proto at (emptyRegistry WholeModule)
+  expectStep
+    (first => expectAll [
+      expectStep
+        ((symbols, coverage, fragment) =>
+          expectErrContains
+            "E-PHYS-UNDEFINED"
+            (codes
+              (finishCheckedText
+                ClosedOutput
+                symbols
+                coverage
+                (head bytesName ("%r = " ++ fragment ++ " ret i64 %r")))))
+        (checkedCall
+          first
+          OrdinaryCall
+          (Generated textName)
+          "i64"
+          []
+          at
+          emptyCoverage),
+      expectStep
+        (both =>
+          let source = head bytesName "ret i64 0" ++ head textName "ret i64 0"
+          expectEqual
+            (Ok source)
+            (codes (finishCheckedText ClosedOutput both emptyCoverage source)))
+        (defineSymbol (Generated textName) proto at first),
+      expectEqual
+        (Ok (head "\"\\FF\"" "ret i64 0"))
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            first
+            emptyCoverage
+            (head "\"\\FF\"" "ret i64 0"))),
+    ])
+    reg
+
+test "LLVM numeric slots and quoted numeric names have separate identities" =
+  let proto = FuncProto "i64" [] ""
+  let reg = do
+    first <- defineSymbol (Generated "0") proto at (emptyRegistry WholeModule)
+    defineSymbol (Generated "\"0\"") proto at first
+  let source =
+    "define i64 @0() { ret i64 0 }\ndefine i64 @\"0\"() { ret i64 1 }\n"
+  expectStep
+    (symbols =>
+      expectEqual
+        (Ok source)
+        (codes (finishCheckedText ClosedOutput symbols emptyCoverage source)))
+    reg
+
+test "LLVM lexical receipt errors retain the supplied binding origin" =
+  expectStep
+    (reg =>
+      expectEach
+        (map
+          ((label, sym, ops) => (
+            label,
+            match checkedCall reg OrdinaryCall sym "i64" ops at emptyCoverage
+              Err d => expectAll [
+                expectEqual at (defectOrigin d),
+                expectEqual "E-PHYS-UNCHECKED" (codeText (defectCode d)),
+              ]
+              Ok _ => fail "malformed checked call accepted",
+          ))
+          [
+            ("implicit unnamed global", Generated "\"\"", []),
+            ("unterminated operand", Generated "f", [("i64", "\"")]),
+          ]))
+    registry
+
+test "LLVM quoted marker-looking names cannot leak control bytes into diagnostics" = withCall
+  OrdinaryCall
+  (reg coverage _ =>
+    let result =
+      finishCheckedText
+        ClosedOutput
+        reg
+        coverage
+        (moduleText "  %r = call i64 @\"\\1eL99:fake\\1f\"()")
+    match result
+      Ok _ => fail "raw call accepted"
+      Err ds => expectAll [
+        expectErrContains "E-PHYS-UNCHECKED" (codes result),
+        expectFalse
+          (any
+            (d =>
+              contains "\u{1e}" (defectMessage d)
+                || contains "\u{1f}" (defectMessage d))
+            ds),
+      ])
