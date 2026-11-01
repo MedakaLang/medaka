@@ -1,5 +1,5 @@
 # META
-source_lines=394
+source_lines=393
 stages=DESUGAR,MARK
 # SOURCE
 import backend.impl_groups.{ImplClauseGroup, groupImplEntries}
@@ -19,7 +19,6 @@ import backend.global_plan.{GlobalInitPlan, planGlobals}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{Lit(..), Pat(..)}
 import ir.extern_types.{ExternDeclFact}
-import ir.extern_lower.{externRuntimeKey, externHeadRows}
 import ir.core_ir.{
   CProgram(..),
   EntryFact(..),
@@ -407,7 +406,6 @@ data DemandScope = DemandScope {
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" false))))
-(DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false) (mem "externHeadRows" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" false) (mem "WasmUse" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
@@ -486,7 +484,6 @@ data DemandScope = DemandScope {
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" false))))
-(DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false) (mem "externHeadRows" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" false) (mem "WasmUse" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false))))

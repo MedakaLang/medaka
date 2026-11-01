@@ -1,5 +1,5 @@
 # META
-source_lines=588
+source_lines=585
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -50,9 +50,6 @@ import types.effect_policy.{
   PolicyVerdict(..), buildCallGraph, fnEffectsTable, viaChain
 }
 import types.repr.{Scheme}
-import types.effect_rows.{
-  Atom, atomLabel, atomLabelOf, effLabelOrigin, renderAtom
-}
 import tools.check_policy.{TargetInputs(..)}
 import types.tc_types.{DriveOutputs(..)}
 import driver.diagnostics.{
@@ -605,7 +602,6 @@ firstOr _ (x :: _) = x
 (DUse false (UseGroup ("ir" "dce") ((mem "ReachRoots" true) (mem "reachedExternChains" false) (mem "reachedExternRoutes" false))))
 (DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "atomLabel" false) (mem "atomLabelOf" false) (mem "effLabelOrigin" false) (mem "renderAtom" false))))
 (DUse false (UseGroup ("tools" "check_policy") ((mem "TargetInputs" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "mkDiag" false) (mem "cjFoldIntoFile" false) (mem "ppDiagCliLines" false) (mem "readFileSafe" false) (mem "srcLinesArr" false))))
@@ -751,7 +747,6 @@ firstOr _ (x :: _) = x
 (DUse false (UseGroup ("ir" "dce") ((mem "ReachRoots" true) (mem "reachedExternChains" false) (mem "reachedExternRoutes" false))))
 (DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "atomLabel" false) (mem "atomLabelOf" false) (mem "effLabelOrigin" false) (mem "renderAtom" false))))
 (DUse false (UseGroup ("tools" "check_policy") ((mem "TargetInputs" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "mkDiag" false) (mem "cjFoldIntoFile" false) (mem "ppDiagCliLines" false) (mem "readFileSafe" false) (mem "srcLinesArr" false))))

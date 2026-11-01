@@ -190,7 +190,6 @@ import types.typecheck.{
   hadTypeErrors,
   hadMatchWarnings,
 }
-import types.tc_types.{DriveOutputs}
 import types.target_profile.{selectedProfile}
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{emptyFacts, factsOfElabSources, factsWithEvidence}

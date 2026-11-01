@@ -43,7 +43,6 @@ import frontend.lex_token.{
   isCloseDelim, isTStringTok, isTUpperTok
 }
 import support.source_index.{lineStartIndex, offsetToLineColFast}
-import support.util.{reverseL, joinWith}
 
 public export data DeclPos = DeclPos Int Int (Option Loc) (List (Option Loc))
 public export data Positions =

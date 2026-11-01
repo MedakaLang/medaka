@@ -2,7 +2,6 @@ import types.program_facts.{withSymbolOrigins}
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{prepareWasmPlan}
 import backend.wasm_emit.{inputCtorFloatFieldsW}
-import types.extern_source.{externSourceHeadRows}
 import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- Single-file per-stage timing driver for the self-hosted front-end.
 -- Times each pipeline stage individually so the cost of each is visible

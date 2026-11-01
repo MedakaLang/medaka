@@ -11,7 +11,6 @@
 import lib.sqlite.{openDb}
 import lib.query.{scanTable, fetchAll}
 import lib.rowtype.{RowType, tInt, tText, tOption, t3, tCustom}
-import lib.recordfmt.{Cell}
 
 data User = User { id : Int, name : String, age : Option Int }
 

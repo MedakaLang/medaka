@@ -15,7 +15,6 @@ import backend.global_plan.{GlobalInitPlan, planGlobals}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{Lit(..), Pat(..)}
 import ir.extern_types.{ExternDeclFact}
-import ir.extern_lower.{externRuntimeKey, externHeadRows}
 import ir.core_ir.{
   CProgram(..),
   EntryFact(..),

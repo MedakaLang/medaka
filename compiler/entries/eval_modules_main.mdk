@@ -10,7 +10,6 @@
 -- <entry.mdk>` (which drives the reference Loader → eval_modules), the same
 -- oracle eval_typed_main uses.
 
-import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import driver.loader.{loadProgram}

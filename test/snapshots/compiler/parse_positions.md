@@ -1,5 +1,5 @@
 # META
-source_lines=527
+source_lines=526
 stages=DESUGAR,MARK
 # SOURCE
 import array
@@ -47,7 +47,6 @@ import frontend.lex_token.{
   isCloseDelim, isTStringTok, isTUpperTok
 }
 import support.source_index.{lineStartIndex, offsetToLineColFast}
-import support.util.{reverseL, joinWith}
 
 public export data DeclPos = DeclPos Int Int (Option Loc) (List (Option Loc))
 public export data Positions =
@@ -534,7 +533,6 @@ positionsFromSpans lineStarts toks offs spans =
 (DUse false (UseGroup ("frontend" "ast") ((mem "DeriveRef" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "Route" true))))
 (DUse false (UseGroup ("frontend" "lex_token") ((mem "Token" true) (mem "isCommaTok" false) (mem "isNoiseTok" false) (mem "isDedentTok" false) (mem "isEqualTok" false) (mem "isIndentTok" false) (mem "isNewlineTok" false) (mem "isPipeTok" false) (mem "isRequiresTok" false) (mem "isWhereTok" false) (mem "isLayoutTok" false) (mem "isOpenDelim" false) (mem "isCloseDelim" false) (mem "isTStringTok" false) (mem "isTUpperTok" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "lineStartIndex" false) (mem "offsetToLineColFast" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DData Public "DeclPos" () ((variant "DeclPos" (ConPos (TyCon "Int") (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Public "Positions" () ((variant "Positions" (ConPos (TyApp (TyCon "List") (TyCon "DeclPos")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))) ())
 (DTypeSig true "positionsDecls" (TyFun (TyCon "Positions") (TyApp (TyCon "List") (TyCon "DeclPos"))))
@@ -721,7 +719,6 @@ positionsFromSpans lineStarts toks offs spans =
 (DUse false (UseGroup ("frontend" "ast") ((mem "DeriveRef" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "Route" true))))
 (DUse false (UseGroup ("frontend" "lex_token") ((mem "Token" true) (mem "isCommaTok" false) (mem "isNoiseTok" false) (mem "isDedentTok" false) (mem "isEqualTok" false) (mem "isIndentTok" false) (mem "isNewlineTok" false) (mem "isPipeTok" false) (mem "isRequiresTok" false) (mem "isWhereTok" false) (mem "isLayoutTok" false) (mem "isOpenDelim" false) (mem "isCloseDelim" false) (mem "isTStringTok" false) (mem "isTUpperTok" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "lineStartIndex" false) (mem "offsetToLineColFast" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DData Public "DeclPos" () ((variant "DeclPos" (ConPos (TyCon "Int") (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Public "Positions" () ((variant "Positions" (ConPos (TyApp (TyCon "List") (TyCon "DeclPos")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))) ())
 (DTypeSig true "positionsDecls" (TyFun (TyCon "Positions") (TyApp (TyCon "List") (TyCon "DeclPos"))))

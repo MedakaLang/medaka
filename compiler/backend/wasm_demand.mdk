@@ -31,7 +31,6 @@ import backend.trmc_analysis.{
 }
 import backend.emit_support.{appParts, isExactCall}
 import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
-import types.private_mangle.{injectiveIdent}
 import support.ordmap.{
   OrdMap, omEmpty, omInsert, omLookup, omHasKey, omKeys, omFromNames,
   omFromPairs, omRestrict
