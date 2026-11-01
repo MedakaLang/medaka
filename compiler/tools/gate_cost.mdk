@@ -30,7 +30,15 @@
    gate names — 0 missing, 0 duplicate keys, 0 unused baseline rows. -}
 
 import json.{Json(..), asArray, asBool, asInt, asString, get, parse}
-import support.util.{contains, joinWith, listLen, splitOnChar, startsWith}
+import support.util.{
+  contains,
+  endsWith,
+  joinWith,
+  listLen,
+  splitOnChar,
+  startsWith,
+  testFileSuffix,
+}
 
 {- | One gate's measured cost.  `medianMs` is the baseline's `medianMs` —
    the LOWER median of the retained raw samples, in milliseconds.  `samples`
@@ -127,11 +135,9 @@ dropDotSh s
 -- suffix FIRST (mirrors `gate_name`'s sed order) so a native gate's key
 -- collapses onto the same label its pre-migration `.sh` used.
 dropTestMdk : String -> String
-dropTestMdk s
-  | stringLength s > 9
-    && stringSlice (stringLength s - 9) (stringLength s) s == "_test.mdk" =
-    stringSlice 0 (stringLength s - 9) s
-  | otherwise = s
+dropTestMdk s =
+  let keep = stringLength s - stringLength testFileSuffix
+  if keep > 0 && endsWith testFileSuffix s then stringSlice 0 keep s else s
 
 dropTestPrefix : String -> String
 dropTestPrefix s

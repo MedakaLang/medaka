@@ -1,0 +1,11 @@
+-- The sibling of `runners.mdk`: a prop, a doctest and a test, each naming the
+-- private `step`.
+import test.{expectEqual}
+import runners.{step, bump}
+
+prop "bump is step" (n : Int) = bump n == step n
+
+-- > step 1
+-- 2
+
+test "bump goes through step" = expectEqual 3 (bump 2)

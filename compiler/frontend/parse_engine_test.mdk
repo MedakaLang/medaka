@@ -3,8 +3,9 @@ import frontend.parse_engine.{
   newParseContext, newParseContextWith, runPWith, runP, getPos, expectTok,
   advance, failP, fatalAtP, orElse as parseOrElse, many, mark, rewind, depthOf,
   withDepth, recordTrailingComma, recordUnitStart, forgetLatestUnitStart,
-  contextCues, tokLineCol, renderFail
+  contextCues, renderFail
 }
+import support.source_index.{offsetToLineColFast}
 import frontend.lex_token.{Token(..)}
 import frontend.parse_result.{
   makeParseMetadata, metadataTrailingCommas, metadataUnitStarts
@@ -164,7 +165,7 @@ test "depth is restored for success, recoverable failure and fatal failure" =
     (map
       ((label, parser) =>
         let ctx = session ()
-        let r = runPWith ctx (withDepth 2 (FailMsg "limit") parser) 0
+        let _ = runPWith ctx (withDepth 2 (FailMsg "limit") parser) 0
         (label, expectEqual 0 (depthOf ctx)))
       [
         ("success", writeOk),
@@ -222,3 +223,10 @@ test "a suspended parser preserves its caller's stdout effect row" =
         x)
       (deferPure 5 : ParserE <Stdout> Int)
   expectEqual ("ok", 0) (status (runP p (arrayFromList []) 0))
+
+tokLineCol : ParseContext -> Int -> (Int, Int)
+tokLineCol ctx i =
+  if ctx.pcGuardPositions && i >= 0 && i < arrayLength ctx.pcOffsets then
+    offsetToLineColFast ctx.pcLineStarts (fst (arrayGetUnsafe i ctx.pcOffsets))
+  else
+    (0, 0)

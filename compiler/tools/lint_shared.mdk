@@ -12,7 +12,7 @@ import support.util.{
   contains, filterList, splitOnChar, joinWith, startsWith, listLen, anyList,
   joinNl, dedupBy
 }
-import list.{drop, sortBy, last, reverse}
+import list.{sortBy, last, reverse}
 import array.{get as arrayGet}
 import string.{split, isUpper, words, unwords}
 import support.path.{stripMdk}
@@ -132,6 +132,18 @@ ruleNameSelfShadowExtern : String
 ruleNameSelfShadowExtern = "rule-self-shadow-extern"
 
 export
+ruleNameUnusedImport : String
+ruleNameUnusedImport = "rule-unused-import"
+
+export
+ruleNameUnusedParam : String
+ruleNameUnusedParam = "rule-unused-param"
+
+export
+ruleNameUnusedLocal : String
+ruleNameUnusedLocal = "rule-unused-local"
+
+export
 ruleNamePreferAssignOp : String
 ruleNamePreferAssignOp = "rule-prefer-assign-op"
 
@@ -168,8 +180,8 @@ ruleNameTestEqualInTrue : String
 ruleNameTestEqualInTrue = "rule-test-equal-in-true"
 
 export
-ruleNameTestPreludeShadow : String
-ruleNameTestPreludeShadow = "rule-test-prelude-shadow"
+ruleNamePreludeShadow : String
+ruleNamePreludeShadow = "rule-prelude-shadow"
 
 -- Is the target file part of the stdlib itself?  A `stdlib` path SEGMENT (so
 -- `stdlib/core.mdk`, `./stdlib/list.mdk`, `/abs/medaka/stdlib/map.mdk` all match,

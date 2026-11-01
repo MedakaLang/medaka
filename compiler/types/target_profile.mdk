@@ -29,7 +29,6 @@ export
 profileBackend : TargetProfile -> Backend
 profileBackend (TargetProfile _ b _ _) = b
 
-export
 profileAbi : TargetProfile -> String
 profileAbi (TargetProfile _ _ a _) = a
 
@@ -48,7 +47,6 @@ profileBindingHost p = match profileBackend p
   BackendEval => None
 
 -- Does the profile grant any part of this label's domain?
-export
 grantsLabel : TargetProfile -> String -> Bool
 grantsLabel p label = any (g => fst g == label) (profileGrants p)
 
@@ -185,7 +183,6 @@ profileNames : List String
 profileNames = map profileName profileRows
 
 -- Every name a user can write: the profile names, then the aliases.
-export
 knownNames : List String
 knownNames = profileNames ++ map fst aliasRows
 

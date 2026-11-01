@@ -1,5 +1,5 @@
 # META
-source_lines=1059
+source_lines=1041
 stages=DESUGAR,MARK
 # SOURCE
 -- The declaration index lint rules query about modules other than the one they
@@ -96,7 +96,7 @@ public export data Ns = NsValue | NsType deriving (Eq)
 
 -- A declared signature: absent (an unsigned binding), a parsed type, or the
 -- text of a shard's type, which `rowSig` decodes on demand.
-public export data SigSlot = NoSig | SigVal Ty | SigRaw String
+export data SigSlot = NoSig | SigVal Ty | SigRaw String
 
 -- `ixrModule` is the module id (the stdlib's dotted relative path, or
 -- `moduleIdOfPath` for a project file).  `ixrParent` is a constructor's type or
@@ -172,7 +172,6 @@ mkRow m n k sig parent fields arity exp loc = IndexRow {
 
 -- Signatured declarations first (in source order), then the values that have a
 -- body and no signature.
-export
 rowsOfDecls : String -> List Decl -> List IndexRow
 rowsOfDecls modId decls =
   let signed = new ()
@@ -378,7 +377,6 @@ rowKeyText r = joinWith "\t" [
 -- field list or export changes, or when the rows change order, and does not
 -- move when only a position does.  Order counts because a rule may act on the
 -- first of several candidates.
-export
 rowsDigest : List IndexRow -> String
 rowsDigest rows =
   let joined = joinWith "\n" (map rowKeyText rows)
@@ -417,7 +415,6 @@ readOptLoc path cur =
 
 -- The shard text: version, stamp, path, content hash, module id, rows digest,
 -- rows.  A row that holds its signature as text is written with that text.
-export
 encodeRowShard : String -> String -> String -> String -> List IndexRow -> String
 encodeRowShard stamp path hash modId rows =
   renderShard stamp path hash modId (rowsDigest rows) (map rowText rows)
@@ -477,7 +474,6 @@ readOptTy cur =
 
 -- (module id, rows digest, rows), or `None` on any doubt: a wrong version,
 -- stamp, path or content hash, a malformed body, or trailing text.
-export
 decodeRowShard : String ->
   String ->
   String ->
@@ -528,7 +524,6 @@ stdlibShardDir _ =
 -- value is not a directory the XDG base-directory specification allows, and
 -- one would be created under the working directory (or, mis-joined, at the
 -- filesystem root), so it is ignored like an unset one.
-export
 stdlibShardDirOf : String -> String -> String
 stdlibShardDirOf xdg home =
   if startsWith "/" xdg then
@@ -548,12 +543,10 @@ projectShardDir root = "\{root}/.medaka/\{indexCacheDir}"
 -- stamp or content rewrites the same file.  The path is also stored in the
 -- shard and checked on load, so a name collision costs a miss and never a
 -- wrong answer.
-export
 rowShardPath : String -> String -> String
 rowShardPath dir path = "\{dir}/\{basename path}.\{hashStringHex path}.sx"
 
 -- The content key a shard is checked against: the 64-bit digest of the source.
-export
 rowContentHash : String -> String
 rowContentHash src = hashStringHex src
 
@@ -677,12 +670,6 @@ emptyScope = IndexScope {
 export
 emptyProjectIndex : ProjectIndex
 emptyProjectIndex = ProjectIndex emptyScope emptyScope [] None
-
--- The index of the stdlib's rows and the project's rows.
-export
-mkProjectIndex : List IndexRow -> List IndexRow -> ProjectIndex
-mkProjectIndex stdlibRows projectRows =
-  mkProjectIndexWith "" "" stdlibRows projectRows
 
 -- The same, each scope carrying the combined digest of its files' row digests
 -- (`combineDigests`); a scope given no digest digests its rows itself.
@@ -984,11 +971,6 @@ export
 stdlibRowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
 stdlibRowsNamed ix ns name = rowsAsked ix (QNamed StdlibScope ns name)
 
--- The project's candidates alone.
-export
-projectRowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
-projectRowsNamed ix ns name = rowsAsked ix (QNamed ProjectScope ns name)
-
 -- Candidates for `name` declared in module `modId` (still a list: a name can
 -- be a value and a constructor, or be declared twice).
 export
@@ -1076,7 +1058,7 @@ localModOfKey key = match readQuery key
 (DImpl true "Eq" ((TyCon "RowKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RkValue") (PCon "RkValue")) () (EVar "True")) (arm (PTuple (PCon "RkCtor") (PCon "RkCtor")) () (EVar "True")) (arm (PTuple (PCon "RkType") (PCon "RkType")) () (EVar "True")) (arm (PTuple (PCon "RkIface") (PCon "RkIface")) () (EVar "True")) (arm (PTuple (PCon "RkMethod") (PCon "RkMethod")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Ns" () ((variant "NsValue" (ConPos)) (variant "NsType" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Ns")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NsValue") (PCon "NsValue")) () (EVar "True")) (arm (PTuple (PCon "NsType") (PCon "NsType")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DData Public "SigSlot" () ((variant "NoSig" (ConPos)) (variant "SigVal" (ConPos (TyCon "Ty"))) (variant "SigRaw" (ConPos (TyCon "String")))) ())
+(DData Abstract "SigSlot" () ((variant "NoSig" (ConPos)) (variant "SigVal" (ConPos (TyCon "Ty"))) (variant "SigRaw" (ConPos (TyCon "String")))) ())
 (DData Public "IndexRow" () ((variant "IndexRow" (ConNamed (field "ixrModule" (TyCon "String")) (field "ixrName" (TyCon "String")) (field "ixrKind" (TyCon "RowKind")) (field "ixrSig" (TyCon "SigSlot")) (field "ixrParent" (TyCon "String")) (field "ixrFields" (TyApp (TyCon "List") (TyCon "String"))) (field "ixrArity" (TyCon "Int")) (field "ixrExported" (TyCon "Bool")) (field "ixrLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DTypeSig true "rowNs" (TyFun (TyCon "RowKind") (TyCon "Ns")))
 (DFunDef false "rowNs" ((PCon "RkValue")) (EVar "NsValue"))
@@ -1094,7 +1076,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "rowHasSig" ((PVar "r")) (EMatch (EFieldAccess (EVar "r") "ixrSig") (arm (PCon "NoSig") () (EVar "False")) (arm (PCon "SigVal" PWild) () (EVar "True")) (arm (PCon "SigRaw" PWild) () (EVar "True"))))
 (DTypeSig false "mkRow" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "RowKind") (TyFun (TyCon "SigSlot") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "IndexRow")))))))))))
 (DFunDef false "mkRow" ((PVar "m") (PVar "n") (PVar "k") (PVar "sig") (PVar "parent") (PVar "fields") (PVar "arity") (PVar "exp") (PVar "loc")) (ERecordCreate "IndexRow" ((fa "ixrModule" (EVar "m")) (fa "ixrName" (EVar "n")) (fa "ixrKind" (EVar "k")) (fa "ixrSig" (EVar "sig")) (fa "ixrParent" (EVar "parent")) (fa "ixrFields" (EVar "fields")) (fa "ixrArity" (EVar "arity")) (fa "ixrExported" (EVar "exp")) (fa "ixrLoc" (EVar "loc")))))
-(DTypeSig true "rowsOfDecls" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "IndexRow")))))
+(DTypeSig false "rowsOfDecls" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "IndexRow")))))
 (DFunDef false "rowsOfDecls" ((PVar "modId") (PVar "decls")) (EBlock (DoLet false false (PVar "signed") (EApp (EVar "new") (ELit LUnit))) (DoLet false false (PVar "sigRows") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "sigRowsOf") (EVar "modId")) (EVar "signed"))) (EVar "decls"))) (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EBinOp "++" (EVar "sigRows") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "unsignedRowsOf") (EVar "modId")) (EVar "signed")) (EVar "seen"))) (EVar "decls"))))))
 (DTypeSig false "sigOf" (TyFun (TyCon "Ty") (TyCon "SigSlot")))
 (DFunDef false "sigOf" ((PVar "t")) (EApp (EVar "SigVal") (EApp (EVar "stripTy") (EVar "t"))))
@@ -1180,7 +1162,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "slotText" ((PCon "SigRaw" (PVar "text"))) (EVar "text"))
 (DTypeSig false "rowKeyText" (TyFun (TyCon "IndexRow") (TyCon "String")))
 (DFunDef false "rowKeyText" ((PVar "r")) (EApp (EApp (EVar "joinWith") (ELit (LString "\t"))) (EListLit (EFieldAccess (EVar "r") "ixrModule") (EFieldAccess (EVar "r") "ixrName") (EApp (EVar "kindTag") (EFieldAccess (EVar "r") "ixrKind")) (EApp (EVar "slotText") (EFieldAccess (EVar "r") "ixrSig")) (EFieldAccess (EVar "r") "ixrParent") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "r") "ixrFields")) (EApp (EVar "intToString") (EFieldAccess (EVar "r") "ixrArity")) (EIf (EFieldAccess (EVar "r") "ixrExported") (ELit (LString "t")) (ELit (LString "f"))))))
-(DTypeSig true "rowsDigest" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "String")))
+(DTypeSig false "rowsDigest" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "String")))
 (DFunDef false "rowsDigest" ((PVar "rows")) (EBlock (DoLet false false (PVar "joined") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EVar "rowKeyText")) (EVar "rows")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "hashStringHex") (EVar "joined")))) (ELit (LString "."))) (EApp (EVar "display") (EApp (EVar "stringLength") (EVar "joined")))) (ELit (LString ""))))))
 (DTypeSig false "rowFormatVersion" (TyCon "Int"))
 (DFunDef false "rowFormatVersion" () (ELit (LInt 4)))
@@ -1189,7 +1171,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "sexpOptLoc" ((PCon "Some" (PCon "Loc" PWild (PVar "a") (PVar "b") (PVar "c") (PVar "d")))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "a"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "b"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "c"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "d"))))))
 (DTypeSig false "readOptLoc" (TyFun (TyCon "String") (TyFun (TyCon "SexpCursor") (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "readOptLoc" ((PVar "path") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoExpr (EIf (EApp (EVar "isCloseByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoExpr (EVar "None"))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "b") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "c") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "d") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")))))))))
-(DTypeSig true "encodeRowShard" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "String")))))))
+(DTypeSig false "encodeRowShard" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "String")))))))
 (DFunDef false "encodeRowShard" ((PVar "stamp") (PVar "path") (PVar "hash") (PVar "modId") (PVar "rows")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renderShard") (EVar "stamp")) (EVar "path")) (EVar "hash")) (EVar "modId")) (EApp (EVar "rowsDigest") (EVar "rows"))) (EApp (EApp (EVar "map") (EVar "rowText")) (EVar "rows"))))
 (DTypeSig false "rowText" (TyFun (TyCon "IndexRow") (TyCon "String")))
 (DFunDef false "rowText" ((PVar "r")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "atomText") (EFieldAccess (EVar "r") "ixrName")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "kindTag") (EFieldAccess (EVar "r") "ixrKind")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "slotText") (EFieldAccess (EVar "r") "ixrSig")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atomText") (EFieldAccess (EVar "r") "ixrParent")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "renderSExp") (EApp (EVar "SList") (EApp (EApp (EVar "map") (EVar "SAtom")) (EFieldAccess (EVar "r") "ixrFields")))))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "intToString") (EFieldAccess (EVar "r") "ixrArity")))) (ELit (LString " "))) (EApp (EVar "display") (EIf (EFieldAccess (EVar "r") "ixrExported") (ELit (LString "t")) (ELit (LString "f"))))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "renderSExp") (EApp (EVar "sexpOptLoc") (EFieldAccess (EVar "r") "ixrLoc"))))) (ELit (LString ")"))))
@@ -1203,19 +1185,19 @@ localModOfKey key = match readQuery key
 (DFunDef false "readRow" ((PVar "path") (PVar "m") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "n") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "k") (EMatch (EApp (EVar "kindOfTag") (EApp (EVar "cursorChar") (EVar "cur"))) (arm (PCon "Some" (PVar "kk")) () (EVar "kk")) (arm (PCon "None") () (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "RkValue"))))) (DoLet false false (PVar "sig") (EApp (EVar "readSlot") (EVar "cur"))) (DoLet false false (PVar "parent") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "fields") (EApp (EApp (EVar "cursorList") (EVar "cursorAtom")) (EVar "cur"))) (DoLet false false (PVar "arity") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "exp") (EApp (EVar "readBoolTF") (EVar "cur"))) (DoLet false false (PVar "loc") (EApp (EApp (EVar "readOptLoc") (EVar "path")) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkRow") (EVar "m")) (EVar "n")) (EVar "k")) (EVar "sig")) (EVar "parent")) (EVar "fields")) (EVar "arity")) (EVar "exp")) (EVar "loc")))))
 (DTypeSig false "readOptTy" (TyFun (TyCon "SexpCursor") (TyApp (TyCon "Option") (TyCon "Ty"))))
 (DFunDef false "readOptTy" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoExpr (EIf (EApp (EVar "isCloseByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoExpr (EVar "None"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EVar "Some") (EVar "t"))))))))
-(DTypeSig true "decodeRowShard" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow")))))))))
+(DTypeSig false "decodeRowShard" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow")))))))))
 (DFunDef false "decodeRowShard" ((PVar "stamp") (PVar "path") (PVar "hash") (PVar "text")) (EBlock (DoLet false false (PVar "cur") (EApp (EVar "cursorOf") (EVar "text"))) (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "st") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "p") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "h") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "cursorFailed") (EVar "cur")) (EBinOp "/=" (EVar "v") (EVar "rowFormatVersion"))) (EBinOp "/=" (EVar "st") (EVar "stamp"))) (EBinOp "/=" (EVar "p") (EVar "path"))) (EBinOp "/=" (EVar "h") (EVar "hash"))) (EVar "None") (EBlock (DoLet false false (PVar "m") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "digest") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readRow") (EVar "path")) (EVar "m"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "cursorFailed") (EVar "cur")) (EApp (EVar "not") (EApp (EVar "cursorAtEnd") (EVar "cur")))) (EVar "None") (EApp (EVar "Some") (ETuple (EVar "m") (EVar "digest") (EVar "rows"))))))))))
 (DTypeSig true "indexCacheDir" (TyCon "String"))
 (DFunDef false "indexCacheDir" () (ELit (LString "lint-index")))
 (DTypeSig true "stdlibShardDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "stdlibShardDir" (PWild) (EApp (EApp (EVar "stdlibShardDirOf") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "getEnv") (ELit (LString "XDG_CACHE_HOME"))))) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "getEnv") (ELit (LString "HOME"))))))
-(DTypeSig true "stdlibShardDirOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DTypeSig false "stdlibShardDirOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "stdlibShardDirOf" ((PVar "xdg") (PVar "home")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "xdg")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "xdg"))) (ELit (LString "/medaka/"))) (EApp (EVar "display") (EVar "indexCacheDir"))) (ELit (LString ""))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "home")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "home"))) (ELit (LString "/.cache/medaka/"))) (EApp (EVar "display") (EVar "indexCacheDir"))) (ELit (LString ""))) (ELit (LString "")))))
 (DTypeSig true "projectShardDir" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "projectShardDir" ((PVar "root")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/.medaka/"))) (EApp (EVar "display") (EVar "indexCacheDir"))) (ELit (LString ""))))
-(DTypeSig true "rowShardPath" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DTypeSig false "rowShardPath" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "rowShardPath" ((PVar "dir") (PVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EVar "display") (EApp (EVar "basename") (EVar "path")))) (ELit (LString "."))) (EApp (EVar "display") (EApp (EVar "hashStringHex") (EVar "path")))) (ELit (LString ".sx"))))
-(DTypeSig true "rowContentHash" (TyFun (TyCon "String") (TyCon "String")))
+(DTypeSig false "rowContentHash" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "rowContentHash" ((PVar "src")) (EApp (EVar "hashStringHex") (EVar "src")))
 (DTypeSig true "fileRows" (TyFun (TyCon "Bool") (TyFun (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "String") (TyCon "ParseError"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))))))))
 (DFunDef false "fileRows" ((PVar "exportedOnly") (PVar "parse") (PVar "dir") (PVar "stamp") (PVar "modId") (PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" PWild) () (EApp (EVar "Ok") (ETuple (ELit (LString "")) (EListLit)))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "hash") (EApp (EVar "rowContentHash") (EVar "src"))) (DoLet false false (PVar "shardStamp") (EIf (EVar "exportedOnly") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "stamp"))) (ELit (LString "/x"))) (EVar "stamp"))) (DoLet false false (PVar "sp") (EApp (EApp (EVar "rowShardPath") (EVar "dir")) (EVar "path"))) (DoLet false false (PVar "cached") (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EVar "None") (EMatch (EApp (EVar "readFile") (EVar "sp")) (arm (PCon "Ok" (PVar "text")) () (EApp (EApp (EApp (EApp (EVar "decodeRowShard") (EVar "shardStamp")) (EVar "path")) (EVar "hash")) (EVar "text"))) (arm (PCon "Err" PWild) () (EVar "None"))))) (DoExpr (EMatch (EVar "cached") (arm (PCon "Some" (PTuple PWild (PVar "digest") (PVar "rows"))) () (EApp (EVar "Ok") (ETuple (EVar "digest") (EVar "rows")))) (arm (PCon "None") () (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (ETuple (EVar "src") (EVar "e")))) (arm (PCon "Ok" (PTuple (PVar "decls") PWild)) () (EBlock (DoLet false false (PVar "all") (EApp (EApp (EVar "map") (EApp (EVar "atPath") (EVar "path"))) (EApp (EApp (EVar "rowsOfDecls") (EVar "modId")) (EVar "decls")))) (DoLet false false (PVar "rows") (EIf (EVar "exportedOnly") (EApp (EVar "exportedRows") (EVar "all")) (EVar "all"))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (ELit LUnit) (EApp (EApp (EApp (EVar "writeShard") (EVar "dir")) (EVar "sp")) (EApp (EApp (EApp (EApp (EApp (EVar "encodeRowShard") (EVar "shardStamp")) (EVar "path")) (EVar "hash")) (EVar "modId")) (EVar "rows"))))) (DoExpr (EApp (EVar "Ok") (ETuple (EApp (EVar "rowsDigest") (EVar "rows")) (EVar "rows"))))))))))))))
@@ -1233,8 +1215,6 @@ localModOfKey key = match readQuery key
 (DFunDef false "emptyScope" () (ERecordCreate "IndexScope" ((fa "ixsByName" (EApp (EVar "new") (ELit LUnit))) (fa "ixsRows" (EListLit)) (fa "ixsNames" (EListLit)) (fa "ixsModules" (EListLit)) (fa "ixsDigest" (ELit (LString ""))))))
 (DTypeSig true "emptyProjectIndex" (TyCon "ProjectIndex"))
 (DFunDef false "emptyProjectIndex" () (EApp (EApp (EApp (EApp (EVar "ProjectIndex") (EVar "emptyScope")) (EVar "emptyScope")) (EListLit)) (EVar "None")))
-(DTypeSig true "mkProjectIndex" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "ProjectIndex"))))
-(DFunDef false "mkProjectIndex" ((PVar "stdlibRows") (PVar "projectRows")) (EApp (EApp (EApp (EApp (EVar "mkProjectIndexWith") (ELit (LString ""))) (ELit (LString ""))) (EVar "stdlibRows")) (EVar "projectRows")))
 (DTypeSig true "mkProjectIndexWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "ProjectIndex"))))))
 (DFunDef false "mkProjectIndexWith" ((PVar "stdDigest") (PVar "projDigest") (PVar "stdlibRows") (PVar "projectRows")) (EApp (EApp (EApp (EApp (EVar "ProjectIndex") (EApp (EApp (EVar "mkScope") (EVar "stdDigest")) (EVar "stdlibRows"))) (EApp (EApp (EVar "mkScope") (EVar "projDigest")) (EVar "projectRows"))) (EListLit)) (EVar "None")))
 (DTypeSig true "combineDigests" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -1337,8 +1317,6 @@ localModOfKey key = match readQuery key
 (DFunDef false "rowsNamed" ((PVar "ix") (PVar "ns") (PVar "name")) (EBinOp "++" (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "ProjectScope")) (EVar "ns")) (EVar "name"))) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "StdlibScope")) (EVar "ns")) (EVar "name")))))
 (DTypeSig true "stdlibRowsNamed" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))
 (DFunDef false "stdlibRowsNamed" ((PVar "ix") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "StdlibScope")) (EVar "ns")) (EVar "name"))))
-(DTypeSig true "projectRowsNamed" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))
-(DFunDef false "projectRowsNamed" ((PVar "ix") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "ProjectScope")) (EVar "ns")) (EVar "name"))))
 (DTypeSig true "rowsIn" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow")))))))
 (DFunDef false "rowsIn" ((PVar "ix") (PVar "modId") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (EApp (EApp (EApp (EVar "rowsNamed") (EVar "ix")) (EVar "ns")) (EVar "name"))))
 (DTypeSig true "rowsOfModule" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow")))))
@@ -1376,7 +1354,7 @@ localModOfKey key = match readQuery key
 (DImpl true "Eq" ((TyCon "RowKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RkValue") (PCon "RkValue")) () (EVar "True")) (arm (PTuple (PCon "RkCtor") (PCon "RkCtor")) () (EVar "True")) (arm (PTuple (PCon "RkType") (PCon "RkType")) () (EVar "True")) (arm (PTuple (PCon "RkIface") (PCon "RkIface")) () (EVar "True")) (arm (PTuple (PCon "RkMethod") (PCon "RkMethod")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Ns" () ((variant "NsValue" (ConPos)) (variant "NsType" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Ns")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NsValue") (PCon "NsValue")) () (EVar "True")) (arm (PTuple (PCon "NsType") (PCon "NsType")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DData Public "SigSlot" () ((variant "NoSig" (ConPos)) (variant "SigVal" (ConPos (TyCon "Ty"))) (variant "SigRaw" (ConPos (TyCon "String")))) ())
+(DData Abstract "SigSlot" () ((variant "NoSig" (ConPos)) (variant "SigVal" (ConPos (TyCon "Ty"))) (variant "SigRaw" (ConPos (TyCon "String")))) ())
 (DData Public "IndexRow" () ((variant "IndexRow" (ConNamed (field "ixrModule" (TyCon "String")) (field "ixrName" (TyCon "String")) (field "ixrKind" (TyCon "RowKind")) (field "ixrSig" (TyCon "SigSlot")) (field "ixrParent" (TyCon "String")) (field "ixrFields" (TyApp (TyCon "List") (TyCon "String"))) (field "ixrArity" (TyCon "Int")) (field "ixrExported" (TyCon "Bool")) (field "ixrLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DTypeSig true "rowNs" (TyFun (TyCon "RowKind") (TyCon "Ns")))
 (DFunDef false "rowNs" ((PCon "RkValue")) (EVar "NsValue"))
@@ -1394,7 +1372,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "rowHasSig" ((PVar "r")) (EMatch (EFieldAccess (EVar "r") "ixrSig") (arm (PCon "NoSig") () (EVar "False")) (arm (PCon "SigVal" PWild) () (EVar "True")) (arm (PCon "SigRaw" PWild) () (EVar "True"))))
 (DTypeSig false "mkRow" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "RowKind") (TyFun (TyCon "SigSlot") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "IndexRow")))))))))))
 (DFunDef false "mkRow" ((PVar "m") (PVar "n") (PVar "k") (PVar "sig") (PVar "parent") (PVar "fields") (PVar "arity") (PVar "exp") (PVar "loc")) (ERecordCreate "IndexRow" ((fa "ixrModule" (EVar "m")) (fa "ixrName" (EVar "n")) (fa "ixrKind" (EVar "k")) (fa "ixrSig" (EVar "sig")) (fa "ixrParent" (EVar "parent")) (fa "ixrFields" (EVar "fields")) (fa "ixrArity" (EVar "arity")) (fa "ixrExported" (EVar "exp")) (fa "ixrLoc" (EVar "loc")))))
-(DTypeSig true "rowsOfDecls" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "IndexRow")))))
+(DTypeSig false "rowsOfDecls" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "IndexRow")))))
 (DFunDef false "rowsOfDecls" ((PVar "modId") (PVar "decls")) (EBlock (DoLet false false (PVar "signed") (EApp (EVar "new") (ELit LUnit))) (DoLet false false (PVar "sigRows") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "sigRowsOf") (EVar "modId")) (EVar "signed"))) (EVar "decls"))) (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EBinOp "++" (EVar "sigRows") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "unsignedRowsOf") (EVar "modId")) (EVar "signed")) (EVar "seen"))) (EVar "decls"))))))
 (DTypeSig false "sigOf" (TyFun (TyCon "Ty") (TyCon "SigSlot")))
 (DFunDef false "sigOf" ((PVar "t")) (EApp (EVar "SigVal") (EApp (EVar "stripTy") (EVar "t"))))
@@ -1480,7 +1458,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "slotText" ((PCon "SigRaw" (PVar "text"))) (EVar "text"))
 (DTypeSig false "rowKeyText" (TyFun (TyCon "IndexRow") (TyCon "String")))
 (DFunDef false "rowKeyText" ((PVar "r")) (EApp (EApp (EVar "joinWith") (ELit (LString "\t"))) (EListLit (EFieldAccess (EVar "r") "ixrModule") (EFieldAccess (EVar "r") "ixrName") (EApp (EVar "kindTag") (EFieldAccess (EVar "r") "ixrKind")) (EApp (EVar "slotText") (EFieldAccess (EVar "r") "ixrSig")) (EFieldAccess (EVar "r") "ixrParent") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "r") "ixrFields")) (EApp (EVar "intToString") (EFieldAccess (EVar "r") "ixrArity")) (EIf (EFieldAccess (EVar "r") "ixrExported") (ELit (LString "t")) (ELit (LString "f"))))))
-(DTypeSig true "rowsDigest" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "String")))
+(DTypeSig false "rowsDigest" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "String")))
 (DFunDef false "rowsDigest" ((PVar "rows")) (EBlock (DoLet false false (PVar "joined") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EVar "rowKeyText")) (EVar "rows")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "hashStringHex") (EVar "joined")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EApp (EVar "stringLength") (EVar "joined")))) (ELit (LString ""))))))
 (DTypeSig false "rowFormatVersion" (TyCon "Int"))
 (DFunDef false "rowFormatVersion" () (ELit (LInt 4)))
@@ -1489,7 +1467,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "sexpOptLoc" ((PCon "Some" (PCon "Loc" PWild (PVar "a") (PVar "b") (PVar "c") (PVar "d")))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "a"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "b"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "c"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "d"))))))
 (DTypeSig false "readOptLoc" (TyFun (TyCon "String") (TyFun (TyCon "SexpCursor") (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "readOptLoc" ((PVar "path") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoExpr (EIf (EApp (EVar "isCloseByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoExpr (EVar "None"))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "b") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "c") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "d") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")))))))))
-(DTypeSig true "encodeRowShard" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "String")))))))
+(DTypeSig false "encodeRowShard" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "String")))))))
 (DFunDef false "encodeRowShard" ((PVar "stamp") (PVar "path") (PVar "hash") (PVar "modId") (PVar "rows")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renderShard") (EVar "stamp")) (EVar "path")) (EMethodRef "hash")) (EVar "modId")) (EApp (EVar "rowsDigest") (EVar "rows"))) (EApp (EApp (EMethodRef "map") (EVar "rowText")) (EVar "rows"))))
 (DTypeSig false "rowText" (TyFun (TyCon "IndexRow") (TyCon "String")))
 (DFunDef false "rowText" ((PVar "r")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "atomText") (EFieldAccess (EVar "r") "ixrName")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "kindTag") (EFieldAccess (EVar "r") "ixrKind")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "slotText") (EFieldAccess (EVar "r") "ixrSig")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atomText") (EFieldAccess (EVar "r") "ixrParent")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "renderSExp") (EApp (EVar "SList") (EApp (EApp (EMethodRef "map") (EVar "SAtom")) (EFieldAccess (EVar "r") "ixrFields")))))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EFieldAccess (EVar "r") "ixrArity")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EIf (EFieldAccess (EVar "r") "ixrExported") (ELit (LString "t")) (ELit (LString "f"))))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "renderSExp") (EApp (EVar "sexpOptLoc") (EFieldAccess (EVar "r") "ixrLoc"))))) (ELit (LString ")"))))
@@ -1503,19 +1481,19 @@ localModOfKey key = match readQuery key
 (DFunDef false "readRow" ((PVar "path") (PVar "m") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "n") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "k") (EMatch (EApp (EVar "kindOfTag") (EApp (EVar "cursorChar") (EVar "cur"))) (arm (PCon "Some" (PVar "kk")) () (EVar "kk")) (arm (PCon "None") () (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "RkValue"))))) (DoLet false false (PVar "sig") (EApp (EVar "readSlot") (EVar "cur"))) (DoLet false false (PVar "parent") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "fields") (EApp (EApp (EVar "cursorList") (EVar "cursorAtom")) (EVar "cur"))) (DoLet false false (PVar "arity") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "exp") (EApp (EVar "readBoolTF") (EVar "cur"))) (DoLet false false (PVar "loc") (EApp (EApp (EVar "readOptLoc") (EVar "path")) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkRow") (EVar "m")) (EVar "n")) (EVar "k")) (EVar "sig")) (EVar "parent")) (EVar "fields")) (EVar "arity")) (EVar "exp")) (EVar "loc")))))
 (DTypeSig false "readOptTy" (TyFun (TyCon "SexpCursor") (TyApp (TyCon "Option") (TyCon "Ty"))))
 (DFunDef false "readOptTy" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoExpr (EIf (EApp (EVar "isCloseByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoExpr (EVar "None"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EVar "Some") (EVar "t"))))))))
-(DTypeSig true "decodeRowShard" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow")))))))))
+(DTypeSig false "decodeRowShard" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow")))))))))
 (DFunDef false "decodeRowShard" ((PVar "stamp") (PVar "path") (PVar "hash") (PVar "text")) (EBlock (DoLet false false (PVar "cur") (EApp (EVar "cursorOf") (EVar "text"))) (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "st") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "p") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "h") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "cursorFailed") (EVar "cur")) (EBinOp "/=" (EVar "v") (EVar "rowFormatVersion"))) (EBinOp "/=" (EVar "st") (EVar "stamp"))) (EBinOp "/=" (EVar "p") (EVar "path"))) (EBinOp "/=" (EVar "h") (EMethodRef "hash"))) (EVar "None") (EBlock (DoLet false false (PVar "m") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "digest") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readRow") (EVar "path")) (EVar "m"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "cursorFailed") (EVar "cur")) (EApp (EVar "not") (EApp (EVar "cursorAtEnd") (EVar "cur")))) (EVar "None") (EApp (EVar "Some") (ETuple (EVar "m") (EVar "digest") (EVar "rows"))))))))))
 (DTypeSig true "indexCacheDir" (TyCon "String"))
 (DFunDef false "indexCacheDir" () (ELit (LString "lint-index")))
 (DTypeSig true "stdlibShardDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "stdlibShardDir" (PWild) (EApp (EApp (EVar "stdlibShardDirOf") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "getEnv") (ELit (LString "XDG_CACHE_HOME"))))) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "getEnv") (ELit (LString "HOME"))))))
-(DTypeSig true "stdlibShardDirOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DTypeSig false "stdlibShardDirOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "stdlibShardDirOf" ((PVar "xdg") (PVar "home")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "xdg")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "xdg"))) (ELit (LString "/medaka/"))) (EApp (EMethodRef "display") (EVar "indexCacheDir"))) (ELit (LString ""))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "home")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "home"))) (ELit (LString "/.cache/medaka/"))) (EApp (EMethodRef "display") (EVar "indexCacheDir"))) (ELit (LString ""))) (ELit (LString "")))))
 (DTypeSig true "projectShardDir" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "projectShardDir" ((PVar "root")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/.medaka/"))) (EApp (EMethodRef "display") (EVar "indexCacheDir"))) (ELit (LString ""))))
-(DTypeSig true "rowShardPath" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DTypeSig false "rowShardPath" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "rowShardPath" ((PVar "dir") (PVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EApp (EVar "basename") (EVar "path")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EApp (EVar "hashStringHex") (EVar "path")))) (ELit (LString ".sx"))))
-(DTypeSig true "rowContentHash" (TyFun (TyCon "String") (TyCon "String")))
+(DTypeSig false "rowContentHash" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "rowContentHash" ((PVar "src")) (EApp (EVar "hashStringHex") (EVar "src")))
 (DTypeSig true "fileRows" (TyFun (TyCon "Bool") (TyFun (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "String") (TyCon "ParseError"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))))))))
 (DFunDef false "fileRows" ((PVar "exportedOnly") (PVar "parse") (PVar "dir") (PVar "stamp") (PVar "modId") (PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" PWild) () (EApp (EVar "Ok") (ETuple (ELit (LString "")) (EListLit)))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "hash") (EApp (EVar "rowContentHash") (EVar "src"))) (DoLet false false (PVar "shardStamp") (EIf (EVar "exportedOnly") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "stamp"))) (ELit (LString "/x"))) (EVar "stamp"))) (DoLet false false (PVar "sp") (EApp (EApp (EVar "rowShardPath") (EVar "dir")) (EVar "path"))) (DoLet false false (PVar "cached") (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EVar "None") (EMatch (EApp (EVar "readFile") (EVar "sp")) (arm (PCon "Ok" (PVar "text")) () (EApp (EApp (EApp (EApp (EVar "decodeRowShard") (EVar "shardStamp")) (EVar "path")) (EMethodRef "hash")) (EVar "text"))) (arm (PCon "Err" PWild) () (EVar "None"))))) (DoExpr (EMatch (EVar "cached") (arm (PCon "Some" (PTuple PWild (PVar "digest") (PVar "rows"))) () (EApp (EVar "Ok") (ETuple (EVar "digest") (EVar "rows")))) (arm (PCon "None") () (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (ETuple (EVar "src") (EVar "e")))) (arm (PCon "Ok" (PTuple (PVar "decls") PWild)) () (EBlock (DoLet false false (PVar "all") (EApp (EApp (EMethodRef "map") (EApp (EVar "atPath") (EVar "path"))) (EApp (EApp (EVar "rowsOfDecls") (EVar "modId")) (EVar "decls")))) (DoLet false false (PVar "rows") (EIf (EVar "exportedOnly") (EApp (EVar "exportedRows") (EDictApp "all")) (EDictApp "all"))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (ELit LUnit) (EApp (EApp (EApp (EVar "writeShard") (EVar "dir")) (EVar "sp")) (EApp (EApp (EApp (EApp (EApp (EVar "encodeRowShard") (EVar "shardStamp")) (EVar "path")) (EMethodRef "hash")) (EVar "modId")) (EVar "rows"))))) (DoExpr (EApp (EVar "Ok") (ETuple (EApp (EVar "rowsDigest") (EVar "rows")) (EVar "rows"))))))))))))))
@@ -1533,8 +1511,6 @@ localModOfKey key = match readQuery key
 (DFunDef false "emptyScope" () (ERecordCreate "IndexScope" ((fa "ixsByName" (EApp (EVar "new") (ELit LUnit))) (fa "ixsRows" (EListLit)) (fa "ixsNames" (EListLit)) (fa "ixsModules" (EListLit)) (fa "ixsDigest" (ELit (LString ""))))))
 (DTypeSig true "emptyProjectIndex" (TyCon "ProjectIndex"))
 (DFunDef false "emptyProjectIndex" () (EApp (EApp (EApp (EApp (EVar "ProjectIndex") (EVar "emptyScope")) (EVar "emptyScope")) (EListLit)) (EVar "None")))
-(DTypeSig true "mkProjectIndex" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "ProjectIndex"))))
-(DFunDef false "mkProjectIndex" ((PVar "stdlibRows") (PVar "projectRows")) (EApp (EApp (EApp (EApp (EVar "mkProjectIndexWith") (ELit (LString ""))) (ELit (LString ""))) (EVar "stdlibRows")) (EVar "projectRows")))
 (DTypeSig true "mkProjectIndexWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "ProjectIndex"))))))
 (DFunDef false "mkProjectIndexWith" ((PVar "stdDigest") (PVar "projDigest") (PVar "stdlibRows") (PVar "projectRows")) (EApp (EApp (EApp (EApp (EVar "ProjectIndex") (EApp (EApp (EVar "mkScope") (EVar "stdDigest")) (EVar "stdlibRows"))) (EApp (EApp (EVar "mkScope") (EVar "projDigest")) (EVar "projectRows"))) (EListLit)) (EVar "None")))
 (DTypeSig true "combineDigests" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -1637,8 +1613,6 @@ localModOfKey key = match readQuery key
 (DFunDef false "rowsNamed" ((PVar "ix") (PVar "ns") (PVar "name")) (EBinOp "++" (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "ProjectScope")) (EVar "ns")) (EVar "name"))) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "StdlibScope")) (EVar "ns")) (EVar "name")))))
 (DTypeSig true "stdlibRowsNamed" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))
 (DFunDef false "stdlibRowsNamed" ((PVar "ix") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "StdlibScope")) (EVar "ns")) (EVar "name"))))
-(DTypeSig true "projectRowsNamed" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))
-(DFunDef false "projectRowsNamed" ((PVar "ix") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "rowsAsked") (EVar "ix")) (EApp (EApp (EApp (EVar "QNamed") (EVar "ProjectScope")) (EVar "ns")) (EVar "name"))))
 (DTypeSig true "rowsIn" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow")))))))
 (DFunDef false "rowsIn" ((PVar "ix") (PVar "modId") (PVar "ns") (PVar "name")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (EApp (EApp (EApp (EVar "rowsNamed") (EVar "ix")) (EVar "ns")) (EVar "name"))))
 (DTypeSig true "rowsOfModule" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow")))))

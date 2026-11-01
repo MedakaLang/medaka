@@ -4,18 +4,12 @@
 
 import test.{expectEach, expectEqual}
 import frontend.ast.{Loc(..)}
+import string.{repeat}
 import support.util.{listLen}
 import frontend.parser.{parseLocated}
 import tools.lint_scope.{
-  Binder(..),
-  BinderKind(..),
-  allBinders,
-  allUses,
-  binderOf,
-  buildScopes,
-  importUses,
-  unusedBinders,
-  wildImports,
+  Binder(..), BinderKind(..), binderOf, buildScopes, importUses, unusedBinders,
+  wildImports, FileScopes, Use(..)
 }
 
 -- The binder at (line, col), as (name, kind, site line, site column).
@@ -38,6 +32,18 @@ unusedNames src =
 
 test "a record pun is a use of the binder it names" =
   expectEqual (Some ("r", BParam, 1, 2)) (resolved "k r = P { r }\n" 1 10)
+
+-- Column 1048578 of line 1 and column 2 of line 2 are 2^20 columns apart plus
+-- one line, the pair a `line * 2^20 + col` key would merge.
+test "positions a line of 2^20 columns apart keep distinct keys" =
+  let src = "f {-" ++ repeat 1048571 "a" ++ "-} x = 1\ng x = 2\n"
+  expectEach [
+    (
+      "first line",
+      expectEqual (Some ("x", BParam, 1, 1048578)) (resolved src 1 1048578),
+    ),
+    ("second line", expectEqual (Some ("x", BParam, 2, 2)) (resolved src 2 2)),
+  ]
 
 test "an interpolation hole is a use" =
   expectEqual (Some ("n", BParam, 1, 2)) (resolved "g n = \"a\\{n}b\"\n" 1 10)
@@ -126,3 +132,42 @@ test "imports: members, aliases, use counts, and a file's own name shadowing one
     ),
     ("wildcard", expectEqual [["test"]] (wildImports s)),
   ]
+
+-- The use count of the import member `name` in `src`, or None when `src` imports
+-- no such member.
+countOf : String -> String -> Option Int
+countOf src name =
+  map
+    snd
+    (find
+      (p => (fst p).binderName == name)
+      (importUses (buildScopes (parseLocated src))))
+
+-- Whether the import member `name` has at least one use.
+isUsed : String -> String -> Option Bool
+isUsed src name = map (> 0) (countOf src name)
+
+test "an import counts as used by a type, a pattern, an annotation or a deriving name" =
+  let src =
+    """
+import m.{SigTy, PatCtor, AnnTy, ConTy, Dv, ImplTy, Unused}
+data D = C ConTy deriving (Dv)
+f : SigTy -> Int
+f (PatCtor x) = (x : AnnTy)
+impl Show ImplTy
+"""
+  expectEach [
+    ("signature type", expectEqual (Some True) (isUsed src "SigTy")),
+    ("pattern constructor", expectEqual (Some True) (isUsed src "PatCtor")),
+    ("annotation", expectEqual (Some True) (isUsed src "AnnTy")),
+    ("constructor field", expectEqual (Some True) (isUsed src "ConTy")),
+    ("deriving", expectEqual (Some True) (isUsed src "Dv")),
+    ("impl head", expectEqual (Some True) (isUsed src "ImplTy")),
+    ("nothing mentions it", expectEqual (Some 0) (countOf src "Unused")),
+  ]
+
+allBinders : FileScopes -> List Binder
+allBinders fs = fs.fsBinders
+
+allUses : FileScopes -> List Use
+allUses fs = fs.fsUses

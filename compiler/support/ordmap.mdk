@@ -26,13 +26,13 @@ omInsert k v m = set k v m
 -- Same visit order and same answer as `get`/`has` on `Map String`.
 export
 omLookup : String -> OrdMap a -> Option a
-omLookup k Tip = None
+omLookup _k Tip = None
 omLookup k (Bin _ k2 v l r) =
   if k < k2 then omLookup k l else if k > k2 then omLookup k r else Some v
 
 export
 omHasKey : String -> OrdMap a -> Bool
-omHasKey k Tip = False
+omHasKey _k Tip = False
 omHasKey k (Bin _ k2 _ l r) =
   if k < k2 then omHasKey k l else if k > k2 then omHasKey k r else True
 
@@ -75,6 +75,8 @@ export
 omRestrict : List String -> OrdMap a -> OrdMap a
 omRestrict ids m = omFromPairs (restrictedPairs ids m) omEmpty
 
+-- The entries of [m] for [ks], in the order of [ks], skipping a key it lacks.
+export
 restrictedPairs : List String -> OrdMap a -> List (String, a)
 restrictedPairs [] _ = []
 restrictedPairs (k :: ks) m = match omLookup k m

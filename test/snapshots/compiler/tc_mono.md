@@ -1,5 +1,5 @@
 # META
-source_lines=2268
+source_lines=2261
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mono: operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the
@@ -86,7 +86,6 @@ import support.util.{
   contains,
   eqStr,
   filterList,
-  isSome,
   joinWith,
   lenKey,
   listLen,
@@ -467,7 +466,7 @@ instantiateNamedMonos : GraphCtx ->
   List (String, Mono) ->
   List (Int, Mono) ->
   List (String, Mono)
-instantiateNamedMonos gctx [] _ = []
+instantiateNamedMonos _gctx [] _ = []
 instantiateNamedMonos gctx ((name, mono) :: rest) subst =
   (name, substMono gctx subst [] [] mono)
     :: instantiateNamedMonos gctx rest subst
@@ -666,8 +665,8 @@ effvarLevel cell = match !cell
 -- itself for one, a fresh join cell for several.
 export
 rowOfMembers : GraphCtx -> List Atom -> List (Ref Effvar) -> EffRow
-rowOfMembers gctx labels [] = EffRow labels None
-rowOfMembers gctx labels [m] = EffRow labels (Some m)
+rowOfMembers _gctx labels [] = EffRow labels None
+rowOfMembers _gctx labels [m] = EffRow labels (Some m)
 rowOfMembers gctx labels ms = EffRow labels (Some (joinCellOf gctx ms))
 
 export
@@ -2247,12 +2246,6 @@ exactReturnRequestOfGoal goal = match goal.oPayload
   GPSite _ _ (SKExactReturn _ request) => Some request
   _ => None
 
--- every super slot in a `requires` chain carries the SAME id; represent the slot by it.
-export
-firstOrZero : List Int -> Int
-firstOrZero [] = 0
-firstOrZero (x :: _) = x
-
 export
 allMethodParamsMentioned : List String -> Ty -> Bool
 allMethodParamsMentioned [] _ = True
@@ -2279,7 +2272,7 @@ implDeclWithReqs _ = []
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "eqStr" false) (mem "filterList" false) (mem "isSome" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "eqStr" false) (mem "filterList" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyIdent" false) (mem "headKeyOfCon" false) (mem "headKeyTag" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "funHeadTag" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "authorityParamSubst" false))))
@@ -2387,7 +2380,7 @@ implDeclWithReqs _ = []
 (DTypeSig true "tupleUnifyClash" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "tupleUnifyClash" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "tupleSpine") (EVar "a")) (EApp (EVar "tupleSpine") (EVar "b"))) (arm (PTuple (PCon "Some" (PVar "xs")) (PCon "Some" (PVar "ys"))) () (EBinOp "/=" (EApp (EVar "listLen") (EVar "xs")) (EApp (EVar "listLen") (EVar "ys")))) (arm (PTuple (PCon "Some" PWild) (PCon "None")) () (EApp (EVar "monoSpineHeadIsCon") (EVar "b"))) (arm (PTuple (PCon "None") (PCon "Some" PWild)) () (EApp (EVar "monoSpineHeadIsCon") (EVar "a"))) (arm (PTuple (PCon "None") (PCon "None")) () (EVar "False"))))
 (DTypeSig true "instantiateNamedMonos" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
-(DFunDef false "instantiateNamedMonos" ((PVar "gctx") (PList) PWild) (EListLit))
+(DFunDef false "instantiateNamedMonos" ((PVar "_gctx") (PList) PWild) (EListLit))
 (DFunDef false "instantiateNamedMonos" ((PVar "gctx") (PCons (PTuple (PVar "name") (PVar "mono")) (PVar "rest")) (PVar "subst")) (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "gctx")) (EVar "subst")) (EListLit)) (EListLit)) (EVar "mono"))) (EApp (EApp (EApp (EVar "instantiateNamedMonos") (EVar "gctx")) (EVar "rest")) (EVar "subst"))))
 (DTypeSig true "headsUnifier" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))))))))
 (DFunDef false "headsUnifier" ((PVar "gctx") (PVar "rigidIds") (PVar "args") (PVar "allHeads")) (EBlock (DoLet false false (PVar "heads") (EApp (EApp (EVar "take") (EApp (EVar "listLen") (EVar "args"))) (EVar "allHeads"))) (DoLet false false (PVar "scratch") (EApp (EVar "Ref") (EListLit))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "heads")) (EApp (EVar "listLen") (EVar "args"))) (EApp (EApp (EVar "cohOverlapGo") (EVar "scratch")) (EApp (EApp (EApp (EVar "rigidSigPairs") (EVar "gctx")) (EVar "rigidIds")) (EApp (EApp (EVar "zipL") (EVar "args")) (EVar "heads"))))) (EApp (EVar "Some") (EVar "scratch")) (EVar "None")))))
@@ -2427,8 +2420,8 @@ implDeclWithReqs _ = []
 (DTypeSig true "effvarLevel" (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyCon "Int")))
 (DFunDef false "effvarLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" PWild (PVar "l")) () (EVar "l")) (arm (PCon "ELink" PWild PWild) () (ELit (LInt 0))) (arm (PCon "EJoin" PWild (PVar "l") PWild) () (EVar "l")) (arm (PCon "ESummary" PWild (PVar "l") PWild) () (EVar "l"))))
 (DTypeSig true "rowOfMembers" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyCon "EffRow")))))
-(DFunDef false "rowOfMembers" ((PVar "gctx") (PVar "labels") (PList)) (EApp (EApp (EVar "EffRow") (EVar "labels")) (EVar "None")))
-(DFunDef false "rowOfMembers" ((PVar "gctx") (PVar "labels") (PList (PVar "m"))) (EApp (EApp (EVar "EffRow") (EVar "labels")) (EApp (EVar "Some") (EVar "m"))))
+(DFunDef false "rowOfMembers" ((PVar "_gctx") (PVar "labels") (PList)) (EApp (EApp (EVar "EffRow") (EVar "labels")) (EVar "None")))
+(DFunDef false "rowOfMembers" ((PVar "_gctx") (PVar "labels") (PList (PVar "m"))) (EApp (EApp (EVar "EffRow") (EVar "labels")) (EApp (EVar "Some") (EVar "m"))))
 (DFunDef false "rowOfMembers" ((PVar "gctx") (PVar "labels") (PVar "ms")) (EApp (EApp (EVar "EffRow") (EVar "labels")) (EApp (EVar "Some") (EApp (EApp (EVar "joinCellOf") (EVar "gctx")) (EVar "ms")))))
 (DTypeSig true "joinCellOf" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyCon "Ref") (TyCon "Effvar")))))
 (DFunDef false "joinCellOf" ((PVar "gctx") (PVar "ms")) (EApp (EVar "Ref") (EApp (EApp (EApp (EVar "EJoin") (EApp (EApp (EVar "newEffvarId") (EVar "gctx")) (ELit LUnit))) (EApp (EVar "minLevelOf") (EVar "ms"))) (EVar "ms"))))
@@ -2858,9 +2851,6 @@ implDeclWithReqs _ = []
 (DFunDef false "oblArgKey" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "++" (EBinOp "++" (ELit (LString "v")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "cell"))))) (ELit (LString ".")))) (arm (PCon "TCon" (PVar "name") PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TRigid" (PVar "name")) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "f")) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TQual" (PVar "a") PWild) () (EApp (EVar "oblArgKey") (EVar "a"))) (arm PWild () (ELit (LString "*")))))
 (DTypeSig true "exactReturnRequestOfGoal" (TyFun (TyCon "Obligation") (TyApp (TyCon "Option") (TyCon "MethodReturnRequest"))))
 (DFunDef false "exactReturnRequestOfGoal" ((PVar "goal")) (EMatch (EFieldAccess (EVar "goal") "oPayload") (arm (PCon "GPSite" PWild PWild (PCon "SKExactReturn" PWild (PVar "request"))) () (EApp (EVar "Some") (EVar "request"))) (arm PWild () (EVar "None"))))
-(DTypeSig true "firstOrZero" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
-(DFunDef false "firstOrZero" ((PList)) (ELit (LInt 0)))
-(DFunDef false "firstOrZero" ((PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig true "allMethodParamsMentioned" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "Bool"))))
 (DFunDef false "allMethodParamsMentioned" ((PList) PWild) (EVar "True"))
 (DFunDef false "allMethodParamsMentioned" ((PCons (PVar "param") (PVar "rest")) (PVar "ty")) (EBinOp "&&" (EApp (EApp (EVar "argMentions") (EListLit (EVar "param"))) (EApp (EVar "stripTyConstraints") (EVar "ty"))) (EApp (EApp (EVar "allMethodParamsMentioned") (EVar "rest")) (EVar "ty"))))
@@ -2879,7 +2869,7 @@ implDeclWithReqs _ = []
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "eqStr" false) (mem "filterList" false) (mem "isSome" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "eqStr" false) (mem "filterList" false) (mem "joinWith" false) (mem "lenKey" false) (mem "listLen" false) (mem "minI" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyIdent" false) (mem "headKeyOfCon" false) (mem "headKeyTag" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "funHeadTag" false))))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "authorityParamSubst" false))))
@@ -2987,7 +2977,7 @@ implDeclWithReqs _ = []
 (DTypeSig true "tupleUnifyClash" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "tupleUnifyClash" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "tupleSpine") (EVar "a")) (EApp (EVar "tupleSpine") (EVar "b"))) (arm (PTuple (PCon "Some" (PVar "xs")) (PCon "Some" (PVar "ys"))) () (EBinOp "/=" (EApp (EVar "listLen") (EVar "xs")) (EApp (EVar "listLen") (EVar "ys")))) (arm (PTuple (PCon "Some" PWild) (PCon "None")) () (EApp (EVar "monoSpineHeadIsCon") (EVar "b"))) (arm (PTuple (PCon "None") (PCon "Some" PWild)) () (EApp (EVar "monoSpineHeadIsCon") (EVar "a"))) (arm (PTuple (PCon "None") (PCon "None")) () (EVar "False"))))
 (DTypeSig true "instantiateNamedMonos" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
-(DFunDef false "instantiateNamedMonos" ((PVar "gctx") (PList) PWild) (EListLit))
+(DFunDef false "instantiateNamedMonos" ((PVar "_gctx") (PList) PWild) (EListLit))
 (DFunDef false "instantiateNamedMonos" ((PVar "gctx") (PCons (PTuple (PVar "name") (PVar "mono")) (PVar "rest")) (PVar "subst")) (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "gctx")) (EVar "subst")) (EListLit)) (EListLit)) (EVar "mono"))) (EApp (EApp (EApp (EVar "instantiateNamedMonos") (EVar "gctx")) (EVar "rest")) (EVar "subst"))))
 (DTypeSig true "headsUnifier" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))))))))
 (DFunDef false "headsUnifier" ((PVar "gctx") (PVar "rigidIds") (PVar "args") (PVar "allHeads")) (EBlock (DoLet false false (PVar "heads") (EApp (EApp (EVar "take") (EApp (EVar "listLen") (EVar "args"))) (EVar "allHeads"))) (DoLet false false (PVar "scratch") (EApp (EVar "Ref") (EListLit))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "heads")) (EApp (EVar "listLen") (EVar "args"))) (EApp (EApp (EVar "cohOverlapGo") (EVar "scratch")) (EApp (EApp (EApp (EVar "rigidSigPairs") (EVar "gctx")) (EVar "rigidIds")) (EApp (EApp (EVar "zipL") (EVar "args")) (EVar "heads"))))) (EApp (EVar "Some") (EVar "scratch")) (EVar "None")))))
@@ -3027,8 +3017,8 @@ implDeclWithReqs _ = []
 (DTypeSig true "effvarLevel" (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyCon "Int")))
 (DFunDef false "effvarLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" PWild (PVar "l")) () (EVar "l")) (arm (PCon "ELink" PWild PWild) () (ELit (LInt 0))) (arm (PCon "EJoin" PWild (PVar "l") PWild) () (EVar "l")) (arm (PCon "ESummary" PWild (PVar "l") PWild) () (EVar "l"))))
 (DTypeSig true "rowOfMembers" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyCon "EffRow")))))
-(DFunDef false "rowOfMembers" ((PVar "gctx") (PVar "labels") (PList)) (EApp (EApp (EVar "EffRow") (EVar "labels")) (EVar "None")))
-(DFunDef false "rowOfMembers" ((PVar "gctx") (PVar "labels") (PList (PVar "m"))) (EApp (EApp (EVar "EffRow") (EVar "labels")) (EApp (EVar "Some") (EVar "m"))))
+(DFunDef false "rowOfMembers" ((PVar "_gctx") (PVar "labels") (PList)) (EApp (EApp (EVar "EffRow") (EVar "labels")) (EVar "None")))
+(DFunDef false "rowOfMembers" ((PVar "_gctx") (PVar "labels") (PList (PVar "m"))) (EApp (EApp (EVar "EffRow") (EVar "labels")) (EApp (EVar "Some") (EVar "m"))))
 (DFunDef false "rowOfMembers" ((PVar "gctx") (PVar "labels") (PVar "ms")) (EApp (EApp (EVar "EffRow") (EVar "labels")) (EApp (EVar "Some") (EApp (EApp (EVar "joinCellOf") (EVar "gctx")) (EVar "ms")))))
 (DTypeSig true "joinCellOf" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyCon "Ref") (TyCon "Effvar")))))
 (DFunDef false "joinCellOf" ((PVar "gctx") (PVar "ms")) (EApp (EVar "Ref") (EApp (EApp (EApp (EVar "EJoin") (EApp (EApp (EVar "newEffvarId") (EVar "gctx")) (ELit LUnit))) (EApp (EVar "minLevelOf") (EVar "ms"))) (EVar "ms"))))
@@ -3458,9 +3448,6 @@ implDeclWithReqs _ = []
 (DFunDef false "oblArgKey" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "++" (EBinOp "++" (ELit (LString "v")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "cell"))))) (ELit (LString ".")))) (arm (PCon "TCon" (PVar "name") PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TRigid" (PVar "name")) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "f")) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TQual" (PVar "a") PWild) () (EApp (EVar "oblArgKey") (EVar "a"))) (arm PWild () (ELit (LString "*")))))
 (DTypeSig true "exactReturnRequestOfGoal" (TyFun (TyCon "Obligation") (TyApp (TyCon "Option") (TyCon "MethodReturnRequest"))))
 (DFunDef false "exactReturnRequestOfGoal" ((PVar "goal")) (EMatch (EFieldAccess (EVar "goal") "oPayload") (arm (PCon "GPSite" PWild PWild (PCon "SKExactReturn" PWild (PVar "request"))) () (EApp (EVar "Some") (EVar "request"))) (arm PWild () (EVar "None"))))
-(DTypeSig true "firstOrZero" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
-(DFunDef false "firstOrZero" ((PList)) (ELit (LInt 0)))
-(DFunDef false "firstOrZero" ((PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig true "allMethodParamsMentioned" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "Bool"))))
 (DFunDef false "allMethodParamsMentioned" ((PList) PWild) (EVar "True"))
 (DFunDef false "allMethodParamsMentioned" ((PCons (PVar "param") (PVar "rest")) (PVar "ty")) (EBinOp "&&" (EApp (EApp (EVar "argMentions") (EListLit (EVar "param"))) (EApp (EVar "stripTyConstraints") (EVar "ty"))) (EApp (EApp (EVar "allMethodParamsMentioned") (EVar "rest")) (EVar "ty"))))

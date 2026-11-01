@@ -100,6 +100,8 @@ import driver.loader.{
   loadProgramFilesLocatedCachedE,
   unknownModuleIdOf,
   findImportLoc,
+  loadErrorSite,
+  loadErrorMessage,
 }
 import driver.diagnostics.{
   analyzeProjectKeyed,
@@ -110,11 +112,6 @@ import driver.diagnostics.{
   Diag(..),
   DiagId(..),
   Severity(..),
-  cjPosition,
-  cjRange,
-  cjRangeOfLoc,
-  cjDiagnostic,
-  cjFileEntry,
   cjAllToJson,
   readDiagSrc,
   missingMainDiag,
@@ -157,8 +154,6 @@ import types.typecheck.{
 import ir.core_ir_lower.{
   lowerProgramEmitWith,
   validateFfiExternTypeNames,
-  methodIfaceTable,
-  declaredRecordFieldOrders,
   ctorFieldTypeNames,
 }
 import types.private_mangle.{mangleUnitsEv}
@@ -293,18 +288,6 @@ run emit runtimeP coreP entry roots exportsFor = match readFile runtimeP
             -- #100: a parse/lex error in an IMPORTED module squiggles THAT module,
             -- exactly as an entry-file parse error squiggles the entry.
             Err (LoadParseFailed mpath msrc pe) => emitParseError mpath msrc pe
-            Err (LoadCycle cmsg cpath csite) =>
-              let (cfile, csrc, cloc) = match csite
-                Some (s, l) => (cpath, s, Some l)
-                None => (entry, tsrc, None)
-              emitDiagnostics
-                (cjAllToJson [
-                  (
-                    cfile,
-                    csrc,
-                    [Diag SevError (Coded RModuleLoad) cmsg cloc None None],
-                  ),
-                ])
             Err (LoadMsg lmsg) =>
               -- Recover the failing import's own span so the squiggle lands on the
               -- bad `import` line, not line 1 (mirrors medaka_cli's F3 Chunk B
@@ -321,6 +304,17 @@ run emit runtimeP coreP entry roots exportsFor = match readFile runtimeP
                     [Diag SevError (Coded RModuleLoad) lmsg mloc None None],
                   ),
                 ])
+            Err le => match loadErrorSite entry le
+              Some (code, cmsg, cfile, csrc, cloc) =>
+                emitDiagnostics
+                  (cjAllToJson [
+                    (
+                      cfile,
+                      optionOr tsrc csrc,
+                      [Diag SevError (Coded code) cmsg cloc None None],
+                    ),
+                  ])
+              None => emitLoadFail entry (loadErrorMessage le)
             Ok triples =>
               let mods = map dropPath triples
               match mods
@@ -398,7 +392,7 @@ analyzeSingle : Bool ->
   List (String, String, List Decl) ->
   (List String -> <IO> List (String, List String)) ->
   <IO> Unit
-analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP loaded exportsFor =
+analyzeSingle emit rsrc csrc tsrc entry _runtimeP _coreP loaded exportsFor =
   let mods = map dropPath loaded
   let paths = map ((mid, path, _) => (mid, path)) loaded
   let front = fileFront exportsFor "" True rsrc csrc (parseLocated tsrc)
@@ -424,7 +418,7 @@ analyzeMulti : Bool ->
   List (String, String, List Decl) ->
   (List String -> <IO> List (String, List String)) ->
   <IO> Unit
-analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots loaded exportsFor =
+analyzeMulti emit rsrc csrc tsrc entry _runtimeP _coreP roots loaded exportsFor =
   let mods = map dropPath loaded
   let paths = map ((mid, path, _) => (mid, path)) loaded
   let cacheRef = Ref []
@@ -643,7 +637,7 @@ finishClean : Bool ->
 finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
   let executionDriver =
     EntryKey { moduleId = "async", binding = "runAsyncMain" }
-  let (analysis, report, outputs) =
+  let (analysis, _, outputs) =
     analyzeProgramReport
       (executedMainInputs
         (driveInputsFor !selectedProfile False [])

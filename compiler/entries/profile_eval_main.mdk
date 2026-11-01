@@ -35,7 +35,6 @@
 -- Without MEDAKA_PERF set the driver exits silently (a measurement tool, not a
 -- pipeline validator). For min-of-K timings the gate runs this driver K times.
 
-import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import eval.eval.{evalModulesOutputFacts}

@@ -1,5 +1,5 @@
 # META
-source_lines=1523
+source_lines=1520
 stages=DESUGAR,MARK
 # SOURCE
 import types.program_facts.{withSymbolOrigins}
@@ -178,7 +178,6 @@ import frontend.marker.{markWithPrelude}
 import ir.sexp.{programToSexp}
 import ir.core_ir.{CProgram}
 import ir.core_ir_lower.{
-  declaredRecordFieldOrders,
   lowerProgramEmitWith,
   lowerProgramWithFacts,
   methodIfaceTable,
@@ -195,7 +194,6 @@ import types.typecheck.{
   hadTypeErrors,
   hadMatchWarnings,
 }
-import types.tc_types.{DriveOutputs}
 import types.target_profile.{selectedProfile}
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{emptyFacts, factsOfElabSources, factsWithEvidence}
@@ -224,7 +222,7 @@ import support.util.{
 }
 import support.path.{chopExt, baseOf}
 import driver.profile_select.{carryProjectProfile}
-import regex.{Regex, Match, Group, mustCompile, isFullMatch, find}
+import regex.{Regex, Group, mustCompile, isFullMatch, find}
 import string.{
   split,
   replaceAll,
@@ -395,7 +393,6 @@ isRunSection n = n == "EVAL" || n == "CRASH"
 canonText : String -> String
 canonText text = blockOf (map trimRight (contentLines text))
 
-export
 normalizeText : String -> String -> String
 normalizeText root text = blockOf (map (normalizeLine root) (contentLines text))
 
@@ -1542,11 +1539,10 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("frontend" "marker") ((mem "markWithPrelude" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "programToSexp" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" false))))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "declaredRecordFieldOrders" false) (mem "lowerProgramEmitWith" false) (mem "lowerProgramWithFacts" false) (mem "methodIfaceTable" false) (mem "ctorFieldTypeNames" false) (mem "validateFfiExternTypeNames" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "lowerProgramEmitWith" false) (mem "lowerProgramWithFacts" false) (mem "methodIfaceTable" false) (mem "ctorFieldTypeNames" false) (mem "validateFfiExternTypeNames" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "cprogramToSexp" false))))
 (DUse false (UseGroup ("types" "annotate") ((mem "annotateProgram" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneToLinesWithRuntime" false) (mem "elaborateOneFacts" false) (mem "elaborateModulesWithReport" false) (mem "hadTypeErrors" false) (mem "hadMatchWarnings" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleUnitsEv" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "emptyFacts" false) (mem "factsOfElabSources" false) (mem "factsWithEvidence" false))))
@@ -1560,7 +1556,7 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "anyList" false) (mem "reverseL" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "chopExt" false) (mem "baseOf" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
-(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "Group" false) (mem "mustCompile" false) (mem "isFullMatch" false) (mem "find" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Group" false) (mem "mustCompile" false) (mem "isFullMatch" false) (mem "find" false))))
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "replaceAll" false) (mem "trim" false) (mem "trimRight" false) (mem "take" false) (mem "drop" false) (mem "toInt" false) (mem "toUpper" false))))
 (DTypeSig true "snapSections" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "snapSections" () (EListLit (ELit (LString "META")) (ELit (LString "SOURCE")) (ELit (LString "TOKENS")) (ELit (LString "COMMENTS")) (ELit (LString "POSITIONS")) (ELit (LString "PARSE")) (ELit (LString "PRINTER")) (ELit (LString "DESUGAR")) (ELit (LString "MARK")) (ELit (LString "TYPES")) (ELit (LString "TYPES_USER")) (ELit (LString "CORE_IR")) (ELit (LString "LLVM")) (ELit (LString "WASM")) (ELit (LString "EVAL")) (ELit (LString "CRASH"))))
@@ -1599,7 +1595,7 @@ mapUnit f (x :: rest) =
 (DFunDef false "isRunSection" ((PVar "n")) (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LString "EVAL"))) (EBinOp "==" (EVar "n") (ELit (LString "CRASH")))))
 (DTypeSig false "canonText" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "canonText" ((PVar "text")) (EApp (EVar "blockOf") (EApp (EApp (EVar "map") (EVar "trimRight")) (EApp (EVar "contentLines") (EVar "text")))))
-(DTypeSig true "normalizeText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DTypeSig false "normalizeText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "normalizeText" ((PVar "root") (PVar "text")) (EApp (EVar "blockOf") (EApp (EApp (EVar "map") (EApp (EVar "normalizeLine") (EVar "root"))) (EApp (EVar "contentLines") (EVar "text")))))
 (DTypeSig false "normalizeLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "normalizeLine" ((PVar "root") (PVar "line")) (EApp (EVar "trimRight") (EApp (EVar "normDurations") (EApp (EVar "normTmp") (EApp (EApp (EVar "normRoot") (EVar "root")) (EVar "line"))))))
@@ -1885,11 +1881,10 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("frontend" "marker") ((mem "markWithPrelude" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "programToSexp" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" false))))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "declaredRecordFieldOrders" false) (mem "lowerProgramEmitWith" false) (mem "lowerProgramWithFacts" false) (mem "methodIfaceTable" false) (mem "ctorFieldTypeNames" false) (mem "validateFfiExternTypeNames" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "lowerProgramEmitWith" false) (mem "lowerProgramWithFacts" false) (mem "methodIfaceTable" false) (mem "ctorFieldTypeNames" false) (mem "validateFfiExternTypeNames" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "cprogramToSexp" false))))
 (DUse false (UseGroup ("types" "annotate") ((mem "annotateProgram" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneToLinesWithRuntime" false) (mem "elaborateOneFacts" false) (mem "elaborateModulesWithReport" false) (mem "hadTypeErrors" false) (mem "hadMatchWarnings" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleUnitsEv" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "emptyFacts" false) (mem "factsOfElabSources" false) (mem "factsWithEvidence" false))))
@@ -1903,7 +1898,7 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "anyList" false) (mem "reverseL" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "chopExt" false) (mem "baseOf" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
-(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "Group" false) (mem "mustCompile" false) (mem "isFullMatch" false) (mem "find" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Group" false) (mem "mustCompile" false) (mem "isFullMatch" false) (mem "find" false))))
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "replaceAll" false) (mem "trim" false) (mem "trimRight" false) (mem "take" false) (mem "drop" false) (mem "toInt" false) (mem "toUpper" false))))
 (DTypeSig true "snapSections" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "snapSections" () (EListLit (ELit (LString "META")) (ELit (LString "SOURCE")) (ELit (LString "TOKENS")) (ELit (LString "COMMENTS")) (ELit (LString "POSITIONS")) (ELit (LString "PARSE")) (ELit (LString "PRINTER")) (ELit (LString "DESUGAR")) (ELit (LString "MARK")) (ELit (LString "TYPES")) (ELit (LString "TYPES_USER")) (ELit (LString "CORE_IR")) (ELit (LString "LLVM")) (ELit (LString "WASM")) (ELit (LString "EVAL")) (ELit (LString "CRASH"))))
@@ -1942,7 +1937,7 @@ mapUnit f (x :: rest) =
 (DFunDef false "isRunSection" ((PVar "n")) (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LString "EVAL"))) (EBinOp "==" (EVar "n") (ELit (LString "CRASH")))))
 (DTypeSig false "canonText" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "canonText" ((PVar "text")) (EApp (EVar "blockOf") (EApp (EApp (EMethodRef "map") (EVar "trimRight")) (EApp (EVar "contentLines") (EVar "text")))))
-(DTypeSig true "normalizeText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DTypeSig false "normalizeText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "normalizeText" ((PVar "root") (PVar "text")) (EApp (EVar "blockOf") (EApp (EApp (EMethodRef "map") (EApp (EVar "normalizeLine") (EVar "root"))) (EApp (EVar "contentLines") (EVar "text")))))
 (DTypeSig false "normalizeLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "normalizeLine" ((PVar "root") (PVar "line")) (EApp (EVar "trimRight") (EApp (EVar "normDurations") (EApp (EVar "normTmp") (EApp (EApp (EVar "normRoot") (EVar "root")) (EVar "line"))))))

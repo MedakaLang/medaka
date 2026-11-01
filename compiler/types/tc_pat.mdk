@@ -128,7 +128,7 @@ instantiateCtorPattern mctx (Forall ids evars avars _ _ t) =
   substMono mctx.mcGraph (freshSubst mctx ids) (freshEffSubst mctx evars) asub t
 
 openExistentials : ModuleCtx -> List (Ref Authvar) -> Unit
-openExistentials mctx [] = ()
+openExistentials _mctx [] = ()
 openExistentials mctx cells =
   markSourceless mctx.mcGraph (map authvarId cells)
   mctx.mcCells.openedExistentialsRef :=
@@ -178,7 +178,7 @@ inferPatNode env (PLit (LI64 hi lo)) =
     (i64HalvesLiteral hi lo)
     env.teDyn.dcModule.mcLoc
   (tconBuiltin "I64", [])
-inferPatNode env (PLit l) = (litType l, [])
+inferPatNode _env (PLit l) = (litType l, [])
 inferPatNode env (PCon name pats) = inferPatCon env name pats
 inferPatNode env (PTuple pats) = inferPatTuple env pats
 inferPatNode env (PCons h t) = inferPatCons env h t
@@ -187,7 +187,7 @@ inferPatNode env (PAs x xloc bid p) = inferPatAs env x xloc bid p
 inferPatNode env (PRec name fields _) = inferPatRec env name fields
 inferPatNode env (PRng lo hi _) = inferPatRng env.teDyn.dcModule lo hi
 inferPatNode env (POr alts) = inferOrPat env alts
-inferPatNode env _ = panic "typecheck: unsupported pattern"
+inferPatNode _env _ = panic "typecheck: unsupported pattern"
 
 -- An or-pattern matches the scrutinee through any alternative, so every alternative has
 -- the scrutinee's type and binds each name at one type.  The first alternative's binders
@@ -238,8 +238,8 @@ inferPatRng mctx (LInt lo) (LInt hi) =
   parkIntLit mctx a lo
   parkIntLit mctx a hi
   (a, [])
-inferPatRng mctx (LByte _) (LByte _) = (tconBuiltin "U8", [])
-inferPatRng mctx (LChar _) (LChar _) = (tconBuiltin "Char", [])
+inferPatRng _mctx (LByte _) (LByte _) = (tconBuiltin "U8", [])
+inferPatRng _mctx (LChar _) (LChar _) = (tconBuiltin "Char", [])
 inferPatRng mctx lo hi =
   pushTypeError
     mctx
@@ -260,7 +260,7 @@ inferPatRec env name fields = match lookupRecordByName env.teDyn.dcModule name
 -- bind a record pattern's fields against fresh types, NO unknown-field check
 -- (the record itself is already-reported unknown; see inferPatRec error path)
 bindRecPatFieldsFresh : TcEnv -> List RecPatField -> List (String, Scheme)
-bindRecPatFieldsFresh env [] = []
+bindRecPatFieldsFresh _env [] = []
 bindRecPatFieldsFresh env ((RecPatField fname _ bid mp) :: rest) =
   inferRecPatFieldWith env (freshVar env.teDyn.dcModule ()) fname bid mp
     ++ bindRecPatFieldsFresh env rest
@@ -280,7 +280,7 @@ inferRecPatFields : TcEnv ->
   List (String, Mono) ->
   List RecPatField ->
   List (String, Scheme)
-inferRecPatFields env _ _ [] = []
+inferRecPatFields _env _ _ [] = []
 inferRecPatFields env rname fieldTypes ((RecPatField fname _ bid mp) :: rest) =
   inferRecPatField env rname fieldTypes fname bid mp
     ++ inferRecPatFields env rname fieldTypes rest
@@ -402,7 +402,7 @@ settlePatLitsOnly dyn saved =
 
 -- [final]: the module is done, so an unknown var defaults instead of deferring.
 settlePatLitsGo : DynCtx -> Bool -> List (Mono, Int, Option Loc) -> Unit
-settlePatLitsGo dyn _ [] = ()
+settlePatLitsGo _dyn _ [] = ()
 settlePatLitsGo dyn final ((a, n, loc) :: rest) =
   match normalize a
     TCon tag _ if isTaggedFixedHead tag =>
@@ -466,7 +466,7 @@ inferPatConWith env scheme pats =
 
 export
 inferPatsNode : TcEnv -> List Pat -> (List Mono, List (String, Scheme))
-inferPatsNode env [] = ([], [])
+inferPatsNode _env [] = ([], [])
 inferPatsNode env (p :: ps) =
   let pr = inferPatNode env p
   let rest = inferPatsNode env ps
@@ -521,21 +521,21 @@ patOpensExistentials env (PCons h t) =
   patOpensExistentials env h || patOpensExistentials env t
 patOpensExistentials env (PAs _ _ _ p) = patOpensExistentials env p
 patOpensExistentials env (POr alts) = anyList (patOpensExistentials env) alts
-patOpensExistentials env _ = False
+patOpensExistentials _env _ = False
 
 recPatFieldOpens : TcEnv -> RecPatField -> Bool
 recPatFieldOpens env (RecPatField _ _ _ (Some p)) = patOpensExistentials env p
-recPatFieldOpens env _ = False
+recPatFieldOpens _env _ = False
 
 ctorHasExistentials : GraphCtx -> Option Scheme -> Bool
 ctorHasExistentials gctx (Some (Forall _ _ avars _ _ _)) =
   anyExistential gctx avars
-ctorHasExistentials gctx None = False
+ctorHasExistentials _gctx None = False
 
 recordHasExistentials : GraphCtx -> Option RecordInfo -> Bool
 recordHasExistentials gctx (Some (RecordInfo _ authIds _ _ _)) =
   anyExistential gctx authIds
-recordHasExistentials gctx None = False
+recordHasExistentials _gctx None = False
 
 anyExistential : GraphCtx -> List Int -> Bool
 anyExistential gctx ids =
@@ -543,7 +543,7 @@ anyExistential gctx ids =
 
 export
 openExistentialScope : ModuleCtx -> List (Ref Authvar) -> ExistentialScope
-openExistentialScope mctx [] = ExistentialScope [] 0
+openExistentialScope _mctx [] = ExistentialScope [] 0
 openExistentialScope mctx opened =
   enterLevel mctx ()
   let level = mctx.mcCells.currentLevel.value
@@ -562,7 +562,7 @@ closeExistentialScope : ModuleCtx ->
   Mono ->
   Option Loc ->
   Unit
-closeExistentialScope mctx (ExistentialScope [] _) _ _ = ()
+closeExistentialScope _mctx (ExistentialScope [] _) _ _ = ()
 closeExistentialScope mctx (ExistentialScope opened level) t loc =
   exitLevel mctx ()
   let inValue = authCellsIn t Tip

@@ -22,7 +22,7 @@ import support.symbol_origin.{SymbolOrigin}
 -- or `noalias align 8 `), its return type, its name without the `@`, its
 -- parameter types, and the attributes written after its parameter list (""
 -- or text with a leading space).  Attribute text is opaque here.
-public export data RuntimeDecl =
+export data RuntimeDecl =
   RuntimeDecl String String String (List String) String
   deriving (Eq, Debug)
 

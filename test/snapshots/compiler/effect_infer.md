@@ -6,7 +6,7 @@ stages=DESUGAR,MARK
 -- them; inference allowances and signature constraints belong to the checker.
 import types.effect_rows.{EffRow(..), Effvar, collectRows}
 import types.effect_domain.{
-  Param(..), canonParam, productNorm, subTopOf, productPrimaryLift, domainKey
+  Param(..), canonParam, productPrimaryLift, domainKey
 }
 import types.effect_authority.{
   Authority(..), authJoin, authTop, authExtend, authAppend, authWidenValue,
@@ -17,7 +17,7 @@ import frontend.ast.{
   Expr(..), Lit(..), Pat(..), Arm(..), LetBind(..), FunClause(..), DoStmt(..),
   TyConOrigin(..), patBoundNames, sameTyConHead
 }
-import support.util.{reverseL, lookupAssoc, mapOption}
+import support.util.{reverseL, mapOption}
 
 export
 recordEffect : Ref (List EffRow) -> EffRow -> Unit
@@ -336,11 +336,11 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
   _ => collectBinds rest acc
 # DESUGAR
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "Effvar" false) (mem "collectRows" false))))
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "productNorm" false) (mem "subTopOf" false) (mem "productPrimaryLift" false) (mem "domainKey" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "productPrimaryLift" false) (mem "domainKey" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false) (mem "authWidenValue" false) (mem "authDomainTop" false) (mem "authRetag" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Lit" true) (mem "Pat" true) (mem "Arm" true) (mem "LetBind" true) (mem "FunClause" true) (mem "DoStmt" true) (mem "TyConOrigin" true) (mem "patBoundNames" false) (mem "sameTyConHead" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "lookupAssoc" false) (mem "mapOption" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "mapOption" false))))
 (DTypeSig true "recordEffect" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EffRow"))) (TyFun (TyCon "EffRow") (TyCon "Unit"))))
 (DFunDef false "recordEffect" (PWild (PCon "EffRow" (PList) (PCon "None"))) (ELit LUnit))
 (DFunDef false "recordEffect" ((PVar "ambient") (PVar "row")) (EApp (EApp (EVar "setRef") (EVar "ambient")) (EBinOp "::" (EVar "row") (EUnOp "!" (EVar "ambient")))))
@@ -449,11 +449,11 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
 (DFunDef false "collectBinds" ((PCons (PCon "LetBind" (PVar "n") (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "acc")) (EMatch (EVar "clauses") (arm (PList (PCon "FunClause" (PList) (PVar "rhs"))) () (EApp (EApp (EVar "collectBinds") (EVar "rest")) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "ALet") (EVar "rhs"))) (EVar "acc")))) (arm PWild () (EApp (EApp (EVar "collectBinds") (EVar "rest")) (EVar "acc")))))
 # MARK
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "Effvar" false) (mem "collectRows" false))))
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "productNorm" false) (mem "subTopOf" false) (mem "productPrimaryLift" false) (mem "domainKey" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "productPrimaryLift" false) (mem "domainKey" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false) (mem "authWidenValue" false) (mem "authDomainTop" false) (mem "authRetag" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Lit" true) (mem "Pat" true) (mem "Arm" true) (mem "LetBind" true) (mem "FunClause" true) (mem "DoStmt" true) (mem "TyConOrigin" true) (mem "patBoundNames" false) (mem "sameTyConHead" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "lookupAssoc" false) (mem "mapOption" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "mapOption" false))))
 (DTypeSig true "recordEffect" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EffRow"))) (TyFun (TyCon "EffRow") (TyCon "Unit"))))
 (DFunDef false "recordEffect" (PWild (PCon "EffRow" (PList) (PCon "None"))) (ELit LUnit))
 (DFunDef false "recordEffect" ((PVar "ambient") (PVar "row")) (EApp (EApp (EVar "setRef") (EVar "ambient")) (EBinOp "::" (EVar "row") (EUnOp "!" (EVar "ambient")))))

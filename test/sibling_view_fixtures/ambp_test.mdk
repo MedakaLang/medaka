@@ -1,0 +1,6 @@
+-- `helper` is private in `ambp` and exported by `ambp_b`: the ambiguity says the
+-- subject's name is private.
+import ambp.*
+import ambp_b.*
+
+main = println (helper 1)

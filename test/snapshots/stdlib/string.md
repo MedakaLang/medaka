@@ -33,7 +33,7 @@ stages=DESUGAR,MARK
 -- `unwords`) are `List`-typed; `toChars` is the one `Array` function.  No
 -- List/Array duals: `arrayFromList` and `array.toList` convert in one call.
 
-import core.{Ordering(..), Ord, Debug, Foldable, Mappable, Option}
+import core.{Ordering(..), Option}
 
 -- `Debug String`/`Debug Char` and the other primitive instances live in the
 -- prelude (`core.mdk`), so they resolve without importing `string`.
@@ -1166,7 +1166,7 @@ export
 sliceBetween : StrCursor -> StrCursor -> String
 sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Option" false))))
 (DTypeSig true "isDigit" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isDigit" ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 48))) (EBinOp "<=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 57)))))
 (DTypeSig true "isAlpha" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -1383,7 +1383,7 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DTypeSig true "sliceBetween" (TyFun (TyCon "StrCursor") (TyFun (TyCon "StrCursor") (TyCon "String"))))
 (DFunDef false "sliceBetween" ((PCon "StrCursor" (PVar "s") (PVar "a")) (PCon "StrCursor" PWild (PVar "b"))) (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "a")) (EVar "b")) (EVar "s")))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Option" false))))
 (DTypeSig true "isDigit" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isDigit" ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 48))) (EBinOp "<=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 57)))))
 (DTypeSig true "isAlpha" (TyFun (TyCon "Char") (TyCon "Bool")))

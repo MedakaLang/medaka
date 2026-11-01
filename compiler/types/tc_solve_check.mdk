@@ -7,9 +7,9 @@
 -- `maybeInferConstraint`); and the registration of what the sites read back: predicate slots, dict
 -- arity and the constraint tables (`registerReqSlots`, `registerImplRequires`, `registerMember`,
 -- `registerConstraintRegs`, `registerInferredFor`, `inferredPredicateSlots`,
--- `declaredPredicateSlots`, `setFunConstraintEntry`, the slot keys `cslotKey` and `cslotVecKey`,
--- the test-only probe `inferredPredicateSlotsProbe`), with the lookups of an interface by
--- constraint id they use (`ifaceForConstraintId`, `ifaceForInferredId`).
+-- `declaredPredicateSlots`, `setFunConstraintEntry`, the slot keys `cslotKey` and `cslotVecKey`),
+-- with the lookups of an interface by constraint id they use (`ifaceForConstraintId`,
+-- `ifaceForInferredId`).
 --
 -- Spec: DICT section 3 (the residual walk), section 4 `gen`/`gen-sig` (the point of evidence
 -- abstraction; inferred-constraint promotion: the inferred P' becomes the scheme's context),
@@ -79,7 +79,6 @@ import types.tc_mono.{
   declaredOblArgId,
   dedupI,
   findTvarInMono,
-  firstOrZero,
   headTyconMono,
   isBareTyvarMono,
   locEq,
@@ -91,7 +90,6 @@ import types.tc_mono.{
   monoUnboundIds,
   monoVarCells,
   monoVectorClosed,
-  peelQual,
   schemeIds,
   sigCellsOf,
   sigRigidBindings,
@@ -116,8 +114,6 @@ import types.tc_diag_text.{
 }
 import types.tc_state.{
   callUOblsWindow,
-  initialModuleCtx,
-  probeGraphCtx,
   renderEvidenceBinder,
   wWindow,
 }
@@ -145,7 +141,7 @@ import types.tc_diag.{
 }
 import types.tc_scope.{argDispatchOf}
 import types.tc_unify.{
-  freshVar, lowerOwnedRoot, monoUnboundVarLevels, recordOblAt, unifyIn
+  lowerOwnedRoot, monoUnboundVarLevels, recordOblAt, unifyIn
 }
 import types.tc_decls_types.{fromAstType}
 import types.tc_decls.{constraintIface, constraintVarNames, methodDictArityOf}
@@ -260,11 +256,10 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   lenKey,
   listLen,
 }
-import list.{head, indexed, reverse}
+import list.{indexed, reverse}
 import string.{join}
 import types.registry.{regKeyOfTab, regKeyRender}
 import types.superclass.{superClosure}
@@ -329,7 +324,7 @@ numericPredicateTraceOn gctx _ = match gctx.trace
 -- `T-REQUIRES-CYCLE` for a repeated goal, `T-REQUIRES-DEPTH` for spent fuel.
 export
 reqWalkReported : ModuleCtx -> Option Loc -> ReqStep -> Option ReqWalk
-reqWalkReported mctx _ (ReqOn walk) = Some walk
+reqWalkReported _mctx _ (ReqOn walk) = Some walk
 reqWalkReported mctx loc (ReqCycle parentIface parentArgs iface args) =
   pushTypeErrorOncePerSite
     mctx
@@ -393,7 +388,7 @@ localAbsSlots mctx name boundIds oblN0 callN0 =
   inferredPredicateSlots mctx name (dedupI (map inferredPredLead vecs)) vecs
 
 localAbsParams : GraphCtx -> ScopeId -> Int -> List PredicateSlot -> List String
-localAbsParams gctx _ _ [] = []
+localAbsParams _gctx _ _ [] = []
 localAbsParams gctx lscope i (_ :: rest) =
   renderEvidenceBinder gctx (Scopes.binderAt lscope i)
     :: localAbsParams gctx lscope (i + 1) rest
@@ -870,7 +865,7 @@ defaultEachMemberWith : DynCtx ->
   List UObligation ->
   List Mono ->
   Unit
-defaultEachMemberWith dyn _ _ _ _ [] = ()
+defaultEachMemberWith _dyn _ _ _ _ [] = ()
 defaultEachMemberWith dyn ownerPolicy guard protectedIds obls (m :: rest) =
   defaultAmbiguousNumWith dyn ownerPolicy guard protectedIds obls m
   defaultEachMemberWith dyn ownerPolicy guard protectedIds obls rest
@@ -954,7 +949,7 @@ registerAmbiguousGo : ModuleCtx ->
   List Int ->
   List Int ->
   Unit
-registerAmbiguousGo mctx [] _ _ _ = ()
+registerAmbiguousGo _mctx [] _ _ _ = ()
 registerAmbiguousGo mctx (o :: rest) groupLevel memberIds anchoredIds =
   match o.oblProj
     OpMethodOcc typarams mty occ _ =>
@@ -1029,7 +1024,7 @@ registerDispatchMonos : ModuleCtx ->
   List Int ->
   List Int ->
   Unit
-registerDispatchMonos mctx _ [] _ _ _ _ _ = ()
+registerDispatchMonos _mctx _ [] _ _ _ _ _ = ()
 registerDispatchMonos mctx iface (dm :: rest) loc scope groupLevel memberIds anchoredIds =
   let ambig =
     filterList
@@ -1098,7 +1093,7 @@ groundNumVarsWith : DynCtx ->
   List UObligation ->
   List Int ->
   Unit
-groundNumVarsWith dyn _ _ _ [] = ()
+groundNumVarsWith _dyn _ _ _ [] = ()
 groundNumVarsWith dyn ownerPolicy guard obls (id :: rest)
   | omHasKey
     (intToString id)
@@ -1148,7 +1143,7 @@ ifaceSupersOf [] _ = None
 ifaceSupersOf ((DAttrib _ d) :: rest) target = match ifaceSupersOf [d] target
   Some r => Some r
   None => ifaceSupersOf rest target
-ifaceSupersOf ((DInterface { pub, def, name, typarams, supers, methods }) :: rest) target
+ifaceSupersOf ((DInterface { pub = _, def = _, name, typarams, supers, methods = _ }) :: rest) target
   | name == target = Some (typarams, supers)
   | otherwise = ifaceSupersOf rest target
 ifaceSupersOf (_ :: rest) target = ifaceSupersOf rest target
@@ -1204,7 +1199,7 @@ checkCallObligationsU : ModuleCtx ->
   ImplUniverse ->
   List UObligation ->
   Unit
-checkCallObligationsU mctx _ _ [] = ()
+checkCallObligationsU _mctx _ _ [] = ()
 checkCallObligationsU mctx deferNonGround univ (o :: rest) =
   let iface = o.pred.iface
   -- `uOblArgs`, NOT `o.pred.args`: an impl-channel obligation carries an EMPTY
@@ -1517,7 +1512,7 @@ oblCallVerdict : ModuleCtx ->
   IfaceRef ->
   List Mono ->
   Option Bool
-oblCallVerdict mctx univ iface [a0] =
+oblCallVerdict _mctx univ iface [a0] =
   let cb = univConcreteBucket univ iface (headTyconMono a0)
   if bucketAnyLonger cb 1 then
     None
@@ -1767,7 +1762,7 @@ rejectWithheldAmbiguity : ModuleCtx ->
   List Mono ->
   List UObligation ->
   Unit
-rejectWithheldAmbiguity mctx _ [] _ = ()
+rejectWithheldAmbiguity _mctx _ [] _ = ()
 rejectWithheldAmbiguity mctx rigidIds withheld obls =
   match withheldGoals mctx.mcGraph withheld obls
     [] => ()
@@ -2093,7 +2088,7 @@ checkReqObligations : SiteCtx ->
   ScopeId ->
   List (IfaceRef, List Mono) ->
   Unit
-checkReqObligations sx _ _ _ _ [] = ()
+checkReqObligations _sx _ _ _ _ [] = ()
 checkReqObligations sx univ walk loc scope ((ifaceR, monoArgs) :: rest) =
   checkReqOne sx univ walk ifaceR monoArgs loc scope
   checkReqObligations sx univ walk loc scope rest
@@ -2166,7 +2161,7 @@ numlitReframeLoc : ModuleCtx -> Option Loc -> Bool
 numlitReframeLoc mctx (Some l) =
   anyList (p => locEq (snd p) l) mctx.mcCells.numlitVarLocs.value
     && not (anyList (ol => locEq ol l) mctx.mcCells.numlitOpLocs.value)
-numlitReframeLoc mctx None = False
+numlitReframeLoc _mctx None = False
 
 -- site-specific reframe wording (if / list / cons) when the context is known, else
 -- a bare literal-vs-type mismatch.  `Int` is the numeric default the literal takes.
@@ -2189,7 +2184,7 @@ numlitMismatchHint mctx loc _ = match numlitCtxKind mctx loc
 
 numlitCtxKind : ModuleCtx -> Option Loc -> Option JoinContext
 numlitCtxKind mctx (Some l) = lookupCtxKind l mctx.mcCells.numlitCtxTags.value
-numlitCtxKind mctx None = None
+numlitCtxKind _mctx None = None
 
 lookupCtxKind : Loc -> List (Loc, JoinContext) -> Option JoinContext
 lookupCtxKind _ [] = None
@@ -2229,7 +2224,7 @@ checkSurvivorObligations : ModuleCtx ->
   List UObligation ->
   Option Loc ->
   Unit
-checkSurvivorObligations mctx _ _ _ _ _ [] _ = ()
+checkSurvivorObligations _mctx _ _ _ _ _ [] _ = ()
 checkSurvivorObligations mctx subject ownIface ownTyparams mty extraMap (o :: rest) loc =
   -- the obligation's occurrence mono is the FULL instantiated occurrence type (`Int -> a`
   -- for a literal's `fromInt`); the constrained position is extracted by the
@@ -2371,7 +2366,7 @@ checkSurvivorDispatchMonos : ModuleCtx ->
   List Mono ->
   Option Loc ->
   Unit
-checkSurvivorDispatchMonos mctx _ _ _ _ _ _ [] _ = ()
+checkSurvivorDispatchMonos _mctx _ _ _ _ _ _ [] _ = ()
 checkSurvivorDispatchMonos mctx subject ownIface ownTyparams mty extraMap oiface (dm :: rest) loc =
   match survivorNameOf dm extraMap
     Some vname =>
@@ -2471,7 +2466,7 @@ registerImplRequires : ModuleCtx ->
   List Require ->
   List ScopedImplMethod ->
   Unit
-registerImplRequires mctx _ _ _ _ _ _ [] = ()
+registerImplRequires _mctx _ _ _ _ _ _ [] = ()
 registerImplRequires mctx ce cur iface implTvMap rpNames reqs (scoped :: rest)
   | registersElementDict mctx mname rpNames =
     let methodArity = methodDictArityInClassEnv mctx ce cur iface mname
@@ -2510,7 +2505,7 @@ registerReqSlots : ModuleCtx ->
   Int ->
   List Require ->
   Unit
-registerReqSlots mctx _ _ _ [] = ()
+registerReqSlots _mctx _ _ _ [] = ()
 registerReqSlots mctx scope implTvMap slot ((Require { requireHead = iface, requireArgs = rargs, requireOrigin = ro }) :: rest) =
   let argMonos = map (a => fromAstType mctx implTvMap a) rargs
   let ids = flatMap monoTyvarIds argMonos
@@ -2551,7 +2546,7 @@ callPredOf (iface, monos, loc)
 -- (later-group) callers infer.
 export
 registerConstraintRegs : ModuleCtx -> List ConstraintReg -> Unit
-registerConstraintRegs mctx [] = ()
+registerConstraintRegs _mctx [] = ()
 registerConstraintRegs mctx (reg :: rest) =
   registerMember mctx reg.crName reg.crScope reg.crIfaceMonos reg.crArgVecs
   registerConstraintRegs mctx rest
@@ -2614,7 +2609,7 @@ registerMember : ModuleCtx ->
 -- constraint ids → 0 dict args at the call site → `unbound identifier:
 -- $dict_find_0` at eval.  An unconstrained fn is never marked EDictAt, so it needs
 -- no entry (mirrors registerInferredFor's empty-ids guard).
-registerMember mctx _ _ [] _ = ()
+registerMember _mctx _ _ [] _ = ()
 registerMember mctx m scope ifaceMonos argVecs =
   let slots = declaredPredicateSlots ifaceMonos argVecs
   registerPredicateSlotIds mctx.mcGraph scope 0 slots
@@ -2682,7 +2677,7 @@ registerPredicateSlotIds : GraphCtx ->
   Int ->
   List PredicateSlot ->
   Unit
-registerPredicateSlotIds gctx _ _ [] = ()
+registerPredicateSlotIds _gctx _ _ [] = ()
 registerPredicateSlotIds gctx scope kept (slot :: rest) =
   registerEachActive gctx slot.psBoundIds (Scopes.binderAt scope kept)
   registerPredicateSlotIds gctx scope (kept + 1) rest
@@ -2711,7 +2706,7 @@ registerInferredConstraints : ModuleCtx ->
   List UObligation ->
   List ScopedScheme ->
   Unit
-registerInferredConstraints mctx _ _ _ [] = ()
+registerInferredConstraints _mctx _ _ _ [] = ()
 registerInferredConstraints mctx sigs callObls addedObls (scoped :: rest) =
   maybeInferConstraint
     mctx
@@ -2731,7 +2726,7 @@ maybeInferConstraint : ModuleCtx ->
   ScopeId ->
   Scheme ->
   Unit
-maybeInferConstraint mctx sigs callObls addedObls m scope sch
+maybeInferConstraint mctx _sigs callObls addedObls m scope sch
   | not (omHasKey m mctx.mcGraph.dictEligibleSetRef.value) = ()
   | omHasKey m mctx.mcCells.sigNameSetRef.value = ()
   | otherwise =
@@ -3275,7 +3270,7 @@ inferredPredicateSlotsGo : ModuleCtx ->
   OrdMap Unit ->
   List PredicateSlot ->
   List PredicateSlot
-inferredPredicateSlotsGo mctx _ [] _ _ acc = reverse acc
+inferredPredicateSlotsGo _mctx _ [] _ _ acc = reverse acc
 inferredPredicateSlotsGo mctx m (id :: rest) buckets covered acc =
   match omLookup (intToString id) buckets
     Some bucket =>
@@ -3427,61 +3422,3 @@ ifaceForConstraintIdGo id (o :: rest) = match o.oblProj
       else
         ifaceForConstraintIdGo id rest
     _ => ifaceForConstraintIdGo id rest
-
--- test-only observation: declarations whose only callers are tests and probes.
-
--- Private producer probe: same-lead predicates stay distinct, an exact duplicate
--- collapses, a multi-argument predicate owns one slot, a vector whose lead is another
--- predicate's non-lead survives, and a trace-only id retains PSArgsUnknown.
--- > inferredPredicateSlotsProbe (initialModuleCtx (probeGraphCtx ())) ()
--- [("Tweak", ["a", "Int"], ["a"]), ("Tweak", ["a", "Bool"], ["a"]), ("Ix", ["a", "b"], ["a", "b"]), ("Num", ["b"], ["b"]), ("", ["?"], ["c"])]
-inferredPredicateSlotsProbe : ModuleCtx ->
-  Unit ->
-  List (String, List String, List String)
-inferredPredicateSlotsProbe mctx _ =
-  let a = freshVar mctx ()
-  let b = freshVar mctx ()
-  let c = freshVar mctx ()
-  let aid = firstOrZero (monoTyvarIds a)
-  let bid = firstOrZero (monoTyvarIds b)
-  let cid = firstOrZero (monoTyvarIds c)
-  let tweak = ifaceRefBare "Tweak"
-  let slots =
-    inferredPredicateSlots
-      mctx
-      "__inferred_predicate_slot_probe__"
-      [aid, bid, cid]
-      [
-        (tweak, aid, [a, tconBuiltin "Int"]),
-        (tweak, aid, [a, tconBuiltin "Bool"]),
-        (tweak, aid, [a, tconBuiltin "Int"]),
-        (ifaceRefBare "Ix", aid, [a, b]),
-        (ifaceRefBare "Num", bid, [b]),
-      ]
-  map (inferredPredicateSlotProbeRow aid bid cid) slots
-
-inferredPredicateSlotProbeRow : Int ->
-  Int ->
-  Int ->
-  PredicateSlot ->
-  (String, List String, List String)
-inferredPredicateSlotProbeRow aid bid cid slot = (
-  slot.psIface.irName,
-  match slot.psArgs
-    PSArgsUnknown => ["?"]
-    PSArgsKnown args => map (inferredPredicateSlotMonoTag aid bid cid) args,
-  map (inferredPredicateSlotIdTag aid bid cid) slot.psBoundIds,
-)
-
-inferredPredicateSlotMonoTag : Int -> Int -> Int -> Mono -> String
-inferredPredicateSlotMonoTag aid bid cid mono = match peelQual mono
-  TVar cell => inferredPredicateSlotIdTag aid bid cid (tyvarId cell)
-  TCon name _ => name
-  _ => "_"
-
-inferredPredicateSlotIdTag : Int -> Int -> Int -> Int -> String
-inferredPredicateSlotIdTag aid bid cid id
-  | id == aid = "a"
-  | id == bid = "b"
-  | id == cid = "c"
-  | otherwise = "_"

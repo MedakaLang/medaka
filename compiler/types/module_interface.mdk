@@ -113,12 +113,17 @@ public export data FrozenExport = FrozenExport {
   feExtern : Bool,
 }
 
+-- `miExports` is what every importer reads.  `miPrivate` is the rest of the
+-- module's top-level value bindings, which only its test sibling reads
+-- (`docs/design/TEST-SIBLING-ACCESS-DESIGN.md` §3.1): the interface records
+-- both whoever imports the module, and the drive selects when it applies it.
 public export data ModuleInterface = ModuleInterface {
   miKey : ModuleKey,
   miKeyText : String,
   miSerial : Int,
   miRow : ModDiags,
   miExports : List (String, FrozenExport),
+  miPrivate : List (String, FrozenExport),
   miFunNames : List String,
   miDispatchIdx : List ((IfaceRef, String), Int),
   miDataCtors : List (TabKey, (DataVis, List String, List Variant)),
@@ -263,19 +268,20 @@ thawExport fe =
   }
 
 -- The interface of a module just checked and drained: [row] is its frozen
--- diagnostics row, [exports] its own export bindings, [before] the view taken before
--- its check, [mctx] its record after the drain and [trees] its tree content, which
--- only a tree drive records.
+-- diagnostics row, [exports] its own export bindings and [private] the rest of its
+-- top-level bindings, [before] the view taken before its check, [mctx] its record
+-- after the drain and [trees] its tree content, which only a tree drive records.
 export
 freezeModuleInterface : ModuleKey ->
   Int ->
   ModDiags ->
   List (String, ExportBinding) ->
+  List (String, ExportBinding) ->
   ModuleRows ->
   ModuleCtx ->
   Option ModuleTrees ->
   ModuleInterface
-freezeModuleInterface key serial row exports before mctx trees =
+freezeModuleInterface key serial row exports private before mctx trees =
   let after = captureModuleRows mctx.mcGraph
   let (ctorPop, recordPop) = mctx.mcCells.ownPopsRef.value
   let existentials =
@@ -286,6 +292,7 @@ freezeModuleInterface key serial row exports before mctx trees =
     miSerial = serial,
     miRow = row,
     miExports = map (b => (fst b, freezeExport (snd b))) exports,
+    miPrivate = map (b => (fst b, freezeExport (snd b))) private,
     miFunNames = M.keys (M.difference after.mrFunNames before.mrFunNames),
     miDispatchIdx = drop (listLen before.mrDispatchIdx) after.mrDispatchIdx,
     miDataCtors = newPrefix after.mrDataCtors before.mrDataCtors,
@@ -600,6 +607,12 @@ applyModuleInterface g mi =
   g.typeErrorsSticky := g.typeErrorsSticky.value || isNonEmptyL mi.miSticky
   g.typeErrorsStickyDiags := mi.miSticky ++ g.typeErrorsStickyDiags.value
   (mi.miRow, map (b => (fst b, thawExport (snd b))) mi.miExports)
+
+-- [mi]'s private bindings over fresh cells, for the drive whose test sibling
+-- imports the module.
+export
+privateBindingsOf : ModuleInterface -> List (String, ExportBinding)
+privateBindingsOf mi = map (b => (fst b, thawExport (snd b))) mi.miPrivate
 
 -- ── the process cache ───────────────────────────────────────────────────────
 

@@ -37,8 +37,6 @@ import http.{
   parseRequest,
   Request,
   Response,
-  responseBody,
-  responseStatus,
   serializeResponse,
 }
 import hex.{decode}

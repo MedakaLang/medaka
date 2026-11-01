@@ -24,7 +24,7 @@ import frontend.ast_codec.{declsSExp, readDecls}
 import string as S
 import support.sexp_value.{
   SExp(..), SexpError(..), atomInt, cursorAtEnd, cursorOf, cursorOffset,
-  parseSExp, renderSExp
+  renderSExp
 }
 import types.interface_frame.{
   InterfaceFault(..), KeyGate, checkedFramed, failure, firstLine, framedFile,
@@ -72,7 +72,6 @@ preludeDeclsOf runtime core = match (binderSpan runtime, binderSpan core)
 -- ── the file ────────────────────────────────────────────────────────────────
 
 -- Distinct from every other framed file's version.
-export
 declsFormatVersion : Int
 declsFormatVersion = 4
 

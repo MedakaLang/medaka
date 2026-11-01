@@ -1,5 +1,5 @@
 # META
-source_lines=679
+source_lines=671
 stages=DESUGAR,MARK
 # SOURCE
 -- The prelude's elaborated trees as a value, an on-disk file and a process
@@ -46,9 +46,8 @@ import list.{reverse}
 import string as S
 import support.sexp_value.{
   SExp(..), SexpError(..), SexpCursor, atomInt, cursorAtEnd, cursorAtom,
-  cursorClose, cursorFail, cursorFailed, cursorInt, cursorList, cursorOf,
-  cursorOffset, cursorOpen, cursorPeek, cursorChar, expectAtom, parseSExp,
-  renderSExp
+  cursorClose, cursorFail, cursorFailed, cursorList, cursorOf, cursorOffset,
+  cursorOpen, renderSExp
 }
 import support.util.{splitOnChar}
 import types.evidence_coverage.{EvidenceFault(..), evidenceFaults}
@@ -136,7 +135,6 @@ localSuffix s
 
 -- ── the file ────────────────────────────────────────────────────────────────
 
-export
 formatVersion : Int
 formatVersion = 3
 
@@ -641,12 +639,6 @@ seedPreludeElab generation pe =
       setPreludeEvidence pe.peEvCounter pe.peEvidence
       preludeElabCacheRef := Some (generation, pe, False)
 
-export
-preludeElabHit : (Int, Int) -> Option PreludeElab
-preludeElabHit generation = match !preludeElabCacheRef
-  Some (seen, pe, _) if seen == generation => Some pe
-  _ => None
-
 -- The value of [generation] with its binders moved onto [core]'s, the process's
 -- own desugar of that generation's core; `None` when nothing is held for it or
 -- [core]'s binders are not a run of the file's count.
@@ -686,7 +678,7 @@ heldPreludeEvCounter _ = map ((_, pe, _) => pe.peEvCounter) !preludeElabCacheRef
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false) (mem "evEntriesSExp" false) (mem "readBinderId" false) (mem "readBool" false) (mem "readDecls" false) (mem "readEvEntries" false) (mem "sexpBinderId" false) (mem "sexpBool" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseAlias ("string") "S"))
-(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "SexpCursor" false) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorAtom" false) (mem "cursorClose" false) (mem "cursorFail" false) (mem "cursorFailed" false) (mem "cursorInt" false) (mem "cursorList" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "cursorOpen" false) (mem "cursorPeek" false) (mem "cursorChar" false) (mem "expectAtom" false) (mem "parseSExp" false) (mem "renderSExp" false))))
+(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "SexpCursor" false) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorAtom" false) (mem "cursorClose" false) (mem "cursorFail" false) (mem "cursorFailed" false) (mem "cursorList" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "cursorOpen" false) (mem "renderSExp" false))))
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false))))
 (DUse false (UseGroup ("types" "evidence_coverage") ((mem "EvidenceFault" true) (mem "evidenceFaults" false))))
 (DUse false (UseGroup ("types" "interface_frame") ((mem "InterfaceFault" true) (mem "KeyGate" false) (mem "bodyOf" false) (mem "checkedFramed" false) (mem "failure" false) (mem "firstLine" false) (mem "framedFile" false) (mem "keyFields" false) (mem "noGate" false) (mem "refuse" false) (mem "renderFramedFault" false) (mem "sha256Hex" false))))
@@ -714,7 +706,7 @@ heldPreludeEvCounter _ = map ((_, pe, _) => pe.peEvCounter) !preludeElabCacheRef
 (DFunDef false "localHighWater" ((PCon "SList" (PVar "items"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "n")) (EApp (EApp (EVar "max") (EVar "acc")) (EApp (EVar "localHighWater") (EVar "n"))))) (ELit (LInt 0))) (EVar "items")))
 (DTypeSig false "localSuffix" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "localSuffix" ((PVar "s")) (EIf (EApp (EApp (EVar "S.endsWith") (ELit (LString "$lb"))) (EVar "s")) (EMatch (EApp (EVar "reverse") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "s"))) (arm (PCons PWild (PCons (PVar "k") PWild)) () (EMatch (EApp (EVar "stringToInt") (EVar "k")) (arm (PCon "Some" (PVar "n")) () (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (arm (PCon "None") () (ELit (LInt 0))))) (arm PWild () (ELit (LInt 0)))) (EIf (EVar "otherwise") (ELit (LInt 0)) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "formatVersion" (TyCon "Int"))
+(DTypeSig false "formatVersion" (TyCon "Int"))
 (DFunDef false "formatVersion" () (ELit (LInt 3)))
 (DTypeSig true "elabKeyOf" (TyFun (TyCon "InterfaceKey") (TyCon "InterfaceKey")))
 (DFunDef false "elabKeyOf" ((PVar "key")) (ERecordCreate "InterfaceKey" ((fa "ikFormat" (EVar "formatVersion")) (fa "ikSources" (EFieldAccess (EVar "key") "ikSources")) (fa "ikCompiler" (EFieldAccess (EVar "key") "ikCompiler")))))
@@ -891,8 +883,6 @@ heldPreludeEvCounter _ = map ((_, pe, _) => pe.peEvCounter) !preludeElabCacheRef
 (DFunDef false "preludeElabCacheRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "seedPreludeElab" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "PreludeElab") (TyCon "Unit"))))
 (DFunDef false "seedPreludeElab" ((PVar "generation") (PVar "pe")) (EMatch (EApp (EApp (EVar "evidenceRowsProblem") (EFieldAccess (EVar "pe") "peEvCounter")) (EFieldAccess (EVar "pe") "peEvidence")) (arm (PCon "Some" PWild) () (ELit LUnit)) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "setPreludeEvidence") (EFieldAccess (EVar "pe") "peEvCounter")) (EFieldAccess (EVar "pe") "peEvidence"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeElabCacheRef")) (EApp (EVar "Some") (ETuple (EVar "generation") (EVar "pe") (EVar "False")))))))))
-(DTypeSig true "preludeElabHit" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "PreludeElab"))))
-(DFunDef false "preludeElabHit" ((PVar "generation")) (EMatch (EUnOp "!" (EVar "preludeElabCacheRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "pe") PWild)) ((GBool (EBinOp "==" (EVar "seen") (EVar "generation")))) (EApp (EVar "Some") (EVar "pe"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "preludeElabFor" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "PreludeElab")))))
 (DFunDef false "preludeElabFor" ((PVar "generation") (PVar "core")) (EMatch (EUnOp "!" (EVar "preludeElabCacheRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "pe") (PCon "True"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "generation")))) (EApp (EVar "Some") (EVar "pe"))) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "pe") (PCon "False"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "generation")))) (EMatch (EApp (EVar "binderSpan") (EVar "core")) (arm (PCon "Some" (PVar "run")) ((GBool (EBinOp "==" (EFieldAccess (EVar "run") "brCount") (EFieldAccess (EVar "pe") "peBinderCount")))) (EBlock (DoLet false false (PVar "moved") (EApp (EApp (EVar "relocated") (EBinOp "-" (EFieldAccess (EVar "run") "brFirst") (EFieldAccess (EVar "pe") "peBinderBase"))) (EVar "pe"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeElabCacheRef")) (EApp (EVar "Some") (ETuple (EVar "generation") (EVar "moved") (EVar "True"))))) (DoExpr (EApp (EVar "Some") (EVar "moved"))))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DTypeSig true "withShippedRows" (TyFun (TyApp (TyCon "Option") (TyCon "PreludeElab")) (TyFun (TyCon "EvTable") (TyFun (TyCon "BinderTypeTable") (TyTuple (TyCon "EvTable") (TyCon "BinderTypeTable"))))))
@@ -905,7 +895,7 @@ heldPreludeEvCounter _ = map ((_, pe, _) => pe.peEvCounter) !preludeElabCacheRef
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false) (mem "evEntriesSExp" false) (mem "readBinderId" false) (mem "readBool" false) (mem "readDecls" false) (mem "readEvEntries" false) (mem "sexpBinderId" false) (mem "sexpBool" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseAlias ("string") "S"))
-(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "SexpCursor" false) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorAtom" false) (mem "cursorClose" false) (mem "cursorFail" false) (mem "cursorFailed" false) (mem "cursorInt" false) (mem "cursorList" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "cursorOpen" false) (mem "cursorPeek" false) (mem "cursorChar" false) (mem "expectAtom" false) (mem "parseSExp" false) (mem "renderSExp" false))))
+(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "SexpCursor" false) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorAtom" false) (mem "cursorClose" false) (mem "cursorFail" false) (mem "cursorFailed" false) (mem "cursorList" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "cursorOpen" false) (mem "renderSExp" false))))
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false))))
 (DUse false (UseGroup ("types" "evidence_coverage") ((mem "EvidenceFault" true) (mem "evidenceFaults" false))))
 (DUse false (UseGroup ("types" "interface_frame") ((mem "InterfaceFault" true) (mem "KeyGate" false) (mem "bodyOf" false) (mem "checkedFramed" false) (mem "failure" false) (mem "firstLine" false) (mem "framedFile" false) (mem "keyFields" false) (mem "noGate" false) (mem "refuse" false) (mem "renderFramedFault" false) (mem "sha256Hex" false))))
@@ -933,7 +923,7 @@ heldPreludeEvCounter _ = map ((_, pe, _) => pe.peEvCounter) !preludeElabCacheRef
 (DFunDef false "localHighWater" ((PCon "SList" (PVar "items"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "n")) (EApp (EApp (EMethodRef "max") (EVar "acc")) (EApp (EVar "localHighWater") (EVar "n"))))) (ELit (LInt 0))) (EVar "items")))
 (DTypeSig false "localSuffix" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "localSuffix" ((PVar "s")) (EIf (EApp (EApp (EVar "S.endsWith") (ELit (LString "$lb"))) (EVar "s")) (EMatch (EApp (EVar "reverse") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "s"))) (arm (PCons PWild (PCons (PVar "k") PWild)) () (EMatch (EApp (EVar "stringToInt") (EVar "k")) (arm (PCon "Some" (PVar "n")) () (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (arm (PCon "None") () (ELit (LInt 0))))) (arm PWild () (ELit (LInt 0)))) (EIf (EVar "otherwise") (ELit (LInt 0)) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "formatVersion" (TyCon "Int"))
+(DTypeSig false "formatVersion" (TyCon "Int"))
 (DFunDef false "formatVersion" () (ELit (LInt 3)))
 (DTypeSig true "elabKeyOf" (TyFun (TyCon "InterfaceKey") (TyCon "InterfaceKey")))
 (DFunDef false "elabKeyOf" ((PVar "key")) (ERecordCreate "InterfaceKey" ((fa "ikFormat" (EVar "formatVersion")) (fa "ikSources" (EFieldAccess (EVar "key") "ikSources")) (fa "ikCompiler" (EFieldAccess (EVar "key") "ikCompiler")))))
@@ -1110,8 +1100,6 @@ heldPreludeEvCounter _ = map ((_, pe, _) => pe.peEvCounter) !preludeElabCacheRef
 (DFunDef false "preludeElabCacheRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "seedPreludeElab" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "PreludeElab") (TyCon "Unit"))))
 (DFunDef false "seedPreludeElab" ((PVar "generation") (PVar "pe")) (EMatch (EApp (EApp (EVar "evidenceRowsProblem") (EFieldAccess (EVar "pe") "peEvCounter")) (EFieldAccess (EVar "pe") "peEvidence")) (arm (PCon "Some" PWild) () (ELit LUnit)) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "setPreludeEvidence") (EFieldAccess (EVar "pe") "peEvCounter")) (EFieldAccess (EVar "pe") "peEvidence"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeElabCacheRef")) (EApp (EVar "Some") (ETuple (EVar "generation") (EVar "pe") (EVar "False")))))))))
-(DTypeSig true "preludeElabHit" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "PreludeElab"))))
-(DFunDef false "preludeElabHit" ((PVar "generation")) (EMatch (EUnOp "!" (EVar "preludeElabCacheRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "pe") PWild)) ((GBool (EBinOp "==" (EVar "seen") (EVar "generation")))) (EApp (EVar "Some") (EVar "pe"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "preludeElabFor" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "PreludeElab")))))
 (DFunDef false "preludeElabFor" ((PVar "generation") (PVar "core")) (EMatch (EUnOp "!" (EVar "preludeElabCacheRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "pe") (PCon "True"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "generation")))) (EApp (EVar "Some") (EVar "pe"))) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "pe") (PCon "False"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "generation")))) (EMatch (EApp (EVar "binderSpan") (EVar "core")) (arm (PCon "Some" (PVar "run")) ((GBool (EBinOp "==" (EFieldAccess (EVar "run") "brCount") (EFieldAccess (EVar "pe") "peBinderCount")))) (EBlock (DoLet false false (PVar "moved") (EApp (EApp (EVar "relocated") (EBinOp "-" (EFieldAccess (EVar "run") "brFirst") (EFieldAccess (EVar "pe") "peBinderBase"))) (EVar "pe"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeElabCacheRef")) (EApp (EVar "Some") (ETuple (EVar "generation") (EVar "moved") (EVar "True"))))) (DoExpr (EApp (EVar "Some") (EVar "moved"))))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DTypeSig true "withShippedRows" (TyFun (TyApp (TyCon "Option") (TyCon "PreludeElab")) (TyFun (TyCon "EvTable") (TyFun (TyCon "BinderTypeTable") (TyTuple (TyCon "EvTable") (TyCon "BinderTypeTable"))))))

@@ -1,0 +1,11 @@
+-- A private interface and its impl.
+interface Sized a where
+  size : a -> Int
+
+export data Box = Box Int
+
+impl Sized Box where
+  size (Box n) = n
+
+export boxed : Int -> Box
+boxed n = Box n

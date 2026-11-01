@@ -27,6 +27,9 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-eager-default`](#rule-eager-default) | universal | perf | gated | fixable-unsafe | file |
 | [`rule-bind-chain-to-do`](#rule-bind-chain-to-do) | universal | complexity | gated | not-fixable | file |
 | [`rule-dead-code`](#rule-dead-code) | universal | suspicious | gated | not-fixable | file |
+| [`rule-unused-import`](#rule-unused-import) | universal | style | gated | fixable | file |
+| [`rule-unused-param`](#rule-unused-param) | universal | style | gated | fixable | file |
+| [`rule-unused-local`](#rule-unused-local) | universal | style | gated | not-fixable | file |
 | [`rule-concat-to-interp`](#rule-concat-to-interp) | universal | style | gated | fixable | file |
 | [`rule-self-shadow-extern`](#rule-self-shadow-extern) | universal | correctness | gated | not-fixable | file |
 | [`rule-prefer-assign-op`](#rule-prefer-assign-op) | universal | style | gated | fixable | file |
@@ -39,7 +42,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-regex-literal`](#rule-regex-literal) | universal | correctness | gated | not-fixable | file |
 | [`rule-test-bool-literal-equal`](#rule-test-bool-literal-equal) | internal | style | gated | fixable | file |
 | [`rule-test-equal-in-true`](#rule-test-equal-in-true) | internal | style | gated | fixable | file |
-| [`rule-test-prelude-shadow`](#rule-test-prelude-shadow) | internal | suspicious | gated | not-fixable | file |
+| [`rule-prelude-shadow`](#rule-prelude-shadow) | universal | suspicious | gated | not-fixable | file |
 
 ## rule-match-on-param
 
@@ -344,6 +347,48 @@ After:
   (binding removed)
 ```
 
+## rule-unused-import
+
+an imported name that nothing in the file uses
+
+A name listed in `import m.{…}` that no expression, signature, constraint, pattern, doctest, `test` or `prop` body of the file uses is dead weight and hides which imports matter. `public import` re-exports, `import m.*`, bare `import m` and `import m as A` list no names and are not checked, and a `T(..)` member is never reported, since a constructor use is not tied to `T`. The fix drops the name and its comma; when no name of the line is used it leaves a bare `import m`, which still brings the module's `impl`s into scope.
+
+```
+Before:
+  import list.{sort, nub}
+  main = sort [2, 1]
+After:
+  import list.{sort}
+  main = sort [2, 1]
+```
+
+## rule-unused-param
+
+a function, method or `prop` parameter that nothing in its clause uses
+
+A parameter that no use in its clause resolves to is dead weight, and a reader cannot tell it from one that matters. Renaming it `_name` says it is intentionally unused, and a name starting with `_` is not reported. Function, impl-method, interface-default, `prop`, `where` and top-level `let rec` clause parameters are checked; the parameters of a `let rec` written inside a block, and lambda, `let`, match-arm and `do`-bind binders, are not. The fix renames every place the binder is written (each alternative of an or-pattern names it). An unused as-binder `x@p` is not renamed: the fix drops `x@` and keeps the pattern. The rename is only suggested, not applied, when `_name` is already used in the declaration, and for a record pun, where renaming the binder would rename the field: the suggestion then reads `field = _name`.
+
+```
+Before:
+  area w h = w * 2
+After:
+  area w _h = w * 2
+```
+
+## rule-unused-local
+
+a `let` binder that nothing reads
+
+A `let` binder that no use resolves to is either dead work or a missed use. Delete the binding if the bound expression has no effect, or use the name if it was meant to be read. A name starting with `_` is not reported; the intended discard is `let _ =` in `do` code and a bare statement elsewhere. Only plain and `do` `let` binders are checked; parameter, lambda, match-arm and `<-` bind binders are not. The finding is only suggested, never fixed, because the bound expression may run an effect.
+
+```
+Before:
+  let total = sum xs
+  count xs
+After:
+  count xs
+```
+
 ## rule-concat-to-interp
 
 `++` chain mixing string literals and expressions. Prefer string interpolation `"…\{e}…"` (hlint 'use interpolation')
@@ -512,15 +557,15 @@ After:
   expectEqual a b
 ```
 
-## rule-test-prelude-shadow
+## rule-prelude-shadow
 
-a `*_test.mdk` file declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)
+a module declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)
 
-A `*_test.mdk` file that declares a top-level `isOk`, `isErr`, `isSome` or `isNone` shadows the prelude function of that name for the rest of the file. Suggest-only; this guards the repository test-helper convention.
+A module that declares a top-level `isOk`, `isErr`, `isSome` or `isNone` shadows the prelude function of that name for the rest of the file, while every other module keeps calling the prelude one. A module that declares the `Option` or `Result` type itself, as the prelude does, is not shadowing the names over that type. Suggest-only. Delete the local copy when it behaves like the prelude one; otherwise rename it to say what it tests.
 
 ```
 Before:
-  isOk r = ...   -- in foo_test.mdk
+  isSome o = o == 1
 After:
-  rename the helper
+  isOne o = o == 1
 ```

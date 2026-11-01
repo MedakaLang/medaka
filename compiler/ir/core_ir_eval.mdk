@@ -25,9 +25,8 @@
 -- values eval.mdk installs); `CMethod`/`CDict` arms consume the elaborated routes
 -- on the typed lowering path.
 
-import frontend.ast.{
-  Lit(..), Pat(..), Addr(..), Route(..), Decl, Loc(..), noBinderId
-}
+import frontend.visibility.{ExportView(..)}
+import frontend.ast.{Lit(..), Pat(..), Addr(..), Decl, Loc(..), noBinderId}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
@@ -62,7 +61,6 @@ import eval.eval.{
   EvalEnv(..),
   EnvFrame,
   indexedFrame,
-  frameCells,
   lookupEnv,
   extendEnv,
   pushFrame,
@@ -93,21 +91,19 @@ import eval.eval.{
   evalRecordUpdate,
   evalValueField,
   evalField,
-  routeTag,
   applyDicts,
   applyMethodDicts,
   coalesceImpls,
   collectCtors,
   installDispatchTables,
   implMethodNames,
-  methodCellsOf,
-  publicExternCells,
+  moduleExports,
+  importsMapFor,
+  withSubjectFull,
   runtimeCellsOf,
   importFrameOf,
   narrowToIface,
-  pubReexports,
   ModExports(..),
-  ctorsByTypeOf,
   evalVariantUpdate,
   buildCtorFieldOrders,
   ctorFieldOrdersRef,
@@ -351,7 +347,7 @@ cevalSwitch : EvalEnv (Value e) ->
   List CTBranch ->
   CTree ->
   <e> Value e
-cevalSwitch env root arms [] branches dft = cevalTree env root arms [] dft
+cevalSwitch env root arms [] _branches dft = cevalTree env root arms [] dft
 cevalSwitch env root arms (v :: rest) branches dft =
   cevalSwitchOn env root arms v rest branches dft
 
@@ -667,7 +663,7 @@ installMethodTables facts decls =
 -- its impls lower to `CImplEntry`s against the JOINT dispatch table built from
 -- ALL decls (an impl in one module for a prelude interface needs the prelude's
 -- dispatch positions).  The value-agnostic import-frame machinery (importFrameOf /
--- pubReexports — they thread only cells + DUse paths, never Values) is reused
+-- moduleExports — they thread only cells + DUse paths, never Values) is reused
 -- verbatim from eval.mdk.  Reads the program's `ProgramFacts` (dispositions and evidence) the way
 -- `evalModulesWith` does, so its dispatch is as typed as the facts it is handed.
 -- parameterized over the value type (v := Value e), like eval.mdk's ModInfo —
@@ -690,7 +686,8 @@ cevalModules facts preludeDecls0 modules0 = withFacts
     -- mechanism and the parity argument are written out once, on eval.mdk's
     -- `evalModulesWith`.  Must move with it: this driver seeds the SAME
     -- program-global `ctorToTypeRef`.
-    let (preludeDecls, modules) = mangleCtorCollisions preludeDecls0 modules0
+    let (preludeDecls, modules) =
+      mangleCtorCollisions facts.pfSibling preludeDecls0 modules0
     let moduleDecls = flatMap snd modules
     let allDecls = preludeDecls ++ moduleDecls
     let dispositions = facts.pfDispositions
@@ -735,6 +732,7 @@ cevalModules facts preludeDecls0 modules0 = withFacts
         runtimeFrame
         (coreImportExports privateCells globalCells preludeDecls)
         []
+        []
         modules
     let implEntries =
       flatMap (cImplEntryValues globalEnv) preludeImpls
@@ -761,10 +759,11 @@ cBuildModInfos : ProgramFacts ->
   EnvFrame (Value e) ->
   ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
+  List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
   List (CModInfo (Value e))
-cBuildModInfos _ _ _ _ _ _ _ _ [] = []
-cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports exportsMap ((mid, decls) :: rest) =
+cBuildModInfos _ _ _ _ _ _ _ _ _ [] = []
+cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports fulls exportsMap ((mid, decls) :: rest) =
   let cbinds = lowerGroupsWith facts decls
   let cimpls =
     lowerImplsWithFacts facts disp reqCounts arities facts.pfDispositions decls
@@ -779,7 +778,11 @@ cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports
   let modCtors = collectCtors decls
   let localCells =
     map (n => (n, Ref VUnit)) (map cBindName cbinds ++ map fst modCtors)
-  let imports = importFrameOf coreExports exportsMap decls
+  let imports =
+    importFrameOf
+      coreExports
+      (importsMapFor facts.pfSibling mid fulls exportsMap)
+      decls
   let menv = EvalEnv
     [
       indexedFrame localCells,
@@ -797,13 +800,16 @@ cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports
   -- the type→ctors index rides WITH the cells in one `ModExports` so an importing
   -- module's `import m.{T(..)}` binds m's own constructor cells instead of falling
   -- through to the bare-name global frame, which every module's ctors share.
-  let exports =
-    ModExports
-      (localCells
-        ++ publicExternCells (frameCells runtimeFrame) decls
-        ++ methodCellsOf (frameCells globalFrame) decls
-        ++ pubReexports coreExports exportsMap decls)
-      (ctorsByTypeOf decls)
+  let exportsUnder =
+    v =>
+      moduleExports
+        v
+        coreExports
+        exportsMap
+        globalFrame
+        runtimeFrame
+        localCells
+        decls
   CModInfo mid decls cbinds cimpls localCells menv
     :: cBuildModInfos
       facts
@@ -813,7 +819,8 @@ cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports
       globalFrame
       runtimeFrame
       coreExports
-      ((mid, exports) :: exportsMap)
+      (withSubjectFull facts.pfSibling mid (exportsUnder FullView) fulls)
+      ((mid, exportsUnder ExportedView) :: exportsMap)
       rest
 
 -- a module's impl methods / interface defaults close over ITS env but coalesce

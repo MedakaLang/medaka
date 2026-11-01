@@ -1,0 +1,227 @@
+-- lint rule rule-unused-param: a function, method or `prop` parameter that no use in its clause resolves to. Rename it `_name` to say it is unused.
+
+import driver.diagnostics.{Severity(..)}
+import frontend.ast.{
+  Decl(..),
+  Expr(..),
+  FunClause(..),
+  LetBind(..),
+  Loc(..),
+  Pat(..),
+  PropParam(..),
+  RecPatField(..),
+}
+import frontend.ast_walk.{BodyOwner(..), DeclBody(..), childExprs, declBodies}
+import frontend.parser.{
+  DeclPos,
+  Positions(..),
+  declPosEndLine,
+  declPosLine,
+  positionsDecls,
+}
+import string.{length as strLength, sliceClamped}
+import array.{get as arrayGet}
+import tools.lint_core.{
+  Applicability(..),
+  Category(..),
+  FileFacts(..),
+  Finding(..),
+  Fix(..),
+  FixEdit(..),
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  factLines,
+  factScopes,
+  mkRule,
+}
+import tools.lint_scope.{
+  Binder(..),
+  BinderKind(..),
+  NameSite(..),
+  SiteKind(..),
+  FileScopes,
+  binderOf,
+  bindersNamedIn,
+  ownerNameSites,
+  patNameSites,
+  unusedBinders,
+  usesNamedIn,
+}
+import tools.lint_shared.{ruleNameUnusedParam}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameUnusedParam,
+      summary =
+        "a function, method or `prop` parameter that nothing in its clause uses",
+      doc =
+        "A parameter that no use in its clause resolves to is dead weight, and a reader cannot tell it from one that matters. Renaming it `_name` says it is intentionally unused, and a name starting with `_` is not reported. Function, impl-method, interface-default, `prop`, `where` and top-level `let rec` clause parameters are checked; the parameters of a `let rec` written inside a block, and lambda, `let`, match-arm and `do`-bind binders, are not. The fix renames every place the binder is written (each alternative of an or-pattern names it). An unused as-binder `x@p` is not renamed: the fix drops `x@` and keeps the pattern. The rename is only suggested, not applied, when `_name` is already used in the declaration, and for a record pun, where renaming the binder would rename the field: the suggestion then reads `field = _name`.\n\nBefore:\n  area w h = w * 2\nAfter:\n  area w _h = w * 2",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [NeedsScopes],
+    }
+    ruleUnusedParam
+    None
+
+ruleUnusedParam : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleUnusedParam _ _ facts pos prog =
+  let fs = factScopes facts
+  let unused = filter (b => b.binderKind == BParam) (unusedBinders fs)
+  if isEmpty unused then
+    []
+  else
+    let sites = flatMap declNameSites prog
+    flatMap (paramFinding facts pos sites) unused
+
+-- The parameter sites of one declaration: those of each body's owner, then
+-- those of every `where` or `let rec` clause nested in a body.
+declNameSites : Decl -> List NameSite
+declNameSites d = flatMap bodyNameSites (declBodies d)
+
+bodyNameSites : DeclBody -> List NameSite
+bodyNameSites (DeclBody owner body) = ownerNameSites owner ++ exprNameSites body
+
+exprNameSites : Expr -> List NameSite
+exprNameSites e = groupNameSites e ++ flatMap exprNameSites (childExprs e)
+
+groupNameSites : Expr -> List NameSite
+groupNameSites (ELetGroup binds _) = flatMap bindNameSites binds
+groupNameSites _ = []
+
+bindNameSites : LetBind -> List NameSite
+bindNameSites (LetBind _ clauses _ _) = flatMap clauseNameSites clauses
+
+clauseNameSites : FunClause -> List NameSite
+clauseNameSites (FunClause ps _) = flatMap patNameSites ps
+
+-- One finding per unused parameter, at its binder token.
+paramFinding : FileFacts -> Positions -> List NameSite -> Binder -> List Finding
+paramFinding facts pos sites b =
+  let fs = factScopes facts
+  let mine = filter (binderIs fs b) sites
+  [
+    Finding {
+      rule = ruleNameUnusedParam,
+      message =
+        "parameter '\{b.binderName}' is never used. Rename it to '_\{b.binderName}' to mark it intentionally unused",
+      severity = SevWarning,
+      loc = Some b.binderSpan,
+      fix = paramFix facts (declLines pos b) b mine,
+    },
+  ]
+
+-- A site belongs to the binder when the scope model resolves its position to it.
+binderIs : FileScopes -> Binder -> NameSite -> Bool
+binderIs fs b (NameSite _ l _) = match binderOf fs l
+  Some c => c.binderId == b.binderId
+  None => False
+
+-- The first and last line of the top-level declaration that holds the binder.
+declLines : Positions -> Binder -> (Int, Int)
+declLines pos b =
+  let line = locLine b.binderSpan
+  optionOr
+    (1, maxLine)
+    (find
+      (r => fst r <= line && line <= snd r)
+      (map declPosRange (positionsDecls pos)))
+
+-- Past any line a source can have, so a binder no declaration holds is checked
+-- against the whole file.
+maxLine : Int
+maxLine = 1073741824
+
+declPosRange : DeclPos -> (Int, Int)
+declPosRange d = (declPosLine d, declPosEndLine d)
+
+locLine : Loc -> Int
+locLine (Loc _ l _ _ _) = l
+
+-- The fix of every site of the binder.  An unused as-binder that is only ever
+-- written as one drops its `x@`.  Otherwise the sites are renamed.  No fix when
+-- the walk did not place the binder's own token, or a site is not exactly its
+-- name's width: the edit would then land on the wrong text.  A suggestion
+-- instead of a fix when a pun is among the sites, or `_name` is already used in
+-- the declaration.
+paramFix : FileFacts -> (Int, Int) -> Binder -> List NameSite -> Option Fix
+paramFix facts range b mine =
+  let name = b.binderName
+  let hasPun = any (s => siteKind s == SitePun) mine
+  if not (any (s => siteLoc s == b.binderSpan) mine)
+    || not (all (exactName name) mine) then
+    None
+  else if all (s => siteKind s == SiteAs) mine then
+    dropAsFix (factLines facts) mine
+  else if hasPun || collides (factScopes facts) range name then
+    Some (renameFix Suggest name mine)
+  else
+    Some (renameFix Safe name mine)
+
+renameFix : Applicability -> String -> List NameSite -> Fix
+renameFix applicability name mine = Fix {
+  fixApplicability = applicability,
+  fixEdits = map (s => FixEdit (siteLoc s) (renamedText name s)) mine,
+  fixMessage = "rename the unused parameter",
+}
+
+renamedText : String -> NameSite -> String
+renamedText name (NameSite _ _ kind) =
+  if kind == SitePun then "\{name} = _\{name}" else "_\{name}"
+
+-- Deleting `x@` from each site.  No fix unless an `@` stands right after every
+-- name token, since the parser keeps only the name's span.
+dropAsFix : Array String -> List NameSite -> Option Fix
+dropAsFix lines mine =
+  if all (atFollows lines) mine then
+    Some Fix {
+      fixApplicability = Safe,
+      fixEdits = map dropAsEdit mine,
+      fixMessage = "drop the unused as-binder and keep its pattern",
+    }
+  else
+    None
+
+dropAsEdit : NameSite -> FixEdit
+dropAsEdit (NameSite _ (Loc f sl sc el ec) _) =
+  FixEdit (Loc f sl sc el (ec + 1)) ""
+
+atFollows : Array String -> NameSite -> Bool
+atFollows lines (NameSite _ (Loc _ _ _ el ec) _) = match arrayGet (el - 1) lines
+  Some text => sliceClamped ec (ec + 1) text == "@"
+  None => False
+
+-- `_name` already names a binder or a use on a line of the declaration, so the
+-- rename could clash with it or capture it.
+collides : FileScopes -> (Int, Int) -> String -> Bool
+collides fs (lo, hi) name =
+  let renamed = "_" ++ name
+  not (isEmpty (bindersNamedIn fs lo hi renamed))
+    || not (isEmpty (usesNamedIn fs lo hi renamed))
+
+-- The site spans its name token: one line, as many columns as the name has
+-- characters.
+exactName : String -> NameSite -> Bool
+exactName name (NameSite _ (Loc _ sl sc el ec) _) =
+  sl == el && ec - sc == strLength name
+
+siteLoc : NameSite -> Loc
+siteLoc (NameSite _ l _) = l
+
+siteKind : NameSite -> SiteKind
+siteKind (NameSite _ _ kind) = kind

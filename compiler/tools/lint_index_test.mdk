@@ -27,29 +27,11 @@ import driver.diagnostics.{Severity(..)}
 import support.util.{joinWith, listLen}
 import tools.printer.{ppTy}
 import tools.lint_index.{
-  IndexRow(..),
-  fileRows,
-  makeStagingDir,
-  stageAndRename,
-  stdlibShardDirOf,
-  RowKind(..),
-  Ns(..),
-  SigSlot(..),
-  ProjectIndex,
-  rowSig,
-  rowsOfDecls,
-  rowsDigest,
-  encodeRowShard,
-  decodeRowShard,
-  rowContentHash,
-  rowShardPath,
-  mkProjectIndex,
-  rowsNamed,
-  rowsIn,
-  stdlibRowsNamed,
-  projectRowsNamed,
-  stdlibRows,
-  projectRows,
+  IndexRow(..), fileRows, makeStagingDir, stageAndRename, stdlibShardDirOf,
+  RowKind(..), Ns(..), SigSlot(..), rowSig, rowsOfDecls, rowsDigest,
+  encodeRowShard, decodeRowShard, rowContentHash, rowShardPath, rowsNamed,
+  rowsIn, stdlibRowsNamed, stdlibRows, projectRows, ProjectIndex, Query(..),
+  Scope(..), mkProjectIndexWith, rowsAsked
 }
 import tools.lint.{
   StdlibIndex,
@@ -61,7 +43,6 @@ import tools.lint.{
   Fixability(..),
   Need(..),
   RuleMeta(..),
-  emptyStdlibIndex,
   lintParseSource,
   lintProgram,
   buildProjectIndexResult,
@@ -822,3 +803,12 @@ projectRootCase dir =
         (projectModules dir ["\{dir}/proj/sub/b.mdk", "\{dir}/loose/c.mdk"]),
     ),
   ]
+
+-- The index of the stdlib's rows and the project's rows.
+mkProjectIndex : List IndexRow -> List IndexRow -> ProjectIndex
+mkProjectIndex stdlibRows projectRows =
+  mkProjectIndexWith "" "" stdlibRows projectRows
+
+-- The project's candidates alone.
+projectRowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
+projectRowsNamed ix ns name = rowsAsked ix (QNamed ProjectScope ns name)

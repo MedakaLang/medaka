@@ -20,7 +20,6 @@
 
 import backend.extern_catalog.{
   Disposition(..),
-  ExternRow,
   catalogRows,
   rowLlvm,
   rowName,
@@ -35,7 +34,7 @@ import string.{unlines}
 public export data Cell = Real | Canned | Refused deriving (Eq)
 
 -- oracle, run, test, native, wasm
-public export data EngineRow = EngineRow String Cell Cell Cell Cell Cell
+export data EngineRow = EngineRow String Cell Cell Cell Cell Cell
 
 runtimePath : String
 runtimePath = "stdlib/runtime.mdk"

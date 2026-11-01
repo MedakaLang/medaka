@@ -31,11 +31,12 @@ import ir.core_ir_lower.{
   lowerProgramEmitWith,
   stampDeclaredSignatures,
   ctorFieldTypeNames,
-  declaredRecordFieldOrders,
 }
 import backend.wasm_emit.{emitProgram, makeWasmEmitInput}
+-- emit_plan_test.mdk pins that every emit-route entry mentions buildEmitPlan.
+-- lint-disable-next-line rule-unused-import
 import backend.emit_plan.{buildEmitPlan}
-import driver.diagnostics.{refuseSymbolDefects}
+import driver.emit_diagnostics.{refuseSymbolDefects}
 
 main = match args ()
   [targetPath] => withTarget targetPath

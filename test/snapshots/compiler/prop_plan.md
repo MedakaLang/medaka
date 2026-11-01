@@ -1,5 +1,5 @@
 # META
-source_lines=1691
+source_lines=1686
 stages=DESUGAR,MARK
 # SOURCE
 -- The engine-neutral property planning layer.
@@ -325,14 +325,14 @@ pairError detail = PlanError "" "" (TyVar "") PEUnsupportedType detail
 pairPlanDecl : String -> Decl -> Decl -> PlanEnv -> Result PlanError PlanEnv
 pairPlanDecl mid (DAttrib _ raw) (DAttrib _ runtime) env =
   pairPlanDecl mid raw runtime env
-pairPlanDecl mid (DData { dataName = rawName, dataCtors = rawCtors }) (DData { dataName = runtimeName, dataParams = ps, dataCtors = runtimeCtors, dataVis = vis, dataOrigin = o }) env
+pairPlanDecl _mid (DData { dataName = rawName, dataCtors = rawCtors }) (DData { dataName = runtimeName, dataParams = ps, dataCtors = runtimeCtors, dataVis = vis, dataOrigin = o }) env
   | rawName == runtimeName =
     let key = TypeKey runtimeName o
     map
       (ctors =>
         insertDef (PlanDef key (ownerOf o) ps (visibilityOf vis) ctors) env)
       (pairCtors rawCtors runtimeCtors)
-pairPlanDecl mid (DNewtype { newtypeName = rawName, newtypeCtor = rawCtor }) (DNewtype { newtypeName = runtimeName, newtypeParams = ps, newtypeCtor = runtimeCtor, newtypeFieldTy = fieldTy, newtypePub = pub, newtypeOrigin = o }) env
+pairPlanDecl _mid (DNewtype { newtypeName = rawName, newtypeCtor = rawCtor }) (DNewtype { newtypeName = runtimeName, newtypeParams = ps, newtypeCtor = runtimeCtor, newtypeFieldTy = fieldTy, newtypePub = pub, newtypeOrigin = o }) env
   | rawName == runtimeName =
     let key = TypeKey runtimeName o
     let def = PlanDef key (ownerOf o) ps (newtypeVisibility pub) [
@@ -643,7 +643,7 @@ matchingDef key ((d@(PlanDef actual _ _ _ _)) :: rest) =
   if sameTypeKey key actual then Some d else matchingDef key rest
 
 hasAmbiguousUnresolved : TypeKey -> List PlanDef -> Bool
-hasAmbiguousUnresolved (TypeKey n OriginUnresolved) defs = listLength defs > 1
+hasAmbiguousUnresolved (TypeKey _n OriginUnresolved) defs = listLength defs > 1
 hasAmbiguousUnresolved _ _ = False
 
 rebuildTy : TypeKey -> List Ty -> Ty
@@ -1402,11 +1402,6 @@ listBoundDecays env plan =
   let truth = finiteTruth env plan
   abstractFinite env truth plan && cyclesThroughListUnder env truth plan
 
-export
-planCyclesThroughList : PlanEnv -> GenPlan -> Bool
-planCyclesThroughList env plan =
-  cyclesThroughListUnder env (finiteTruth env plan) plan
-
 -- A carrier state is a node; an edge records whether the field path leading to
 -- the next state crosses a list. A cycle through a list is a closed walk using
 -- at least one list edge. Building the graph visits each state once and the
@@ -1807,8 +1802,8 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "pairError" ((PVar "detail")) (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "TyVar") (ELit (LString "")))) (EVar "PEUnsupportedType")) (EVar "detail")))
 (DTypeSig false "pairPlanDecl" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyFun (TyCon "Decl") (TyFun (TyCon "PlanEnv") (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyCon "PlanEnv")))))))
 (DFunDef false "pairPlanDecl" ((PVar "mid") (PCon "DAttrib" PWild (PVar "raw")) (PCon "DAttrib" PWild (PVar "runtime")) (PVar "env")) (EApp (EApp (EApp (EApp (EVar "pairPlanDecl") (EVar "mid")) (EVar "raw")) (EVar "runtime")) (EVar "env")))
-(DFunDef false "pairPlanDecl" ((PVar "mid") (PRec "DData" ((rf "dataName" (PVar "rawName")) (rf "dataCtors" (PVar "rawCtors"))) false) (PRec "DData" ((rf "dataName" (PVar "runtimeName")) (rf "dataParams" (PVar "ps")) (rf "dataCtors" (PVar "runtimeCtors")) (rf "dataVis" (PVar "vis")) (rf "dataOrigin" (PVar "o"))) false) (PVar "env")) (EIf (EBinOp "==" (EVar "rawName") (EVar "runtimeName")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "TypeKey") (EVar "runtimeName")) (EVar "o"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "ctors")) (EApp (EApp (EVar "insertDef") (EApp (EApp (EApp (EApp (EApp (EVar "PlanDef") (EVar "key")) (EApp (EVar "ownerOf") (EVar "o"))) (EVar "ps")) (EApp (EVar "visibilityOf") (EVar "vis"))) (EVar "ctors"))) (EVar "env")))) (EApp (EApp (EVar "pairCtors") (EVar "rawCtors")) (EVar "runtimeCtors"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "pairPlanDecl" ((PVar "mid") (PRec "DNewtype" ((rf "newtypeName" (PVar "rawName")) (rf "newtypeCtor" (PVar "rawCtor"))) false) (PRec "DNewtype" ((rf "newtypeName" (PVar "runtimeName")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeCtor" (PVar "runtimeCtor")) (rf "newtypeFieldTy" (PVar "fieldTy")) (rf "newtypePub" (PVar "pub")) (rf "newtypeOrigin" (PVar "o"))) false) (PVar "env")) (EIf (EBinOp "==" (EVar "rawName") (EVar "runtimeName")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "TypeKey") (EVar "runtimeName")) (EVar "o"))) (DoLet false false (PVar "def") (EApp (EApp (EApp (EApp (EApp (EVar "PlanDef") (EVar "key")) (EApp (EVar "ownerOf") (EVar "o"))) (EVar "ps")) (EApp (EVar "newtypeVisibility") (EVar "pub"))) (EListLit (EApp (EApp (EApp (EVar "PlanCtor") (EVar "rawCtor")) (EVar "runtimeCtor")) (EListLit (EApp (EApp (EVar "PlanField") (EVar "None")) (EVar "fieldTy"))))))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EVar "insertDef") (EVar "def")) (EVar "env"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "pairPlanDecl" ((PVar "_mid") (PRec "DData" ((rf "dataName" (PVar "rawName")) (rf "dataCtors" (PVar "rawCtors"))) false) (PRec "DData" ((rf "dataName" (PVar "runtimeName")) (rf "dataParams" (PVar "ps")) (rf "dataCtors" (PVar "runtimeCtors")) (rf "dataVis" (PVar "vis")) (rf "dataOrigin" (PVar "o"))) false) (PVar "env")) (EIf (EBinOp "==" (EVar "rawName") (EVar "runtimeName")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "TypeKey") (EVar "runtimeName")) (EVar "o"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "ctors")) (EApp (EApp (EVar "insertDef") (EApp (EApp (EApp (EApp (EApp (EVar "PlanDef") (EVar "key")) (EApp (EVar "ownerOf") (EVar "o"))) (EVar "ps")) (EApp (EVar "visibilityOf") (EVar "vis"))) (EVar "ctors"))) (EVar "env")))) (EApp (EApp (EVar "pairCtors") (EVar "rawCtors")) (EVar "runtimeCtors"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "pairPlanDecl" ((PVar "_mid") (PRec "DNewtype" ((rf "newtypeName" (PVar "rawName")) (rf "newtypeCtor" (PVar "rawCtor"))) false) (PRec "DNewtype" ((rf "newtypeName" (PVar "runtimeName")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeCtor" (PVar "runtimeCtor")) (rf "newtypeFieldTy" (PVar "fieldTy")) (rf "newtypePub" (PVar "pub")) (rf "newtypeOrigin" (PVar "o"))) false) (PVar "env")) (EIf (EBinOp "==" (EVar "rawName") (EVar "runtimeName")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "TypeKey") (EVar "runtimeName")) (EVar "o"))) (DoLet false false (PVar "def") (EApp (EApp (EApp (EApp (EApp (EVar "PlanDef") (EVar "key")) (EApp (EVar "ownerOf") (EVar "o"))) (EVar "ps")) (EApp (EVar "newtypeVisibility") (EVar "pub"))) (EListLit (EApp (EApp (EApp (EVar "PlanCtor") (EVar "rawCtor")) (EVar "runtimeCtor")) (EListLit (EApp (EApp (EVar "PlanField") (EVar "None")) (EVar "fieldTy"))))))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EVar "insertDef") (EVar "def")) (EVar "env"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "pairPlanDecl" (PWild PWild PWild PWild) (EApp (EVar "Err") (EApp (EVar "pairError") (ELit (LString "raw and runtime nominal declarations disagree")))))
 (DTypeSig false "pairCtors" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyApp (TyCon "List") (TyCon "PlanCtor"))))))
 (DFunDef false "pairCtors" ((PList) (PList)) (EApp (EVar "Ok") (EListLit)))
@@ -1921,7 +1916,7 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "matchingDef" (PWild (PList)) (EVar "None"))
 (DFunDef false "matchingDef" ((PVar "key") (PCons (PAs "d" (PCon "PlanDef" (PVar "actual") PWild PWild PWild PWild)) (PVar "rest"))) (EIf (EApp (EApp (EVar "sameTypeKey") (EVar "key")) (EVar "actual")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "matchingDef") (EVar "key")) (EVar "rest"))))
 (DTypeSig false "hasAmbiguousUnresolved" (TyFun (TyCon "TypeKey") (TyFun (TyApp (TyCon "List") (TyCon "PlanDef")) (TyCon "Bool"))))
-(DFunDef false "hasAmbiguousUnresolved" ((PCon "TypeKey" (PVar "n") (PCon "OriginUnresolved")) (PVar "defs")) (EBinOp ">" (EApp (EVar "listLength") (EVar "defs")) (ELit (LInt 1))))
+(DFunDef false "hasAmbiguousUnresolved" ((PCon "TypeKey" (PVar "_n") (PCon "OriginUnresolved")) (PVar "defs")) (EBinOp ">" (EApp (EVar "listLength") (EVar "defs")) (ELit (LInt 1))))
 (DFunDef false "hasAmbiguousUnresolved" (PWild PWild) (EVar "False"))
 (DTypeSig false "rebuildTy" (TyFun (TyCon "TypeKey") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Ty"))))
 (DFunDef false "rebuildTy" ((PCon "TypeKey" (PVar "n") (PVar "o")) (PVar "args")) (EApp (EApp (EVar "foldTy") (ERecordCreate "TyCon" ((fa "tyConName" (EVar "n")) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "o"))))) (EVar "args")))
@@ -2202,8 +2197,6 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "listLengthBound" ((PVar "env") (PVar "depth") (PVar "plan")) (EBlock (DoLet false false (PVar "truth") (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "abstractFinite") (EVar "env")) (EVar "truth")) (EVar "plan"))) (ELit (LInt 0)) (EIf (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EVar "truth")) (EVar "plan")) (EApp (EApp (EVar "max") (ELit (LInt 0))) (EBinOp "-" (EVar "listLenMax") (EVar "depth"))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EVar "listLenMax")))))))
 (DTypeSig true "listBoundDecays" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
 (DFunDef false "listBoundDecays" ((PVar "env") (PVar "plan")) (EBlock (DoLet false false (PVar "truth") (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (DoExpr (EBinOp "&&" (EApp (EApp (EApp (EVar "abstractFinite") (EVar "env")) (EVar "truth")) (EVar "plan")) (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EVar "truth")) (EVar "plan"))))))
-(DTypeSig true "planCyclesThroughList" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
-(DFunDef false "planCyclesThroughList" ((PVar "env") (PVar "plan")) (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (EVar "plan")))
 (DTypeSig false "cyclesThroughListUnder" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GenPlan") (TyCon "Bool")))))
 (DFunDef false "cyclesThroughListUnder" ((PVar "env") (PVar "truth") (PVar "root")) (EBlock (DoLet false false (PVar "graph") (EApp (EApp (EApp (EApp (EVar "buildListGraph") (EVar "env")) (EVar "truth")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "root")) (EVar "False")) (EListLit))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "anyStateReturns") (EVar "graph")) (EApp (EVar "omKeys") (EVar "graph"))))))
 (DTypeSig false "nominalLeaves" (TyFun (TyCon "GenPlan") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))) (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool")))))))
@@ -2438,8 +2431,8 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "pairError" ((PVar "detail")) (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "TyVar") (ELit (LString "")))) (EVar "PEUnsupportedType")) (EVar "detail")))
 (DTypeSig false "pairPlanDecl" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyFun (TyCon "Decl") (TyFun (TyCon "PlanEnv") (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyCon "PlanEnv")))))))
 (DFunDef false "pairPlanDecl" ((PVar "mid") (PCon "DAttrib" PWild (PVar "raw")) (PCon "DAttrib" PWild (PVar "runtime")) (PVar "env")) (EApp (EApp (EApp (EApp (EVar "pairPlanDecl") (EVar "mid")) (EVar "raw")) (EVar "runtime")) (EVar "env")))
-(DFunDef false "pairPlanDecl" ((PVar "mid") (PRec "DData" ((rf "dataName" (PVar "rawName")) (rf "dataCtors" (PVar "rawCtors"))) false) (PRec "DData" ((rf "dataName" (PVar "runtimeName")) (rf "dataParams" (PVar "ps")) (rf "dataCtors" (PVar "runtimeCtors")) (rf "dataVis" (PVar "vis")) (rf "dataOrigin" (PVar "o"))) false) (PVar "env")) (EIf (EBinOp "==" (EVar "rawName") (EVar "runtimeName")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "TypeKey") (EVar "runtimeName")) (EVar "o"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "ctors")) (EApp (EApp (EVar "insertDef") (EApp (EApp (EApp (EApp (EApp (EVar "PlanDef") (EVar "key")) (EApp (EVar "ownerOf") (EVar "o"))) (EVar "ps")) (EApp (EVar "visibilityOf") (EVar "vis"))) (EVar "ctors"))) (EVar "env")))) (EApp (EApp (EVar "pairCtors") (EVar "rawCtors")) (EVar "runtimeCtors"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "pairPlanDecl" ((PVar "mid") (PRec "DNewtype" ((rf "newtypeName" (PVar "rawName")) (rf "newtypeCtor" (PVar "rawCtor"))) false) (PRec "DNewtype" ((rf "newtypeName" (PVar "runtimeName")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeCtor" (PVar "runtimeCtor")) (rf "newtypeFieldTy" (PVar "fieldTy")) (rf "newtypePub" (PVar "pub")) (rf "newtypeOrigin" (PVar "o"))) false) (PVar "env")) (EIf (EBinOp "==" (EVar "rawName") (EVar "runtimeName")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "TypeKey") (EVar "runtimeName")) (EVar "o"))) (DoLet false false (PVar "def") (EApp (EApp (EApp (EApp (EApp (EVar "PlanDef") (EVar "key")) (EApp (EVar "ownerOf") (EVar "o"))) (EVar "ps")) (EApp (EVar "newtypeVisibility") (EVar "pub"))) (EListLit (EApp (EApp (EApp (EVar "PlanCtor") (EVar "rawCtor")) (EVar "runtimeCtor")) (EListLit (EApp (EApp (EVar "PlanField") (EVar "None")) (EVar "fieldTy"))))))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EVar "insertDef") (EVar "def")) (EVar "env"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "pairPlanDecl" ((PVar "_mid") (PRec "DData" ((rf "dataName" (PVar "rawName")) (rf "dataCtors" (PVar "rawCtors"))) false) (PRec "DData" ((rf "dataName" (PVar "runtimeName")) (rf "dataParams" (PVar "ps")) (rf "dataCtors" (PVar "runtimeCtors")) (rf "dataVis" (PVar "vis")) (rf "dataOrigin" (PVar "o"))) false) (PVar "env")) (EIf (EBinOp "==" (EVar "rawName") (EVar "runtimeName")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "TypeKey") (EVar "runtimeName")) (EVar "o"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "ctors")) (EApp (EApp (EVar "insertDef") (EApp (EApp (EApp (EApp (EApp (EVar "PlanDef") (EVar "key")) (EApp (EVar "ownerOf") (EVar "o"))) (EVar "ps")) (EApp (EVar "visibilityOf") (EVar "vis"))) (EVar "ctors"))) (EVar "env")))) (EApp (EApp (EVar "pairCtors") (EVar "rawCtors")) (EVar "runtimeCtors"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "pairPlanDecl" ((PVar "_mid") (PRec "DNewtype" ((rf "newtypeName" (PVar "rawName")) (rf "newtypeCtor" (PVar "rawCtor"))) false) (PRec "DNewtype" ((rf "newtypeName" (PVar "runtimeName")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeCtor" (PVar "runtimeCtor")) (rf "newtypeFieldTy" (PVar "fieldTy")) (rf "newtypePub" (PVar "pub")) (rf "newtypeOrigin" (PVar "o"))) false) (PVar "env")) (EIf (EBinOp "==" (EVar "rawName") (EVar "runtimeName")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "TypeKey") (EVar "runtimeName")) (EVar "o"))) (DoLet false false (PVar "def") (EApp (EApp (EApp (EApp (EApp (EVar "PlanDef") (EVar "key")) (EApp (EVar "ownerOf") (EVar "o"))) (EVar "ps")) (EApp (EVar "newtypeVisibility") (EVar "pub"))) (EListLit (EApp (EApp (EApp (EVar "PlanCtor") (EVar "rawCtor")) (EVar "runtimeCtor")) (EListLit (EApp (EApp (EVar "PlanField") (EVar "None")) (EVar "fieldTy"))))))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EVar "insertDef") (EVar "def")) (EVar "env"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "pairPlanDecl" (PWild PWild PWild PWild) (EApp (EVar "Err") (EApp (EVar "pairError") (ELit (LString "raw and runtime nominal declarations disagree")))))
 (DTypeSig false "pairCtors" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyApp (TyCon "List") (TyCon "PlanCtor"))))))
 (DFunDef false "pairCtors" ((PList) (PList)) (EApp (EVar "Ok") (EListLit)))
@@ -2552,7 +2545,7 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "matchingDef" (PWild (PList)) (EVar "None"))
 (DFunDef false "matchingDef" ((PVar "key") (PCons (PAs "d" (PCon "PlanDef" (PVar "actual") PWild PWild PWild PWild)) (PVar "rest"))) (EIf (EApp (EApp (EVar "sameTypeKey") (EVar "key")) (EVar "actual")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "matchingDef") (EVar "key")) (EVar "rest"))))
 (DTypeSig false "hasAmbiguousUnresolved" (TyFun (TyCon "TypeKey") (TyFun (TyApp (TyCon "List") (TyCon "PlanDef")) (TyCon "Bool"))))
-(DFunDef false "hasAmbiguousUnresolved" ((PCon "TypeKey" (PVar "n") (PCon "OriginUnresolved")) (PVar "defs")) (EBinOp ">" (EApp (EVar "listLength") (EVar "defs")) (ELit (LInt 1))))
+(DFunDef false "hasAmbiguousUnresolved" ((PCon "TypeKey" (PVar "_n") (PCon "OriginUnresolved")) (PVar "defs")) (EBinOp ">" (EApp (EVar "listLength") (EVar "defs")) (ELit (LInt 1))))
 (DFunDef false "hasAmbiguousUnresolved" (PWild PWild) (EVar "False"))
 (DTypeSig false "rebuildTy" (TyFun (TyCon "TypeKey") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Ty"))))
 (DFunDef false "rebuildTy" ((PCon "TypeKey" (PVar "n") (PVar "o")) (PVar "args")) (EApp (EApp (EVar "foldTy") (ERecordCreate "TyCon" ((fa "tyConName" (EVar "n")) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "o"))))) (EVar "args")))
@@ -2833,8 +2826,6 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "listLengthBound" ((PVar "env") (PVar "depth") (PVar "plan")) (EBlock (DoLet false false (PVar "truth") (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "abstractFinite") (EVar "env")) (EVar "truth")) (EVar "plan"))) (ELit (LInt 0)) (EIf (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EVar "truth")) (EVar "plan")) (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EBinOp "-" (EVar "listLenMax") (EVar "depth"))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EVar "listLenMax")))))))
 (DTypeSig true "listBoundDecays" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
 (DFunDef false "listBoundDecays" ((PVar "env") (PVar "plan")) (EBlock (DoLet false false (PVar "truth") (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (DoExpr (EBinOp "&&" (EApp (EApp (EApp (EVar "abstractFinite") (EVar "env")) (EVar "truth")) (EVar "plan")) (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EVar "truth")) (EVar "plan"))))))
-(DTypeSig true "planCyclesThroughList" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
-(DFunDef false "planCyclesThroughList" ((PVar "env") (PVar "plan")) (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (EVar "plan")))
 (DTypeSig false "cyclesThroughListUnder" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GenPlan") (TyCon "Bool")))))
 (DFunDef false "cyclesThroughListUnder" ((PVar "env") (PVar "truth") (PVar "root")) (EBlock (DoLet false false (PVar "graph") (EApp (EApp (EApp (EApp (EVar "buildListGraph") (EVar "env")) (EVar "truth")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "root")) (EVar "False")) (EListLit))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "anyStateReturns") (EVar "graph")) (EApp (EVar "omKeys") (EVar "graph"))))))
 (DTypeSig false "nominalLeaves" (TyFun (TyCon "GenPlan") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))) (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool")))))))

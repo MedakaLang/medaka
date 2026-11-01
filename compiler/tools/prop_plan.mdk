@@ -321,14 +321,14 @@ pairError detail = PlanError "" "" (TyVar "") PEUnsupportedType detail
 pairPlanDecl : String -> Decl -> Decl -> PlanEnv -> Result PlanError PlanEnv
 pairPlanDecl mid (DAttrib _ raw) (DAttrib _ runtime) env =
   pairPlanDecl mid raw runtime env
-pairPlanDecl mid (DData { dataName = rawName, dataCtors = rawCtors }) (DData { dataName = runtimeName, dataParams = ps, dataCtors = runtimeCtors, dataVis = vis, dataOrigin = o }) env
+pairPlanDecl _mid (DData { dataName = rawName, dataCtors = rawCtors }) (DData { dataName = runtimeName, dataParams = ps, dataCtors = runtimeCtors, dataVis = vis, dataOrigin = o }) env
   | rawName == runtimeName =
     let key = TypeKey runtimeName o
     map
       (ctors =>
         insertDef (PlanDef key (ownerOf o) ps (visibilityOf vis) ctors) env)
       (pairCtors rawCtors runtimeCtors)
-pairPlanDecl mid (DNewtype { newtypeName = rawName, newtypeCtor = rawCtor }) (DNewtype { newtypeName = runtimeName, newtypeParams = ps, newtypeCtor = runtimeCtor, newtypeFieldTy = fieldTy, newtypePub = pub, newtypeOrigin = o }) env
+pairPlanDecl _mid (DNewtype { newtypeName = rawName, newtypeCtor = rawCtor }) (DNewtype { newtypeName = runtimeName, newtypeParams = ps, newtypeCtor = runtimeCtor, newtypeFieldTy = fieldTy, newtypePub = pub, newtypeOrigin = o }) env
   | rawName == runtimeName =
     let key = TypeKey runtimeName o
     let def = PlanDef key (ownerOf o) ps (newtypeVisibility pub) [
@@ -639,7 +639,7 @@ matchingDef key ((d@(PlanDef actual _ _ _ _)) :: rest) =
   if sameTypeKey key actual then Some d else matchingDef key rest
 
 hasAmbiguousUnresolved : TypeKey -> List PlanDef -> Bool
-hasAmbiguousUnresolved (TypeKey n OriginUnresolved) defs = listLength defs > 1
+hasAmbiguousUnresolved (TypeKey _n OriginUnresolved) defs = listLength defs > 1
 hasAmbiguousUnresolved _ _ = False
 
 rebuildTy : TypeKey -> List Ty -> Ty
@@ -1397,11 +1397,6 @@ listBoundDecays : PlanEnv -> GenPlan -> Bool
 listBoundDecays env plan =
   let truth = finiteTruth env plan
   abstractFinite env truth plan && cyclesThroughListUnder env truth plan
-
-export
-planCyclesThroughList : PlanEnv -> GenPlan -> Bool
-planCyclesThroughList env plan =
-  cyclesThroughListUnder env (finiteTruth env plan) plan
 
 -- A carrier state is a node; an edge records whether the field path leading to
 -- the next state crosses a list. A cycle through a list is a closed walk using

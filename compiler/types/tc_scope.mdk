@@ -45,7 +45,6 @@ import types.tc_env.{
   declTopFnNames,
   extendMethodRow,
   graphAmbigValues,
-  graphPubDefiners,
   ieImplExistsForHeadOf,
   ifaceMethodNames,
   importedBindings,
@@ -98,7 +97,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   joinDot,
   joinWith,
   listLen,
@@ -124,7 +122,6 @@ export
 ifaceSortKey : IfaceRef -> String
 ifaceSortKey ir = "\{ifaceIdentity ir.irOrigin ir.irName}|\{ir.irName}"
 
-export
 sortIfaceRefs : List IfaceRef -> List IfaceRef
 sortIfaceRefs xs = sortIfaceRefsGo xs []
 
@@ -374,7 +371,7 @@ methodUndecided : GraphCtx ->
 methodUndecided gctx prog n cs [] = match methodPreludeRow n cs
   Some r => MsOne r
   None => methodAliasedScope gctx prog n cs
-methodUndecided gctx _ _ _ admitted =
+methodUndecided _gctx _ _ _ admitted =
   MsMany (sortIfaceRefs (map methodRowIface admitted))
 
 -- The last rung: a declaration reached only through a module alias.  The alias binds
@@ -691,7 +688,7 @@ moduleAliasKeys : GraphCtx ->
   List (String, String, String, Ident, Loc)
 moduleAliasKeys gctx (path@(UseAlias _ a)) loc =
   aliasMethodKeysFor gctx a (useModId path) loc
-moduleAliasKeys gctx _ _ = []
+moduleAliasKeys _gctx _ _ = []
 
 memberAliasKeys : GraphCtx ->
   UsePath ->
@@ -699,7 +696,7 @@ memberAliasKeys : GraphCtx ->
   List (String, String, String, Ident, Loc)
 memberAliasKeys gctx (path@(UseGroup _ ms)) loc =
   flatMap (memberAliasMethodKeys gctx (useModId path) loc) ms
-memberAliasKeys gctx _ _ = []
+memberAliasKeys _gctx _ _ = []
 
 -- `import m.{mth as loc}`: the local `loc` is a spelling of `m`'s method `mth`, keyed
 -- under the local name.  It binds `loc` and nothing else, so a bare `mth` in the same
@@ -762,7 +759,7 @@ aliasMethodKeyApply : ModuleCtx ->
   List String ->
   OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) ->
   OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
-aliasMethodKeyApply mctx _ [] tab = tab
+aliasMethodKeyApply _mctx _ [] tab = tab
 aliasMethodKeyApply mctx g (k :: rest) tab =
   let hits = optionOr [] (omLookup k g)
   let tab2 = match aliasRowIdents hits []
@@ -782,7 +779,7 @@ aliasMethodKeyEntry : ModuleCtx ->
   List (String, String, String, Ident, Loc) ->
   OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) ->
   OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
-aliasMethodKeyEntry mctx _ [] tab = tab
+aliasMethodKeyEntry _mctx _ [] tab = tab
 aliasMethodKeyEntry mctx k ((_, mname, _, ident, _) :: _) tab =
   match methodRowById ident (methodVisibleHere mctx mname)
     None => tab
@@ -883,7 +880,7 @@ anyUsePathBinds : GraphCtx ->
   String ->
   (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) ->
   Bool
-anyUsePathBinds gctx [] _ _ _ = False
+anyUsePathBinds _gctx [] _ _ _ = False
 anyUsePathBinds gctx ((DAttrib _ d) :: rest) wide n c =
   anyUsePathBinds gctx [d] wide n c || anyUsePathBinds gctx rest wide n c
 anyUsePathBinds gctx ((DUse _ path _) :: rest) wide n c =
@@ -981,7 +978,7 @@ depExportsMethodIdent gctx dep n ident =
 -- declaration mints no identity and reaches the floor alone (`spInsert`).
 export
 insertCtorPop : TcEnv -> List Decl -> SpellingPop Scheme -> SpellingPop Scheme
-insertCtorPop env [] pop = pop
+insertCtorPop _env [] pop = pop
 insertCtorPop env ((DAttrib _ d) :: rest) pop =
   insertCtorPop env rest (insertCtorPop env [d] pop)
 insertCtorPop env ((DData { dataName, dataCtors, dataOrigin, ... }) :: rest) pop =
@@ -1002,7 +999,7 @@ insertCtorVariants : TcEnv ->
   List Variant ->
   SpellingPop Scheme ->
   SpellingPop Scheme
-insertCtorVariants env _ _ [] pop = pop
+insertCtorVariants _env _ _ [] pop = pop
 insertCtorVariants env tyName o ((Variant cn _) :: rest) pop =
   insertCtorVariants env tyName o rest (insertCtorRow env tyName o cn pop)
 
@@ -1117,7 +1114,7 @@ ctorCandImported gctx prog n (ident, owner, _) =
   anyUsePathBindsCtor gctx prog n owner ident
 
 anyUsePathBindsCtor : GraphCtx -> List Decl -> String -> String -> Ident -> Bool
-anyUsePathBindsCtor gctx [] _ _ _ = False
+anyUsePathBindsCtor _gctx [] _ _ _ = False
 anyUsePathBindsCtor gctx ((DAttrib _ d) :: rest) n owner ident =
   anyUsePathBindsCtor gctx [d] n owner ident
     || anyUsePathBindsCtor gctx rest n owner ident
@@ -1229,7 +1226,7 @@ insertRecordPop : ModuleCtx ->
   List Decl ->
   SpellingPop RecordInfo ->
   SpellingPop RecordInfo
-insertRecordPop mctx [] pop = pop
+insertRecordPop _mctx [] pop = pop
 insertRecordPop mctx ((DAttrib _ d) :: rest) pop =
   insertRecordPop mctx rest (insertRecordPop mctx [d] pop)
 insertRecordPop mctx ((DData { dataName, dataCtors, dataOrigin, ... }) :: rest) pop =
@@ -1245,7 +1242,7 @@ insertRecordVariants : ModuleCtx ->
   List Variant ->
   SpellingPop RecordInfo ->
   SpellingPop RecordInfo
-insertRecordVariants mctx _ _ [] pop = pop
+insertRecordVariants _mctx _ _ [] pop = pop
 insertRecordVariants mctx tyName o ((Variant cn (ConNamed _ _)) :: rest) pop =
   insertRecordVariants mctx tyName o rest (insertRecordRow mctx tyName o cn pop)
 insertRecordVariants mctx tyName o (_ :: rest) pop =
@@ -1325,7 +1322,7 @@ overrideScopedRecords : ModuleCtx ->
   OrdMap (List (Ident, String, RecordInfo)) ->
   List String ->
   Unit
-overrideScopedRecords mctx _ _ [] = ()
+overrideScopedRecords _mctx _ _ [] = ()
 overrideScopedRecords mctx prog cands (n :: rest) =
   match omLookup n cands
     None => ()
@@ -1405,7 +1402,7 @@ pickSchemesByDecl : ModuleCtx ->
   Registry MethodSchemeRow ->
   OrdMap Scheme ->
   List (String, EnvBinding)
-pickSchemesByDecl mctx [] _ _ _ = []
+pickSchemesByDecl _mctx [] _ _ _ = []
 pickSchemesByDecl mctx (n :: ns) table byId sources =
   let rest = pickSchemesByDecl mctx ns table byId sources
   match admittedRowFor mctx n byId
@@ -1527,21 +1524,23 @@ memberSchemeOblEntry mid qual m =
 -- B-2.2-f (#1113): the payload is `a`, not `List a`.  The declared-prefix sidecar's
 -- qual table carries a per-entry SCALAR (`CDeclaredPrefix`), which does not fit a
 -- list-shaped payload; every existing caller instantiates `a := List X` unchanged.
+-- [defs] answers the importing module's view of a dependency's export table
+-- (`tc_decls.importerDefiners`).
 export
-aliasConstraintEntries : GraphCtx ->
+aliasConstraintEntries : (String -> List (String, (String, String))) ->
   List Decl ->
   List ((String, String), a) ->
   List (String, a)
-aliasConstraintEntries gctx [] _ = []
-aliasConstraintEntries gctx ((DAttrib _ d) :: rest) qual =
-  aliasConstraintEntries gctx [d] qual ++ aliasConstraintEntries gctx rest qual
-aliasConstraintEntries gctx ((DUse _ path _) :: rest) qual =
-  aliasEntriesFor gctx (importTableMid path) path qual
-    ++ aliasConstraintEntries gctx rest qual
-aliasConstraintEntries gctx (_ :: rest) qual =
-  aliasConstraintEntries gctx rest qual
+aliasConstraintEntries _defs [] _ = []
+aliasConstraintEntries defs ((DAttrib _ d) :: rest) qual =
+  aliasConstraintEntries defs [d] qual ++ aliasConstraintEntries defs rest qual
+aliasConstraintEntries defs ((DUse _ path _) :: rest) qual =
+  aliasEntriesFor defs (importTableMid path) path qual
+    ++ aliasConstraintEntries defs rest qual
+aliasConstraintEntries defs (_ :: rest) qual =
+  aliasConstraintEntries defs rest qual
 
-aliasEntriesFor : GraphCtx ->
+aliasEntriesFor : (String -> List (String, (String, String))) ->
   String ->
   UsePath ->
   List ((String, String), a) ->
@@ -1561,13 +1560,13 @@ aliasEntriesFor : GraphCtx ->
 -- cannot enumerate it; it also re-exports nothing, so the definer key on its own rows is
 -- already final and the direct `defMid == mid` match `schemeOblEntriesFor` uses is exact
 -- here for the same reason it is inexact for a re-exporting module.
-aliasEntriesFor gctx mid (UseAlias _ a) qual
+aliasEntriesFor defs mid (UseAlias _ a) qual
   | mid == "" = flatMap (moduleAliasEntry mid a) qual
-  | otherwise = flatMap (graphAliasEntry a qual) (graphPubDefiners gctx mid)
+  | otherwise = flatMap (graphAliasEntry a qual) (defs mid)
 -- `import m.{x as y}` → `y` carries `x`'s dict arity.
-aliasEntriesFor gctx mid (UseGroup _ ms) qual =
+aliasEntriesFor _defs mid (UseGroup _ ms) qual =
   flatMap (memberAliasEntry mid qual) ms
-aliasEntriesFor gctx _ _ _ = []
+aliasEntriesFor _defs _ _ _ = []
 
 -- IMPORT ALIASING: the LOCAL names, across every module, under which a CONSTRAINED
 -- function is reachable through an alias.  These must join dictNames or the aliased
@@ -1580,36 +1579,40 @@ aliasEntriesFor gctx _ _ _ = []
 -- [bare] is a SET below this line: the walk asks `is this name constrained?` once per
 -- name a dependency defines and once per name it re-exports, so a `contains` over the
 -- graph's whole dict-name list was O(names x dictNames) per alias import.
+-- [defsFor] answers an importing module's view of a dependency's export table
+-- (`tc_decls.importerDefiners`), the importer's id first.
 export
-aliasDictNames : GraphCtx ->
+aliasDictNames : (String -> String -> List (String, (String, String))) ->
   List String ->
   List (String, List Decl) ->
   List (String, List Decl) ->
   List String
-aliasDictNames gctx bare unitDecls modules =
+aliasDictNames defsFor bare unitDecls modules =
   let bareSet = namesToSet bare omEmpty
-  flatMap (u => aliasDictNamesOfUnit gctx bareSet unitDecls (snd u)) modules
+  flatMap
+    (u => aliasDictNamesOfUnit (defsFor (fst u)) bareSet unitDecls (snd u))
+    modules
 
-aliasDictNamesOfUnit : GraphCtx ->
+aliasDictNamesOfUnit : (String -> List (String, (String, String))) ->
   OrdMap Unit ->
   List (String, List Decl) ->
   List Decl ->
   List String
-aliasDictNamesOfUnit gctx bare unitDecls decls =
-  flatMap (aliasDictNamesOfDecl gctx bare unitDecls) decls
+aliasDictNamesOfUnit defs bare unitDecls decls =
+  flatMap (aliasDictNamesOfDecl defs bare unitDecls) decls
 
-aliasDictNamesOfDecl : GraphCtx ->
+aliasDictNamesOfDecl : (String -> List (String, (String, String))) ->
   OrdMap Unit ->
   List (String, List Decl) ->
   Decl ->
   List String
-aliasDictNamesOfDecl gctx bare unitDecls (DAttrib _ d) =
-  aliasDictNamesOfDecl gctx bare unitDecls d
-aliasDictNamesOfDecl gctx bare unitDecls (DUse _ path _) =
-  aliasDictNamesOfPath gctx bare unitDecls (useModId path) path
-aliasDictNamesOfDecl gctx _ _ _ = []
+aliasDictNamesOfDecl defs bare unitDecls (DAttrib _ d) =
+  aliasDictNamesOfDecl defs bare unitDecls d
+aliasDictNamesOfDecl defs bare unitDecls (DUse _ path _) =
+  aliasDictNamesOfPath defs bare unitDecls (useModId path) path
+aliasDictNamesOfDecl _defs _ _ _ = []
 
-aliasDictNamesOfPath : GraphCtx ->
+aliasDictNamesOfPath : (String -> List (String, (String, String))) ->
   OrdMap Unit ->
   List (String, List Decl) ->
   String ->
@@ -1625,20 +1628,16 @@ aliasDictNamesOfPath : GraphCtx ->
 -- table; a row counts when the DEFINER's own name is in [bare].  The
 -- decl-derived half stays because the graph is empty on the loader-less Flat
 -- drivers, where a directly-imported definer must still contribute.
-aliasDictNamesOfPath gctx bare unitDecls mid (UseAlias _ a) =
+aliasDictNamesOfPath defs bare unitDecls mid (UseAlias _ a) =
   let own = match lookupAssoc mid unitDecls
     Some ds => filter (n => omHasKey n bare) (declTopFnNames ds)
     None => []
   let reexported =
-    map
-      fst
-      (filterList
-        (r => omHasKey (snd (snd r)) bare)
-        (graphPubDefiners gctx mid))
+    map fst (filterList (r => omHasKey (snd (snd r)) bare) (defs mid))
   map (qualifiedLocal a) (dedup (own ++ reexported))
-aliasDictNamesOfPath gctx bare _ _ (UseGroup _ ms) =
+aliasDictNamesOfPath _defs bare _ _ (UseGroup _ ms) =
   flatMap (memberDictName bare) ms
-aliasDictNamesOfPath gctx _ _ _ _ = []
+aliasDictNamesOfPath _defs _ _ _ _ = []
 
 memberDictName : OrdMap Unit -> UseMember -> List String
 memberDictName bare m = match useMemberAlias m
@@ -1680,7 +1679,7 @@ graphAliasEntry a qual (localName, (defMid, origin)) =
 
 export
 reportAmbiguousImportsIn : ModuleCtx -> OrdMap Unit -> List Decl -> Unit
-reportAmbiguousImportsIn mctx _ [] = ()
+reportAmbiguousImportsIn _mctx _ [] = ()
 reportAmbiguousImportsIn mctx occ ((DAttrib _ d) :: rest) =
   reportAmbiguousImportsIn mctx occ [d]
   reportAmbiguousImportsIn mctx occ rest
@@ -1733,7 +1732,7 @@ pushAmbiguousImports : ModuleCtx ->
   Loc ->
   List (String, List String) ->
   Unit
-pushAmbiguousImports mctx _ _ [] = ()
+pushAmbiguousImports _mctx _ _ [] = ()
 pushAmbiguousImports mctx depId loc ((n, mids) :: rest) =
   pushTypeErrorHelpFixAt
     mctx

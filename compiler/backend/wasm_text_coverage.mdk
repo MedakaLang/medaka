@@ -1,0 +1,794 @@
+-- This audits named identities and checked descriptors. It does not reconstruct
+-- the operand stack; validation and execution still judge that realization.
+import backend.wasm_symbols.{
+  WasmSymbol(..),
+  WasmShape(..),
+  SymbolRegistry,
+  SymbolDefect(..),
+  SymbolDeclaration(..),
+  checkCall,
+  declarations,
+  isExcused,
+  symbolName,
+}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omKeys}
+import support.symbol_origin.{SymbolOrigin(..)}
+import support.util.{joinWith, reverseL, startsWith}
+
+-- Closed output and previously justified gaps are distinct audit obligations.
+-- lint-disable-next-line rule-clone-type
+public export data CoveragePolicy =
+  | ClosedOutput
+  | RecordedGaps (List WasmSymbol)
+
+data Token = Token String Bool SymbolOrigin
+data Receipt = Receipt {
+  text : String,
+  name : String,
+  operands : Int,
+  tailCall : Bool,
+  origin : SymbolOrigin,
+  tokens : List Token,
+}
+
+export data CallCoverage = CallCoverage Int (OrdMap Receipt)
+
+export
+emptyCoverage : CallCoverage
+-- Empty ledgers have distinct nominal receipt types on the two targets.
+-- lint-disable-next-line rule-duplicate-body
+emptyCoverage = CallCoverage 0 omEmpty
+
+moduleOrigin : SymbolOrigin
+-- The no-binding origin keeps the documented physical diagnostic sentinel.
+-- lint-disable-next-line rule-duplicate-body
+moduleOrigin = SymbolOrigin "module" "" 0 0
+
+export
+checkedCall : SymbolRegistry ->
+  Bool ->
+  String ->
+  Int ->
+  SymbolOrigin ->
+  CallCoverage ->
+  Result SymbolDefect (SymbolRegistry, CallCoverage, String)
+checkedCall reg tailCall name operands origin (CallCoverage next entries) = do
+  reg2 <- checkCall (WasmFunc name) operands origin reg
+  let instruction = if tailCall then "return_call" else "call"
+  let text = "\{instruction} $\{name}"
+  tokens <- match rawTokens text
+    Err (UncheckedText reason _) => Err (UncheckedText reason origin)
+    result => result
+  if callFacts tokens /= [(instruction, "$" ++ name)] then
+    Err
+      (UncheckedText
+        "checked instruction must contain exactly one matching named call"
+        origin)
+  else
+    let key = intToString next
+    let receipt = Receipt {
+      text = text,
+      name = name,
+      operands = operands,
+      tailCall = tailCall,
+      origin = origin,
+      tokens = tokens,
+    }
+    Ok (
+      reg2,
+      CallCoverage (next + 1) (omInsert key receipt entries),
+      "\u{1e}W\{key}:\{text}\u{1f}",
+    )
+
+byte : Array Int -> Int -> Int
+-- Target-local scanners retain independent token and receipt operations.
+-- lint-disable-next-line rule-duplicate-body
+byte bytes i =
+  if i < 0 || i >= arrayLength bytes then -1 else arrayGetUnsafe i bytes
+
+space : Int -> Bool
+space c = c == 32 || c == 9 || c == 10 || c == 13
+
+boundary : Int -> Bool
+boundary c = c == -1 || space c || c == 40 || c == 41 || c == 59
+
+wordEnd : Array Int -> Int -> Int
+wordEnd bytes i =
+  let c = byte bytes i
+  if boundary c || c == 34 || c == 30 || c == 31 then
+    i
+  else
+    wordEnd bytes (i + 1)
+
+quotedEnd : Array Int -> Int -> Result SymbolDefect Int
+quotedEnd bytes i = match byte bytes i
+  c if c == -1 => Err (UncheckedText "unterminated string" moduleOrigin)
+  34 => Ok (i + 1)
+  92 =>
+    if byte bytes (i + 1) == -1 then
+      Err (UncheckedText "unterminated string escape" moduleOrigin)
+    else
+      quotedEnd bytes (i + 2)
+  _ => quotedEnd bytes (i + 1)
+
+lineEnd : Array Int -> Int -> Int
+-- Target-local scanners retain independent token and receipt operations.
+-- lint-disable-next-line rule-duplicate-body
+lineEnd bytes i =
+  let c = byte bytes i
+  if c == -1 || c == 10 || c == 13 then i else lineEnd bytes (i + 1)
+
+commentEnd : Array Int -> Int -> Int -> Result SymbolDefect Int
+commentEnd bytes i depth =
+  if byte bytes i == -1 then
+    Err (UncheckedText "unterminated block comment" moduleOrigin)
+  else if byte bytes i == 40 && byte bytes (i + 1) == 59 then
+    commentEnd bytes (i + 2) (depth + 1)
+  else if byte bytes i == 59 && byte bytes (i + 1) == 41 then
+    if depth == 1 then Ok (i + 2) else commentEnd bytes (i + 2) (depth - 1)
+  else
+    commentEnd bytes (i + 1) depth
+
+keyEnd : Array Int -> Int -> Int
+-- Target-local scanners retain independent token and receipt operations.
+-- lint-disable-next-line rule-duplicate-body
+keyEnd bytes i =
+  let c = byte bytes i
+  if c >= 48 && c <= 57 then keyEnd bytes (i + 1) else i
+
+prependChecked : List Token -> SymbolOrigin -> List Token -> List Token
+-- Target-local scanners retain independent token and receipt operations.
+-- lint-disable-next-line rule-duplicate-body
+prependChecked [] _ acc = acc
+-- Target-local scanners retain independent token and receipt operations.
+-- lint-disable-next-line rule-duplicate-body
+prependChecked ((Token text _ _) :: rest) origin acc =
+  prependChecked rest origin (Token text True origin :: acc)
+
+rawTokens : String -> Result SymbolDefect (List Token)
+-- Target-local scanners retain independent token and receipt operations.
+-- lint-disable-next-line rule-duplicate-body
+rawTokens text = do
+  (tokens, _) <- scan text (stringToUtf8Bytes text) omEmpty False None 0 0 [] []
+  Ok tokens
+
+scan : String ->
+  Array Int ->
+  OrdMap Receipt ->
+  Bool ->
+  Option SymbolRegistry ->
+  Int ->
+  Int ->
+  List Token ->
+  List String ->
+  Result SymbolDefect (List Token, String)
+scan text bytes entries markers registry i copied tokens chunks =
+  let c = byte bytes i
+  if c == -1 then
+    Ok (
+      reverseL tokens,
+      joinWith "" (reverseL (stringSliceBytes copied i text :: chunks)),
+    )
+  else if c == 30 then
+    if not markers
+      || byte bytes (i + 1) /= 87
+      || not (boundary (byte bytes (i - 1))) then
+      Err (UncheckedText "malformed or nested receipt" moduleOrigin)
+    else
+      let endKey = keyEnd bytes (i + 2)
+      let key = stringSliceBytes (i + 2) endKey text
+      if key == "" || byte bytes endKey /= 58 then
+        Err (UncheckedText "malformed receipt key" moduleOrigin)
+      else match omLookup key entries
+        None => Err (UncheckedText "unknown receipt" moduleOrigin)
+        Some receipt =>
+          let start = endKey + 1
+          let end = start + stringByteLength receipt.text
+          if end >= arrayLength bytes
+            || byte bytes end /= 31
+            || not (boundary (byte bytes (end + 1))) then
+            Err (UncheckedText "changed or unterminated receipt" receipt.origin)
+          else if stringSliceBytes start end text /= receipt.text then
+            Err (UncheckedText "changed receipt text" receipt.origin)
+          else match recheck registry receipt
+            Err d => Err d
+            Ok _ =>
+              scan
+                text
+                bytes
+                entries
+                markers
+                registry
+                (end + 1)
+                (end + 1)
+                (prependChecked receipt.tokens receipt.origin tokens)
+                (receipt.text :: stringSliceBytes copied i text :: chunks)
+  else if c == 31 then
+    Err (UncheckedText "unmatched receipt end" moduleOrigin)
+  else if space c then
+    scan text bytes entries markers registry (i + 1) copied tokens chunks
+  else if c == 59 && byte bytes (i + 1) == 59 then
+    scan
+      text
+      bytes
+      entries
+      markers
+      registry
+      (lineEnd bytes i)
+      copied
+      tokens
+      chunks
+  else if c == 40 && byte bytes (i + 1) == 59 then do
+    end <- commentEnd bytes (i + 2) 1
+    scan text bytes entries markers registry end copied tokens chunks
+  else if c == 34 then do
+    end <- quotedEnd bytes (i + 1)
+    scan
+      text
+      bytes
+      entries
+      markers
+      registry
+      end
+      copied
+      (Token "\"\"" False moduleOrigin :: tokens)
+      chunks
+  else if c == 59 then
+    Err (UncheckedText "invalid comment delimiter" moduleOrigin)
+  else
+    let end = if c == 40 || c == 41 then i + 1 else wordEnd bytes i
+    scan
+      text
+      bytes
+      entries
+      markers
+      registry
+      end
+      copied
+      (Token (stringSliceBytes i end text) False moduleOrigin :: tokens)
+      chunks
+
+recheck : Option SymbolRegistry -> Receipt -> Result SymbolDefect Unit
+recheck None _ = Ok ()
+recheck (Some reg) receipt = do
+  _ <- checkCall (WasmFunc receipt.name) receipt.operands receipt.origin reg
+  Ok ()
+
+named : String -> Bool
+named s = startsWith "$" s
+
+bare : String -> String
+bare s = stringSlice 1 (stringLength s) s
+
+callFacts : List Token -> List (String, String)
+callFacts tokens = reverseL (callFactsGo tokens [])
+
+callFactsGo : List Token -> List (String, String) -> List (String, String)
+callFactsGo [] acc = acc
+callFactsGo ((Token op _ _) :: (Token name _ _) :: rest) acc
+  | (op == "call" || op == "return_call") && named name =
+    callFactsGo rest ((op, name) :: acc)
+callFactsGo (_ :: rest) acc = callFactsGo rest acc
+
+type SymbolIndex a = OrdMap (OrdMap a)
+
+symbolNamespace : WasmSymbol -> String
+symbolNamespace (WasmFunc _) = "f"
+symbolNamespace (WasmType _) = "t"
+symbolNamespace (WasmGlobal _) = "g"
+symbolNamespace (WasmData _) = "d"
+symbolNamespace (WasmElem _) = "e"
+
+symbolFrom : String -> String -> WasmSymbol
+symbolFrom "f" n = WasmFunc n
+symbolFrom "t" n = WasmType n
+symbolFrom "g" n = WasmGlobal n
+symbolFrom "d" n = WasmData n
+symbolFrom _ n = WasmElem n
+
+symbolLookup : WasmSymbol -> SymbolIndex a -> Option a
+symbolLookup sym index = match omLookup (symbolNamespace sym) index
+  None => None
+  Some names => omLookup (symbolName sym) names
+
+symbolHas : WasmSymbol -> SymbolIndex a -> Bool
+symbolHas sym index = isSome (symbolLookup sym index)
+
+symbolInsert : WasmSymbol -> a -> SymbolIndex a -> SymbolIndex a
+symbolInsert sym value index =
+  let names = optionOr omEmpty (omLookup (symbolNamespace sym) index)
+  omInsert (symbolNamespace sym) (omInsert (symbolName sym) value names) index
+
+symbolKeys : SymbolIndex a -> List WasmSymbol
+symbolKeys index =
+  flatMap
+    (namespace => match omLookup namespace index
+      None => []
+      Some names => map (symbolFrom namespace) (omKeys names))
+    (omKeys index)
+
+data Expected = Expected WasmSymbol WasmShape SymbolOrigin
+data Materialized = Materialized WasmSymbol WasmShape Bool
+
+expectedMap : List SymbolDeclaration ->
+  SymbolIndex Expected ->
+  SymbolIndex Expected
+expectedMap [] acc = acc
+expectedMap ((SymbolDeclaration sym shape at) :: rest) acc =
+  expectedMap rest (symbolInsert sym (Expected sym shape at) acc)
+
+-- Header groups stop at the first instruction. Nested reference value types
+-- count as one parameter, while `$name` is a binder and contributes no slot.
+paramSlots : List Token -> Int -> Int -> Result SymbolDefect (Int, List Token)
+paramSlots [] _ _ =
+  Err (UncheckedText "unterminated parameter group" moduleOrigin)
+paramSlots ((Token text _ _) :: rest) depth count =
+  if text == ")" && depth == 0 then
+    Ok (count, rest)
+  else if text == "(" then
+    paramSlots rest (depth + 1) (if depth == 0 then count + 1 else count)
+  else if text == ")" then
+    paramSlots rest (depth - 1) count
+  else
+    paramSlots rest depth (if depth == 0 && not (named text) then
+      count + 1
+    else
+      count)
+
+skipGroup : List Token -> Int -> List Token
+skipGroup [] _ = []
+skipGroup ((Token text _ _) :: rest) depth =
+  if text == ")" && depth == 0 then
+    rest
+  else
+    skipGroup
+      rest
+      (depth + (if text == "(" then 1 else if text == ")" then -1 else 0))
+
+functionShape : List Token ->
+  Int ->
+  Bool ->
+  Option String ->
+  Result SymbolDefect WasmShape
+functionShape ((Token "(" _ _) :: (Token "param" _ _) :: rest) count _ typeName =
+  do
+    (n, after) <- paramSlots rest 0 0
+    functionShape after (count + n) True typeName
+functionShape ((Token "(" _ _) :: (Token "type" _ _) :: (Token name _ _) :: rest) count explicit _
+  | named name =
+    functionShape (skipGroup rest 0) count explicit (Some (bare name))
+functionShape ((Token "(" _ _) :: (Token op _ _) :: rest) count explicit typeName
+  | op == "result" || op == "local" || op == "export" || op == "import" =
+    functionShape (skipGroup rest 0) count explicit typeName
+functionShape _ count _explicit None = Ok (FuncParams count)
+functionShape _ count explicit (Some name) =
+  Ok (FuncOfType name (if explicit then count else -1))
+
+inlineImport : List Token -> Bool
+inlineImport ((Token "(" _ _) :: (Token "import" _ _) :: _) = True
+inlineImport ((Token "(" _ _) :: (Token op _ _) :: rest)
+  | op == "param" || op == "type" || op == "result" || op == "export" =
+    inlineImport (skipGroup rest 0)
+inlineImport _ = False
+
+parent : List String -> String
+parent [] = ""
+parent (p :: _) = p
+
+declaration : String -> String -> List String -> Option WasmSymbol
+declaration "func" name context =
+  if parent context == "module"
+    || parent context == "import"
+    || isEmpty context then
+    Some (WasmFunc name)
+  else
+    None
+declaration "type" name context =
+  if parent context == "module"
+    || parent context == "rec"
+    || isEmpty context then
+    Some (WasmType name)
+  else
+    None
+declaration "global" name context =
+  if parent context == "module"
+    || parent context == "import"
+    || isEmpty context then
+    Some (WasmGlobal name)
+  else
+    None
+declaration "data" name context =
+  if parent context == "module" || isEmpty context then
+    Some (WasmData name)
+  else
+    None
+declaration _ _ _ = None
+
+ordinaryShape : WasmSymbol -> WasmShape
+ordinaryShape (WasmType _) = TypeDecl
+ordinaryShape (WasmGlobal _) = GlobalDecl
+ordinaryShape (WasmData _) = DataDecl
+ordinaryShape (WasmElem _) = ElemDecl
+ordinaryShape (WasmFunc _) = FuncParams 0
+
+admit : WasmSymbol ->
+  WasmShape ->
+  Bool ->
+  SymbolIndex Materialized ->
+  Result SymbolDefect (SymbolIndex Materialized)
+admit (sym@(WasmElem _)) shape imported seen =
+  Ok (symbolInsert sym (Materialized sym shape imported) seen)
+admit sym shape imported seen =
+  if symbolHas sym seen then
+    Err (DuplicateDefinition sym moduleOrigin moduleOrigin)
+  else
+    Ok (symbolInsert sym (Materialized sym shape imported) seen)
+
+inventory : List Token ->
+  List String ->
+  SymbolIndex Materialized ->
+  OrdMap Int ->
+  Result SymbolDefect (SymbolIndex Materialized, OrdMap Int)
+inventory [] context seen types =
+  if isEmpty context then
+    Ok (seen, types)
+  else
+    Err (UncheckedText "unclosed expression" moduleOrigin)
+inventory ((Token "(" _ _) :: (Token op _ _) :: (Token name _ _) :: rest) context seen types
+  | named name = match declaration op (bare name) context
+    Some (sym@(WasmFunc _)) => do
+      shape <- functionShape rest 0 False None
+      next <- admit
+        sym
+        shape
+        (parent context == "import" || inlineImport rest)
+        seen
+      inventory rest (op :: context) next types
+    Some (sym@(WasmType typeName)) => do
+      next <- admit sym TypeDecl False seen
+      match rest
+        (Token "(" _ _) :: (Token "func" _ _) :: after => do
+          shape <- functionShape after 0 False None
+          let n = match shape
+            FuncParams count => count
+            FuncOfType _ count => count
+            _ => 0
+          inventory rest (op :: context) next (omInsert typeName n types)
+        _ => inventory rest (op :: context) next types
+    Some sym => do
+      next <- admit sym (ordinaryShape sym) False seen
+      inventory rest (op :: context) next types
+    None =>
+      inventory
+        (Token name False moduleOrigin :: rest)
+        (op :: context)
+        seen
+        types
+inventory ((Token "(" _ _) :: (Token op _ _) :: rest) context seen types =
+  if op == "func"
+    && (parent context == "module"
+      || parent context == "import"
+      || isEmpty context) then
+    Err
+      (UncheckedText
+        "function declaration lacks a registry identity"
+        moduleOrigin)
+  else
+    inventory rest (op :: context) seen types
+inventory ((Token ")" _ _) :: _rest) [] _seen _types =
+  Err (UncheckedText "unmatched expression end" moduleOrigin)
+inventory ((Token ")" _ _) :: rest) (_ :: outer) seen types =
+  inventory rest outer seen types
+inventory ((Token name _ _) :: rest) context seen types
+  | named name && parent context == "elem" = do
+    next <- admit (WasmElem (bare name)) ElemDecl False seen
+    inventory rest context next types
+inventory (_ :: rest) context seen types = inventory rest context seen types
+
+gapNames : CoveragePolicy -> SymbolRegistry -> SymbolIndex Unit
+gapNames ClosedOutput _ = omEmpty
+gapNames (RecordedGaps syms) reg = gapsGo syms reg omEmpty
+
+gapsGo : List WasmSymbol ->
+  SymbolRegistry ->
+  SymbolIndex Unit ->
+  SymbolIndex Unit
+gapsGo [] _ acc = acc
+gapsGo (sym :: rest) reg acc =
+  gapsGo rest reg (if isExcused sym reg then symbolInsert sym () acc else acc)
+
+actualCount : WasmShape -> OrdMap Int -> Int
+actualCount (FuncImported n) _ = n
+actualCount (FuncParams n) _ = n
+actualCount (FuncOfType name n) types =
+  if n >= 0 then n else optionOr -1 (omLookup name types)
+actualCount _ _ = -1
+
+sameShape : Bool -> WasmShape -> WasmShape -> Bool -> OrdMap Int -> Bool
+sameShape deferred expected actual imported types =
+  let linkage = match expected
+    FuncImported _ => imported
+    FuncParams _ => not imported
+    FuncOfType _ _ => not imported
+    _ => True
+  let countMatches = match actual
+    FuncOfType name explicit => match omLookup name types
+      Some count =>
+        (explicit < 0 || explicit == count)
+          && actualCount expected types == count
+      None =>
+        deferred && (explicit < 0 || actualCount expected types == explicit)
+    _ => actualCount expected types == actualCount actual types
+  let kindMatches = match (expected, actual)
+    (FuncOfType name _, FuncOfType found _) => name == found
+    (FuncOfType _ _, _) => False
+    (FuncImported _, FuncParams _) => True
+    (FuncParams _, FuncParams _) => True
+    (FuncImported _, FuncOfType _ _) => True
+    (FuncParams _, FuncOfType _ _) => True
+    _ => expected == actual
+  linkage && countMatches && kindMatches
+
+shapeDefect : WasmSymbol ->
+  WasmShape ->
+  WasmShape ->
+  OrdMap Int ->
+  SymbolOrigin ->
+  SymbolDefect
+shapeDefect sym expected (FuncOfType name explicit) types at =
+  match omLookup name types
+    Some count =>
+      if explicit >= 0 && explicit /= count then
+        NamedTypeShapeMismatch (symbolName sym) name explicit count at
+      else
+        ordinaryShapeDefect sym expected (FuncOfType name explicit) types at
+    None => ordinaryShapeDefect sym expected (FuncOfType name explicit) types at
+shapeDefect sym expected actual types at =
+  ordinaryShapeDefect sym expected actual types at
+
+ordinaryShapeDefect : WasmSymbol ->
+  WasmShape ->
+  WasmShape ->
+  OrdMap Int ->
+  SymbolOrigin ->
+  SymbolDefect
+ordinaryShapeDefect sym expected actual types at =
+  ShapeMismatch
+    (symbolName sym)
+    (actualCount expected types)
+    (actualCount actual types)
+    at
+    at
+
+declarationDefects : SymbolIndex Expected ->
+  SymbolIndex Materialized ->
+  OrdMap Int ->
+  SymbolIndex Unit ->
+  List SymbolDefect
+declarationDefects expected seen types gaps =
+  flatMap
+      (sym => match symbolLookup sym expected
+        None => []
+        Some (Expected _ shape at) => match symbolLookup sym seen
+          None => if symbolHas sym gaps then [] else [UndefinedReference sym at]
+          Some (Materialized _ actual imported) =>
+            if sameShape False shape actual imported types then
+              []
+            else
+              [shapeDefect sym shape actual types at])
+      (symbolKeys expected)
+    ++ flatMap
+      (sym =>
+        if symbolHas sym expected then
+          []
+        else
+          [UndefinedReference sym moduleOrigin])
+      (symbolKeys seen)
+
+useOf : String -> String -> List WasmSymbol
+useOf "call" n = [WasmFunc n]
+useOf "return_call" n = [WasmFunc n]
+useOf "ref.func" n = [WasmFunc n, WasmElem n]
+useOf "func" n = [WasmFunc n]
+useOf "start" n = [WasmFunc n]
+useOf "global.get" n = [WasmGlobal n]
+useOf "global.set" n = [WasmGlobal n]
+useOf "memory.init" n = [WasmData n]
+useOf "data.drop" n = [WasmData n]
+useOf op n =
+  if op == "ref.null"
+    || op == "ref.cast"
+    || op == "ref.test"
+    || op == "sub"
+    || op == "final"
+    || op == "type"
+    || op == "ref"
+    || op == "null"
+    || op == "call_ref"
+    || op == "return_call_ref"
+    || startsWith "struct." op
+    || startsWith "array." op then
+    [WasmType n]
+  else
+    []
+
+missingUse : SymbolIndex Materialized ->
+  SymbolIndex Unit ->
+  SymbolOrigin ->
+  WasmSymbol ->
+  List SymbolDefect
+missingUse seen gaps at sym =
+  if symbolHas sym seen || symbolHas sym gaps then
+    []
+  else match sym
+    WasmElem name => [UndeclaredFuncRef name at]
+    _ => [UndefinedReference sym at]
+
+uses : List Token ->
+  SymbolIndex Materialized ->
+  SymbolIndex Unit ->
+  List SymbolDefect
+uses tokens seen gaps = reverseL (usesGo tokens seen gaps [])
+
+usesGo : List Token ->
+  SymbolIndex Materialized ->
+  SymbolIndex Unit ->
+  List SymbolDefect ->
+  List SymbolDefect
+usesGo [] _ _ acc = acc
+usesGo ((Token op covered origin) :: rest) seen gaps acc = match rest
+  [] =>
+    if (op == "call" || op == "return_call") && not covered then
+      UncheckedText "uncovered direct call" origin :: acc
+    else
+      acc
+  (Token name _ _) :: after =>
+    let uncovered =
+      if (op == "call" || op == "return_call") && not covered then
+        [UncheckedText "uncovered direct call" origin]
+      else
+        []
+    let absent =
+      if named name then
+        flatMap (missingUse seen gaps origin) (useOf op (bare name))
+      else
+        []
+    let extra = match after
+      (Token second _ _) :: _ if named second
+        && (op == "array.new_data" || op == "array.init_data") =>
+        missingUse seen gaps origin (WasmData (bare second))
+      (Token second _ _) :: _ if named second && op == "array.copy" =>
+        missingUse seen gaps origin (WasmType (bare second))
+      _ => []
+    usesGo rest seen gaps (reverseL (uncovered ++ absent ++ extra) ++ acc)
+
+-- Count code dependencies for manifest drift checks; comments and literals are
+-- inert, and namespaces keep a global and a type with the same name distinct.
+export
+namedUses : String -> Result SymbolDefect (List (WasmSymbol, Int))
+namedUses text = do
+  tokens <- rawTokens text
+  let counts = namedUseCounts tokens omEmpty
+  Ok
+    (map
+      (sym => (sym, optionOr 0 (symbolLookup sym counts)))
+      (symbolKeys counts))
+
+namedUseCounts : List Token -> SymbolIndex Int -> SymbolIndex Int
+namedUseCounts [] counts = counts
+namedUseCounts ((Token op _ _) :: rest) counts = match rest
+  (Token name _ _) :: after =>
+    let first = if named name then useOf op (bare name) else []
+    let second = match after
+      (Token name2 _ _) :: _ if op == "array.copy" && named name2 =>
+        [WasmType (bare name2)]
+      _ => []
+    namedUseCounts rest (fold countNamedUse counts (first ++ second))
+  [] => counts
+
+countNamedUse : SymbolIndex Int -> WasmSymbol -> SymbolIndex Int
+countNamedUse counts (sym@(WasmType _)) =
+  symbolInsert sym (optionOr 0 (symbolLookup sym counts) + 1) counts
+countNamedUse counts (sym@(WasmGlobal _)) =
+  symbolInsert sym (optionOr 0 (symbolLookup sym counts) + 1) counts
+countNamedUse counts _ = counts
+
+attributeOrigins : List Token ->
+  SymbolIndex Expected ->
+  SymbolOrigin ->
+  List Token ->
+  List Token
+-- Origin attribution preserves each target’s nominal token type.
+-- lint-disable-next-line rule-duplicate-body
+attributeOrigins [] _ _ acc = reverseL acc
+attributeOrigins ((Token "func" covered origin) :: (target@(Token name _ _)) :: rest) expected current acc
+  | named name =
+    let next = match symbolLookup (WasmFunc (bare name)) expected
+      Some (Expected _ _ at) => at
+      None => current
+    attributeOrigins
+      (target :: rest)
+      expected
+      next
+      (Token "func" covered (if covered then origin else next) :: acc)
+-- Origin attribution preserves each target’s nominal token type.
+-- lint-disable-next-line rule-duplicate-body
+attributeOrigins ((Token text covered origin) :: rest) expected current acc =
+  attributeOrigins
+    rest
+    expected
+    current
+    (Token text covered (if covered then origin else current) :: acc)
+
+-- Census fragments are not a module. Check their receipts and declarations,
+-- but return no text and require no absent declaration or cross-fragment use.
+export
+checkCheckedFragment : SymbolRegistry ->
+  CallCoverage ->
+  String ->
+  Result (List SymbolDefect) Unit
+checkCheckedFragment reg (CallCoverage _ entries) text =
+  match scan text (stringToUtf8Bytes text) entries True (Some reg) 0 0 [] []
+    Err d => Err [d]
+    Ok (tokens, _) => match inventory tokens [] omEmpty omEmpty
+      Err d => Err [d]
+      Ok (seen, types) =>
+        let expected = expectedMap (declarations reg) omEmpty
+        let defects =
+          fragmentDeclarations expected seen types ++ uncovered tokens
+        if isEmpty defects then Ok () else Err defects
+
+fragmentDeclarations : SymbolIndex Expected ->
+  SymbolIndex Materialized ->
+  OrdMap Int ->
+  List SymbolDefect
+fragmentDeclarations expected seen types =
+  flatMap
+    (sym => match symbolLookup sym expected
+      None => [UndefinedReference sym moduleOrigin]
+      Some (Expected _ shape at) => match symbolLookup sym seen
+        Some (Materialized _ actual imported) =>
+          if sameShape True shape actual imported types then
+            []
+          else
+            [shapeDefect sym shape actual types at]
+        None => [])
+    (symbolKeys seen)
+
+uncovered : List Token -> List SymbolDefect
+uncovered tokens = reverseL (uncoveredGo tokens [])
+
+uncoveredGo : List Token -> List SymbolDefect -> List SymbolDefect
+uncoveredGo [] acc = acc
+uncoveredGo ((Token op covered at) :: rest) acc =
+  if (op == "call" || op == "return_call") && not covered then
+    uncoveredGo rest (UncheckedText "uncovered direct call" at :: acc)
+  else
+    uncoveredGo rest acc
+
+export
+finishCheckedText : CoveragePolicy ->
+  SymbolRegistry ->
+  CallCoverage ->
+  String ->
+  Result (List SymbolDefect) String
+finishCheckedText policy reg (CallCoverage _ entries) text =
+  match scan text (stringToUtf8Bytes text) entries True (Some reg) 0 0 [] []
+    Err d => Err [d]
+    Ok (raw, stripped) => match inventory raw [] omEmpty omEmpty
+      Err d => Err [d]
+      Ok (seen, types) =>
+        let expected = expectedMap (declarations reg) omEmpty
+        let tokens = attributeOrigins raw expected moduleOrigin []
+        let gaps = gapNames policy reg
+        let elementUses =
+          flatMap
+            (sym => match sym
+              WasmElem name => missingUse seen gaps moduleOrigin (WasmFunc name)
+              _ => [])
+            (symbolKeys seen)
+        let defects =
+          declarationDefects expected seen types gaps
+            ++ uses tokens seen gaps
+            ++ elementUses
+        if isEmpty defects then Ok stripped else Err defects

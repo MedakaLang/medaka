@@ -32,7 +32,7 @@ boolSeeds : List (String, Value a)
 boolToInt : Bool -> Int
 buildCtorFieldOrders : List Decl -> List (String, List String)
 buildMethodReqCounts : Option DispositionTable -> List Decl -> List ((String, String), Int)
-buildModInfos : EnvFrame (Value a) -> EnvFrame (Value a) -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
+buildModInfos : EnvFrame (Value a) -> EnvFrame (Value a) -> ModExports (Value a) -> List SiblingPair -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
 buildRootModuleStateWith : ProgramFacts -> List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> (List (ModInfo (Value a)), List (String, Ref (Value a)))
 buildStampExterns : Unit -> List (String, Value a)
 buildWith : Value a -> Int -> Int -> <a> List (Value a)
@@ -81,6 +81,7 @@ ctorFieldOrdersRef : Ref (List (String, List String))
 ctorNamesOfDecl : Decl -> List (String, List String)
 ctorToTypeRef : Ref (List (String, String))
 ctorsByTypeOf : List Decl -> List (String, List String)
+ctorsByTypeUnder : ExportView -> List Decl -> List (String, List String)
 ctorsOfDecl : Decl -> List (String, Value a)
 currentEvalFile : Ref String
 currentEvalLoc : Ref Loc
@@ -122,7 +123,6 @@ evalMain : List Decl -> String
 evalMatch : Loc -> EvalEnv (Value a) -> Value a -> List Arm -> <a> Value a
 evalMethodAt : EvalEnv (Value a) -> String -> String -> Route -> List Route -> List Route -> <a> Value a
 evalMethodAtEv : EvalEnv (Value a) -> String -> (String, Int, Route, List Route, List Route) -> <a> Value a
-evalModulesOutput : List Decl -> List (String, List Decl) -> String
 evalModulesOutputFacts : ProgramFacts -> List Decl -> List (String, List Decl) -> String
 evalModulesOutputRunFacts : ProgramFacts -> List Decl -> List (String, List Decl) -> <IO> String
 evalModulesRootEnvFacts : ProgramFacts -> List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> List (String, Value a)
@@ -195,6 +195,7 @@ implMethodReqCountEntry : String -> ImplMethod -> ((String, String), Int)
 implMethodReqCounts : Option DispositionTable -> Decl -> List ((String, String), Int)
 implMethodValue : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> Value a
 importFrameOf : ModExports (Value a) -> List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
+importsMapFor : List SiblingPair -> String -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a))
 inCharRange : String -> String -> String -> Bool -> Bool
 inIntRange : Int -> Int -> Int -> Bool -> Bool
 indexedFrame : List (String, Ref a) -> EnvFrame a
@@ -267,13 +268,14 @@ memoThunkOf : Ref (Option (Value a)) -> EvalEnv (Value a) -> Expr -> Value a
 mergeField : List (String, Value a) -> (String, Value a) -> (String, Value a)
 methodAtNarrow : EvalEnv (Value a) -> String -> Value a -> Route -> <a> (Value a, List (Value a))
 methodCell : List (String, Ref (Value a)) -> String -> List (String, Ref (Value a))
-methodCellsOf : List (String, Ref (Value a)) -> List Decl -> List (String, Ref (Value a))
+methodCellsOf : List (String, Ref (Value a)) -> Map String Unit -> List Decl -> List (String, Ref (Value a))
 methodReqCountIndex : List ((String, String), Int) -> Map String (Map String Int)
 methodReqCountIndexGo : List ((String, String), Int) -> Map String (Map String Int) -> Map String (Map String Int)
 methodReqCountRef : Ref (Map String (Map String Int))
 mkGroup : List (String, (List Pat, Expr, Loc)) -> String -> (String, List (List Pat, Expr, Loc))
 modExportCells : ModExports a -> List (String, Ref a)
 modImplEntries : List ((String, String, String), List Int) -> ModInfo (Value a) -> List (String, (Int, Value a))
+moduleExports : ExportView -> ModExports (Value a) -> List (String, ModExports (Value a)) -> EnvFrame (Value a) -> EnvFrame (Value a) -> List (String, Ref (Value a)) -> List Decl -> ModExports (Value a)
 moduleFileOf : String -> String
 moduleMethodNames : List Decl -> List String
 moduleMethodNamesOf : Decl -> List String
@@ -478,11 +480,8 @@ prim3M : (Value a -> Value a -> Value a -> <a> Value a) -> Value a
 prim5M : (Value a -> Value a -> Value a -> Value a -> Value a -> <a> Value a) -> Value a
 progArgsRef : Ref (List String)
 projectDict : Value a -> List Int -> Value a
-pubReexports : ModExports (Value a) -> List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
-publicExternCells : List (String, Ref (Value a)) -> List Decl -> List (String, Ref (Value a))
+publicExternCells : List (String, Ref (Value a)) -> Map String Unit -> List Decl -> List (String, Ref (Value a))
 publicExternCellsGo : Map String (Ref (Value a)) -> List String -> List (String, Ref (Value a))
-publicExternNames : List Decl -> List String
-publicExternNamesRev : List Decl -> List String -> List String
 pushFrame : EvalEnv (Value a) -> List (String, Ref (Value a)) -> EvalEnv (Value a)
 qualifyCell : String -> (String, Ref (Value a)) -> (String, Ref (Value a))
 rangeArrayMk : List Int -> Value a
@@ -491,7 +490,7 @@ reTag : String -> String -> List Int -> Int -> Value a -> Value a
 readOutput : Unit -> <a> String
 receiverOf : EvalEnv (Value a) -> Route -> List Route -> <a> Value a
 recordCreateVals : String -> List String -> List (String, Value a) -> List (Value a)
-reexport : ModExports (Value a) -> List (String, ModExports (Value a)) -> Decl -> List (String, Ref (Value a))
+reexport : ModExports (Value a) -> List (String, ModExports (Value a)) -> UsePath -> List (String, Ref (Value a))
 reportIfUndecidable : String -> List (Value a) -> Unit
 requireMethodRoute : String -> String -> Route -> Route
 resetOutput : Unit -> <a> Unit
@@ -568,4 +567,5 @@ valueListEq : List (Value a) -> List (Value a) -> Bool
 valueTag : Value a -> Int
 variantFieldOrder : Variant -> List (String, List String)
 withCallFile : EvalEnv (Value a) -> (Unit -> <a> Value a) -> <a> Value a
+withSubjectFull : List SiblingPair -> String -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a))
 zipFieldOrder : List String -> List (Value a) -> List (String, Value a)

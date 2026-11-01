@@ -1,0 +1,16 @@
+-- A subject with an abstract type, a private type and a private helper.
+export data Box = Box Int
+
+export
+grow : Box -> Box
+grow (Box n) = Box (step n)
+
+step : Int -> Int
+step n = n + 1
+
+data Hidden = Hidden Int | Other
+
+hiddenVal : Hidden -> Int
+hiddenVal h = match h
+  Hidden n => n
+  Other => 0

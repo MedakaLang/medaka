@@ -1,0 +1,19 @@
+-- Fixture for rule-prelude-shadow, linted under the default non-test path: the
+-- rule fires in any module, not only in `*_test.mdk`.  The same declarations
+-- under a `_test.mdk` path are pinned by the harness's own `test` block.
+
+-- POSITIVE: names stdlib/core.mdk (the auto-prelude) already exports.
+-- expect-next-line rule-prelude-shadow
+isOk r = r == 0
+-- expect-next-line rule-prelude-shadow
+isErr r = r /= 0
+-- expect-next-line rule-prelude-shadow
+isSome o = o == 1
+
+-- NEGATIVE: a name the prelude does not export is this file's own to declare.
+isPending x = x == 2
+
+-- NEGATIVE: a directive whose comment block states why the shadow is wanted.
+-- This copy answers a different question from the prelude's, on purpose.
+-- lint-disable-next-line rule-prelude-shadow
+isNone o = o /= 1

@@ -63,7 +63,6 @@ import tools.gate_registry.{
   globMatch,
   parseSelector,
   tierPartOf,
-  modePartOf,
   selectGates,
   renderJson,
   renderShardsJson,
@@ -84,7 +83,6 @@ import support.util.{
   endsWith,
   escStr,
   filterList,
-  isSome,
   joinNl,
   joinWith,
   listLen,
@@ -593,7 +591,6 @@ indentedNames (o :: os) = "  \{o}" :: indentedNames os
 -- The rebuild commands for the stale names, `mc` being the names the multicall
 -- oracle serves: they share one binary, so one multicall rebuild refreshes all
 -- of them, and every other name is rebuilt alone.
-export
 staleBannerLines : List String -> List String -> List String
 staleBannerLines mc stale =
   let served = filterList (o => contains o mc) stale
@@ -1468,7 +1465,6 @@ staleShareFrom all (g :: gs) =
     "\{g.name}: stale shares_baseline_with '\{g.sharesBaselineWith}' — it must name another entry deriving the same baselineKey; remove it once the old entry is gone"
       :: rest
 
-export
 duplicateBaselineKeyViolations : List Gate -> List String
 duplicateBaselineKeyViolations gates =
   dupKeyFrom gates (sortUniqS (map (g => baselineKey g.run) gates))
@@ -2311,10 +2307,7 @@ siteError name c =
    ungraded site. `Unresolvable` is an import that names no module file at
    all: the analysis cannot see what it does, and saying so is the difference
    between "nothing to grade" and "nothing was looked at". -}
-public export data ImportTarget =
-  | Followed String String
-  | Elsewhere
-  | Unresolvable
+export data ImportTarget = Followed String String | Elsewhere | Unresolvable
 
 {- | The module ids a source file imports, in source order.
 
@@ -2542,7 +2535,6 @@ nativeGradeViolations root (g :: gs) =
 
 -- ── assembling and rendering the violation classes ──────────────────────────
 
-export
 verifyClasses : String ->
   List Gate ->
   List Shard ->

@@ -14,16 +14,15 @@
 --
 -- Usage: medaka build sqlite/distinct_demo.mdk -o /tmp/ddemo && /tmp/ddemo <db>
 
-import lib.sqlite.{Db, openDb}
+import lib.sqlite.{openDb}
 import lib.select.{
-  Select,
   selectFrom,
   withOrderBy,
   withLimit,
   withDistinct,
   queryDistinct,
 }
-import lib.rowtype.{RowType, tInt, t2}
+import lib.rowtype.{tInt, t2}
 import demo_support.{printInts, printPairs}
 
 main : <IO> Unit

@@ -43,7 +43,7 @@
 -- `rowScratch` and the batched build (`buildBatch`) are `test.oracle_support`'s
 -- shared helpers too.
 import io.{runVerb}
-import list.{lookup, replicate}
+import list.{replicate}
 import string.{contains, join, startsWith, trim}
 import test.{
   Expectation(..),

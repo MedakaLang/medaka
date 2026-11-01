@@ -294,7 +294,7 @@ ffiCatalogNarrowMsg : String ->
   List Atom ->
   List Atom ->
   String
-ffiCatalogNarrowMsg n arrow cat decl missing =
+ffiCatalogNarrowMsg n arrow cat _decl missing =
   "foreign declaration `\{n}` redeclares a built-in with a narrower effect row\{arrow}: the built-in performs <\{renderAtoms cat}>, which this row does not cover at <\{renderAtoms missing}>\{ffiCatalogTopNote missing}; declare `<\{renderAtoms cat}>` or wider, or rename the extern"
 
 -- A parameterised label whose parameter is the top renders as the bare label,

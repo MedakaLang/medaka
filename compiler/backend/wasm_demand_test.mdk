@@ -1,8 +1,9 @@
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.wasm_demand.{
   WasmDemandPlan, WasmDemand(..), censusWasmDemand, wasmTypeContext,
-  returnStamp, cexprStamp, Env, EnvRef(..), envEmpty, envBind, envBindUnstamped,
-  envExtendUnstamped, envRestrict, envLookup, envHas, selectedFallthroughSymbols
+  helperFunctionNames, returnStamp, cexprStamp, EnvRef(..), envEmpty, envBind,
+  envBindUnstamped, envExtendUnstamped, envRestrict, envLookup, envHas,
+  selectedFallthroughSymbols
 }
 import frontend.ast.{BinderId(..)}
 import backend.emit_plan.{EmitPlan, prepareWasmPlan}
@@ -22,10 +23,10 @@ import ir.extern_lower.{walkExternVars, externVar, implicitRuntimeFacts}
 import ir.extern_types.{ExternDeclFact(..)}
 import types.extern_source.{ExternBindingKind(..)}
 import support.ordmap.{omEmpty, omFromNames, omKeys, omFromPairs, omInsert}
-import support.util.{joinNl}
+import support.util.{joinNl, contains}
 import test.{
   Expectation, expectAll, expectEach, expectEqual, expectErrContains,
-  expectFalse, expectTextContainsAll, fail
+  expectFalse, expectTrue, expectTextContainsAll, fail
 }
 import types.capability_manifest.{
   EntryKey(..),
@@ -211,7 +212,7 @@ main =
   42
 """
         ["closApplyLines", "stderrByteImportLines"]
-        ["C_Tup2", "T_Tup2", "argarr", "clos", "codety"],
+        ["C_Tup2", "T_zZ_24_Tuple2", "argarr", "clos", "codety"],
     ),
     (
       "list",
@@ -550,6 +551,25 @@ test "gap census preserves its forced reference walk without requiring main" =
       plan
       cp)
 
+test "census helper domain and no-main neighbors" =
+  let run =
+    src =>
+      let (plan, cp) = prepared src
+      emitProgramGaps
+        (makeWasmEmitInput RawUnchecked PreludeFreeRuntime [])
+        plan
+        cp
+  expectAll [
+    expectTrue (contains "mdk_int_add" helperFunctionNames),
+    expectTrue (contains "mdk_str_concat" helperFunctionNames),
+    expectEqual (Ok []) (run "f x y = x + y"),
+    expectEqual (Ok []) (run "f x = x ++ \"z\""),
+    expectEqual (Ok []) (run "f x = y => x + y"),
+    match run "f x = missing x"
+      Ok gaps => expectTextContainsAll ["missing"] (joinNl gaps)
+      Err _ => fail "unknown user call must remain a census gap",
+  ]
+
 test "ordinary spellings cannot acquire a runtime declaration's result stamp" =
   let (_, cp) = prepared "main = 42"
   let context = wasmTypeContext omEmpty cp
@@ -593,3 +613,38 @@ test "restricting to the captured names keeps their stamps and drops the rest" =
     expectEqual "unstamped" (refText (envLookup "scratch" captured)),
     expectFalse (envHas "b" captured),
   ]
+
+test "planned host and JS imports use physical wire parameter counts" =
+  let demand =
+    demandOf
+      """
+extern zero : Unit -> <FFI "js"> Int
+  bind js "zero"
+extern mixed : Int -> Float -> <FFI "js"> Int
+  bind js "mixed"
+main = (zero (), mixed 2 3.0)
+"""
+  let rows =
+    filter
+      (i => i.namespace == "jsffi" || i.field == "mdk_write_byte")
+      demand.imports
+  expectEqual
+    [
+      ("env", "mdk_write_byte", " (param i32)", 1),
+      ("jsffi", "zero:Unit->Int", " (result i64)", 0),
+      (
+        "jsffi",
+        "mixed:Int,Float->Int",
+        " (param i64) (param f64) (result i64)",
+        2,
+      ),
+    ]
+    (map (i => (i.namespace, i.field, i.signature, i.parameterCount)) rows)
+
+test "tuple physical type identities match emitted root and constructor" =
+  let demand = demandOf "main = (1, 2)"
+  expectEqual
+    ["C_Tup2", "T_zZ_24_Tuple2"]
+    (filter
+      (t => t == "T_zZ_24_Tuple2" || t == "C_Tup2" || t == "T_Tup2")
+      demand.representationTypes)

@@ -1,4 +1,5 @@
 addCtor : TcEnv -> String -> Scheme -> TcEnv
+aliasOrImplPub : Decl -> Bool
 aliasOwnAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasVisibleTo : Int -> AliasDecl -> Bool
@@ -10,66 +11,37 @@ attachStandaloneSources : Map String Scheme -> List (String, EnvBinding) -> List
 bindingDeclared : TcEnv -> String -> Option CDeclared
 bindingWithStandalone : EnvBinding -> (StandaloneOrigin, ValueScheme) -> EnvBinding
 boundNames : UsePath -> Option (Map String Unit)
-buildClassEnv : GraphCtx -> List DeclEnvModule -> ClassEnv
 buildClassEnvGo : GraphCtx -> List DeclEnvModule -> ClassEnv -> ClassEnv
 buildFlatImplEnv : List Decl -> ImplEnv
-buildImplEnv : List DeclEnvModule -> ImplEnv
 buildImplEnvGo : List DeclEnvModule -> ImplAcc -> ImplAcc
 buildImplUniverse : List Decl -> ImplUniverse
 builtinClassName : BuiltinClass -> String
 builtinClassOrigin : GraphCtx -> BuiltinClass -> TyConOrigin
 builtinIfaceRef : GraphCtx -> BuiltinClass -> IfaceRef
 ceAddRows : List CeRow -> ClassEnv -> ClassEnv
-ceFunctorEnv : GraphCtx -> ClassEnv
-ceFunctorIface : Decl
-ceFunctorKey : RegKey
-ceFunctorMethod : IfaceMethod
-ceGradedEnv : GraphCtx -> ClassEnv
-ceGradedIface : Decl
-ceGradedKey : RegKey
-ceGradedMethod : IfaceMethod
 ceInsertRow : CeRow -> ClassEnv -> ClassEnv
 ceLookupAt : RegKey -> Int -> ClassEnv -> Option CeRow
 ceLookupGraph : RegKey -> ClassEnv -> Option CeRow
-ceMethodBar : IfaceMethod
-ceMethodFoo : IfaceMethod
 ceMethodName : (String, Ty, List (String, List Kind)) -> String
 ceMethodOf : List (String, List Kind) -> IfaceMethod -> (String, Ty, List (String, List Kind))
 ceMethodTyAt : IfaceRef -> String -> Int -> ClassEnv -> Option (List String, Ty, List (String, List Kind))
 ceMethodTyIn : List String -> String -> List (String, Ty, List (String, List Kind)) -> Option (List String, Ty, List (String, List Kind))
-ceMethodTyStr : (String, Ty, List (String, List Kind)) -> String
-ceProbeEnv : GraphCtx -> ClassEnv
-ceProbeKey : String -> RegKey
 ceRequiredAt : RegKey -> Int -> ClassEnv -> Option (List String)
 ceRowDoneKey : CeRow -> String
 ceRowIface : CeRow -> IfaceRef
 ceRowIfaceName : CeRow -> String
-ceRowIfaceNameAt : String -> Int -> ClassEnv -> String
 ceRowKey : CeRow -> RegKey
 ceRowLoc : CeRow -> Option Loc
 ceRowMethodNames : CeRow -> List String
-ceRowMethodNamesAt : String -> Int -> ClassEnv -> List String
-ceRowMethodTysAt : String -> Int -> ClassEnv -> List String
 ceRowMethods : CeRow -> List (String, Ty, List (String, List Kind))
 ceRowOrd : CeRow -> Int
-ceRowOriginTag : CeRow -> String
-ceRowParamKindNamesAt : RegKey -> Int -> ClassEnv -> List (List String)
 ceRowParamKinds : CeRow -> List (List Kind)
 ceRowRequired : CeRow -> List String
-ceRowSuperHeadsAt : String -> Int -> ClassEnv -> List String
-ceRowSuperOriginAt : String -> Int -> ClassEnv -> String
-ceRowSuperParamsAt : String -> Int -> ClassEnv -> List String
 ceRowSupers : CeRow -> List Super
 ceRowTyparams : CeRow -> List String
-ceRowTyparamsAt : String -> Int -> ClassEnv -> List String
 ceRowsOwnedBy : Int -> ClassEnv -> List CeRow
 ceRowsVisibleAt : Int -> ClassEnv -> List CeRow
-ceSameDeclIn : String -> List IfaceMethod -> Decl
 ceSlotKindsAt : RegKey -> Int -> Int -> ClassEnv -> Option (List Kind)
-ceSuperEq : Super
-ceSuperHead : Super -> String
-ceSuperOrigin : Super -> String
-ceSuperParams : Super -> List String
 classEnvDeclFact : Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc)
 classEnvDeclFacts : List Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc)
 classEnvFinish : ClassEnv -> ClassEnv
@@ -83,6 +55,7 @@ declEnvMarkReached : List String -> Map String Unit -> Map String Unit
 declEnvModule : GraphCtx -> Int -> String -> List Decl -> DeclEnvModule
 declEnvReachFrom : Map String (List String) -> List String -> Map String Unit -> Map String Unit
 declEnvRowVisible : Int -> DeclEnvModule -> List Decl
+declEnvSiblingSees : Int -> DeclEnvModule -> Bool
 declEnvVisibleAt : Int -> Int -> Bool
 declEnvVisibleTo : Int -> Int -> Bool -> Bool
 declEnvsOrdOf : String -> DeclEnvs -> Int
@@ -139,12 +112,7 @@ ieEntriesForIface : List ImplRow -> IfaceRef -> List Mono -> List KeyEntry
 ieEntriesForMethod : GraphCtx -> List ImplRow -> String -> Option (List IfaceRef) -> List Mono -> List KeyEntry
 ieFileRow : ImplRow -> ImplEnv -> ImplEnv
 ieFileRowByHead : ImplRow -> ImplEnv -> ImplEnv
-ieGenImplIn : String -> Decl
 ieHeadCandidateExists : ImplEnv -> IfaceRef -> HeadKey -> Bool
-ieHeadProbeAmod : List Decl
-ieHeadProbeDecls : List Decl
-ieHeadProbeEnv : GraphCtx -> ImplEnv
-ieHeadProbeZmod : List Decl
 ieHeadRows : Option HeadKey -> ImplEnv -> List ImplRow
 ieImplExistsForHeadGo : GraphCtx -> List ImplRow -> String -> TabKey -> Option (List IfaceRef) -> Bool
 ieImplExistsForHeadOf : ModuleCtx -> ImplEnv -> String -> HeadKey -> Option (List IfaceRef) -> Bool
@@ -152,12 +120,6 @@ ieIndexRows : List ImplRow -> ImplEnv -> ImplEnv
 ieInsertRow : ImplRow -> ImplEnv -> ImplEnv
 ieInsertRowAt : TabKey -> ImplRow -> ImplEnv -> ImplEnv
 ieInsertRowKeys : List TabKey -> ImplRow -> ImplEnv -> ImplEnv
-ieLooseImplIn : String -> Decl
-ieOtherImplIn : String -> Decl
-ieProbeBareKey : RegKey
-ieProbeBlobHead : HeadKey
-ieProbeEnv : GraphCtx -> ImplEnv
-ieProbeKey : String -> RegKey
 ieRowAdmittedBy : IfaceRef -> Option (List IfaceRef) -> Bool
 ieRowAnswersMethod : GraphCtx -> ImplRow -> List String -> String -> Option (List IfaceRef) -> Bool
 ieRowHeadMatches : List Ty -> List Mono -> Bool
@@ -177,13 +139,10 @@ ieRowWithSeq : List ImplRow -> Int -> Option ImplRow
 ieRowsAll : ImplEnv -> List ImplRow
 ieRowsOwnedBy : Int -> ImplEnv -> List ImplRow
 ieRowsVisibleAt : Int -> ImplEnv -> List ImplRow
-ieSameImplIn : String -> Decl
 ieSameOrdRun : Int -> List ImplRow -> List ImplRow -> (List ImplRow, List ImplRow)
 ieSnapAt : Int -> List (Int, ImplUniverse) -> ImplUniverse -> ImplUniverse
 ieSnapStep : List ImplRow -> (List (Int, ImplUniverse), ImplUniverse) -> (List (Int, ImplUniverse), ImplUniverse)
 ieSnapZero : (List (Int, ImplUniverse), ImplUniverse)
-ieTyBlob : Ty
-ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
 ieUniverseAt : Int -> ImplEnv -> ImplUniverse
 ifaceExportsIndex : GraphCtx -> Unit -> Map String (List (String, List String))
 ifaceMethodIdentPair : TyConOrigin -> IfaceMethod -> List (String, Ident)
@@ -281,9 +240,9 @@ rangedOver : GraphCtx -> EffLabel -> Bool -> Bool
 recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
 reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
 reexportedIfaceMethods : Map String (List (String, List String)) -> List Decl -> List (String, List String)
-reexportedIfaceMethodsOf : Map String (List (String, List String)) -> Decl -> List (String, List String)
+reexportedIfaceMethodsOf : Map String (List (String, List String)) -> UsePath -> List (String, List String)
 reexportedMethodIdents : Map String (List (String, Ident)) -> List Decl -> List (String, Ident)
-reexportedMethodIdentsOf : Map String (List (String, Ident)) -> Decl -> List (String, Ident)
+reexportedMethodIdentsOf : Map String (List (String, Ident)) -> UsePath -> List (String, Ident)
 removeAllS : List String -> List String -> List String
 requiredMethodNames : List IfaceMethod -> List String
 sameIfaceDecl : IfaceRef -> IfaceRef -> Bool

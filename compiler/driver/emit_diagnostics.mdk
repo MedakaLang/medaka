@@ -1,0 +1,37 @@
+import driver.diagnostics.{
+  CheckJson(..),
+  Diag,
+  emitDiagExitCode,
+  llvmSymbolDefectDiags,
+  ppDiagCliLines,
+  readFileSafe,
+  srcLinesArr,
+  symbolDefectDiags,
+}
+import driver.front_gate.{diagJsonPathOfEnv, writeDiagJson}
+import backend.wasm_symbols.{SymbolDefect}
+import backend.llvm_symbols as LlvmSymbols
+import support.stage_count.{stageExit}
+
+export
+refuseSymbolDefects : String -> List SymbolDefect -> <IO> Unit
+refuseSymbolDefects file ds = refusePhysical (symbolDefectDiags file ds)
+
+export
+refuseLlvmSymbolDefects : String -> List LlvmSymbols.SymbolDefect -> <IO> Unit
+refuseLlvmSymbolDefects file ds = refusePhysical (llvmSymbolDefectDiags file ds)
+
+refusePhysical : List (String, Diag) -> <IO> Unit
+refusePhysical diags =
+  let _ = match diagJsonPathOfEnv ()
+    Some path =>
+      let triples = map ((at, diag) => (at, readFileSafe at, [diag])) diags
+      writeDiagJson path (CjParts "" triples)
+    None =>
+      let _ =
+        map
+          ((at, diag) =>
+            ePutStrLn (ppDiagCliLines (srcLinesArr (readFileSafe at)) at diag))
+          diags
+      ()
+  stageExit emitDiagExitCode

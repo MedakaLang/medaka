@@ -35,7 +35,6 @@ import tools.gate_cmd.{gateHelpText, runGateCmd}
 import tools.interface_cmd.{interfaceHelpText, runInterfaceCmd}
 import tools.new_cmd.{newProject}
 import driver.build_cmd.{
-  BuildReport,
   BuildTarget(..),
   ppBuildReport,
   runBuild,
@@ -57,15 +56,14 @@ import driver.build_cmd.{
 }
 import support.util.{
   reverseL,
+  testFileSuffix,
   joinNl,
   joinWith,
   splitNl,
   startsWith,
   endsWith,
-  anyList,
   filterList,
   contains,
-  sortUniqS,
   listLen,
   schemeLineName,
   stringTrim,
@@ -114,21 +112,16 @@ import args.{
   flag,
   flagValue,
   lastValue,
-  flagValues,
   unknownFlagMessage,
   usageExitCode,
   withStrictDash,
 }
 import frontend.ast.{
-  letBindName, Decl(..), ExternDecl(..), Expr(..), Loc(..), Pat, LetBind(..),
-  EvTable, EvId
+  letBindName, Decl(..), ExternDecl(..), Expr(..), Loc(..), LetBind(..)
 }
 import frontend.parser.{
   parseWithPositions,
-  parseWithPositionsLocated,
   parseResult,
-  parseLocatedResult,
-  Positions,
 }
 import frontend.lexer.{tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
@@ -145,7 +138,6 @@ import driver.loader.{
   dropPathTriple,
   modIdToPath,
   findProjectRoot,
-  findProjectRootOrSelf,
   entrySearchRoots,
   projectTrustedMods,
   stdlibOwnership,
@@ -157,6 +149,7 @@ import driver.front_gate.{
   moduleLoadErrText,
   ppParseError,
 }
+import frontend.ast.{SiblingPair}
 import driver.diagnostics.{
   desugaredModPairs,
   CheckDrive(..),
@@ -167,13 +160,10 @@ import driver.diagnostics.{
   FrontInput(..),
   FrontPolicy(..),
   FrontOutput(..),
-  ppDiagCli,
   ppDiagCliSrc,
   ppDiagCliLines,
-  renderTcDiags,
   ppDiagBuckets,
   stdlibExportsReader,
-  diagOfResError,
   diagOfTypeError,
   relDiagPath,
   srcLinesArr,
@@ -182,23 +172,16 @@ import driver.diagnostics.{
   diagIdIsSyntax,
   Severity(..),
   Severity(..),
-  cjPosition,
-  cjRange,
-  cjRangeOfLoc,
-  cjDiagnostic,
-  cjFileEntry,
   cjAllToJson,
   flushRunEnvelope,
   pendingStaleNotice,
   pendingPreludeNotices,
   readDiagSrc,
-  optField,
-  cjFixJson,
   mkDiag,
   checkJsonFileParts,
+  siblingPairsOf,
   CheckJson(..),
   ppCheckJson,
-  cjFoldIntoFile,
   readFileSafe,
   diagIsError,
   diagIsWarn,
@@ -208,7 +191,6 @@ import driver.diagnostics.{
   renderTripleWarnings,
   residualOrGeneric,
   coherenceWarnCode,
-  runBuildWarnCodes,
   isCoherenceWarn,
   mainShapeWarnings,
   mainEntryError,
@@ -223,7 +205,7 @@ import json.{
   asString,
 }
 import types.publish.{TcReport(..), tcCode}
-import types.program_facts.{ProgramFacts, factsOfChecked}
+import types.program_facts.{ProgramFacts, factsOfChecked, withSibling}
 import types.typecheck.{
   TcDiag,
   driveInputsFor,
@@ -244,8 +226,6 @@ import eval.eval.{
   progArgsRef,
 }
 import tools.test_cmd.{
-  runTest,
-  runTestReport,
   runTestGradedReport,
   filterMatchedNothing,
   testHelpText,
@@ -256,8 +236,6 @@ import tools.test_cmd.{
   runTestOne,
   initTestSeed,
   printTestSeedLine,
-  cliTestReportOk,
-  cliTestReportJson,
   cliGradedTestReportOk,
   cliGradedTestReportJson,
   cliSeedOnFailure,
@@ -282,39 +260,16 @@ import tools.doc.{
   rebucketLibraryImpls,
 }
 import tools.lint.{
-  allRules,
-  lintProgram,
   StdlibIndex,
   StdlibIndexError(..),
   indexForRun,
-  applySuppressions,
-  applySuppressionsMulti,
-  applySuppressionsDirs,
-  applySuppressionsMultiDirs,
-  collectDirectives,
-  findingToDiag,
-  Finding,
-  Directive,
-  applyFixes,
   allRuleNames,
-  applyFindingFilters,
-  applyFindingDeny,
-  isFindingError,
-  lintFileDiagTriple,
   splitLintNames,
 }
 import tools.lint_cache.{storeEntries}
 import tools.lint_baseline.{
   LintBaseline,
   readLintBaseline,
-  baselineKeyOf,
-  baselineViolations,
-  baselineViolationLine,
-  applyBaselineToFindings,
-  applyBaselineToDiags,
-  baselineDiagViolations,
-  diagCodeOf,
-  findingRuleOf,
   renderLintBaseline,
 }
 import tools.codemod.{
@@ -863,8 +818,9 @@ runCheckCmd argv =
                 -- one is stdlib-root ownership with no `allow-internal` opt-out.
                 let (flatStdlib, ownedStdlib) =
                   stdlibOwnership target roots stdlibDir mods
-                let inputs =
-                  driveInputsFor !selectedProfile flatStdlib ownedStdlib
+                let inputs = { driveInputsFor !selectedProfile flatStdlib ownedStdlib |
+                  diSibling = siblingPairsOf roots modsWithPath,
+                }
                 let perfTLoad = now ()
                 let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
                 let _ =
@@ -1106,7 +1062,15 @@ checkRoute inputs typesMode allowInternal trusted roots rsrc csrc tsrc target mo
     FrontFile (_, _, decls) =>
       checkFileReport typesMode rsrc csrc tsrc target decls front
     FrontGraph mods modPairs =>
-      checkProjectReport rsrc csrc tsrc target mods modPairs front
+      checkProjectReport
+        rsrc
+        csrc
+        tsrc
+        target
+        inputs.diSibling
+        mods
+        modPairs
+        front
 
 -- `check`'s single-file report over its front-end run.
 checkFileReport : Bool ->
@@ -1174,18 +1138,23 @@ checkProjectReport : String ->
   String ->
   String ->
   String ->
+  List SiblingPair ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   FrontOutput CheckDump ->
   <IO> Unit
-checkProjectReport rsrc csrc tsrc target mods modPairs front =
+checkProjectReport rsrc csrc tsrc target sibling mods modPairs front =
   match front.foDriven
     None => dieMsg (ppDiagBuckets front.foDiags)
     Some dump =>
       -- The entry's guard-exhaustiveness lines, rendered whenever resolve accepted
       -- the graph.
       let exWarns =
-        entryExhaust (desugaredPrelude rsrc) (desugaredPrelude csrc) modPairs
+        entryExhaust
+          (desugaredPrelude rsrc)
+          (desugaredPrelude csrc)
+          sibling
+          modPairs
       match locatedProjectDiags front.foDiags
         -- BUGFIX (imported-module diagnostics): when there ARE type errors, render
         -- the accumulated per-module diagnostics LOCATED (`file:L:C: msg` + caret),
@@ -2702,7 +2671,7 @@ finishBuildArgs _ _ _ = Err "error: medaka build takes exactly one input file"
 -- typecheck, mainSchemeRef populated), force `main`.  Only reached AFTER the
 -- check-strength gate below (both arms: the front end's diagnostics, then its
 -- drive's report, which must carry `trChecked`), so a genuinely ill-typed
--- program never reaches evalModulesOutput (G1 soundness invariant).
+-- program never reaches evalModulesOutputRunFacts (G1 soundness invariant).
 -- [cohWarns] are the warnings the caller's own gate already computed, as (path,
 -- src, diags) triples: the single-file arm's whole warning set
 -- (`allWarnTriples`), the multi-module arm's `runBuildWarnCodes` only
@@ -2964,6 +2933,7 @@ runRunCmd argv =
         stdlibOwnership target roots stdlibDir mods
       let inputs = { driveInputsFor !selectedProfile flatStdlib ownedStdlib |
         diPreludeKey = Some (preludeGeneration rsrc csrc),
+        diSibling = siblingPairsOf roots modsWithPath,
       }
       let perfTLoad = now ()
       let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
@@ -3044,7 +3014,7 @@ runRunCmd argv =
                       finishRunEval
                         target
                         jsonMode
-                        (checkedFacts report)
+                        (withSibling inputs.diSibling (checkedFacts report))
                         trees
                         mods
                         (allWarnTriples tsrc target diags)
@@ -3130,7 +3100,7 @@ runRunCmd argv =
                       finishRunEval
                         target
                         jsonMode
-                        (checkedFacts report)
+                        (withSibling inputs.diSibling (checkedFacts report))
                         trees
                         mods
                         projWarns
@@ -3140,7 +3110,7 @@ runRunCmd argv =
                           (PerfMarks perfT0 perfTCheck allocCheck opCheck))
 -- G1 (SOUNDNESS): typecheck the WHOLE module graph and abort before
 -- eval unless the drive's report carries a checked program (`trChecked`).  A
--- type error makes evalModulesOutput miscompile (the G1 bug), so we never
+-- type error makes evalModulesOutputRunFacts miscompile (the G1 bug), so we never
 -- reach it.  Resolve-phase errors (e.g. PrivateNameAccess) ride a SEPARATE
 -- channel the report does not cover, so resolveModulesErrorsByFile is
 -- consulted FIRST (mirroring `check`/`build`) and run aborts with the same
@@ -3172,7 +3142,7 @@ elaborateRun inputs executionDriver rtD coreD modsD =
     None => ()
   (analysis, report, outputs)
 
--- B2 (RUN-EFFECTS): evalModulesOutputRunFacts is evalModulesOutput plus the real-I/O
+-- B2 (RUN-EFFECTS): evalModulesOutputRunFacts runs the program with the real-I/O
 -- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main
 -- reaches here already rewritten by `executedTrees`.
 runProgramOutput : ProgramFacts ->
@@ -3545,7 +3515,7 @@ runDocLibraryTargets outDir targets =
       prelude.pnRuntimeSrc
       prelude.pnCoreSrc
       stdlibDir
-      (filter (t => not (endsWith "_test.mdk" t)) targets)
+      (filter (t => not (endsWith testFileSuffix t)) targets)
     -- `rebucketLibraryImpls` runs at the `List ModuleDoc` level, after
     -- every module is computed and before ANY output is written, so the
     -- pages, the index and the inventory all read the same (already
@@ -3784,6 +3754,7 @@ analyzeLoaded prelude target roots stdlibDir fn modsWithPath =
           modsD)
       FrontInput {
         fiInputs = { driveInputsFor !selectedProfile False [] |
+          diSibling = siblingPairsOf roots modsWithPath,
           diManifestRequests = [EntryOverPrelude fn HostInvocation],
           diPreludeKey = Some (preludeGeneration rsrc csrc),
         },
@@ -4568,7 +4539,7 @@ dirOf2 : String -> String
 dirOf2 path = dirGo2 path (stringLength path)
 
 dirGo2 : String -> Int -> String
-dirGo2 path 0 = "."
+dirGo2 _path 0 = "."
 dirGo2 path i =
   if stringSlice (i - 1) i path == "/" then
     stringSlice 0 (i - 1) path

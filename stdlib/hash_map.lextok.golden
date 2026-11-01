@@ -15,8 +15,6 @@ UPPER "Display"
 COMMA
 UPPER "Option"
 COMMA
-UPPER "Mappable"
-COMMA
 UPPER "Hashable"
 COMMA
 UPPER "Index"

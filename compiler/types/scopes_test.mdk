@@ -2,7 +2,7 @@
 -- frame types intentionally have no Eq/Debug instances, so assertions compare
 -- projected immutable views and booleans.
 
-import test.{expectEqual, expectTrue}
+import test.{expectEqual}
 import frontend.ast.{TyConOrigin(..)}
 import types.evidence.{ScopeId(..)}
 import types.repr.{IfaceRef(..)}
@@ -11,11 +11,10 @@ import types.scopes.{
   ScopeCursor(..),
   ScopeFrame(..),
   ScopeOwner(..),
-  ScopeStore,
+  ScopeStore(..),
   binderAt,
   captureScopeCursor,
   closeScopeCursor,
-  copyScopeStore,
   enclosingDefaultBody,
   freshScope,
   freshScopeStore,
@@ -28,6 +27,12 @@ import types.scopes.{
   visibleOnChain,
 }
 import support.util.{listLen}
+
+copyScopeStore : ScopeStore -> ScopeStore
+copyScopeStore store = ScopeStore {
+  ssFrames = Ref (arrayCopy store.ssFrames.value),
+  ssNext = Ref store.ssNext.value,
+}
 
 data FrameView = FrameView {
   fvId : ScopeId,

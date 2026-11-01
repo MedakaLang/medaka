@@ -1507,7 +1507,7 @@ ARROW
 UPPER "Bool"
 NEWLINE
 IDENT "firstFragNl"
-IDENT "leading"
+IDENT "_leading"
 LBRACKET
 RBRACKET
 EQUAL
@@ -2690,7 +2690,7 @@ IDENT "src"
 LPAREN
 UPPER "LiteralCursor"
 IDENT "p"
-IDENT "quote"
+IDENT "_quote"
 IDENT "flavor"
 IDENT "part"
 IDENT "leading"
@@ -4206,8 +4206,6 @@ NEWLINE
 DEDENT
 NEWLINE
 DEDENT
-NEWLINE
-EXPORT
 NEWLINE
 IDENT "utf8FixIt"
 COLON

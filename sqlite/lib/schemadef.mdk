@@ -64,7 +64,6 @@ import parsec.lib.parser.{
   Parser,
   runParser,
   optional,
-  choice,
   spaces,
   eof,
   failWith,

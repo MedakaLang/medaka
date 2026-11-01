@@ -1,0 +1,4 @@
+import n.{countdown}
+import mp.*
+
+main = println (countdown 3 + mval)

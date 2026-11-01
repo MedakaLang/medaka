@@ -1,4 +1,5 @@
 addCellHead : Decl -> Map String Unit -> Map String Unit
+aliasOverlayDecls : Int -> List DeclEnvModule -> Decl -> List Decl
 alignScopedSchemes : List ScopedMember -> List (String, Scheme) -> List ScopedScheme
 appendDataUniverse : ModuleCtx -> String -> List Decl -> Unit
 appendUniverseAccums : GraphCtx -> String -> List Decl -> Unit
@@ -46,7 +47,7 @@ ifaceDfsCycleOneSuper : ClassEnv -> Int -> Ref (Map String Unit) -> List CeRow -
 ifaceDfsCycleSupers : ClassEnv -> Int -> Ref (Map String Unit) -> List CeRow -> List Super -> List String
 ifaceMethodSlotKeys : List Decl -> List String
 ifaceMonoName : (IfaceRef, List Mono) -> List (String, Mono)
-importDefinersOf : GraphCtx -> List Decl -> List (String, (String, String))
+importDefinersOf : GraphCtx -> String -> List Decl -> List (String, (String, String))
 importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
 importedCtorTypeDeclsFirstWins : List Decl -> Int -> List DeclEnvModule -> List Decl
 importedCtorTypeDeclsLastWins : List Decl -> Int -> List DeclEnvModule -> List Decl
@@ -76,8 +77,6 @@ memberOfIds : ModuleCtx -> List Mono -> Map Int Int
 memberOverlayDecl : Int -> List DeclEnvModule -> String -> UseMember -> List Decl
 memberPeelSource : ModuleCtx -> List (String, Ty) -> String -> Mono -> Option Mono
 membersSpanLoc : Map String (List (List Pat, Expr)) -> List String -> Option Loc
-methodReturnOwnershipProbe : Unit -> (List String, List String, Bool, Bool)
-methodReturnProbeStamp : ModuleCtx -> MethodSchemeRow -> MethodSchemeRow -> List Decl -> (String, String, String)
 moduleRefNameSet : List Decl -> Map String Unit
 moduleStampOrder : List StampStep
 noteEvidenceObservation : GraphCtx -> Obligation -> Unit
@@ -100,7 +99,6 @@ processSCC : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) ->
 processSCCs : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List (List String) -> (List (String, Scheme), Map String (List (List Pat, Expr)))
 processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr)) -> List String -> Map String Unit -> (List (String, Scheme), Map String (List (List Pat, Expr)))
 publicDataScopeDecls : List Decl -> List Decl
-publicValNames : List Decl -> List String
 recordEvidence : GraphCtx -> List Obligation -> Unit
 recordLiveRoots : ModuleCtx -> Unit -> Unit
 recordModuleStart : GraphCtx -> String -> Unit
@@ -149,8 +147,8 @@ stampNoting : ModuleCtx -> (SiteCtx -> Obligation -> Unit) -> Obligation -> Unit
 stampTailDecl : Map String Int -> Decl -> Decl
 stampTailDecls : Map String Int -> List Decl -> List Decl
 unjudgedRanges : Int -> Int -> List (Int, Int) -> List (Int, Int)
-useAdmittedRows : GraphCtx -> Bool -> List Decl -> List (String, (String, String))
-useDefinerRows : GraphCtx -> Bool -> UsePath -> List (String, (String, String))
+useAdmittedRows : (String -> List (String, (String, String))) -> Bool -> List Decl -> List (String, (String, String))
+useDefinerRows : (String -> List (String, (String, String))) -> Bool -> UsePath -> List (String, (String, String))
 userExternSchemes : ModuleCtx -> Map String TyConOrigin -> List Decl -> List (String, Scheme)
 verdictFinding : String -> Bool -> TcDiag -> DrainFinding
 wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl

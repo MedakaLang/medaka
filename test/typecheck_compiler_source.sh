@@ -305,6 +305,9 @@ compiler/tools/prop_runner_test.mdk"
 # same sprint. A filename entry granted on "nothing calls this file" cannot survive
 # the file acquiring callers, so the exemption is pinned to its four actual lines
 # the way the typecheck family's is.
+# `types/tc_env_test.mdk` holds the impl-environment probe corpus (the `ieByHead` immunity
+# probe row carries an unresolved impl origin) that used to sit in `tc_env.mdk` beside the
+# doctests it served; the fixture is a test input and the file feeds no pipeline stage.
 # The scope and typecheck sibling tests observe unresolved default-owner origins
 # in total matches. Their sole eliminator lines are pinned below; this grants no
 # new constructor mint.
@@ -329,6 +332,7 @@ compiler/types/route_key.mdk
 compiler/types/scopes_test.mdk
 compiler/types/tc_diag_text.mdk
 compiler/types/tc_env.mdk
+compiler/types/tc_env_test.mdk
 compiler/types/tc_module.mdk
 compiler/types/tc_mono.mdk
 compiler/types/tc_solve.mdk
@@ -491,7 +495,7 @@ check_origin_observers() {
   echo "  ok: $1 only observes OriginUnresolved"
 }
 check_origin_observers compiler/tools/prop_plan.mdk \
-  'hasAmbiguousUnresolved (TypeKey n OriginUnresolved) defs = listLength defs > 1' || exit 1
+  'hasAmbiguousUnresolved (TypeKey _n OriginUnresolved) defs = listLength defs > 1' || exit 1
 check_origin_observers compiler/tools/prop_runner_test.mdk \
   'stampBuiltinTy (ty@(TyCon { tyConName, tyConOrigin = OriginUnresolved })) =' || exit 1
 check_origin_observers compiler/tools/native_props_test.mdk \
@@ -553,7 +557,7 @@ check_origin_observers compiler/types/capability_manifest.mdk \
 # no identity a `stampTyHead` immunity rule could make permanent — the value is never
 # compared for identity, only for `irName == ""`.
 # ⚠️ #1519 (ARCH A-3.3) ADDED TWO LINES, BOTH ELIMINATOR ARMS, SAME SHAPE AS
-# `originPhrase`'s ABOVE. `ceRowOriginTag`/`ceSuperOrigin` (`CE`'s doctest-only
+# `originPhrase`'s ABOVE. `ceRowOriginTag`/`ceSuperOrigin` (`CE`'s test-only
 # projections of `IfaceRef.irOrigin`/`Super.superOrigin`) enumerate all three
 # `TyConOrigin` inhabitants rather than closing the match with a wildcard — a
 # wildcard would still be TOTAL (an earlier revision of that code argued
@@ -568,7 +572,7 @@ check_origin_observers compiler/types/capability_manifest.mdk \
 # ⚠️ ARCH B-2.1-a3 (Stage B sprint) ADDED ONE LINE, AND IT IS THE FIRST ENTRY ON THIS
 # LIST THAT *CONSTRUCTS* — stated plainly because that is a stronger claim than every
 # entry above it. `implOrigin = OriginUnresolved,` is inside `ieLooseImplIn`, a
-# DOCTEST FIXTURE in the `IE` doctest block (grep `ieLooseImplIn`), not a production
+# TEST FIXTURE in `compiler/types/tc_env_test.mdk` (grep `ieLooseImplIn`), not a production
 # mint: the #1519 entries above have `OriginUnresolved` on the LEFT of an eliminator
 # arm, whereas this one puts it on the right.
 #
@@ -1005,13 +1009,13 @@ activeFunDictPredOf gctx request useScope =
 goalRequestOfKind : ModuleCtx -> String -> EntailKind -> Option PredicateRequest
 goalPredOf : ModuleCtx -> String -> Mono -> Option PredicateRequest
 goalPredOfOp : ModuleCtx -> String -> Option PredicateRequest
-activeDictVarOfEncl mctx None m encl useScope =
+activeDictVarOfEncl mctx None m _encl useScope =
 map LegacyScalar (activeDictVarOf mctx.mcGraph m useScope)
 activeDictVarOfEncl mctx (Some request) m encl useScope =
 enclSlotIndex mctx None target encl = elemIndex target (enclSlotIds mctx encl)
 enclSlotIndex mctx (Some request) target encl =
 implReqDictVarOf mctx.mcGraph (Some request) m useScope
-entailAssumVar mctx _ m encl _ useScope (EKNestedTop iface _ _ rest) =
+entailAssumVar mctx _ m _encl _ useScope (EKNestedTop iface _ _ rest) =
 goalMatchesGiven : GraphCtx -> ScopeId -> IfaceRef -> List Mono -> Bool
 mctx.mcCells.funPredicateSlotsRef :=
 mctx.mcCells.methodPredicateSlotsRef :=
@@ -1450,7 +1454,7 @@ fi
 # its single route goal. The scalar-only recorder remains only as the fallback
 # inside recordBinopGoals for prelude-free arithmetic.
 numeric_operator_required='  recordBinopGoals at.teDyn.dcModule op dref lt
-goalRequestOfKind mctx _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
+goalRequestOfKind _mctx _ (EKPredicateOp _ _ predicate) = Some
 entailAssumVar mctx request m encl _ useScope (EKPredicateOp _ _ _) =
 entailInst sx name m encl useScope _ (EKPredicateOp _ _ predicate) =
   (stampPredicateOpRouteVal sx encl useScope name m predicate, [])'

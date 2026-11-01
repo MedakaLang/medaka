@@ -46,7 +46,6 @@ import frontend.ast.{
   qualifierSource,
   EffParamTy(..),
   effAtomSurface,
-  authTermSurface,
   effAtomBare,
   effAtomWith,
   Route(..),
@@ -389,7 +388,6 @@ evSiteRouteIn idx ev = match siteRouteResultIn idx ev
   Ok r => r
   Err message => panic message
 
-export
 siteRouteResultIn : EvIndex -> EvId -> Result String Route
 siteRouteResultIn idx ev
   | isUnminted ev = Ok RNone
@@ -408,7 +406,6 @@ evSiteLitIn idx ev = match siteLitResultIn idx ev
   Ok answer => answer
   Err message => panic message
 
-export
 siteLitResultIn : EvIndex -> EvId -> Result String (Option Float, Route)
 siteLitResultIn idx ev
   | isUnminted ev = Ok (None, RNone)
@@ -427,7 +424,6 @@ evSiteHeadIn idx ev = match siteHeadResultIn idx ev
   Ok head => head
   Err message => panic message
 
-export
 siteHeadResultIn : EvIndex -> EvId -> Result String String
 siteHeadResultIn idx ev
   | isUnminted ev = Ok ""

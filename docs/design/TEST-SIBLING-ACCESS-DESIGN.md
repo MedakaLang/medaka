@@ -1,6 +1,6 @@
 # Test siblings see their subject's private names
 
-**Status:** DECIDED 2026-10-18 — semantics ruled (follow Rust unless there is a good reason not to); implementation not started.
+**Status:** DECIDED 2026-10-18 — semantics ruled (follow Rust unless there is a good reason not to); implemented except the items listed in §8 (stdlib siblings under `medaka test`; the typecheck D8 sinks stay exported; 33 of 34 M3 rows deferred): F1 #4314, F2 #4703, F3 #4717, migration #4616 (PR #4724).
 
 A `foo_test.mdk` beside `foo.mdk` may import any of `foo`'s top-level names, exported or not,
 the way a Rust `#[cfg(test)] mod tests` sees its parent's private items. This document records
@@ -58,7 +58,7 @@ Val, 2026-10-18: follow Rust's decisions, and deviate only with a good reason.
 | What the sibling sees | The subject's whole top-level scope: values, types, the constructors of abstract (`export data`) and private types, newtype constructors, private interfaces and their methods, non-exported impls, effect labels, and the names the subject itself imports | `use super::*` in a child module, including the parent's private `use` imports |
 | How access is granted | By position. Ordinary `import` syntax, no new keyword | Visibility follows the tree; the `use` line is ordinary |
 | Whose private names | Its own subject only, not other files in the directory | A child sees its ancestors, not its siblings |
-| Re-exporting a name reached only through the privilege | Error | E0364/E0365 |
+| Re-exporting a name reached only through the privilege | A named re-export (`export import subject.{step}`) is an error, once per named name; a glob re-export (`export import subject.*`) re-exports the exported view only and raises no error | E0364/E0365 for a named `pub use`; `pub use super::*` skips the private items silently |
 | A module whose file is not `*_test.mdk` importing one that is | Error | `#[cfg(test)]` items do not exist in a non-test build |
 | A sibling's own new exports, including ones whose types mention the subject's private types | Allowed (only `_test` modules can import them) | A child's `pub fn` may return a parent-private type; `private_interfaces` is a lint, not an error |
 | A private helper used only by the sibling | Still reported by `rule-dead-code`; the remedy is to move it into the sibling | Reported dead in a non-test build |
@@ -81,8 +81,8 @@ Val, 2026-10-18: follow Rust's decisions, and deviate only with a good reason.
 `S` is the sibling of `M` exactly when all of these hold:
 
 - `S`'s file name is `M`'s file name with `.mdk` replaced by `_test.mdk`;
-- both files are in the same directory, compared after canonicalization;
-- both resolve to the same project root (the same `medaka.toml`, or both in the stdlib tree).
+- both files are in the same directory, compared after canonicalization (so they also share
+  one project root).
 
 The relation is physical, not a comparison of module ids. Stdlib module ids are bare names, so
 an id rule would let a user's root-level `net_test.mdk` see stdlib `net`'s private names. The
@@ -103,7 +103,7 @@ step n = n + 1
 
 -- file: counter_test.mdk
 import test.{expectEqual}
-import counter.{Counter(..), step}
+import counter.{Counter(..), step, tick}
 
 test "step adds one" = expectEqual 2 (step 1)
 
@@ -200,7 +200,7 @@ each of them one producer to read, rather than one more derivation to reconcile.
 | M-IDENTITY, #2563 (identity-key every cross-module namespace) | Its remaining scope includes the typechecker's import-scope ladders (`applyCtorScopeOverrides` → `scopedCtorEntry` → `importedCtorEntry`, and the record rung). They answer "which module's declaration does this importer's name denote" (#2563's wording): they choose among candidates that are already visible. Which names are visible at all comes from the `public*` family in §4.3. | Only the `public*` family has to change for a sibling to typecheck. The ladders stay untouched and stay #2563's; when #2563 retires them it reads the same producer. The feature does not wait on M-IDENTITY. |
 | Phase 2 as planned 2026-10-19: sprint 1 the cell-lifetime table and the `tc_types` leaf, sprint 2 lowering and eval read `CheckedProgram`, then a gate between Phase 3 C1/C2 and state threading | Every Phase 2 sprint lives in `typecheck.mdk`. Slice 1 touches no Phase 2 source, but shares the LEG A golden mechanism (`frontend.resolve` is a LEG A module). | Each slice runs serially between Phase 2 sprints, never in parallel with one. Slice 2 edits `typecheck.mdk` and carries the D1 growth ratchet. Replacing five projections with calls should shrink the file; if it grows, the override names where the lines go. |
 | Phase 3 C1, the `ModuleInterface` codec | C1 serializes "a module's published export surface". | C1 serializes the subsystem's output, so slice 1 lands before C1. The full view (§3.1) does not exist until slice 3; if C1 exists by then, slice 3 adds the full view to the interface under a format-version bump, which the codec has by design. Slices 2 and 3 do not gate Phase 3. |
-| The interpreter's export table | Eval's `ModExports` is built by the eval driver from declarations (`evalModulesWith`), not installed by the typechecker; Phase 2 sprint 2's installed-table deletion does not move it. | Eval's switch belongs to slice 3, and moves `evalModules` (`compiler/eval/eval.mdk`) and `cevalModules` (`compiler/ir/core_ir_eval.mdk`) together ([T-EVAL-LOCKSTEP]). |
+| The interpreter's export table | Eval's `ModExports` is built by the eval driver from declarations (`evalModulesWith`), not installed by the typechecker; Phase 2 sprint 2's installed-table deletion does not move it. | Eval's switch moved into slice 2 (see the deviation in §6). `evalModules` (`compiler/eval/eval.mdk`) and `cevalModules` (`compiler/ir/core_ir_eval.mdk`) move together, and both call `eval.moduleExports` ([T-EVAL-LOCKSTEP]). |
 
 **In the playbook.** `compiler/ARCHITECTURE-PLAYBOOK.md` carries this design as follows:
 
@@ -242,10 +242,30 @@ each of them one producer to read, rather than one more derivation to reconcile.
    §3.1) and how many become private names of the subject, since the first kind changes what
    the subject module contains.
 
-Slice 1 can start now, between Phase 2 sprints.
+**Deviation (2026-10-31): eval's switch moved from slice 3 into slice 2.** Reading the exported
+view in `evalModules` and `cevalModules` is behaviour-preserving except where eval exported names
+the module does not export. The slice-2 census found those (#4710: a `run` that bound a private
+or impl-method name through a wildcard import ahead of an explicit one), and the same change that
+reads the exported view fixes them. Slices 1 and 2 are landed (F1 #4314, F2 #4703), and so is
+slice 3 (F3 #4717).
 
 ## 7. Out of scope
 
 - `medaka test foo.mdk` also running `foo_test.mdk`.
 - Finer-grained visibility (`pub(crate)`-style).
 - Changing which doctests may see private names.
+
+## 8. Known limits
+
+Cautions measured during the migration (#4616). A private type alias imported by name
+into a sibling does not expand, so leave an alias exported when a sibling uses it in a
+signature. A sibling sees the names its subject imports, so removing an "unused" import from
+a subject can break its sibling; import the name from its defining module instead. Under `medaka test`, a
+stdlib sibling (`stdlib/regex_test.mdk`, `stdlib/toml_test.mdk`) loses its whole sibling
+view, names and record fields alike (`unbound variable parseGetInt` for
+`stdlib/toml_test.mdk`), while `medaka check` accepts the same file. The cause is not
+established; `siblingSubjectId` (`compiler/driver/loader.mdk`) not matching the stdlib
+module id is the suspect.
+
+Two migration items are not done: the typecheck D8 sinks stay exported, and 33 of the 34 M3
+rows are deferred.

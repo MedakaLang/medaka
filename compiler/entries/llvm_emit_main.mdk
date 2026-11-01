@@ -27,11 +27,10 @@ import types.tc_elab.{grantWholeDomain}
 import types.program_facts.{emptyFacts}
 import ir.core_ir_lower.{
   lowerProgramEmitWith,
-  declaredRecordFieldOrders,
 }
 import backend.llvm_emit.{emitProgram, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
-import driver.diagnostics.{refuseLlvmSymbolDefects}
+import driver.emit_diagnostics.{refuseLlvmSymbolDefects}
 
 export
 oracleMain : Unit -> <IO> Unit

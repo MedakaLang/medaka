@@ -30,7 +30,7 @@ import frontend.ast.{
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import support.util.{isEmptyL, reverseL}
-import hash_map.{has}
+import hash_map
 import tools.lint_core.{
   Category(..),
   Ctx(..),
@@ -197,7 +197,7 @@ bindChainFinding loc _ = Finding {
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "reverseL" false))))
-(DUse false (UseGroup ("hash_map") ((mem "has" false))))
+(DUse false (UseName ("hash_map")))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "Visitor" true) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "declHeadHits" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "matchToMapErrPassthru" false) (mem "matchToMapTransform" false) (mem "ruleNameBindChainToDo" false) (mem "stmtExprs" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
@@ -236,7 +236,7 @@ bindChainFinding loc _ = Finding {
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "reverseL" false))))
-(DUse false (UseGroup ("hash_map") ((mem "has" false))))
+(DUse false (UseName ("hash_map")))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "Visitor" true) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "declHeadHits" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "matchToMapErrPassthru" false) (mem "matchToMapTransform" false) (mem "ruleNameBindChainToDo" false) (mem "stmtExprs" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))

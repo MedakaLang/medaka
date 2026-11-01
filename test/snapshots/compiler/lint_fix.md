@@ -1,5 +1,5 @@
 # META
-source_lines=287
+source_lines=303
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_fix.mdk — turns the fixes findings carry into validated
@@ -7,7 +7,7 @@ stages=DESUGAR,MARK
 -- registry and nothing from `types/`: the caller passes the linter in as a
 -- function, so the driver sees only findings.
 
-import list.{sortBy}
+import list.{sortBy, drop}
 import frontend.ast.{Loc(..)}
 import frontend.ast_walk.{ExprKind(..)}
 import frontend.lex_scan.{scanRawChars}
@@ -23,7 +23,7 @@ import support.source_index.{sourcePositionToOffset}
 -- Why a fix run produced nothing.  The input that does not parse is the
 -- caller's; an output that does not parse is a fixer's bug, and is never
 -- returned.
-public export data FixError =
+export data FixError =
   | SourceDoesNotParse String
   | FixedOutputDoesNotParse Int String
   | EditsRejected EditError
@@ -243,6 +243,22 @@ fixPass lint limit path n total src = match lint path src
       Err e => Err (EditsRejected e)
       Ok out => fixPass lint limit path (n + 1) (total + length chosen) out
 
+-- The edit that removes item `i` of a delimited list whose items sit at `items`
+-- (in source order) together with one separator: an item with a successor goes
+-- with the text up to that successor's start, the last one with the text from
+-- its predecessor's end.  `None` for a sole item, which has no separator to take,
+-- and for an index outside the list.
+export
+removeListItem : List Loc -> Int -> Option FixEdit
+removeListItem items i =
+  let before = if i > 0 then drop (i - 1) items else []
+  match (drop i items, before)
+    ((Loc _ sl sc _ _) :: (Loc _ nl nc _ _) :: _, _) =>
+      Some (FixEdit (Loc "" sl sc nl nc) "")
+    ((Loc _ _ _ el ec) :: [], (Loc _ _ _ pl pc) :: _ :: _) =>
+      Some (FixEdit (Loc "" pl pc el ec) "")
+    _ => None
+
 -- How tightly a replacement's text binds.  `Closed` text (a literal, a name,
 -- anything already bracketed) reads the same in any position; `Applied` text
 -- (a call) binds tighter than any operator but needs brackets as an operand of
@@ -290,7 +306,7 @@ separatesChildren KMapLit = True
 separatesChildren KSetLit = True
 separatesChildren _ = False
 # DESUGAR
-(DUse false (UseGroup ("list") ((mem "sortBy" false))))
+(DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "drop" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true))))
 (DUse false (UseGroup ("frontend" "lex_scan") ((mem "scanRawChars" false))))
@@ -300,7 +316,7 @@ separatesChildren _ = False
 (DUse false (UseGroup ("tools" "source_edits") ((mem "EditError" false) (mem "SourceEdit" true) (mem "applySourceEdits" false) (mem "validateSourceEdits" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "makeSnapshot" false) (mem "snapshotId" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "sourcePositionToOffset" false))))
-(DData Public "FixError" () ((variant "SourceDoesNotParse" (ConPos (TyCon "String"))) (variant "FixedOutputDoesNotParse" (ConPos (TyCon "Int") (TyCon "String"))) (variant "EditsRejected" (ConPos (TyCon "EditError")))) ())
+(DData Abstract "FixError" () ((variant "SourceDoesNotParse" (ConPos (TyCon "String"))) (variant "FixedOutputDoesNotParse" (ConPos (TyCon "Int") (TyCon "String"))) (variant "EditsRejected" (ConPos (TyCon "EditError")))) ())
 (DTypeSig true "fixErrorText" (TyFun (TyCon "FixError") (TyCon "String")))
 (DFunDef false "fixErrorText" ((PCon "SourceDoesNotParse" (PVar "msg"))) (EVar "msg"))
 (DFunDef false "fixErrorText" ((PCon "FixedOutputDoesNotParse" (PVar "pass") (PVar "msg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the fixed source of pass ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "pass")))) (ELit (LString " does not parse: "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))
@@ -366,6 +382,8 @@ separatesChildren _ = False
 (DFunDef false "applyFixes" ((PVar "lint") (PVar "limit") (PVar "path") (PVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fixPass") (EVar "lint")) (EVar "limit")) (EVar "path")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "src")))
 (DTypeSig false "fixPass" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Finding"))))) (TyFun (TyCon "Applicability") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "FixError")) (TyCon "FixRun")))))))))
 (DFunDef false "fixPass" ((PVar "lint") (PVar "limit") (PVar "path") (PVar "n") (PVar "total") (PVar "src")) (EMatch (EApp (EApp (EVar "lint") (EVar "path")) (EVar "src")) (arm (PCon "Err" (PVar "msg")) () (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EVar "SourceDoesNotParse") (EVar "msg"))) (EApp (EVar "Err") (EApp (EApp (EVar "FixedOutputDoesNotParse") (EVar "n")) (EVar "msg"))))) (arm (PCon "Ok" (PVar "findings")) () (EBlock (DoLet false false (PVar "snap") (EApp (EApp (EApp (EApp (EVar "makeSnapshot") (EVar "path")) (EVar "None")) (EVar "n")) (EVar "src"))) (DoLet false false (PVar "chosen") (EApp (EApp (EApp (EVar "chooseFixes") (EVar "limit")) (EVar "snap")) (EApp (EVar "fixesOf") (EVar "findings")))) (DoExpr (EIf (EApp (EVar "isEmpty") (EVar "chosen")) (EApp (EVar "Ok") (EApp (EApp (EVar "Settled") (EVar "src")) (EVar "total"))) (EIf (EBinOp ">=" (EVar "n") (EVar "maxPasses")) (EApp (EVar "Ok") (EApp (EApp (EVar "Capped") (EVar "src")) (EVar "total"))) (EMatch (EApp (EApp (EVar "applySourceEdits") (EVar "snap")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "r")) (EFieldAccess (EVar "r") "rsEdits"))) (EVar "chosen"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "EditsRejected") (EVar "e")))) (arm (PCon "Ok" (PVar "out")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fixPass") (EVar "lint")) (EVar "limit")) (EVar "path")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EBinOp "+" (EVar "total") (EApp (EVar "length") (EVar "chosen")))) (EVar "out")))))))))))
+(DTypeSig true "removeListItem" (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "FixEdit")))))
+(DFunDef false "removeListItem" ((PVar "items") (PVar "i")) (EBlock (DoLet false false (PVar "before") (EIf (EBinOp ">" (EVar "i") (ELit (LInt 0))) (EApp (EApp (EVar "drop") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "items")) (EListLit))) (DoExpr (EMatch (ETuple (EApp (EApp (EVar "drop") (EVar "i")) (EVar "items")) (EVar "before")) (arm (PTuple (PCons (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild) (PCons (PCon "Loc" PWild (PVar "nl") (PVar "nc") PWild PWild) PWild)) PWild) () (EApp (EVar "Some") (EApp (EApp (EVar "FixEdit") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "sl")) (EVar "sc")) (EVar "nl")) (EVar "nc"))) (ELit (LString ""))))) (arm (PTuple (PCons (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")) (PList)) (PCons (PCon "Loc" PWild PWild PWild (PVar "pl") (PVar "pc")) (PCons PWild PWild))) () (EApp (EVar "Some") (EApp (EApp (EVar "FixEdit") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "pl")) (EVar "pc")) (EVar "el")) (EVar "ec"))) (ELit (LString ""))))) (arm PWild () (EVar "None"))))))
 (DData Public "Binding" () ((variant "Closed" (ConPos)) (variant "Applied" (ConPos)) (variant "Open" (ConPos))) ())
 (DTypeSig true "parenIfNeeded" (TyFun (TyCon "Binding") (TyFun (TyApp (TyCon "Option") (TyCon "ExprKind")) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "parenIfNeeded" ((PCon "Closed") PWild (PVar "text")) (EVar "text"))
@@ -398,7 +416,7 @@ separatesChildren _ = False
 (DFunDef false "separatesChildren" ((PCon "KSetLit")) (EVar "True"))
 (DFunDef false "separatesChildren" (PWild) (EVar "False"))
 # MARK
-(DUse false (UseGroup ("list") ((mem "sortBy" false))))
+(DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "drop" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true))))
 (DUse false (UseGroup ("frontend" "lex_scan") ((mem "scanRawChars" false))))
@@ -408,7 +426,7 @@ separatesChildren _ = False
 (DUse false (UseGroup ("tools" "source_edits") ((mem "EditError" false) (mem "SourceEdit" true) (mem "applySourceEdits" false) (mem "validateSourceEdits" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "makeSnapshot" false) (mem "snapshotId" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "sourcePositionToOffset" false))))
-(DData Public "FixError" () ((variant "SourceDoesNotParse" (ConPos (TyCon "String"))) (variant "FixedOutputDoesNotParse" (ConPos (TyCon "Int") (TyCon "String"))) (variant "EditsRejected" (ConPos (TyCon "EditError")))) ())
+(DData Abstract "FixError" () ((variant "SourceDoesNotParse" (ConPos (TyCon "String"))) (variant "FixedOutputDoesNotParse" (ConPos (TyCon "Int") (TyCon "String"))) (variant "EditsRejected" (ConPos (TyCon "EditError")))) ())
 (DTypeSig true "fixErrorText" (TyFun (TyCon "FixError") (TyCon "String")))
 (DFunDef false "fixErrorText" ((PCon "SourceDoesNotParse" (PVar "msg"))) (EVar "msg"))
 (DFunDef false "fixErrorText" ((PCon "FixedOutputDoesNotParse" (PVar "pass") (PVar "msg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the fixed source of pass ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "pass")))) (ELit (LString " does not parse: "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))
@@ -474,6 +492,8 @@ separatesChildren _ = False
 (DFunDef false "applyFixes" ((PVar "lint") (PVar "limit") (PVar "path") (PVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fixPass") (EVar "lint")) (EVar "limit")) (EVar "path")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "src")))
 (DTypeSig false "fixPass" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Finding"))))) (TyFun (TyCon "Applicability") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "FixError")) (TyCon "FixRun")))))))))
 (DFunDef false "fixPass" ((PVar "lint") (PVar "limit") (PVar "path") (PVar "n") (PVar "total") (PVar "src")) (EMatch (EApp (EApp (EVar "lint") (EVar "path")) (EVar "src")) (arm (PCon "Err" (PVar "msg")) () (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EVar "SourceDoesNotParse") (EVar "msg"))) (EApp (EVar "Err") (EApp (EApp (EVar "FixedOutputDoesNotParse") (EVar "n")) (EVar "msg"))))) (arm (PCon "Ok" (PVar "findings")) () (EBlock (DoLet false false (PVar "snap") (EApp (EApp (EApp (EApp (EVar "makeSnapshot") (EVar "path")) (EVar "None")) (EVar "n")) (EVar "src"))) (DoLet false false (PVar "chosen") (EApp (EApp (EApp (EVar "chooseFixes") (EVar "limit")) (EVar "snap")) (EApp (EVar "fixesOf") (EVar "findings")))) (DoExpr (EIf (EApp (EMethodRef "isEmpty") (EVar "chosen")) (EApp (EVar "Ok") (EApp (EApp (EVar "Settled") (EVar "src")) (EVar "total"))) (EIf (EBinOp ">=" (EVar "n") (EVar "maxPasses")) (EApp (EVar "Ok") (EApp (EApp (EVar "Capped") (EVar "src")) (EVar "total"))) (EMatch (EApp (EApp (EVar "applySourceEdits") (EVar "snap")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "r")) (EFieldAccess (EVar "r") "rsEdits"))) (EVar "chosen"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "EditsRejected") (EVar "e")))) (arm (PCon "Ok" (PVar "out")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fixPass") (EVar "lint")) (EVar "limit")) (EVar "path")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EBinOp "+" (EVar "total") (EApp (EMethodRef "length") (EVar "chosen")))) (EVar "out")))))))))))
+(DTypeSig true "removeListItem" (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "FixEdit")))))
+(DFunDef false "removeListItem" ((PVar "items") (PVar "i")) (EBlock (DoLet false false (PVar "before") (EIf (EBinOp ">" (EVar "i") (ELit (LInt 0))) (EApp (EApp (EVar "drop") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "items")) (EListLit))) (DoExpr (EMatch (ETuple (EApp (EApp (EVar "drop") (EVar "i")) (EVar "items")) (EVar "before")) (arm (PTuple (PCons (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild) (PCons (PCon "Loc" PWild (PVar "nl") (PVar "nc") PWild PWild) PWild)) PWild) () (EApp (EVar "Some") (EApp (EApp (EVar "FixEdit") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "sl")) (EVar "sc")) (EVar "nl")) (EVar "nc"))) (ELit (LString ""))))) (arm (PTuple (PCons (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")) (PList)) (PCons (PCon "Loc" PWild PWild PWild (PVar "pl") (PVar "pc")) (PCons PWild PWild))) () (EApp (EVar "Some") (EApp (EApp (EVar "FixEdit") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "pl")) (EVar "pc")) (EVar "el")) (EVar "ec"))) (ELit (LString ""))))) (arm PWild () (EVar "None"))))))
 (DData Public "Binding" () ((variant "Closed" (ConPos)) (variant "Applied" (ConPos)) (variant "Open" (ConPos))) ())
 (DTypeSig true "parenIfNeeded" (TyFun (TyCon "Binding") (TyFun (TyApp (TyCon "Option") (TyCon "ExprKind")) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "parenIfNeeded" ((PCon "Closed") PWild (PVar "text")) (EVar "text"))

@@ -36,15 +36,12 @@ import frontend.ast.{externDecls}
 import backend.extern_catalog.{runtimeDomain}
 import frontend.ast.{Decl(..)}
 import types.typecheck.{
-  checkedFfiExternTypeNamesModules,
   preludeArgPosDictNames,
   preludeReturnPosDictNames,
 }
 import types.tc_types.{DriveOutputs}
 import ir.core_ir_lower.{
-  declaredRecordFieldOrders,
   lowerProgramEmitWith,
-  methodIfaceTable,
   ctorFieldTypeNames,
   validateFfiExternTypeNames,
 }
@@ -59,7 +56,7 @@ import entries.entry_support.{
   stampSiteFiles,
 }
 import support.timer.{statsEnabled, emitStats}
-import driver.diagnostics.{refuseSymbolDefects}
+import driver.emit_diagnostics.{refuseSymbolDefects}
 import types.program_facts.{ProgramFacts}
 import types.tc_occurrence.{constrainedSigNames}
 
@@ -87,7 +84,7 @@ emitTail : List (String, String, List Decl) ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-emitTail mods requirement outputs facts runtimeDecls coreD modules1 =
+emitTail mods requirement _outputs facts runtimeDecls coreD modules1 =
   let modules2 = stampSiteFiles mods modules1
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0

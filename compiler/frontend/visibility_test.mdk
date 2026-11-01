@@ -1,0 +1,333 @@
+-- Sibling test module for `compiler/frontend/visibility.mdk` ([P-TEST-SIBLING]).
+--
+-- The producer's facets over a module's own declarations: `declExportsIn` and
+-- `declExportsCtors` answer for one raw declaration, `exportedValueNames` lists the
+-- names a module's importers can bind as values, and `nsValues` is the namespace
+-- they come from, including the binders of an exported `let rec` group.  Each row
+-- parses a small module and reads the facet directly.  The per-namespace carriage
+-- rules over `export import` hops are exercised through `resolve_test` and the
+-- module fixtures, not here.
+
+import test.{expectEach, expectEqual, expectFalse, expectTrue}
+import frontend.ast.{Decl, Loc(..), UseMember(..), UsePath(..)}
+import frontend.desugar.{desugar}
+import frontend.parser.{parse}
+import frontend.visibility.{
+  ExportView(..),
+  ModuleExports,
+  buildExportsWith,
+  coreExports,
+  declExportsCtors,
+  declExportsIn,
+  directIn,
+  exportedValueNames,
+  expandMemberNames,
+  fullExportsOf,
+  isPubExp,
+  nsTypes,
+  nsValues,
+  privilegedCarry,
+  typeCtorsOf,
+  viewOf,
+}
+import support.ordmap.{OrdMap, omEmpty, omInsert}
+
+declsOf : String -> List Decl
+declsOf src = desugar (parse src)
+
+-- The one declaration of a single-declaration source, read raw.
+declOf : String -> Option Decl
+declOf src = match declsOf src
+  [d] => Some d
+  _ => None
+
+-- A source's one declaration answers `p`; a source that does not parse to exactly
+-- one declaration is a failed row.
+answers : (Decl -> Bool) -> String -> Bool
+answers p src = match declOf src
+  Some d => p d
+  None => False
+
+-- ── declExportsIn ─────────────────────────────────────────────────────────
+
+test "a public or abstract type names itself in the type namespace, a private one does not" = expectEach
+  [
+    (
+      "public",
+      expectTrue
+        (answers (declExportsIn nsTypes) "public export data T = A | B"),
+    ),
+    (
+      "abstract",
+      expectTrue (answers (declExportsIn nsTypes) "export data T = A | B"),
+    ),
+    ("private", expectFalse (answers (declExportsIn nsTypes) "data T = A | B")),
+  ]
+
+test "a declaration wrapped in an attribute is read raw, so it declares nothing" =
+  expectFalse
+    (answers
+      (declExportsIn nsTypes)
+      "@deprecated \"old\"\nexport data T = A | B")
+
+-- ── declExportsCtors ──────────────────────────────────────────────────────
+
+test "only a public data type exports constructors, not an abstract one nor a newtype" = expectEach
+  [
+    (
+      "public",
+      expectTrue (answers declExportsCtors "public export data T = A | B"),
+    ),
+    (
+      "abstract",
+      expectFalse (answers declExportsCtors "export data T = A | B"),
+    ),
+    (
+      "newtype",
+      expectFalse (answers declExportsCtors "export newtype W = W Int"),
+    ),
+    ("private", expectFalse (answers declExportsCtors "data T = A | B")),
+  ]
+
+-- ── exportedValueNames ────────────────────────────────────────────────────
+
+test "a public signature and its public definition each name the binding, a private one names nothing" = expectEach
+  [
+    (
+      "public",
+      expectEqual
+        ["f", "f"]
+        (exportedValueNames (declsOf """
+export f : Int
+export f = 1
+""")),
+    ),
+    (
+      "private",
+      expectEqual [] (exportedValueNames (declsOf """
+g : Int
+g = 2
+""")),
+    ),
+  ]
+
+test "a public interface names its methods and a private one does not" = expectEach
+  [
+    (
+      "public",
+      expectEqual
+        ["q"]
+        (exportedValueNames
+          (declsOf """
+export interface Q a where
+  q : a -> Int
+""")),
+    ),
+    (
+      "private",
+      expectEqual
+        []
+        (exportedValueNames (declsOf """
+interface R a where
+  r : a -> Int
+""")),
+    ),
+  ]
+
+test "a public extern is named" =
+  expectEqual
+    ["foo"]
+    (exportedValueNames (declsOf "export extern foo : Int -> Int"))
+
+test "an attribute over a public definition is looked through" =
+  expectEqual
+    ["h"]
+    (exportedValueNames (declsOf "@deprecated \"old\"\nexport h = 1"))
+
+-- ── nsValues: the binders of an exported `let rec` group ──────────────────
+
+test "the value namespace holds the binders of an exported let rec group, not a private one's" = expectEach
+  [
+    (
+      "public",
+      expectEqual
+        ["countdown"]
+        (directIn
+          nsValues
+          (declsOf
+            "export let rec countdown n = if n == 0 then 7 else countdown (n - 1)")),
+    ),
+    (
+      "private",
+      expectEqual
+        []
+        (directIn
+          nsValues
+          (declsOf
+            "let rec countdown n = if n == 0 then 7 else countdown (n - 1)")),
+    ),
+  ]
+
+-- ── the two views ─────────────────────────────────────────────────────────
+-- The full view is what a module's test sibling sees: every top-level name of
+-- the module, and the names the module imports.
+
+subjectSrc : String
+subjectSrc =
+  """
+import lib.{shared}
+export data Counter = Counter Int
+data Hidden = Hidden Int
+export newtype Meters = Meters Int
+interface Sized a where
+  size : a -> Int
+effect Beep
+export tick : Counter -> Counter
+tick (Counter n) = Counter (step n)
+step : Int -> Int
+step n = n + 1
+"""
+
+-- The surfaces of a module `lib` exporting one value, as the known map an
+-- importer of `lib` judges against.
+libKnown : OrdMap ModuleExports
+libKnown =
+  omInsert
+    "lib"
+    (buildExportsWith
+      (coreExports [])
+      omEmpty
+      "lib"
+      (declsOf "export shared : Int\nexport shared = 1")
+      [])
+    omEmpty
+
+subjectExports : ExportView -> ModuleExports
+subjectExports ExportedView =
+  buildExportsWith (coreExports []) libKnown "subj" (declsOf subjectSrc) []
+subjectExports FullView =
+  fullExportsOf (coreExports []) libKnown "subj" (declsOf subjectSrc)
+
+isFull : ExportView -> Bool
+isFull FullView = True
+isFull ExportedView = False
+
+test "only the importer whose subject a module is sees it in the full view" = expectEach
+  [
+    ("the subject itself", expectTrue (isFull (viewOf (Some "subj") "subj"))),
+    ("another module", expectFalse (isFull (viewOf (Some "subj") "other"))),
+    ("an importer with no subject", expectFalse (isFull (viewOf None "subj"))),
+  ]
+
+test "the full view holds what the exported view withholds" = expectEach [
+  (
+    "the private value",
+    expectEqual
+      (False, True)
+      (
+        isPubExp (subjectExports ExportedView) "step",
+        isPubExp (subjectExports FullView) "step",
+      ),
+  ),
+  (
+    "the abstract type's constructor",
+    expectEqual
+      (None, Some ["Counter"])
+      (
+        typeCtorsOf "Counter" (subjectExports ExportedView),
+        typeCtorsOf "Counter" (subjectExports FullView),
+      ),
+  ),
+  (
+    "the private type and its constructor",
+    expectEqual
+      (None, Some ["Hidden"])
+      (
+        typeCtorsOf "Hidden" (subjectExports ExportedView),
+        typeCtorsOf "Hidden" (subjectExports FullView),
+      ),
+  ),
+  (
+    "the newtype's constructor, which `Meters(..)` binds beside the type",
+    expectEqual
+      (["Meters"], ["Meters", "Meters"])
+      (
+        boundNames
+          (expandMemberNames
+            (subjectExports ExportedView)
+            (UseMember "Meters" True noLoc None)),
+        boundNames
+          (expandMemberNames
+            (subjectExports FullView)
+            (UseMember "Meters" True noLoc None)),
+      ),
+  ),
+  (
+    "the private interface's method",
+    expectEqual
+      (False, True)
+      (
+        isPubExp (subjectExports ExportedView) "size",
+        isPubExp (subjectExports FullView) "size",
+      ),
+  ),
+  (
+    "the private effect label",
+    expectEqual
+      (False, True)
+      (
+        isPubExp (subjectExports ExportedView) "Beep",
+        isPubExp (subjectExports FullView) "Beep",
+      ),
+  ),
+  (
+    "a name the module imports",
+    expectEqual
+      (False, True)
+      (
+        isPubExp (subjectExports ExportedView) "shared",
+        isPubExp (subjectExports FullView) "shared",
+      ),
+  ),
+]
+
+test "a re-export of the subject carries a privileged name only from the full view" = expectEach
+  [
+    (
+      "a private value among exported ones",
+      expectEqual
+        ["step"]
+        (privilegedCarry
+          (subjectExports ExportedView)
+          (subjectExports FullView)
+          (UseGroup ["subj"] [member "tick", member "step"])),
+    ),
+    (
+      "an abstract type's constructors",
+      expectEqual
+        ["Counter"]
+        (privilegedCarry
+          (subjectExports ExportedView)
+          (subjectExports FullView)
+          (UseGroup ["subj"] [UseMember "Counter" True noLoc None])),
+    ),
+    (
+      "an exported value alone",
+      expectEqual
+        []
+        (privilegedCarry
+          (subjectExports ExportedView)
+          (subjectExports FullView)
+          (UseGroup ["subj"] [member "tick"])),
+    ),
+  ]
+
+member : String -> UseMember
+member n = UseMember n False noLoc None
+
+noLoc : Loc
+noLoc = Loc "" 0 0 0 0
+
+-- The names an expanded member list binds, in order.
+boundNames : List (String, String, Loc) -> List String
+boundNames = map ((name, _, _) => name)

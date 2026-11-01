@@ -12,7 +12,7 @@ import types.manifest_publish.{
 }
 import types.capability_manifest.{
   EntryKey(..), InvocationProtocol(..), ManifestRequest(..), CapabilityManifest,
-  FrozenAuthority(..), FrozenVariable, FrozenAtom, ManifestDefect(..)
+  FrozenAuthority(..), FrozenAtom, ManifestDefect(..)
 }
 import types.capability_policy.{PolicyVerdict(..), manifestAllowed}
 import frontend.ast.{EffParamTy(..)}

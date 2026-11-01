@@ -1,0 +1,4 @@
+-- Not the sibling: the impl is reached with only the exported type imported.
+import pimpl.{Color(..)}
+
+main = println (display Green)

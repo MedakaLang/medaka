@@ -280,7 +280,8 @@ inlang-backend-emit-binder-refusal-test:
 ## The emission plan's lazy/eager global classification, and the structural check
 ## that neither emitter recomputes it. Native: the check reads the emitter sources.
 inlang-backend-emit-plan-test:
-	./medaka test --native compiler/backend/emit_plan_test.mdk compiler/backend/extern_requirements_test.mdk compiler/backend/wasm_demand_test.mdk compiler/backend/wasm_fn_values_test.mdk
+	./medaka test --native compiler/backend/emit_plan_test.mdk
+	./medaka test --native compiler/backend/extern_requirements_test.mdk compiler/backend/wasm_demand_test.mdk compiler/backend/wasm_fn_values_test.mdk
 	./medaka test compiler/backend/global_plan_test.mdk
 
 ## The immutable implementation-clause partition consumed by both emitters;
@@ -326,6 +327,7 @@ inlang-backend-llvm-emit-bytelit-test:
 ## The Wasm physical-identity registry (backend/wasm_symbols.mdk): each defect
 ## beside a valid same-name control, plus whole programs through the emitter.
 inlang-backend-wasm-symbols-test:
+	./medaka test compiler/backend/wasm_text_coverage_test.mdk
 	./medaka test compiler/backend/wasm_symbols_test.mdk compiler/backend/wasm_symbol_names_test.mdk
 
 ## The Wasm runtime helper blocks (backend/wasm_preamble.mdk): each block's text
@@ -337,6 +339,7 @@ inlang-backend-wasm-preamble-test:
 ## The LLVM physical-symbol registry (backend/llvm_symbols.mdk): each defect
 ## beside a valid same-name control, plus whole programs through the emitter.
 inlang-backend-llvm-symbols-test:
+	./medaka test compiler/backend/llvm_text_coverage_test.mdk
 	./medaka test compiler/backend/llvm_symbols_test.mdk compiler/backend/llvm_symbol_names_test.mdk
 
 ## The LLVM runtime preamble (backend/llvm_preamble.mdk): each row renders as
@@ -610,6 +613,16 @@ inlang-frontend-ast-codec-test:
 ## missing from ast_walk's enumerations into a failure.
 inlang-frontend-ast-walk-test:
 	./medaka test compiler/frontend/ast_walk_test.mdk
+
+## compiler/frontend/visibility_test.mdk is a `*_test.mdk` sibling, outside every
+## entry's import closure ([W-MODULE-BLIND]): it pins the producer's facets.
+inlang-frontend-visibility-test:
+	./medaka test compiler/frontend/visibility_test.mdk
+
+## compiler/driver/loader_test.mdk is a `*_test.mdk` sibling, outside every
+## entry's import closure ([W-MODULE-BLIND]): it pins the test-sibling relation.
+inlang-driver-loader-test:
+	./medaka test compiler/driver/loader_test.mdk
 
 ## compiler/types/prelude_elab.mdk is imported by types.typecheck and
 ## driver.build_cmd; this step runs its own sibling test by name.

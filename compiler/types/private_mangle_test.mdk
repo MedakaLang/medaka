@@ -362,6 +362,7 @@ test "mangleCtorCollisions returns a collision-free program unchanged" =
         (snd
           (mangleCtorCollisions
             []
+            []
             (parseUnits [("amod", amod), ("app", "main = 1\n")])))))
 
 test "mangleCtorCollisions renames only ctors declared by two units" = expectAll
@@ -374,6 +375,7 @@ test "mangleCtorCollisions renames only ctors declared by two units" = expectAll
           (snd
             (mangleCtorCollisions
               []
+              []
               (parseUnits [
                 ("amod", amod),
                 ("bmod", "public export data Other = Wid\n"),
@@ -385,6 +387,7 @@ test "mangleCtorCollisions renames only ctors declared by two units" = expectAll
           "bmod"
           (snd
             (mangleCtorCollisions
+              []
               []
               (parseUnits [
                 ("amod", amod),
@@ -400,6 +403,7 @@ test "mangleCtorCollisions exempts Pass and Fail" =
         "bmod"
         (snd
           (mangleCtorCollisions
+            []
             []
             (parseUnits [
               ("amod", "public export data A = Pass\n"),

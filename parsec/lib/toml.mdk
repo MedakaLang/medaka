@@ -24,30 +24,24 @@
 
 import lib.parser.{
   Parser,
-  PResult,
   runParser,
-  runP,
   satisfy,
   char,
   anyChar,
   string,
   eof,
   digit,
-  letter,
-  space,
   spaces,
   many,
   some,
-  many1,
   optional,
   between,
   sepBy,
-  sepBy1,
   choice,
   failWith,
   orElse,
 }
-import list.{reverse}
+import list
 import string.{fromChars}
 
 -- ---------------------------------------------------------------------------

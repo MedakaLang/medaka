@@ -10,10 +10,87 @@
    Runs under `medaka test --native`: it spawns subprocesses and reads
    fixtures, neither of which the interpreter binds. -}
 
-import test_process.{medakaBin, medakaRoot, boundedVerb, withScratchDir}
+import test_process.{
+  medakaBin, medakaRoot, boundedVerb, withScratchDir, expectSpawnOk,
+  expectSpawnOkLine, expectSpawnFailsAll
+}
 import test.{Expectation, expectAll, expectEqualText, fail, pass}
 import fs.{mkdirAll}
-import string.{startsWith, contains, lines, stripPrefix, split, join, drop}
+import io.{runVerb}
+import string.{
+  startsWith, contains, lines, stripPrefix, split, join, drop, replace
+}
+
+apiWitnessSource : String
+apiWitnessSource = join "\n" [
+  "import backend.wasm_emit.{WasmEmitInput, emitProgram, emitProgramGaps, makeWasmEmitInput}",
+  "import backend.emit_plan.{EmitPlan, prepareWasmPlan}",
+  "import backend.extern_catalog.{RuntimeExternDomain(..)}",
+  "import types.capability_manifest.{ManifestRequirement(..)}",
+  "import ir.core_ir.{CProgram}",
+  "import backend.wasm_symbols.{SymbolDefect}",
+  "import frontend.parser.{parse}",
+  "import frontend.desugar.{desugar}",
+  "import types.annotate.{annotateProgram}",
+  "import types.program_facts.{emptyFacts}",
+  "import ir.core_ir_lower.{lowerProgramEmitWith}",
+  "import support.ordmap.{omEmpty}",
+  "import string.{contains}",
+  "normalApiWitness : WasmEmitInput -> EmitPlan -> CProgram -> Result (List SymbolDefect) String",
+  "normalApiWitness input plan program = emitProgram input plan program",
+  "gapsApiWitness : WasmEmitInput -> EmitPlan -> CProgram -> Result (List SymbolDefect) (List String)",
+  "gapsApiWitness input plan program = emitProgramGaps input plan program",
+  "main =",
+  "  let cp = lowerProgramEmitWith emptyFacts (annotateProgram (desugar (parse \"main = 1\")))",
+  "  let (plan, core) = prepareWasmPlan PreludeFreeRuntime omEmpty cp",
+  "  let input = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []",
+  "  match normalApiWitness input plan core",
+  "    Err _ => panic \"normal emission failed\"",
+  "    Ok wat => match gapsApiWitness input plan core",
+  "      Err _ => panic \"gap emission failed\"",
+  "      Ok gaps => if contains \"(module\" wat && gaps == [] then 513 else panic \"unexpected emission\"",
+]
+
+typedApiCheck : <IO, Exec, FileWrite> Expectation
+typedApiCheck = withScratchDir
+  (dir =>
+    match (runVerb "sh" [
+      "-c",
+      "root=$(cd \"$1\" && pwd -P) || exit 1; for d in backend frontend types ir support driver eval tools; do ln -s \"$root/compiler/$d\" \"$2/$d\" || exit 1; done; cp \"$root/compiler/medaka.toml\" \"$2/medaka.toml\"",
+      "sh", medakaRoot, dir
+    ])
+      Err e => fail e
+      Ok (code, _, err) =>
+        if code /= 0 then
+          fail err
+        else match (
+          writeFile (dir ++ "/witness.mdk") apiWitnessSource,
+          writeFile
+            (dir ++ "/bad_argument.mdk")
+            (replace
+              "normalApiWitness input plan core"
+              "normalApiWitness 42 plan core"
+              apiWitnessSource),
+          writeFile
+            (dir ++ "/bad_payload.mdk")
+            (replace
+              "Result (List SymbolDefect) (List String)"
+              "Result (List SymbolDefect) Int"
+              apiWitnessSource),
+        )
+          (Ok _, Ok _, Ok _) => expectAll [
+            expectSpawnOk medakaBin ["check", dir ++ "/witness.mdk"],
+            expectSpawnOkLine medakaBin ["run", dir ++ "/witness.mdk"] "513",
+            expectSpawnFailsAll
+              medakaBin
+              ["check", dir ++ "/bad_argument.mdk"]
+              ["type"],
+            expectSpawnFailsAll
+              medakaBin
+              ["check", dir ++ "/bad_payload.mdk"]
+              ["type"],
+          ]
+          _ => fail "could not write typed API witnesses")
 
 wasmEmitPath : <IO> String
 wasmEmitPath = "\{medakaRoot}/compiler/backend/wasm_emit.mdk"
@@ -185,4 +262,4 @@ renderBoth work = do
   Ok (only, combined)
 
 test "snapshot_wasm_input: WASM-only equals combined; Score defined at its clause arity; WasmEmitInput API and no legacy hooks" =
-  expectAll [apiCheck, legacyCheck, wasmCheck]
+  expectAll [apiCheck, typedApiCheck, legacyCheck, wasmCheck]

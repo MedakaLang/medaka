@@ -39,9 +39,7 @@ import ir.core_ir.{
   MethodEvidence(..),
   noDeclFacts,
 }
-import ir.core_ir_lower.{
-  ifaceMethodArityKey, lowerProgramWithFacts, methodConstraintIfaces
-}
+import ir.core_ir_lower.{lowerProgramWithFacts}
 import types.program_facts.{ProgramFacts, factsOfElab, withFacts}
 import ir.core_ir_sexp.{cprogramToSexp}
 import types.evidence.{
@@ -66,6 +64,7 @@ import types.tc_types.{
   EvidenceOutcomeKind(..),
   NumericPredicateTraceEntry(..),
   NumericPredicateTraceStage(..),
+  DriveArgs(..),
   DriveInputs(..),
   DriveOutputs(..),
   GraphCtx(..),
@@ -74,6 +73,7 @@ import types.tc_types.{
   MethodReturnTraceStage(..),
 }
 import types.module_interface_test_support.{noValueMain}
+import types.tc_diag_text.{stickyDiagsInPushOrder}
 import types.tc_state.{
   beginAssumptionTrace,
   beginEvidenceObservation,
@@ -109,21 +109,21 @@ import types.typecheck.{
   checkModulesChainReportForGraph,
   checkModulesDiagsChain,
   checkModulesEntryFullReportK,
-  checkModulesEntryReport,
   checkModulesPartialLast,
   checkOneDiags,
-  checkOneDiagsGraph,
   checkOneSchemeFullK,
   checkOneSchemeFullKGraph,
   defaultDriveInputs,
   driveArgs,
   driveInputsFor,
   elaborateModules,
-  elaborateModulesGraph,
   elaborateOne,
   elaborateOneFacts,
   ModDiags,
-  stickyTypeErrorDiags,
+  checkModulesEntryReportOut,
+  checkOneReportKGraph,
+  elabTreesDrive,
+  entrySplit,
   tcCode,
   tcMsg,
 }
@@ -1748,27 +1748,6 @@ test "method occurrence arity stays distinct from tagged impl callable arity" =
       "observeArity"
       "arityAct")
 
-test "qualified method constraints preserve a selected empty row" =
-  let program =
-    desugar
-      (parseLocated
-        (joinNl [
-          "interface Plain a where",
-          "  collide : a -> Int",
-          "interface Rich a where",
-          "  collide : Num b => a -> b -> Int",
-        ]))
-  let rows = methodConstraintIfaces program
-  expectAll [
-    expectEqual
-      (Some [])
-      (lookupAssoc (ifaceMethodArityKey "Plain" "collide") rows),
-    expectEqual
-      (Some ["Num"])
-      (lookupAssoc (ifaceMethodArityKey "Rich" "collide") rows),
-    expectEqual (Some ["Num"]) (lookupAssoc "collide" rows),
-  ]
-
 test "definer-shadow application publishes its selected arity" =
   expectEqual
     (Some 1)
@@ -2574,7 +2553,7 @@ test "a generalized local is dictionary-abstracted: each use applies it to the g
         ])
   -- `g x` and `g y` are dictionary applications of `g`, one per use, and each
   -- forwards the given for its own argument's variable: two distinct binders.  One
-  -- binder shared by both uses is the #1045 wrong answer.
+  -- binder shared by both uses is the wrong answer.
   let apps = evidenceEntriesOfKind "GKDictApp" entries
   expectAll [
     expectEqual [] codes,
@@ -2585,7 +2564,7 @@ test "a generalized local is dictionary-abstracted: each use applies it to the g
       _ => False),
   ]
 
--- #1112 A-3: production-path observation of `buildDispositions`'
+-- Production-path observation of `buildDispositions`'
 -- table, over a real multi-module elaboration. `elaborateModules` returns the
 -- table it built (`types/typecheck.mdk`'s `driveGraphK`) as the sixth component
 -- of its result.
@@ -2627,7 +2606,7 @@ anyMatchInheritedDefault wantMid wantIface wantMethod (d :: rest) = match d
       || anyMatchInheritedDefault wantMid wantIface wantMethod rest
   Supplied _ _ _ => anyMatchInheritedDefault wantMid wantIface wantMethod rest
 
--- #1265's shape: `Dog` implements two DIFFERENT interfaces (`ifa::Speak`,
+-- The shape: `Dog` implements two DIFFERENT interfaces (`ifa::Speak`,
 -- `ifb::Greet`) that happen to share the bare method name `speak`, both
 -- method-less (both `InheritedDefault`). The disposition table keys on
 -- INSTANCE identity (one row per `impl` declaration), so it must keep the two
@@ -2677,7 +2656,7 @@ test "#1265: two same-named methods of two different interfaces stay two rows" =
       (anyMatchInheritedDefault "cb" "Greet" "speak" (dispositionRows table)),
   ]
 
--- #1020's cross-module shape: a cross-module `impl` overriding NOTHING
+-- The cross-module shape: a cross-module `impl` overriding NOTHING
 -- (`Speak Dog`) is `InheritedDefault`; a sibling overriding its one method
 -- (`Loud Cat`) is `Supplied`; a second cross-module empty impl of the SAME
 -- interface (`Loud Dog`) is `InheritedDefault` alongside it.
@@ -3056,7 +3035,7 @@ drainProjectedGoalSource = [
 ]
 
 -- A goal that reaches two or more instances and is on a scheme-quantified
--- variable is the caller's; reporting it ambiguous at the drain was #3031.
+-- variable is the caller's; reporting it ambiguous at the drain would be wrong.
 test "the graph-end drain reports no scheme-quantified goal ambiguous" =
   expectEqual
     [
@@ -3952,7 +3931,7 @@ test "spelling-collision judgment matrix: super construction" =
 test "spelling-collision judgment matrix: min order" =
   aliasHeadVerdicts ([], "entry") collisionMinOrder
 
--- An arrow is a constructed head like any other (#1617): an impl over `(Int -> b)`
+-- An arrow is a constructed head like any other: an impl over `(Int -> b)`
 -- is selected for a ground arrow goal, and that impl's `requires` are owed at the
 -- use, as they are for `(Box b)` (#4045).
 arrowHeadShow : List String
@@ -6081,7 +6060,7 @@ test "a served prefix reports as the checked one across requests" =
     ),
   ]
 
--- #2095: production-path observation of `evidenceObservation`'s
+-- Production-path observation of `evidenceObservation`'s
 -- entries, one program per family the mission asks for. `elaborateOne`'s two-
 -- module shape mirrors `methodCarrierStages` above; the coreDecls half stays the
 -- numeric prelude so `intToString` and friends are the same environment those
@@ -6558,3 +6537,63 @@ test "an integer literal at a type with no Num instance is a type mismatch" =
   expectEqual
     ["T-TYPE-MISMATCH"]
     (map fst (checkDiagsOver numeric (literalAt "y" "Bool" 1)))
+
+-- A wrapper declares what its decl declares: `@deprecated` over an abstractly
+-- exported record leaves the record abstract to an importer, so a field access
+-- through it is rejected exactly as for the bare declaration.
+test "an attributed abstract record is as abstract to an importer as the bare one" =
+  let provider =
+    attr => joinNl [
+      attr,
+      "export data P = P { x : Int, y : Int }",
+      "export mk : Int -> P",
+      "mk n = P n 2",
+    ]
+  let user = joinNl ["import m.{P, mk}", "main = (mk 3).x"]
+  let reportFor =
+    attr => checkModulesEntryReport defaultDriveInputs [] [] [
+      ("m", desugar (parse (provider attr))),
+      ("use", desugar (parse user)),
+    ]
+  expectAll [
+    expectEqual (reportFor "") (reportFor "@deprecated \"old\""),
+    expectSatisfies
+      "an abstract-field rejection"
+      (r => S.contains "exported abstractly" r)
+      (reportFor "@deprecated \"old\""),
+  ]
+
+-- `elaborateModules` beside the graph record its drive ends in, for a test that
+-- observes that record after the drive.
+elaborateModulesGraph : DriveArgs -> (ElabResult, GraphCtx)
+elaborateModulesGraph args =
+  let ((result, _, _), gctx) = elabTreesDrive args
+  (result, gctx)
+
+-- `checkOneDiags` beside the graph record its drive ends in, for a test that observes
+-- that record after the drive.
+checkOneDiagsGraph : DriveArgs -> ((List TcDiag, List TcDiag), GraphCtx)
+checkOneDiagsGraph args =
+  let (report, gctx) = checkOneReportKGraph args
+  let (_, _, errs, warns) = entrySplit report
+  ((errs, warns), gctx)
+
+-- render the entry report: type errors win (each `TYPE ERROR: …`), else the
+-- entry's `name : scheme` lines followed by its non-exhaustive-match warnings.
+-- The harness sorts, so scheme/warn relative order is not load-bearing.  Mirrors
+-- runCheck's single-file shape, but over the entry module of a resolved graph.
+checkModulesEntryReport : DriveInputs ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  String
+checkModulesEntryReport inputs runtimeDecls coreDecls modules =
+  fst (checkModulesEntryReportOut inputs runtimeDecls coreDecls modules)
+
+-- #2544 (M4): every diagnostic that armed the sticky gate in the drive, each tagged
+-- with the module it was recorded in, in push order, deduplicated PER GOAL —
+-- module, code, location and text together — never by text alone (a text key would
+-- re-introduce the suppressed-check shape OD5 forbids: two goals at two sites with
+-- the same rendering are two findings).
+stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
+stickyTypeErrorDiags o = stickyDiagsInPushOrder o.doStickyDiags

@@ -1,5 +1,5 @@
 # META
-source_lines=1191
+source_lines=1190
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cmd.mdk — the `medaka lint` engine.
@@ -26,7 +26,6 @@ import support.util.{
   anyList,
   contains,
   filterList,
-  isSome,
   joinNl,
   joinWith,
   lookupAssoc,
@@ -1194,7 +1193,7 @@ writeFixedSource target src newSrc n =
       let _ = putStrLn "fixed \{intToString n} finding(s) in \{target}"
       False
 # DESUGAR
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "isSome" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseAlias ("string") "Str"))
@@ -1411,7 +1410,7 @@ writeFixedSource target src newSrc n =
 (DTypeSig false "writeFixedSource" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Bool")))))))
 (DFunDef false "writeFixedSource" ((PVar "target") (PVar "src") (PVar "newSrc") (PVar "n")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EBinOp "==" (EVar "newSrc") (EVar "src"))) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "fixed 0 finding(s) in ")) (EVar "target")))) (DoExpr (EVar "False"))) (EMatch (EApp (EApp (EVar "writeFile") (EVar "target")) (EVar "newSrc")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EVar "True")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "fixed ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " finding(s) in "))) (EApp (EVar "display") (EVar "target"))) (ELit (LString ""))))) (DoExpr (EVar "False")))))))
 # MARK
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "isSome" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseAlias ("string") "Str"))

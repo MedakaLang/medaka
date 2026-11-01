@@ -5,8 +5,8 @@
 -- module publishes, the diagnostics of its bodies (binding, impl method, `test`, `prop`, extern),
 -- the interface-cycle and impl-coherence checks that end the module, the import of an earlier
 -- module's data, the stamp queue and its drain (what is enqueued, what is reported, that a
--- drain empties the queue), `publicValNames`, `externSchemesGo`, `captureTypeErrors`,
--- `verdictFinding`, `isLiveSpan`, `spanKeys` and `settleClosedBody`.
+-- drain empties the queue), `externSchemesGo`, `captureTypeErrors`, `verdictFinding`,
+-- `isLiveSpan`, `spanKeys` and `settleClosedBody`.
 -- Not driven here, because no export reaches them: the import-overlay rows and the plural site
 -- resolvers.  Their effect is observed as the module's errors and as the drain's
 -- unrouted-dispatch findings, and an overlay that changes no verdict is not observable below
@@ -23,7 +23,31 @@ import test.{
   expectTrue,
 }
 import list.{drop, sort, take}
-import frontend.ast.{Decl(..), EvEntry(..), EvVal(..), Loc(..)}
+import frontend.ast.{
+  Decl(..), EvEntry(..), EvVal(..), Loc(..), Route(..), Ty(..), tyConBuiltin
+}
+import types.tc_state.{
+  freshGraphRun, carryModuleCtx, probeGraphCtx, initialModuleCtx
+}
+import types.tc_solve.{
+  methodReturnProbeScope,
+  methodReturnProbeSpelling,
+  methodReturnArgs,
+  methodReturnProbeRouteKey,
+  methodReturnProbeIface,
+  methodReturnProbeImpl,
+}
+import types.tc_occurrence.{
+  methodReturnProbeRequest,
+  firstMethodRow,
+  methodReturnProbeCodes,
+}
+import types.tc_env.{buildFlatImplEnv}
+import types.tc_mono.{stripArrows}
+import types.tc_elab.{resolveExactReturnSite}
+import types.tc_types.{siteFor, MethodSchemeRow(..)}
+import types.tc_solve_entail.{ieSelectRowByIface, rowRouteKey}
+import types.tc_decls.{ifaceMethodSchemeRows}
 import types.tc_elab.{drivenEvidence}
 import support.ordmap.{omEmpty, omFromNames}
 import types.repr.{Scheme(..), ppScheme}
@@ -50,7 +74,6 @@ import types.tc_module.{
   elabModuleStamp,
   externSchemesGo,
   isLiveSpan,
-  publicValNames,
   settleClosedBody,
   spanKeys,
   verdictFinding,
@@ -466,55 +489,7 @@ test "a verdict finding carries its module, its diagnostic and its liveness, and
     expectFalse (deadVerdict d).dfLive,
   ]
 
--- ── what a module exports and what a graph is stamped with ───────────────
-
-test "a public signature and its public definition each name the binding, a private one names nothing" = expectEach
-  [
-    (
-      "public",
-      expectEqual
-        ["f", "f"]
-        (publicValNames (declsOf "m" """
-export f : Int
-export f = 1
-""")),
-    ),
-    (
-      "private",
-      expectEqual [] (publicValNames (declsOf "m" """
-g : Int
-g = 2
-""")),
-    ),
-  ]
-
-test "a public interface names its methods and a private one does not" = expectEach
-  [
-    (
-      "public",
-      expectEqual
-        ["q"]
-        (publicValNames
-          (declsOf "m" """
-export interface Q a where
-  q : a -> Int
-""")),
-    ),
-    (
-      "private",
-      expectEqual
-        []
-        (publicValNames (declsOf "m" """
-interface R a where
-  r : a -> Int
-""")),
-    ),
-  ]
-
-test "a public extern is named" =
-  expectEqual
-    ["foo"]
-    (publicValNames (declsOf "m" "export extern foo : Int -> Int"))
+-- ── what a graph is stamped with ──────────────────────────────────────────
 
 test "the schemes of the externs among a module's declarations are those and no others" =
   expectEqual
@@ -581,3 +556,104 @@ standsLive xs y = y % 4 /= 0 && any (x => x % 4 /= 0 && x % 6 == y % 6) xs
 prop "a span is live exactly when a live goal stands at it" (xs : List Int) (y : Int) =
   isLiveSpan (omFromNames (spanKeys (map locOf xs)) omEmpty) (locOf y)
     == standsLive xs y
+
+-- Runs in a carry of [prev], the caller's record, in its graph record with a fresh
+-- graph run.
+methodReturnProbeStamp : ModuleCtx ->
+  MethodSchemeRow ->
+  MethodSchemeRow ->
+  List Decl ->
+  (String, Option String, Option String)
+methodReturnProbeStamp prev ownedRow foreignRow impls =
+  let gctx = GraphCtx { prev.mcGraph | graphRun = freshGraphRun () }
+  let mctx = carryModuleCtx gctx prev
+  let scope = methodReturnProbeScope mctx "return-owner-stamper"
+  let request = methodReturnProbeRequest mctx ownedRow
+  methodReturnProbeSpelling mctx foreignRow
+  let env = buildFlatImplEnv impls
+  mctx.mcCells.bodyImplEnvRef := env
+  let tagRef = Ref RNone
+  let implRef = Ref []
+  let resultMono = stripArrows request.mrrOccurrence
+  resolveExactReturnSite
+    (siteFor mctx)
+    omEmpty
+    "make"
+    tagRef
+    implRef
+    resultMono
+    request
+    ""
+    None
+    scope
+  let goals = optionOr [] (methodReturnArgs gctx request)
+  let ownedKey =
+    map
+      rowRouteKey
+      (ieSelectRowByIface (siteFor mctx) env ownedRow.msrIface goals)
+  let foreignKey =
+    map
+      rowRouteKey
+      (ieSelectRowByIface (siteFor mctx) env foreignRow.msrIface goals)
+  (methodReturnProbeRouteKey tagRef.value, ownedKey, foreignKey)
+
+-- The request is created before the spelling table is pointed at Foreign.  The checker
+-- must still reject a graph containing only Foreign's impl, its positive control must
+-- accept Owner's impl, and the stamper must select Owner's distinct route.
+-- What the ownership probe saw: the checker's error codes with only Foreign's impl
+-- and with both impls, the route key the stamper wrote, and the keys of the rows
+-- the owner's and the foreign interface select.
+data ReturnOwnership = ReturnOwnership {
+  roRejected : List String,
+  roAccepted : List String,
+  roStamped : String,
+  roOwnedKey : Option String,
+  roForeignKey : Option String,
+}
+
+methodReturnOwnershipProbe : Unit -> ReturnOwnership
+methodReturnOwnershipProbe _ =
+  let ownedGraph = probeGraphCtx ()
+  let ownedDecl =
+    methodReturnProbeIface
+      "return-owner"
+      "Owner"
+      (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
+  let foreignDecl =
+    methodReturnProbeIface
+      "return-foreign"
+      "Foreign"
+      (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
+  let ownedCtx = initialModuleCtx ownedGraph
+  let ownedRow = firstMethodRow (ifaceMethodSchemeRows ownedCtx [ownedDecl])
+  let foreignGraph = GraphCtx { ownedGraph | graphRun = freshGraphRun () }
+  let foreignCtx = carryModuleCtx foreignGraph ownedCtx
+  let foreignRow =
+    firstMethodRow (ifaceMethodSchemeRows foreignCtx [foreignDecl])
+  let ownedImpl = methodReturnProbeImpl "return-owner" "Owner"
+  let foreignImpl = methodReturnProbeImpl "return-foreign" "Foreign"
+  let (rejected, rejectedCtx) =
+    methodReturnProbeCodes foreignCtx ownedRow [foreignImpl]
+  let (accepted, acceptedCtx) =
+    methodReturnProbeCodes rejectedCtx ownedRow [foreignImpl, ownedImpl]
+  let (actualKey, ownedKey, foreignKey) = methodReturnProbeStamp
+    acceptedCtx
+    ownedRow
+    foreignRow
+    [foreignImpl, ownedImpl]
+  ReturnOwnership {
+    roRejected = rejected,
+    roAccepted = accepted,
+    roStamped = actualKey,
+    roOwnedKey = ownedKey,
+    roForeignKey = foreignKey,
+  }
+
+test "a return-owner request selects the owner's impl and rejects the foreign one" =
+  let seen = methodReturnOwnershipProbe ()
+  expectAll [
+    expectEqual ["T-NO-IMPL"] seen.roRejected,
+    expectEqual [] seen.roAccepted,
+    expectEqual (Some seen.roStamped) seen.roOwnedKey,
+    expectNotEqual (Some seen.roStamped) seen.roForeignKey,
+  ]

@@ -1,5 +1,5 @@
 # META
-source_lines=829
+source_lines=827
 stages=DESUGAR,MARK
 # SOURCE
 -- The type REPRESENTATION of the typechecker and its renderers: the monotype
@@ -27,7 +27,6 @@ import types.effect_rows.{
   renderAtomsWith,
   Atom(..),
   effrowNorm,
-  effrowLabels,
   rowFlat,
   effvarId,
   isJoinCell,
@@ -36,7 +35,7 @@ import types.effect_rows.{
 }
 import frontend.ast.{
   Ty(..), Constraint(..), TyConOrigin(..), EffAtomTy(..), effAtomSurface,
-  binderDomainSurface, authTermSurface, qualifierSource, authTermsSurface
+  binderDomainSurface, qualifierSource, authTermsSurface
 }
 import support.util.{listLen, filterList, isEmptyL, joinWith, sortUniqS, escStr}
 
@@ -468,7 +467,6 @@ export
 letters : String
 letters = "abcdefghijklmnopqrstuvwxyz"
 
-export
 nameOf : Ref (List (Int, String)) -> Ref Int -> Int -> String
 nameOf ctx cnt id = match lookupAssocI id !ctx
   Some s => s
@@ -834,8 +832,8 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 # DESUGAR
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authvarName" false) (mem "authNorm" false) (mem "authIsTop" false) (mem "authSub" false) (mem "renderAuthorityWith" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "renderAtoms" false) (mem "renderAtomsWith" false) (mem "Atom" true) (mem "effrowNorm" false) (mem "effrowLabels" false) (mem "rowFlat" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "EffRow" true) (mem "Effvar" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "renderAtoms" false) (mem "renderAtomsWith" false) (mem "Atom" true) (mem "effrowNorm" false) (mem "rowFlat" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "EffRow" true) (mem "Effvar" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "escStr" false))))
 (DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String") (TyCon "TyConOrigin"))) (variant "TRigid" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow"))) (variant "TQual" (ConPos (TyCon "Mono") (TyCon "Authority"))) (variant "TAuth" (ConPos (TyCon "Authority")))) ())
 (DData Public "Tyvar" () ((variant "Unbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "Link" (ConPos (TyCon "Mono")))) ())
@@ -874,7 +872,7 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DFunDef false "ppMono" ((PVar "t")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "t")))))
 (DTypeSig true "letters" (TyCon "String"))
 (DFunDef false "letters" () (ELit (LString "abcdefghijklmnopqrstuvwxyz")))
-(DTypeSig true "nameOf" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String")))))
+(DTypeSig false "nameOf" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "nameOf" ((PVar "ctx") (PVar "cnt") (PVar "id")) (EMatch (EApp (EApp (EVar "lookupAssocI") (EVar "id")) (EUnOp "!" (EVar "ctx"))) (arm (PCon "Some" (PVar "s")) () (EVar "s")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "assignName") (EVar "ctx")) (EVar "cnt")) (EVar "id")))))
 (DTypeSig true "assignName" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "assignName" ((PVar "ctx") (PVar "cnt") (PVar "id")) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EVar "cnt"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cnt")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoLet false false (PVar "s") (EIf (EBinOp "<" (EVar "n") (ELit (LInt 26))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "n")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "letters")) (EBinOp "++" (ELit (LString "t")) (EApp (EVar "intToString") (EVar "n"))))) (DoExpr (EIf (EApp (EApp (EVar "nameTaken") (EVar "s")) (EUnOp "!" (EVar "ctx"))) (EApp (EApp (EApp (EVar "assignName") (EVar "ctx")) (EVar "cnt")) (EVar "id")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctx")) (EBinOp "::" (ETuple (EVar "id") (EVar "s")) (EUnOp "!" (EVar "ctx"))))) (DoExpr (EVar "s")))))))
@@ -969,8 +967,8 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 # MARK
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authvarName" false) (mem "authNorm" false) (mem "authIsTop" false) (mem "authSub" false) (mem "renderAuthorityWith" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "renderAtoms" false) (mem "renderAtomsWith" false) (mem "Atom" true) (mem "effrowNorm" false) (mem "effrowLabels" false) (mem "rowFlat" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "EffRow" true) (mem "Effvar" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "renderAtoms" false) (mem "renderAtomsWith" false) (mem "Atom" true) (mem "effrowNorm" false) (mem "rowFlat" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "EffRow" true) (mem "Effvar" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "escStr" false))))
 (DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String") (TyCon "TyConOrigin"))) (variant "TRigid" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow"))) (variant "TQual" (ConPos (TyCon "Mono") (TyCon "Authority"))) (variant "TAuth" (ConPos (TyCon "Authority")))) ())
 (DData Public "Tyvar" () ((variant "Unbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "Link" (ConPos (TyCon "Mono")))) ())
@@ -1009,7 +1007,7 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DFunDef false "ppMono" ((PVar "t")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "t")))))
 (DTypeSig true "letters" (TyCon "String"))
 (DFunDef false "letters" () (ELit (LString "abcdefghijklmnopqrstuvwxyz")))
-(DTypeSig true "nameOf" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String")))))
+(DTypeSig false "nameOf" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "nameOf" ((PVar "ctx") (PVar "cnt") (PVar "id")) (EMatch (EApp (EApp (EVar "lookupAssocI") (EVar "id")) (EUnOp "!" (EVar "ctx"))) (arm (PCon "Some" (PVar "s")) () (EVar "s")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "assignName") (EVar "ctx")) (EVar "cnt")) (EVar "id")))))
 (DTypeSig true "assignName" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "assignName" ((PVar "ctx") (PVar "cnt") (PVar "id")) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EVar "cnt"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cnt")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoLet false false (PVar "s") (EIf (EBinOp "<" (EVar "n") (ELit (LInt 26))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "n")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "letters")) (EBinOp "++" (ELit (LString "t")) (EApp (EVar "intToString") (EVar "n"))))) (DoExpr (EIf (EApp (EApp (EVar "nameTaken") (EVar "s")) (EUnOp "!" (EVar "ctx"))) (EApp (EApp (EApp (EVar "assignName") (EVar "ctx")) (EVar "cnt")) (EVar "id")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctx")) (EBinOp "::" (ETuple (EVar "id") (EVar "s")) (EUnOp "!" (EVar "ctx"))))) (DoExpr (EVar "s")))))))

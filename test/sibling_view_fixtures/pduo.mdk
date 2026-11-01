@@ -1,0 +1,7 @@
+-- A second subject, beside `pchain.mdk`, in the graph of `pduo_test.mdk`.
+export
+scale : Int -> Int
+scale n = hidden n + 1
+
+hidden : Int -> Int
+hidden n = n * 100

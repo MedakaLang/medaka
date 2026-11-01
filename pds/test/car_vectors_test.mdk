@@ -34,7 +34,7 @@ import test.vector_runner.{
   spawnFindings,
 }
 import string.{contains}
-import test.{Expectation, expectNoFindings}
+import test.{expectNoFindings}
 import test_process.{medakaRoot}
 import time.{elapsedSince, monotonic}
 

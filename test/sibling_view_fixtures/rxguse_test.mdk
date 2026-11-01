@@ -1,0 +1,4 @@
+-- Imports the glob re-export above and reads the name it carries.
+import rxg_test.*
+
+main = println visible

@@ -64,7 +64,6 @@ findTvarInMono : Mono -> Int -> Option Mono
 findTvarInMonos : List Mono -> Int -> Option Mono
 findTvarN : Mono -> Int -> Option Mono
 firstIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
-firstOrZero : List Int -> Int
 firstTvar : Mono -> Mono -> Int -> Option Mono
 foldrFun : List Mono -> Mono -> Mono
 funArity : Mono -> Int

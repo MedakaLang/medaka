@@ -1,5 +1,5 @@
 # META
-source_lines=3248
+source_lines=2772
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls: declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs`
@@ -44,7 +44,9 @@ import types.tc_types.{
   PredicateSlot(..),
   SigVars(..),
   DeclEnvModule,
+  ExportBinding(..),
   GraphCtx,
+  ModuleBindings(..),
   ModuleCtx,
   RecordInfo,
   TcEnv,
@@ -67,10 +69,8 @@ import types.tc_mono.{
 import types.tc_state.{
   carryModuleCtx,
   emptyBuiltinClasses,
-  emptyDataEnv,
   freshSubRecordsOf,
   mctxAtIfSome,
-  probeGraphCtx,
 }
 import types.tc_env.{
   addCtor,
@@ -85,11 +85,13 @@ import types.tc_env.{
   declEnvModule,
   declEnvReachFrom,
   declEnvRowVisible,
+  declEnvSiblingSees,
   declEnvVisibleTo,
   declGradedScope,
   declParamKinds,
   declTopFnNames,
   definersIn,
+  graphPubDefiners,
   dtopFor,
   effTailNames,
   implAccFinish,
@@ -165,6 +167,7 @@ import frontend.ast.{
   DataVis(..),
   Decl(..),
   EffAtomTy(..),
+  ExternDecl(..),
   Field(..),
   Ident(..),
   IfaceMethod(..),
@@ -175,17 +178,15 @@ import frontend.ast.{
   TyConOrigin(..),
   UseMember(..),
   Variant(..),
+  externDecls,
   firstTyLoc,
   firstTyLocList,
   identOriginFold,
   lookupTab,
   mapTyFull,
   mkIdent,
-  noBinderId,
-  noDeclLoc,
   tabKeyEq,
   tabKeyName,
-  tyConBuiltin,
 }
 import types.repr.{IfaceRef(..), Mono(..), Scheme(..), ppMono, ppTy}
 import support.ordmap.{
@@ -198,6 +199,8 @@ import support.ordmap.{
   omKeys,
   omLookup,
   omMapValues,
+  omRestrict,
+  restrictedPairs,
   OrdMap,
 }
 import types.effect_domain.{Param(..)}
@@ -209,7 +212,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   listLen,
   lookupAssoc,
   reverseL,
@@ -217,7 +219,18 @@ import support.util.{
 }
 import list.{elemIndex, findMap, head}
 import types.registry.{spFloor}
-import frontend.visibility.{useModId}
+import frontend.ast.{SiblingPair(..)}
+import frontend.visibility.{
+  ExportView(..),
+  useModId,
+  carriedPaths,
+  pubUsePaths,
+  directUnder,
+  nsValues,
+  subjectOf,
+  valueNamesUnder,
+  viewFor,
+}
 import frontend.resolve.{stampGraphTyOrigins}
 import map as IdMap
 
@@ -228,7 +241,7 @@ import map as IdMap
 -- every table, so the two cannot drift.
 export
 declEnvAccOf : GraphCtx -> List DeclEnvModule -> DeclEnvAcc -> DeclEnvAcc
-declEnvAccOf gctx [] a = a
+declEnvAccOf _gctx [] a = a
 declEnvAccOf gctx (m :: rest) a =
   -- #1675: BOTH definer projections come out of ONE fold.  They are derived from
   -- the same uncollapsed row list -- `deDefiners` keeps the first row per name,
@@ -337,7 +350,8 @@ declEnvRowKindEntries : GraphCtx ->
   DeclEnvModule ->
   List (TabKey, List Kind)
 declEnvRowKindEntries gctx cur m
-  | declEnvVisibleTo cur m.demOrd False = declEnvKindEntries gctx m.demDecls
+  | declEnvVisibleTo cur m.demOrd False || declEnvSiblingSees cur m =
+    declEnvKindEntries gctx m.demDecls
   | declEnvVisibleTo cur m.demOrd True = m.demKindEntries
   | otherwise = []
 
@@ -362,7 +376,7 @@ declEnvSeedChain : GraphCtx ->
   List DeclEnvModule ->
   DeclEnvSeedAcc ->
   DeclEnvSeedAcc
-declEnvSeedChain gctx [] s = s
+declEnvSeedChain _gctx [] s = s
 declEnvSeedChain gctx (m :: rest) s =
   let kents = declEnvRowKindEntries gctx (m.demOrd + 1) m
   declEnvSeedChain gctx rest DeclEnvSeedAcc {
@@ -398,7 +412,7 @@ declEnvRowAtomsChain : GraphCtx ->
   List DeclEnvModule ->
   (List (TabKey, List (List Atom)), OrdMap (List (TabKey, List (List Atom)))) ->
   (List (TabKey, List (List Atom)), OrdMap (List (TabKey, List (List Atom))))
-declEnvRowAtomsChain gctx [] s = s
+declEnvRowAtomsChain _gctx [] s = s
 declEnvRowAtomsChain gctx (m :: rest) (aacc, am) =
   let entries = declEnvRowAtomsEntries gctx (m.demOrd + 1) m
   declEnvRowAtomsChain gctx rest (entries ++ aacc, omInsert m.demId aacc am)
@@ -440,7 +454,7 @@ declEnvRowAtomsEntries gctx cur m
 -- alias has no per-run row either.  Adding one here would publish a
 -- cross-module entry with no single-file counterpart.
 declEnvRowAtomEntries : GraphCtx -> List Decl -> List (TabKey, List (List Atom))
-declEnvRowAtomEntries gctx [] = []
+declEnvRowAtomEntries _gctx [] = []
 declEnvRowAtomEntries gctx ((DAttrib _ d) :: rest) =
   declEnvRowAtomEntries gctx (d :: rest)
 declEnvRowAtomEntries gctx ((DData { dataName = n, dataParams = ps, dataCtors = vs, dataOrigin = o }) :: rest) =
@@ -599,23 +613,6 @@ declEnvSeedDataUniverse mctx mid envs =
   mctx.mcCells.fieldOwnerReachRef :=
     optionOr omEmpty (omLookup mid envs.deReach)
 
--- ── doctests ─────────────────────────────────────────────────────────────
--- Both conjuncts, on the kind projection: own row ⇒ everything; earlier row ⇒ the
--- kind-public projection; later row ⇒ nothing.
--- > listLen (declEnvRowKindEntries (probeGraphCtx ()) 0 (deKindRow0 (probeGraphCtx ())))
--- 4
--- > listLen (declEnvRowKindEntries (probeGraphCtx ()) 1 (deKindRow0 (probeGraphCtx ())))
--- 3
--- > listLen (declEnvRowKindEntries (probeGraphCtx ()) 0 (deKindRow1 (probeGraphCtx ())))
--- 0
-
--- The field-owner population: only a `ConNamed` variant votes, and it votes under
--- its CONSTRUCTOR name.
--- > optionOr [] (omLookup "x" (declEnvDeclFieldOwners [deFieldOwnerFixtureA] omEmpty))
--- ["Pt"]
--- > optionOr [] (omLookup "x" (declEnvDeclFieldOwners [deKindNewtypeFixture] omEmpty))
--- []
-
 -- Both ident indexes are accumulated newest-first per key and reversed once here,
 -- so the fold that fills them stays resumable (see `DeclEnvAcc`).
 dataEnvFinish : DataEnv -> DataEnv
@@ -654,9 +651,9 @@ dataEnvFromDeclsGo ord (d :: rest) acc =
 -- doctest pins population neutrality.
 dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
 dataEnvAddDecl ord _ (DAttrib _ d) acc = dataEnvAddDecl ord True d acc
-dataEnvAddDecl ord _ (DData { dataName, dataParams, dataCtors, dataOrigin, ... }) acc =
+dataEnvAddDecl _ord _ (DData { dataName, dataParams, dataCtors, dataOrigin, ... }) acc =
   addDataTypeDecl dataName dataOrigin dataParams dataCtors acc
-dataEnvAddDecl ord _ (DNewtype { newtypeName, newtypeParams, newtypeCtor, newtypeFieldTy, newtypeOrigin, ... }) acc =
+dataEnvAddDecl _ord _ (DNewtype { newtypeName, newtypeParams, newtypeCtor, newtypeFieldTy, newtypeOrigin, ... }) acc =
   addDataTypeDecl
     newtypeName
     newtypeOrigin
@@ -944,7 +941,7 @@ emitCyclicAliasErrors : ModuleCtx ->
   List (TabKey, (List String, Ty)) ->
   List String ->
   Unit
-emitCyclicAliasErrors mctx _ _ [] = ()
+emitCyclicAliasErrors _mctx _ _ [] = ()
 emitCyclicAliasErrors mctx prog table (name :: rest) =
   let reader = mctx.mcCells.currentModuleRef.value
   let named = filterList (e => tabKeyName (fst e) == name) table
@@ -1194,7 +1191,7 @@ rowArgAtomsIn mctx scope (TyFun a b) =
 rowArgAtomsIn mctx scope (TyTuple ts) = flatMap (rowArgAtomsIn mctx scope) ts
 rowArgAtomsIn mctx scope (TyEffect _ _ t) = rowArgAtomsIn mctx scope t
 rowArgAtomsIn mctx scope (TyConstrained _ t) = rowArgAtomsIn mctx scope t
-rowArgAtomsIn mctx _ _ = []
+rowArgAtomsIn _mctx _ _ = []
 
 rowArgAtomsApp : ModuleCtx ->
   List (String, List Kind) ->
@@ -1235,8 +1232,8 @@ krowArgVarAtoms : GraphCtx ->
   List (List Atom) ->
   List Ty ->
   List (String, List Atom)
-krowArgVarAtoms gctx [] _ _ = []
-krowArgVarAtoms gctx _ _ [] = []
+krowArgVarAtoms _gctx [] _ _ = []
+krowArgVarAtoms _gctx _ _ [] = []
 krowArgVarAtoms gctx (KRow :: ks) decls ((TyVar n) :: as2) =
   (n, optionOr [] (head decls)) :: krowArgVarAtoms gctx ks (restAtoms decls) as2
 krowArgVarAtoms gctx (KRow :: ks) decls ((TyRow labels tails _) :: as2) =
@@ -1585,8 +1582,8 @@ inferParamRowAtoms gctx params variants =
 -- WRITTEN beside it at that occurrence (a tail position `<Stdout | p>` reports
 -- `[Stdout]`; every other occurrence reports `[]`).
 paramRowAtomOccs : GraphCtx -> String -> Ty -> List (List Atom)
-paramRowAtomOccs gctx p (TyVar n) = if n == p then [[]] else []
-paramRowAtomOccs gctx _ (TyCon { tyConName = _ }) = []
+paramRowAtomOccs _gctx p (TyVar n) = if n == p then [[]] else []
+paramRowAtomOccs _gctx _ (TyCon { tyConName = _ }) = []
 paramRowAtomOccs gctx p (TyEffect labels tails t) =
   paramRowAtomsFor gctx p tails labels ++ paramRowAtomOccs gctx p t
 paramRowAtomOccs gctx p (TyRow labels tails _) =
@@ -1597,7 +1594,7 @@ paramRowAtomOccs gctx p (TyTuple ts) = flatMap (paramRowAtomOccs gctx p) ts
 paramRowAtomOccs gctx p (TyApp a b) =
   paramRowAtomOccs gctx p a ++ paramRowAtomOccs gctx p b
 paramRowAtomOccs gctx p (TyConstrained _ t) = paramRowAtomOccs gctx p t
-paramRowAtomOccs gctx _ _ = []
+paramRowAtomOccs _gctx _ _ = []
 
 -- The row's written atoms, once per tail var that IS [p] (a join names several).
 paramRowAtomsFor : GraphCtx ->
@@ -1615,7 +1612,7 @@ paramRowAtomsFor gctx p tails labels =
 -- parameter — guarantees nothing, hence `[]`: the conservative verdict, since
 -- nothing here may widen acceptance on a shape this pass cannot see.
 intersectDeclAtoms : GraphCtx -> List (List Atom) -> List Atom
-intersectDeclAtoms gctx [] = []
+intersectDeclAtoms _gctx [] = []
 intersectDeclAtoms gctx (first :: rest) =
   filterList (x => allList (b => isEmptyL (atomsEscape gctx [x] b)) rest) first
 
@@ -1630,12 +1627,12 @@ mintParamReprs mctx (_ :: ps) (KRow :: ks) =
 mintParamReprs mctx (p :: ps) ((KAuth l pat) :: ks) =
   TAuth (AVar (freshAuthvarRanged mctx (dtopFor mctx.mcGraph l) pat (Some p)))
     :: mintParamReprs mctx ps ks
-mintParamReprs mctx _ _ = []
+mintParamReprs _mctx _ _ = []
 
 -- KType param names → their TVar (the tvs map fromAstTypeE consults for tyvars)
 ktypeTvs : List String -> List Kind -> List Mono -> List (String, Mono)
 ktypeTvs (p :: ps) (KType :: ks) (r :: rs) = (p, r) :: ktypeTvs ps ks rs
-ktypeTvs (p :: ps) (_ :: ks) (_ :: rs) = ktypeTvs ps ks rs
+ktypeTvs (_p :: ps) (_ :: ks) (_ :: rs) = ktypeTvs ps ks rs
 ktypeTvs _ _ _ = []
 
 -- KRow param names → the effvar cell inside their TEff repr, so a field's `<e>`
@@ -1651,7 +1648,7 @@ paramEtbl params kinds reprs = SigVars {
 kauthCells : List String -> List Kind -> List Mono -> List (String, Ref Authvar)
 kauthCells (p :: ps) ((KAuth _ _) :: ks) ((TAuth (AVar cell)) :: rs) =
   (p, cell) :: kauthCells ps ks rs
-kauthCells (p :: ps) (_ :: ks) (_ :: rs) = kauthCells ps ks rs
+kauthCells (_p :: ps) (_ :: ks) (_ :: rs) = kauthCells ps ks rs
 kauthCells _ _ _ = []
 
 -- A constructor's existential binders (`C (p : Authority L) …`): each a fresh
@@ -1676,7 +1673,7 @@ existentialCells mctx binders =
     binders
 
 recordExistentials : GraphCtx -> List (String, Ref Authvar) -> Unit
-recordExistentials gctx [] = ()
+recordExistentials _gctx [] = ()
 recordExistentials gctx cells =
   gctx.graphRun.anyExistentialsRef := True
   gctx.graphRun.ctorExistentialsRef :=
@@ -1697,7 +1694,7 @@ padCtorBinders (_ :: vs) [] = [] :: padCtorBinders vs []
 krowRows : List String -> List Kind -> List Mono -> List (String, Ref Effvar)
 krowRows (p :: ps) (KRow :: ks) ((TEff (EffRow _ (Some cell))) :: rs) =
   (p, cell) :: krowRows ps ks rs
-krowRows (p :: ps) (_ :: ks) (_ :: rs) = krowRows ps ks rs
+krowRows (_p :: ps) (_ :: ks) (_ :: rs) = krowRows ps ks rs
 krowRows _ _ _ = []
 
 -- a named-field data variant (`C { f : T, … }`, e.g. ast's DInterface) carries a
@@ -1736,7 +1733,7 @@ registerNamedFieldVariantsGo mctx o tyName params kinds ((Variant cname (ConName
   registerNamedFieldVariantsGo mctx o tyName params kinds rest brest
 registerNamedFieldVariantsGo mctx o tyName params kinds (_ :: rest) (_ :: brest) =
   registerNamedFieldVariantsGo mctx o tyName params kinds rest brest
-registerNamedFieldVariantsGo mctx _ _ _ _ _ _ = ()
+registerNamedFieldVariantsGo _mctx _ _ _ _ _ _ = ()
 
 addVariants : TcEnv ->
   List (String, Mono) ->
@@ -1899,7 +1896,7 @@ directIfaceSchemeRows mctx (DInterface { name, typarams, typaramKinds, methods, 
     IfaceRef { irName = name, irOrigin = ifaceOrigin }
     typarams
     methods
-directIfaceSchemeRows mctx _ = []
+directIfaceSchemeRows _mctx _ = []
 
 -- Exactly one `sigToSchemeTvsIn` allocation per row.  Slots are computed from that
 -- allocation's tv map and quantified-id order, then installed at the same construction
@@ -1910,7 +1907,7 @@ methodSchemeRows : ModuleCtx ->
   List String ->
   List IfaceMethod ->
   List MethodSchemeRow
-methodSchemeRows mctx _ _ _ [] = []
+methodSchemeRows _mctx _ _ _ [] = []
 methodSchemeRows mctx scope iface typarams ((IfaceMethod mname mty _ _) :: rest) =
   let (scheme, tvs) = sigToSchemeTvsIn mctx scope mty
   let slots =
@@ -2000,7 +1997,7 @@ methodSchemesPure : ModuleCtx ->
   List (String, List Kind) ->
   List IfaceMethod ->
   List (String, Scheme)
-methodSchemesPure mctx _ [] = []
+methodSchemesPure _mctx _ [] = []
 methodSchemesPure mctx scope ((IfaceMethod mname mty _ _) :: rest) =
   (mname, fst (sigToSchemeTvsIn mctx scope mty))
     :: methodSchemesPure mctx scope rest
@@ -2041,7 +2038,7 @@ methodPredicateSlotsOfType mctx typarams (TyConstrained cs t) tvs fullIds =
     ++ methodPredicateSlotsOfType mctx typarams t tvs fullIds
 methodPredicateSlotsOfType mctx typarams (TyEffect _ _ t) tvs fullIds =
   methodPredicateSlotsOfType mctx typarams t tvs fullIds
-methodPredicateSlotsOfType mctx _ _ _ _ = []
+methodPredicateSlotsOfType _mctx _ _ _ _ = []
 
 constraintMethodPredicateSlot : ModuleCtx ->
   List String ->
@@ -2165,7 +2162,7 @@ declKindEntry gctx (DNewtype { newtypeName = name, newtypeParams = params, newty
   Some (o, name, declParamKinds gctx params anns)
 declKindEntry gctx (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasParamKinds = anns, tyAliasOrigin = o }) =
   Some (o, name, declParamKinds gctx params anns)
-declKindEntry gctx _ = None
+declKindEntry _gctx _ = None
 
 -- Runs `k` with the declared kinds of `ds` in the table of [mctx], the current
 -- record, then puts the table back as it was. A reader that elaborates signatures
@@ -2324,21 +2321,19 @@ ctorIdentRow tyName o cn = match mkIdent NsCtor o cn
 reexportedCtorIdents : OrdMap (List (String, String, Ident)) ->
   List Decl ->
   List (String, String, Ident)
-reexportedCtorIdents acc decls = flatMap (reexportedCtorIdentsOf acc) decls
+reexportedCtorIdents acc decls =
+  flatMap (reexportedCtorIdentsOf acc) (pubUsePaths decls)
 
 reexportedCtorIdentsOf : OrdMap (List (String, String, Ident)) ->
-  Decl ->
+  UsePath ->
   List (String, String, Ident)
-reexportedCtorIdentsOf acc (DAttrib _ d) = reexportedCtorIdentsOf acc d
-reexportedCtorIdentsOf acc (DUse True path _) =
-  match omLookup (useModId path) acc
-    None => []
-    Some src => match path
-      -- `export import src.*` re-exports every one of src's constructors
-      UseWild _ => src
-      UseGroup _ ms => flatMap (m => reexportCtorMember m src) ms
-      _ => []
-reexportedCtorIdentsOf _ _ = []
+reexportedCtorIdentsOf acc path = match omLookup (useModId path) acc
+  None => []
+  Some src => match path
+    -- `export import src.*` re-exports every one of src's constructors
+    UseWild _ => src
+    UseGroup _ ms => flatMap (m => reexportCtorMember m src) ms
+    _ => []
 
 reexportCtorMember : UseMember ->
   List (String, String, Ident) ->
@@ -2371,11 +2366,12 @@ implHeadNormalDecl _ d = d
 -- keyed by declaration identity, so a head expands with the aliases of the
 -- module that wrote it.
 export
-stampGraphDecls : List Decl ->
+stampGraphDecls : List SiblingPair ->
+  List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
-stampGraphDecls coreDecls0 modules0 =
-  let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
+stampGraphDecls sibling coreDecls0 modules0 =
+  let (coreDecls, modules) = stampGraphTyOrigins sibling coreDecls0 modules0
   let aliases = flatMap graphAliasRow (coreDecls ++ flatMap snd modules)
   if isEmptyL aliases then
     (coreDecls, modules)
@@ -2390,9 +2386,32 @@ declEnvModulesFrom : GraphCtx ->
   Int ->
   List (String, List Decl) ->
   List DeclEnvModule
-declEnvModulesFrom gctx _ [] = []
-declEnvModulesFrom gctx k ((mid, decls) :: rest) =
-  declEnvModule gctx k mid decls :: declEnvModulesFrom gctx (k + 1) rest
+declEnvModulesFrom gctx k mods =
+  withSiblingOrd gctx.config.value.tcSibling (declEnvRowsFrom gctx k mods)
+
+declEnvRowsFrom : GraphCtx ->
+  Int ->
+  List (String, List Decl) ->
+  List DeclEnvModule
+declEnvRowsFrom _gctx _ [] = []
+declEnvRowsFrom gctx k ((mid, decls) :: rest) =
+  declEnvModule gctx k mid decls :: declEnvRowsFrom gctx (k + 1) rest
+
+-- [rows] with each test subject's row naming its sibling's ordinal
+-- (`declEnvSiblingSees`).  A pair whose sibling has no row changes nothing.
+withSiblingOrd : List SiblingPair -> List DeclEnvModule -> List DeclEnvModule
+withSiblingOrd [] rows = rows
+withSiblingOrd siblings rows =
+  let ords = omFromPairs (map (m => (m.demId, m.demOrd)) rows) omEmpty
+  let siblingOf =
+    omFromPairs (map (p => (p.spSubject, p.spSibling)) siblings) omEmpty
+  map
+    (m => match omLookup m.demId siblingOf
+      Some sib => match omLookup sib ords
+        Some ord => { m | demSiblingOrd = Some ord }
+        None => m
+      None => m)
+    rows
 
 declEnvOrdIndex : OrdMap Int -> List DeclEnvModule -> OrdMap Int
 declEnvOrdIndex acc [] = acc
@@ -2581,26 +2600,54 @@ modulePubDefiners : OrdMap (List (String, (String, String))) ->
   List Decl ->
   List (String, (String, String))
 modulePubDefiners before mid decls =
-  map (n => (n, (mid, n))) (pubTopFnNames decls)
-    ++ reexportDefiners before decls
+  moduleDefinersUnder ExportedView before mid decls
 
--- the rows a module's `export import` decls (`DUse True` — the same filter resolve's
--- `pubUsePaths` and `reexportSeed` use) add to its own export table.  A plain `import`
--- is not re-exported and contributes nothing downstream.
-reexportDefiners : OrdMap (List (String, (String, String))) ->
+-- A module's definer rows under [view]: its own functions, then the rows its
+-- carried paths add.
+moduleDefinersUnder : ExportView ->
+  OrdMap (List (String, (String, String))) ->
+  String ->
   List Decl ->
   List (String, (String, String))
-reexportDefiners _ [] = []
-reexportDefiners before ((DAttrib _ d) :: rest) =
-  reexportDefiners before [d] ++ reexportDefiners before rest
-reexportDefiners before ((DUse True path _) :: rest) =
+moduleDefinersUnder view before mid decls =
+  map (n => (n, (mid, n))) (topFnNamesUnder view decls)
+    ++ reexportDefiners before (carriedPaths view decls)
+
+-- the rows a module's carried paths (`carriedPaths`: its `export import`s, or every
+-- import for the full view) add to its table.  A plain `import` is not re-exported,
+-- so under the exported view it contributes nothing downstream.
+reexportDefiners : OrdMap (List (String, (String, String))) ->
+  List UsePath ->
+  List (String, (String, String))
+reexportDefiners before paths = flatMap (reexportDefinersOf before) paths
+
+-- What importer [importer] reads of [depId]'s export table: `graphPubDefiners`, or,
+-- when [importer] is [depId]'s test sibling, the rows of [depId]'s full view, so a
+-- name the subject imports keeps the module that defines it (and with it the
+-- constraint a call to it passes a dictionary for).
+export
+importerDefiners : GraphCtx ->
+  String ->
+  String ->
+  List (String, (String, String))
+importerDefiners gctx importer depId =
+  match viewFor gctx.config.value.tcSibling importer depId
+    ExportedView => graphPubDefiners gctx depId
+    FullView =>
+      let envs = gctx.declEnvsRef.value
+      match head (filterList (m => m.demId == depId) envs.deModules)
+        Some m =>
+          firstRowPerName
+            omEmpty
+            (moduleDefinersUnder FullView envs.deDefiners depId m.demDecls)
+        None => graphPubDefiners gctx depId
+
+reexportDefinersOf : OrdMap (List (String, (String, String))) ->
+  UsePath ->
+  List (String, (String, String))
+reexportDefinersOf before path =
   let depId = useModId path
-  if depId == "core" then
-    reexportDefiners before rest
-  else
-    importFormRows path (definersIn before depId)
-      ++ reexportDefiners before rest
-reexportDefiners before (_ :: rest) = reexportDefiners before rest
+  if depId == "core" then [] else importFormRows path (definersIn before depId)
 
 -- `declTopFnNames` restricted to the EXPORTED bindings — what a wildcard import can
 -- actually bind.  A private binding must not enter the definer map: it is unreachable
@@ -2610,607 +2657,91 @@ reexportDefiners before (_ :: rest) = reexportDefiners before rest
 -- Standalone visibility includes an exported signature with a private body,
 -- but never visibility donated by a same-named public interface method.
 -- Intersect with actual function definitions to exclude extern declarations.
-export
 pubTopFnNames : List Decl -> List String
-pubTopFnNames decls =
-  let fns = namesToSet (declTopFnNames decls) omEmpty
-  filterList (n => omHasKey n fns) (publicStandaloneNames decls)
+pubTopFnNames decls = topFnNamesUnder ExportedView decls
 
-publicStandaloneNames : List Decl -> List String
-publicStandaloneNames [] = []
-publicStandaloneNames ((DAttrib _ d) :: rest) =
-  publicStandaloneNames [d] ++ publicStandaloneNames rest
-publicStandaloneNames ((DFunDef True n _ _ _ _) :: rest) =
-  n :: publicStandaloneNames rest
-publicStandaloneNames ((DTypeSig True n _ _) :: rest) =
-  n :: publicStandaloneNames rest
-publicStandaloneNames (_ :: rest) = publicStandaloneNames rest
+topFnNamesUnder : ExportView -> List Decl -> List String
+topFnNamesUnder view decls =
+  let fns = namesToSet (declTopFnNames decls) omEmpty
+  filterList (n => omHasKey n fns) (directUnder view nsValues decls)
+
+-- The ordinary winner and standalone alternative travel together through
+-- import selection, aliases, re-exports, and graph memoization.
+export
+tagModuleExports : OrdMap Scheme ->
+  List (String, Scheme) ->
+  List (String, ExportBinding)
+tagModuleExports standalones schemes =
+  map
+    ((name, scheme) => (
+      name,
+      ExportBinding {
+        xbScheme = scheme,
+        xbStandalone = omLookup name standalones,
+        xbExtern = False,
+      },
+    ))
+    schemes
+
+-- [prog]'s own export bindings, out of the bindings its check produced.
+export
+publicModuleExports : List Decl ->
+  ModuleBindings ->
+  List (String, ExportBinding)
+publicModuleExports prog bindings =
+  moduleBindingsUnder ExportedView (pubTopFnNames prog) prog bindings
+
+-- The bindings of [prog]'s full view that its exports [own] leave out.
+export
+privateModuleExports : List Decl ->
+  ModuleBindings ->
+  List (String, ExportBinding) ->
+  List (String, ExportBinding)
+privateModuleExports prog bindings own =
+  let exported = omFromNames (map fst own) omEmpty
+  filterList
+    (b => not (omHasKey (fst b) exported))
+    (moduleBindingsUnder FullView (declTopFnNames prog) prog bindings)
+
+-- [envs]' export bindings, with the private bindings of [mid]'s test subject
+-- beside its exports when [mid] is a test sibling.
+export
+siblingDepEnv : ModuleCtx ->
+  String ->
+  (List (String, List (String, ExportBinding)), List (String, List (String, ExportBinding))) ->
+  List (String, List (String, ExportBinding))
+siblingDepEnv prev mid (depEnv, privEnv) =
+  match subjectOf prev.mcGraph.config.value.tcSibling mid
+    Some subject => match (
+      lookupAssoc subject depEnv,
+      lookupAssoc subject privEnv,
+    )
+      (Some own, Some priv) => (subject, own ++ priv) :: depEnv
+      _ => depEnv
+    None => depEnv
+
+-- [prog]'s value bindings under [view], [fns] the functions among them whose
+-- standalone alternative travels with them.
+moduleBindingsUnder : ExportView ->
+  List String ->
+  List Decl ->
+  ModuleBindings ->
+  List (String, ExportBinding)
+moduleBindingsUnder view fns prog bindings =
+  let standalones = omRestrict fns bindings.mbStandaloneSchemes
+  let externs = omFromNames (map (e => e.edName) (externDecls prog)) omEmpty
+  map
+    ((name, binding) => (
+      name,
+      ExportBinding { binding | xbExtern = omHasKey name externs },
+    ))
+    (tagModuleExports
+      standalones
+      (restrictedPairs
+        (valueNamesUnder view prog)
+        (omFromPairs (reverseL bindings.mbSchemes) omEmpty)))
 
 -- test-only observation: declarations whose only callers are tests and probes.
-
--- Fixtures for the doctests above.  `deKindRow1` is the SAME decls at ordinal 1,
--- which is how the later-row arm is exercised without a second decl set.
-deKindAbstractFixture : Decl
-deKindAbstractFixture = DData {
-  dataVis = VisAbstract,
-  dataName = "Opq",
-  dataParams = [],
-  dataParamKinds = [],
-  dataCtors = [Variant "MkOpq" (ConPos [tyConBuiltin "Int" None])],
-  dataCtorBinders = [],
-  dataDerives = [],
-  dataOrigin = OriginModule "m",
-  dataExtern = False,
-  dataNameLoc = None,
-}
-
-deKindPrivateFixture : Decl
-deKindPrivateFixture = DData {
-  dataVis = VisPrivate,
-  dataName = "Priv",
-  dataParams = [],
-  dataParamKinds = [],
-  dataCtors = [Variant "MkPriv" (ConPos [tyConBuiltin "Int" None])],
-  dataCtorBinders = [],
-  dataDerives = [],
-  dataOrigin = OriginModule "m",
-  dataExtern = False,
-  dataNameLoc = None,
-}
-
-deKindNewtypeFixture : Decl
-deKindNewtypeFixture = DNewtype {
-  newtypePub = True,
-  newtypeName = "Wrap",
-  newtypeParams = [],
-  newtypeParamKinds = [],
-  newtypeCtor = "Wrap",
-  newtypeFieldTy = tyConBuiltin "Int" None,
-  newtypeCtorBinders = [],
-  newtypeDerives = [],
-  newtypeOrigin = OriginModule "m",
-  newtypeNameLoc = None,
-}
-
-deKindFixtureDecls : List Decl
-deKindFixtureDecls = [
-  deFieldOwnerFixtureA,
-  deKindAbstractFixture,
-  deKindPrivateFixture,
-  deKindNewtypeFixture,
-]
-
-deKindRow0 : GraphCtx -> DeclEnvModule
-deKindRow0 gctx = declEnvModule gctx 0 "m" deKindFixtureDecls
-
-deKindRow1 : GraphCtx -> DeclEnvModule
-deKindRow1 gctx = declEnvModule gctx 1 "m" deKindFixtureDecls
-
--- ── A-3.6 bite C-1: THE OWN-row exclusion, asserted rather than incidental ────
--- `declEnvSeedChain` stamps row [m]'s id with the accumulators as they stand
--- BEFORE [m] is folded in, so [m]'s seed is "every row strictly earlier than
--- [m]" and never [m] itself.  That is a STRUCTURAL property of the fold order —
--- there is no ordinal test to find and none to keep — and until now it was
--- asserted only in prose two hundred lines up.  Prose is not fail-capable, and
--- the exclusion is load-bearing in a way an ordinal statement is not: a module
--- registers its OWN decls a second time, immediately after this seed, through
--- `registerAllData … prog0`.  Seeding the own row here too would put the same
--- `cname` key in `fieldOwnersRef` twice (`addFieldOwners` does not dedupe) —
--- `fieldOwnerNames`, its only reader, dedupes on read, so the
--- doubling would not move an answer; the assertions below pin the seed's shape.
---
--- So these four lines are A TRIPWIRE ON A specific wrong edit, and it is one
--- an implementer can arrive here already instructed to make:
--- `test/registry_keying_ratchet.sh`'s `declEnvsRef` row tells A-3.6 to *"hand
--- every row the FINAL accumulator"*.  Doing that destroys the exclusion the same
--- row calls structural.  Every assertion below moves if it is done — that is the
--- fail-capability argument, and it is by construction, not by hope:
---   * `deSeedChainProbe` is a TWO-row chain, so the final accumulator differs
---     from every row's prefix.  Row "m" is FIRST, so its correct seed is EMPTY
---     while the final accumulator holds both rows: 0 → 6 kinds, `[]` → two
---     owners.  Row "n" is LAST, so its correct seed is row "m" alone while the
---     final accumulator adds "n"'s own identical `Pt`: 3 → 6 kinds, and
---     `["Pt"]` → `["Pt", "Pt"]` — the doubled key itself, named.
---   * A ONE-row chain could not discriminate any of that (prefix and final
---     accumulator coincide at the only row), which is why the probe carries two
---     rows with DISTINCT ids rather than reusing `deKindRow0`/`deKindRow1`.
--- > listLen (optionOr [] (omLookup "m" (deSeedChainKinds (probeGraphCtx ()))))
--- 0
--- > optionOr [] (omLookup "x" (optionOr omEmpty (omLookup "m" (deSeedChainOwners (probeGraphCtx ())))))
--- []
--- > listLen (optionOr [] (omLookup "n" (deSeedChainKinds (probeGraphCtx ()))))
--- 3
--- > optionOr [] (omLookup "x" (optionOr omEmpty (omLookup "n" (deSeedChainOwners (probeGraphCtx ())))))
--- ["Pt"]
-
--- #2158: the THIRD accumulator, on the SAME probe, so the own-row exclusion is
--- asserted on it too — row "m" is first, so its name index is EMPTY even though
--- "m" itself declares `Pt`/`Opq`/`Wrap`; row "n" sees exactly "m"'s three
--- kind-public names and NOT its own identical copies.  (`Priv` is absent from
--- both for the separate reason `declEnvRowKindEntries`' cross-module arm drops
--- a private decl — see the kind-count doctests above.)
--- > omKeys (optionOr omEmpty (omLookup "m" (deSeedChainNames (probeGraphCtx ()))))
--- []
--- > omKeys (optionOr omEmpty (omLookup "n" (deSeedChainNames (probeGraphCtx ()))))
--- ["Opq", "Pt", "Wrap"]
-
--- The parity assertion, and it is the one that pins the fix.  #2158 first
--- shipped the name index as a per-module REBUILD in `declEnvSeedDataUniverse`
--- (`omFromNames (map (p => tabKeyName (fst p)) kindsRef.value) omEmpty`), which
--- was quadratic in the module count.  The accumulator replaced it, so what must
--- stay true is that the accumulated set and the rebuilt set AGREE on every row.
--- This states that as an equation over the probe rather than as prose, so a
--- future edit to either half that breaks the agreement is loud here.
--- > deSeedNameParity "m"
--- True
--- > deSeedNameParity "n"
--- True
-
--- Row "n" carries the SAME decls as `deKindRow0` at ordinal 1 under a DIFFERENT
--- module id.  Same decls is deliberate: it makes the own-row contribution and the
--- earlier row's contribution identical values, so the only thing the assertions
--- above can be reading is WHICH ROWS were folded, never which decls.
-deSeedRowN : GraphCtx -> DeclEnvModule
-deSeedRowN gctx = declEnvModule gctx 1 "n" deKindFixtureDecls
-
--- The bare zero, NOT `emptyDeclEnvSeedAcc`: these probes assert which ROWS were
--- folded, and the `""` core-pass seed would be an extra key in every assertion.
-deSeedChainProbeZero : DeclEnvSeedAcc
-deSeedChainProbeZero = DeclEnvSeedAcc {
-  dsKAcc = [],
-  dsOAcc = omEmpty,
-  dsNAcc = omEmpty,
-  dsKinds = omEmpty,
-  dsOwners = omEmpty,
-  dsNames = omEmpty,
-}
-
-deSeedChainProbe : GraphCtx -> DeclEnvSeedAcc
-deSeedChainProbe gctx =
-  declEnvSeedChain gctx [deKindRow0 gctx, deSeedRowN gctx] deSeedChainProbeZero
-
-deSeedChainKinds : GraphCtx -> OrdMap (List (TabKey, List Kind))
-deSeedChainKinds gctx = (deSeedChainProbe gctx).dsKinds
-
-deSeedChainOwners : GraphCtx -> OrdMap (OrdMap (List String))
-deSeedChainOwners gctx = (deSeedChainProbe gctx).dsOwners
-
-deSeedChainNames : GraphCtx -> OrdMap (OrdMap Unit)
-deSeedChainNames gctx = (deSeedChainProbe gctx).dsNames
-
--- The accumulated name set for [mid] vs. the retired rebuild, computed here off
--- the SAME row's kind seed.  `omKeys` is sorted ascending, so this compares KEY
--- SETS and is blind to tree shape and to insertion order — which is exactly the
--- equivalence class the only reader (`noImplHintFor`'s `omHasKey`) can observe.
-deSeedNameParity : String -> Bool
-deSeedNameParity mid =
-  let gctx = probeGraphCtx ()
-  let accumulated =
-    omKeys (optionOr omEmpty (omLookup mid (deSeedChainNames gctx)))
-  let rebuilt =
-    omKeys
-      (omFromNames
-        (map
-          (p => tabKeyName (fst p))
-          (optionOr [] (omLookup mid (deSeedChainKinds gctx))))
-        omEmpty)
-  accumulated == rebuilt
-
--- ── #2158 F7: the name index as A PROGRAM-GLOBAL TABLE (T-GLOBAL-TABLE) ──────
--- `deNameIndexBefore` is a new whole-graph table, so `compiler/AGENTS.md`'s
--- T-GLOBAL-TABLE bar applies: the fixture that matters is not "the feature
--- works", it is "the feature is present and code that never touches it is
--- unaffected".  The four rows below are built for that shape specifically —
--- `deSeedChainProbe` above cannot state it, because both of its rows declare the
--- same data types, so nothing there distinguishes "row X contributed" from "row X
--- was skipped".
---
---   * `modA` declares `Alpha` and `Shared`.
---   * `modB` declares `Beta` and its OWN `Shared` — same declared NAME, different
---     module.  That pair is deliberate: the index is bare-name by construction
---     (`tabKeyName`, matching the `tabHasName` scan it replaced — see the
---     `ModuleCtx` field's comment), so the two `Shared` declarations must collapse
---     to ONE key.  A future edit that made the index identity-keyed would show up
---     as two entries here, which is the point of asserting the key LIST rather
---     than a membership Bool.
---   * `modC` and `modD` declare NO data type at all — just a value binding.  They
---     are the "unrelated code" half: their presence must leave every other row's
---     index untouched, and they must contribute nothing to any later row's.
-deNameIdxAlpha : Decl
-deNameIdxAlpha = DData {
-  dataVis = VisPublic,
-  dataName = "Alpha",
-  dataParams = [],
-  dataParamKinds = [],
-  dataCtors = [Variant "MkAlpha" (ConPos [tyConBuiltin "Int" None])],
-  dataCtorBinders = [],
-  dataDerives = [],
-  dataOrigin = OriginModule "modA",
-  dataExtern = False,
-  dataNameLoc = None,
-}
-
-deNameIdxSharedA : Decl
-deNameIdxSharedA = DData {
-  dataVis = VisPublic,
-  dataName = "Shared",
-  dataParams = [],
-  dataParamKinds = [],
-  dataCtors = [Variant "MkSharedA" (ConPos [tyConBuiltin "Int" None])],
-  dataCtorBinders = [],
-  dataDerives = [],
-  dataOrigin = OriginModule "modA",
-  dataExtern = False,
-  dataNameLoc = None,
-}
-
-deNameIdxBeta : Decl
-deNameIdxBeta = DData {
-  dataVis = VisPublic,
-  dataName = "Beta",
-  dataParams = [],
-  dataParamKinds = [],
-  dataCtors = [Variant "MkBeta" (ConPos [tyConBuiltin "Int" None])],
-  dataCtorBinders = [],
-  dataDerives = [],
-  dataOrigin = OriginModule "modB",
-  dataExtern = False,
-  dataNameLoc = None,
-}
-
-deNameIdxSharedB : Decl
-deNameIdxSharedB = DData {
-  dataVis = VisPublic,
-  dataName = "Shared",
-  dataParams = [],
-  dataParamKinds = [],
-  dataCtors = [Variant "MkSharedB" (ConPos [tyConBuiltin "Int" None])],
-  dataCtorBinders = [],
-  dataDerives = [],
-  dataOrigin = OriginModule "modB",
-  dataExtern = False,
-  dataNameLoc = None,
-}
-
-deNameIdxModA : GraphCtx -> DeclEnvModule
-deNameIdxModA gctx =
-  declEnvModule gctx 0 "modA" [deNameIdxAlpha, deNameIdxSharedA]
-
-deNameIdxModB : GraphCtx -> DeclEnvModule
-deNameIdxModB gctx =
-  declEnvModule gctx 1 "modB" [deNameIdxBeta, deNameIdxSharedB]
-
--- No data declaration anywhere in these two — a plain value binding, the
--- "unrelated code" T-GLOBAL-TABLE asks for.
-deNameIdxModC : GraphCtx -> DeclEnvModule
-deNameIdxModC gctx = declEnvModule gctx 2 "modC" [
-  DFunDef True "modCHelper" [] (ELit (LInt 1)) noDeclLoc noBinderId,
-]
-
-deNameIdxModD : GraphCtx -> DeclEnvModule
-deNameIdxModD gctx = declEnvModule gctx 3 "modD" [
-  DFunDef True "modDHelper" [] (ELit (LInt 2)) noDeclLoc noBinderId,
-]
-
-deNameIdxChain : GraphCtx -> OrdMap (OrdMap Unit)
-deNameIdxChain gctx =
-  let s =
-    declEnvSeedChain
-      gctx
-      [
-        deNameIdxModA gctx,
-        deNameIdxModB gctx,
-        deNameIdxModC gctx,
-        deNameIdxModD gctx,
-      ]
-      deSeedChainProbeZero
-  s.dsNames
-
--- The SAME chain with the two data-free rows removed.  Comparing against this is
--- what turns "unrelated code is unaffected" into an assertion rather than a hope.
-deNameIdxChainNoUnrelated : GraphCtx -> OrdMap (OrdMap Unit)
-deNameIdxChainNoUnrelated gctx =
-  let s =
-    declEnvSeedChain
-      gctx
-      [deNameIdxModA gctx, deNameIdxModB gctx]
-      deSeedChainProbeZero
-  s.dsNames
-
-deNameIdxAt : OrdMap (OrdMap Unit) -> String -> List String
-deNameIdxAt nm mid = omKeys (optionOr omEmpty (omLookup mid nm))
-
--- ── doctests ─────────────────────────────────────────────────────────────
--- (a) A name declared in an EARLIER module is visible at a later module's seed.
---     `modB` sees `modA`'s two names and no others.
--- > deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modB"
--- ["Alpha", "Shared"]
-
--- (b) A name declared in the SAME module is NOT — own registrations go on TOP of
---     the universe later, via `recordParamKinds` under `registerAllData … prog0`.
---     `modB` declares `Beta`; `Beta` is absent from `modB`'s own seed and present
---     one row later.
--- > omHasKey "Beta" (optionOr omEmpty (omLookup "modB" (deNameIdxChain (probeGraphCtx ()))))
--- False
--- > omHasKey "Beta" (optionOr omEmpty (omLookup "modC" (deNameIdxChain (probeGraphCtx ()))))
--- True
-
---     …and the first row's seed is empty, own-row exclusion at the boundary.
--- > deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modA"
--- []
-
--- (c) Unrelated code — `modC`/`modD` declare no data type at all.  They
---     contribute NOTHING (the two rows' indexes are equal, so the row between
---     them added no name), and their presence perturbs NOTHING (`modA`/`modB`
---     read identically in a chain that does not contain them at all).
---     `Shared` appears ONCE across both declaring modules: bare-name by design.
--- > deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modC"
--- ["Alpha", "Beta", "Shared"]
--- > deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modD" == deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modC"
--- True
--- > deNameIdxAt (deNameIdxChainNoUnrelated (probeGraphCtx ())) "modA" == deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modA"
--- True
--- > deNameIdxAt (deNameIdxChainNoUnrelated (probeGraphCtx ())) "modB" == deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modB"
--- True
-
--- Build the whole-graph `DataEnv` from the per-module rows — the SAME rows
--- `deImpls`/`deIfaces` fold, visiting the same decls in the same order the
--- flattened `deAllDecls` holds them (`declEnvDeclsOf` is those rows' `demDecls`
--- concatenated in ordinal order), so nothing about the four bare-name-free
--- tables below moves by taking rows instead of the flat list.
---
--- A-3.2b residual (#1512) took the rows for one reason: `deAliases` now carries
--- the declaring module's ORDINAL, and the flattened list has no ordinal in it —
--- the same reason `buildImplEnv` has always read rows (see `buildDeclEnvs`).
-buildDataEnv : List DeclEnvModule -> DataEnv
-buildDataEnv rows = dataEnvFinish (dataEnvFromRowsGo rows emptyDataEnv)
-
--- Fixture for the doctests below: a PUBLIC alias in the prelude row (ordinal 0),
--- a PRIVATE one beside it, and a public one in a later module (ordinal 1).
-aliasFixturePubCore : Decl
-aliasFixturePubCore = DTypeAlias {
-  tyAliasPub = True,
-  tyAliasName = "PubCore",
-  tyAliasParams = [],
-  tyAliasParamKinds = [],
-  tyAliasRhs = tyConBuiltin "Int" None,
-  tyAliasOrigin = OriginModule "core",
-  tyAliasNameLoc = None,
-}
-
-aliasFixturePrivCore : Decl
-aliasFixturePrivCore = DTypeAlias {
-  tyAliasPub = False,
-  tyAliasName = "PrivCore",
-  tyAliasParams = [],
-  tyAliasParamKinds = [],
-  tyAliasRhs = tyConBuiltin "Int" None,
-  tyAliasOrigin = OriginModule "core",
-  tyAliasNameLoc = None,
-}
-
-aliasFixturePubM : Decl
-aliasFixturePubM = DTypeAlias {
-  tyAliasPub = True,
-  tyAliasName = "PubM",
-  tyAliasParams = [],
-  tyAliasParamKinds = [],
-  tyAliasRhs = tyConBuiltin "Int" None,
-  tyAliasOrigin = OriginModule "m",
-  tyAliasNameLoc = None,
-}
-
--- PUBLIC, but wrapped in an attribute.  SINCE #1228/#1586 this row is visible:
--- `registerData` unwraps `DAttrib`, so `aliasVisibleTo`'s third condition is gone
--- and this alias behaves like any other public one.  It is still in the population
--- (`deAliases` holds four rows, asserted below) — that half never changed.
-aliasFixtureAttribCore : Decl
-aliasFixtureAttribCore =
-  DAttrib
-    [AttrDeprecated (Some "old")]
-    DTypeAlias {
-      tyAliasPub = True,
-      tyAliasName = "AttribCore",
-      tyAliasParams = [],
-      tyAliasParamKinds = [],
-      tyAliasRhs = tyConBuiltin "Int" None,
-      tyAliasOrigin = OriginModule "core",
-      tyAliasNameLoc = None,
-    }
-
-aliasFixtureEnv : GraphCtx -> DataEnv
-aliasFixtureEnv gctx = buildDataEnv [
-  declEnvModule gctx 0 "core" [
-    aliasFixturePubCore, aliasFixturePrivCore, aliasFixtureAttribCore
-  ],
-  declEnvModule gctx 1 "m" [aliasFixturePubM],
-]
-
-aliasNamesAt : Int -> List String
-aliasNamesAt cur =
-  map
-    (e => tabKeyName (fst e))
-    (aliasUniverseAt cur (aliasFixtureEnv (probeGraphCtx ())).deAliases)
-
--- ── doctests ─────────────────────────────────────────────────────────────
--- The prelude reader (ordinal 0) sees NOTHING — not even its own public alias.
--- > aliasNamesAt 0
--- []
-
--- A reader at ordinal 1 sees the prelude's PUBLIC aliases — the plain one and the
--- ATTRIBUTED one (#1228/#1586: an attribute is metadata and no longer hides a
--- declaration) — and NOT its private one.  `AttribCore` comes first because
--- `deAliases` is built by PREPEND and it is the last of core's three decls.
--- > aliasNamesAt 1
--- ["AttribCore", "PubCore"]
-
--- A reader at ordinal 2 sees every public alias, DESCENDING by ordinal — the
--- order the retired accumulator produced, which `lookupTab`'s first-match and
--- `emitCyclicAliasErrors`' render order both observe.
--- > aliasNamesAt 2
--- ["PubM", "AttribCore", "PubCore"]
-
--- Fail-CLOSED at `declEnvsOrdOf`'s miss sentinel, exactly as `declEnvVisibleAt`.
--- > aliasNamesAt (0 - 1)
--- []
-
--- POPULATION NEUTRALITY: all FOUR aliases are in `deAliases` — including the
--- attributed one and the private one — and it is the READ that narrows.  This is
--- the assertion that fails if a later edit "tidies" a visibility question back into
--- the fold, re-creating the two-rows-one-record divergence `dataEnvAddDecl`'s note
--- exists to prevent.
--- > listLen (aliasFixtureEnv (probeGraphCtx ())).deAliases
--- 4
-
--- Fixture for the doctests below: two DIFFERENT modules ("m", "n") each
--- declaring a record named-field variant with field "x".
-deFieldOwnerFixtureA : Decl
-deFieldOwnerFixtureA = DData {
-  dataVis = VisPublic,
-  dataName = "Pt",
-  dataParams = [],
-  dataParamKinds = [],
-  dataCtors =
-    [Variant "Pt" (ConNamed [Field "x" (tyConBuiltin "Int" None)] False)],
-  dataCtorBinders = [],
-  dataDerives = [],
-  dataOrigin = OriginModule "m",
-  dataExtern = False,
-  dataNameLoc = None,
-}
-
-deFieldOwnerFixtureB : Decl
-deFieldOwnerFixtureB = DData {
-  dataVis = VisPublic,
-  dataName = "Vec",
-  dataParams = [],
-  dataParamKinds = [],
-  dataCtors =
-    [Variant "Vec" (ConNamed [Field "x" (tyConBuiltin "Int" None)] False)],
-  dataCtorBinders = [],
-  dataDerives = [],
-  dataOrigin = OriginModule "n",
-  dataExtern = False,
-  dataNameLoc = None,
-}
-
--- Same DECLARED NAME as fixture A ("Pt"), different module.  This is the case
--- the bare-name table (`universeFieldOwners`) genuinely cannot discriminate:
--- `addFieldOwners` is already a multimap, so it does NOT collapse fixture A/B
--- above (different ctor NAMES "Pt"/"Vec" — the bare table already shows two
--- rows for those).  What the bare table collapses is A vs C: both would
--- append the SAME bare string "Pt" to field "x"'s owner list, so a reader of
--- that list cannot tell "Pt" declared twice from one declaration counted
--- twice.  The identity table keeps them as two DISTINCT `Ident`s (different
--- `OriginModule`), which `distinctIdentsIn2` below asserts on directly.
-deFieldOwnerFixtureC : Decl
-deFieldOwnerFixtureC = DData {
-  dataVis = VisPublic,
-  dataName = "Pt",
-  dataParams = [],
-  dataParamKinds = [],
-  dataCtors =
-    [Variant "Pt" (ConNamed [Field "x" (tyConBuiltin "Int" None)] False)],
-  dataCtorBinders = [],
-  dataDerives = [],
-  dataOrigin = OriginModule "n",
-  dataExtern = False,
-  dataNameLoc = None,
-}
-
-deFieldOwnerCollisionEnv : GraphCtx -> DataEnv
-deFieldOwnerCollisionEnv gctx = buildDataEnv [
-  declEnvModule gctx 0 "m" [deFieldOwnerFixtureA, deFieldOwnerFixtureB],
-]
-
-deFieldOwnerSingleEnv : GraphCtx -> DataEnv
-deFieldOwnerSingleEnv gctx =
-  buildDataEnv [declEnvModule gctx 0 "m" [deFieldOwnerFixtureA]]
-
-deFieldOwnerSameNameEnv : GraphCtx -> DataEnv
-deFieldOwnerSameNameEnv gctx = buildDataEnv [
-  declEnvModule gctx 0 "m" [deFieldOwnerFixtureA, deFieldOwnerFixtureC],
-]
-
--- ── #2147 residual: `deRecordIdents`' bucket order, now pinned ───────────────
--- `deFieldOwnerIdents` has had an ORDERED assertion since A-3.2a (the `["Pt",
--- "Vec"]` doctest below states a list, not a length).  `deRecordIdents` — its
--- sibling under the same `omMapValues reverseL` finalisation in `buildDataEnv`,
--- rewritten from `++ [x]` to cons-and-reverse by #2147 — had only its VALUES
--- covered, never its ORDER.  So the one property #2147 had to preserve was the
--- one nothing asserted: drop `deRecordIdents`' half of that `omMapValues
--- reverseL` and every existing assertion in this file still passes.
---
--- The fixture needs 2+ entries under ONE key, and `deRecordIdents` is keyed by
--- CONSTRUCTOR name, so it takes two records sharing a ctor name under different
--- TYPE names — which is also what makes the assertion discriminating, since the
--- type name is then the thing that distinguishes first from second.
-deRecordOrderFixtureA : Decl
-deRecordOrderFixtureA = DData {
-  dataVis = VisPublic,
-  dataName = "P1",
-  dataParams = [],
-  dataParamKinds = [],
-  dataCtors =
-    [Variant "Pt" (ConNamed [Field "x" (tyConBuiltin "Int" None)] False)],
-  dataCtorBinders = [],
-  dataDerives = [],
-  dataOrigin = OriginModule "m",
-  dataExtern = False,
-  dataNameLoc = None,
-}
-
-deRecordOrderFixtureB : Decl
-deRecordOrderFixtureB = DData {
-  dataVis = VisPublic,
-  dataName = "P2",
-  dataParams = [],
-  dataParamKinds = [],
-  dataCtors =
-    [Variant "Pt" (ConNamed [Field "y" (tyConBuiltin "Int" None)] False)],
-  dataCtorBinders = [],
-  dataDerives = [],
-  dataOrigin = OriginModule "n",
-  dataExtern = False,
-  dataNameLoc = None,
-}
-
--- Two modules in ORDINAL order, so "P1" is declared strictly before "P2".
-deRecordOrderEnv : GraphCtx -> DataEnv
-deRecordOrderEnv gctx = buildDataEnv [
-  declEnvModule gctx 0 "m" [deRecordOrderFixtureA],
-  declEnvModule gctx 1 "n" [deRecordOrderFixtureB],
-]
-
-deRecordIdentTyNames : List (Ident, String, List Field) -> List String
-deRecordIdentTyNames [] = []
-deRecordIdentTyNames ((_, tyName, _) :: rest) =
-  tyName :: deRecordIdentTyNames rest
-
--- ── doctests ─────────────────────────────────────────────────────────────
--- > map snd (optionOr [] (omLookup "x" (deFieldOwnerCollisionEnv (probeGraphCtx ())).deFieldOwnerIdents))
--- ["Pt", "Vec"]
--- > listLen (optionOr [] (omLookup "x" (deFieldOwnerCollisionEnv (probeGraphCtx ())).deFieldOwnerIdents))
--- 2
--- > map snd (optionOr [] (omLookup "x" (deFieldOwnerSingleEnv (probeGraphCtx ())).deFieldOwnerIdents))
--- ["Pt"]
-
--- The discriminating case: SAME declared name ("Pt") from two DIFFERENT
--- modules stays two DISTINCT identities, not one bare-name collision.
--- > map snd (optionOr [] (omLookup "x" (deFieldOwnerSameNameEnv (probeGraphCtx ())).deFieldOwnerIdents))
--- ["Pt", "Pt"]
--- > distinctIdentsIn2 (optionOr [] (omLookup "x" (deFieldOwnerSameNameEnv (probeGraphCtx ())).deFieldOwnerIdents))
--- True
-
--- #2147's order half, on `deRecordIdents` rather than `deFieldOwnerIdents`:
--- DECLARATION order within the bucket, "P1" (module ordinal 0) before "P2"
--- (ordinal 1).  Remove `deRecordIdents`' `omMapValues reverseL` in
--- `buildDataEnv` and this reads `["P2", "P1"]`; the length assertion beside it
--- does not move, which is precisely why a length was never enough.
--- > deRecordIdentTyNames (optionOr [] (omLookup "Pt" (deRecordOrderEnv (probeGraphCtx ())).deRecordIdents))
--- ["P1", "P2"]
--- > listLen (optionOr [] (omLookup "Pt" (deRecordOrderEnv (probeGraphCtx ())).deRecordIdents))
--- 2
 
 -- [saved] is the caller's current record: the observation runs in a carry of it, in
 -- its graph record with fresh sub-records, and its graph record is current again on
@@ -3243,19 +2774,12 @@ methodRowNumObservation saved caseName builtinDecls decls =
       natoDeclaredType = ppTy anchor.msrType,
     }
   observation
-
--- Two-element owner list, DISTINCT `Ident`s (never a fixed answer): the
--- property a bare-name multimap cannot state, since two `String`s "Pt"/"Pt"
--- carry no way to tell them apart.
-distinctIdentsIn2 : List (Ident, String) -> Bool
-distinctIdentsIn2 [(i1, _), (i2, _)] = i1 /= i2
-distinctIdentsIn2 _ = False
 # DESUGAR
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "PredicateSlotArgs" true) (mem "AliasDecl" true) (mem "BuiltinClass" true) (mem "BuiltinClasses" true) (mem "DataEnv" true) (mem "DataTypeDecl" true) (mem "DeclEnvAcc" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "Kind" true) (mem "MethodPredicateSlot" true) (mem "MethodPredicateTemplate" true) (mem "MethodSchemeRow" true) (mem "NumAnchorTestObservation" true) (mem "PredicateSlot" true) (mem "SigVars" true) (mem "DeclEnvModule" false) (mem "GraphCtx" false) (mem "ModuleCtx" false) (mem "RecordInfo" false) (mem "TcEnv" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "PredicateSlotArgs" true) (mem "AliasDecl" true) (mem "BuiltinClass" true) (mem "BuiltinClasses" true) (mem "DataEnv" true) (mem "DataTypeDecl" true) (mem "DeclEnvAcc" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "Kind" true) (mem "MethodPredicateSlot" true) (mem "MethodPredicateTemplate" true) (mem "MethodSchemeRow" true) (mem "NumAnchorTestObservation" true) (mem "PredicateSlot" true) (mem "SigVars" true) (mem "DeclEnvModule" false) (mem "ExportBinding" true) (mem "GraphCtx" false) (mem "ModuleBindings" true) (mem "ModuleCtx" false) (mem "RecordInfo" false) (mem "TcEnv" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "applyParams" false) (mem "authvarIdOf" false) (mem "collectAuthvarIds" false) (mem "collectRowEffvarIds" false) (mem "collectTyIds" false) (mem "effvarIdOf" false) (mem "foldrFun" false) (mem "monoTyvarId" false) (mem "schemeBodyOf" false) (mem "schemeIds" false) (mem "tconFrom" false) (mem "tyAppSpine" false) (mem "tyVarNames" false))))
-(DUse false (UseGroup ("types" "tc_state") ((mem "carryModuleCtx" false) (mem "emptyBuiltinClasses" false) (mem "emptyDataEnv" false) (mem "freshSubRecordsOf" false) (mem "mctxAtIfSome" false) (mem "probeGraphCtx" false))))
-(DUse false (UseGroup ("types" "tc_env") ((mem "addCtor" false) (mem "aliasUniverseAt" false) (mem "buildClassEnvGo" false) (mem "buildImplEnvGo" false) (mem "builtinIfaceRef" false) (mem "classEnvFinish" false) (mem "constraintSlotDispatchVar" false) (mem "declEnvDeclsOf" false) (mem "declEnvKindEntries" false) (mem "declEnvModule" false) (mem "declEnvReachFrom" false) (mem "declEnvRowVisible" false) (mem "declEnvVisibleTo" false) (mem "declGradedScope" false) (mem "declParamKinds" false) (mem "declTopFnNames" false) (mem "definersIn" false) (mem "dtopFor" false) (mem "effTailNames" false) (mem "implAccFinish" false) (mem "importLocFor" false) (mem "kindPublicDataDecl" false) (mem "methodEnvGo" false) (mem "methodSlotKey" false) (mem "namesToSet" false) (mem "publicDataDecl" false) (mem "rangedOver" false) (mem "removeAllS" false) (mem "sameIfaceDecl" false) (mem "tyTabKey" false) (mem "useModuleId" false))))
+(DUse false (UseGroup ("types" "tc_state") ((mem "carryModuleCtx" false) (mem "emptyBuiltinClasses" false) (mem "freshSubRecordsOf" false) (mem "mctxAtIfSome" false))))
+(DUse false (UseGroup ("types" "tc_env") ((mem "addCtor" false) (mem "aliasUniverseAt" false) (mem "buildClassEnvGo" false) (mem "buildImplEnvGo" false) (mem "builtinIfaceRef" false) (mem "classEnvFinish" false) (mem "constraintSlotDispatchVar" false) (mem "declEnvDeclsOf" false) (mem "declEnvKindEntries" false) (mem "declEnvModule" false) (mem "declEnvReachFrom" false) (mem "declEnvRowVisible" false) (mem "declEnvSiblingSees" false) (mem "declEnvVisibleTo" false) (mem "declGradedScope" false) (mem "declParamKinds" false) (mem "declTopFnNames" false) (mem "definersIn" false) (mem "graphPubDefiners" false) (mem "dtopFor" false) (mem "effTailNames" false) (mem "implAccFinish" false) (mem "importLocFor" false) (mem "kindPublicDataDecl" false) (mem "methodEnvGo" false) (mem "methodSlotKey" false) (mem "namesToSet" false) (mem "publicDataDecl" false) (mem "rangedOver" false) (mem "removeAllS" false) (mem "sameIfaceDecl" false) (mem "tyTabKey" false) (mem "useModuleId" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeErrorOnce" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "importFormRows" false) (mem "memberBindsCtorName" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "atomsEscape" false) (mem "freshAuthBinderRanged" false) (mem "freshAuthvar" false) (mem "freshAuthvarRanged" false) (mem "freshEffMap" false) (mem "freshEffvar" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "namedArgDomains" false) (mem "freshVars" false))))
@@ -3263,33 +2787,34 @@ distinctIdentsIn2 _ = False
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "atomsOfWritten" false) (mem "authArgBindersIn" false) (mem "authorityBinderBound" false) (mem "binderDomainsIn" false) (mem "bindingForceFromAst" false) (mem "fromAstType" false) (mem "fromAstTypeE" false) (mem "namedArgTypes" false) (mem "namedAtomBinders" false) (mem "patternSlotNamesIn" false) (mem "payloadTypesE" false) (mem "qualifiedKindScope" false) (mem "recFieldMono" false) (mem "reportBinderDomains" false) (mem "reportUnboundAuthorityNames" false) (mem "reportUnboundAuthorityNamesIn" false) (mem "rowArgNames" false) (mem "rowArgNamesIn" false) (mem "sigVarsWithAuths" false) (mem "substAliasArgs" false) (mem "writtenBindingForce" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomsNorm" false) (mem "pureRow" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "UsePath" true) (mem "Ns" true) (mem "Lit" true) (mem "Expr" true) (mem "Attr" true) (mem "ConPayload" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "Field" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "KindAnn" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "Variant" true) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "identOriginFold" false) (mem "lookupTab" false) (mem "mapTyFull" false) (mem "mkIdent" false) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "tyConBuiltin" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "UsePath" true) (mem "Ns" true) (mem "Lit" true) (mem "Expr" true) (mem "Attr" true) (mem "ConPayload" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "ExternDecl" true) (mem "Field" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "KindAnn" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "Variant" true) (mem "externDecls" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "identOriginFold" false) (mem "lookupTab" false) (mem "mapTyFull" false) (mem "mkIdent" false) (mem "tabKeyEq" false) (mem "tabKeyName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "ppMono" false) (mem "ppTy" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "omDelete" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omMapValues" false) (mem "OrdMap" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omDelete" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omMapValues" false) (mem "omRestrict" false) (mem "restrictedPairs" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("list") ((mem "elemIndex" false) (mem "findMap" false) (mem "head" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "spFloor" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" true))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "ExportView" true) (mem "useModId" false) (mem "carriedPaths" false) (mem "pubUsePaths" false) (mem "directUnder" false) (mem "nsValues" false) (mem "subjectOf" false) (mem "valueNamesUnder" false) (mem "viewFor" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "stampGraphTyOrigins" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DTypeSig true "declEnvAccOf" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "DeclEnvAcc") (TyCon "DeclEnvAcc")))))
-(DFunDef false "declEnvAccOf" ((PVar "gctx") (PList) (PVar "a")) (EVar "a"))
+(DFunDef false "declEnvAccOf" ((PVar "_gctx") (PList) (PVar "a")) (EVar "a"))
 (DFunDef false "declEnvAccOf" ((PVar "gctx") (PCons (PVar "m") (PVar "rest")) (PVar "a")) (EBlock (DoLet false false (PVar "definers") (EApp (EApp (EApp (EVar "declEnvDefinerIndex") (EFieldAccess (EVar "a") "daDefiners")) (EFieldAccess (EVar "a") "daAmbig")) (EListLit (EVar "m")))) (DoExpr (EApp (EApp (EApp (EVar "declEnvAccOf") (EVar "gctx")) (EVar "rest")) (ERecordCreate "DeclEnvAcc" ((fa "daOrdIndex" (EApp (EApp (EVar "declEnvOrdIndex") (EFieldAccess (EVar "a") "daOrdIndex")) (EListLit (EVar "m")))) (fa "daDefiners" (EApp (EVar "fst") (EVar "definers"))) (fa "daAmbig" (EApp (EVar "snd") (EVar "definers"))) (fa "daData" (EApp (EApp (EVar "dataEnvFromRowsGo") (EListLit (EVar "m"))) (EFieldAccess (EVar "a") "daData"))) (fa "daImpls" (EApp (EApp (EVar "buildImplEnvGo") (EListLit (EVar "m"))) (EFieldAccess (EVar "a") "daImpls"))) (fa "daIfaces" (EApp (EApp (EApp (EVar "buildClassEnvGo") (EVar "gctx")) (EListLit (EVar "m"))) (EFieldAccess (EVar "a") "daIfaces"))) (fa "daMethods" (EApp (EApp (EApp (EVar "methodEnvGo") (EVar "gctx")) (EListLit (EVar "m"))) (EFieldAccess (EVar "a") "daMethods"))) (fa "daSeeds" (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "gctx")) (EListLit (EVar "m"))) (EFieldAccess (EVar "a") "daSeeds"))) (fa "daPolarity" (EApp (EApp (EVar "declEnvPolarityChain") (EListLit (EVar "m"))) (EFieldAccess (EVar "a") "daPolarity"))) (fa "daOwnerModules" (EApp (EApp (EVar "declEnvOwnerModules") (EListLit (EVar "m"))) (EFieldAccess (EVar "a") "daOwnerModules")))))))))
 (DTypeSig true "buildDeclEnvs" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "DeclEnvAcc") (TyFun (TyCon "DeclEnvModule") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyCon "DeclEnvs"))))))
 (DFunDef false "buildDeclEnvs" ((PVar "gctx") (PVar "acc") (PVar "coreRow") (PVar "modRows")) (EBlock (DoLet false false (PVar "mods") (EBinOp "::" (EVar "coreRow") (EVar "modRows"))) (DoLet false false (PVar "a") (EApp (EApp (EApp (EVar "declEnvAccOf") (EVar "gctx")) (EVar "modRows")) (EVar "acc"))) (DoExpr (ERecordCreate "DeclEnvs" ((fa "deModules" (EVar "mods")) (fa "deOrdIndex" (EFieldAccess (EVar "a") "daOrdIndex")) (fa "deDefiners" (EFieldAccess (EVar "a") "daDefiners")) (fa "deAmbigValues" (EFieldAccess (EVar "a") "daAmbig")) (fa "deAllDecls" (EApp (EVar "declEnvDeclsOf") (EVar "mods"))) (fa "deData" (EApp (EVar "dataEnvFinish") (EFieldAccess (EVar "a") "daData"))) (fa "deImpls" (EApp (EVar "implAccFinish") (EFieldAccess (EVar "a") "daImpls"))) (fa "deIfaces" (EApp (EVar "classEnvFinish") (EFieldAccess (EVar "a") "daIfaces"))) (fa "deMethods" (EFieldAccess (EVar "a") "daMethods")) (fa "deKindsBefore" (EFieldAccess (EFieldAccess (EVar "a") "daSeeds") "dsKinds")) (fa "deNameIndexBefore" (EFieldAccess (EFieldAccess (EVar "a") "daSeeds") "dsNames")) (fa "dePolaritiesBefore" (EApp (EVar "snd") (EFieldAccess (EVar "a") "daPolarity"))) (fa "deAtomsBefore" (EApp (EVar "snd") (EApp (EApp (EApp (EVar "declEnvRowAtomsChain") (EVar "gctx")) (EVar "mods")) (ETuple (EListLit) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty")))))) (fa "deOwnersBefore" (EFieldAccess (EFieldAccess (EVar "a") "daSeeds") "dsOwners")) (fa "deOwnerModules" (EFieldAccess (EVar "a") "daOwnerModules")) (fa "deReach" (EApp (EVar "declEnvReachIndex") (EVar "mods"))))))))
 (DTypeSig false "declEnvRowKindEntries" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyCon "DeclEnvModule") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))))))
-(DFunDef false "declEnvRowKindEntries" ((PVar "gctx") (PVar "cur") (PVar "m")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "False")) (EApp (EApp (EVar "declEnvKindEntries") (EVar "gctx")) (EFieldAccess (EVar "m") "demDecls")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "True")) (EFieldAccess (EVar "m") "demKindEntries") (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "declEnvRowKindEntries" ((PVar "gctx") (PVar "cur") (PVar "m")) (EIf (EBinOp "||" (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "False")) (EApp (EApp (EVar "declEnvSiblingSees") (EVar "cur")) (EVar "m"))) (EApp (EApp (EVar "declEnvKindEntries") (EVar "gctx")) (EFieldAccess (EVar "m") "demDecls")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "True")) (EFieldAccess (EVar "m") "demKindEntries") (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "declEnvSeedChain" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "DeclEnvSeedAcc") (TyCon "DeclEnvSeedAcc")))))
-(DFunDef false "declEnvSeedChain" ((PVar "gctx") (PList) (PVar "s")) (EVar "s"))
+(DFunDef false "declEnvSeedChain" ((PVar "_gctx") (PList) (PVar "s")) (EVar "s"))
 (DFunDef false "declEnvSeedChain" ((PVar "gctx") (PCons (PVar "m") (PVar "rest")) (PVar "s")) (EBlock (DoLet false false (PVar "kents") (EApp (EApp (EApp (EVar "declEnvRowKindEntries") (EVar "gctx")) (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m"))) (DoExpr (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "gctx")) (EVar "rest")) (ERecordCreate "DeclEnvSeedAcc" ((fa "dsKAcc" (EBinOp "++" (EVar "kents") (EFieldAccess (EVar "s") "dsKAcc"))) (fa "dsOAcc" (EApp (EApp (EVar "declEnvDeclFieldOwners") (EApp (EApp (EVar "declEnvRowVisible") (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m"))) (EFieldAccess (EVar "s") "dsOAcc"))) (fa "dsNAcc" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "p"))))) (EVar "kents"))) (EFieldAccess (EVar "s") "dsNAcc"))) (fa "dsKinds" (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EFieldAccess (EVar "s") "dsKAcc")) (EFieldAccess (EVar "s") "dsKinds"))) (fa "dsOwners" (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EFieldAccess (EVar "s") "dsOAcc")) (EFieldAccess (EVar "s") "dsOwners"))) (fa "dsNames" (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EFieldAccess (EVar "s") "dsNAcc")) (EFieldAccess (EVar "s") "dsNames")))))))))
 (DTypeSig false "declEnvRowAtomsChain" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))))))))
-(DFunDef false "declEnvRowAtomsChain" ((PVar "gctx") (PList) (PVar "s")) (EVar "s"))
+(DFunDef false "declEnvRowAtomsChain" ((PVar "_gctx") (PList) (PVar "s")) (EVar "s"))
 (DFunDef false "declEnvRowAtomsChain" ((PVar "gctx") (PCons (PVar "m") (PVar "rest")) (PTuple (PVar "aacc") (PVar "am"))) (EBlock (DoLet false false (PVar "entries") (EApp (EApp (EApp (EVar "declEnvRowAtomsEntries") (EVar "gctx")) (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m"))) (DoExpr (EApp (EApp (EApp (EVar "declEnvRowAtomsChain") (EVar "gctx")) (EVar "rest")) (ETuple (EBinOp "++" (EVar "entries") (EVar "aacc")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "aacc")) (EVar "am")))))))
 (DTypeSig false "declEnvRowAtomsEntries" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyCon "DeclEnvModule") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))))))
 (DFunDef false "declEnvRowAtomsEntries" ((PVar "gctx") (PVar "cur") (PVar "m")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "False")) (EApp (EApp (EVar "declEnvRowAtomEntries") (EVar "gctx")) (EFieldAccess (EVar "m") "demDecls")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "True")) (EApp (EApp (EVar "declEnvRowAtomEntries") (EVar "gctx")) (EApp (EApp (EVar "filterList") (EVar "kindPublicDataDecl")) (EFieldAccess (EVar "m") "demDecls"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "declEnvRowAtomEntries" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))))
-(DFunDef false "declEnvRowAtomEntries" ((PVar "gctx") (PList)) (EListLit))
+(DFunDef false "declEnvRowAtomEntries" ((PVar "_gctx") (PList)) (EListLit))
 (DFunDef false "declEnvRowAtomEntries" ((PVar "gctx") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "declEnvRowAtomEntries") (EVar "gctx")) (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "declEnvRowAtomEntries" ((PVar "gctx") (PCons (PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataCtors" (PVar "vs")) (rf "dataOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EApp (EApp (EVar "inferParamRowAtoms") (EVar "gctx")) (EVar "ps")) (EVar "vs"))) (EApp (EApp (EVar "declEnvRowAtomEntries") (EVar "gctx")) (EVar "rest"))))
 (DFunDef false "declEnvRowAtomEntries" ((PVar "gctx") (PCons (PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EApp (EApp (EVar "inferParamRowAtoms") (EVar "gctx")) (EVar "ps")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty"))))))) (EApp (EApp (EVar "declEnvRowAtomEntries") (EVar "gctx")) (EVar "rest"))))
@@ -3329,8 +2854,8 @@ distinctIdentsIn2 _ = False
 (DFunDef false "dataEnvFromDeclsGo" ((PVar "ord") (PCons (PVar "d") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "dataEnvAddDecl") (EVar "ord")) (EVar "False")) (EVar "d")) (EVar "acc"))))
 (DTypeSig false "dataEnvAddDecl" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Decl") (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))
 (DFunDef false "dataEnvAddDecl" ((PVar "ord") PWild (PCon "DAttrib" PWild (PVar "d")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "dataEnvAddDecl") (EVar "ord")) (EVar "True")) (EVar "d")) (EVar "acc")))
-(DFunDef false "dataEnvAddDecl" ((PVar "ord") PWild (PRec "DData" ((rf "dataName" None) (rf "dataParams" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataParams")) (EVar "dataCtors")) (EVar "acc")))
-(DFunDef false "dataEnvAddDecl" ((PVar "ord") PWild (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeParams" None) (rf "newtypeCtor" None) (rf "newtypeFieldTy" None) (rf "newtypeOrigin" None)) true) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "newtypeName")) (EVar "newtypeOrigin")) (EVar "newtypeParams")) (EListLit (EApp (EApp (EVar "Variant") (EVar "newtypeCtor")) (EApp (EVar "ConPos") (EListLit (EVar "newtypeFieldTy")))))) (EVar "acc")))
+(DFunDef false "dataEnvAddDecl" ((PVar "_ord") PWild (PRec "DData" ((rf "dataName" None) (rf "dataParams" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataParams")) (EVar "dataCtors")) (EVar "acc")))
+(DFunDef false "dataEnvAddDecl" ((PVar "_ord") PWild (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeParams" None) (rf "newtypeCtor" None) (rf "newtypeFieldTy" None) (rf "newtypeOrigin" None)) true) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "newtypeName")) (EVar "newtypeOrigin")) (EVar "newtypeParams")) (EListLit (EApp (EApp (EVar "Variant") (EVar "newtypeCtor")) (EApp (EVar "ConPos") (EListLit (EVar "newtypeFieldTy")))))) (EVar "acc")))
 (DFunDef false "dataEnvAddDecl" ((PVar "ord") (PVar "att") (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasName" None) (rf "tyAliasParams" None) (rf "tyAliasRhs" None) (rf "tyAliasOrigin" None)) true)) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addAliasDecl") (EVar "tyAliasName")) (EVar "tyAliasOrigin")) (EVar "tyAliasParams")) (EVar "tyAliasRhs")) (EVar "ord")) (EApp (EVar "publicDataDecl") (EVar "d"))) (EVar "att")) (EVar "acc")))
 (DFunDef false "dataEnvAddDecl" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "addDataTypeDecl" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
@@ -3385,7 +2910,7 @@ distinctIdentsIn2 _ = False
 (DFunDef false "aliasDfsVisitAll" (PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "aliasDfsVisitAll" ((PVar "graph") (PVar "visitedRef") (PVar "onStackRef") (PVar "onStackSetRef") (PVar "cyclicOut") (PCons (PVar "k") (PVar "ks"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "aliasDfsVisit") (EVar "graph")) (EVar "visitedRef")) (EVar "onStackRef")) (EVar "onStackSetRef")) (EVar "cyclicOut")) (EVar "k"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "aliasDfsVisitAll") (EVar "graph")) (EVar "visitedRef")) (EVar "onStackRef")) (EVar "onStackSetRef")) (EVar "cyclicOut")) (EVar "ks")))))
 (DTypeSig false "emitCyclicAliasErrors" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "emitCyclicAliasErrors" ((PVar "mctx") PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "emitCyclicAliasErrors" ((PVar "_mctx") PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "emitCyclicAliasErrors" ((PVar "mctx") (PVar "prog") (PVar "table") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "reader") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentModuleRef") "value")) (DoLet false false (PVar "named") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "e"))) (EVar "name")))) (EVar "table"))) (DoLet false false (PVar "loc") (EMatch (EApp (EApp (EVar "find") (ELam ((PVar "e")) (EApp (EApp (EVar "aliasDeclaredBy") (EVar "reader")) (EApp (EVar "fst") (EVar "e"))))) (EVar "named")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "firstTyLoc") (EApp (EVar "snd") (EApp (EVar "snd") (EVar "e"))))) (arm (PCon "None") () (EApp (EApp (EVar "findMap") (ELam ((PVar "e")) (EMatch (EApp (EVar "tabKeyModule") (EApp (EVar "fst") (EVar "e"))) (arm (PCon "Some" (PVar "owner")) () (EApp (EApp (EApp (EVar "importLocFor") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value") "deReach")) (EVar "prog")) (EVar "owner"))) (arm (PCon "None") () (EVar "None"))))) (EVar "named"))))) (DoExpr (EApp (EApp (EApp (EVar "pushTypeErrorOnce") (EApp (EApp (EVar "mctxAtIfSome") (EVar "loc")) (EVar "mctx"))) (EVar "TRecursiveAlias")) (EBinOp "++" (EBinOp "++" (ELit (LString "type alias `")) (EVar "name")) (ELit (LString "` is recursive; a type alias cannot refer to itself, so declare a `data` type instead"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitCyclicAliasErrors") (EVar "mctx")) (EVar "prog")) (EVar "table")) (EVar "rest")))))
 (DTypeSig false "aliasDeclaredBy" (TyFun (TyCon "String") (TyFun (TyCon "TabKey") (TyCon "Bool"))))
 (DFunDef false "aliasDeclaredBy" ((PVar "reader") (PVar "key")) (EMatch (EApp (EVar "tabKeyModule") (EVar "key")) (arm (PCon "Some" (PVar "owner")) () (EBinOp "==" (EVar "owner") (EVar "reader"))) (arm (PCon "None") () (EVar "True"))))
@@ -3423,14 +2948,14 @@ distinctIdentsIn2 _ = False
 (DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope"))) (EVar "ts")))
 (DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
 (DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
-(DFunDef false "rowArgAtomsIn" ((PVar "mctx") PWild PWild) (EListLit))
+(DFunDef false "rowArgAtomsIn" ((PVar "_mctx") PWild PWild) (EListLit))
 (DTypeSig false "rowArgAtomsApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))))
 (DFunDef false "rowArgAtomsApp" ((PVar "mctx") (PVar "scope") (PVar "o") (PVar "n") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EVar "Some") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "kinds")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "paramRowAtomsOf") (EVar "mctx")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))))) (EVar "args")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope"))) (EVar "args"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "rowArgAtomsVarApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))))
 (DFunDef false "rowArgAtomsVarApp" ((PVar "mctx") (PVar "scope") (PVar "h") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "h")) (EVar "scope")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EVar "Some") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "kinds")) (EListLit)) (EVar "args")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope"))) (EVar "args"))))) (arm PWild () (EVar "None"))))
 (DTypeSig true "krowArgVarAtoms" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))
-(DFunDef false "krowArgVarAtoms" ((PVar "gctx") (PList) PWild PWild) (EListLit))
-(DFunDef false "krowArgVarAtoms" ((PVar "gctx") PWild PWild (PList)) (EListLit))
+(DFunDef false "krowArgVarAtoms" ((PVar "_gctx") (PList) PWild PWild) (EListLit))
+(DFunDef false "krowArgVarAtoms" ((PVar "_gctx") PWild PWild (PList)) (EListLit))
 (DFunDef false "krowArgVarAtoms" ((PVar "gctx") (PCons (PCon "KRow") (PVar "ks")) (PVar "decls") (PCons (PCon "TyVar" (PVar "n")) (PVar "as2"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EVar "head") (EVar "decls")))) (EApp (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "gctx")) (EVar "ks")) (EApp (EVar "restAtoms") (EVar "decls"))) (EVar "as2"))))
 (DFunDef false "krowArgVarAtoms" ((PVar "gctx") (PCons (PCon "KRow") (PVar "ks")) (PVar "decls") (PCons (PCon "TyRow" (PVar "labels") (PVar "tails") PWild) (PVar "as2"))) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "atomsNorm") (EBinOp "++" (EApp (EApp (EVar "atomsOfWritten") (EVar "gctx")) (EVar "labels")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EVar "head") (EVar "decls")))))))) (EVar "tails")) (EApp (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "gctx")) (EVar "ks")) (EApp (EVar "restAtoms") (EVar "decls"))) (EVar "as2"))))
 (DFunDef false "krowArgVarAtoms" ((PVar "gctx") (PCons PWild (PVar "ks")) (PVar "decls") (PCons PWild (PVar "as2"))) (EApp (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "gctx")) (EVar "ks")) (EApp (EVar "restAtoms") (EVar "decls"))) (EVar "as2")))
@@ -3476,39 +3001,39 @@ distinctIdentsIn2 _ = False
 (DTypeSig false "inferParamRowAtoms" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "inferParamRowAtoms" ((PVar "gctx") (PVar "params") (PVar "variants")) (EBlock (DoLet false false (PVar "fieldTys") (EApp (EApp (EVar "flatMap") (ELam ((PVar "v")) (EApp (EVar "payloadAstTypes") (EApp (EVar "variantPayload") (EVar "v"))))) (EVar "variants"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EVar "intersectDeclAtoms") (EVar "gctx")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "t")))) (EVar "fieldTys"))))) (EVar "params")))))
 (DTypeSig false "paramRowAtomOccs" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyVar" (PVar "n"))) (EIf (EBinOp "==" (EVar "n") (EVar "p")) (EListLit (EListLit)) (EListLit)))
-(DFunDef false "paramRowAtomOccs" ((PVar "gctx") PWild (PRec "TyCon" ((rf "tyConName" PWild)) false)) (EListLit))
+(DFunDef false "paramRowAtomOccs" ((PVar "_gctx") (PVar "p") (PCon "TyVar" (PVar "n"))) (EIf (EBinOp "==" (EVar "n") (EVar "p")) (EListLit (EListLit)) (EListLit)))
+(DFunDef false "paramRowAtomOccs" ((PVar "_gctx") PWild (PRec "TyCon" ((rf "tyConName" PWild)) false)) (EListLit))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "paramRowAtomsFor") (EVar "gctx")) (EVar "p")) (EVar "tails")) (EVar "labels")) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "t"))))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyRow" (PVar "labels") (PVar "tails") PWild)) (EApp (EApp (EApp (EApp (EVar "paramRowAtomsFor") (EVar "gctx")) (EVar "p")) (EVar "tails")) (EVar "labels")))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "a")) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "b"))))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p"))) (EVar "ts")))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "a")) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "b"))))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "t")))
-(DFunDef false "paramRowAtomOccs" ((PVar "gctx") PWild PWild) (EListLit))
+(DFunDef false "paramRowAtomOccs" ((PVar "_gctx") PWild PWild) (EListLit))
 (DTypeSig false "paramRowAtomsFor" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))))
 (DFunDef false "paramRowAtomsFor" ((PVar "gctx") (PVar "p") (PVar "tails") (PVar "labels")) (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EApp (EVar "atomsOfWritten") (EVar "gctx")) (EVar "labels")))) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "p")))) (EVar "tails"))))
 (DTypeSig false "intersectDeclAtoms" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyApp (TyCon "List") (TyCon "Atom")))))
-(DFunDef false "intersectDeclAtoms" ((PVar "gctx") (PList)) (EListLit))
+(DFunDef false "intersectDeclAtoms" ((PVar "_gctx") (PList)) (EListLit))
 (DFunDef false "intersectDeclAtoms" ((PVar "gctx") (PCons (PVar "first") (PVar "rest"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EApp (EApp (EVar "allList") (ELam ((PVar "b")) (EApp (EVar "isEmptyL") (EApp (EApp (EApp (EVar "atomsEscape") (EVar "gctx")) (EListLit (EVar "x"))) (EVar "b"))))) (EVar "rest")))) (EVar "first")))
 (DTypeSig false "mintParamReprs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyApp (TyCon "List") (TyCon "Mono"))))))
 (DFunDef false "mintParamReprs" ((PVar "mctx") (PCons PWild (PVar "ps")) (PCons (PCon "KType") (PVar "ks"))) (EBinOp "::" (EApp (EApp (EVar "freshVar") (EVar "mctx")) (ELit LUnit)) (EApp (EApp (EApp (EVar "mintParamReprs") (EVar "mctx")) (EVar "ps")) (EVar "ks"))))
 (DFunDef false "mintParamReprs" ((PVar "mctx") (PCons PWild (PVar "ps")) (PCons (PCon "KRow") (PVar "ks"))) (EBinOp "::" (EApp (EVar "TEff") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EApp (EApp (EVar "freshEffvar") (EVar "mctx")) (ELit LUnit))))) (EApp (EApp (EApp (EVar "mintParamReprs") (EVar "mctx")) (EVar "ps")) (EVar "ks"))))
 (DFunDef false "mintParamReprs" ((PVar "mctx") (PCons (PVar "p") (PVar "ps")) (PCons (PCon "KAuth" (PVar "l") (PVar "pat")) (PVar "ks"))) (EBinOp "::" (EApp (EVar "TAuth") (EApp (EVar "AVar") (EApp (EApp (EApp (EApp (EVar "freshAuthvarRanged") (EVar "mctx")) (EApp (EApp (EVar "dtopFor") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "l"))) (EVar "pat")) (EApp (EVar "Some") (EVar "p"))))) (EApp (EApp (EApp (EVar "mintParamReprs") (EVar "mctx")) (EVar "ps")) (EVar "ks"))))
-(DFunDef false "mintParamReprs" ((PVar "mctx") PWild PWild) (EListLit))
+(DFunDef false "mintParamReprs" ((PVar "_mctx") PWild PWild) (EListLit))
 (DTypeSig false "ktypeTvs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
 (DFunDef false "ktypeTvs" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "KType") (PVar "ks")) (PCons (PVar "r") (PVar "rs"))) (EBinOp "::" (ETuple (EVar "p") (EVar "r")) (EApp (EApp (EApp (EVar "ktypeTvs") (EVar "ps")) (EVar "ks")) (EVar "rs"))))
-(DFunDef false "ktypeTvs" ((PCons (PVar "p") (PVar "ps")) (PCons PWild (PVar "ks")) (PCons PWild (PVar "rs"))) (EApp (EApp (EApp (EVar "ktypeTvs") (EVar "ps")) (EVar "ks")) (EVar "rs")))
+(DFunDef false "ktypeTvs" ((PCons (PVar "_p") (PVar "ps")) (PCons PWild (PVar "ks")) (PCons PWild (PVar "rs"))) (EApp (EApp (EApp (EVar "ktypeTvs") (EVar "ps")) (EVar "ks")) (EVar "rs")))
 (DFunDef false "ktypeTvs" (PWild PWild PWild) (EListLit))
 (DTypeSig false "paramEtbl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "SigVars")))))
 (DFunDef false "paramEtbl" ((PVar "params") (PVar "kinds") (PVar "reprs")) (ERecordCreate "SigVars" ((fa "svRows" (EApp (EApp (EApp (EVar "krowRows") (EVar "params")) (EVar "kinds")) (EVar "reprs"))) (fa "svAuths" (EApp (EApp (EApp (EVar "kauthCells") (EVar "params")) (EVar "kinds")) (EVar "reprs"))))))
 (DTypeSig false "kauthCells" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Authvar"))))))))
 (DFunDef false "kauthCells" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "KAuth" PWild PWild) (PVar "ks")) (PCons (PCon "TAuth" (PCon "AVar" (PVar "cell"))) (PVar "rs"))) (EBinOp "::" (ETuple (EVar "p") (EVar "cell")) (EApp (EApp (EApp (EVar "kauthCells") (EVar "ps")) (EVar "ks")) (EVar "rs"))))
-(DFunDef false "kauthCells" ((PCons (PVar "p") (PVar "ps")) (PCons PWild (PVar "ks")) (PCons PWild (PVar "rs"))) (EApp (EApp (EApp (EVar "kauthCells") (EVar "ps")) (EVar "ks")) (EVar "rs")))
+(DFunDef false "kauthCells" ((PCons (PVar "_p") (PVar "ps")) (PCons PWild (PVar "ks")) (PCons PWild (PVar "rs"))) (EApp (EApp (EApp (EVar "kauthCells") (EVar "ps")) (EVar "ks")) (EVar "rs")))
 (DFunDef false "kauthCells" (PWild PWild PWild) (EListLit))
 (DTypeSig false "existentialCells" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Authvar")))))))
 (DFunDef false "existentialCells" ((PVar "mctx") (PVar "binders")) (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EMatch (EApp (EVar "snd") (EVar "b")) (arm (PCon "KindAuthority" (PVar "l") (PVar "o") (PVar "pat") PWild) () (ETuple (EApp (EVar "fst") (EVar "b")) (EApp (EApp (EApp (EApp (EVar "freshAuthvarRanged") (EVar "mctx")) (EApp (EApp (EVar "dtopFor") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o")))) (EApp (EApp (EApp (EVar "rangedOver") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))) (EVar "pat"))) (EApp (EVar "Some") (EApp (EVar "fst") (EVar "b")))))) (arm PWild () (ETuple (EApp (EVar "fst") (EVar "b")) (EApp (EApp (EApp (EVar "freshAuthvar") (EVar "mctx")) (EVar "PUnit")) (EApp (EVar "Some") (EApp (EVar "fst") (EVar "b"))))))))) (EVar "binders")))
 (DTypeSig false "recordExistentials" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Authvar")))) (TyCon "Unit"))))
-(DFunDef false "recordExistentials" ((PVar "gctx") (PList)) (ELit LUnit))
+(DFunDef false "recordExistentials" ((PVar "_gctx") (PList)) (ELit LUnit))
 (DFunDef false "recordExistentials" ((PVar "gctx") (PVar "cells")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "anyExistentialsRef")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "ctorExistentialsRef")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "c")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EApp (EVar "snd") (EVar "c")))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "ctorExistentialsRef") "value")) (EVar "cells"))))))
 (DTypeSig false "padCtorBinders" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))))))
 (DFunDef false "padCtorBinders" ((PList) PWild) (EListLit))
@@ -3516,14 +3041,14 @@ distinctIdentsIn2 _ = False
 (DFunDef false "padCtorBinders" ((PCons PWild (PVar "vs")) (PList)) (EBinOp "::" (EListLit) (EApp (EApp (EVar "padCtorBinders") (EVar "vs")) (EListLit))))
 (DTypeSig false "krowRows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar"))))))))
 (DFunDef false "krowRows" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "KRow") (PVar "ks")) (PCons (PCon "TEff" (PCon "EffRow" PWild (PCon "Some" (PVar "cell")))) (PVar "rs"))) (EBinOp "::" (ETuple (EVar "p") (EVar "cell")) (EApp (EApp (EApp (EVar "krowRows") (EVar "ps")) (EVar "ks")) (EVar "rs"))))
-(DFunDef false "krowRows" ((PCons (PVar "p") (PVar "ps")) (PCons PWild (PVar "ks")) (PCons PWild (PVar "rs"))) (EApp (EApp (EApp (EVar "krowRows") (EVar "ps")) (EVar "ks")) (EVar "rs")))
+(DFunDef false "krowRows" ((PCons (PVar "_p") (PVar "ps")) (PCons PWild (PVar "ks")) (PCons PWild (PVar "rs"))) (EApp (EApp (EApp (EVar "krowRows") (EVar "ps")) (EVar "ks")) (EVar "rs")))
 (DFunDef false "krowRows" (PWild PWild PWild) (EListLit))
 (DTypeSig false "registerNamedFieldVariants" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyCon "Unit")))))))))
 (DFunDef false "registerNamedFieldVariants" ((PVar "mctx") (PVar "o") (PVar "tyName") (PVar "params") (PVar "kinds") (PVar "variants") (PVar "binders")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerNamedFieldVariantsGo") (EVar "mctx")) (EVar "o")) (EVar "tyName")) (EVar "params")) (EVar "kinds")) (EVar "variants")) (EApp (EApp (EVar "padCtorBinders") (EVar "variants")) (EVar "binders"))))
 (DTypeSig false "registerNamedFieldVariantsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyCon "Unit")))))))))
 (DFunDef false "registerNamedFieldVariantsGo" ((PVar "mctx") (PVar "o") (PVar "tyName") (PVar "params") (PVar "kinds") (PCons (PCon "Variant" (PVar "cname") (PCon "ConNamed" (PVar "fields") PWild)) (PVar "rest")) (PCons (PVar "bs") (PVar "brest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerRecordInfoKeyed") (EVar "mctx")) (EVar "o")) (EVar "cname")) (EVar "tyName")) (EVar "params")) (EVar "kinds")) (EVar "bs")) (EVar "fields"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerNamedFieldVariantsGo") (EVar "mctx")) (EVar "o")) (EVar "tyName")) (EVar "params")) (EVar "kinds")) (EVar "rest")) (EVar "brest")))))
 (DFunDef false "registerNamedFieldVariantsGo" ((PVar "mctx") (PVar "o") (PVar "tyName") (PVar "params") (PVar "kinds") (PCons PWild (PVar "rest")) (PCons PWild (PVar "brest"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerNamedFieldVariantsGo") (EVar "mctx")) (EVar "o")) (EVar "tyName")) (EVar "params")) (EVar "kinds")) (EVar "rest")) (EVar "brest")))
-(DFunDef false "registerNamedFieldVariantsGo" ((PVar "mctx") PWild PWild PWild PWild PWild PWild) (ELit LUnit))
+(DFunDef false "registerNamedFieldVariantsGo" ((PVar "_mctx") PWild PWild PWild PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "addVariants" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "SigVars") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyCon "TcEnv")))))))))))
 (DFunDef false "addVariants" ((PVar "env") (PVar "tvs") (PVar "etbl") (PVar "paramTyIds") (PVar "rowEffvarIds") (PVar "authvarIds") (PVar "result") (PCons (PCon "Variant" (PVar "cname") (PVar "payload")) (PVar "rest")) (PCons (PVar "binders") (PVar "brest"))) (EBlock (DoLet false false (PVar "opened") (EApp (EApp (EVar "existentialCells") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "binders"))) (DoExpr (EApp (EApp (EVar "recordExistentials") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcGraph")) (EVar "opened"))) (DoLet false false (PVar "ctorEtbl") (EApp (EApp (EVar "sigVarsWithAuths") (EVar "opened")) (EVar "etbl"))) (DoExpr (EApp (EApp (EApp (EVar "reportUnboundAuthorityNamesIn") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EApp (EVar "payloadAstTypes") (EVar "payload"))) (EVar "ctorEtbl"))) (DoLet false false (PVar "ctorType") (EApp (EApp (EVar "foldrFun") (EApp (EApp (EApp (EApp (EVar "payloadTypesE") (EApp (EApp (EVar "mctxAtIfSome") (EApp (EVar "firstTyLocList") (EApp (EVar "payloadAstTypes") (EVar "payload")))) (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule"))) (EVar "ctorEtbl")) (EVar "tvs")) (EVar "payload"))) (EVar "result"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EVar "addCtor") (EVar "env")) (EVar "cname")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EVar "paramTyIds")) (EVar "rowEffvarIds")) (EBinOp "++" (EVar "authvarIds") (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EApp (EVar "authvarId") (EApp (EVar "snd") (EVar "c"))))) (EVar "opened")))) (EListLit)) (EVar "pureRow")) (EVar "ctorType")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addVariants") (EVar "env2")) (EVar "tvs")) (EVar "etbl")) (EVar "paramTyIds")) (EVar "rowEffvarIds")) (EVar "authvarIds")) (EVar "result")) (EVar "rest")) (EVar "brest")))))
 (DFunDef false "addVariants" ((PVar "env") PWild PWild PWild PWild PWild PWild PWild PWild) (EVar "env"))
@@ -3560,9 +3085,9 @@ distinctIdentsIn2 _ = False
 (DFunDef false "isDirectInterfaceDecl" (PWild) (EVar "False"))
 (DTypeSig false "directIfaceSchemeRows" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "MethodSchemeRow")))))
 (DFunDef false "directIfaceSchemeRows" ((PVar "mctx") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "methods" None) (rf "ifaceOrigin" None)) true)) (EApp (EApp (EApp (EApp (EApp (EVar "methodSchemeRows") (EVar "mctx")) (EApp (EApp (EApp (EApp (EVar "declGradedScope") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "typarams")) (EVar "typaramKinds")) (EVar "methods"))) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "name")) (fa "irOrigin" (EVar "ifaceOrigin"))))) (EVar "typarams")) (EVar "methods")))
-(DFunDef false "directIfaceSchemeRows" ((PVar "mctx") PWild) (EListLit))
+(DFunDef false "directIfaceSchemeRows" ((PVar "_mctx") PWild) (EListLit))
 (DTypeSig false "methodSchemeRows" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "MethodSchemeRow"))))))))
-(DFunDef false "methodSchemeRows" ((PVar "mctx") PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "methodSchemeRows" ((PVar "_mctx") PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "methodSchemeRows" ((PVar "mctx") (PVar "scope") (PVar "iface") (PVar "typarams") (PCons (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "scheme") (PVar "tvs")) (EApp (EApp (EApp (EVar "sigToSchemeTvsIn") (EVar "mctx")) (EVar "scope")) (EVar "mty"))) (DoLet false false (PVar "slots") (EApp (EApp (EApp (EApp (EApp (EVar "methodPredicateSlotsOfType") (EVar "mctx")) (EVar "typarams")) (EVar "mty")) (EVar "tvs")) (EApp (EVar "schemeIds") (EVar "scheme")))) (DoExpr (EApp (EApp (EApp (EVar "installMethodPredicateSlots") (EVar "mctx")) (EApp (EApp (EVar "methodSlotKey") (EVar "iface")) (EVar "mname"))) (EVar "slots"))) (DoExpr (EBinOp "::" (ERecordCreate "MethodSchemeRow" ((fa "msrIface" (EVar "iface")) (fa "msrName" (EVar "mname")) (fa "msrTyparams" (EVar "typarams")) (fa "msrType" (EVar "mty")) (fa "msrScheme" (EVar "scheme")) (fa "msrPredicateTemplate" (ERecordCreate "MethodPredicateTemplate" ((fa "mptInterface" (EVar "iface")) (fa "mptArguments" (EApp (EApp (EVar "methodInterfacePredicateTemplate") (EVar "typarams")) (EVar "tvs")))))) (fa "msrMethodSlots" (EVar "slots")))) (EApp (EApp (EApp (EApp (EApp (EVar "methodSchemeRows") (EVar "mctx")) (EVar "scope")) (EVar "iface")) (EVar "typarams")) (EVar "rest"))))))
 (DTypeSig false "methodInterfacePredicateTemplate" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))))))
 (DFunDef false "methodInterfacePredicateTemplate" ((PList) PWild) (EListLit))
@@ -3573,7 +3098,7 @@ distinctIdentsIn2 _ = False
 (DFunDef false "pickNumLitRow" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "pickNumLitRow" ((PVar "iface") (PVar "mname") (PCons (PVar "row") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "row") "msrName") (EVar "mname")) (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "row") "msrIface")) (EVar "iface"))) (EApp (EVar "Some") (EVar "row")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "pickNumLitRow") (EVar "iface")) (EVar "mname")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "methodSchemesPure" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "methodSchemesPure" ((PVar "mctx") PWild (PList)) (EListLit))
+(DFunDef false "methodSchemesPure" ((PVar "_mctx") PWild (PList)) (EListLit))
 (DFunDef false "methodSchemesPure" ((PVar "mctx") (PVar "scope") (PCons (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "mname") (EApp (EVar "fst") (EApp (EApp (EApp (EVar "sigToSchemeTvsIn") (EVar "mctx")) (EVar "scope")) (EVar "mty")))) (EApp (EApp (EApp (EVar "methodSchemesPure") (EVar "mctx")) (EVar "scope")) (EVar "rest"))))
 (DTypeSig false "installMethodPredicateSlots" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyCon "Unit")))))
 (DFunDef false "installMethodPredicateSlots" ((PVar "mctx") (PVar "key") (PVar "slots")) (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "slots")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodPredicateSlotsRef") "value")))) (ELit LUnit) (EApp (EApp (EApp (EVar "setMethodPredicateSlotEntry") (EVar "mctx")) (EVar "key")) (EVar "slots"))))
@@ -3582,7 +3107,7 @@ distinctIdentsIn2 _ = False
 (DTypeSig false "methodPredicateSlotsOfType" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "MethodPredicateSlot"))))))))
 (DFunDef false "methodPredicateSlotsOfType" ((PVar "mctx") (PVar "typarams") (PCon "TyConstrained" (PVar "cs") (PVar "t")) (PVar "tvs") (PVar "fullIds")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "constraintMethodPredicateSlot") (EVar "mctx")) (EVar "typarams")) (EVar "tvs")) (EVar "fullIds"))) (EVar "cs")) (EApp (EApp (EApp (EApp (EApp (EVar "methodPredicateSlotsOfType") (EVar "mctx")) (EVar "typarams")) (EVar "t")) (EVar "tvs")) (EVar "fullIds"))))
 (DFunDef false "methodPredicateSlotsOfType" ((PVar "mctx") (PVar "typarams") (PCon "TyEffect" PWild PWild (PVar "t")) (PVar "tvs") (PVar "fullIds")) (EApp (EApp (EApp (EApp (EApp (EVar "methodPredicateSlotsOfType") (EVar "mctx")) (EVar "typarams")) (EVar "t")) (EVar "tvs")) (EVar "fullIds")))
-(DFunDef false "methodPredicateSlotsOfType" ((PVar "mctx") PWild PWild PWild PWild) (EListLit))
+(DFunDef false "methodPredicateSlotsOfType" ((PVar "_mctx") PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "constraintMethodPredicateSlot" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "MethodPredicateSlot"))))))))
 (DFunDef false "constraintMethodPredicateSlot" ((PVar "mctx") (PVar "typarams") (PVar "tvs") (PVar "fullIds") (PVar "c")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "constraintIsMethodLevel") (EVar "typarams")) (EVar "c"))) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "bound") (EApp (EApp (EVar "constraintNameMonos") (EApp (EVar "constraintVarNames") (EVar "c"))) (EVar "tvs"))) (DoLet false false (PVar "ids") (EApp (EApp (EVar "map") (EVar "monoTyvarId")) (EVar "bound"))) (DoExpr (EListLit (ERecordCreate "MethodPredicateSlot" ((fa "mpsPredicate" (ERecordCreate "PredicateSlot" ((fa "psIface" (ERecordCreate "IfaceRef" ((fa "irName" (EApp (EVar "constraintIface") (EVar "c"))) (fa "irOrigin" (EFieldAccess (EVar "c") "constraintOrigin"))))) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EApp (EApp (EVar "map") (EApp (EApp (EVar "fromAstType") (EVar "mctx")) (EVar "tvs"))) (EFieldAccess (EVar "c") "constraintArgs")))) (fa "psBoundIds" (EVar "ids"))))) (fa "mpsPositions" (EApp (EApp (EVar "map") (ELam ((PVar "id")) (EApp (EApp (EVar "optionOr") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EApp (EApp (EVar "elemIndex") (EVar "id")) (EVar "fullIds"))))) (EVar "ids")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "registerAllData" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
@@ -3609,7 +3134,7 @@ distinctIdentsIn2 _ = False
 (DFunDef false "declKindEntry" ((PVar "gctx") (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataParamKinds" (PVar "anns")) (rf "dataOrigin" (PVar "o"))) false)) (EApp (EVar "Some") (ETuple (EVar "o") (EVar "name") (EApp (EApp (EApp (EVar "declParamKinds") (EVar "gctx")) (EVar "params")) (EVar "anns")))))
 (DFunDef false "declKindEntry" ((PVar "gctx") (PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeParamKinds" (PVar "anns")) (rf "newtypeOrigin" (PVar "o"))) false)) (EApp (EVar "Some") (ETuple (EVar "o") (EVar "name") (EApp (EApp (EApp (EVar "declParamKinds") (EVar "gctx")) (EVar "params")) (EVar "anns")))))
 (DFunDef false "declKindEntry" ((PVar "gctx") (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "name")) (rf "tyAliasParams" (PVar "params")) (rf "tyAliasParamKinds" (PVar "anns")) (rf "tyAliasOrigin" (PVar "o"))) false)) (EApp (EVar "Some") (ETuple (EVar "o") (EVar "name") (EApp (EApp (EApp (EVar "declParamKinds") (EVar "gctx")) (EVar "params")) (EVar "anns")))))
-(DFunDef false "declKindEntry" ((PVar "gctx") PWild) (EVar "None"))
+(DFunDef false "declKindEntry" ((PVar "_gctx") PWild) (EVar "None"))
 (DTypeSig true "withDeclParamKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyVar "a")))))
 (DFunDef false "withDeclParamKinds" ((PVar "mctx") (PVar "ds") (PVar "k")) (EBlock (DoLet false false (PVar "kinds") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (DoLet false false (PVar "names") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef") "value")) (DoExpr (EApp (EApp (EVar "each") (EApp (EVar "recordDeclaredKinds") (EVar "mctx"))) (EVar "ds"))) (DoLet false false (PVar "result") (EApp (EVar "k") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef")) (EVar "kinds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef")) (EVar "names"))) (DoExpr (EVar "result"))))
 (DTypeSig false "recordDeclaredKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Decl") (TyCon "Unit"))))
@@ -3638,11 +3163,9 @@ distinctIdentsIn2 _ = False
 (DTypeSig false "ctorIdentRow" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))))
 (DFunDef false "ctorIdentRow" ((PVar "tyName") (PVar "o") (PVar "cn")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "i")) () (EListLit (ETuple (EVar "cn") (EVar "tyName") (EVar "i"))))))
 (DTypeSig false "reexportedCtorIdents" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
-(DFunDef false "reexportedCtorIdents" ((PVar "acc") (PVar "decls")) (EApp (EApp (EVar "flatMap") (EApp (EVar "reexportedCtorIdentsOf") (EVar "acc"))) (EVar "decls")))
-(DTypeSig false "reexportedCtorIdentsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
-(DFunDef false "reexportedCtorIdentsOf" ((PVar "acc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "reexportedCtorIdentsOf") (EVar "acc")) (EVar "d")))
-(DFunDef false "reexportedCtorIdentsOf" ((PVar "acc") (PCon "DUse" (PCon "True") (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EMatch (EVar "path") (arm (PCon "UseWild" PWild) () (EVar "src")) (arm (PCon "UseGroup" PWild (PVar "ms")) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "reexportCtorMember") (EVar "m")) (EVar "src")))) (EVar "ms"))) (arm PWild () (EListLit))))))
-(DFunDef false "reexportedCtorIdentsOf" (PWild PWild) (EListLit))
+(DFunDef false "reexportedCtorIdents" ((PVar "acc") (PVar "decls")) (EApp (EApp (EVar "flatMap") (EApp (EVar "reexportedCtorIdentsOf") (EVar "acc"))) (EApp (EVar "pubUsePaths") (EVar "decls"))))
+(DTypeSig false "reexportedCtorIdentsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
+(DFunDef false "reexportedCtorIdentsOf" ((PVar "acc") (PVar "path")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EMatch (EVar "path") (arm (PCon "UseWild" PWild) () (EVar "src")) (arm (PCon "UseGroup" PWild (PVar "ms")) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "reexportCtorMember") (EVar "m")) (EVar "src")))) (EVar "ms"))) (arm PWild () (EListLit))))))
 (DTypeSig false "reexportCtorMember" (TyFun (TyCon "UseMember") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
 (DFunDef false "reexportCtorMember" ((PVar "m") (PVar "src")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "rowBoundByMember") (EVar "m")) (EVar "r")))) (EVar "src")))
 (DTypeSig false "rowBoundByMember" (TyFun (TyCon "UseMember") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")) (TyCon "Bool"))))
@@ -3655,11 +3178,16 @@ distinctIdentsIn2 _ = False
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "implHeadNormalDecl") (EVar "aliases")) (EVar "d"))))
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PAs "d" (PRec "DImpl" ((rf "tys" (PVar "tys"))) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EApp (EApp (EVar "map") (EApp (EApp (EVar "tyAliasNormalForm") (EVar "aliases")) (EListLit))) (EVar "tys"))))))
 (DFunDef false "implHeadNormalDecl" (PWild (PVar "d")) (EVar "d"))
-(DTypeSig true "stampGraphDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "stampGraphDecls" ((PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PVar "aliases") (EApp (EApp (EVar "flatMap") (EVar "graphAliasRow")) (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules"))))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "aliases")) (ETuple (EVar "coreDecls") (EVar "modules")) (ETuple (EApp (EApp (EVar "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EVar "coreDecls")) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EApp (EVar "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EApp (EVar "snd") (EVar "m")))))) (EVar "modules")))))))
+(DTypeSig true "stampGraphDecls" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
+(DFunDef false "stampGraphDecls" ((PVar "sibling") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "sibling")) (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PVar "aliases") (EApp (EApp (EVar "flatMap") (EVar "graphAliasRow")) (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules"))))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "aliases")) (ETuple (EVar "coreDecls") (EVar "modules")) (ETuple (EApp (EApp (EVar "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EVar "coreDecls")) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EApp (EVar "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EApp (EVar "snd") (EVar "m")))))) (EVar "modules")))))))
 (DTypeSig true "declEnvModulesFrom" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "DeclEnvModule"))))))
-(DFunDef false "declEnvModulesFrom" ((PVar "gctx") PWild (PList)) (EListLit))
-(DFunDef false "declEnvModulesFrom" ((PVar "gctx") (PVar "k") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (EVar "k")) (EVar "mid")) (EVar "decls")) (EApp (EApp (EApp (EVar "declEnvModulesFrom") (EVar "gctx")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "declEnvModulesFrom" ((PVar "gctx") (PVar "k") (PVar "mods")) (EApp (EApp (EVar "withSiblingOrd") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "config") "value") "tcSibling")) (EApp (EApp (EApp (EVar "declEnvRowsFrom") (EVar "gctx")) (EVar "k")) (EVar "mods"))))
+(DTypeSig false "declEnvRowsFrom" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "DeclEnvModule"))))))
+(DFunDef false "declEnvRowsFrom" ((PVar "_gctx") PWild (PList)) (EListLit))
+(DFunDef false "declEnvRowsFrom" ((PVar "gctx") (PVar "k") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (EVar "k")) (EVar "mid")) (EVar "decls")) (EApp (EApp (EApp (EVar "declEnvRowsFrom") (EVar "gctx")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest"))))
+(DTypeSig false "withSiblingOrd" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyApp (TyCon "List") (TyCon "DeclEnvModule")))))
+(DFunDef false "withSiblingOrd" ((PList) (PVar "rows")) (EVar "rows"))
+(DFunDef false "withSiblingOrd" ((PVar "siblings") (PVar "rows")) (EBlock (DoLet false false (PVar "ords") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EFieldAccess (EVar "m") "demId") (EFieldAccess (EVar "m") "demOrd")))) (EVar "rows"))) (EVar "omEmpty"))) (DoLet false false (PVar "siblingOf") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EFieldAccess (EVar "p") "spSubject") (EFieldAccess (EVar "p") "spSibling")))) (EVar "siblings"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "m") "demId")) (EVar "siblingOf")) (arm (PCon "Some" (PVar "sib")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "sib")) (EVar "ords")) (arm (PCon "Some" (PVar "ord")) () (ERecordUpdate (EVar "m") ((fa "demSiblingOrd" (EApp (EVar "Some") (EVar "ord")))))) (arm (PCon "None") () (EVar "m")))) (arm (PCon "None") () (EVar "m"))))) (EVar "rows")))))
 (DTypeSig false "declEnvOrdIndex" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
 (DFunDef false "declEnvOrdIndex" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "declEnvOrdIndex" ((PVar "acc") (PCons (PVar "m") (PVar "rest"))) (EApp (EApp (EVar "declEnvOrdIndex") (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EFieldAccess (EVar "m") "demOrd")) (EVar "acc"))) (EVar "rest")))
@@ -3690,114 +3218,37 @@ distinctIdentsIn2 _ = False
 (DFunDef false "firstRowPerName" (PWild (PList)) (EListLit))
 (DFunDef false "firstRowPerName" ((PVar "seen") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "k")) (EVar "seen")) (EApp (EApp (EVar "firstRowPerName") (EVar "seen")) (EVar "rest")) (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EApp (EApp (EVar "firstRowPerName") (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (ELit LUnit)) (EVar "seen"))) (EVar "rest")))))
 (DTypeSig false "modulePubDefiners" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))))))
-(DFunDef false "modulePubDefiners" ((PVar "before") (PVar "mid") (PVar "decls")) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (ETuple (EVar "mid") (EVar "n"))))) (EApp (EVar "pubTopFnNames") (EVar "decls"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "decls"))))
-(DTypeSig false "reexportDefiners" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "reexportDefiners" (PWild (PList)) (EListLit))
-(DFunDef false "reexportDefiners" ((PVar "before") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EListLit (EVar "d"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest"))))
-(DFunDef false "reexportDefiners" ((PVar "before") (PCons (PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest")) (EBinOp "++" (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EApp (EVar "definersIn") (EVar "before")) (EVar "depId"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest")))))))
-(DFunDef false "reexportDefiners" ((PVar "before") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest")))
-(DTypeSig true "pubTopFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "pubTopFnNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "decls"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "fns")))) (EApp (EVar "publicStandaloneNames") (EVar "decls"))))))
-(DTypeSig false "publicStandaloneNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "publicStandaloneNames" ((PList)) (EListLit))
-(DFunDef false "publicStandaloneNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "publicStandaloneNames") (EListLit (EVar "d"))) (EApp (EVar "publicStandaloneNames") (EVar "rest"))))
-(DFunDef false "publicStandaloneNames" ((PCons (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "publicStandaloneNames") (EVar "rest"))))
-(DFunDef false "publicStandaloneNames" ((PCons (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "publicStandaloneNames") (EVar "rest"))))
-(DFunDef false "publicStandaloneNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "publicStandaloneNames") (EVar "rest")))
-(DTypeSig false "deKindAbstractFixture" (TyCon "Decl"))
-(DFunDef false "deKindAbstractFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisAbstract")) (fa "dataName" (ELit (LString "Opq"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkOpq"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deKindPrivateFixture" (TyCon "Decl"))
-(DFunDef false "deKindPrivateFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPrivate")) (fa "dataName" (ELit (LString "Priv"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkPriv"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deKindNewtypeFixture" (TyCon "Decl"))
-(DFunDef false "deKindNewtypeFixture" () (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "True")) (fa "newtypeName" (ELit (LString "Wrap"))) (fa "newtypeParams" (EListLit)) (fa "newtypeParamKinds" (EListLit)) (fa "newtypeCtor" (ELit (LString "Wrap"))) (fa "newtypeFieldTy" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "newtypeCtorBinders" (EListLit)) (fa "newtypeDerives" (EListLit)) (fa "newtypeOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "newtypeNameLoc" (EVar "None")))))
-(DTypeSig false "deKindFixtureDecls" (TyApp (TyCon "List") (TyCon "Decl")))
-(DFunDef false "deKindFixtureDecls" () (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deKindAbstractFixture") (EVar "deKindPrivateFixture") (EVar "deKindNewtypeFixture")))
-(DTypeSig false "deKindRow0" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvModule")))
-(DFunDef false "deKindRow0" ((PVar "gctx")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 0))) (ELit (LString "m"))) (EVar "deKindFixtureDecls")))
-(DTypeSig false "deKindRow1" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvModule")))
-(DFunDef false "deKindRow1" ((PVar "gctx")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 1))) (ELit (LString "m"))) (EVar "deKindFixtureDecls")))
-(DTypeSig false "deSeedRowN" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvModule")))
-(DFunDef false "deSeedRowN" ((PVar "gctx")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 1))) (ELit (LString "n"))) (EVar "deKindFixtureDecls")))
-(DTypeSig false "deSeedChainProbeZero" (TyCon "DeclEnvSeedAcc"))
-(DFunDef false "deSeedChainProbeZero" () (ERecordCreate "DeclEnvSeedAcc" ((fa "dsKAcc" (EListLit)) (fa "dsOAcc" (EVar "omEmpty")) (fa "dsNAcc" (EVar "omEmpty")) (fa "dsKinds" (EVar "omEmpty")) (fa "dsOwners" (EVar "omEmpty")) (fa "dsNames" (EVar "omEmpty")))))
-(DTypeSig false "deSeedChainProbe" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvSeedAcc")))
-(DFunDef false "deSeedChainProbe" ((PVar "gctx")) (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "gctx")) (EListLit (EApp (EVar "deKindRow0") (EVar "gctx")) (EApp (EVar "deSeedRowN") (EVar "gctx")))) (EVar "deSeedChainProbeZero")))
-(DTypeSig false "deSeedChainKinds" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))))
-(DFunDef false "deSeedChainKinds" ((PVar "gctx")) (EFieldAccess (EApp (EVar "deSeedChainProbe") (EVar "gctx")) "dsKinds"))
-(DTypeSig false "deSeedChainOwners" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "deSeedChainOwners" ((PVar "gctx")) (EFieldAccess (EApp (EVar "deSeedChainProbe") (EVar "gctx")) "dsOwners"))
-(DTypeSig false "deSeedChainNames" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "deSeedChainNames" ((PVar "gctx")) (EFieldAccess (EApp (EVar "deSeedChainProbe") (EVar "gctx")) "dsNames"))
-(DTypeSig false "deSeedNameParity" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "deSeedNameParity" ((PVar "mid")) (EBlock (DoLet false false (PVar "gctx") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "accumulated") (EApp (EVar "omKeys") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EApp (EVar "deSeedChainNames") (EVar "gctx")))))) (DoLet false false (PVar "rebuilt") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "p"))))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EApp (EVar "deSeedChainKinds") (EVar "gctx")))))) (EVar "omEmpty")))) (DoExpr (EBinOp "==" (EVar "accumulated") (EVar "rebuilt")))))
-(DTypeSig false "deNameIdxAlpha" (TyCon "Decl"))
-(DFunDef false "deNameIdxAlpha" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Alpha"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkAlpha"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deNameIdxSharedA" (TyCon "Decl"))
-(DFunDef false "deNameIdxSharedA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedA"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deNameIdxBeta" (TyCon "Decl"))
-(DFunDef false "deNameIdxBeta" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Beta"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkBeta"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deNameIdxSharedB" (TyCon "Decl"))
-(DFunDef false "deNameIdxSharedB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedB"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deNameIdxModA" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvModule")))
-(DFunDef false "deNameIdxModA" ((PVar "gctx")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 0))) (ELit (LString "modA"))) (EListLit (EVar "deNameIdxAlpha") (EVar "deNameIdxSharedA"))))
-(DTypeSig false "deNameIdxModB" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvModule")))
-(DFunDef false "deNameIdxModB" ((PVar "gctx")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 1))) (ELit (LString "modB"))) (EListLit (EVar "deNameIdxBeta") (EVar "deNameIdxSharedB"))))
-(DTypeSig false "deNameIdxModC" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvModule")))
-(DFunDef false "deNameIdxModC" ((PVar "gctx")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 2))) (ELit (LString "modC"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (ELit (LString "modCHelper"))) (EListLit)) (EApp (EVar "ELit") (EApp (EVar "LInt") (ELit (LInt 1))))) (EVar "noDeclLoc")) (EVar "noBinderId")))))
-(DTypeSig false "deNameIdxModD" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvModule")))
-(DFunDef false "deNameIdxModD" ((PVar "gctx")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 3))) (ELit (LString "modD"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (ELit (LString "modDHelper"))) (EListLit)) (EApp (EVar "ELit") (EApp (EVar "LInt") (ELit (LInt 2))))) (EVar "noDeclLoc")) (EVar "noBinderId")))))
-(DTypeSig false "deNameIdxChain" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "deNameIdxChain" ((PVar "gctx")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "gctx")) (EListLit (EApp (EVar "deNameIdxModA") (EVar "gctx")) (EApp (EVar "deNameIdxModB") (EVar "gctx")) (EApp (EVar "deNameIdxModC") (EVar "gctx")) (EApp (EVar "deNameIdxModD") (EVar "gctx")))) (EVar "deSeedChainProbeZero"))) (DoExpr (EFieldAccess (EVar "s") "dsNames"))))
-(DTypeSig false "deNameIdxChainNoUnrelated" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "deNameIdxChainNoUnrelated" ((PVar "gctx")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "gctx")) (EListLit (EApp (EVar "deNameIdxModA") (EVar "gctx")) (EApp (EVar "deNameIdxModB") (EVar "gctx")))) (EVar "deSeedChainProbeZero"))) (DoExpr (EFieldAccess (EVar "s") "dsNames"))))
-(DTypeSig false "deNameIdxAt" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "deNameIdxAt" ((PVar "nm") (PVar "mid")) (EApp (EVar "omKeys") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "nm")))))
-(DTypeSig false "buildDataEnv" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyCon "DataEnv")))
-(DFunDef false "buildDataEnv" ((PVar "rows")) (EApp (EVar "dataEnvFinish") (EApp (EApp (EVar "dataEnvFromRowsGo") (EVar "rows")) (EVar "emptyDataEnv"))))
-(DTypeSig false "aliasFixturePubCore" (TyCon "Decl"))
-(DFunDef false "aliasFixturePubCore" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None")))))
-(DTypeSig false "aliasFixturePrivCore" (TyCon "Decl"))
-(DFunDef false "aliasFixturePrivCore" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "False")) (fa "tyAliasName" (ELit (LString "PrivCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None")))))
-(DTypeSig false "aliasFixturePubM" (TyCon "Decl"))
-(DFunDef false "aliasFixturePubM" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubM"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "tyAliasNameLoc" (EVar "None")))))
-(DTypeSig false "aliasFixtureAttribCore" (TyCon "Decl"))
-(DFunDef false "aliasFixtureAttribCore" () (EApp (EApp (EVar "DAttrib") (EListLit (EApp (EVar "AttrDeprecated") (EApp (EVar "Some") (ELit (LString "old")))))) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "AttribCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None"))))))
-(DTypeSig false "aliasFixtureEnv" (TyFun (TyCon "GraphCtx") (TyCon "DataEnv")))
-(DFunDef false "aliasFixtureEnv" ((PVar "gctx")) (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 0))) (ELit (LString "core"))) (EListLit (EVar "aliasFixturePubCore") (EVar "aliasFixturePrivCore") (EVar "aliasFixtureAttribCore"))) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 1))) (ELit (LString "m"))) (EListLit (EVar "aliasFixturePubM"))))))
-(DTypeSig false "aliasNamesAt" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "aliasNamesAt" ((PVar "cur")) (EApp (EApp (EVar "map") (ELam ((PVar "e")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "e"))))) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EFieldAccess (EApp (EVar "aliasFixtureEnv") (EApp (EVar "probeGraphCtx") (ELit LUnit))) "deAliases"))))
-(DTypeSig false "deFieldOwnerFixtureA" (TyCon "Decl"))
-(DFunDef false "deFieldOwnerFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deFieldOwnerFixtureB" (TyCon "Decl"))
-(DFunDef false "deFieldOwnerFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Vec"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Vec"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deFieldOwnerFixtureC" (TyCon "Decl"))
-(DFunDef false "deFieldOwnerFixtureC" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deFieldOwnerCollisionEnv" (TyFun (TyCon "GraphCtx") (TyCon "DataEnv")))
-(DFunDef false "deFieldOwnerCollisionEnv" ((PVar "gctx")) (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 0))) (ELit (LString "m"))) (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deFieldOwnerFixtureB"))))))
-(DTypeSig false "deFieldOwnerSingleEnv" (TyFun (TyCon "GraphCtx") (TyCon "DataEnv")))
-(DFunDef false "deFieldOwnerSingleEnv" ((PVar "gctx")) (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 0))) (ELit (LString "m"))) (EListLit (EVar "deFieldOwnerFixtureA"))))))
-(DTypeSig false "deFieldOwnerSameNameEnv" (TyFun (TyCon "GraphCtx") (TyCon "DataEnv")))
-(DFunDef false "deFieldOwnerSameNameEnv" ((PVar "gctx")) (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 0))) (ELit (LString "m"))) (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deFieldOwnerFixtureC"))))))
-(DTypeSig false "deRecordOrderFixtureA" (TyCon "Decl"))
-(DFunDef false "deRecordOrderFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P1"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deRecordOrderFixtureB" (TyCon "Decl"))
-(DFunDef false "deRecordOrderFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P2"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "y"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deRecordOrderEnv" (TyFun (TyCon "GraphCtx") (TyCon "DataEnv")))
-(DFunDef false "deRecordOrderEnv" ((PVar "gctx")) (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 0))) (ELit (LString "m"))) (EListLit (EVar "deRecordOrderFixtureA"))) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 1))) (ELit (LString "n"))) (EListLit (EVar "deRecordOrderFixtureB"))))))
-(DTypeSig false "deRecordIdentTyNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyApp (TyCon "List") (TyCon "Field")))) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "deRecordIdentTyNames" ((PList)) (EListLit))
-(DFunDef false "deRecordIdentTyNames" ((PCons (PTuple PWild (PVar "tyName") PWild) (PVar "rest"))) (EBinOp "::" (EVar "tyName") (EApp (EVar "deRecordIdentTyNames") (EVar "rest"))))
+(DFunDef false "modulePubDefiners" ((PVar "before") (PVar "mid") (PVar "decls")) (EApp (EApp (EApp (EApp (EVar "moduleDefinersUnder") (EVar "ExportedView")) (EVar "before")) (EVar "mid")) (EVar "decls")))
+(DTypeSig false "moduleDefinersUnder" (TyFun (TyCon "ExportView") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))))))
+(DFunDef false "moduleDefinersUnder" ((PVar "view") (PVar "before") (PVar "mid") (PVar "decls")) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (ETuple (EVar "mid") (EVar "n"))))) (EApp (EApp (EVar "topFnNamesUnder") (EVar "view")) (EVar "decls"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EApp (EApp (EVar "carriedPaths") (EVar "view")) (EVar "decls")))))
+(DTypeSig false "reexportDefiners" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "UsePath")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "reexportDefiners" ((PVar "before") (PVar "paths")) (EApp (EApp (EVar "flatMap") (EApp (EVar "reexportDefinersOf") (EVar "before"))) (EVar "paths")))
+(DTypeSig true "importerDefiners" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))))))
+(DFunDef false "importerDefiners" ((PVar "gctx") (PVar "importer") (PVar "depId")) (EMatch (EApp (EApp (EApp (EVar "viewFor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "config") "value") "tcSibling")) (EVar "importer")) (EVar "depId")) (arm (PCon "ExportedView") () (EApp (EApp (EVar "graphPubDefiners") (EVar "gctx")) (EVar "depId"))) (arm (PCon "FullView") () (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EVar "gctx") "declEnvsRef") "value")) (DoExpr (EMatch (EApp (EVar "head") (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EBinOp "==" (EFieldAccess (EVar "m") "demId") (EVar "depId")))) (EFieldAccess (EVar "envs") "deModules"))) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "firstRowPerName") (EVar "omEmpty")) (EApp (EApp (EApp (EApp (EVar "moduleDefinersUnder") (EVar "FullView")) (EFieldAccess (EVar "envs") "deDefiners")) (EVar "depId")) (EFieldAccess (EVar "m") "demDecls")))) (arm (PCon "None") () (EApp (EApp (EVar "graphPubDefiners") (EVar "gctx")) (EVar "depId")))))))))
+(DTypeSig false "reexportDefinersOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "reexportDefinersOf" ((PVar "before") (PVar "path")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EListLit) (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EApp (EVar "definersIn") (EVar "before")) (EVar "depId")))))))
+(DTypeSig false "pubTopFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "pubTopFnNames" ((PVar "decls")) (EApp (EApp (EVar "topFnNamesUnder") (EVar "ExportedView")) (EVar "decls")))
+(DTypeSig false "topFnNamesUnder" (TyFun (TyCon "ExportView") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "topFnNamesUnder" ((PVar "view") (PVar "decls")) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "decls"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "fns")))) (EApp (EApp (EApp (EVar "directUnder") (EVar "view")) (EVar "nsValues")) (EVar "decls"))))))
+(DTypeSig true "tagModuleExports" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))))
+(DFunDef false "tagModuleExports" ((PVar "standalones") (PVar "schemes")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "name") (PVar "scheme"))) (ETuple (EVar "name") (ERecordCreate "ExportBinding" ((fa "xbScheme" (EVar "scheme")) (fa "xbStandalone" (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "standalones"))) (fa "xbExtern" (EVar "False"))))))) (EVar "schemes")))
+(DTypeSig true "publicModuleExports" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))))
+(DFunDef false "publicModuleExports" ((PVar "prog") (PVar "bindings")) (EApp (EApp (EApp (EApp (EVar "moduleBindingsUnder") (EVar "ExportedView")) (EApp (EVar "pubTopFnNames") (EVar "prog"))) (EVar "prog")) (EVar "bindings")))
+(DTypeSig true "privateModuleExports" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleBindings") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))))
+(DFunDef false "privateModuleExports" ((PVar "prog") (PVar "bindings") (PVar "own")) (EBlock (DoLet false false (PVar "exported") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "own"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "b"))) (EVar "exported"))))) (EApp (EApp (EApp (EApp (EVar "moduleBindingsUnder") (EVar "FullView")) (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "prog")) (EVar "bindings"))))))
+(DTypeSig true "siblingDepEnv" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))))))
+(DFunDef false "siblingDepEnv" ((PVar "prev") (PVar "mid") (PTuple (PVar "depEnv") (PVar "privEnv"))) (EMatch (EApp (EApp (EVar "subjectOf") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "prev") "mcGraph") "config") "value") "tcSibling")) (EVar "mid")) (arm (PCon "Some" (PVar "subject")) () (EMatch (ETuple (EApp (EApp (EVar "lookupAssoc") (EVar "subject")) (EVar "depEnv")) (EApp (EApp (EVar "lookupAssoc") (EVar "subject")) (EVar "privEnv"))) (arm (PTuple (PCon "Some" (PVar "own")) (PCon "Some" (PVar "priv"))) () (EBinOp "::" (ETuple (EVar "subject") (EBinOp "++" (EVar "own") (EVar "priv"))) (EVar "depEnv"))) (arm PWild () (EVar "depEnv")))) (arm (PCon "None") () (EVar "depEnv"))))
+(DTypeSig false "moduleBindingsUnder" (TyFun (TyCon "ExportView") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))))))
+(DFunDef false "moduleBindingsUnder" ((PVar "view") (PVar "fns") (PVar "prog") (PVar "bindings")) (EBlock (DoLet false false (PVar "standalones") (EApp (EApp (EVar "omRestrict") (EVar "fns")) (EFieldAccess (EVar "bindings") "mbStandaloneSchemes"))) (DoLet false false (PVar "externs") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (ELam ((PVar "e")) (EFieldAccess (EVar "e") "edName"))) (EApp (EVar "externDecls") (EVar "prog")))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "name") (PVar "binding"))) (ETuple (EVar "name") (EVariantUpdate "ExportBinding" (EVar "binding") ((fa "xbExtern" (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "externs")))))))) (EApp (EApp (EVar "tagModuleExports") (EVar "standalones")) (EApp (EApp (EVar "restrictedPairs") (EApp (EApp (EVar "valueNamesUnder") (EVar "view")) (EVar "prog"))) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EFieldAccess (EVar "bindings") "mbSchemes"))) (EVar "omEmpty"))))))))
 (DTypeSig true "methodRowNumObservation" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "NumAnchorTestObservation"))))))
 (DFunDef false "methodRowNumObservation" ((PVar "saved") (PVar "caseName") (PVar "builtinDecls") (PVar "decls")) (EBlock (DoLet false false (PVar "gctx") (EApp (EVar "freshSubRecordsOf") (EFieldAccess (EVar "saved") "mcGraph"))) (DoLet false false (PVar "mctx") (EApp (EApp (EVar "carryModuleCtx") (EVar "gctx")) (EVar "saved"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "builtinDecls")))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "mctx")) (EVar "decls"))) (DoExpr (EApp (EApp (EVar "seedNumLitFromIntAnchor") (EVar "mctx")) (EVar "rows"))) (DoLet false false (PVar "observation") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "numLitFromIntAnchorRef") "value") (arm (PCon "None") () (ERecordCreate "NumAnchorTestObservation" ((fa "natoCase" (EVar "caseName")) (fa "natoHasRow" (EVar "False")) (fa "natoIface" (ELit (LString ""))) (fa "natoSchemeBody" (ELit (LString ""))) (fa "natoDeclaredType" (ELit (LString "")))))) (arm (PCon "Some" (PVar "anchor")) () (ERecordCreate "NumAnchorTestObservation" ((fa "natoCase" (EVar "caseName")) (fa "natoHasRow" (EVar "True")) (fa "natoIface" (EFieldAccess (EFieldAccess (EVar "anchor") "msrIface") "irName")) (fa "natoSchemeBody" (EApp (EVar "ppMono") (EApp (EVar "schemeBodyOf") (EFieldAccess (EVar "anchor") "msrScheme")))) (fa "natoDeclaredType" (EApp (EVar "ppTy") (EFieldAccess (EVar "anchor") "msrType")))))))) (DoExpr (EVar "observation"))))
-(DTypeSig false "distinctIdentsIn2" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String"))) (TyCon "Bool")))
-(DFunDef false "distinctIdentsIn2" ((PList (PTuple (PVar "i1") PWild) (PTuple (PVar "i2") PWild))) (EBinOp "/=" (EVar "i1") (EVar "i2")))
-(DFunDef false "distinctIdentsIn2" (PWild) (EVar "False"))
 # MARK
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "PredicateSlotArgs" true) (mem "AliasDecl" true) (mem "BuiltinClass" true) (mem "BuiltinClasses" true) (mem "DataEnv" true) (mem "DataTypeDecl" true) (mem "DeclEnvAcc" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "Kind" true) (mem "MethodPredicateSlot" true) (mem "MethodPredicateTemplate" true) (mem "MethodSchemeRow" true) (mem "NumAnchorTestObservation" true) (mem "PredicateSlot" true) (mem "SigVars" true) (mem "DeclEnvModule" false) (mem "GraphCtx" false) (mem "ModuleCtx" false) (mem "RecordInfo" false) (mem "TcEnv" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "PredicateSlotArgs" true) (mem "AliasDecl" true) (mem "BuiltinClass" true) (mem "BuiltinClasses" true) (mem "DataEnv" true) (mem "DataTypeDecl" true) (mem "DeclEnvAcc" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "Kind" true) (mem "MethodPredicateSlot" true) (mem "MethodPredicateTemplate" true) (mem "MethodSchemeRow" true) (mem "NumAnchorTestObservation" true) (mem "PredicateSlot" true) (mem "SigVars" true) (mem "DeclEnvModule" false) (mem "ExportBinding" true) (mem "GraphCtx" false) (mem "ModuleBindings" true) (mem "ModuleCtx" false) (mem "RecordInfo" false) (mem "TcEnv" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "applyParams" false) (mem "authvarIdOf" false) (mem "collectAuthvarIds" false) (mem "collectRowEffvarIds" false) (mem "collectTyIds" false) (mem "effvarIdOf" false) (mem "foldrFun" false) (mem "monoTyvarId" false) (mem "schemeBodyOf" false) (mem "schemeIds" false) (mem "tconFrom" false) (mem "tyAppSpine" false) (mem "tyVarNames" false))))
-(DUse false (UseGroup ("types" "tc_state") ((mem "carryModuleCtx" false) (mem "emptyBuiltinClasses" false) (mem "emptyDataEnv" false) (mem "freshSubRecordsOf" false) (mem "mctxAtIfSome" false) (mem "probeGraphCtx" false))))
-(DUse false (UseGroup ("types" "tc_env") ((mem "addCtor" false) (mem "aliasUniverseAt" false) (mem "buildClassEnvGo" false) (mem "buildImplEnvGo" false) (mem "builtinIfaceRef" false) (mem "classEnvFinish" false) (mem "constraintSlotDispatchVar" false) (mem "declEnvDeclsOf" false) (mem "declEnvKindEntries" false) (mem "declEnvModule" false) (mem "declEnvReachFrom" false) (mem "declEnvRowVisible" false) (mem "declEnvVisibleTo" false) (mem "declGradedScope" false) (mem "declParamKinds" false) (mem "declTopFnNames" false) (mem "definersIn" false) (mem "dtopFor" false) (mem "effTailNames" false) (mem "implAccFinish" false) (mem "importLocFor" false) (mem "kindPublicDataDecl" false) (mem "methodEnvGo" false) (mem "methodSlotKey" false) (mem "namesToSet" false) (mem "publicDataDecl" false) (mem "rangedOver" false) (mem "removeAllS" false) (mem "sameIfaceDecl" false) (mem "tyTabKey" false) (mem "useModuleId" false))))
+(DUse false (UseGroup ("types" "tc_state") ((mem "carryModuleCtx" false) (mem "emptyBuiltinClasses" false) (mem "freshSubRecordsOf" false) (mem "mctxAtIfSome" false))))
+(DUse false (UseGroup ("types" "tc_env") ((mem "addCtor" false) (mem "aliasUniverseAt" false) (mem "buildClassEnvGo" false) (mem "buildImplEnvGo" false) (mem "builtinIfaceRef" false) (mem "classEnvFinish" false) (mem "constraintSlotDispatchVar" false) (mem "declEnvDeclsOf" false) (mem "declEnvKindEntries" false) (mem "declEnvModule" false) (mem "declEnvReachFrom" false) (mem "declEnvRowVisible" false) (mem "declEnvSiblingSees" false) (mem "declEnvVisibleTo" false) (mem "declGradedScope" false) (mem "declParamKinds" false) (mem "declTopFnNames" false) (mem "definersIn" false) (mem "graphPubDefiners" false) (mem "dtopFor" false) (mem "effTailNames" false) (mem "implAccFinish" false) (mem "importLocFor" false) (mem "kindPublicDataDecl" false) (mem "methodEnvGo" false) (mem "methodSlotKey" false) (mem "namesToSet" false) (mem "publicDataDecl" false) (mem "rangedOver" false) (mem "removeAllS" false) (mem "sameIfaceDecl" false) (mem "tyTabKey" false) (mem "useModuleId" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeErrorOnce" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "importFormRows" false) (mem "memberBindsCtorName" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "atomsEscape" false) (mem "freshAuthBinderRanged" false) (mem "freshAuthvar" false) (mem "freshAuthvarRanged" false) (mem "freshEffMap" false) (mem "freshEffvar" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "namedArgDomains" false) (mem "freshVars" false))))
@@ -3805,33 +3256,34 @@ distinctIdentsIn2 _ = False
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "atomsOfWritten" false) (mem "authArgBindersIn" false) (mem "authorityBinderBound" false) (mem "binderDomainsIn" false) (mem "bindingForceFromAst" false) (mem "fromAstType" false) (mem "fromAstTypeE" false) (mem "namedArgTypes" false) (mem "namedAtomBinders" false) (mem "patternSlotNamesIn" false) (mem "payloadTypesE" false) (mem "qualifiedKindScope" false) (mem "recFieldMono" false) (mem "reportBinderDomains" false) (mem "reportUnboundAuthorityNames" false) (mem "reportUnboundAuthorityNamesIn" false) (mem "rowArgNames" false) (mem "rowArgNamesIn" false) (mem "sigVarsWithAuths" false) (mem "substAliasArgs" false) (mem "writtenBindingForce" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomsNorm" false) (mem "pureRow" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "UsePath" true) (mem "Ns" true) (mem "Lit" true) (mem "Expr" true) (mem "Attr" true) (mem "ConPayload" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "Field" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "KindAnn" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "Variant" true) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "identOriginFold" false) (mem "lookupTab" false) (mem "mapTyFull" false) (mem "mkIdent" false) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "tyConBuiltin" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "UsePath" true) (mem "Ns" true) (mem "Lit" true) (mem "Expr" true) (mem "Attr" true) (mem "ConPayload" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "ExternDecl" true) (mem "Field" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "KindAnn" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "Variant" true) (mem "externDecls" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "identOriginFold" false) (mem "lookupTab" false) (mem "mapTyFull" false) (mem "mkIdent" false) (mem "tabKeyEq" false) (mem "tabKeyName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "ppMono" false) (mem "ppTy" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "omDelete" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omMapValues" false) (mem "OrdMap" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omDelete" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omMapValues" false) (mem "omRestrict" false) (mem "restrictedPairs" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
-(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("list") ((mem "elemIndex" false) (mem "findMap" false) (mem "head" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "spFloor" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" true))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "ExportView" true) (mem "useModId" false) (mem "carriedPaths" false) (mem "pubUsePaths" false) (mem "directUnder" false) (mem "nsValues" false) (mem "subjectOf" false) (mem "valueNamesUnder" false) (mem "viewFor" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "stampGraphTyOrigins" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DTypeSig true "declEnvAccOf" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "DeclEnvAcc") (TyCon "DeclEnvAcc")))))
-(DFunDef false "declEnvAccOf" ((PVar "gctx") (PList) (PVar "a")) (EVar "a"))
+(DFunDef false "declEnvAccOf" ((PVar "_gctx") (PList) (PVar "a")) (EVar "a"))
 (DFunDef false "declEnvAccOf" ((PVar "gctx") (PCons (PVar "m") (PVar "rest")) (PVar "a")) (EBlock (DoLet false false (PVar "definers") (EApp (EApp (EApp (EVar "declEnvDefinerIndex") (EFieldAccess (EVar "a") "daDefiners")) (EFieldAccess (EVar "a") "daAmbig")) (EListLit (EVar "m")))) (DoExpr (EApp (EApp (EApp (EVar "declEnvAccOf") (EVar "gctx")) (EVar "rest")) (ERecordCreate "DeclEnvAcc" ((fa "daOrdIndex" (EApp (EApp (EVar "declEnvOrdIndex") (EFieldAccess (EVar "a") "daOrdIndex")) (EListLit (EVar "m")))) (fa "daDefiners" (EApp (EVar "fst") (EVar "definers"))) (fa "daAmbig" (EApp (EVar "snd") (EVar "definers"))) (fa "daData" (EApp (EApp (EVar "dataEnvFromRowsGo") (EListLit (EVar "m"))) (EFieldAccess (EVar "a") "daData"))) (fa "daImpls" (EApp (EApp (EVar "buildImplEnvGo") (EListLit (EVar "m"))) (EFieldAccess (EVar "a") "daImpls"))) (fa "daIfaces" (EApp (EApp (EApp (EVar "buildClassEnvGo") (EVar "gctx")) (EListLit (EVar "m"))) (EFieldAccess (EVar "a") "daIfaces"))) (fa "daMethods" (EApp (EApp (EApp (EVar "methodEnvGo") (EVar "gctx")) (EListLit (EVar "m"))) (EFieldAccess (EVar "a") "daMethods"))) (fa "daSeeds" (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "gctx")) (EListLit (EVar "m"))) (EFieldAccess (EVar "a") "daSeeds"))) (fa "daPolarity" (EApp (EApp (EVar "declEnvPolarityChain") (EListLit (EVar "m"))) (EFieldAccess (EVar "a") "daPolarity"))) (fa "daOwnerModules" (EApp (EApp (EVar "declEnvOwnerModules") (EListLit (EVar "m"))) (EFieldAccess (EVar "a") "daOwnerModules")))))))))
 (DTypeSig true "buildDeclEnvs" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "DeclEnvAcc") (TyFun (TyCon "DeclEnvModule") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyCon "DeclEnvs"))))))
 (DFunDef false "buildDeclEnvs" ((PVar "gctx") (PVar "acc") (PVar "coreRow") (PVar "modRows")) (EBlock (DoLet false false (PVar "mods") (EBinOp "::" (EVar "coreRow") (EVar "modRows"))) (DoLet false false (PVar "a") (EApp (EApp (EApp (EVar "declEnvAccOf") (EVar "gctx")) (EVar "modRows")) (EVar "acc"))) (DoExpr (ERecordCreate "DeclEnvs" ((fa "deModules" (EVar "mods")) (fa "deOrdIndex" (EFieldAccess (EVar "a") "daOrdIndex")) (fa "deDefiners" (EFieldAccess (EVar "a") "daDefiners")) (fa "deAmbigValues" (EFieldAccess (EVar "a") "daAmbig")) (fa "deAllDecls" (EApp (EVar "declEnvDeclsOf") (EVar "mods"))) (fa "deData" (EApp (EVar "dataEnvFinish") (EFieldAccess (EVar "a") "daData"))) (fa "deImpls" (EApp (EVar "implAccFinish") (EFieldAccess (EVar "a") "daImpls"))) (fa "deIfaces" (EApp (EVar "classEnvFinish") (EFieldAccess (EVar "a") "daIfaces"))) (fa "deMethods" (EFieldAccess (EVar "a") "daMethods")) (fa "deKindsBefore" (EFieldAccess (EFieldAccess (EVar "a") "daSeeds") "dsKinds")) (fa "deNameIndexBefore" (EFieldAccess (EFieldAccess (EVar "a") "daSeeds") "dsNames")) (fa "dePolaritiesBefore" (EApp (EVar "snd") (EFieldAccess (EVar "a") "daPolarity"))) (fa "deAtomsBefore" (EApp (EVar "snd") (EApp (EApp (EApp (EVar "declEnvRowAtomsChain") (EVar "gctx")) (EVar "mods")) (ETuple (EListLit) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty")))))) (fa "deOwnersBefore" (EFieldAccess (EFieldAccess (EVar "a") "daSeeds") "dsOwners")) (fa "deOwnerModules" (EFieldAccess (EVar "a") "daOwnerModules")) (fa "deReach" (EApp (EVar "declEnvReachIndex") (EVar "mods"))))))))
 (DTypeSig false "declEnvRowKindEntries" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyCon "DeclEnvModule") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))))))
-(DFunDef false "declEnvRowKindEntries" ((PVar "gctx") (PVar "cur") (PVar "m")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "False")) (EApp (EApp (EVar "declEnvKindEntries") (EVar "gctx")) (EFieldAccess (EVar "m") "demDecls")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "True")) (EFieldAccess (EVar "m") "demKindEntries") (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "declEnvRowKindEntries" ((PVar "gctx") (PVar "cur") (PVar "m")) (EIf (EBinOp "||" (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "False")) (EApp (EApp (EVar "declEnvSiblingSees") (EVar "cur")) (EVar "m"))) (EApp (EApp (EVar "declEnvKindEntries") (EVar "gctx")) (EFieldAccess (EVar "m") "demDecls")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "True")) (EFieldAccess (EVar "m") "demKindEntries") (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "declEnvSeedChain" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "DeclEnvSeedAcc") (TyCon "DeclEnvSeedAcc")))))
-(DFunDef false "declEnvSeedChain" ((PVar "gctx") (PList) (PVar "s")) (EVar "s"))
+(DFunDef false "declEnvSeedChain" ((PVar "_gctx") (PList) (PVar "s")) (EVar "s"))
 (DFunDef false "declEnvSeedChain" ((PVar "gctx") (PCons (PVar "m") (PVar "rest")) (PVar "s")) (EBlock (DoLet false false (PVar "kents") (EApp (EApp (EApp (EVar "declEnvRowKindEntries") (EVar "gctx")) (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m"))) (DoExpr (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "gctx")) (EVar "rest")) (ERecordCreate "DeclEnvSeedAcc" ((fa "dsKAcc" (EBinOp "++" (EVar "kents") (EFieldAccess (EVar "s") "dsKAcc"))) (fa "dsOAcc" (EApp (EApp (EVar "declEnvDeclFieldOwners") (EApp (EApp (EVar "declEnvRowVisible") (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m"))) (EFieldAccess (EVar "s") "dsOAcc"))) (fa "dsNAcc" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "p"))))) (EVar "kents"))) (EFieldAccess (EVar "s") "dsNAcc"))) (fa "dsKinds" (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EFieldAccess (EVar "s") "dsKAcc")) (EFieldAccess (EVar "s") "dsKinds"))) (fa "dsOwners" (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EFieldAccess (EVar "s") "dsOAcc")) (EFieldAccess (EVar "s") "dsOwners"))) (fa "dsNames" (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EFieldAccess (EVar "s") "dsNAcc")) (EFieldAccess (EVar "s") "dsNames")))))))))
 (DTypeSig false "declEnvRowAtomsChain" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))))))))
-(DFunDef false "declEnvRowAtomsChain" ((PVar "gctx") (PList) (PVar "s")) (EVar "s"))
+(DFunDef false "declEnvRowAtomsChain" ((PVar "_gctx") (PList) (PVar "s")) (EVar "s"))
 (DFunDef false "declEnvRowAtomsChain" ((PVar "gctx") (PCons (PVar "m") (PVar "rest")) (PTuple (PVar "aacc") (PVar "am"))) (EBlock (DoLet false false (PVar "entries") (EApp (EApp (EApp (EVar "declEnvRowAtomsEntries") (EVar "gctx")) (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m"))) (DoExpr (EApp (EApp (EApp (EVar "declEnvRowAtomsChain") (EVar "gctx")) (EVar "rest")) (ETuple (EBinOp "++" (EVar "entries") (EVar "aacc")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "aacc")) (EVar "am")))))))
 (DTypeSig false "declEnvRowAtomsEntries" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyCon "DeclEnvModule") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))))))
 (DFunDef false "declEnvRowAtomsEntries" ((PVar "gctx") (PVar "cur") (PVar "m")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "False")) (EApp (EApp (EVar "declEnvRowAtomEntries") (EVar "gctx")) (EFieldAccess (EVar "m") "demDecls")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "True")) (EApp (EApp (EVar "declEnvRowAtomEntries") (EVar "gctx")) (EApp (EApp (EVar "filterList") (EVar "kindPublicDataDecl")) (EFieldAccess (EVar "m") "demDecls"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "declEnvRowAtomEntries" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))))
-(DFunDef false "declEnvRowAtomEntries" ((PVar "gctx") (PList)) (EListLit))
+(DFunDef false "declEnvRowAtomEntries" ((PVar "_gctx") (PList)) (EListLit))
 (DFunDef false "declEnvRowAtomEntries" ((PVar "gctx") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "declEnvRowAtomEntries") (EVar "gctx")) (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "declEnvRowAtomEntries" ((PVar "gctx") (PCons (PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataCtors" (PVar "vs")) (rf "dataOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EApp (EApp (EVar "inferParamRowAtoms") (EVar "gctx")) (EVar "ps")) (EVar "vs"))) (EApp (EApp (EVar "declEnvRowAtomEntries") (EVar "gctx")) (EVar "rest"))))
 (DFunDef false "declEnvRowAtomEntries" ((PVar "gctx") (PCons (PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EApp (EApp (EVar "inferParamRowAtoms") (EVar "gctx")) (EVar "ps")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty"))))))) (EApp (EApp (EVar "declEnvRowAtomEntries") (EVar "gctx")) (EVar "rest"))))
@@ -3871,8 +3323,8 @@ distinctIdentsIn2 _ = False
 (DFunDef false "dataEnvFromDeclsGo" ((PVar "ord") (PCons (PVar "d") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "dataEnvAddDecl") (EVar "ord")) (EVar "False")) (EVar "d")) (EVar "acc"))))
 (DTypeSig false "dataEnvAddDecl" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Decl") (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))
 (DFunDef false "dataEnvAddDecl" ((PVar "ord") PWild (PCon "DAttrib" PWild (PVar "d")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "dataEnvAddDecl") (EVar "ord")) (EVar "True")) (EVar "d")) (EVar "acc")))
-(DFunDef false "dataEnvAddDecl" ((PVar "ord") PWild (PRec "DData" ((rf "dataName" None) (rf "dataParams" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataParams")) (EVar "dataCtors")) (EVar "acc")))
-(DFunDef false "dataEnvAddDecl" ((PVar "ord") PWild (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeParams" None) (rf "newtypeCtor" None) (rf "newtypeFieldTy" None) (rf "newtypeOrigin" None)) true) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "newtypeName")) (EVar "newtypeOrigin")) (EVar "newtypeParams")) (EListLit (EApp (EApp (EVar "Variant") (EVar "newtypeCtor")) (EApp (EVar "ConPos") (EListLit (EVar "newtypeFieldTy")))))) (EVar "acc")))
+(DFunDef false "dataEnvAddDecl" ((PVar "_ord") PWild (PRec "DData" ((rf "dataName" None) (rf "dataParams" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataParams")) (EVar "dataCtors")) (EVar "acc")))
+(DFunDef false "dataEnvAddDecl" ((PVar "_ord") PWild (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeParams" None) (rf "newtypeCtor" None) (rf "newtypeFieldTy" None) (rf "newtypeOrigin" None)) true) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "newtypeName")) (EVar "newtypeOrigin")) (EVar "newtypeParams")) (EListLit (EApp (EApp (EVar "Variant") (EVar "newtypeCtor")) (EApp (EVar "ConPos") (EListLit (EVar "newtypeFieldTy")))))) (EVar "acc")))
 (DFunDef false "dataEnvAddDecl" ((PVar "ord") (PVar "att") (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasName" None) (rf "tyAliasParams" None) (rf "tyAliasRhs" None) (rf "tyAliasOrigin" None)) true)) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addAliasDecl") (EVar "tyAliasName")) (EVar "tyAliasOrigin")) (EVar "tyAliasParams")) (EVar "tyAliasRhs")) (EVar "ord")) (EApp (EVar "publicDataDecl") (EVar "d"))) (EVar "att")) (EVar "acc")))
 (DFunDef false "dataEnvAddDecl" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "addDataTypeDecl" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
@@ -3927,7 +3379,7 @@ distinctIdentsIn2 _ = False
 (DFunDef false "aliasDfsVisitAll" (PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "aliasDfsVisitAll" ((PVar "graph") (PVar "visitedRef") (PVar "onStackRef") (PVar "onStackSetRef") (PVar "cyclicOut") (PCons (PVar "k") (PVar "ks"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "aliasDfsVisit") (EVar "graph")) (EVar "visitedRef")) (EVar "onStackRef")) (EVar "onStackSetRef")) (EVar "cyclicOut")) (EVar "k"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "aliasDfsVisitAll") (EVar "graph")) (EVar "visitedRef")) (EVar "onStackRef")) (EVar "onStackSetRef")) (EVar "cyclicOut")) (EVar "ks")))))
 (DTypeSig false "emitCyclicAliasErrors" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "emitCyclicAliasErrors" ((PVar "mctx") PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "emitCyclicAliasErrors" ((PVar "_mctx") PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "emitCyclicAliasErrors" ((PVar "mctx") (PVar "prog") (PVar "table") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "reader") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentModuleRef") "value")) (DoLet false false (PVar "named") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "e"))) (EVar "name")))) (EVar "table"))) (DoLet false false (PVar "loc") (EMatch (EApp (EApp (EDictApp "find") (ELam ((PVar "e")) (EApp (EApp (EVar "aliasDeclaredBy") (EVar "reader")) (EApp (EVar "fst") (EVar "e"))))) (EVar "named")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "firstTyLoc") (EApp (EVar "snd") (EApp (EVar "snd") (EVar "e"))))) (arm (PCon "None") () (EApp (EApp (EVar "findMap") (ELam ((PVar "e")) (EMatch (EApp (EVar "tabKeyModule") (EApp (EVar "fst") (EVar "e"))) (arm (PCon "Some" (PVar "owner")) () (EApp (EApp (EApp (EVar "importLocFor") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value") "deReach")) (EVar "prog")) (EVar "owner"))) (arm (PCon "None") () (EVar "None"))))) (EVar "named"))))) (DoExpr (EApp (EApp (EApp (EVar "pushTypeErrorOnce") (EApp (EApp (EVar "mctxAtIfSome") (EVar "loc")) (EVar "mctx"))) (EVar "TRecursiveAlias")) (EBinOp "++" (EBinOp "++" (ELit (LString "type alias `")) (EVar "name")) (ELit (LString "` is recursive; a type alias cannot refer to itself, so declare a `data` type instead"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitCyclicAliasErrors") (EVar "mctx")) (EVar "prog")) (EVar "table")) (EVar "rest")))))
 (DTypeSig false "aliasDeclaredBy" (TyFun (TyCon "String") (TyFun (TyCon "TabKey") (TyCon "Bool"))))
 (DFunDef false "aliasDeclaredBy" ((PVar "reader") (PVar "key")) (EMatch (EApp (EVar "tabKeyModule") (EVar "key")) (arm (PCon "Some" (PVar "owner")) () (EBinOp "==" (EVar "owner") (EVar "reader"))) (arm (PCon "None") () (EVar "True"))))
@@ -3965,14 +3417,14 @@ distinctIdentsIn2 _ = False
 (DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope"))) (EVar "ts")))
 (DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
 (DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
-(DFunDef false "rowArgAtomsIn" ((PVar "mctx") PWild PWild) (EListLit))
+(DFunDef false "rowArgAtomsIn" ((PVar "_mctx") PWild PWild) (EListLit))
 (DTypeSig false "rowArgAtomsApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))))
 (DFunDef false "rowArgAtomsApp" ((PVar "mctx") (PVar "scope") (PVar "o") (PVar "n") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EVar "Some") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "kinds")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "paramRowAtomsOf") (EVar "mctx")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))))) (EVar "args")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope"))) (EVar "args"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "rowArgAtomsVarApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))))
 (DFunDef false "rowArgAtomsVarApp" ((PVar "mctx") (PVar "scope") (PVar "h") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "h")) (EVar "scope")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EVar "Some") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "kinds")) (EListLit)) (EVar "args")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope"))) (EVar "args"))))) (arm PWild () (EVar "None"))))
 (DTypeSig true "krowArgVarAtoms" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))
-(DFunDef false "krowArgVarAtoms" ((PVar "gctx") (PList) PWild PWild) (EListLit))
-(DFunDef false "krowArgVarAtoms" ((PVar "gctx") PWild PWild (PList)) (EListLit))
+(DFunDef false "krowArgVarAtoms" ((PVar "_gctx") (PList) PWild PWild) (EListLit))
+(DFunDef false "krowArgVarAtoms" ((PVar "_gctx") PWild PWild (PList)) (EListLit))
 (DFunDef false "krowArgVarAtoms" ((PVar "gctx") (PCons (PCon "KRow") (PVar "ks")) (PVar "decls") (PCons (PCon "TyVar" (PVar "n")) (PVar "as2"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EVar "head") (EVar "decls")))) (EApp (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "gctx")) (EVar "ks")) (EApp (EVar "restAtoms") (EVar "decls"))) (EVar "as2"))))
 (DFunDef false "krowArgVarAtoms" ((PVar "gctx") (PCons (PCon "KRow") (PVar "ks")) (PVar "decls") (PCons (PCon "TyRow" (PVar "labels") (PVar "tails") PWild) (PVar "as2"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "atomsNorm") (EBinOp "++" (EApp (EApp (EVar "atomsOfWritten") (EVar "gctx")) (EVar "labels")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EVar "head") (EVar "decls")))))))) (EVar "tails")) (EApp (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "gctx")) (EVar "ks")) (EApp (EVar "restAtoms") (EVar "decls"))) (EVar "as2"))))
 (DFunDef false "krowArgVarAtoms" ((PVar "gctx") (PCons PWild (PVar "ks")) (PVar "decls") (PCons PWild (PVar "as2"))) (EApp (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "gctx")) (EVar "ks")) (EApp (EVar "restAtoms") (EVar "decls"))) (EVar "as2")))
@@ -4018,39 +3470,39 @@ distinctIdentsIn2 _ = False
 (DTypeSig false "inferParamRowAtoms" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "inferParamRowAtoms" ((PVar "gctx") (PVar "params") (PVar "variants")) (EBlock (DoLet false false (PVar "fieldTys") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "v")) (EApp (EVar "payloadAstTypes") (EApp (EVar "variantPayload") (EVar "v"))))) (EVar "variants"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EVar "intersectDeclAtoms") (EVar "gctx")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "t")))) (EVar "fieldTys"))))) (EVar "params")))))
 (DTypeSig false "paramRowAtomOccs" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyVar" (PVar "n"))) (EIf (EBinOp "==" (EVar "n") (EVar "p")) (EListLit (EListLit)) (EListLit)))
-(DFunDef false "paramRowAtomOccs" ((PVar "gctx") PWild (PRec "TyCon" ((rf "tyConName" PWild)) false)) (EListLit))
+(DFunDef false "paramRowAtomOccs" ((PVar "_gctx") (PVar "p") (PCon "TyVar" (PVar "n"))) (EIf (EBinOp "==" (EVar "n") (EVar "p")) (EListLit (EListLit)) (EListLit)))
+(DFunDef false "paramRowAtomOccs" ((PVar "_gctx") PWild (PRec "TyCon" ((rf "tyConName" PWild)) false)) (EListLit))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "paramRowAtomsFor") (EVar "gctx")) (EVar "p")) (EVar "tails")) (EVar "labels")) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "t"))))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyRow" (PVar "labels") (PVar "tails") PWild)) (EApp (EApp (EApp (EApp (EVar "paramRowAtomsFor") (EVar "gctx")) (EVar "p")) (EVar "tails")) (EVar "labels")))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "a")) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "b"))))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p"))) (EVar "ts")))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "a")) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "b"))))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "t")))
-(DFunDef false "paramRowAtomOccs" ((PVar "gctx") PWild PWild) (EListLit))
+(DFunDef false "paramRowAtomOccs" ((PVar "_gctx") PWild PWild) (EListLit))
 (DTypeSig false "paramRowAtomsFor" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))))
 (DFunDef false "paramRowAtomsFor" ((PVar "gctx") (PVar "p") (PVar "tails") (PVar "labels")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EApp (EVar "atomsOfWritten") (EVar "gctx")) (EVar "labels")))) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "p")))) (EVar "tails"))))
 (DTypeSig false "intersectDeclAtoms" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyApp (TyCon "List") (TyCon "Atom")))))
-(DFunDef false "intersectDeclAtoms" ((PVar "gctx") (PList)) (EListLit))
+(DFunDef false "intersectDeclAtoms" ((PVar "_gctx") (PList)) (EListLit))
 (DFunDef false "intersectDeclAtoms" ((PVar "gctx") (PCons (PVar "first") (PVar "rest"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EApp (EApp (EVar "allList") (ELam ((PVar "b")) (EApp (EVar "isEmptyL") (EApp (EApp (EApp (EVar "atomsEscape") (EVar "gctx")) (EListLit (EVar "x"))) (EVar "b"))))) (EVar "rest")))) (EVar "first")))
 (DTypeSig false "mintParamReprs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyApp (TyCon "List") (TyCon "Mono"))))))
 (DFunDef false "mintParamReprs" ((PVar "mctx") (PCons PWild (PVar "ps")) (PCons (PCon "KType") (PVar "ks"))) (EBinOp "::" (EApp (EApp (EVar "freshVar") (EVar "mctx")) (ELit LUnit)) (EApp (EApp (EApp (EVar "mintParamReprs") (EVar "mctx")) (EVar "ps")) (EVar "ks"))))
 (DFunDef false "mintParamReprs" ((PVar "mctx") (PCons PWild (PVar "ps")) (PCons (PCon "KRow") (PVar "ks"))) (EBinOp "::" (EApp (EVar "TEff") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EApp (EApp (EVar "freshEffvar") (EVar "mctx")) (ELit LUnit))))) (EApp (EApp (EApp (EVar "mintParamReprs") (EVar "mctx")) (EVar "ps")) (EVar "ks"))))
 (DFunDef false "mintParamReprs" ((PVar "mctx") (PCons (PVar "p") (PVar "ps")) (PCons (PCon "KAuth" (PVar "l") (PVar "pat")) (PVar "ks"))) (EBinOp "::" (EApp (EVar "TAuth") (EApp (EVar "AVar") (EApp (EApp (EApp (EApp (EVar "freshAuthvarRanged") (EVar "mctx")) (EApp (EApp (EVar "dtopFor") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "l"))) (EVar "pat")) (EApp (EVar "Some") (EVar "p"))))) (EApp (EApp (EApp (EVar "mintParamReprs") (EVar "mctx")) (EVar "ps")) (EVar "ks"))))
-(DFunDef false "mintParamReprs" ((PVar "mctx") PWild PWild) (EListLit))
+(DFunDef false "mintParamReprs" ((PVar "_mctx") PWild PWild) (EListLit))
 (DTypeSig false "ktypeTvs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
 (DFunDef false "ktypeTvs" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "KType") (PVar "ks")) (PCons (PVar "r") (PVar "rs"))) (EBinOp "::" (ETuple (EVar "p") (EVar "r")) (EApp (EApp (EApp (EVar "ktypeTvs") (EVar "ps")) (EVar "ks")) (EVar "rs"))))
-(DFunDef false "ktypeTvs" ((PCons (PVar "p") (PVar "ps")) (PCons PWild (PVar "ks")) (PCons PWild (PVar "rs"))) (EApp (EApp (EApp (EVar "ktypeTvs") (EVar "ps")) (EVar "ks")) (EVar "rs")))
+(DFunDef false "ktypeTvs" ((PCons (PVar "_p") (PVar "ps")) (PCons PWild (PVar "ks")) (PCons PWild (PVar "rs"))) (EApp (EApp (EApp (EVar "ktypeTvs") (EVar "ps")) (EVar "ks")) (EVar "rs")))
 (DFunDef false "ktypeTvs" (PWild PWild PWild) (EListLit))
 (DTypeSig false "paramEtbl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "SigVars")))))
 (DFunDef false "paramEtbl" ((PVar "params") (PVar "kinds") (PVar "reprs")) (ERecordCreate "SigVars" ((fa "svRows" (EApp (EApp (EApp (EVar "krowRows") (EVar "params")) (EVar "kinds")) (EVar "reprs"))) (fa "svAuths" (EApp (EApp (EApp (EVar "kauthCells") (EVar "params")) (EVar "kinds")) (EVar "reprs"))))))
 (DTypeSig false "kauthCells" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Authvar"))))))))
 (DFunDef false "kauthCells" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "KAuth" PWild PWild) (PVar "ks")) (PCons (PCon "TAuth" (PCon "AVar" (PVar "cell"))) (PVar "rs"))) (EBinOp "::" (ETuple (EVar "p") (EVar "cell")) (EApp (EApp (EApp (EVar "kauthCells") (EVar "ps")) (EVar "ks")) (EVar "rs"))))
-(DFunDef false "kauthCells" ((PCons (PVar "p") (PVar "ps")) (PCons PWild (PVar "ks")) (PCons PWild (PVar "rs"))) (EApp (EApp (EApp (EVar "kauthCells") (EVar "ps")) (EVar "ks")) (EVar "rs")))
+(DFunDef false "kauthCells" ((PCons (PVar "_p") (PVar "ps")) (PCons PWild (PVar "ks")) (PCons PWild (PVar "rs"))) (EApp (EApp (EApp (EVar "kauthCells") (EVar "ps")) (EVar "ks")) (EVar "rs")))
 (DFunDef false "kauthCells" (PWild PWild PWild) (EListLit))
 (DTypeSig false "existentialCells" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Authvar")))))))
 (DFunDef false "existentialCells" ((PVar "mctx") (PVar "binders")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EMatch (EApp (EVar "snd") (EVar "b")) (arm (PCon "KindAuthority" (PVar "l") (PVar "o") (PVar "pat") PWild) () (ETuple (EApp (EVar "fst") (EVar "b")) (EApp (EApp (EApp (EApp (EVar "freshAuthvarRanged") (EVar "mctx")) (EApp (EApp (EVar "dtopFor") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o")))) (EApp (EApp (EApp (EVar "rangedOver") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))) (EVar "pat"))) (EApp (EVar "Some") (EApp (EVar "fst") (EVar "b")))))) (arm PWild () (ETuple (EApp (EVar "fst") (EVar "b")) (EApp (EApp (EApp (EVar "freshAuthvar") (EVar "mctx")) (EVar "PUnit")) (EApp (EVar "Some") (EApp (EVar "fst") (EVar "b"))))))))) (EVar "binders")))
 (DTypeSig false "recordExistentials" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Authvar")))) (TyCon "Unit"))))
-(DFunDef false "recordExistentials" ((PVar "gctx") (PList)) (ELit LUnit))
+(DFunDef false "recordExistentials" ((PVar "_gctx") (PList)) (ELit LUnit))
 (DFunDef false "recordExistentials" ((PVar "gctx") (PVar "cells")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "anyExistentialsRef")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "ctorExistentialsRef")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "c")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EApp (EVar "snd") (EVar "c")))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "ctorExistentialsRef") "value")) (EVar "cells"))))))
 (DTypeSig false "padCtorBinders" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))))))
 (DFunDef false "padCtorBinders" ((PList) PWild) (EListLit))
@@ -4058,14 +3510,14 @@ distinctIdentsIn2 _ = False
 (DFunDef false "padCtorBinders" ((PCons PWild (PVar "vs")) (PList)) (EBinOp "::" (EListLit) (EApp (EApp (EVar "padCtorBinders") (EVar "vs")) (EListLit))))
 (DTypeSig false "krowRows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar"))))))))
 (DFunDef false "krowRows" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "KRow") (PVar "ks")) (PCons (PCon "TEff" (PCon "EffRow" PWild (PCon "Some" (PVar "cell")))) (PVar "rs"))) (EBinOp "::" (ETuple (EVar "p") (EVar "cell")) (EApp (EApp (EApp (EVar "krowRows") (EVar "ps")) (EVar "ks")) (EVar "rs"))))
-(DFunDef false "krowRows" ((PCons (PVar "p") (PVar "ps")) (PCons PWild (PVar "ks")) (PCons PWild (PVar "rs"))) (EApp (EApp (EApp (EVar "krowRows") (EVar "ps")) (EVar "ks")) (EVar "rs")))
+(DFunDef false "krowRows" ((PCons (PVar "_p") (PVar "ps")) (PCons PWild (PVar "ks")) (PCons PWild (PVar "rs"))) (EApp (EApp (EApp (EVar "krowRows") (EVar "ps")) (EVar "ks")) (EVar "rs")))
 (DFunDef false "krowRows" (PWild PWild PWild) (EListLit))
 (DTypeSig false "registerNamedFieldVariants" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyCon "Unit")))))))))
 (DFunDef false "registerNamedFieldVariants" ((PVar "mctx") (PVar "o") (PVar "tyName") (PVar "params") (PVar "kinds") (PVar "variants") (PVar "binders")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerNamedFieldVariantsGo") (EVar "mctx")) (EVar "o")) (EVar "tyName")) (EVar "params")) (EVar "kinds")) (EVar "variants")) (EApp (EApp (EVar "padCtorBinders") (EVar "variants")) (EVar "binders"))))
 (DTypeSig false "registerNamedFieldVariantsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyCon "Unit")))))))))
 (DFunDef false "registerNamedFieldVariantsGo" ((PVar "mctx") (PVar "o") (PVar "tyName") (PVar "params") (PVar "kinds") (PCons (PCon "Variant" (PVar "cname") (PCon "ConNamed" (PVar "fields") PWild)) (PVar "rest")) (PCons (PVar "bs") (PVar "brest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerRecordInfoKeyed") (EVar "mctx")) (EVar "o")) (EVar "cname")) (EVar "tyName")) (EVar "params")) (EVar "kinds")) (EVar "bs")) (EVar "fields"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerNamedFieldVariantsGo") (EVar "mctx")) (EVar "o")) (EVar "tyName")) (EVar "params")) (EVar "kinds")) (EVar "rest")) (EVar "brest")))))
 (DFunDef false "registerNamedFieldVariantsGo" ((PVar "mctx") (PVar "o") (PVar "tyName") (PVar "params") (PVar "kinds") (PCons PWild (PVar "rest")) (PCons PWild (PVar "brest"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerNamedFieldVariantsGo") (EVar "mctx")) (EVar "o")) (EVar "tyName")) (EVar "params")) (EVar "kinds")) (EVar "rest")) (EVar "brest")))
-(DFunDef false "registerNamedFieldVariantsGo" ((PVar "mctx") PWild PWild PWild PWild PWild PWild) (ELit LUnit))
+(DFunDef false "registerNamedFieldVariantsGo" ((PVar "_mctx") PWild PWild PWild PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "addVariants" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "SigVars") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyCon "TcEnv")))))))))))
 (DFunDef false "addVariants" ((PVar "env") (PVar "tvs") (PVar "etbl") (PVar "paramTyIds") (PVar "rowEffvarIds") (PVar "authvarIds") (PVar "result") (PCons (PCon "Variant" (PVar "cname") (PVar "payload")) (PVar "rest")) (PCons (PVar "binders") (PVar "brest"))) (EBlock (DoLet false false (PVar "opened") (EApp (EApp (EVar "existentialCells") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "binders"))) (DoExpr (EApp (EApp (EVar "recordExistentials") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcGraph")) (EVar "opened"))) (DoLet false false (PVar "ctorEtbl") (EApp (EApp (EVar "sigVarsWithAuths") (EVar "opened")) (EVar "etbl"))) (DoExpr (EApp (EApp (EApp (EVar "reportUnboundAuthorityNamesIn") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EApp (EVar "payloadAstTypes") (EVar "payload"))) (EVar "ctorEtbl"))) (DoLet false false (PVar "ctorType") (EApp (EApp (EVar "foldrFun") (EApp (EApp (EApp (EApp (EVar "payloadTypesE") (EApp (EApp (EVar "mctxAtIfSome") (EApp (EVar "firstTyLocList") (EApp (EVar "payloadAstTypes") (EVar "payload")))) (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule"))) (EVar "ctorEtbl")) (EVar "tvs")) (EVar "payload"))) (EVar "result"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EVar "addCtor") (EVar "env")) (EVar "cname")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EVar "paramTyIds")) (EVar "rowEffvarIds")) (EBinOp "++" (EVar "authvarIds") (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EApp (EVar "authvarId") (EApp (EVar "snd") (EVar "c"))))) (EVar "opened")))) (EListLit)) (EVar "pureRow")) (EVar "ctorType")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addVariants") (EVar "env2")) (EVar "tvs")) (EVar "etbl")) (EVar "paramTyIds")) (EVar "rowEffvarIds")) (EVar "authvarIds")) (EVar "result")) (EVar "rest")) (EVar "brest")))))
 (DFunDef false "addVariants" ((PVar "env") PWild PWild PWild PWild PWild PWild PWild PWild) (EVar "env"))
@@ -4102,9 +3554,9 @@ distinctIdentsIn2 _ = False
 (DFunDef false "isDirectInterfaceDecl" (PWild) (EVar "False"))
 (DTypeSig false "directIfaceSchemeRows" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "MethodSchemeRow")))))
 (DFunDef false "directIfaceSchemeRows" ((PVar "mctx") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "methods" None) (rf "ifaceOrigin" None)) true)) (EApp (EApp (EApp (EApp (EApp (EVar "methodSchemeRows") (EVar "mctx")) (EApp (EApp (EApp (EApp (EVar "declGradedScope") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "typarams")) (EVar "typaramKinds")) (EVar "methods"))) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "name")) (fa "irOrigin" (EVar "ifaceOrigin"))))) (EVar "typarams")) (EVar "methods")))
-(DFunDef false "directIfaceSchemeRows" ((PVar "mctx") PWild) (EListLit))
+(DFunDef false "directIfaceSchemeRows" ((PVar "_mctx") PWild) (EListLit))
 (DTypeSig false "methodSchemeRows" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "MethodSchemeRow"))))))))
-(DFunDef false "methodSchemeRows" ((PVar "mctx") PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "methodSchemeRows" ((PVar "_mctx") PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "methodSchemeRows" ((PVar "mctx") (PVar "scope") (PVar "iface") (PVar "typarams") (PCons (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "scheme") (PVar "tvs")) (EApp (EApp (EApp (EVar "sigToSchemeTvsIn") (EVar "mctx")) (EVar "scope")) (EVar "mty"))) (DoLet false false (PVar "slots") (EApp (EApp (EApp (EApp (EApp (EVar "methodPredicateSlotsOfType") (EVar "mctx")) (EVar "typarams")) (EVar "mty")) (EVar "tvs")) (EApp (EVar "schemeIds") (EVar "scheme")))) (DoExpr (EApp (EApp (EApp (EVar "installMethodPredicateSlots") (EVar "mctx")) (EApp (EApp (EVar "methodSlotKey") (EVar "iface")) (EVar "mname"))) (EVar "slots"))) (DoExpr (EBinOp "::" (ERecordCreate "MethodSchemeRow" ((fa "msrIface" (EVar "iface")) (fa "msrName" (EVar "mname")) (fa "msrTyparams" (EVar "typarams")) (fa "msrType" (EVar "mty")) (fa "msrScheme" (EVar "scheme")) (fa "msrPredicateTemplate" (ERecordCreate "MethodPredicateTemplate" ((fa "mptInterface" (EVar "iface")) (fa "mptArguments" (EApp (EApp (EVar "methodInterfacePredicateTemplate") (EVar "typarams")) (EVar "tvs")))))) (fa "msrMethodSlots" (EVar "slots")))) (EApp (EApp (EApp (EApp (EApp (EVar "methodSchemeRows") (EVar "mctx")) (EVar "scope")) (EVar "iface")) (EVar "typarams")) (EVar "rest"))))))
 (DTypeSig false "methodInterfacePredicateTemplate" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))))))
 (DFunDef false "methodInterfacePredicateTemplate" ((PList) PWild) (EListLit))
@@ -4115,7 +3567,7 @@ distinctIdentsIn2 _ = False
 (DFunDef false "pickNumLitRow" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "pickNumLitRow" ((PVar "iface") (PVar "mname") (PCons (PVar "row") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "row") "msrName") (EVar "mname")) (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "row") "msrIface")) (EVar "iface"))) (EApp (EVar "Some") (EVar "row")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "pickNumLitRow") (EVar "iface")) (EVar "mname")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "methodSchemesPure" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "methodSchemesPure" ((PVar "mctx") PWild (PList)) (EListLit))
+(DFunDef false "methodSchemesPure" ((PVar "_mctx") PWild (PList)) (EListLit))
 (DFunDef false "methodSchemesPure" ((PVar "mctx") (PVar "scope") (PCons (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "mname") (EApp (EVar "fst") (EApp (EApp (EApp (EVar "sigToSchemeTvsIn") (EVar "mctx")) (EVar "scope")) (EVar "mty")))) (EApp (EApp (EApp (EVar "methodSchemesPure") (EVar "mctx")) (EVar "scope")) (EVar "rest"))))
 (DTypeSig false "installMethodPredicateSlots" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyCon "Unit")))))
 (DFunDef false "installMethodPredicateSlots" ((PVar "mctx") (PVar "key") (PVar "slots")) (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "slots")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodPredicateSlotsRef") "value")))) (ELit LUnit) (EApp (EApp (EApp (EVar "setMethodPredicateSlotEntry") (EVar "mctx")) (EVar "key")) (EVar "slots"))))
@@ -4124,7 +3576,7 @@ distinctIdentsIn2 _ = False
 (DTypeSig false "methodPredicateSlotsOfType" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "MethodPredicateSlot"))))))))
 (DFunDef false "methodPredicateSlotsOfType" ((PVar "mctx") (PVar "typarams") (PCon "TyConstrained" (PVar "cs") (PVar "t")) (PVar "tvs") (PVar "fullIds")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "constraintMethodPredicateSlot") (EVar "mctx")) (EVar "typarams")) (EVar "tvs")) (EVar "fullIds"))) (EVar "cs")) (EApp (EApp (EApp (EApp (EApp (EVar "methodPredicateSlotsOfType") (EVar "mctx")) (EVar "typarams")) (EVar "t")) (EVar "tvs")) (EVar "fullIds"))))
 (DFunDef false "methodPredicateSlotsOfType" ((PVar "mctx") (PVar "typarams") (PCon "TyEffect" PWild PWild (PVar "t")) (PVar "tvs") (PVar "fullIds")) (EApp (EApp (EApp (EApp (EApp (EVar "methodPredicateSlotsOfType") (EVar "mctx")) (EVar "typarams")) (EVar "t")) (EVar "tvs")) (EVar "fullIds")))
-(DFunDef false "methodPredicateSlotsOfType" ((PVar "mctx") PWild PWild PWild PWild) (EListLit))
+(DFunDef false "methodPredicateSlotsOfType" ((PVar "_mctx") PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "constraintMethodPredicateSlot" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "MethodPredicateSlot"))))))))
 (DFunDef false "constraintMethodPredicateSlot" ((PVar "mctx") (PVar "typarams") (PVar "tvs") (PVar "fullIds") (PVar "c")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "constraintIsMethodLevel") (EVar "typarams")) (EVar "c"))) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "bound") (EApp (EApp (EVar "constraintNameMonos") (EApp (EVar "constraintVarNames") (EVar "c"))) (EVar "tvs"))) (DoLet false false (PVar "ids") (EApp (EApp (EMethodRef "map") (EVar "monoTyvarId")) (EVar "bound"))) (DoExpr (EListLit (ERecordCreate "MethodPredicateSlot" ((fa "mpsPredicate" (ERecordCreate "PredicateSlot" ((fa "psIface" (ERecordCreate "IfaceRef" ((fa "irName" (EApp (EVar "constraintIface") (EVar "c"))) (fa "irOrigin" (EFieldAccess (EVar "c") "constraintOrigin"))))) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "fromAstType") (EVar "mctx")) (EVar "tvs"))) (EFieldAccess (EVar "c") "constraintArgs")))) (fa "psBoundIds" (EVar "ids"))))) (fa "mpsPositions" (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (EApp (EApp (EVar "optionOr") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EApp (EApp (EVar "elemIndex") (EVar "id")) (EVar "fullIds"))))) (EVar "ids")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "registerAllData" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
@@ -4151,7 +3603,7 @@ distinctIdentsIn2 _ = False
 (DFunDef false "declKindEntry" ((PVar "gctx") (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataParamKinds" (PVar "anns")) (rf "dataOrigin" (PVar "o"))) false)) (EApp (EVar "Some") (ETuple (EVar "o") (EVar "name") (EApp (EApp (EApp (EVar "declParamKinds") (EVar "gctx")) (EVar "params")) (EVar "anns")))))
 (DFunDef false "declKindEntry" ((PVar "gctx") (PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeParamKinds" (PVar "anns")) (rf "newtypeOrigin" (PVar "o"))) false)) (EApp (EVar "Some") (ETuple (EVar "o") (EVar "name") (EApp (EApp (EApp (EVar "declParamKinds") (EVar "gctx")) (EVar "params")) (EVar "anns")))))
 (DFunDef false "declKindEntry" ((PVar "gctx") (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "name")) (rf "tyAliasParams" (PVar "params")) (rf "tyAliasParamKinds" (PVar "anns")) (rf "tyAliasOrigin" (PVar "o"))) false)) (EApp (EVar "Some") (ETuple (EVar "o") (EVar "name") (EApp (EApp (EApp (EVar "declParamKinds") (EVar "gctx")) (EVar "params")) (EVar "anns")))))
-(DFunDef false "declKindEntry" ((PVar "gctx") PWild) (EVar "None"))
+(DFunDef false "declKindEntry" ((PVar "_gctx") PWild) (EVar "None"))
 (DTypeSig true "withDeclParamKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyVar "a")))))
 (DFunDef false "withDeclParamKinds" ((PVar "mctx") (PVar "ds") (PVar "k")) (EBlock (DoLet false false (PVar "kinds") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (DoLet false false (PVar "names") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef") "value")) (DoExpr (EApp (EApp (EVar "each") (EApp (EVar "recordDeclaredKinds") (EVar "mctx"))) (EVar "ds"))) (DoLet false false (PVar "result") (EApp (EVar "k") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef")) (EVar "kinds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef")) (EVar "names"))) (DoExpr (EVar "result"))))
 (DTypeSig false "recordDeclaredKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Decl") (TyCon "Unit"))))
@@ -4180,11 +3632,9 @@ distinctIdentsIn2 _ = False
 (DTypeSig false "ctorIdentRow" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))))
 (DFunDef false "ctorIdentRow" ((PVar "tyName") (PVar "o") (PVar "cn")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "i")) () (EListLit (ETuple (EVar "cn") (EVar "tyName") (EVar "i"))))))
 (DTypeSig false "reexportedCtorIdents" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
-(DFunDef false "reexportedCtorIdents" ((PVar "acc") (PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "reexportedCtorIdentsOf") (EVar "acc"))) (EVar "decls")))
-(DTypeSig false "reexportedCtorIdentsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
-(DFunDef false "reexportedCtorIdentsOf" ((PVar "acc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "reexportedCtorIdentsOf") (EVar "acc")) (EVar "d")))
-(DFunDef false "reexportedCtorIdentsOf" ((PVar "acc") (PCon "DUse" (PCon "True") (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EMatch (EVar "path") (arm (PCon "UseWild" PWild) () (EVar "src")) (arm (PCon "UseGroup" PWild (PVar "ms")) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "reexportCtorMember") (EVar "m")) (EVar "src")))) (EVar "ms"))) (arm PWild () (EListLit))))))
-(DFunDef false "reexportedCtorIdentsOf" (PWild PWild) (EListLit))
+(DFunDef false "reexportedCtorIdents" ((PVar "acc") (PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "reexportedCtorIdentsOf") (EVar "acc"))) (EApp (EVar "pubUsePaths") (EVar "decls"))))
+(DTypeSig false "reexportedCtorIdentsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
+(DFunDef false "reexportedCtorIdentsOf" ((PVar "acc") (PVar "path")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EMatch (EVar "path") (arm (PCon "UseWild" PWild) () (EVar "src")) (arm (PCon "UseGroup" PWild (PVar "ms")) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "reexportCtorMember") (EVar "m")) (EVar "src")))) (EVar "ms"))) (arm PWild () (EListLit))))))
 (DTypeSig false "reexportCtorMember" (TyFun (TyCon "UseMember") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
 (DFunDef false "reexportCtorMember" ((PVar "m") (PVar "src")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "rowBoundByMember") (EVar "m")) (EVar "r")))) (EVar "src")))
 (DTypeSig false "rowBoundByMember" (TyFun (TyCon "UseMember") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")) (TyCon "Bool"))))
@@ -4197,11 +3647,16 @@ distinctIdentsIn2 _ = False
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "implHeadNormalDecl") (EVar "aliases")) (EVar "d"))))
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PAs "d" (PRec "DImpl" ((rf "tys" (PVar "tys"))) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "tyAliasNormalForm") (EVar "aliases")) (EListLit))) (EVar "tys"))))))
 (DFunDef false "implHeadNormalDecl" (PWild (PVar "d")) (EVar "d"))
-(DTypeSig true "stampGraphDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "stampGraphDecls" ((PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PVar "aliases") (EApp (EApp (EDictApp "flatMap") (EVar "graphAliasRow")) (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules"))))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "aliases")) (ETuple (EVar "coreDecls") (EVar "modules")) (ETuple (EApp (EApp (EMethodRef "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EVar "coreDecls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EApp (EMethodRef "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EApp (EVar "snd") (EVar "m")))))) (EVar "modules")))))))
+(DTypeSig true "stampGraphDecls" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
+(DFunDef false "stampGraphDecls" ((PVar "sibling") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "sibling")) (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PVar "aliases") (EApp (EApp (EDictApp "flatMap") (EVar "graphAliasRow")) (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules"))))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "aliases")) (ETuple (EVar "coreDecls") (EVar "modules")) (ETuple (EApp (EApp (EMethodRef "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EVar "coreDecls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EApp (EMethodRef "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EApp (EVar "snd") (EVar "m")))))) (EVar "modules")))))))
 (DTypeSig true "declEnvModulesFrom" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "DeclEnvModule"))))))
-(DFunDef false "declEnvModulesFrom" ((PVar "gctx") PWild (PList)) (EListLit))
-(DFunDef false "declEnvModulesFrom" ((PVar "gctx") (PVar "k") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (EVar "k")) (EVar "mid")) (EVar "decls")) (EApp (EApp (EApp (EVar "declEnvModulesFrom") (EVar "gctx")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "declEnvModulesFrom" ((PVar "gctx") (PVar "k") (PVar "mods")) (EApp (EApp (EVar "withSiblingOrd") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "config") "value") "tcSibling")) (EApp (EApp (EApp (EVar "declEnvRowsFrom") (EVar "gctx")) (EVar "k")) (EVar "mods"))))
+(DTypeSig false "declEnvRowsFrom" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "DeclEnvModule"))))))
+(DFunDef false "declEnvRowsFrom" ((PVar "_gctx") PWild (PList)) (EListLit))
+(DFunDef false "declEnvRowsFrom" ((PVar "gctx") (PVar "k") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (EVar "k")) (EVar "mid")) (EVar "decls")) (EApp (EApp (EApp (EVar "declEnvRowsFrom") (EVar "gctx")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest"))))
+(DTypeSig false "withSiblingOrd" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyApp (TyCon "List") (TyCon "DeclEnvModule")))))
+(DFunDef false "withSiblingOrd" ((PList) (PVar "rows")) (EVar "rows"))
+(DFunDef false "withSiblingOrd" ((PVar "siblings") (PVar "rows")) (EBlock (DoLet false false (PVar "ords") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EFieldAccess (EVar "m") "demId") (EFieldAccess (EVar "m") "demOrd")))) (EVar "rows"))) (EVar "omEmpty"))) (DoLet false false (PVar "siblingOf") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EFieldAccess (EVar "p") "spSubject") (EFieldAccess (EVar "p") "spSibling")))) (EVar "siblings"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "m") "demId")) (EVar "siblingOf")) (arm (PCon "Some" (PVar "sib")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "sib")) (EVar "ords")) (arm (PCon "Some" (PVar "ord")) () (ERecordUpdate (EVar "m") ((fa "demSiblingOrd" (EApp (EVar "Some") (EVar "ord")))))) (arm (PCon "None") () (EVar "m")))) (arm (PCon "None") () (EVar "m"))))) (EVar "rows")))))
 (DTypeSig false "declEnvOrdIndex" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
 (DFunDef false "declEnvOrdIndex" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "declEnvOrdIndex" ((PVar "acc") (PCons (PVar "m") (PVar "rest"))) (EApp (EApp (EVar "declEnvOrdIndex") (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EFieldAccess (EVar "m") "demOrd")) (EVar "acc"))) (EVar "rest")))
@@ -4232,105 +3687,28 @@ distinctIdentsIn2 _ = False
 (DFunDef false "firstRowPerName" (PWild (PList)) (EListLit))
 (DFunDef false "firstRowPerName" ((PVar "seen") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "k")) (EVar "seen")) (EApp (EApp (EVar "firstRowPerName") (EVar "seen")) (EVar "rest")) (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EApp (EApp (EVar "firstRowPerName") (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (ELit LUnit)) (EVar "seen"))) (EVar "rest")))))
 (DTypeSig false "modulePubDefiners" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))))))
-(DFunDef false "modulePubDefiners" ((PVar "before") (PVar "mid") (PVar "decls")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (ETuple (EVar "mid") (EVar "n"))))) (EApp (EVar "pubTopFnNames") (EVar "decls"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "decls"))))
-(DTypeSig false "reexportDefiners" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "reexportDefiners" (PWild (PList)) (EListLit))
-(DFunDef false "reexportDefiners" ((PVar "before") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EListLit (EVar "d"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest"))))
-(DFunDef false "reexportDefiners" ((PVar "before") (PCons (PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest")) (EBinOp "++" (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EApp (EVar "definersIn") (EVar "before")) (EVar "depId"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest")))))))
-(DFunDef false "reexportDefiners" ((PVar "before") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest")))
-(DTypeSig true "pubTopFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "pubTopFnNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "decls"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "fns")))) (EApp (EVar "publicStandaloneNames") (EVar "decls"))))))
-(DTypeSig false "publicStandaloneNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "publicStandaloneNames" ((PList)) (EListLit))
-(DFunDef false "publicStandaloneNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "publicStandaloneNames") (EListLit (EVar "d"))) (EApp (EVar "publicStandaloneNames") (EVar "rest"))))
-(DFunDef false "publicStandaloneNames" ((PCons (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "publicStandaloneNames") (EVar "rest"))))
-(DFunDef false "publicStandaloneNames" ((PCons (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "publicStandaloneNames") (EVar "rest"))))
-(DFunDef false "publicStandaloneNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "publicStandaloneNames") (EVar "rest")))
-(DTypeSig false "deKindAbstractFixture" (TyCon "Decl"))
-(DFunDef false "deKindAbstractFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisAbstract")) (fa "dataName" (ELit (LString "Opq"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkOpq"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deKindPrivateFixture" (TyCon "Decl"))
-(DFunDef false "deKindPrivateFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPrivate")) (fa "dataName" (ELit (LString "Priv"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkPriv"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deKindNewtypeFixture" (TyCon "Decl"))
-(DFunDef false "deKindNewtypeFixture" () (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "True")) (fa "newtypeName" (ELit (LString "Wrap"))) (fa "newtypeParams" (EListLit)) (fa "newtypeParamKinds" (EListLit)) (fa "newtypeCtor" (ELit (LString "Wrap"))) (fa "newtypeFieldTy" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "newtypeCtorBinders" (EListLit)) (fa "newtypeDerives" (EListLit)) (fa "newtypeOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "newtypeNameLoc" (EVar "None")))))
-(DTypeSig false "deKindFixtureDecls" (TyApp (TyCon "List") (TyCon "Decl")))
-(DFunDef false "deKindFixtureDecls" () (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deKindAbstractFixture") (EVar "deKindPrivateFixture") (EVar "deKindNewtypeFixture")))
-(DTypeSig false "deKindRow0" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvModule")))
-(DFunDef false "deKindRow0" ((PVar "gctx")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 0))) (ELit (LString "m"))) (EVar "deKindFixtureDecls")))
-(DTypeSig false "deKindRow1" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvModule")))
-(DFunDef false "deKindRow1" ((PVar "gctx")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 1))) (ELit (LString "m"))) (EVar "deKindFixtureDecls")))
-(DTypeSig false "deSeedRowN" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvModule")))
-(DFunDef false "deSeedRowN" ((PVar "gctx")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 1))) (ELit (LString "n"))) (EVar "deKindFixtureDecls")))
-(DTypeSig false "deSeedChainProbeZero" (TyCon "DeclEnvSeedAcc"))
-(DFunDef false "deSeedChainProbeZero" () (ERecordCreate "DeclEnvSeedAcc" ((fa "dsKAcc" (EListLit)) (fa "dsOAcc" (EVar "omEmpty")) (fa "dsNAcc" (EVar "omEmpty")) (fa "dsKinds" (EVar "omEmpty")) (fa "dsOwners" (EVar "omEmpty")) (fa "dsNames" (EVar "omEmpty")))))
-(DTypeSig false "deSeedChainProbe" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvSeedAcc")))
-(DFunDef false "deSeedChainProbe" ((PVar "gctx")) (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "gctx")) (EListLit (EApp (EVar "deKindRow0") (EVar "gctx")) (EApp (EVar "deSeedRowN") (EVar "gctx")))) (EVar "deSeedChainProbeZero")))
-(DTypeSig false "deSeedChainKinds" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))))
-(DFunDef false "deSeedChainKinds" ((PVar "gctx")) (EFieldAccess (EApp (EVar "deSeedChainProbe") (EVar "gctx")) "dsKinds"))
-(DTypeSig false "deSeedChainOwners" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "deSeedChainOwners" ((PVar "gctx")) (EFieldAccess (EApp (EVar "deSeedChainProbe") (EVar "gctx")) "dsOwners"))
-(DTypeSig false "deSeedChainNames" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "deSeedChainNames" ((PVar "gctx")) (EFieldAccess (EApp (EVar "deSeedChainProbe") (EVar "gctx")) "dsNames"))
-(DTypeSig false "deSeedNameParity" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "deSeedNameParity" ((PVar "mid")) (EBlock (DoLet false false (PVar "gctx") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "accumulated") (EApp (EVar "omKeys") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EApp (EVar "deSeedChainNames") (EVar "gctx")))))) (DoLet false false (PVar "rebuilt") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "p"))))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EApp (EVar "deSeedChainKinds") (EVar "gctx")))))) (EVar "omEmpty")))) (DoExpr (EBinOp "==" (EVar "accumulated") (EVar "rebuilt")))))
-(DTypeSig false "deNameIdxAlpha" (TyCon "Decl"))
-(DFunDef false "deNameIdxAlpha" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Alpha"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkAlpha"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deNameIdxSharedA" (TyCon "Decl"))
-(DFunDef false "deNameIdxSharedA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedA"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deNameIdxBeta" (TyCon "Decl"))
-(DFunDef false "deNameIdxBeta" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Beta"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkBeta"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deNameIdxSharedB" (TyCon "Decl"))
-(DFunDef false "deNameIdxSharedB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedB"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deNameIdxModA" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvModule")))
-(DFunDef false "deNameIdxModA" ((PVar "gctx")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 0))) (ELit (LString "modA"))) (EListLit (EVar "deNameIdxAlpha") (EVar "deNameIdxSharedA"))))
-(DTypeSig false "deNameIdxModB" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvModule")))
-(DFunDef false "deNameIdxModB" ((PVar "gctx")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 1))) (ELit (LString "modB"))) (EListLit (EVar "deNameIdxBeta") (EVar "deNameIdxSharedB"))))
-(DTypeSig false "deNameIdxModC" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvModule")))
-(DFunDef false "deNameIdxModC" ((PVar "gctx")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 2))) (ELit (LString "modC"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (ELit (LString "modCHelper"))) (EListLit)) (EApp (EVar "ELit") (EApp (EVar "LInt") (ELit (LInt 1))))) (EVar "noDeclLoc")) (EVar "noBinderId")))))
-(DTypeSig false "deNameIdxModD" (TyFun (TyCon "GraphCtx") (TyCon "DeclEnvModule")))
-(DFunDef false "deNameIdxModD" ((PVar "gctx")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 3))) (ELit (LString "modD"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (ELit (LString "modDHelper"))) (EListLit)) (EApp (EVar "ELit") (EApp (EVar "LInt") (ELit (LInt 2))))) (EVar "noDeclLoc")) (EVar "noBinderId")))))
-(DTypeSig false "deNameIdxChain" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "deNameIdxChain" ((PVar "gctx")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "gctx")) (EListLit (EApp (EVar "deNameIdxModA") (EVar "gctx")) (EApp (EVar "deNameIdxModB") (EVar "gctx")) (EApp (EVar "deNameIdxModC") (EVar "gctx")) (EApp (EVar "deNameIdxModD") (EVar "gctx")))) (EVar "deSeedChainProbeZero"))) (DoExpr (EFieldAccess (EVar "s") "dsNames"))))
-(DTypeSig false "deNameIdxChainNoUnrelated" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "deNameIdxChainNoUnrelated" ((PVar "gctx")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "gctx")) (EListLit (EApp (EVar "deNameIdxModA") (EVar "gctx")) (EApp (EVar "deNameIdxModB") (EVar "gctx")))) (EVar "deSeedChainProbeZero"))) (DoExpr (EFieldAccess (EVar "s") "dsNames"))))
-(DTypeSig false "deNameIdxAt" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "deNameIdxAt" ((PVar "nm") (PVar "mid")) (EApp (EVar "omKeys") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "nm")))))
-(DTypeSig false "buildDataEnv" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyCon "DataEnv")))
-(DFunDef false "buildDataEnv" ((PVar "rows")) (EApp (EVar "dataEnvFinish") (EApp (EApp (EVar "dataEnvFromRowsGo") (EVar "rows")) (EVar "emptyDataEnv"))))
-(DTypeSig false "aliasFixturePubCore" (TyCon "Decl"))
-(DFunDef false "aliasFixturePubCore" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None")))))
-(DTypeSig false "aliasFixturePrivCore" (TyCon "Decl"))
-(DFunDef false "aliasFixturePrivCore" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "False")) (fa "tyAliasName" (ELit (LString "PrivCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None")))))
-(DTypeSig false "aliasFixturePubM" (TyCon "Decl"))
-(DFunDef false "aliasFixturePubM" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubM"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "tyAliasNameLoc" (EVar "None")))))
-(DTypeSig false "aliasFixtureAttribCore" (TyCon "Decl"))
-(DFunDef false "aliasFixtureAttribCore" () (EApp (EApp (EVar "DAttrib") (EListLit (EApp (EVar "AttrDeprecated") (EApp (EVar "Some") (ELit (LString "old")))))) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "AttribCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None"))))))
-(DTypeSig false "aliasFixtureEnv" (TyFun (TyCon "GraphCtx") (TyCon "DataEnv")))
-(DFunDef false "aliasFixtureEnv" ((PVar "gctx")) (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 0))) (ELit (LString "core"))) (EListLit (EVar "aliasFixturePubCore") (EVar "aliasFixturePrivCore") (EVar "aliasFixtureAttribCore"))) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 1))) (ELit (LString "m"))) (EListLit (EVar "aliasFixturePubM"))))))
-(DTypeSig false "aliasNamesAt" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "aliasNamesAt" ((PVar "cur")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "e"))))) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EFieldAccess (EApp (EVar "aliasFixtureEnv") (EApp (EVar "probeGraphCtx") (ELit LUnit))) "deAliases"))))
-(DTypeSig false "deFieldOwnerFixtureA" (TyCon "Decl"))
-(DFunDef false "deFieldOwnerFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deFieldOwnerFixtureB" (TyCon "Decl"))
-(DFunDef false "deFieldOwnerFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Vec"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Vec"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deFieldOwnerFixtureC" (TyCon "Decl"))
-(DFunDef false "deFieldOwnerFixtureC" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deFieldOwnerCollisionEnv" (TyFun (TyCon "GraphCtx") (TyCon "DataEnv")))
-(DFunDef false "deFieldOwnerCollisionEnv" ((PVar "gctx")) (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 0))) (ELit (LString "m"))) (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deFieldOwnerFixtureB"))))))
-(DTypeSig false "deFieldOwnerSingleEnv" (TyFun (TyCon "GraphCtx") (TyCon "DataEnv")))
-(DFunDef false "deFieldOwnerSingleEnv" ((PVar "gctx")) (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 0))) (ELit (LString "m"))) (EListLit (EVar "deFieldOwnerFixtureA"))))))
-(DTypeSig false "deFieldOwnerSameNameEnv" (TyFun (TyCon "GraphCtx") (TyCon "DataEnv")))
-(DFunDef false "deFieldOwnerSameNameEnv" ((PVar "gctx")) (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 0))) (ELit (LString "m"))) (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deFieldOwnerFixtureC"))))))
-(DTypeSig false "deRecordOrderFixtureA" (TyCon "Decl"))
-(DFunDef false "deRecordOrderFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P1"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deRecordOrderFixtureB" (TyCon "Decl"))
-(DFunDef false "deRecordOrderFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P2"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "y"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
-(DTypeSig false "deRecordOrderEnv" (TyFun (TyCon "GraphCtx") (TyCon "DataEnv")))
-(DFunDef false "deRecordOrderEnv" ((PVar "gctx")) (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 0))) (ELit (LString "m"))) (EListLit (EVar "deRecordOrderFixtureA"))) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EVar "gctx")) (ELit (LInt 1))) (ELit (LString "n"))) (EListLit (EVar "deRecordOrderFixtureB"))))))
-(DTypeSig false "deRecordIdentTyNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyApp (TyCon "List") (TyCon "Field")))) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "deRecordIdentTyNames" ((PList)) (EListLit))
-(DFunDef false "deRecordIdentTyNames" ((PCons (PTuple PWild (PVar "tyName") PWild) (PVar "rest"))) (EBinOp "::" (EVar "tyName") (EApp (EVar "deRecordIdentTyNames") (EVar "rest"))))
+(DFunDef false "modulePubDefiners" ((PVar "before") (PVar "mid") (PVar "decls")) (EApp (EApp (EApp (EApp (EVar "moduleDefinersUnder") (EVar "ExportedView")) (EVar "before")) (EVar "mid")) (EVar "decls")))
+(DTypeSig false "moduleDefinersUnder" (TyFun (TyCon "ExportView") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))))))
+(DFunDef false "moduleDefinersUnder" ((PVar "view") (PVar "before") (PVar "mid") (PVar "decls")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (ETuple (EVar "mid") (EVar "n"))))) (EApp (EApp (EVar "topFnNamesUnder") (EVar "view")) (EVar "decls"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EApp (EApp (EVar "carriedPaths") (EVar "view")) (EVar "decls")))))
+(DTypeSig false "reexportDefiners" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "UsePath")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "reexportDefiners" ((PVar "before") (PVar "paths")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "reexportDefinersOf") (EVar "before"))) (EVar "paths")))
+(DTypeSig true "importerDefiners" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))))))
+(DFunDef false "importerDefiners" ((PVar "gctx") (PVar "importer") (PVar "depId")) (EMatch (EApp (EApp (EApp (EVar "viewFor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "config") "value") "tcSibling")) (EVar "importer")) (EVar "depId")) (arm (PCon "ExportedView") () (EApp (EApp (EVar "graphPubDefiners") (EVar "gctx")) (EVar "depId"))) (arm (PCon "FullView") () (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EVar "gctx") "declEnvsRef") "value")) (DoExpr (EMatch (EApp (EVar "head") (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EBinOp "==" (EFieldAccess (EVar "m") "demId") (EVar "depId")))) (EFieldAccess (EVar "envs") "deModules"))) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "firstRowPerName") (EVar "omEmpty")) (EApp (EApp (EApp (EApp (EVar "moduleDefinersUnder") (EVar "FullView")) (EFieldAccess (EVar "envs") "deDefiners")) (EVar "depId")) (EFieldAccess (EVar "m") "demDecls")))) (arm (PCon "None") () (EApp (EApp (EVar "graphPubDefiners") (EVar "gctx")) (EVar "depId")))))))))
+(DTypeSig false "reexportDefinersOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "reexportDefinersOf" ((PVar "before") (PVar "path")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EListLit) (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EApp (EVar "definersIn") (EVar "before")) (EVar "depId")))))))
+(DTypeSig false "pubTopFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "pubTopFnNames" ((PVar "decls")) (EApp (EApp (EVar "topFnNamesUnder") (EVar "ExportedView")) (EVar "decls")))
+(DTypeSig false "topFnNamesUnder" (TyFun (TyCon "ExportView") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "topFnNamesUnder" ((PVar "view") (PVar "decls")) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "decls"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "fns")))) (EApp (EApp (EApp (EVar "directUnder") (EVar "view")) (EVar "nsValues")) (EVar "decls"))))))
+(DTypeSig true "tagModuleExports" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))))
+(DFunDef false "tagModuleExports" ((PVar "standalones") (PVar "schemes")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "name") (PVar "scheme"))) (ETuple (EVar "name") (ERecordCreate "ExportBinding" ((fa "xbScheme" (EVar "scheme")) (fa "xbStandalone" (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "standalones"))) (fa "xbExtern" (EVar "False"))))))) (EVar "schemes")))
+(DTypeSig true "publicModuleExports" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))))
+(DFunDef false "publicModuleExports" ((PVar "prog") (PVar "bindings")) (EApp (EApp (EApp (EApp (EVar "moduleBindingsUnder") (EVar "ExportedView")) (EApp (EVar "pubTopFnNames") (EVar "prog"))) (EVar "prog")) (EVar "bindings")))
+(DTypeSig true "privateModuleExports" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleBindings") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))))
+(DFunDef false "privateModuleExports" ((PVar "prog") (PVar "bindings") (PVar "own")) (EBlock (DoLet false false (PVar "exported") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "own"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "b"))) (EVar "exported"))))) (EApp (EApp (EApp (EApp (EVar "moduleBindingsUnder") (EVar "FullView")) (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "prog")) (EVar "bindings"))))))
+(DTypeSig true "siblingDepEnv" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))))))
+(DFunDef false "siblingDepEnv" ((PVar "prev") (PVar "mid") (PTuple (PVar "depEnv") (PVar "privEnv"))) (EMatch (EApp (EApp (EVar "subjectOf") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "prev") "mcGraph") "config") "value") "tcSibling")) (EVar "mid")) (arm (PCon "Some" (PVar "subject")) () (EMatch (ETuple (EApp (EApp (EVar "lookupAssoc") (EVar "subject")) (EVar "depEnv")) (EApp (EApp (EVar "lookupAssoc") (EVar "subject")) (EVar "privEnv"))) (arm (PTuple (PCon "Some" (PVar "own")) (PCon "Some" (PVar "priv"))) () (EBinOp "::" (ETuple (EVar "subject") (EBinOp "++" (EVar "own") (EVar "priv"))) (EVar "depEnv"))) (arm PWild () (EVar "depEnv")))) (arm (PCon "None") () (EVar "depEnv"))))
+(DTypeSig false "moduleBindingsUnder" (TyFun (TyCon "ExportView") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))))))
+(DFunDef false "moduleBindingsUnder" ((PVar "view") (PVar "fns") (PVar "prog") (PVar "bindings")) (EBlock (DoLet false false (PVar "standalones") (EApp (EApp (EVar "omRestrict") (EVar "fns")) (EFieldAccess (EVar "bindings") "mbStandaloneSchemes"))) (DoLet false false (PVar "externs") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (EFieldAccess (EVar "e") "edName"))) (EApp (EVar "externDecls") (EVar "prog")))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "name") (PVar "binding"))) (ETuple (EVar "name") (EVariantUpdate "ExportBinding" (EVar "binding") ((fa "xbExtern" (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "externs")))))))) (EApp (EApp (EVar "tagModuleExports") (EVar "standalones")) (EApp (EApp (EVar "restrictedPairs") (EApp (EApp (EVar "valueNamesUnder") (EVar "view")) (EVar "prog"))) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EFieldAccess (EVar "bindings") "mbSchemes"))) (EVar "omEmpty"))))))))
 (DTypeSig true "methodRowNumObservation" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "NumAnchorTestObservation"))))))
 (DFunDef false "methodRowNumObservation" ((PVar "saved") (PVar "caseName") (PVar "builtinDecls") (PVar "decls")) (EBlock (DoLet false false (PVar "gctx") (EApp (EVar "freshSubRecordsOf") (EFieldAccess (EVar "saved") "mcGraph"))) (DoLet false false (PVar "mctx") (EApp (EApp (EVar "carryModuleCtx") (EVar "gctx")) (EVar "saved"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "builtinDecls")))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "mctx")) (EVar "decls"))) (DoExpr (EApp (EApp (EVar "seedNumLitFromIntAnchor") (EVar "mctx")) (EVar "rows"))) (DoLet false false (PVar "observation") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "numLitFromIntAnchorRef") "value") (arm (PCon "None") () (ERecordCreate "NumAnchorTestObservation" ((fa "natoCase" (EVar "caseName")) (fa "natoHasRow" (EVar "False")) (fa "natoIface" (ELit (LString ""))) (fa "natoSchemeBody" (ELit (LString ""))) (fa "natoDeclaredType" (ELit (LString "")))))) (arm (PCon "Some" (PVar "anchor")) () (ERecordCreate "NumAnchorTestObservation" ((fa "natoCase" (EVar "caseName")) (fa "natoHasRow" (EVar "True")) (fa "natoIface" (EFieldAccess (EFieldAccess (EVar "anchor") "msrIface") "irName")) (fa "natoSchemeBody" (EApp (EVar "ppMono") (EApp (EVar "schemeBodyOf") (EFieldAccess (EVar "anchor") "msrScheme")))) (fa "natoDeclaredType" (EApp (EVar "ppTy") (EFieldAccess (EVar "anchor") "msrType")))))))) (DoExpr (EVar "observation"))))
-(DTypeSig false "distinctIdentsIn2" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String"))) (TyCon "Bool")))
-(DFunDef false "distinctIdentsIn2" ((PList (PTuple (PVar "i1") PWild) (PTuple (PVar "i2") PWild))) (EBinOp "/=" (EVar "i1") (EVar "i2")))
-(DFunDef false "distinctIdentsIn2" (PWild) (EVar "False"))

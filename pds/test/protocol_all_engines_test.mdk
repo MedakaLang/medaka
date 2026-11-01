@@ -25,7 +25,7 @@ import test.vector_runner.{
   expectRow,
   transcriptArm,
 }
-import test.{Expectation}
+import test
 
 gate : String
 gate = "pds/test/protocol_all_engines"

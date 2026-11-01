@@ -26,7 +26,6 @@ import frontend.parser.{
   parseErrorLine,
   parseErrorCol,
   parseErrorMessage,
-  Positions,
   DeclPos,
   positionsDecls,
   declPosLine,
@@ -40,7 +39,6 @@ import frontend.ast.{
   qualifierSource,
   effAtomSurface,
   binderDomainSurface,
-  authTermSurface,
   ctorBindersSource,
   tyParamSources,
   Constraint(..),
@@ -89,7 +87,7 @@ import regex.{
 -- parsing `de_sig` back — the sig is a rendering, not a data structure) /
 -- de_line (the declaration's source line, which is what places a `-- # Title`
 -- section heading relative to the entries around it).
-public export data DocEntry = DocEntry String String String String DocKind Int
+export data DocEntry = DocEntry String String String String DocKind Int
 
 -- What kind of declaration produced an entry, for the library-mode impl
 -- rebucketing pass (`rebucketLibraryImpls`).  `KTypeDecl` marks a `data`/
@@ -1839,7 +1837,7 @@ docSchemesFor : String ->
   List String ->
   List Decl ->
   <IO> List (String, Scheme)
-docSchemesFor runtimeSrc coreSrc filename roots rawUser =
+docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
   match (projectEntrySchemes
     (Ref [])
     (Ref omEmpty)

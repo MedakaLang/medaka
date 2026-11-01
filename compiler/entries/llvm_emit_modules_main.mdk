@@ -33,14 +33,10 @@ import frontend.ast.{externDecls}
 import backend.extern_catalog.{runtimeDomain}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{Decl(..)}
-import types.typecheck.{
-  checkedFfiExternTypeNamesModules,
-}
 import types.tc_types.{DriveOutputs}
 import ir.core_ir.{CProgram(..), CBind(..)}
 import ir.core_ir_lower.{
   ifaceImplHeadTable,
-  declaredRecordFieldOrders,
   lowerProgramEmitWith,
   lowerProgramEmitPinnedWith,
   methodIfaceTable,
@@ -58,13 +54,13 @@ import backend.llvm_emit.{
   withNoInlineFns,
 }
 import ir.dce.{dceFilter}
-import driver.diagnostics.{refuseLlvmSymbolDefects}
+import driver.emit_diagnostics.{refuseLlvmSymbolDefects}
 import entries.entry_support.{
   driveEmitLocated,
   stampSiteFiles,
 }
 import support.timer.{statsEnabled, emitStats}
-import support.util.{endsWith, filterList}
+import support.util.{filterList}
 import driver.main_autoprint.{autoPrintPinName}
 import support.stage_count.{stageCountInit, stageDump}
 import types.program_facts.{ProgramFacts}
@@ -137,7 +133,7 @@ emitTail : List (String, String, List Decl) ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-emitTail mods requirement outputs facts runtimeDecls coreD modules1 =
+emitTail mods requirement _outputs facts runtimeDecls coreD modules1 =
   let half = emitHalfOfEnv
   let modules2 = stampSiteFiles mods modules1
   let allDecls0 = coreD ++ flatMap snd modules2

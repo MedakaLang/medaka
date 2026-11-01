@@ -18,7 +18,6 @@ import frontend.parser.{
   ParseError(..),
   parseErrorLine,
   parseErrorCol,
-  parseErrorMessage,
 }
 
 renderErr : ParseError -> String

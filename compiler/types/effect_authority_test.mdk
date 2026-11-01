@@ -12,8 +12,8 @@ import types.typecheck.{
 import types.repr.{Scheme(..), ppScheme}
 import frontend.ast.{Loc(..)}
 import types.effect_authority.{
-  Authority(..), Authvar(..), authNorm, authSub, authJoin, renderAuthority,
-  authSplit, authExtend, authAppend, authIsTop, authPatternClose, authIsPattern
+  Authority(..), Authvar(..), authSub, authJoin, renderAuthority, authSplit,
+  authExtend, authAppend, authIsTop, authPatternClose, authIsPattern
 }
 import types.effect_domain.{Param(..)}
 import support.util.{contains, lookupAssoc, anyList, listLen}

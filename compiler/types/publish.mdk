@@ -649,7 +649,6 @@ liveCells name (PubScheme { psScheme = (Forall ids effIds authIds residuals row 
 
 -- At graph end nothing in the graph can fix an unquantified cell: it is a
 -- weak variable.
-export
 atGraphEnd : List LiveCell -> List LiveCell
 atGraphEnd = map toWeak
 
@@ -682,7 +681,7 @@ walkResiduals name authIds rs w =
     w
 
 walkMono : String -> List Int -> List Int -> List Int -> Mono -> Walk -> Walk
-walkMono name ids effIds authIds (TVar cell) w = match !cell
+walkMono name ids _effIds _authIds (TVar cell) w = match !cell
   Link _ => push (LinkCell name TyVarK None) w
   Unbound id _ => if hasId id ids then w else push (FreeMeta name TyVarK id) w
 walkMono name ids effIds authIds (TApp a b) w =

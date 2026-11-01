@@ -349,6 +349,7 @@ emptyTcConfig = TcConfig {
   tcStdlibOwned = omEmpty,
   tcFlatEntryIsStdlib = False,
   tcKey = "\n\n",
+  tcSibling = [],
 }
 
 -- A graph record with every field fresh and [run] as its graph run: the process's
@@ -1169,31 +1170,3 @@ scopeTraceContext gctx sid =
 export
 scopeFrameStats : GraphCtx -> (Int, Int)
 scopeFrameStats gctx = Scopes.scopeFrameStats (currentScopeStore gctx ())
-
--- Test-only seam: the names a default body's evidence binders render to.  Its
--- method-level slots are dictionary parameters of the lowered body; its receiver is
--- never a parameter -- lowering and eval rebind it per instance (`defaultReceiverDict`).
-defaultBodyBinderNamesProbe : Unit -> List String
-defaultBodyBinderNamesProbe _ =
-  let gctx = probeGraphCtx ()
-  let iface =
-    IfaceRef { irName = "Supply", irOrigin = OriginModule "owner-module" }
-  let owner = DefaultBodyIdentity { dbiIface = iface, dbiMethod = "copy" }
-  let store = currentScopeStore gctx ()
-  let root = Scopes.freshScope store None 0 "owner-module" ModuleOwner
-  let body =
-    Scopes.freshScope
-      store
-      (Some root)
-      1
-      "owner-module"
-      (DefaultBodyOwner owner)
-  let rendered = [
-    renderEvidenceBinder gctx (Scopes.binderAt body 0),
-    renderEvidenceBinder gctx (Scopes.binderAt body 1),
-    renderEvidenceBinder gctx (Scopes.binderAt body defaultReceiverOrdinal),
-  ]
-  rendered
-
--- > defaultBodyBinderNamesProbe ()
--- ["$dict_copy_0", "$dict_copy_1", "$self_copy"]

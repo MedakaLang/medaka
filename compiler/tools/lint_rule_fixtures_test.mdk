@@ -48,7 +48,7 @@
 --
 -- Optional first line `-- fixture-path: <name>` is the virtual path the fixture
 -- is linted under (default `fixture.mdk`), for rules scoped by file name such as
--- `rule-test-prelude-shadow`, which fires only under a `_test.mdk` name.
+-- a rule that must be pinned under both a `_test.mdk` and a plain name.
 --
 -- A rule whose metadata needs the stdlib index (`rule-stdlib-reimpl`) is linted
 -- with the index the CLI builds, built once per test process by that rule's
@@ -121,6 +121,7 @@ fixtureNames = [
   "option-eliminators",
   "orelse-staircase",
   "prefer-assign-op",
+  "prelude-shadow",
   "promissory-reader",
   "regex-literal",
   "rem-parity",
@@ -128,7 +129,9 @@ fixtureNames = [
   "stdlib-reimpl",
   "test-bool-literal-equal",
   "test-equal-in-true",
-  "test-prelude-shadow",
+  "unused-import",
+  "unused-local",
+  "unused-param",
   "when-unless",
 ]
 
@@ -394,6 +397,8 @@ test "rule-orelse-staircase fixture" = fixtureHolds "orelse-staircase"
 
 test "rule-prefer-assign-op fixture" = fixtureHolds "prefer-assign-op"
 
+test "rule-prelude-shadow fixture" = fixtureHolds "prelude-shadow"
+
 test "rule-promissory-reader fixture" = fixtureHolds "promissory-reader"
 
 test "rule-regex-literal fixture" = fixtureHolds "regex-literal"
@@ -409,23 +414,77 @@ test "rule-test-bool-literal-equal fixture" =
 
 test "rule-test-equal-in-true fixture" = fixtureHolds "test-equal-in-true"
 
-test "rule-test-prelude-shadow fixture" = fixtureHolds "test-prelude-shadow"
+test "rule-unused-import fixture" = fixtureHolds "unused-import"
+
+test "rule-unused-local fixture" = fixtureHolds "unused-local"
+
+test "rule-unused-param fixture" = fixtureHolds "unused-param"
 
 test "rule-when-unless fixture" = fixtureHolds "when-unless"
 
--- The same declarations are silent outside a `_test.mdk` path, so the header
--- path is what makes the rule fire.
-test "rule-test-prelude-shadow is silent under a non-test path" =
-  match readOr "\{fixtureDir}/test-prelude-shadow.mdk"
+-- The same declarations still fire under a `_test.mdk` path.
+test "rule-prelude-shadow fires under a test path" =
+  match readOr "\{fixtureDir}/prelude-shadow.mdk"
     Err e => fail e
     Ok src =>
       match (lintLinesAt
         emptyStdlibIndex
-        "fixture.mdk"
-        "rule-test-prelude-shadow"
+        "fixture_test.mdk"
+        "rule-prelude-shadow"
         src)
         Err e => fail e
-        Ok flagged => expectEqual [] flagged
+        Ok flagged => expectEqual [7, 9, 11] flagged
+
+preludeShadowAt : String -> String -> Result String (List Int)
+preludeShadowAt path src =
+  lintLinesAt emptyStdlibIndex path "rule-prelude-shadow" src
+
+-- The exemption follows the declarations, not the file name: the module that
+-- declares `Option` owns `isSome`, and a file called `core.mdk` that does not
+-- is shadowing it.
+test "rule-prelude-shadow exempts the module that declares the type" =
+  let owner = "data Option a = Some a | None\n\nisSome o = True\n"
+  let user = "isSome o = True\n"
+  expectAll [
+    labelFail
+      "owner under any path"
+      (expectEqual (Ok []) (preludeShadowAt "core.mdk" owner)),
+    labelFail
+      "owner under a stdlib path"
+      (expectEqual (Ok []) (preludeShadowAt "stdlib/core.mdk" owner)),
+    labelFail
+      "a core.mdk in a stdlib directory that declares no Option"
+      (expectEqual (Ok [1]) (preludeShadowAt "stdlib/core.mdk" user)),
+    labelFail
+      "a core.mdk in a mystdlib directory"
+      (expectEqual (Ok [1]) (preludeShadowAt "mystdlib/core.mdk" user)),
+    labelFail
+      "Option does not own isOk"
+      (expectEqual
+        (Ok [4])
+        (preludeShadowAt "core.mdk" (owner ++ "isOk r = True\n"))),
+  ]
+
+-- The rule reads one file: a private helper that only the subject's test
+-- sibling imports is still dead in the subject, and one the subject itself uses
+-- is live.  A test sibling sees the helper (`check`), and this rule does not.
+test "rule-dead-code still reports a private helper only its test sibling uses" =
+  expectEqual
+    (Ok [5])
+    (lintLinesAt
+      emptyStdlibIndex
+      "counter.mdk"
+      "rule-dead-code"
+      "export tick : Int -> Int\ntick n = n\n\nstep : Int -> Int\nstep n = n + 1\n")
+
+test "rule-dead-code is silent on a private helper the subject uses" =
+  expectEqual
+    (Ok [])
+    (lintLinesAt
+      emptyStdlibIndex
+      "counter.mdk"
+      "rule-dead-code"
+      "export tick : Int -> Int\ntick n = step n\n\nstep : Int -> Int\nstep n = n + 1\n")
 
 test "every fixture file is on the roster" = rosterIsClosed
 

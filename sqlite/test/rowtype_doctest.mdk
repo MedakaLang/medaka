@@ -13,12 +13,10 @@ import lib.rowtype.{
   tInt,
   tText,
   tBool,
-  tBlob,
   tOption,
   tFloat,
   t2,
   t3,
-  t4,
   tCustom,
 }
 import lib.recordfmt.{Cell(..)}

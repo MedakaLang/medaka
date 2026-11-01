@@ -33,7 +33,7 @@ import types.tc_types.{
 import map as IdMap
 export import types.publish.{tcCode, TcDiag(..), tcLoc, tcMsg}
 import support.ordmap.{omHasKey, omInsert, omLookup, OrdMap}
-import support.util.{anyList, filterList, isSome, splitOnChar, startsWith}
+import support.util.{anyList, filterList}
 import types.registry.{HeadKey(..)}
 import types.tc_diag_text.{
   derivableIface,
@@ -325,7 +325,7 @@ export
 firstTupleCallHint : ModuleCtx ->
   List Mono ->
   Option (String, Option (Loc, String))
-firstTupleCallHint mctx [] = None
+firstTupleCallHint _mctx [] = None
 firstTupleCallHint mctx (m :: rest) = match tupleCallHintFor mctx m
   Some hf => Some hf
   None => firstTupleCallHint mctx rest
@@ -365,7 +365,7 @@ noImplHint mctx iface [arg] = match headTyconNameMono arg
     else
       noImplHintFor mctx iface n
   None => None
-noImplHint mctx _ _ = None
+noImplHint _mctx _ _ = None
 
 -- A type declared in a stdlib-owned module cannot take `deriving`, and an
 -- `impl` of a core interface for it would be an orphan (docs/spec/language-design.md
@@ -435,7 +435,7 @@ pushNoImplError mctx iface loc args = match firstTupleCallHint mctx args
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse true (UseGroup ("types" "publish") ((mem "tcCode" false) (mem "TcDiag" true) (mem "tcLoc" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false) (mem "isSome" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "derivableIface" false) (mem "findTupleCand" false) (mem "locKey" false) (mem "msgAtKey" false) (mem "noImplAdvice" false) (mem "noImplFoundMsg" false) (mem "writtenDiag" false))))
 (DTypeSig true "typeErrorsArmed" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Bool"))))
@@ -472,13 +472,13 @@ pushNoImplError mctx iface loc args = match firstTupleCallHint mctx args
 (DTypeSig false "tupleCallHintFor" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
 (DFunDef false "tupleCallHintFor" ((PVar "mctx") (PVar "m")) (EApp (EApp (EVar "findTupleCand") (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "tupleCallCandidates") "value")))
 (DTypeSig true "firstTupleCallHint" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
-(DFunDef false "firstTupleCallHint" ((PVar "mctx") (PList)) (EVar "None"))
+(DFunDef false "firstTupleCallHint" ((PVar "_mctx") (PList)) (EVar "None"))
 (DFunDef false "firstTupleCallHint" ((PVar "mctx") (PCons (PVar "m") (PVar "rest"))) (EMatch (EApp (EApp (EVar "tupleCallHintFor") (EVar "mctx")) (EVar "m")) (arm (PCon "Some" (PVar "hf")) () (EApp (EVar "Some") (EVar "hf"))) (arm (PCon "None") () (EApp (EApp (EVar "firstTupleCallHint") (EVar "mctx")) (EVar "rest")))))
 (DTypeSig true "boundaryOwnsOpen" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "boundaryOwnsOpen" ((PVar "mctx") (PVar "rigidIds") (PVar "i")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "i"))) (EVar "rigidIds"))) (EApp (EVar "not") (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "deferrableVarIds") "value")))))
 (DTypeSig false "noImplHint" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "noImplHint" ((PVar "mctx") (PVar "iface") (PList (PVar "arg"))) (EMatch (EApp (EVar "headTyconNameMono") (EVar "arg")) (arm (PCon "Some" (PVar "n")) () (EIf (EBinOp "&&" (EApp (EVar "derivableIface") (EVar "iface")) (EApp (EApp (EVar "headIsStdlibOwned") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "arg"))) (EVar "None") (EApp (EApp (EApp (EVar "noImplHintFor") (EVar "mctx")) (EVar "iface")) (EVar "n")))) (arm (PCon "None") () (EVar "None"))))
-(DFunDef false "noImplHint" ((PVar "mctx") PWild PWild) (EVar "None"))
+(DFunDef false "noImplHint" ((PVar "_mctx") PWild PWild) (EVar "None"))
 (DTypeSig false "headIsStdlibOwned" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "headIsStdlibOwned" ((PVar "gctx") (PVar "arg")) (EMatch (EApp (EVar "headTyconMono") (EVar "arg")) (arm (PCon "Some" (PCon "HkDecl" (PCon "TkIdent" (PCon "Ident" PWild (PVar "io") PWild)))) () (EApp (EApp (EApp (EVar "identOriginFold") (EVar "False")) (ELam ((PVar "mid")) (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "config") "value") "tcStdlibOwned")))) (EVar "io"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "noImplHintFor" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
@@ -497,7 +497,7 @@ pushNoImplError mctx iface loc args = match firstTupleCallHint mctx args
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse true (UseGroup ("types" "publish") ((mem "tcCode" false) (mem "TcDiag" true) (mem "tcLoc" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false) (mem "isSome" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "derivableIface" false) (mem "findTupleCand" false) (mem "locKey" false) (mem "msgAtKey" false) (mem "noImplAdvice" false) (mem "noImplFoundMsg" false) (mem "writtenDiag" false))))
 (DTypeSig true "typeErrorsArmed" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Bool"))))
@@ -534,13 +534,13 @@ pushNoImplError mctx iface loc args = match firstTupleCallHint mctx args
 (DTypeSig false "tupleCallHintFor" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
 (DFunDef false "tupleCallHintFor" ((PVar "mctx") (PVar "m")) (EApp (EApp (EVar "findTupleCand") (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "tupleCallCandidates") "value")))
 (DTypeSig true "firstTupleCallHint" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
-(DFunDef false "firstTupleCallHint" ((PVar "mctx") (PList)) (EVar "None"))
+(DFunDef false "firstTupleCallHint" ((PVar "_mctx") (PList)) (EVar "None"))
 (DFunDef false "firstTupleCallHint" ((PVar "mctx") (PCons (PVar "m") (PVar "rest"))) (EMatch (EApp (EApp (EVar "tupleCallHintFor") (EVar "mctx")) (EVar "m")) (arm (PCon "Some" (PVar "hf")) () (EApp (EVar "Some") (EVar "hf"))) (arm (PCon "None") () (EApp (EApp (EVar "firstTupleCallHint") (EVar "mctx")) (EVar "rest")))))
 (DTypeSig true "boundaryOwnsOpen" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "boundaryOwnsOpen" ((PVar "mctx") (PVar "rigidIds") (PVar "i")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "i"))) (EVar "rigidIds"))) (EApp (EVar "not") (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "deferrableVarIds") "value")))))
 (DTypeSig false "noImplHint" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "noImplHint" ((PVar "mctx") (PVar "iface") (PList (PVar "arg"))) (EMatch (EApp (EVar "headTyconNameMono") (EVar "arg")) (arm (PCon "Some" (PVar "n")) () (EIf (EBinOp "&&" (EApp (EVar "derivableIface") (EVar "iface")) (EApp (EApp (EVar "headIsStdlibOwned") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "arg"))) (EVar "None") (EApp (EApp (EApp (EVar "noImplHintFor") (EVar "mctx")) (EVar "iface")) (EVar "n")))) (arm (PCon "None") () (EVar "None"))))
-(DFunDef false "noImplHint" ((PVar "mctx") PWild PWild) (EVar "None"))
+(DFunDef false "noImplHint" ((PVar "_mctx") PWild PWild) (EVar "None"))
 (DTypeSig false "headIsStdlibOwned" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "headIsStdlibOwned" ((PVar "gctx") (PVar "arg")) (EMatch (EApp (EVar "headTyconMono") (EVar "arg")) (arm (PCon "Some" (PCon "HkDecl" (PCon "TkIdent" (PCon "Ident" PWild (PVar "io") PWild)))) () (EApp (EApp (EApp (EVar "identOriginFold") (EVar "False")) (ELam ((PVar "mid")) (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "config") "value") "tcStdlibOwned")))) (EVar "io"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "noImplHintFor" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))

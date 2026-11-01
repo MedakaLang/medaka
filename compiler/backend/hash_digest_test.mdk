@@ -10,9 +10,7 @@
 -- The file cases write real files, so they run native:
 -- `medaka test --native compiler/backend/hash_digest_test.mdk`.
 
-import test.{
-  Expectation, expectEqual, expectEach, expectNotEqual, expectTrue, fail
-}
+import test.{expectEqual, expectEach, expectNotEqual, expectTrue, fail}
 import string.{repeat}
 import array.{fromList}
 import test_process.{withScratchDir}

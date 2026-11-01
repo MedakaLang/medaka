@@ -1,5 +1,5 @@
 # META
-source_lines=214
+source_lines=213
 stages=DESUGAR,MARK
 # SOURCE
 -- The prelude's desugared declarations as a file.
@@ -28,7 +28,7 @@ import frontend.ast_codec.{declsSExp, readDecls}
 import string as S
 import support.sexp_value.{
   SExp(..), SexpError(..), atomInt, cursorAtEnd, cursorOf, cursorOffset,
-  parseSExp, renderSExp
+  renderSExp
 }
 import types.interface_frame.{
   InterfaceFault(..), KeyGate, checkedFramed, failure, firstLine, framedFile,
@@ -76,7 +76,6 @@ preludeDeclsOf runtime core = match (binderSpan runtime, binderSpan core)
 -- ── the file ────────────────────────────────────────────────────────────────
 
 -- Distinct from every other framed file's version.
-export
 declsFormatVersion : Int
 declsFormatVersion = 4
 
@@ -220,7 +219,7 @@ negativeRun run = run.brFirst < 0 || run.brCount < 0
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false) (mem "readDecls" false))))
 (DUse false (UseAlias ("string") "S"))
-(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "parseSExp" false) (mem "renderSExp" false))))
+(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "renderSExp" false))))
 (DUse false (UseGroup ("types" "interface_frame") ((mem "InterfaceFault" true) (mem "KeyGate" false) (mem "checkedFramed" false) (mem "failure" false) (mem "firstLine" false) (mem "framedFile" false) (mem "keyFields" false) (mem "noGate" false) (mem "refuse" false) (mem "renderFramedFault" false))))
 (DUse false (UseGroup ("types" "prelude_elab") ((mem "BinderRun" true) (mem "binderRunIs" false) (mem "binderSpan" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" true))))
@@ -232,7 +231,7 @@ negativeRun run = run.brFirst < 0 || run.brCount < 0
 (DFunDef false "treeRun" ((PVar "tree")) (ERecordCreate "BinderRun" ((fa "brFirst" (EFieldAccess (EVar "tree") "ptBase")) (fa "brCount" (EFieldAccess (EVar "tree") "ptBinders")))))
 (DTypeSig true "preludeDeclsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeDecls")))))
 (DFunDef false "preludeDeclsOf" ((PVar "runtime") (PVar "core")) (EMatch (ETuple (EApp (EVar "binderSpan") (EVar "runtime")) (EApp (EVar "binderSpan") (EVar "core"))) (arm (PTuple (PCon "Some" (PVar "rr")) (PCon "Some" (PVar "cr"))) () (EApp (EVar "Ok") (ERecordCreate "PreludeDecls" ((fa "pdRuntime" (EApp (EApp (EVar "treeOf") (EVar "runtime")) (EVar "rr"))) (fa "pdCore" (EApp (EApp (EVar "treeOf") (EVar "core")) (EVar "cr"))))))) (arm (PTuple (PCon "None") PWild) () (EApp (EVar "Err") (ELit (LString "the binder ordinals of runtime.mdk are not one run")))) (arm (PTuple PWild (PCon "None")) () (EApp (EVar "Err") (ELit (LString "the binder ordinals of core.mdk are not one run"))))))
-(DTypeSig true "declsFormatVersion" (TyCon "Int"))
+(DTypeSig false "declsFormatVersion" (TyCon "Int"))
 (DFunDef false "declsFormatVersion" () (ELit (LInt 4)))
 (DTypeSig true "declsKeyOf" (TyFun (TyCon "InterfaceKey") (TyCon "InterfaceKey")))
 (DFunDef false "declsKeyOf" ((PVar "key")) (ERecordCreate "InterfaceKey" ((fa "ikFormat" (EVar "declsFormatVersion")) (fa "ikSources" (EFieldAccess (EVar "key") "ikSources")) (fa "ikCompiler" (EFieldAccess (EVar "key") "ikCompiler")))))
@@ -267,7 +266,7 @@ negativeRun run = run.brFirst < 0 || run.brCount < 0
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false) (mem "readDecls" false))))
 (DUse false (UseAlias ("string") "S"))
-(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "parseSExp" false) (mem "renderSExp" false))))
+(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "renderSExp" false))))
 (DUse false (UseGroup ("types" "interface_frame") ((mem "InterfaceFault" true) (mem "KeyGate" false) (mem "checkedFramed" false) (mem "failure" false) (mem "firstLine" false) (mem "framedFile" false) (mem "keyFields" false) (mem "noGate" false) (mem "refuse" false) (mem "renderFramedFault" false))))
 (DUse false (UseGroup ("types" "prelude_elab") ((mem "BinderRun" true) (mem "binderRunIs" false) (mem "binderSpan" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" true))))
@@ -279,7 +278,7 @@ negativeRun run = run.brFirst < 0 || run.brCount < 0
 (DFunDef false "treeRun" ((PVar "tree")) (ERecordCreate "BinderRun" ((fa "brFirst" (EFieldAccess (EVar "tree") "ptBase")) (fa "brCount" (EFieldAccess (EVar "tree") "ptBinders")))))
 (DTypeSig true "preludeDeclsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeDecls")))))
 (DFunDef false "preludeDeclsOf" ((PVar "runtime") (PVar "core")) (EMatch (ETuple (EApp (EVar "binderSpan") (EVar "runtime")) (EApp (EVar "binderSpan") (EVar "core"))) (arm (PTuple (PCon "Some" (PVar "rr")) (PCon "Some" (PVar "cr"))) () (EApp (EVar "Ok") (ERecordCreate "PreludeDecls" ((fa "pdRuntime" (EApp (EApp (EVar "treeOf") (EVar "runtime")) (EVar "rr"))) (fa "pdCore" (EApp (EApp (EVar "treeOf") (EVar "core")) (EVar "cr"))))))) (arm (PTuple (PCon "None") PWild) () (EApp (EVar "Err") (ELit (LString "the binder ordinals of runtime.mdk are not one run")))) (arm (PTuple PWild (PCon "None")) () (EApp (EVar "Err") (ELit (LString "the binder ordinals of core.mdk are not one run"))))))
-(DTypeSig true "declsFormatVersion" (TyCon "Int"))
+(DTypeSig false "declsFormatVersion" (TyCon "Int"))
 (DFunDef false "declsFormatVersion" () (ELit (LInt 4)))
 (DTypeSig true "declsKeyOf" (TyFun (TyCon "InterfaceKey") (TyCon "InterfaceKey")))
 (DFunDef false "declsKeyOf" ((PVar "key")) (ERecordCreate "InterfaceKey" ((fa "ikFormat" (EVar "declsFormatVersion")) (fa "ikSources" (EFieldAccess (EVar "key") "ikSources")) (fa "ikCompiler" (EFieldAccess (EVar "key") "ikCompiler")))))

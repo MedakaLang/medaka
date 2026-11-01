@@ -1,0 +1,5 @@
+-- A selective import of the `let rec` binder alone resolves cleanly.
+import m.{countdown}
+
+f : Int -> Int
+f x = countdown x

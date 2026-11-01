@@ -127,7 +127,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   joinWith,
   listLen,
   lookupAssoc,
@@ -135,10 +134,10 @@ import support.util.{
   reverseL,
   startsWith,
 }
-import list.{head}
+import list
 import frontend.marker.{localBoundNames}
 import types.private_mangle.{mangledName}
-import frontend.visibility.{useModId}
+import frontend.visibility.{useModId, pubUsePaths}
 import map as IdMap
 import types.tc_foreign.{declExternNames}
 
@@ -305,7 +304,7 @@ callArgVecsV : GraphCtx ->
   List (CSlot, List Mono) ->
   List (Int, Mono) ->
   List (List Mono)
-callArgVecsV gctx [] _ = []
+callArgVecsV _gctx [] _ = []
 callArgVecsV gctx ((s, v) :: rest) subst = match lookupAssocI s.csId subst
   Some m => substArgVec gctx subst m v :: callArgVecsV gctx rest subst
   None => callArgVecsV gctx rest subst
@@ -323,7 +322,7 @@ callArgVecsV gctx ((s, v) :: rest) subst = match lookupAssocI s.csId subst
 -- value by diff_compiler_dict_semantics_test.mdk and on its order-freedom by
 -- diff_compiler_dict_semantics_permute.sh (no _swapped file needed).
 substArgVec : GraphCtx -> List (Int, Mono) -> Mono -> List Mono -> List Mono
-substArgVec gctx _ m [] = [m]
+substArgVec _gctx _ m [] = [m]
 substArgVec gctx subst _ v = map (substMono gctx subst [] []) v
 
 export
@@ -365,7 +364,7 @@ admittedReceiverMono : ModuleCtx ->
   List IfaceRef ->
   Mono ->
   Option Mono
-admittedReceiverMono mctx _ [] _ = None
+admittedReceiverMono _mctx _ [] _ = None
 admittedReceiverMono mctx name (ir :: _) mono = do
   k <- lookupIdxById ir name mctx.mcCells.methodDispatchIdxByIdRef.value
   nthFunDomain k mono
@@ -426,7 +425,7 @@ shadowStandaloneHead env (EVar name)
 shadowStandaloneHead env (EVarId name _)
   | isShadowStandalone env name = Some (name, [], [])
   | otherwise = None
-shadowStandaloneHead env _ = None
+shadowStandaloneHead _env _ = None
 
 -- #2154: the IMPORTER-side spine arm — the peer of definerShadowSpineArgAt /
 -- definerShadowSpineVarAt for an imported standalone shadowing a method whose
@@ -591,7 +590,7 @@ definerShadowArgHead mctx (ELoc _ f) = definerShadowArgHead mctx f
 -- P0-20 invariant.  Sharing the symbol makes them impossible to drift.
 definerShadowArgHead mctx (EMethodAt name _ ev) =
   definerShadowArgHeadCell mctx name (methodCellOf mctx.mcGraph ev)
-definerShadowArgHead mctx _ = None
+definerShadowArgHead _mctx _ = None
 
 definerShadowArgHeadCell : ModuleCtx ->
   String ->
@@ -764,7 +763,7 @@ dictVarSatisfiesIface : ModuleCtx ->
   Int ->
   List (String, Mono) ->
   Bool
-dictVarSatisfiesIface mctx _ _ [] = False
+dictVarSatisfiesIface _mctx _ _ [] = False
 dictVarSatisfiesIface mctx mIface id ((cIface, cm) :: rest)
   | monoIsTyvarId cm id && contains mIface (ifaceSelfAndSupers mctx cIface) =
     True
@@ -1013,7 +1012,7 @@ definerShadowVarHead mctx (EVarId name _)
   | ifaceMethodName mctx name
     && omHasKey name mctx.mcCells.definerShadowNamesRef.value = Some name
   | otherwise = None
-definerShadowVarHead mctx _ = None
+definerShadowVarHead _mctx _ = None
 
 -- ── #1815: the dispatch argument is not always argument 0 ───────────────────
 -- The two predicates above peel a BARE head, so they only ever fire on the node that
@@ -1103,7 +1102,7 @@ shadowStandaloneDictSlotsAt : DynCtx ->
   String ->
   Mono ->
   ShadowDicts
-shadowStandaloneDictSlotsAt dyn None _ _ _ = emptyShadowDicts
+shadowStandaloneDictSlotsAt _dyn None _ _ _ = emptyShadowDicts
 shadowStandaloneDictSlotsAt dyn (Some value) name key xt =
   let inst = instantiateMethodTracked dyn.dcModule value.vsScheme
   let dc =
@@ -1209,7 +1208,7 @@ admittedDeclHitters : ModuleCtx ->
   List IfaceRef ->
   List Mono ->
   Option (List IfaceRef)
-admittedDeclHitters mctx _ _ [] _ = Some []
+admittedDeclHitters _mctx _ _ [] _ = Some []
 admittedDeclHitters mctx env name (ir :: rest) ats =
   match admittedDeclHits mctx env name ir ats
     None => None
@@ -1246,7 +1245,7 @@ importerDispatchIdxOuter mctx name =
     None => methodDispatchIdx mctx name
 
 admittedIdxMax : ModuleCtx -> String -> List IfaceRef -> Option Int
-admittedIdxMax mctx _ [] = None
+admittedIdxMax _mctx _ [] = None
 admittedIdxMax mctx name (ir :: rest) =
   let here = lookupIdxById ir name mctx.mcCells.methodDispatchIdxByIdRef.value
   match admittedIdxMax mctx name rest
@@ -1276,7 +1275,7 @@ groundAdmittedGo : TcEnv ->
   List Mono ->
   Option Loc ->
   Unit
-groundAdmittedGo env _ [] _ _ = ()
+groundAdmittedGo _env _ [] _ _ = ()
 groundAdmittedGo env mname (ir :: rest) ats dloc =
   match (lookupIdxById
     ir
@@ -1516,7 +1515,7 @@ standaloneShadowsFromSet gctx isMethod fnSet prog =
 -- and it is left exactly where #1302 and `declMethodIdentsOf`'s F3 already own it.
 export
 nameableIfaceShadows : GraphCtx -> List Decl -> List String -> List String
-nameableIfaceShadows gctx _ [] = []
+nameableIfaceShadows _gctx _ [] = []
 nameableIfaceShadows gctx prog names
   -- fail OPEN on an absent index — see the paragraph above; `names` unchanged is exactly
   -- the pre-#1353 graph-global answer.
@@ -1778,21 +1777,17 @@ reachableStandaloneSigGo graph fuel ((mid, n) :: rest) =
 -- no name into the re-exporter's own exports, so nothing downstream can reach through
 -- it.
 --
--- The catch-all arm is exhaustive by that rule rather than by omission — a re-export is
--- representable only as a `DUse True`, wrapped in `DAttrib` or not, so no other `Decl`
--- constructor can contribute a hop and a new one never will.  Its ledgered peer
--- `reexportedIfaceMethodsOf` (the interface-row half of the same walk) carries the same
--- two arms for the same reason.
+-- The hops are `pubUsePaths decls`, the one reader of `DUse True`; its ledgered peer
+-- `reexportedIfaceMethodsOf` (the interface-row half of the same walk) iterates the same list.
 reexportedOrigins : List Decl -> String -> List (String, String)
-reexportedOrigins decls name = flatMap (d => reexportedOriginsOf d name) decls
+reexportedOrigins decls name =
+  flatMap (p => reexportedOriginsOf p name) (pubUsePaths decls)
 
-reexportedOriginsOf : Decl -> String -> List (String, String)
-reexportedOriginsOf (DAttrib _ d) name = reexportedOriginsOf d name
-reexportedOriginsOf (DUse True path _) name = match importedBindings path
+reexportedOriginsOf : UsePath -> String -> List (String, String)
+reexportedOriginsOf path name = match importedBindings path
   None => [(useModId path, name)]
   Some bs =>
     map (b => (useModId path, fst b)) (filterList (b => snd b == name) bs)
-reexportedOriginsOf _ _ = []
 
 declaresStandalone : String -> List Decl -> Bool
 declaresStandalone _ [] = False
@@ -2084,7 +2079,6 @@ coreShadowMapFor gctx coreProg shadowMap
 --     local is `sz`) bind it under a different spelling, so neither admits it — and
 --     both then agree with what the un-mangled path already does with that spelling.
 -- Empty shadowMap ⇒ `lookupAssoc` misses ⇒ True ⇒ the check/run path is untouched.
-export
 shadowSymSpelledBare : SpellCtx -> List (String, String) -> String -> Bool
 shadowSymSpelledBare sc sm n = match lookupAssoc n sm
   None => True
@@ -2097,7 +2091,6 @@ spellCtxOf gctx prog = SpellCtx {
   scCorePfx = mangledName "core" "",
 }
 
-export
 moduleSpellsShadowBare : SpellCtx -> String -> String -> Bool
 moduleSpellsShadowBare sc sym bare =
   contains sym sc.scTopFns
@@ -2108,7 +2101,7 @@ bareLocalBound : BareLocals -> String -> Bool
 bareLocalBound bl bare = bl.blAll || contains bare bl.blSet
 
 declBareLocals : GraphCtx -> List Decl -> BareLocals -> BareLocals
-declBareLocals gctx [] acc = acc
+declBareLocals _gctx [] acc = acc
 declBareLocals gctx ((DAttrib _ d) :: rest) acc =
   declBareLocals gctx rest (declBareLocals gctx [d] acc)
 declBareLocals gctx ((DUse _ path _) :: rest) acc =
@@ -2138,14 +2131,12 @@ formBareLocals gctx path acc =
 
 -- the BARE interface-method name a (possibly mangled) standalone-shadow symbol stands for.
 -- Identity on the un-mangled run/check path, where the map is empty.
-export
 shadowBareName : List (String, String) -> String -> String
 shadowBareName sm n = optionOr n (lookupAssoc n sm)
 
 -- Method nameability and standalone availability are independent. The wrapper
 -- admits standalone routes only for this module's definitions or actual imported
 -- standalone descriptors, never for private functions elsewhere in the graph.
-export
 methodMarkCtx : GraphCtx -> MarkSets -> String -> List Decl -> MarkCtx
 methodMarkCtx gctx ms "" coreProg
   | omSize (ifaceExportsIndex gctx ()) == 0 = MarkCtx {

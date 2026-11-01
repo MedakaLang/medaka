@@ -11,6 +11,7 @@ import types.route_key.{
   EvIndex, entriesAboveSegment, evidenceLookup, evIndexOf, evIndexSlotCount
 }
 import frontend.ast.{Decl, EvEntry(..), EvId(..)}
+import frontend.ast.{SiblingPair(..)}
 import frontend.ast_codec.{declsSExp, evEntriesSExp}
 import eval.eval.{evalModulesOutputFacts}
 import types.program_facts.{factsOfChecked}
@@ -46,7 +47,8 @@ import types.tc_types.{
 }
 import types.typecheck.{
   defaultDriveInputs, checkModules, checkModulesChainReportFor,
-  elaborateModulesWithReport, elaborateModulesChainReport
+  checkModulesChainReportForGraph, chainArgs, elaborateModulesWithReport,
+  elaborateModulesChainReport
 }
 import support.util.{joinNl, contains, dedup}
 
@@ -664,7 +666,7 @@ dedupInts ns =
   map (n => optionOr 0 (stringToInt n)) (dedup (map intToString ns))
 
 ranked : List String -> OrdMap String -> OrdMap String -> SExp -> SExp
-ranked mids ordinals grants (SList [SAtom m, SAtom n])
+ranked mids ordinals _grants (SList [SAtom m, SAtom n])
   | contains m mids = SList [SAtom m, SAtom (optionOr n (omLookup n ordinals))]
 ranked mids ordinals grants (SList items) =
   SList (map (ranked mids ordinals grants) items)
@@ -1110,3 +1112,144 @@ test "a serve of a module id keeps none of another content's grant rows" =
         ),
       ]
     None => fail "could not read the prelude pair"
+
+-- ── the private surface ─────────────────────────────────────────────────────
+-- A recorded interface carries a module's private bindings beside its exports, and
+-- a drive selects them when it applies the interface: only for the module's test
+-- sibling (`DriveInputs.diSibling`).  Serving one module id to a sibling and to
+-- another importer, in one process or in one drive, must give each its own view, in
+-- either order.
+
+viewSubjectSrc : String
+viewSubjectSrc = joinNl [
+  "export data Box = Box Int",
+  "export tick : Box -> Box",
+  "tick (Box n) = Box (step n)",
+  "step : Int -> Int",
+  "step n = n + 1",
+]
+
+viewWarmSrc : String -> String
+viewWarmSrc subject = joinNl ["import \{subject}.{tick}", "warm = tick"]
+
+viewUserSrc : String -> String
+viewUserSrc subject = joinNl ["import \{subject}.{step}", "entry = step 1"]
+
+-- One keyed drive of [subject] and an entry [entry], whose source is the warm
+-- importer's when its name ends `_warm` and the private-name user's otherwise;
+-- [sibling] names the entry the subject's test sibling.  The entry's error codes
+-- and the number of modules served.
+viewDrive : String -> String -> String -> Bool -> (List String, Int)
+viewDrive chainKey subject entry sibling =
+  let mods = [
+    (subject, viewSubjectSrc),
+    (
+      entry,
+      if entry == "\{subject}_warm" then
+        viewWarmSrc subject
+      else
+        viewUserSrc subject,
+    ),
+  ]
+  let (errs, served) =
+    graphViewDrive
+      chainKey
+      (if sibling then [sibPair entry subject] else [])
+      mods
+  (filter (line => S.startsWith "\{entry} error" line) errs, served)
+
+-- The pair that makes module [sib] the test sibling of module [subj].
+sibPair : String -> String -> SiblingPair
+sibPair sib subj = SiblingPair { spSibling = sib, spSubject = subj }
+
+-- One keyed drive of [mods], (module id, source) in dependency order, whose
+-- test sibling pairs are [siblings]: every module's error codes and the number
+-- of modules served.
+graphViewDrive : String ->
+  List SiblingPair ->
+  List (String, String) ->
+  (List String, Int)
+graphViewDrive chainKey siblings mods =
+  let inputs = { defaultDriveInputs | diSibling = siblings }
+  let ((report, outputs), _) =
+    checkModulesChainReportForGraph
+      (chainArgs
+        inputs
+        False
+        (Some (4801, 4802))
+        chainKey
+        (stepKeys mods)
+        []
+        (desugar (parse ""))
+        (map (m => (fst m, desugar (parseLocated (snd m)))) mods))
+  (
+    filter (line => S.contains " error " line) (render report),
+    outputs.doServedModules,
+  )
+
+test "a served subject gives its sibling the private view and another importer the exported one" =
+  let _ = viewDrive "vw-k" "vw_s" "vw_s_warm" False
+  let sib = viewDrive "vw-k" "vw_s" "vw_s_test" True
+  let other = viewDrive "vw-k" "vw_s" "vw_o" False
+  expectEach [
+    ("the sibling is served the subject", expectEqual 1 (snd sib)),
+    ("the sibling binds the private name", expectEqual [] (fst sib)),
+    ("the other importer is served the subject", expectEqual 1 (snd other)),
+    (
+      "the other importer does not bind it",
+      expectEqual ["vw_o error T-UNBOUND"] (fst other),
+    ),
+  ]
+
+test "a served subject gives another importer the exported view and then its sibling the private one" =
+  let _ = viewDrive "vr-k" "vr_s" "vr_s_warm" False
+  let other = viewDrive "vr-k" "vr_s" "vr_o" False
+  let sib = viewDrive "vr-k" "vr_s" "vr_s_test" True
+  expectEach [
+    ("the other importer is served the subject", expectEqual 1 (snd other)),
+    (
+      "the other importer does not bind it",
+      expectEqual ["vr_o error T-UNBOUND"] (fst other),
+    ),
+    ("the sibling is served the subject", expectEqual 1 (snd sib)),
+    ("the sibling binds the private name", expectEqual [] (fst sib)),
+  ]
+
+test "one drive gives a served subject's sibling the private view and its other importer the exported one" =
+  let _ = viewDrive "vg-k" "vg_s" "vg_s_warm" False
+  let (errs, served) =
+    graphViewDrive
+      "vg-k"
+      [sibPair "vg_s_test" "vg_s"]
+      [
+        ("vg_s", viewSubjectSrc),
+        ("vg_s_test", viewUserSrc "vg_s"),
+        ("vg_o", viewUserSrc "vg_s"),
+      ]
+  expectEach [
+    ("the subject is served", expectEqual 1 served),
+    (
+      "only the other importer is refused the private name",
+      expectEqual ["vg_o error T-UNBOUND"] errs,
+    ),
+  ]
+
+test "two siblings of two subjects in one drive each see only their own subject" =
+  let (errs, _) =
+    graphViewDrive
+      "vt-k"
+      [sibPair "vt_a_test" "vt_a", sibPair "vt_b_test" "vt_b"]
+      [
+        ("vt_a", viewSubjectSrc),
+        ("vt_a_test", viewUserSrc "vt_a"),
+        ("vt_b", viewSubjectSrc),
+        (
+          "vt_b_test",
+          joinNl [
+            "import vt_b.{step}",
+            "import vt_a.{step as aStep}",
+            "entry = step (aStep 1)",
+          ],
+        ),
+      ]
+  expectEqual ["vt_b_test error T-UNBOUND"] errs

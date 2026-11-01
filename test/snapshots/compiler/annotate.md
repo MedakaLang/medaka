@@ -1,5 +1,5 @@
 # META
-source_lines=297
+source_lines=296
 stages=DESUGAR,MARK
 # SOURCE
 -- annotate.mdk — Lexical-addressing EMISSION pass (STAGE2-DESIGN §2.0).
@@ -36,7 +36,6 @@ stages=DESUGAR,MARK
 
 import frontend.ast.{
   patBindings,
-  recFieldBindings,
   isHint,
   letBindName,
   propParamName,
@@ -300,7 +299,7 @@ export
 annotateProgram : List Decl -> List Decl
 annotateProgram prog = map annotateDecl prog
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "propParamName" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "propParamName" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DTypeSig false "paramFrames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "paramFrames" ((PVar "pats")) (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "patBindings")) (EVar "pats"))))
@@ -407,7 +406,7 @@ annotateProgram prog = map annotateDecl prog
 (DTypeSig true "annotateProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "annotateProgram" ((PVar "prog")) (EApp (EApp (EVar "map") (EVar "annotateDecl")) (EVar "prog")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "propParamName" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "propParamName" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DTypeSig false "paramFrames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "paramFrames" ((PVar "pats")) (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "patBindings")) (EVar "pats"))))

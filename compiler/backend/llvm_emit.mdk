@@ -186,7 +186,6 @@ import types.extern_source.{ExternBindingKind(..)}
 import backend.extern_requirements.{ExternRequirements, requirementFacts}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{
-  hostRows,
   hostSymbol,
   isWildPat,
   Lit(..),
@@ -197,8 +196,6 @@ import frontend.ast.{
   BinderId(..),
   RecPatField(..),
   noDeclLoc,
-  ifaceIdMatches,
-  isFixedWidthHead,
   fixedWidthMask,
   isU64Head,
   isFixedIntHead,
@@ -271,22 +268,23 @@ import backend.llvm_preamble.{
   declareLine, declareRuntime, ffiRuntimeDecls, preambleLines, runtimeDecls
 }
 import backend.llvm_symbols.{
-  CallShape(..),
   LlvmParam(..),
   LlvmSymbol(..),
   ModuleScope(..),
   Prototype(..),
   SymbolDefect,
   SymbolRegistry,
-  checkCall,
   checkRef,
   declareSymbol,
   defineSymbol,
   emptyRegistry,
   excuseSymbol,
   prototypeText,
-  symbolName,
   unresolved,
+}
+import backend.llvm_text_coverage.{
+  CallCoverage, CallModifier(..), CoveragePolicy(..), checkedCall,
+  emptyCoverage, finishCheckedText
 }
 import support.symbol_origin.{SymbolOrigin(..)}
 import backend.extern_catalog.{
@@ -321,7 +319,6 @@ import backend.trmc_analysis.{
   bindName,
   bindNames,
   patVars,
-  patVarsList,
   patVarNames,
   isCtorTail,
   isSelfSatApp,
@@ -329,9 +326,6 @@ import backend.trmc_analysis.{
   ctorTailName,
   ctorTailLeadFields,
   ctorTailSelfIdx,
-  splitLastF,
-  selfFree,
-  mentionsSelfMethod,
   DispGroup(..),
   dispRootOf,
   dispMembersOf,
@@ -341,7 +335,7 @@ import backend.trmc_analysis.{
   clauseArityOf,
   lastStmtExpr,
 }
-import types.private_mangle.{hashName, injectiveIdent}
+import types.private_mangle.{hashName}
 import types.route_key.{numIntWord}
 import backend.impl_groups.{ImplClauseGroup(..)}
 import backend.emit_plan.{
@@ -352,7 +346,6 @@ import backend.emit_plan.{
 }
 import list.{zip}
 import backend.emit_support.{
-  bindEagerReach,
   bindNameMap,
   guardVars,
   ftPrefix,
@@ -962,6 +955,8 @@ data Emit = Emit {
   -- the module's physical symbols (backend/llvm_symbols.mdk), the defects found
   -- registering them, latest first, and the binding whose emission is running
   symbols : Ref SymbolRegistry,
+  coverage : Ref CallCoverage,
+  excusedCalls : Ref (List LlvmSymbol),
   symbolDefects : Ref (List SymbolDefect),
   symOrigin : Ref SymbolOrigin,
   -- inside `emitAsDeclares`: the top-level defines its walk wrote, latest first
@@ -1184,22 +1179,28 @@ defineHeaderAs e head site sym proto =
 wordProto : List LlvmParam -> Prototype
 wordProto ps = FuncProto "i64" ps ""
 
--- A direct call of the generated `@<sym>` on the i64 words [ops], returning one.
-checkWordCall : Emit -> String -> List String -> Unit
-checkWordCall e sym ops =
-  registerL
-    e
-    (checkCall
-      (Generated sym)
-      (CallShape "i64" (map (_ => "i64") ops))
-      !e.symOrigin)
+-- Render the checked instruction and retain its emission-local receipt.
+directCallWith : Emit ->
+  CallModifier ->
+  LlvmSymbol ->
+  String ->
+  List (String, String) ->
+  String
+directCallWith e modifier sym ret ops =
+  match checkedCall !e.symbols modifier sym ret ops !e.symOrigin !e.coverage
+    Ok (reg, coverage, text) =>
+      e.symbols := reg
+      e.coverage := coverage
+      text
+    Err defect =>
+      e.symbolDefects := defect :: !e.symbolDefects
+      ""
 
--- `call <ret> @<sym>(<type> <operand>, …)`, checked against the prototype the
--- module gives [sym].
 directCall : Emit -> LlvmSymbol -> String -> List (String, String) -> String
-directCall e sym ret ops =
-  let _ = registerL e (checkCall sym (CallShape ret (map fst ops)) !e.symOrigin)
-  "call \{ret} @\{symbolName sym}(\{rawArgDecls ops})"
+directCall e sym ret ops = directCallWith e OrdinaryCall sym ret ops
+
+wordCall : Emit -> String -> List String -> String
+wordCall e sym ops = directCall e (Generated sym) "i64" (i64Ops ops)
 
 -- The instruction line `  <r> = call …` of the runtime or foreign function
 -- [fn], or `  call …` when the call's result is not named ([r] is "").
@@ -1942,8 +1943,8 @@ lookupVarG e env x = match omLookup x env
     if isLazyGlobal e x then
       let r = freshReg e
       let forcer = LN.llvmName (LN.LGlobalForcer x)
-      let _ = checkWordCall e forcer []
-      let _ = emit e "  \{r} = call i64 @\{forcer}()"
+      let call = wordCall e forcer []
+      let _ = emit e "  \{r} = \{call}"
       (r, LTInt)
     else match lookupAssoc x (globalsRegRef e).value
       Some (True, ty) =>
@@ -3674,12 +3675,6 @@ emitRawAs e env RawU32 a = emitU32Raw e env a
 emitRawAs e env RawI32 a = emitU32Raw e env a
 emitRawAs e env RawWord a = fst (emitExpr e env a)
 
--- typed call operands, `i32 %x, i64 %y`.
-rawArgDecls : List (String, String) -> String
-rawArgDecls [] = ""
-rawArgDecls [(t, x)] = "\{t} \{x}"
-rawArgDecls ((t, x) :: rest) = "\{t} \{x}, \{rawArgDecls rest}"
-
 -- The word result of a saturated call of a raw worker, for an ordinary (word)
 -- context: a raw `U64` result is boxed and a raw `U32` retagged, once, here.
 emitRawWorkerCallW : Emit ->
@@ -4180,7 +4175,7 @@ u64Escapes e x _ (CTuple es) = u64EscapesWords e x es
 u64Escapes e x _ (CList es) = u64EscapesWords e x es
 u64Escapes e x _ (CIndex a i) = u64EscapesWords e x [a, i]
 u64Escapes e x _ (CUnOp _ a) = u64Escapes e x False a
-u64Escapes e x raw ex = match flattenApp ex []
+u64Escapes e x _raw ex = match flattenApp ex []
   (CVar f _, args) =>
     if f == x then
       occurrencesOf x ex
@@ -5467,7 +5462,7 @@ bytesHexBE arr i =
 -- (matching emitArith's existing LTFloat branch, which already unboxes operands on
 -- the strength of the left's type).  Only called in statically-Float context.
 emitFloatD : Emit -> OrdMap (String, LTy) -> CExpr -> String
-emitFloatD e env (CLit (LFloat f)) = ensureFloatDot (floatToString f)
+emitFloatD _ _env (CLit (LFloat f)) = ensureFloatDot (floatToString f)
 emitFloatD e env (ex@(CBinPrim op l r _ _)) =
   if isArithOp op then match constNanFold op l r
     -- #672: a compile-time-constant NaN → the host's exact NaN bits (a valid
@@ -7214,8 +7209,8 @@ emitIndirect e env hd args mode =
     -- float-returning local function keeps its LTFloat result.
     Some lam =>
       let r = freshReg e
-      let _ = checkWordCall e lam (cw :: argOps)
-      let _ = emit e "  \{r} = call i64 @\{lam}(\{argDecls (cw :: argOps)})"
+      let call = wordCall e lam (cw :: argOps)
+      let _ = emit e "  \{r} = \{call}"
       (r, indirectRetTy e cw hd)
     None => emitIndirectMode e cw argOps hd mode
 
@@ -7407,14 +7402,14 @@ emitMethod e env name iface siteArity (route@(RKey tag _ _)) implRoutes methRout
         mode
         resTy
     None => gapE e "no impl of method '\{name}' for instance '\{tag}'"
-emitMethod e env name iface siteArity (RDict d) implRoutes methRoutes argOps _ =
+emitMethod e env name iface siteArity (RDict d) _implRoutes methRoutes argOps _ =
   emitMethodDispatch e env name iface siteArity (RDict d) methRoutes argOps
-emitMethod e env name iface siteArity (RDictFwd d) implRoutes methRoutes argOps _ =
+emitMethod e env name iface siteArity (RDictFwd d) _implRoutes methRoutes argOps _ =
   emitMethodDispatch e env name iface siteArity (RDictFwd d) methRoutes argOps
 -- a projected super dictionary dispatches exactly as a dictionary parameter does
-emitMethod e env name iface siteArity (RProj r path) implRoutes methRoutes argOps _ =
+emitMethod e env name iface siteArity (RProj r path) _implRoutes methRoutes argOps _ =
   emitMethodDispatch e env name iface siteArity (RProj r path) methRoutes argOps
-emitMethod e env name iface siteArity RNone implRoutes methRoutes argOps _ =
+emitMethod e _env name iface siteArity RNone _implRoutes _methRoutes argOps _ =
   emitMethodArgDispatch e name iface siteArity argOps
 -- S-1: a CONSTRAINED shadowing standalone was given leading dict PARAMS by
 -- dictPassDecl, so its call must supply the matching dict WORDS.  Delegate to
@@ -7425,7 +7420,7 @@ emitMethod e env name iface siteArity RNone implRoutes methRoutes argOps _ =
 -- `dicts == []` (every unconstrained standalone, the compiler's own definer shadows
 -- included) keeps the byte-identical pre-S1 direct call ⇒ the self-compile
 -- fixpoint cannot move.
-emitMethod e env name _ _ (RLocal sym dicts) implRoutes methRoutes argOps mode =
+emitMethod e env name _ _ (RLocal sym dicts) _implRoutes _methRoutes argOps mode =
   let target = if sym == "" then name else sym
   -- #1430 (S2, row 39): a RETURN-POSITION method (`zed : a`) shadowed by a module-local
   -- standalone routes RLocal to a NULLARY top-level binding, and a nullary binding is a
@@ -7717,9 +7712,9 @@ isInheritedEntry _ = False
 -- a downstream `++`/`::` types its operand correctly (native backend).
 emitImplCall : Emit -> String -> List String -> LTy -> (String, LTy)
 emitImplCall e fname argOps resTy =
-  let _ = checkWordCall e fname argOps
+  let call = wordCall e fname argOps
   let r = freshReg e
-  let _ = emit e "  \{r} = call i64 @\{fname}(\{argDecls argOps})"
+  let _ = emit e "  \{r} = \{call}"
   (r, resTy)
 
 -- A direct call of define `sym` (already `mdk_`-prefixed) in [mode]: exact ⇒ the
@@ -7763,7 +7758,7 @@ emitOverApp e sym argOps arity resTy =
 -- takes the runtime path.  Uses an alloca result slot (like emitIf) so no phi
 -- predecessor-label bookkeeping is needed.
 emitApplyAny : Emit -> String -> List String -> String
-emitApplyAny e cw [] = cw
+emitApplyAny _ cw [] = cw
 emitApplyAny e cw argOps =
   let n = lengthS argOps
   let hdr = loadHeader e cw
@@ -7855,8 +7850,8 @@ emitPapDefine e papName fname supplied remaining =
   let capOps = loadPapCaptures e supplied 0
   let allArgs = capOps ++ argNames remaining 0
   let r = freshReg e
-  let _ = checkWordCall e fname allArgs
-  let _ = emit e "  \{r} = call i64 @\{fname}(\{argDecls allArgs})"
+  let call = wordCall e fname allArgs
+  let _ = emit e "  \{r} = \{call}"
   let _ = emit e ("  ret i64 " ++ r)
   let _ = emit e "}"
   let _ = emit e ""
@@ -8506,8 +8501,8 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     && isLazyGlobal e (memoGlobalName symTag name) then
     let rv = freshReg e
     let memoForcer = LN.llvmName (LN.LGlobalForcer (memoGlobalName symTag name))
-    let _ = checkWordCall e memoForcer []
-    let _ = emit e "  \{rv} = call i64 @\{memoForcer}()"
+    let call = wordCall e memoForcer []
+    let _ = emit e "  \{rv} = \{call}"
     let _ = emit e "  store i64 \{rv}, ptr \{slot}"
     emit e ("  br label %" ++ endL)
   else
@@ -8667,7 +8662,7 @@ emitAmbiguousArm e =
 -- an arg-tag site whose interface has no impl groups at all for the method: nothing
 -- can be called, so the site is an honest gap rather than a guess.
 emitDefaultArgTag : Emit -> String -> List String -> (String, LTy)
-emitDefaultArgTag e method argOps =
+emitDefaultArgTag e method _argOps =
   gapE
     e
     ("arg-tag dispatch for method '"
@@ -9271,7 +9266,7 @@ emitGroupBody : Emit ->
   Unit
 emitGroupBody e fname _ _ 0 [([], body)] =
   emitFnBody e omEmpty (TailDefine fname 0 False) body
-emitGroupBody e fname _ _ 0 _ =
+emitGroupBody e _fname _ _ 0 _ =
   gapU e "nullary impl group with more than one clause"
 -- Fast path: single-clause all-PVar impl (e.g. `append xs ys = xs ++ ys`).
 -- Build a typed env directly from param names × receiver type so that `++`/`::`
@@ -11249,13 +11244,13 @@ emitSwitch : Emit ->
   String ->
   Ref LTy ->
   Unit
-emitSwitch e env roots arms [] branches dft slot endL ftL rty =
+emitSwitch e env roots arms [] _branches dft slot endL ftL rty =
   emitTree e env roots arms [] slot endL ftL rty dft
-emitSwitch e env roots arms (foc :: rest) [] dft slot endL ftL rty =
+emitSwitch e env roots arms (_foc :: rest) [] dft slot endL ftL rty =
   emitTree e env roots arms rest slot endL ftL rty dft
 emitSwitch e env roots arms (foc :: rest) (branches@((CTBranch (HLit _) _) :: _)) dft slot endL ftL rty =
   emitLitChain e env roots arms foc rest branches dft slot endL ftL rty
-emitSwitch e env roots arms (foc :: rest) ((CTBranch HUnit sub) :: _) dft slot endL ftL rty =
+emitSwitch e env roots arms (_foc :: rest) ((CTBranch HUnit sub) :: _) _dft slot endL ftL rty =
   emitTree e env roots arms rest slot endL ftL rty sub
 emitSwitch e env roots arms (foc :: rest) (branches@((CTBranch h _) :: _)) dft slot endL ftL rty =
   match conHeadInfo h
@@ -11769,8 +11764,9 @@ emitFn e (CBind name (c :: rest) site _) = match dispGroupOf !e.gDispGroups name
       emitMultiClauseFn e name clauses site
 emitFn e (CBind name [] _ _) =
   -- in record mode the gap stands in for this function's define
-  e.symbols :=
-    excuseSymbol (Generated (LN.llvmName (LN.LUserFunction name))) !e.symbols
+  let sym = Generated (LN.llvmName (LN.LUserFunction name))
+  e.symbols := excuseSymbol sym !e.symbols
+  e.excusedCalls := sym :: !e.excusedCalls
   gapU e "top-level function with no clauses"
 
 -- a single-clause function with no raw U64 worker.
@@ -12141,7 +12137,7 @@ trmcBindNullaryGroup _ env [] = env
 trmcBindNullaryGroup e env ((CBind name [CClause [] rhs] _ bid) :: rest) =
   let vt = stampWord e bid (emitExpr e env rhs)
   trmcBindNullaryGroup e (omInsert name vt env) rest
-trmcBindNullaryGroup _ env (_ :: rest) = env
+trmcBindNullaryGroup _ env (_ :: _rest) = env
 
 -- a TRMC tail leaf: an eligible ctor-tail conses into the destination + loops; a
 -- bare plain-tail self-call (F3 — `None => self …`, no enclosing cons/ctor)
@@ -12671,7 +12667,7 @@ floatWorkerEligible e name pats ptys body =
 -- (no self-recursive / float-param requirement — return-unboxing alone is a win).
 -- Single-clause, all-PVar, non-dict, float return, body shape `emitFnBodyD` handles.
 floatFwEligible : Emit -> String -> List Pat -> List LTy -> CExpr -> Bool
-floatFwEligible e name pats ptys body =
+floatFwEligible e name pats _ptys body =
   let rty = match sigLookup e name
     Some (FnSig _ r) => r
     None => LTInt
@@ -12824,7 +12820,7 @@ emitFnBodyDBlock e env self worker fp arity ((CSLet _ (PVar x _ _) rhs) :: rest)
   else
     let (v, ty) = emitExpr e env rhs
     emitFnBodyDBlock e (omInsert x (v, ty) env) self worker fp arity rest
-emitFnBodyDBlock e env _ _ _ _ _ =
+emitFnBodyDBlock e _env _ _ _ _ _ =
   gapU
     e
     "float-worker block: unexpected statement shape (should be gated by floatWorkerBlockOk)"
@@ -12842,8 +12838,8 @@ emitTailLeafD e env self worker fp arity _ (CVar f0 _, args)
   | f0 == self && lengthS args == arity =
     let ops = emitWorkerArgs e env fp 0 args
     let r = freshReg e
-    let call = directCall e (Generated worker) "double" ops
-    let _ = emit e "  \{r} = musttail \{call}"
+    let call = directCallWith e MustTailCall (Generated worker) "double" ops
+    let _ = emit e "  \{r} = \{call}"
     emit e ("  ret double " ++ r)
 emitTailLeafD e env _ _ _ _ other _ =
   let d = emitFloatD e env other
@@ -13180,8 +13176,8 @@ emitFnBodyRaw e env (RawTail self worker w) other = match flattenApp other []
       let ops = emitRawArgs e env (rawWorkerKinds w) args
       let rty = rawKindTy (rawWorkerRet w)
       let r = freshReg e
-      let call = directCall e (Generated worker) rty ops
-      let _ = emit e "  \{r} = musttail \{call}"
+      let call = directCallWith e MustTailCall (Generated worker) rty ops
+      let _ = emit e "  \{r} = \{call}"
       emit e "  ret \{rty} \{r}"
     else
       emitRawValueRet e env (RawTail self worker w) other
@@ -13520,10 +13516,11 @@ tailDefineSym (TailDefine sym _ _) = sym
 -- prototype differs, and the verifier then refuses the module.
 emitDirectTailCall : Emit -> TailDefine -> String -> List String -> Unit
 emitDirectTailCall e self sym ops =
-  let _ = checkWordCall e sym ops
+  let modifier =
+    if fillsTailDefine self sym ops then MustTailCall else OrdinaryCall
+  let call = directCallWith e modifier (Generated sym) "i64" (i64Ops ops)
   let r = freshReg e
-  let kw = if fillsTailDefine self sym ops then "musttail call" else "call"
-  let _ = emit e "  \{r} = \{kw} i64 @\{sym}(\{argDecls ops})"
+  let _ = emit e "  \{r} = \{call}"
   emit e ("  ret i64 " ++ r)
 
 -- Does a call of `sym` on `ops` fill the define `self` word for word?  Every
@@ -13561,7 +13558,7 @@ fnBinds (b :: rest) = if isFnBind b then b :: fnBinds rest else fnBinds rest
 -- the nullary value bindings (non-`main`, no parameters), in source order.
 valBinds : List CBind -> List CBind
 valBinds [] = []
-valBinds ((CBind "main" cs _ _) :: rest) = valBinds rest
+valBinds ((CBind "main" _cs _ _) :: rest) = valBinds rest
 valBinds (b :: rest) = if isFnBind b then valBinds rest else b :: valBinds rest
 
 -- the value-global names a binding's rhs references EAGERLY (at init time) — i.e.
@@ -14036,7 +14033,7 @@ emitRefAlloc : Emit -> OrdMap (String, LTy) -> List CExpr -> (String, LTy)
 emitRefAlloc e env [x] =
   let (xw, _) = emitExpr e env x
   emitCtorAlloc e "$ref" [xw]
-emitRefAlloc e env _ = gapE e "Ref expects exactly 1 argument"
+emitRefAlloc e _env _ = gapE e "Ref expects exactly 1 argument"
 
 emitSetRef : Emit -> OrdMap (String, LTy) -> List CExpr -> (String, LTy)
 emitSetRef e env [r, x] =
@@ -14048,7 +14045,7 @@ emitSetRef e env [r, x] =
   let _ = emit e "  \{fp} = getelementptr i8, ptr \{p}, i64 8"
   let _ = emit e "  store i64 \{xw}, ptr \{fp}"
   ("1", LTInt)
-emitSetRef e env _ = gapE e "setRef expects exactly 2 arguments"
+emitSetRef e _env _ = gapE e "setRef expects exactly 2 arguments"
 
 emitFieldExprs : Emit -> OrdMap (String, LTy) -> List CField -> List String
 emitFieldExprs _ _ [] = []
@@ -14512,7 +14509,7 @@ emitArrayMakeWith e env [nExpr, fExpr] =
   let w = freshReg e
   let _ = emit e "  \{w} = ptrtoint ptr \{p} to i64"
   (w, LTCon)
-emitArrayMakeWith e env _ = gapE e "arrayMakeWith takes two arguments"
+emitArrayMakeWith e _env _ = gapE e "arrayMakeWith takes two arguments"
 
 -- ── lists ─────────────────────────────────────────────────────────
 -- VALUE REPRESENTATION: a list is a chain of boxed Cons cells (matching the
@@ -14752,7 +14749,10 @@ runStrictEmission e input plan groups implEntries =
   let siteFiles = siteFileTable e
   match symbolDefectsL e True
     [] =>
-      Ok
+      finishCheckedText
+        (RecordedGaps !e.excusedCalls)
+        !e.symbols
+        !e.coverage
         (joinNl
           (siteTrapDeclares e
             ++ reverseL !e.buf
@@ -14932,6 +14932,8 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
           WholeModule
         else
           ModuleHalf)),
+    coverage = Ref emptyCoverage,
+    excusedCalls = Ref [],
     symbolDefects = Ref [],
     symOrigin = Ref moduleOrigin,
     hiddenDefines = Ref None,
@@ -15370,12 +15372,24 @@ emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries facts
   let _ = noteUnprovidedExterns e found
   let _ = emitPreamble e
+  let _ = emitFfiDeclares e
+  let _ = emitGlobalDecls e (valBinds groups)
   let _ = emitFnsGaps e (fnBinds groups)
   let _ = emitImplsGaps e implEntries
   let _ = emitTopBindsGaps e omEmpty (valBinds groups)
-  -- no text is written, so a call need not meet its symbol here
   match symbolDefectsL e False
-    [] => Ok (reverseL !e.gapLog)
+    [] =>
+      map
+        (_ => reverseL !e.gapLog)
+        (finishCheckedText
+          (RecordedGaps !e.excusedCalls)
+          !e.symbols
+          !e.coverage
+          (joinNl
+            (siteTrapDeclares e
+              ++ reverseL !e.buf
+              ++ reverseL !e.lams
+              ++ siteFileTable e)))
     defects => Err defects
 
 emitFnsGaps : Emit -> List CBind -> Unit

@@ -1,0 +1,9 @@
+-- A subject with two private names for a sibling to re-export by name.
+export visible : Int
+visible = 1
+
+hidden : Int
+hidden = 2
+
+hidden2 : Int
+hidden2 = 3

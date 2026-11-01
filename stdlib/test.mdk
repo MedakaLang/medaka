@@ -379,7 +379,7 @@ remainingCountMsg rest =
 -- one side runs out first, the message names how many lines remain on the
 -- other side, including the one shown.
 diffLineMsg : Int -> List String -> List String -> String
-diffLineMsg n [] [] = "expected and actual differ only outside their lines"
+diffLineMsg _n [] [] = "expected and actual differ only outside their lines"
 diffLineMsg n [] (a :: rest) =
   "line \{intToString n}: expected nothing but got \{debug a} (\{remainingCountMsg rest})"
 diffLineMsg n (e :: rest) [] =

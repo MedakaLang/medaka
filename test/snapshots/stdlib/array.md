@@ -1,5 +1,5 @@
 # META
-source_lines=889
+source_lines=883
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `Array a`.
@@ -38,13 +38,7 @@ stages=DESUGAR,MARK
 import core.{
   Ordering(..),
   Ord,
-  Debug,
-  Display,
-  Foldable,
-  Mappable,
   Filterable,
-  Semigroup,
-  Monoid,
   Option,
 }
 
@@ -892,7 +886,7 @@ prop "take, drop and sliceClamped agree with an index filter" (xs : List Int) (l
     && eq (toList (take lo arr)) (map snd (filter (p => fst p < lo) pairs))
     && eq (toList (drop lo arr)) (map snd (filter (p => fst p >= lo) pairs))
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Filterable" false) (mem "Option" false))))
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a"))))
 (DFunDef false "singleton" ((PVar "x")) (EArrayLit (EVar "x")))
 (DTypeSig true "make" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a")))))
@@ -1021,7 +1015,7 @@ prop "take, drop and sliceClamped agree with an index filter" (xs : List Int) (l
 (DProp false "filterMap agrees with List filterMap" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "f") (ELam ((PVar "x")) (EIf (EBinOp "==" (EBinOp "%" (EVar "x") (ELit (LInt 3))) (ELit (LInt 0))) (EApp (EVar "Some") (EBinOp "*" (EVar "x") (ELit (LInt 2)))) (EVar "None")))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EApp (EApp (EVar "filterMap") (EVar "f")) (EVar "arr")))) (EApp (EApp (EVar "filterMap") (EVar "f")) (EVar "xs"))))))
 (DProp false "take, drop and sliceClamped agree with an index filter" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "lo" (TyCon "Int")) (pp "hi" (TyCon "Int"))) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "pairs") (EApp (EVar "toList") (EApp (EApp (EVar "zip") (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EVar "length") (EVar "arr")))) (EVar "arr")))) (DoLet false false (PVar "inRange") (ELam ((PVar "p")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "fst") (EVar "p")) (EVar "lo")) (EBinOp "<" (EApp (EVar "fst") (EVar "p")) (EVar "hi"))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EApp (EApp (EApp (EVar "sliceClamped") (EVar "lo")) (EVar "hi")) (EVar "arr")))) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EVar "filter") (EVar "inRange")) (EVar "pairs")))) (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EApp (EApp (EVar "take") (EVar "lo")) (EVar "arr")))) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EVar "filter") (ELam ((PVar "p")) (EBinOp "<" (EApp (EVar "fst") (EVar "p")) (EVar "lo")))) (EVar "pairs"))))) (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EApp (EApp (EVar "drop") (EVar "lo")) (EVar "arr")))) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EVar "filter") (ELam ((PVar "p")) (EBinOp ">=" (EApp (EVar "fst") (EVar "p")) (EVar "lo")))) (EVar "pairs"))))))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Filterable" false) (mem "Option" false))))
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a"))))
 (DFunDef false "singleton" ((PVar "x")) (EArrayLit (EVar "x")))
 (DTypeSig true "make" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a")))))

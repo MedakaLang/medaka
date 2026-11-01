@@ -1,5 +1,5 @@
 # META
-source_lines=256
+source_lines=255
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/types/effect_policy.mdk — does an entry's invocation summary fit a
@@ -27,7 +27,6 @@ import types.effect_rows.{
   atomLabel,
   atomAuth,
   atomsUnion,
-  renderAtom,
   Atom(..),
   effrowLabels,
 }
@@ -261,7 +260,7 @@ firstWithEffect effTable label (c :: rest) =
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "TyConOrigin" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authVars" false) (mem "authvarDefaultName" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true) (mem "effrowLabels" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomsUnion" false) (mem "Atom" true) (mem "effrowLabels" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" false))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true) (mem "ManifestRequest" true) (mem "InvocationProtocol" true) (mem "CapabilityManifest" true))))
@@ -368,7 +367,7 @@ firstWithEffect effTable label (c :: rest) =
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "TyConOrigin" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authVars" false) (mem "authvarDefaultName" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true) (mem "effrowLabels" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomsUnion" false) (mem "Atom" true) (mem "effrowLabels" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" false))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true) (mem "ManifestRequest" true) (mem "InvocationProtocol" true) (mem "CapabilityManifest" true))))

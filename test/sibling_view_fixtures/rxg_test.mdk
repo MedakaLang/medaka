@@ -1,0 +1,6 @@
+-- A glob re-export of the subject carries the exported view only, so it raises
+-- no R-PRIVILEGED-REEXPORT even though the subject has a private `hidden`.
+import test.{expectEqual}
+export import rxg.*
+
+test "reads both" = expectEqual 3 (visible + hidden)

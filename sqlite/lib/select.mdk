@@ -1329,7 +1329,7 @@ compileOperand : (String -> Option Int) ->
 compileOperand lookup (ECol name) = match lookup name
   None => Err "compilePred: unknown column: \{name}"
   Some i => Ok (cells => nthCell cells i)
-compileOperand lookup (ELit lit) = Ok (_ => litToCell lit)
+compileOperand _lookup (ELit lit) = Ok (_ => litToCell lit)
 compileOperand lookup (EArith op l r) = do
   gl <- compileOperand lookup l
   gr <- compileOperand lookup r
@@ -1357,7 +1357,8 @@ compileOperand _ (EAgg fn _) =
 -- `EIsNull`/`ENotNull`) are not usable as VALUE operands — a pre-existing
 -- limitation this task does not extend (real SQLite treats a boolean as an
 -- Int 0/1/NULL value; this engine does not, for ANY of these nodes).
-compileOperand lookup _ = Err "compilePred: operand must be a column or literal"
+compileOperand _lookup _ =
+  Err "compilePred: operand must be a column or literal"
 
 -- | Compile any `SqlExpr` value operand to a per-row `List Cell -> Cell`
 --   accessor (an alias of `compileOperand` for the UPDATE SET call site).

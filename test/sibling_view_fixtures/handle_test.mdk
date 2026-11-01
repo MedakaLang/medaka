@@ -1,0 +1,10 @@
+-- The sibling is trusted with the phantom constructor as its subject is: it may
+-- forge a handle at any authority.  Accepted.
+import test.{expectEqual}
+import handle.{H(..)}
+
+export forge : (path : String) -> H path
+forge _ = H 7
+
+test "forged" = match forge "/etc"
+  H n => expectEqual 7 n

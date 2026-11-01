@@ -1,0 +1,7 @@
+-- Imports, through its subject, a name the subject itself imports.  Accepted.
+import test.{expectEqual}
+import pimport.{last}
+
+test "the subject's own import" = expectEqual (Some 3) (last [1, 2, 3])
+
+main = println (optionOr 0 (last [1, 2, 3]))

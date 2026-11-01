@@ -213,7 +213,8 @@ buildAndRun target entryPath outPath tmpDir tests nonce =
     True
     False
     False
-    BuildProbe)
+    BuildProbe
+    (Some target))
     Err rep =>
       Err
         "native test runner: could not build \{target} natively\n\{ppBuildReport rep}"

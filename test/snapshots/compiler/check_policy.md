@@ -1,5 +1,5 @@
 # META
-source_lines=804
+source_lines=769
 stages=DESUGAR,MARK
 # SOURCE
 import types.capability_manifest.{
@@ -16,14 +16,13 @@ import string.{trimLeft}
 import types.effect_domain.{
   canonParam, drender, isSubTop, Param(..), pathClimbs, pathSpelling
 }
-import types.effect_authority.{authHasVars, authConsts}
+import types.effect_authority.{authConsts}
 import types.effect_param_decode.{decodeSetParam}
 import types.effect_policy as EP
 import types.effect_policy.{
-  PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain,
-  allOk
+  PolicyVerdict(..), buildCallGraph, fnEffectsTable, viaChain, allOk
 }
-import types.effect_rows.{atomKey, atomLabel, atomAuth, renderAtom, Atom(..)}
+import types.effect_rows.{atomKey, atomLabel, atomAuth, Atom(..)}
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
 -- policy checker (WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md).
 --
@@ -290,7 +289,8 @@ runPlugin fnName grants elab =
   -- The plugin runs ELABORATED, as `run` does: an interface default reaches an
   -- instance only through the elaboration's disposition table.  The stubs are
   -- plain prelude-level values the evaluator binds after the prelude.
-  let (coreE, modulesE) = mangleCtorCollisionsPair (elab.erCore, elab.erModules)
+  let (coreE, modulesE) =
+    mangleCtorCollisionsPair [] (elab.erCore, elab.erModules)
   let facts = factsOfElab elab
   withFacts facts (_ =>
     resetOutput ()
@@ -511,31 +511,6 @@ listIsEmpty _ = False
 -- as a seam.  Add a `-- WS-1c wasm: encode M as custom section bytes` marker
 -- in backend/wasm_emit.mdk when that work is picked up.
 
--- Render one atom as a TOML key-value line.
--- PPrefix (Some s) → 'Label = "s"'
--- PUnit / PPrefix None → 'Label = true'
--- A set of elements (`Net "a.com/*", Net "b.com/*"`) is an array of the
--- elements' values, `Net = ["a.com/*", "b.com/*"]`; a Set label's single
--- element is itself an array of members.
--- An authority left symbolic at the host boundary is reported conservatively
--- as the bare grant (`Label = true`), never omitted, with a TOML comment
--- naming the variables that left it unresolved. So is a path whose canonical
--- form lies above the working directory, which no working-directory-relative
--- grant admits.
-atomToToml : (Atom -> String) -> Atom -> String
-atomToToml keyOf a =
-  let label = keyOf a
-  match authConsts (atomAuth a)
-    Some ps if anyList pathClimbs ps => label ++ " = true"
-    Some [p] => "\{label} = \{paramToml p}"
-    Some (ps@(_ :: _ :: _)) =>
-      "\{label} = [\{joinWith ", " (map paramToml ps)}]"
-    _ =>
-      if authHasVars (atomAuth a) then
-        "\{label} = true  # unresolved: \{unresolvedWhy a}"
-      else
-        label ++ " = true"
-
 paramToml : Param -> String
 paramToml p = match canonParam p
   PPrefix (Some s) => tomlQuote s
@@ -583,15 +558,6 @@ lowerFirst s =
   let n = stringLength s
   if n == 0 then s else toLower (stringSlice 0 1 s) ++ stringSlice 1 n s
 
--- Render the whole capability row as TOML.
--- Returns the full TOML block (bare header if no effects).
-export
-manifestToml : List Atom -> String
-manifestToml [] = "[package.capabilities]\n"
-manifestToml atoms =
-  let lines = map (atomToToml (manifestKey atoms)) atoms
-  "[package.capabilities]\n" ++ joinTomlLines lines
-
 -- The TOML key an atom is written under: its bare spelling, unless another
 -- atom of the row spells the same label from a different declaring origin
 -- (identity is `(origin, name)`), in which case every atom of that spelling
@@ -609,7 +575,6 @@ labelCollides atoms name =
       (sortUniqS (map atomKey (filterList (b => atomLabel b == name) atoms)))
     > 1
 
-export
 qualifiedKey : Atom -> String
 qualifiedKey a = EP.qualifiedKey a
 
@@ -815,11 +780,11 @@ joinSemiTok xs = joinWith ";" xs
 (DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true))))
 (DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "Param" true) (mem "pathClimbs" false) (mem "pathSpelling" false))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "authHasVars" false) (mem "authConsts" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "authConsts" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "decodeSetParam" false))))
 (DUse false (UseAlias ("types" "effect_policy") "EP"))
-(DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "policyRefusals" false) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false) (mem "allOk" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "renderAtom" false) (mem "Atom" true))))
+(DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false) (mem "allOk" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "Atom" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "effParamSurface" false) (mem "Decl" true))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
@@ -873,7 +838,7 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "stubSource" (TyCon "String"))
 (DFunDef false "stubSource" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "cacheGet req = \"\"\n")) (ELit (LString "cacheSet req result = ()\n")) (ELit (LString "logEvent s = putStr (stringConcat [\"   [LOG] \", s, \"\\n\"])\n")) (ELit (LString "getEnv k = None\n")) (ELit (LString "args u = []\n")) (ELit (LString "executablePath u = \"\"\n")) (ELit (LString "readFile p g = Err \"\"\n")) (ELit (LString "readFileBytes p g = Err \"\"\n")) (ELit (LString "fileExists p g = False\n")) (ELit (LString "canonicalizePath p g = p\n")) (ELit (LString "listDir p g = Err \"\"\n")) (ELit (LString "statFile p g = Err \"\"\n")) (ELit (LString "writeFile p c g = Err \"\"\n")) (ELit (LString "writeFileBytes p b g = Err \"\"\n")) (ELit (LString "appendFile p c g = Err \"\"\n")) (ELit (LString "makeDir p g = Err \"\"\n")) (ELit (LString "removeFile p g = Err \"\"\n")) (ELit (LString "rename o n gs gd = Err \"\"\n")) (ELit (LString "removeDir p g = Err \"\"\n")) (ELit (LString "runCommand cmd a = Err \"\"\n")) (ELit (LString "runCommandBatch cmd j a = []\n")) (ELit (LString "netResolve h = Err \"\"\n")) (ELit (LString "netTcpConnect h p = Err \"\"\n")) (ELit (LString "netTcpListen h p = Err \"\"\n")) (ELit (LString "netListenPort fd = Err \"\"\n")) (ELit (LString "netTcpAccept fd = Err \"\"\n")) (ELit (LString "netSend fd b = Err \"\"\n")) (ELit (LString "netRecv fd n = Err \"\"\n")) (ELit (LString "netShutdown fd how = Err \"\"\n")) (ELit (LString "netClose fd = Err \"\"\n")) (ELit (LString "netSetTimeout fd ms = Err \"\"\n")))))
 (DTypeSig false "runPlugin" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "ElabResult") (TyCon "String")))))
-(DFunDef false "runPlugin" ((PVar "fnName") (PVar "grants") (PVar "elab")) (EBlock (DoLet false false (PVar "stubD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "stubSource")))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EFieldAccess (EVar "elab") "erCore") (EFieldAccess (EVar "elab") "erModules")))) (DoLet false false (PVar "facts") (EApp (EVar "factsOfElab") (EVar "elab"))) (DoExpr (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoExpr (EApp (EVar "resetOutput") (ELit LUnit))) (DoLet false false (PVar "rootEnv") (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EVar "facts")) (EApp (EVar "buildStampExterns") (ELit LUnit))) (EBinOp "++" (EVar "coreE") (EVar "stubD"))) (EVar "modulesE"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupValue") (EVar "fnName")) (EVar "rootEnv")) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "   (no '")) (EVar "fnName")) (ELit (LString "' binding in output)\n")))) (arm (PCon "Some" (PVar "fnVal")) () (EBlock (DoLet false false (PVar "sample") (ELit (LString "X-Forwarded-For: 192.168.1.1"))) (DoLet false false (PVar "granted") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "f") PWild) (EApp (EApp (EVar "apply") (EVar "f")) (EApp (EVar "VList") (EListLit))))) (EVar "fnVal")) (EApp (EApp (EVar "replicate") (EVar "grants")) (ELit LUnit)))) (DoLet false false (PVar "result") (EApp (EApp (EVar "apply") (EVar "granted")) (EApp (EVar "VString") (EVar "sample")))) (DoLet false false (PVar "logged") (EApp (EVar "readOutput") (ELit LUnit))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "logged"))) (ELit (LString "   "))) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "escStr") (EVar "sample")))) (ELit (LString " = "))) (EApp (EVar "display") (EApp (EVar "ppValue") (EVar "result")))) (ELit (LString "\n"))))))))))))))
+(DFunDef false "runPlugin" ((PVar "fnName") (PVar "grants") (PVar "elab")) (EBlock (DoLet false false (PVar "stubD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "stubSource")))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE")) (EApp (EApp (EVar "mangleCtorCollisionsPair") (EListLit)) (ETuple (EFieldAccess (EVar "elab") "erCore") (EFieldAccess (EVar "elab") "erModules")))) (DoLet false false (PVar "facts") (EApp (EVar "factsOfElab") (EVar "elab"))) (DoExpr (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoExpr (EApp (EVar "resetOutput") (ELit LUnit))) (DoLet false false (PVar "rootEnv") (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EVar "facts")) (EApp (EVar "buildStampExterns") (ELit LUnit))) (EBinOp "++" (EVar "coreE") (EVar "stubD"))) (EVar "modulesE"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupValue") (EVar "fnName")) (EVar "rootEnv")) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "   (no '")) (EVar "fnName")) (ELit (LString "' binding in output)\n")))) (arm (PCon "Some" (PVar "fnVal")) () (EBlock (DoLet false false (PVar "sample") (ELit (LString "X-Forwarded-For: 192.168.1.1"))) (DoLet false false (PVar "granted") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "f") PWild) (EApp (EApp (EVar "apply") (EVar "f")) (EApp (EVar "VList") (EListLit))))) (EVar "fnVal")) (EApp (EApp (EVar "replicate") (EVar "grants")) (ELit LUnit)))) (DoLet false false (PVar "result") (EApp (EApp (EVar "apply") (EVar "granted")) (EApp (EVar "VString") (EVar "sample")))) (DoLet false false (PVar "logged") (EApp (EVar "readOutput") (ELit LUnit))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "logged"))) (ELit (LString "   "))) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "escStr") (EVar "sample")))) (ELit (LString " = "))) (EApp (EVar "display") (EApp (EVar "ppValue") (EVar "result")))) (ELit (LString "\n"))))))))))))))
 (DTypeSig false "lookupValue" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupValue" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupValue" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupValue") (EVar "k")) (EVar "rest"))))
@@ -904,8 +869,6 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "listIsEmpty" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "listIsEmpty" ((PList)) (EVar "True"))
 (DFunDef false "listIsEmpty" (PWild) (EVar "False"))
-(DTypeSig false "atomToToml" (TyFun (TyFun (TyCon "Atom") (TyCon "String")) (TyFun (TyCon "Atom") (TyCon "String"))))
-(DFunDef false "atomToToml" ((PVar "keyOf") (PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "keyOf") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "authConsts") (EApp (EVar "atomAuth") (EVar "a"))) (arm (PCon "Some" (PVar "ps")) ((GBool (EApp (EApp (EVar "anyList") (EVar "pathClimbs")) (EVar "ps")))) (EBinOp "++" (EVar "label") (ELit (LString " = true")))) (arm (PCon "Some" (PList (PVar "p"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = "))) (EApp (EVar "display") (EApp (EVar "paramToml") (EVar "p")))) (ELit (LString "")))) (arm (PCon "Some" (PAs "ps" (PCons PWild (PCons PWild PWild)))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = ["))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "paramToml")) (EVar "ps"))))) (ELit (LString "]")))) (arm PWild () (EIf (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = true  # unresolved: "))) (EApp (EVar "display") (EApp (EVar "unresolvedWhy") (EVar "a")))) (ELit (LString ""))) (EBinOp "++" (EVar "label") (ELit (LString " = true")))))))))
 (DTypeSig false "paramToml" (TyFun (TyCon "Param") (TyCon "String")))
 (DFunDef false "paramToml" ((PVar "p")) (EMatch (EApp (EVar "canonParam") (EVar "p")) (arm (PCon "PPrefix" (PCon "Some" (PVar "s"))) () (EApp (EVar "tomlQuote") (EVar "s"))) (arm (PCon "PPath" (PCon "Some" (PVar "s"))) () (EApp (EVar "tomlQuote") (EApp (EVar "pathSpelling") (EVar "s")))) (arm (PCon "PSet" (PCon "Some" (PVar "xs"))) () (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "tomlQuote")) (EVar "xs"))))) (ELit (LString "]")))) (arm (PCon "PProduct" (PVar "ax")) ((GBool (EApp (EVar "not") (EApp (EVar "isSubTop") (EApp (EVar "PProduct") (EVar "ax")))))) (EBinOp "++" (EBinOp "++" (ELit (LString "{ ")) (EApp (EVar "display") (EApp (EVar "productTomlInline") (EVar "ax")))) (ELit (LString " }")))) (arm PWild () (ELit (LString "true")))))
 (DTypeSig false "productTomlInline" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "String")))
@@ -924,14 +887,11 @@ joinSemiTok xs = joinWith ";" xs
 (DFunDef false "tomlChar" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (ELit (LString "\\\"")) (EIf (EBinOp "||" (EBinOp "<" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 32))) (EBinOp "==" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 127)))) (EBinOp "++" (EBinOp "++" (ELit (LString "\\u00")) (EApp (EVar "display") (EApp (EVar "escOneHex2") (EApp (EVar "charCode") (EVar "c"))))) (ELit (LString ""))) (EIf (EVar "otherwise") (EApp (EVar "charToStr") (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "lowerFirst" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "lowerFirst" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EVar "s") (EBinOp "++" (EApp (EVar "toLower") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s"))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "n")) (EVar "s")))))))
-(DTypeSig true "manifestToml" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
-(DFunDef false "manifestToml" ((PList)) (ELit (LString "[package.capabilities]\n")))
-(DFunDef false "manifestToml" ((PVar "atoms")) (EBlock (DoLet false false (PVar "lines") (EApp (EApp (EVar "map") (EApp (EVar "atomToToml") (EApp (EVar "manifestKey") (EVar "atoms")))) (EVar "atoms"))) (DoExpr (EBinOp "++" (ELit (LString "[package.capabilities]\n")) (EApp (EVar "joinTomlLines") (EVar "lines"))))))
 (DTypeSig true "manifestKey" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyCon "Atom") (TyCon "String"))))
 (DFunDef false "manifestKey" ((PVar "atoms") (PVar "a")) (EIf (EApp (EApp (EVar "labelCollides") (EVar "atoms")) (EApp (EVar "atomLabel") (EVar "a"))) (EApp (EVar "qualifiedKey") (EVar "a")) (EApp (EVar "atomLabel") (EVar "a"))))
 (DTypeSig false "labelCollides" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "labelCollides" ((PVar "atoms") (PVar "name")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "atomKey")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EBinOp "==" (EApp (EVar "atomLabel") (EVar "b")) (EVar "name")))) (EVar "atoms"))))) (ELit (LInt 1))))
-(DTypeSig true "qualifiedKey" (TyFun (TyCon "Atom") (TyCon "String")))
+(DTypeSig false "qualifiedKey" (TyFun (TyCon "Atom") (TyCon "String")))
 (DFunDef false "qualifiedKey" ((PVar "a")) (EApp (EVar "EP.qualifiedKey") (EVar "a")))
 (DTypeSig true "unresolvedWhy" (TyFun (TyCon "Atom") (TyCon "String")))
 (DFunDef false "unresolvedWhy" ((PVar "a")) (EApp (EVar "EP.unresolvedWhy") (EVar "a")))
@@ -1006,11 +966,11 @@ joinSemiTok xs = joinWith ";" xs
 (DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true))))
 (DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "Param" true) (mem "pathClimbs" false) (mem "pathSpelling" false))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "authHasVars" false) (mem "authConsts" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "authConsts" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "decodeSetParam" false))))
 (DUse false (UseAlias ("types" "effect_policy") "EP"))
-(DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "policyRefusals" false) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false) (mem "allOk" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "renderAtom" false) (mem "Atom" true))))
+(DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false) (mem "allOk" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "Atom" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "effParamSurface" false) (mem "Decl" true))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
@@ -1064,7 +1024,7 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "stubSource" (TyCon "String"))
 (DFunDef false "stubSource" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "cacheGet req = \"\"\n")) (ELit (LString "cacheSet req result = ()\n")) (ELit (LString "logEvent s = putStr (stringConcat [\"   [LOG] \", s, \"\\n\"])\n")) (ELit (LString "getEnv k = None\n")) (ELit (LString "args u = []\n")) (ELit (LString "executablePath u = \"\"\n")) (ELit (LString "readFile p g = Err \"\"\n")) (ELit (LString "readFileBytes p g = Err \"\"\n")) (ELit (LString "fileExists p g = False\n")) (ELit (LString "canonicalizePath p g = p\n")) (ELit (LString "listDir p g = Err \"\"\n")) (ELit (LString "statFile p g = Err \"\"\n")) (ELit (LString "writeFile p c g = Err \"\"\n")) (ELit (LString "writeFileBytes p b g = Err \"\"\n")) (ELit (LString "appendFile p c g = Err \"\"\n")) (ELit (LString "makeDir p g = Err \"\"\n")) (ELit (LString "removeFile p g = Err \"\"\n")) (ELit (LString "rename o n gs gd = Err \"\"\n")) (ELit (LString "removeDir p g = Err \"\"\n")) (ELit (LString "runCommand cmd a = Err \"\"\n")) (ELit (LString "runCommandBatch cmd j a = []\n")) (ELit (LString "netResolve h = Err \"\"\n")) (ELit (LString "netTcpConnect h p = Err \"\"\n")) (ELit (LString "netTcpListen h p = Err \"\"\n")) (ELit (LString "netListenPort fd = Err \"\"\n")) (ELit (LString "netTcpAccept fd = Err \"\"\n")) (ELit (LString "netSend fd b = Err \"\"\n")) (ELit (LString "netRecv fd n = Err \"\"\n")) (ELit (LString "netShutdown fd how = Err \"\"\n")) (ELit (LString "netClose fd = Err \"\"\n")) (ELit (LString "netSetTimeout fd ms = Err \"\"\n")))))
 (DTypeSig false "runPlugin" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "ElabResult") (TyCon "String")))))
-(DFunDef false "runPlugin" ((PVar "fnName") (PVar "grants") (PVar "elab")) (EBlock (DoLet false false (PVar "stubD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "stubSource")))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EFieldAccess (EVar "elab") "erCore") (EFieldAccess (EVar "elab") "erModules")))) (DoLet false false (PVar "facts") (EApp (EVar "factsOfElab") (EVar "elab"))) (DoExpr (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoExpr (EApp (EVar "resetOutput") (ELit LUnit))) (DoLet false false (PVar "rootEnv") (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EVar "facts")) (EApp (EVar "buildStampExterns") (ELit LUnit))) (EBinOp "++" (EVar "coreE") (EVar "stubD"))) (EVar "modulesE"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupValue") (EVar "fnName")) (EVar "rootEnv")) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "   (no '")) (EVar "fnName")) (ELit (LString "' binding in output)\n")))) (arm (PCon "Some" (PVar "fnVal")) () (EBlock (DoLet false false (PVar "sample") (ELit (LString "X-Forwarded-For: 192.168.1.1"))) (DoLet false false (PVar "granted") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "f") PWild) (EApp (EApp (EVar "apply") (EVar "f")) (EApp (EVar "VList") (EListLit))))) (EVar "fnVal")) (EApp (EApp (EVar "replicate") (EVar "grants")) (ELit LUnit)))) (DoLet false false (PVar "result") (EApp (EApp (EVar "apply") (EVar "granted")) (EApp (EVar "VString") (EVar "sample")))) (DoLet false false (PVar "logged") (EApp (EVar "readOutput") (ELit LUnit))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "logged"))) (ELit (LString "   "))) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "escStr") (EVar "sample")))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EApp (EVar "ppValue") (EVar "result")))) (ELit (LString "\n"))))))))))))))
+(DFunDef false "runPlugin" ((PVar "fnName") (PVar "grants") (PVar "elab")) (EBlock (DoLet false false (PVar "stubD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "stubSource")))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE")) (EApp (EApp (EVar "mangleCtorCollisionsPair") (EListLit)) (ETuple (EFieldAccess (EVar "elab") "erCore") (EFieldAccess (EVar "elab") "erModules")))) (DoLet false false (PVar "facts") (EApp (EVar "factsOfElab") (EVar "elab"))) (DoExpr (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoExpr (EApp (EVar "resetOutput") (ELit LUnit))) (DoLet false false (PVar "rootEnv") (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EVar "facts")) (EApp (EVar "buildStampExterns") (ELit LUnit))) (EBinOp "++" (EVar "coreE") (EVar "stubD"))) (EVar "modulesE"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupValue") (EVar "fnName")) (EVar "rootEnv")) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "   (no '")) (EVar "fnName")) (ELit (LString "' binding in output)\n")))) (arm (PCon "Some" (PVar "fnVal")) () (EBlock (DoLet false false (PVar "sample") (ELit (LString "X-Forwarded-For: 192.168.1.1"))) (DoLet false false (PVar "granted") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "f") PWild) (EApp (EApp (EVar "apply") (EVar "f")) (EApp (EVar "VList") (EListLit))))) (EVar "fnVal")) (EApp (EApp (EVar "replicate") (EVar "grants")) (ELit LUnit)))) (DoLet false false (PVar "result") (EApp (EApp (EVar "apply") (EVar "granted")) (EApp (EVar "VString") (EVar "sample")))) (DoLet false false (PVar "logged") (EApp (EVar "readOutput") (ELit LUnit))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "logged"))) (ELit (LString "   "))) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "escStr") (EVar "sample")))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EApp (EVar "ppValue") (EVar "result")))) (ELit (LString "\n"))))))))))))))
 (DTypeSig false "lookupValue" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupValue" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupValue" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupValue") (EVar "k")) (EVar "rest"))))
@@ -1095,8 +1055,6 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "listIsEmpty" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "listIsEmpty" ((PList)) (EVar "True"))
 (DFunDef false "listIsEmpty" (PWild) (EVar "False"))
-(DTypeSig false "atomToToml" (TyFun (TyFun (TyCon "Atom") (TyCon "String")) (TyFun (TyCon "Atom") (TyCon "String"))))
-(DFunDef false "atomToToml" ((PVar "keyOf") (PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "keyOf") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "authConsts") (EApp (EVar "atomAuth") (EVar "a"))) (arm (PCon "Some" (PVar "ps")) ((GBool (EApp (EApp (EVar "anyList") (EVar "pathClimbs")) (EVar "ps")))) (EBinOp "++" (EVar "label") (ELit (LString " = true")))) (arm (PCon "Some" (PList (PVar "p"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EApp (EVar "paramToml") (EVar "p")))) (ELit (LString "")))) (arm (PCon "Some" (PAs "ps" (PCons PWild (PCons PWild PWild)))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = ["))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "paramToml")) (EVar "ps"))))) (ELit (LString "]")))) (arm PWild () (EIf (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = true  # unresolved: "))) (EApp (EMethodRef "display") (EApp (EVar "unresolvedWhy") (EVar "a")))) (ELit (LString ""))) (EBinOp "++" (EVar "label") (ELit (LString " = true")))))))))
 (DTypeSig false "paramToml" (TyFun (TyCon "Param") (TyCon "String")))
 (DFunDef false "paramToml" ((PVar "p")) (EMatch (EApp (EVar "canonParam") (EVar "p")) (arm (PCon "PPrefix" (PCon "Some" (PVar "s"))) () (EApp (EVar "tomlQuote") (EVar "s"))) (arm (PCon "PPath" (PCon "Some" (PVar "s"))) () (EApp (EVar "tomlQuote") (EApp (EVar "pathSpelling") (EVar "s")))) (arm (PCon "PSet" (PCon "Some" (PVar "xs"))) () (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "tomlQuote")) (EVar "xs"))))) (ELit (LString "]")))) (arm (PCon "PProduct" (PVar "ax")) ((GBool (EApp (EVar "not") (EApp (EVar "isSubTop") (EApp (EVar "PProduct") (EVar "ax")))))) (EBinOp "++" (EBinOp "++" (ELit (LString "{ ")) (EApp (EMethodRef "display") (EApp (EVar "productTomlInline") (EVar "ax")))) (ELit (LString " }")))) (arm PWild () (ELit (LString "true")))))
 (DTypeSig false "productTomlInline" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "String")))
@@ -1115,14 +1073,11 @@ joinSemiTok xs = joinWith ";" xs
 (DFunDef false "tomlChar" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (ELit (LString "\\\"")) (EIf (EBinOp "||" (EBinOp "<" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 32))) (EBinOp "==" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 127)))) (EBinOp "++" (EBinOp "++" (ELit (LString "\\u00")) (EApp (EMethodRef "display") (EApp (EVar "escOneHex2") (EApp (EVar "charCode") (EVar "c"))))) (ELit (LString ""))) (EIf (EVar "otherwise") (EApp (EVar "charToStr") (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "lowerFirst" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "lowerFirst" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EVar "s") (EBinOp "++" (EApp (EVar "toLower") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s"))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "n")) (EVar "s")))))))
-(DTypeSig true "manifestToml" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
-(DFunDef false "manifestToml" ((PList)) (ELit (LString "[package.capabilities]\n")))
-(DFunDef false "manifestToml" ((PVar "atoms")) (EBlock (DoLet false false (PVar "lines") (EApp (EApp (EMethodRef "map") (EApp (EVar "atomToToml") (EApp (EVar "manifestKey") (EVar "atoms")))) (EVar "atoms"))) (DoExpr (EBinOp "++" (ELit (LString "[package.capabilities]\n")) (EApp (EVar "joinTomlLines") (EVar "lines"))))))
 (DTypeSig true "manifestKey" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyCon "Atom") (TyCon "String"))))
 (DFunDef false "manifestKey" ((PVar "atoms") (PVar "a")) (EIf (EApp (EApp (EVar "labelCollides") (EVar "atoms")) (EApp (EVar "atomLabel") (EVar "a"))) (EApp (EVar "qualifiedKey") (EVar "a")) (EApp (EVar "atomLabel") (EVar "a"))))
 (DTypeSig false "labelCollides" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "labelCollides" ((PVar "atoms") (PVar "name")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "atomKey")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EBinOp "==" (EApp (EVar "atomLabel") (EVar "b")) (EVar "name")))) (EVar "atoms"))))) (ELit (LInt 1))))
-(DTypeSig true "qualifiedKey" (TyFun (TyCon "Atom") (TyCon "String")))
+(DTypeSig false "qualifiedKey" (TyFun (TyCon "Atom") (TyCon "String")))
 (DFunDef false "qualifiedKey" ((PVar "a")) (EApp (EVar "EP.qualifiedKey") (EVar "a")))
 (DTypeSig true "unresolvedWhy" (TyFun (TyCon "Atom") (TyCon "String")))
 (DFunDef false "unresolvedWhy" ((PVar "a")) (EApp (EVar "EP.unresolvedWhy") (EVar "a")))

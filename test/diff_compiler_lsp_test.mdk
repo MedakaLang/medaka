@@ -36,6 +36,10 @@
    | `kept-resolve-error-single` | didOpen a single file with a resolve error, hover | `level6 : Int` and `bad : Int`, as a drive answers them |
    | `kept-cold` | didOpen a buffer whose publish kept nothing, then completion and inlayHint | both drive and answer: the buffer's own `level6` completes, `bad` earns its hint |
    | `kept-stale-edit` | didOpen, didChange to a resolve-erroring text, hover | the NEW text's type, never the analysis the first publish kept |
+   | `sibling-view-sibling` | hover, completion, definition and references on a private name of the subject, in its test sibling | each verb sees `step` as `check` does: the type, the candidate, and the definition in the subject |
+   | `sibling-view-other` | the same four requests in a module that is not the sibling | none of them sees the private `step`, as `check` rejects the import |
+   | `sibling-view-imported` | definition and references on a name the subject imports, in the sibling, and references from that name's own definition | the definition is in the defining module; references reach the sibling's use and the subject's import |
+   | `sibling-view-imported-other` | the same name through a module that is not the sibling | the subject exports no `twice`, so definition and references find nothing |
    | `kept-inlay-project` | inlayHint over an import-bearing buffer | `: Int` on `k = plain 3`, the type the project analysis gives (`check --types`), not the buffer typechecked alone |
 
    Each row is its own `medaka lsp` process, exactly as the retired scripts
@@ -91,8 +95,6 @@ import compiler_cli_test_support.{
 import fs.{mkdirAll}
 import json.{
   Json(..),
-  asInt,
-  asString,
   get,
   jArray,
   jObject,
@@ -277,6 +279,10 @@ diagKey d =
 unless : Bool -> String -> Option String
 unless ok msg = if ok then None else Some msg
 
+-- | `Some msg` exactly when `bad` holds: the grade for a thing that must not happen.
+reports : Bool -> String -> Option String
+reports bad msg = if bad then Some msg else None
+
 -- # The request sets
 
 rpc : Int -> String -> Json -> Json
@@ -427,10 +433,164 @@ projectFiles = [
   ("main_app.mdk", mainAppSrc),
 ]
 
+-- # The test sibling's view of its subject
+
+-- | A private helper beside an abstract type, the shape of
+-- `test/sibling_view_fixtures/counter.mdk`.
+sibSubjectSrc : String
+sibSubjectSrc =
+  "export data Counter = Counter Int\n\nexport tick : Counter -> Counter\ntick (Counter n) = Counter (step n)\n\nstep : Int -> Int\nstep n = n + 1\n"
+
+-- | Imports the private `step`; `use2` is a completion prefix.
+sibUserSrc : String
+sibUserSrc =
+  "import sub.{Counter(..), step}\n\nuse1 = step 1\nuse2 = ste\n\nmain = println use1\n"
+
+-- | One session over `sibUserSrc` as the file `file`: hover, completion,
+-- definition and references at the use `step 1` / the prefix `ste`.
+sibRequests : String -> String -> List Json
+sibRequests dir file =
+  let uri = "file://\{dir}/\{file}"
+  [
+    initCaps,
+    didOpenMsg uri sibUserSrc,
+    rpc 2 "textDocument/hover" (posParams uri 2 8),
+    rpc 3 "textDocument/completion" (posParams uri 3 10),
+    rpc 4 "textDocument/definition" (posParams uri 2 8),
+    rpc 5 "textDocument/references" (posParams uri 2 8),
+    bye,
+  ]
+
+-- | Whether the reply to `id` names a location in the file `file`.
+locatesIn : String -> Int -> Seen -> Bool
+locatesIn file idn s =
+  elem
+    file
+    (map (l => basename (strField "uri" l)) (elems (resultTo idn s.objs)))
+
+completesStep : Seen -> Bool
+completesStep s =
+  itemsOf (resultTo 3 s.objs) |> map (strField "label") |> elem "step"
+
+gradeSiblingView : Seen -> List String
+gradeSiblingView s = somes [
+  hoverIs s 2 "step : Int -> Int",
+  unless
+    (completesStep s)
+    "completing `ste` did not offer the subject's private `step`",
+  unless (locatesIn "sub.mdk" 4 s) "definition of `step` did not reach sub.mdk",
+  unless (locatesIn "sub.mdk" 5 s) "references of `step` did not reach sub.mdk",
+]
+
+gradeNonSiblingView : Seen -> List String
+gradeNonSiblingView s = somes [
+  hoverIs s 2 "",
+  reports
+    (completesStep s)
+    "completing `ste` offered the private `step` to a non-sibling",
+  reports
+    (locatesIn "sub.mdk" 4 s)
+    "definition of `step` reached sub.mdk from a non-sibling",
+  reports
+    (locatesIn "sub.mdk" 5 s)
+    "references of `step` reached sub.mdk from a non-sibling",
+]
+
+-- # A name the subject imports, seen through the sibling
+
+helperSrc : String
+helperSrc = "export twice : Int -> Int\ntwice n = n * 2\n"
+
+-- | Imports `twice` from `helper` and never exports it.
+sibImportingSubjectSrc : String
+sibImportingSubjectSrc =
+  "import helper.{twice}\n\nexport tick : Int -> Int\ntick n = twice n + 1\n"
+
+-- | Reaches `twice` through the subject, as `check` accepts for the sibling.
+sibImportUserSrc : String
+sibImportUserSrc =
+  "import sub.{twice}\n\nuse1 = twice 1\n\nmain = println use1\n"
+
+-- | Definition and references at the use `twice 1` in `file`, then, with the
+-- defining module open, references at the head of `twice` in `helper.mdk`.
+importedRequests : String -> String -> List Json
+importedRequests dir file =
+  let uri = "file://\{dir}/\{file}"
+  let helperUri = "file://\{dir}/helper.mdk"
+  [
+    initCaps,
+    didOpenMsg uri sibImportUserSrc,
+    didOpenMsg helperUri helperSrc,
+    rpc 2 "textDocument/definition" (posParams uri 2 8),
+    rpc 3 "textDocument/references" (posParams uri 2 8),
+    rpc 4 "textDocument/references" (posParams helperUri 1 1),
+    bye,
+  ]
+
+-- | The sorted `(file, 0-based line)` of every location in the reply to `id`.
+locationsOf : Int -> Seen -> List (String, Int)
+locationsOf idn s = sort (map locationOf (elems (resultTo idn s.objs)))
+
+locationOf : Json -> (String, Int)
+locationOf l = match dig ["range", "start", "line"] l
+  Some (JInt n) => (basename (strField "uri" l), n)
+  _ => (basename (strField "uri" l), -1)
+
+locationsAre : Seen -> Int -> List (String, Int) -> Option String
+locationsAre s idn want =
+  let got = locationsOf idn s
+  unless
+    (got == want)
+    "locations \{intToString idn} answered \{debug got}, expected \{debug want}"
+
+-- | The definition is the signature and clause in `helper.mdk`; references
+-- add the uses in the subject and in the sibling, as for a plain importer.
+gradeImportedView : Seen -> List String
+gradeImportedView s = somes [
+  locationsAre s 2 [("helper.mdk", 0), ("helper.mdk", 1)],
+  locationsAre s 3 [
+    ("helper.mdk", 0),
+    ("helper.mdk", 1),
+    ("sub.mdk", 3),
+    ("sub_test.mdk", 2),
+  ],
+  locationsAre s 4 [
+    ("helper.mdk", 0),
+    ("helper.mdk", 1),
+    ("sub.mdk", 3),
+    ("sub_test.mdk", 2),
+  ],
+]
+
+-- | The subject exports no `twice`: nothing resolves, and references reach only
+-- the buffer's own use.
+gradeImportedNonSibling : Seen -> List String
+gradeImportedNonSibling s = somes [
+  locationsAre s 2 [],
+  locationsAre s 3 [("other.mdk", 2)],
+]
+
 -- # The sessions that reach an analysis a publish kept
 
 manifest : (String, String)
 manifest = ("medaka.toml", "[package]\nname = \"kept\"\n")
+
+sibFiles : List (String, String)
+sibFiles = [
+  manifest,
+  ("sub.mdk", sibSubjectSrc),
+  ("sub_test.mdk", sibUserSrc),
+  ("other.mdk", sibUserSrc),
+]
+
+sibImportFiles : List (String, String)
+sibImportFiles = [
+  manifest,
+  ("helper.mdk", helperSrc),
+  ("sub.mdk", sibImportingSubjectSrc),
+  ("sub_test.mdk", sibImportUserSrc),
+  ("other.mdk", sibImportUserSrc),
+]
 
 sibSrc : String
 sibSrc = "export\nbase = 7\n"
@@ -804,6 +964,34 @@ probes = [
       ],
     oracle = NoOracle,
     grade = s => somes [hoverIs s 2 "double : Semigroup a => a -> a"],
+  },
+  Probe {
+    name = "sibling-view-sibling",
+    files = sibFiles,
+    requests = dir => sibRequests dir "sub_test.mdk",
+    oracle = NoOracle,
+    grade = gradeSiblingView,
+  },
+  Probe {
+    name = "sibling-view-other",
+    files = sibFiles,
+    requests = dir => sibRequests dir "other.mdk",
+    oracle = NoOracle,
+    grade = gradeNonSiblingView,
+  },
+  Probe {
+    name = "sibling-view-imported",
+    files = sibImportFiles,
+    requests = dir => importedRequests dir "sub_test.mdk",
+    oracle = NoOracle,
+    grade = gradeImportedView,
+  },
+  Probe {
+    name = "sibling-view-imported-other",
+    files = sibImportFiles,
+    requests = dir => importedRequests dir "other.mdk",
+    oracle = NoOracle,
+    grade = gradeImportedNonSibling,
   },
   Probe {
     name = "kept-inlay-project",
