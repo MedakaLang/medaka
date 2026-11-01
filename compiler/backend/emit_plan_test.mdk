@@ -20,7 +20,11 @@ import backend.extern_catalog.{RuntimeExternDomain(..)}
 import backend.emit_target.{Backend(..)}
 import ir.extern_lower.{lowerExterns, externVar, implicitRuntimeFacts}
 import types.program_facts.{emptyFacts}
-import frontend.parser.{parse}
+import frontend.parser.{parse, parseResult}
+import frontend.lexer.{tokenize, tokenizeWithOffsetPairs}
+import frontend.lex_token.{Token(..), tokenToString, isLayoutTok}
+import frontend.marker.{localBoundNames}
+import tools.printer.{programToString}
 import test_process.{medakaRoot}
 import test.{
   Expectation,
@@ -32,12 +36,19 @@ import test.{
   labelFail,
   expectEach,
   expectTextContainsAll,
+  expectNoFindings,
+  expectFindings,
+  expectAtLeast,
   fail,
 }
-import string.{contains, endsWith, lines, split, trimLeft, startsWith, words}
-import list.{drop, sort, take}
+import string.{
+  contains, endsWith, lines, split, trimLeft, startsWith, words, join,
+  sliceClamped
+}
+import list.{drop, sort, take, mapWithIndex, reverse}
 import frontend.ast.{
-  Addr(..), Lit(..), Pat(..), Route(..), noDeclLoc, noBinderId
+  Addr(..), Lit(..), Pat(..), Route(..), Decl(..), noDeclLoc, noBinderId,
+  declBinderNames
 }
 import ir.core_ir.{
   CArm(..),
@@ -59,7 +70,9 @@ import ir.core_ir.{
   EntryFact(..),
   synthBind,
 }
-import support.ordmap.{omLookup, omEmpty}
+import support.ordmap.{
+  OrdMap, omLookup, omEmpty, omInsert, omKeys, omFromNames, omFromPairs
+}
 import backend.emit_plan.{
   EmitPlan(..),
   ReachUnits(..),
@@ -313,34 +326,320 @@ withBackendCode file check =
     Err e => fail "cannot read compiler/backend/\{file}: \{e}"
     Ok text => check (codeLinesOf text)
 
--- These names identify the retired recursive wrapper-demand scanner in
--- wasm_emit. The plan owns the set now; this is a source-shape ratchet.
-legacyWasmValueScanners : List String
-legacyWasmValueScanners = [
-  "scanFnValueUses",
-  "scanImplValueUses",
-  "scanImplEntryValueUses",
-  "scanBindValueUses",
-  "scanExprValueUses",
-  "scanArmValueUses",
-  "scanGuardValueUses",
-  "scanBlockValueUses",
+-- This bounded fingerprint recognizes the retained historical families under
+-- consistent identifier substitutions. It does not decide semantic equivalence:
+-- changing control flow, literals, constructors or clause order can evade it.
+-- Match whole families, including helper multiplicity, rather than banning a
+-- generic recursive list walk that a target physical adapter may also need.
+retirementFixtures : List (String, String, String)
+retirementFixtures = [
+  ("R-ROSTER LLVM", "roster-llvm", "llvm_emit.mdk"),
+  ("R-ORD LLVM", "ordinal-llvm", "llvm_emit.mdk"),
+  ("R-GROUP LLVM", "group-llvm", "llvm_emit.mdk"),
+  ("R-ROSTER Wasm", "roster-wasm", "wasm_emit.mdk"),
+  ("R-ORD Wasm", "ordinal-wasm", "wasm_emit.mdk"),
+  ("R-GROUP Wasm", "group-wasm", "wasm_emit.mdk"),
+  ("R-VALUSE Wasm", "valuse-wasm", "wasm_emit.mdk"),
 ]
 
-legacyWasmValueScannersIn : List String -> List String
-legacyWasmValueScannersIn code =
-  filter (name => any (contains name) code) legacyWasmValueScanners
+retirementFixture : String -> <IO, FileRead> Result String String
+retirementFixture name =
+  readFile "\{medakaRoot}/test/backend_retirement_fixtures/\{name}.txt"
 
-test "wasm_emit has no duplicate function-value scanner" = withBackendCode
-  "wasm_emit.mdk"
-  (code => expectAll
-    [
-      expectEqual [] (legacyWasmValueScannersIn code),
-      -- A restored producer spelling is the positive control for this ratchet.
+-- Parse first, then print each complete function with the existing AST printer.
+-- This removes comments, source locations, whitespace and redundant parentheses.
+-- Lowercase identifiers are erased, including their equality relationships:
+-- binders in separate scopes may be alpha-renamed independently. This can
+-- collide with unrelated same-shaped code; whole-family matching limits that
+-- conservatism, and the physical-adapter controls pin the current neighbors.
+retirementFunctions : List Decl -> OrdMap (List Decl)
+retirementFunctions ds = fold (acc d => retirementMerge d acc) omEmpty ds
+
+retirementMerge : Decl -> OrdMap (List Decl) -> OrdMap (List Decl)
+retirementMerge (DFunDef _ n ps body _ _) acc =
+  omInsert
+    n
+    (DFunDef False n ps body noDeclLoc noBinderId
+      :: optionOr [] (omLookup n acc))
+    acc
+retirementMerge (DAttrib _ inner) acc = retirementMerge inner acc
+retirementMerge _ acc = acc
+
+retirementTokens : List Token -> List String
+retirementTokens [] = []
+retirementTokens ((TIdent _) :: rest) = "IDENT" :: retirementTokens rest
+retirementTokens (t :: rest) =
+  if isLayoutTok t || t == TEof then
+    retirementTokens rest
+  else
+    tokenToString t :: retirementTokens rest
+
+retirementShape : List Decl -> String
+retirementShape ds =
+  let text = programToString (reverse ds)
+  let (tokens, spans) = tokenizeWithOffsetPairs text
+  let names = canonicalRetirementNames tokens omEmpty
+  let normalized =
+    stringConcat (renameRetirementTokens text names tokens spans 0)
+  join "\n" (retirementTokens (tokenize (programToString (parse normalized))))
+
+-- Canonicalize before the final print: identifier width can change the printer's
+-- optional parentheses and trailing commas, even when the AST shape is unchanged.
+canonicalRetirementNames : List Token -> OrdMap String -> OrdMap String
+canonicalRetirementNames [] names = names
+canonicalRetirementNames ((TIdent n) :: rest) names =
+  canonicalRetirementNames rest (omInsert n "identifier" names)
+canonicalRetirementNames (_ :: rest) names = canonicalRetirementNames rest names
+
+retirementShapes : String -> Result String (OrdMap Int)
+retirementShapes text = match parseResult text
+  Err _ => Err "retirement: source does not parse"
+  Ok ds =>
+    let funcs = retirementFunctions ds
+    Ok
+      (fold
+        (counts n =>
+          let shape = retirementShape (optionOr [] (omLookup n funcs))
+          omInsert shape (1 + optionOr 0 (omLookup shape counts)) counts)
+        omEmpty
+        (omKeys funcs))
+
+retirementFindings : String ->
+  OrdMap Int ->
+  OrdMap Int ->
+  Result String (List String)
+retirementFindings family historical actual =
+  if isEmpty (omKeys historical) then
+    Err "retirement: empty historical family \{family}"
+  else
+    Ok (if all
+      (shape =>
+        optionOr 0 (omLookup shape actual)
+          >= optionOr 0 (omLookup shape historical))
+      (omKeys historical) then
+      [family]
+    else
+      [])
+
+checkRetirement : String -> String -> String -> Result String (List String)
+checkRetirement family historical actual = do
+  required <- retirementShapes historical
+  found <- retirementShapes actual
+  retirementFindings family required found
+
+-- Rename only lexical identifier tokens belonging to declarations or binders;
+-- strings, comments, constructors and imported callees remain intact. The set
+-- comes from the parsed fixture, independently of fingerprint normalization.
+renamedRetirement : String -> Result String String
+renamedRetirement text = match parseResult text
+  Err _ => Err "retirement: fixture does not parse"
+  Ok ds =>
+    let bound =
+      omFromNames (flatMap declBinderNames ds ++ localBoundNames ds) omEmpty
+    let names =
+      omFromPairs
+        (mapWithIndex
+          (i n => (n, "restoredIdentifier_\{1000003 - 13 * i}"))
+          (omKeys bound))
+        omEmpty
+    let (tokens, spans) = tokenizeWithOffsetPairs text
+    Ok (stringConcat (renameRetirementTokens text names tokens spans 0))
+
+renameRetirementTokens : String ->
+  OrdMap String ->
+  List Token ->
+  List (Int, Int) ->
+  Int ->
+  List String
+renameRetirementTokens text names (t :: ts) ((start, end) :: spans) offset =
+  match t
+    TIdent n => match omLookup n names
+      Some replacement =>
+        sliceClamped offset start text
+          :: replacement
+          :: renameRetirementTokens text names ts spans end
+      None => renameRetirementTokens text names ts spans offset
+    _ => renameRetirementTokens text names ts spans offset
+renameRetirementTokens text _ [] [] offset =
+  [sliceClamped offset (stringLength text) text]
+renameRetirementTokens _ _ _ _ _ = panic "retirement: token/span mismatch"
+
+expectRetirementRestored : String -> Bool -> <IO, FileRead> Expectation
+expectRetirementRestored fixture renamed =
+  match filter ((_, name, _) => name == fixture) retirementFixtures
+    [(family, _, emitter)] => match (
+      retirementFixture fixture,
+      readFile "\{medakaRoot}/compiler/backend/\{emitter}",
+    )
+      (Ok historical, Ok current) =>
+        match if renamed then renamedRetirement historical else Ok historical
+          Err e => fail e
+          Ok restored =>
+            let verdict =
+              checkRetirement family historical "\{current}\n\{restored}"
+            expectAll [
+              expectAtLeast
+                1
+                (length (omKeys (retirementFunctions (parse restored)))),
+              if renamed then
+                expectNotEqual historical restored
+              else
+                expectEqual historical restored,
+              expectEqual
+                (retirementShapes historical)
+                (retirementShapes restored),
+              expectFindings family verdict,
+              expectEqual (Ok [family]) verdict,
+            ]
+      (Err e, _) => fail e
+      (_, Err e) => fail e
+    _ => fail "retirement: unknown fixture \{fixture}"
+
+test "R-ROSTER Wasm complete original restoration" =
+  expectRetirementRestored "roster-wasm" False
+test "R-ROSTER Wasm complete renamed restoration" =
+  expectRetirementRestored "roster-wasm" True
+test "R-ORD Wasm complete original restoration" =
+  expectRetirementRestored "ordinal-wasm" False
+test "R-ORD Wasm complete renamed restoration" =
+  expectRetirementRestored "ordinal-wasm" True
+test "R-GROUP Wasm complete original restoration" =
+  expectRetirementRestored "group-wasm" False
+test "R-GROUP Wasm complete renamed restoration" =
+  expectRetirementRestored "group-wasm" True
+test "R-VALUSE Wasm complete original restoration" =
+  expectRetirementRestored "valuse-wasm" False
+test "R-VALUSE Wasm complete renamed restoration" =
+  expectRetirementRestored "valuse-wasm" True
+test "R-ROSTER LLVM complete original restoration" =
+  expectRetirementRestored "roster-llvm" False
+test "R-ROSTER LLVM complete renamed restoration" =
+  expectRetirementRestored "roster-llvm" True
+test "R-ORD LLVM complete original restoration" =
+  expectRetirementRestored "ordinal-llvm" False
+test "R-ORD LLVM complete renamed restoration" =
+  expectRetirementRestored "ordinal-llvm" True
+test "R-GROUP LLVM complete original restoration" =
+  expectRetirementRestored "group-llvm" False
+test "R-GROUP LLVM complete renamed restoration" =
+  expectRetirementRestored "group-llvm" True
+
+test "current target physical adapters contain no historical semantic producer family" = expectAll
+  [
+    expectAtLeast 4 (length retirementFixtures),
+    expectEach
+      (map
+        ((family, fixture, emitter) => (
+          family,
+          match (
+            retirementFixture fixture,
+            readFile "\{medakaRoot}/compiler/backend/\{emitter}",
+          )
+            (Ok historical, Ok current) =>
+              expectNoFindings
+                family
+                (checkRetirement family historical current)
+            (Err e, _) => fail e
+            (_, Err e) => fail e,
+        ))
+        retirementFixtures),
+  ]
+
+test "retirement fingerprints erase identifiers and retain semantic tokens" =
+  let base = retirementShapes "apply f x = f x"
+  expectEach [
+    (
+      "opaque declaration and local renames",
+      expectEqual base (retirementShapes "opaque a b = a b"),
+    ),
+    (
+      "documented collision for different identifier relationships",
+      expectEqual base (retirementShapes "apply f x = f f"),
+    ),
+    (
+      "operators",
+      expectNotEqual
+        (retirementShapes "f x = x + 1")
+        (retirementShapes "g y = y - 1"),
+    ),
+    (
+      "literals",
+      expectNotEqual
+        (retirementShapes "f x = x + 1")
+        (retirementShapes "g y = y + 2"),
+    ),
+    (
+      "constructors",
+      expectNotEqual
+        (retirementShapes "f x = Some x")
+        (retirementShapes "g y = Ok y"),
+    ),
+    (
+      "comments and parentheses",
+      expectEqual base (retirementShapes "-- apply\nopaque a b = (a b)"),
+    ),
+    (
+      "parser errors cannot count as retirement findings",
       expectEqual
-        ["scanExprValueUses"]
-        (legacyWasmValueScannersIn ["scanExprValueUses fnNames ctorArs"]),
-    ])
+        (Err "retirement: source does not parse")
+        (retirementShapes "broken = ("),
+    ),
+    (
+      "empty reference cannot pass",
+      expectEqual
+        (Err "retirement: empty historical family empty")
+        (checkRetirement "empty" "" "main = 42"),
+    ),
+  ]
+
+test "similar physical tables and method buckets are lawful retirement neighbors" =
+  let physical =
+    """
+    physicalTags : String -> List String
+    physicalTags "Option" = ["i31:0", "struct:1"]
+    physicalTags "Result" = ["struct:0", "struct:1"]
+    physicalTags "Ordering" = ["i31:0", "i31:1", "i31:2"]
+    physicalTags _ = []
+    methodBuckets [] buckets = buckets
+    methodBuckets (entry :: rest) buckets =
+      let method = implEntryMethodW entry
+      let bucket = optionOr [] (omLookup method buckets)
+      methodBuckets rest (omInsert method (entry :: bucket) buckets)
+    physicalOrdinals [] _ acc = acc
+    physicalOrdinals (name :: rest) index acc =
+      physicalOrdinals rest (index + 1) (omInsert name index acc)
+    """
+  expectEach
+    (map
+      ((family, fixture, _) => (
+        family,
+        match retirementFixture fixture
+          Err e => fail e
+          Ok historical =>
+            expectNoFindings family (checkRetirement family historical physical),
+      ))
+      retirementFixtures)
+
+test "retirement fingerprints allow independent renaming of shadowed binders" =
+  expectEqual
+    (retirementShapes
+      """
+      f x =
+        let x = x + 1
+        x
+      f x y =
+        let x = x + y
+        x
+      """)
+    (retirementShapes
+      """
+      renamed first =
+        let inner = first + 1
+        inner
+      renamed other delta =
+        let result = other + delta
+        result
+      """)
 
 test "no emitter derives declares from emitted text" =
   expectAll

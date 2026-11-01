@@ -1,0 +1,53 @@
+-- Historical declarations: 6a87580140d5df81ca9af27c8ba5ac199c46d10f:compiler/backend/wasm_emit.mdk
+ctorOrdsOfW : List String ->
+  OrdMap String ->
+  OrdMap (List String) ->
+  OrdMap Int ->
+  OrdMap Int
+ctorOrdsOfW [] _ _ m = m
+ctorOrdsOfW (ty :: rest) tym tcm m =
+  ctorOrdsOfW rest tym tcm (indexCtorsW tym ty (ctorsOfTypeIxW tcm ty) 0 m)
+
+indexCtorsW : OrdMap String ->
+  String ->
+  List String ->
+  Int ->
+  OrdMap Int ->
+  OrdMap Int
+indexCtorsW _ _ [] _ m = m
+indexCtorsW tym ty (c :: cs) i m = indexCtorsW tym ty cs (i + 1) (if omHasKey
+  c
+  m then
+  m
+else if firstTyIsW tym c ty then
+  omInsert c i m
+else
+  m)
+
+firstTyIsW : OrdMap String -> String -> String -> Bool
+firstTyIsW tym c ty = match omLookup c tym
+  Some t => eqStr t ty
+  None => False
+
+ctorsOfTypeIxW : OrdMap (List String) -> String -> List String
+ctorsOfTypeIxW tcm ty =
+  ctorsOfTypeDispatchW (t => optionOr [] (omLookup t tcm)) ty
+
+ctorsOfTypeDispatchW : (String -> List String) -> String -> List String
+ctorsOfTypeDispatchW userFallback ty =
+  if isReservedType ty then
+    reservedCtorsOfType ty
+  else if ty == "List" then
+    ["Cons", "Nil"]
+  else if ty == "Bool" then
+    ["False", "True"]
+  else if isTupleType ty then
+    [tupleCtorName (tupleTypeArity ty)]
+  else
+    userFallback ty
+
+reservedCtorsOfType : String -> List String
+reservedCtorsOfType "Option" = ["Some", "None"]
+reservedCtorsOfType "Result" = ["Ok", "Err"]
+reservedCtorsOfType "Ordering" = ["Lt", "Eq", "Gt"]
+reservedCtorsOfType _ = []

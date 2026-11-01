@@ -3385,19 +3385,6 @@ test "impl partition passing neighbor emits on both renderers" =
           ))
           emissionRoutes)
 
-test "emitters have no duplicate impl partition producers" = match (
-  readFile (underRoot "compiler/backend/llvm_emit.mdk"),
-  readFile (underRoot "compiler/backend/wasm_emit.mdk"),
-)
-  (Ok llvm, Ok wasm) => expectEach [
-    ("llvm distinct keys", expectFalse (contains "distinctImplKeys :" llvm)),
-    ("llvm gather", expectFalse (contains "gatherGroup :" llvm)),
-    ("wasm distinct keys", expectFalse (contains "distinctImplKeys :" wasm)),
-    ("wasm gather", expectFalse (contains "gatherImplGroup :" wasm)),
-  ]
-  (Err e, _) => fail e
-  (_, Err e) => fail e
-
 test "impl partition P U P and wrong-program plan" =
   let p = typedLowered "" mixedGroupSrc
   let u = typedLowered "" (defaultSrc "M" "N")
