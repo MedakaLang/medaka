@@ -19,10 +19,10 @@ import support.util.{
 }
 import string.{toInt}
 import tools.probe_transcript.{
-  Chunk(..), Section(..), chunksOf, decodeValue, endTag, firstNonEmptyLine,
-  mintNonce, freshProbeNonce, noncedPrefix, probeNameNonce, renameUserMain,
-  runtimeAlias, runtimeDependencyName, runtimeDependencyPrefix, sentinelLine,
-  startTag, tagsInOrder, valuePrintExprWith
+  seedEnvArgs, Chunk(..), Section(..), chunksOf, decodeValue, endTag,
+  firstNonEmptyLine, mintNonce, freshProbeNonce, noncedPrefix, probeNameNonce,
+  renameUserMain, runtimeAlias, runtimeDependencyName, runtimeDependencyPrefix,
+  sentinelLine, startTag, tagsInOrder, valuePrintExprWith
 }
 import tools.printer.{exprToString, ppTy}
 import tools.prop_plan.{
@@ -476,12 +476,15 @@ buildAndRunPlanned target entry out tmp jobs nonce =
       Err
         (NativeBuildFailure
           "native property runner: could not build \{target} natively\n\{ppBuildReport rep}")
-    Ok _ => match runCommand "env" [
-      "MEDAKA_ROOT=" ++ root,
-      "MEDAKA=" ++ medaka,
-      "MEDAKA_EMITTER=" ++ emitter,
-      out,
-    ]
+    Ok _ => match (runCommand
+      "env"
+      (seedEnvArgs ()
+        ++ [
+          "MEDAKA_ROOT=" ++ root,
+          "MEDAKA=" ++ medaka,
+          "MEDAKA_EMITTER=" ++ emitter,
+          out,
+        ]))
       Err e =>
         Err
           (NativeRuntimeFailure

@@ -106,6 +106,7 @@ import eval.eval.{
   currentEvalFile,
   modulePathMap,
   testCapableExterns,
+  seedRunRng,
   funNamesOf,
   dropShadowedExp,
   lookupBinding,
@@ -184,7 +185,7 @@ import tools.eval_props.{
   startEvalPropWorker,
   takeEvalPropBootstrap,
 }
-import tools.probe_transcript.{firstNonEmptyLine}
+import tools.probe_transcript.{firstNonEmptyLine, testSeedRef, seedEnvArgs}
 import tools.test_pins.{
   PinIndex,
   PinKind(..),
@@ -266,7 +267,7 @@ import args.{
 }
 import json.{Json(..), jObject, jArray, stringify}
 import tools.lint.{splitLintNames}
-import string.{toInt}
+import string.{toInt, replaceAll}
 import test_process.{testJobs}
 import support.timer.{perfEnabled, now, emitPhase}
 import types.tc_diag_text.{tcDiagGoalKey}
@@ -3148,7 +3149,7 @@ superviseEvalProps : String ->
 superviseEvalProps _ _ [] = []
 superviseEvalProps medaka target requests =
   let argv = ["test", "--props-worker"] ++ workerPositionals target requests
-  match runCommand medaka argv
+  match runCommand "env" (seedEnvArgs () ++ [medaka] ++ argv)
     Err message =>
       workerRuntimeRows
         requests
@@ -4378,6 +4379,9 @@ testHelpText = stringConcat [
   "                      instead of the default 100\n", "\n",
   "  --props-worker        internal evaluator property worker, invoked by the test runner\n",
   "\n",
+  "Random draws in the program under test use one seed per run: MEDAKA_SEED\n",
+  "when set, else OS entropy. A failing run prints `seed: N (rerun with\n",
+  "MEDAKA_SEED=N)` after the summary.\n", "\n",
   "--native and --engines are mutually exclusive. With neither, the default\n",
   "is the native backend alone.\n", "\n",
   "With no target, tests the project containing the current directory: the\n",
@@ -4492,6 +4496,49 @@ engineOfName _ = None
 -- were already unreachable (the flag floor ran first), so nothing that could
 -- silently drop a token survives.
 
+-- ── the run's seed ──────────────────────────────────────────────────────
+-- One seed per `medaka test` invocation: MEDAKA_SEED when set, else OS entropy.
+-- The in-process eval engine draws from it (`seedRunRng`) and every spawned
+-- native probe, props worker and per-file child gets it as MEDAKA_SEED
+-- (`seedEnvArgs`). Entropy seeds are 56-bit so the printed value is a plain
+-- decimal Int on every engine.
+export
+initTestSeed : Unit -> <IO> Result String Unit
+initTestSeed _ = match getEnv "MEDAKA_SEED"
+  Some text => match toInt text
+    Some n => Ok (adoptTestSeed n)
+    None => Err "MEDAKA_SEED must be a decimal integer, got \{debug text}"
+  None => Ok (adoptTestSeed (entropySeed (osEntropyBytes 8) 0 0))
+
+-- The first seven of the entropy bytes, big-endian: 56 bits, always a
+-- non-negative Int.
+entropySeed : Array Int -> Int -> Int -> Int
+entropySeed bytes i acc =
+  if i >= 7 then acc else entropySeed bytes (i + 1) (acc * 256 + bytes[i])
+
+adoptTestSeed : Int -> Unit
+adoptTestSeed n =
+  testSeedRef := Some n
+  seedRunRng n
+
+testSeedLine : Int -> String
+testSeedLine n =
+  "seed: \{intToString n} (rerun with MEDAKA_SEED=\{intToString n})"
+
+-- Printed once after the summary of a run in which something failed; a green
+-- run prints nothing.
+export
+printTestSeedLine : Unit -> <IO> Unit
+printTestSeedLine _ = match !testSeedRef
+  Some n => putStrLn (testSeedLine n)
+  None => ()
+
+-- A per-file child prints its own seed line; the parent prints the one line.
+dropSeedLine : String -> String
+dropSeedLine out = match !testSeedRef
+  Some n => replaceAll (testSeedLine n ++ "\n") "" out
+  None => out
+
 -- Original single-file path, unchanged: read <MEDAKA_ROOT>/stdlib sources,
 -- build search roots, run `runTest`, exit 1 on any failure/read-error.
 export
@@ -4503,7 +4550,11 @@ runTestOne engines cases filterOpt target =
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   let ok = runTest engines rtPath corePath target roots cases filterOpt
-  if ok then () else stageExit 1
+  if ok then
+    ()
+  else
+    printTestSeedLine ()
+    stageExit 1
 
 export
 cliTestReportOk : Option String ->
@@ -4947,7 +4998,7 @@ testFilesGo engines _ _ _ cases filterOpt seedOpt files acc =
   let prefix =
     childJobsPrefix (min jobs (length files)) jobs
       ++ childGcMarkersPrefix (envOr "GC_MARKERS" "") jobs
-  let argvs = map (prefix ++ [medaka] ++ _) childArgvs
+  let argvs = map (seedEnvArgs () ++ prefix ++ [medaka] ++ _) childArgvs
   if jobs <= 1 then
     testFilesSerial "env" files argvs acc
   else
@@ -4994,7 +5045,7 @@ testFilesReport (f :: rest) (r :: results) acc =
       let _ = ePutStrLn "medaka test: \{f}: failed to start test runner: \{e}"
       False
     Ok (code, out, err) =>
-      let _ = putStr out
+      let _ = putStr (dropSeedLine out)
       -- `putStr` writes to buffered <Stdout>; `ePutStr`/`ePutStrLn` below write
       -- straight through to unbuffered <Stderr>. Under a merged capture
       -- (`2>&1`), the stderr write can hit disk before this file's still-

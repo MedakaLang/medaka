@@ -519,6 +519,7 @@ runtimeCellsOf : List (String, Value a) -> <a> List (String, Ref (Value a))
 runtimePanic : DiagCode -> String -> a
 runtimeTypeTag : Value a -> Option String
 scopedFileBound : Bool -> Value a
+seedRunRng : Int -> Unit
 selectByName : String -> List (String, (Int, Value a)) -> List (Int, Value a)
 selfBind : String -> (String, String)
 seqV : Unit -> Value a -> Value a

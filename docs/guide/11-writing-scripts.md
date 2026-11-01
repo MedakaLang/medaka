@@ -70,6 +70,10 @@ $ MEDAKA_SEED=42 medaka run draw.mdk
 
 (The first line is one possible unseeded run; it differs every time.)
 
+`medaka test` seeds its draws the same way, once per run and for every engine. When a
+test fails, the run ends with `seed: N (rerun with MEDAKA_SEED=N)`; set that variable to
+replay the draws.
+
 ## Four worked examples
 
 The programs below start by writing their own input files, so each one runs from an
