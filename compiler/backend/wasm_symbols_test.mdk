@@ -424,7 +424,7 @@ test "Wasm census rejects an injected raw call in a compiled child" = withScratc
     Ok (0, _, _) =>
       let emitter = dir ++ "/compiler/backend/wasm_emit.mdk"
       let probe = dir ++ "/compiler/backend/census_guard_probe_test.mdk"
-      let hole = "      ++ indent bodyLines\n      ++ [\"  )\"]"
+      let hole = "  let fnDef =\n    [sig]"
       let insert =
         "  let fnDef =\n    [sig] ++ (if name == \"f\" then [\"    call $mdk_print_int\"] else [])"
       match readFile emitter
