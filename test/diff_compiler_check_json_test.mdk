@@ -214,8 +214,11 @@ physicalJsonRow : String -> String -> String -> <Exec, IO, FileRead> Expectation
 physicalJsonRow dir backend missing =
   let bin = "\{dir}/result-\{backend}-\{missing}"
   let target = if backend == "wasm" then ["--target", "wasm"] else []
+  let probe = "\{dir}/probe-\{missing}"
   let args =
     [
+        "PATH=\{dir}:/usr/bin:/bin",
+        "PHYSICAL_WASM_PROBE=\{probe}",
         "PHYSICAL_BACKEND=\{backend}",
         "PHYSICAL_NO_ORIGIN=\{missing}",
         "MEDAKA_EMITTER=\{dir}/child",
@@ -241,12 +244,31 @@ physicalJsonRow dir backend missing =
         expectEqual True (S.contains "\"kind\":\"error\"" out),
         expectEqual True (S.contains range out),
         expectEqual False (fileExists bin),
+        expectEqual (backend == "wasm") (fileExists probe),
       ]
 
 physicalJsonBuild : String -> <Exec, IO, FileRead, FileWrite> Expectation
 physicalJsonBuild dir =
   let _ = writeFile "\{dir}/input.mdk" "-- input\nmain = 1\n"
   let child = underRoot "compiler/entries/physical_diag_test_main.mdk"
+  let tool = "\{dir}/wasm-tools"
+  let _ =
+    writeFile
+      tool
+      "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf invoked > \"$PHYSICAL_WASM_PROBE\"\n"
+  match boundedVerb "chmod" ["+x", tool]
+    Err e => fail "wasm-tools fixture chmod: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        fail
+          "wasm-tools fixture chmod exited \{intToString code}: \{out ++ err}"
+      else
+        physicalJsonBuildChild dir child
+
+physicalJsonBuildChild : String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+physicalJsonBuildChild dir child =
   match boundedVerbSeconds 300 medakaBin ["build", child, "-o", "\{dir}/child"]
     Err e => fail "physical child build: \{e}"
     Ok (code, out, err) =>
