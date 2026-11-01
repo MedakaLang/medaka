@@ -1115,8 +1115,10 @@ shiftSlots lo slots = arrayMakeWith (arrayLength slots) (i =>
 findSteps : Regex -> String -> Int
 findSteps re s =
   let steps = Ref 0
-  let _ = searchFrom re (codesOf s) 0 False False steps
-  !steps
+  match searchFrom re (codesOf s) 0 False False steps
+    -- Only the count threaded through `steps` matters, found or not.
+    None => !steps
+    Some _ => !steps
 
 -- `textOf lo hi` renders one span: a String subject slices itself, a byte
 -- subject decodes the span, and the span walk is written once either way.

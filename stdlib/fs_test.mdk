@@ -18,10 +18,12 @@ test "readFile of a file that is not UTF-8 is an Err naming readFileBytes" =
     Err e => fail "no scratch directory: \{e}"
     Ok dir =>
       let path = joinPath dir "not-utf8.bin"
-      let _ = writeFileBytes path [|0x61, 0xc0, 0xae|]
-      expectErrContains
-        "\{path}: not valid UTF-8 (use readFileBytes for raw bytes)"
-        (readFile path)
+      match writeFileBytes path [|0x61, 0xc0, 0xae|]
+        Err e => fail "setup failed: \{e}"
+        Ok _ =>
+          expectErrContains
+            "\{path}: not valid UTF-8 (use readFileBytes for raw bytes)"
+            (readFile path)
 
 -- A nested tree: two directories under the root, one of them holding a
 -- directory of its own, several files in each.
@@ -153,8 +155,9 @@ test "editFile writes when the text changes" = withScratchDir
 test "editFile of a file that is not UTF-8 names the path once" = withScratchDir
   (dir =>
     let path = joinPath dir "not-utf8.bin"
-    let _ = writeFileBytes path [|0x61, 0xc0, 0xae|]
-    expectEqual (map (_ => ()) (readFile path)) (editFile path Ok))
+    match writeFileBytes path [|0x61, 0xc0, 0xae|]
+      Err e => fail "setup failed: \{e}"
+      Ok _ => expectEqual (map (_ => ()) (readFile path)) (editFile path Ok))
 
 -- A read-only file refuses the write open, except for root, which ignores
 -- the mode, so the test passes without asserting when it runs as root. The

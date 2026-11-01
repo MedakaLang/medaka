@@ -151,7 +151,9 @@ acceptLoop lis handle = match accept lis
   Err message => panic "crawl_stub: accept failed: \{message}"
   Ok conn =>
     let _ = handle conn
-    let _ = close conn
+    bestEffort
+      "the call is finished and the peer may already have hung up; the loop goes on to the next one"
+      (close conn)
     acceptLoop lis handle
 
 serve : Int ->

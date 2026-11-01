@@ -1075,9 +1075,6 @@ NEWLINE
 DEDENT
 ELSE
 INDENT
-LET
-UNDERSCORE
-EQUAL
 IDENT "push"
 IDENT "b"
 IDENT "buf"
@@ -1309,11 +1306,12 @@ EQUAL
 IDENT "body"
 IDENT "conn"
 NEWLINE
-LET
-UNDERSCORE
-EQUAL
+IDENT "bestEffort"
+STRING "the connection is being torn down and `body`'s result is what the caller needs; a failed close has no recovery"
+LPAREN
 IDENT "close"
 IDENT "conn"
+RPAREN
 NEWLINE
 IDENT "r"
 NEWLINE
@@ -1388,11 +1386,12 @@ EQUAL
 IDENT "body"
 IDENT "lis"
 NEWLINE
-LET
-UNDERSCORE
-EQUAL
+IDENT "bestEffort"
+STRING "the listener is being torn down and `body`'s result is what the caller needs; a failed close has no recovery"
+LPAREN
 IDENT "closeListener"
 IDENT "lis"
+RPAREN
 NEWLINE
 IDENT "r"
 NEWLINE
@@ -1459,11 +1458,12 @@ EQUAL
 IDENT "handle"
 IDENT "conn"
 NEWLINE
-LET
-UNDERSCORE
-EQUAL
+IDENT "bestEffort"
+STRING "the connection is finished whether or not `handle` succeeded and the loop must go on to the next one; a failed close has no recovery"
+LPAREN
 IDENT "close"
 IDENT "conn"
+RPAREN
 NEWLINE
 IDENT "serveLoop"
 IDENT "lis"

@@ -264,9 +264,10 @@ test "getBits past end of input returns Err, not garbage or a hang" =
 alignThenRead : Result String Int
 alignThenRead =
   let r = newBitReader (B.fromArrayAssumeByteDomain [|0xFF, 0x00|])
-  let _ = getBits 3 r
-  alignByte r
-  getBits 8 r
+  do
+    _ <- getBits 3 r
+    let () = alignByte r
+    getBits 8 r
 
 test "alignByte mid-byte discards exactly the unread fraction of the current byte" =
   expectEqual (Ok 0) alignThenRead

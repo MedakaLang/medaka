@@ -403,7 +403,9 @@ acceptLoop lis handle = match accept lis
   Err message => panic "appview_stub: accept failed: \{message}"
   Ok conn =>
     let _ = handle conn
-    let _ = close conn
+    bestEffort
+      "the call is finished and the peer may already have hung up; the loop goes on to the next one"
+      (close conn)
     acceptLoop lis handle
 
 serveWith : Int -> (Listener * -> <FileWrite, Net> Unit) -> <IO, Net> Unit
@@ -464,8 +466,12 @@ holdCalls path status lis remaining held =
 flushHeld : List (Connection *, Bytes) -> <Net> Unit
 flushHeld [] = ()
 flushHeld ((conn, bytes) :: rest) =
-  let _ = sendAll conn bytes
-  let _ = close conn
+  bestEffort
+    "a held call the PDS has already abandoned is closed on its side, and the case asserts what the PDS answered its own client"
+    (sendAll conn bytes)
+  bestEffort
+    "the answer is sent or abandoned, and the peer may already have closed"
+    (close conn)
   flushHeld rest
 
 -- A `size`-byte answer. The body is filler: what a case about a large answer
@@ -506,8 +512,9 @@ sendRange bytes lo hi conn =
   if lo >= hi then
     ()
   else
-    let _ = sendAll conn (B.sliceClamped lo hi bytes)
-    ()
+    bestEffort
+      "a call the PDS has already abandoned is closed on its side (see above)"
+      (sendAll conn (B.sliceClamped lo hi bytes))
 
 sendPrefixes : Bytes -> Int -> List (Connection *) -> <Clock, Net> Unit
 sendPrefixes _ _ [] = ()
@@ -537,7 +544,9 @@ finishAll : Bytes -> Int -> List (Connection *) -> <Net> Unit
 finishAll _ _ [] = ()
 finishAll bytes from (conn :: rest) =
   let () = sendRange bytes from (B.length bytes) conn
-  let _ = close conn
+  bestEffort
+    "the call is answered in full or abandoned by the PDS, and the peer may already have closed"
+    (close conn)
   finishAll bytes from rest
 
 {- | Holds `count` calls as `batch` does, then answers every one of them with a

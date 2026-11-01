@@ -536,7 +536,8 @@ prop "Display Vector shows only the live range and agrees with Eq" (xs : List In
   let b = fromList xs
   push y b
   let differs = not (eq (display a) (display b))
-  let _ = pop b
+  let popped = pop b
   differs
+    && popped == Some y
     && eq (display a) (display b)
     && eq (display a) "fromList \{display xs}"
