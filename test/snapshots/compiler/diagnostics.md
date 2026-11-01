@@ -1,5 +1,5 @@
 # META
-source_lines=3478
+source_lines=3463
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -139,7 +139,6 @@ import support.util.{
   reverseL,
 }
 import support.timer.{takePerfSink}
-import support.stage_count.{stageExit}
 import backend.wasm_symbols.{
   SymbolDefect,
   defectCode,
@@ -2964,29 +2963,15 @@ physicalDiag file origin code message =
     if line > 0 && at /= "" then Some (Loc at line col line col) else None
   (at, mkDiag SevError code "[\{code}] \{message}" loc)
 
--- The emit driver's refusal of a module with physical-symbol defects: their
--- diagnostics on stderr, each with its source line, under the code that tells
--- `medaka build` they are diagnostics rather than a backend crash.  No module
--- text is written.
 export
-refuseSymbolDefects : String -> List SymbolDefect -> <IO> Unit
-refuseSymbolDefects file ds = refusePhysical (map (symbolDefectDiag file) ds)
+symbolDefectDiags : String -> List SymbolDefect -> List (String, Diag)
+symbolDefectDiags file ds = map (symbolDefectDiag file) ds
 
-refusePhysical : List (String, Diag) -> <IO> Unit
-refusePhysical diags =
-  let _ =
-    map
-      ((at, diag) =>
-        ePutStrLn (ppDiagCliLines (srcLinesArr (readFileSafe at)) at diag))
-      diags
-  stageExit emitDiagExitCode
-
--- The LLVM emitter's physical-symbol defects (backend/llvm_symbols.mdk), refused
--- as the Wasm emitter's are above.
 export
-refuseLlvmSymbolDefects : String -> List LlvmSymbols.SymbolDefect -> <IO> Unit
-refuseLlvmSymbolDefects file ds =
-  refusePhysical (map (llvmSymbolDefectDiag file) ds)
+llvmSymbolDefectDiags : String ->
+  List LlvmSymbols.SymbolDefect ->
+  List (String, Diag)
+llvmSymbolDefectDiags file ds = map (llvmSymbolDefectDiag file) ds
 
 llvmSymbolDefectDiag : String -> LlvmSymbols.SymbolDefect -> (String, Diag)
 llvmSymbolDefectDiag file d =
@@ -3508,7 +3493,6 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "valueMainCandidate" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false) (mem "isSome" false) (mem "lenKey" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "takePerfSink" false))))
-(DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "defectCode" false) (mem "defectMessage" false) (mem "defectOrigin" false))))
 (DUse false (UseAlias ("backend" "llvm_symbols") "LlvmSymbols"))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false) (mem "originPosition" false))))
@@ -3905,12 +3889,10 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "symbolDefectDiag" ((PVar "file") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "physicalDiag") (EVar "file")) (EApp (EVar "defectOrigin") (EVar "d"))) (EApp (EVar "defectCode") (EVar "d"))) (EApp (EVar "defectMessage") (EVar "d"))))
 (DTypeSig false "physicalDiag" (TyFun (TyCon "String") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "DiagCode") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Diag")))))))
 (DFunDef false "physicalDiag" ((PVar "file") (PVar "origin") (PVar "code") (PVar "message")) (EBlock (DoLet false false (PTuple (PVar "f") (PVar "line") (PVar "col")) (EApp (EVar "originPosition") (EVar "origin"))) (DoLet false false (PVar "at") (EIf (EBinOp "==" (EVar "f") (ELit (LString ""))) (EVar "file") (EVar "f"))) (DoLet false false (PVar "loc") (EIf (EBinOp "&&" (EBinOp ">" (EVar "line") (ELit (LInt 0))) (EBinOp "/=" (EVar "at") (ELit (LString "")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "at")) (EVar "line")) (EVar "col")) (EVar "line")) (EVar "col"))) (EVar "None"))) (DoExpr (ETuple (EVar "at") (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "code")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EVar "code"))) (ELit (LString "] "))) (EApp (EVar "display") (EVar "message"))) (ELit (LString "")))) (EVar "loc"))))))
-(DTypeSig true "refuseSymbolDefects" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "refuseSymbolDefects" ((PVar "file") (PVar "ds")) (EApp (EVar "refusePhysical") (EApp (EApp (EVar "map") (EApp (EVar "symbolDefectDiag") (EVar "file"))) (EVar "ds"))))
-(DTypeSig false "refusePhysical" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag"))) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "refusePhysical" ((PVar "diags")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "at") (PVar "diag"))) (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EApp (EVar "readFileSafe") (EVar "at")))) (EVar "at")) (EVar "diag"))))) (EVar "diags"))) (DoExpr (EApp (EVar "stageExit") (EVar "emitDiagExitCode")))))
-(DTypeSig true "refuseLlvmSymbolDefects" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "LlvmSymbols.SymbolDefect")) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "refuseLlvmSymbolDefects" ((PVar "file") (PVar "ds")) (EApp (EVar "refusePhysical") (EApp (EApp (EVar "map") (EApp (EVar "llvmSymbolDefectDiag") (EVar "file"))) (EVar "ds"))))
+(DTypeSig true "symbolDefectDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag"))))))
+(DFunDef false "symbolDefectDiags" ((PVar "file") (PVar "ds")) (EApp (EApp (EVar "map") (EApp (EVar "symbolDefectDiag") (EVar "file"))) (EVar "ds")))
+(DTypeSig true "llvmSymbolDefectDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "LlvmSymbols.SymbolDefect")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag"))))))
+(DFunDef false "llvmSymbolDefectDiags" ((PVar "file") (PVar "ds")) (EApp (EApp (EVar "map") (EApp (EVar "llvmSymbolDefectDiag") (EVar "file"))) (EVar "ds")))
 (DTypeSig false "llvmSymbolDefectDiag" (TyFun (TyCon "String") (TyFun (TyCon "LlvmSymbols.SymbolDefect") (TyTuple (TyCon "String") (TyCon "Diag")))))
 (DFunDef false "llvmSymbolDefectDiag" ((PVar "file") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "physicalDiag") (EVar "file")) (EApp (EVar "LlvmSymbols.defectOrigin") (EVar "d"))) (EApp (EVar "LlvmSymbols.defectCode") (EVar "d"))) (EApp (EVar "LlvmSymbols.defectMessage") (EVar "d"))))
 (DTypeSig true "emitGateDiags" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
@@ -4030,7 +4012,6 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "valueMainCandidate" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false) (mem "isSome" false) (mem "lenKey" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "takePerfSink" false))))
-(DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "SymbolDefect" false) (mem "defectCode" false) (mem "defectMessage" false) (mem "defectOrigin" false))))
 (DUse false (UseAlias ("backend" "llvm_symbols") "LlvmSymbols"))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false) (mem "originPosition" false))))
@@ -4427,12 +4408,10 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "symbolDefectDiag" ((PVar "file") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "physicalDiag") (EVar "file")) (EApp (EVar "defectOrigin") (EVar "d"))) (EApp (EVar "defectCode") (EVar "d"))) (EApp (EVar "defectMessage") (EVar "d"))))
 (DTypeSig false "physicalDiag" (TyFun (TyCon "String") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "DiagCode") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Diag")))))))
 (DFunDef false "physicalDiag" ((PVar "file") (PVar "origin") (PVar "code") (PVar "message")) (EBlock (DoLet false false (PTuple (PVar "f") (PVar "line") (PVar "col")) (EApp (EVar "originPosition") (EVar "origin"))) (DoLet false false (PVar "at") (EIf (EBinOp "==" (EVar "f") (ELit (LString ""))) (EVar "file") (EVar "f"))) (DoLet false false (PVar "loc") (EIf (EBinOp "&&" (EBinOp ">" (EVar "line") (ELit (LInt 0))) (EBinOp "/=" (EVar "at") (ELit (LString "")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "at")) (EVar "line")) (EVar "col")) (EVar "line")) (EVar "col"))) (EVar "None"))) (DoExpr (ETuple (EVar "at") (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "code")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EVar "code"))) (ELit (LString "] "))) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString "")))) (EVar "loc"))))))
-(DTypeSig true "refuseSymbolDefects" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "refuseSymbolDefects" ((PVar "file") (PVar "ds")) (EApp (EVar "refusePhysical") (EApp (EApp (EMethodRef "map") (EApp (EVar "symbolDefectDiag") (EVar "file"))) (EVar "ds"))))
-(DTypeSig false "refusePhysical" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag"))) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "refusePhysical" ((PVar "diags")) (EBlock (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "at") (PVar "diag"))) (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EApp (EVar "readFileSafe") (EVar "at")))) (EVar "at")) (EVar "diag"))))) (EVar "diags"))) (DoExpr (EApp (EVar "stageExit") (EVar "emitDiagExitCode")))))
-(DTypeSig true "refuseLlvmSymbolDefects" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "LlvmSymbols.SymbolDefect")) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "refuseLlvmSymbolDefects" ((PVar "file") (PVar "ds")) (EApp (EVar "refusePhysical") (EApp (EApp (EMethodRef "map") (EApp (EVar "llvmSymbolDefectDiag") (EVar "file"))) (EVar "ds"))))
+(DTypeSig true "symbolDefectDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag"))))))
+(DFunDef false "symbolDefectDiags" ((PVar "file") (PVar "ds")) (EApp (EApp (EMethodRef "map") (EApp (EVar "symbolDefectDiag") (EVar "file"))) (EVar "ds")))
+(DTypeSig true "llvmSymbolDefectDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "LlvmSymbols.SymbolDefect")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag"))))))
+(DFunDef false "llvmSymbolDefectDiags" ((PVar "file") (PVar "ds")) (EApp (EApp (EMethodRef "map") (EApp (EVar "llvmSymbolDefectDiag") (EVar "file"))) (EVar "ds")))
 (DTypeSig false "llvmSymbolDefectDiag" (TyFun (TyCon "String") (TyFun (TyCon "LlvmSymbols.SymbolDefect") (TyTuple (TyCon "String") (TyCon "Diag")))))
 (DFunDef false "llvmSymbolDefectDiag" ((PVar "file") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "physicalDiag") (EVar "file")) (EApp (EVar "LlvmSymbols.defectOrigin") (EVar "d"))) (EApp (EVar "LlvmSymbols.defectCode") (EVar "d"))) (EApp (EVar "LlvmSymbols.defectMessage") (EVar "d"))))
 (DTypeSig true "emitGateDiags" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))

@@ -14,7 +14,8 @@ import string as S
 import fs.{fixtureDirs, isFile}
 import compiler_cli_test_support.{fixtureStems}
 import test_process.{
-  medakaBin, medakaRoot, underRoot, boundedVerb, withScratchDir
+  medakaBin, medakaRoot, underRoot, boundedVerb, boundedVerbSeconds,
+  withScratchDir, expectSpawnFailsAll
 }
 import test.{
   Expectation,
@@ -24,6 +25,7 @@ import test.{
   expectAll,
   expectAtLeast,
   expectEach,
+  expectEqual,
 }
 
 corpus : <IO> String
@@ -206,3 +208,86 @@ test "1078/build-json-flag-not-consumed-as-input: bare build --json reports R-BU
           "1078/build-json-flag-not-consumed: regressed, --json read as a second positional: \{text}"
       else
         pass
+
+-- The child writes a clean front-end envelope before its typed physical refusal.
+physicalJsonRow : String -> String -> String -> <Exec, IO, FileRead> Expectation
+physicalJsonRow dir backend missing =
+  let bin = "\{dir}/result-\{backend}-\{missing}"
+  let target = if backend == "wasm" then ["--target", "wasm"] else []
+  let args =
+    [
+        "PHYSICAL_BACKEND=\{backend}",
+        "PHYSICAL_NO_ORIGIN=\{missing}",
+        "MEDAKA_EMITTER=\{dir}/child",
+        "MEDAKA_WASM_EMITTER=\{dir}/child",
+        medakaBin,
+        "build",
+        "--json",
+      ]
+      ++ target
+      ++ ["\{dir}/input.mdk", "-o", bin]
+  match boundedVerb "env" args
+    Err e => fail "physical build spawn: \{e}"
+    Ok (code, out, err) =>
+      let range =
+        if missing == "1" then
+          "\"range\":null"
+        else
+          "\"range\":{\"end\":{\"character\":3,\"line\":1},\"start\":{\"character\":3,\"line\":1}}"
+      expectAll [
+        expectEqual 1 code,
+        expectEqual "" err,
+        expectEqual True (S.contains "\"code\":\"E-PHYS-SHAPE\"" out),
+        expectEqual True (S.contains "\"kind\":\"error\"" out),
+        expectEqual True (S.contains range out),
+        expectEqual False (fileExists bin),
+      ]
+
+physicalJsonBuild : String -> <Exec, IO, FileRead, FileWrite> Expectation
+physicalJsonBuild dir =
+  let _ = writeFile "\{dir}/input.mdk" "-- input\nmain = 1\n"
+  let child = underRoot "compiler/entries/physical_diag_test_main.mdk"
+  match boundedVerbSeconds 300 medakaBin ["build", child, "-o", "\{dir}/child"]
+    Err e => fail "physical child build: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        fail "physical child build exited \{intToString code}: \{out ++ err}"
+      else
+        expectAll [
+          physicalJsonRow dir "llvm" "0",
+          physicalJsonRow dir "llvm" "1",
+          physicalJsonRow dir "wasm" "0",
+          physicalJsonRow dir "wasm" "1",
+          textPhysicalRow dir "llvm",
+          textPhysicalRow dir "wasm",
+          expectSpawnFailsAll
+            "env"
+            [
+              "CC=/bin/false",
+              medakaBin,
+              "build",
+              "--json",
+              "\{dir}/input.mdk",
+              "-o",
+              "\{dir}/bad-clang",
+            ]
+            ["R-BUILD-FAILED"],
+        ]
+
+test "physical refusals replace the clean build JSON envelope" =
+  withScratchDir physicalJsonBuild
+
+textPhysicalRow : String -> String -> <Exec, IO> Expectation
+textPhysicalRow dir backend = match boundedVerb "env" [
+  "PHYSICAL_BACKEND=\{backend}",
+  "\{dir}/child",
+  "a",
+  "b",
+  "\{dir}/input.mdk",
+]
+  Err e => fail "text physical spawn: \{e}"
+  Ok (code, out, err) => expectAll [
+    expectEqual 3 code,
+    expectEqual "" out,
+    expectEqual True (S.contains "E-PHYS-SHAPE" err),
+  ]

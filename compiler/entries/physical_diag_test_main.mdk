@@ -1,0 +1,41 @@
+import driver.diagnostics.{CheckJson(..)}
+import driver.emit_diagnostics.{refuseLlvmSymbolDefects, refuseSymbolDefects}
+import driver.front_gate.{diagJsonPathOfEnv, writeDiagJson, writeGateAck}
+import backend.wasm_symbols as Wasm
+import backend.llvm_symbols as Llvm
+import support.symbol_origin.{SymbolOrigin(..)}
+
+main =
+  let argv = args ()
+  let file = match argv
+    _ :: _ :: f :: _ => f
+    _ => ""
+  let at = match getEnv "PHYSICAL_NO_ORIGIN"
+    Some "1" => SymbolOrigin "main" "" 0 0
+    _ => SymbolOrigin "main" file 2 3
+  let _ = writeGateAck ()
+  let _ = match diagJsonPathOfEnv ()
+    Some path => writeDiagJson path (CjParts file [(file, "", [])])
+    None => ()
+  match getEnv "PHYSICAL_BACKEND"
+    Some "wasm" => wasmDefect file at
+    _ => llvmDefect file at
+
+wasmDefect : String -> SymbolOrigin -> <IO> Unit
+wasmDefect file at =
+  let sym = Wasm.WasmFunc "f"
+  match Wasm.declareSymbol sym (Wasm.FuncParams 1) at Wasm.emptyRegistry
+    Err d => refuseSymbolDefects file [d]
+    Ok reg => match Wasm.checkCall sym 2 at reg
+      Err d => refuseSymbolDefects file [d]
+      Ok _ => ePutStrLn "expected a Wasm shape defect"
+
+llvmDefect : String -> SymbolOrigin -> <IO> Unit
+llvmDefect file at =
+  let sym = Llvm.Generated "f"
+  let proto = Llvm.FuncProto "i64" [Llvm.LlvmParam "i64" "x"] ""
+  match Llvm.declareSymbol sym proto at (Llvm.emptyRegistry Llvm.WholeModule)
+    Err d => refuseLlvmSymbolDefects file [d]
+    Ok reg => match Llvm.checkCall sym (Llvm.CallShape "i64" []) at reg
+      Err d => refuseLlvmSymbolDefects file [d]
+      Ok _ => ePutStrLn "expected an LLVM shape defect"

@@ -135,7 +135,6 @@ import support.util.{
   reverseL,
 }
 import support.timer.{takePerfSink}
-import support.stage_count.{stageExit}
 import backend.wasm_symbols.{
   SymbolDefect,
   defectCode,
@@ -2960,29 +2959,15 @@ physicalDiag file origin code message =
     if line > 0 && at /= "" then Some (Loc at line col line col) else None
   (at, mkDiag SevError code "[\{code}] \{message}" loc)
 
--- The emit driver's refusal of a module with physical-symbol defects: their
--- diagnostics on stderr, each with its source line, under the code that tells
--- `medaka build` they are diagnostics rather than a backend crash.  No module
--- text is written.
 export
-refuseSymbolDefects : String -> List SymbolDefect -> <IO> Unit
-refuseSymbolDefects file ds = refusePhysical (map (symbolDefectDiag file) ds)
+symbolDefectDiags : String -> List SymbolDefect -> List (String, Diag)
+symbolDefectDiags file ds = map (symbolDefectDiag file) ds
 
-refusePhysical : List (String, Diag) -> <IO> Unit
-refusePhysical diags =
-  let _ =
-    map
-      ((at, diag) =>
-        ePutStrLn (ppDiagCliLines (srcLinesArr (readFileSafe at)) at diag))
-      diags
-  stageExit emitDiagExitCode
-
--- The LLVM emitter's physical-symbol defects (backend/llvm_symbols.mdk), refused
--- as the Wasm emitter's are above.
 export
-refuseLlvmSymbolDefects : String -> List LlvmSymbols.SymbolDefect -> <IO> Unit
-refuseLlvmSymbolDefects file ds =
-  refusePhysical (map (llvmSymbolDefectDiag file) ds)
+llvmSymbolDefectDiags : String ->
+  List LlvmSymbols.SymbolDefect ->
+  List (String, Diag)
+llvmSymbolDefectDiags file ds = map (llvmSymbolDefectDiag file) ds
 
 llvmSymbolDefectDiag : String -> LlvmSymbols.SymbolDefect -> (String, Diag)
 llvmSymbolDefectDiag file d =

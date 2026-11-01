@@ -692,7 +692,7 @@ or defined exactly once, and every direct call has to supply the operand count t
 definition takes. The Wasm emitter keeps a per-emission registry
 (`SymbolRegistry`) and returns its defects to the emit driver instead of the module
 text, so nothing is written. The driver renders them with
-`renderSymbolDefects`/`refuseSymbolDefects` (`compiler/driver/diagnostics.mdk`) at
+`renderSymbolDefects` (`compiler/driver/diagnostics.mdk`) and `refuseSymbolDefects` (`compiler/driver/emit_diagnostics.mdk`) at
 the binding whose emission found the defect, with the code leading the message, and
 exits `emitDiagExitCode`, which `medaka build` forwards as a diagnostic. A binding
 with no source position (the prelude-free probe entries) is reported by name under
