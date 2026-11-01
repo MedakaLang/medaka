@@ -104,11 +104,13 @@ import support.ordmap.{
   OrdMap, omEmpty, omFromNames, omFromPairs, omHasKey, omInsert, omLookup
 }
 import frontend.visibility.{
-  directIn,
+  ExportView(..),
+  directUnder,
+  carriedPaths,
   nsValues,
   nsIfaceMethods,
+  nsTypeCtors,
   declExportsCtors,
-  pubUsePaths,
 }
 import list.{drop, findMap}
 import eval.u64_halves as H
@@ -4467,6 +4469,8 @@ evalModulesWith facts extraExterns preludeDecls0 modules0 = withFacts
         globalFrame
         runtimeFrame
         (coreImportExports privateCells globalCells preludeDecls)
+        facts.pfSibling
+        []
         []
         modules
     let implEntries =
@@ -4494,11 +4498,13 @@ evalModulesWith facts extraExterns preludeDecls0 modules0 = withFacts
 buildModInfos : EnvFrame (Value e) ->
   EnvFrame (Value e) ->
   ModExports (Value e) ->
+  Option (String, String) ->
+  List (String, ModExports (Value e)) ->
   List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
   List (ModInfo (Value e))
-buildModInfos _ _ _ _ [] = []
-buildModInfos globalFrame runtimeFrame coreExports exportsMap ((mid, decls) :: rest) =
+buildModInfos _ _ _ _ _ _ [] = []
+buildModInfos globalFrame runtimeFrame coreExports sibling fulls exportsMap ((mid, decls) :: rest) =
   let grps = groupsOf decls
   -- P0-9: each module's OWN constructors ALSO live in its LOCAL frame (they stay
   -- in the shared global too — see evalModulesWith — for by-name / `Type(..)`
@@ -4509,7 +4515,8 @@ buildModInfos globalFrame runtimeFrame coreExports exportsMap ((mid, decls) :: r
   -- first-wins and would otherwise pick the wrong module's arity (E-NOT-A-FUNCTION).
   let modCtors = collectCtors decls
   let localCells = map (n => (n, Ref VUnit)) (map fst grps ++ map fst modCtors)
-  let imports = importFrameOf coreExports exportsMap decls
+  let imports =
+    importFrameOf coreExports (importsMapFor sibling mid fulls exportsMap) decls
   -- #1542: tag this module's env with its own file, LAST in the frame list so
   -- an ordinary name lookup (which resolves in localCells/imports/globalCells
   -- almost always) never reaches it — only the once-per-call lookup in
@@ -4523,20 +4530,24 @@ buildModInfos globalFrame runtimeFrame coreExports exportsMap ((mid, decls) :: r
     fileTagFrame,
     runtimeFrame,
   ]
-  let exports =
-    moduleExports
-      coreExports
-      exportsMap
-      globalFrame
-      runtimeFrame
-      localCells
-      decls
+  let exportsUnder =
+    v =>
+      moduleExports
+        v
+        coreExports
+        exportsMap
+        globalFrame
+        runtimeFrame
+        localCells
+        decls
   ModInfo mid decls grps localCells menv
     :: buildModInfos
       globalFrame
       runtimeFrame
       coreExports
-      ((mid, exports) :: exportsMap)
+      sibling
+      (withSubjectFull sibling mid (exportsUnder FullView) fulls)
+      ((mid, exportsUnder ExportedView) :: exportsMap)
       rest
 
 -- What a module offers its importers: the names the visibility producer exports,
@@ -4545,26 +4556,50 @@ buildModInfos globalFrame runtimeFrame coreExports exportsMap ((mid, decls) :: r
 -- those may bind through `import m.*` or `import m.{x}`.  Both module drivers build
 -- their `ModExports` here so they cannot disagree.
 export
-moduleExports : ModExports (Value e) ->
+moduleExports : ExportView ->
+  ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
   EnvFrame (Value e) ->
   EnvFrame (Value e) ->
   List (String, Ref (Value e)) ->
   List Decl ->
   ModExports (Value e)
-moduleExports coreExports exportsMap globalFrame runtimeFrame localCells decls =
-  let ctorsByType = ctorsByTypeOf decls
-  let valueNames = omFromNames (directIn nsValues decls) omEmpty
+moduleExports view coreExports exportsMap globalFrame runtimeFrame localCells decls =
+  let ctorsByType = ctorsByTypeUnder view decls
+  let valueNames = omFromNames (directUnder view nsValues decls) omEmpty
   let ctorNames = omFromNames (flatMap snd ctorsByType) omEmpty
   let methodNames =
-    omFromNames (flatMap snd (directIn nsIfaceMethods decls)) omEmpty
+    omFromNames (flatMap snd (directUnder view nsIfaceMethods decls)) omEmpty
   let visible = c => omHasKey (fst c) valueNames || omHasKey (fst c) ctorNames
   ModExports
     (filterList visible localCells
       ++ publicExternCells (frameCells runtimeFrame) valueNames decls
       ++ methodCellsOf (frameCells globalFrame) methodNames decls
-      ++ flatMap (reexport coreExports exportsMap) (pubUsePaths decls))
+      ++ flatMap (reexport coreExports exportsMap) (carriedPaths view decls))
     ctorsByType
+
+-- The exports map the module [mid] imports against: [fulls] (the subject's
+-- full view) ahead of [exportsMap] when [mid] is the test sibling, so the
+-- sibling reads the subject's private cells and every other module is
+-- untouched.  Both module drivers call this, so they cannot disagree.
+export
+importsMapFor : Option (String, String) ->
+  String ->
+  List (String, ModExports (Value e)) ->
+  List (String, ModExports (Value e)) ->
+  List (String, ModExports (Value e))
+importsMapFor sibling mid fulls exportsMap =
+  if map fst sibling == Some mid then fulls ++ exportsMap else exportsMap
+
+-- [fulls] extended with module [mid]'s full view when [mid] is the subject.
+export
+withSubjectFull : Option (String, String) ->
+  String ->
+  ModExports (Value e) ->
+  List (String, ModExports (Value e)) ->
+  List (String, ModExports (Value e))
+withSubjectFull sibling mid full fulls =
+  if map snd sibling == Some mid then (mid, full) :: fulls else fulls
 
 -- Runtime externs retain one canonical cell. An exported extern must expose that
 -- cell under an import spelling, rather than allocate a module-local placeholder
@@ -4733,6 +4768,8 @@ buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 = withFacts
         globalFrame
         runtimeFrame
         (coreImportExports privateCells globalCells preludeDecls)
+        facts.pfSibling
+        []
         []
         modules
     let implEntries =
@@ -4800,7 +4837,13 @@ modExportCells (ModExports cells _) = cells
 -- `globalCells`, so an over-indexed name would shadow the binding resolve chose.
 export
 ctorsByTypeOf : List Decl -> List (String, List String)
-ctorsByTypeOf decls = flatMap ctorNamesOfDecl decls
+ctorsByTypeOf decls = ctorsByTypeUnder ExportedView decls
+
+-- The same index under [view]: the full view lists every type's constructors,
+-- abstract data and newtypes included.
+ctorsByTypeUnder : ExportView -> List Decl -> List (String, List String)
+ctorsByTypeUnder ExportedView decls = flatMap ctorNamesOfDecl decls
+ctorsByTypeUnder FullView decls = directUnder FullView nsTypeCtors decls
 
 ctorNamesOfDecl : Decl -> List (String, List String)
 ctorNamesOfDecl (DAttrib _ d) = ctorNamesOfDecl d

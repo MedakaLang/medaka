@@ -221,7 +221,7 @@ import json.{
   asString,
 }
 import types.publish.{TcReport(..), tcCode}
-import types.program_facts.{ProgramFacts, factsOfChecked}
+import types.program_facts.{ProgramFacts, factsOfChecked, withSibling}
 import types.typecheck.{
   TcDiag,
   driveInputsFor,
@@ -2957,6 +2957,7 @@ runRunCmd argv =
         stdlibOwnership target roots stdlibDir mods
       let inputs = { driveInputsFor !selectedProfile flatStdlib ownedStdlib |
         diPreludeKey = Some (preludeGeneration rsrc csrc),
+        diSibling = siblingPairOf roots stdlibDir modsWithPath,
       }
       let perfTLoad = now ()
       let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
@@ -3035,7 +3036,7 @@ runRunCmd argv =
                       finishRunEval
                         target
                         jsonMode
-                        (checkedFacts report)
+                        (withSibling inputs.diSibling (checkedFacts report))
                         trees
                         mods
                         (allWarnTriples tsrc target diags)
@@ -3116,7 +3117,7 @@ runRunCmd argv =
                       finishRunEval
                         target
                         jsonMode
-                        (checkedFacts report)
+                        (withSibling inputs.diSibling (checkedFacts report))
                         trees
                         mods
                         projWarns

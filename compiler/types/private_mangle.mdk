@@ -146,7 +146,10 @@ import frontend.visibility.{
   coreExports,
   buildExportsWith,
   pubIfaceMethodSets,
-  directIn,
+  ExportView(..),
+  viewOf,
+  fullExportsOf,
+  directUnder,
   filterInSet,
   nsValues,
   valueDeclsOf,
@@ -244,7 +247,7 @@ renameUnits externName implicit coreDecls modules =
     withPreludeDefs
       (dedup (unitDefNames ("", coreDecls)))
       implicit
-      (fnExportsFrom allUnits surfaces)
+      (fnExportsFrom (_ => ExportedView) allUnits surfaces)
   let ctorExportsPerUnit = ctorExportsFrom surfaces
   let externExports = externExportsFrom externName allUnits surfaces
   let coreOut = mangleUnitU
@@ -288,27 +291,36 @@ mangleUnitsEv : EvTable ->
   List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl), EvTable, SymbolOrigins)
-mangleUnitsEv table coreDecls modules =
+mangleUnitsEv = mangleUnitsEvFor None
+
+-- `mangleUnitsEv` for a drive whose (test sibling, subject) pair is [sibling]:
+-- the sibling's unit reads the subject's full view, every other unit its
+-- exported one.
+export
+mangleUnitsEvFor : Option (String, String) ->
+  EvTable ->
+  List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl), EvTable, SymbolOrigins)
+mangleUnitsEvFor sibling table coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
   let entryMid = entryUnitMid allUnits
   let surfaces = unitSurfaces allUnits
   let exportsPerUnit =
-    withPreludeDefs
-      (dedup (unitDefNames ("", coreDecls)))
-      []
-      (fnExportsFrom allUnits surfaces)
+    exportsPerUnitOf (_ => ExportedView) coreDecls allUnits surfaces
   let ctorExportsPerUnit = ctorExportsFrom surfaces
   let externExports = externExportsFrom externSymbolName allUnits surfaces
+  let siblingMaps = siblingUnitMaps sibling coreDecls allUnits surfaces
   -- ONE map per unit, threaded to both readers: the decl rename and the evidence
   -- remap name the same symbols, and building the map twice was measured at +0.99%
   -- Ir on the emitter child over the compiler's own graph.
   let units =
     map
-      (unitRenameMapEntry
-        entryMid
-        exportsPerUnit
-        ctorExportsPerUnit
-        externExports)
+      (unitEntryFor entryMid siblingMaps (
+        exportsPerUnit,
+        ctorExportsPerUnit,
+        externExports,
+      ))
       allUnits
   let renamed = map renameUnitEntry units
   let coreOut = match renamed
@@ -333,6 +345,86 @@ mangleUnitsWithOrigins : List Decl ->
 mangleUnitsWithOrigins coreDecls modules =
   let (coreOut, modsOut, _, origins) = mangleUnitsEv [] coreDecls modules
   (coreOut, modsOut, origins)
+
+-- The three export maps, in the order `unitRenameMapEntry` takes them.
+type ExportMaps = (List (String, List (String, String)), List (String, List (String, String, List String)), OrdMap (OrdMap String))
+
+-- Each unit's exported function symbols, the prelude's definitions ahead of them.
+exportsPerUnitOf : (String -> ExportView) ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, ModuleExports) ->
+  List (String, List (String, String))
+exportsPerUnitOf viewOfUnit coreDecls allUnits surfaces =
+  withPreludeDefs
+    (dedup (unitDefNames ("", coreDecls)))
+    []
+    (fnExportsFrom viewOfUnit allUnits surfaces)
+
+-- The export maps the sibling's unit imports against, with its subject's
+-- surface replaced by the full view; `None` when the drive has no sibling.
+siblingUnitMaps : Option (String, String) ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, ModuleExports) ->
+  Option (String, ExportMaps)
+siblingUnitMaps None _ _ _ = None
+siblingUnitMaps (Some (sib, subj)) coreDecls allUnits surfaces =
+  let full = fullSurfaces subj allUnits surfaces
+  Some (
+    sib,
+    (
+      exportsPerUnitOf (viewOf (Some subj)) coreDecls allUnits full,
+      ctorExportsFrom full,
+      externExportsFrom externSymbolName allUnits full,
+    ),
+  )
+
+-- [surfaces] with module [subj]'s entry rebuilt as its full view.  The rest
+-- keep their exported surfaces, so no other unit's `export import` of the
+-- subject carries a private name.
+fullSurfaces : String ->
+  List (String, List Decl) ->
+  List (String, ModuleExports) ->
+  List (String, ModuleExports)
+fullSurfaces subj allUnits surfaces =
+  let coreExp = match lookupAssoc "core" allUnits
+    Some coreDecls => coreExports coreDecls
+    None => coreExports []
+  let known = omFromPairs (reverseL surfaces) omEmpty
+  map (fullSurfaceOf subj coreExp known allUnits) surfaces
+
+fullSurfaceOf : String ->
+  ModuleExports ->
+  OrdMap ModuleExports ->
+  List (String, List Decl) ->
+  (String, ModuleExports) ->
+  (String, ModuleExports)
+fullSurfaceOf subj coreExp known allUnits (mid, exp) =
+  if mid == subj then
+    (
+      mid,
+      optionOr
+        exp
+        (map
+          (decls => fullExportsOf coreExp known mid decls)
+          (lookupAssoc mid allUnits)),
+    )
+  else
+    (mid, exp)
+
+unitEntryFor : String ->
+  Option (String, ExportMaps) ->
+  ExportMaps ->
+  (String, List Decl) ->
+  (String, (OrdMap String, Bool, List Decl))
+unitEntryFor entryMid None (fns, ctors, externs) (mid, decls) =
+  unitRenameMapEntry entryMid fns ctors externs (mid, decls)
+unitEntryFor entryMid (Some (sib, (sibFns, sibCtors, sibExterns))) (fns, ctors, externs) (mid, decls) =
+  if mid == sib then
+    unitRenameMapEntry entryMid sibFns sibCtors sibExterns (mid, decls)
+  else
+    unitRenameMapEntry entryMid fns ctors externs (mid, decls)
 
 -- one unit's rename map, keyed by its module id, beside the decls it applies to.  The
 -- SAME two builders and the same first-entry-wins fold `mangleUnitU` applies, so a
@@ -584,11 +676,12 @@ surfacesGo coreExp known ((mid, decls) :: rest)
 -- therefore mangles its reference to `<definer>__<name>`, never
 -- `<reExporter>__<name>`, which has no backing definition.  An interface method,
 -- a body-less signature and an extern are values but not function symbols.
-fnExportsFrom : List (String, List Decl) ->
+fnExportsFrom : (String -> ExportView) ->
+  List (String, List Decl) ->
   List (String, ModuleExports) ->
   List (String, List (String, String))
-fnExportsFrom units surfaces =
-  let fnSyms = omFromPairs (map unitFnSyms units) omEmpty
+fnExportsFrom viewOfUnit units surfaces =
+  let fnSyms = omFromPairs (map (unitFnSyms viewOfUnit) units) omEmpty
   let methods = omFromPairs (map surfaceMethods surfaces) omEmpty
   map (unitFnExports fnSyms methods) (zip units surfaces)
 
@@ -601,10 +694,12 @@ surfaceMethods (mid, exp) =
 -- beside a public interface method of the same name is not offered
 -- (`test/llvm_fixtures_modules/method_private_standalone_visibility`).  It keeps
 -- core to what core marks exported, too: core's surface is every binding (#2640).
-unitFnSyms : (String, List Decl) -> (String, OrdMap Unit)
-unitFnSyms (mid, decls) =
+unitFnSyms : (String -> ExportView) ->
+  (String, List Decl) ->
+  (String, OrdMap Unit)
+unitFnSyms viewOfUnit (mid, decls) =
   let defined = omFromNames (unitDefNames (mid, decls)) omEmpty
-  let exported = directIn nsValues decls
+  let exported = directUnder (viewOfUnit mid) nsValues decls
   (mid, omFromNames (filterInSet defined exported) omEmpty)
 
 -- The first row per name wins: a module's own values precede what it re-exports.

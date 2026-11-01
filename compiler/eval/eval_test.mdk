@@ -19,12 +19,16 @@ import eval.eval.{
   buildMethodReqCounts,
   Value(..),
   evalModulesOutput,
+  evalModulesOutputFacts,
   ppValue,
   externBindings,
   ioExternBindings,
 }
 import list.{lookup}
-import ir.core_ir_eval.{cevalModulesOutput}
+import ir.core_ir_eval.{cevalModulesOutput, cevalModulesOutputFacts}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.program_facts.{ProgramFacts, emptyFacts, withSibling}
 
 testLoc : Loc
 testLoc = Loc "" 1 0 1 0
@@ -162,4 +166,29 @@ test "run's random externs use a stream separate from the oracle's" =
     expectEqual "0" (ppValue oracleState),
     expectEqual (ppValue fromRun) (ppValue fromOracle),
     expectEqual "75817894" (ppValue fromOracle),
+  ]
+
+siblingSubjectSrc : String
+siblingSubjectSrc =
+  "export data Counter = Counter Int\n\nexport tick : Counter -> Counter\ntick (Counter n) = Counter (step n)\n\nstep : Int -> Int\nstep n = n + 1\n"
+
+siblingTestSrc : String
+siblingTestSrc =
+  "import counter.{Counter(..), step, tick}\n\nbump : Int -> Int\nbump n = match tick (Counter n)\n  Counter m => step m\n\nmain = putStrLn (intToString (bump 1))\n"
+
+siblingModules : List (String, List Decl)
+siblingModules = [
+  ("counter", desugar (parse siblingSubjectSrc)),
+  ("counter_test", desugar (parse siblingTestSrc)),
+]
+
+siblingFacts : ProgramFacts
+siblingFacts = withSibling (Some ("counter_test", "counter")) emptyFacts
+
+-- The sibling's own import of the subject's private `step` and abstract
+-- `Counter(..)` resolves in both interpreters; `step (tick (Counter 1))` is 3.
+test "a test sibling reads its subject's private names in both evaluators" = expectAll
+  [
+    expectEqual "3\n" (evalModulesOutputFacts siblingFacts [] siblingModules),
+    expectEqual "3\n" (cevalModulesOutputFacts siblingFacts [] siblingModules),
   ]

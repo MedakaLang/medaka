@@ -30,6 +30,7 @@ import driver.diagnostics.{
   cjSingleParts,
   ppCheckJson,
   readFileSafe,
+  siblingPairOf,
   relDiagPath,
   hintResErrorPairs,
   mainEntryError,
@@ -252,7 +253,7 @@ resolveRefusal allowInternal stdlibDir trusted rsrc csrc entry g =
               (map modIdToPath g.fgMods)
               allowInternal
               trusted
-              None
+              (siblingPairOf g.fgRoots stdlibDir g.fgMods)
               (Some (preludeGeneration rsrc csrc))
               g.fgRuntimeD
               g.fgCoreD
