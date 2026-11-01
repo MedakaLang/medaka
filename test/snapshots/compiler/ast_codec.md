@@ -1,5 +1,5 @@
 # META
-source_lines=2134
+source_lines=2129
 stages=DESUGAR,MARK
 # SOURCE
 -- A faithful, fail-closed codec for the elaborated AST and the evidence rows.
@@ -48,11 +48,6 @@ readDecls cur = checked "decls" cur (cursorList readDecl cur)
 export
 readEvEntries : SexpCursor -> Result SexpError (List EvEntry)
 readEvEntries cur = checked "evidence" cur (cursorList readEvEntry cur)
-
--- The whole of `text` is one list of declarations.
-export
-decodeDecls : String -> Result SexpError (List Decl)
-decodeDecls text = decodeAll readDecls text
 
 -- The whole of `text` is one list of evidence rows.
 export
@@ -2149,8 +2144,6 @@ readDeclTagged t cur
 (DFunDef false "readDecls" ((PVar "cur")) (EApp (EApp (EApp (EVar "checked") (ELit (LString "decls"))) (EVar "cur")) (EApp (EApp (EVar "cursorList") (EVar "readDecl")) (EVar "cur"))))
 (DTypeSig true "readEvEntries" (TyFun (TyCon "SexpCursor") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "List") (TyCon "EvEntry")))))
 (DFunDef false "readEvEntries" ((PVar "cur")) (EApp (EApp (EApp (EVar "checked") (ELit (LString "evidence"))) (EVar "cur")) (EApp (EApp (EVar "cursorList") (EVar "readEvEntry")) (EVar "cur"))))
-(DTypeSig true "decodeDecls" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "decodeDecls" ((PVar "text")) (EApp (EApp (EVar "decodeAll") (EVar "readDecls")) (EVar "text")))
 (DTypeSig true "decodeEvEntries" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "List") (TyCon "EvEntry")))))
 (DFunDef false "decodeEvEntries" ((PVar "text")) (EApp (EApp (EVar "decodeAll") (EVar "readEvEntries")) (EVar "text")))
 (DTypeSig false "decodeAll" (TyFun (TyFun (TyCon "SexpCursor") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a"))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a")))))
@@ -2880,8 +2873,6 @@ readDeclTagged t cur
 (DFunDef false "readDecls" ((PVar "cur")) (EApp (EApp (EApp (EVar "checked") (ELit (LString "decls"))) (EVar "cur")) (EApp (EApp (EVar "cursorList") (EVar "readDecl")) (EVar "cur"))))
 (DTypeSig true "readEvEntries" (TyFun (TyCon "SexpCursor") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "List") (TyCon "EvEntry")))))
 (DFunDef false "readEvEntries" ((PVar "cur")) (EApp (EApp (EApp (EVar "checked") (ELit (LString "evidence"))) (EVar "cur")) (EApp (EApp (EVar "cursorList") (EVar "readEvEntry")) (EVar "cur"))))
-(DTypeSig true "decodeDecls" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "decodeDecls" ((PVar "text")) (EApp (EApp (EVar "decodeAll") (EVar "readDecls")) (EVar "text")))
 (DTypeSig true "decodeEvEntries" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "List") (TyCon "EvEntry")))))
 (DFunDef false "decodeEvEntries" ((PVar "text")) (EApp (EApp (EVar "decodeAll") (EVar "readEvEntries")) (EVar "text")))
 (DTypeSig false "decodeAll" (TyFun (TyFun (TyCon "SexpCursor") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a"))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a")))))

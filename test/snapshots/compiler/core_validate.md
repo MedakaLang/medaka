@@ -1,5 +1,5 @@
 # META
-source_lines=1787
+source_lines=1767
 stages=DESUGAR,MARK
 # SOURCE
 import backend.impl_groups.{validateImplGroups}
@@ -329,10 +329,6 @@ validateExternMetadata (cp@(CProgram _ _ _ _ _ facts)) =
     (collectExternUses cp)
 
 export
-findingExtern : ExternFinding -> String
-findingExtern (ExternFinding name _ _ _ _) = name
-
-export
 findingBinding : ExternFinding -> String
 findingBinding (ExternFinding _ _ _ _ binding) = binding
 
@@ -366,7 +362,6 @@ isUnprovidedOn backend name = isSome (unprovidedOn backend name)
 -- `runtimeExterns` names the externs the entry declared from
 -- `stdlib/runtime.mdk`; a name among them with no catalog row is an internal
 -- error, raised before the program is read.
-export
 validateExterns : Backend -> List String -> CProgram -> List ExternFinding
 validateExterns backend runtimeExterns prog =
   let _ = refuseMissingRows runtimeExterns
@@ -375,7 +370,6 @@ validateExterns backend runtimeExterns prog =
 
 -- One line per record node whose ordinals the emitters cannot trust, in
 -- program order; empty for a well-stamped program.
-export
 validateRecords : CProgram -> List String
 validateRecords prog = match walkProgram LlvmBackend prog
   Walk _ _ bad _ _ _ _ _ => reverseL bad
@@ -386,7 +380,6 @@ renderRecordRefusal bad = joinWith "\n" bad
 
 -- One line per application whose mode its head's defined arity contradicts, in
 -- program order; empty for a well-stamped program.
-export
 validateCalls : CProgram -> List String
 validateCalls (prog@(CProgram _ _ _ impls _ _)) =
   match walkProgram LlvmBackend prog
@@ -394,7 +387,6 @@ validateCalls (prog@(CProgram _ _ _ impls _ _)) =
 
 -- One line per `CBinPrim` whose non-empty scalar tag is not licensed for its
 -- operator, in program order. An empty tag makes no scalar claim.
-export
 validateScalarOperators : CProgram -> List String
 validateScalarOperators prog = match walkProgram LlvmBackend prog
   Walk _ _ _ bad _ _ _ _ => reverseL bad
@@ -420,7 +412,6 @@ splitGroupFaults ((ent@(CImplEntry method _ _ body)) :: rest) seen acc =
 
 -- Signature facts are complete for every emitted method and preserve the plan's
 -- qualified keys. Callback positions are strictly increasing value positions.
-export
 validateMethodResults : EmitPlan -> CProgram -> List String
 validateMethodResults plan (prog@(CProgram _ _ _ impls _ facts)) =
   let index = indexMethodResults facts.factMethodResults
@@ -530,7 +521,6 @@ noteMethodResult (Ctx _ _ _ _ _ facts _) method iface (Walk seen found bad scala
 
 -- One line per method occurrence or impl entry whose dictionaries disagree with
 -- the method's declared context (see the header), in program order.
-export
 validateMethodContexts : CProgram -> List String
 validateMethodContexts (prog@(CProgram _ _ _ impls mctx facts)) =
   match walkProgram LlvmBackend prog
@@ -582,7 +572,6 @@ leadingMethodDicts _ k _ = k
 -- is the qualified word its canonical key opens with.  The emitters only prefix
 -- and join the stamp, so an entry with none would define a symbol named after
 -- nothing.
-export
 validateImplSymbols : CProgram -> List String
 validateImplSymbols (CProgram _ _ _ impls _ _) = flatMap implSymbolFaults impls
 
@@ -627,7 +616,6 @@ validateImplSymbolInjectivity cp = match implSymbolCollision cp
   None => ()
 
 -- The refusal text for the first collision, if any.
-export
 implSymbolCollision : CProgram -> Option String
 implSymbolCollision (CProgram _ _ _ impls _ _) =
   let rows = dedupBy implPreImageKey (flatMap taggedImplSymRow impls)
@@ -721,7 +709,6 @@ validateDictTags backend cp = match dictTagCollision backend cp
   None => ()
 
 -- The refusal text for the first collision, if any: the full-width space first.
-export
 dictTagCollision : Backend -> CProgram -> Option String
 dictTagCollision backend (CProgram _ _ _ impls _ _) =
   let rows = dedupBy dictRouteWordKey (map dictRouteWordRow impls)
@@ -792,11 +779,9 @@ renderCallRefusal : List String -> String
 renderCallRefusal bad = joinWith "\n" bad
 
 -- The names in `names` that have no extern catalog row.
-export
 missingCatalogRows : List String -> List String
 missingCatalogRows names = filter (n => isNone (catalogRow n)) names
 
-export
 missingRowsMessage : List String -> String
 missingRowsMessage missing =
   let names = joinWith ", " (map quoteName missing)
@@ -827,7 +812,6 @@ renderExternRefusal findings = renderExternRefusalUnder !checkedTarget findings
 -- built-in its target does not provide, so none arrives after an admitted
 -- check, and every finding says so (`checkMissedNote`).  An extern behind a
 -- label the profile does not reach (`withheldLabels`) also names that label.
-export
 renderExternRefusalUnder : Option CheckedTarget -> List ExternFinding -> String
 renderExternRefusalUnder None findings =
   joinWith "\n" (map renderExternFinding findings)
@@ -851,8 +835,7 @@ checkMissedNote backend =
 
 -- What `medaka build` checked the program against before lowering: the
 -- selected profile, and each runtime extern's declared labels.
-public export data CheckedTarget =
-  CheckedTarget TargetProfile (OrdMap (List String))
+export data CheckedTarget = CheckedTarget TargetProfile (OrdMap (List String))
 
 export
 checkedTargetOf : TargetProfile -> List Decl -> CheckedTarget
@@ -1090,7 +1073,6 @@ scalarComparisonOperator _ = False
 
 -- One line per way a dispatch node's evidence fails to denote a dictionary its
 -- callee binds (see the header).
-export
 validateDispatchEvidence : CProgram -> List String
 validateDispatchEvidence prog = match walkProgram LlvmBackend prog
   Walk _ _ _ _ _ _ bad _ => reverseL bad
@@ -1453,7 +1435,6 @@ walkStmts ctx scope ((CSAssign _ e) :: rest) w =
 -- an `if`, the arms of a match, the body of a `let` or let-group and the last
 -- statement of a block.  The same walk refuses an or-pattern candidate whose
 -- body index names no earlier `CArm` of its list.
-export
 validateTails : CProgram -> List String
 validateTails (CProgram groups _ _ impls _ _) =
   reverseL (tailImpls impls (tailBinds groups []))
@@ -1607,7 +1588,6 @@ tailStmt b (CSExpr e) acc = tailE b False e acc
 tailStmt b (CSLet _ _ e) acc = tailE b False e acc
 tailStmt b (CSAssign _ e) acc = tailE b False e acc
 
-export
 validateSymbolOrigins : CProgram -> List String
 validateSymbolOrigins (CProgram groups _ ctorTypes _ _ facts) =
   match facts.factSymbolOrigins
@@ -1840,8 +1820,6 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "validateRequirementProjection" (PWild PWild) (EListLit))
 (DTypeSig false "validateExternMetadata" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateExternMetadata" ((PAs "cp" (PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts")))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "use")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "use") "useSymbol")) (EFieldAccess (EVar "facts") "factExterns")) (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "unknown-extern-declaration: ")) (EFieldAccess (EVar "use") "useSymbol")))) (arm (PCon "Some" (PVar "fact")) () (EMatch (EFieldAccess (EVar "fact") "callableShape") (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "missing-extern-abi: ")) (EFieldAccess (EVar "fact") "symbol")))) (arm (PCon "Some" PWild) () (EListLit))))))) (EApp (EVar "collectExternUses") (EVar "cp"))))
-(DTypeSig true "findingExtern" (TyFun (TyCon "ExternFinding") (TyCon "String")))
-(DFunDef false "findingExtern" ((PCon "ExternFinding" (PVar "name") PWild PWild PWild PWild)) (EVar "name"))
 (DTypeSig true "findingBinding" (TyFun (TyCon "ExternFinding") (TyCon "String")))
 (DFunDef false "findingBinding" ((PCon "ExternFinding" PWild PWild PWild PWild (PVar "binding"))) (EVar "binding"))
 (DTypeSig true "unprovidedOn" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "GapKind") (TyCon "String"))))))
@@ -1853,20 +1831,20 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "notProvidedOf" (PWild) (EVar "None"))
 (DTypeSig true "isUnprovidedOn" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isUnprovidedOn" ((PVar "backend") (PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "unprovidedOn") (EVar "backend")) (EVar "name"))))
-(DTypeSig true "validateExterns" (TyFun (TyCon "Backend") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "ExternFinding"))))))
+(DTypeSig false "validateExterns" (TyFun (TyCon "Backend") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "ExternFinding"))))))
 (DFunDef false "validateExterns" ((PVar "backend") (PVar "runtimeExterns") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "refuseMissingRows") (EVar "runtimeExterns"))) (DoExpr (EMatch (EApp (EApp (EVar "walkProgram") (EVar "backend")) (EVar "prog")) (arm (PCon "Walk" PWild (PVar "found") PWild PWild PWild PWild PWild PWild) () (EApp (EVar "reverseL") (EVar "found")))))))
-(DTypeSig true "validateRecords" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateRecords" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateRecords" ((PVar "prog")) (EMatch (EApp (EApp (EVar "walkProgram") (EVar "LlvmBackend")) (EVar "prog")) (arm (PCon "Walk" PWild PWild (PVar "bad") PWild PWild PWild PWild PWild) () (EApp (EVar "reverseL") (EVar "bad")))))
 (DTypeSig true "renderRecordRefusal" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "renderRecordRefusal" ((PVar "bad")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad")))
-(DTypeSig true "validateCalls" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateCalls" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateCalls" ((PAs "prog" (PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild))) (EMatch (EApp (EApp (EVar "walkProgram") (EVar "LlvmBackend")) (EVar "prog")) (arm (PCon "Walk" PWild PWild PWild PWild (PVar "bad") PWild PWild PWild) () (EBinOp "++" (EApp (EVar "reverseL") (EVar "bad")) (EApp (EApp (EApp (EVar "splitGroupFaults") (EVar "impls")) (EVar "omEmpty")) (EListLit))))))
-(DTypeSig true "validateScalarOperators" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateScalarOperators" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateScalarOperators" ((PVar "prog")) (EMatch (EApp (EApp (EVar "walkProgram") (EVar "LlvmBackend")) (EVar "prog")) (arm (PCon "Walk" PWild PWild PWild (PVar "bad") PWild PWild PWild PWild) () (EApp (EVar "reverseL") (EVar "bad")))))
 (DTypeSig false "splitGroupFaults" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "splitGroupFaults" ((PList) PWild (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
 (DFunDef false "splitGroupFaults" ((PCons (PAs "ent" (PCon "CImplEntry" (PVar "method") PWild PWild (PVar "body"))) (PVar "rest")) (PVar "seen") (PVar "acc")) (EBlock (DoLet false false (PTuple (PVar "key") (PVar "n")) (EApp (EVar "entryArityRow") (EVar "ent"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "seen")) (arm (PCon "Some" (PVar "k")) () (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EApp (EApp (EVar "splitGroupFaults") (EVar "rest")) (EVar "seen")) (EVar "acc")) (EApp (EApp (EApp (EVar "splitGroupFaults") (EVar "rest")) (EVar "seen")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "call: impl entry takes ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " value parameters, the first entry of its group "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString " [in impl "))) (EApp (EVar "display") (EVar "method"))) (ELit (LString "@"))) (EApp (EVar "display") (EApp (EVar "implBodyTag") (EVar "body")))) (ELit (LString "]"))) (EVar "acc"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "splitGroupFaults") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "n")) (EVar "seen"))) (EVar "acc")))))))
-(DTypeSig true "validateMethodResults" (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "validateMethodResults" (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "validateMethodResults" ((PVar "plan") (PAs "prog" (PCon "CProgram" PWild PWild PWild (PVar "impls") PWild (PVar "facts")))) (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexMethodResults") (EFieldAccess (EVar "facts") "factMethodResults"))) (DoLet false false (PVar "rowsBad") (EApp (EApp (EApp (EVar "methodResultRows") (EFieldAccess (EVar "facts") "factMethodResults")) (EVar "omEmpty")) (EListLit))) (DoLet false true (PVar "keys") (ELam ((PVar "idx")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "iface")) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "iface")) (EVar "m")))) (EApp (EVar "omKeys") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "iface")) (EVar "idx"))))))) (EApp (EVar "omKeys") (EVar "idx"))))) (DoLet false false (PVar "planBad") (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "keys") (EVar "index")) (EApp (EVar "keys") (EFieldAccess (EVar "plan") "methodResults"))) (EApp (EApp (EVar "all") (EApp (EVar "methodResultMatches") (EFieldAccess (EVar "plan") "methodResults"))) (EFieldAccess (EVar "facts") "factMethodResults"))) (EListLit) (EListLit (ELit (LString "method result: emit plan index disagrees with declaration facts"))))) (DoLet false false (PVar "refsBad") (EMatch (EApp (EApp (EVar "walkProgram") (EVar "LlvmBackend")) (EVar "prog")) (arm (PCon "Walk" PWild PWild PWild PWild PWild PWild PWild (PVar "bad")) () (EApp (EVar "reverseL") (EVar "bad"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "rowsBad") (EVar "planBad")) (EVar "refsBad")) (EApp (EApp (EVar "flatMap") (EApp (EVar "entryMethodResult") (EVar "index"))) (EVar "impls"))))))
 (DTypeSig false "methodResultMatches" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))) (TyFun (TyCon "MethodResultFact") (TyCon "Bool"))))
 (DFunDef false "methodResultMatches" ((PVar "index") (PVar "row")) (EBinOp "==" (EApp (EApp (EApp (EVar "lookupMethodResult") (EVar "index")) (EFieldAccess (EVar "row") "iface")) (EFieldAccess (EVar "row") "method")) (EApp (EVar "Some") (EVar "row"))))
@@ -1886,7 +1864,7 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig false "noteMethodResult" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "noteMethodResult" (PWild PWild (PLit (LString "")) (PVar "w")) (EVar "w"))
 (DFunDef false "noteMethodResult" ((PCon "Ctx" PWild PWild PWild PWild PWild (PVar "facts") PWild) (PVar "method") (PVar "iface") (PCon "Walk" (PVar "seen") (PVar "found") (PVar "bad") (PVar "scalar") (PVar "calls") (PVar "ctxs") (PVar "evs") (PVar "results"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Walk") (EVar "seen")) (EVar "found")) (EVar "bad")) (EVar "scalar")) (EVar "calls")) (EVar "ctxs")) (EVar "evs")) (EBinOp "++" (EApp (EApp (EApp (EVar "missingMethodResult") (EFieldAccess (EVar "facts") "efMethods")) (EVar "iface")) (EVar "method")) (EVar "results"))))
-(DTypeSig true "validateMethodContexts" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateMethodContexts" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateMethodContexts" ((PAs "prog" (PCon "CProgram" PWild PWild PWild (PVar "impls") (PVar "mctx") (PVar "facts")))) (EMatch (EApp (EApp (EVar "walkProgram") (EVar "LlvmBackend")) (EVar "prog")) (arm (PCon "Walk" PWild PWild PWild PWild PWild (PVar "bad") PWild PWild) () (EBinOp "++" (EApp (EVar "reverseL") (EVar "bad")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "entryContextFaults") (EApp (EApp (EVar "omFromPairs") (EVar "mctx")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factRequires")) (EVar "omEmpty")))) (EVar "impls"))))))
 (DTypeSig false "entryContextFaults" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "entryContextFaults" ((PVar "table") (PVar "reqs") (PCon "CImplEntry" (PVar "method") PWild PWild (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") PWild PWild (PVar "pats") PWild))) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EApp (EVar "declaredMethodContext") (EVar "table")) (EVar "iface")) (EVar "method"))) (DoLet false false (PVar "r") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "reqs")))) (DoLet false false (PVar "n") (EApp (EApp (EApp (EVar "leadingMethodDicts") (EVar "method")) (ELit (LInt 0))) (EVar "pats"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "k")) (EBinOp "==" (EVar "n") (EBinOp "+" (EVar "k") (EVar "r")))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method context: impl entry opens with ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " `$dict_"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString "_k` parameters, `"))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "` declares "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString " and its instance requires "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "r")))) (ELit (LString " [in impl "))) (EApp (EVar "display") (EVar "method"))) (ELit (LString "@"))) (EApp (EVar "display") (EVar "tag"))) (ELit (LString "]"))))))))
@@ -1896,14 +1874,14 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig false "leadingMethodDicts" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))
 (DFunDef false "leadingMethodDicts" ((PVar "method") (PVar "k") (PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "x") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EVar "display") (EVar "method"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "leadingMethodDicts") (EVar "method")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")) (EVar "k")))
 (DFunDef false "leadingMethodDicts" (PWild (PVar "k") PWild) (EVar "k"))
-(DTypeSig true "validateImplSymbols" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateImplSymbols" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateImplSymbols" ((PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EApp (EApp (EVar "flatMap") (EVar "implSymbolFaults")) (EVar "impls")))
 (DTypeSig false "implSymbolFaults" (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "implSymbolFaults" ((PCon "CImplEntry" (PVar "method") PWild PWild (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PCon "ImplSym" (PVar "sym") PWild PWild) PWild PWild PWild))) (EBinOp "++" (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl symbol: entry has no stamped symbol [in impl ")) (EApp (EVar "display") (EVar "method"))) (ELit (LString "@"))) (EApp (EVar "display") (EVar "tag"))) (ELit (LString "]")))) (EListLit)) (EIf (EBinOp "==" (EVar "iface") (EApp (EVar "ifaceWordOfKey") (EVar "key"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl symbol: interface word `")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "` is not the qualified word `"))) (EApp (EVar "display") (EApp (EVar "ifaceWordOfKey") (EVar "key")))) (ELit (LString "` of its key [in impl "))) (EApp (EVar "display") (EVar "method"))) (ELit (LString "@"))) (EApp (EVar "display") (EVar "tag"))) (ELit (LString "]")))))))
 (DFunDef false "implSymbolFaults" ((PCon "CImplEntry" (PVar "method") PWild PWild (PCon "CImplDefault" PWild (PVar "tag") PWild (PCon "ImplSym" (PVar "sym") (PVar "ifaceTag") (PVar "keyTag")) PWild PWild PWild))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EBinOp "==" (EVar "ifaceTag") (ELit (LString "")))) (EBinOp "==" (EVar "keyTag") (ELit (LString "")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl symbol: default entry has no stamped symbol [in impl ")) (EApp (EVar "display") (EVar "method"))) (ELit (LString "@"))) (EApp (EVar "display") (EVar "tag"))) (ELit (LString "]")))) (EListLit)))
 (DTypeSig true "validateImplSymbolInjectivity" (TyFun (TyCon "CProgram") (TyCon "Unit")))
 (DFunDef false "validateImplSymbolInjectivity" ((PVar "cp")) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "panic") (EVar "message"))) (arm (PCon "None") () (ELit LUnit))))
-(DTypeSig true "implSymbolCollision" (TyFun (TyCon "CProgram") (TyApp (TyCon "Option") (TyCon "String"))))
+(DTypeSig false "implSymbolCollision" (TyFun (TyCon "CProgram") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "implSymbolCollision" ((PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupBy") (EVar "implPreImageKey")) (EApp (EApp (EVar "flatMap") (EVar "taggedImplSymRow")) (EVar "impls")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "checkImplSymbolsInjective") (EVar "rows")) (EVar "omEmpty")) (EVar "True")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "Some") (EVar "message"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "checkImplSymbolsInjective") (EVar "rows")) (EVar "omEmpty")) (EVar "False")))))))
 (DTypeSig false "taggedImplSymRow" (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))
 (DFunDef false "taggedImplSymRow" ((PCon "CImplEntry" (PVar "m") PWild PWild (PCon "CImplTagged" PWild (PVar "key") PWild (PCon "ImplSym" (PVar "tag") PWild PWild) PWild PWild PWild))) (EListLit (ETuple (EVar "m") (EVar "tag") (EVar "key"))))
@@ -1915,7 +1893,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "checkImplSymbolsInjective" ((PCons (PTuple (PVar "m") (PVar "tag") (PVar "key")) (PVar "rest")) (PVar "seen") (PVar "native")) (EBlock (DoLet false false (PVar "sym") (EIf (EVar "native") (EApp (EVar "LN.llvmName") (EApp (EApp (EVar "LN.LImplMethod") (EVar "tag")) (EVar "m"))) (EApp (EVar "WN.wasmName") (EApp (EApp (EVar "WN.WImplMethod") (EVar "tag")) (EVar "m"))))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "sym")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "checkImplSymbolsInjective") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "sym")) (EVar "key")) (EVar "seen"))) (EVar "native"))) (arm (PCon "Some" (PVar "prev")) () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "emitted impl-symbol collision: two DISTINCT impls of method `")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "` are emitted under one symbol.\ncollided symbol: "))) (EApp (EVar "display") (EVar "sym"))) (ELit (LString "\nimpl 1 key: "))) (EApp (EVar "display") (EVar "prev"))) (ELit (LString "\nimpl 2 key: "))) (EApp (EVar "display") (EVar "key"))) (ELit (LString "\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`. Since #1950 those keys are spelled into the symbol by `private_mangle.injectiveIdent`, which is INJECTIVE, so this is NOT a naming mistake you can rename your way out of -- it means the emitted-symbol scheme itself lost injectivity. Please report this message, with both keys above.")))))))))
 (DTypeSig true "validateDictTags" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyCon "Unit"))))
 (DFunDef false "validateDictTags" ((PVar "backend") (PVar "cp")) (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "panic") (EVar "message"))) (arm (PCon "None") () (ELit LUnit))))
-(DTypeSig true "dictTagCollision" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyApp (TyCon "Option") (TyCon "String")))))
+(DTypeSig false "dictTagCollision" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "dictTagCollision" ((PVar "backend") (PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupBy") (EVar "dictRouteWordKey")) (EApp (EApp (EVar "map") (EVar "dictRouteWordRow")) (EVar "impls")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "Some") (EVar "message"))) (arm (PCon "None") () (EMatch (EVar "backend") (arm (PCon "LlvmBackend") () (EVar "None")) (arm (PCon "WasmBackend") () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty"))) (arm (PCon "EvalBackend") () (EVar "None"))))))))
 (DTypeSig false "nativeDictTagSpace" (TyCon "String"))
 (DFunDef false "nativeDictTagSpace" () (ELit (LString "native (LLVM) i64 dict-witness word `hashName` -- BOTH backends, since the wasm tag is this hash masked")))
@@ -1934,9 +1912,9 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "implBodyTag" ((PCon "CImplDefault" PWild (PVar "tag") PWild PWild PWild PWild PWild)) (EVar "tag"))
 (DTypeSig true "renderCallRefusal" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "renderCallRefusal" ((PVar "bad")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad")))
-(DTypeSig true "missingCatalogRows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "missingCatalogRows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "missingCatalogRows" ((PVar "names")) (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EVar "isNone") (EApp (EVar "catalogRow") (EVar "n"))))) (EVar "names")))
-(DTypeSig true "missingRowsMessage" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DTypeSig false "missingRowsMessage" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "missingRowsMessage" ((PVar "missing")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "quoteName")) (EVar "missing")))) (DoExpr (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: runtime extern ")) (EApp (EVar "display") (EVar "names"))) (ELit (LString " has no row in the extern catalog (compiler/backend/extern_catalog.mdk)"))))))
 (DTypeSig false "quoteName" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "quoteName" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EVar "n")) (ELit (LString "'"))))
@@ -1946,14 +1924,14 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "renderExternFinding" ((PCon "ExternFinding" (PVar "name") (PVar "backend") (PVar "kind") (PVar "why") (PVar "binding"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString ": runtime extern '"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' is not available on the "))) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend ("))) (EApp (EVar "display") (EApp (EVar "gapKindName") (EVar "kind")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "why"))) (ELit (LString ") [in "))) (EApp (EVar "display") (EVar "binding"))) (ELit (LString "]"))))
 (DTypeSig true "renderExternRefusal" (TyFun (TyApp (TyCon "List") (TyCon "ExternFinding")) (TyCon "String")))
 (DFunDef false "renderExternRefusal" ((PVar "findings")) (EApp (EApp (EVar "renderExternRefusalUnder") (EUnOp "!" (EVar "checkedTarget"))) (EVar "findings")))
-(DTypeSig true "renderExternRefusalUnder" (TyFun (TyApp (TyCon "Option") (TyCon "CheckedTarget")) (TyFun (TyApp (TyCon "List") (TyCon "ExternFinding")) (TyCon "String"))))
+(DTypeSig false "renderExternRefusalUnder" (TyFun (TyApp (TyCon "Option") (TyCon "CheckedTarget")) (TyFun (TyApp (TyCon "List") (TyCon "ExternFinding")) (TyCon "String"))))
 (DFunDef false "renderExternRefusalUnder" ((PCon "None") (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EVar "renderExternFinding")) (EVar "findings"))))
 (DFunDef false "renderExternRefusalUnder" ((PCon "Some" (PVar "t")) (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EApp (EVar "renderFindingUnder") (EVar "t"))) (EVar "findings"))))
 (DTypeSig false "renderFindingUnder" (TyFun (TyCon "CheckedTarget") (TyFun (TyCon "ExternFinding") (TyCon "String"))))
 (DFunDef false "renderFindingUnder" ((PCon "CheckedTarget" (PVar "profile") (PVar "labels")) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") PWild PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoLet false false (PVar "withheldNote") (EMatch (EApp (EApp (EVar "withheldLabels") (EVar "profile")) (EVar "declared")) (arm (PList) () (ELit (LString ""))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "; the target `")) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` performs")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString ""))) (EApp (EVar "display") (EVar "withheldNote"))) (ELit (LString "; "))) (EApp (EVar "display") (EApp (EVar "checkMissedNote") (EVar "backend")))) (ELit (LString ""))))))
 (DTypeSig false "checkMissedNote" (TyFun (TyCon "Backend") (TyCon "String")))
 (DFunDef false "checkMissedNote" ((PVar "backend")) (EBinOp "++" (EBinOp "++" (ELit (LString "`check` should have refused this program before the ")) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend saw it, so this is a bug in the compiler"))))
-(DData Public "CheckedTarget" () ((variant "CheckedTarget" (ConPos (TyCon "TargetProfile") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DData Abstract "CheckedTarget" () ((variant "CheckedTarget" (ConPos (TyCon "TargetProfile") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "checkedTargetOf" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CheckedTarget"))))
 (DFunDef false "checkedTargetOf" ((PVar "profile") (PVar "runtimeDecls")) (EApp (EApp (EVar "CheckedTarget") (EVar "profile")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "externLabels") (EVar "runtimeDecls"))) (EVar "omEmpty"))))
 (DTypeSig true "checkedTarget" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "CheckedTarget"))))
@@ -2049,7 +2027,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "scalarComparisonOperator" ((PLit (LString "<="))) (EVar "True"))
 (DFunDef false "scalarComparisonOperator" ((PLit (LString ">="))) (EVar "True"))
 (DFunDef false "scalarComparisonOperator" (PWild) (EVar "False"))
-(DTypeSig true "validateDispatchEvidence" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateDispatchEvidence" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateDispatchEvidence" ((PVar "prog")) (EMatch (EApp (EApp (EVar "walkProgram") (EVar "LlvmBackend")) (EVar "prog")) (arm (PCon "Walk" PWild PWild PWild PWild PWild PWild (PVar "bad") PWild) () (EApp (EVar "reverseL") (EVar "bad")))))
 (DTypeSig false "dictParamCounts" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
 (DFunDef false "dictParamCounts" ((PList) (PVar "acc")) (EVar "acc"))
@@ -2157,7 +2135,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "walkStmts" ((PVar "ctx") (PVar "scope") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
 (DFunDef false "walkStmts" ((PVar "ctx") (PVar "scope") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "w")) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "bindLetScope") (EVar "pat")) (EVar "e")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "ctx")) (EVar "inner")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EIf (EVar "recF") (EVar "inner") (EVar "scope"))) (EVar "e")) (EVar "w"))))))
 (DFunDef false "walkStmts" ((PVar "ctx") (PVar "scope") (PCons (PCon "CSAssign" PWild (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
-(DTypeSig true "validateTails" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateTails" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateTails" ((PCon "CProgram" (PVar "groups") PWild PWild (PVar "impls") PWild PWild)) (EApp (EVar "reverseL") (EApp (EApp (EVar "tailImpls") (EVar "impls")) (EApp (EApp (EVar "tailBinds") (EVar "groups")) (EListLit)))))
 (DTypeSig true "renderTailRefusal" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "renderTailRefusal" ((PVar "bad")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad")))
@@ -2241,7 +2219,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSExpr" (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSLet" PWild PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSAssign" PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
-(DTypeSig true "validateSymbolOrigins" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateSymbolOrigins" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateSymbolOrigins" ((PCon "CProgram" (PVar "groups") PWild (PVar "ctorTypes") PWild PWild (PVar "facts"))) (EMatch (EFieldAccess (EVar "facts") "factSymbolOrigins") (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "origins")) () (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PCon "CBind" (PVar "name") PWild PWild PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "origins") "functions")) (EListLit) (EListLit (EBinOp "++" (ELit (LString "symbol origin: missing function ")) (EVar "name")))))) (EVar "groups")) (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "name") (PVar "owner"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "owner")) (EFieldAccess (EVar "origins") "constructors")) (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "symbol origin: missing constructor owner ")) (EVar "owner")))) (arm (PCon "Some" (PVar "rows")) () (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "rows")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "symbol origin: missing constructor ")) (EApp (EVar "display") (EVar "name"))) (ELit (LString " in "))) (EApp (EVar "display") (EVar "owner"))) (ELit (LString ""))))))))) (EVar "ctorTypes"))))))
 (DTypeSig true "validateBinderStamps" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateBinderStamps" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") PWild (PVar "facts"))) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "BM.fromList") (EApp (EApp (EVar "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "binderOrdinal") (EFieldAccess (EVar "r") "brId")) (EVar "r")))) (EFieldAccess (EVar "facts") "factBinders")))) (DoLet false false (PVar "ctors") (EApp (EApp (EVar "omFromPairs") (EVar "ctorTypes")) (EVar "omEmpty"))) (DoLet false false (PVar "arities") (EApp (EApp (EVar "omFromPairs") (EVar "ctorArs")) (EVar "omEmpty"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "bindStampFaults") (EVar "rows")) (EVar "ctors")) (EVar "arities"))) (EVar "groups")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "entryStampFaults") (EVar "rows")) (EVar "ctors")) (EVar "arities"))) (EVar "impls"))))))
@@ -2341,8 +2319,6 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "validateRequirementProjection" (PWild PWild) (EListLit))
 (DTypeSig false "validateExternMetadata" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateExternMetadata" ((PAs "cp" (PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts")))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "use")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "use") "useSymbol")) (EFieldAccess (EVar "facts") "factExterns")) (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "unknown-extern-declaration: ")) (EFieldAccess (EVar "use") "useSymbol")))) (arm (PCon "Some" (PVar "fact")) () (EMatch (EFieldAccess (EVar "fact") "callableShape") (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "missing-extern-abi: ")) (EFieldAccess (EVar "fact") "symbol")))) (arm (PCon "Some" PWild) () (EListLit))))))) (EApp (EVar "collectExternUses") (EVar "cp"))))
-(DTypeSig true "findingExtern" (TyFun (TyCon "ExternFinding") (TyCon "String")))
-(DFunDef false "findingExtern" ((PCon "ExternFinding" (PVar "name") PWild PWild PWild PWild)) (EVar "name"))
 (DTypeSig true "findingBinding" (TyFun (TyCon "ExternFinding") (TyCon "String")))
 (DFunDef false "findingBinding" ((PCon "ExternFinding" PWild PWild PWild PWild (PVar "binding"))) (EVar "binding"))
 (DTypeSig true "unprovidedOn" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "GapKind") (TyCon "String"))))))
@@ -2354,20 +2330,20 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "notProvidedOf" (PWild) (EVar "None"))
 (DTypeSig true "isUnprovidedOn" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isUnprovidedOn" ((PVar "backend") (PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "unprovidedOn") (EVar "backend")) (EVar "name"))))
-(DTypeSig true "validateExterns" (TyFun (TyCon "Backend") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "ExternFinding"))))))
+(DTypeSig false "validateExterns" (TyFun (TyCon "Backend") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "ExternFinding"))))))
 (DFunDef false "validateExterns" ((PVar "backend") (PVar "runtimeExterns") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "refuseMissingRows") (EVar "runtimeExterns"))) (DoExpr (EMatch (EApp (EApp (EVar "walkProgram") (EVar "backend")) (EVar "prog")) (arm (PCon "Walk" PWild (PVar "found") PWild PWild PWild PWild PWild PWild) () (EApp (EVar "reverseL") (EVar "found")))))))
-(DTypeSig true "validateRecords" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateRecords" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateRecords" ((PVar "prog")) (EMatch (EApp (EApp (EVar "walkProgram") (EVar "LlvmBackend")) (EVar "prog")) (arm (PCon "Walk" PWild PWild (PVar "bad") PWild PWild PWild PWild PWild) () (EApp (EVar "reverseL") (EVar "bad")))))
 (DTypeSig true "renderRecordRefusal" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "renderRecordRefusal" ((PVar "bad")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad")))
-(DTypeSig true "validateCalls" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateCalls" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateCalls" ((PAs "prog" (PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild))) (EMatch (EApp (EApp (EVar "walkProgram") (EVar "LlvmBackend")) (EVar "prog")) (arm (PCon "Walk" PWild PWild PWild PWild (PVar "bad") PWild PWild PWild) () (EBinOp "++" (EApp (EVar "reverseL") (EVar "bad")) (EApp (EApp (EApp (EVar "splitGroupFaults") (EVar "impls")) (EVar "omEmpty")) (EListLit))))))
-(DTypeSig true "validateScalarOperators" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateScalarOperators" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateScalarOperators" ((PVar "prog")) (EMatch (EApp (EApp (EVar "walkProgram") (EVar "LlvmBackend")) (EVar "prog")) (arm (PCon "Walk" PWild PWild PWild (PVar "bad") PWild PWild PWild PWild) () (EApp (EVar "reverseL") (EVar "bad")))))
 (DTypeSig false "splitGroupFaults" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "splitGroupFaults" ((PList) PWild (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
 (DFunDef false "splitGroupFaults" ((PCons (PAs "ent" (PCon "CImplEntry" (PVar "method") PWild PWild (PVar "body"))) (PVar "rest")) (PVar "seen") (PVar "acc")) (EBlock (DoLet false false (PTuple (PVar "key") (PVar "n")) (EApp (EVar "entryArityRow") (EVar "ent"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "seen")) (arm (PCon "Some" (PVar "k")) () (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EApp (EApp (EVar "splitGroupFaults") (EVar "rest")) (EVar "seen")) (EVar "acc")) (EApp (EApp (EApp (EVar "splitGroupFaults") (EVar "rest")) (EVar "seen")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "call: impl entry takes ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " value parameters, the first entry of its group "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString " [in impl "))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "@"))) (EApp (EMethodRef "display") (EApp (EVar "implBodyTag") (EVar "body")))) (ELit (LString "]"))) (EVar "acc"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "splitGroupFaults") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "n")) (EVar "seen"))) (EVar "acc")))))))
-(DTypeSig true "validateMethodResults" (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "validateMethodResults" (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "validateMethodResults" ((PVar "plan") (PAs "prog" (PCon "CProgram" PWild PWild PWild (PVar "impls") PWild (PVar "facts")))) (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexMethodResults") (EFieldAccess (EVar "facts") "factMethodResults"))) (DoLet false false (PVar "rowsBad") (EApp (EApp (EApp (EVar "methodResultRows") (EFieldAccess (EVar "facts") "factMethodResults")) (EVar "omEmpty")) (EListLit))) (DoLet false true (PVar "keys") (ELam ((PVar "idx")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "iface")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "iface")) (EVar "m")))) (EApp (EVar "omKeys") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "iface")) (EVar "idx"))))))) (EApp (EVar "omKeys") (EVar "idx"))))) (DoLet false false (PVar "planBad") (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "keys") (EMethodRef "index")) (EApp (EVar "keys") (EFieldAccess (EVar "plan") "methodResults"))) (EApp (EApp (EDictApp "all") (EApp (EVar "methodResultMatches") (EFieldAccess (EVar "plan") "methodResults"))) (EFieldAccess (EVar "facts") "factMethodResults"))) (EListLit) (EListLit (ELit (LString "method result: emit plan index disagrees with declaration facts"))))) (DoLet false false (PVar "refsBad") (EMatch (EApp (EApp (EVar "walkProgram") (EVar "LlvmBackend")) (EVar "prog")) (arm (PCon "Walk" PWild PWild PWild PWild PWild PWild PWild (PVar "bad")) () (EApp (EVar "reverseL") (EVar "bad"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "rowsBad") (EVar "planBad")) (EVar "refsBad")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "entryMethodResult") (EMethodRef "index"))) (EVar "impls"))))))
 (DTypeSig false "methodResultMatches" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))) (TyFun (TyCon "MethodResultFact") (TyCon "Bool"))))
 (DFunDef false "methodResultMatches" ((PVar "index") (PVar "row")) (EBinOp "==" (EApp (EApp (EApp (EVar "lookupMethodResult") (EMethodRef "index")) (EFieldAccess (EVar "row") "iface")) (EFieldAccess (EVar "row") "method")) (EApp (EVar "Some") (EVar "row"))))
@@ -2387,7 +2363,7 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig false "noteMethodResult" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "noteMethodResult" (PWild PWild (PLit (LString "")) (PVar "w")) (EVar "w"))
 (DFunDef false "noteMethodResult" ((PCon "Ctx" PWild PWild PWild PWild PWild (PVar "facts") PWild) (PVar "method") (PVar "iface") (PCon "Walk" (PVar "seen") (PVar "found") (PVar "bad") (PVar "scalar") (PVar "calls") (PVar "ctxs") (PVar "evs") (PVar "results"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Walk") (EVar "seen")) (EVar "found")) (EVar "bad")) (EVar "scalar")) (EVar "calls")) (EVar "ctxs")) (EVar "evs")) (EBinOp "++" (EApp (EApp (EApp (EVar "missingMethodResult") (EFieldAccess (EVar "facts") "efMethods")) (EVar "iface")) (EVar "method")) (EVar "results"))))
-(DTypeSig true "validateMethodContexts" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateMethodContexts" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateMethodContexts" ((PAs "prog" (PCon "CProgram" PWild PWild PWild (PVar "impls") (PVar "mctx") (PVar "facts")))) (EMatch (EApp (EApp (EVar "walkProgram") (EVar "LlvmBackend")) (EVar "prog")) (arm (PCon "Walk" PWild PWild PWild PWild PWild (PVar "bad") PWild PWild) () (EBinOp "++" (EApp (EVar "reverseL") (EVar "bad")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "entryContextFaults") (EApp (EApp (EVar "omFromPairs") (EVar "mctx")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factRequires")) (EVar "omEmpty")))) (EVar "impls"))))))
 (DTypeSig false "entryContextFaults" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "entryContextFaults" ((PVar "table") (PVar "reqs") (PCon "CImplEntry" (PVar "method") PWild PWild (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") PWild PWild (PVar "pats") PWild))) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EApp (EVar "declaredMethodContext") (EVar "table")) (EVar "iface")) (EVar "method"))) (DoLet false false (PVar "r") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "reqs")))) (DoLet false false (PVar "n") (EApp (EApp (EApp (EVar "leadingMethodDicts") (EVar "method")) (ELit (LInt 0))) (EVar "pats"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "k")) (EBinOp "==" (EVar "n") (EBinOp "+" (EVar "k") (EVar "r")))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method context: impl entry opens with ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " `$dict_"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "_k` parameters, `"))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "` declares "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString " and its instance requires "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "r")))) (ELit (LString " [in impl "))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "@"))) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString "]"))))))))
@@ -2397,14 +2373,14 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig false "leadingMethodDicts" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))
 (DFunDef false "leadingMethodDicts" ((PVar "method") (PVar "k") (PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "x") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "leadingMethodDicts") (EVar "method")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")) (EVar "k")))
 (DFunDef false "leadingMethodDicts" (PWild (PVar "k") PWild) (EVar "k"))
-(DTypeSig true "validateImplSymbols" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateImplSymbols" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateImplSymbols" ((PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "implSymbolFaults")) (EVar "impls")))
 (DTypeSig false "implSymbolFaults" (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "implSymbolFaults" ((PCon "CImplEntry" (PVar "method") PWild PWild (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PCon "ImplSym" (PVar "sym") PWild PWild) PWild PWild PWild))) (EBinOp "++" (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl symbol: entry has no stamped symbol [in impl ")) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "@"))) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString "]")))) (EListLit)) (EIf (EBinOp "==" (EVar "iface") (EApp (EVar "ifaceWordOfKey") (EVar "key"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl symbol: interface word `")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "` is not the qualified word `"))) (EApp (EMethodRef "display") (EApp (EVar "ifaceWordOfKey") (EVar "key")))) (ELit (LString "` of its key [in impl "))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "@"))) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString "]")))))))
 (DFunDef false "implSymbolFaults" ((PCon "CImplEntry" (PVar "method") PWild PWild (PCon "CImplDefault" PWild (PVar "tag") PWild (PCon "ImplSym" (PVar "sym") (PVar "ifaceTag") (PVar "keyTag")) PWild PWild PWild))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EBinOp "==" (EVar "ifaceTag") (ELit (LString "")))) (EBinOp "==" (EVar "keyTag") (ELit (LString "")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl symbol: default entry has no stamped symbol [in impl ")) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "@"))) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString "]")))) (EListLit)))
 (DTypeSig true "validateImplSymbolInjectivity" (TyFun (TyCon "CProgram") (TyCon "Unit")))
 (DFunDef false "validateImplSymbolInjectivity" ((PVar "cp")) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "panic") (EVar "message"))) (arm (PCon "None") () (ELit LUnit))))
-(DTypeSig true "implSymbolCollision" (TyFun (TyCon "CProgram") (TyApp (TyCon "Option") (TyCon "String"))))
+(DTypeSig false "implSymbolCollision" (TyFun (TyCon "CProgram") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "implSymbolCollision" ((PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupBy") (EVar "implPreImageKey")) (EApp (EApp (EDictApp "flatMap") (EVar "taggedImplSymRow")) (EVar "impls")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "checkImplSymbolsInjective") (EVar "rows")) (EVar "omEmpty")) (EVar "True")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "Some") (EVar "message"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "checkImplSymbolsInjective") (EVar "rows")) (EVar "omEmpty")) (EVar "False")))))))
 (DTypeSig false "taggedImplSymRow" (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))
 (DFunDef false "taggedImplSymRow" ((PCon "CImplEntry" (PVar "m") PWild PWild (PCon "CImplTagged" PWild (PVar "key") PWild (PCon "ImplSym" (PVar "tag") PWild PWild) PWild PWild PWild))) (EListLit (ETuple (EVar "m") (EVar "tag") (EVar "key"))))
@@ -2416,7 +2392,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "checkImplSymbolsInjective" ((PCons (PTuple (PVar "m") (PVar "tag") (PVar "key")) (PVar "rest")) (PVar "seen") (PVar "native")) (EBlock (DoLet false false (PVar "sym") (EIf (EVar "native") (EApp (EVar "LN.llvmName") (EApp (EApp (EVar "LN.LImplMethod") (EVar "tag")) (EVar "m"))) (EApp (EVar "WN.wasmName") (EApp (EApp (EVar "WN.WImplMethod") (EVar "tag")) (EVar "m"))))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "sym")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "checkImplSymbolsInjective") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "sym")) (EVar "key")) (EVar "seen"))) (EVar "native"))) (arm (PCon "Some" (PVar "prev")) () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "emitted impl-symbol collision: two DISTINCT impls of method `")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "` are emitted under one symbol.\ncollided symbol: "))) (EApp (EMethodRef "display") (EVar "sym"))) (ELit (LString "\nimpl 1 key: "))) (EApp (EMethodRef "display") (EVar "prev"))) (ELit (LString "\nimpl 2 key: "))) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`. Since #1950 those keys are spelled into the symbol by `private_mangle.injectiveIdent`, which is INJECTIVE, so this is NOT a naming mistake you can rename your way out of -- it means the emitted-symbol scheme itself lost injectivity. Please report this message, with both keys above.")))))))))
 (DTypeSig true "validateDictTags" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyCon "Unit"))))
 (DFunDef false "validateDictTags" ((PVar "backend") (PVar "cp")) (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "panic") (EVar "message"))) (arm (PCon "None") () (ELit LUnit))))
-(DTypeSig true "dictTagCollision" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyApp (TyCon "Option") (TyCon "String")))))
+(DTypeSig false "dictTagCollision" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "dictTagCollision" ((PVar "backend") (PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupBy") (EVar "dictRouteWordKey")) (EApp (EApp (EMethodRef "map") (EVar "dictRouteWordRow")) (EVar "impls")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "Some") (EVar "message"))) (arm (PCon "None") () (EMatch (EVar "backend") (arm (PCon "LlvmBackend") () (EVar "None")) (arm (PCon "WasmBackend") () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty"))) (arm (PCon "EvalBackend") () (EVar "None"))))))))
 (DTypeSig false "nativeDictTagSpace" (TyCon "String"))
 (DFunDef false "nativeDictTagSpace" () (ELit (LString "native (LLVM) i64 dict-witness word `hashName` -- BOTH backends, since the wasm tag is this hash masked")))
@@ -2435,9 +2411,9 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "implBodyTag" ((PCon "CImplDefault" PWild (PVar "tag") PWild PWild PWild PWild PWild)) (EVar "tag"))
 (DTypeSig true "renderCallRefusal" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "renderCallRefusal" ((PVar "bad")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad")))
-(DTypeSig true "missingCatalogRows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "missingCatalogRows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "missingCatalogRows" ((PVar "names")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EVar "isNone") (EApp (EVar "catalogRow") (EVar "n"))))) (EVar "names")))
-(DTypeSig true "missingRowsMessage" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DTypeSig false "missingRowsMessage" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "missingRowsMessage" ((PVar "missing")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "quoteName")) (EVar "missing")))) (DoExpr (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: runtime extern ")) (EApp (EMethodRef "display") (EVar "names"))) (ELit (LString " has no row in the extern catalog (compiler/backend/extern_catalog.mdk)"))))))
 (DTypeSig false "quoteName" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "quoteName" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EVar "n")) (ELit (LString "'"))))
@@ -2447,14 +2423,14 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "renderExternFinding" ((PCon "ExternFinding" (PVar "name") (PVar "backend") (PVar "kind") (PVar "why") (PVar "binding"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString ": runtime extern '"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' is not available on the "))) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend ("))) (EApp (EMethodRef "display") (EApp (EVar "gapKindName") (EVar "kind")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "why"))) (ELit (LString ") [in "))) (EApp (EMethodRef "display") (EVar "binding"))) (ELit (LString "]"))))
 (DTypeSig true "renderExternRefusal" (TyFun (TyApp (TyCon "List") (TyCon "ExternFinding")) (TyCon "String")))
 (DFunDef false "renderExternRefusal" ((PVar "findings")) (EApp (EApp (EVar "renderExternRefusalUnder") (EUnOp "!" (EVar "checkedTarget"))) (EVar "findings")))
-(DTypeSig true "renderExternRefusalUnder" (TyFun (TyApp (TyCon "Option") (TyCon "CheckedTarget")) (TyFun (TyApp (TyCon "List") (TyCon "ExternFinding")) (TyCon "String"))))
+(DTypeSig false "renderExternRefusalUnder" (TyFun (TyApp (TyCon "Option") (TyCon "CheckedTarget")) (TyFun (TyApp (TyCon "List") (TyCon "ExternFinding")) (TyCon "String"))))
 (DFunDef false "renderExternRefusalUnder" ((PCon "None") (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EVar "renderExternFinding")) (EVar "findings"))))
 (DFunDef false "renderExternRefusalUnder" ((PCon "Some" (PVar "t")) (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderFindingUnder") (EVar "t"))) (EVar "findings"))))
 (DTypeSig false "renderFindingUnder" (TyFun (TyCon "CheckedTarget") (TyFun (TyCon "ExternFinding") (TyCon "String"))))
 (DFunDef false "renderFindingUnder" ((PCon "CheckedTarget" (PVar "profile") (PVar "labels")) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") PWild PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoLet false false (PVar "withheldNote") (EMatch (EApp (EApp (EVar "withheldLabels") (EVar "profile")) (EVar "declared")) (arm (PList) () (ELit (LString ""))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "; the target `")) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` performs")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "withheldNote"))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EApp (EVar "checkMissedNote") (EVar "backend")))) (ELit (LString ""))))))
 (DTypeSig false "checkMissedNote" (TyFun (TyCon "Backend") (TyCon "String")))
 (DFunDef false "checkMissedNote" ((PVar "backend")) (EBinOp "++" (EBinOp "++" (ELit (LString "`check` should have refused this program before the ")) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend saw it, so this is a bug in the compiler"))))
-(DData Public "CheckedTarget" () ((variant "CheckedTarget" (ConPos (TyCon "TargetProfile") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DData Abstract "CheckedTarget" () ((variant "CheckedTarget" (ConPos (TyCon "TargetProfile") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "checkedTargetOf" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CheckedTarget"))))
 (DFunDef false "checkedTargetOf" ((PVar "profile") (PVar "runtimeDecls")) (EApp (EApp (EVar "CheckedTarget") (EVar "profile")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "externLabels") (EVar "runtimeDecls"))) (EVar "omEmpty"))))
 (DTypeSig true "checkedTarget" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "CheckedTarget"))))
@@ -2550,7 +2526,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "scalarComparisonOperator" ((PLit (LString "<="))) (EVar "True"))
 (DFunDef false "scalarComparisonOperator" ((PLit (LString ">="))) (EVar "True"))
 (DFunDef false "scalarComparisonOperator" (PWild) (EVar "False"))
-(DTypeSig true "validateDispatchEvidence" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateDispatchEvidence" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateDispatchEvidence" ((PVar "prog")) (EMatch (EApp (EApp (EVar "walkProgram") (EVar "LlvmBackend")) (EVar "prog")) (arm (PCon "Walk" PWild PWild PWild PWild PWild PWild (PVar "bad") PWild) () (EApp (EVar "reverseL") (EVar "bad")))))
 (DTypeSig false "dictParamCounts" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
 (DFunDef false "dictParamCounts" ((PList) (PVar "acc")) (EVar "acc"))
@@ -2658,7 +2634,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "walkStmts" ((PVar "ctx") (PVar "scope") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
 (DFunDef false "walkStmts" ((PVar "ctx") (PVar "scope") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "w")) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "bindLetScope") (EVar "pat")) (EVar "e")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "ctx")) (EVar "inner")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EIf (EVar "recF") (EVar "inner") (EVar "scope"))) (EVar "e")) (EVar "w"))))))
 (DFunDef false "walkStmts" ((PVar "ctx") (PVar "scope") (PCons (PCon "CSAssign" PWild (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
-(DTypeSig true "validateTails" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateTails" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateTails" ((PCon "CProgram" (PVar "groups") PWild PWild (PVar "impls") PWild PWild)) (EApp (EVar "reverseL") (EApp (EApp (EVar "tailImpls") (EVar "impls")) (EApp (EApp (EVar "tailBinds") (EVar "groups")) (EListLit)))))
 (DTypeSig true "renderTailRefusal" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "renderTailRefusal" ((PVar "bad")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad")))
@@ -2742,7 +2718,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSExpr" (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSLet" PWild PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSAssign" PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
-(DTypeSig true "validateSymbolOrigins" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "validateSymbolOrigins" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateSymbolOrigins" ((PCon "CProgram" (PVar "groups") PWild (PVar "ctorTypes") PWild PWild (PVar "facts"))) (EMatch (EFieldAccess (EVar "facts") "factSymbolOrigins") (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "origins")) () (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PCon "CBind" (PVar "name") PWild PWild PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "origins") "functions")) (EListLit) (EListLit (EBinOp "++" (ELit (LString "symbol origin: missing function ")) (EVar "name")))))) (EVar "groups")) (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "name") (PVar "owner"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "owner")) (EFieldAccess (EVar "origins") "constructors")) (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "symbol origin: missing constructor owner ")) (EVar "owner")))) (arm (PCon "Some" (PVar "rows")) () (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "rows")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "symbol origin: missing constructor ")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString " in "))) (EApp (EMethodRef "display") (EVar "owner"))) (ELit (LString ""))))))))) (EVar "ctorTypes"))))))
 (DTypeSig true "validateBinderStamps" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateBinderStamps" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") PWild (PVar "facts"))) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "BM.fromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "binderOrdinal") (EFieldAccess (EVar "r") "brId")) (EVar "r")))) (EFieldAccess (EVar "facts") "factBinders")))) (DoLet false false (PVar "ctors") (EApp (EApp (EVar "omFromPairs") (EVar "ctorTypes")) (EVar "omEmpty"))) (DoLet false false (PVar "arities") (EApp (EApp (EVar "omFromPairs") (EVar "ctorArs")) (EVar "omEmpty"))) (DoExpr (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "bindStampFaults") (EVar "rows")) (EVar "ctors")) (EVar "arities"))) (EVar "groups")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "entryStampFaults") (EVar "rows")) (EVar "ctors")) (EVar "arities"))) (EVar "impls"))))))

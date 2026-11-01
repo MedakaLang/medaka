@@ -318,36 +318,10 @@ findLex ctx start end =
   go start
 
 export
-parseRecovering : String -> RecoveredSource
-parseRecovering = parseRecoveringWith defaultRecoveryLimits
-
-export
-parseRecoveringWith : RecoveryLimits -> String -> RecoveredSource
-parseRecoveringWith (limits@(RecoveryLimits maxSource maxTokens maxAttempts maxDiagnostics)) src
-  | min (min maxSource maxTokens) (min maxAttempts maxDiagnostics) < 0 =
-    budgetResult src 0
-  | stringLength src > maxSource = budgetResult src 0
-  | otherwise =
-    let cell = Ref None
-    let index () = match !cell
-      Some value => value
-      None =>
-        let value = indexSource src
-        cell := Some value
-        value
-    recoverTokens limits src index
-
-export
 defaultRecoveryAdmission : String -> Option RecoveredSource
 defaultRecoveryAdmission src = match defaultRecoveryLimits
   RecoveryLimits maxSource _ _ _ =>
     if stringLength src > maxSource then Some (budgetResult src 0) else None
-
-export
-parseRecoveringWithIndex : SourceIndex -> String -> RecoveredSource
-parseRecoveringWithIndex index src = match defaultRecoveryAdmission src
-  Some result => result
-  None => recoverTokens defaultRecoveryLimits src (() => index)
 
 export
 budgetResult : String -> Int -> RecoveredSource
@@ -359,24 +333,6 @@ budgetResult src count =
     [makeInvalidRegion (SourceExtent 0 (stringLength src)) RecoveryBudget]
     (Partial ExhaustedBudget)
     (RecoveryStats count 0 0)
-
-recoverTokens : RecoveryLimits ->
-  String ->
-  (Unit -> SourceIndex) ->
-  RecoveredSource
-recoverTokens (limits@(RecoveryLimits _ maxTokens _ _)) src index =
-  let (ts, os) = tokenizeWithOffsetPairs src
-  let count = length ts
-  if count > maxTokens then
-    budgetResult src count
-  else
-    recoverPrepared
-      limits
-      src
-      index
-      ts
-      os
-      (P.parseSourcePairsWithIndex src ts os index)
 
 export
 recoverSourcePairsWithIndex : RecoveryLimits ->

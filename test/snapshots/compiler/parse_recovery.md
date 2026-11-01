@@ -1,5 +1,5 @@
 # META
-source_lines=446
+source_lines=402
 stages=DESUGAR,MARK
 # SOURCE
 import list.{reverse}
@@ -322,36 +322,10 @@ findLex ctx start end =
   go start
 
 export
-parseRecovering : String -> RecoveredSource
-parseRecovering = parseRecoveringWith defaultRecoveryLimits
-
-export
-parseRecoveringWith : RecoveryLimits -> String -> RecoveredSource
-parseRecoveringWith (limits@(RecoveryLimits maxSource maxTokens maxAttempts maxDiagnostics)) src
-  | min (min maxSource maxTokens) (min maxAttempts maxDiagnostics) < 0 =
-    budgetResult src 0
-  | stringLength src > maxSource = budgetResult src 0
-  | otherwise =
-    let cell = Ref None
-    let index () = match !cell
-      Some value => value
-      None =>
-        let value = indexSource src
-        cell := Some value
-        value
-    recoverTokens limits src index
-
-export
 defaultRecoveryAdmission : String -> Option RecoveredSource
 defaultRecoveryAdmission src = match defaultRecoveryLimits
   RecoveryLimits maxSource _ _ _ =>
     if stringLength src > maxSource then Some (budgetResult src 0) else None
-
-export
-parseRecoveringWithIndex : SourceIndex -> String -> RecoveredSource
-parseRecoveringWithIndex index src = match defaultRecoveryAdmission src
-  Some result => result
-  None => recoverTokens defaultRecoveryLimits src (() => index)
 
 export
 budgetResult : String -> Int -> RecoveredSource
@@ -363,24 +337,6 @@ budgetResult src count =
     [makeInvalidRegion (SourceExtent 0 (stringLength src)) RecoveryBudget]
     (Partial ExhaustedBudget)
     (RecoveryStats count 0 0)
-
-recoverTokens : RecoveryLimits ->
-  String ->
-  (Unit -> SourceIndex) ->
-  RecoveredSource
-recoverTokens (limits@(RecoveryLimits _ maxTokens _ _)) src index =
-  let (ts, os) = tokenizeWithOffsetPairs src
-  let count = length ts
-  if count > maxTokens then
-    budgetResult src count
-  else
-    recoverPrepared
-      limits
-      src
-      index
-      ts
-      os
-      (P.parseSourcePairsWithIndex src ts os index)
 
 export
 recoverSourcePairsWithIndex : RecoveryLimits ->
@@ -508,18 +464,10 @@ ensureDiagnostic (RecoveryLimits _ _ _ maxDiagnostics) diagnostic result =
 (DFunDef false "reject" ((PVar "run") (PVar "state") (PVar "diagnostic")) (EBlock (DoLet false false (PVar "ctx") (EFieldAccess (EVar "run") "parser")) (DoLet false false (PVar "size") (EFieldAccess (EVar "run") "size")) (DoLet false false (PVar "p") (EFieldAccess (EVar "state") "position")) (DoLet false false (PVar "next") (EApp (EApp (EApp (EVar "nextFence") (EVar "ctx")) (EFieldAccess (EVar "run") "fences")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (DoLet false false (PVar "terminal") (EApp (EApp (EApp (EVar "findLex") (EVar "ctx")) (EVar "p")) (EApp (EApp (EVar "min") (EApp (EVar "arrayLength") (EFieldAccess (EVar "run") "fences"))) (EBinOp "+" (EVar "next") (ELit (LInt 1)))))) (DoExpr (EMatch (EVar "terminal") (arm (PCon "Some" (PVar "terminal")) () (EBlock (DoLet false false (PVar "kind") (EMatch (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "terminal")) (arm (PCon "TLexError" (PVar "k")) () (EVar "k")) (arm PWild () (EApp (EVar "GenericParse") (ELit (LString "unreachable")))))) (DoExpr (EApp (EApp (EApp (EVar "publish") (EVar "run")) (ERecordUpdate (EVar "state") ((fa "diagnostics" (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "failureDiag") (EVar "ctx")) (EVar "size")) (EVar "terminal")) (EVar "kind")) (EFieldAccess (EVar "state") "diagnostics"))) (fa "regions" (EBinOp "::" (ETuple (EApp (EApp (EApp (EVar "offAt") (EVar "ctx")) (EVar "size")) (EVar "p")) (EVar "size") (EVar "TerminalLexError")) (EFieldAccess (EVar "state") "regions"))) (fa "attempts" (EBinOp "+" (EFieldAccess (EVar "state") "attempts") (ELit (LInt 1))))))) (EVar "StoppedLexically"))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "ts") (EApp (EApp (EApp (EVar "sliceList") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "p")) (EVar "next"))) (DoLet false false (PVar "os") (EApp (EApp (EApp (EVar "sliceList") (EApp (EVar "contextOffsets") (EVar "ctx"))) (EVar "p")) (EVar "next"))) (DoLet false false (PVar "checked") (EMatch (EApp (EApp (EApp (EApp (EVar "P.prescanErrorPairsWithIndex") (EFieldAccess (EVar "run") "source")) (EBinOp "++" (EVar "ts") (EListLit (EVar "TEof")))) (EBinOp "++" (EVar "os") (EListLit (ETuple (EVar "size") (EVar "size"))))) (EFieldAccess (EVar "run") "index")) (arm (PCon "Some" (PVar "err")) () (EApp (EVar "parseErrorDiagnostic") (EVar "err"))) (arm (PCon "None") () (EVar "diagnostic")))) (DoLet false false (PVar "updated") (ERecordUpdate (EVar "state") ((fa "diagnostics" (EBinOp "::" (EVar "checked") (EFieldAccess (EVar "state") "diagnostics"))) (fa "attempts" (EBinOp "+" (EFieldAccess (EVar "state") "attempts") (ELit (LInt 1))))))) (DoExpr (EMatch (ETuple (EApp (EVar "isEofTok") (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "next"))) (EFieldAccess (EVar "run") "damage")) (arm (PTuple (PCon "True") (PCon "Some" (PVar "reason"))) () (EApp (EApp (EApp (EVar "publish") (EVar "run")) (ERecordUpdate (EVar "updated") ((fa "regions" (EBinOp "::" (ETuple (EApp (EApp (EApp (EVar "offAt") (EVar "ctx")) (EVar "size")) (EVar "p")) (EVar "size") (EVar "reason")) (EFieldAccess (EVar "state") "regions")))))) (EVar "StoppedDelimiter"))) (arm PWild () (EApp (EApp (EVar "recoverLoop") (EVar "run")) (ERecordUpdate (EVar "updated") ((fa "position" (EVar "next")) (fa "regions" (EBinOp "::" (ETuple (EApp (EApp (EApp (EVar "offAt") (EVar "ctx")) (EVar "size")) (EVar "p")) (EApp (EApp (EApp (EVar "offAt") (EVar "ctx")) (EVar "size")) (EVar "next")) (EVar "InvalidDeclaration")) (EFieldAccess (EVar "state") "regions")))))))))))))))
 (DTypeSig false "findLex" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "findLex" ((PVar "ctx") (PVar "start") (PVar "end")) (EBlock (DoLet false true (PVar "go") (ELam ((PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "end")) (EVar "None") (EMatch (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "p")) (arm (PCon "TLexError" PWild) () (EApp (EVar "Some") (EVar "p"))) (arm PWild () (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1))))))))) (DoExpr (EApp (EVar "go") (EVar "start")))))
-(DTypeSig true "parseRecovering" (TyFun (TyCon "String") (TyCon "RecoveredSource")))
-(DFunDef false "parseRecovering" () (EApp (EVar "parseRecoveringWith") (EVar "defaultRecoveryLimits")))
-(DTypeSig true "parseRecoveringWith" (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "String") (TyCon "RecoveredSource"))))
-(DFunDef false "parseRecoveringWith" ((PAs "limits" (PCon "RecoveryLimits" (PVar "maxSource") (PVar "maxTokens") (PVar "maxAttempts") (PVar "maxDiagnostics"))) (PVar "src")) (EIf (EBinOp "<" (EApp (EApp (EVar "min") (EApp (EApp (EVar "min") (EVar "maxSource")) (EVar "maxTokens"))) (EApp (EApp (EVar "min") (EVar "maxAttempts")) (EVar "maxDiagnostics"))) (ELit (LInt 0))) (EApp (EApp (EVar "budgetResult") (EVar "src")) (ELit (LInt 0))) (EIf (EBinOp ">" (EApp (EVar "stringLength") (EVar "src")) (EVar "maxSource")) (EApp (EApp (EVar "budgetResult") (EVar "src")) (ELit (LInt 0))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "None"))) (DoLet false true (PVar "index") (ELam ((PLit LUnit)) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "value")) () (EVar "value")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "value") (EApp (EVar "indexSource") (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "value")))) (DoExpr (EVar "value"))))))) (DoExpr (EApp (EApp (EApp (EVar "recoverTokens") (EVar "limits")) (EVar "src")) (EVar "index")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "defaultRecoveryAdmission" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecoveredSource"))))
 (DFunDef false "defaultRecoveryAdmission" ((PVar "src")) (EMatch (EVar "defaultRecoveryLimits") (arm (PCon "RecoveryLimits" (PVar "maxSource") PWild PWild PWild) () (EIf (EBinOp ">" (EApp (EVar "stringLength") (EVar "src")) (EVar "maxSource")) (EApp (EVar "Some") (EApp (EApp (EVar "budgetResult") (EVar "src")) (ELit (LInt 0)))) (EVar "None")))))
-(DTypeSig true "parseRecoveringWithIndex" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyCon "RecoveredSource"))))
-(DFunDef false "parseRecoveringWithIndex" ((PVar "index") (PVar "src")) (EMatch (EApp (EVar "defaultRecoveryAdmission") (EVar "src")) (arm (PCon "Some" (PVar "result")) () (EVar "result")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "recoverTokens") (EVar "defaultRecoveryLimits")) (EVar "src")) (ELam ((PLit LUnit)) (EVar "index"))))))
 (DTypeSig true "budgetResult" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "RecoveredSource"))))
 (DFunDef false "budgetResult" ((PVar "src") (PVar "count")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeRecoveredSource") (EListLit)) (EApp (EApp (EApp (EApp (EVar "Positions") (EListLit)) (EListLit)) (ELit (LInt 0))) (EListLit))) (EListLit)) (EListLit (EApp (EApp (EVar "makeInvalidRegion") (EApp (EApp (EVar "SourceExtent") (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "src")))) (EVar "RecoveryBudget")))) (EApp (EVar "Partial") (EVar "ExhaustedBudget"))) (EApp (EApp (EApp (EVar "RecoveryStats") (EVar "count")) (ELit (LInt 0))) (ELit (LInt 0)))))
-(DTypeSig false "recoverTokens" (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyCon "SourceIndex")) (TyCon "RecoveredSource")))))
-(DFunDef false "recoverTokens" ((PAs "limits" (PCon "RecoveryLimits" PWild (PVar "maxTokens") PWild PWild)) (PVar "src") (PVar "index")) (EBlock (DoLet false false (PTuple (PVar "ts") (PVar "os")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoLet false false (PVar "count") (EApp (EVar "length") (EVar "ts"))) (DoExpr (EIf (EBinOp ">" (EVar "count") (EVar "maxTokens")) (EApp (EApp (EVar "budgetResult") (EVar "src")) (EVar "count")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recoverPrepared") (EVar "limits")) (EVar "src")) (EVar "index")) (EVar "ts")) (EVar "os")) (EApp (EApp (EApp (EApp (EVar "P.parseSourcePairsWithIndex") (EVar "src")) (EVar "ts")) (EVar "os")) (EVar "index")))))))
 (DTypeSig true "recoverSourcePairsWithIndex" (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "ParseDiagnostic")) (TyCon "ParsedSource")) (TyCon "RecoveredSource"))))))))
 (DFunDef false "recoverSourcePairsWithIndex" ((PVar "limits") (PVar "index") (PVar "src") (PVar "ts") (PVar "os") (PVar "strict")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recoverPrepared") (EVar "limits")) (EVar "src")) (ELam ((PLit LUnit)) (EVar "index"))) (EVar "ts")) (EVar "os")) (EVar "strict")))
 (DTypeSig false "recoverPrepared" (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyCon "SourceIndex")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "ParseDiagnostic")) (TyCon "ParsedSource")) (TyCon "RecoveredSource"))))))))
@@ -586,18 +534,10 @@ ensureDiagnostic (RecoveryLimits _ _ _ maxDiagnostics) diagnostic result =
 (DFunDef false "reject" ((PVar "run") (PVar "state") (PVar "diagnostic")) (EBlock (DoLet false false (PVar "ctx") (EFieldAccess (EVar "run") "parser")) (DoLet false false (PVar "size") (EFieldAccess (EVar "run") "size")) (DoLet false false (PVar "p") (EFieldAccess (EVar "state") "position")) (DoLet false false (PVar "next") (EApp (EApp (EApp (EVar "nextFence") (EVar "ctx")) (EFieldAccess (EVar "run") "fences")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (DoLet false false (PVar "terminal") (EApp (EApp (EApp (EVar "findLex") (EVar "ctx")) (EVar "p")) (EApp (EApp (EMethodRef "min") (EApp (EVar "arrayLength") (EFieldAccess (EVar "run") "fences"))) (EBinOp "+" (EVar "next") (ELit (LInt 1)))))) (DoExpr (EMatch (EVar "terminal") (arm (PCon "Some" (PVar "terminal")) () (EBlock (DoLet false false (PVar "kind") (EMatch (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "terminal")) (arm (PCon "TLexError" (PVar "k")) () (EVar "k")) (arm PWild () (EApp (EVar "GenericParse") (ELit (LString "unreachable")))))) (DoExpr (EApp (EApp (EApp (EVar "publish") (EVar "run")) (ERecordUpdate (EVar "state") ((fa "diagnostics" (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "failureDiag") (EVar "ctx")) (EVar "size")) (EVar "terminal")) (EVar "kind")) (EFieldAccess (EVar "state") "diagnostics"))) (fa "regions" (EBinOp "::" (ETuple (EApp (EApp (EApp (EVar "offAt") (EVar "ctx")) (EVar "size")) (EVar "p")) (EVar "size") (EVar "TerminalLexError")) (EFieldAccess (EVar "state") "regions"))) (fa "attempts" (EBinOp "+" (EFieldAccess (EVar "state") "attempts") (ELit (LInt 1))))))) (EVar "StoppedLexically"))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "ts") (EApp (EApp (EApp (EVar "sliceList") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "p")) (EVar "next"))) (DoLet false false (PVar "os") (EApp (EApp (EApp (EVar "sliceList") (EApp (EVar "contextOffsets") (EVar "ctx"))) (EVar "p")) (EVar "next"))) (DoLet false false (PVar "checked") (EMatch (EApp (EApp (EApp (EApp (EVar "P.prescanErrorPairsWithIndex") (EFieldAccess (EVar "run") "source")) (EBinOp "++" (EVar "ts") (EListLit (EVar "TEof")))) (EBinOp "++" (EVar "os") (EListLit (ETuple (EVar "size") (EVar "size"))))) (EFieldAccess (EVar "run") "index")) (arm (PCon "Some" (PVar "err")) () (EApp (EVar "parseErrorDiagnostic") (EVar "err"))) (arm (PCon "None") () (EVar "diagnostic")))) (DoLet false false (PVar "updated") (ERecordUpdate (EVar "state") ((fa "diagnostics" (EBinOp "::" (EVar "checked") (EFieldAccess (EVar "state") "diagnostics"))) (fa "attempts" (EBinOp "+" (EFieldAccess (EVar "state") "attempts") (ELit (LInt 1))))))) (DoExpr (EMatch (ETuple (EApp (EVar "isEofTok") (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "next"))) (EFieldAccess (EVar "run") "damage")) (arm (PTuple (PCon "True") (PCon "Some" (PVar "reason"))) () (EApp (EApp (EApp (EVar "publish") (EVar "run")) (ERecordUpdate (EVar "updated") ((fa "regions" (EBinOp "::" (ETuple (EApp (EApp (EApp (EVar "offAt") (EVar "ctx")) (EVar "size")) (EVar "p")) (EVar "size") (EVar "reason")) (EFieldAccess (EVar "state") "regions")))))) (EVar "StoppedDelimiter"))) (arm PWild () (EApp (EApp (EVar "recoverLoop") (EVar "run")) (ERecordUpdate (EVar "updated") ((fa "position" (EVar "next")) (fa "regions" (EBinOp "::" (ETuple (EApp (EApp (EApp (EVar "offAt") (EVar "ctx")) (EVar "size")) (EVar "p")) (EApp (EApp (EApp (EVar "offAt") (EVar "ctx")) (EVar "size")) (EVar "next")) (EVar "InvalidDeclaration")) (EFieldAccess (EVar "state") "regions")))))))))))))))
 (DTypeSig false "findLex" (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "findLex" ((PVar "ctx") (PVar "start") (PVar "end")) (EBlock (DoLet false true (PVar "go") (ELam ((PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "end")) (EVar "None") (EMatch (EApp (EApp (EVar "peekTok") (EApp (EVar "contextTokens") (EVar "ctx"))) (EVar "p")) (arm (PCon "TLexError" PWild) () (EApp (EVar "Some") (EVar "p"))) (arm PWild () (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1))))))))) (DoExpr (EApp (EVar "go") (EVar "start")))))
-(DTypeSig true "parseRecovering" (TyFun (TyCon "String") (TyCon "RecoveredSource")))
-(DFunDef false "parseRecovering" () (EApp (EVar "parseRecoveringWith") (EVar "defaultRecoveryLimits")))
-(DTypeSig true "parseRecoveringWith" (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "String") (TyCon "RecoveredSource"))))
-(DFunDef false "parseRecoveringWith" ((PAs "limits" (PCon "RecoveryLimits" (PVar "maxSource") (PVar "maxTokens") (PVar "maxAttempts") (PVar "maxDiagnostics"))) (PVar "src")) (EIf (EBinOp "<" (EApp (EApp (EMethodRef "min") (EApp (EApp (EMethodRef "min") (EVar "maxSource")) (EVar "maxTokens"))) (EApp (EApp (EMethodRef "min") (EVar "maxAttempts")) (EVar "maxDiagnostics"))) (ELit (LInt 0))) (EApp (EApp (EVar "budgetResult") (EVar "src")) (ELit (LInt 0))) (EIf (EBinOp ">" (EApp (EVar "stringLength") (EVar "src")) (EVar "maxSource")) (EApp (EApp (EVar "budgetResult") (EVar "src")) (ELit (LInt 0))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "None"))) (DoLet false true (PVar "index") (ELam ((PLit LUnit)) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "value")) () (EVar "value")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "value") (EApp (EVar "indexSource") (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "value")))) (DoExpr (EVar "value"))))))) (DoExpr (EApp (EApp (EApp (EVar "recoverTokens") (EVar "limits")) (EVar "src")) (EMethodRef "index")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "defaultRecoveryAdmission" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecoveredSource"))))
 (DFunDef false "defaultRecoveryAdmission" ((PVar "src")) (EMatch (EVar "defaultRecoveryLimits") (arm (PCon "RecoveryLimits" (PVar "maxSource") PWild PWild PWild) () (EIf (EBinOp ">" (EApp (EVar "stringLength") (EVar "src")) (EVar "maxSource")) (EApp (EVar "Some") (EApp (EApp (EVar "budgetResult") (EVar "src")) (ELit (LInt 0)))) (EVar "None")))))
-(DTypeSig true "parseRecoveringWithIndex" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyCon "RecoveredSource"))))
-(DFunDef false "parseRecoveringWithIndex" ((PVar "index") (PVar "src")) (EMatch (EApp (EVar "defaultRecoveryAdmission") (EVar "src")) (arm (PCon "Some" (PVar "result")) () (EVar "result")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "recoverTokens") (EVar "defaultRecoveryLimits")) (EVar "src")) (ELam ((PLit LUnit)) (EMethodRef "index"))))))
 (DTypeSig true "budgetResult" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "RecoveredSource"))))
 (DFunDef false "budgetResult" ((PVar "src") (PVar "count")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeRecoveredSource") (EListLit)) (EApp (EApp (EApp (EApp (EVar "Positions") (EListLit)) (EListLit)) (ELit (LInt 0))) (EListLit))) (EListLit)) (EListLit (EApp (EApp (EVar "makeInvalidRegion") (EApp (EApp (EVar "SourceExtent") (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "src")))) (EVar "RecoveryBudget")))) (EApp (EVar "Partial") (EVar "ExhaustedBudget"))) (EApp (EApp (EApp (EVar "RecoveryStats") (EDictApp "count")) (ELit (LInt 0))) (ELit (LInt 0)))))
-(DTypeSig false "recoverTokens" (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyCon "SourceIndex")) (TyCon "RecoveredSource")))))
-(DFunDef false "recoverTokens" ((PAs "limits" (PCon "RecoveryLimits" PWild (PVar "maxTokens") PWild PWild)) (PVar "src") (PVar "index")) (EBlock (DoLet false false (PTuple (PVar "ts") (PVar "os")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoLet false false (PVar "count") (EApp (EMethodRef "length") (EVar "ts"))) (DoExpr (EIf (EBinOp ">" (EDictApp "count") (EVar "maxTokens")) (EApp (EApp (EVar "budgetResult") (EVar "src")) (EDictApp "count")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recoverPrepared") (EVar "limits")) (EVar "src")) (EMethodRef "index")) (EVar "ts")) (EVar "os")) (EApp (EApp (EApp (EApp (EVar "P.parseSourcePairsWithIndex") (EVar "src")) (EVar "ts")) (EVar "os")) (EMethodRef "index")))))))
 (DTypeSig true "recoverSourcePairsWithIndex" (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "ParseDiagnostic")) (TyCon "ParsedSource")) (TyCon "RecoveredSource"))))))))
 (DFunDef false "recoverSourcePairsWithIndex" ((PVar "limits") (PVar "index") (PVar "src") (PVar "ts") (PVar "os") (PVar "strict")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recoverPrepared") (EVar "limits")) (EVar "src")) (ELam ((PLit LUnit)) (EMethodRef "index"))) (EVar "ts")) (EVar "os")) (EVar "strict")))
 (DTypeSig false "recoverPrepared" (TyFun (TyCon "RecoveryLimits") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyCon "SourceIndex")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "ParseDiagnostic")) (TyCon "ParsedSource")) (TyCon "RecoveredSource"))))))))

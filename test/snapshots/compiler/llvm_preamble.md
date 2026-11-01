@@ -26,7 +26,7 @@ import support.symbol_origin.{SymbolOrigin}
 -- or `noalias align 8 `), its return type, its name without the `@`, its
 -- parameter types, and the attributes written after its parameter list (""
 -- or text with a leading space).  Attribute text is opaque here.
-public export data RuntimeDecl =
+export data RuntimeDecl =
   RuntimeDecl String String String (List String) String
   deriving (Eq, Debug)
 
@@ -330,7 +330,7 @@ runtimeDecls = [
 # DESUGAR
 (DUse false (UseGroup ("backend" "llvm_symbols") ((mem "LlvmParam" true) (mem "LlvmSymbol" true) (mem "Prototype" true) (mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "declareOnce" false) (mem "prototypeText" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false))))
-(DData Public "RuntimeDecl" () ((variant "RuntimeDecl" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) ())
+(DData Abstract "RuntimeDecl" () ((variant "RuntimeDecl" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) ())
 (DImpl true "Eq" ((TyCon "RuntimeDecl")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RuntimeDecl" (PVar "__a0") (PVar "__a1") (PVar "__a2") (PVar "__a3") (PVar "__a4")) (PCon "RuntimeDecl" (PVar "__b0") (PVar "__b1") (PVar "__b2") (PVar "__b3") (PVar "__b4"))) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EVar "eq") (EVar "__a4")) (EVar "__b4"))))))))
 (DImpl true "Debug" ((TyCon "RuntimeDecl")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RuntimeDecl" (PVar "__a0") (PVar "__a1") (PVar "__a2") (PVar "__a3") (PVar "__a4")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "RuntimeDecl ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a2")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a3")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a4")))))))))
 (DTypeSig false "fn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "RuntimeDecl")))))
@@ -355,7 +355,7 @@ runtimeDecls = [
 # MARK
 (DUse false (UseGroup ("backend" "llvm_symbols") ((mem "LlvmParam" true) (mem "LlvmSymbol" true) (mem "Prototype" true) (mem "SymbolDefect" false) (mem "SymbolRegistry" false) (mem "declareOnce" false) (mem "prototypeText" false))))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false))))
-(DData Public "RuntimeDecl" () ((variant "RuntimeDecl" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) ())
+(DData Abstract "RuntimeDecl" () ((variant "RuntimeDecl" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) ())
 (DImpl true "Eq" ((TyCon "RuntimeDecl")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RuntimeDecl" (PVar "__a0") (PVar "__a1") (PVar "__a2") (PVar "__a3") (PVar "__a4")) (PCon "RuntimeDecl" (PVar "__b0") (PVar "__b1") (PVar "__b2") (PVar "__b3") (PVar "__b4"))) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EMethodRef "eq") (EVar "__a4")) (EVar "__b4"))))))))
 (DImpl true "Debug" ((TyCon "RuntimeDecl")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RuntimeDecl" (PVar "__a0") (PVar "__a1") (PVar "__a2") (PVar "__a3") (PVar "__a4")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "RuntimeDecl ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a2")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a3")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a4")))))))))
 (DTypeSig false "fn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "RuntimeDecl")))))

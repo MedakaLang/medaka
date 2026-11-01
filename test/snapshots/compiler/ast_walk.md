@@ -1,5 +1,5 @@
 # META
-source_lines=411
+source_lines=347
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/frontend/ast_walk.mdk — exhaustive traversal of the raw (pre-desugar)
@@ -349,70 +349,6 @@ implMethodBody iface (ImplMethod m ps body) =
 letGroupBodies : LetBind -> List DeclBody
 letGroupBodies (LetBind name clauses _ _) =
   map ((FunClause ps body) => DeclBody (OwnerLetGroup name ps) body) clauses
-
--- The span of a node's own `ELoc` wrapper, if it is one.
-nodeLoc : Expr -> Option Loc
-nodeLoc (ELit _) = None
-nodeLoc (EVar _) = None
-nodeLoc (EApp _ _) = None
-nodeLoc (ELam _ _) = None
-nodeLoc (ELet _ _ _ _ _) = None
-nodeLoc (EMatch _ _) = None
-nodeLoc (EIf _ _ _) = None
-nodeLoc (EBinOp _ _ _ _) = None
-nodeLoc (EUnOp _ _ _) = None
-nodeLoc (EInfix _ _ _) = None
-nodeLoc (EFieldAccess _ _ _) = None
-nodeLoc (ETuple _) = None
-nodeLoc (EListLit _) = None
-nodeLoc (EArrayLit _) = None
-nodeLoc (ERangeList _ _ _) = None
-nodeLoc (ERangeArray _ _ _) = None
-nodeLoc (ESlice _ _ _ _) = None
-nodeLoc (ELetGroup _ _) = None
-nodeLoc (ESection _) = None
-nodeLoc (EIndex _ _) = None
-nodeLoc (EAnnot _ _) = None
-nodeLoc (EHeadAnnot _ _) = None
-nodeLoc (EBlock _) = None
-nodeLoc (EDo _ _) = None
-nodeLoc (EStringInterp _) = None
-nodeLoc (EGuards _) = None
-nodeLoc (ERecordCreate _ _) = None
-nodeLoc (ERecordUpdate _ _ _) = None
-nodeLoc (EVariantUpdate _ _ _) = None
-nodeLoc (EMapLit _ _) = None
-nodeLoc (ESetLit _ _) = None
-nodeLoc (EAsPat _ _) = None
-nodeLoc (EOrPat _) = None
-nodeLoc (EMethodRef _) = None
-nodeLoc (EDictApp _) = None
-nodeLoc (EVarAt _ _) = None
-nodeLoc (EVarId _ _) = None
-nodeLoc (EMethodAt _ _ _) = None
-nodeLoc (EDictAt _ _) = None
-nodeLoc (ELoc l _) = Some l
-nodeLoc (EDoOrigin _ _) = None
-nodeLoc (ENumLit _ _ _) = None
-nodeLoc (EWideLit _ _ _ _) = None
-
--- A node's source span: its own `ELoc` span, or else the span from the
--- earliest start to the latest end among the `ELoc`s nearest its leaves.  The
--- parser leaves application and operator nodes unwrapped, so this is how their
--- extent is recovered.  `None` for a tree with no `ELoc` at all.
-export
-exprSpan : Expr -> Option Loc
-exprSpan e = match nodeLoc e
-  Some l => Some l
-  None => fold joinSpan None (map exprSpan (childExprs e))
-
-joinSpan : Option Loc -> Option Loc -> Option Loc
-joinSpan None b = b
-joinSpan a None = a
-joinSpan (Some (Loc f sl sc el ec)) (Some (Loc _ sl2 sc2 el2 ec2)) =
-  let (l1, c1) = min (sl, sc) (sl2, sc2)
-  let (l2, c2) = max (el, ec) (el2, ec2)
-  Some (Loc f l1 c1 l2 c2)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "Loc" true) (mem "MethodDefault" true) (mem "Pat" false) (mem "PropParam" false) (mem "Section" true))))
 (DData Public "ExprKind" () ((variant "KLit" (ConPos)) (variant "KVar" (ConPos)) (variant "KApp" (ConPos)) (variant "KLam" (ConPos)) (variant "KLet" (ConPos)) (variant "KMatch" (ConPos)) (variant "KIf" (ConPos)) (variant "KBinOp" (ConPos)) (variant "KUnOp" (ConPos)) (variant "KInfix" (ConPos)) (variant "KFieldAccess" (ConPos)) (variant "KTuple" (ConPos)) (variant "KListLit" (ConPos)) (variant "KArrayLit" (ConPos)) (variant "KRangeList" (ConPos)) (variant "KRangeArray" (ConPos)) (variant "KSlice" (ConPos)) (variant "KLetGroup" (ConPos)) (variant "KSection" (ConPos)) (variant "KIndex" (ConPos)) (variant "KAnnot" (ConPos)) (variant "KHeadAnnot" (ConPos)) (variant "KBlock" (ConPos)) (variant "KDo" (ConPos)) (variant "KStringInterp" (ConPos)) (variant "KGuards" (ConPos)) (variant "KRecordCreate" (ConPos)) (variant "KRecordUpdate" (ConPos)) (variant "KVariantUpdate" (ConPos)) (variant "KMapLit" (ConPos)) (variant "KSetLit" (ConPos)) (variant "KAsPat" (ConPos)) (variant "KOrPat" (ConPos)) (variant "KMethodRef" (ConPos)) (variant "KDictApp" (ConPos)) (variant "KVarAt" (ConPos)) (variant "KVarId" (ConPos)) (variant "KMethodAt" (ConPos)) (variant "KDictAt" (ConPos)) (variant "KLoc" (ConPos)) (variant "KDoOrigin" (ConPos)) (variant "KNumLit" (ConPos)) (variant "KWideLit" (ConPos))) ())
@@ -626,56 +562,6 @@ joinSpan (Some (Loc f sl sc el ec)) (Some (Loc _ sl2 sc2 el2 ec2)) =
 (DFunDef false "implMethodBody" ((PVar "iface") (PCon "ImplMethod" (PVar "m") (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "DeclBody") (EApp (EApp (EApp (EVar "OwnerImplMethod") (EVar "iface")) (EVar "m")) (EVar "ps"))) (EVar "body")))
 (DTypeSig false "letGroupBodies" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "DeclBody"))))
 (DFunDef false "letGroupBodies" ((PCon "LetBind" (PVar "name") (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "map") (ELam ((PCon "FunClause" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "DeclBody") (EApp (EApp (EVar "OwnerLetGroup") (EVar "name")) (EVar "ps"))) (EVar "body")))) (EVar "clauses")))
-(DTypeSig false "nodeLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
-(DFunDef false "nodeLoc" ((PCon "ELit" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EVar" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EApp" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ELam" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ELet" PWild PWild PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EMatch" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EIf" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EBinOp" PWild PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EUnOp" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EInfix" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EFieldAccess" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ETuple" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EListLit" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EArrayLit" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ERangeList" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ERangeArray" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ESlice" PWild PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ELetGroup" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ESection" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EIndex" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EAnnot" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EHeadAnnot" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EBlock" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EDo" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EStringInterp" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EGuards" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ERecordCreate" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ERecordUpdate" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EVariantUpdate" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EMapLit" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ESetLit" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EAsPat" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EOrPat" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EMethodRef" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EDictApp" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EVarAt" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EVarId" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EMethodAt" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EDictAt" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
-(DFunDef false "nodeLoc" ((PCon "EDoOrigin" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ENumLit" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EWideLit" PWild PWild PWild PWild)) (EVar "None"))
-(DTypeSig true "exprSpan" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
-(DFunDef false "exprSpan" ((PVar "e")) (EMatch (EApp (EVar "nodeLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EVar "Some") (EVar "l"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "fold") (EVar "joinSpan")) (EVar "None")) (EApp (EApp (EVar "map") (EVar "exprSpan")) (EApp (EVar "childExprs") (EVar "e")))))))
-(DTypeSig false "joinSpan" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
-(DFunDef false "joinSpan" ((PCon "None") (PVar "b")) (EVar "b"))
-(DFunDef false "joinSpan" ((PVar "a") (PCon "None")) (EVar "a"))
-(DFunDef false "joinSpan" ((PCon "Some" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (PCon "Some" (PCon "Loc" PWild (PVar "sl2") (PVar "sc2") (PVar "el2") (PVar "ec2")))) (EBlock (DoLet false false (PTuple (PVar "l1") (PVar "c1")) (EApp (EApp (EVar "min") (ETuple (EVar "sl") (EVar "sc"))) (ETuple (EVar "sl2") (EVar "sc2")))) (DoLet false false (PTuple (PVar "l2") (PVar "c2")) (EApp (EApp (EVar "max") (ETuple (EVar "el") (EVar "ec"))) (ETuple (EVar "el2") (EVar "ec2")))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "l1")) (EVar "c1")) (EVar "l2")) (EVar "c2"))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "Loc" true) (mem "MethodDefault" true) (mem "Pat" false) (mem "PropParam" false) (mem "Section" true))))
 (DData Public "ExprKind" () ((variant "KLit" (ConPos)) (variant "KVar" (ConPos)) (variant "KApp" (ConPos)) (variant "KLam" (ConPos)) (variant "KLet" (ConPos)) (variant "KMatch" (ConPos)) (variant "KIf" (ConPos)) (variant "KBinOp" (ConPos)) (variant "KUnOp" (ConPos)) (variant "KInfix" (ConPos)) (variant "KFieldAccess" (ConPos)) (variant "KTuple" (ConPos)) (variant "KListLit" (ConPos)) (variant "KArrayLit" (ConPos)) (variant "KRangeList" (ConPos)) (variant "KRangeArray" (ConPos)) (variant "KSlice" (ConPos)) (variant "KLetGroup" (ConPos)) (variant "KSection" (ConPos)) (variant "KIndex" (ConPos)) (variant "KAnnot" (ConPos)) (variant "KHeadAnnot" (ConPos)) (variant "KBlock" (ConPos)) (variant "KDo" (ConPos)) (variant "KStringInterp" (ConPos)) (variant "KGuards" (ConPos)) (variant "KRecordCreate" (ConPos)) (variant "KRecordUpdate" (ConPos)) (variant "KVariantUpdate" (ConPos)) (variant "KMapLit" (ConPos)) (variant "KSetLit" (ConPos)) (variant "KAsPat" (ConPos)) (variant "KOrPat" (ConPos)) (variant "KMethodRef" (ConPos)) (variant "KDictApp" (ConPos)) (variant "KVarAt" (ConPos)) (variant "KVarId" (ConPos)) (variant "KMethodAt" (ConPos)) (variant "KDictAt" (ConPos)) (variant "KLoc" (ConPos)) (variant "KDoOrigin" (ConPos)) (variant "KNumLit" (ConPos)) (variant "KWideLit" (ConPos))) ())
@@ -889,53 +775,3 @@ joinSpan (Some (Loc f sl sc el ec)) (Some (Loc _ sl2 sc2 el2 ec2)) =
 (DFunDef false "implMethodBody" ((PVar "iface") (PCon "ImplMethod" (PVar "m") (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "DeclBody") (EApp (EApp (EApp (EVar "OwnerImplMethod") (EVar "iface")) (EVar "m")) (EVar "ps"))) (EVar "body")))
 (DTypeSig false "letGroupBodies" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "DeclBody"))))
 (DFunDef false "letGroupBodies" ((PCon "LetBind" (PVar "name") (PVar "clauses") PWild PWild)) (EApp (EApp (EMethodRef "map") (ELam ((PCon "FunClause" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "DeclBody") (EApp (EApp (EVar "OwnerLetGroup") (EVar "name")) (EVar "ps"))) (EVar "body")))) (EVar "clauses")))
-(DTypeSig false "nodeLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
-(DFunDef false "nodeLoc" ((PCon "ELit" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EVar" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EApp" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ELam" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ELet" PWild PWild PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EMatch" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EIf" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EBinOp" PWild PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EUnOp" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EInfix" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EFieldAccess" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ETuple" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EListLit" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EArrayLit" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ERangeList" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ERangeArray" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ESlice" PWild PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ELetGroup" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ESection" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EIndex" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EAnnot" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EHeadAnnot" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EBlock" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EDo" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EStringInterp" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EGuards" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ERecordCreate" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ERecordUpdate" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EVariantUpdate" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EMapLit" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ESetLit" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EAsPat" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EOrPat" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EMethodRef" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EDictApp" PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EVarAt" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EVarId" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EMethodAt" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EDictAt" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
-(DFunDef false "nodeLoc" ((PCon "EDoOrigin" PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "ENumLit" PWild PWild PWild)) (EVar "None"))
-(DFunDef false "nodeLoc" ((PCon "EWideLit" PWild PWild PWild PWild)) (EVar "None"))
-(DTypeSig true "exprSpan" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
-(DFunDef false "exprSpan" ((PVar "e")) (EMatch (EApp (EVar "nodeLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EVar "Some") (EVar "l"))) (arm (PCon "None") () (EApp (EApp (EApp (EMethodRef "fold") (EVar "joinSpan")) (EVar "None")) (EApp (EApp (EMethodRef "map") (EVar "exprSpan")) (EApp (EVar "childExprs") (EVar "e")))))))
-(DTypeSig false "joinSpan" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
-(DFunDef false "joinSpan" ((PCon "None") (PVar "b")) (EVar "b"))
-(DFunDef false "joinSpan" ((PVar "a") (PCon "None")) (EVar "a"))
-(DFunDef false "joinSpan" ((PCon "Some" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (PCon "Some" (PCon "Loc" PWild (PVar "sl2") (PVar "sc2") (PVar "el2") (PVar "ec2")))) (EBlock (DoLet false false (PTuple (PVar "l1") (PVar "c1")) (EApp (EApp (EMethodRef "min") (ETuple (EVar "sl") (EVar "sc"))) (ETuple (EVar "sl2") (EVar "sc2")))) (DoLet false false (PTuple (PVar "l2") (PVar "c2")) (EApp (EApp (EMethodRef "max") (ETuple (EVar "el") (EVar "ec"))) (ETuple (EVar "el2") (EVar "ec2")))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "l1")) (EVar "c1")) (EVar "l2")) (EVar "c2"))))))

@@ -1043,7 +1043,6 @@ catalogFamilies req =
       _ => None)
     req.rows
 
-export
 selectedFallthroughSymbols : ExternRequirements ->
   List (String, WasmFamily) ->
   OrdMap Unit

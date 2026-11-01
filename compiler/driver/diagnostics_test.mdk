@@ -19,8 +19,8 @@ import driver.diagnostics.{
   analyzeProjectReport, analyzeProjectKeyed, analyzeProjectKeyedSources,
   noStdlibExports, graphCheckDrive, CheckDrive(..), CheckDump(..), analyzeFrom,
   frontEnd, checkFrontDrive, FrontInput(..), FrontPolicy(..), FrontProgram(..),
-  FrontOutput(..), Diag(..), diagIdText, foldCachedIdentity,
-  resolveCachedIdentity, checkJsonFileParts, ppCheckJson, stdlibExportsReader,
+  FrontOutput(..), Diag(..), diagIdText, passCacheRef, PassCaches(..),
+  PassEntry(..), checkJsonFileParts, ppCheckJson, stdlibExportsReader,
   desugaredModPairs, ChainSteps(..)
 }
 import driver.loader.{loadProgramFilesLocatedCachedSourcesE}
@@ -1455,3 +1455,14 @@ aliasedTestImport dir = match (
 
 test "the import ban names the module as the importer wrote it" =
   withScratchDir aliasedTestImport
+
+-- The identity of the entry the bucketing fold's cache holds for module [mid]:
+-- unchanged across analyzes that serve the module, new whenever one folds it.
+foldCachedIdentity : String -> Option Int
+foldCachedIdentity mid =
+  map (e => e.peIdentity) (omLookup mid passCacheRef.value.pcFold)
+
+-- The same for the resolve pass's cache.
+resolveCachedIdentity : String -> Option Int
+resolveCachedIdentity mid =
+  map (e => e.peIdentity) (omLookup mid passCacheRef.value.pcResolve)

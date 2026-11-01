@@ -1,5 +1,5 @@
 # META
-source_lines=188
+source_lines=157
 stages=DESUGAR,MARK
 # SOURCE
 import support.stage_count.{stageBump}
@@ -18,9 +18,9 @@ import support.source_index.{SourceIndex, indexSource, sourcePositionToOffset}
 
 public export data SourceSpan = SourceSpan Int Int
 public export data TriviaKind = LineComment | BlockComment
-public export data Trivia = Trivia TriviaKind SourceSpan
+export data Trivia = Trivia TriviaKind SourceSpan
 public export data PieceKind = TokenCoverage | CommentCoverage | SourceGap
-public export data SourcePiece = SourcePiece PieceKind SourceSpan
+export data SourcePiece = SourcePiece PieceKind SourceSpan
 -- Source and token limits identify distinct admission failures.
 -- lint-disable-next-line rule-clone-type
 public export data SyntaxAdmission =
@@ -153,39 +153,8 @@ syntaxTokenSpans (SyntaxSource _ _ _ spans _ _ _ _ _) =
   arrayFromList (toList spans)
 
 export
-syntaxTrivia : SyntaxSource -> Array Trivia
-syntaxTrivia (SyntaxSource _ _ _ _ trivia _ _ _ _) =
-  arrayFromList (toList trivia)
-
-export
-syntaxPieces : SyntaxSource -> Array SourcePiece
-syntaxPieces (SyntaxSource _ _ _ _ _ pieces _ _ _) =
-  arrayFromList (toList pieces)
-
-export
-syntaxStrict : SyntaxSource -> Result ParseDiagnostic ParsedSource
-syntaxStrict (SyntaxSource _ _ _ _ _ _ strict _ _) = strict
-
-export
 syntaxRecovered : SyntaxSource -> RecoveredSource
 syntaxRecovered (SyntaxSource _ _ _ _ _ _ _ _ recovered) = recovered
-
-export
-syntaxSlice : SyntaxSource -> SourceSpan -> Option String
-syntaxSlice syntax (SourceSpan lo hi) =
-  let src = syntaxSourceText syntax
-  if lo < 0 || hi < lo || hi > stringLength src then
-    None
-  else
-    Some (stringSlice lo hi src)
-
-export
-spanFromLoc : SyntaxSource -> Loc -> Option SourceSpan
-spanFromLoc syntax (Loc _ line col endLine endCol) = do
-  let index = syntaxIndex syntax
-  lo <- sourcePositionToOffset index line col
-  hi <- sourcePositionToOffset index endLine endCol
-  if lo <= hi then Some (SourceSpan lo hi) else None
 
 export
 syntaxStructural : SyntaxSource -> Option ParsedSource
@@ -204,9 +173,9 @@ syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false))))
 (DData Public "SourceSpan" () ((variant "SourceSpan" (ConPos (TyCon "Int") (TyCon "Int")))) ())
 (DData Public "TriviaKind" () ((variant "LineComment" (ConPos)) (variant "BlockComment" (ConPos))) ())
-(DData Public "Trivia" () ((variant "Trivia" (ConPos (TyCon "TriviaKind") (TyCon "SourceSpan")))) ())
+(DData Abstract "Trivia" () ((variant "Trivia" (ConPos (TyCon "TriviaKind") (TyCon "SourceSpan")))) ())
 (DData Public "PieceKind" () ((variant "TokenCoverage" (ConPos)) (variant "CommentCoverage" (ConPos)) (variant "SourceGap" (ConPos))) ())
-(DData Public "SourcePiece" () ((variant "SourcePiece" (ConPos (TyCon "PieceKind") (TyCon "SourceSpan")))) ())
+(DData Abstract "SourcePiece" () ((variant "SourcePiece" (ConPos (TyCon "PieceKind") (TyCon "SourceSpan")))) ())
 (DData Public "SyntaxAdmission" () ((variant "SourceLimit" (ConPos (TyCon "Int"))) (variant "TokenLimit" (ConPos (TyCon "Int")))) ())
 (DImpl true "Debug" ((TyCon "SyntaxAdmission")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "SourceLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SourceLimit ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "TokenLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "TokenLimit ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))))))))
 (DImpl true "Display" ((TyCon "SyntaxAdmission")) () ((im "display" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "SourceLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SourceLimit ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a0"))))) (arm (PCon "TokenLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "TokenLimit ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a0")))))))))
@@ -241,18 +210,8 @@ syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural
 (DFunDef false "syntaxTokens" ((PCon "SyntaxSource" PWild PWild (PVar "tokens") PWild PWild PWild PWild PWild PWild)) (EApp (EVar "arrayFromList") (EApp (EVar "toList") (EVar "tokens"))))
 (DTypeSig true "syntaxTokenSpans" (TyFun (TyCon "SyntaxSource") (TyApp (TyCon "Array") (TyCon "SourceSpan"))))
 (DFunDef false "syntaxTokenSpans" ((PCon "SyntaxSource" PWild PWild PWild (PVar "spans") PWild PWild PWild PWild PWild)) (EApp (EVar "arrayFromList") (EApp (EVar "toList") (EVar "spans"))))
-(DTypeSig true "syntaxTrivia" (TyFun (TyCon "SyntaxSource") (TyApp (TyCon "Array") (TyCon "Trivia"))))
-(DFunDef false "syntaxTrivia" ((PCon "SyntaxSource" PWild PWild PWild PWild (PVar "trivia") PWild PWild PWild PWild)) (EApp (EVar "arrayFromList") (EApp (EVar "toList") (EVar "trivia"))))
-(DTypeSig true "syntaxPieces" (TyFun (TyCon "SyntaxSource") (TyApp (TyCon "Array") (TyCon "SourcePiece"))))
-(DFunDef false "syntaxPieces" ((PCon "SyntaxSource" PWild PWild PWild PWild PWild (PVar "pieces") PWild PWild PWild)) (EApp (EVar "arrayFromList") (EApp (EVar "toList") (EVar "pieces"))))
-(DTypeSig true "syntaxStrict" (TyFun (TyCon "SyntaxSource") (TyApp (TyApp (TyCon "Result") (TyCon "ParseDiagnostic")) (TyCon "ParsedSource"))))
-(DFunDef false "syntaxStrict" ((PCon "SyntaxSource" PWild PWild PWild PWild PWild PWild (PVar "strict") PWild PWild)) (EVar "strict"))
 (DTypeSig true "syntaxRecovered" (TyFun (TyCon "SyntaxSource") (TyCon "RecoveredSource")))
 (DFunDef false "syntaxRecovered" ((PCon "SyntaxSource" PWild PWild PWild PWild PWild PWild PWild PWild (PVar "recovered"))) (EVar "recovered"))
-(DTypeSig true "syntaxSlice" (TyFun (TyCon "SyntaxSource") (TyFun (TyCon "SourceSpan") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "syntaxSlice" ((PVar "syntax") (PCon "SourceSpan" (PVar "lo") (PVar "hi"))) (EBlock (DoLet false false (PVar "src") (EApp (EVar "syntaxSourceText") (EVar "syntax"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "src")))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "src")))))))
-(DTypeSig true "spanFromLoc" (TyFun (TyCon "SyntaxSource") (TyFun (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "SourceSpan")))))
-(DFunDef false "spanFromLoc" ((PVar "syntax") (PCon "Loc" PWild (PVar "line") (PVar "col") (PVar "endLine") (PVar "endCol"))) (ELet false (PVar "index") (EApp (EVar "syntaxIndex") (EVar "syntax")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EVar "line")) (EVar "col"))) (ELam ((PVar "lo")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EVar "endLine")) (EVar "endCol"))) (ELam ((PVar "hi")) (EIf (EBinOp "<=" (EVar "lo") (EVar "hi")) (EApp (EVar "Some") (EApp (EApp (EVar "SourceSpan") (EVar "lo")) (EVar "hi"))) (EVar "None"))))))))
 (DTypeSig true "syntaxStructural" (TyFun (TyCon "SyntaxSource") (TyApp (TyCon "Option") (TyCon "ParsedSource"))))
 (DFunDef false "syntaxStructural" ((PCon "SyntaxSource" PWild PWild PWild PWild PWild PWild PWild (PVar "structural") PWild)) (EVar "structural"))
 # MARK
@@ -269,9 +228,9 @@ syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false))))
 (DData Public "SourceSpan" () ((variant "SourceSpan" (ConPos (TyCon "Int") (TyCon "Int")))) ())
 (DData Public "TriviaKind" () ((variant "LineComment" (ConPos)) (variant "BlockComment" (ConPos))) ())
-(DData Public "Trivia" () ((variant "Trivia" (ConPos (TyCon "TriviaKind") (TyCon "SourceSpan")))) ())
+(DData Abstract "Trivia" () ((variant "Trivia" (ConPos (TyCon "TriviaKind") (TyCon "SourceSpan")))) ())
 (DData Public "PieceKind" () ((variant "TokenCoverage" (ConPos)) (variant "CommentCoverage" (ConPos)) (variant "SourceGap" (ConPos))) ())
-(DData Public "SourcePiece" () ((variant "SourcePiece" (ConPos (TyCon "PieceKind") (TyCon "SourceSpan")))) ())
+(DData Abstract "SourcePiece" () ((variant "SourcePiece" (ConPos (TyCon "PieceKind") (TyCon "SourceSpan")))) ())
 (DData Public "SyntaxAdmission" () ((variant "SourceLimit" (ConPos (TyCon "Int"))) (variant "TokenLimit" (ConPos (TyCon "Int")))) ())
 (DImpl true "Debug" ((TyCon "SyntaxAdmission")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "SourceLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SourceLimit ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "TokenLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "TokenLimit ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))))))))
 (DImpl true "Display" ((TyCon "SyntaxAdmission")) () ((im "display" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "SourceLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SourceLimit ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a0"))))) (arm (PCon "TokenLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "TokenLimit ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a0")))))))))
@@ -306,17 +265,7 @@ syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural
 (DFunDef false "syntaxTokens" ((PCon "SyntaxSource" PWild PWild (PVar "tokens") PWild PWild PWild PWild PWild PWild)) (EApp (EVar "arrayFromList") (EApp (EMethodRef "toList") (EVar "tokens"))))
 (DTypeSig true "syntaxTokenSpans" (TyFun (TyCon "SyntaxSource") (TyApp (TyCon "Array") (TyCon "SourceSpan"))))
 (DFunDef false "syntaxTokenSpans" ((PCon "SyntaxSource" PWild PWild PWild (PVar "spans") PWild PWild PWild PWild PWild)) (EApp (EVar "arrayFromList") (EApp (EMethodRef "toList") (EVar "spans"))))
-(DTypeSig true "syntaxTrivia" (TyFun (TyCon "SyntaxSource") (TyApp (TyCon "Array") (TyCon "Trivia"))))
-(DFunDef false "syntaxTrivia" ((PCon "SyntaxSource" PWild PWild PWild PWild (PVar "trivia") PWild PWild PWild PWild)) (EApp (EVar "arrayFromList") (EApp (EMethodRef "toList") (EVar "trivia"))))
-(DTypeSig true "syntaxPieces" (TyFun (TyCon "SyntaxSource") (TyApp (TyCon "Array") (TyCon "SourcePiece"))))
-(DFunDef false "syntaxPieces" ((PCon "SyntaxSource" PWild PWild PWild PWild PWild (PVar "pieces") PWild PWild PWild)) (EApp (EVar "arrayFromList") (EApp (EMethodRef "toList") (EVar "pieces"))))
-(DTypeSig true "syntaxStrict" (TyFun (TyCon "SyntaxSource") (TyApp (TyApp (TyCon "Result") (TyCon "ParseDiagnostic")) (TyCon "ParsedSource"))))
-(DFunDef false "syntaxStrict" ((PCon "SyntaxSource" PWild PWild PWild PWild PWild PWild (PVar "strict") PWild PWild)) (EVar "strict"))
 (DTypeSig true "syntaxRecovered" (TyFun (TyCon "SyntaxSource") (TyCon "RecoveredSource")))
 (DFunDef false "syntaxRecovered" ((PCon "SyntaxSource" PWild PWild PWild PWild PWild PWild PWild PWild (PVar "recovered"))) (EVar "recovered"))
-(DTypeSig true "syntaxSlice" (TyFun (TyCon "SyntaxSource") (TyFun (TyCon "SourceSpan") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "syntaxSlice" ((PVar "syntax") (PCon "SourceSpan" (PVar "lo") (PVar "hi"))) (EBlock (DoLet false false (PVar "src") (EApp (EVar "syntaxSourceText") (EVar "syntax"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "src")))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "src")))))))
-(DTypeSig true "spanFromLoc" (TyFun (TyCon "SyntaxSource") (TyFun (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "SourceSpan")))))
-(DFunDef false "spanFromLoc" ((PVar "syntax") (PCon "Loc" PWild (PVar "line") (PVar "col") (PVar "endLine") (PVar "endCol"))) (ELet false (PVar "index") (EApp (EVar "syntaxIndex") (EVar "syntax")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EVar "line")) (EVar "col"))) (ELam ((PVar "lo")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EVar "endLine")) (EVar "endCol"))) (ELam ((PVar "hi")) (EIf (EBinOp "<=" (EVar "lo") (EVar "hi")) (EApp (EVar "Some") (EApp (EApp (EVar "SourceSpan") (EVar "lo")) (EVar "hi"))) (EVar "None"))))))))
 (DTypeSig true "syntaxStructural" (TyFun (TyCon "SyntaxSource") (TyApp (TyCon "Option") (TyCon "ParsedSource"))))
 (DFunDef false "syntaxStructural" ((PCon "SyntaxSource" PWild PWild PWild PWild PWild PWild PWild (PVar "structural") PWild)) (EVar "structural"))

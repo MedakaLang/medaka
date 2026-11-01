@@ -3003,10 +3003,8 @@ originsFor prog = match (factsNow ()).pfSymbolOrigins
   Some origins => origins
   None => singleProgramOrigins prog
 
-public export data OriginClause =
-  OriginClause SymbolOrigin String CClause Loc BinderId
+export data OriginClause = OriginClause SymbolOrigin String CClause Loc BinderId
 
-export
 groupOriginClauses : List OriginClause -> List (SymbolOrigin, CBind)
 groupOriginClauses clauses =
   map
@@ -3653,7 +3651,6 @@ declaredArityOr arities ifaceWord mname pats =
 -- Declaration-derived results and callback positions, keyed by the qualified
 -- interface word. A method result uses only the head parameter; callbacks keep
 -- the signature's full parameter set, including non-head element parameters.
-export
 methodResultFacts : List Decl -> List MethodResultFact
 methodResultFacts prog = flatMap ifaceMethodResultFacts prog
 
@@ -3786,45 +3783,9 @@ ifaceWordOfKey key = match splitOnChar '|' key
   w :: _ => w
   [] => key
 
--- ── method → method-level constraint INTERFACE names (native backend, G7) ────
--- Per interface method that carries a method-level `=>` constraint (foldMap's
--- `Monoid m =>`): the interface name of each such constraint, IN SLOT ORDER —
--- the SAME order typecheck's `methodConstraintSlotIds`/`resolveMethodDicts` fill
--- the method occurrence's `methRoutes` list.  This lets the default-body emitter
--- map a cross-interface method (e.g. the `empty` in foldMap's default, a Monoid
--- method whose dict is threaded per-call by the RESULT type, not the container)
--- to the threaded method-dict PARAM and dispatch it at run time — so one shared
--- `@mdk_default_foldMap_List` serves both a List-monoid and a String-monoid fold.
--- Every constraint that mentions a tyvar is a slot, interface params included;
--- the same predicate as typecheck's `constraintIsMethodLevel`.
--- Qualified rows include an explicit [] so a selected unconstrained method cannot
--- fall through to a same-spelled interface method's legacy bare row.
-export
-methodConstraintIfaces : List Decl -> List (String, List String)
-methodConstraintIfaces prog = flatMap methodConstraintIfaceEntries prog
-
-methodConstraintIfaceEntries : Decl -> List (String, List String)
--- #1037
-methodConstraintIfaceEntries (DAttrib _ d) = methodConstraintIfaceEntries d
-methodConstraintIfaceEntries (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
-  flatMap (m => methodConstraintIfaceEntry (ifaceWordOf o ifaceName) m) methods
-methodConstraintIfaceEntries _ = []
-
-methodConstraintIfaceEntry : String -> IfaceMethod -> List (String, List String)
-methodConstraintIfaceEntry ifaceWord (IfaceMethod mname mty _ _) =
-  let ifaces = methodLevelConstraintIfaces mty
-  let qualified = (ifaceMethodArityKey ifaceWord mname, ifaces)
-  if isEmptyL ifaces then
-    [qualified]
-  else
-    [
-      (mname, ifaces),
-      qualified,
-    ]
-
 -- The program's method-context table (`core_ir.CProgram`): each interface method
 -- whose declared `=>` context has a slot, with that slot count, keyed like the
--- qualified rows above.
+-- qualified rows of `ifaceMethodArityKey`.
 methodContextSlotCounts : List Decl -> List (String, Int)
 methodContextSlotCounts prog = flatMap methodContextRows prog
 

@@ -1,7 +1,7 @@
 import frontend.syntax_source.{
-  publishSyntax, syntaxSourceText, renderOriginal, syntaxPieces, syntaxTrivia,
-  syntaxStrict, syntaxStructural, syntaxRecovered, syntaxSlice, spanFromLoc,
-  publishSyntaxWithCheckedDecls, SourceSpan(..), SourcePiece(..), Trivia(..)
+  publishSyntax, syntaxSourceText, renderOriginal, syntaxStructural,
+  syntaxRecovered, syntaxIndex, SyntaxSource(..), publishSyntaxWithCheckedDecls,
+  SourceSpan(..), SourcePiece(..), Trivia(..)
 }
 import frontend.parse_diagnostic.{ParseDiagnostic(..), ParseDiagnosticKind(..)}
 import frontend.parse_recovery.{defaultRecoveryLimits}
@@ -10,6 +10,7 @@ import frontend.parser.{parseSource, parseSourceSyntaxPairs, parseLocatedResult}
 import frontend.lexer.{tokenizeWithOffsetPairs}
 import frontend.ast_codec.{declsSExp}
 import support.sexp_value.{renderSExp}
+import support.source_index.{sourcePositionToOffset}
 import frontend.ast.{Loc(..)}
 import frontend.parse_result.{
   ParsedSource, parsedDecls, parsedPositions, parsedMetadata,
@@ -282,3 +283,29 @@ f e = match e
 main = f (L 1)
 """,
       ])
+
+syntaxTrivia : SyntaxSource -> Array Trivia
+syntaxTrivia (SyntaxSource _ _ _ _ trivia _ _ _ _) =
+  arrayFromList (toList trivia)
+
+syntaxPieces : SyntaxSource -> Array SourcePiece
+syntaxPieces (SyntaxSource _ _ _ _ _ pieces _ _ _) =
+  arrayFromList (toList pieces)
+
+syntaxStrict : SyntaxSource -> Result ParseDiagnostic ParsedSource
+syntaxStrict (SyntaxSource _ _ _ _ _ _ strict _ _) = strict
+
+syntaxSlice : SyntaxSource -> SourceSpan -> Option String
+syntaxSlice syntax (SourceSpan lo hi) =
+  let src = syntaxSourceText syntax
+  if lo < 0 || hi < lo || hi > stringLength src then
+    None
+  else
+    Some (stringSlice lo hi src)
+
+spanFromLoc : SyntaxSource -> Loc -> Option SourceSpan
+spanFromLoc syntax (Loc _ line col endLine endCol) = do
+  let index = syntaxIndex syntax
+  lo <- sourcePositionToOffset index line col
+  hi <- sourcePositionToOffset index endLine endCol
+  if lo <= hi then Some (SourceSpan lo hi) else None

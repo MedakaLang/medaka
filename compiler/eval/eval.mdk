@@ -476,7 +476,6 @@ isInheritedEntry mname word = match omLookup mname !inheritedEntryRef
   Some words => omHasKey word words
   None => False
 
-export
 buildMethodReqCounts : Option DispositionTable ->
   List Decl ->
   List ((String, String), Int)
@@ -5003,16 +5002,6 @@ lastOfList (_ :: rest) = lastOfList rest
 firstOrEmpty : List String -> String
 firstOrEmpty [] = ""
 firstOrEmpty (x :: _) = x
-
--- Run a multi-module program for its OUTPUT (the loader-driven analog of
--- evalOutput): evaluate every module in dependency order, force the root
--- module's `main` for its IO side-effects, return the captured stdout.  Untyped
--- programs only: no evidence, no dispositions, no binders.  A typed program uses
--- `evalModulesOutputFacts`.
-export
-evalModulesOutput : List Decl -> List (String, List Decl) -> String
-evalModulesOutput preludeDecls modules =
-  evalModulesOutputFacts emptyFacts preludeDecls modules
 
 export
 evalModulesOutputFacts : ProgramFacts ->

@@ -1,5 +1,5 @@
 # META
-source_lines=2731
+source_lines=2726
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -295,7 +295,6 @@ readPreludeSources stdlibDir =
 
 -- `readPreludeSources` for the files [compiler] wrote: a binary built without
 -- an identity of its own (a test) names the writer it trusts.
-export
 readPreludeSourcesAs : String -> String -> <IO> Result String PreludeInputs
 readPreludeSourcesAs compiler stdlibDir =
   let rtPath = joinPath stdlibDir "runtime.mdk"
@@ -790,7 +789,6 @@ isTmpRoot dir = dir == "/tmp" || dir == "/tmp/"
 isExplicitScratch : String -> Bool
 isExplicitScratch tmpdir = tmpdir /= "" && not (isTmpRoot tmpdir)
 
-export
 scratchCandidatesFrom : String -> String -> List String
 scratchCandidatesFrom tmpdir scratch =
   if isExplicitScratch tmpdir then [tmpdir] else [scratch, "/tmp"]
@@ -983,13 +981,11 @@ gcArchiveIn libDir =
 
 -- `pkg-config --static --libs` with `-lgc` replaced by the archive path, which
 -- keeps the archive's own dependencies (`-lpthread`, `-ldl` on older glibc).
-export
 gcStaticLibs : String -> List String -> List String
 gcStaticLibs archive libs = map (t => if t == "-lgc" then archive else t) libs
 
 -- The inverse, for the link retry: each libgc archive path becomes `-L<its dir>
 -- -lgc`.  Flags with no archive come back unchanged.
-export
 gcSharedLibs : List String -> List String
 gcSharedLibs libs = flatMap gcSharedFlag libs
 
@@ -1850,7 +1846,6 @@ public export data BuildProfile = BuildNormal | BuildProbe
 -- ignores MEDAKA_RT_OBJ, which is ThinLTO bitcode.  A probe at any other level
 -- takes it with the normal LTO detection, so `-O2` gives the same link as
 -- `BuildNormal`.
-export
 profileClang : BuildProfile -> String -> String -> (String, Bool)
 profileClang BuildNormal normalOpt _ = (normalOpt, True)
 profileClang BuildProbe _ probeOpt =
@@ -2793,7 +2788,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "validatedPrelude" ((PVar "path") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "pe")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "path")) (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "pe"))))) (ELit (LString "\n  (while loading the implicit prelude)"))))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "notePreludeParse") (EVar "src")) (EVar "decls"))) (DoExpr (EApp (EVar "Ok") (EVar "src")))))))
 (DTypeSig true "readPreludeSources" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeInputs")))))
 (DFunDef false "readPreludeSources" ((PVar "stdlibDir")) (EApp (EApp (EVar "readPreludeSourcesAs") (EApp (EVar "buildFingerprint") (ELit LUnit))) (EVar "stdlibDir")))
-(DTypeSig true "readPreludeSourcesAs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeInputs"))))))
+(DTypeSig false "readPreludeSourcesAs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeInputs"))))))
 (DFunDef false "readPreludeSourcesAs" ((PVar "compiler") (PVar "stdlibDir")) (EBlock (DoLet false false (PVar "rtPath") (EApp (EApp (EVar "joinPath") (EVar "stdlibDir")) (ELit (LString "runtime.mdk")))) (DoLet false false (PVar "corePath") (EApp (EApp (EVar "joinPath") (EVar "stdlibDir")) (ELit (LString "core.mdk")))) (DoExpr (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeText") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EMatch (EApp (EVar "readPreludeText") (EVar "corePath")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "validatedPrelude") (EVar "rtPath")) (EVar "rsrc"))) (ELam (PWild) (EApp (EVar "Err") (EVar "e"))))) (arm (PCon "Ok" (PVar "csrc")) () (EBlock (DoLet false false (PVar "inputs") (ERecordUpdate (EApp (EApp (EApp (EVar "shippedInputs") (EVar "stdlibDir")) (EVar "rsrc")) (EVar "csrc")) ((fa "pnCompiler" (EVar "compiler"))))) (DoExpr (EIf (EApp (EVar "takePreludeDecls") (EVar "inputs")) (EApp (EVar "Ok") (EVar "inputs")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "validatedPrelude") (EVar "rtPath")) (EVar "rsrc"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "validatedPrelude") (EVar "corePath")) (EVar "csrc"))) (ELam (PWild) (EApp (EVar "Ok") (EVar "inputs"))))))))))))))))
 (DData Public "FileVerdict" () ((variant "FileLoaded" (ConPos)) (variant "FileMissing" (ConPos)) (variant "FileStale" (ConPos (TyCon "String"))) (variant "FileDisabled" (ConPos))) ())
 (DData Public "SideFile" () ((variant "InterfaceFile" (ConPos)) (variant "TreesFile" (ConPos)) (variant "DeclsFile" (ConPos))) ())
@@ -2885,7 +2880,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "isTmpRoot" ((PVar "dir")) (EBinOp "||" (EBinOp "==" (EVar "dir") (ELit (LString "/tmp"))) (EBinOp "==" (EVar "dir") (ELit (LString "/tmp/")))))
 (DTypeSig false "isExplicitScratch" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isExplicitScratch" ((PVar "tmpdir")) (EBinOp "&&" (EBinOp "/=" (EVar "tmpdir") (ELit (LString ""))) (EApp (EVar "not") (EApp (EVar "isTmpRoot") (EVar "tmpdir")))))
-(DTypeSig true "scratchCandidatesFrom" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "scratchCandidatesFrom" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "scratchCandidatesFrom" ((PVar "tmpdir") (PVar "scratch")) (EIf (EApp (EVar "isExplicitScratch") (EVar "tmpdir")) (EListLit (EVar "tmpdir")) (EListLit (EVar "scratch") (ELit (LString "/tmp")))))
 (DTypeSig true "scratchProjectManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "scratchProjectManifest" ((PVar "projectName") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "canonicalizePath") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "target"))))) (DoExpr (EApp (EApp (EVar "scratchManifestText") (EVar "projectName")) (EApp (EVar "readDeps") (EVar "root"))))))
@@ -2922,9 +2917,9 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "detectGC" ((PVar "cc") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "gcPrefix") (EApp (EApp (EVar "envOr") (ELit (LString "GC_PREFIX"))) (ELit (LString "")))) (DoExpr (EIf (EBinOp "/=" (EVar "gcPrefix") (ELit (LString ""))) (EApp (EVar "detectGCPrefix") (EVar "gcPrefix")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--exists")) (ELit (LString "bdw-gc")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EBlock (DoLet false false (PVar "cflags") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--cflags")) (ELit (LString "bdw-gc"))))) (DoLet false false (PVar "archive") (EApp (EVar "gcArchiveIn") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--variable=libdir")) (ELit (LString "bdw-gc")))))) (DoLet false false (PVar "libs") (EIf (EBinOp "==" (EVar "archive") (ELit (LString ""))) (EApp (EVar "words") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--libs")) (ELit (LString "bdw-gc"))))) (EApp (EApp (EVar "gcStaticLibs") (EVar "archive")) (EApp (EVar "words") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--static")) (ELit (LString "--libs")) (ELit (LString "bdw-gc")))))))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EVar "words") (EVar "cflags")) (EVar "libs")))))) (arm PWild () (EApp (EApp (EVar "detectGCBrew") (EVar "cc")) (EVar "tmpDir"))))))))
 (DTypeSig false "gcArchiveIn" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "gcArchiveIn" ((PVar "libDir")) (EBlock (DoLet false false (PVar "archive") (EApp (EApp (EVar "joinPath") (EVar "libDir")) (ELit (LString "libgc.a")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "libDir") (ELit (LString ""))) (EApp (EVar "fileExists") (EVar "archive"))) (EVar "archive") (ELit (LString ""))))))
-(DTypeSig true "gcStaticLibs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "gcStaticLibs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "gcStaticLibs" ((PVar "archive") (PVar "libs")) (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "-lgc"))) (EVar "archive") (EVar "t")))) (EVar "libs")))
-(DTypeSig true "gcSharedLibs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "gcSharedLibs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "gcSharedLibs" ((PVar "libs")) (EApp (EApp (EVar "flatMap") (EVar "gcSharedFlag")) (EVar "libs")))
 (DTypeSig false "gcSharedFlag" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "gcSharedFlag" ((PVar "t")) (EIf (EBinOp "||" (EBinOp "==" (EVar "t") (ELit (LString "libgc.a"))) (EApp (EApp (EVar "endsWith") (ELit (LString "/libgc.a"))) (EVar "t"))) (EListLit (EBinOp "++" (ELit (LString "-L")) (EApp (EVar "dirOf") (EVar "t"))) (ELit (LString "-lgc"))) (EListLit (EVar "t"))))
@@ -3007,7 +3002,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "clangOptFlag" (TyEffect ("IO") None (TyCon "String")))
 (DFunDef false "clangOptFlag" () (EBlock (DoLet false false (PVar "optFlagRaw") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_CLANG_OPT"))) (ELit (LString "-O2")))) (DoExpr (EIf (EBinOp "==" (EVar "optFlagRaw") (ELit (LString ""))) (ELit (LString "-O2")) (EVar "optFlagRaw")))))
 (DData Public "BuildProfile" () ((variant "BuildNormal" (ConPos)) (variant "BuildProbe" (ConPos))) ())
-(DTypeSig true "profileClang" (TyFun (TyCon "BuildProfile") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Bool"))))))
+(DTypeSig false "profileClang" (TyFun (TyCon "BuildProfile") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "profileClang" ((PCon "BuildNormal") (PVar "normalOpt") PWild) (ETuple (EVar "normalOpt") (EVar "True")))
 (DFunDef false "profileClang" ((PCon "BuildProbe") PWild (PVar "probeOpt")) (EIf (EBinOp "||" (EBinOp "==" (EVar "probeOpt") (ELit (LString ""))) (EBinOp "==" (EVar "probeOpt") (ELit (LString "-O0")))) (ETuple (ELit (LString "-O0")) (EVar "False")) (ETuple (EVar "probeOpt") (EVar "True"))))
 (DTypeSig false "resolveProfile" (TyFun (TyCon "BuildProfile") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "Bool")))))
@@ -3136,7 +3131,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "validatedPrelude" ((PVar "path") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "pe")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "path")) (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "pe"))))) (ELit (LString "\n  (while loading the implicit prelude)"))))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "notePreludeParse") (EVar "src")) (EVar "decls"))) (DoExpr (EApp (EVar "Ok") (EVar "src")))))))
 (DTypeSig true "readPreludeSources" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeInputs")))))
 (DFunDef false "readPreludeSources" ((PVar "stdlibDir")) (EApp (EApp (EVar "readPreludeSourcesAs") (EApp (EVar "buildFingerprint") (ELit LUnit))) (EVar "stdlibDir")))
-(DTypeSig true "readPreludeSourcesAs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeInputs"))))))
+(DTypeSig false "readPreludeSourcesAs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeInputs"))))))
 (DFunDef false "readPreludeSourcesAs" ((PVar "compiler") (PVar "stdlibDir")) (EBlock (DoLet false false (PVar "rtPath") (EApp (EApp (EVar "joinPath") (EVar "stdlibDir")) (ELit (LString "runtime.mdk")))) (DoLet false false (PVar "corePath") (EApp (EApp (EVar "joinPath") (EVar "stdlibDir")) (ELit (LString "core.mdk")))) (DoExpr (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeText") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EMatch (EApp (EVar "readPreludeText") (EVar "corePath")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "validatedPrelude") (EVar "rtPath")) (EVar "rsrc"))) (ELam (PWild) (EApp (EVar "Err") (EVar "e"))))) (arm (PCon "Ok" (PVar "csrc")) () (EBlock (DoLet false false (PVar "inputs") (ERecordUpdate (EApp (EApp (EApp (EVar "shippedInputs") (EVar "stdlibDir")) (EVar "rsrc")) (EVar "csrc")) ((fa "pnCompiler" (EVar "compiler"))))) (DoExpr (EIf (EApp (EVar "takePreludeDecls") (EVar "inputs")) (EApp (EVar "Ok") (EVar "inputs")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "validatedPrelude") (EVar "rtPath")) (EVar "rsrc"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "validatedPrelude") (EVar "corePath")) (EVar "csrc"))) (ELam (PWild) (EApp (EVar "Ok") (EVar "inputs"))))))))))))))))
 (DData Public "FileVerdict" () ((variant "FileLoaded" (ConPos)) (variant "FileMissing" (ConPos)) (variant "FileStale" (ConPos (TyCon "String"))) (variant "FileDisabled" (ConPos))) ())
 (DData Public "SideFile" () ((variant "InterfaceFile" (ConPos)) (variant "TreesFile" (ConPos)) (variant "DeclsFile" (ConPos))) ())
@@ -3228,7 +3223,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "isTmpRoot" ((PVar "dir")) (EBinOp "||" (EBinOp "==" (EVar "dir") (ELit (LString "/tmp"))) (EBinOp "==" (EVar "dir") (ELit (LString "/tmp/")))))
 (DTypeSig false "isExplicitScratch" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isExplicitScratch" ((PVar "tmpdir")) (EBinOp "&&" (EBinOp "/=" (EVar "tmpdir") (ELit (LString ""))) (EApp (EVar "not") (EApp (EVar "isTmpRoot") (EVar "tmpdir")))))
-(DTypeSig true "scratchCandidatesFrom" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "scratchCandidatesFrom" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "scratchCandidatesFrom" ((PVar "tmpdir") (PVar "scratch")) (EIf (EApp (EVar "isExplicitScratch") (EVar "tmpdir")) (EListLit (EVar "tmpdir")) (EListLit (EVar "scratch") (ELit (LString "/tmp")))))
 (DTypeSig true "scratchProjectManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "scratchProjectManifest" ((PVar "projectName") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "canonicalizePath") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "target"))))) (DoExpr (EApp (EApp (EVar "scratchManifestText") (EVar "projectName")) (EApp (EVar "readDeps") (EVar "root"))))))
@@ -3265,9 +3260,9 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "detectGC" ((PVar "cc") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "gcPrefix") (EApp (EApp (EVar "envOr") (ELit (LString "GC_PREFIX"))) (ELit (LString "")))) (DoExpr (EIf (EBinOp "/=" (EVar "gcPrefix") (ELit (LString ""))) (EApp (EVar "detectGCPrefix") (EVar "gcPrefix")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--exists")) (ELit (LString "bdw-gc")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EBlock (DoLet false false (PVar "cflags") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--cflags")) (ELit (LString "bdw-gc"))))) (DoLet false false (PVar "archive") (EApp (EVar "gcArchiveIn") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--variable=libdir")) (ELit (LString "bdw-gc")))))) (DoLet false false (PVar "libs") (EIf (EBinOp "==" (EVar "archive") (ELit (LString ""))) (EApp (EVar "words") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--libs")) (ELit (LString "bdw-gc"))))) (EApp (EApp (EVar "gcStaticLibs") (EVar "archive")) (EApp (EVar "words") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--static")) (ELit (LString "--libs")) (ELit (LString "bdw-gc")))))))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EVar "words") (EVar "cflags")) (EVar "libs")))))) (arm PWild () (EApp (EApp (EVar "detectGCBrew") (EVar "cc")) (EVar "tmpDir"))))))))
 (DTypeSig false "gcArchiveIn" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "gcArchiveIn" ((PVar "libDir")) (EBlock (DoLet false false (PVar "archive") (EApp (EApp (EVar "joinPath") (EVar "libDir")) (ELit (LString "libgc.a")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "libDir") (ELit (LString ""))) (EApp (EVar "fileExists") (EVar "archive"))) (EVar "archive") (ELit (LString ""))))))
-(DTypeSig true "gcStaticLibs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "gcStaticLibs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "gcStaticLibs" ((PVar "archive") (PVar "libs")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "-lgc"))) (EVar "archive") (EVar "t")))) (EVar "libs")))
-(DTypeSig true "gcSharedLibs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "gcSharedLibs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "gcSharedLibs" ((PVar "libs")) (EApp (EApp (EDictApp "flatMap") (EVar "gcSharedFlag")) (EVar "libs")))
 (DTypeSig false "gcSharedFlag" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "gcSharedFlag" ((PVar "t")) (EIf (EBinOp "||" (EBinOp "==" (EVar "t") (ELit (LString "libgc.a"))) (EApp (EApp (EVar "endsWith") (ELit (LString "/libgc.a"))) (EVar "t"))) (EListLit (EBinOp "++" (ELit (LString "-L")) (EApp (EVar "dirOf") (EVar "t"))) (ELit (LString "-lgc"))) (EListLit (EVar "t"))))
@@ -3350,7 +3345,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "clangOptFlag" (TyEffect ("IO") None (TyCon "String")))
 (DFunDef false "clangOptFlag" () (EBlock (DoLet false false (PVar "optFlagRaw") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_CLANG_OPT"))) (ELit (LString "-O2")))) (DoExpr (EIf (EBinOp "==" (EVar "optFlagRaw") (ELit (LString ""))) (ELit (LString "-O2")) (EVar "optFlagRaw")))))
 (DData Public "BuildProfile" () ((variant "BuildNormal" (ConPos)) (variant "BuildProbe" (ConPos))) ())
-(DTypeSig true "profileClang" (TyFun (TyCon "BuildProfile") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Bool"))))))
+(DTypeSig false "profileClang" (TyFun (TyCon "BuildProfile") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "profileClang" ((PCon "BuildNormal") (PVar "normalOpt") PWild) (ETuple (EVar "normalOpt") (EVar "True")))
 (DFunDef false "profileClang" ((PCon "BuildProbe") PWild (PVar "probeOpt")) (EIf (EBinOp "||" (EBinOp "==" (EVar "probeOpt") (ELit (LString ""))) (EBinOp "==" (EVar "probeOpt") (ELit (LString "-O0")))) (ETuple (ELit (LString "-O0")) (EVar "False")) (ETuple (EVar "probeOpt") (EVar "True"))))
 (DTypeSig false "resolveProfile" (TyFun (TyCon "BuildProfile") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "Bool")))))

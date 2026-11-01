@@ -167,7 +167,6 @@ rowEval (ExternRow _ _ _ v) = v
 
 -- The family a backend selects its emitter by, or `None` when nothing is
 -- lowered (`NotProvided`) or the backend has no families (`Interpreted`).
-export
 dispositionFamily : Disposition f -> Option f
 dispositionFamily (CSymbol f _) = Some f
 dispositionFamily (EnvImport f _) = Some f
@@ -431,7 +430,6 @@ wasmTupleArities _ = []
 -- list is complete: a demand one flag implies in another (`readFileBytes`'s
 -- `UseFileBytes` comes with `UseArray`) is written out, never derived.  An extern absent here demands nothing
 -- beyond what its call site already brings.
-export
 wasmUseRows : List (String, List WasmUse)
 wasmUseRows = [
   ("ePutStr", [UseEPut]),
