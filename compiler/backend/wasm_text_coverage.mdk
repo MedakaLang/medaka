@@ -308,7 +308,7 @@ symbolKeys index =
     (omKeys index)
 
 data Expected = Expected WasmSymbol WasmShape SymbolOrigin
-data Materialized = Materialized WasmSymbol WasmShape
+data Materialized = Materialized WasmSymbol WasmShape Bool
 
 expectedMap : List SymbolDeclaration ->
   SymbolIndex Expected ->
@@ -364,6 +364,13 @@ functionShape _ count explicit None = Ok (FuncParams count)
 functionShape _ count explicit (Some name) =
   Ok (FuncOfType name (if explicit then count else -1))
 
+inlineImport : List Token -> Bool
+inlineImport ((Token "(" _ _) :: (Token "import" _ _) :: _) = True
+inlineImport ((Token "(" _ _) :: (Token op _ _) :: rest)
+  | op == "param" || op == "type" || op == "result" || op == "export" =
+    inlineImport (skipGroup rest 0)
+inlineImport _ = False
+
 parent : List String -> String
 parent [] = ""
 parent (p :: _) = p
@@ -406,15 +413,16 @@ ordinaryShape (WasmFunc _) = FuncParams 0
 
 admit : WasmSymbol ->
   WasmShape ->
+  Bool ->
   SymbolIndex Materialized ->
   Result SymbolDefect (SymbolIndex Materialized)
-admit (sym@(WasmElem _)) shape seen =
-  Ok (symbolInsert sym (Materialized sym shape) seen)
-admit sym shape seen =
+admit (sym@(WasmElem _)) shape imported seen =
+  Ok (symbolInsert sym (Materialized sym shape imported) seen)
+admit sym shape imported seen =
   if symbolHas sym seen then
     Err (DuplicateDefinition sym moduleOrigin moduleOrigin)
   else
-    Ok (symbolInsert sym (Materialized sym shape) seen)
+    Ok (symbolInsert sym (Materialized sym shape imported) seen)
 
 inventory : List Token ->
   List String ->
@@ -430,10 +438,14 @@ inventory ((Token "(" _ _) :: (Token op _ _) :: (Token name _ _) :: rest) contex
   | named name = match declaration op (bare name) context
     Some (sym@(WasmFunc _)) => do
       shape <- functionShape rest 0 False None
-      next <- admit sym shape seen
+      next <- admit
+        sym
+        shape
+        (parent context == "import" || inlineImport rest)
+        seen
       inventory rest (op :: context) next types
     Some (sym@(WasmType typeName)) => do
-      next <- admit sym TypeDecl seen
+      next <- admit sym TypeDecl False seen
       match rest
         (Token "(" _ _) :: (Token "func" _ _) :: after => do
           shape <- functionShape after 0 False None
@@ -444,7 +456,7 @@ inventory ((Token "(" _ _) :: (Token op _ _) :: (Token name _ _) :: rest) contex
           inventory rest (op :: context) next (omInsert typeName n types)
         _ => inventory rest (op :: context) next types
     Some sym => do
-      next <- admit sym (ordinaryShape sym) seen
+      next <- admit sym (ordinaryShape sym) False seen
       inventory rest (op :: context) next types
     None =>
       inventory
@@ -469,7 +481,7 @@ inventory ((Token ")" _ _) :: rest) (_ :: outer) seen types =
   inventory rest outer seen types
 inventory ((Token name _ _) :: rest) context seen types
   | named name && parent context == "elem" = do
-    next <- admit (WasmElem (bare name)) ElemDecl seen
+    next <- admit (WasmElem (bare name)) ElemDecl False seen
     inventory rest context next types
 inventory (_ :: rest) context seen types = inventory rest context seen types
 
@@ -492,12 +504,30 @@ actualCount (FuncOfType name n) types =
   if n >= 0 then n else optionOr -1 (omLookup name types)
 actualCount _ _ = -1
 
-sameShape : WasmShape -> WasmShape -> OrdMap Int -> Bool
-sameShape (FuncImported n) actual types = n == actualCount actual types
-sameShape (FuncParams n) actual types = n == actualCount actual types
-sameShape (FuncOfType name n) (actual@(FuncOfType found _)) types =
-  name == found && n == actualCount actual types
-sameShape a b _ = a == b
+sameShape : Bool -> WasmShape -> WasmShape -> Bool -> OrdMap Int -> Bool
+sameShape deferred expected actual imported types =
+  let linkage = match expected
+    FuncImported _ => imported
+    FuncParams _ => not imported
+    FuncOfType _ _ => not imported
+    _ => True
+  let countMatches = match actual
+    FuncOfType name explicit => match omLookup name types
+      Some count =>
+        (explicit < 0 || explicit == count)
+          && actualCount expected types == count
+      None =>
+        deferred && (explicit < 0 || actualCount expected types == explicit)
+    _ => actualCount expected types == actualCount actual types
+  let kindMatches = match (expected, actual)
+    (FuncOfType name _, FuncOfType found _) => name == found
+    (FuncOfType _ _, _) => False
+    (FuncImported _, FuncParams _) => True
+    (FuncParams _, FuncParams _) => True
+    (FuncImported _, FuncOfType _ _) => True
+    (FuncParams _, FuncOfType _ _) => True
+    _ => expected == actual
+  linkage && countMatches && kindMatches
 
 declarationDefects : SymbolIndex Expected ->
   SymbolIndex Materialized ->
@@ -510,8 +540,8 @@ declarationDefects expected seen types gaps =
         None => []
         Some (Expected _ shape at) => match symbolLookup sym seen
           None => if symbolHas sym gaps then [] else [UndefinedReference sym at]
-          Some (Materialized _ actual) =>
-            if sameShape shape actual types then
+          Some (Materialized _ actual imported) =>
+            if sameShape False shape actual imported types then
               []
             else
               [
@@ -693,8 +723,8 @@ fragmentDeclarations expected seen types =
     (sym => match symbolLookup sym expected
       None => [UndefinedReference sym moduleOrigin]
       Some (Expected _ shape at) => match symbolLookup sym seen
-        Some (Materialized _ actual) =>
-          if sameShape shape actual types then
+        Some (Materialized _ actual imported) =>
+          if sameShape True shape actual imported types then
             []
           else
             [

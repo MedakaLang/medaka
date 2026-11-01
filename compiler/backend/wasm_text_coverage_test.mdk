@@ -338,6 +338,146 @@ test "Wasm named function types determine physical parameter counts" =
     ])
     reg
 
+test "Wasm materialized function linkage distinguishes imports and definitions" =
+  let imported =
+    declareSymbol (WasmFunc "host") (FuncImported 0) at emptyRegistry
+  let defined = defineSymbol (WasmFunc "host") (FuncParams 0) at emptyRegistry
+  let importText = "(module (import \"env\" \"host\" (func $host)))"
+  let inlineText = "(module (func $host (import \"env\" \"host\")))"
+  let localText = "(module (func $host))"
+  expectAll [
+    expectStep
+      (reg => expectAll [
+        expectEqual
+          (Ok importText)
+          (codes (finishCheckedText ClosedOutput reg emptyCoverage importText)),
+        expectEqual
+          (Ok inlineText)
+          (codes (finishCheckedText ClosedOutput reg emptyCoverage inlineText)),
+        expectErrContains
+          "E-PHYS-SHAPE"
+          (codes (finishCheckedText ClosedOutput reg emptyCoverage localText)),
+      ])
+      imported,
+    expectStep
+      (reg => expectAll [
+        expectEqual
+          (Ok localText)
+          (codes (finishCheckedText ClosedOutput reg emptyCoverage localText)),
+        expectErrContains
+          "E-PHYS-SHAPE"
+          (codes (finishCheckedText ClosedOutput reg emptyCoverage importText)),
+        expectErrContains
+          "E-PHYS-SHAPE"
+          (codes (finishCheckedText ClosedOutput reg emptyCoverage inlineText)),
+      ])
+      defined,
+  ]
+
+test "Wasm receipted host call refuses a substituted local body" =
+  let setup = do
+    r <- declareSymbol (WasmFunc "host") (FuncImported 0) at emptyRegistry
+    defineSymbol (WasmFunc "caller") (FuncParams 0) at r
+  expectStep
+    (reg =>
+      expectStep
+        ((next, coverage, fragment) =>
+          let local =
+            "(module (func $host (result i64) i64.const 7) (func $caller (export \"run\") (result i64) "
+              ++ fragment
+              ++ "))"
+          let imported =
+            "(module (import \"env\" \"host\" (func $host (result i64))) (func $caller (export \"run\") (result i64) "
+              ++ fragment
+              ++ "))"
+          expectAll [
+            expectErrContains
+              "E-PHYS-SHAPE"
+              (codes (finishCheckedText ClosedOutput next coverage local)),
+            expectEqual
+              (Ok (replace fragment "call $host" imported))
+              (codes (finishCheckedText ClosedOutput next coverage imported)),
+          ])
+        (checkedCall reg False "host" 0 at emptyCoverage))
+    setup
+
+test "Wasm explicit and forward named function types agree with registry" =
+  let reg = do
+    r <- declareSymbol (WasmType "sig") TypeDecl at emptyRegistry
+    defineSymbol (WasmFunc "f") (FuncOfType "sig" 1) at r
+  expectStep
+    (r => expectAll [
+      expectEach
+        (map
+          (source => (
+            source,
+            expectEqual
+              (Ok source)
+              (codes (finishCheckedText ClosedOutput r emptyCoverage source)),
+          ))
+          [
+            "(module (type $sig (func (param i64))) (func $f (type $sig) (param i64)))",
+            "(module (func $f (type $sig)) (type $sig (func (param i64))))",
+            "(module (func $f (type $sig) (param i64)) (type $sig (func (param i64))))",
+          ]),
+      expectEach
+        (map
+          (source => (
+            source,
+            expectErrContains
+              "E-PHYS-SHAPE"
+              (codes (finishCheckedText ClosedOutput r emptyCoverage source)),
+          ))
+          [
+            "(module (type $sig (func (param i64 i64))) (func $f (type $sig) (param i64)))",
+            "(module (func $f (type $sig) (param i64)) (type $sig (func (param i64 i64))))",
+            "(module (type $sig (func (param i64))) (func $f (type $sig) (param i64 i64)))",
+          ]),
+      expectErrContains
+        "E-PHYS-UNDEFINED"
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            r
+            emptyCoverage
+            "(module (func $f (type $unknown) (param i64)) (type $sig (func (param i64))))")),
+    ])
+    reg
+
+test "Wasm imported named types preserve linkage and resolve forward declarations" =
+  let setup = do
+    r <- declareSymbol (WasmType "sig") TypeDecl at emptyRegistry
+    declareSymbol (WasmFunc "host") (FuncImported 1) at r
+  expectStep
+    (reg => expectAll [
+      expectEqual
+        (Ok
+          "(module (import \"env\" \"host\" (func $host (type $sig))) (type $sig (func (param i64))))")
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            reg
+            emptyCoverage
+            "(module (import \"env\" \"host\" (func $host (type $sig))) (type $sig (func (param i64))))")),
+      expectErrContains
+        "E-PHYS-SHAPE"
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            reg
+            emptyCoverage
+            "(module (import \"env\" \"host\" (func $host (type $sig) (param i64))) (type $sig (func (param i64 i64))))")),
+      expectErrContains
+        "E-PHYS-SHAPE"
+        (codes
+          (finishCheckedText
+            ClosedOutput
+            reg
+            emptyCoverage
+            "(module (func $host (type $sig) (param i64)) (type $sig (func (param i64))))")),
+    ])
+    setup
+
 test "Wasm final registry rechecks the exact stored call descriptor" = withCall
   False
   (_ coverage fragment =>
