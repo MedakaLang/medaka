@@ -17,7 +17,8 @@ import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{EmitPlan, buildEmitPlan}
 import ir.core_ir.{CProgram}
 import test.{
-  Expectation, expectAll, expectEqual, expectSatisfies, labelFail, fail
+  Expectation, expectAll, expectEqual, expectTrue, expectSatisfies, labelFail,
+  fail
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
@@ -646,18 +647,21 @@ test "llvm concatenated raw call refuses complete publication" = withScratchDir
                         ]
                         match boundedVerbSeconds 240 "env" badArgs
                           Err e => fail e
-                          Ok (_, out, err) => match readFile bad
-                            Ok _ => fail "refused publication left an artifact"
-                            Err _ => expectAll [
-                              expectSpawnOkLine good [] "42",
-                              rejection,
-                              expectEqual
-                                None
-                                (stringIndexOf "\u{1e}" (out ++ err)),
-                              expectEqual
-                                None
-                                (stringIndexOf "\u{1f}" (out ++ err)),
-                            ]
+                          Ok (_, out, err) =>
+                            if fileExists bad then
+                              fail "refused publication left an artifact"
+                            else
+                              expectAll [
+                                expectTrue (fileExists good),
+                                expectSpawnOkLine good [] "42",
+                                rejection,
+                                expectEqual
+                                  None
+                                  (stringIndexOf "\u{1e}" (out ++ err)),
+                                expectEqual
+                                  None
+                                  (stringIndexOf "\u{1f}" (out ++ err)),
+                              ]
                       Ok (code, out, err) =>
                         fail
                           "control build exited \{intToString code}: \{out} \{err}"

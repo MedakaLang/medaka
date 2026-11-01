@@ -11,7 +11,8 @@ import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{EmitPlan, prepareWasmPlan}
 import ir.core_ir.{CProgram}
 import test.{
-  Expectation, expectAll, expectEqual, expectSatisfies, labelFail, fail
+  Expectation, expectAll, expectEqual, expectTrue, expectSatisfies, labelFail,
+  fail
 }
 import test_process.{
   withScratchDir, boundedVerbSeconds, expectSpawnOkLine, expectSpawnFailsAll,
@@ -423,7 +424,7 @@ test "Wasm census rejects an injected raw call in a compiled child" = withScratc
     Ok (0, _, _) =>
       let emitter = dir ++ "/compiler/backend/wasm_emit.mdk"
       let probe = dir ++ "/compiler/backend/census_guard_probe_test.mdk"
-      let hole = "  let fnDef =\n    [sig]"
+      let hole = "      ++ indent bodyLines\n      ++ [\"  )\"]"
       let insert =
         "  let fnDef =\n    [sig] ++ (if name == \"f\" then [\"    call $mdk_print_int\"] else [])"
       match readFile emitter
@@ -463,9 +464,9 @@ test "wasm concatenated raw call refuses complete publication" = withScratchDir
       let mutant = dir ++ "/mutant-emitter"
       let good = dir ++ "/good.wasm"
       let bad = dir ++ "/bad.wasm"
-      let hole = "  let fnDef =\n    [sig]"
+      let hole = "      ++ indent bodyLines\n      ++ [\"  )\"]"
       let insert =
-        "  let fnDef =\n    [sig] ++ (if endsWith \"publicationprobe\" name then [\"    call \" ++ \"$mdk_print_int\"] else [])"
+        "      ++ (if endsWith \"publicationprobe\" name then [\"    i64.const 0\", \"    call \" ++ \"$mdk_print_int\"] else [])\n      ++ indent bodyLines\n      ++ [\"  )\"]"
       match (
         readFile emitter,
         writeFile
@@ -518,21 +519,24 @@ test "wasm concatenated raw call refuses complete publication" = withScratchDir
                         ]
                         match boundedVerbSeconds 240 "env" badArgs
                           Err e => fail e
-                          Ok (_, out, err) => match readFile bad
-                            Ok _ => fail "refused publication left an artifact"
-                            Err _ => expectAll [
-                              expectSpawnOkLine
-                                "node"
-                                [underRoot "test/wasm/run.js", good]
-                                "42",
-                              rejection,
-                              expectEqual
-                                None
-                                (stringIndexOf "\u{1e}" (out ++ err)),
-                              expectEqual
-                                None
-                                (stringIndexOf "\u{1f}" (out ++ err)),
-                            ]
+                          Ok (_, out, err) =>
+                            if fileExists bad then
+                              fail "refused publication left an artifact"
+                            else
+                              expectAll [
+                                expectTrue (fileExists good),
+                                expectSpawnOkLine
+                                  "node"
+                                  [underRoot "test/wasm/run.js", good]
+                                  "42",
+                                rejection,
+                                expectEqual
+                                  None
+                                  (stringIndexOf "\u{1e}" (out ++ err)),
+                                expectEqual
+                                  None
+                                  (stringIndexOf "\u{1f}" (out ++ err)),
+                              ]
                       Ok (code, out, err) =>
                         fail
                           "control build exited \{intToString code}: \{out} \{err}"
