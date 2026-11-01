@@ -44,7 +44,6 @@ import frontend.ast.{
   EvTable,
   identOriginFold,
   mkIdent,
-  tyConBuiltin,
 }
 import types.runtime_types.{
   BinderRow(..), RuntimeType(..), addBinderRow, runtimeTypeOf
@@ -132,7 +131,6 @@ import types.tc_env.{
   addCtor,
   attachStandaloneSources,
   bindingWithStandalone,
-  buildFlatImplEnv,
   ceLookupAt,
   ceRowDoneKey,
   ceRowIface,
@@ -211,7 +209,6 @@ import types.tc_mono.{
   monoUnboundIds,
   resultAfterArrows,
   schemeMono,
-  stripArrows,
   tconBuiltin,
   tconUnresolved,
   tyVarNames,
@@ -224,7 +221,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   joinWith,
   lenKey,
   listLen,
@@ -235,13 +231,10 @@ import types.tc_occurrence.{
   argDispatchIndicesById,
   constrainedSigNames,
   evIdModule,
-  firstMethodRow,
   mapGroupClauses,
   markGroupClauses,
   markRecursiveOccurrences,
   markTailDecls,
-  methodReturnProbeCodes,
-  methodReturnProbeRequest,
   rebuildGroupDecls,
 }
 import types.tc_solve.{
@@ -258,12 +251,6 @@ import types.tc_solve.{
   goalsSince,
   improveByUniqueImpl,
   methodDictEntry,
-  methodReturnArgs,
-  methodReturnProbeIface,
-  methodReturnProbeImpl,
-  methodReturnProbeRouteKey,
-  methodReturnProbeScope,
-  methodReturnProbeSpelling,
   openScope,
   outerRigidIds,
   recDictAppEntry,
@@ -293,20 +280,16 @@ import types.tc_effects.{
 import types.tc_state.{
   blankModuleCtx,
   callUOblsWindow,
-  carryModuleCtx,
   checkRunResidue,
   currentScopeStore,
   dynAtIfSome,
   enterStampCtx,
   envAtIfSome,
-  freshGraphRun,
   freshModuleCtx,
-  initialModuleCtx,
   mctxAt,
   moduleCtxFrom,
   moduleWindow,
   plainModuleSeed,
-  probeGraphCtx,
   seedCheckRun,
   wMark,
   wWindow,
@@ -424,7 +407,6 @@ import frontend.resolve.{
   stampTyOrigins,
 }
 import list.{findMap, sortOn}
-import types.tc_solve_entail.{ieSelectRowByIface, rowRouteKey}
 import types.effect_bindings.{newBindingSummary}
 import types.tc_diag.{pushTypeError, pushTypeErrorAt}
 import types.tc_elab.{
@@ -562,7 +544,7 @@ recordModuleStart gctx mid =
 mapLocalSchemes : ModuleCtx ->
   List (String, Option Loc, Mono) ->
   List (String, Option Loc, Scheme)
-mapLocalSchemes mctx [] = []
+mapLocalSchemes _mctx [] = []
 mapLocalSchemes mctx ((n, l, m) :: rest) =
   (n, l, generalize mctx m) :: mapLocalSchemes mctx rest
 
@@ -637,7 +619,7 @@ recordTopDeclBinderTypes gctx schemes signed (DLetGroup _ binds) =
     binds
 recordTopDeclBinderTypes gctx schemes signed (DAttrib _ d) =
   recordTopDeclBinderTypes gctx schemes signed d
-recordTopDeclBinderTypes gctx _ _ _ = ()
+recordTopDeclBinderTypes _gctx _ _ _ = ()
 
 recordTopFunBinderType : GraphCtx ->
   OrdMap Scheme ->
@@ -659,7 +641,7 @@ recordTopFunBinderType gctx schemes signed n bid arity =
     None => ()
 
 resolveSites : SiteCtx -> OrdMap Unit -> List PendingEntry -> Unit
-resolveSites sx _ [] = ()
+resolveSites _sx _ [] = ()
 resolveSites sx rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _) :: rest) =
   let sx = { sx | sxSite = loc }
   match kind
@@ -749,7 +731,7 @@ resolveSites sx rpNames ((PendingEntry name tagRef resultMono encl kind loc scop
 -- Do not describe the population as "GLOBAL by design — local ∪ imported ∪ prelude":
 -- `SHADOW-SEMANTICS.md:242-245` retires that phrase as a false synonym for graph-global.
 resolveRLocalSites : SiteCtx -> List PendingEntry -> Unit
-resolveRLocalSites sx [] = ()
+resolveRLocalSites _sx [] = ()
 resolveRLocalSites sx ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
   let sx = { sx | sxSite = loc }
   match kind
@@ -784,7 +766,7 @@ resolveArithSites ((dref, m) :: rest) =
 -- #156 S3c: resolveOpSite is now a thin adapter over `entail` (EKOp kind); the inst
 -- route is stampOpRouteVal, a pure Route-returning extraction of the old stampOpRoute.
 resolveOpSites : SiteCtx -> Bool -> List PendingEntry -> Unit
-resolveOpSites sx _ [] = ()
+resolveOpSites _sx _ [] = ()
 resolveOpSites sx isBinop ((PendingEntry method tagRef operandMono encl kind loc scope _) :: rest) =
   let sx = { sx | sxSite = loc }
   match kind
@@ -1722,7 +1704,7 @@ inferPropBodies env prog =
   ]
 
 inferPropBodiesGo : TcEnv -> List Decl -> Unit
-inferPropBodiesGo env [] = ()
+inferPropBodiesGo _env [] = ()
 inferPropBodiesGo outer ((DProp _ name params body) :: rest) =
   -- The body's checks are located at the body (the declaration has no span),
   -- and its type at the value it returns.
@@ -1765,7 +1747,7 @@ inferPropBodiesGo env (_ :: rest) = inferPropBodiesGo env rest
 -- stamping enabled (no snapshot/restore).  Without this, `test "x" = 1 + "str"`
 -- and `test "x" = 42` slipped through `check` with zero diagnostics.
 inferTestBodies : TcEnv -> List Decl -> Unit
-inferTestBodies env [] = ()
+inferTestBodies _env [] = ()
 inferTestBodies outer ((DTest _ name body) :: rest) =
   -- The body's checks are located at the body (the declaration has no span),
   -- and its type at the value it returns.
@@ -2274,7 +2256,7 @@ processSCCs : TcEnv ->
   OrdMap (List (List Pat, Expr)) ->
   List (List String) ->
   (List (String, Scheme), OrdMap (List (List Pat, Expr)))
-processSCCs env _ grouped [] = ([], grouped)
+processSCCs _env _ grouped [] = ([], grouped)
 processSCCs env sigs grouped (scc :: rest) =
   let (env2, schemes, grouped2) = processSCC env sigs grouped scc
   let (restSchemes, grouped3) = processSCCs env2 sigs grouped2 rest
@@ -2537,7 +2519,7 @@ scopeMembers : ModuleCtx ->
   OrdMap (List (List Pat, Expr)) ->
   List (String, Mono) ->
   List ScopedMember
-scopeMembers mctx _ _ [] = []
+scopeMembers _mctx _ _ [] = []
 scopeMembers mctx parent grouped ((name, mono) :: rest) =
   let sid =
     Scopes.freshScope
@@ -2600,7 +2582,7 @@ inferMembers : TcEnv ->
   OrdMap (List (List Pat, Expr)) ->
   List ScopedMember ->
   Unit
-inferMembers env _ _ [] = ()
+inferMembers _env _ _ [] = ()
 inferMembers outer sigs grouped (member :: rest) =
   let m = member.smName
   -- A member's own checks (its signature against its value, its forcing
@@ -2663,7 +2645,7 @@ memberPeelSource : ModuleCtx ->
   String ->
   Mono ->
   Option Mono
-memberPeelSource mctx sigs m v =
+memberPeelSource mctx _sigs m v =
   map (_ => v) (omLookup m mctx.mcCells.sigNameSetRef.value)
 
 regIfaceMonosOf : ConstraintReg -> List (IfaceRef, List Mono)
@@ -3200,7 +3182,7 @@ oracleImportDeclsOf gctx cur rows (DUse _ (p@(UseAlias _ _)) _) =
   wildOverlayDecls cur rows dep ++ reexportedCtorDecls gctx cur rows dep
 oracleImportDeclsOf gctx cur rows (DUse _ (p@(UseWild _)) _) =
   reexportedCtorDecls gctx cur rows (useModId p)
-oracleImportDeclsOf gctx _ _ _ = []
+oracleImportDeclsOf _gctx _ _ _ = []
 
 -- The decls declaring the constructors `dep` re-exports from other modules, found
 -- through the graph's constructor export index, whose rows carry each constructor's
@@ -3522,7 +3504,7 @@ useAdmittedRows : (String -> List (String, (String, String))) ->
   Bool ->
   List Decl ->
   List (String, (String, String))
-useAdmittedRows defs _ [] = []
+useAdmittedRows _defs _ [] = []
 useAdmittedRows defs wild ((DAttrib _ d) :: rest) =
   useAdmittedRows defs wild [d] ++ useAdmittedRows defs wild rest
 useAdmittedRows defs wild ((DUse _ path _) :: rest) =
@@ -4022,7 +4004,7 @@ stampNoting stamp resolve o =
   o.oInner := innerOr o.oInner.value acc.value
 
 runStampStep : ModuleCtx -> StampCtx -> StampStep -> Unit
-runStampStep mctx ctx SSNumlitFloats = setNumlitFloatsGo ctx.scNumlits
+runStampStep _mctx ctx SSNumlitFloats = setNumlitFloatsGo ctx.scNumlits
 runStampStep stamp ctx SSReturnSites =
   let rpNames = omFromNames ctx.scRpNames omEmpty
   stampEach

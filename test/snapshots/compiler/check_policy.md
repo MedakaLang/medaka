@@ -1,5 +1,5 @@
 # META
-source_lines=805
+source_lines=804
 stages=DESUGAR,MARK
 # SOURCE
 import types.capability_manifest.{
@@ -20,10 +20,9 @@ import types.effect_authority.{authHasVars, authConsts}
 import types.effect_param_decode.{decodeSetParam}
 import types.effect_policy as EP
 import types.effect_policy.{
-  PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain,
-  allOk
+  PolicyVerdict(..), buildCallGraph, fnEffectsTable, viaChain, allOk
 }
-import types.effect_rows.{atomKey, atomLabel, atomAuth, renderAtom, Atom(..)}
+import types.effect_rows.{atomKey, atomLabel, atomAuth, Atom(..)}
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
 -- policy checker (WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md).
 --
@@ -819,8 +818,8 @@ joinSemiTok xs = joinWith ";" xs
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authHasVars" false) (mem "authConsts" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "decodeSetParam" false))))
 (DUse false (UseAlias ("types" "effect_policy") "EP"))
-(DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "policyRefusals" false) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false) (mem "allOk" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "renderAtom" false) (mem "Atom" true))))
+(DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false) (mem "allOk" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "Atom" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "effParamSurface" false) (mem "Decl" true))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
@@ -1010,8 +1009,8 @@ joinSemiTok xs = joinWith ";" xs
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authHasVars" false) (mem "authConsts" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "decodeSetParam" false))))
 (DUse false (UseAlias ("types" "effect_policy") "EP"))
-(DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "policyRefusals" false) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false) (mem "allOk" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "renderAtom" false) (mem "Atom" true))))
+(DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false) (mem "allOk" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "Atom" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "effParamSurface" false) (mem "Decl" true))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))

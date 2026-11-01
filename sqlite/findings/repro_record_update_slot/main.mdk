@@ -1,4 +1,4 @@
-import lib.a.{Sel, mkSel}
+import lib.a.{mkSel}
 
 -- `groupBy` is the FIRST field here (slot 0) — same NAME, different SLOT
 data Agg = Agg { groupBy : List Int, n : Int }

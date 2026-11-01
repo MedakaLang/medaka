@@ -14,9 +14,7 @@ import driver.build_cmd.{
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omKeys, omLookup}
-import support.util.{
-  joinNl, joinWith, splitNl, filterList, lookupAssoc, listLen, zipL, reverseL
-}
+import support.util.{joinNl, joinWith, splitNl, listLen, reverseL}
 import string.{toInt}
 import tools.probe_transcript.{
   Chunk(..), Section(..), chunksOf, decodeValue, endTag, firstNonEmptyLine,
@@ -29,17 +27,16 @@ import tools.prop_plan.{
   PlanModule(..), TypeKey(..), CustomPlan(..), PlanEnv(..), GenPlan(..),
   PlanDef(..), PlanCtor(..), PlanField(..), PlanError(..), PlanErrorReason(..),
   PlanVisibility(..), planErrorText, buildPlanEnvModules, planFor, planDef,
-  instantiateCtor, planTy, typeKeyWord, ctorWeights, listLengthBound,
-  listBoundDecays, listLenMax, optionWeights, resultWeights, maxGenDepth,
-  SoftWeight(..), softCtorWeights, intMin, intMax, structuralRngModulus,
+  instantiateCtor, typeKeyWord, ctorWeights, listLengthBound, listBoundDecays,
+  listLenMax, optionWeights, resultWeights, maxGenDepth, SoftWeight(..),
+  softCtorWeights, intMin, intMax, structuralRngModulus,
   structuralRngMultiplier, structuralRngIncrement, structuralRngMixMultiplier1,
   structuralRngMixMultiplier2, structuralRngWordModulus, structuralRngWordHalf,
   ShrinkAction(..), shrinkActions, IntShrinkStep(..), intShrinkSteps
 }
 import tools.prop_runner.{
   PropResult(..), PropStatus(..), PropFailureKind(..), filterProps,
-  filterPropsByName, propSeedValue, PropRequest(..), propRequestName,
-  propRequestSeed, propRequestCases
+  PropRequest(..), propRequestName, propRequestSeed, propRequestCases
 }
 
 sentinelBase : String
@@ -1135,13 +1132,13 @@ graphNodeBody nonce _ _ _ _ _ GChar = "\{generatedPrefix nonce}char ()"
 graphNodeBody nonce _ _ _ _ _ GString = stringExpr nonce 0
 graphNodeBody _ _ _ _ _ _ GUnit = "()"
 graphNodeBody nonce _ _ core _ _ (GCustom _) = customDrawExpr nonce core
-graphNodeBody nonce modules env core graph prefix (GList p) =
+graphNodeBody nonce modules env _core graph prefix (GList p) =
   renderListByDepth nonce "[" "]" env p (graphDraw modules env graph prefix p)
-graphNodeBody nonce modules env core graph prefix (GArray p) =
+graphNodeBody nonce modules env _core graph prefix (GArray p) =
   renderListByDepth nonce "[|" "|]" env p (graphDraw modules env graph prefix p)
-graphNodeBody nonce modules env core graph prefix (GOption p) =
+graphNodeBody nonce modules env _core graph prefix (GOption p) =
   renderOptionByDepth nonce env p (graphDraw modules env graph prefix p)
-graphNodeBody nonce modules env core graph prefix (GResult err ok) =
+graphNodeBody nonce modules env _core graph prefix (GResult err ok) =
   renderResultByDepth
     nonce
     env
@@ -1149,9 +1146,9 @@ graphNodeBody nonce modules env core graph prefix (GResult err ok) =
     ok
     (graphDraw modules env graph prefix err)
     (graphDraw modules env graph prefix ok)
-graphNodeBody _ modules env core graph prefix (GTuple ps) =
+graphNodeBody _ modules env _core graph prefix (GTuple ps) =
   "(\{joinWith ", " (map (graphDraw modules env graph prefix) ps)})"
-graphNodeBody nonce modules env core graph prefix (plan@(GNominal key _)) =
+graphNodeBody nonce modules env _core graph prefix (plan@(GNominal key _)) =
   match planDef env key
     Err _ => "panic \"native property runner: missing planned constructor\""
     Ok (PlanDef _ owner _ visibility ctors) =>
@@ -1396,7 +1393,7 @@ renderListChoiceN nonce open close child bound count =
   "match \{generatedPrefix nonce}choose \{count}\n\{renderListArms open close child bound 0}"
 
 renderListArms : String -> String -> String -> Int -> Int -> String
-renderListArms open close child bound n
+renderListArms _open _close _child bound n
   | n > bound = ""
 renderListArms open close child bound n =
   "  \{if n == bound then "_" else intToString n} => \{open}\{joinWith ", " (repeatString child n)}\{close}\n\{renderListArms open close child bound (n + 1)}"
@@ -1499,13 +1496,13 @@ candidateNodeBody nonce _ _ _ _ _ GString name =
   "if \{name} == \"\" then [] else [\{runtimeAlias nonce}.stringSlice 0 (\{runtimeAlias nonce}.stringLength \{name} / 2) \{name}]"
 candidateNodeBody _ _ _ _ _ _ GUnit _ = "[]"
 candidateNodeBody _ _ _ core _ _ (GCustom _) name = "\{core}.shrink \{name}"
-candidateNodeBody nonce modules env _ graph prefix (GList p) name =
+candidateNodeBody nonce _modules _env _ graph prefix (GList p) name =
   graphListCandidates nonce graph prefix p name (shrinkActions (GList p))
-candidateNodeBody nonce modules env _ graph prefix (GArray p) name =
+candidateNodeBody nonce _modules _env _ graph prefix (GArray p) name =
   graphArrayCandidates nonce graph prefix p name (shrinkActions (GArray p))
-candidateNodeBody nonce modules env _ graph prefix (GOption p) name =
+candidateNodeBody nonce _modules _env _ graph prefix (GOption p) name =
   graphOptionCandidates nonce graph prefix p name (shrinkActions (GOption p))
-candidateNodeBody nonce modules env _ graph prefix (result@(GResult err ok)) name =
+candidateNodeBody nonce _modules _env _ graph prefix (result@(GResult err ok)) name =
   graphResultCandidates nonce graph prefix err ok name (shrinkActions result)
 candidateNodeBody nonce _ _ _ graph prefix (GTuple ps) name =
   graphTupleCandidates nonce graph prefix ps name (shrinkActions (GTuple ps))
@@ -1700,10 +1697,10 @@ graphTupleCandidateLists : String ->
   List String ->
   Int ->
   String
-graphTupleCandidateLists nonce _ _ [] _ _ _ = "[]"
+graphTupleCandidateLists _nonce _ _ [] _ _ _ = "[]"
 graphTupleCandidateLists nonce graph prefix (plan :: plans) all (value :: values) index =
   "\{coreAlias nonce}.map (candidate => (\{joinWith ", " (replaceName index "candidate" all)})) (\{graphShrinkRef graph prefix plan value}) ++ \{graphTupleCandidateLists nonce graph prefix plans all values (index + 1)}"
-graphTupleCandidateLists nonce _ _ _ _ _ _ = "[]"
+graphTupleCandidateLists _nonce _ _ _ _ _ _ = "[]"
 
 graphNominalCandidates : String ->
   List PlanModule ->
@@ -1853,10 +1850,10 @@ graphNominalFieldCandidates : String ->
   Bool ->
   Int ->
   String
-graphNominalFieldCandidates nonce _ _ _ _ [] _ _ _ _ = "[]"
+graphNominalFieldCandidates _nonce _ _ _ _ [] _ _ _ _ = "[]"
 graphNominalFieldCandidates nonce graph prefix ref all ((_, plan) :: rest) allValues (value :: values) named index =
   "\{coreAlias nonce}.map (candidate => \{rebuildCtor ref all (replaceName index "candidate" allValues) named}) (\{graphShrinkRef graph prefix plan value}) ++ \{graphNominalFieldCandidates nonce graph prefix ref all rest allValues values named (index + 1)}"
-graphNominalFieldCandidates nonce _ _ _ _ _ _ _ _ _ = "[]"
+graphNominalFieldCandidates _nonce _ _ _ _ _ _ _ _ _ = "[]"
 
 graphJoinDisplays : NativeGraph ->
   String ->
@@ -1956,7 +1953,7 @@ plannedRunLines : String ->
   List GenPlan ->
   Int ->
   List String
-plannedRunLines nonce modules graph i ps plans _ =
+plannedRunLines nonce _modules graph i ps plans _ =
   [
       "\{runName nonce i} \{generatedPrefix nonce}cases =",
       "  if \{generatedPrefix nonce}cases <= 0 then (True, \"\") else",
@@ -2007,7 +2004,7 @@ plannedFailureLines nonce i ps plans = [
 ]
 
 plannedShrinkStart : String -> Int -> List PropParam -> List GenPlan -> String
-plannedShrinkStart nonce i ps plans =
+plannedShrinkStart nonce i ps _plans =
   "\{shrinkName nonce i} 100 \{joinWith " " (paramSlots nonce i ps)}"
 
 shrinkName : String -> Int -> String
@@ -2057,8 +2054,8 @@ shrinkTryLines : String ->
   List GenPlan ->
   Int ->
   List String
-shrinkTryLines nonce _ _ _ [] _ _ = []
-shrinkTryLines nonce _ _ _ ps _ j
+shrinkTryLines _nonce _ _ _ [] _ _ = []
+shrinkTryLines _nonce _ _ _ ps _ j
   | j >= listLen ps = []
 shrinkTryLines nonce modules graph i ps plans j =
   shrinkTryLine nonce modules graph i ps plans j
@@ -2073,8 +2070,6 @@ shrinkTryLine : String ->
   Int ->
   List String
 shrinkTryLine nonce modules graph i ps plans j =
-  let current = slotName nonce i j
-  let plan = nthPlan j plans
   let params = paramSlots nonce i ps
   let after =
     if j + 1 >= listLen ps then
@@ -2177,7 +2172,7 @@ rebuildCtor ref fields values named =
 
 plannedMainLines : String -> List NativePlanOutcome -> Int -> List String
 plannedMainLines _ [] _ = []
-plannedMainLines nonce ((NativeRunnable (DProp _ _ params _) r plans) :: rest) i =
+plannedMainLines nonce ((NativeRunnable (DProp _ _ _params _) r _plans) :: rest) i =
   [
       "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) (startTag i)}\"",
       "  let _ = \{generatedPrefix nonce}state := ((\{intToString (propRequestSeed r)} % \{intToString structuralRngModulus}) + \{intToString structuralRngModulus}) % \{intToString structuralRngModulus}",

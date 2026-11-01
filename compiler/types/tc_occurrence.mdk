@@ -54,12 +54,10 @@ import types.tc_types.{
   RecDictApp,
   ScopedMember,
   ShadowDicts,
-  siteFor,
   TcEnv,
   ValueScheme,
 }
 import types.tc_mono.{
-  allMethodParamsMentioned,
   argMentions,
   funArity,
   isBareTyvarMono,
@@ -71,25 +69,18 @@ import types.tc_mono.{
   propParamNamesTc,
   rootIdOf,
   sameRootId,
-  schemeBodyOf,
-  schemeIds,
   stripArrows,
   stripTyConstraints,
   substMono,
   tconBuiltin,
   tconUnresolved,
-  tupleMono,
   tyVarNames,
 }
 import types.tc_state.{
   carryModuleCtx,
   currentScopeStore,
-  emptyMethodEnv,
   envAt,
   freshGraphRun,
-  freshSubRecordsOf,
-  initialModuleCtx,
-  probeGraphCtx,
   wAll,
   wPush,
 }
@@ -98,26 +89,12 @@ import types.tc_env.{
   buildFlatImplEnv,
   buildImplUniverse,
   builtinIfaceRef,
-  declEnvModule,
   dispatchTyparams,
-  envFor,
-  extendMethodRow,
-  extendVar,
   hasImportDefiner,
   lookupLocalFlag,
   lookupMethodRow,
   lookupVar,
   methodArgs,
-  methodEnvGo,
-  methodRowSameNameView,
-  methodRowTestConstantDecl,
-  methodRowTestConstraint,
-  methodRowTestFoldMapDecl,
-  methodRowTestIface,
-  methodRowTestNum,
-  methodRowTestSameA,
-  methodRowTestSameB,
-  methodRowTestUserFromInt,
   methodSlotKey,
   originMethodName,
   standaloneValueFor,
@@ -148,7 +125,6 @@ import types.tc_unify.{
   recordObl,
   recordOblAt,
   recordSchemeCallObligations,
-  unify,
   unifyIn,
   zipSlotVecs,
 }
@@ -159,7 +135,6 @@ import types.tc_decls.{
   constraintVarNames,
   ifaceMethodSchemeRows,
   importerDefiners,
-  methodRowNumObservation,
 }
 import types.tc_solve_givens.{predicateSlotIds, predicateSlotIdsAt}
 import types.tc_solve_entail.{noteNumericPredicateTrace}
@@ -170,28 +145,15 @@ import types.tc_solve.{
   isLocalAbsName,
   localSourceName,
   methodPredicateTemplateHasAbsent,
-  methodReturnArgs,
-  methodReturnProbeGoalIfaces,
   methodReturnProbeIface,
-  methodReturnProbeImpl,
-  methodReturnProbeOblIfaces,
   methodReturnProbeOccurrence,
   methodReturnProbeScope,
   methodReturnProbeSpelling,
-  methodReturnResolutionValid,
-  methodReturnSelectedIdentity,
-  methodRowRegistrySlotIds,
-  methodSlotArgumentIds,
-  methodSlotBoundIds,
-  methodSlotIdsAtPositions,
-  methodSlotPositions,
   noteMethodReturnTrace,
-  numAnchorObservationView,
   pushDictApp,
   pushGoal,
   returnPosMethodNames,
   routeLocalSym,
-  solveExactReturnOnce,
 }
 import types.tc_solve_check.{
   checkCallObligationsU, dedupSlotVecs, dispatchMonosOf
@@ -206,7 +168,6 @@ import types.tc_shadow.{
   declaredEffectsAt,
   isDefinerShadow,
   isShadowStandalone,
-  methodCellLookup,
   rejectAdmittedValueOccurrence,
   shadowDeclaredFor,
   shadowStandaloneDictSlots,
@@ -248,9 +209,7 @@ import frontend.ast.{
   tyConBuiltin,
 }
 import types.solver_contract.{SolverOutcome(..), ClassPredicate(..), Wanted(..)}
-import types.repr.{
-  IfaceRef(..), Mono(..), Scheme(..), lookupAssocI, normalize, ppMono
-}
+import types.repr.{IfaceRef(..), Mono(..), Scheme(..), lookupAssocI}
 import types.evidence_complete.{Inner(..), innerNone}
 import types.evidence.{
   SolverEvidence(..),
@@ -269,7 +228,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   listLen,
   lookupAssoc,
   reverseL,
@@ -1114,7 +1072,7 @@ instantiateMethodPredicateSlots : GraphCtx ->
   List MethodPredicateSlot ->
   List (Int, Mono) ->
   List PredicateSlot
-instantiateMethodPredicateSlots gctx [] _ = []
+instantiateMethodPredicateSlots _gctx [] _ = []
 instantiateMethodPredicateSlots gctx (slot :: rest) subst =
   match instantiateMethodPredicateSlot gctx slot subst
     Some pred => pred :: instantiateMethodPredicateSlots gctx rest subst
@@ -1148,7 +1106,7 @@ instantiatedMethodPredicateArgs : GraphCtx ->
   PredicateSlotArgs ->
   List (Int, Mono) ->
   PredicateSlotArgs
-instantiatedMethodPredicateArgs gctx PSArgsUnknown _ = PSArgsUnknown
+instantiatedMethodPredicateArgs _gctx PSArgsUnknown _ = PSArgsUnknown
 instantiatedMethodPredicateArgs gctx (PSArgsKnown args) subst =
   PSArgsKnown (map (substMono gctx subst [] []) args)
 
@@ -1550,8 +1508,8 @@ recordCallObligations : ModuleCtx ->
   List Mono ->
   List (List Mono) ->
   Unit
-recordCallObligations mctx [] _ _ = ()
-recordCallObligations mctx _ [] _ = ()
+recordCallObligations _mctx [] _ _ = ()
+recordCallObligations _mctx _ [] _ = ()
 recordCallObligations mctx (s :: ss) (mono :: ms) []
   | s.csIface.irName == "" = recordCallObligations mctx ss ms []
   | otherwise =
@@ -1758,7 +1716,7 @@ recordNegatedLitRange mctx t (EWideLit _ _ _ lx) =
     (_, l, hi, lo, _, loc) :: rest if l == lx =>
       mctx.mcCells.wideLitRanges := (t, lx, hi, lo, True, loc) :: rest
     _ => ()
-recordNegatedLitRange mctx _ _ = ()
+recordNegatedLitRange _mctx _ _ = ()
 
 -- #146: unified operator-obligation recorder.  The arithmetic (`+ - * / %`, unary
 -- `-`), comparison (`== /= < > <= >=`) and append (`++`) operators each carry an
@@ -1983,7 +1941,7 @@ anyRootMatch id ((v, _) :: rest) = sameRootId id v || anyRootMatch id rest
 -- Taint every worklist literal sharing the root [id] (record its loc as
 -- operator-tainted) and DROP it from the worklist; keep the others.
 taintAndDrop : ModuleCtx -> Int -> List (Mono, Loc) -> List (Mono, Loc)
-taintAndDrop mctx _ [] = []
+taintAndDrop _mctx _ [] = []
 taintAndDrop mctx id ((v, l) :: rest)
   | sameRootId id v =
     mctx.mcCells.numlitOpLocs := l :: mctx.mcCells.numlitOpLocs.value
@@ -2252,7 +2210,7 @@ recordInstantiatedMethodLevelSlots : ModuleCtx ->
   Option Loc ->
   ScopeId ->
   Unit
-recordInstantiatedMethodLevelSlots mctx [] _ _ = ()
+recordInstantiatedMethodLevelSlots _mctx [] _ _ = ()
 recordInstantiatedMethodLevelSlots mctx (slot :: rest) loc scope =
   match slot.psArgs
     PSArgsUnknown => ()
@@ -2320,7 +2278,7 @@ recordMethodLevelSlotObls : ModuleCtx ->
   List Constraint ->
   List (String, Mono) ->
   Unit
-recordMethodLevelSlotObls mctx [] _ = ()
+recordMethodLevelSlotObls _mctx [] _ = ()
 recordMethodLevelSlotObls mctx (c :: rest) subst =
   if allList (v => isSome (lookupAssoc v subst)) (constraintVarNames c) then
     recordObl
@@ -2349,7 +2307,7 @@ recordSelectedStandaloneRoutes : ModuleCtx ->
   List (Ref Route, Ref Inner) ->
   Mono ->
   Unit
-recordSelectedStandaloneRoutes mctx _ _ [] _ = ()
+recordSelectedStandaloneRoutes _mctx _ _ [] _ = ()
 recordSelectedStandaloneRoutes mctx mname dicts ((r, inner) :: rest) tx =
   pushSiteGoal
     mctx.mcGraph
@@ -2496,7 +2454,7 @@ prePassDeclScoped mctx rw (DAttrib attrs d) =
 -- in, exactly like the DFunDef arm.
 prePassDeclScoped mctx rw (DLetGroup pub binds) =
   DLetGroup pub (map (prePassLetBindScoped mctx rw) binds)
-prePassDeclScoped mctx _ d = d
+prePassDeclScoped _mctx _ d = d
 
 prePassLetBindScoped : ModuleCtx -> ArgRw -> LetBind -> LetBind
 prePassLetBindScoped mctx rw (LetBind n clauses site bid) =
@@ -2507,7 +2465,7 @@ prePassFunClauseScoped mctx rw (FunClause ps e) =
   FunClause ps (rewriteArgScoped mctx rw (boundOfList (patVarsListTc ps)) e)
 
 prePassIfaceMethodScoped : ModuleCtx -> ArgRw -> IfaceMethod -> IfaceMethod
-prePassIfaceMethodScoped mctx _ (IfaceMethod n ty None mloc) =
+prePassIfaceMethodScoped _mctx _ (IfaceMethod n ty None mloc) =
   IfaceMethod n ty None mloc
 prePassIfaceMethodScoped mctx rw (IfaceMethod n ty (Some (MethodDefault ps e)) mloc) =
   IfaceMethod
@@ -2587,13 +2545,13 @@ letPatRename gctx (PVar x l bid) e1 b
   | localAbsCandidate e1 && not (isLocalAbsName x) =
     let fresh = freshLocalAbsName gctx x
     (PVar fresh l bid, omInsert x fresh b)
-letPatRename gctx p _ b = (p, boundInsert (patVarsTc p) b)
+letPatRename _gctx p _ b = (p, boundInsert (patVarsTc p) b)
 
 bindsRename : GraphCtx ->
   List LetBind ->
   OrdMap String ->
   (List LetBind, OrdMap String)
-bindsRename gctx [] b = ([], b)
+bindsRename _gctx [] b = ([], b)
 bindsRename gctx ((bind@(LetBind n clauses site bid)) :: rest) b =
   let (n2, b1) =
     if localAbsCandidateBind bind && not (isLocalAbsName n) then
@@ -2764,7 +2722,7 @@ rewriteArgScoped mctx _ _ (ENumLit n ev lx) =
 rewriteArgScoped mctx _ _ (EWideLit hi lo ev lx) =
   EWideLit hi lo (mintedOr (mintOpSite mctx) ev) lx
 -- leaves (ELit / EMethodRef / EDictApp / EVarAt / EMethodAt / EDictAt / SecBare)
-rewriteArgScoped mctx _ _ e = e
+rewriteArgScoped _mctx _ _ e = e
 
 rewriteArgField : ModuleCtx ->
   ArgRw ->
@@ -2787,7 +2745,7 @@ rewriteArgInterp : ModuleCtx ->
   OrdMap String ->
   InterpPart ->
   InterpPart
-rewriteArgInterp mctx _ _ (InterpStr s) = InterpStr s
+rewriteArgInterp _mctx _ _ (InterpStr s) = InterpStr s
 rewriteArgInterp mctx rw bound (InterpExpr e) =
   InterpExpr (rewriteArgScoped mctx rw bound e)
 
@@ -2823,7 +2781,7 @@ rewriteArgGuards : ModuleCtx ->
   OrdMap String ->
   List Guard ->
   (List Guard, OrdMap String)
-rewriteArgGuards mctx _ bound [] = ([], bound)
+rewriteArgGuards _mctx _ bound [] = ([], bound)
 rewriteArgGuards mctx rw bound ((GBool e) :: rest) =
   let e2 = rewriteArgScoped mctx rw bound e
   let (rest2, bnd) = rewriteArgGuards mctx rw bound rest
@@ -2841,7 +2799,7 @@ rewriteArgStmts : ModuleCtx ->
   OrdMap String ->
   List DoStmt ->
   List DoStmt
-rewriteArgStmts mctx _ _ [] = []
+rewriteArgStmts _mctx _ _ [] = []
 rewriteArgStmts mctx rw bound ((DoExpr e) :: rest) =
   DoExpr (rewriteArgScoped mctx rw bound e)
     :: rewriteArgStmts mctx rw bound rest
@@ -2989,8 +2947,8 @@ markTailDecls mctx mc dn granted decls =
   map (markTailDecl mctx (argRwOf mc dn noDictHook granted)) decls
 
 markTailDecl : ModuleCtx -> ArgRw -> Decl -> Decl
-markTailDecl mctx _ (d@(DFunDef _ _ _ _ _ _)) = d
-markTailDecl mctx _ (d@(DLetGroup _ _)) = d
+markTailDecl _mctx _ (d@(DFunDef _ _ _ _ _ _)) = d
+markTailDecl _mctx _ (d@(DLetGroup _ _)) = d
 markTailDecl mctx rw (DAttrib attrs d) = DAttrib attrs (markTailDecl mctx rw d)
 markTailDecl mctx rw d = prePassDeclScoped mctx rw d
 
@@ -3149,7 +3107,7 @@ recMarkMembers : ModuleCtx ->
   List ScopedMember ->
   OrdMap (List (List Pat, Expr)) ->
   OrdMap (List (List Pat, Expr))
-recMarkMembers mctx _ _ [] grouped = grouped
+recMarkMembers _mctx _ _ [] grouped = grouped
 recMarkMembers mctx dn placeholders (member :: rest) grouped =
   let m = member.smName
   let onDict =

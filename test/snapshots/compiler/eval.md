@@ -1,5 +1,5 @@
 # META
-source_lines=5478
+source_lines=5477
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -102,7 +102,6 @@ import support.util.{
   dedup,
   startsWith,
   endsWith,
-  zipL,
 }
 import support.ordmap.{
   OrdMap, omEmpty, omFromNames, omFromPairs, omHasKey, omInsert, omLookup
@@ -5488,7 +5487,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("types" "expr_loc") ((mem "noTrapLoc" false) (mem "isNoLoc" false) (mem "exprStartLoc" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "emptyFacts" false) (mem "factsNow" false) (mem "withFacts" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ExportView" true) (mem "directUnder" false) (mem "carriedPaths" false) (mem "nsValues" false) (mem "nsIfaceMethods" false) (mem "nsTypeCtors" false) (mem "declExportsCtors" false) (mem "subjectOf" false) (mem "isSubjectIn" false))))
@@ -7290,7 +7289,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("types" "expr_loc") ((mem "noTrapLoc" false) (mem "isNoLoc" false) (mem "exprStartLoc" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "emptyFacts" false) (mem "factsNow" false) (mem "withFacts" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ExportView" true) (mem "directUnder" false) (mem "carriedPaths" false) (mem "nsValues" false) (mem "nsIfaceMethods" false) (mem "nsTypeCtors" false) (mem "declExportsCtors" false) (mem "subjectOf" false) (mem "isSubjectIn" false))))

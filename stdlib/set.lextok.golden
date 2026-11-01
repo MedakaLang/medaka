@@ -458,8 +458,8 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "rotateL"
-IDENT "x"
-IDENT "l"
+IDENT "_x"
+IDENT "_l"
 UPPER "Tip"
 EQUAL
 IDENT "panic"
@@ -516,9 +516,9 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "rotateR"
-IDENT "x"
+IDENT "_x"
 UPPER "Tip"
-IDENT "r"
+IDENT "_r"
 EQUAL
 IDENT "panic"
 STRING "Set.rotateR: empty left subtree"
@@ -558,8 +558,8 @@ RPAREN
 IDENT "t3"
 NEWLINE
 IDENT "singleL"
-IDENT "x1"
-IDENT "t1"
+IDENT "_x1"
+IDENT "_t1"
 UPPER "Tip"
 EQUAL
 IDENT "panic"
@@ -600,9 +600,9 @@ IDENT "t3"
 RPAREN
 NEWLINE
 IDENT "singleR"
-IDENT "x1"
+IDENT "_x1"
 UPPER "Tip"
-IDENT "t3"
+IDENT "_t3"
 EQUAL
 IDENT "panic"
 STRING "Set.singleR: empty left subtree"
@@ -656,8 +656,8 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "doubleL"
-IDENT "x1"
-IDENT "t1"
+IDENT "_x1"
+IDENT "_t1"
 UNDERSCORE
 EQUAL
 IDENT "panic"
@@ -712,9 +712,9 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "doubleR"
-IDENT "x1"
+IDENT "_x1"
 UNDERSCORE
-IDENT "t4"
+IDENT "_t4"
 EQUAL
 IDENT "panic"
 STRING "Set.doubleR: malformed left subtree"
@@ -1123,7 +1123,7 @@ ARROW
 UPPER "Bool"
 NEWLINE
 IDENT "has"
-IDENT "x"
+IDENT "_x"
 UPPER "Tip"
 EQUAL
 UPPER "False"
@@ -1246,7 +1246,7 @@ UPPER "Set"
 IDENT "a"
 NEWLINE
 IDENT "delete"
-IDENT "x"
+IDENT "_x"
 UPPER "Tip"
 EQUAL
 UPPER "Tip"
@@ -1720,7 +1720,7 @@ GT
 IDENT "b"
 NEWLINE
 IDENT "foldrSet"
-IDENT "f"
+IDENT "_f"
 IDENT "z"
 UPPER "Tip"
 EQUAL
@@ -1775,7 +1775,7 @@ GT
 IDENT "b"
 NEWLINE
 IDENT "foldlSet"
-IDENT "f"
+IDENT "_f"
 IDENT "z"
 UPPER "Tip"
 EQUAL
@@ -2085,7 +2085,7 @@ IDENT "a"
 RPAREN
 NEWLINE
 IDENT "splitAt"
-IDENT "x"
+IDENT "_x"
 UPPER "Tip"
 EQUAL
 LPAREN
@@ -2190,7 +2190,7 @@ IDENT "a"
 RPAREN
 NEWLINE
 IDENT "splitMember"
-IDENT "x"
+IDENT "_x"
 UPPER "Tip"
 EQUAL
 LPAREN
@@ -2369,12 +2369,12 @@ IDENT "a"
 NEWLINE
 IDENT "intersection"
 UPPER "Tip"
-IDENT "b"
+IDENT "_b"
 EQUAL
 UPPER "Tip"
 NEWLINE
 IDENT "intersection"
-IDENT "a"
+IDENT "_a"
 UPPER "Tip"
 EQUAL
 UPPER "Tip"
@@ -2449,7 +2449,7 @@ IDENT "a"
 NEWLINE
 IDENT "difference"
 UPPER "Tip"
-IDENT "b"
+IDENT "_b"
 EQUAL
 UPPER "Tip"
 NEWLINE
@@ -2539,12 +2539,12 @@ UPPER "Bool"
 NEWLINE
 IDENT "subsetGo"
 UPPER "Tip"
-IDENT "b"
+IDENT "_b"
 EQUAL
 UPPER "True"
 NEWLINE
 IDENT "subsetGo"
-IDENT "a"
+IDENT "_a"
 UPPER "Tip"
 EQUAL
 UPPER "False"
@@ -2940,7 +2940,7 @@ ARROW
 UPPER "Bool"
 NEWLINE
 IDENT "allElems"
-IDENT "p"
+IDENT "_p"
 UPPER "Tip"
 EQUAL
 UPPER "True"
@@ -3034,7 +3034,7 @@ UPPER "True"
 NEWLINE
 IDENT "ascending"
 LBRACKET
-IDENT "x"
+IDENT "_x"
 RBRACKET
 EQUAL
 UPPER "True"

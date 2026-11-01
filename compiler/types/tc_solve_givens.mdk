@@ -52,7 +52,7 @@ import types.evidence.{EvidenceBinderId(..), ScopeId(..), SolverEvidence(..)}
 import types.repr.{IfaceRef(..), Mono(..), lookupAssocI, normalize}
 import support.ordmap.{omInsert, omLookup, OrdMap}
 import types.superclass.{SuperNode(..), lookupPos, mapAll, superClosure}
-import support.util.{allList, isSome, listLen, lookupAssoc, orElseOpt}
+import support.util.{allList, listLen, lookupAssoc, orElseOpt}
 import list.{drop, elemIndex}
 import string.{join}
 import types.registry.{regKeyOfTab, regKeyRender}
@@ -315,7 +315,7 @@ visibleDictsFor : GraphCtx ->
   ScopeId ->
   List (Int, EvidenceBinderId) ->
   List EvidenceBinderId
-visibleDictsFor gctx _ _ [] = []
+visibleDictsFor _gctx _ _ [] = []
 visibleDictsFor gctx id useScope ((eid, binder) :: rest)
   | eid == id
     && Scopes.givenVisibleFrom
@@ -330,7 +330,7 @@ firstDictForEncl : GraphCtx ->
   ScopeId ->
   List (Int, EvidenceBinderId) ->
   Option EvidenceBinderId
-firstDictForEncl gctx _ _ [] = None
+firstDictForEncl _gctx _ _ [] = None
 firstDictForEncl gctx id useScope ((eid, binder) :: rest)
   | eid == id
     && Scopes.givenVisibleFrom
@@ -358,7 +358,7 @@ activeDictVarOfEncl : ModuleCtx ->
   String ->
   ScopeId ->
   Option AssumAnswer
-activeDictVarOfEncl mctx None m encl useScope =
+activeDictVarOfEncl mctx None m _encl useScope =
   map LegacyScalar (activeDictVarOf mctx.mcGraph m useScope)
 activeDictVarOfEncl mctx (Some request) m encl useScope =
   -- A complete predicate request is terminal: a miss must not be overwritten by
@@ -399,7 +399,7 @@ implReqDictVarOf : GraphCtx ->
   Mono ->
   ScopeId ->
   Option AssumAnswer
-implReqDictVarOf gctx None _ _ = None
+implReqDictVarOf _gctx None _ _ = None
 implReqDictVarOf gctx (Some request) m useScope = match peelQual m
   TVar cell =>
     firstPredForEnclAt
@@ -521,7 +521,7 @@ methodLevelPredicateSlots mctx typarams (TyConstrained cs t) tvMap =
     ++ methodLevelPredicateSlots mctx typarams t tvMap
 methodLevelPredicateSlots mctx typarams (TyEffect _ _ t) tvMap =
   methodLevelPredicateSlots mctx typarams t tvMap
-methodLevelPredicateSlots mctx _ _ _ = []
+methodLevelPredicateSlots _mctx _ _ _ = []
 
 methodLevelPredicateSlot : ModuleCtx ->
   List String ->
@@ -564,7 +564,7 @@ registerMethodDictSlots : GraphCtx ->
   List Int ->
   List (Int, Mono) ->
   Unit
-registerMethodDictSlots gctx _ _ [] _ = ()
+registerMethodDictSlots _gctx _ _ [] _ = ()
 registerMethodDictSlots gctx scope slot (id :: rest) subst =
   registerOneMethodDict gctx scope slot id subst
   registerMethodDictSlots gctx scope (slot + 1) rest subst
@@ -636,7 +636,7 @@ registerImplMethodDictsGo : GraphCtx ->
   List String ->
   List (String, Mono) ->
   Unit
-registerImplMethodDictsGo gctx _ _ [] _ = ()
+registerImplMethodDictsGo _gctx _ _ [] _ = ()
 registerImplMethodDictsGo gctx scope slot (vname :: rest) tvMap =
   registerImplMethodDictOne gctx scope slot vname tvMap
   registerImplMethodDictsGo gctx scope (slot + 1) rest tvMap
@@ -718,7 +718,7 @@ registerPredGiven : GraphCtx ->
   List Mono ->
   EvidenceBinderId ->
   Unit
-registerPredGiven gctx _ [] _ = ()
+registerPredGiven _gctx _ [] _ = ()
 registerPredGiven gctx iface args dname
   | allList isBareTyvarMono args = ()
   | otherwise =
@@ -875,7 +875,7 @@ firstPredForEnclResidual : GraphCtx ->
   ScopeId ->
   List GivenEntry ->
   Option AssumAnswer
-firstPredForEnclResidual gctx _ _ _ [] = None
+firstPredForEnclResidual _gctx _ _ _ [] = None
 firstPredForEnclResidual gctx iface args useScope (g :: rest)
   | givenInScope GSPredicateOnly g
     && g.geSlot.psIface.irName == iface
@@ -889,7 +889,7 @@ firstPredForEnclResidual gctx iface args useScope (g :: rest)
 
 export
 registerEachActive : GraphCtx -> List Int -> EvidenceBinderId -> Unit
-registerEachActive gctx [] _ = ()
+registerEachActive _gctx [] _ = ()
 registerEachActive gctx (id :: rest) dname =
   gctx.graphRun.activeDictVars :=
     (id, dname) :: gctx.graphRun.activeDictVars.value
@@ -920,7 +920,7 @@ registerSlotPredGivens : GraphCtx ->
   Int ->
   List PredicateSlot ->
   Unit
-registerSlotPredGivens gctx _ _ [] = ()
+registerSlotPredGivens _gctx _ _ [] = ()
 registerSlotPredGivens gctx scope slot (s :: srest) =
   registerFunPredGiven gctx s (Scopes.binderAt scope slot)
   registerSlotPredGivens gctx scope (slot + 1) srest
@@ -940,7 +940,7 @@ registerFunPredGivenSlots : GraphCtx ->
   List (PredicateSlot, List Int) ->
   EvidenceBinderId ->
   Unit
-registerFunPredGivenSlots gctx [] _ = ()
+registerFunPredGivenSlots _gctx [] _ = ()
 registerFunPredGivenSlots gctx ((slot, path) :: rest) binder =
   pushGiven gctx GMPredicate (ProjectedGiven binder path) slot binder
   registerFunPredGivenSlots gctx rest binder
@@ -1000,7 +1000,7 @@ predicateSlotOfNode n = PredicateSlot {
 -- `registerPredGiven` / `registerFunPredGiven` write.
 export
 goalMatchesGiven : GraphCtx -> ScopeId -> IfaceRef -> List Mono -> Bool
-goalMatchesGiven gctx _ _ [] = False
+goalMatchesGiven _gctx _ _ [] = False
 goalMatchesGiven gctx scope iface args =
   anyGivenMatches
     gctx
@@ -1034,7 +1034,7 @@ registerActiveDictVars : GraphCtx ->
   Int ->
   List PredicateSlot ->
   Unit
-registerActiveDictVars gctx _ _ [] = ()
+registerActiveDictVars _gctx _ _ [] = ()
 registerActiveDictVars gctx scope slot (s :: rest) =
   registerEachActive gctx s.psBoundIds (Scopes.binderAt scope slot)
   registerActiveDictVars gctx scope (slot + 1) rest

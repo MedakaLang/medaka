@@ -540,9 +540,9 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "rotateL"
-IDENT "k"
-IDENT "v"
-IDENT "l"
+IDENT "_k"
+IDENT "_v"
+IDENT "_l"
 UPPER "Tip"
 EQUAL
 IDENT "panic"
@@ -608,10 +608,10 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "rotateR"
-IDENT "k"
-IDENT "v"
+IDENT "_k"
+IDENT "_v"
 UPPER "Tip"
-IDENT "r"
+IDENT "_r"
 EQUAL
 IDENT "panic"
 STRING "Map.rotateR: empty left subtree"
@@ -660,9 +660,9 @@ RPAREN
 IDENT "t3"
 NEWLINE
 IDENT "singleL"
-IDENT "k1"
-IDENT "v1"
-IDENT "t1"
+IDENT "_k1"
+IDENT "_v1"
+IDENT "_t1"
 UPPER "Tip"
 EQUAL
 IDENT "panic"
@@ -712,10 +712,10 @@ IDENT "t3"
 RPAREN
 NEWLINE
 IDENT "singleR"
-IDENT "k1"
-IDENT "v1"
+IDENT "_k1"
+IDENT "_v1"
 UPPER "Tip"
-IDENT "t3"
+IDENT "_t3"
 EQUAL
 IDENT "panic"
 STRING "Map.singleR: empty left subtree"
@@ -780,9 +780,9 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "doubleL"
-IDENT "k1"
-IDENT "v1"
-IDENT "t1"
+IDENT "_k1"
+IDENT "_v1"
+IDENT "_t1"
 UNDERSCORE
 EQUAL
 IDENT "panic"
@@ -848,10 +848,10 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "doubleR"
-IDENT "k1"
-IDENT "v1"
+IDENT "_k1"
+IDENT "_v1"
 UNDERSCORE
-IDENT "t4"
+IDENT "_t4"
 EQUAL
 IDENT "panic"
 STRING "Map.doubleR: malformed left subtree"
@@ -1373,7 +1373,7 @@ UPPER "Option"
 IDENT "v"
 NEWLINE
 IDENT "get"
-IDENT "k"
+IDENT "_k"
 UPPER "Tip"
 EQUAL
 UPPER "None"
@@ -1473,7 +1473,7 @@ ARROW
 UPPER "Bool"
 NEWLINE
 IDENT "has"
-IDENT "k"
+IDENT "_k"
 UPPER "Tip"
 EQUAL
 UPPER "False"
@@ -1531,7 +1531,7 @@ IDENT "v"
 NEWLINE
 IDENT "findWithDefault"
 IDENT "d"
-IDENT "k"
+IDENT "_k"
 UPPER "Tip"
 EQUAL
 IDENT "d"
@@ -1683,7 +1683,7 @@ IDENT "k"
 IDENT "v"
 NEWLINE
 IDENT "insertWith"
-IDENT "f"
+IDENT "_f"
 IDENT "k"
 IDENT "v"
 UPPER "Tip"
@@ -1777,8 +1777,8 @@ IDENT "k"
 IDENT "v"
 NEWLINE
 IDENT "adjust"
-IDENT "f"
-IDENT "k"
+IDENT "_f"
+IDENT "_k"
 UPPER "Tip"
 EQUAL
 UPPER "Tip"
@@ -1860,7 +1860,7 @@ IDENT "k"
 IDENT "v"
 NEWLINE
 IDENT "delete"
-IDENT "k"
+IDENT "_k"
 UPPER "Tip"
 EQUAL
 UPPER "Tip"
@@ -2384,7 +2384,7 @@ GT
 IDENT "b"
 NEWLINE
 IDENT "foldrWithKey"
-IDENT "f"
+IDENT "_f"
 IDENT "z"
 UPPER "Tip"
 EQUAL
@@ -2446,7 +2446,7 @@ GT
 IDENT "b"
 NEWLINE
 IDENT "foldlWithKey"
-IDENT "f"
+IDENT "_f"
 IDENT "z"
 UPPER "Tip"
 EQUAL
@@ -3017,7 +3017,7 @@ IDENT "k"
 IDENT "w"
 NEWLINE
 IDENT "mapWithKey"
-IDENT "f"
+IDENT "_f"
 UPPER "Tip"
 EQUAL
 UPPER "Tip"
@@ -3378,7 +3378,7 @@ IDENT "v"
 RPAREN
 NEWLINE
 IDENT "splitAt"
-IDENT "k"
+IDENT "_k"
 UPPER "Tip"
 EQUAL
 LPAREN
@@ -3490,7 +3490,7 @@ IDENT "v"
 RPAREN
 NEWLINE
 IDENT "splitLookup"
-IDENT "k"
+IDENT "_k"
 UPPER "Tip"
 EQUAL
 LPAREN
@@ -3620,7 +3620,7 @@ IDENT "k"
 IDENT "v"
 NEWLINE
 IDENT "filterWithKey"
-IDENT "p"
+IDENT "_p"
 UPPER "Tip"
 EQUAL
 UPPER "Tip"
@@ -3933,14 +3933,14 @@ IDENT "k"
 IDENT "v"
 NEWLINE
 IDENT "unionWith"
-IDENT "f"
+IDENT "_f"
 UPPER "Tip"
 IDENT "b"
 EQUAL
 IDENT "b"
 NEWLINE
 IDENT "unionWith"
-IDENT "f"
+IDENT "_f"
 IDENT "a"
 UPPER "Tip"
 EQUAL
@@ -4045,7 +4045,7 @@ IDENT "k"
 IDENT "v"
 NEWLINE
 IDENT "setWith"
-IDENT "f"
+IDENT "_f"
 IDENT "k"
 IDENT "v"
 UPPER "Tip"
@@ -4141,14 +4141,14 @@ IDENT "k"
 IDENT "v"
 NEWLINE
 IDENT "unionWithSplit"
-IDENT "f"
+IDENT "_f"
 UPPER "Tip"
 IDENT "b"
 EQUAL
 IDENT "b"
 NEWLINE
 IDENT "unionWithSplit"
-IDENT "f"
+IDENT "_f"
 IDENT "a"
 UPPER "Tip"
 EQUAL
@@ -4238,7 +4238,7 @@ IDENT "v"
 NEWLINE
 IDENT "difference"
 UPPER "Tip"
-IDENT "b"
+IDENT "_b"
 EQUAL
 UPPER "Tip"
 NEWLINE
@@ -4313,15 +4313,15 @@ IDENT "k"
 IDENT "x"
 NEWLINE
 IDENT "intersectionWith"
-IDENT "f"
+IDENT "_f"
 UPPER "Tip"
-IDENT "b"
+IDENT "_b"
 EQUAL
 UPPER "Tip"
 NEWLINE
 IDENT "intersectionWith"
-IDENT "f"
-IDENT "a"
+IDENT "_f"
+IDENT "_a"
 UPPER "Tip"
 EQUAL
 UPPER "Tip"
@@ -4437,7 +4437,7 @@ RPAREN
 WHERE
 INDENT
 IDENT "map"
-IDENT "f"
+IDENT "_f"
 UPPER "Tip"
 EQUAL
 UPPER "Tip"
@@ -4483,7 +4483,7 @@ RPAREN
 WHERE
 INDENT
 IDENT "filterMap"
-IDENT "f"
+IDENT "_f"
 UPPER "Tip"
 EQUAL
 UPPER "Tip"
@@ -4989,7 +4989,7 @@ LPAREN
 UPPER "Bin"
 IDENT "s"
 IDENT "k"
-IDENT "v"
+IDENT "_v"
 IDENT "l"
 IDENT "r"
 RPAREN
@@ -5062,7 +5062,7 @@ ARROW
 UPPER "Bool"
 NEWLINE
 IDENT "allKeys"
-IDENT "p"
+IDENT "_p"
 UPPER "Tip"
 EQUAL
 UPPER "True"
@@ -5159,7 +5159,7 @@ UPPER "True"
 NEWLINE
 IDENT "ascending"
 LBRACKET
-IDENT "x"
+IDENT "_x"
 RBRACKET
 EQUAL
 UPPER "True"
@@ -5853,7 +5853,7 @@ IDENT "k"
 IDENT "v"
 NEWLINE
 IDENT "insertWithOld"
-IDENT "f"
+IDENT "_f"
 IDENT "k"
 IDENT "v"
 UPPER "Tip"
@@ -5939,7 +5939,7 @@ IDENT "k"
 IDENT "v"
 NEWLINE
 IDENT "deleteOld"
-IDENT "k"
+IDENT "_k"
 UPPER "Tip"
 EQUAL
 UPPER "Tip"
@@ -6614,7 +6614,7 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "foldInserts"
-IDENT "step"
+IDENT "_step"
 LBRACKET
 RBRACKET
 IDENT "m"
@@ -6670,7 +6670,7 @@ IDENT "k"
 IDENT "v"
 NEWLINE
 IDENT "foldDeletes"
-IDENT "step"
+IDENT "_step"
 LBRACKET
 RBRACKET
 IDENT "m"

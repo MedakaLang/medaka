@@ -445,8 +445,8 @@ export
 contains : Bytes -> Bytes -> Bool
 contains needle haystack = isSome (indexOf needle haystack)
 
-{- | Whether `b` begins with `prefix`. The empty prefix begins every byte
-   string.
+{- | Whether the second byte string begins with the first. The empty prefix begins
+   every byte string.
 
    > startsWith (encodeUtf8 "he") (encodeUtf8 "hello")
    True
@@ -454,7 +454,7 @@ contains needle haystack = isSome (indexOf needle haystack)
    False -}
 export
 startsWith : Bytes -> Bytes -> Bool
-startsWith (prefix@(Bytes nb)) (b@(Bytes bb)) =
+startsWith (Bytes nb) (Bytes bb) =
   let nlen = byteBlockLength nb
   nlen <= byteBlockLength bb && matchesAtGo nb bb 0 0 nlen
 
@@ -463,7 +463,8 @@ startsWith (prefix@(Bytes nb)) (b@(Bytes bb)) =
 -- > startsWith (encodeUtf8 "hello!") (encodeUtf8 "hello")
 -- False
 
-{- | Whether `b` ends with `suffix`. The empty suffix ends every byte string.
+{- | Whether the second byte string ends with the first. The empty suffix ends
+   every byte string.
 
    > endsWith (encodeUtf8 "lo") (encodeUtf8 "hello")
    True
@@ -471,7 +472,7 @@ startsWith (prefix@(Bytes nb)) (b@(Bytes bb)) =
    False -}
 export
 endsWith : Bytes -> Bytes -> Bool
-endsWith (suffix@(Bytes nb)) (b@(Bytes bb)) =
+endsWith (Bytes nb) (Bytes bb) =
   let nlen = byteBlockLength nb
   let hlen = byteBlockLength bb
   nlen <= hlen && matchesAtGo nb bb 0 (hlen - nlen) nlen

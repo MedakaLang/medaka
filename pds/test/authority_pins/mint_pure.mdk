@@ -1,6 +1,6 @@
 -- Refused: a pure row cannot spend `Mint "access"`. Twin: `mint_labelled.mdk`.
 
-import lib.jwt.{Mint, SessionKey, mintAccessToken}
+import lib.jwt.{SessionKey, mintAccessToken}
 
 export
 mintIt : SessionKey -> String

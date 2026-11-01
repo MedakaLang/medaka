@@ -1,5 +1,5 @@
 # META
-source_lines=4723
+source_lines=4675
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..), codeText}
@@ -39,7 +39,6 @@ import tools.gate_cmd.{gateHelpText, runGateCmd}
 import tools.interface_cmd.{interfaceHelpText, runInterfaceCmd}
 import tools.new_cmd.{newProject}
 import driver.build_cmd.{
-  BuildReport,
   BuildTarget(..),
   ppBuildReport,
   runBuild,
@@ -67,10 +66,8 @@ import support.util.{
   splitNl,
   startsWith,
   endsWith,
-  anyList,
   filterList,
   contains,
-  sortUniqS,
   listLen,
   schemeLineName,
   stringTrim,
@@ -116,21 +113,16 @@ import args.{
   flag,
   flagValue,
   lastValue,
-  flagValues,
   unknownFlagMessage,
   usageExitCode,
   withStrictDash,
 }
 import frontend.ast.{
-  letBindName, Decl(..), ExternDecl(..), Expr(..), Loc(..), Pat, LetBind(..),
-  EvTable, EvId
+  letBindName, Decl(..), ExternDecl(..), Expr(..), Loc(..), LetBind(..)
 }
 import frontend.parser.{
   parseWithPositions,
-  parseWithPositionsLocated,
   parseResult,
-  parseLocatedResult,
-  Positions,
 }
 import frontend.lexer.{tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
@@ -147,7 +139,6 @@ import driver.loader.{
   dropPathTriple,
   modIdToPath,
   findProjectRoot,
-  findProjectRootOrSelf,
   entrySearchRoots,
   projectTrustedMods,
   stdlibOwnership,
@@ -170,13 +161,10 @@ import driver.diagnostics.{
   FrontInput(..),
   FrontPolicy(..),
   FrontOutput(..),
-  ppDiagCli,
   ppDiagCliSrc,
   ppDiagCliLines,
-  renderTcDiags,
   ppDiagBuckets,
   stdlibExportsReader,
-  diagOfResError,
   diagOfTypeError,
   relDiagPath,
   srcLinesArr,
@@ -185,24 +173,16 @@ import driver.diagnostics.{
   diagIdIsSyntax,
   Severity(..),
   Severity(..),
-  cjPosition,
-  cjRange,
-  cjRangeOfLoc,
-  cjDiagnostic,
-  cjFileEntry,
   cjAllToJson,
   flushRunEnvelope,
   pendingStaleNotice,
   pendingPreludeNotices,
   readDiagSrc,
-  optField,
-  cjFixJson,
   mkDiag,
   checkJsonFileParts,
   siblingPairsOf,
   CheckJson(..),
   ppCheckJson,
-  cjFoldIntoFile,
   readFileSafe,
   diagIsError,
   diagIsWarn,
@@ -212,7 +192,6 @@ import driver.diagnostics.{
   renderTripleWarnings,
   residualOrGeneric,
   coherenceWarnCode,
-  runBuildWarnCodes,
   isCoherenceWarn,
   mainShapeWarnings,
   mainEntryError,
@@ -248,8 +227,6 @@ import eval.eval.{
   progArgsRef,
 }
 import tools.test_cmd.{
-  runTest,
-  runTestReport,
   runTestGradedReport,
   filterMatchedNothing,
   testHelpText,
@@ -258,8 +235,6 @@ import tools.test_cmd.{
   parseTestCasesFlag,
   parseTestIntFlag,
   runTestOne,
-  cliTestReportOk,
-  cliTestReportJson,
   cliGradedTestReportOk,
   cliGradedTestReportJson,
   checkTestMdkRoster,
@@ -283,39 +258,16 @@ import tools.doc.{
   rebucketLibraryImpls,
 }
 import tools.lint.{
-  allRules,
-  lintProgram,
   StdlibIndex,
   StdlibIndexError(..),
   indexForRun,
-  applySuppressions,
-  applySuppressionsMulti,
-  applySuppressionsDirs,
-  applySuppressionsMultiDirs,
-  collectDirectives,
-  findingToDiag,
-  Finding,
-  Directive,
-  applyFixes,
   allRuleNames,
-  applyFindingFilters,
-  applyFindingDeny,
-  isFindingError,
-  lintFileDiagTriple,
   splitLintNames,
 }
 import tools.lint_cache.{storeEntries}
 import tools.lint_baseline.{
   LintBaseline,
   readLintBaseline,
-  baselineKeyOf,
-  baselineViolations,
-  baselineViolationLine,
-  applyBaselineToFindings,
-  applyBaselineToDiags,
-  baselineDiagViolations,
-  diagCodeOf,
-  findingRuleOf,
   renderLintBaseline,
 }
 import tools.codemod.{
@@ -4548,7 +4500,7 @@ dirOf2 : String -> String
 dirOf2 path = dirGo2 path (stringLength path)
 
 dirGo2 : String -> Int -> String
-dirGo2 path 0 = "."
+dirGo2 _path 0 = "."
 dirGo2 path i =
   if stringSlice (i - 1) i path == "/" then
     stringSlice 0 (i - 1) path
@@ -4735,8 +4687,8 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "gate_cmd") ((mem "gateHelpText" false) (mem "runGateCmd" false))))
 (DUse false (UseGroup ("tools" "interface_cmd") ((mem "interfaceHelpText" false) (mem "runInterfaceCmd" false))))
 (DUse false (UseGroup ("tools" "new_cmd") ((mem "newProject" false))))
-(DUse false (UseGroup ("driver" "build_cmd") ((mem "BuildReport" false) (mem "BuildTarget" true) (mem "ppBuildReport" false) (mem "runBuild" false) (mem "emitRtObj" false) (mem "emitPreludeObj" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "readPreludeSources" false) (mem "loadPreludeInterface" false) (mem "PreludeInputs" true) (mem "SideFile" true) (mem "staleLine" false) (mem "shippedInputs" false) (mem "FileVerdict" false) (mem "checkPreludeElab" false) (mem "loadPreludeElab" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "testFileSuffix" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "sortUniqS" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "stringTrim" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("driver" "build_cmd") ((mem "BuildTarget" true) (mem "ppBuildReport" false) (mem "runBuild" false) (mem "emitRtObj" false) (mem "emitPreludeObj" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "readPreludeSources" false) (mem "loadPreludeInterface" false) (mem "PreludeInputs" true) (mem "SideFile" true) (mem "staleLine" false) (mem "shippedInputs" false) (mem "FileVerdict" false) (mem "checkPreludeElab" false) (mem "loadPreludeElab" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "testFileSuffix" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "filterList" false) (mem "contains" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "stringTrim" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageCountInit" false) (mem "stageDump" false) (mem "stageExit" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omFromNames" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false) (mem "joinPath" false))))
@@ -4746,17 +4698,17 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("types" "target_profile") ((mem "Backend" true) (mem "buildableNames" false) (mem "lookupProfile" false) (mem "profileBackend" false) (mem "runProfile" false) (mem "selectedProfile" false))))
 (DUse false (UseGroup ("tools" "target_check") ((mem "targetRefusal" false) (mem "ppTargetDiag" false) (mem "foldTargetDiags" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
-(DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "lastValue" false) (mem "flagValues" false) (mem "unknownFlagMessage" false) (mem "usageExitCode" false) (mem "withStrictDash" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true) (mem "EvTable" false) (mem "EvId" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "Positions" false))))
+(DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "lastValue" false) (mem "unknownFlagMessage" false) (mem "usageExitCode" false) (mem "withStrictDash" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Loc" true) (mem "LetBind" true))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
 (DUse false (UseGroup ("tools" "target_parse") ((mem "targetDesugared" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "stdinEntry" false) (mem "readStdinProgram" false) (mem "stdinReadOverride" false) (mem "readSource" false) (mem "readSourceE" false) (mem "sourceNotUtf8Message" false) (mem "dropPathTriple" false) (mem "modIdToPath" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "stdinEntry" false) (mem "readStdinProgram" false) (mem "stdinReadOverride" false) (mem "readSource" false) (mem "readSourceE" false) (mem "sourceNotUtf8Message" false) (mem "dropPathTriple" false) (mem "modIdToPath" false) (mem "findProjectRoot" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false))))
 (DUse false (UseGroup ("driver" "front_gate") ((mem "GateAsk" true) (mem "cliStdlibExports" false) (mem "envelopeWithNotes" false) (mem "moduleLoadErrText" false) (mem "ppParseError" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "desugaredModPairs" false) (mem "CheckDrive" true) (mem "CheckDump" true) (mem "frontEnd" false) (mem "checkFrontDrive" false) (mem "FrontProgram" true) (mem "FrontInput" true) (mem "FrontPolicy" true) (mem "FrontOutput" true) (mem "ppDiagCli" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "renderTcDiags" false) (mem "ppDiagBuckets" false) (mem "stdlibExportsReader" false) (mem "diagOfResError" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "DiagId" true) (mem "diagIdIsSyntax" false) (mem "Severity" true) (mem "Severity" true) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "pendingPreludeNotices" false) (mem "readDiagSrc" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFileParts" false) (mem "siblingPairsOf" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "cjFoldIntoFile" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "runBuildWarnCodes" false) (mem "isCoherenceWarn" false) (mem "mainShapeWarnings" false) (mem "mainEntryError" false) (mem "ppMainEntryError" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "desugaredModPairs" false) (mem "CheckDrive" true) (mem "CheckDump" true) (mem "frontEnd" false) (mem "checkFrontDrive" false) (mem "FrontProgram" true) (mem "FrontInput" true) (mem "FrontPolicy" true) (mem "FrontOutput" true) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "ppDiagBuckets" false) (mem "stdlibExportsReader" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "DiagId" true) (mem "diagIdIsSyntax" false) (mem "Severity" true) (mem "Severity" true) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "pendingPreludeNotices" false) (mem "readDiagSrc" false) (mem "mkDiag" false) (mem "checkJsonFileParts" false) (mem "siblingPairsOf" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "isCoherenceWarn" false) (mem "mainShapeWarnings" false) (mem "mainEntryError" false) (mem "ppMainEntryError" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "asString" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "tcCode" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false) (mem "factsOfChecked" false) (mem "withSibling" false))))
@@ -4764,16 +4716,16 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" true))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "asyncMainShapeError" false) (mem "shouldAutoPrintMain" false) (mem "valueMainCandidate" false) (mem "executedFromReport" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalModulesOutputRunFacts" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "runJsonMode" false) (mem "pendingRunDiags" false) (mem "progArgsRef" false))))
-(DUse false (UseGroup ("tools" "test_cmd") ((mem "runTest" false) (mem "runTestReport" false) (mem "runTestGradedReport" false) (mem "filterMatchedNothing" false) (mem "testHelpText" false) (mem "testArgSpec" false) (mem "parseTestEngines" false) (mem "parseTestCasesFlag" false) (mem "parseTestIntFlag" false) (mem "runTestOne" false) (mem "cliTestReportOk" false) (mem "cliTestReportJson" false) (mem "cliGradedTestReportOk" false) (mem "cliGradedTestReportJson" false) (mem "checkTestMdkRoster" false) (mem "testFilesGo" false) (mem "runEvalPropsWorker" false))))
+(DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestGradedReport" false) (mem "filterMatchedNothing" false) (mem "testHelpText" false) (mem "testArgSpec" false) (mem "parseTestEngines" false) (mem "parseTestCasesFlag" false) (mem "parseTestIntFlag" false) (mem "runTestOne" false) (mem "cliGradedTestReportOk" false) (mem "cliGradedTestReportJson" false) (mem "checkTestMdkRoster" false) (mem "testFilesGo" false) (mem "runEvalPropsWorker" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "seedPropRng" false) (mem "PropRequest" true))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Engine" true))))
 (DUse false (UseGroup ("tools" "repl") ((mem "initSession" false) (mem "replLoop" false))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "runServer" false))))
 (DUse false (UseGroup ("tools" "mcp") ((mem "runMcpServer" false))))
 (DUse false (UseGroup ("tools" "doc") ((mem "runDoc" false) (mem "ModuleDoc" false) (mem "computeModuleDoc" false) (mem "docParseError" false) (mem "mdName" false) (mem "renderModulePage" false) (mem "renderIndex" false) (mem "libraryInventoryJson" false) (mem "rebucketLibraryImpls" false))))
-(DUse false (UseGroup ("tools" "lint") ((mem "allRules" false) (mem "lintProgram" false) (mem "StdlibIndex" false) (mem "StdlibIndexError" true) (mem "indexForRun" false) (mem "applySuppressions" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMultiDirs" false) (mem "collectDirectives" false) (mem "findingToDiag" false) (mem "Finding" false) (mem "Directive" false) (mem "applyFixes" false) (mem "allRuleNames" false) (mem "applyFindingFilters" false) (mem "applyFindingDeny" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "splitLintNames" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "StdlibIndex" false) (mem "StdlibIndexError" true) (mem "indexForRun" false) (mem "allRuleNames" false) (mem "splitLintNames" false))))
 (DUse false (UseGroup ("tools" "lint_cache") ((mem "storeEntries" false))))
-(DUse false (UseGroup ("tools" "lint_baseline") ((mem "LintBaseline" false) (mem "readLintBaseline" false) (mem "baselineKeyOf" false) (mem "baselineViolations" false) (mem "baselineViolationLine" false) (mem "applyBaselineToFindings" false) (mem "applyBaselineToDiags" false) (mem "baselineDiagViolations" false) (mem "diagCodeOf" false) (mem "findingRuleOf" false) (mem "renderLintBaseline" false))))
+(DUse false (UseGroup ("tools" "lint_baseline") ((mem "LintBaseline" false) (mem "readLintBaseline" false) (mem "renderLintBaseline" false))))
 (DUse false (UseGroup ("tools" "codemod") ((mem "findCodemod" false) (mem "codemodMk" false) (mem "codemodWarnDecls" false) (mem "codemodListing" false) (mem "codemodSource" false) (mem "CodeMode" true))))
 (DUse false (UseGroup ("tools" "lint_cmd") ((mem "explainRule" false) (mem "lintCacheCtx" false) (mem "lintHelpText" false) (mem "renderRuleRowsJson" false) (mem "renderRuleRowsNames" false) (mem "renderRuleRowsText" false) (mem "rulesPageMarkdown" false) (mem "selectRuleRows" false) (mem "runLintJsonCmd" false) (mem "lintFilesToDiagTriples" false) (mem "baselineFileCodes" false) (mem "runProjectReport" false) (mem "resolveLintTargets" false) (mem "lintFilesGo" false) (mem "LintRun" true) (mem "inactiveInternalRuleUse" false))))
 (DUse false (UseGroup ("support" "cli_targets") ((mem "lintTargetExists" false) (mem "expandLintTarget" false))))
@@ -5249,7 +5201,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "dirOf2" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dirOf2" ((PVar "path")) (EApp (EApp (EVar "dirGo2") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))))
 (DTypeSig false "dirGo2" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "dirGo2" ((PVar "path") (PLit (LInt 0))) (ELit (LString ".")))
+(DFunDef false "dirGo2" ((PVar "_path") (PLit (LInt 0))) (ELit (LString ".")))
 (DFunDef false "dirGo2" ((PVar "path") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "path")) (ELit (LString "/"))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "path")) (EApp (EApp (EVar "dirGo2") (EVar "path")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
 (DTypeSig false "replArgSpec" (TyCon "ArgSpec"))
 (DFunDef false "replArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "repl"))) (EListLit)))
@@ -5292,8 +5244,8 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "gate_cmd") ((mem "gateHelpText" false) (mem "runGateCmd" false))))
 (DUse false (UseGroup ("tools" "interface_cmd") ((mem "interfaceHelpText" false) (mem "runInterfaceCmd" false))))
 (DUse false (UseGroup ("tools" "new_cmd") ((mem "newProject" false))))
-(DUse false (UseGroup ("driver" "build_cmd") ((mem "BuildReport" false) (mem "BuildTarget" true) (mem "ppBuildReport" false) (mem "runBuild" false) (mem "emitRtObj" false) (mem "emitPreludeObj" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "readPreludeSources" false) (mem "loadPreludeInterface" false) (mem "PreludeInputs" true) (mem "SideFile" true) (mem "staleLine" false) (mem "shippedInputs" false) (mem "FileVerdict" false) (mem "checkPreludeElab" false) (mem "loadPreludeElab" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "testFileSuffix" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "sortUniqS" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "stringTrim" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("driver" "build_cmd") ((mem "BuildTarget" true) (mem "ppBuildReport" false) (mem "runBuild" false) (mem "emitRtObj" false) (mem "emitPreludeObj" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "readPreludeSources" false) (mem "loadPreludeInterface" false) (mem "PreludeInputs" true) (mem "SideFile" true) (mem "staleLine" false) (mem "shippedInputs" false) (mem "FileVerdict" false) (mem "checkPreludeElab" false) (mem "loadPreludeElab" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "testFileSuffix" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "filterList" false) (mem "contains" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "stringTrim" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageCountInit" false) (mem "stageDump" false) (mem "stageExit" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omFromNames" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false) (mem "joinPath" false))))
@@ -5303,17 +5255,17 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("types" "target_profile") ((mem "Backend" true) (mem "buildableNames" false) (mem "lookupProfile" false) (mem "profileBackend" false) (mem "runProfile" false) (mem "selectedProfile" false))))
 (DUse false (UseGroup ("tools" "target_check") ((mem "targetRefusal" false) (mem "ppTargetDiag" false) (mem "foldTargetDiags" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
-(DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "lastValue" false) (mem "flagValues" false) (mem "unknownFlagMessage" false) (mem "usageExitCode" false) (mem "withStrictDash" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true) (mem "EvTable" false) (mem "EvId" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "Positions" false))))
+(DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "lastValue" false) (mem "unknownFlagMessage" false) (mem "usageExitCode" false) (mem "withStrictDash" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Loc" true) (mem "LetBind" true))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
 (DUse false (UseGroup ("tools" "target_parse") ((mem "targetDesugared" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "stdinEntry" false) (mem "readStdinProgram" false) (mem "stdinReadOverride" false) (mem "readSource" false) (mem "readSourceE" false) (mem "sourceNotUtf8Message" false) (mem "dropPathTriple" false) (mem "modIdToPath" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "stdinEntry" false) (mem "readStdinProgram" false) (mem "stdinReadOverride" false) (mem "readSource" false) (mem "readSourceE" false) (mem "sourceNotUtf8Message" false) (mem "dropPathTriple" false) (mem "modIdToPath" false) (mem "findProjectRoot" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false))))
 (DUse false (UseGroup ("driver" "front_gate") ((mem "GateAsk" true) (mem "cliStdlibExports" false) (mem "envelopeWithNotes" false) (mem "moduleLoadErrText" false) (mem "ppParseError" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "desugaredModPairs" false) (mem "CheckDrive" true) (mem "CheckDump" true) (mem "frontEnd" false) (mem "checkFrontDrive" false) (mem "FrontProgram" true) (mem "FrontInput" true) (mem "FrontPolicy" true) (mem "FrontOutput" true) (mem "ppDiagCli" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "renderTcDiags" false) (mem "ppDiagBuckets" false) (mem "stdlibExportsReader" false) (mem "diagOfResError" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "DiagId" true) (mem "diagIdIsSyntax" false) (mem "Severity" true) (mem "Severity" true) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "pendingPreludeNotices" false) (mem "readDiagSrc" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFileParts" false) (mem "siblingPairsOf" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "cjFoldIntoFile" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "runBuildWarnCodes" false) (mem "isCoherenceWarn" false) (mem "mainShapeWarnings" false) (mem "mainEntryError" false) (mem "ppMainEntryError" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "desugaredModPairs" false) (mem "CheckDrive" true) (mem "CheckDump" true) (mem "frontEnd" false) (mem "checkFrontDrive" false) (mem "FrontProgram" true) (mem "FrontInput" true) (mem "FrontPolicy" true) (mem "FrontOutput" true) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "ppDiagBuckets" false) (mem "stdlibExportsReader" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "DiagId" true) (mem "diagIdIsSyntax" false) (mem "Severity" true) (mem "Severity" true) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "pendingPreludeNotices" false) (mem "readDiagSrc" false) (mem "mkDiag" false) (mem "checkJsonFileParts" false) (mem "siblingPairsOf" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "isCoherenceWarn" false) (mem "mainShapeWarnings" false) (mem "mainEntryError" false) (mem "ppMainEntryError" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "asString" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "tcCode" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false) (mem "factsOfChecked" false) (mem "withSibling" false))))
@@ -5321,16 +5273,16 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" true))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "asyncMainShapeError" false) (mem "shouldAutoPrintMain" false) (mem "valueMainCandidate" false) (mem "executedFromReport" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalModulesOutputRunFacts" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "runJsonMode" false) (mem "pendingRunDiags" false) (mem "progArgsRef" false))))
-(DUse false (UseGroup ("tools" "test_cmd") ((mem "runTest" false) (mem "runTestReport" false) (mem "runTestGradedReport" false) (mem "filterMatchedNothing" false) (mem "testHelpText" false) (mem "testArgSpec" false) (mem "parseTestEngines" false) (mem "parseTestCasesFlag" false) (mem "parseTestIntFlag" false) (mem "runTestOne" false) (mem "cliTestReportOk" false) (mem "cliTestReportJson" false) (mem "cliGradedTestReportOk" false) (mem "cliGradedTestReportJson" false) (mem "checkTestMdkRoster" false) (mem "testFilesGo" false) (mem "runEvalPropsWorker" false))))
+(DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestGradedReport" false) (mem "filterMatchedNothing" false) (mem "testHelpText" false) (mem "testArgSpec" false) (mem "parseTestEngines" false) (mem "parseTestCasesFlag" false) (mem "parseTestIntFlag" false) (mem "runTestOne" false) (mem "cliGradedTestReportOk" false) (mem "cliGradedTestReportJson" false) (mem "checkTestMdkRoster" false) (mem "testFilesGo" false) (mem "runEvalPropsWorker" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "seedPropRng" false) (mem "PropRequest" true))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Engine" true))))
 (DUse false (UseGroup ("tools" "repl") ((mem "initSession" false) (mem "replLoop" false))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "runServer" false))))
 (DUse false (UseGroup ("tools" "mcp") ((mem "runMcpServer" false))))
 (DUse false (UseGroup ("tools" "doc") ((mem "runDoc" false) (mem "ModuleDoc" false) (mem "computeModuleDoc" false) (mem "docParseError" false) (mem "mdName" false) (mem "renderModulePage" false) (mem "renderIndex" false) (mem "libraryInventoryJson" false) (mem "rebucketLibraryImpls" false))))
-(DUse false (UseGroup ("tools" "lint") ((mem "allRules" false) (mem "lintProgram" false) (mem "StdlibIndex" false) (mem "StdlibIndexError" true) (mem "indexForRun" false) (mem "applySuppressions" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMultiDirs" false) (mem "collectDirectives" false) (mem "findingToDiag" false) (mem "Finding" false) (mem "Directive" false) (mem "applyFixes" false) (mem "allRuleNames" false) (mem "applyFindingFilters" false) (mem "applyFindingDeny" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "splitLintNames" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "StdlibIndex" false) (mem "StdlibIndexError" true) (mem "indexForRun" false) (mem "allRuleNames" false) (mem "splitLintNames" false))))
 (DUse false (UseGroup ("tools" "lint_cache") ((mem "storeEntries" false))))
-(DUse false (UseGroup ("tools" "lint_baseline") ((mem "LintBaseline" false) (mem "readLintBaseline" false) (mem "baselineKeyOf" false) (mem "baselineViolations" false) (mem "baselineViolationLine" false) (mem "applyBaselineToFindings" false) (mem "applyBaselineToDiags" false) (mem "baselineDiagViolations" false) (mem "diagCodeOf" false) (mem "findingRuleOf" false) (mem "renderLintBaseline" false))))
+(DUse false (UseGroup ("tools" "lint_baseline") ((mem "LintBaseline" false) (mem "readLintBaseline" false) (mem "renderLintBaseline" false))))
 (DUse false (UseGroup ("tools" "codemod") ((mem "findCodemod" false) (mem "codemodMk" false) (mem "codemodWarnDecls" false) (mem "codemodListing" false) (mem "codemodSource" false) (mem "CodeMode" true))))
 (DUse false (UseGroup ("tools" "lint_cmd") ((mem "explainRule" false) (mem "lintCacheCtx" false) (mem "lintHelpText" false) (mem "renderRuleRowsJson" false) (mem "renderRuleRowsNames" false) (mem "renderRuleRowsText" false) (mem "rulesPageMarkdown" false) (mem "selectRuleRows" false) (mem "runLintJsonCmd" false) (mem "lintFilesToDiagTriples" false) (mem "baselineFileCodes" false) (mem "runProjectReport" false) (mem "resolveLintTargets" false) (mem "lintFilesGo" false) (mem "LintRun" true) (mem "inactiveInternalRuleUse" false))))
 (DUse false (UseGroup ("support" "cli_targets") ((mem "lintTargetExists" false) (mem "expandLintTarget" false))))
@@ -5806,7 +5758,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "dirOf2" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dirOf2" ((PVar "path")) (EApp (EApp (EVar "dirGo2") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))))
 (DTypeSig false "dirGo2" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "dirGo2" ((PVar "path") (PLit (LInt 0))) (ELit (LString ".")))
+(DFunDef false "dirGo2" ((PVar "_path") (PLit (LInt 0))) (ELit (LString ".")))
 (DFunDef false "dirGo2" ((PVar "path") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "path")) (ELit (LString "/"))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "path")) (EApp (EApp (EVar "dirGo2") (EVar "path")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
 (DTypeSig false "replArgSpec" (TyCon "ArgSpec"))
 (DFunDef false "replArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "repl"))) (EListLit)))

@@ -10,7 +10,7 @@ import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 import ir.sexp.{exprSexp, patSexp}
 import tools.lint_core.{DupClause(..), Finding(..)}
 import tools.lint_shared.{
-  declLocList, isCtorName, ruleNameDuplicateBody, sortUniqS, unwrapLoc
+  isCtorName, ruleNameDuplicateBody, sortUniqS, unwrapLoc
 }
 
 -- minimum body complexity (count of AST nodes) to be eligible.  Calibrated so the

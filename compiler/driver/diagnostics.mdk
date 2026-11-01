@@ -37,7 +37,6 @@ import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import frontend.desugar.{desugar, checkDerives}
 import frontend.resolve.{
   ResError,
-  resolveProgram,
   resolveProgramG2,
   internalGuardFor,
   ppResError,
@@ -59,7 +58,7 @@ import frontend.visibility.{
   coreExports,
   useModuleIds,
 }
-import list.{drop, last}
+import list.{last}
 import support.ordmap.{
   OrdMap,
   omEmpty,
@@ -141,7 +140,6 @@ import support.util.{
   filterList,
   contains,
   joinDot,
-  isSome,
   lenKey,
   reverseL,
 }
@@ -1611,14 +1609,14 @@ projectKeyedFromLoad : (List String -> <e> List (String, List String)) ->
   Result LoadError (List (String, String, List Decl)) ->
   <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag))
 -- Dependency errors keep the destination file and the exact located parser error.
-projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadParseFailed mpath _ pe)) =
+projectKeyedFromLoad _exportsFor _allowInternal _trustedMods _entry _roots _runtimeSrc _coreSrc staleRef (Err (LoadParseFailed mpath _ pe)) =
   (None, appendStale staleRef [(mpath, [parseErrDiag mpath pe])])
-projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err (LoadMsg e)) = (
+projectKeyedFromLoad _exportsFor _allowInternal _trustedMods entry _roots _runtimeSrc _coreSrc staleRef (Err (LoadMsg e)) = (
   None,
   appendStale staleRef [(entry, [mkDiag SevError RModuleLoad e None])],
 )
 -- A located cycle or test-module import belongs to the importing module.
-projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Err le) = (
+projectKeyedFromLoad _exportsFor _allowInternal _trustedMods entry _roots _runtimeSrc _coreSrc staleRef (Err le) = (
   None,
   appendStale staleRef (match loadErrorSite entry le
     Some (code, e, file, _, loc) => [(file, [mkDiag SevError code e loc])]
@@ -2639,7 +2637,7 @@ cjRangeOfLoc src (Some (Loc _ sl sc el ec)) =
     (c, d) <- offsetToUtf16Position index end
     Some (cjRange a b c d)
   optionOr JNull positions
-cjRangeOfLoc src None = JNull
+cjRangeOfLoc _src None = JNull
 
 -- Severity code: Error=1, Warning=2.
 cjSevCode : Severity -> Int

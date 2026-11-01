@@ -6,7 +6,7 @@ import frontend.ast.{BinderId(..)}
 -- `withNoInlineFns`.  A name it misses is a helper LLVM may inline away, which is
 -- invisible until a check that disassembles that helper finds no symbol.
 
-import test.{expectAll, expectEqual, expectFalse, expectTrue, fail}
+import test.{expectAll, expectEqual, expectTrue, fail}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
 import ir.core_ir_lower.{

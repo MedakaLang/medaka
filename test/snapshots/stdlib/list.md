@@ -14,7 +14,7 @@ stages=DESUGAR,MARK
    `Traversable` interfaces) are defined in the prelude and work on lists
    without an import. This module holds what is specific to lists. -}
 
-import core.{Ordering(..), Ord, Debug, Foldable, Mappable, Option, Result}
+import core.{Ordering(..), Ord, Debug, Option, Result}
 
 -- # Re-exports
 
@@ -191,7 +191,7 @@ export
 last : List a -> Option a
 last [] = None
 last [x] = Some x
-last (x :: xs) = last xs
+last (_x :: xs) = last xs
 
 -- > last ([] : List Int)
 -- None
@@ -205,7 +205,7 @@ last (x :: xs) = last xs
 export
 init : List a -> Option (List a)
 init [] = None
-init (x :: []) = Some []
+init (_x :: []) = Some []
 init (x :: xs) = map (x :: _) (init xs)
 
 -- > init ([] : List Int)
@@ -790,7 +790,7 @@ split sep xs = go xs
 -- `contains : List a -> List a -> Bool` expects membership, and the type
 -- cannot warn them otherwise.
 
-{- | Whether the list begins with `prefix`.
+{- | Whether the second list begins with the first.
 
    Every list begins with the empty list. `elem` is the test for a single
    element.
@@ -802,7 +802,7 @@ split sep xs = go xs
 export
 startsWith : Eq a => List a -> List a -> Bool
 startsWith [] _ = True
-startsWith prefix [] = False
+startsWith _prefix [] = False
 startsWith (p :: ps) (x :: xs) = p == x && startsWith ps xs
 
 -- > startsWith ([] : List Int) [1]
@@ -1353,7 +1353,7 @@ prop "elemIndices agrees with the plain findIndices reference on [] and singleto
     && eq (elemIndices k [k]) [0]
     && eq (elemIndices k xs) (findIndicesRef (== k) xs)
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false) (mem "Result" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Option" false) (mem "Result" false))))
 (DUse true (UseGroup ("core") ((mem "Filterable" false) (mem "filter" false) (mem "filterMap" false))))
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "singleton" ((PVar "a")) (EListLit (EVar "a")))
@@ -1383,10 +1383,10 @@ prop "elemIndices agrees with the plain findIndices reference on [] and singleto
 (DTypeSig true "last" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a"))))
 (DFunDef false "last" ((PList)) (EVar "None"))
 (DFunDef false "last" ((PList (PVar "x"))) (EApp (EVar "Some") (EVar "x")))
-(DFunDef false "last" ((PCons (PVar "x") (PVar "xs"))) (EApp (EVar "last") (EVar "xs")))
+(DFunDef false "last" ((PCons (PVar "_x") (PVar "xs"))) (EApp (EVar "last") (EVar "xs")))
 (DTypeSig true "init" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "init" ((PList)) (EVar "None"))
-(DFunDef false "init" ((PCons (PVar "x") (PList))) (EApp (EVar "Some") (EListLit)))
+(DFunDef false "init" ((PCons (PVar "_x") (PList))) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "init" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "x") (EVar "_s")))) (EApp (EVar "init") (EVar "xs"))))
 (DTypeSig true "get" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
 (DFunDef false "get" (PWild (PList)) (EVar "None"))
@@ -1492,7 +1492,7 @@ prop "elemIndices agrees with the plain findIndices reference on [] and singleto
 (DFunDef false "split" ((PVar "sep") (PVar "xs")) (ELetGroup ((lgb "sepLen" (clause () (EApp (EVar "length") (EVar "sep")))) (lgb "go" (clause ((PVar "ys")) (EMatch (EApp (EApp (EVar "findSub") (ELit (LInt 0))) (EVar "ys")) (arm (PCon "None") () (EListLit (EVar "ys"))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EApp (EVar "take") (EVar "i")) (EVar "ys")) (EApp (EVar "go") (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "i") (EVar "sepLen"))) (EVar "ys")))))))) (lgb "findSub" (clause ((PVar "i") (PVar "ys")) (EIf (EApp (EApp (EVar "startsWith") (EVar "sep")) (EVar "ys")) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EVar "findSubTail") (EVar "i")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))) (lgb "findSubTail" (clause (PWild (PList)) (EVar "None")) (clause ((PVar "i") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "findSub") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))) (EApp (EVar "go") (EVar "xs"))))
 (DTypeSig true "startsWith" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "startsWith" ((PList) PWild) (EVar "True"))
-(DFunDef false "startsWith" ((PVar "prefix") (PList)) (EVar "False"))
+(DFunDef false "startsWith" ((PVar "_prefix") (PList)) (EVar "False"))
 (DFunDef false "startsWith" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "x") (PVar "xs"))) (EBinOp "&&" (EBinOp "==" (EVar "p") (EVar "x")) (EApp (EApp (EVar "startsWith") (EVar "ps")) (EVar "xs"))))
 (DTypeSig true "endsWith" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "endsWith" ((PVar "suffix") (PVar "xs")) (EApp (EApp (EVar "startsWith") (EApp (EVar "reverse") (EVar "suffix"))) (EApp (EVar "reverse") (EVar "xs"))))
@@ -1637,7 +1637,7 @@ prop "elemIndices agrees with the plain findIndices reference on [] and singleto
 (DProp false "findIndices agrees with a plain reference on all, none, mixed, [] and singletons" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "none") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "x")) (EVar "True"))) (EVar "xs"))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EVar "True"))) (EVar "xs"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "x")) (EVar "False"))) (EVar "xs"))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EVar "False"))) (EVar "xs")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "_s")) (EBinOp "<" (EVar "_s") (EVar "k")))) (EVar "xs"))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "_s")) (EBinOp "<" (EVar "_s") (EVar "k")))) (EVar "xs")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "_s")) (EBinOp "<" (EVar "_s") (EVar "k")))) (EVar "none"))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "_s")) (EBinOp "<" (EVar "_s") (EVar "k")))) (EVar "none")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "_s")) (EBinOp "<" (EVar "_s") (EVar "k")))) (EListLit (EVar "k")))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "_s")) (EBinOp "<" (EVar "_s") (EVar "k")))) (EListLit (EVar "k"))))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "_s")) (EBinOp "<" (EVar "_s") (ELit (LInt 3))))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 1))))) (EListLit (ELit (LInt 0)) (ELit (LInt 1)) (ELit (LInt 3))))))))
 (DProp false "elemIndices agrees with the plain findIndices reference on [] and singletons" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EApp (EVar "elemIndices") (EVar "k")) (EListLit))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "k")))) (EListLit))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "elemIndices") (EVar "k")) (EListLit (EVar "k")))) (EListLit (ELit (LInt 0))))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "elemIndices") (EVar "k")) (EVar "xs"))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "k")))) (EVar "xs")))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false) (mem "Result" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Option" false) (mem "Result" false))))
 (DUse true (UseGroup ("core") ((mem "Filterable" false) (mem "filter" false) (mem "filterMap" false))))
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "singleton" ((PVar "a")) (EListLit (EVar "a")))
@@ -1667,10 +1667,10 @@ prop "elemIndices agrees with the plain findIndices reference on [] and singleto
 (DTypeSig true "last" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a"))))
 (DFunDef false "last" ((PList)) (EVar "None"))
 (DFunDef false "last" ((PList (PVar "x"))) (EApp (EVar "Some") (EVar "x")))
-(DFunDef false "last" ((PCons (PVar "x") (PVar "xs"))) (EApp (EVar "last") (EVar "xs")))
+(DFunDef false "last" ((PCons (PVar "_x") (PVar "xs"))) (EApp (EVar "last") (EVar "xs")))
 (DTypeSig true "init" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "init" ((PList)) (EVar "None"))
-(DFunDef false "init" ((PCons (PVar "x") (PList))) (EApp (EVar "Some") (EListLit)))
+(DFunDef false "init" ((PCons (PVar "_x") (PList))) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "init" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "x") (EVar "_s")))) (EApp (EVar "init") (EVar "xs"))))
 (DTypeSig true "get" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
 (DFunDef false "get" (PWild (PList)) (EVar "None"))
@@ -1776,7 +1776,7 @@ prop "elemIndices agrees with the plain findIndices reference on [] and singleto
 (DFunDef false "split" ((PVar "sep") (PVar "xs")) (ELetGroup ((lgb "sepLen" (clause () (EApp (EMethodRef "length") (EVar "sep")))) (lgb "go" (clause ((PVar "ys")) (EMatch (EApp (EApp (EVar "findSub") (ELit (LInt 0))) (EVar "ys")) (arm (PCon "None") () (EListLit (EVar "ys"))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EApp (EVar "take") (EVar "i")) (EVar "ys")) (EApp (EVar "go") (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "i") (EVar "sepLen"))) (EVar "ys")))))))) (lgb "findSub" (clause ((PVar "i") (PVar "ys")) (EIf (EApp (EApp (EDictApp "startsWith") (EVar "sep")) (EVar "ys")) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EVar "findSubTail") (EVar "i")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))) (lgb "findSubTail" (clause (PWild (PList)) (EVar "None")) (clause ((PVar "i") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "findSub") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))) (EApp (EVar "go") (EVar "xs"))))
 (DTypeSig true "startsWith" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "startsWith" ((PList) PWild) (EVar "True"))
-(DFunDef false "startsWith" ((PVar "prefix") (PList)) (EVar "False"))
+(DFunDef false "startsWith" ((PVar "_prefix") (PList)) (EVar "False"))
 (DFunDef false "startsWith" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "x") (PVar "xs"))) (EBinOp "&&" (EBinOp "==" (EVar "p") (EVar "x")) (EApp (EApp (EDictApp "startsWith") (EVar "ps")) (EVar "xs"))))
 (DTypeSig true "endsWith" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "endsWith" ((PVar "suffix") (PVar "xs")) (EApp (EApp (EDictApp "startsWith") (EApp (EVar "reverse") (EVar "suffix"))) (EApp (EVar "reverse") (EVar "xs"))))

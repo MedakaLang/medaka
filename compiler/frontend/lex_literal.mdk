@@ -199,7 +199,7 @@ finish [] = ""
 finish [s] = s
 finish xs = concat (reverse xs)
 firstFragNl : Bool -> List String -> Bool
-firstFragNl leading [] = True
+firstFragNl _leading [] = True
 firstFragNl leading _ = leading
 splitRange : Array Char -> Int -> Int -> Int -> List String
 splitRange cs start p n
@@ -347,7 +347,7 @@ parseHex src p end acc
 
 export
 readLiteral : Array Char -> LiteralCursor -> Result LexError LiteralRead
-readLiteral src (LiteralCursor p quote flavor part leading inside) =
+readLiteral src (LiteralCursor p _quote flavor part leading inside) =
   literalGo src (arrayLength src) p flavor part leading inside []
 
 literalGo : Array Char ->

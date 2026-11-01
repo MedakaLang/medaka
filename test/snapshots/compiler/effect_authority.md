@@ -13,9 +13,9 @@ stages=DESUGAR,MARK
 -- Anything else is not proven, never assumed.
 
 import types.effect_domain.{
-  Param(..), dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
-  appendParam, dantichain, dsubAny, djoinN, setCardCap, productNorm,
-  renderAxisVal, lookupAxis, domainKey, retagParam
+  Param(..), dsub, drender, isSubTop, subTopOf, extendParam, appendParam,
+  dantichain, dsubAny, djoinN, setCardCap, productNorm, renderAxisVal,
+  lookupAxis, domainKey, retagParam
 }
 import support.util.{
   joinWith, reverseL, listLen, anyList, allList, dedupBy, filterList
@@ -536,7 +536,7 @@ paramElements (PPath (Some s)) = [s]
 paramElements (PSet (Some xs)) = xs
 paramElements p = [trimLeft (drender p)]
 # DESUGAR
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false) (mem "productNorm" false) (mem "renderAxisVal" false) (mem "lookupAxis" false) (mem "domainKey" false) (mem "retagParam" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false) (mem "productNorm" false) (mem "renderAxisVal" false) (mem "lookupAxis" false) (mem "domainKey" false) (mem "retagParam" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "dedupBy" false) (mem "filterList" false))))
 (DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseAlias ("map") "M"))
@@ -700,7 +700,7 @@ paramElements p = [trimLeft (drender p)]
 (DFunDef false "paramElements" ((PCon "PSet" (PCon "Some" (PVar "xs")))) (EVar "xs"))
 (DFunDef false "paramElements" ((PVar "p")) (EListLit (EApp (EVar "trimLeft") (EApp (EVar "drender") (EVar "p")))))
 # MARK
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false) (mem "productNorm" false) (mem "renderAxisVal" false) (mem "lookupAxis" false) (mem "domainKey" false) (mem "retagParam" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false) (mem "productNorm" false) (mem "renderAxisVal" false) (mem "lookupAxis" false) (mem "domainKey" false) (mem "retagParam" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "dedupBy" false) (mem "filterList" false))))
 (DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseAlias ("map") "M"))

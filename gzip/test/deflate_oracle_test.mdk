@@ -181,8 +181,8 @@ realize dir slug (ByteIn n f) =
   thenPath
     (writeFileBytes "\{dir}/\{slug}.bin" (A.makeWith n f))
     "\{dir}/\{slug}.bin"
-realize dir slug (RealIn rel) = Ok "\{medakaRoot}/\{rel}"
-realize dir slug SeedGz = seedPlain dir
+realize _dir _slug (RealIn rel) = Ok "\{medakaRoot}/\{rel}"
+realize dir _slug SeedGz = seedPlain dir
 
 -- Shared failure shape for a spawn: a spawn error, a nonzero exit, or the
 -- success continuation.

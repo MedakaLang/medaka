@@ -22,7 +22,6 @@ import byteparser.{
   beSint,
   beU64,
   takeBytes,
-  failWith,
   beFloat64,
 }
 import bytes.{Bytes, decodeUtf8, fromU8Array, toArray}
@@ -198,7 +197,7 @@ readBodies : Bytes ->
   List SerialType ->
   List Cell ->
   BResult (List Cell)
-readBodies input pos end [] acc = BOk (reverse acc) pos
+readBodies _input pos _ [] acc = BOk (reverse acc) pos
 readBodies input pos end (st :: rest) acc = onOk (readBody
   input
   pos
@@ -208,9 +207,9 @@ readBodies input pos end (st :: rest) acc = onOk (readBody
 
 -- Read one cell's body given its serial type.
 readBody : Bytes -> Int -> Int -> SerialType -> BResult Cell
-readBody input pos _end STNull = BOk CNull pos
-readBody input pos _end STIntZero = BOk (CInt 0) pos
-readBody input pos _end STIntOne = BOk (CInt 1) pos
+readBody _input pos _end STNull = BOk CNull pos
+readBody _input pos _end STIntZero = BOk (CInt 0) pos
+readBody _input pos _end STIntOne = BOk (CInt 1) pos
 -- An 8-byte integer is SQLite's full 64-bit range, which `Int` does not hold:
 -- it is read as its 64 bits and kept as an `I64` only when it does not fit.
 readBody input pos end (STInt 8) =

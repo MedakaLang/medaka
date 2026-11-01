@@ -3,7 +3,7 @@
 import frontend.ast.{Loc(..), Decl(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
-import support.util.{listLen, anyList, splitNl, joinWith, startsWith, isSome}
+import support.util.{listLen, anyList, splitNl, joinWith, startsWith}
 import list.{last}
 import support.char.{isAlnum}
 import regex.{

@@ -25,7 +25,7 @@
 import test.vector_runner.{
   Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
 }
-import test.{Expectation}
+import test
 
 fullCorpusArm : Engine -> Arm
 fullCorpusArm e = Arm {

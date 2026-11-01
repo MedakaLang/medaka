@@ -18,7 +18,7 @@
 import test.vector_runner.{
   Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
 }
-import test.{Expectation}
+import test
 
 -- The accepted low-S normalization: an arithmetic select over `scHighBit`,
 -- never an `if` on a secret.

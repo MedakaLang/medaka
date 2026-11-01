@@ -1,0 +1,150 @@
+-- lint rule rule-unused-import: an `import m.{…}` member that nothing in the file uses. Drop the name from the list.
+
+import frontend.ast.{Decl(..), Loc(..), UseMember(..), UsePath(..)}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import frontend.lex_scan.{scanRaw}
+import frontend.lex_token.{RawTok(..), Token(..)}
+import frontend.lexer.{Comment, commentText}
+import list.{indexed, zip}
+import string.{lines, stripPrefix, trim}
+import support.util.{joinWith}
+import tools.lint_core.{
+  Applicability(..),
+  Category(..),
+  FileFacts(..),
+  Finding(..),
+  Fix(..),
+  FixEdit(..),
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  factComments,
+  factScopes,
+  mkRule,
+}
+import tools.lint_fix.{removeListItem}
+import tools.lint_scope.{Binder(..), FileScopes, binderOf, importUses}
+import tools.lint_shared.{ruleNameUnusedImport}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameUnusedImport,
+      summary = "an imported name that nothing in the file uses",
+      doc =
+        "A name listed in `import m.{…}` that no expression, signature, constraint, pattern, doctest, `test` or `prop` body of the file uses is dead weight and hides which imports matter. `public import` re-exports, `import m.*`, bare `import m` and `import m as A` list no names and are not checked, and a `T(..)` member is never reported, since a constructor use is not tied to `T`. The fix drops the name and its comma; when no name of the line is used it leaves a bare `import m`, which still brings the module's `impl`s into scope.\n\nBefore:\n  import list.{sort, nub}\n  main = sort [2, 1]\nAfter:\n  import list.{sort}\n  main = sort [2, 1]",
+      category = Style,
+      scope = Universal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = Fixable,
+      needs = [NeedsScopes],
+    }
+    ruleUnusedImport
+    None
+
+ruleUnusedImport : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleUnusedImport _ _ facts _ prog =
+  let fs = factScopes facts
+  let silent = filter (u => snd u == 0) (importUses fs)
+  if isEmpty silent then
+    []
+  else
+    let seen = doctestNames (doctestBodies (factComments facts))
+    let dead =
+      map
+        (u => (fst u).binderId)
+        (filter (u => not (elem (fst u).binderName seen)) silent)
+    flatMap (groupFindings fs dead) prog
+
+-- A `public import` re-exports its names, so none of them is dead.
+groupFindings : FileScopes -> List Int -> Decl -> List Finding
+groupFindings fs dead (DUse False (UseGroup path members) groupLoc) =
+  let flags = map (memberDead fs dead) members
+  let locs = map memberLoc members
+  let everyDead = all (f => f) flags
+  flatMap
+    (m => memberFinding path groupLoc locs everyDead (fst m))
+    (filter snd (zip (indexed members) flags))
+groupFindings _ _ _ = []
+
+-- The identifiers of doctest inputs, which are comments and so never walked.
+doctestNames : List String -> List String
+doctestNames inputs = flatMap (d => flatMap rawIdent (scanRaw d)) inputs
+
+rawIdent : RawTok -> List String
+rawIdent (RTok (TIdent x) _ _) = [x]
+rawIdent (RTok (TUpper x) _ _) = [x]
+rawIdent _ = []
+
+-- The input of each doctest line: `-- > expr` in a line comment, or a line
+-- starting `> ` inside a block comment, which on the opening line follows the
+-- `{-`.
+doctestBodies : List Comment -> List String
+doctestBodies comments =
+  flatMap (c => flatMap doctestBody (lines (commentText c))) comments
+
+doctestBody : String -> List String
+doctestBody line =
+  let t = trim line
+  let inner = trim (optionOr t (stripPrefix "{-" t))
+  toList (stripPrefix "-- > " t) ++ toList (stripPrefix "> " inner)
+
+memberLoc : UseMember -> Loc
+memberLoc (UseMember _ _ loc _) = loc
+
+-- A `T(..)` member is never dead: it may be used through a constructor, which
+-- the scope model does not tie to `T`.
+memberDead : FileScopes -> List Int -> UseMember -> Bool
+memberDead fs dead (UseMember _ allCtors loc _) = match binderOf fs loc
+  Some b => not allCtors && elem b.binderId dead
+  None => False
+
+memberFinding : List String ->
+  Loc ->
+  List Loc ->
+  Bool ->
+  (Int, UseMember) ->
+  List Finding
+memberFinding path groupLoc locs everyDead (ix, UseMember n _ loc alias) = [
+  Finding {
+    rule = ruleNameUnusedImport,
+    message =
+      "imported name '\{optionOr n alias}' is never used. Remove it from the import list",
+    severity = SevWarning,
+    loc = Some loc,
+    fix = removalFix path groupLoc locs everyDead ix,
+  },
+]
+
+-- A line whose names are all dead keeps the bare import, because the module's
+-- `impl`s stay in scope through it.  A bare import of a dotted path does not
+-- resolve for a project module (`import frontend.ast` is "unknown module"), so
+-- there the fix is only suggested.
+removalFix : List String -> Loc -> List Loc -> Bool -> Int -> Option Fix
+removalFix path groupLoc locs everyDead ix
+  | everyDead =
+    Some
+      (fixOf
+        (if length path > 1 then Suggest else Safe)
+        (FixEdit groupLoc ("import " ++ joinWith "." path)))
+  | otherwise = map (fixOf Safe) (removeListItem locs ix)
+
+fixOf : Applicability -> FixEdit -> Fix
+fixOf applicability edit = Fix {
+  fixApplicability = applicability,
+  fixEdits = [edit],
+  fixMessage = "remove the unused import",
+}

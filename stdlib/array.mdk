@@ -34,13 +34,7 @@
 import core.{
   Ordering(..),
   Ord,
-  Debug,
-  Display,
-  Foldable,
-  Mappable,
   Filterable,
-  Semigroup,
-  Monoid,
   Option,
 }
 

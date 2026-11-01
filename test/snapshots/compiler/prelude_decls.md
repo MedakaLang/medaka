@@ -28,7 +28,7 @@ import frontend.ast_codec.{declsSExp, readDecls}
 import string as S
 import support.sexp_value.{
   SExp(..), SexpError(..), atomInt, cursorAtEnd, cursorOf, cursorOffset,
-  parseSExp, renderSExp
+  renderSExp
 }
 import types.interface_frame.{
   InterfaceFault(..), KeyGate, checkedFramed, failure, firstLine, framedFile,
@@ -219,7 +219,7 @@ negativeRun run = run.brFirst < 0 || run.brCount < 0
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false) (mem "readDecls" false))))
 (DUse false (UseAlias ("string") "S"))
-(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "parseSExp" false) (mem "renderSExp" false))))
+(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "renderSExp" false))))
 (DUse false (UseGroup ("types" "interface_frame") ((mem "InterfaceFault" true) (mem "KeyGate" false) (mem "checkedFramed" false) (mem "failure" false) (mem "firstLine" false) (mem "framedFile" false) (mem "keyFields" false) (mem "noGate" false) (mem "refuse" false) (mem "renderFramedFault" false))))
 (DUse false (UseGroup ("types" "prelude_elab") ((mem "BinderRun" true) (mem "binderRunIs" false) (mem "binderSpan" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" true))))
@@ -266,7 +266,7 @@ negativeRun run = run.brFirst < 0 || run.brCount < 0
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false) (mem "readDecls" false))))
 (DUse false (UseAlias ("string") "S"))
-(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "parseSExp" false) (mem "renderSExp" false))))
+(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "renderSExp" false))))
 (DUse false (UseGroup ("types" "interface_frame") ((mem "InterfaceFault" true) (mem "KeyGate" false) (mem "checkedFramed" false) (mem "failure" false) (mem "firstLine" false) (mem "framedFile" false) (mem "keyFields" false) (mem "noGate" false) (mem "refuse" false) (mem "renderFramedFault" false))))
 (DUse false (UseGroup ("types" "prelude_elab") ((mem "BinderRun" true) (mem "binderRunIs" false) (mem "binderSpan" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" true))))

@@ -110,9 +110,7 @@ import types.tc_mono.{
 import types.tc_state.{
   callUOblsWindow,
   currentScopeStore,
-  initialModuleCtx,
   moduleWindow,
-  probeGraphCtx,
 }
 import types.tc_env.{
   anyArgMentions,
@@ -135,7 +133,6 @@ import types.tc_scope.{methodAdmittedHere, methodVisibleHere}
 import types.tc_unify.{
   enterLevel,
   exitLevel,
-  freshEffvar,
   freshTvMap,
   freshVar,
   instantiateMethodTracked,
@@ -148,13 +145,9 @@ import types.tc_decls_types.{fromAstType, reqTyToMono}
 import types.tc_solve_givens.{
   activeDictPredOf,
   activeDictVarOfEncl,
-  anyGivenMatches,
   assumAnswerEvidence,
   assumAnswerRoute,
   enclSlot,
-  firstPredForEncl,
-  firstPredForEnclAt,
-  firstPredForEnclResidual,
   givenInScope,
   givenRoute,
   givensForScope,
@@ -162,7 +155,6 @@ import types.tc_solve_givens.{
   noteAssumption,
   predicateRequestMatchesSlot,
   projectedGivenOf,
-  pushGiven,
 }
 import types.tc_solve_entail.{
   determinedGoalInstance,
@@ -254,14 +246,13 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   listLen,
   lookupAssoc,
   orElseOpt,
   reverseL,
   splitOnChar,
 }
-import list.{drop, get, head, indexed, reverse, take, zip}
+import list.{drop, get, indexed, reverse, take, zip}
 import string.{join}
 import types.evidence_complete.{innerNone}
 import types.scopes as Scopes
@@ -824,7 +815,7 @@ routableSelection mctx name (answer@(Selects iface _ _)) =
   match lookupAssoc key mctx.mcCells.methodPredicateSlotsRef.value
     Some (_ :: _) => Unroutable iface
     _ => answer
-routableSelection mctx _ answer = answer
+routableSelection _mctx _ answer = answer
 
 admittedDeclAnswer : SiteCtx ->
   ImplEnv ->
@@ -1103,7 +1094,7 @@ routesOfMonosTopV : SiteCtx ->
 -- no vectors at all (a caller with nothing to offer) ⇒ the scalar router, unchanged.
 routesOfMonosTopV sx encl useScope monos ifaces [] =
   routesOfMonosTop sx encl useScope monos ifaces
-routesOfMonosTopV sx _ _ [] _ _ = []
+routesOfMonosTopV _sx _ _ [] _ _ = []
 routesOfMonosTopV sx encl useScope (m :: rest) [] (_ :: vs) =
   routeOf sx ifaceRefNone encl useScope (CountImpls ifaceRefNone) m
     :: routesOfMonosTopV sx encl useScope rest [] vs
@@ -1154,7 +1145,7 @@ routesOfMonosTop : SiteCtx ->
   List Mono ->
   List IfaceRef ->
   List Route
-routesOfMonosTop sx _ _ [] _ = []
+routesOfMonosTop _sx _ _ [] _ = []
 routesOfMonosTop sx encl useScope (m :: rest) [] =
   routeOf sx ifaceRefNone encl useScope (CountImpls ifaceRefNone) m
     :: routesOfMonosTop sx encl useScope rest []
@@ -1347,12 +1338,12 @@ solveExactReturnInstance : SiteCtx ->
   Wanted ->
   List Mono ->
   MethodReturnResolution
-solveExactReturnInstance sx request wanted [] = MethodReturnResolution {
+solveExactReturnInstance _sx _request wanted [] = MethodReturnResolution {
   mrrWanted = wanted,
   mrrOutcome = Deferred wanted [BlockingFinalization],
   mrrSelectedRow = None,
 }
-solveExactReturnInstance sx request wanted args =
+solveExactReturnInstance sx _request wanted args =
   let env = sx.sxModule.mcCells.bodyImplEnvRef.value
   let iface = wanted.predicate.predicateInterface
   let selected =
@@ -1514,7 +1505,7 @@ methodReturnPrerequisitesMatch _ _ = False
 -- need one bound is left as it is, for `checkSigsTooGeneral` has already run.
 export
 improveByUniqueImpl : DynCtx -> OrdMap Unit -> List UObligation -> Unit
-improveByUniqueImpl dyn _ [] = ()
+improveByUniqueImpl _dyn _ [] = ()
 improveByUniqueImpl dyn sigIds (o :: rest) =
   improveGoal
     dyn
@@ -1570,7 +1561,7 @@ determineByUniqueInstanceGo : ModuleCtx ->
   Bool ->
   List (Int, UObligation) ->
   Bool
-determineByUniqueInstanceGo mctx _ _ changed [] = changed
+determineByUniqueInstanceGo _mctx _ _ changed [] = changed
 determineByUniqueInstanceGo mctx rigidIds window changed ((_, o) :: rest) =
   let args = map normalize (uOblArgs mctx.mcGraph o)
   let now = determineGoal mctx rigidIds window o args
@@ -1635,7 +1626,7 @@ determineHeldGoal mctx rigidIds window o args
 -- Files a commit's instance under the variable heading the committed goal, the
 -- one `determinedGoalInstance` reads when selection by head finds nothing.
 fileDeterminedRow : ModuleCtx -> ImplRow -> List Mono -> Unit
-fileDeterminedRow mctx _ [] = ()
+fileDeterminedRow _mctx _ [] = ()
 fileDeterminedRow mctx row (first :: rest) = match normalize first
   TVar cell =>
     let table = mctx.mcCells.determinedRowsRef.value
@@ -1864,7 +1855,7 @@ superGoalClosureGo : GraphCtx ->
   List IfaceRef ->
   List (IfaceRef, List Mono) ->
   List (IfaceRef, List Mono)
-superGoalClosureGo gctx [] _ acc = reverse acc
+superGoalClosureGo _gctx [] _ acc = reverse acc
 superGoalClosureGo gctx ((iface, args) :: rest) seen acc =
   let step =
     st sg => match sg
@@ -2078,7 +2069,7 @@ goalDefersOpenWorld mctx scope iface args =
 --     pointwise: a slot is open only if NO binding has already fixed a context claiming
 --     any variable this predicate mentions, at any position.
 goalSlotStillOpen : ModuleCtx -> List Mono -> Bool
-goalSlotStillOpen mctx [] = False
+goalSlotStillOpen _mctx [] = False
 goalSlotStillOpen mctx args =
   not (goalIdsClaimed mctx (flatMap monoUnboundIds args))
 
@@ -2089,7 +2080,7 @@ goalSlotStillOpen mctx args =
 -- context, `registerInferredFor` for an inferred one), so the test does not distinguish
 -- them — the fixedness, not the channel, is what decides.
 goalIdsClaimed : ModuleCtx -> List Int -> Bool
-goalIdsClaimed mctx [] = False
+goalIdsClaimed _mctx [] = False
 goalIdsClaimed mctx ids =
   anyClaimRow ids mctx.mcCells.funPredicateSlotsRef.value
 
@@ -2180,7 +2171,7 @@ sealMethodReturnGoalsFrom : GraphCtx ->
   List Obligation ->
   (List Obligation, List MethodReturnMemoView) ->
   (List Obligation, List MethodReturnMemoView)
-sealMethodReturnGoalsFrom gctx _ [] acc = acc
+sealMethodReturnGoalsFrom _gctx _ [] acc = acc
 sealMethodReturnGoalsFrom gctx evidence (goal :: rest) (goals, views) =
   match exactReturnRequestOfGoal goal
     Some request => sealMethodReturnGoalsFrom gctx evidence rest (

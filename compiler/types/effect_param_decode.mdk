@@ -117,7 +117,7 @@ effectParamProblems _ (PSet None) (EPLit _) = []
 -- A bare literal on a Product label lifts into the first axis as the
 -- domain does (`productPrimaryLift`): a prefix pattern for a Prefix axis, a
 -- one-element set for a Set axis.
-effectParamProblems l (PProduct schema) (EPLit pat) =
+effectParamProblems _l (PProduct schema) (EPLit pat) =
   primaryLiteralProblems schema pat
     ++ productAxesProblems schema (productPrimaryLift schema pat)
 effectParamProblems l _ (EPLit _) = [atomicLabelParamText l]

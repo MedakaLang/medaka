@@ -121,7 +121,7 @@ effectParamProblems _ (PSet None) (EPLit _) = []
 -- A bare literal on a Product label lifts into the first axis as the
 -- domain does (`productPrimaryLift`): a prefix pattern for a Prefix axis, a
 -- one-element set for a Set axis.
-effectParamProblems l (PProduct schema) (EPLit pat) =
+effectParamProblems _l (PProduct schema) (EPLit pat) =
   primaryLiteralProblems schema pat
     ++ productAxesProblems schema (productPrimaryLift schema pat)
 effectParamProblems l _ (EPLit _) = [atomicLabelParamText l]
@@ -273,7 +273,7 @@ axisProblems schema name p = match lookupAxis name schema
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPrefix" (PCon "None")) (PCon "EPLit" (PVar "pat"))) (EApp (EApp (EVar "prefixLiteralProblems") (EVar "l")) (EVar "pat")))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPath" (PCon "None")) (PCon "EPLit" (PVar "pat"))) (EApp (EApp (EVar "prefixLiteralProblems") (EVar "l")) (EVar "pat")))
 (DFunDef false "effectParamProblems" (PWild (PCon "PSet" (PCon "None")) (PCon "EPLit" PWild)) (EListLit))
-(DFunDef false "effectParamProblems" ((PVar "l") (PCon "PProduct" (PVar "schema")) (PCon "EPLit" (PVar "pat"))) (EBinOp "++" (EApp (EApp (EVar "primaryLiteralProblems") (EVar "schema")) (EVar "pat")) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EApp (EVar "productPrimaryLift") (EVar "schema")) (EVar "pat")))))
+(DFunDef false "effectParamProblems" ((PVar "_l") (PCon "PProduct" (PVar "schema")) (PCon "EPLit" (PVar "pat"))) (EBinOp "++" (EApp (EApp (EVar "primaryLiteralProblems") (EVar "schema")) (EVar "pat")) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EApp (EVar "productPrimaryLift") (EVar "schema")) (EVar "pat")))))
 (DFunDef false "effectParamProblems" ((PVar "l") PWild (PCon "EPLit" PWild)) (EListLit (EApp (EVar "atomicLabelParamText") (EVar "l"))))
 (DFunDef false "effectParamProblems" (PWild (PCon "PSet" (PCon "None")) (PCon "EPSet" PWild)) (EListLit))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPrefix" (PCon "None")) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label `")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "` takes a prefix pattern, not a set")))))
@@ -349,7 +349,7 @@ axisProblems schema name p = match lookupAxis name schema
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPrefix" (PCon "None")) (PCon "EPLit" (PVar "pat"))) (EApp (EApp (EVar "prefixLiteralProblems") (EVar "l")) (EVar "pat")))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPath" (PCon "None")) (PCon "EPLit" (PVar "pat"))) (EApp (EApp (EVar "prefixLiteralProblems") (EVar "l")) (EVar "pat")))
 (DFunDef false "effectParamProblems" (PWild (PCon "PSet" (PCon "None")) (PCon "EPLit" PWild)) (EListLit))
-(DFunDef false "effectParamProblems" ((PVar "l") (PCon "PProduct" (PVar "schema")) (PCon "EPLit" (PVar "pat"))) (EBinOp "++" (EApp (EApp (EVar "primaryLiteralProblems") (EVar "schema")) (EVar "pat")) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EApp (EVar "productPrimaryLift") (EVar "schema")) (EVar "pat")))))
+(DFunDef false "effectParamProblems" ((PVar "_l") (PCon "PProduct" (PVar "schema")) (PCon "EPLit" (PVar "pat"))) (EBinOp "++" (EApp (EApp (EVar "primaryLiteralProblems") (EVar "schema")) (EVar "pat")) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EApp (EVar "productPrimaryLift") (EVar "schema")) (EVar "pat")))))
 (DFunDef false "effectParamProblems" ((PVar "l") PWild (PCon "EPLit" PWild)) (EListLit (EApp (EVar "atomicLabelParamText") (EVar "l"))))
 (DFunDef false "effectParamProblems" (PWild (PCon "PSet" (PCon "None")) (PCon "EPSet" PWild)) (EListLit))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPrefix" (PCon "None")) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label `")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "` takes a prefix pattern, not a set")))))

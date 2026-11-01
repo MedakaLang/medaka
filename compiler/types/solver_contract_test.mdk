@@ -499,8 +499,6 @@ contextForwardingResult _ =
   let rich = instantiateQualified testServices richScope testOrigin vectorScheme
   let absent =
     instantiateQualified testServices absentScope absentOrigin sharedScheme
-  let richSignature = ("contract", 3, "boundValue", 37)
-  let absentSignature = ("synthetic", 0 - 1, "<none>", 53)
   ContextForwardingObservation {
     cfoRichStoredContexts = map wantedContext rich.arguments,
     cfoAbsentStoredContexts = map wantedContext absent.arguments,

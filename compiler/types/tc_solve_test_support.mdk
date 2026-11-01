@@ -108,7 +108,7 @@ routeWords (RDict name) = ["dict:\{name}"]
 routeWords (RDictFwd name) = ["dictfwd:\{name}"]
 routeWords (RLocal name rs) = "local:\{name}" :: flatMap routeWords rs
 routeWords (RScalar name) = ["scalar:\{name}"]
-routeWords (RProj r path) = routeWords r
+routeWords (RProj r _path) = routeWords r
 
 -- The inputs of a drive a test observes through [sink]: nothing stdlib-owned, no
 -- profile, the sink as the trace.

@@ -21,7 +21,7 @@ import test.vector_ledger.{
 }
 import test.vector_runner.{freshScratch, reap, runSeconds, spawn, spawnFindings}
 import string.{contains, unlines}
-import test.{Expectation, expectNoFindings}
+import test.{expectNoFindings}
 import test_process.{medakaRoot}
 
 gate : String

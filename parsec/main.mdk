@@ -13,7 +13,6 @@ import lib.parser.{
   char,
   sepBy,
   chainl1,
-  spaces,
   between,
   string,
   orElse,

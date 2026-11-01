@@ -26,7 +26,7 @@ import frontend.ast.{
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import support.util.{isEmptyL, reverseL}
-import hash_map.{has}
+import hash_map
 import tools.lint_core.{
   Category(..),
   Ctx(..),

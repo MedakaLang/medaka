@@ -15,7 +15,7 @@ import backend.emit_target.{Backend, profileColumn}
 import test_process.{medakaBin, boundedVerb, withScratchDir}
 import test.{Expectation, expectEach, expectEqual, expectTextContainsAll, fail}
 
-import types.target_profile.{TargetProfile, profileNames, lookupProfile}
+import types.target_profile.{profileNames, lookupProfile}
 import backend.core_validate.{unprovidedOn}
 import backend.extern_catalog.{catalogRows, rowName}
 

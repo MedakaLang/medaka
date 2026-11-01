@@ -11,10 +11,6 @@ UPPER "Ord"
 COMMA
 UPPER "Debug"
 COMMA
-UPPER "Foldable"
-COMMA
-UPPER "Mappable"
-COMMA
 UPPER "Option"
 COMMA
 UPPER "Result"
@@ -453,7 +449,7 @@ IDENT "x"
 NEWLINE
 IDENT "last"
 LPAREN
-IDENT "x"
+IDENT "_x"
 CONS
 IDENT "xs"
 RPAREN
@@ -482,7 +478,7 @@ UPPER "None"
 NEWLINE
 IDENT "init"
 LPAREN
-IDENT "x"
+IDENT "_x"
 CONS
 LBRACKET
 RBRACKET
@@ -2732,7 +2728,7 @@ EQUAL
 UPPER "True"
 NEWLINE
 IDENT "startsWith"
-IDENT "prefix"
+IDENT "_prefix"
 LBRACKET
 RBRACKET
 EQUAL

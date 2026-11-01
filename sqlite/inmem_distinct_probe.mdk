@@ -13,14 +13,13 @@ import lib.dbwriter.{buildDatabaseMulti}
 import lib.sqlite.{Db, fromBytes}
 import lib.recordfmt.{Cell(..)}
 import lib.select.{
-  Select,
   selectFrom,
   withOrderBy,
   withLimit,
   withDistinct,
   queryDistinct,
 }
-import lib.rowtype.{RowType, tInt, t2}
+import lib.rowtype.{tInt, t2}
 import demo_support.{printInts, printPairs}
 
 numsSql : String

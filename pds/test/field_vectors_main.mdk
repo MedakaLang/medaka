@@ -165,7 +165,7 @@ processAll : Array Int ->
   Int ->
   Int ->
   <IO> Unit
-processAll counts totals stride path [] lineNo rowNo = ()
+processAll _counts _totals _stride _path [] _lineNo _rowNo = ()
 processAll counts totals stride path (l :: rest) lineNo rowNo =
   let t = trim l
   if t == "" || isComment t then
@@ -185,7 +185,7 @@ runFile counts totals stride path = match readLines path
   Ok ls => processAll counts totals stride path ls 1 0
 
 runAll : Array Int -> Array Int -> Int -> List String -> <IO, FileRead> Unit
-runAll counts totals stride [] = ()
+runAll _counts _totals _stride [] = ()
 runAll counts totals stride (f :: rest) =
   let () = runFile counts totals stride f
   runAll counts totals stride rest

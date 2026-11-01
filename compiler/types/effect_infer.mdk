@@ -2,7 +2,7 @@
 -- them; inference allowances and signature constraints belong to the checker.
 import types.effect_rows.{EffRow(..), Effvar, collectRows}
 import types.effect_domain.{
-  Param(..), canonParam, productNorm, subTopOf, productPrimaryLift, domainKey
+  Param(..), canonParam, productPrimaryLift, domainKey
 }
 import types.effect_authority.{
   Authority(..), authJoin, authTop, authExtend, authAppend, authWidenValue,
@@ -13,7 +13,7 @@ import frontend.ast.{
   Expr(..), Lit(..), Pat(..), Arm(..), LetBind(..), FunClause(..), DoStmt(..),
   TyConOrigin(..), patBoundNames, sameTyConHead
 }
-import support.util.{reverseL, lookupAssoc, mapOption}
+import support.util.{reverseL, mapOption}
 
 export
 recordEffect : Ref (List EffRow) -> EffRow -> Unit

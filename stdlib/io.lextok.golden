@@ -6,8 +6,6 @@ UPPER "Debug"
 COMMA
 UPPER "Display"
 COMMA
-UPPER "Option"
-COMMA
 UPPER "Result"
 COMMA
 IDENT "optionOr"

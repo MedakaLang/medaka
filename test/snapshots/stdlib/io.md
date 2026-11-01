@@ -15,7 +15,7 @@ stages=DESUGAR,MARK
    in `Err`. There is no IO monad: an action runs when it is evaluated, so
    `match readFile path` works directly. -}
 
-import core.{Debug, Display, Option, Result, optionOr}
+import core.{Debug, Display, Result, optionOr}
 import string.{stripCR}
 
 -- # Standard error
@@ -177,7 +177,7 @@ export
 getEnvOr : (name : String) -> String -> <Env name> String
 getEnvOr name fallback = optionOr fallback (getEnv name)
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "optionOr" false))))
+(DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Display" false) (mem "Result" false) (mem "optionOr" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DTypeSig true "eprint" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("Stderr") None (TyCon "Unit")))))
 (DFunDef false "eprint" ((PVar "x")) (EApp (EVar "ePutStr") (EApp (EVar "display") (EVar "x"))))
@@ -202,7 +202,7 @@ getEnvOr name fallback = optionOr fallback (getEnv name)
 (DTypeSig true "getEnvOr" (TyFun (TyNamed "name" (TyCon "String")) (TyFun (TyCon "String") (TyEffect ((atom "Env" (name "name"))) None (TyCon "String")))))
 (DFunDef false "getEnvOr" ((PVar "name") (PVar "fallback")) (EApp (EApp (EVar "optionOr") (EVar "fallback")) (EApp (EVar "getEnv") (EVar "name"))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "optionOr" false))))
+(DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Display" false) (mem "Result" false) (mem "optionOr" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DTypeSig true "eprint" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("Stderr") None (TyCon "Unit")))))
 (DFunDef false "eprint" ((PVar "x")) (EApp (EVar "ePutStr") (EApp (EMethodRef "display") (EVar "x"))))

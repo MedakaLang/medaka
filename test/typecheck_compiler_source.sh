@@ -495,7 +495,7 @@ check_origin_observers() {
   echo "  ok: $1 only observes OriginUnresolved"
 }
 check_origin_observers compiler/tools/prop_plan.mdk \
-  'hasAmbiguousUnresolved (TypeKey n OriginUnresolved) defs = listLength defs > 1' || exit 1
+  'hasAmbiguousUnresolved (TypeKey _n OriginUnresolved) defs = listLength defs > 1' || exit 1
 check_origin_observers compiler/tools/prop_runner_test.mdk \
   'stampBuiltinTy (ty@(TyCon { tyConName, tyConOrigin = OriginUnresolved })) =' || exit 1
 check_origin_observers compiler/tools/native_props_test.mdk \
@@ -1009,13 +1009,13 @@ activeFunDictPredOf gctx request useScope =
 goalRequestOfKind : ModuleCtx -> String -> EntailKind -> Option PredicateRequest
 goalPredOf : ModuleCtx -> String -> Mono -> Option PredicateRequest
 goalPredOfOp : ModuleCtx -> String -> Option PredicateRequest
-activeDictVarOfEncl mctx None m encl useScope =
+activeDictVarOfEncl mctx None m _encl useScope =
 map LegacyScalar (activeDictVarOf mctx.mcGraph m useScope)
 activeDictVarOfEncl mctx (Some request) m encl useScope =
 enclSlotIndex mctx None target encl = elemIndex target (enclSlotIds mctx encl)
 enclSlotIndex mctx (Some request) target encl =
 implReqDictVarOf mctx.mcGraph (Some request) m useScope
-entailAssumVar mctx _ m encl _ useScope (EKNestedTop iface _ _ rest) =
+entailAssumVar mctx _ m _encl _ useScope (EKNestedTop iface _ _ rest) =
 goalMatchesGiven : GraphCtx -> ScopeId -> IfaceRef -> List Mono -> Bool
 mctx.mcCells.funPredicateSlotsRef :=
 mctx.mcCells.methodPredicateSlotsRef :=
@@ -1454,7 +1454,7 @@ fi
 # its single route goal. The scalar-only recorder remains only as the fallback
 # inside recordBinopGoals for prelude-free arithmetic.
 numeric_operator_required='  recordBinopGoals at.teDyn.dcModule op dref lt
-goalRequestOfKind mctx _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
+goalRequestOfKind _mctx _ (EKPredicateOp _ _ predicate) = Some
 entailAssumVar mctx request m encl _ useScope (EKPredicateOp _ _ _) =
 entailInst sx name m encl useScope _ (EKPredicateOp _ _ predicate) =
   (stampPredicateOpRouteVal sx encl useScope name m predicate, [])'

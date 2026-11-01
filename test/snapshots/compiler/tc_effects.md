@@ -1,5 +1,5 @@
 # META
-source_lines=2059
+source_lines=2058
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_effects: the effect checks inference runs at binding boundaries and impl bodies (escape,
@@ -182,7 +182,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   joinWith,
   listLen,
   lookupAssoc,
@@ -210,7 +209,7 @@ effectSiteOf : ModuleCtx ->
   Option String ->
   Option Authority ->
   Option Loc
-effectSiteOf mctx _ None _ = None
+effectSiteOf _mctx _ None _ = None
 effectSiteOf mctx fn (Some label) bound =
   match omLookup (effectSiteKey fn label) mctx.mcCells.effectSitesRef.value
     Some sites =>
@@ -246,7 +245,7 @@ recordEffectBody mctx summary lower =
   EffectSolver.recordBodyLower mctx.mcCells.effectSummaries summary lower
 
 summaryEscape : GraphCtx -> Bool -> List Atom -> List Atom -> List Atom
-summaryEscape gctx True lower upper = atomsDiff lower upper
+summaryEscape _gctx True lower upper = atomsDiff lower upper
 summaryEscape gctx False lower upper = atomsEscape gctx lower upper
 
 finishEffectSummaryScope : ModuleCtx ->
@@ -296,7 +295,7 @@ export
 reportEffectSummaryFailures : ModuleCtx ->
   List (SummaryFailure ObligationSite) ->
   Unit
-reportEffectSummaryFailures mctx [] = ()
+reportEffectSummaryFailures _mctx [] = ()
 reportEffectSummaryFailures outer (failure :: rest) =
   let fn = failure.esfContext.osFn
   let mctx =
@@ -419,7 +418,7 @@ finishEffectContract dyn (saved, savedAuths) =
 -- registration — would leave the table empty and spuriously reject `Async e a`.
 export
 checkUndeterminedRetEffVars : ModuleCtx -> List Decl -> Unit
-checkUndeterminedRetEffVars mctx [] = ()
+checkUndeterminedRetEffVars _mctx [] = ()
 checkUndeterminedRetEffVars mctx (d :: rest) =
   checkUndeterminedRetEffVarsDecl mctx d
   checkUndeterminedRetEffVars mctx rest
@@ -448,14 +447,14 @@ checkUndeterminedRetEffVarsDecl mctx (DTypeSig _ n t _) =
   checkArgEffVarCoverage mctx None [] n t
 checkUndeterminedRetEffVarsDecl mctx (DAttrib _ d) =
   checkUndeterminedRetEffVarsDecl mctx d
-checkUndeterminedRetEffVarsDecl mctx _ = ()
+checkUndeterminedRetEffVarsDecl _mctx _ = ()
 
 checkIfaceMethodEffs : ModuleCtx ->
   String ->
   List (String, List Kind) ->
   List IfaceMethod ->
   Unit
-checkIfaceMethodEffs mctx _ _ [] = ()
+checkIfaceMethodEffs _mctx _ _ [] = ()
 checkIfaceMethodEffs mctx iface scope ((IfaceMethod mname mty _ _) :: rest) =
   match undeterminedRetEffVars mctx scope mty
     [] => ()
@@ -545,7 +544,7 @@ checkArgEffVars : ModuleCtx ->
   List (String, List Atom) ->
   List String ->
   Unit
-checkArgEffVars mctx _ _ _ _ _ [] = ()
+checkArgEffVars _mctx _ _ _ _ _ [] = ()
 checkArgEffVars mctx iface mname mty argOccs retOccs (v :: rest) =
   let vrets = filterList (o => fst o == v) retOccs
   let vatoms = flatMap snd (filterList (o => fst o == v) argOccs)
@@ -570,7 +569,7 @@ checkArgEffVars mctx iface mname mty argOccs retOccs (v :: rest) =
 -- first non-empty escape of the argument-side atoms against a non-argument
 -- occurrence's declared atoms (IO-expanded via atomsEscape)
 retOccsEscape : GraphCtx -> List Atom -> List (String, List Atom) -> List Atom
-retOccsEscape gctx _ [] = []
+retOccsEscape _gctx _ [] = []
 retOccsEscape gctx vatoms ((_, declAtoms) :: rest) =
   if isNonEmptyL (atomsEscape gctx vatoms declAtoms) then
     atomsEscape gctx vatoms declAtoms
@@ -600,7 +599,7 @@ methodEffArgOccs mctx scope (TyConstrained _ t) = methodEffArgOccs mctx scope t
 methodEffArgOccs mctx scope (TyEffect _ _ t) = methodEffArgOccs mctx scope t
 methodEffArgOccs mctx scope (TyFun a b) =
   argPerformableOccs mctx scope True a ++ methodEffArgOccs mctx scope b
-methodEffArgOccs mctx _ _ = []
+methodEffArgOccs _mctx _ _ = []
 
 -- One `(tail var, the row's written atoms)` occurrence per tail variable.  A
 -- row is a JOIN when it names several (#821, `<Stdout | e | e2>`), and every
@@ -651,7 +650,7 @@ argPerformableOccs mctx scope perf (TyApp a b) = match tyAppSpine (TyApp a b)
     argPerformableOccs mctx scope perf a ++ argPerformableOccs mctx scope perf b
 argPerformableOccs mctx scope perf (TyConstrained _ t) =
   argPerformableOccs mctx scope perf t
-argPerformableOccs mctx _ _ _ = []
+argPerformableOccs _mctx _ _ _ = []
 
 -- one ctor node: its bare row-kinded slots (if performable) + recurse the args
 --
@@ -821,7 +820,7 @@ declaredEffects : GraphCtx -> Ty -> List Atom
 declaredEffects gctx (TyFun _ ret) = declaredEffects gctx ret
 declaredEffects gctx (TyEffect effs _ _) = atomsOfWritten gctx effs
 declaredEffects gctx (TyConstrained _ t) = declaredEffects gctx t
-declaredEffects gctx _ = []
+declaredEffects _gctx _ = []
 
 -- #797: the TAIL of that same first `<…>` — the field `declaredEffects` drops.
 -- No names is a genuinely CLOSED row (`<>`, `<Stdout>`); one or more is an OPEN
@@ -851,7 +850,7 @@ declaredArgEffNames : ModuleCtx -> Ty -> List String
 declaredArgEffNames mctx (TyFun a ret) =
   effTailNames a ++ rowArgNames mctx a ++ declaredArgEffNames mctx ret
 declaredArgEffNames mctx (TyConstrained _ t) = declaredArgEffNames mctx t
-declaredArgEffNames mctx _ = []
+declaredArgEffNames _mctx _ = []
 
 -- #797: is the declared return row genuinely OPEN — a free tail var that appears
 -- NOWHERE on the argument side?  Such a var is chosen by nothing but the callee's
@@ -1255,8 +1254,8 @@ registerLocalGroupAbs : TcEnv ->
   Int ->
   List (LetBind, Option ScopeId) ->
   Unit
-registerLocalGroupAbs env _ _ [] = ()
-registerLocalGroupAbs genv oblN0 callN0 ((bind@(LetBind name _ _ _), lscope) :: rest) =
+registerLocalGroupAbs _env _ _ [] = ()
+registerLocalGroupAbs genv oblN0 callN0 ((LetBind name _ _ _, lscope) :: rest) =
   match lookupVar genv name
     Some sch =>
       registerLocalAbsIf genv.teDyn.dcModule name lscope sch oblN0 callN0
@@ -1484,7 +1483,7 @@ argumentAuthority env top (Some e) xt =
   let q = alphaOf top (envVarType env) prelude (envAlphaLets env) e xt
   noteArgumentShape env top prelude q e xt
   q
-argumentAuthority env top None xt = typeAuthority top xt
+argumentAuthority _env top None xt = typeAuthority top xt
 
 -- Record, for a report of a bound this argument fails (`boundFailureMsg`),
 -- the authority variables it extends on the right, and those it would reach
@@ -1632,8 +1631,8 @@ launderEscapeFromLog : GraphCtx ->
   List EffRow ->
   List AbsorptionEvent ->
   List Atom
-launderEscapeFromLog gctx [] _ _ = []
-launderEscapeFromLog gctx _ [] _ = []
+launderEscapeFromLog _gctx [] _ _ = []
+launderEscapeFromLog _gctx _ [] _ = []
 launderEscapeFromLog gctx (der :: dRest) (aer :: aRest) evts =
   let here = match aer
     EffRow _ None => []
@@ -1650,7 +1649,7 @@ launderOpenActualArrow gctx (EffRow declAtoms (Some cell)) evts =
     []
   else
     atomsEscape gctx (atomsAbsorbedInto tid evts) declAtoms
-launderOpenActualArrow gctx (EffRow _ None) _ = []
+launderOpenActualArrow _gctx (EffRow _ None) _ = []
 
 -- the concrete atoms the window recorded as absorbed into the live tail [tid]
 -- (resolving each event's stored cell live, per risk 2).
@@ -1861,7 +1860,7 @@ checkIndexOnlyGo : ModuleCtx ->
   Option Loc ->
   List String ->
   Unit
-checkIndexOnlyGo mctx _ _ _ [] = ()
+checkIndexOnlyGo _mctx _ _ _ [] = ()
 checkIndexOnlyGo mctx subject effMap loc (v :: rest) =
   -- [eager] already holds only the vars the body performed on a method arrow
   -- (`eagerIndexOnlyVars`); whether the cell then closed (the pre-#821 unify)
@@ -1918,7 +1917,7 @@ effVarChargedOccs gctx (TyFun a b) =
   effVarChargedOccs gctx a ++ effVarChargedOccs gctx b
 effVarChargedOccs gctx (TyTuple ts) = flatMap (effVarChargedOccs gctx) ts
 effVarChargedOccs gctx (TyConstrained _ t) = effVarChargedOccs gctx t
-effVarChargedOccs gctx _ = []
+effVarChargedOccs _gctx _ = []
 
 checkEffVarAtoms : ModuleCtx ->
   String ->
@@ -1926,7 +1925,7 @@ checkEffVarAtoms : ModuleCtx ->
   List (String, Ref Effvar) ->
   Option Loc ->
   Unit
-checkEffVarAtoms mctx _ _ [] _ = ()
+checkEffVarAtoms _mctx _ _ [] _ = ()
 checkEffVarAtoms mctx subject occs ((n, cell) :: rest) loc =
   let esc =
     effVarOccEscape mctx.mcGraph n (effrowLabels (EffRow [] (Some cell))) occs
@@ -1942,8 +1941,8 @@ effVarOccEscape : GraphCtx ->
   List Atom ->
   List (String, List Atom) ->
   List Atom
-effVarOccEscape gctx _ [] _ = []
-effVarOccEscape gctx _ _ [] = []
+effVarOccEscape _gctx _ [] _ = []
+effVarOccEscape _gctx _ _ [] = []
 effVarOccEscape gctx n instAtoms ((m, declAtoms) :: rest) =
   if m == n && isNonEmptyL (atomsEscape gctx instAtoms declAtoms) then
     atomsEscape gctx instAtoms declAtoms
@@ -1968,7 +1967,7 @@ effVarOccAtoms gctx (TyApp a b) = effVarOccAtoms gctx a ++ effVarOccAtoms gctx b
 effVarOccAtoms gctx (TyFun a b) = effVarOccAtoms gctx a ++ effVarOccAtoms gctx b
 effVarOccAtoms gctx (TyTuple ts) = flatMap (effVarOccAtoms gctx) ts
 effVarOccAtoms gctx (TyConstrained _ t) = effVarOccAtoms gctx t
-effVarOccAtoms gctx _ = []
+effVarOccAtoms _gctx _ = []
 
 export
 clausesAt : String -> OrdMap (List (List Pat, Expr)) -> List (List Pat, Expr)
@@ -2008,7 +2007,7 @@ checkEffectEscapeIn : ModuleCtx ->
   String ->
   List Atom ->
   Unit
-checkEffectEscapeIn mctx group sigs m effs =
+checkEffectEscapeIn mctx group _sigs m effs =
   match omLookup m mctx.mcCells.sigTyMapRef.value
     None => ()
     -- #797: a genuinely open declared row (free return-position tail var, no
@@ -2046,7 +2045,7 @@ checkEffectEscapeIn mctx group sigs m effs =
 -- member the solver said nothing about, and drop it for one it reported.
 export
 flushPendingEscapes : ModuleCtx -> Option GroupCtx -> Unit
-flushPendingEscapes mctx None = ()
+flushPendingEscapes _mctx None = ()
 flushPendingEscapes mctx (Some group) =
   let pending = reverseL group.gcPendingEscapes.value
   group.gcPendingEscapes := []
@@ -2083,7 +2082,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omDelete" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "effect_solver") ((mem "ScopeRoles" true) (mem "noScopeRoles" false) (mem "SummaryFailure" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "reverse" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "ifaceWordOf" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false) (mem "mapExpr" false))))
@@ -2097,7 +2096,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "methodEntryHere" false))))
 (DTypeSig false "effectSiteOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Authority")) (TyApp (TyCon "Option") (TyCon "Loc")))))))
-(DFunDef false "effectSiteOf" ((PVar "mctx") PWild (PCon "None") PWild) (EVar "None"))
+(DFunDef false "effectSiteOf" ((PVar "_mctx") PWild (PCon "None") PWild) (EVar "None"))
 (DFunDef false "effectSiteOf" ((PVar "mctx") (PVar "fn") (PCon "Some" (PVar "label")) (PVar "bound")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "effectSiteKey") (EVar "fn")) (EVar "label"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "effectSitesRef") "value")) (arm (PCon "Some" (PVar "sites")) () (EBlock (DoLet false false (PVar "ordered") (EApp (EVar "reverseL") (EVar "sites"))) (DoLet false false (PVar "offending") (EMatch (EVar "bound") (arm (PCon "Some" (PVar "hi")) () (EApp (EApp (EVar "filterList") (ELam ((PVar "site")) (EApp (EVar "not") (EApp (EApp (EVar "authSub") (EApp (EVar "fst") (EVar "site"))) (EVar "hi"))))) (EVar "ordered"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EMatch (EBinOp "++" (EVar "offending") (EVar "ordered")) (arm (PCons (PVar "site") PWild) () (EApp (EVar "snd") (EVar "site"))) (arm (PList) () (EVar "None")))))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig true "beginEffectSummaryScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
 (DFunDef false "beginEffectSummaryScope" ((PVar "mctx") PWild) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueScopes")) (EBinOp "::" (EApp (EVar "wSnapshot") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueScopes") "value")))) (DoExpr (EApp (EApp (EApp (EVar "EffectSolver.openSummaryScope") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "effectSummaries")) (EApp (EApp (EVar "newEffvarId") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentLevel") "value")))))
@@ -2106,14 +2105,14 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DTypeSig true "recordEffectBody" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
 (DFunDef false "recordEffectBody" ((PVar "mctx") (PVar "summary") (PVar "lower")) (EApp (EApp (EApp (EVar "EffectSolver.recordBodyLower") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "effectSummaries")) (EVar "summary")) (EVar "lower")))
 (DTypeSig false "summaryEscape" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "summaryEscape" ((PVar "gctx") (PCon "True") (PVar "lower") (PVar "upper")) (EApp (EApp (EVar "atomsDiff") (EVar "lower")) (EVar "upper")))
+(DFunDef false "summaryEscape" ((PVar "_gctx") (PCon "True") (PVar "lower") (PVar "upper")) (EApp (EApp (EVar "atomsDiff") (EVar "lower")) (EVar "upper")))
 (DFunDef false "summaryEscape" ((PVar "gctx") (PCon "False") (PVar "lower") (PVar "upper")) (EApp (EApp (EApp (EVar "atomsEscape") (EVar "gctx")) (EVar "lower")) (EVar "upper")))
 (DTypeSig false "finishEffectSummaryScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyCon "Unit")))))
 (DFunDef false "finishEffectSummaryScope" ((PVar "mctx") (PVar "retained") (PVar "borrowed")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "finishEffectSummaryScopeKeeping") (EVar "mctx")) (EVar "noScopeRoles")) (EVar "retained")) (EVar "borrowed"))) (DoExpr (ELit LUnit))))
 (DTypeSig true "finishEffectSummaryScopeKeeping" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ScopeRoles") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "AuthResidual"))))))))
 (DFunDef false "finishEffectSummaryScopeKeeping" ((PVar "mctx") (PVar "roles") (PVar "retained") (PVar "borrowed")) (EBlock (DoLet false false (PVar "outcome") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "EffectSolver.closeSummaryScope") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidEffvarsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef") "value")) (EVar "roles")) (EVar "retained")) (EVar "borrowed")) (EApp (EVar "summaryEscape") (EFieldAccess (EVar "mctx") "mcGraph"))) (EApp (EVar "joinCellOf") (EFieldAccess (EVar "mctx") "mcGraph"))) (EApp (EVar "freshEffvarAt") (EFieldAccess (EVar "mctx") "mcGraph"))) (EApp (EVar "widenOpenedFor") (EVar "mctx")))) (DoExpr (EApp (EApp (EVar "reportEffectSummaryFailures") (EVar "mctx")) (EFieldAccess (EVar "outcome") "esoFailures"))) (DoExpr (EApp (EApp (EVar "finishFileValueScope") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "member") (PVar "w"))) (ETuple (EVar "member") (ERecordCreate "AuthResidual" ((fa "arLower" (EFieldAccess (EVar "w") "awLower")) (fa "arUpper" (EFieldAccess (EVar "w") "awUpper")) (fa "arExact" (EFieldAccess (EVar "w") "awExact"))))))) (EFieldAccess (EVar "outcome") "esoResiduals")))))
 (DTypeSig true "reportEffectSummaryFailures" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyCon "ObligationSite"))) (TyCon "Unit"))))
-(DFunDef false "reportEffectSummaryFailures" ((PVar "mctx") (PList)) (ELit LUnit))
+(DFunDef false "reportEffectSummaryFailures" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "reportEffectSummaryFailures" ((PVar "outer") (PCons (PVar "failure") (PVar "rest"))) (EBlock (DoLet false false (PVar "fn") (EFieldAccess (EFieldAccess (EVar "failure") "esfContext") "osFn")) (DoLet false false (PVar "mctx") (EApp (EApp (EVar "mctxAt") (EApp (EApp (EVar "orElseLoc") (EApp (EApp (EApp (EApp (EVar "effectSiteOf") (EVar "outer")) (EVar "fn")) (EFieldAccess (EVar "failure") "esfLabel")) (EApp (EVar "failureBound") (EVar "failure")))) (EFieldAccess (EFieldAccess (EVar "failure") "esfContext") "osLoc"))) (EVar "outer"))) (DoExpr (EMatch (EFieldAccess (EVar "failure") "esfAuthority") (arm (PCon "Some" (PTuple (PVar "lo") (PVar "hi"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "mentionsEscaped") (EVar "mctx")) (EVar "lo")) (EApp (EApp (EVar "mentionsEscaped") (EVar "mctx")) (EVar "hi"))) (ELit LUnit) (EIf (EFieldAccess (EVar "failure") "esfExact") (EApp (EApp (EApp (EApp (EApp (EVar "reportIndexFailure") (EVar "mctx")) (EFieldAccess (EFieldAccess (EVar "failure") "esfContext") "osCovering")) (EFieldAccess (EVar "mctx") "mcLoc")) (EVar "lo")) (EVar "hi")) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TAuthority")) (EFieldAccess (EVar "mctx") "mcLoc")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "authorityFailureMsg") (EVar "mctx")) (EVar "fn")) (EFieldAccess (EVar "failure") "esfLabel")) (EFieldAccess (EVar "failure") "esfResidualOf")) (EVar "lo")) (EVar "hi")) (EFieldAccess (EVar "failure") "esfWrittenUpper")))))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rowFailureReportedRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rowFailureReportedRef") "value")))) (DoExpr (EApp (EApp (EVar "reportRowFailure") (EVar "mctx")) (EVar "failure"))))))) (DoExpr (EApp (EApp (EVar "reportEffectSummaryFailures") (EVar "outer")) (EVar "rest")))))
 (DTypeSig false "failureBound" (TyFun (TyApp (TyCon "SummaryFailure") (TyCon "ObligationSite")) (TyApp (TyCon "Option") (TyCon "Authority"))))
 (DFunDef false "failureBound" ((PVar "failure")) (EMatch (EFieldAccess (EVar "failure") "esfAuthority") (arm (PCon "Some" (PTuple PWild (PVar "hi"))) () (EApp (EVar "Some") (EVar "hi"))) (arm (PCon "None") () (EMatch (EFieldAccess (EVar "failure") "esfLabel") (arm (PCon "Some" (PVar "label")) () (EApp (EApp (EVar "map") (EVar "atomAuth")) (EApp (EApp (EVar "findAtom") (EVar "label")) (EApp (EVar "fst") (EApp (EVar "rowFlat") (EFieldAccess (EVar "failure") "esfUpper")))))) (arm (PCon "None") () (EVar "None"))))))
@@ -2126,29 +2125,29 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DTypeSig true "finishEffectContract" (TyFun (TyCon "DynCtx") (TyFun (TyTuple (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (TyCon "Unit"))))
 (DFunDef false "finishEffectContract" ((PVar "dyn") (PTuple (PVar "saved") (PVar "savedAuths"))) (EBlock (DoExpr (EApp (EApp (EVar "resolvePendingJoins") (EVar "dyn")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value"))) (DoExpr (EApp (EApp (EApp (EVar "finishEffectSummaryScope") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "Tip")) (EVar "Tip"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "rigidEffvarsRef")) (EVar "saved"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "rigidAuthvarsRef")) (EVar "savedAuths")))))
 (DTypeSig true "checkUndeterminedRetEffVars" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "checkUndeterminedRetEffVars" ((PVar "mctx") (PList)) (ELit LUnit))
+(DFunDef false "checkUndeterminedRetEffVars" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "checkUndeterminedRetEffVars" ((PVar "mctx") (PCons (PVar "d") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "checkUndeterminedRetEffVarsDecl") (EVar "mctx")) (EVar "d"))) (DoExpr (EApp (EApp (EVar "checkUndeterminedRetEffVars") (EVar "mctx")) (EVar "rest")))))
 (DTypeSig false "checkUndeterminedRetEffVarsDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Decl") (TyCon "Unit"))))
 (DFunDef false "checkUndeterminedRetEffVarsDecl" ((PVar "mctx") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EApp (EVar "checkIfaceMethodEffs") (EVar "mctx")) (EVar "name")) (EApp (EApp (EApp (EApp (EVar "declGradedScope") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "typarams")) (EVar "typaramKinds")) (EVar "methods"))) (EVar "methods")))
 (DFunDef false "checkUndeterminedRetEffVarsDecl" ((PVar "mctx") (PCon "DTypeSig" PWild (PVar "n") (PVar "t") PWild)) (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVarCoverage") (EVar "mctx")) (EVar "None")) (EListLit)) (EVar "n")) (EVar "t")))
 (DFunDef false "checkUndeterminedRetEffVarsDecl" ((PVar "mctx") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "checkUndeterminedRetEffVarsDecl") (EVar "mctx")) (EVar "d")))
-(DFunDef false "checkUndeterminedRetEffVarsDecl" ((PVar "mctx") PWild) (ELit LUnit))
+(DFunDef false "checkUndeterminedRetEffVarsDecl" ((PVar "_mctx") PWild) (ELit LUnit))
 (DTypeSig false "checkIfaceMethodEffs" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit"))))))
-(DFunDef false "checkIfaceMethodEffs" ((PVar "mctx") PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "checkIfaceMethodEffs" ((PVar "_mctx") PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkIfaceMethodEffs" ((PVar "mctx") (PVar "iface") (PVar "scope") (PCons (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EApp (EApp (EVar "undeterminedRetEffVars") (EVar "mctx")) (EVar "scope")) (EVar "mty")) (arm (PList) () (ELit LUnit)) (arm (PVar "bad") () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "TEffectUndetermined")) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EVar "effectUndeterminedMsg") (EVar "iface")) (EVar "mname")) (EVar "bad")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVarCoverage") (EVar "mctx")) (EApp (EVar "Some") (EVar "iface"))) (EVar "scope")) (EVar "mname")) (EVar "mty"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkIfaceMethodEffs") (EVar "mctx")) (EVar "iface")) (EVar "scope")) (EVar "rest")))))
 (DTypeSig false "checkArgEffVarCoverage" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyCon "Unit")))))))
 (DFunDef false "checkArgEffVarCoverage" ((PVar "mctx") (PVar "iface") (PVar "scope") (PVar "mname") (PVar "mty")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVars") (EVar "mctx")) (EVar "iface")) (EVar "mname")) (EVar "mty")) (EApp (EApp (EApp (EVar "methodEffArgOccs") (EVar "mctx")) (EVar "scope")) (EVar "mty"))) (EApp (EApp (EApp (EVar "methodEffRetOccs") (EVar "mctx")) (EVar "scope")) (EVar "mty"))) (EApp (EVar "dedup") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EApp (EVar "methodEffArgOccs") (EVar "mctx")) (EVar "scope")) (EVar "mty"))))))
 (DTypeSig false "checkArgEffVars" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))))))
-(DFunDef false "checkArgEffVars" ((PVar "mctx") PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "checkArgEffVars" ((PVar "_mctx") PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkArgEffVars" ((PVar "mctx") (PVar "iface") (PVar "mname") (PVar "mty") (PVar "argOccs") (PVar "retOccs") (PCons (PVar "v") (PVar "rest"))) (EBlock (DoLet false false (PVar "vrets") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "v")))) (EVar "retOccs"))) (DoLet false false (PVar "vatoms") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "v")))) (EVar "argOccs")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "vrets")) (EMatch (EVar "iface") (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "TEffectArgUncovered")) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EVar "argOnlyEffVarMsg") (EVar "i")) (EVar "mname")) (EVar "v")))) (arm (PCon "None") () (ELit LUnit))) (EMatch (EApp (EApp (EApp (EVar "retOccsEscape") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "vatoms")) (EVar "vrets")) (arm (PList) () (ELit LUnit)) (arm (PVar "esc") () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "TEffectArgUncovered")) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EApp (EVar "argAtomsMsgFor") (EVar "iface")) (EVar "mname")) (EVar "v")) (EVar "esc"))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVars") (EVar "mctx")) (EVar "iface")) (EVar "mname")) (EVar "mty")) (EVar "argOccs")) (EVar "retOccs")) (EVar "rest")))))
 (DTypeSig false "retOccsEscape" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyApp (TyCon "List") (TyCon "Atom"))))))
-(DFunDef false "retOccsEscape" ((PVar "gctx") PWild (PList)) (EListLit))
+(DFunDef false "retOccsEscape" ((PVar "_gctx") PWild (PList)) (EListLit))
 (DFunDef false "retOccsEscape" ((PVar "gctx") (PVar "vatoms") (PCons (PTuple PWild (PVar "declAtoms")) (PVar "rest"))) (EIf (EApp (EVar "isNonEmptyL") (EApp (EApp (EApp (EVar "atomsEscape") (EVar "gctx")) (EVar "vatoms")) (EVar "declAtoms"))) (EApp (EApp (EApp (EVar "atomsEscape") (EVar "gctx")) (EVar "vatoms")) (EVar "declAtoms")) (EApp (EApp (EApp (EVar "retOccsEscape") (EVar "gctx")) (EVar "vatoms")) (EVar "rest"))))
 (DTypeSig false "methodEffArgOccs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))
 (DFunDef false "methodEffArgOccs" ((PVar "mctx") (PVar "scope") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "methodEffArgOccs") (EVar "mctx")) (EVar "scope")) (EVar "t")))
 (DFunDef false "methodEffArgOccs" ((PVar "mctx") (PVar "scope") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "methodEffArgOccs") (EVar "mctx")) (EVar "scope")) (EVar "t")))
 (DFunDef false "methodEffArgOccs" ((PVar "mctx") (PVar "scope") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "mctx")) (EVar "scope")) (EVar "True")) (EVar "a")) (EApp (EApp (EApp (EVar "methodEffArgOccs") (EVar "mctx")) (EVar "scope")) (EVar "b"))))
-(DFunDef false "methodEffArgOccs" ((PVar "mctx") PWild PWild) (EListLit))
+(DFunDef false "methodEffArgOccs" ((PVar "_mctx") PWild PWild) (EListLit))
 (DTypeSig false "occsOfTails" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))
 (DFunDef false "occsOfTails" ((PVar "gctx") (PVar "tails") (PVar "labels")) (EBlock (DoLet false false (PVar "atoms") (EApp (EApp (EVar "atomsOfWritten") (EVar "gctx")) (EVar "labels"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EVar "atoms")))) (EVar "tails")))))
 (DTypeSig false "argPerformableOccs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))
@@ -2158,7 +2157,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DFunDef false "argPerformableOccs" ((PVar "mctx") (PVar "scope") (PVar "perf") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf"))) (EVar "ts")))
 (DFunDef false "argPerformableOccs" ((PVar "mctx") (PVar "scope") (PVar "perf") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "krowSlotOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf")) (EVar "o")) (EVar "n")) (EVar "args"))) (arm (PTuple (PCon "TyVar" (PVar "h")) (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EVar "krowSlotVarOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf")) (EVar "h")) (EVar "args"))) (arm PWild () (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf")) (EVar "b"))))))
 (DFunDef false "argPerformableOccs" ((PVar "mctx") (PVar "scope") (PVar "perf") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf")) (EVar "t")))
-(DFunDef false "argPerformableOccs" ((PVar "mctx") PWild PWild PWild) (EListLit))
+(DFunDef false "argPerformableOccs" ((PVar "_mctx") PWild PWild PWild) (EListLit))
 (DTypeSig false "krowSlotOccs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Bool") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))))
 (DFunDef false "krowSlotOccs" ((PVar "mctx") (PVar "scope") (PVar "perf") (PVar "o") (PVar "n") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EBinOp "++" (EIf (EVar "perf") (EApp (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "kinds")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "paramRowAtomsOf") (EVar "mctx")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))))) (EVar "args")) (EListLit)) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf"))) (EVar "args")))) (arm PWild () (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf"))) (EVar "args")))))
 (DTypeSig false "krowSlotVarOccs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))))
@@ -2180,7 +2179,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DFunDef false "declaredEffects" ((PVar "gctx") (PCon "TyFun" PWild (PVar "ret"))) (EApp (EApp (EVar "declaredEffects") (EVar "gctx")) (EVar "ret")))
 (DFunDef false "declaredEffects" ((PVar "gctx") (PCon "TyEffect" (PVar "effs") PWild PWild)) (EApp (EApp (EVar "atomsOfWritten") (EVar "gctx")) (EVar "effs")))
 (DFunDef false "declaredEffects" ((PVar "gctx") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "declaredEffects") (EVar "gctx")) (EVar "t")))
-(DFunDef false "declaredEffects" ((PVar "gctx") PWild) (EListLit))
+(DFunDef false "declaredEffects" ((PVar "_gctx") PWild) (EListLit))
 (DTypeSig false "declaredEffectTail" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "declaredEffectTail" ((PCon "TyFun" PWild (PVar "ret"))) (EApp (EVar "declaredEffectTail") (EVar "ret")))
 (DFunDef false "declaredEffectTail" ((PCon "TyEffect" PWild (PVar "tail") PWild)) (EVar "tail"))
@@ -2189,7 +2188,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DTypeSig false "declaredArgEffNames" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "declaredArgEffNames" ((PVar "mctx") (PCon "TyFun" (PVar "a") (PVar "ret"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "effTailNames") (EVar "a")) (EApp (EApp (EVar "rowArgNames") (EVar "mctx")) (EVar "a"))) (EApp (EApp (EVar "declaredArgEffNames") (EVar "mctx")) (EVar "ret"))))
 (DFunDef false "declaredArgEffNames" ((PVar "mctx") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "declaredArgEffNames") (EVar "mctx")) (EVar "t")))
-(DFunDef false "declaredArgEffNames" ((PVar "mctx") PWild) (EListLit))
+(DFunDef false "declaredArgEffNames" ((PVar "_mctx") PWild) (EListLit))
 (DTypeSig false "declaredEffectsOpen" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Ty") (TyCon "Bool"))))
 (DFunDef false "declaredEffectsOpen" ((PVar "mctx") (PVar "ty")) (EBlock (DoLet false false (PVar "argNames") (EApp (EApp (EVar "declaredArgEffNames") (EVar "mctx")) (EVar "ty"))) (DoExpr (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "argNames"))))) (EApp (EVar "declaredEffectTail") (EVar "ty"))))))
 (DTypeSig true "evOrdinal" (TyFun (TyCon "EvId") (TyCon "Int")))
@@ -2267,8 +2266,8 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DTypeSig true "collectProducedSummary" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow"))))
 (DFunDef false "collectProducedSummary" ((PVar "mctx") (PVar "rows")) (EBlock (DoLet false false (PVar "summary") (EApp (EApp (EVar "freshEffectSummary") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "row")) (EApp (EApp (EApp (EVar "recordEffectBody") (EVar "mctx")) (EVar "summary")) (EVar "row")))) (EVar "rows"))) (DoExpr (EVar "summary"))))
 (DTypeSig true "registerLocalGroupAbs" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "LetBind") (TyApp (TyCon "Option") (TyCon "ScopeId")))) (TyCon "Unit"))))))
-(DFunDef false "registerLocalGroupAbs" ((PVar "env") PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "registerLocalGroupAbs" ((PVar "genv") (PVar "oblN0") (PVar "callN0") (PCons (PTuple (PAs "bind" (PCon "LetBind" (PVar "name") PWild PWild PWild)) (PVar "lscope")) (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EApp (EVar "lookupVar") (EVar "genv")) (EVar "name")) (arm (PCon "Some" (PVar "sch")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerLocalAbsIf") (EFieldAccess (EFieldAccess (EVar "genv") "teDyn") "dcModule")) (EVar "name")) (EVar "lscope")) (EVar "sch")) (EVar "oblN0")) (EVar "callN0"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerLocalGroupAbs") (EVar "genv")) (EVar "oblN0")) (EVar "callN0")) (EVar "rest")))))
+(DFunDef false "registerLocalGroupAbs" ((PVar "_env") PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "registerLocalGroupAbs" ((PVar "genv") (PVar "oblN0") (PVar "callN0") (PCons (PTuple (PCon "LetBind" (PVar "name") PWild PWild PWild) (PVar "lscope")) (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EApp (EVar "lookupVar") (EVar "genv")) (EVar "name")) (arm (PCon "Some" (PVar "sch")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerLocalAbsIf") (EFieldAccess (EFieldAccess (EVar "genv") "teDyn") "dcModule")) (EVar "name")) (EVar "lscope")) (EVar "sch")) (EVar "oblN0")) (EVar "callN0"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerLocalGroupAbs") (EVar "genv")) (EVar "oblN0")) (EVar "callN0")) (EVar "rest")))))
 (DTypeSig true "localBindingSummary" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "LetBind") (TyTuple (TyCon "String") (TyCon "BindingSummary")))))
 (DFunDef false "localBindingSummary" ((PVar "mctx") (PCon "LetBind" (PVar "name") (PVar "clauses") PWild PWild)) (EBlock (DoLet false false (PVar "arity") (EMatch (EApp (EApp (EVar "map") (EVar "funClausePair")) (EVar "clauses")) (arm (PCons (PTuple (PVar "pats") PWild) PWild) () (EApp (EVar "listLen") (EVar "pats"))) (arm (PList) () (ELit (LInt 0))))) (DoExpr (ETuple (EVar "name") (EApp (EApp (EApp (EVar "newBindingSummary") (EVar "arity")) (EApp (EVar "freshVar") (EVar "mctx"))) (EApp (EVar "freshEffectSummary") (EVar "mctx")))))))
 (DTypeSig false "fileBoundKey" (TyFun (TyCon "Loc") (TyCon "String")))
@@ -2313,7 +2312,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DFunDef false "recordClauseFileBound" ((PVar "mctx") (PVar "body") (PVar "arity") (PVar "ty")) (EIf (EBinOp "<=" (EVar "arity") (ELit (LInt 0))) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TFun" PWild (PVar "row") (PVar "result")) () (EIf (EBinOp "==" (EVar "arity") (ELit (LInt 1))) (EApp (EApp (EApp (EVar "recordFileBound") (EVar "mctx")) (EVar "body")) (EVar "row")) (EApp (EApp (EApp (EApp (EVar "recordClauseFileBound") (EVar "mctx")) (EVar "body")) (EBinOp "-" (EVar "arity") (ELit (LInt 1)))) (EVar "result")))) (arm (PCon "TQual" (PVar "inner") PWild) () (EApp (EApp (EApp (EApp (EVar "recordClauseFileBound") (EVar "mctx")) (EVar "body")) (EVar "arity")) (EVar "inner"))) (arm PWild () (ELit LUnit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "argumentAuthority" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "Option") (TyCon "Expr")) (TyFun (TyCon "Mono") (TyCon "Authority"))))))
 (DFunDef false "argumentAuthority" ((PVar "env") (PVar "top") (PCon "Some" (PVar "e")) (PVar "xt")) (EBlock (DoLet false false (PVar "prelude") (EApp (EVar "displayIsPrelude") (EVar "env"))) (DoLet false false (PVar "q") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "alphaOf") (EVar "top")) (EApp (EVar "envVarType") (EVar "env"))) (EVar "prelude")) (EApp (EVar "envAlphaLets") (EVar "env"))) (EVar "e")) (EVar "xt"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteArgumentShape") (EVar "env")) (EVar "top")) (EVar "prelude")) (EVar "q")) (EVar "e")) (EVar "xt"))) (DoExpr (EVar "q"))))
-(DFunDef false "argumentAuthority" ((PVar "env") (PVar "top") (PCon "None") (PVar "xt")) (EApp (EApp (EVar "typeAuthority") (EVar "top")) (EVar "xt")))
+(DFunDef false "argumentAuthority" ((PVar "_env") (PVar "top") (PCon "None") (PVar "xt")) (EApp (EApp (EVar "typeAuthority") (EVar "top")) (EVar "xt")))
 (DTypeSig false "noteArgumentShape" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Param") (TyFun (TyCon "Bool") (TyFun (TyCon "Authority") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyCon "Unit"))))))))
 (DFunDef false "noteArgumentShape" ((PVar "env") (PVar "top") (PVar "prelude") (PVar "q") (PVar "e") (PVar "xt")) (EBlock (DoLet false false (PVar "lets") (EApp (EVar "envAlphaLets") (EVar "env"))) (DoExpr (EMatch (EApp (EVar "extensionBase") (EVar "e")) (arm (PCon "Some" (PVar "base")) () (EApp (EApp (EVar "markBinders") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcCells") "extendedBindersRef")) (EApp (EVar "authVars") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "alphaOf") (EVar "top")) (EApp (EVar "envVarType") (EVar "env"))) (EVar "prelude")) (EVar "lets")) (EVar "base")) (EApp (EVar "tconBuiltin") (ELit (LString "String"))))))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EIf (EVar "prelude") (ELit LUnit) (EBlock (DoLet false false (PVar "seen") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "c")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "c"))) (ELit LUnit)) (EVar "m")))) (EVar "Tip")) (EApp (EVar "authVars") (EVar "q")))) (DoExpr (EApp (EApp (EVar "markBinders") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcCells") "displayHiddenBindersRef")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "IdMap.has") (EApp (EVar "authvarId") (EVar "c"))) (EVar "seen"))))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "x")) (EApp (EVar "authVars") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "alphaOf") (EVar "top")) (EApp (EVar "envVarType") (EVar "env"))) (EVar "prelude")) (EVar "lets")) (EVar "x")) (EVar "xt"))))) (EApp (EVar "displayOperands") (EVar "e")))))))))))
 (DTypeSig false "extensionBase" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
@@ -2346,12 +2345,12 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DTypeSig false "isPreludeDisplayIface" (TyFun (TyCon "IfaceRef") (TyCon "Bool")))
 (DFunDef false "isPreludeDisplayIface" ((PVar "iface")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Display"))) (EApp (EVar "isPreludeOrigin") (EFieldAccess (EVar "iface") "irOrigin"))))
 (DTypeSig true "launderEscapeFromLog" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyFun (TyApp (TyCon "List") (TyCon "AbsorptionEvent")) (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "launderEscapeFromLog" ((PVar "gctx") (PList) PWild PWild) (EListLit))
-(DFunDef false "launderEscapeFromLog" ((PVar "gctx") PWild (PList) PWild) (EListLit))
+(DFunDef false "launderEscapeFromLog" ((PVar "_gctx") (PList) PWild PWild) (EListLit))
+(DFunDef false "launderEscapeFromLog" ((PVar "_gctx") PWild (PList) PWild) (EListLit))
 (DFunDef false "launderEscapeFromLog" ((PVar "gctx") (PCons (PVar "der") (PVar "dRest")) (PCons (PVar "aer") (PVar "aRest")) (PVar "evts")) (EBlock (DoLet false false (PVar "here") (EMatch (EVar "aer") (arm (PCon "EffRow" PWild (PCon "None")) () (EListLit)) (arm (PCon "EffRow" PWild (PCon "Some" PWild)) () (EApp (EApp (EApp (EVar "launderOpenActualArrow") (EVar "gctx")) (EVar "der")) (EVar "evts"))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EApp (EApp (EVar "launderEscapeFromLog") (EVar "gctx")) (EVar "dRest")) (EVar "aRest")) (EVar "evts"))))))
 (DTypeSig false "launderOpenActualArrow" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EffRow") (TyFun (TyApp (TyCon "List") (TyCon "AbsorptionEvent")) (TyApp (TyCon "List") (TyCon "Atom"))))))
 (DFunDef false "launderOpenActualArrow" ((PVar "gctx") (PCon "EffRow" (PVar "declAtoms") (PCon "Some" (PVar "cell"))) (PVar "evts")) (EBlock (DoLet false false (PVar "tid") (EApp (EVar "liveTailId") (EVar "cell"))) (DoExpr (EIf (EBinOp "==" (EVar "tid") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EListLit) (EApp (EApp (EApp (EVar "atomsEscape") (EVar "gctx")) (EApp (EApp (EVar "atomsAbsorbedInto") (EVar "tid")) (EVar "evts"))) (EVar "declAtoms"))))))
-(DFunDef false "launderOpenActualArrow" ((PVar "gctx") (PCon "EffRow" PWild (PCon "None")) PWild) (EListLit))
+(DFunDef false "launderOpenActualArrow" ((PVar "_gctx") (PCon "EffRow" PWild (PCon "None")) PWild) (EListLit))
 (DTypeSig false "atomsAbsorbedInto" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "AbsorptionEvent")) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "atomsAbsorbedInto" (PWild (PList)) (EListLit))
 (DFunDef false "atomsAbsorbedInto" ((PVar "tid") (PCons (PVar "ev") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "liveTailId") (EFieldAccess (EVar "ev") "cell")) (EVar "tid")) (EBinOp "::" (EFieldAccess (EVar "ev") "atom") (EApp (EApp (EVar "atomsAbsorbedInto") (EVar "tid")) (EVar "rest"))) (EApp (EApp (EVar "atomsAbsorbedInto") (EVar "tid")) (EVar "rest"))))
@@ -2371,7 +2370,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DTypeSig false "effVarCellPerformed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))))
 (DFunDef false "effVarCellPerformed" ((PVar "v") (PVar "effMap") (PVar "pairs") (PVar "tails")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "v")) (EVar "effMap")) (arm (PCon "Some" (PVar "cell")) () (EBlock (DoLet false false (PVar "dids") (EApp (EVar "rowTailId") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell"))))) (DoExpr (EApp (EApp (EVar "anyList") (ELam ((PVar "did")) (EBinOp "||" (EApp (EApp (EVar "containsI") (EVar "did")) (EVar "tails")) (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "p")) (EVar "did")) (EApp (EApp (EVar "containsI") (EApp (EVar "snd") (EVar "p"))) (EVar "tails"))))) (EVar "pairs"))))) (EVar "dids"))))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "checkIndexOnlyGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "checkIndexOnlyGo" ((PVar "mctx") PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "checkIndexOnlyGo" ((PVar "_mctx") PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkIndexOnlyGo" ((PVar "mctx") (PVar "subject") (PVar "effMap") (PVar "loc") (PCons (PVar "v") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "TEffectIndexEager")) (EVar "loc")) (EApp (EApp (EVar "indexEagerMsg") (EVar "subject")) (EVar "v")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkIndexOnlyGo") (EVar "mctx")) (EVar "subject")) (EVar "effMap")) (EVar "loc")) (EVar "rest")))))
 (DTypeSig true "performSiteIn" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyApp (TyCon "Option") (TyCon "Loc")))))) (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "performSiteIn" ((PCon "None") PWild) (EVar "None"))
@@ -2389,13 +2388,13 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DFunDef false "effVarChargedOccs" ((PVar "gctx") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "effVarChargedOccs") (EVar "gctx")) (EVar "a")) (EApp (EApp (EVar "effVarChargedOccs") (EVar "gctx")) (EVar "b"))))
 (DFunDef false "effVarChargedOccs" ((PVar "gctx") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "effVarChargedOccs") (EVar "gctx"))) (EVar "ts")))
 (DFunDef false "effVarChargedOccs" ((PVar "gctx") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "effVarChargedOccs") (EVar "gctx")) (EVar "t")))
-(DFunDef false "effVarChargedOccs" ((PVar "gctx") PWild) (EListLit))
+(DFunDef false "effVarChargedOccs" ((PVar "_gctx") PWild) (EListLit))
 (DTypeSig false "checkEffVarAtoms" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))
-(DFunDef false "checkEffVarAtoms" ((PVar "mctx") PWild PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "checkEffVarAtoms" ((PVar "_mctx") PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkEffVarAtoms" ((PVar "mctx") (PVar "subject") (PVar "occs") (PCons (PTuple (PVar "n") (PVar "cell")) (PVar "rest")) (PVar "loc")) (EBlock (DoLet false false (PVar "esc") (EApp (EApp (EApp (EApp (EVar "effVarOccEscape") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "n")) (EApp (EVar "effrowLabels") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell"))))) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isNonEmptyL") (EVar "esc")) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "TEffectLaunder")) (EVar "loc")) (EApp (EApp (EApp (EVar "effVarLaunderMsg") (EVar "subject")) (EVar "n")) (EVar "esc"))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkEffVarAtoms") (EVar "mctx")) (EVar "subject")) (EVar "occs")) (EVar "rest")) (EVar "loc")))))
 (DTypeSig false "effVarOccEscape" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "effVarOccEscape" ((PVar "gctx") PWild (PList) PWild) (EListLit))
-(DFunDef false "effVarOccEscape" ((PVar "gctx") PWild PWild (PList)) (EListLit))
+(DFunDef false "effVarOccEscape" ((PVar "_gctx") PWild (PList) PWild) (EListLit))
+(DFunDef false "effVarOccEscape" ((PVar "_gctx") PWild PWild (PList)) (EListLit))
 (DFunDef false "effVarOccEscape" ((PVar "gctx") (PVar "n") (PVar "instAtoms") (PCons (PTuple (PVar "m") (PVar "declAtoms")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "n")) (EApp (EVar "isNonEmptyL") (EApp (EApp (EApp (EVar "atomsEscape") (EVar "gctx")) (EVar "instAtoms")) (EVar "declAtoms")))) (EApp (EApp (EApp (EVar "atomsEscape") (EVar "gctx")) (EVar "instAtoms")) (EVar "declAtoms")) (EApp (EApp (EApp (EApp (EVar "effVarOccEscape") (EVar "gctx")) (EVar "n")) (EVar "instAtoms")) (EVar "rest"))))
 (DTypeSig false "effVarOccAtoms" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "effVarOccAtoms" ((PVar "gctx") (PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EVar "occsOfTails") (EVar "gctx")) (EVar "tails")) (EVar "labels")) (EApp (EApp (EVar "effVarOccAtoms") (EVar "gctx")) (EVar "t"))))
@@ -2404,7 +2403,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DFunDef false "effVarOccAtoms" ((PVar "gctx") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "effVarOccAtoms") (EVar "gctx")) (EVar "a")) (EApp (EApp (EVar "effVarOccAtoms") (EVar "gctx")) (EVar "b"))))
 (DFunDef false "effVarOccAtoms" ((PVar "gctx") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "effVarOccAtoms") (EVar "gctx"))) (EVar "ts")))
 (DFunDef false "effVarOccAtoms" ((PVar "gctx") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "effVarOccAtoms") (EVar "gctx")) (EVar "t")))
-(DFunDef false "effVarOccAtoms" ((PVar "gctx") PWild) (EListLit))
+(DFunDef false "effVarOccAtoms" ((PVar "_gctx") PWild) (EListLit))
 (DTypeSig true "clausesAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
 (DFunDef false "clausesAt" ((PVar "n") (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m")) (arm (PCon "Some" (PVar "xs")) () (EVar "xs")) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "clausesOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
@@ -2414,9 +2413,9 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DTypeSig true "checkEffectEscape" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))))
 (DFunDef false "checkEffectEscape" ((PVar "dyn") (PVar "sigs") (PVar "m") (PVar "effs")) (EMatch (EFieldAccess (EVar "dyn") "dcGroup") (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "group")) () (EApp (EApp (EApp (EApp (EApp (EVar "checkEffectEscapeIn") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "group")) (EVar "sigs")) (EVar "m")) (EVar "effs")))))
 (DTypeSig false "checkEffectEscapeIn" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "GroupCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))))
-(DFunDef false "checkEffectEscapeIn" ((PVar "mctx") (PVar "group") (PVar "sigs") (PVar "m") (PVar "effs")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "written")) () (EBlock (DoLet false false (PVar "ty") (EApp (EApp (EVar "expandReturnSpine") (EVar "mctx")) (EVar "written"))) (DoExpr (EIf (EApp (EApp (EVar "declaredEffectsOpen") (EVar "mctx")) (EVar "ty")) (ELit LUnit) (EMatch (EApp (EApp (EApp (EVar "atomsEscape") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "filterList") (EVar "concreteAtom")) (EVar "effs"))) (EApp (EApp (EVar "declaredEffects") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "ty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "extras") () (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "group") "gcPendingEscapes")) (EBinOp "::" (ETuple (EVar "m") (EFieldAccess (EVar "mctx") "mcLoc") (EApp (EApp (EApp (EApp (EVar "effectEscapeMsg") (EVar "m")) (EApp (EApp (EVar "declaredEffects") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "ty"))) (EApp (EVar "declaredEffectTail") (EVar "ty"))) (EVar "extras"))) (EFieldAccess (EFieldAccess (EVar "group") "gcPendingEscapes") "value")))))))))))
+(DFunDef false "checkEffectEscapeIn" ((PVar "mctx") (PVar "group") (PVar "_sigs") (PVar "m") (PVar "effs")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "written")) () (EBlock (DoLet false false (PVar "ty") (EApp (EApp (EVar "expandReturnSpine") (EVar "mctx")) (EVar "written"))) (DoExpr (EIf (EApp (EApp (EVar "declaredEffectsOpen") (EVar "mctx")) (EVar "ty")) (ELit LUnit) (EMatch (EApp (EApp (EApp (EVar "atomsEscape") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "filterList") (EVar "concreteAtom")) (EVar "effs"))) (EApp (EApp (EVar "declaredEffects") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "ty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "extras") () (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "group") "gcPendingEscapes")) (EBinOp "::" (ETuple (EVar "m") (EFieldAccess (EVar "mctx") "mcLoc") (EApp (EApp (EApp (EApp (EVar "effectEscapeMsg") (EVar "m")) (EApp (EApp (EVar "declaredEffects") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "ty"))) (EApp (EVar "declaredEffectTail") (EVar "ty"))) (EVar "extras"))) (EFieldAccess (EFieldAccess (EVar "group") "gcPendingEscapes") "value")))))))))))
 (DTypeSig true "flushPendingEscapes" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "GroupCtx")) (TyCon "Unit"))))
-(DFunDef false "flushPendingEscapes" ((PVar "mctx") (PCon "None")) (ELit LUnit))
+(DFunDef false "flushPendingEscapes" ((PVar "_mctx") (PCon "None")) (ELit LUnit))
 (DFunDef false "flushPendingEscapes" ((PVar "mctx") (PCon "Some" (PVar "group"))) (EBlock (DoLet false false (PVar "pending") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "group") "gcPendingEscapes") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "group") "gcPendingEscapes")) (EListLit))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "entry")) (EBlock (DoLet false false (PTuple (PVar "m") (PVar "loc") (PVar "msg")) (EVar "entry")) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rowFailureReportedRef") "value")) (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TEffectLeak")) (EVar "loc")) (EVar "msg"))))))) (EVar "pending")))))
 (DTypeSig false "concreteAtom" (TyFun (TyCon "Atom") (TyCon "Bool")))
 (DFunDef false "concreteAtom" ((PVar "a")) (EApp (EVar "not") (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a")))))
@@ -2442,7 +2441,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omDelete" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "effect_solver") ((mem "ScopeRoles" true) (mem "noScopeRoles" false) (mem "SummaryFailure" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "reverse" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "ifaceWordOf" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false) (mem "mapExpr" false))))
@@ -2456,7 +2455,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "methodEntryHere" false))))
 (DTypeSig false "effectSiteOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Authority")) (TyApp (TyCon "Option") (TyCon "Loc")))))))
-(DFunDef false "effectSiteOf" ((PVar "mctx") PWild (PCon "None") PWild) (EVar "None"))
+(DFunDef false "effectSiteOf" ((PVar "_mctx") PWild (PCon "None") PWild) (EVar "None"))
 (DFunDef false "effectSiteOf" ((PVar "mctx") (PVar "fn") (PCon "Some" (PVar "label")) (PVar "bound")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "effectSiteKey") (EVar "fn")) (EVar "label"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "effectSitesRef") "value")) (arm (PCon "Some" (PVar "sites")) () (EBlock (DoLet false false (PVar "ordered") (EApp (EVar "reverseL") (EVar "sites"))) (DoLet false false (PVar "offending") (EMatch (EVar "bound") (arm (PCon "Some" (PVar "hi")) () (EApp (EApp (EVar "filterList") (ELam ((PVar "site")) (EApp (EVar "not") (EApp (EApp (EVar "authSub") (EApp (EVar "fst") (EVar "site"))) (EVar "hi"))))) (EVar "ordered"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EMatch (EBinOp "++" (EVar "offending") (EVar "ordered")) (arm (PCons (PVar "site") PWild) () (EApp (EVar "snd") (EVar "site"))) (arm (PList) () (EVar "None")))))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig true "beginEffectSummaryScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
 (DFunDef false "beginEffectSummaryScope" ((PVar "mctx") PWild) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueScopes")) (EBinOp "::" (EApp (EVar "wSnapshot") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueFlows")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fileValueScopes") "value")))) (DoExpr (EApp (EApp (EApp (EVar "EffectSolver.openSummaryScope") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "effectSummaries")) (EApp (EApp (EVar "newEffvarId") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentLevel") "value")))))
@@ -2465,14 +2464,14 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DTypeSig true "recordEffectBody" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
 (DFunDef false "recordEffectBody" ((PVar "mctx") (PVar "summary") (PVar "lower")) (EApp (EApp (EApp (EVar "EffectSolver.recordBodyLower") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "effectSummaries")) (EVar "summary")) (EVar "lower")))
 (DTypeSig false "summaryEscape" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "summaryEscape" ((PVar "gctx") (PCon "True") (PVar "lower") (PVar "upper")) (EApp (EApp (EVar "atomsDiff") (EVar "lower")) (EVar "upper")))
+(DFunDef false "summaryEscape" ((PVar "_gctx") (PCon "True") (PVar "lower") (PVar "upper")) (EApp (EApp (EVar "atomsDiff") (EVar "lower")) (EVar "upper")))
 (DFunDef false "summaryEscape" ((PVar "gctx") (PCon "False") (PVar "lower") (PVar "upper")) (EApp (EApp (EApp (EVar "atomsEscape") (EVar "gctx")) (EVar "lower")) (EVar "upper")))
 (DTypeSig false "finishEffectSummaryScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyCon "Unit")))))
 (DFunDef false "finishEffectSummaryScope" ((PVar "mctx") (PVar "retained") (PVar "borrowed")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "finishEffectSummaryScopeKeeping") (EVar "mctx")) (EVar "noScopeRoles")) (EVar "retained")) (EVar "borrowed"))) (DoExpr (ELit LUnit))))
 (DTypeSig true "finishEffectSummaryScopeKeeping" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ScopeRoles") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "AuthResidual"))))))))
 (DFunDef false "finishEffectSummaryScopeKeeping" ((PVar "mctx") (PVar "roles") (PVar "retained") (PVar "borrowed")) (EBlock (DoLet false false (PVar "outcome") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "EffectSolver.closeSummaryScope") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidEffvarsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef") "value")) (EVar "roles")) (EVar "retained")) (EVar "borrowed")) (EApp (EVar "summaryEscape") (EFieldAccess (EVar "mctx") "mcGraph"))) (EApp (EVar "joinCellOf") (EFieldAccess (EVar "mctx") "mcGraph"))) (EApp (EVar "freshEffvarAt") (EFieldAccess (EVar "mctx") "mcGraph"))) (EApp (EVar "widenOpenedFor") (EVar "mctx")))) (DoExpr (EApp (EApp (EVar "reportEffectSummaryFailures") (EVar "mctx")) (EFieldAccess (EVar "outcome") "esoFailures"))) (DoExpr (EApp (EApp (EVar "finishFileValueScope") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "member") (PVar "w"))) (ETuple (EVar "member") (ERecordCreate "AuthResidual" ((fa "arLower" (EFieldAccess (EVar "w") "awLower")) (fa "arUpper" (EFieldAccess (EVar "w") "awUpper")) (fa "arExact" (EFieldAccess (EVar "w") "awExact"))))))) (EFieldAccess (EVar "outcome") "esoResiduals")))))
 (DTypeSig true "reportEffectSummaryFailures" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyCon "ObligationSite"))) (TyCon "Unit"))))
-(DFunDef false "reportEffectSummaryFailures" ((PVar "mctx") (PList)) (ELit LUnit))
+(DFunDef false "reportEffectSummaryFailures" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "reportEffectSummaryFailures" ((PVar "outer") (PCons (PVar "failure") (PVar "rest"))) (EBlock (DoLet false false (PVar "fn") (EFieldAccess (EFieldAccess (EVar "failure") "esfContext") "osFn")) (DoLet false false (PVar "mctx") (EApp (EApp (EVar "mctxAt") (EApp (EApp (EVar "orElseLoc") (EApp (EApp (EApp (EApp (EVar "effectSiteOf") (EVar "outer")) (EVar "fn")) (EFieldAccess (EVar "failure") "esfLabel")) (EApp (EVar "failureBound") (EVar "failure")))) (EFieldAccess (EFieldAccess (EVar "failure") "esfContext") "osLoc"))) (EVar "outer"))) (DoExpr (EMatch (EFieldAccess (EVar "failure") "esfAuthority") (arm (PCon "Some" (PTuple (PVar "lo") (PVar "hi"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "mentionsEscaped") (EVar "mctx")) (EVar "lo")) (EApp (EApp (EVar "mentionsEscaped") (EVar "mctx")) (EVar "hi"))) (ELit LUnit) (EIf (EFieldAccess (EVar "failure") "esfExact") (EApp (EApp (EApp (EApp (EApp (EVar "reportIndexFailure") (EVar "mctx")) (EFieldAccess (EFieldAccess (EVar "failure") "esfContext") "osCovering")) (EFieldAccess (EVar "mctx") "mcLoc")) (EVar "lo")) (EVar "hi")) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TAuthority")) (EFieldAccess (EVar "mctx") "mcLoc")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "authorityFailureMsg") (EVar "mctx")) (EVar "fn")) (EFieldAccess (EVar "failure") "esfLabel")) (EFieldAccess (EVar "failure") "esfResidualOf")) (EVar "lo")) (EVar "hi")) (EFieldAccess (EVar "failure") "esfWrittenUpper")))))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rowFailureReportedRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rowFailureReportedRef") "value")))) (DoExpr (EApp (EApp (EVar "reportRowFailure") (EVar "mctx")) (EVar "failure"))))))) (DoExpr (EApp (EApp (EVar "reportEffectSummaryFailures") (EVar "outer")) (EVar "rest")))))
 (DTypeSig false "failureBound" (TyFun (TyApp (TyCon "SummaryFailure") (TyCon "ObligationSite")) (TyApp (TyCon "Option") (TyCon "Authority"))))
 (DFunDef false "failureBound" ((PVar "failure")) (EMatch (EFieldAccess (EVar "failure") "esfAuthority") (arm (PCon "Some" (PTuple PWild (PVar "hi"))) () (EApp (EVar "Some") (EVar "hi"))) (arm (PCon "None") () (EMatch (EFieldAccess (EVar "failure") "esfLabel") (arm (PCon "Some" (PVar "label")) () (EApp (EApp (EMethodRef "map") (EVar "atomAuth")) (EApp (EApp (EVar "findAtom") (EVar "label")) (EApp (EVar "fst") (EApp (EVar "rowFlat") (EFieldAccess (EVar "failure") "esfUpper")))))) (arm (PCon "None") () (EVar "None"))))))
@@ -2485,29 +2484,29 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DTypeSig true "finishEffectContract" (TyFun (TyCon "DynCtx") (TyFun (TyTuple (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (TyCon "Unit"))))
 (DFunDef false "finishEffectContract" ((PVar "dyn") (PTuple (PVar "saved") (PVar "savedAuths"))) (EBlock (DoExpr (EApp (EApp (EVar "resolvePendingJoins") (EVar "dyn")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value"))) (DoExpr (EApp (EApp (EApp (EVar "finishEffectSummaryScope") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "Tip")) (EVar "Tip"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "rigidEffvarsRef")) (EVar "saved"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "rigidAuthvarsRef")) (EVar "savedAuths")))))
 (DTypeSig true "checkUndeterminedRetEffVars" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "checkUndeterminedRetEffVars" ((PVar "mctx") (PList)) (ELit LUnit))
+(DFunDef false "checkUndeterminedRetEffVars" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "checkUndeterminedRetEffVars" ((PVar "mctx") (PCons (PVar "d") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "checkUndeterminedRetEffVarsDecl") (EVar "mctx")) (EVar "d"))) (DoExpr (EApp (EApp (EVar "checkUndeterminedRetEffVars") (EVar "mctx")) (EVar "rest")))))
 (DTypeSig false "checkUndeterminedRetEffVarsDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Decl") (TyCon "Unit"))))
 (DFunDef false "checkUndeterminedRetEffVarsDecl" ((PVar "mctx") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EApp (EVar "checkIfaceMethodEffs") (EVar "mctx")) (EVar "name")) (EApp (EApp (EApp (EApp (EVar "declGradedScope") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "typarams")) (EVar "typaramKinds")) (EVar "methods"))) (EVar "methods")))
 (DFunDef false "checkUndeterminedRetEffVarsDecl" ((PVar "mctx") (PCon "DTypeSig" PWild (PVar "n") (PVar "t") PWild)) (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVarCoverage") (EVar "mctx")) (EVar "None")) (EListLit)) (EVar "n")) (EVar "t")))
 (DFunDef false "checkUndeterminedRetEffVarsDecl" ((PVar "mctx") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "checkUndeterminedRetEffVarsDecl") (EVar "mctx")) (EVar "d")))
-(DFunDef false "checkUndeterminedRetEffVarsDecl" ((PVar "mctx") PWild) (ELit LUnit))
+(DFunDef false "checkUndeterminedRetEffVarsDecl" ((PVar "_mctx") PWild) (ELit LUnit))
 (DTypeSig false "checkIfaceMethodEffs" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit"))))))
-(DFunDef false "checkIfaceMethodEffs" ((PVar "mctx") PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "checkIfaceMethodEffs" ((PVar "_mctx") PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkIfaceMethodEffs" ((PVar "mctx") (PVar "iface") (PVar "scope") (PCons (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EApp (EApp (EVar "undeterminedRetEffVars") (EVar "mctx")) (EVar "scope")) (EVar "mty")) (arm (PList) () (ELit LUnit)) (arm (PVar "bad") () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "TEffectUndetermined")) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EVar "effectUndeterminedMsg") (EVar "iface")) (EVar "mname")) (EVar "bad")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVarCoverage") (EVar "mctx")) (EApp (EVar "Some") (EVar "iface"))) (EVar "scope")) (EVar "mname")) (EVar "mty"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkIfaceMethodEffs") (EVar "mctx")) (EVar "iface")) (EVar "scope")) (EVar "rest")))))
 (DTypeSig false "checkArgEffVarCoverage" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyCon "Unit")))))))
 (DFunDef false "checkArgEffVarCoverage" ((PVar "mctx") (PVar "iface") (PVar "scope") (PVar "mname") (PVar "mty")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVars") (EVar "mctx")) (EVar "iface")) (EVar "mname")) (EVar "mty")) (EApp (EApp (EApp (EVar "methodEffArgOccs") (EVar "mctx")) (EVar "scope")) (EVar "mty"))) (EApp (EApp (EApp (EVar "methodEffRetOccs") (EVar "mctx")) (EVar "scope")) (EVar "mty"))) (EApp (EVar "dedup") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EApp (EVar "methodEffArgOccs") (EVar "mctx")) (EVar "scope")) (EVar "mty"))))))
 (DTypeSig false "checkArgEffVars" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))))))
-(DFunDef false "checkArgEffVars" ((PVar "mctx") PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "checkArgEffVars" ((PVar "_mctx") PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkArgEffVars" ((PVar "mctx") (PVar "iface") (PVar "mname") (PVar "mty") (PVar "argOccs") (PVar "retOccs") (PCons (PVar "v") (PVar "rest"))) (EBlock (DoLet false false (PVar "vrets") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "v")))) (EVar "retOccs"))) (DoLet false false (PVar "vatoms") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "v")))) (EVar "argOccs")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "vrets")) (EMatch (EVar "iface") (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "TEffectArgUncovered")) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EVar "argOnlyEffVarMsg") (EVar "i")) (EVar "mname")) (EVar "v")))) (arm (PCon "None") () (ELit LUnit))) (EMatch (EApp (EApp (EApp (EVar "retOccsEscape") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "vatoms")) (EVar "vrets")) (arm (PList) () (ELit LUnit)) (arm (PVar "esc") () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "TEffectArgUncovered")) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EApp (EVar "argAtomsMsgFor") (EVar "iface")) (EVar "mname")) (EVar "v")) (EVar "esc"))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVars") (EVar "mctx")) (EVar "iface")) (EVar "mname")) (EVar "mty")) (EVar "argOccs")) (EVar "retOccs")) (EVar "rest")))))
 (DTypeSig false "retOccsEscape" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyApp (TyCon "List") (TyCon "Atom"))))))
-(DFunDef false "retOccsEscape" ((PVar "gctx") PWild (PList)) (EListLit))
+(DFunDef false "retOccsEscape" ((PVar "_gctx") PWild (PList)) (EListLit))
 (DFunDef false "retOccsEscape" ((PVar "gctx") (PVar "vatoms") (PCons (PTuple PWild (PVar "declAtoms")) (PVar "rest"))) (EIf (EApp (EVar "isNonEmptyL") (EApp (EApp (EApp (EVar "atomsEscape") (EVar "gctx")) (EVar "vatoms")) (EVar "declAtoms"))) (EApp (EApp (EApp (EVar "atomsEscape") (EVar "gctx")) (EVar "vatoms")) (EVar "declAtoms")) (EApp (EApp (EApp (EVar "retOccsEscape") (EVar "gctx")) (EVar "vatoms")) (EVar "rest"))))
 (DTypeSig false "methodEffArgOccs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))
 (DFunDef false "methodEffArgOccs" ((PVar "mctx") (PVar "scope") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "methodEffArgOccs") (EVar "mctx")) (EVar "scope")) (EVar "t")))
 (DFunDef false "methodEffArgOccs" ((PVar "mctx") (PVar "scope") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "methodEffArgOccs") (EVar "mctx")) (EVar "scope")) (EVar "t")))
 (DFunDef false "methodEffArgOccs" ((PVar "mctx") (PVar "scope") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "mctx")) (EVar "scope")) (EVar "True")) (EVar "a")) (EApp (EApp (EApp (EVar "methodEffArgOccs") (EVar "mctx")) (EVar "scope")) (EVar "b"))))
-(DFunDef false "methodEffArgOccs" ((PVar "mctx") PWild PWild) (EListLit))
+(DFunDef false "methodEffArgOccs" ((PVar "_mctx") PWild PWild) (EListLit))
 (DTypeSig false "occsOfTails" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))
 (DFunDef false "occsOfTails" ((PVar "gctx") (PVar "tails") (PVar "labels")) (EBlock (DoLet false false (PVar "atoms") (EApp (EApp (EVar "atomsOfWritten") (EVar "gctx")) (EVar "labels"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EVar "atoms")))) (EVar "tails")))))
 (DTypeSig false "argPerformableOccs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))
@@ -2517,7 +2516,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DFunDef false "argPerformableOccs" ((PVar "mctx") (PVar "scope") (PVar "perf") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf"))) (EVar "ts")))
 (DFunDef false "argPerformableOccs" ((PVar "mctx") (PVar "scope") (PVar "perf") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "krowSlotOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf")) (EVar "o")) (EVar "n")) (EVar "args"))) (arm (PTuple (PCon "TyVar" (PVar "h")) (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EVar "krowSlotVarOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf")) (EVar "h")) (EVar "args"))) (arm PWild () (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf")) (EVar "b"))))))
 (DFunDef false "argPerformableOccs" ((PVar "mctx") (PVar "scope") (PVar "perf") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf")) (EVar "t")))
-(DFunDef false "argPerformableOccs" ((PVar "mctx") PWild PWild PWild) (EListLit))
+(DFunDef false "argPerformableOccs" ((PVar "_mctx") PWild PWild PWild) (EListLit))
 (DTypeSig false "krowSlotOccs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Bool") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))))
 (DFunDef false "krowSlotOccs" ((PVar "mctx") (PVar "scope") (PVar "perf") (PVar "o") (PVar "n") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EBinOp "++" (EIf (EVar "perf") (EApp (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "kinds")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "paramRowAtomsOf") (EVar "mctx")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))))) (EVar "args")) (EListLit)) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf"))) (EVar "args")))) (arm PWild () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "mctx")) (EVar "scope")) (EVar "perf"))) (EVar "args")))))
 (DTypeSig false "krowSlotVarOccs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))))
@@ -2539,7 +2538,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DFunDef false "declaredEffects" ((PVar "gctx") (PCon "TyFun" PWild (PVar "ret"))) (EApp (EApp (EVar "declaredEffects") (EVar "gctx")) (EVar "ret")))
 (DFunDef false "declaredEffects" ((PVar "gctx") (PCon "TyEffect" (PVar "effs") PWild PWild)) (EApp (EApp (EVar "atomsOfWritten") (EVar "gctx")) (EVar "effs")))
 (DFunDef false "declaredEffects" ((PVar "gctx") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "declaredEffects") (EVar "gctx")) (EVar "t")))
-(DFunDef false "declaredEffects" ((PVar "gctx") PWild) (EListLit))
+(DFunDef false "declaredEffects" ((PVar "_gctx") PWild) (EListLit))
 (DTypeSig false "declaredEffectTail" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "declaredEffectTail" ((PCon "TyFun" PWild (PVar "ret"))) (EApp (EVar "declaredEffectTail") (EVar "ret")))
 (DFunDef false "declaredEffectTail" ((PCon "TyEffect" PWild (PVar "tail") PWild)) (EVar "tail"))
@@ -2548,7 +2547,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DTypeSig false "declaredArgEffNames" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "declaredArgEffNames" ((PVar "mctx") (PCon "TyFun" (PVar "a") (PVar "ret"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "effTailNames") (EVar "a")) (EApp (EApp (EVar "rowArgNames") (EVar "mctx")) (EVar "a"))) (EApp (EApp (EVar "declaredArgEffNames") (EVar "mctx")) (EVar "ret"))))
 (DFunDef false "declaredArgEffNames" ((PVar "mctx") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "declaredArgEffNames") (EVar "mctx")) (EVar "t")))
-(DFunDef false "declaredArgEffNames" ((PVar "mctx") PWild) (EListLit))
+(DFunDef false "declaredArgEffNames" ((PVar "_mctx") PWild) (EListLit))
 (DTypeSig false "declaredEffectsOpen" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Ty") (TyCon "Bool"))))
 (DFunDef false "declaredEffectsOpen" ((PVar "mctx") (PVar "ty")) (EBlock (DoLet false false (PVar "argNames") (EApp (EApp (EVar "declaredArgEffNames") (EVar "mctx")) (EVar "ty"))) (DoExpr (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "argNames"))))) (EApp (EVar "declaredEffectTail") (EVar "ty"))))))
 (DTypeSig true "evOrdinal" (TyFun (TyCon "EvId") (TyCon "Int")))
@@ -2626,8 +2625,8 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DTypeSig true "collectProducedSummary" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow"))))
 (DFunDef false "collectProducedSummary" ((PVar "mctx") (PVar "rows")) (EBlock (DoLet false false (PVar "summary") (EApp (EApp (EVar "freshEffectSummary") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "row")) (EApp (EApp (EApp (EVar "recordEffectBody") (EVar "mctx")) (EVar "summary")) (EVar "row")))) (EVar "rows"))) (DoExpr (EVar "summary"))))
 (DTypeSig true "registerLocalGroupAbs" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "LetBind") (TyApp (TyCon "Option") (TyCon "ScopeId")))) (TyCon "Unit"))))))
-(DFunDef false "registerLocalGroupAbs" ((PVar "env") PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "registerLocalGroupAbs" ((PVar "genv") (PVar "oblN0") (PVar "callN0") (PCons (PTuple (PAs "bind" (PCon "LetBind" (PVar "name") PWild PWild PWild)) (PVar "lscope")) (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EApp (EVar "lookupVar") (EVar "genv")) (EVar "name")) (arm (PCon "Some" (PVar "sch")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerLocalAbsIf") (EFieldAccess (EFieldAccess (EVar "genv") "teDyn") "dcModule")) (EVar "name")) (EVar "lscope")) (EVar "sch")) (EVar "oblN0")) (EVar "callN0"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerLocalGroupAbs") (EVar "genv")) (EVar "oblN0")) (EVar "callN0")) (EVar "rest")))))
+(DFunDef false "registerLocalGroupAbs" ((PVar "_env") PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "registerLocalGroupAbs" ((PVar "genv") (PVar "oblN0") (PVar "callN0") (PCons (PTuple (PCon "LetBind" (PVar "name") PWild PWild PWild) (PVar "lscope")) (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EApp (EVar "lookupVar") (EVar "genv")) (EVar "name")) (arm (PCon "Some" (PVar "sch")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerLocalAbsIf") (EFieldAccess (EFieldAccess (EVar "genv") "teDyn") "dcModule")) (EVar "name")) (EVar "lscope")) (EVar "sch")) (EVar "oblN0")) (EVar "callN0"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerLocalGroupAbs") (EVar "genv")) (EVar "oblN0")) (EVar "callN0")) (EVar "rest")))))
 (DTypeSig true "localBindingSummary" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "LetBind") (TyTuple (TyCon "String") (TyCon "BindingSummary")))))
 (DFunDef false "localBindingSummary" ((PVar "mctx") (PCon "LetBind" (PVar "name") (PVar "clauses") PWild PWild)) (EBlock (DoLet false false (PVar "arity") (EMatch (EApp (EApp (EMethodRef "map") (EVar "funClausePair")) (EVar "clauses")) (arm (PCons (PTuple (PVar "pats") PWild) PWild) () (EApp (EVar "listLen") (EVar "pats"))) (arm (PList) () (ELit (LInt 0))))) (DoExpr (ETuple (EVar "name") (EApp (EApp (EApp (EVar "newBindingSummary") (EVar "arity")) (EApp (EVar "freshVar") (EVar "mctx"))) (EApp (EVar "freshEffectSummary") (EVar "mctx")))))))
 (DTypeSig false "fileBoundKey" (TyFun (TyCon "Loc") (TyCon "String")))
@@ -2672,7 +2671,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DFunDef false "recordClauseFileBound" ((PVar "mctx") (PVar "body") (PVar "arity") (PVar "ty")) (EIf (EBinOp "<=" (EVar "arity") (ELit (LInt 0))) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TFun" PWild (PVar "row") (PVar "result")) () (EIf (EBinOp "==" (EVar "arity") (ELit (LInt 1))) (EApp (EApp (EApp (EVar "recordFileBound") (EVar "mctx")) (EVar "body")) (EVar "row")) (EApp (EApp (EApp (EApp (EVar "recordClauseFileBound") (EVar "mctx")) (EVar "body")) (EBinOp "-" (EVar "arity") (ELit (LInt 1)))) (EVar "result")))) (arm (PCon "TQual" (PVar "inner") PWild) () (EApp (EApp (EApp (EApp (EVar "recordClauseFileBound") (EVar "mctx")) (EVar "body")) (EVar "arity")) (EVar "inner"))) (arm PWild () (ELit LUnit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "argumentAuthority" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "Option") (TyCon "Expr")) (TyFun (TyCon "Mono") (TyCon "Authority"))))))
 (DFunDef false "argumentAuthority" ((PVar "env") (PVar "top") (PCon "Some" (PVar "e")) (PVar "xt")) (EBlock (DoLet false false (PVar "prelude") (EApp (EVar "displayIsPrelude") (EVar "env"))) (DoLet false false (PVar "q") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "alphaOf") (EVar "top")) (EApp (EVar "envVarType") (EVar "env"))) (EVar "prelude")) (EApp (EVar "envAlphaLets") (EVar "env"))) (EVar "e")) (EVar "xt"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteArgumentShape") (EVar "env")) (EVar "top")) (EVar "prelude")) (EVar "q")) (EVar "e")) (EVar "xt"))) (DoExpr (EVar "q"))))
-(DFunDef false "argumentAuthority" ((PVar "env") (PVar "top") (PCon "None") (PVar "xt")) (EApp (EApp (EVar "typeAuthority") (EVar "top")) (EVar "xt")))
+(DFunDef false "argumentAuthority" ((PVar "_env") (PVar "top") (PCon "None") (PVar "xt")) (EApp (EApp (EVar "typeAuthority") (EVar "top")) (EVar "xt")))
 (DTypeSig false "noteArgumentShape" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Param") (TyFun (TyCon "Bool") (TyFun (TyCon "Authority") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyCon "Unit"))))))))
 (DFunDef false "noteArgumentShape" ((PVar "env") (PVar "top") (PVar "prelude") (PVar "q") (PVar "e") (PVar "xt")) (EBlock (DoLet false false (PVar "lets") (EApp (EVar "envAlphaLets") (EVar "env"))) (DoExpr (EMatch (EApp (EVar "extensionBase") (EVar "e")) (arm (PCon "Some" (PVar "base")) () (EApp (EApp (EVar "markBinders") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcCells") "extendedBindersRef")) (EApp (EVar "authVars") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "alphaOf") (EVar "top")) (EApp (EVar "envVarType") (EVar "env"))) (EVar "prelude")) (EVar "lets")) (EVar "base")) (EApp (EVar "tconBuiltin") (ELit (LString "String"))))))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EIf (EVar "prelude") (ELit LUnit) (EBlock (DoLet false false (PVar "seen") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "c")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "c"))) (ELit LUnit)) (EVar "m")))) (EVar "Tip")) (EApp (EVar "authVars") (EVar "q")))) (DoExpr (EApp (EApp (EVar "markBinders") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcCells") "displayHiddenBindersRef")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "IdMap.has") (EApp (EVar "authvarId") (EVar "c"))) (EVar "seen"))))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "x")) (EApp (EVar "authVars") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "alphaOf") (EVar "top")) (EApp (EVar "envVarType") (EVar "env"))) (EVar "prelude")) (EVar "lets")) (EVar "x")) (EVar "xt"))))) (EApp (EVar "displayOperands") (EVar "e")))))))))))
 (DTypeSig false "extensionBase" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
@@ -2705,12 +2704,12 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DTypeSig false "isPreludeDisplayIface" (TyFun (TyCon "IfaceRef") (TyCon "Bool")))
 (DFunDef false "isPreludeDisplayIface" ((PVar "iface")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Display"))) (EApp (EVar "isPreludeOrigin") (EFieldAccess (EVar "iface") "irOrigin"))))
 (DTypeSig true "launderEscapeFromLog" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyFun (TyApp (TyCon "List") (TyCon "AbsorptionEvent")) (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "launderEscapeFromLog" ((PVar "gctx") (PList) PWild PWild) (EListLit))
-(DFunDef false "launderEscapeFromLog" ((PVar "gctx") PWild (PList) PWild) (EListLit))
+(DFunDef false "launderEscapeFromLog" ((PVar "_gctx") (PList) PWild PWild) (EListLit))
+(DFunDef false "launderEscapeFromLog" ((PVar "_gctx") PWild (PList) PWild) (EListLit))
 (DFunDef false "launderEscapeFromLog" ((PVar "gctx") (PCons (PVar "der") (PVar "dRest")) (PCons (PVar "aer") (PVar "aRest")) (PVar "evts")) (EBlock (DoLet false false (PVar "here") (EMatch (EVar "aer") (arm (PCon "EffRow" PWild (PCon "None")) () (EListLit)) (arm (PCon "EffRow" PWild (PCon "Some" PWild)) () (EApp (EApp (EApp (EVar "launderOpenActualArrow") (EVar "gctx")) (EVar "der")) (EVar "evts"))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EApp (EApp (EVar "launderEscapeFromLog") (EVar "gctx")) (EVar "dRest")) (EVar "aRest")) (EVar "evts"))))))
 (DTypeSig false "launderOpenActualArrow" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EffRow") (TyFun (TyApp (TyCon "List") (TyCon "AbsorptionEvent")) (TyApp (TyCon "List") (TyCon "Atom"))))))
 (DFunDef false "launderOpenActualArrow" ((PVar "gctx") (PCon "EffRow" (PVar "declAtoms") (PCon "Some" (PVar "cell"))) (PVar "evts")) (EBlock (DoLet false false (PVar "tid") (EApp (EVar "liveTailId") (EVar "cell"))) (DoExpr (EIf (EBinOp "==" (EVar "tid") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EListLit) (EApp (EApp (EApp (EVar "atomsEscape") (EVar "gctx")) (EApp (EApp (EVar "atomsAbsorbedInto") (EVar "tid")) (EVar "evts"))) (EVar "declAtoms"))))))
-(DFunDef false "launderOpenActualArrow" ((PVar "gctx") (PCon "EffRow" PWild (PCon "None")) PWild) (EListLit))
+(DFunDef false "launderOpenActualArrow" ((PVar "_gctx") (PCon "EffRow" PWild (PCon "None")) PWild) (EListLit))
 (DTypeSig false "atomsAbsorbedInto" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "AbsorptionEvent")) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "atomsAbsorbedInto" (PWild (PList)) (EListLit))
 (DFunDef false "atomsAbsorbedInto" ((PVar "tid") (PCons (PVar "ev") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "liveTailId") (EFieldAccess (EVar "ev") "cell")) (EVar "tid")) (EBinOp "::" (EFieldAccess (EVar "ev") "atom") (EApp (EApp (EVar "atomsAbsorbedInto") (EVar "tid")) (EVar "rest"))) (EApp (EApp (EVar "atomsAbsorbedInto") (EVar "tid")) (EVar "rest"))))
@@ -2730,7 +2729,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DTypeSig false "effVarCellPerformed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))))
 (DFunDef false "effVarCellPerformed" ((PVar "v") (PVar "effMap") (PVar "pairs") (PVar "tails")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "v")) (EVar "effMap")) (arm (PCon "Some" (PVar "cell")) () (EBlock (DoLet false false (PVar "dids") (EApp (EVar "rowTailId") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell"))))) (DoExpr (EApp (EApp (EVar "anyList") (ELam ((PVar "did")) (EBinOp "||" (EApp (EApp (EVar "containsI") (EVar "did")) (EVar "tails")) (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "p")) (EVar "did")) (EApp (EApp (EVar "containsI") (EApp (EVar "snd") (EVar "p"))) (EVar "tails"))))) (EVar "pairs"))))) (EVar "dids"))))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "checkIndexOnlyGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "checkIndexOnlyGo" ((PVar "mctx") PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "checkIndexOnlyGo" ((PVar "_mctx") PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkIndexOnlyGo" ((PVar "mctx") (PVar "subject") (PVar "effMap") (PVar "loc") (PCons (PVar "v") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "TEffectIndexEager")) (EVar "loc")) (EApp (EApp (EVar "indexEagerMsg") (EVar "subject")) (EVar "v")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkIndexOnlyGo") (EVar "mctx")) (EVar "subject")) (EVar "effMap")) (EVar "loc")) (EVar "rest")))))
 (DTypeSig true "performSiteIn" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyApp (TyCon "Option") (TyCon "Loc")))))) (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "performSiteIn" ((PCon "None") PWild) (EVar "None"))
@@ -2748,13 +2747,13 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DFunDef false "effVarChargedOccs" ((PVar "gctx") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "effVarChargedOccs") (EVar "gctx")) (EVar "a")) (EApp (EApp (EVar "effVarChargedOccs") (EVar "gctx")) (EVar "b"))))
 (DFunDef false "effVarChargedOccs" ((PVar "gctx") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "effVarChargedOccs") (EVar "gctx"))) (EVar "ts")))
 (DFunDef false "effVarChargedOccs" ((PVar "gctx") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "effVarChargedOccs") (EVar "gctx")) (EVar "t")))
-(DFunDef false "effVarChargedOccs" ((PVar "gctx") PWild) (EListLit))
+(DFunDef false "effVarChargedOccs" ((PVar "_gctx") PWild) (EListLit))
 (DTypeSig false "checkEffVarAtoms" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))
-(DFunDef false "checkEffVarAtoms" ((PVar "mctx") PWild PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "checkEffVarAtoms" ((PVar "_mctx") PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkEffVarAtoms" ((PVar "mctx") (PVar "subject") (PVar "occs") (PCons (PTuple (PVar "n") (PVar "cell")) (PVar "rest")) (PVar "loc")) (EBlock (DoLet false false (PVar "esc") (EApp (EApp (EApp (EApp (EVar "effVarOccEscape") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "n")) (EApp (EVar "effrowLabels") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell"))))) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isNonEmptyL") (EVar "esc")) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "TEffectLaunder")) (EVar "loc")) (EApp (EApp (EApp (EVar "effVarLaunderMsg") (EVar "subject")) (EVar "n")) (EVar "esc"))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkEffVarAtoms") (EVar "mctx")) (EVar "subject")) (EVar "occs")) (EVar "rest")) (EVar "loc")))))
 (DTypeSig false "effVarOccEscape" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "effVarOccEscape" ((PVar "gctx") PWild (PList) PWild) (EListLit))
-(DFunDef false "effVarOccEscape" ((PVar "gctx") PWild PWild (PList)) (EListLit))
+(DFunDef false "effVarOccEscape" ((PVar "_gctx") PWild (PList) PWild) (EListLit))
+(DFunDef false "effVarOccEscape" ((PVar "_gctx") PWild PWild (PList)) (EListLit))
 (DFunDef false "effVarOccEscape" ((PVar "gctx") (PVar "n") (PVar "instAtoms") (PCons (PTuple (PVar "m") (PVar "declAtoms")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "n")) (EApp (EVar "isNonEmptyL") (EApp (EApp (EApp (EVar "atomsEscape") (EVar "gctx")) (EVar "instAtoms")) (EVar "declAtoms")))) (EApp (EApp (EApp (EVar "atomsEscape") (EVar "gctx")) (EVar "instAtoms")) (EVar "declAtoms")) (EApp (EApp (EApp (EApp (EVar "effVarOccEscape") (EVar "gctx")) (EVar "n")) (EVar "instAtoms")) (EVar "rest"))))
 (DTypeSig false "effVarOccAtoms" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "effVarOccAtoms" ((PVar "gctx") (PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EVar "occsOfTails") (EVar "gctx")) (EVar "tails")) (EVar "labels")) (EApp (EApp (EVar "effVarOccAtoms") (EVar "gctx")) (EVar "t"))))
@@ -2763,7 +2762,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DFunDef false "effVarOccAtoms" ((PVar "gctx") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "effVarOccAtoms") (EVar "gctx")) (EVar "a")) (EApp (EApp (EVar "effVarOccAtoms") (EVar "gctx")) (EVar "b"))))
 (DFunDef false "effVarOccAtoms" ((PVar "gctx") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "effVarOccAtoms") (EVar "gctx"))) (EVar "ts")))
 (DFunDef false "effVarOccAtoms" ((PVar "gctx") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "effVarOccAtoms") (EVar "gctx")) (EVar "t")))
-(DFunDef false "effVarOccAtoms" ((PVar "gctx") PWild) (EListLit))
+(DFunDef false "effVarOccAtoms" ((PVar "_gctx") PWild) (EListLit))
 (DTypeSig true "clausesAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
 (DFunDef false "clausesAt" ((PVar "n") (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m")) (arm (PCon "Some" (PVar "xs")) () (EVar "xs")) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "clausesOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
@@ -2773,9 +2772,9 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DTypeSig true "checkEffectEscape" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))))
 (DFunDef false "checkEffectEscape" ((PVar "dyn") (PVar "sigs") (PVar "m") (PVar "effs")) (EMatch (EFieldAccess (EVar "dyn") "dcGroup") (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "group")) () (EApp (EApp (EApp (EApp (EApp (EVar "checkEffectEscapeIn") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "group")) (EVar "sigs")) (EVar "m")) (EVar "effs")))))
 (DTypeSig false "checkEffectEscapeIn" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "GroupCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))))
-(DFunDef false "checkEffectEscapeIn" ((PVar "mctx") (PVar "group") (PVar "sigs") (PVar "m") (PVar "effs")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "written")) () (EBlock (DoLet false false (PVar "ty") (EApp (EApp (EVar "expandReturnSpine") (EVar "mctx")) (EVar "written"))) (DoExpr (EIf (EApp (EApp (EVar "declaredEffectsOpen") (EVar "mctx")) (EVar "ty")) (ELit LUnit) (EMatch (EApp (EApp (EApp (EVar "atomsEscape") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "filterList") (EVar "concreteAtom")) (EVar "effs"))) (EApp (EApp (EVar "declaredEffects") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "ty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "extras") () (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "group") "gcPendingEscapes")) (EBinOp "::" (ETuple (EVar "m") (EFieldAccess (EVar "mctx") "mcLoc") (EApp (EApp (EApp (EApp (EVar "effectEscapeMsg") (EVar "m")) (EApp (EApp (EVar "declaredEffects") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "ty"))) (EApp (EVar "declaredEffectTail") (EVar "ty"))) (EVar "extras"))) (EFieldAccess (EFieldAccess (EVar "group") "gcPendingEscapes") "value")))))))))))
+(DFunDef false "checkEffectEscapeIn" ((PVar "mctx") (PVar "group") (PVar "_sigs") (PVar "m") (PVar "effs")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "written")) () (EBlock (DoLet false false (PVar "ty") (EApp (EApp (EVar "expandReturnSpine") (EVar "mctx")) (EVar "written"))) (DoExpr (EIf (EApp (EApp (EVar "declaredEffectsOpen") (EVar "mctx")) (EVar "ty")) (ELit LUnit) (EMatch (EApp (EApp (EApp (EVar "atomsEscape") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "filterList") (EVar "concreteAtom")) (EVar "effs"))) (EApp (EApp (EVar "declaredEffects") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "ty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "extras") () (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "group") "gcPendingEscapes")) (EBinOp "::" (ETuple (EVar "m") (EFieldAccess (EVar "mctx") "mcLoc") (EApp (EApp (EApp (EApp (EVar "effectEscapeMsg") (EVar "m")) (EApp (EApp (EVar "declaredEffects") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "ty"))) (EApp (EVar "declaredEffectTail") (EVar "ty"))) (EVar "extras"))) (EFieldAccess (EFieldAccess (EVar "group") "gcPendingEscapes") "value")))))))))))
 (DTypeSig true "flushPendingEscapes" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "GroupCtx")) (TyCon "Unit"))))
-(DFunDef false "flushPendingEscapes" ((PVar "mctx") (PCon "None")) (ELit LUnit))
+(DFunDef false "flushPendingEscapes" ((PVar "_mctx") (PCon "None")) (ELit LUnit))
 (DFunDef false "flushPendingEscapes" ((PVar "mctx") (PCon "Some" (PVar "group"))) (EBlock (DoLet false false (PVar "pending") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "group") "gcPendingEscapes") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "group") "gcPendingEscapes")) (EListLit))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "entry")) (EBlock (DoLet false false (PTuple (PVar "m") (PVar "loc") (PVar "msg")) (EVar "entry")) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rowFailureReportedRef") "value")) (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TEffectLeak")) (EVar "loc")) (EVar "msg"))))))) (EVar "pending")))))
 (DTypeSig false "concreteAtom" (TyFun (TyCon "Atom") (TyCon "Bool")))
 (DFunDef false "concreteAtom" ((PVar "a")) (EApp (EVar "not") (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a")))))

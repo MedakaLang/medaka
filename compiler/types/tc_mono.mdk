@@ -82,7 +82,6 @@ import support.util.{
   contains,
   eqStr,
   filterList,
-  isSome,
   joinWith,
   lenKey,
   listLen,
@@ -463,7 +462,7 @@ instantiateNamedMonos : GraphCtx ->
   List (String, Mono) ->
   List (Int, Mono) ->
   List (String, Mono)
-instantiateNamedMonos gctx [] _ = []
+instantiateNamedMonos _gctx [] _ = []
 instantiateNamedMonos gctx ((name, mono) :: rest) subst =
   (name, substMono gctx subst [] [] mono)
     :: instantiateNamedMonos gctx rest subst
@@ -662,8 +661,8 @@ effvarLevel cell = match !cell
 -- itself for one, a fresh join cell for several.
 export
 rowOfMembers : GraphCtx -> List Atom -> List (Ref Effvar) -> EffRow
-rowOfMembers gctx labels [] = EffRow labels None
-rowOfMembers gctx labels [m] = EffRow labels (Some m)
+rowOfMembers _gctx labels [] = EffRow labels None
+rowOfMembers _gctx labels [m] = EffRow labels (Some m)
 rowOfMembers gctx labels ms = EffRow labels (Some (joinCellOf gctx ms))
 
 export

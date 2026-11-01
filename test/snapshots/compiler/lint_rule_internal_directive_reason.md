@@ -13,7 +13,7 @@ import frontend.parser.{
   declPosEndLine,
 }
 import driver.diagnostics.{Severity(..)}
-import support.util.{contains, anyList, filterList, splitNl, isSome}
+import support.util.{contains, anyList, filterList, splitNl}
 import string.{toLower, words}
 import regex.{Regex, mustCompile, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText}
@@ -280,7 +280,7 @@ directiveReasonFinding c = Finding {
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false) (mem "splitNl" false) (mem "isSome" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false) (mem "words" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))
@@ -343,7 +343,7 @@ directiveReasonFinding c = Finding {
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false) (mem "splitNl" false) (mem "isSome" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false) (mem "words" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))

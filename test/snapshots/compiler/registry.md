@@ -1,5 +1,5 @@
 # META
-source_lines=1562
+source_lines=1561
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -153,7 +153,6 @@ import frontend.ast.{
   tabKeyName,
   tabKeyEq,
   lookupTab,
-  tabHasName,
 }
 import support.ordmap.{
   OrdMap,
@@ -1565,7 +1564,7 @@ headU = HkDecl (TkBare NsType "Box")
 -- > headKeyIdent (HkRigid "a")
 -- None
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "tabKeyEq" false) (mem "lookupTab" false) (mem "tabHasName" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "tabKeyEq" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false) (mem "contains" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false))))
@@ -1836,7 +1835,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig false "headU" (TyCon "HeadKey"))
 (DFunDef false "headU" () (EApp (EVar "HkDecl") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (ELit (LString "Box")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "tabKeyEq" false) (mem "lookupTab" false) (mem "tabHasName" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "tabKeyEq" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false) (mem "contains" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false))))

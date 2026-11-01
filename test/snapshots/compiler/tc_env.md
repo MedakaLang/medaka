@@ -1,5 +1,5 @@
 # META
-source_lines=3831
+source_lines=3822
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -39,7 +39,6 @@ import types.tc_state.{
   emptyImplEnv,
   emptyImplUniverse,
   emptyMethodEnv,
-  probeGraphCtx,
 }
 import frontend.ast.{
   Constraint(..),
@@ -64,7 +63,6 @@ import frontend.ast.{
   UsePath(..),
   Variant(..),
   identOriginOf,
-  ifaceIdentity,
   mkIdent,
   orElseLoc,
   sameTyConHead,
@@ -74,11 +72,10 @@ import frontend.ast.{
   useMemberLocal,
   useMemberOrigin,
 }
-import types.repr.{IfaceRef(..), Mono(..), Scheme(..), ppTy}
+import types.repr.{IfaceRef(..), Mono(..), Scheme(..)}
 import types.effect_param_decode.{dtopIn}
 import types.effect_domain.{Param(..)}
 import types.effect_rows.{EffLabel(..)}
-import types.tc_diag_text.{kindName}
 import types.effect_infer.{AlphaBinder(..)}
 import types.tc_types.{
   CeRow(..),
@@ -122,9 +119,7 @@ import support.ordmap.{
   omEmpty, omFromNames, omHasKey, omInsert, omLookup, omSize, OrdMap
 }
 import list.{
-  drop,
   findMap,
-  indexed,
   last,
 }
 import support.util.{
@@ -133,19 +128,15 @@ import support.util.{
   dedup,
   filterList,
   isEmptyL,
-  isSome,
   listLen,
-  lookupAssoc,
   reverseL,
   selfBinding,
 }
 import types.registry.{
   HeadKey(..),
-  headKeyOfCon,
   headKeyTag,
   mregAppendK,
   mregLookupK,
-  MultiRegistry,
   regInsertK,
   Registry,
   RegKey,
@@ -456,11 +447,11 @@ ifaceParamKindsFor : GraphCtx ->
   List IfaceMethod ->
   String ->
   List Kind
-ifaceParamKindsFor gctx [] _ _ _ = []
+ifaceParamKindsFor _gctx [] _ _ _ = []
 ifaceParamKindsFor gctx (q :: qs) (a :: anns) methods p
   | q == p = ifaceParamKindsDecl gctx a p methods
   | otherwise = ifaceParamKindsFor gctx qs anns methods p
-ifaceParamKindsFor gctx _ [] _ _ = []
+ifaceParamKindsFor _gctx _ [] _ _ = []
 
 -- ── #1111 A-2.3: the TYPE-namespace table key, and the MISS POLICY ────────
 -- The ONE place a key for `aliasTableRef` / `dataParamKindsRef` is minted, on
@@ -835,7 +826,7 @@ declEnvRowVisible cur m
 -- #1228/#1586, and it is deliberately NOT touched here.
 export
 declEnvKindEntries : GraphCtx -> List Decl -> List (TabKey, List Kind)
-declEnvKindEntries gctx [] = []
+declEnvKindEntries _gctx [] = []
 declEnvKindEntries gctx ((DAttrib _ d) :: rest) =
   declEnvKindEntries gctx (d :: rest)
 declEnvKindEntries gctx ((DData { dataName = n, dataParams = ps, dataParamKinds = ks, dataOrigin = o }) :: rest) =
@@ -1369,7 +1360,7 @@ classEnvFinish env = ClassEnv { env | ceRows = reverseL env.ceRows }
 
 export
 buildClassEnvGo : GraphCtx -> List DeclEnvModule -> ClassEnv -> ClassEnv
-buildClassEnvGo gctx [] env = env
+buildClassEnvGo _gctx [] env = env
 buildClassEnvGo gctx (m :: rest) env =
   let rows = classEnvRowsOf gctx m.demOrd (classEnvDeclFacts m.demDecls)
   buildClassEnvGo gctx rest (ceAddRows rows env)
@@ -1390,7 +1381,7 @@ classEnvRowsOf : GraphCtx ->
   Int ->
   List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc) ->
   List CeRow
-classEnvRowsOf gctx _ [] = []
+classEnvRowsOf _gctx _ [] = []
 classEnvRowsOf gctx ord ((name, typarams, kinds, methods, supers, o, loc) :: rest) =
   let scope = declGradedScope gctx typarams kinds methods
   let row =
@@ -1416,7 +1407,7 @@ ifaceParamKindsDeclAll : GraphCtx ->
   List (Option KindAnn) ->
   List IfaceMethod ->
   List (List Kind)
-ifaceParamKindsDeclAll gctx [] _ _ = []
+ifaceParamKindsDeclAll _gctx [] _ _ = []
 ifaceParamKindsDeclAll gctx (p :: ps) [] methods =
   ifaceParamKindsDeclAll gctx (p :: ps) [None] methods
 ifaceParamKindsDeclAll gctx (p :: ps) (a :: anns) methods =
@@ -1548,7 +1539,7 @@ ceMethodName (n, _, _) = n
 -- dependency rows already folded, so it may resume from the prelude prefix.
 export
 methodEnvGo : GraphCtx -> List DeclEnvModule -> MethodEnv -> MethodEnv
-methodEnvGo gctx [] env = env
+methodEnvGo _gctx [] env = env
 methodEnvGo gctx (m :: rest) env = methodEnvGo gctx rest MethodEnv {
   meByName = methodRowsInto gctx m.demOrd m.demDecls env.meByName,
   meExports =
@@ -1570,7 +1561,7 @@ methodRowsInto : GraphCtx ->
   List Decl ->
   OrdMap (List MethodRow) ->
   OrdMap (List MethodRow)
-methodRowsInto gctx _ [] acc = acc
+methodRowsInto _gctx _ [] acc = acc
 methodRowsInto gctx ord ((DAttrib _ d) :: rest) acc =
   methodRowsInto gctx ord rest (methodRowsInto gctx ord [d] acc)
 methodRowsInto gctx ord ((DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... }) :: rest) acc =
@@ -1936,10 +1927,10 @@ padAnns (_ :: ps) (a :: rest) = a :: padAnns ps rest
 padAnns (_ :: ps) [] = None :: padAnns ps []
 
 kindOfAnn : GraphCtx -> Option KindAnn -> Kind
-kindOfAnn gctx (Some KindEffect) = KRow
+kindOfAnn _gctx (Some KindEffect) = KRow
 kindOfAnn gctx (Some (KindAuthority l o pat _)) =
   KAuth (EffLabel l o) (rangedOver gctx (EffLabel l o) pat)
-kindOfAnn gctx _ = KType
+kindOfAnn _gctx _ = KType
 
 -- an INTERFACE parameter's slot kinds from its declared arrow kind: `Effect ->
 -- Type -> Type` is `[KRow, KType]` (the final `Type` is the result, not a
@@ -1947,13 +1938,13 @@ kindOfAnn gctx _ = KType
 export
 kindAnnSlots : GraphCtx -> KindAnn -> List Kind
 kindAnnSlots gctx (KindArrow a b) = kindAnnAtom gctx a :: kindAnnSlots gctx b
-kindAnnSlots gctx _ = []
+kindAnnSlots _gctx _ = []
 
 kindAnnAtom : GraphCtx -> KindAnn -> Kind
-kindAnnAtom gctx KindEffect = KRow
+kindAnnAtom _gctx KindEffect = KRow
 kindAnnAtom gctx (KindAuthority l o pat _) =
   KAuth (EffLabel l o) (rangedOver gctx (EffLabel l o) pat)
-kindAnnAtom gctx _ = KType
+kindAnnAtom _gctx _ = KType
 
 -- ── #822: interface type-parameter kinds (graded interfaces) ──────────────
 -- EFFECTS-SEMANTICS §6 "Graded interfaces": an interface may abstract over a
@@ -2036,7 +2027,7 @@ declGradedScope : GraphCtx ->
   List (Option KindAnn) ->
   List IfaceMethod ->
   List (String, List Kind)
-declGradedScope gctx [] _ _ = []
+declGradedScope _gctx [] _ _ = []
 declGradedScope gctx (p :: ps) [] methods =
   declGradedScope gctx (p :: ps) [None] methods
 declGradedScope gctx (p :: ps) (a :: anns) methods =
@@ -2055,7 +2046,7 @@ ifaceParamKindsDecl : GraphCtx ->
   List Kind
 ifaceParamKindsDecl gctx (Some (KindArrow a b)) _ _ =
   kindAnnSlots gctx (KindArrow a b)
-ifaceParamKindsDecl gctx _ p methods =
+ifaceParamKindsDecl _gctx _ p methods =
   map (_ => KType) (ifaceParamKindsOf p methods)
 
 declGradedScopeAdd : String ->
@@ -2289,7 +2280,7 @@ ieImplExistsForHeadGo : GraphCtx ->
   TabKey ->
   Option (List IfaceRef) ->
   Bool
-ieImplExistsForHeadGo gctx [] _ _ _ = False
+ieImplExistsForHeadGo _gctx [] _ _ _ = False
 ieImplExistsForHeadGo gctx ((r@(ImplRow _ _ ir tys _ ms _)) :: rest) name goal admitted
   | headTabIs (univReceiverTag tys) goal
     && ieRowAdmittedBy ir admitted
@@ -2648,7 +2639,7 @@ ieEntriesForMethod : GraphCtx ->
   Option (List IfaceRef) ->
   List Mono ->
   List KeyEntry
-ieEntriesForMethod gctx [] _ _ _ = []
+ieEntriesForMethod _gctx [] _ _ _ = []
 ieEntriesForMethod gctx ((r@(ImplRow _ _ ir tys _ ms _)) :: rest) name admitted goals
   | ieRowAdmittedBy ir admitted
     && ieRowHeadMatches tys goals
@@ -2671,7 +2662,7 @@ ieRowAnswersMethod : GraphCtx ->
   String ->
   Option (List IfaceRef) ->
   Bool
-ieRowAnswersMethod gctx _ ms name None = contains name ms
+ieRowAnswersMethod _gctx _ ms name None = contains name ms
 ieRowAnswersMethod gctx r ms name (Some _) =
   contains name ms || ieRowInheritsDefault gctx r name
 
@@ -3835,20 +3826,19 @@ methodRowSameNameView rows =
     rows
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_mono") ((mem "argMentions" false) (mem "entryHeadMatches" false) (mem "headTyconTy" false) (mem "implDeclsWithReqs" false) (mem "nthTy" false) (mem "schemeBodyOf" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyVarNames" false))))
-(DUse false (UseGroup ("types" "tc_state") ((mem "builtinCtors" false) (mem "emptyClassEnv" false) (mem "emptyDataEnv" false) (mem "emptyDeclEnvSeedAcc" false) (mem "emptyImplEnv" false) (mem "emptyImplUniverse" false) (mem "emptyMethodEnv" false) (mem "probeGraphCtx" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "orElseLoc" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
-(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "ppTy" false))))
+(DUse false (UseGroup ("types" "tc_state") ((mem "builtinCtors" false) (mem "emptyClassEnv" false) (mem "emptyDataEnv" false) (mem "emptyDeclEnvSeedAcc" false) (mem "emptyImplEnv" false) (mem "emptyImplUniverse" false) (mem "emptyMethodEnv" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "mkIdent" false) (mem "orElseLoc" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "dtopIn" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true))))
-(DUse false (UseGroup ("types" "tc_diag_text") ((mem "kindName" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "AlphaBinder" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "AliasDecl" false) (mem "CDeclared" false) (mem "BuiltinClass" true) (mem "dynFor" false) (mem "MethodEntry" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false) (mem "pubUsePaths" false) (mem "declExportsIn" false) (mem "declExportsCtors" false) (mem "nsInterfaces" false) (mem "nsTypes" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false) (mem "indexed" false) (mem "last" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "MultiRegistry" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
+(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "last" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "listLen" false) (mem "reverseL" false) (mem "selfBinding" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "GoalOrigin" true))))
 (DTypeSig true "aliasUniverseAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))))
@@ -3895,9 +3885,9 @@ methodRowSameNameView rows =
 (DTypeSig true "rangedOver" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EffLabel") (TyFun (TyCon "Bool") (TyCon "Bool")))))
 (DFunDef false "rangedOver" ((PVar "gctx") (PVar "l") (PVar "pat")) (EBinOp "&&" (EVar "pat") (EApp (EVar "domainHasPatterns") (EApp (EApp (EVar "dtopFor") (EVar "gctx")) (EVar "l")))))
 (DTypeSig true "ifaceParamKindsFor" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))
-(DFunDef false "ifaceParamKindsFor" ((PVar "gctx") (PList) PWild PWild PWild) (EListLit))
+(DFunDef false "ifaceParamKindsFor" ((PVar "_gctx") (PList) PWild PWild PWild) (EListLit))
 (DFunDef false "ifaceParamKindsFor" ((PVar "gctx") (PCons (PVar "q") (PVar "qs")) (PCons (PVar "a") (PVar "anns")) (PVar "methods") (PVar "p")) (EIf (EBinOp "==" (EVar "q") (EVar "p")) (EApp (EApp (EApp (EApp (EVar "ifaceParamKindsDecl") (EVar "gctx")) (EVar "a")) (EVar "p")) (EVar "methods")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "ifaceParamKindsFor") (EVar "gctx")) (EVar "qs")) (EVar "anns")) (EVar "methods")) (EVar "p")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "ifaceParamKindsFor" ((PVar "gctx") PWild (PList) PWild PWild) (EListLit))
+(DFunDef false "ifaceParamKindsFor" ((PVar "_gctx") PWild (PList) PWild PWild) (EListLit))
 (DTypeSig true "tyTabKey" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "TabKey"))))
 (DFunDef false "tyTabKey" ((PVar "o") (PVar "n")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "o")) (EVar "n")))
 (DTypeSig true "ifaceTabKey" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "TabKey"))))
@@ -3924,7 +3914,7 @@ methodRowSameNameView rows =
 (DTypeSig true "declEnvRowVisible" (TyFun (TyCon "Int") (TyFun (TyCon "DeclEnvModule") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "declEnvRowVisible" ((PVar "cur") (PVar "m")) (EIf (EBinOp "||" (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "False")) (EApp (EApp (EVar "declEnvSiblingSees") (EVar "cur")) (EVar "m"))) (EFieldAccess (EVar "m") "demDecls") (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "True")) (EFieldAccess (EVar "m") "demPubDecls") (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "declEnvKindEntries" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))))
-(DFunDef false "declEnvKindEntries" ((PVar "gctx") (PList)) (EListLit))
+(DFunDef false "declEnvKindEntries" ((PVar "_gctx") (PList)) (EListLit))
 (DFunDef false "declEnvKindEntries" ((PVar "gctx") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "declEnvKindEntries") (EVar "gctx")) (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "declEnvKindEntries" ((PVar "gctx") (PCons (PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataParamKinds" (PVar "ks")) (rf "dataOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EApp (EApp (EVar "declParamKinds") (EVar "gctx")) (EVar "ps")) (EVar "ks"))) (EApp (EApp (EVar "declEnvKindEntries") (EVar "gctx")) (EVar "rest"))))
 (DFunDef false "declEnvKindEntries" ((PVar "gctx") (PCons (PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeParamKinds" (PVar "ks")) (rf "newtypeOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EApp (EApp (EVar "declParamKinds") (EVar "gctx")) (EVar "ps")) (EVar "ks"))) (EApp (EApp (EVar "declEnvKindEntries") (EVar "gctx")) (EVar "rest"))))
@@ -4023,7 +4013,7 @@ methodRowSameNameView rows =
 (DTypeSig true "classEnvFinish" (TyFun (TyCon "ClassEnv") (TyCon "ClassEnv")))
 (DFunDef false "classEnvFinish" ((PVar "env")) (EVariantUpdate "ClassEnv" (EVar "env") ((fa "ceRows" (EApp (EVar "reverseL") (EFieldAccess (EVar "env") "ceRows"))))))
 (DTypeSig true "buildClassEnvGo" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "ClassEnv") (TyCon "ClassEnv")))))
-(DFunDef false "buildClassEnvGo" ((PVar "gctx") (PList) (PVar "env")) (EVar "env"))
+(DFunDef false "buildClassEnvGo" ((PVar "_gctx") (PList) (PVar "env")) (EVar "env"))
 (DFunDef false "buildClassEnvGo" ((PVar "gctx") (PCons (PVar "m") (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EVar "classEnvRowsOf") (EVar "gctx")) (EFieldAccess (EVar "m") "demOrd")) (EApp (EVar "classEnvDeclFacts") (EFieldAccess (EVar "m") "demDecls")))) (DoExpr (EApp (EApp (EApp (EVar "buildClassEnvGo") (EVar "gctx")) (EVar "rest")) (EApp (EApp (EVar "ceAddRows") (EVar "rows")) (EVar "env"))))))
 (DTypeSig false "classEnvDeclFacts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "Super")) (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "classEnvDeclFacts" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "classEnvDeclFact")) (EVar "prog")))
@@ -4032,10 +4022,10 @@ methodRowSameNameView rows =
 (DFunDef false "classEnvDeclFact" ((PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "supers" None) (rf "methods" None) (rf "ifaceOrigin" None) (rf "ifaceNameLoc" None)) true)) (EListLit (ETuple (EVar "name") (EVar "typarams") (EVar "typaramKinds") (EVar "methods") (EVar "supers") (EVar "ifaceOrigin") (EVar "ifaceNameLoc"))))
 (DFunDef false "classEnvDeclFact" (PWild) (EListLit))
 (DTypeSig false "classEnvRowsOf" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "Super")) (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyCon "CeRow"))))))
-(DFunDef false "classEnvRowsOf" ((PVar "gctx") PWild (PList)) (EListLit))
+(DFunDef false "classEnvRowsOf" ((PVar "_gctx") PWild (PList)) (EListLit))
 (DFunDef false "classEnvRowsOf" ((PVar "gctx") (PVar "ord") (PCons (PTuple (PVar "name") (PVar "typarams") (PVar "kinds") (PVar "methods") (PVar "supers") (PVar "o") (PVar "loc")) (PVar "rest"))) (EBlock (DoLet false false (PVar "scope") (EApp (EApp (EApp (EApp (EVar "declGradedScope") (EVar "gctx")) (EVar "typarams")) (EVar "kinds")) (EVar "methods"))) (DoLet false false (PVar "row") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CeRow") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "name")))) (EVar "ord")) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "name")) (fa "irOrigin" (EVar "o"))))) (EVar "typarams")) (EApp (EApp (EVar "map") (EApp (EVar "ceMethodOf") (EVar "scope"))) (EVar "methods"))) (EVar "supers")) (EApp (EApp (EApp (EApp (EVar "ifaceParamKindsDeclAll") (EVar "gctx")) (EVar "typarams")) (EVar "kinds")) (EVar "methods"))) (EApp (EVar "requiredMethodNames") (EVar "methods"))) (EVar "loc"))) (DoExpr (EBinOp "::" (EVar "row") (EApp (EApp (EApp (EVar "classEnvRowsOf") (EVar "gctx")) (EVar "ord")) (EVar "rest"))))))
 (DTypeSig true "ifaceParamKindsDeclAll" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Kind"))))))))
-(DFunDef false "ifaceParamKindsDeclAll" ((PVar "gctx") (PList) PWild PWild) (EListLit))
+(DFunDef false "ifaceParamKindsDeclAll" ((PVar "_gctx") (PList) PWild PWild) (EListLit))
 (DFunDef false "ifaceParamKindsDeclAll" ((PVar "gctx") (PCons (PVar "p") (PVar "ps")) (PList) (PVar "methods")) (EApp (EApp (EApp (EApp (EVar "ifaceParamKindsDeclAll") (EVar "gctx")) (EBinOp "::" (EVar "p") (EVar "ps"))) (EListLit (EVar "None"))) (EVar "methods")))
 (DFunDef false "ifaceParamKindsDeclAll" ((PVar "gctx") (PCons (PVar "p") (PVar "ps")) (PCons (PVar "a") (PVar "anns")) (PVar "methods")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "ifaceParamKindsDecl") (EVar "gctx")) (EVar "a")) (EVar "p")) (EVar "methods")) (EApp (EApp (EApp (EApp (EVar "ifaceParamKindsDeclAll") (EVar "gctx")) (EVar "ps")) (EVar "anns")) (EVar "methods"))))
 (DTypeSig false "ceMethodOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "IfaceMethod") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))
@@ -4065,10 +4055,10 @@ methodRowSameNameView rows =
 (DTypeSig false "ceMethodName" (TyFun (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyCon "String")))
 (DFunDef false "ceMethodName" ((PTuple (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig true "methodEnvGo" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "MethodEnv") (TyCon "MethodEnv")))))
-(DFunDef false "methodEnvGo" ((PVar "gctx") (PList) (PVar "env")) (EVar "env"))
+(DFunDef false "methodEnvGo" ((PVar "_gctx") (PList) (PVar "env")) (EVar "env"))
 (DFunDef false "methodEnvGo" ((PVar "gctx") (PCons (PVar "m") (PVar "rest")) (PVar "env")) (EApp (EApp (EApp (EVar "methodEnvGo") (EVar "gctx")) (EVar "rest")) (ERecordCreate "MethodEnv" ((fa "meByName" (EApp (EApp (EApp (EApp (EVar "methodRowsInto") (EVar "gctx")) (EFieldAccess (EVar "m") "demOrd")) (EFieldAccess (EVar "m") "demDecls")) (EFieldAccess (EVar "env") "meByName"))) (fa "meExports" (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EBinOp "++" (EApp (EVar "declMethodIdents") (EFieldAccess (EVar "m") "demDecls")) (EApp (EApp (EVar "reexportedMethodIdents") (EFieldAccess (EVar "env") "meExports")) (EFieldAccess (EVar "m") "demDecls")))) (EFieldAccess (EVar "env") "meExports"))) (fa "meIfaceExports" (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EBinOp "++" (EApp (EVar "ifaceMethodRows") (EFieldAccess (EVar "m") "demDecls")) (EApp (EApp (EVar "reexportedIfaceMethods") (EFieldAccess (EVar "env") "meIfaceExports")) (EFieldAccess (EVar "m") "demDecls")))) (EFieldAccess (EVar "env") "meIfaceExports")))))))
 (DTypeSig false "methodRowsInto" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodRow"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodRow"))))))))
-(DFunDef false "methodRowsInto" ((PVar "gctx") PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "methodRowsInto" ((PVar "_gctx") PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "methodRowsInto" ((PVar "gctx") (PVar "ord") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "methodRowsInto") (EVar "gctx")) (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "methodRowsInto") (EVar "gctx")) (EVar "ord")) (EListLit (EVar "d"))) (EVar "acc"))))
 (DFunDef false "methodRowsInto" ((PVar "gctx") (PVar "ord") (PCons (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "methods" None) (rf "ifaceOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "methodRowsInto") (EVar "gctx")) (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "methodRowsOfIface") (EVar "ord")) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "name")) (fa "irOrigin" (EVar "ifaceOrigin"))))) (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "ifaceOrigin")) (EVar "name")))) (EVar "typarams")) (EApp (EApp (EApp (EApp (EVar "declGradedScope") (EVar "gctx")) (EVar "typarams")) (EVar "typaramKinds")) (EVar "methods"))) (EVar "methods")) (EVar "acc"))))
 (DFunDef false "methodRowsInto" ((PVar "gctx") (PVar "ord") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "methodRowsInto") (EVar "gctx")) (EVar "ord")) (EVar "rest")) (EVar "acc")))
@@ -4168,27 +4158,27 @@ methodRowSameNameView rows =
 (DFunDef false "padAnns" ((PCons PWild (PVar "ps")) (PCons (PVar "a") (PVar "rest"))) (EBinOp "::" (EVar "a") (EApp (EApp (EVar "padAnns") (EVar "ps")) (EVar "rest"))))
 (DFunDef false "padAnns" ((PCons PWild (PVar "ps")) (PList)) (EBinOp "::" (EVar "None") (EApp (EApp (EVar "padAnns") (EVar "ps")) (EListLit))))
 (DTypeSig false "kindOfAnn" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "Option") (TyCon "KindAnn")) (TyCon "Kind"))))
-(DFunDef false "kindOfAnn" ((PVar "gctx") (PCon "Some" (PCon "KindEffect"))) (EVar "KRow"))
+(DFunDef false "kindOfAnn" ((PVar "_gctx") (PCon "Some" (PCon "KindEffect"))) (EVar "KRow"))
 (DFunDef false "kindOfAnn" ((PVar "gctx") (PCon "Some" (PCon "KindAuthority" (PVar "l") (PVar "o") (PVar "pat") PWild))) (EApp (EApp (EVar "KAuth") (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))) (EApp (EApp (EApp (EVar "rangedOver") (EVar "gctx")) (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))) (EVar "pat"))))
-(DFunDef false "kindOfAnn" ((PVar "gctx") PWild) (EVar "KType"))
+(DFunDef false "kindOfAnn" ((PVar "_gctx") PWild) (EVar "KType"))
 (DTypeSig true "kindAnnSlots" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "KindAnn") (TyApp (TyCon "List") (TyCon "Kind")))))
 (DFunDef false "kindAnnSlots" ((PVar "gctx") (PCon "KindArrow" (PVar "a") (PVar "b"))) (EBinOp "::" (EApp (EApp (EVar "kindAnnAtom") (EVar "gctx")) (EVar "a")) (EApp (EApp (EVar "kindAnnSlots") (EVar "gctx")) (EVar "b"))))
-(DFunDef false "kindAnnSlots" ((PVar "gctx") PWild) (EListLit))
+(DFunDef false "kindAnnSlots" ((PVar "_gctx") PWild) (EListLit))
 (DTypeSig false "kindAnnAtom" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "KindAnn") (TyCon "Kind"))))
-(DFunDef false "kindAnnAtom" ((PVar "gctx") (PCon "KindEffect")) (EVar "KRow"))
+(DFunDef false "kindAnnAtom" ((PVar "_gctx") (PCon "KindEffect")) (EVar "KRow"))
 (DFunDef false "kindAnnAtom" ((PVar "gctx") (PCon "KindAuthority" (PVar "l") (PVar "o") (PVar "pat") PWild)) (EApp (EApp (EVar "KAuth") (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))) (EApp (EApp (EApp (EVar "rangedOver") (EVar "gctx")) (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))) (EVar "pat"))))
-(DFunDef false "kindAnnAtom" ((PVar "gctx") PWild) (EVar "KType"))
+(DFunDef false "kindAnnAtom" ((PVar "_gctx") PWild) (EVar "KType"))
 (DTypeSig true "anyKRow" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Bool")))
 (DFunDef false "anyKRow" ((PList)) (EVar "False"))
 (DFunDef false "anyKRow" ((PCons (PCon "KRow") PWild)) (EVar "True"))
 (DFunDef false "anyKRow" ((PCons PWild (PVar "rest"))) (EApp (EVar "anyKRow") (EVar "rest")))
 (DTypeSig true "declGradedScope" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))
-(DFunDef false "declGradedScope" ((PVar "gctx") (PList) PWild PWild) (EListLit))
+(DFunDef false "declGradedScope" ((PVar "_gctx") (PList) PWild PWild) (EListLit))
 (DFunDef false "declGradedScope" ((PVar "gctx") (PCons (PVar "p") (PVar "ps")) (PList) (PVar "methods")) (EApp (EApp (EApp (EApp (EVar "declGradedScope") (EVar "gctx")) (EBinOp "::" (EVar "p") (EVar "ps"))) (EListLit (EVar "None"))) (EVar "methods")))
 (DFunDef false "declGradedScope" ((PVar "gctx") (PCons (PVar "p") (PVar "ps")) (PCons (PVar "a") (PVar "anns")) (PVar "methods")) (EApp (EApp (EApp (EVar "declGradedScopeAdd") (EVar "p")) (EApp (EApp (EApp (EApp (EVar "ifaceParamKindsDecl") (EVar "gctx")) (EVar "a")) (EVar "p")) (EVar "methods"))) (EApp (EApp (EApp (EApp (EVar "declGradedScope") (EVar "gctx")) (EVar "ps")) (EVar "anns")) (EVar "methods"))))
 (DTypeSig false "ifaceParamKindsDecl" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "Option") (TyCon "KindAnn")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "Kind")))))))
 (DFunDef false "ifaceParamKindsDecl" ((PVar "gctx") (PCon "Some" (PCon "KindArrow" (PVar "a") (PVar "b"))) PWild PWild) (EApp (EApp (EVar "kindAnnSlots") (EVar "gctx")) (EApp (EApp (EVar "KindArrow") (EVar "a")) (EVar "b"))))
-(DFunDef false "ifaceParamKindsDecl" ((PVar "gctx") PWild (PVar "p") (PVar "methods")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "KType"))) (EApp (EApp (EVar "ifaceParamKindsOf") (EVar "p")) (EVar "methods"))))
+(DFunDef false "ifaceParamKindsDecl" ((PVar "_gctx") PWild (PVar "p") (PVar "methods")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "KType"))) (EApp (EApp (EVar "ifaceParamKindsOf") (EVar "p")) (EVar "methods"))))
 (DTypeSig false "declGradedScopeAdd" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))
 (DFunDef false "declGradedScopeAdd" ((PVar "p") (PVar "kinds") (PVar "rest")) (EIf (EApp (EVar "anyKRow") (EVar "kinds")) (EBinOp "::" (ETuple (EVar "p") (EVar "kinds")) (EVar "rest")) (EIf (EVar "otherwise") (EVar "rest") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ifaceParamKindsOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "Kind")))))
@@ -4246,7 +4236,7 @@ methodRowSameNameView rows =
 (DTypeSig true "ieImplExistsForHeadOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "String") (TyFun (TyCon "HeadKey") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "IfaceRef"))) (TyCon "Bool")))))))
 (DFunDef false "ieImplExistsForHeadOf" ((PVar "mctx") (PVar "env") (PVar "name") (PVar "hk") (PVar "admitted")) (EApp (EApp (EApp (EApp (EApp (EVar "ieImplExistsForHeadGo") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "ieHeadRows") (EApp (EVar "Some") (EVar "hk"))) (EVar "env"))) (EApp (EApp (EVar "originMethodName") (EVar "mctx")) (EVar "name"))) (EApp (EVar "dispHeadTab") (EVar "hk"))) (EVar "admitted")))
 (DTypeSig false "ieImplExistsForHeadGo" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyCon "TabKey") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "IfaceRef"))) (TyCon "Bool")))))))
-(DFunDef false "ieImplExistsForHeadGo" ((PVar "gctx") (PList) PWild PWild PWild) (EVar "False"))
+(DFunDef false "ieImplExistsForHeadGo" ((PVar "_gctx") (PList) PWild PWild PWild) (EVar "False"))
 (DFunDef false "ieImplExistsForHeadGo" ((PVar "gctx") (PCons (PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild (PVar "ms") PWild)) (PVar "rest")) (PVar "name") (PVar "goal") (PVar "admitted")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "headTabIs") (EApp (EVar "univReceiverTag") (EVar "tys"))) (EVar "goal")) (EApp (EApp (EVar "ieRowAdmittedBy") (EVar "ir")) (EVar "admitted"))) (EApp (EApp (EApp (EApp (EApp (EVar "ieRowAnswersMethod") (EVar "gctx")) (EVar "r")) (EVar "ms")) (EVar "name")) (EVar "admitted"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "ieImplExistsForHeadGo") (EVar "gctx")) (EVar "rest")) (EVar "name")) (EVar "goal")) (EVar "admitted")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ieRowAdmittedBy" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "IfaceRef"))) (TyCon "Bool"))))
 (DFunDef false "ieRowAdmittedBy" (PWild (PCon "None")) (EVar "True"))
@@ -4295,10 +4285,10 @@ methodRowSameNameView rows =
 (DFunDef false "ieEntriesForIface" ((PList) PWild PWild) (EListLit))
 (DFunDef false "ieEntriesForIface" ((PCons (PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild PWild PWild)) (PVar "rest")) (PVar "iface") (PVar "goals")) (EIf (EBinOp "&&" (EApp (EApp (EVar "ieRowIfaceMatches") (EVar "ir")) (EVar "iface")) (EApp (EApp (EVar "ieRowHeadMatches") (EVar "tys")) (EVar "goals"))) (EBinOp "++" (EApp (EVar "keyEntryOfRow") (EVar "r")) (EApp (EApp (EApp (EVar "ieEntriesForIface") (EVar "rest")) (EVar "iface")) (EVar "goals"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ieEntriesForIface") (EVar "rest")) (EVar "iface")) (EVar "goals")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ieEntriesForMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "IfaceRef"))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "KeyEntry"))))))))
-(DFunDef false "ieEntriesForMethod" ((PVar "gctx") (PList) PWild PWild PWild) (EListLit))
+(DFunDef false "ieEntriesForMethod" ((PVar "_gctx") (PList) PWild PWild PWild) (EListLit))
 (DFunDef false "ieEntriesForMethod" ((PVar "gctx") (PCons (PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild (PVar "ms") PWild)) (PVar "rest")) (PVar "name") (PVar "admitted") (PVar "goals")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "ieRowAdmittedBy") (EVar "ir")) (EVar "admitted")) (EApp (EApp (EVar "ieRowHeadMatches") (EVar "tys")) (EVar "goals"))) (EApp (EApp (EApp (EApp (EApp (EVar "ieRowAnswersMethod") (EVar "gctx")) (EVar "r")) (EVar "ms")) (EVar "name")) (EVar "admitted"))) (EBinOp "++" (EApp (EVar "keyEntryOfRow") (EVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "ieEntriesForMethod") (EVar "gctx")) (EVar "rest")) (EVar "name")) (EVar "admitted")) (EVar "goals"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "ieEntriesForMethod") (EVar "gctx")) (EVar "rest")) (EVar "name")) (EVar "admitted")) (EVar "goals")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ieRowAnswersMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ImplRow") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "IfaceRef"))) (TyCon "Bool")))))))
-(DFunDef false "ieRowAnswersMethod" ((PVar "gctx") PWild (PVar "ms") (PVar "name") (PCon "None")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms")))
+(DFunDef false "ieRowAnswersMethod" ((PVar "_gctx") PWild (PVar "ms") (PVar "name") (PCon "None")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms")))
 (DFunDef false "ieRowAnswersMethod" ((PVar "gctx") (PVar "r") (PVar "ms") (PVar "name") (PCon "Some" PWild)) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms")) (EApp (EApp (EApp (EVar "ieRowInheritsDefault") (EVar "gctx")) (EVar "r")) (EVar "name"))))
 (DTypeSig false "ieRowInheritsDefault" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ImplRow") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "ieRowInheritsDefault" ((PVar "gctx") (PVar "r") (PVar "name")) (EBlock (DoLet false false (PTuple (PVar "iface") PWild PWild) (EApp (EVar "ieRowTriple") (EVar "r"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (EApp (EVar "ieRowOrd") (EVar "r"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "declEnvsRef") "value") "deIfaces")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "ceRow")) () (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "ceRowMethodNames") (EVar "ceRow"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "ceRowRequired") (EVar "ceRow"))))))))))
@@ -4518,20 +4508,19 @@ methodRowSameNameView rows =
 (DFunDef false "methodRowSameNameView" ((PVar "rows")) (EApp (EApp (EVar "map") (ELam ((PVar "row")) (ETuple (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irName") (EFieldAccess (EVar "row") "msrName") (EApp (EVar "listLen") (EApp (EVar "schemeIds") (EFieldAccess (EVar "row") "msrScheme"))) (EApp (EVar "listLen") (EFieldAccess (EVar "row") "msrMethodSlots"))))) (EVar "rows")))
 # MARK
 (DUse false (UseGroup ("types" "tc_mono") ((mem "argMentions" false) (mem "entryHeadMatches" false) (mem "headTyconTy" false) (mem "implDeclsWithReqs" false) (mem "nthTy" false) (mem "schemeBodyOf" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyVarNames" false))))
-(DUse false (UseGroup ("types" "tc_state") ((mem "builtinCtors" false) (mem "emptyClassEnv" false) (mem "emptyDataEnv" false) (mem "emptyDeclEnvSeedAcc" false) (mem "emptyImplEnv" false) (mem "emptyImplUniverse" false) (mem "emptyMethodEnv" false) (mem "probeGraphCtx" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "orElseLoc" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
-(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "ppTy" false))))
+(DUse false (UseGroup ("types" "tc_state") ((mem "builtinCtors" false) (mem "emptyClassEnv" false) (mem "emptyDataEnv" false) (mem "emptyDeclEnvSeedAcc" false) (mem "emptyImplEnv" false) (mem "emptyImplUniverse" false) (mem "emptyMethodEnv" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "mkIdent" false) (mem "orElseLoc" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "dtopIn" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true))))
-(DUse false (UseGroup ("types" "tc_diag_text") ((mem "kindName" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "AlphaBinder" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "CeRow" true) (mem "ClassEnv" true) (mem "DeclEnvAcc" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "EnvBinding" true) (mem "GraphCtx" true) (mem "ImplAcc" true) (mem "ImplEnv" true) (mem "ImplRow" true) (mem "ImplUniverse" true) (mem "InstRef" true) (mem "KeyEntry" true) (mem "Kind" true) (mem "MethodEnv" true) (mem "MethodPredicateSlot" true) (mem "MethodRow" true) (mem "MethodSchemeRow" true) (mem "ModuleCtx" true) (mem "RecordInfo" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "ValueScheme" true) (mem "AliasDecl" false) (mem "CDeclared" false) (mem "BuiltinClass" true) (mem "dynFor" false) (mem "MethodEntry" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false) (mem "pubUsePaths" false) (mem "declExportsIn" false) (mem "declExportsCtors" false) (mem "nsInterfaces" false) (mem "nsTypes" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false) (mem "indexed" false) (mem "last" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "MultiRegistry" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
+(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "last" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "listLen" false) (mem "reverseL" false) (mem "selfBinding" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "GoalOrigin" true))))
 (DTypeSig true "aliasUniverseAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))))
@@ -4578,9 +4567,9 @@ methodRowSameNameView rows =
 (DTypeSig true "rangedOver" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EffLabel") (TyFun (TyCon "Bool") (TyCon "Bool")))))
 (DFunDef false "rangedOver" ((PVar "gctx") (PVar "l") (PVar "pat")) (EBinOp "&&" (EVar "pat") (EApp (EVar "domainHasPatterns") (EApp (EApp (EVar "dtopFor") (EVar "gctx")) (EVar "l")))))
 (DTypeSig true "ifaceParamKindsFor" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))
-(DFunDef false "ifaceParamKindsFor" ((PVar "gctx") (PList) PWild PWild PWild) (EListLit))
+(DFunDef false "ifaceParamKindsFor" ((PVar "_gctx") (PList) PWild PWild PWild) (EListLit))
 (DFunDef false "ifaceParamKindsFor" ((PVar "gctx") (PCons (PVar "q") (PVar "qs")) (PCons (PVar "a") (PVar "anns")) (PVar "methods") (PVar "p")) (EIf (EBinOp "==" (EVar "q") (EVar "p")) (EApp (EApp (EApp (EApp (EVar "ifaceParamKindsDecl") (EVar "gctx")) (EVar "a")) (EVar "p")) (EVar "methods")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "ifaceParamKindsFor") (EVar "gctx")) (EVar "qs")) (EVar "anns")) (EVar "methods")) (EVar "p")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "ifaceParamKindsFor" ((PVar "gctx") PWild (PList) PWild PWild) (EListLit))
+(DFunDef false "ifaceParamKindsFor" ((PVar "_gctx") PWild (PList) PWild PWild) (EListLit))
 (DTypeSig true "tyTabKey" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "TabKey"))))
 (DFunDef false "tyTabKey" ((PVar "o") (PVar "n")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "o")) (EVar "n")))
 (DTypeSig true "ifaceTabKey" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "TabKey"))))
@@ -4607,7 +4596,7 @@ methodRowSameNameView rows =
 (DTypeSig true "declEnvRowVisible" (TyFun (TyCon "Int") (TyFun (TyCon "DeclEnvModule") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "declEnvRowVisible" ((PVar "cur") (PVar "m")) (EIf (EBinOp "||" (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "False")) (EApp (EApp (EVar "declEnvSiblingSees") (EVar "cur")) (EVar "m"))) (EFieldAccess (EVar "m") "demDecls") (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "True")) (EFieldAccess (EVar "m") "demPubDecls") (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "declEnvKindEntries" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))))
-(DFunDef false "declEnvKindEntries" ((PVar "gctx") (PList)) (EListLit))
+(DFunDef false "declEnvKindEntries" ((PVar "_gctx") (PList)) (EListLit))
 (DFunDef false "declEnvKindEntries" ((PVar "gctx") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "declEnvKindEntries") (EVar "gctx")) (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "declEnvKindEntries" ((PVar "gctx") (PCons (PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataParamKinds" (PVar "ks")) (rf "dataOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EApp (EApp (EVar "declParamKinds") (EVar "gctx")) (EVar "ps")) (EVar "ks"))) (EApp (EApp (EVar "declEnvKindEntries") (EVar "gctx")) (EVar "rest"))))
 (DFunDef false "declEnvKindEntries" ((PVar "gctx") (PCons (PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeParamKinds" (PVar "ks")) (rf "newtypeOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EApp (EApp (EVar "declParamKinds") (EVar "gctx")) (EVar "ps")) (EVar "ks"))) (EApp (EApp (EVar "declEnvKindEntries") (EVar "gctx")) (EVar "rest"))))
@@ -4706,7 +4695,7 @@ methodRowSameNameView rows =
 (DTypeSig true "classEnvFinish" (TyFun (TyCon "ClassEnv") (TyCon "ClassEnv")))
 (DFunDef false "classEnvFinish" ((PVar "env")) (EVariantUpdate "ClassEnv" (EVar "env") ((fa "ceRows" (EApp (EVar "reverseL") (EFieldAccess (EVar "env") "ceRows"))))))
 (DTypeSig true "buildClassEnvGo" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "ClassEnv") (TyCon "ClassEnv")))))
-(DFunDef false "buildClassEnvGo" ((PVar "gctx") (PList) (PVar "env")) (EVar "env"))
+(DFunDef false "buildClassEnvGo" ((PVar "_gctx") (PList) (PVar "env")) (EVar "env"))
 (DFunDef false "buildClassEnvGo" ((PVar "gctx") (PCons (PVar "m") (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EVar "classEnvRowsOf") (EVar "gctx")) (EFieldAccess (EVar "m") "demOrd")) (EApp (EVar "classEnvDeclFacts") (EFieldAccess (EVar "m") "demDecls")))) (DoExpr (EApp (EApp (EApp (EVar "buildClassEnvGo") (EVar "gctx")) (EVar "rest")) (EApp (EApp (EVar "ceAddRows") (EVar "rows")) (EVar "env"))))))
 (DTypeSig false "classEnvDeclFacts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "Super")) (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "classEnvDeclFacts" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "classEnvDeclFact")) (EVar "prog")))
@@ -4715,10 +4704,10 @@ methodRowSameNameView rows =
 (DFunDef false "classEnvDeclFact" ((PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "supers" None) (rf "methods" None) (rf "ifaceOrigin" None) (rf "ifaceNameLoc" None)) true)) (EListLit (ETuple (EVar "name") (EVar "typarams") (EVar "typaramKinds") (EVar "methods") (EVar "supers") (EVar "ifaceOrigin") (EVar "ifaceNameLoc"))))
 (DFunDef false "classEnvDeclFact" (PWild) (EListLit))
 (DTypeSig false "classEnvRowsOf" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "Super")) (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyCon "CeRow"))))))
-(DFunDef false "classEnvRowsOf" ((PVar "gctx") PWild (PList)) (EListLit))
+(DFunDef false "classEnvRowsOf" ((PVar "_gctx") PWild (PList)) (EListLit))
 (DFunDef false "classEnvRowsOf" ((PVar "gctx") (PVar "ord") (PCons (PTuple (PVar "name") (PVar "typarams") (PVar "kinds") (PVar "methods") (PVar "supers") (PVar "o") (PVar "loc")) (PVar "rest"))) (EBlock (DoLet false false (PVar "scope") (EApp (EApp (EApp (EApp (EVar "declGradedScope") (EVar "gctx")) (EVar "typarams")) (EVar "kinds")) (EVar "methods"))) (DoLet false false (PVar "row") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CeRow") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "name")))) (EVar "ord")) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "name")) (fa "irOrigin" (EVar "o"))))) (EVar "typarams")) (EApp (EApp (EMethodRef "map") (EApp (EVar "ceMethodOf") (EVar "scope"))) (EVar "methods"))) (EVar "supers")) (EApp (EApp (EApp (EApp (EVar "ifaceParamKindsDeclAll") (EVar "gctx")) (EVar "typarams")) (EVar "kinds")) (EVar "methods"))) (EApp (EVar "requiredMethodNames") (EVar "methods"))) (EVar "loc"))) (DoExpr (EBinOp "::" (EVar "row") (EApp (EApp (EApp (EVar "classEnvRowsOf") (EVar "gctx")) (EVar "ord")) (EVar "rest"))))))
 (DTypeSig true "ifaceParamKindsDeclAll" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Kind"))))))))
-(DFunDef false "ifaceParamKindsDeclAll" ((PVar "gctx") (PList) PWild PWild) (EListLit))
+(DFunDef false "ifaceParamKindsDeclAll" ((PVar "_gctx") (PList) PWild PWild) (EListLit))
 (DFunDef false "ifaceParamKindsDeclAll" ((PVar "gctx") (PCons (PVar "p") (PVar "ps")) (PList) (PVar "methods")) (EApp (EApp (EApp (EApp (EVar "ifaceParamKindsDeclAll") (EVar "gctx")) (EBinOp "::" (EVar "p") (EVar "ps"))) (EListLit (EVar "None"))) (EVar "methods")))
 (DFunDef false "ifaceParamKindsDeclAll" ((PVar "gctx") (PCons (PVar "p") (PVar "ps")) (PCons (PVar "a") (PVar "anns")) (PVar "methods")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "ifaceParamKindsDecl") (EVar "gctx")) (EVar "a")) (EVar "p")) (EVar "methods")) (EApp (EApp (EApp (EApp (EVar "ifaceParamKindsDeclAll") (EVar "gctx")) (EVar "ps")) (EVar "anns")) (EVar "methods"))))
 (DTypeSig false "ceMethodOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "IfaceMethod") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))
@@ -4748,10 +4737,10 @@ methodRowSameNameView rows =
 (DTypeSig false "ceMethodName" (TyFun (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyCon "String")))
 (DFunDef false "ceMethodName" ((PTuple (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig true "methodEnvGo" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "MethodEnv") (TyCon "MethodEnv")))))
-(DFunDef false "methodEnvGo" ((PVar "gctx") (PList) (PVar "env")) (EVar "env"))
+(DFunDef false "methodEnvGo" ((PVar "_gctx") (PList) (PVar "env")) (EVar "env"))
 (DFunDef false "methodEnvGo" ((PVar "gctx") (PCons (PVar "m") (PVar "rest")) (PVar "env")) (EApp (EApp (EApp (EVar "methodEnvGo") (EVar "gctx")) (EVar "rest")) (ERecordCreate "MethodEnv" ((fa "meByName" (EApp (EApp (EApp (EApp (EVar "methodRowsInto") (EVar "gctx")) (EFieldAccess (EVar "m") "demOrd")) (EFieldAccess (EVar "m") "demDecls")) (EFieldAccess (EVar "env") "meByName"))) (fa "meExports" (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EBinOp "++" (EApp (EVar "declMethodIdents") (EFieldAccess (EVar "m") "demDecls")) (EApp (EApp (EVar "reexportedMethodIdents") (EFieldAccess (EVar "env") "meExports")) (EFieldAccess (EVar "m") "demDecls")))) (EFieldAccess (EVar "env") "meExports"))) (fa "meIfaceExports" (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EBinOp "++" (EApp (EVar "ifaceMethodRows") (EFieldAccess (EVar "m") "demDecls")) (EApp (EApp (EVar "reexportedIfaceMethods") (EFieldAccess (EVar "env") "meIfaceExports")) (EFieldAccess (EVar "m") "demDecls")))) (EFieldAccess (EVar "env") "meIfaceExports")))))))
 (DTypeSig false "methodRowsInto" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodRow"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodRow"))))))))
-(DFunDef false "methodRowsInto" ((PVar "gctx") PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "methodRowsInto" ((PVar "_gctx") PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "methodRowsInto" ((PVar "gctx") (PVar "ord") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "methodRowsInto") (EVar "gctx")) (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "methodRowsInto") (EVar "gctx")) (EVar "ord")) (EListLit (EVar "d"))) (EVar "acc"))))
 (DFunDef false "methodRowsInto" ((PVar "gctx") (PVar "ord") (PCons (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "methods" None) (rf "ifaceOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "methodRowsInto") (EVar "gctx")) (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "methodRowsOfIface") (EVar "ord")) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "name")) (fa "irOrigin" (EVar "ifaceOrigin"))))) (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "ifaceOrigin")) (EVar "name")))) (EVar "typarams")) (EApp (EApp (EApp (EApp (EVar "declGradedScope") (EVar "gctx")) (EVar "typarams")) (EVar "typaramKinds")) (EVar "methods"))) (EVar "methods")) (EVar "acc"))))
 (DFunDef false "methodRowsInto" ((PVar "gctx") (PVar "ord") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "methodRowsInto") (EVar "gctx")) (EVar "ord")) (EVar "rest")) (EVar "acc")))
@@ -4851,27 +4840,27 @@ methodRowSameNameView rows =
 (DFunDef false "padAnns" ((PCons PWild (PVar "ps")) (PCons (PVar "a") (PVar "rest"))) (EBinOp "::" (EVar "a") (EApp (EApp (EVar "padAnns") (EVar "ps")) (EVar "rest"))))
 (DFunDef false "padAnns" ((PCons PWild (PVar "ps")) (PList)) (EBinOp "::" (EVar "None") (EApp (EApp (EVar "padAnns") (EVar "ps")) (EListLit))))
 (DTypeSig false "kindOfAnn" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "Option") (TyCon "KindAnn")) (TyCon "Kind"))))
-(DFunDef false "kindOfAnn" ((PVar "gctx") (PCon "Some" (PCon "KindEffect"))) (EVar "KRow"))
+(DFunDef false "kindOfAnn" ((PVar "_gctx") (PCon "Some" (PCon "KindEffect"))) (EVar "KRow"))
 (DFunDef false "kindOfAnn" ((PVar "gctx") (PCon "Some" (PCon "KindAuthority" (PVar "l") (PVar "o") (PVar "pat") PWild))) (EApp (EApp (EVar "KAuth") (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))) (EApp (EApp (EApp (EVar "rangedOver") (EVar "gctx")) (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))) (EVar "pat"))))
-(DFunDef false "kindOfAnn" ((PVar "gctx") PWild) (EVar "KType"))
+(DFunDef false "kindOfAnn" ((PVar "_gctx") PWild) (EVar "KType"))
 (DTypeSig true "kindAnnSlots" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "KindAnn") (TyApp (TyCon "List") (TyCon "Kind")))))
 (DFunDef false "kindAnnSlots" ((PVar "gctx") (PCon "KindArrow" (PVar "a") (PVar "b"))) (EBinOp "::" (EApp (EApp (EVar "kindAnnAtom") (EVar "gctx")) (EVar "a")) (EApp (EApp (EVar "kindAnnSlots") (EVar "gctx")) (EVar "b"))))
-(DFunDef false "kindAnnSlots" ((PVar "gctx") PWild) (EListLit))
+(DFunDef false "kindAnnSlots" ((PVar "_gctx") PWild) (EListLit))
 (DTypeSig false "kindAnnAtom" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "KindAnn") (TyCon "Kind"))))
-(DFunDef false "kindAnnAtom" ((PVar "gctx") (PCon "KindEffect")) (EVar "KRow"))
+(DFunDef false "kindAnnAtom" ((PVar "_gctx") (PCon "KindEffect")) (EVar "KRow"))
 (DFunDef false "kindAnnAtom" ((PVar "gctx") (PCon "KindAuthority" (PVar "l") (PVar "o") (PVar "pat") PWild)) (EApp (EApp (EVar "KAuth") (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))) (EApp (EApp (EApp (EVar "rangedOver") (EVar "gctx")) (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))) (EVar "pat"))))
-(DFunDef false "kindAnnAtom" ((PVar "gctx") PWild) (EVar "KType"))
+(DFunDef false "kindAnnAtom" ((PVar "_gctx") PWild) (EVar "KType"))
 (DTypeSig true "anyKRow" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Bool")))
 (DFunDef false "anyKRow" ((PList)) (EVar "False"))
 (DFunDef false "anyKRow" ((PCons (PCon "KRow") PWild)) (EVar "True"))
 (DFunDef false "anyKRow" ((PCons PWild (PVar "rest"))) (EApp (EVar "anyKRow") (EVar "rest")))
 (DTypeSig true "declGradedScope" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))
-(DFunDef false "declGradedScope" ((PVar "gctx") (PList) PWild PWild) (EListLit))
+(DFunDef false "declGradedScope" ((PVar "_gctx") (PList) PWild PWild) (EListLit))
 (DFunDef false "declGradedScope" ((PVar "gctx") (PCons (PVar "p") (PVar "ps")) (PList) (PVar "methods")) (EApp (EApp (EApp (EApp (EVar "declGradedScope") (EVar "gctx")) (EBinOp "::" (EVar "p") (EVar "ps"))) (EListLit (EVar "None"))) (EVar "methods")))
 (DFunDef false "declGradedScope" ((PVar "gctx") (PCons (PVar "p") (PVar "ps")) (PCons (PVar "a") (PVar "anns")) (PVar "methods")) (EApp (EApp (EApp (EVar "declGradedScopeAdd") (EVar "p")) (EApp (EApp (EApp (EApp (EVar "ifaceParamKindsDecl") (EVar "gctx")) (EVar "a")) (EVar "p")) (EVar "methods"))) (EApp (EApp (EApp (EApp (EVar "declGradedScope") (EVar "gctx")) (EVar "ps")) (EVar "anns")) (EVar "methods"))))
 (DTypeSig false "ifaceParamKindsDecl" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "Option") (TyCon "KindAnn")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "Kind")))))))
 (DFunDef false "ifaceParamKindsDecl" ((PVar "gctx") (PCon "Some" (PCon "KindArrow" (PVar "a") (PVar "b"))) PWild PWild) (EApp (EApp (EVar "kindAnnSlots") (EVar "gctx")) (EApp (EApp (EVar "KindArrow") (EVar "a")) (EVar "b"))))
-(DFunDef false "ifaceParamKindsDecl" ((PVar "gctx") PWild (PVar "p") (PVar "methods")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "KType"))) (EApp (EApp (EVar "ifaceParamKindsOf") (EVar "p")) (EVar "methods"))))
+(DFunDef false "ifaceParamKindsDecl" ((PVar "_gctx") PWild (PVar "p") (PVar "methods")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "KType"))) (EApp (EApp (EVar "ifaceParamKindsOf") (EVar "p")) (EVar "methods"))))
 (DTypeSig false "declGradedScopeAdd" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))
 (DFunDef false "declGradedScopeAdd" ((PVar "p") (PVar "kinds") (PVar "rest")) (EIf (EApp (EVar "anyKRow") (EVar "kinds")) (EBinOp "::" (ETuple (EVar "p") (EVar "kinds")) (EVar "rest")) (EIf (EVar "otherwise") (EVar "rest") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ifaceParamKindsOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "Kind")))))
@@ -4929,7 +4918,7 @@ methodRowSameNameView rows =
 (DTypeSig true "ieImplExistsForHeadOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "String") (TyFun (TyCon "HeadKey") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "IfaceRef"))) (TyCon "Bool")))))))
 (DFunDef false "ieImplExistsForHeadOf" ((PVar "mctx") (PVar "env") (PVar "name") (PVar "hk") (PVar "admitted")) (EApp (EApp (EApp (EApp (EApp (EVar "ieImplExistsForHeadGo") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "ieHeadRows") (EApp (EVar "Some") (EVar "hk"))) (EVar "env"))) (EApp (EApp (EVar "originMethodName") (EVar "mctx")) (EVar "name"))) (EApp (EVar "dispHeadTab") (EVar "hk"))) (EVar "admitted")))
 (DTypeSig false "ieImplExistsForHeadGo" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyCon "TabKey") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "IfaceRef"))) (TyCon "Bool")))))))
-(DFunDef false "ieImplExistsForHeadGo" ((PVar "gctx") (PList) PWild PWild PWild) (EVar "False"))
+(DFunDef false "ieImplExistsForHeadGo" ((PVar "_gctx") (PList) PWild PWild PWild) (EVar "False"))
 (DFunDef false "ieImplExistsForHeadGo" ((PVar "gctx") (PCons (PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild (PVar "ms") PWild)) (PVar "rest")) (PVar "name") (PVar "goal") (PVar "admitted")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "headTabIs") (EApp (EVar "univReceiverTag") (EVar "tys"))) (EVar "goal")) (EApp (EApp (EVar "ieRowAdmittedBy") (EVar "ir")) (EVar "admitted"))) (EApp (EApp (EApp (EApp (EApp (EVar "ieRowAnswersMethod") (EVar "gctx")) (EVar "r")) (EVar "ms")) (EVar "name")) (EVar "admitted"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "ieImplExistsForHeadGo") (EVar "gctx")) (EVar "rest")) (EVar "name")) (EVar "goal")) (EVar "admitted")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ieRowAdmittedBy" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "IfaceRef"))) (TyCon "Bool"))))
 (DFunDef false "ieRowAdmittedBy" (PWild (PCon "None")) (EVar "True"))
@@ -4978,10 +4967,10 @@ methodRowSameNameView rows =
 (DFunDef false "ieEntriesForIface" ((PList) PWild PWild) (EListLit))
 (DFunDef false "ieEntriesForIface" ((PCons (PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild PWild PWild)) (PVar "rest")) (PVar "iface") (PVar "goals")) (EIf (EBinOp "&&" (EApp (EApp (EVar "ieRowIfaceMatches") (EVar "ir")) (EVar "iface")) (EApp (EApp (EVar "ieRowHeadMatches") (EVar "tys")) (EVar "goals"))) (EBinOp "++" (EApp (EVar "keyEntryOfRow") (EVar "r")) (EApp (EApp (EApp (EVar "ieEntriesForIface") (EVar "rest")) (EVar "iface")) (EVar "goals"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ieEntriesForIface") (EVar "rest")) (EVar "iface")) (EVar "goals")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ieEntriesForMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "IfaceRef"))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "KeyEntry"))))))))
-(DFunDef false "ieEntriesForMethod" ((PVar "gctx") (PList) PWild PWild PWild) (EListLit))
+(DFunDef false "ieEntriesForMethod" ((PVar "_gctx") (PList) PWild PWild PWild) (EListLit))
 (DFunDef false "ieEntriesForMethod" ((PVar "gctx") (PCons (PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild (PVar "ms") PWild)) (PVar "rest")) (PVar "name") (PVar "admitted") (PVar "goals")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "ieRowAdmittedBy") (EVar "ir")) (EVar "admitted")) (EApp (EApp (EVar "ieRowHeadMatches") (EVar "tys")) (EVar "goals"))) (EApp (EApp (EApp (EApp (EApp (EVar "ieRowAnswersMethod") (EVar "gctx")) (EVar "r")) (EVar "ms")) (EVar "name")) (EVar "admitted"))) (EBinOp "++" (EApp (EVar "keyEntryOfRow") (EVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "ieEntriesForMethod") (EVar "gctx")) (EVar "rest")) (EVar "name")) (EVar "admitted")) (EVar "goals"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "ieEntriesForMethod") (EVar "gctx")) (EVar "rest")) (EVar "name")) (EVar "admitted")) (EVar "goals")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ieRowAnswersMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ImplRow") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "IfaceRef"))) (TyCon "Bool")))))))
-(DFunDef false "ieRowAnswersMethod" ((PVar "gctx") PWild (PVar "ms") (PVar "name") (PCon "None")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms")))
+(DFunDef false "ieRowAnswersMethod" ((PVar "_gctx") PWild (PVar "ms") (PVar "name") (PCon "None")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms")))
 (DFunDef false "ieRowAnswersMethod" ((PVar "gctx") (PVar "r") (PVar "ms") (PVar "name") (PCon "Some" PWild)) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms")) (EApp (EApp (EApp (EVar "ieRowInheritsDefault") (EVar "gctx")) (EVar "r")) (EVar "name"))))
 (DTypeSig false "ieRowInheritsDefault" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ImplRow") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "ieRowInheritsDefault" ((PVar "gctx") (PVar "r") (PVar "name")) (EBlock (DoLet false false (PTuple (PVar "iface") PWild PWild) (EApp (EVar "ieRowTriple") (EVar "r"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (EApp (EVar "ieRowOrd") (EVar "r"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "declEnvsRef") "value") "deIfaces")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "ceRow")) () (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "ceRowMethodNames") (EVar "ceRow"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "ceRowRequired") (EVar "ceRow"))))))))))

@@ -12,7 +12,7 @@
 --   published — see the comment there) and the empty-input base58 edge
 --   (published nowhere in-family).
 
-import test.{expectEqual, expectErr, expectOk, expectTrue}
+import test.{expectEqual, expectErr, expectOk}
 import string.{repeat}
 import bytes.{Bytes, fromU8Array}
 import bytes as B

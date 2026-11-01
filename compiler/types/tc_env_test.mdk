@@ -78,8 +78,7 @@ import types.tc_types.{CeRow(..), ImplUniverse(..), Kind(..)}
 import types.registry.{HeadKey(..), MultiRegistry, mregLookupK, regKeyNTab}
 import types.tc_env.{
   buildFlatImplEnv, ceRowIface, ceRowMethodNames, ceRowMethods, ceRowParamKinds,
-  ceRowSupers, ceRowTyparams, dispHeadTab, emptyImplAcc, ieUniverseAt,
-  instRefSeq, oblIfaceKey
+  ceRowSupers, ceRowTyparams, dispHeadTab, ieUniverseAt, instRefSeq, oblIfaceKey
 }
 import frontend.ast.{KindAnn(..), Ns(..), Require(..), Super(..), TabKey(..)}
 import types.tc_diag_text.{kindName}
@@ -793,7 +792,7 @@ ieGenImplIn m = DImpl {
 -- concrete `Blob`, so a head-keyed index must file it beside them regardless — see the
 -- F1 paragraph above.
 ieLooseImplIn : String -> Decl
-ieLooseImplIn m = DImpl {
+ieLooseImplIn _m = DImpl {
   pub = True,
   iface = "Loose",
   tys = [ieTyBlob],

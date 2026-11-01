@@ -11,8 +11,7 @@ import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{EmitPlan, prepareWasmPlan}
 import ir.core_ir.{CProgram}
 import test.{
-  Expectation, expectAll, expectEqual, expectTrue, expectSatisfies, labelFail,
-  fail
+  expectAll, expectEqual, expectTrue, expectSatisfies, labelFail, fail
 }
 import test_process.{
   withScratchDir, boundedVerbSeconds, expectSpawnOkLine, expectSpawnFailsAll,
@@ -466,7 +465,7 @@ test "wasm concatenated raw call refuses complete publication" = withScratchDir
       let bad = dir ++ "/bad.wasm"
       let hole = "      ++ indent bodyLines\n      ++ [\"  )\"]"
       let insert =
-        "      ++ (if endsWith \"publicationprobe\" name then [\"    i64.const 0\", \"    call \" ++ \"$mdk_print_int\"] else [])\n      ++ indent bodyLines\n      ++ [\"  )\"]"
+        "      ++ (if isSome (stringIndexOf \"publicationprobe\" name) then [\"    i64.const 0\", \"    call \" ++ \"$mdk_print_int\"] else [])\n      ++ indent bodyLines\n      ++ [\"  )\"]"
       match (
         readFile emitter,
         writeFile

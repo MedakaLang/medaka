@@ -40,7 +40,7 @@ isSkippable : String -> Bool
 isSkippable line = line == "" || startsWith "#" line
 
 gradeLines : (String -> Result String Unit) -> Bool -> List String -> (Int, Int)
-gradeLines validate expectOk [] = (0, 0)
+gradeLines _validate _expectOk [] = (0, 0)
 gradeLines validate expectOk (line :: rest) =
   let (restPass, restTotal) = gradeLines validate expectOk rest
   if isSkippable line then

@@ -382,7 +382,7 @@ import frontend.exhaust.{
 }
 import frontend.desugar.{exprSpanLoc}
 import types.module_interface.{forgetLocalRows}
-import list.{head, last}
+import list.{last}
 import types.effect_values.{joinProducedEnvelope}
 import types.scopes as Scopes
 import map as IdMap
@@ -414,7 +414,7 @@ finishValueEffectsKeeping dyn generalizing =
 -- ── expression inference ──────────────────────────────────────────────────
 export
 infer : TcEnv -> Expr -> Mono
-infer env (ELit l) = litType l
+infer _env (ELit l) = litType l
 -- PLAN.md #11: a source integer literal is `Num a` for a fresh `a`.  With the
 -- prelude loaded (Num registered + `fromInt` in scope), model the literal exactly
 -- as `fromInt n`.  inferMethodAt
@@ -494,7 +494,7 @@ infer env (EDoOrigin l e) =
   }
   infer { env | teDyn = { env.teDyn | dcDo = Some doCtx } } e
 
-infer env _ = panic "typecheck: unsupported expression"
+infer _env _ = panic "typecheck: unsupported expression"
 
 -- is this lowered do-chain a `defer` block?  Its head callee is the tagged
 -- `deferThen` (see `callAndThen` in desugar.mdk).
@@ -549,7 +549,7 @@ openLocalScopeIf mctx name
 
 closeLocalScope : ModuleCtx -> Option ScopeId -> Unit
 closeLocalScope mctx (Some _) = closeScope mctx ()
-closeLocalScope mctx None = ()
+closeLocalScope _mctx None = ()
 
 -- An occurrence of a candidate local.  Once its binder has generalized with
 -- predicates the occurrence instantiates them; before that (a recursive use) it is
@@ -620,7 +620,7 @@ inferGrantedAt env name ev =
 -- bare sequential block: value of the last statement; earlier statements typed
 -- for effect; let/assign extend the env
 inferBlock : TcEnv -> List DoStmt -> Mono
-inferBlock env [] = tconBuiltin "Unit"
+inferBlock _env [] = tconBuiltin "Unit"
 inferBlock env [s] = inferLastStmt env s
 inferBlock env (s :: rest) = inferBlock (inferStmt env s) rest
 
@@ -679,7 +679,7 @@ inferStmtAt env (DoBind pat e) =
   bindFrom env.teDyn (fst pr) t
   settlePatLits env.teDyn lits
   extendLocalVars env (snd pr)
-inferStmtAt env _ = panic "typecheck: unsupported block statement"
+inferStmtAt _env _ = panic "typecheck: unsupported block statement"
 
 -- A bare (non-final, non-`let`) block statement discards its value.  A free
 -- result var (nothing downstream constrained it) is pinned to `Unit` via plain
@@ -891,7 +891,7 @@ unifyFieldAssignsIdx : TcEnv ->
   RecordSubst ->
   List FieldAssign ->
   Unit
-unifyFieldAssignsIdx env _ _ _ [] = ()
+unifyFieldAssignsIdx _env _ _ _ [] = ()
 unifyFieldAssignsIdx env rname ri subst ((FieldAssign fn val) :: rest) =
   unifyFieldAssignIdx env rname ri subst fn val
   unifyFieldAssignsIdx env rname ri subst rest
@@ -1079,7 +1079,7 @@ inferBinop dyn "||" lt rt = boolOp dyn lt rt
 inferBinop dyn "::" lt rt = consOp dyn lt rt
 inferBinop dyn ">>" lt rt = composeOp dyn lt rt False
 inferBinop dyn "<<" lt rt = composeOp dyn lt rt True
-inferBinop dyn op _ _ = panic ("typecheck: unsupported operator " ++ op)
+inferBinop _dyn op _ _ = panic ("typecheck: unsupported operator " ++ op)
 
 -- `++` (append) carries a `Semigroup` obligation on its (unified)
 -- operand type — a verbatim mirror of `eqCompareOp`/`recordIfaceObligation` for `==`,
@@ -1151,7 +1151,7 @@ export
 checkWideLiterals : ModuleCtx ->
   List (Mono, String, Int, Int, Bool, Option Loc) ->
   Unit
-checkWideLiterals mctx [] = ()
+checkWideLiterals _mctx [] = ()
 checkWideLiterals mctx ((m, lx, hi, lo, negated, loc) :: rest) =
   let at = orElseLoc loc mctx.mcLoc
   let shown = if negated then "-" ++ lx else lx
@@ -1221,7 +1221,7 @@ checkWideLiterals mctx ((m, lx, hi, lo, negated, loc) :: rest) =
 -- own location (no message dedup: two `300`s are two errors).
 export
 checkFixedWidthLiterals : ModuleCtx -> List (Mono, Int, Option Loc) -> Unit
-checkFixedWidthLiterals mctx [] = ()
+checkFixedWidthLiterals _mctx [] = ()
 checkFixedWidthLiterals mctx ((m, n, loc) :: rest) =
   match normalize m
     TCon tag _ => match taggedFixedRange tag
@@ -1336,7 +1336,7 @@ composeOp dyn gt ht True = composeOp dyn ht gt False
 inferUnop : DynCtx -> String -> Mono -> Mono
 inferUnop dyn "-" t = negateOp dyn.dcModule t
 inferUnop dyn "!" t = derefOp dyn t
-inferUnop dyn op _ = panic ("typecheck: unsupported unary op " ++ op)
+inferUnop _dyn op _ = panic ("typecheck: unsupported unary op " ++ op)
 
 -- #1739 half A: `!x` is Ref-DEREFERENCE, not boolean negation — `not` is the sole
 -- boolean negation (it is already a prelude fn).  The unify is the same one
@@ -1474,7 +1474,7 @@ appNodeArg e = e
 -- each with the node that supplies it so `inferApp` can still localize its own error
 -- span.
 inferSpineArgs : TcEnv -> List Expr -> List (Expr, Mono)
-inferSpineArgs env [] = []
+inferSpineArgs _env [] = []
 inferSpineArgs env (n :: rest) =
   let t = infer env (appNodeArg n)
   (n, t) :: inferSpineArgs env rest
@@ -1482,7 +1482,7 @@ inferSpineArgs env (n :: rest) =
 -- fold `inferApp` over a spine's (node, argument-type) pairs, left to right.  One
 -- pair is exactly the single `inferApp` call the bare-head paths make.
 inferAppNodes : TcEnv -> Mono -> List (Expr, Mono) -> Mono
-inferAppNodes env ft [] = ft
+inferAppNodes _env ft [] = ft
 inferAppNodes env ft ((node, at) :: rest) =
   inferAppNodes env (inferApp env node ft at) rest
 
@@ -1491,7 +1491,7 @@ inferAppNodes env ft ((node, at) :: rest) =
 -- `applicationRow` with its own syntax, so a standalone selected in place of a
 -- method is proved exactly like any other callee.
 unifySpineResult : TcEnv -> Expr -> Mono -> List (Expr, Mono) -> Mono
-unifySpineResult env _ ft [] = ft
+unifySpineResult _env _ ft [] = ft
 unifySpineResult env f ft ((node, at) :: rest) =
   let r = freshVar env.teDyn.dcModule ()
   let eff = applicationRow env (EApp f node) ft at r
@@ -1580,8 +1580,8 @@ plainAppHead : TcEnv -> Expr -> Bool
 plainAppHead env (ELoc _ inner) = plainAppHead env inner
 plainAppHead env (hd@(EVar _)) = plainAppHeadVar env hd
 plainAppHead env (hd@(EVarId _ _)) = plainAppHeadVar env hd
-plainAppHead env (EDictAt _ _) = True
-plainAppHead env _ = False
+plainAppHead _env (EDictAt _ _) = True
+plainAppHead _env _ = False
 
 -- the arrows of [ft] peeled [n] deep, then the result unified with [expected]
 -- BEFORE any argument is looked at; each argument is then inferred against
@@ -1598,7 +1598,7 @@ inferAppResultFirst env hd args expected =
   inferAppArgsAgainst env hd ft args
 
 inferAppArgsAgainst : TcEnv -> Expr -> Mono -> List Expr -> Mono
-inferAppArgsAgainst env _ ft [] = ft
+inferAppArgsAgainst _env _ ft [] = ft
 inferAppArgsAgainst env appSoFar ft (x :: rest) =
   let xt = match lamUnderLoc x
     Some (loc, pats, body) =>
@@ -2273,7 +2273,7 @@ lamUnderLoc _ = None
 -- var when `ft` is not yet a concrete arrow (then nothing is pushed; the trailing
 -- `unify ft (TFun xt …)` reconciles).
 funDomain : ModuleCtx -> Mono -> Mono
-funDomain mctx (TFun a _ _) = a
+funDomain _mctx (TFun a _ _) = a
 funDomain mctx _ = freshVar mctx ()
 
 -- like inferLam, but checked against the arrow [expected] it flows into, when
@@ -2703,7 +2703,7 @@ sourceBindingArity _ = 0
 -- (`registerLocalAbs`): each use applies it to dictionaries solved at the use, so its
 -- constrained vars generalize and defer exactly as described above.
 registerLocalScheme : ModuleCtx -> String -> Scheme -> Int -> Int -> Int -> Unit
-registerLocalScheme mctx x sch oblN0 callN0 dictN0 =
+registerLocalScheme mctx x sch oblN0 callN0 _dictN0 =
   declareQuantified mctx sch
   -- Obligations registered universally (#827/#838 I2); do not gate to IMPL/DEFAULT
   -- bodies only. See docs/spec/DICT-SEMANTICS.md § "4.1 `gen` at a local binder".
@@ -2856,13 +2856,13 @@ clauseResult arity (loc, value) = match resultAfterArrows arity value
   None => (loc, value)
 
 inferProduced : TcEnv -> List Expr -> List (Option Loc, Mono)
-inferProduced env [] = []
+inferProduced _env [] = []
 inferProduced env (e :: es) =
   let value = infer env e
   (exprLoc e, value) :: inferProduced env es
 
 inferEach : TcEnv -> List Expr -> List Mono
-inferEach env [] = []
+inferEach _env [] = []
 inferEach env (e :: es) =
   let t = infer env e
   t :: inferEach env es
@@ -2996,7 +2996,7 @@ checkMatchChecks mctx scrutTy arms =
 
 export
 checkDeferredMatches : ModuleCtx -> List (Mono, List Arm, Option Loc) -> Unit
-checkDeferredMatches mctx [] = ()
+checkDeferredMatches _mctx [] = ()
 checkDeferredMatches mctx ((scrutTy, arms, loc) :: rest) =
   checkMatchChecks (mctxAt loc mctx) scrutTy arms
   checkDeferredMatches mctx rest
@@ -3067,7 +3067,7 @@ checkRedundantGo : ModuleCtx ->
   Bool ->
   List Arm ->
   Unit
-checkRedundantGo mctx oracle _ _ _ _ [] = ()
+checkRedundantGo _mctx _oracle _ _ _ _ [] = ()
 checkRedundantGo mctx oracle col0 prec heads offCol ((Arm pat gs body) :: rest) =
   let dp = desugarPat mctx.mcCells.matchOracle.value pat
   if armUnreachable mctx oracle col0 prec heads offCol dp then
@@ -3175,10 +3175,11 @@ armUnreachable : ModuleCtx ->
   Bool ->
   Pat ->
   Bool
-armUnreachable mctx oracle col0 prec heads offCol (PCon c args)
+armUnreachable _mctx oracle col0 prec heads offCol (PCon c args)
   | not offCol && not (omHasKey c heads) = False
   | otherwise = patUnreachable oracle col0 prec (PCon c args)
-armUnreachable mctx oracle col0 prec _ _ dp = patUnreachable oracle col0 prec dp
+armUnreachable _mctx oracle col0 prec _ _ dp =
+  patUnreachable oracle col0 prec dp
 
 noteHeadCtor : Pat -> OrdMap Unit -> OrdMap Unit
 noteHeadCtor (PCon c _) heads = omInsert c () heads
@@ -3211,7 +3212,7 @@ nonExhaustiveMsg : ModuleCtx ->
   List (List Pat) ->
   Bool ->
   (String, Option String)
-nonExhaustiveMsg mctx oracle scrutTy rows binder =
+nonExhaustiveMsg mctx _oracle scrutTy rows binder =
   match (usefulWitness
     mctx.mcCells.matchOracle.value
     (matchCol0Type scrutTy)
@@ -3236,13 +3237,13 @@ nonExhaustiveMsg mctx oracle scrutTy rows binder =
 
 -- one single-column matrix row per non-guarded arm (its desugared pattern)
 nonGuardedRows : ModuleCtx -> List Arm -> List (List Pat)
-nonGuardedRows mctx [] = []
+nonGuardedRows _mctx [] = []
 nonGuardedRows mctx ((Arm pat [] _) :: rest) =
   [desugarPat mctx.mcCells.matchOracle.value pat] :: nonGuardedRows mctx rest
 nonGuardedRows mctx ((Arm _ _ _) :: rest) = nonGuardedRows mctx rest
 
 inferArms : TcEnv -> Mono -> List Arm -> List (Option Loc, Mono)
-inferArms env _ [] = []
+inferArms _env _ [] = []
 inferArms env scrutTy ((Arm pat gs body) :: rest) =
   let value = inferArm env scrutTy pat gs body
   (exprLoc body, value) :: inferArms env scrutTy rest
@@ -3318,7 +3319,6 @@ processLetGroup env binds =
   beginEffectSummaryScope env.teDyn.dcModule ()
   let oblN0 = wMark env.teDyn.dcModule.mcCells.implObls
   let callN0 = wMark env.teDyn.dcModule.mcCells.obls
-  let dictN0 = goalsMark env.teDyn.dcModule.mcGraph ()
   let summaries = map (localBindingSummary env.teDyn.dcModule) binds
   each
     (entry => recordLetBindType env.teDyn.dcModule.mcGraph entry)
@@ -3391,7 +3391,7 @@ processLetGroup env binds =
 
 -- the generalized (name, scheme) pairs of a just-closed local group
 groupSchemesOf : TcEnv -> List LetBind -> List (String, Scheme)
-groupSchemesOf env [] = []
+groupSchemesOf _env [] = []
 groupSchemesOf genv ((LetBind name _ _ _) :: rest) = match lookupVar genv name
   Some sch => (name, sch) :: groupSchemesOf genv rest
   None => groupSchemesOf genv rest
@@ -3399,8 +3399,8 @@ groupSchemesOf genv ((LetBind name _ _ _) :: rest) = match lookupVar genv name
 inferLetBinds : TcEnv ->
   List (LetBind, (String, BindingSummary)) ->
   List (Option ScopeId)
-inferLetBinds env [] = []
-inferLetBinds env ((bind@(LetBind name clauses _ _), (_, owned)) :: rest) =
+inferLetBinds _env [] = []
+inferLetBinds env ((LetBind name clauses _ _, (_, owned)) :: rest) =
   let pairs = map funClausePair clauses
   let lscope =
     if isLocalAbsName name then
@@ -3422,7 +3422,7 @@ inferLetBinds env ((bind@(LetBind name clauses _ _), (_, owned)) :: rest) =
 -- rigid (`matchEqPairs`), from the binder's close on.
 export
 declareRigidVars : ModuleCtx -> List String -> Unit
-declareRigidVars mctx [] = ()
+declareRigidVars _mctx [] = ()
 declareRigidVars mctx keys =
   mctx.mcCells.declaredSigVarIds :=
     omFromNames keys mctx.mcCells.declaredSigVarIds.value
@@ -3440,7 +3440,7 @@ preunifySigsEx : ModuleCtx ->
   List (String, Ty) ->
   List ScopedMember ->
   (List ConstraintReg, List (String, Ty, List (String, Mono)))
-preunifySigsEx mctx _ [] = ([], [])
+preunifySigsEx _mctx _ [] = ([], [])
 preunifySigsEx mctx sigs (member :: rest) =
   let m = member.smName
   let v = member.smMono
@@ -3531,7 +3531,7 @@ inferMemberClauses : TcEnv ->
   BindingSummary ->
   List (List Pat, Expr) ->
   List Atom
-inferMemberClauses env _ _ [] = []
+inferMemberClauses _env _ _ [] = []
 inferMemberClauses env peel owned clauses =
   let (values, effects) = inferClauseValues env peel owned clauses
   publishProducedResults env.teDyn owned values
@@ -3542,7 +3542,7 @@ inferClauseValues : TcEnv ->
   BindingSummary ->
   List (List Pat, Expr) ->
   (List (Option Loc, Mono), List EffRow)
-inferClauseValues env _ _ [] = ([], [])
+inferClauseValues _env _ _ [] = ([], [])
 inferClauseValues env peel owned (cl :: rest) =
   let ce = inferClauseEff env peel cl
   -- A clause that does not fit the member's type is reported at the value it
@@ -3606,8 +3606,8 @@ inferClauseEff outer peel (pats, body) =
 -- domains onto the inferred param types.  No-op for an unsigned member, a value
 -- binding (no params), or a sig with no remaining arrows.
 peelOntoParams : DynCtx -> Option Mono -> List Mono -> List Pat -> Unit
-peelOntoParams dyn None _ _ = ()
-peelOntoParams dyn (Some _) _ [] = ()
+peelOntoParams _dyn None _ _ = ()
+peelOntoParams _dyn (Some _) _ [] = ()
 peelOntoParams dyn (Some src) patTypes pats =
   zipBindFrom dyn patTypes (peelArrows (listLen pats) src)
 

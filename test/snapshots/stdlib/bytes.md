@@ -1,5 +1,5 @@
 # META
-source_lines=1003
+source_lines=1004
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
@@ -449,8 +449,8 @@ export
 contains : Bytes -> Bytes -> Bool
 contains needle haystack = isSome (indexOf needle haystack)
 
-{- | Whether `b` begins with `prefix`. The empty prefix begins every byte
-   string.
+{- | Whether the second byte string begins with the first. The empty prefix begins
+   every byte string.
 
    > startsWith (encodeUtf8 "he") (encodeUtf8 "hello")
    True
@@ -458,7 +458,7 @@ contains needle haystack = isSome (indexOf needle haystack)
    False -}
 export
 startsWith : Bytes -> Bytes -> Bool
-startsWith (prefix@(Bytes nb)) (b@(Bytes bb)) =
+startsWith (Bytes nb) (Bytes bb) =
   let nlen = byteBlockLength nb
   nlen <= byteBlockLength bb && matchesAtGo nb bb 0 0 nlen
 
@@ -467,7 +467,8 @@ startsWith (prefix@(Bytes nb)) (b@(Bytes bb)) =
 -- > startsWith (encodeUtf8 "hello!") (encodeUtf8 "hello")
 -- False
 
-{- | Whether `b` ends with `suffix`. The empty suffix ends every byte string.
+{- | Whether the second byte string ends with the first. The empty suffix ends
+   every byte string.
 
    > endsWith (encodeUtf8 "lo") (encodeUtf8 "hello")
    True
@@ -475,7 +476,7 @@ startsWith (prefix@(Bytes nb)) (b@(Bytes bb)) =
    False -}
 export
 endsWith : Bytes -> Bytes -> Bool
-endsWith (suffix@(Bytes nb)) (b@(Bytes bb)) =
+endsWith (Bytes nb) (Bytes bb) =
   let nlen = byteBlockLength nb
   let hlen = byteBlockLength bb
   nlen <= hlen && matchesAtGo nb bb 0 (hlen - nlen) nlen
@@ -1062,9 +1063,9 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "contains" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
 (DFunDef false "contains" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig true "startsWith" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
-(DFunDef false "startsWith" ((PAs "prefix" (PCon "Bytes" (PVar "nb"))) (PAs "b" (PCon "Bytes" (PVar "bb")))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "nlen"))))))
+(DFunDef false "startsWith" ((PCon "Bytes" (PVar "nb")) (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "nlen"))))))
 (DTypeSig true "endsWith" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
-(DFunDef false "endsWith" ((PAs "suffix" (PCon "Bytes" (PVar "nb"))) (PAs "b" (PCon "Bytes" (PVar "bb")))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoLet false false (PVar "hlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EVar "hlen")) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (EBinOp "-" (EVar "hlen") (EVar "nlen"))) (EVar "nlen"))))))
+(DFunDef false "endsWith" ((PCon "Bytes" (PVar "nb")) (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoLet false false (PVar "hlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EVar "hlen")) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (EBinOp "-" (EVar "hlen") (EVar "nlen"))) (EVar "nlen"))))))
 (DTypeSig false "foldGo" (TyFun (TyFun (TyVar "b") (TyFun (TyCon "U8") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b"))))))))
 (DFunDef false "foldGo" ((PVar "f") (PVar "acc") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EApp (EVar "foldGo") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bb")))) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
 (DTypeSig true "fold" (TyFun (TyFun (TyVar "b") (TyFun (TyCon "U8") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyCon "Bytes") (TyEffect () (Some "e") (TyVar "b"))))))
@@ -1196,9 +1197,9 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "contains" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
 (DFunDef false "contains" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig true "startsWith" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
-(DFunDef false "startsWith" ((PAs "prefix" (PCon "Bytes" (PVar "nb"))) (PAs "b" (PCon "Bytes" (PVar "bb")))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "nlen"))))))
+(DFunDef false "startsWith" ((PCon "Bytes" (PVar "nb")) (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "nlen"))))))
 (DTypeSig true "endsWith" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
-(DFunDef false "endsWith" ((PAs "suffix" (PCon "Bytes" (PVar "nb"))) (PAs "b" (PCon "Bytes" (PVar "bb")))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoLet false false (PVar "hlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EVar "hlen")) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (EBinOp "-" (EVar "hlen") (EVar "nlen"))) (EVar "nlen"))))))
+(DFunDef false "endsWith" ((PCon "Bytes" (PVar "nb")) (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoLet false false (PVar "hlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EVar "hlen")) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (EBinOp "-" (EVar "hlen") (EVar "nlen"))) (EVar "nlen"))))))
 (DTypeSig false "foldGo" (TyFun (TyFun (TyVar "b") (TyFun (TyCon "U8") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b"))))))))
 (DFunDef false "foldGo" ((PVar "f") (PVar "acc") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EApp (EVar "foldGo") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bb")))) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
 (DTypeSig true "fold#shadow" (TyFun (TyFun (TyVar "b") (TyFun (TyCon "U8") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyCon "Bytes") (TyEffect () (Some "e") (TyVar "b"))))))

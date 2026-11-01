@@ -5,7 +5,6 @@
 -- rules and hands them in, so this module knows nothing about flags.
 
 import frontend.ast.{
-  letBindName,
   Loc(..),
   Ty(..),
   UsePath(..),
@@ -78,11 +77,8 @@ import support.util.{
   startsWith,
   endsWith,
   dedup,
-  stringTrim,
-  isSome,
-  lookupAssoc,
 }
-import hash_map.{HashMap, new, get, setInPlace, has, keys, findWithDefault}
+import hash_map.{HashMap, new, get, setInPlace, has}
 import list.{take, drop, indexed, nub}
 import string.{indexOf, lines}
 import array.{fromList}
@@ -116,7 +112,6 @@ import tools.lint_core.{
   Visitor(..),
   factComments,
   fixToDiagFix,
-  factDupClauses,
   factScopes,
   clampApplicability,
   emptyStdlibIndex,
@@ -1338,7 +1333,7 @@ spliceLines lines s e txt = take (s - 1) lines ++ splitNl txt ++ drop e lines
 -- Parse --prefix=v1,v2,... from argv; returns [] if not present.
 export
 parseLintFlagList : String -> List String -> List String
-parseLintFlagList prefix [] = []
+parseLintFlagList _prefix [] = []
 parseLintFlagList prefix (x :: rest)
   | startsWith prefix x =
     splitLintNames (stringSlice (stringLength prefix) (stringLength x) x)

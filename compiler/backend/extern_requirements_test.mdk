@@ -7,7 +7,7 @@ import test_process.{boundedVerbSeconds, underRoot}
 import ir.core_ir_sexp_parse.{parseCProgram}
 import support.util.{listLen}
 import string.{contains, lines, split}
-import test.{fail, pass, expectNotEqual}
+import test.{fail, expectNotEqual}
 import types.runtime_abi_types.{CallableShape(..)}
 import backend.extern_requirements.{
   ExternRequirements(..), ExternRequirement(..), RequirementBinding(..),

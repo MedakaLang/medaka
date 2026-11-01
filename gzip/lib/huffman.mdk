@@ -732,7 +732,7 @@ emitUsed lengths codes i n w
     None => ()
 
 decodeExpected : Huffman -> BitReader -> List Int -> Bool
-decodeExpected h r [] = True
+decodeExpected _h _r [] = True
 decodeExpected h r (sym :: rest) = match decodeSym h r
   Ok got => got == sym && decodeExpected h r rest
   Err _ => False

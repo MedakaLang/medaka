@@ -317,7 +317,7 @@ appendMany : DataDir d ->
   Int ->
   Int ->
   <FileRead d, FileWrite d> Result String Unit
-appendMany dir 0 _ = Ok ()
+appendMany _dir 0 _ = Ok ()
 appendMany dir remaining timeSeconds =
   match appendAt dir timeSeconds "bafyrei\{intToString remaining}"
     Err message => Err message

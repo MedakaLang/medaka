@@ -6,7 +6,7 @@ import backend.emit_plan.{prepareWasmPlan}
 import backend.wasm_emit.{inputCtorFloatFieldsW}
 import backend.extern_catalog.{RuntimeExternDomain(..)}
 import string.{contains, lines, startsWith, unlines}
-import list.{reverse, filter}
+import list.{reverse}
 import types.capability_manifest.{ManifestRequirement(..)}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}

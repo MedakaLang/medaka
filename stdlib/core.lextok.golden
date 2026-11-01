@@ -10997,7 +10997,7 @@ NEWLINE
 PROP
 STRING "Arbitrary (List a) delegates, bounds length, and is not degenerate"
 LPAREN
-IDENT "n"
+IDENT "_n"
 COLON
 UPPER "Int"
 RPAREN
@@ -11036,7 +11036,7 @@ NEWLINE
 PROP
 STRING "Arbitrary (Option a) draws both constructors and delegates"
 LPAREN
-IDENT "n"
+IDENT "_n"
 COLON
 UPPER "Int"
 RPAREN

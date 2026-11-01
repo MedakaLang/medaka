@@ -149,7 +149,6 @@ import frontend.ast.{
   tabKeyName,
   tabKeyEq,
   lookupTab,
-  tabHasName,
 }
 import support.ordmap.{
   OrdMap,

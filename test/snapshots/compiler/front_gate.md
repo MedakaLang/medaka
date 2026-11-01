@@ -1,5 +1,5 @@
 # META
-source_lines=515
+source_lines=514
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -28,7 +28,6 @@ import driver.diagnostics.{
   DiagId(..),
   Severity(..),
   cjDiagnostic,
-  cjFoldIntoFile,
   cjGraphParts,
   cjLoadFailure,
   cjSingleParts,
@@ -526,7 +525,7 @@ fileWithNotes _ _ _ = None
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalGuardFor" false) (mem "resolveModulesErrorsByFile" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "DiagId" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjFoldIntoFile" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "siblingPairsOf" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "DiagId" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "siblingPairsOf" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadErrorSite" false) (mem "dropPathTriple" false) (mem "entrySearchRoots" false) (mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "projectTrustedMods" false) (mem "readSource" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinNl" false) (mem "splitLast" false))))
@@ -611,7 +610,7 @@ fileWithNotes _ _ _ = None
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalGuardFor" false) (mem "resolveModulesErrorsByFile" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "DiagId" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjFoldIntoFile" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "siblingPairsOf" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "DiagId" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "siblingPairsOf" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadErrorSite" false) (mem "dropPathTriple" false) (mem "entrySearchRoots" false) (mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "projectTrustedMods" false) (mem "readSource" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinNl" false) (mem "splitLast" false))))
