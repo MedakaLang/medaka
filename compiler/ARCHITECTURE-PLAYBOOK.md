@@ -167,252 +167,63 @@ lines in `typecheck.mdk`, all parameters, re-wraps and records, loaned against
 
 ---
 
-## 5. Phase 3: the interface artifact (A7)
+## 5. Phase 3: the interface artifact (A7) — met 2026-10-25
 
-This is M-CACHE (#2732) plus run-once O3 and O5. It is also the single largest lever on
-the box's CPU-seconds, the stated perf goal. Under the 2026-10-18 amendment it starts
-after S1 rather than after Phase 2.
+This was M-CACHE (#2732) with run-once O3 and O5, the largest lever on the box's
+CPU-seconds. The row-by-row record (C1 to C3b-2) is in this file's git history; the sprint
+reports are under `/var/tmp/medaka-sprints/arch-p3*/` on the build box.
 
-| Id | Action | Mechanism | Acceptance | Size | Needs |
-|---|---|---|---|---|---|
-| **C1** | `ModuleInterface` codec | Serialize a module's published export surface (schemes, interfaces, instances and their dispositions, the importer-visible evidence rows, declared effects) with a codec in the style of `ir/core_ir_sexp.mdk`, with a format version and the module's source fingerprint, the compiler fingerprint, the instance-environment key the contract requires (§5) and the IO join of the selected target profile (D7: the join's atom list, not the profile's name, so profiles with the same join share an entry). The surface is the F1 producer's output. F3 later adds the full view a test sibling reads (private items included, as rustc's `.rmeta` carries them; ruled 2026-10-18) under a format-version bump. | Round-trip prop: decode (encode x) equals x for every stdlib module; a changed instance environment invalidates; an interface written under one join is never loaded under another, shown by a two-profile test over an unsigned binding whose type differs between them (the open-tail case in D7). | sprint | V2, F1 |
-| **C2** | The prelude ships pre-checked | At `make medaka`, the prelude's interface file is produced beside `stdlib/core.mdk`, keyed by the source fingerprint the binary bakes; the loader resolves it from `exeDir` as it resolves `stdlib/` and prefers it when the fingerprint matches (D6, ruled: shipped files, not baked). Every verb loads it instead of re-checking `core.mdk`; the same step then covers every stdlib module. Files are content-addressed per (module, IO join) (D7): `make medaka` produces the full join and the playground's (`wasmgc/browser-worker`), joins whose interfaces are byte-identical share one file, and any other join falls back to a full check. | G6's pins show zero prelude typecheck drives per process; hello-world `check` instruction count falls by the measured prelude share; interface-on versus interface-off differential over the engines corpus is identical; a mismatched fingerprint falls back to a full check and says so on stderr. | sprint | C1 |
-| **C3a** | Imports load interfaces in process (done) | The diagnostics arm serves each unchanged module before the entry from its recorded `ModuleInterface` (`types/module_interface.mdk`) within a session (the LSP and the playground; `check --json` and MCP drive without recording steps, so they neither serve nor record interfaces); two pass caches serve the raw-tree resolve and exhaust verdicts per module; the chain-length and MRU cliffs (#4167, #2797) are fixed. | Met: the warm leaf edit of the compiler's own graph re-checks 2 modules (the `lsp.e_leaf_edit` rows of `test/arch_goldens/stage_counts.golden`). The REPL clause is met at the sprint base (`repl_one_line.typecheck.drive` 1 in `test/arch_goldens/stage_counts.golden`), and so is `build`'s (`build_hello.typecheck.drive` 1 and `typecheck.module` 1 in the same golden). | sprint | C2, V3 |
-| **C3b-1** | The tree arm serves in process (done) | A keyed tree drive serves each unchanged module before the entry from its recorded `ModuleTrees` (`types/module_interface.mdk`, policy in `types/serve_policy.mdk`): the marked pre-`dictPass` trees plus the rows the graph-end passes read, with `dictPass` re-run over the whole graph. Local binder names are a function of the graph (#4284). `medaka test`'s gate and doctest drives are keyed, so the doctest drive checks only the spliced module. One-shot verbs record and serve nothing. | Met: `test_docimp_eval.typecheck.module` falls 4 to 3 with `typecheck.drive` 2 (`test/arch_goldens/stage_counts.golden`); `test_doc_eval` met the criterion at the sprint base. The whole-tree census of cold against warm drives is identical. | sprint | C3a |
-| **C3b-2** | The module store and the `medaka test` parent/child reuse (measured, not built; ruled out 2026-10-25) | Sprint 7b's identity spike built both on a scratch tree and measured them. The store saves at most 1.5 / 2.1 / 4.1% of the gate sample's CPU under the three key variants (1.4 / 2.4 / 11.0% of `make test`), gross of any decode cost. Decoding a stdlib module costs about what checking it does even at `prelude_elab`'s cursor rate (244 Ir/B; the prototype reader is 555), so it pays only for the compiler's own larger modules, and a cold `check --cache` of the self graph costs +54% CPU over a keyed check to write 130 MB. The handoff is exact over 110 native targets under seven identity rules but CPU-negative today (`interface_sexp_test` 28.0 to 35.0 CPU-s); its ceiling is 0.85% of `make test`. The child shares no module id with its parent at the base: the probe's per-run runtime dependency renames every stdlib module (`canonicalModId`, `driver/loader.mdk`). With stable ids the child floors would be `test_probe` 7 to 3, `test_doc_native` 2, `test_docimp_native` 3 to 2, `test_bytebuilder` 13 to 3, not 1. What 7b landed: a served module's key without the entry and roots (#4444 item 1). Sorting the graph key's rows was tried and dropped: a served module then prints overlapping impls in the first drive's order. | Not built (Val, 2026-10-25). `test_probe` and `test_doc_native` stay named exceptions in `stage_counts.golden`; #3902, #4279 and #2732 close on these numbers. Reopen if the module codec gets a cursor reader and a view that is not 57% of a file. | sprint | C3b-1 |
+**Exit criterion:** nothing proven in one process is re-proven in the next for an unchanged
+input; the prelude is checked at build time only.
 
-**Exit criterion.** Nothing proven in one process is re-proven in the next for an
-unchanged input; the prelude is checked at build time only.
+**Met 2026-10-25 at `fba49724e`, with named exceptions** (epic #4206; PRs #4391, #4394,
+#4410, #4433, #4448, #4452). The prelude ships pre-checked and is not checked at run time; a
+module whose key matches is served in process by the diagnostics arm and the tree arm.
+Nothing is served across a process.
 
-**Exit, stated 2026-10-25 at `fba49724e`, with named exceptions** (epic #4206; PRs #4391,
-#4394, #4410, #4433, #4448, #4452): the prelude ships pre-checked and is not checked at
-run time, and a module whose key matches is served in process by the diagnostics arm and
-the tree arm. Nothing is served across a process. The `medaka test` native child checks
-its own graph, so four rows of `stage_counts.golden` stay named exceptions
-(`test_probe`, `test_doc_native`, `test_tonly_native`, `test_bytebuilder`); row C3b-2
-records why the store and the handoff were measured and not built. Reopening them is
-Phase 4's call, not a Phase 3 debt.
-
-**Amended 2026-10-21 (Phase 2 wrap): what Phase 2 changed about this phase.** The three
-rows above stand as the actions; the points below are their refinements, derived from the
-cell table, the memo code and the stage-6 measurements, and they are the inputs to the cut.
-The `Needs` column is met: V2 and V3 landed in Phase 1, F1 in #4314, and #2724 (the
-module-count superlinearity #2732 waited on) is closed.
-
-1. **C1's content is the fill table.** A loaded interface restores, beside the published
-   value (`cpSchemes`, `cpCore`, `cpDispositions`), the 19 strict and 6 caveat rows of
-   `types/CELL-LIFETIMES.md` § "Interface fills". Rows of kind *accumulated module by
-   module* (the `CrossRun` universes, predicate slots and declared prefixes,
-   `GraphRun.ctorExistentialsRef`) are interface content, one contribution per module.
-   Rows of kind *computed once from the whole graph's declarations* (`effectDomains`,
-   `declEnvsRef`, `markSetsRef`, `argDispatchIdxByIdRef`, `mangledShadowMapRef`,
-   `abstractRecordTypesRef`, `builtinClassesRef`, `dictEligible*`) are recomputed by the
-   loader over the loaded graph's declaration view, so the interface carries that view
-   (heads, signatures, effect-domain declarations) in a `Decl`-free form. The admissibility
-   rule is the one `PreludePreamble` already states in `types/tc_types.mdk`: every field a
-   pure function of the module's declarations; no `Decl`, no `Ref`, no live `Scheme`
-   (`PubScheme` is the admitted form); no read of process state. `cpEvidence` and
-   `cpBinders` are not C1 content: no fill row reads them, and they belong to the tree-arm
-   artifact (point 2), where #4284 is a prerequisite.
-2. **C2 is the core memo served from a file, and it splits by output arm.**
-   `CoreCheckMemo` plus `PreludePreamble` is the shipped prelude's content and
-   `checkCoreMemoized`'s hit path is its loader; the key
-   family is the memos' (`ccmKey`), widened per D7 to the join's atom list (the in-process
-   memo keys on the profile name, which the file key must not). **C2a** serves the diags arm
-   (`check`, the LSP, MCP, the playground, `medaka test`'s gate): acceptance as written, and
-   `check_hello.typecheck.module` 2 to 1. At `17e977db4` the prelude's core pass is 63% of a
-   hello-world `check`'s instructions (§1), 85% with its parse. **C2b** serves the tree arm
-   (`run`, `build`'s child, `medaka test`'s phases), which needs the prelude's elaborated,
-   dict-passed trees: that artifact carries them (`ir/core_ir_sexp.mdk` and its parser are
-   the codec precedent; #4172's prelude object is the native link's half), and
-   `run_hello`/`build_hello` `typecheck.module` go 2 to 1. C2a lands first; C2b is its own
-   sprint.
-3. **C3's preconditions.** The in-session reuse C3 promises cannot be shown on the
-   compiler's own graph until #4167 (the chain memo records nothing past 64 modules) and
-   #2797 (the 24-entry MRU caches) are closed; both join C3's `Needs`. The per-module
-   accumulator copies (#4165, #4166) are the cost of the *accumulated* rows C3 restores and
-   are measured in its cost rows.
-4. **Zero growth.** Phase 3 adds no net code lines to `types/typecheck.mdk`: the value and
-   its one process cache are a new leaf (`types/interface.mdk`), the codec another
-   (`types/interface_sexp.mdk`) over a new `support/sexp.mdk` (a `types → ir` import of
-   `ir/sexp.mdk` would be a layering violation, and that module has writers only; corrected
-   2026-10-22 at the Phase 3 cut, ruling P3-D19), the loader side lives in `driver/`, and the
-   typechecker's one change is the core memo's hit and miss paths going through the frozen
-   value. An `Arch-Growth-Override:` in a Phase 3 sprint is a review finding unless it names
-   that one path. Phase 2's loaned +2,733 lines are Phase 4's to move.
-5. **Parity.** Interface-on versus interface-off is a two-arm differential over the wide
-   corpus (every program under `test/` and the inline test programs; stage 6e's survey
-   measured five rejected corpora and the wide census then moved 102 more rows), plus the
-   stage-6 multi-drive probe set (a loaded interface is a drive, so 6b's rows must not
-   move) and the retention and peak-RSS rows (6b's chain-memo regression, #4355). The
-   tooling is Phase 2's: `arch-p2/facts/stage6/cost/` and `arch-p1/tools/ir_identity.sh`
-   under `/var/tmp/medaka-sprints/`. A mismatched fingerprint falls back to a full check and
-   says so; a slice that deletes a prelude drive names a program only that drive judged.
-6. **Order against Phase 4.** Ruling 8's precondition (S2) is met, so Phase 4 is unblocked
-   too. Phase 3 runs first: it is the perf lever, and its typechecker footprint is one hit
-   path, after which Phase 4's leaves move the loaned lines. A Phase 4 leaf that touches no
-   driver region may interleave between Phase 3 sprints, the way F1 did between Phase 2's.
-7. The Phase 1 exception rows C3 owns are unchanged (§3), and
-   `compiler/types/drive_independence_test.mdk` (6b) stays green across C3's session reuse.
+Named exceptions:
+- `test_probe`, `test_doc_native`, `test_tonly_native` and `test_bytebuilder` stay named rows
+  of `test/arch_goldens/stage_counts.golden`: the `medaka test` native child checks its own graph.
+- **C3b-2** (the module store and the `medaka test` parent/child reuse) was measured, not built,
+  and ruled out 2026-10-25. The store saves at most 4.1% of the gate sample's CPU across its
+  three key variants, and the handoff is CPU-negative today. #3902, #4279 and #2732 close on
+  these numbers. Reopen only if the module codec gets a cursor reader and a view that is not
+  57% of a file; that is a later call, not a Phase 3 debt.
 
 ---
 
-## 6. Phase 4: the typechecker in modules (A8)
+## 6. Phase 4: the typechecker in modules (A8) — met 2026-10-29
 
-This is #2586. It starts when Phase 2's S2 has moved the state the earlier split trial
-tripped on, and it proceeds along the layer axis, one leaf at a time. Each extraction
-owes: a dependency-closure golden (G3) for the new module, snapshot `--new`, a LEG A
-golden per new module with the selfproc gate's list grown, source-soundness coverage and
-the fixpoint.
+**Exit criterion:** `types/typecheck.mdk` is the entry module and is under 3,000 code lines;
+each of the 26 `tc_*` modules has a closure golden, a LEG A golden and a test sibling; no
+`types.tc_*` row is in `oversize.golden` without a header reason; the largest `types/` module's
+header says why; IR identity against the phase base holds over the self graph.
 
-**Amended 2026-10-26 (the Phase 4 cut; rulings P4-D1 to P4-D12, Val, recorded on #4206).**
-The seven-row table this section carried was replaced by the one below, derived at
-`e2f8b4840` from the file's measured call graph rather than from its section banners:
-`types/typecheck.mdk` has 3,409 top-level declarations, its only large strongly-connected
-component is the 64-declaration `infer` recursion (1,206 code lines), and a dependency-forced
-layering of every declaration (a declaration's layer is at least the max of its callees'; the
-tool and its inputs are under `/var/tmp/medaka-sprints/arch-p4/`) orders the rows below with
-no cross-layer conflict, so no inversion mechanism is needed (P4-D2). Three findings of that
-derivation corrected the old table: the `coh*` family is the instance-head *matcher* (algebra,
-not a global check); the solver sits *below* inference, because local `let` generalization
-calls improvement (GHC's order); patterns and the binding-group policy split out below the
-recursion. The table below is the one sprint 0 ratified (see the second amendment block). A module
-over 3,000 lines by the A8 measure states why in its header and joins `oversize.golden` under an
-`Arch-Pin-Raise:` trailer (A8). Principles for every row: it names its precedent and whether
-its order is forced or chosen; it holds one responsibility; it cites only the spec sections that
-govern its contents; it owns its tests.
+**Met 2026-10-29**, accepted by Val (epic #4206, rulings P4-D1 to D12). The exit sprint is PR
+#4573 (`arch-p4-11-diag-codes`), merged 2026-10-28. `typecheck.mdk` stays the entry (P4-D4).
+#4318 (`ElabResult` and `GraphPreamble` as records) landed in sprint 10 at `884bd3716`.
 
-| Order | Module | Holds | Spec it implements | Precedent | Size (A8 file lines; code lines) | Position | Exports at boundary depth |
-|---|---|---|---|---|---|---|---|
-| 0 | `types/tc_types.mdk` (landed, Phase 2 T1) | the data declarations and state records, and the five record helpers and three accumulator data rows it already holds (`Accumulate`, `PassEvidence`, `PassMethod`), and the key format of the grant records (`grantTopKey`, `methodGrantKey`, `setGrantIds`) | — | types.ml; GHC.Tc.Types | 1,211; 3 | - | the 152 types; gains `PassEvidence`, `PassMethod`, `Accumulate` |
-| 1 | `types/tc_mono.mdk` | operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the graph-run counter: head inspection, variable ids (including the live tail ids of effect variables), substitution, one-way matching and overlap, the builtin tycons, the `Scheme` projections (`schemeIds`, `schemeMono`, `schemeBodyOf`, `schemeAuthIds`) | HM-CORE §2 (owed, #2555); DICT §3 (specificity is matching) | btype.ml; GHC.Core.Unify, TyCo.Subst | 1,024; 822 (test-only 22) | forced below everything: 582 edges into it from the rows above, 0 edges out of it to any module but `tc_types` | 114 names; most-shared: `monoUnboundIds`, `tconBuiltin`, `tyvarId`, `headTyconMono`, `substMono`, `tyAppSpine`, `tyVarNames`, `schemeIds`, `authCellsIn` |
-| 4a | `types/tc_diag_text.mdk` | **NEW (ratification pending (Val, 2026-10-27)).** the context-free message text: every message, help and fix builder, diagnostic key and text rewrite (`locKey`, `msgAtKey`, `writtenDiag`, `prependDiagOpt`) whose operands are values and whose closure is `tc_types`, `tc_mono`, `repr`, the AST and the effect leaves (`kindName`, `backticked`, `quotedNames`, `renderKindArrow`); no row takes a context record, an environment or a cell | ERROR-QUALITY.md; A5 | GHC.Tc.Errors.Ppr (unsourced here), without a Types counterpart: Medaka has text builders and no message data type; rustc keeps diagnostics as values apart from the `DiagCtxt` sink (report-rustc.md:58) | 1,453; 938 | forced below `tc_env`: 1 edge `tc_env` to the leaf (`kindName`, read by `ceRowParamKindNamesAt`, an R5 test-only probe), 0 back; chosen against `tc_state`: 0 edges either way | 147 names |
-| 2 | `types/tc_state.mdk` | mints, copies and carries of the state records (including `emptyShadowDicts`, the check-run and module seed mints `seedCheckRun` and `plainModuleSeed`, and the span carries `sameSpan`, `mctxAt`, `dynAt`, `envAt` with their `IfSome` forms), the process interners cell and its high-water carries to and from a graph run (`raiseToHighWater`, `noteHighWater`), the `Windowed` channel ops, and the test-only trace-sink probes that only build or read a `TraceSink`, the graph-run evidence cells or the scope store (`beginAssumptionTrace`, `beginNumericPredicateTrace`, `beginMethodReturnTrace`, `beginEvidenceObservation`, `evCellsSpanProbe` and their `finish` forms; `scopeTraceContext`, `scopeFrameStats`) | TYPECHECK-CONTRACTS §5; CELL-LIFETIMES.md | Ctype's level state; TcRnMonad env mints | 640 | forced above `tc_mono`: 3 edges state to mono, 0 back | 41 names; most-shared: `currentScopeStore`, `wWindow`, `dynAtIfSome`, `wMark`, `probeGraphCtx`, `initialModuleCtx`, `mctxAtIfSome`, `mctxAt`, `wRestore` |
-| 3 | `types/tc_env.mdk` | construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration envelope (`DataEnv`, `DeclEnvs`: accessors, visibility, the reach/import index and the import site it finds (`importLocFor`), the export and definer tables; their construction from declarations is `tc_decls`), the identity keys (including the built-in classes' spellings and references, `builtinClassName`, `builtinIfaceRef`), the imported-binding rows (`importedBindings`, `boundNames`), the alias table's two ordinal projections (`aliasUniverseAt`, `aliasOwnAt`), and the term environment (`TcEnv` extension and lookup); which names an import makes visible is `tc_scope` | DICT §8 (identity-keyed tables); SHADOW §1.0 (the envelopes the scope ladders read) | env.ml; GHC.Tc.Utils.Env (InstEnv, ClassEnv) | 1,570; 1,293 (test-only 331) | forced above `tc_state`: 11 edges env to state, 0 back | 164 names; most-shared: `tyTabKey`, `namesToSet`, `methodSlotKey`, `sameIfaceDecl`, `ifaceTabKey`, `effTailNames`, `declTopFnNames`, `lookupRecordByName`, `lookupVar` |
-| 4 | `types/tc_diag.mdk` | the emission API over `TcDiag` (`recordTypeError`, the `pushTypeError*` family, ambiguity replacement), the detection counter; the context-free message text and keys are `tc_diag_text`'s, and a message builder that needs solver or inference context lives beside its emission site (D3) | ERROR-QUALITY.md; DIAGNOSTIC-CODES-DESIGN.md; A5 | Location + per-module `report_error` (report-ocaml.md:51); GHC.Tc.Errors (the reporter, apart from its Ppr leaf) | 422; 225 | chosen: 0 edges with `tc_env`; acyclic anywhere from just above `tc_state` to just below `tc_scope` | 14 names; most-shared: `pushTypeErrorAt`, `pushTypeError`, `pushTypeErrorOnceAt`, `pushTypeErrorHelpFixAt`, `pushTypeErrorOncePerSite`, `erredDuring`, `recordTypeError`, `pushTypeErrorOnce`, `pushBoundaryAmbiguity` |
-| 5 | `types/tc_scope.mdk` | **NEW.** name visibility across imports, read off the envelopes: the method-scope ladder (the own, imported and undecided rungs, admission, the dispatch-index and impl-existence reads scoped by it), the ctor and record scoped views (candidates, overrides, scoped entries), the interface rows an import makes visible (`importedIfaceRows`), and the alias-qualified supply (`import m as A` rows, keys, spellings, ambiguity message, dictionary names and constraint entries) | SHADOW §1.0, S1-NS, S2-DECL; language-design Module System, Import Details; SYNTAX Import aliasing | GHC.Rename.Env / GlobalRdrEnv (lookup apart from InstEnv); OCaml `Env.lookup_*` (resolving opens apart from the tables) | 814; 694 | forced above `tc_diag`: 2 edges scope to diag, 0 back | 27 names; most-shared: `methodAdmittedHere`, `methodEntryHere`, `argDispatchOf`, `methodIfaceHere`, `ieImplExistsForHead`, `methodDispatchIdx`, `aliasConstraintEntries`, `aliasDictNames`, `aliasMethodSpellings` |
-| 6 | `types/tc_unify.mdk` | fresh variables and levels (including level lowering, `lowerToCurrent`, `lowerOwnedRoot`), unification over types, rows, joins, index rows and authority, the occurs check, the mismatch action (`typeMismatch`, `poisonMismatchVars`), generalization and instantiation | HM-CORE §3, §4 (owed, #2555); EFFECTS §2.4, §5, §6.6-6.8 | ctype.ml; GHC.Tc.Utils.Unify, TcMType, Instantiate | 2,171; 1,915 | chosen: 0 edges with `tc_scope`; acyclic anywhere from just above `tc_diag` to just below `tc_decls_variance` | 84 names; most-shared: `freshVar`, `unifyIn`, `captureScope`, `enterLevel`, `exitLevel`, `freshTvMap`, `instantiateMethodTracked`, `unify`, `atomsEscape` |
-| 7 | `types/tc_decls_variance.mdk` | **NEW.** polarity and variance of declared types: occurrence polarity, polarity joins and the `DeclEnvs` polarity fixpoint | EFFECTS §6.4 (inferred variance, invariant indices), §6.8 (covariant joins), §5 (the covariant-position check); HM-CORE §3 (owed, #2555: unification parameterized on the declaration environment's variance) | typedecl_variance.ml (OCaml); GHC.Tc.TyCl variance and role inference | 325; 293 | chosen in substance: one edge (`polarityAtOr` -> `polarityAt`, a helper that could sink) puts it above `tc_unify` | 6 names; most-shared: `payloadAstTypes`, `variantPayload`, `seedParamPolarityFixpointScoped`, `declEnvPolarityChain`, `inferParamPolarities`, `recordParamPolarities` |
-| 8 | `types/tc_decls_types.mdk` | **NEW.** the written-type layer of declaration analysis: AST types to `Mono` (`fromAstType`, `fromAstTypeE` and their application, alias-argument, effect-row and authority-qualifier cases `qualifyByTerms`, with the signature binder sets `SigVars` they read), the expansion of an applied alias, at conversion and at a written head (`aliasArgBindings`, `aliasScopeE`, `expandAliasHeadTy`, `substAliasArgs`), declared-kind consistency (`checkDeclaredKinds`, `checkHeadKinds`, `checkIfaceHeadKinds`, `checkSuperKinds`), effect domains (`registerEffectDomain`, `populateEffectDomainsGraph`, `checkDomainAxes`, `checkWrittenElementCap`), authority terms and binders (`authArgOf`, `checkDeclAuthorityUses`, `checkBinderDomain`, `checkPhantomAuthorityExport`, `reportUnboundAuthorityNamesIn`, `authorityBinderBound`) and written effect-parameter checks (`checkEffectParams`), with the message builders those checks use | DICT §1 (the type and predicate forms the conversion lowers); EFFECTS §2.1 (the domain family a label declares: `Unit`, `Prefix`, `Set`, `Product`), §4.1 (named authorities and scoped constraints), §6.1-§6.5 (kinds, declaration sites, partial annotations, kind consistency, requires chains), including §6.4 (alias expansion invents no qualifier); SYNTAX Declared parameter kinds | typetexp.ml (unsourced here; named only by the playbook row); GHC.Tc.Gen.HsType (4,948 lines, report-ghc.md:34) apart from GHC.Tc.TyCl | 1,641; 1,480 | forced above `tc_decls_variance`: 8 edges decls_types to decls_variance, 0 back | 31 names; most-shared: `fromAstType`, `rowArgNamesIn`, `fromAstTypeE`, `authArgBindersIn`, `atomsOfWritten`, `rowArgNames`, `sigVarsWithAuths`, `patternSlotNamesIn`, `sigConstraintsOf` |
-| 9 | `types/tc_decls.mdk` | declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs` from declarations (`buildDeclEnvs`, `dataEnvAddDecl`, the owner tables), variant and record registration (`registerVariants`, `registerRecordInfoKeyed`, the existential cells), type aliases (`addAliasDecl`, cycle rejection by `rejectCyclicAliases`, the expansion normal form `tyAliasNormalForm`), the graph pre-pass over declarations (`stampGraphDecls`: type-constructor identity, then impl heads in alias normal form), the recording of declared kinds (`recordDeclKinds`, `recordDeclaredKinds`), the method scheme rows, and the signature layer over the conversion (`sigToScheme`, `sigVarsFor`, `instantiateSigTracked`, `astTypeFreshTbl`, `headAnnotTy`). The conversion itself and the kind, authority, effect-domain and effect-parameter checks are `tc_decls_types` | DICT §1; EFFECTS §4.1 (the signature binders), §6.1 (kinds), §6.2 (kind annotations bind parameters at declaration heads), §6.4 (kind consistency and indices of a declared head); DICT §8 I4 (the alias normal form keeps resolved identity); language-design Data Types | typedecl.ml; GHC.Tc.TyCl | 1,948 | forced above `tc_decls_types`: 29 edges decls to decls_types, 0 back | 39 names; most-shared: `methodDictArityOf`, `constraintIface`, `ifaceMethodSchemeRows`, `constraintIsMethodLevel`, `constraintVarNames`, `sigToScheme`, `sigToSchemeTvsIn`, `stampGraphDecls` |
-| 10 | `types/tc_foreign.mdk` | **NEW.** extern signatures checked against the FFI-ABI crossable set and the FFI-ABI rules on unlabelled, builtin-shadowing, catalog-narrow and nullary externs, with the signature-position helpers they use and the extern projections of a declaration list (`externDecls`, `directExternSigs`, `declExternNames`) | FFI-ABI §1 (the crossable set) and its preamble rules (T-FFI-UNLABELLED, -BUILTIN-SHADOW, -CATALOG-NARROW, -NULLARY); EFFECTS §2.3 (the `FFI` parameter grammar at a declaration) | GHC.Tc.Gen.Foreign (foreign declaration checks) | 546 | chosen: above `tc_decls_types` (the alias expansion `expandAliasHeadTy` it reads at a written head), 0 edges with `tc_decls` | 10 names; most-shared: `externDecls`, `directExternSigs`, `declExternNames`, `ffiExternTypeRowsWith`, `ffiCheckExternsCatalogRow`, `ffiCheckExternsCrossable`, `ffiCheckExternsLabelled`, `ffiCheckExternsShadow`, `ffiStampMode`, `namedArgOrder` |
-| 11 | `types/tc_solve_givens.mdk` | **NEW.** the given and assumption store of the solver: registering, scoping and answering from givens and assumptions, including the active-dictionary assumption writers (`registerEachActive*`, `registerActiveDictVars`) | DICT §3 (assumptions); TYPECHECK-CONTRACTS §3 (givens) | GHC InertSet givens; rustc ParamEnv | 695; 608 | chosen: 0 edges with `tc_foreign`; acyclic anywhere from just above `tc_decls` to just below `tc_solve_entail` | 39 names; most-shared: `lookupPredicateSlots`, `givenAnswers`, `predicateSlotKnownSupers`, `registerSlotPredGivens`, `superLookup`, `activeDictPredOf`, `activeDictVarOf`, `activeDictVarOfEncl`, `activeFunDictPredOf` |
-| 12 | `types/tc_solve_entail.mdk` | **NEW.** entailment as routes: the judgment `P ⊢ π ⇝ e` at a site (`entail` and its assumption, instance, determined and rigid-lead arms `entailAssum`, `entailInst`, `entailDetermined`, `entailRigidLead`), the selection of the most specific matching impl row (`ieSelectRowByIface`, `ieSelectRowByMethod`, `pickMostSpecificEntry`, `goalCandidates`, `goalReach`) with the closed-goal ambiguous-overlap report (`goalsClosed`, `reportAmbiguousOverlap`), the route words a site stamps (`keyForSite`, `stampOpRouteVal`, `stampPredicateOpRouteVal`), the route walk over a selected row's `requires` and supers with its memo (the SCC of 22 decls and 523 lines: `routeOfD`, `argImplRequiresRoutesForRow`, `superRouteAt`, `routeWalkMemoized`) and the return-position route selection (`selectReturnRow`, `legacyReturnReqRoutesForRow`) | DICT §3 (the entailment judgment, specificity, determination, W2 the termination measure of the route walk), §5 (return-position dispatch through the dictionary), §6.1 (the per-goal unique minimum), §6.2 T3 (the closed goal), §8 I2 (qualified instance identity) | GHC.Tc.Solver.Dict (report-ghc.md:63; Interact was merged into Solve, :97); rustc traits/select (3,112 lines, report-rustc.md:32) beside fulfill.rs (:48) | 1,327; 1,172 | forced above `tc_solve_givens`: 12 edges solve_entail to solve_givens, 0 back | 34 names; most-shared: `goalCandidates`, `goalRows`, `reqWalkStart`, `ieSelectRowByIface`, `goalReach`, `reqWalkEnter`, `reqWalkMemo`, `noteNumericPredicateTrace`, `directSuperGoals` |
-| 13 | `types/tc_solve.mdk` | one solving judgment over one goal store, above the entailment core: the exact-return and method-return solver (`solveExactReturn*`, the method-return predicate and its templates); improvement and determination by the unique instance, with the module-end refiling of the determined rows (`refileDeterminedRows`); instance selection for the judgments above entailment (the three rows `rigidHeadInstanceContext`, `answeredOnlyByBindingHead`, `residualSelectionStable`); the goal store, its dict-application reads (`dictAppsSince`) and the solving walks' discharge memo (`pushGoal`, `walkGoalDischarged`, `walkGoalFollowed`); and the evidence routes a solved goal answers with (the call-slot route family `routeOf`, `routesOfMonosTop`, `routesOfMonosTopV`, `topRouteV`; the method-predicate, recursive-dictionary, exact-return and numeric-return routes). Entailment and the route walk are `tc_solve_entail`; predicate-slot, dict-arity and constraint registration and the residual walk at binders are `tc_solve_check` | DICT §3, §4.2, §5; TYPECHECK-CONTRACTS §3 | GHC.Tc.Solver; rustc_trait_selection | 1,938 | forced above `tc_solve_entail`: 68 edges solve to solve_entail, 0 back | 101 names; most-shared: `uOblArgs`, `openScope`, `callUOblsWindow`, `isLocalAbsName`, `returnPosMethodNames`, `numConstrainedIds`, `routeLocalSym`, `routesOfMonosTopV`, `ifaceSelfAndSupers` |
-| 14 | `types/tc_solve_check.mdk` | **NEW.** the solver boundary judgments and the write side of a binder's dictionary parameters: obligation checks at call and survivor sites, ambiguity registration and reports, numeric defaulting, the residual walk at binders (`residualPredsOf`, `residualBoundPreds`, `residualInferredPreds`, `unroutedResidual`: DICT §3 `inst` for a residual), the call-slot obligations of dispatch monos at generalization (`registerDispatchMonos`), the promotion of inferred constraints to the binding's scheme (`registerInferredConstraints`, `maybeInferConstraint`); and the registration of what the sites read back: predicate slots, dict arity and the constraint tables (`registerReqSlots`, `registerImplRequires`, `registerMember`, `registerConstraintRegs`, `registerInferredFor`, `inferredPredicateSlots`, `declaredPredicateSlots`, `setFunConstraintEntry`, the slot keys `cslotKey` and `cslotVecKey`, the test-only probe `inferredPredicateSlotsProbe`), with the lookups of an interface by constraint id they use (`ifaceForConstraintId`, `ifaceForInferredId`) | DICT §3 (the residual walk), §4 `gen`/`gen-sig` (the point of evidence abstraction; inferred-constraint promotion: the inferred P' becomes the scheme's context), §4.1 G1 (its local reading: one dictionary parameter per predicate, arity and order keyed by binder identity), §4.2 (discharge, OD2), §5 (the element dictionary of a return- or argument-position method), §6.2 (scheduling), §6.3 (defaulting), §8 I1 (evidence abstraction keyed by binding identity); HM-CORE §6 (owed, #2555) | GHC simplifyTop / Solver.Default; rustc fulfill (the boundary judgments); no module-level precedent for the registration half (unsourced here) | 1,861; 1,558 (test-only 47) | forced above `tc_solve`: 80 edges solve_check to solve, 0 back | 35 names; most-shared: `finalizeNumBoundary`, `dedupSlotVecs`, `callPredOf`, `checkCallObligationsU`, `checkSigVarGoals`, `oblPredOf`, `rejectUndeterminedVectors`, `predicateSlotView`, `boundTyvarIds` |
-| 15 | `types/tc_shadow.mdk` | standalone-vs-method shadow resolution (S1-S9) outside the inference recursion, including the recorded-local site resolution `resolveRLocalSite` (SHADOW S2's inversion at route time), the admitted-set occurrence checks (S2-DECL (d)), and the mark sets a module may name (`methodMarkCtx`: S1-NS nameability; its module-level wrapper `moduleMarkCtx`) | SHADOW-SEMANTICS §1 S1-S9, §1.1; S2-DECL (d) | none (Medaka-specific) | 1,162 | chosen in substance: one edge (`shadowStandaloneDictSlots` -> `dedupSlotVecs`, a helper that could sink) puts it above `tc_solve_check` | 48 names; most-shared: `isDefinerShadow`, `methodCellOf`, `pushAmbiguousShadowDecl`, `nameableIfaceMethodSet`, `recoveredShadowSym`, `groundShadowReceiver`, `shadowHeadEnv`, `callArgVecsV` |
-| 16 | `types/tc_effects.mdk` | the effect checks inference runs at binding boundaries and impl bodies (escape, summary failures, rigidity, index-only variables), grant and authority recording (including the authority an argument carries into its application, `argumentAuthority`), and file-bound values (authority bounds at binding boundaries: recording, flow and settle checks); wires the `effect_*` leaves into inference | EFFECTS §2.3, §5, §6.2-6.9, §8 | none in GHC/OCaml | 1,414; 1,195 | chosen: 0 edges with `tc_shadow`; acyclic anywhere from just above `tc_solve_check` to just below `tc_occurrence` | 49 names; most-shared: `clausesOf`, `beginEffectSummaryScope`, `finishEffectSummaryScopeKeeping`, `evOrdinal`, `recordClauseFileBound`, `flushPendingEscapes`, `freshEffectSummary` |
-| 17 | `types/tc_occurrence.mdk` | method and literal occurrence inference, operator dispatch-site recording (including `recordShadowStandaloneObls`), evidence-site minting, the mark pass over binding groups and the write-back of its marked clauses over the declarations (`rebuildGroupDecls`), the constrained-signature set, and the test-only evidence-cell and method-return probes (the `cellGoalInnerAliasing` family, `cellStoreMisses`, the `methodRow*Probe` and `methodReturn*Probe` rows) | DICT §4 (occurrence half), §5, §8 I7; SHADOW S2-DECL | GHC.Tc.Gen.Head, Gen.App | 2,899; 2,058 (test-only 515) | forced above `tc_effects`: 13 edges occurrence to effects, 0 back | 45 names; most-shared: `constrainedSigNames`, `argDispatchIndicesById`, `isGrantOnlyEv`, `markSourceless`, `recordIfaceObligation`, `instantiateStandaloneOccurrence`, `instantiateVarTrackedWithSubst`, `markNumlitOpTaint`, `mkMethodOccObl` |
-| 18 | `types/tc_groups.mdk` | binding-group analysis and the generalization policy at a binding boundary: the free-variable walk that forms groups, the value restriction and the recursive-value restriction (`checkRecursiveValue`, `checkRecBindNonFunction`, the `eagerRefs` walk), group generalization, goals required below (`requireGoalsBelow`) and the prerequisite walk over them (`nestedRequireGoals`), signature constraints | HM-CORE §1 (gen-value), §4, §5 (owed, #2555); DICT §4.1 G2, §6.3 at binders | GHC.Rename.Bind dependency analysis + Tc.Solver.simplifyInfer; OCaml is_nonexpansive/generalize | 1,254; 1,069 | chosen in substance: one edge (`isDeclaredCtorHead` -> `ctorHeadShaped`, a helper that could sink) puts it above `tc_occurrence` | 36 names; most-shared: `exprLoc`, `checkRecursiveValue`, `allEVars`, `sigTvarIds`, `genBindingRestricted`, `residualsOf`, `isNonexpansive`, `checkRecBindNonFunction`, `requireGoalsBelow` |
-| 19 | `types/tc_pat.mdk` | pattern inference: literal, constructor, tuple, list, record and existential-opening patterns, binder types, and the module-end settle of the deferred literal patterns (`settleDeferredPatLits`) | no HM-CORE section on pattern typing yet (owed, #2555); language-design Data Types; EFFECTS §4.1 | GHC.Tc.Gen.Pat | 415 | chosen: 0 edges with `tc_groups`; acyclic anywhere from just above `tc_occurrence` to just below `tc_infer_records` | 14 names; most-shared: `unknownFieldMsg`, `recordBinderType`, `settlePatLits`, `takePatLits`, `inferPat`, `recordLocalBind`, `inferPats`, `recordAuthCells` |
-| 20 | `types/tc_infer_records.mdk` | **NEW.** the helpers the record arms call: field-owner resolution, field-shape conflicts, record instantiation, the record error emitters and the field-name suggestion, and the stamped record head (`stampedRecordHead`); the nine record arms themselves (`inferRecordCreate`, `inferFieldAccess`, `inferValueField`, `inferRecordUpdate*`) and their field-assignment helpers (`unifyFieldAssignIdx`, `unifyFieldAssignsIdx`) are members of the `tc_infer` recursion | language-design Data Types, Sum Types (Variants with Named Fields), Product Types (record construction, access, update) | typecore.ml record cases (type_label_exp, disambiguate_label); GHC.Tc.Gen.Expr record cases | 725; 649 | chosen above `tc_pat`: its closure has no `tc_pat` (0 edges either way) | 15 names; most-shared: `recordFieldNames`, `assignedFieldNames`, `firstFieldName`, `instantiateRecordUpdate`, `resolveFieldRecord`, `stampedRecordHead`, `unknownRecordFresh`, `checkMissingFields`, `fieldAssignNamePair` |
-| 21 | `types/tc_infer.mdk` | the expression inference recursion (variables, application, lambda, let and rec-let, match and arms, blocks, the shadow-application arms, the record arms, and the operator arms with their typing rules (`inferBinop`, `inferUnop`)), signature pre-unification, exhaustiveness and wide-literal checks at their sites, with their module-end steps beside them (`checkDeferredMatches`, `checkFixedWidthLiterals`); the record arms' helpers are `tc_infer_records` | DICT §4 (the elaboration judgment); HM-CORE §3-§5 (owed, #2555); SHADOW §1 (S2, S4-S7), §1.1; S2-DECL (d); EFFECTS §3 | typecore.ml; GHC.Tc.Gen.Expr, Match, Bind | 2,440 | forced above `tc_infer_records`: 21 edges infer to infer_records, 0 back | 17 names; most-shared: `closeScope`, `goalsMark`, `valueSpanLoc`, `sccProtectedSignatureIds`, `infer`, `appArgLoc`, `borrowedEffectCells`, `checkMatchChecks`, `checkWideLiterals` |
-| 22 | `types/tc_elab.mdk` | dict-passing elaboration (`dictPass`), the grant rewrite (`grantWholeDomain`), operator-to-method rewriting: tree-to-tree passes over evidence; and the realization of solved evidence into the tree's route cells, one recorded site at a time (`resolve*Site`, `resolveArgStamps`, `resolveMethodDicts`, `resolveDictApps`, `realizeRecDictApps`): the cells `dictPass` reads | DICT §4 (translation), §7; EFFECTS §8 | GHC.HsToCore evidence binding; `dictPass` (STAGE2-DESIGN) | 1,463 | chosen in substance: one edge (`constrainedSigPredicateSlots` -> `sigConstraints`, a helper that could sink) puts it above `tc_infer` | 7 names; most-shared: `setFunPredicateSlots`, `dictPassModulesIfEnabled`, `drivenEvidence`, `methodGrantOf`, `methodMarkCtx`, `selfDeclArities`, `grantWholeDomain` |
-| 23 | `types/tc_global.mdk` | the whole-graph and declaration-level checks that need inference: the coherence scan, impl head, super-context and completeness checks, impl and default method bodies (including the windowed driver over a module's own impls, `inferUserImplBodies`, with `locatedImpls`, `derivingTypeLoc` and `uOblIsDecidableNow`), survivor call obligations | DICT §5.1 M1, M3, §6 C1, C2, C4 | GHC.Tc.TyCl.Instance, Tc.Validity (OCaml has no classes) | 1,858 | chosen in substance: one edge (`registerMethodBodyGrants` -> `methodGrantOf`, a helper that could sink) puts it above `tc_elab` | 18 names; most-shared: `inferUserImplBodies`, `nestedRequireGoals`, `calleeNumObls`, `checkCoherence`, `checkGradedImplHeads`, `checkImplCompletenessMap`, `checkPhantomMethods`, `checkSuperImpls`, `cohImplOfRow`, `cohIncomparableHelp` |
-| 24 | `types/tc_module.mdk` | the per-module check in one order: declarations, top-level groups, test and prop bodies, final checks, the stamp queue and its drain (`enqueueStampCtx`, `stampCtxOf`, `stampNoting`, `stampEach`, `checkGraphFinish`), the binding-id stamping of a module's clauses and tail declarations (`stampGroupClauses`, `stampTailDecls`), the plural site resolution (`resolveSites`, `resolveRLocalSites`, `resolveArithSites`, `resolveOpSites`), the evidence-observation writer (`noteEvidenceObservation` and its entry builders), binder-type materialization, and the registration of imported declarations (the import-overlay rows: `registerImportOverlay`, `overlay*`, `cached*`, `importOverlayDecls`, `oracleImportDecls*`, `reexported*Decl`, `useDefinerRows`); the mark pass's module begin and finish rows (`beginModuleMarking`, `finishModuleMarking`) stay here because `tc_occurrence` is at the A8 band when extracted, and a `tc_mark` module would hold them with `methodMarkCtx` and `moduleMarkCtx` (owed, Val) | TYPECHECK-CONTRACTS §3 (scoped scheduling); DICT §4.2, §7.1; HM-CORE §5 (owed, #2555) | typemod.ml's per-structure half; GHC.Tc.Module tcRnSrcDecls and tcRnImports (split from the driver by size) | 2,579 | forced above `tc_global`: 19 edges module to global, 0 back | 12 names; most-shared: `captureTypeErrors`, `drainStampQueue`, `verdictFinding`, `checkBodyImpl`, `checkModuleFull`, `checkModuleFullDiags` |
-| 25 | `types/typecheck.mdk` (stays; P4-D4) | the entry module: the graph drive, the chain and core memos and interface continuation, serving, import seeding, publication, value-main judgment, configuration, the verb-facing API; the pre-inference alias rewrite, a driver step (`aliasSchemes`, `aliasSchemeEntry`, `coreAliasSchemes`, `renameAliasedMethods*`, `deAliasMethod*`, `resolveAliasMethodSpellings`); the `export import types.publish` facade | TYPECHECK-CONTRACTS §4, §5; DICT §7.1, §8 | typemod.ml type_implementation; GHC.Tc.Module tcRnModule + GHC.Driver.Make upsweep | 2,296 | forced above `tc_module`: 19 edges typecheck to module, 0 back | 49 names; most-shared: `bindingGrantArity`, `chainArgs`, `chainFullKey`, `checkModules`, `checkModulesAllLines`, `checkModulesChainReportFor`, `checkModulesChainReportForGraph`, `checkModulesDiagsChain`, `checkModulesEntryFullReportK` |
+The layer table, 27 rows from `tc_types` to `typecheck.mdk` with each row's order, position,
+precedent and A8 size, moved to [`types/ARCHITECTURE.md`](ARCHITECTURE.md) under "Layer order".
+The `.mdk` headers that cite this section for the table reach it through this pointer.
 
-Size cells of rows 2, 9, 10, 13, 15, 19, 21, 22, 23, 24 and 25 give the A8 file lines measured on the tree by `p4_prereview_sizes.py`, and no code-lines figure: the second number (production declarations, test-only rows excluded) was the plan's census estimate and no tool derives it from the current tree, so it is dropped there.
+---
 
-**Amended 2026-10-25/26 (sprint 0, the partition; Val's rulings).** Sprint 0 placed every one of
-`types/typecheck.mdk`'s 3,409 top-level declarations by one numbered rule (R1 486, R2 1, R3 1,240,
-R4 1,494, R5 182, R6 6), checked that the loader accepts the whole partition as files that build and
-check clean, and measured the sizes. The partition of record is each module's header together with
-`compiler/types/ARCHITECTURE.md`; the table above is generated from the same source as the headers.
-The table grew from the sixteen modules below `tc_types` (plus the entry) of the first version to the
-twenty-five modules below it plus the entry, 27 rows with `tc_types` and `typecheck.mdk`.
+## 7. Phase 5: the backends (A4) — exit 2026-11-01
 
-- New row, ratification pending (Val): `tc_diag_text` (between `tc_mono` and `tc_state`: the context-free
-  message text, keys and text rewrites; forced below `tc_env`, chosen against `tc_state`).
-- New rows, each ratified by Val: `tc_scope` (between `tc_diag` and `tc_unify`: name visibility across
-  imports, read off the envelopes, including the alias-qualified supply); `tc_foreign` (above
-  `tc_decls`: extern signatures against the FFI-ABI rules); `tc_infer_records` (below `tc_infer`, above
-  `tc_pat`; application and letrec are not cut); `tc_decls_variance` (below `tc_decls_types`);
-  `tc_decls_types` (AST types to `Mono`, apart from declarations proper, as OCaml's typetexp and
-  typedecl and GHC's Gen.HsType and TyCl are apart); and the solver cut into `tc_solve_givens`
-  (the given store, below), `tc_solve_entail` (entailment as routes and instance selection),
-  `tc_solve` (the goal store and the solving walks above entailment) and `tc_solve_check` (the
-  checks at a boundary, above, with the write side of a binder's dictionary parameters).
-- Ruling (Val, 2026-10-25/26): the registration of predicate slots, dict arity and the constraint
-  tables, which the table above cut as a row of its own (`tc_solve_register`, 34 declarations), is
-  merged into `tc_solve_check`. The two are the write side of a binder's dictionary parameters and
-  the judgments at the binder's boundary (DICT section 4 `gen`/`gen-sig`, section 8 I1); the merged
-  row holds 116 declarations in 1,861 A8 lines, under 3,000.
-- Sizes are the A8 file measure: non-blank, non-comment lines of the generated file, including the
-  import block, export markers, declarations and the probe sections that stay (P4-D8), with the
-  fixtures that move to the sibling test taken out. Over 3,000: no row of the table; `tc_infer`
-  measures 2,403 (the 64-declaration recursion plus its arm helpers), so no over-3,000 reason is owed.
-  `tc_module` (2,650) and `tc_occurrence` (2,900) carry no adopted reason: a sprint that would take
-  either over 3,000 stops for Val.
-- The D8 exception (narrow, named): the 15 trace and probe sinks consumed by drive-level tests stay
-  in their home modules in the test-only section and are imported directly by `typecheck_test.mdk`,
-  with no facade; the exception ends with R35 (`docs/design/TEST-SIBLING-ACCESS-DESIGN.md`).
-- `tc_mono`'s holds is reworded to "pure except for minting effect-variable ids from the
-  graph-run counter"; lifting that mint is an idiom-slice option under the identity oracles.
-- The alias-qualified-method family (45 declarations across `tc_env`, `tc_scope` and `typecheck`)
-  has no row of its own: its declarations sit at the lowest legal layer, `tc_scope` holds 35 and
-  `typecheck` keeps the pre-inference rewrite as a driver step; each header names the slice it holds,
-  citing `docs/spec/language-design.md` Module System Import Details.
-- The `util` flag marks 39 stdlib-shaped helpers whose placement is unchanged and which do not count
-  as module API; an idiom slice replaces them with stdlib, and there is no `tc_util` module.
-- Doctest placement: a doctest runs in its owning module. One that calls a name in a higher module
-  moves to the sibling `*_test.mdk` of the highest module it calls; two doctests move this way
-  (the `tc_env` block that calls `deKindRow0` moves to `tc_decls_test.mdk`).
+This is #1398's REVISION block. It ran beside Phases 0 to 4 and needed nothing from them. The
+visibility producer (F1 to F3, `docs/design/TEST-SIBLING-ACCESS-DESIGN.md`) ran between Phase 2
+sprints.
 
-*Position* says whether the graph forces the row's place (edges down, none up) or precedent
-chose it where either order is acyclic. Test-only probes stay in the module whose state they
-read, in a marked section exported to that module's sibling only; fixtures move to the
-siblings (P4-D8). Every module gets a `<module>_test.mdk` in its sprint, with the
-`typecheck_test.mdk` blocks whose subject moved plus API tests by the `write-tests` table; #3944's
-exclusion of white-box tests of `unify`, `generalize`, `instantiate` and `entail` is reversed by
-the split (P4-D7). A move is a source-order-preserving slice judged by identity oracles (IR
-identity with a plant control, wide-corpus output identity, the LEG A multiset check, an
-import-collision check, instruction counts within two percent); the idiom rewrite is a separate
-slice (P4-D6, D9, D11). No `Arch-Growth-Override:` is admitted in the phase (P4-D5).
+**Exit, merged 2026-11-01** (PR #4723, the P5.15 phase exit). Status and final evidence are
+tracked by #4604, which is an issue; no PR carries that number.
 
-Sprints run serially under one orchestrator, extracting modules bottom-up in the Order column's
-sequence, each sprint ending with its own review. Sprint 0 (the partition pre-sprint; nothing
-lands) is done. The last two sprints are the exit (this document's §6 collapses to its criterion;
-`types/ARCHITECTURE.md` re-derived with a spec column; `TYPECHECK-ARCHITECTURE.md` to
-`archive/design/`; #4318) and the diagnostic code registry (`support/diag_codes.mdk`, one closed
-type for every stage's codes pinned to `DIAGNOSTIC-CODES-DESIGN.md` by a two-way test; P4-D3b,
-after the exit). Which modules each sprint extracts is set in the phase plan and its tracking
-issues (milestone 42), not here; reviews run on opus where a decision is taken and sonnet where a
-decided placement is executed (P4-D12).
+Landed rows: B1 on 2026-10-14 (#4107, PR #4110); B5 on 2026-10-27 (P5.8, PR #4537); F1 in #4314;
+F2 in #4703. B2 to B4 and F3 have no landing line in this section; see #4206.
 
-**Exit criterion.** `types/typecheck.mdk` is the entry module and is under 3,000 code lines;
-every module of the 26 `tc_*` names of the table (`tc_types`, `tc_mono`, `tc_state`, `tc_env`,
-`tc_diag_text`, `tc_diag`, `tc_scope`, `tc_unify`, `tc_decls_variance`, `tc_decls_types`, `tc_decls`, `tc_foreign`,
-`tc_solve_givens`, `tc_solve_entail`, `tc_solve`, `tc_solve_check`,
-`tc_shadow`, `tc_effects`, `tc_occurrence`, `tc_groups`, `tc_pat`, `tc_infer_records`,
-`tc_infer`, `tc_elab`, `tc_global`, `tc_module`) has a closure golden, a LEG A golden and a test
-sibling; no `types.tc_*` row is in `oversize.golden` without a header reason; the largest
-`types/` module is one whose header says why; `tc_diag_text`'s closure contains no inference module
-(A5); IR identity against the phase base holds over the self graph.
-
-## 7. Phase 5: the backends (A4), in parallel with everything
-
-This is #1398's REVISION block and runs beside Phases 0 to 4; it needs nothing from them.
-
-| Id | Action | Acceptance |
-|---|---|---|
-| **B1** | The Plan record (R5). **Landed 2026-10-14** (sprint #4107, PR #4110): `backend/emit_plan.mdk`'s `EmitPlan` carries target, extern requirements, global initialization, constructor facts and implementation groups. `lowerProgramEmitWith` takes no backend. | `lowerProgramEmitWith` has no backend parameter; `WasmEmitInput` carries the four facts it lacked; `emit_plan_test.mdk` pins the route roster and plan construction. The same-input product projection is recorded in P5.15's product report. |
-| **B2** | F7 capability manifest (P5.5): checked requests publish the complete immutable entry/protocol contract before erasure; policy and emission consume it. Physical extern requirements are separately derived from reachable externs and carried by `EmitPlan.externRequirements`; they are not absent. | F7 publication, policy, target and emission fixtures; gateway validation and the P5.15 product gate compare observed validated-plan imports with shipping artifacts. See `backend/ARCHITECTURE.md` fact ledger. |
-| **B3** | Twin retirement | Global initialization order is owned by `backend/global_plan.mdk` and carried by `EmitPlan.globalInit`; emitters consume its source-prioritized SCC-ready order. The native `emit_plan_test.mdk` retirement judge fingerprints seven complete historical LLVM/Wasm producer families after identifier erasure and rejects original and consistently renamed restorations. This is a bounded historical-shape floor; arbitrary algorithm rewrites can evade it. G3's twin count falls with every fact that lands; a PR that adds a twin says why. |
-| **B4** | Validators on every route. `core_validate.validateForEmission` runs before LLVM/Wasm output; the source-derived renderer and entry rosters cover strict, record, unchecked, gaps/census, stats, playground and playground-analyze routes. | `core_validate_test.mdk` derives public renderers from signatures and checks route coverage; `emit_plan_test.mdk` pins all emitter entries. P5.15's executed product route covers CLI, modules and local shipping playground for the checked inputs in its report. |
-| **B5** | Physical identity (P5.8). **Landed 2026-10-27** (sprint `arch-p5-08-retirement`, PR #4537): `backend/llvm_symbols.mdk` and `backend/wasm_symbols.mdk` register generated definitions, prototypes, calls and references per emission, refusing contradictions before artifact output (`E-PHYS-*`). Shared logical constructor roster/ordinals and implementation groups are carried and validated; `fnValueUses` is carried by `WasmDemandPlan.fnValues` and independently re-planned by `validateWasmDemand`. P5.11 and P5.12 reports record the group and value-use retirement evidence. Phase status and final evidence are tracked by #4604. | `backend/ARCHITECTURE.md` fact ledger names producer, carrier, validator, fixture and deleted duplicate. Mutations assert named refusal before output. This bounded guarantee is not independent Wasm operand-stack reconstruction. |
-
-**Amendment 2026-10-19: the visibility producer.** A4 applied to the export surface
-(`docs/design/TEST-SIBLING-ACCESS-DESIGN.md`). Like Phase 5 it runs beside the typechecker
-phases, but it is ordered against them: each slice runs serially between Phase 2 sprints, and
-F1 lands before C1 so the codec encodes one producer. F2 and F3 do not gate Phase 3; if C1
-exists when F3 lands, F3 adds the full view to the interface under a format-version bump.
-
-| Id | Action | Acceptance |
-|---|---|---|
-| **F1** (landed in #4314) | A `frontend/` module, seeded from `resolve.mdk`'s `ExpNs` block, answers "may this importer see this name" from declarations plus a loader-supplied sibling flag; resolve and `private_mangle`'s import map read it. | Two-arm IR identity and the LEG A goldens unchanged; `resolve.mdk` shrinks. |
-| **F2** (landed in #4703) | The sites were the `tc_*` modules, not `types/typecheck.mdk` itself. `publicDataDecl(s)`, `kindPublicDataDecl`, `publicStandaloneNames` and `publicValNames` (deleted) and the re-export walkers in `tc_env`, `tc_decls`, `tc_module`, `tc_shadow` and `typecheck` read `frontend/visibility`; the M-IDENTITY ladders are untouched. `eval` and `core_ir_eval` moved in from F3: `eval.moduleExports` narrows `ModExports` to the producer's names, so `run` no longer binds an unexported name through an import (#4710). The producer gained `declExportsIn`, `declExportsCtors`, `exportedValueNames`, `nsAbstractData` (exported), `nsIfaceMethods` (exported) and the `DLetGroup True` arm of `nsValues`. Re-export walkers read `pubUsePaths`, which drops the `DAttrib` arm (only `@attr export import` reaches it). The one-decl predicates still do not unwrap `DAttrib`; that gap is #3765's. #4312 is ruled an ambiguity error, and #4316's pin now counts the missing `pub` spellings. | `test/arch_goldens/visibility.golden` fell for the `tc_*` modules and `eval.eval` (rows removed where a module no longer reads a spelling) and rose for `frontend.visibility` (the producer gained facets). What remains in `tc_decls` and `typecheck` is the V3 selections and V4 rebuilds the census classified, pinned, not zeroed. `types/typecheck.mdk` did not grow. |
-| **F3** | Test siblings see their subject's private names (the design's slice 3). | The design's slice 3 evidence. |
+Named limits, as their rows state them: B3's fingerprint is a bounded historical-shape floor,
+and arbitrary algorithm rewrites can evade it; B5's guarantee is not independent Wasm
+operand-stack reconstruction.
 
 ---
 
