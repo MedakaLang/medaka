@@ -59,10 +59,9 @@ Panics when `n` is negative.
 
 ```
 length : MutBytes -> Int
-length mb
 ```
 
-The number of bytes in `mb`, fixed when it was allocated.
+The number of bytes in the buffer, fixed when it was allocated.
 
 ```medaka
 > length (make 4)
@@ -73,10 +72,10 @@ The number of bytes in `mb`, fixed when it was allocated.
 
 ```
 get : Int -> MutBytes -> Option U8
-get i mb
+get i _
 ```
 
-The byte at index `i` of `mb`, or `None` when `i` is out of range.
+The byte at index `i`, or `None` when `i` is out of range.
 
 `mb[i]` is the panicking form: on the same out-of-range index, `get`
 answers `None` where `mb[i]` raises an index error.
@@ -96,10 +95,10 @@ None
 
 ```
 setInPlace : Int -> U8 -> MutBytes -> Unit
-setInPlace i v mb
+setInPlace i v _
 ```
 
-Replaces the byte at index `i` of `mb` with `v`.
+Replaces the byte at index `i` with `v`.
 
 Panics when `i` is out of range.
 
@@ -112,10 +111,10 @@ Panics when `i` is out of range.
 
 ```
 fill : U8 -> MutBytes -> Unit
-fill v mb
+fill v _
 ```
 
-Replaces every byte of `mb` with `v`.
+Replaces every byte with `v`.
 
 ```medaka
 > let mb = make 3 in let _ = fill 7 mb in debug mb
@@ -126,16 +125,16 @@ Replaces every byte of `mb` with `v`.
 
 ```
 blit : MutBytes -> Int -> MutBytes -> Int -> Int -> Unit
-blit src srcOff dst dstOff len
+blit _ srcOff _ dstOff len
 ```
 
-Copies `len` bytes from `src`, starting at `srcOff`, into `dst`, starting
-at `dstOff`.
+Copies `len` bytes from the first buffer, starting at `srcOff`, into the
+second, starting at `dstOff`.
 
 Panics when any argument is negative or the copy would run past the end
 of either byte string.
 
-`src` and `dst` may be the same `MutBytes` and the two runs may overlap.
+The two buffers may be the same `MutBytes` and the two runs may overlap.
 Every source byte is read as it was before any byte was written.
 
 ```medaka
@@ -151,12 +150,11 @@ Every source byte is read as it was before any byte was written.
 
 ```
 freeze : MutBytes -> Bytes
-freeze mb
 ```
 
-The bytes of `mb` as an immutable `Bytes`.
+The bytes of the buffer as an immutable `Bytes`.
 
-The result is a copy, so a write to `mb` afterwards does not reach it.
+The result is a copy, so a write to the buffer afterwards does not reach it.
 
 ```medaka
 > let mb = make 2 in let _ = setInPlace 1 9 mb in toArray (freeze mb)
@@ -204,15 +202,14 @@ by the other. The whole block becomes the byte string.
 
 ```
 lendByteBlockUnsafe : MutBytes -> ByteBlock
-lendByteBlockUnsafe mb
 ```
 
-The block `mb` is built on, with no copy.
+The block the buffer is built on, with no copy.
 
 The counterpart of `adoptByteBlockUnsafe`, for a caller that reads the
 bytes in place without paying for `freeze`'s copy. A write to the block
-changes `mb`, and a later write to `mb` changes what the block holds, so
-read it before `mb` is written again.
+changes the buffer, and a later write to the buffer changes what the block
+holds, so read it before the buffer is written again.
 
 ```medaka
 > byteBlockLength (lendByteBlockUnsafe (make 5))

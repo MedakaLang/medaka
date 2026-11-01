@@ -109,7 +109,7 @@ RPAREN
 NEWLINE
 IDENT "layoutWithOffsets"
 IDENT "src"
-IDENT "len"
+IDENT "_len"
 EQUAL
 INDENT
 LET
@@ -144,7 +144,7 @@ RPAREN
 NEWLINE
 IDENT "layoutWithOffsetPairs"
 IDENT "src"
-IDENT "len"
+IDENT "_len"
 EQUAL
 INDENT
 LET
@@ -467,11 +467,11 @@ UPPER "List"
 UPPER "Int"
 NEWLINE
 IDENT "offsetsToLinesGo"
-IDENT "src"
+IDENT "_src"
 LBRACKET
 RBRACKET
-IDENT "p"
-IDENT "line"
+IDENT "_p"
+IDENT "_line"
 EQUAL
 LBRACKET
 RBRACKET
@@ -938,12 +938,6 @@ IDENT "src"
 EQUAL
 IDENT "stringToChars"
 IDENT "s"
-NEWLINE
-LET
-IDENT "len"
-EQUAL
-IDENT "arrayLength"
-IDENT "src"
 NEWLINE
 IDENT "rawToComments"
 IDENT "src"

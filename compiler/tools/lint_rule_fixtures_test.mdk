@@ -433,7 +433,7 @@ test "rule-prelude-shadow fires under a test path" =
         "rule-prelude-shadow"
         src)
         Err e => fail e
-        Ok flagged => expectEqual 3 (length flagged)
+        Ok flagged => expectEqual [7, 9, 11] flagged
 
 preludeShadowAt : String -> String -> Result String (List Int)
 preludeShadowAt path src =

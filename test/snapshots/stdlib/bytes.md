@@ -1,5 +1,5 @@
 # META
-source_lines=1003
+source_lines=1004
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
@@ -449,8 +449,8 @@ export
 contains : Bytes -> Bytes -> Bool
 contains needle haystack = isSome (indexOf needle haystack)
 
-{- | Whether `b` begins with `prefix`. The empty prefix begins every byte
-   string.
+{- | Whether the second byte string begins with the first. The empty prefix begins
+   every byte string.
 
    > startsWith (encodeUtf8 "he") (encodeUtf8 "hello")
    True
@@ -467,7 +467,8 @@ startsWith (Bytes nb) (Bytes bb) =
 -- > startsWith (encodeUtf8 "hello!") (encodeUtf8 "hello")
 -- False
 
-{- | Whether `b` ends with `suffix`. The empty suffix ends every byte string.
+{- | Whether the second byte string ends with the first. The empty suffix ends
+   every byte string.
 
    > endsWith (encodeUtf8 "lo") (encodeUtf8 "hello")
    True
