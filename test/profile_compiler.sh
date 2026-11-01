@@ -41,8 +41,9 @@ CORE="$ROOT/stdlib/core.mdk"
 [ -f "$MODULES_DRIVER" ] || { echo "missing $MODULES_DRIVER" >&2; exit 2; }
 
 # Parse min-of-N [perf] output from tmpfile and print a table.
-# Handles both 3-field format (label, time, ops) and 4-field format (label, time, alloc, ops).
-# The total line may have no ops field.
+# Handles the 3-field format (label, time, ops), the 4-field format (label, time, alloc, ops)
+# and the 5-field format (label, time, alloc, target, op count) that `medaka run` emits for
+# its own eval row; the last reports the op count. The total line may have no ops field.
 print_min_table() {
   tmpfile="$1"
   awk '
@@ -52,7 +53,11 @@ print_min_table() {
       sub(/^\[perf\] /, "", label)
       t = parts[2]
       sub(/s$/, "", t)
-      if (n >= 4) {
+      if (n >= 5) {
+        alloc = parts[3]
+        sub(/MB$/, "", alloc)
+        ops = parts[5]
+      } else if (n == 4) {
         alloc = parts[3]
         sub(/MB$/, "", alloc)
         ops = parts[4]

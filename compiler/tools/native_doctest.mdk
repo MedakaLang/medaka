@@ -58,7 +58,7 @@ import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
 import support.util.{joinNl, splitNl}
 import tools.probe_transcript.{
-  seedEnvArgs,
+  runUnderSeed,
   Chunk(..),
   Section(..),
   chunksOf,
@@ -314,15 +314,12 @@ buildAndRun target entryPath outPath tmpDir examples synthResults nonce =
     -- MEDAKA_ROOT from its environment, so it gets the same env prefix the test
     -- and prop probes get; an unset MEDAKA resolves to $MEDAKA_ROOT/medaka, or
     -- ./medaka when MEDAKA_ROOT is unset too.
-    Ok _ => match (runCommand
-      "env"
-      (seedEnvArgs ()
-        ++ [
-          "MEDAKA_ROOT=" ++ root,
-          "MEDAKA=" ++ medaka,
-          "MEDAKA_EMITTER=" ++ emitter,
-          outPath,
-        ]))
+    Ok _ => match runUnderSeed [
+      "MEDAKA_ROOT=" ++ root,
+      "MEDAKA=" ++ medaka,
+      "MEDAKA_EMITTER=" ++ emitter,
+      outPath,
+    ]
       Err e =>
         Err "native doctest runner: could not run the compiled probe: \{e}"
       Ok (code, out, errOut) =>

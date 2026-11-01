@@ -38,7 +38,7 @@ import support.path.{joinPath, baseOf, dirOf}
 import support.util.{anyList, joinNl, splitNl, startsWith, listLen}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert}
 import tools.probe_transcript.{
-  seedEnvArgs,
+  runUnderSeed,
   Section(..),
   freshProbeNonce,
   mintNonce,
@@ -328,17 +328,14 @@ runSection : String ->
   <IO> ArmOut
 runSection target tsrc userDecls nonce outPath k arm prefix =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  match (runCommand
-    "env"
-    (seedEnvArgs ()
-      ++ [
-        "MEDAKA_ROOT=" ++ root,
-        "MEDAKA=" ++ envOr "MEDAKA" (joinPath root "medaka"),
-        "MEDAKA_EMITTER="
-          ++ envOr "MEDAKA_EMITTER" (joinPath root "medaka_emitter"),
-        "\{selectorVar nonce}=\{sectionKey k}",
-        outPath,
-      ]))
+  match runUnderSeed [
+    "MEDAKA_ROOT=" ++ root,
+    "MEDAKA=" ++ envOr "MEDAKA" (joinPath root "medaka"),
+    "MEDAKA_EMITTER="
+      ++ envOr "MEDAKA_EMITTER" (joinPath root "medaka_emitter"),
+    "\{selectorVar nonce}=\{sectionKey k}",
+    outPath,
+  ]
     Ok (code, out, errOut) =>
       if anyList (startsWith prefix) (splitNl out) then
         armDecode nonce arm code out errOut

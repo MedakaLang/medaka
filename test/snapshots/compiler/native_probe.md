@@ -1,5 +1,5 @@
 # META
-source_lines=406
+source_lines=403
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/native_probe.mdk — one native probe build for all the native
@@ -42,7 +42,7 @@ import support.path.{joinPath, baseOf, dirOf}
 import support.util.{anyList, joinNl, splitNl, startsWith, listLen}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert}
 import tools.probe_transcript.{
-  seedEnvArgs,
+  runUnderSeed,
   Section(..),
   freshProbeNonce,
   mintNonce,
@@ -332,17 +332,14 @@ runSection : String ->
   <IO> ArmOut
 runSection target tsrc userDecls nonce outPath k arm prefix =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  match (runCommand
-    "env"
-    (seedEnvArgs ()
-      ++ [
-        "MEDAKA_ROOT=" ++ root,
-        "MEDAKA=" ++ envOr "MEDAKA" (joinPath root "medaka"),
-        "MEDAKA_EMITTER="
-          ++ envOr "MEDAKA_EMITTER" (joinPath root "medaka_emitter"),
-        "\{selectorVar nonce}=\{sectionKey k}",
-        outPath,
-      ]))
+  match runUnderSeed [
+    "MEDAKA_ROOT=" ++ root,
+    "MEDAKA=" ++ envOr "MEDAKA" (joinPath root "medaka"),
+    "MEDAKA_EMITTER="
+      ++ envOr "MEDAKA_EMITTER" (joinPath root "medaka_emitter"),
+    "\{selectorVar nonce}=\{sectionKey k}",
+    outPath,
+  ]
     Ok (code, out, errOut) =>
       if anyList (startsWith prefix) (splitNl out) then
         armDecode nonce arm code out errOut
@@ -415,7 +412,7 @@ propResult _ = None
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "joinNl" false) (mem "splitNl" false) (mem "startsWith" false) (mem "listLen" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false))))
-(DUse false (UseGroup ("tools" "probe_transcript") ((mem "seedEnvArgs" false) (mem "Section" true) (mem "freshProbeNonce" false) (mem "mintNonce" false) (mem "probeNameNonce" false) (mem "renameUserMain" false) (mem "runtimeAlias" false) (mem "runtimeDependencyName" false))))
+(DUse false (UseGroup ("tools" "probe_transcript") ((mem "runUnderSeed" false) (mem "Section" true) (mem "freshProbeNonce" false) (mem "mintNonce" false) (mem "probeNameNonce" false) (mem "renameUserMain" false) (mem "runtimeAlias" false) (mem "runtimeDependencyName" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" false) (mem "RunResult" true) (mem "buildDetailsFrom" false))))
 (DUse false (UseGroup ("tools" "native_doctest") ((mem "doctestProbePrefixes" false) (mem "doctestRendered" false) (mem "doctestSection" false) (mem "runNativeDoctests" false))))
 (DUse false (UseGroup ("tools" "native_test_decls") ((mem "runNativeTests" false) (mem "testProbePrefixes" false) (mem "testResultsFromRun" false) (mem "testSection" false))))
@@ -474,7 +471,7 @@ propResult _ = None
 (DFunDef false "runSections" ((PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "nonce") (PVar "outPath") (PVar "k") (PCons (PVar "arm") (PVar "arms")) (PCons (PVar "section") (PVar "sections"))) (EBlock (DoLet false false (PVar "out") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runSection") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "nonce")) (EVar "outPath")) (EVar "k")) (EVar "arm")) (EFieldAccess (EVar "section") "secPrefix"))) (DoExpr (EBinOp "::" (EVar "out") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runSections") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "nonce")) (EVar "outPath")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "arms")) (EVar "sections"))))))
 (DFunDef false "runSections" (PWild PWild PWild PWild PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "runSection" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Arm") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ArmOut")))))))))))
-(DFunDef false "runSection" ((PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "nonce") (PVar "outPath") (PVar "k") (PVar "arm") (PVar "prefix")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EBinOp "++" (EApp (EVar "seedEnvArgs") (ELit LUnit)) (EListLit (EBinOp "++" (ELit (LString "MEDAKA_ROOT=")) (EVar "root")) (EBinOp "++" (ELit (LString "MEDAKA=")) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka"))))) (EBinOp "++" (ELit (LString "MEDAKA_EMITTER=")) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_EMITTER"))) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka_emitter"))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "selectorVar") (EVar "nonce")))) (ELit (LString "="))) (EApp (EVar "display") (EApp (EVar "sectionKey") (EVar "k")))) (ELit (LString ""))) (EVar "outPath")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "startsWith") (EVar "prefix"))) (EApp (EVar "splitNl") (EVar "out"))) (EApp (EApp (EApp (EApp (EApp (EVar "armDecode") (EVar "nonce")) (EVar "arm")) (EVar "code")) (EVar "out")) (EVar "errOut")) (EApp (EApp (EApp (EApp (EVar "armAlone") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "arm")))) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EApp (EVar "armAlone") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "arm")))))))
+(DFunDef false "runSection" ((PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "nonce") (PVar "outPath") (PVar "k") (PVar "arm") (PVar "prefix")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoExpr (EMatch (EApp (EVar "runUnderSeed") (EListLit (EBinOp "++" (ELit (LString "MEDAKA_ROOT=")) (EVar "root")) (EBinOp "++" (ELit (LString "MEDAKA=")) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka"))))) (EBinOp "++" (ELit (LString "MEDAKA_EMITTER=")) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_EMITTER"))) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka_emitter"))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "selectorVar") (EVar "nonce")))) (ELit (LString "="))) (EApp (EVar "display") (EApp (EVar "sectionKey") (EVar "k")))) (ELit (LString ""))) (EVar "outPath"))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "startsWith") (EVar "prefix"))) (EApp (EVar "splitNl") (EVar "out"))) (EApp (EApp (EApp (EApp (EApp (EVar "armDecode") (EVar "nonce")) (EVar "arm")) (EVar "code")) (EVar "out")) (EVar "errOut")) (EApp (EApp (EApp (EApp (EVar "armAlone") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "arm")))) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EApp (EVar "armAlone") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "arm")))))))
 (DTypeSig false "armSection" (TyFun (TyCon "String") (TyFun (TyCon "Arm") (TyCon "Section"))))
 (DFunDef false "armSection" ((PVar "nonce") (PCon "DocArm" (PVar "examples") (PVar "synthResults"))) (EApp (EApp (EApp (EVar "doctestSection") (EVar "nonce")) (EVar "examples")) (EVar "synthResults")))
 (DFunDef false "armSection" ((PVar "nonce") (PCon "TestArm" (PVar "first") (PVar "tests"))) (EApp (EApp (EApp (EVar "testSection") (EVar "nonce")) (EVar "first")) (EVar "tests")))
@@ -512,7 +509,7 @@ propResult _ = None
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "joinNl" false) (mem "splitNl" false) (mem "startsWith" false) (mem "listLen" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false))))
-(DUse false (UseGroup ("tools" "probe_transcript") ((mem "seedEnvArgs" false) (mem "Section" true) (mem "freshProbeNonce" false) (mem "mintNonce" false) (mem "probeNameNonce" false) (mem "renameUserMain" false) (mem "runtimeAlias" false) (mem "runtimeDependencyName" false))))
+(DUse false (UseGroup ("tools" "probe_transcript") ((mem "runUnderSeed" false) (mem "Section" true) (mem "freshProbeNonce" false) (mem "mintNonce" false) (mem "probeNameNonce" false) (mem "renameUserMain" false) (mem "runtimeAlias" false) (mem "runtimeDependencyName" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" false) (mem "RunResult" true) (mem "buildDetailsFrom" false))))
 (DUse false (UseGroup ("tools" "native_doctest") ((mem "doctestProbePrefixes" false) (mem "doctestRendered" false) (mem "doctestSection" false) (mem "runNativeDoctests" false))))
 (DUse false (UseGroup ("tools" "native_test_decls") ((mem "runNativeTests" false) (mem "testProbePrefixes" false) (mem "testResultsFromRun" false) (mem "testSection" false))))
@@ -571,7 +568,7 @@ propResult _ = None
 (DFunDef false "runSections" ((PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "nonce") (PVar "outPath") (PVar "k") (PCons (PVar "arm") (PVar "arms")) (PCons (PVar "section") (PVar "sections"))) (EBlock (DoLet false false (PVar "out") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runSection") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "nonce")) (EVar "outPath")) (EVar "k")) (EVar "arm")) (EFieldAccess (EVar "section") "secPrefix"))) (DoExpr (EBinOp "::" (EVar "out") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runSections") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "nonce")) (EVar "outPath")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "arms")) (EVar "sections"))))))
 (DFunDef false "runSections" (PWild PWild PWild PWild PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "runSection" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Arm") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ArmOut")))))))))))
-(DFunDef false "runSection" ((PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "nonce") (PVar "outPath") (PVar "k") (PVar "arm") (PVar "prefix")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EBinOp "++" (EApp (EVar "seedEnvArgs") (ELit LUnit)) (EListLit (EBinOp "++" (ELit (LString "MEDAKA_ROOT=")) (EVar "root")) (EBinOp "++" (ELit (LString "MEDAKA=")) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka"))))) (EBinOp "++" (ELit (LString "MEDAKA_EMITTER=")) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_EMITTER"))) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka_emitter"))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "selectorVar") (EVar "nonce")))) (ELit (LString "="))) (EApp (EMethodRef "display") (EApp (EVar "sectionKey") (EVar "k")))) (ELit (LString ""))) (EVar "outPath")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "startsWith") (EVar "prefix"))) (EApp (EVar "splitNl") (EVar "out"))) (EApp (EApp (EApp (EApp (EApp (EVar "armDecode") (EVar "nonce")) (EVar "arm")) (EVar "code")) (EVar "out")) (EVar "errOut")) (EApp (EApp (EApp (EApp (EVar "armAlone") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "arm")))) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EApp (EVar "armAlone") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "arm")))))))
+(DFunDef false "runSection" ((PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "nonce") (PVar "outPath") (PVar "k") (PVar "arm") (PVar "prefix")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoExpr (EMatch (EApp (EVar "runUnderSeed") (EListLit (EBinOp "++" (ELit (LString "MEDAKA_ROOT=")) (EVar "root")) (EBinOp "++" (ELit (LString "MEDAKA=")) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka"))))) (EBinOp "++" (ELit (LString "MEDAKA_EMITTER=")) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_EMITTER"))) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka_emitter"))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "selectorVar") (EVar "nonce")))) (ELit (LString "="))) (EApp (EMethodRef "display") (EApp (EVar "sectionKey") (EVar "k")))) (ELit (LString ""))) (EVar "outPath"))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "startsWith") (EVar "prefix"))) (EApp (EVar "splitNl") (EVar "out"))) (EApp (EApp (EApp (EApp (EApp (EVar "armDecode") (EVar "nonce")) (EVar "arm")) (EVar "code")) (EVar "out")) (EVar "errOut")) (EApp (EApp (EApp (EApp (EVar "armAlone") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "arm")))) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EApp (EVar "armAlone") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "arm")))))))
 (DTypeSig false "armSection" (TyFun (TyCon "String") (TyFun (TyCon "Arm") (TyCon "Section"))))
 (DFunDef false "armSection" ((PVar "nonce") (PCon "DocArm" (PVar "examples") (PVar "synthResults"))) (EApp (EApp (EApp (EVar "doctestSection") (EVar "nonce")) (EVar "examples")) (EVar "synthResults")))
 (DFunDef false "armSection" ((PVar "nonce") (PCon "TestArm" (PVar "first") (PVar "tests"))) (EApp (EApp (EApp (EVar "testSection") (EVar "nonce")) (EVar "first")) (EVar "tests")))

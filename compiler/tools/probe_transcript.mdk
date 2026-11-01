@@ -92,6 +92,12 @@ seedEnvArgs _ = match !testSeedRef
   Some n => ["MEDAKA_SEED=\{intToString n}"]
   None => []
 
+-- `env` run with the run's seed assignment ahead of [assignmentsAndCommand].
+export
+runUnderSeed : List String -> <IO> Result String (Int, String, String)
+runUnderSeed assignmentsAndCommand =
+  runCommand "env" (seedEnvArgs () ++ assignmentsAndCommand)
+
 -- The tag of a sentinel line under `prefix`, or None for an ordinary output
 -- line.
 export

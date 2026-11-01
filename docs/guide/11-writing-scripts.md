@@ -72,7 +72,10 @@ $ MEDAKA_SEED=42 medaka run draw.mdk
 
 `medaka test` seeds its draws the same way, once per run and for every engine. When a
 test fails, the run ends with `seed: N (rerun with MEDAKA_SEED=N)`; set that variable to
-replay the draws.
+replay the draws. An uncaught panic aborts the run without a summary, so no seed is printed:
+set `MEDAKA_SEED` to make the run repeatable. A failing property prints two seeds: the property
+seed (`--seed`, used to generate its cases) and the run seed (`MEDAKA_SEED`, used for draws in
+the body); rerun with both when the body draws.
 
 ## Four worked examples
 

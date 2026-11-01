@@ -2831,29 +2831,30 @@ runArgSpec = spec "run" [
   value ["--target"] "NAME" "target profile `main` must also fit",
 ]
 
+-- The clock, allocation and op-count readings taken when `run`'s check phase
+-- ends, plus the verb's start time.
+data PerfMarks = PerfMarks {
+  marksStart : Float,
+  marksCheck : Float,
+  marksAlloc : Float,
+  marksOps : Int,
+}
+
 -- The `eval` + `total` phase lines, as a named partially-applied function so the
 -- deeply-indented `finishRunEval` call sites stay one flat line.  `finishRunEval`
 -- runs this itself, immediately before flushing the envelope — see its `postPerf`
 -- note for why the caller must not run it afterwards.
-runEvalPerf : Bool ->
-  String ->
-  Float ->
-  Float ->
-  Float ->
-  Int ->
-  Unit ->
-  <IO> Unit
-runEvalPerf perfOn target perfT0 perfTCheck allocCheck opCheck _ =
+runEvalPerf : Bool -> String -> PerfMarks -> Unit -> <IO> Unit
+runEvalPerf perfOn target marks _ =
   let perfTEval = now ()
-  let _ =
-    emitPhaseAO
-      perfOn
-      "eval"
-      (perfTEval - perfTCheck)
-      (allocSnap () - allocCheck)
-      target
-      (opSnap () - opCheck)
-  emitTotal perfOn (perfTEval - perfT0)
+  emitPhaseAO
+    perfOn
+    "eval"
+    (perfTEval - marks.marksCheck)
+    (allocSnap () - marks.marksAlloc)
+    target
+    (opSnap () - marks.marksOps)
+  emitTotal perfOn (perfTEval - marks.marksStart)
 
 runRunCmd : List String -> <IO> Unit
 runRunCmd argv =
@@ -3049,10 +3050,7 @@ runRunCmd argv =
                         (runEvalPerf
                           perfOn
                           target
-                          perfT0
-                          perfTCheck
-                          allocCheck
-                          opCheck)
+                          (PerfMarks perfT0 perfTCheck allocCheck opCheck))
             (errs, _) => match jsonMode
               -- #2798 review S2: `diags` (the WHOLE list, errors and warnings)
               -- for JSON, matching `check --json`'s per-file diagnostics array
@@ -3138,10 +3136,7 @@ runRunCmd argv =
                         (runEvalPerf
                           perfOn
                           target
-                          perfT0
-                          perfTCheck
-                          allocCheck
-                          opCheck)
+                          (PerfMarks perfT0 perfTCheck allocCheck opCheck))
 -- G1 (SOUNDNESS): typecheck the WHOLE module graph and abort before
 -- eval unless the drive's report carries a checked program (`trChecked`).  A
 -- type error makes evalModulesOutput miscompile (the G1 bug), so we never
@@ -3435,19 +3430,18 @@ runTestManyTargets engines cases filterOpt seedOpt targets =
       let stdlibDir = root ++ "/stdlib"
       let rosterOk = checkTestMdkRoster root targets files
       let _ = reportSupervisedTrees stdlibDir rtPath corePath
-      let anyFailed =
-        testFilesGo
-          engines
-          rtPath
-          corePath
-          stdlibDir
-          cases
-          filterOpt
-          seedOpt
-          files
-          False
+      let (anyFailed, seedSeen) = testFilesGo
+        engines
+        rtPath
+        corePath
+        stdlibDir
+        cases
+        filterOpt
+        seedOpt
+        files
+        (False, False)
       if anyFailed || not rosterOk then
-        printTestSeedLine ()
+        if seedSeen then printTestSeedLine ()
         stageExit 1
 
 -- The trees' verdict for a `test` run that hands every file to a child process:
