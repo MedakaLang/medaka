@@ -123,7 +123,6 @@ export
 ifaceSortKey : IfaceRef -> String
 ifaceSortKey ir = "\{ifaceIdentity ir.irOrigin ir.irName}|\{ir.irName}"
 
-export
 sortIfaceRefs : List IfaceRef -> List IfaceRef
 sortIfaceRefs xs = sortIfaceRefsGo xs []
 

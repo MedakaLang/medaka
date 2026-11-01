@@ -1,5 +1,5 @@
 # META
-source_lines=2060
+source_lines=2059
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_effects: the effect checks inference runs at binding boundaries and impl bodies (escape,
@@ -1238,7 +1238,6 @@ notePerformSite env eff = match env.teDyn.dcPerformSites
       map (cell => (cell, env.teDyn.dcModule.mcLoc)) (snd (rowFlat eff))
         ++ sites.value
 
-export
 markBinders : Ref (Map Int Unit) -> List (Ref Authvar) -> Unit
 markBinders table cells =
   table := fold (m c => IdMap.set (authvarId c) () m) table.value cells
@@ -2263,7 +2262,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DFunDef false "appSpineArgCount" (PWild) (ELit (LInt 0)))
 (DTypeSig true "notePerformSite" (TyFun (TyCon "TcEnv") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
 (DFunDef false "notePerformSite" ((PVar "env") (PVar "eff")) (EMatch (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcPerformSites") (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "sites")) () (EApp (EApp (EVar "setRef") (EVar "sites")) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "cell")) (ETuple (EVar "cell") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcLoc")))) (EApp (EVar "snd") (EApp (EVar "rowFlat") (EVar "eff")))) (EFieldAccess (EVar "sites") "value"))))))
-(DTypeSig true "markBinders" (TyFun (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyCon "Unit"))))
+(DTypeSig false "markBinders" (TyFun (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyCon "Unit"))))
 (DFunDef false "markBinders" ((PVar "table") (PVar "cells")) (EApp (EApp (EVar "setRef") (EVar "table")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "c")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "c"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EVar "table") "value")) (EVar "cells"))))
 (DTypeSig true "collectProducedSummary" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow"))))
 (DFunDef false "collectProducedSummary" ((PVar "mctx") (PVar "rows")) (EBlock (DoLet false false (PVar "summary") (EApp (EApp (EVar "freshEffectSummary") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "row")) (EApp (EApp (EApp (EVar "recordEffectBody") (EVar "mctx")) (EVar "summary")) (EVar "row")))) (EVar "rows"))) (DoExpr (EVar "summary"))))
@@ -2622,7 +2621,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DFunDef false "appSpineArgCount" (PWild) (ELit (LInt 0)))
 (DTypeSig true "notePerformSite" (TyFun (TyCon "TcEnv") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
 (DFunDef false "notePerformSite" ((PVar "env") (PVar "eff")) (EMatch (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcPerformSites") (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "sites")) () (EApp (EApp (EVar "setRef") (EVar "sites")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "cell")) (ETuple (EVar "cell") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcLoc")))) (EApp (EVar "snd") (EApp (EVar "rowFlat") (EVar "eff")))) (EFieldAccess (EVar "sites") "value"))))))
-(DTypeSig true "markBinders" (TyFun (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyCon "Unit"))))
+(DTypeSig false "markBinders" (TyFun (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyCon "Unit"))))
 (DFunDef false "markBinders" ((PVar "table") (PVar "cells")) (EApp (EApp (EVar "setRef") (EVar "table")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "c")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "c"))) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EVar "table") "value")) (EVar "cells"))))
 (DTypeSig true "collectProducedSummary" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow"))))
 (DFunDef false "collectProducedSummary" ((PVar "mctx") (PVar "rows")) (EBlock (DoLet false false (PVar "summary") (EApp (EApp (EVar "freshEffectSummary") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "row")) (EApp (EApp (EApp (EVar "recordEffectBody") (EVar "mctx")) (EVar "summary")) (EVar "row")))) (EVar "rows"))) (DoExpr (EVar "summary"))))

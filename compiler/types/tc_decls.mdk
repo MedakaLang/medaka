@@ -2676,7 +2676,6 @@ reexportDefinersOf before path =
 -- Standalone visibility includes an exported signature with a private body,
 -- but never visibility donated by a same-named public interface method.
 -- Intersect with actual function definitions to exclude extern declarations.
-export
 pubTopFnNames : List Decl -> List String
 pubTopFnNames decls = topFnNamesUnder ExportedView decls
 

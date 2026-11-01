@@ -3937,7 +3937,6 @@ moduleStampOrder = [
 ]
 
 -- Whether a finding at [loc] is live: it is located, at one of [live]'s spans.
-export
 isLiveSpan : OrdMap Unit -> Option Loc -> Bool
 isLiveSpan _ None = False
 isLiveSpan live loc = omHasKey (locKey loc) live
@@ -3991,7 +3990,6 @@ liveLocsOf mctx goals =
 
 -- The span keys (`locKey`) of the located [locs].  An unlocated goal or occurrence
 -- names no span, so no unlocated finding is joined to it (`isLiveSpan`).
-export
 spanKeys : List (Option Loc) -> List String
 spanKeys [] = []
 spanKeys (None :: rest) = spanKeys rest

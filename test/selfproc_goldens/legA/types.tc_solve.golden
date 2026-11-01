@@ -170,6 +170,5 @@ walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
 walkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Bool
 walkGoalFollowed : ReqWalk -> IfaceRef -> List Mono -> Bool
 walkGoalSame : IfaceRef -> List Mono -> IfaceRef -> List Mono -> Bool
-walkGoalSameProbe : Unit -> List Bool
 wantedMatches : Wanted -> Wanted -> Bool
 withDeclaredVars : ModuleCtx -> Map String Unit -> List Mono -> Map String Unit

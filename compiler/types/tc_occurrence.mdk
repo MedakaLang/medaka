@@ -1,9 +1,9 @@
 -- tc_occurrence: method and literal occurrence inference, operator dispatch-site recording
 -- (including `recordShadowStandaloneObls`), evidence-site minting, the mark pass over binding
 -- groups and the write-back of its marked clauses over the declarations (`rebuildGroupDecls`), the
--- constrained-signature set, and the test-only evidence-cell and method-return probes (the
--- `cellGoalInnerAliasing` family, `cellStoreMisses`, the `methodRow*Probe` and `methodReturn*Probe`
--- rows).
+-- constrained-signature set, and the evidence-cell and method-return probes that `tc_module` and
+-- the drive-level `typecheck_test` read (the `cellGoalInnerAliasing` family, the `methodRow*Probe`
+-- and `methodReturn*Probe` rows).
 --
 -- Spec: DICT section 4 (occurrence half), section 5, section 8 I7; SHADOW S2-DECL.
 --
@@ -3245,7 +3245,8 @@ popMarkedClause grouped pending n =
     c :: cs => (c, omInsert n cs pending)
     [] => panic "rebuildGroupDecls: no marked clause left for \{n}"
 
--- test-only observation: declarations whose only callers are tests and probes.
+-- Observation declarations exported for readers outside this module: `cellGoalInnerAliasing` for
+-- the drive-level `typecheck_test`, and the method-row and method-return probes `tc_module` reads.
 
 -- Test visibility (`typecheck_test.mdk` and `tc_occurrence_test.mdk`): each goal of
 -- [gctx]'s graph that writes a method cell's route or dictionaries, by kind, with
@@ -3310,19 +3311,6 @@ innerAliases o c =
   o.oInner := savedGoal
   c.ecInner := savedCell
   hit
-
--- Test visibility (`tc_occurrence_test.mdk`): why [gctx]'s site and method cell stores
--- hold no cell for [ev], each "" where one does.
-export
-cellStoreMisses : GraphCtx -> EvId -> (String, String)
-cellStoreMisses gctx ev = (
-  missText (siteCellLookup gctx ev),
-  missText (methodCellLookup gctx ev),
-)
-
-missText : Result String a -> String
-missText (Ok _) = ""
-missText (Err message) = message
 
 export
 firstMethodRow : List MethodSchemeRow -> MethodSchemeRow
@@ -3591,49 +3579,6 @@ methodReturnVectorCompletenessProbe _ =
 -- > methodReturnVectorCompletenessProbe ()
 -- (Some [], Some ["Int", "a"], True, False)
 
-export
-methodReturnTemplatePresenceProbe : Unit -> (List Bool, List Bool)
-methodReturnTemplatePresenceProbe _ =
-  let gctx = probeGraphCtx ()
-  let mctx = initialModuleCtx gctx
-  let present =
-    firstMethodRow
-      (ifaceMethodSchemeRows mctx [
-        methodRowTestIface
-          "return-template-present"
-          "Present"
-          ["a", "b"]
-          [
-            IfaceMethod
-              "make"
-              (TyFun
-                (tyConBuiltin "Unit" None)
-                (TyTuple [TyVar "a", TyVar "b"]))
-              None
-              None,
-          ],
-      ])
-  let absent =
-    firstMethodRow
-      (ifaceMethodSchemeRows mctx [
-        methodRowTestIface
-          "return-template-absent"
-          "Absent"
-          ["a", "b"]
-          [
-            IfaceMethod
-              "make"
-              (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
-              None
-              None,
-          ],
-      ])
-  let observed = (
-    map isSome present.msrPredicateTemplate.mptArguments,
-    map isSome absent.msrPredicateTemplate.mptArguments,
-  )
-  observed
-
 -- Runs in a carry of [prev], the caller's record, in its graph record with a fresh
 -- graph run, and returns it beside the codes: it is the record left current.
 export
@@ -3665,75 +3610,6 @@ methodReturnProbeCodes prev ownedRow impls =
       (reverseL mctx.mcCells.typeErrors.items.value),
     mctx,
   )
-
-export
-methodReturnResolutionMutationProbe : Unit -> (Bool, Bool, Bool, Bool)
-methodReturnResolutionMutationProbe _ =
-  let gctx = probeGraphCtx ()
-  let mctx = initialModuleCtx gctx
-  let _ = methodReturnProbeScope mctx "return-outcome-validation"
-  let ownedDecl =
-    methodReturnProbeIface
-      "return-owner"
-      "Owner"
-      (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
-  let ownedRow = firstMethodRow (ifaceMethodSchemeRows mctx [ownedDecl])
-  let ownedImpl = methodReturnProbeImpl "return-owner" "Owner"
-  mctx.mcCells.bodyImplEnvRef := buildFlatImplEnv [ownedImpl]
-  let request = methodReturnProbeRequest mctx ownedRow
-  let resolution = solveExactReturnOnce (siteFor mctx) request
-  let valid = methodReturnResolutionValid mctx request resolution
-  let (wrongSelection, wrongPrerequisites) = match resolution.mrrOutcome
-    Solved (InstanceEvidence _ args prerequisites supers) => (
-      MethodReturnResolution {
-        mrrWanted = resolution.mrrWanted,
-        mrrOutcome =
-          Solved
-            (InstanceEvidence
-              (RequestInstanceId (-1))
-              args
-              prerequisites
-              supers),
-        mrrSelectedRow = resolution.mrrSelectedRow,
-      },
-      MethodReturnResolution {
-        mrrWanted = resolution.mrrWanted,
-        mrrOutcome =
-          Solved
-            (InstanceEvidence
-              (RequestInstanceId (methodReturnSelectedIdentity resolution))
-              args
-              (PrerequisiteEvidence {
-                  prerequisiteInterface =
-                    resolution.mrrWanted.predicate.predicateInterface,
-                  prerequisiteArguments = args,
-                }
-                :: prerequisites)
-              supers),
-        mrrSelectedRow = resolution.mrrSelectedRow,
-      },
-    )
-    _ => panic "ordinary return mutation probe expected instance evidence"
-  let wanted = resolution.mrrWanted
-  let wrongWanted = Wanted {
-    id = wanted.id,
-    predicate = wanted.predicate,
-    origin = wanted.origin,
-    scope = ScopeId 999999,
-    destination = wanted.destination,
-  }
-  let disagreement = MethodReturnResolution {
-    mrrWanted = wrongWanted,
-    mrrOutcome = resolution.mrrOutcome,
-    mrrSelectedRow = resolution.mrrSelectedRow,
-  }
-  let observed = (
-    valid,
-    not (methodReturnResolutionValid mctx request wrongSelection),
-    not (methodReturnResolutionValid mctx request wrongPrerequisites),
-    not (methodReturnResolutionValid mctx request disagreement),
-  )
-  observed
 
 -- Runs in a carry of [prev], the caller's record, in its graph record with a fresh
 -- graph run, and returns it beside the observation: it is the record left current.

@@ -1,5 +1,5 @@
 # META
-source_lines=4467
+source_lines=4465
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_module: the per-module check in one order: declarations, top-level groups, test and prop
@@ -3941,7 +3941,6 @@ moduleStampOrder = [
 ]
 
 -- Whether a finding at [loc] is live: it is located, at one of [live]'s spans.
-export
 isLiveSpan : OrdMap Unit -> Option Loc -> Bool
 isLiveSpan _ None = False
 isLiveSpan live loc = omHasKey (locKey loc) live
@@ -3995,7 +3994,6 @@ liveLocsOf mctx goals =
 
 -- The span keys (`locKey`) of the located [locs].  An unlocated goal or occurrence
 -- names no span, so no unlocated finding is joined to it (`isLiveSpan`).
-export
 spanKeys : List (Option Loc) -> List String
 spanKeys [] = []
 spanKeys (None :: rest) = spanKeys rest
@@ -4837,7 +4835,7 @@ methodReturnOwnershipProbe _ =
 (DFunDef false "elabModuleStamp" ((PVar "prev") (PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "implDecls") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EFieldAccess (EVar "prev") "mcGraph")) (EApp (EVar "checkRunResidue") (EVar "prev"))) (EVar "mid")) (EApp (EVar "plainModuleSeed") (EVar "seedVars"))) (EVar "accData")) (EVar "implDecls")) (EVar "prog")))
 (DTypeSig false "moduleStampOrder" (TyApp (TyCon "List") (TyCon "StampStep")))
 (DFunDef false "moduleStampOrder" () (EListLit (EVar "SSNumlitFloats") (EVar "SSReturnSites") (EVar "SSBinopSites") (EVar "SSUnopSites") (EVar "SSArithSites") (EVar "SSArgStamps") (EVar "SSRLocalSites") (EVar "SSRecDictApps") (EVar "SSDictApps") (EVar "SSMethodDicts")))
-(DTypeSig true "isLiveSpan" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
+(DTypeSig false "isLiveSpan" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
 (DFunDef false "isLiveSpan" (PWild (PCon "None")) (EVar "False"))
 (DFunDef false "isLiveSpan" ((PVar "live") (PVar "loc")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "locKey") (EVar "loc"))) (EVar "live")))
 (DTypeSig false "runStampSteps" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "StampCtx") (TyFun (TyApp (TyCon "List") (TyCon "StampStep")) (TyCon "Unit")))))
@@ -4848,7 +4846,7 @@ methodReturnOwnershipProbe _ =
 (DFunDef false "stampCtxOf" ((PVar "mctx") (PVar "mid") (PVar "implDecls") (PVar "goals") (PVar "numlits")) (EBlock (DoLet false false (PVar "dropped") (EApp (EApp (EVar "blankModuleCtx") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "mid"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "dropped") "mcCells") "superDeclsRef")) (EApp (EApp (EVar "filterList") (EVar "isInterfaceDecl")) (EVar "implDecls")))) (DoExpr (ERecordCreate "StampCtx" ((fa "scModule" (EVar "mid")) (fa "scModuleCtx" (EApp (EApp (EApp (EApp (EApp (EVar "moduleCtxFrom") (EVar "False")) (EVar "mctx")) (EVar "dropped")) (EVar "dropped")) (EVar "dropped"))) (fa "scRpNames" (EApp (EVar "returnPosMethodNames") (EVar "implDecls"))) (fa "scGoals" (EVar "goals")) (fa "scNumlits" (EVar "numlits")) (fa "scLiveLocs" (EApp (EApp (EVar "liveLocsOf") (EVar "mctx")) (EVar "goals"))))))))
 (DTypeSig false "liveLocsOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "liveLocsOf" ((PVar "mctx") (PVar "goals")) (EBlock (DoLet false false (PVar "ids") (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "liveRoots") "value"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ids")) (EListLit) (EBlock (DoLet false false (PVar "live") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "i")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "i")) (ELit LUnit)) (EVar "acc")))) (EVar "Tip")) (EVar "ids"))) (DoLet false false (PVar "mentions") (ELam ((PVar "ms")) (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EVar "anyList") (ELam ((PVar "i")) (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EVar "live")))) (EApp (EVar "monoUnboundIds") (EVar "m"))))) (EVar "ms")))) (DoExpr (EApp (EVar "spanKeys") (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "o")) (EFieldAccess (EVar "o") "oLoc"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EApp (EVar "mentions") (EApp (EVar "goalMonos") (EVar "o"))))) (EVar "goals"))) (EApp (EApp (EVar "filterMap") (ELam ((PTuple PWild (PVar "m") (PVar "loc"))) (EIf (EApp (EVar "mentions") (EListLit (EVar "m"))) (EApp (EVar "Some") (EVar "loc")) (EVar "None")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "admittedOccObls") "value"))))))))))
-(DTypeSig true "spanKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "spanKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "spanKeys" ((PList)) (EListLit))
 (DFunDef false "spanKeys" ((PCons (PCon "None") (PVar "rest"))) (EApp (EVar "spanKeys") (EVar "rest")))
 (DFunDef false "spanKeys" ((PCons (PVar "loc") (PVar "rest"))) (EBinOp "::" (EApp (EVar "locKey") (EVar "loc")) (EApp (EVar "spanKeys") (EVar "rest"))))
@@ -5302,7 +5300,7 @@ methodReturnOwnershipProbe _ =
 (DFunDef false "elabModuleStamp" ((PVar "prev") (PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "implDecls") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EFieldAccess (EVar "prev") "mcGraph")) (EApp (EVar "checkRunResidue") (EVar "prev"))) (EVar "mid")) (EApp (EVar "plainModuleSeed") (EVar "seedVars"))) (EVar "accData")) (EVar "implDecls")) (EVar "prog")))
 (DTypeSig false "moduleStampOrder" (TyApp (TyCon "List") (TyCon "StampStep")))
 (DFunDef false "moduleStampOrder" () (EListLit (EVar "SSNumlitFloats") (EVar "SSReturnSites") (EVar "SSBinopSites") (EVar "SSUnopSites") (EVar "SSArithSites") (EVar "SSArgStamps") (EVar "SSRLocalSites") (EVar "SSRecDictApps") (EVar "SSDictApps") (EVar "SSMethodDicts")))
-(DTypeSig true "isLiveSpan" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
+(DTypeSig false "isLiveSpan" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
 (DFunDef false "isLiveSpan" (PWild (PCon "None")) (EVar "False"))
 (DFunDef false "isLiveSpan" ((PVar "live") (PVar "loc")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "locKey") (EVar "loc"))) (EVar "live")))
 (DTypeSig false "runStampSteps" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "StampCtx") (TyFun (TyApp (TyCon "List") (TyCon "StampStep")) (TyCon "Unit")))))
@@ -5313,7 +5311,7 @@ methodReturnOwnershipProbe _ =
 (DFunDef false "stampCtxOf" ((PVar "mctx") (PVar "mid") (PVar "implDecls") (PVar "goals") (PVar "numlits")) (EBlock (DoLet false false (PVar "dropped") (EApp (EApp (EVar "blankModuleCtx") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "mid"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "dropped") "mcCells") "superDeclsRef")) (EApp (EApp (EVar "filterList") (EVar "isInterfaceDecl")) (EVar "implDecls")))) (DoExpr (ERecordCreate "StampCtx" ((fa "scModule" (EVar "mid")) (fa "scModuleCtx" (EApp (EApp (EApp (EApp (EApp (EVar "moduleCtxFrom") (EVar "False")) (EVar "mctx")) (EVar "dropped")) (EVar "dropped")) (EVar "dropped"))) (fa "scRpNames" (EApp (EVar "returnPosMethodNames") (EVar "implDecls"))) (fa "scGoals" (EVar "goals")) (fa "scNumlits" (EVar "numlits")) (fa "scLiveLocs" (EApp (EApp (EVar "liveLocsOf") (EVar "mctx")) (EVar "goals"))))))))
 (DTypeSig false "liveLocsOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "liveLocsOf" ((PVar "mctx") (PVar "goals")) (EBlock (DoLet false false (PVar "ids") (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "liveRoots") "value"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ids")) (EListLit) (EBlock (DoLet false false (PVar "live") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "i")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "i")) (ELit LUnit)) (EVar "acc")))) (EVar "Tip")) (EVar "ids"))) (DoLet false false (PVar "mentions") (ELam ((PVar "ms")) (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EVar "anyList") (ELam ((PVar "i")) (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EVar "live")))) (EApp (EVar "monoUnboundIds") (EVar "m"))))) (EVar "ms")))) (DoExpr (EApp (EVar "spanKeys") (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "o")) (EFieldAccess (EVar "o") "oLoc"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EApp (EVar "mentions") (EApp (EVar "goalMonos") (EVar "o"))))) (EVar "goals"))) (EApp (EApp (EMethodRef "filterMap") (ELam ((PTuple PWild (PVar "m") (PVar "loc"))) (EIf (EApp (EVar "mentions") (EListLit (EVar "m"))) (EApp (EVar "Some") (EVar "loc")) (EVar "None")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "admittedOccObls") "value"))))))))))
-(DTypeSig true "spanKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "spanKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "spanKeys" ((PList)) (EListLit))
 (DFunDef false "spanKeys" ((PCons (PCon "None") (PVar "rest"))) (EApp (EVar "spanKeys") (EVar "rest")))
 (DFunDef false "spanKeys" ((PCons (PVar "loc") (PVar "rest"))) (EBinOp "::" (EApp (EVar "locKey") (EVar "loc")) (EApp (EVar "spanKeys") (EVar "rest"))))

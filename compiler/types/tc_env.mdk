@@ -1462,7 +1462,6 @@ ceLookupAt key cur env = match regLookupK key env.ceByKey
 -- resolve at a site that could see the declaration, so no ordinal filter applies.
 -- Reached from the superclass closure, whose seeds are resolved predicate
 -- interfaces and whose edges are `Super` occurrences stamped by resolve.
-export
 ceLookupGraph : RegKey -> ClassEnv -> Option CeRow
 ceLookupGraph key env = regLookupK key env.ceByKey
 
@@ -3557,7 +3556,6 @@ useModuleId : Decl -> List String
 useModuleId (DUse _ path _) = [useModId path]
 useModuleId _ = []
 
-export
 lastComponent : List String -> String
 lastComponent ns = optionOr "" (last ns)
 
