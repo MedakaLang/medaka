@@ -4,25 +4,14 @@ import types.effect_rows.{
   Atom(..), atomBuiltin, renderAtoms, EffRow(..), Effvar(..), effrowLabels,
   rowFlat, joinRows, effvarId, effrowNorm, isJoinCell, linkRow
 }
-import support.util.{listLen, reverseL}
-import map.{Map(..), has, set}
+import support.util.{listLen}
+import list.{nubBy}
 import support.opcount.{setOpCounting, opSnap}
 
+-- Keep the first cell for each stable identity (`list.nubBy`: the same keep-first
+-- dedup).
 dedupCells : List (Ref Effvar) -> List (Ref Effvar)
-dedupCells cells = reverseL (dedupCellsGo cells Tip [])
-
--- Keep the first cell for each stable identity.
-dedupCellsGo : List (Ref Effvar) ->
-  Map Int Unit ->
-  List (Ref Effvar) ->
-  List (Ref Effvar)
-dedupCellsGo [] _ acc = acc
-dedupCellsGo (cell :: cells) seen acc =
-  let id = effvarId cell
-  if has id seen then
-    dedupCellsGo cells seen acc
-  else
-    dedupCellsGo cells (set id () seen) (cell :: acc)
+dedupCells cells = nubBy (a b => effvarId a == effvarId b) cells
 
 deepDiamond : Int -> Ref Effvar -> Ref Effvar
 deepDiamond 0 leaf = leaf

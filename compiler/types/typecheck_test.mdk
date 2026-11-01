@@ -2553,7 +2553,7 @@ test "a generalized local is dictionary-abstracted: each use applies it to the g
         ])
   -- `g x` and `g y` are dictionary applications of `g`, one per use, and each
   -- forwards the given for its own argument's variable: two distinct binders.  One
-  -- binder shared by both uses is the #1045 wrong answer.
+  -- binder shared by both uses is the wrong answer.
   let apps = evidenceEntriesOfKind "GKDictApp" entries
   expectAll [
     expectEqual [] codes,
@@ -2564,7 +2564,7 @@ test "a generalized local is dictionary-abstracted: each use applies it to the g
       _ => False),
   ]
 
--- #1112 A-3: production-path observation of `buildDispositions`'
+-- Production-path observation of `buildDispositions`'
 -- table, over a real multi-module elaboration. `elaborateModules` returns the
 -- table it built (`types/typecheck.mdk`'s `driveGraphK`) as the sixth component
 -- of its result.
@@ -2606,7 +2606,7 @@ anyMatchInheritedDefault wantMid wantIface wantMethod (d :: rest) = match d
       || anyMatchInheritedDefault wantMid wantIface wantMethod rest
   Supplied _ _ _ => anyMatchInheritedDefault wantMid wantIface wantMethod rest
 
--- #1265's shape: `Dog` implements two DIFFERENT interfaces (`ifa::Speak`,
+-- The shape: `Dog` implements two DIFFERENT interfaces (`ifa::Speak`,
 -- `ifb::Greet`) that happen to share the bare method name `speak`, both
 -- method-less (both `InheritedDefault`). The disposition table keys on
 -- INSTANCE identity (one row per `impl` declaration), so it must keep the two
@@ -2656,7 +2656,7 @@ test "#1265: two same-named methods of two different interfaces stay two rows" =
       (anyMatchInheritedDefault "cb" "Greet" "speak" (dispositionRows table)),
   ]
 
--- #1020's cross-module shape: a cross-module `impl` overriding NOTHING
+-- The cross-module shape: a cross-module `impl` overriding NOTHING
 -- (`Speak Dog`) is `InheritedDefault`; a sibling overriding its one method
 -- (`Loud Cat`) is `Supplied`; a second cross-module empty impl of the SAME
 -- interface (`Loud Dog`) is `InheritedDefault` alongside it.
@@ -3035,7 +3035,7 @@ drainProjectedGoalSource = [
 ]
 
 -- A goal that reaches two or more instances and is on a scheme-quantified
--- variable is the caller's; reporting it ambiguous at the drain was #3031.
+-- variable is the caller's; reporting it ambiguous at the drain would be wrong.
 test "the graph-end drain reports no scheme-quantified goal ambiguous" =
   expectEqual
     [
@@ -3931,7 +3931,7 @@ test "spelling-collision judgment matrix: super construction" =
 test "spelling-collision judgment matrix: min order" =
   aliasHeadVerdicts ([], "entry") collisionMinOrder
 
--- An arrow is a constructed head like any other (#1617): an impl over `(Int -> b)`
+-- An arrow is a constructed head like any other: an impl over `(Int -> b)`
 -- is selected for a ground arrow goal, and that impl's `requires` are owed at the
 -- use, as they are for `(Box b)` (#4045).
 arrowHeadShow : List String
@@ -6060,7 +6060,7 @@ test "a served prefix reports as the checked one across requests" =
     ),
   ]
 
--- #2095: production-path observation of `evidenceObservation`'s
+-- Production-path observation of `evidenceObservation`'s
 -- entries, one program per family the mission asks for. `elaborateOne`'s two-
 -- module shape mirrors `methodCarrierStages` above; the coreDecls half stays the
 -- numeric prelude so `intToString` and friends are the same environment those

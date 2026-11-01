@@ -1209,14 +1209,11 @@ whenPub ctx mid ns name key True = addExport ctx mid ns name key
 whenPub ctx mid ns name key False =
   if isSubjectIn ctx.sibs mid then addPrivate ctx mid ns name key
 
--- record a non-exported name of a test subject, visible to its sibling only.
+-- record a non-exported name of a test subject, visible to its sibling only:
+-- the subject's own private defs and every name the subject imports.
 addPrivate : Ctx -> String -> String -> String -> String -> Unit
 addPrivate ctx mid ns name originKey =
-  let _ = hmSetC ctx ctx.privOrigin (mkKey mid ns name) originKey
-  let cur = match hmGetC ctx ctx.modPriv mid
-    Some l => l
-    None => []
-  hmSetC ctx ctx.modPriv mid ((ns, name, originKey) :: cur)
+  addEntry ctx ctx.privOrigin ctx.modPriv mid ns name originKey
 
 -- the origin key of `o` in `srcMod` as seen by importer `me`: its exports, and
 -- for the subject's own test sibling also its private names.
@@ -1231,11 +1228,22 @@ originFor ctx me srcMod ns o = match hmGetC ctx ctx.originOf (mkKey srcMod ns o)
 -- map (O(1) member lookup) and the per-module list (wildcard enumeration).
 addExport : Ctx -> String -> String -> String -> String -> Unit
 addExport ctx mid ns name originKey =
-  let _ = hmSetC ctx ctx.originOf (mkKey mid ns name) originKey
-  let cur = match hmGetC ctx ctx.modExp mid
+  addEntry ctx ctx.originOf ctx.modExp mid ns name originKey
+
+addEntry : Ctx ->
+  HashMap String String ->
+  HashMap String (List (String, String, String)) ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Unit
+addEntry ctx flat perMod mid ns name originKey =
+  hmSetC ctx flat (mkKey mid ns name) originKey
+  let cur = match hmGetC ctx perMod mid
     Some l => l
     None => []
-  hmSetC ctx ctx.modExp mid ((ns, name, originKey) :: cur)
+  hmSetC ctx perMod mid ((ns, name, originKey) :: cur)
 
 registerReExports : Ctx -> String -> List Decl -> Unit
 registerReExports _ _ [] = ()
@@ -1247,33 +1255,49 @@ registerReExports ctx mid ((DAttrib _ inner) :: rest) =
 registerReExports ctx mid (_ :: rest) = registerReExports ctx mid rest
 
 reExportPath : Ctx -> String -> UsePath -> Unit
-reExportPath ctx mid (UseName ns) = reExportName ctx mid ns
+reExportPath ctx mid (UseName ns) = splitUseName ns (reExportOne ctx mid)
 reExportPath ctx mid (UseGroup srcPath members) =
   reExportMembers ctx mid (joinDotL srcPath) members
 reExportPath ctx mid (UseWild srcPath) = reExportWild ctx mid (joinDotL srcPath)
 reExportPath _ _ (UseAlias _ _) = ()
 
-reExportName : Ctx -> String -> List String -> Unit
-reExportName ctx mid ns = match splitLastL ns
-  Some (pre, nm) => reExportOne ctx mid (joinDotL pre) nm nm
+-- `import a.b.c` names the member `c` of module `a.b`, imported under its own name.
+splitUseName : List String -> (String -> String -> String -> Unit) -> Unit
+splitUseName ns k = match splitLastL ns
+  Some (pre, nm) => k (joinDotL pre) nm nm
   None => ()
 
 reExportMembers : Ctx -> String -> String -> List UseMember -> Unit
-reExportMembers _ _ _ [] = ()
-reExportMembers ctx mid srcMod (m :: rest) =
-  let _ = reExportOne ctx mid srcMod (useMemberOrigin m) (useMemberLocal m)
-  let _ = whenAll m (_ => reExportTyCtors ctx mid srcMod (useMemberOrigin m))
-  reExportMembers ctx mid srcMod rest
+reExportMembers ctx mid srcMod members =
+  eachMember
+    (reExportOne ctx mid srcMod)
+    (reExportTyCtors ctx mid srcMod)
+    members
+
+-- one `{a, T(..)}` group: each member by name, and the constructors of `T(..)`.
+eachMember : (String -> String -> Unit) ->
+  (String -> Unit) ->
+  List UseMember ->
+  Unit
+eachMember _ _ [] = ()
+eachMember one ctors (m :: rest) =
+  one (useMemberOrigin m) (useMemberLocal m)
+  whenAll m (_ => ctors (useMemberOrigin m))
+  eachMember one ctors rest
+
+-- run `act` in every namespace.
+forEachNs : (String -> Unit) -> Unit
+forEachNs act =
+  act nsVal
+  act nsTy
+  act nsCtor
+  act nsIface
+  act nsMethod
 
 -- re-export the origin name `o` from `srcMod` under local `l` in `mid`, in every
 -- namespace `srcMod` actually exports it under.
 reExportOne : Ctx -> String -> String -> String -> String -> Unit
-reExportOne ctx mid srcMod o l =
-  let _ = reExportNs ctx mid srcMod o l nsVal
-  let _ = reExportNs ctx mid srcMod o l nsTy
-  let _ = reExportNs ctx mid srcMod o l nsCtor
-  let _ = reExportNs ctx mid srcMod o l nsIface
-  reExportNs ctx mid srcMod o l nsMethod
+reExportOne ctx mid srcMod o l = forEachNs (reExportNs ctx mid srcMod o l)
 
 reExportNs : Ctx -> String -> String -> String -> String -> String -> Unit
 reExportNs ctx mid srcMod o l ns =
@@ -1293,49 +1317,40 @@ reExportWildGo ctx mid ((ns, name, originKey) :: rest) =
   reExportWildGo ctx mid rest
 
 -- ── imports → this module's useEnv (all DUse, pub or not) ────────────────────
-processImports : Ctx ->
-  String ->
-  HashMap String String ->
-  HashMap String String ->
-  List Decl ->
-  Unit
-processImports _ _ _ _ [] = ()
-processImports ctx me useEnv aliasM ((DUse _ path _) :: rest) =
-  let _ = importPath ctx me useEnv aliasM path
-  processImports ctx me useEnv aliasM rest
-processImports ctx me useEnv aliasM ((DAttrib _ inner) :: rest) =
-  processImports ctx me useEnv aliasM (inner :: rest)
-processImports ctx me useEnv aliasM (_ :: rest) =
-  processImports ctx me useEnv aliasM rest
+-- Where one module's imports land.
+--   impEnv   : the module's useEnv
+--   impAlias : its `import S as A` table
+--   impTrack : the module is a test subject, so every name it imports is also
+--              recorded private to it (`addPrivate`), which is how its sibling
+--              sees "the names the subject itself imports"
+data ImportScope = ImportScope {
+  impCtx : Ctx,
+  impMe : String,
+  impEnv : HashMap String String,
+  impAlias : HashMap String String,
+  impTrack : Bool,
+}
 
-importPath : Ctx ->
-  String ->
-  HashMap String String ->
-  HashMap String String ->
-  UsePath ->
-  Unit
-importPath ctx me useEnv _ (UseName ns) = match splitLastL ns
-  Some (pre, nm) => importOne ctx me useEnv (joinDotL pre) nm nm
-  None => ()
-importPath ctx me useEnv _ (UseGroup srcPath members) =
-  importMembers ctx me useEnv (joinDotL srcPath) members
-importPath ctx me useEnv _ (UseWild srcPath) =
-  importWild ctx me useEnv (joinDotL srcPath)
-importPath ctx _ _ aliasM (UseAlias srcPath alias) =
-  hmSetC ctx aliasM alias (joinDotL srcPath)
+processImports : ImportScope -> List Decl -> Unit
+processImports _ [] = ()
+processImports sc ((DUse _ path _) :: rest) =
+  importPath sc path
+  processImports sc rest
+processImports sc ((DAttrib _ inner) :: rest) =
+  processImports sc (inner :: rest)
+processImports sc (_ :: rest) = processImports sc rest
 
-importMembers : Ctx ->
-  String ->
-  HashMap String String ->
-  String ->
-  List UseMember ->
-  Unit
-importMembers _ _ _ _ [] = ()
-importMembers ctx me useEnv srcMod (m :: rest) =
-  let _ = importOne ctx me useEnv srcMod (useMemberOrigin m) (useMemberLocal m)
-  let _ =
-    whenAll m (_ => importTyCtors ctx me useEnv srcMod (useMemberOrigin m))
-  importMembers ctx me useEnv srcMod rest
+importPath : ImportScope -> UsePath -> Unit
+importPath sc (UseName ns) = splitUseName ns (importOne sc)
+importPath sc (UseGroup srcPath members) =
+  importMembers sc (joinDotL srcPath) members
+importPath sc (UseWild srcPath) = importWild sc (joinDotL srcPath)
+importPath sc (UseAlias srcPath alias) =
+  hmSetC sc.impCtx sc.impAlias alias (joinDotL srcPath)
+
+importMembers : ImportScope -> String -> List UseMember -> Unit
+importMembers sc srcMod members =
+  eachMember (importOne sc srcMod) (importTyCtors sc srcMod) members
 
 whenAll : UseMember -> (Unit -> Unit) -> Unit
 whenAll (UseMember _ True _ _) f = f ()
@@ -1350,18 +1365,13 @@ tyCtorsOf ctx me srcMod o = match originFor ctx me srcMod nsTy o
     None => []
   None => []
 
-importTyCtors : Ctx ->
-  String ->
-  HashMap String String ->
-  String ->
-  String ->
-  Unit
-importTyCtors ctx me useEnv srcMod o = forEachUnit (tyCtorsOf
-  ctx
-  me
+importTyCtors : ImportScope -> String -> String -> Unit
+importTyCtors sc srcMod o = forEachUnit (tyCtorsOf
+  sc.impCtx
+  sc.impMe
   srcMod
   o) (c =>
-  importNs ctx me useEnv srcMod c c nsCtor)
+  importNs sc srcMod c c nsCtor)
 
 reExportTyCtors : Ctx -> String -> String -> String -> Unit
 reExportTyCtors ctx mid srcMod o = forEachUnit (tyCtorsOf
@@ -1374,54 +1384,39 @@ reExportTyCtors ctx mid srcMod o = forEachUnit (tyCtorsOf
 forEachUnit : List a -> (a -> Unit) -> Unit
 forEachUnit [] _ = ()
 forEachUnit (x :: xs) f =
-  let _ = f x
+  f x
   forEachUnit xs f
 
-importOne : Ctx ->
-  String ->
-  HashMap String String ->
-  String ->
-  String ->
-  String ->
-  Unit
-importOne ctx me useEnv srcMod o l =
-  let _ = importNs ctx me useEnv srcMod o l nsVal
-  let _ = importNs ctx me useEnv srcMod o l nsTy
-  let _ = importNs ctx me useEnv srcMod o l nsCtor
-  let _ = importNs ctx me useEnv srcMod o l nsIface
-  importNs ctx me useEnv srcMod o l nsMethod
+importOne : ImportScope -> String -> String -> String -> Unit
+importOne sc srcMod o l = forEachNs (importNs sc srcMod o l)
 
-importNs : Ctx ->
-  String ->
-  HashMap String String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  Unit
-importNs ctx me useEnv srcMod o l ns = match originFor ctx me srcMod ns o
-  Some originKey => hmSetC ctx useEnv (ns ++ sep ++ l) originKey
+importNs : ImportScope -> String -> String -> String -> String -> Unit
+importNs sc srcMod o l ns = match originFor sc.impCtx sc.impMe srcMod ns o
+  Some originKey => bindImported sc ns l originKey
   None => ()
 
-importWild : Ctx -> String -> HashMap String String -> String -> Unit
-importWild ctx me useEnv srcMod =
-  let _ = match hmGetC ctx ctx.modExp srcMod
-    Some entries => importWildGo ctx useEnv entries
+-- bring `<ns> <l>` into scope as `originKey`.
+bindImported : ImportScope -> String -> String -> String -> Unit
+bindImported sc ns l originKey =
+  hmSetC sc.impCtx sc.impEnv (ns ++ sep ++ l) originKey
+  if sc.impTrack then addPrivate sc.impCtx sc.impMe ns l originKey
+
+importWild : ImportScope -> String -> Unit
+importWild sc srcMod =
+  match hmGetC sc.impCtx sc.impCtx.modExp srcMod
+    Some entries => importWildGo sc entries
     None => ()
-  match viewFor ctx.sibs me srcMod
-    FullView => match hmGetC ctx ctx.modPriv srcMod
-      Some entries => importWildGo ctx useEnv entries
+  match viewFor sc.impCtx.sibs sc.impMe srcMod
+    FullView => match hmGetC sc.impCtx sc.impCtx.modPriv srcMod
+      Some entries => importWildGo sc entries
       None => ()
     ExportedView => ()
 
-importWildGo : Ctx ->
-  HashMap String String ->
-  List (String, String, String) ->
-  Unit
-importWildGo _ _ [] = ()
-importWildGo ctx useEnv ((ns, name, originKey) :: rest) =
-  let _ = hmSetC ctx useEnv (ns ++ sep ++ name) originKey
-  importWildGo ctx useEnv rest
+importWildGo : ImportScope -> List (String, String, String) -> Unit
+importWildGo _ [] = ()
+importWildGo sc ((ns, name, originKey) :: rest) =
+  bindImported sc ns name originKey
+  importWildGo sc rest
 
 -- Last parse per prelude slot, keyed by the FULL source string (never a path), so
 -- an edited prelude re-parses.  The cached value is a function of `src` alone
@@ -1527,11 +1522,13 @@ seedPreludeGo ctx mid ((ns, name, originKey) :: rest) =
   let _ = addExport ctx mid ns name originKey
   seedPreludeGo ctx mid rest
 
--- copy the prelude modules' exports into a module's useEnv (auto-in-scope).
-seedUseEnvPrelude : Ctx -> String -> HashMap String String -> Unit
-seedUseEnvPrelude ctx me useEnv =
-  let _ = importWild ctx me useEnv "core"
-  importWild ctx me useEnv "runtime"
+-- copy the prelude modules' exports into a module's useEnv (auto-in-scope). The
+-- prelude is in every module's scope already, so it is never recorded private.
+seedUseEnvPrelude : ImportScope -> Unit
+seedUseEnvPrelude sc =
+  let own = { sc | impTrack = False }
+  importWild own "core"
+  importWild own "runtime"
 
 -- ── the per-module driver ────────────────────────────────────────────────────
 indexModule : Ctx -> String -> String -> String -> Unit
@@ -1550,9 +1547,16 @@ indexParsed ctx mid uri decls positions =
   let ownDefs = collectDefs ctx expSet mid uri paired
   let useEnv = hmNew ()
   let aliasM = hmNew ()
-  let _ = seedUseEnvPrelude ctx mid useEnv
+  let sc = ImportScope {
+    impCtx = ctx,
+    impMe = mid,
+    impEnv = useEnv,
+    impAlias = aliasM,
+    impTrack = isSubjectIn ctx.sibs mid,
+  }
+  let _ = seedUseEnvPrelude sc
   let _ = addOwnToEnv ctx useEnv ownDefs
-  let _ = processImports ctx mid useEnv aliasM decls
+  let _ = processImports sc decls
   let _ = registerExports ctx mid ownDefs decls
   walkDecls (W ctx mid uri useEnv aliasM) paired
 

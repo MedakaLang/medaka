@@ -403,74 +403,53 @@ test "a name is an import definer once the module records the module it comes fr
 --    `zmod` at ordinals 1 and 0 reads `1` both times, which by item 3's own rule grades
 --    nothing, so it is asserted once.  That line still discriminates key minting: a row
 --    indexed under a mis-minted concrete key answers `0` here at every ordinal.
-test "the impl environment holds every row in build order, with distinct identities, invariant in the reading ordinal" = expectAll
-  [
-    expectEqual
-      1
-      (listLen
-        (mregLookupK
-          (ieProbeKey "amod")
-          (ieProbeEnv (probeGraphCtx ())).ieConcrete)),
-    expectEqual
-      1
-      (listLen
-        (mregLookupK
-          (ieProbeKey "zmod")
-          (ieProbeEnv (probeGraphCtx ())).ieConcrete)),
-    expectEqual
-      2
-      (listLen
-        (mregLookupK
-          ieProbeBareKey
-          (ieProbeEnv (probeGraphCtx ())).ieConcrete)),
+test "the impl environment holds every row in build order, with distinct identities, invariant in the reading ordinal" =
+  let env = ieProbeEnv (probeGraphCtx ())
+  expectAll [
+    expectEqual 1 (listLen (mregLookupK (ieProbeKey "amod") env.ieConcrete)),
+    expectEqual 1 (listLen (mregLookupK (ieProbeKey "zmod") env.ieConcrete)),
+    expectEqual 2 (listLen (mregLookupK ieProbeBareKey env.ieConcrete)),
     expectEqual
       ["amod", "zmod"]
-      (map
-        (r => instRefMid (ieRowInst r))
-        (ieProbeEnv (probeGraphCtx ())).ieRows),
-    expectEqual
-      [0, 1]
-      (map
-        (r => instRefSeq (ieRowInst r))
-        (ieProbeEnv (probeGraphCtx ())).ieRows),
-    expectEqual 2 (listLen (ieProbeEnv (probeGraphCtx ())).ieUnivSnaps),
+      (map (r => instRefMid (ieRowInst r)) env.ieRows),
+    expectEqual [0, 1] (map (r => instRefSeq (ieRowInst r)) env.ieRows),
+    expectEqual 2 (listLen env.ieUnivSnaps),
     expectEqual
       1
       (listLen
         (mregLookupK
           (ieProbeKey "amod")
-          (ieUnivConcreteOf (ieUniverseAt 0 (ieProbeEnv (probeGraphCtx ())))))),
+          (ieUnivConcreteOf (ieUniverseAt 0 env)))),
     expectEqual
       1
       (listLen
         (mregLookupK
           (ieProbeKey "amod")
-          (ieUnivConcreteOf (ieUniverseAt 1 (ieProbeEnv (probeGraphCtx ())))))),
+          (ieUnivConcreteOf (ieUniverseAt 1 env)))),
     expectEqual
       1
       (listLen
         (mregLookupK
           (ieProbeKey "zmod")
-          (ieUnivConcreteOf (ieUniverseAt 0 (ieProbeEnv (probeGraphCtx ())))))),
+          (ieUnivConcreteOf (ieUniverseAt 0 env)))),
     expectEqual
       1
       (listLen
         (mregLookupK
           (ieProbeKey "zmod")
-          (ieUnivConcreteOf (ieUniverseAt 1 (ieProbeEnv (probeGraphCtx ())))))),
+          (ieUnivConcreteOf (ieUniverseAt 1 env)))),
     expectEqual
       1
       (listLen
         (mregLookupK
           (ieProbeKey "amod")
-          (ieUnivConcreteOf
-            (ieUniverseAt (0 - 1) (ieProbeEnv (probeGraphCtx ())))))),
+          (ieUnivConcreteOf (ieUniverseAt (0 - 1) env)))),
     expectEqual
       1
       (listLen
         (mregLookupK
           (ieProbeKey "zmod")
-          (ieUnivConcreteOf (ieUniverseAt 1 (ieProbeEnv (probeGraphCtx ())))))),
+          (ieUnivConcreteOf (ieUniverseAt 1 env)))),
   ]
 
 -- 5. the positive control: the corpus is populated and numbered as claimed.  Read
@@ -527,31 +506,23 @@ test "the impl environment holds every row in build order, with distinct identit
 --    keying: identical head buckets on both arms, over a corpus that deliberately
 --    mixes origin-bearing and identity-less interfaces.  It says nothing about
 --    `ieConcrete`/`ieHeadless`, which is where F1 lives and which stays open.
-test "head rows split into the blob-head rows and the headless row" = expectAll
-  [
+test "head rows split into the blob-head rows and the headless row" =
+  let env = ieHeadProbeEnv (probeGraphCtx ())
+  expectAll [
     expectEqual
       [0, 1, 2, 3, 4]
-      (map
-        (r => instRefSeq (ieRowInst r))
-        (ieHeadProbeEnv (probeGraphCtx ())).ieRows),
+      (map (r => instRefSeq (ieRowInst r)) env.ieRows),
     expectEqual
       [0, 1, 2, 4]
       (map
         (r => instRefSeq (ieRowInst r))
-        (ieHeadRows
-          (Some ieProbeBlobHead)
-          (ieHeadProbeEnv (probeGraphCtx ())))),
+        (ieHeadRows (Some ieProbeBlobHead) env)),
+    expectEqual [3] (map (r => instRefSeq (ieRowInst r)) (ieHeadRows None env)),
     expectEqual
-      [3]
+      [0]
       (map
         (r => instRefSeq (ieRowInst r))
-        (ieHeadRows None (ieHeadProbeEnv (probeGraphCtx ())))),
-    expectEqual
-      1
-      (listLen
-        (mregLookupK
-          (ieProbeKey "amod")
-          (ieHeadProbeEnv (probeGraphCtx ())).ieConcrete)),
+        (mregLookupK (ieProbeKey "amod") env.ieConcrete)),
     expectEqual
       [0, 1, 2, 4]
       (map

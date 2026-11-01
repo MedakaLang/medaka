@@ -18,8 +18,6 @@ import test.{
   expectAll,
   expectAtLeast,
   expectEqual,
-  expectFalse,
-  expectTrue,
 }
 import frontend.parser.{parse}
 import frontend.resolve.{stampGraphTyOrigins}
@@ -88,7 +86,7 @@ import frontend.ast.{
   Field(..), Ident(..), TabKey(..), Variant(..), noBinderId, noDeclLoc,
   tyConBuiltin
 }
-import support.ordmap.{OrdMap, omFromNames, omHasKey}
+import support.ordmap.{OrdMap, omFromNames}
 import types.tc_env.{aliasUniverseAt}
 import types.tc_state.{emptyDataEnv}
 import support.util.{listLen}
@@ -354,8 +352,8 @@ test "graphAliasRow reads an alias declaration, through an attribute, and nothin
   ]
 
 test "isAliasDecl is true of an alias and false of data" = expectAll [
-  expectTrue (all isAliasDecl (parse "type A = Int\n")),
-  expectFalse (any isAliasDecl (parse "data B = B\n")),
+  expectEqual [True] (map isAliasDecl (parse "type A = Int\n")),
+  expectEqual [False] (map isAliasDecl (parse "data B = B\n")),
 ]
 
 test "rejectCyclicAliases reports a cycle of aliases and accepts a chain" =
@@ -505,22 +503,22 @@ test "a graph with no alias keeps the heads it came with" =
 test "the kind projection: own row sees everything, an earlier row its public part, a later row nothing" = expectAll
   [
     expectEqual
-      4
-      (listLen
+      ["Opq", "Priv", "Pt", "Wrap"]
+      (kindRowNames
         (declEnvRowKindEntries
           (probeGraphCtx ())
           0
           (deKindRow0 (probeGraphCtx ())))),
     expectEqual
-      3
-      (listLen
+      ["Opq", "Pt", "Wrap"]
+      (kindRowNames
         (declEnvRowKindEntries
           (probeGraphCtx ())
           1
           (deKindRow0 (probeGraphCtx ())))),
     expectEqual
-      0
-      (listLen
+      []
+      (kindRowNames
         (declEnvRowKindEntries
           (probeGraphCtx ())
           0
@@ -558,7 +556,7 @@ test "only a ConNamed variant votes as a field owner, under its constructor name
 --
 -- So these four lines are A TRIPWIRE ON A specific wrong edit, and it is one
 -- an implementer can arrive here already instructed to make:
--- `test/registry_keying_ratchet.sh`'s `declEnvsRef` row tells A-3.6 to *"hand
+-- `test/registry_keying_ratchet.sh`'s `declEnvsRef` row says to *"hand
 -- every row the FINAL accumulator"*.  Doing that destroys the exclusion the same
 -- row calls structural.  Every assertion below moves if it is done — that is the
 -- fail-capability argument, and it is by construction, not by hope:
@@ -573,9 +571,8 @@ test "only a ConNamed variant votes as a field owner, under its constructor name
 --     rows with DISTINCT ids rather than reusing `deKindRow0`/`deKindRow1`.
 test "a row's seed holds every earlier row and never its own" = expectAll [
   expectEqual
-    0
-    (listLen
-      (optionOr [] (omLookup "m" (deSeedChainKinds (probeGraphCtx ()))))),
+    (Some 0)
+    (map listLen (omLookup "m" (deSeedChainKinds (probeGraphCtx ())))),
   expectEqual
     []
     (optionOr
@@ -586,9 +583,8 @@ test "a row's seed holds every earlier row and never its own" = expectAll [
           omEmpty
           (omLookup "m" (deSeedChainOwners (probeGraphCtx ())))))),
   expectEqual
-    3
-    (listLen
-      (optionOr [] (omLookup "n" (deSeedChainKinds (probeGraphCtx ()))))),
+    (Some 3)
+    (map listLen (omLookup "n" (deSeedChainKinds (probeGraphCtx ())))),
   expectEqual
     ["Pt"]
     (optionOr
@@ -626,8 +622,8 @@ test "the name index excludes the own row at each seed" = expectAll [
 -- future edit to either half that breaks the agreement is loud here.
 test "the accumulated name index agrees with the rebuilt one on every row" = expectAll
   [
-    expectTrue (deSeedNameParity "m"),
-    expectTrue (deSeedNameParity "n"),
+    expectEqual (snd (deSeedNameSets "m")) (fst (deSeedNameSets "m")),
+    expectEqual (snd (deSeedNameSets "n")) (fst (deSeedNameSets "n")),
   ]
 
 -- ── tests ─────────────────────────────────────────────────────────────
@@ -644,18 +640,12 @@ test "a name declared in an earlier module is visible at a later module's seed" 
 --     one row later.
 test "a name declared in the same module is not visible at its own seed" = expectAll
   [
-    expectFalse
-      (omHasKey
-        "Beta"
-        (optionOr
-          omEmpty
-          (omLookup "modB" (deNameIdxChain (probeGraphCtx ()))))),
-    expectTrue
-      (omHasKey
-        "Beta"
-        (optionOr
-          omEmpty
-          (omLookup "modC" (deNameIdxChain (probeGraphCtx ()))))),
+    expectEqual
+      ["Alpha", "Shared"]
+      (deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modB"),
+    expectEqual
+      ["Alpha", "Beta", "Shared"]
+      (deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modC"),
   ]
 
 --     …and the first row's seed is empty, own-row exclusion at the boundary.
@@ -710,76 +700,46 @@ test "a reader at the miss sentinel sees no alias" =
 -- the fold, re-creating the two-rows-one-record divergence `dataEnvAddDecl`'s note
 -- exists to prevent.
 test "alias population leaves the other tables alone" =
-  expectEqual 4 (listLen (aliasFixtureEnv (probeGraphCtx ())).deAliases)
+  expectEqual
+    ["AttribCore", "PrivCore", "PubCore", "PubM"]
+    (sort
+      (map
+        (a => tabKeyName (fst a))
+        (aliasFixtureEnv (probeGraphCtx ())).deAliases))
 
 -- ── tests ─────────────────────────────────────────────────────────────
 test "field owner idents: a collision keeps both, a single owner keeps one" = expectAll
   [
     expectEqual
       ["Pt", "Vec"]
-      (map
-        snd
-        (optionOr
-          []
-          (omLookup
-            "x"
-            (deFieldOwnerCollisionEnv (probeGraphCtx ())).deFieldOwnerIdents))),
-    expectEqual
-      2
-      (listLen
-        (optionOr
-          []
-          (omLookup
-            "x"
-            (deFieldOwnerCollisionEnv (probeGraphCtx ())).deFieldOwnerIdents))),
-    expectEqual
-      ["Pt"]
-      (map
-        snd
-        (optionOr
-          []
-          (omLookup
-            "x"
-            (deFieldOwnerSingleEnv (probeGraphCtx ())).deFieldOwnerIdents))),
+      (owners (deFieldOwnerCollisionEnv (probeGraphCtx ()))),
+    expectEqual ["Pt"] (owners (deFieldOwnerSingleEnv (probeGraphCtx ()))),
   ]
+
+-- The owner names recorded under field "x".
+owners : DataEnv -> List String
+owners env = map snd (fieldXOwners env)
+
+fieldXOwners : DataEnv -> List (Ident, String)
+fieldXOwners env = optionOr [] (omLookup "x" env.deFieldOwnerIdents)
 
 -- The discriminating case: SAME declared name ("Pt") from two DIFFERENT
 -- modules stays two DISTINCT identities, not one bare-name collision.
-test "the same declared name from two modules stays two distinct identities" = expectAll
-  [
-    expectEqual
-      ["Pt", "Pt"]
-      (map
-        snd
-        (optionOr
-          []
-          (omLookup
-            "x"
-            (deFieldOwnerSameNameEnv (probeGraphCtx ())).deFieldOwnerIdents))),
-    expectTrue
-      (distinctIdentsIn2
-        (optionOr
-          []
-          (omLookup
-            "x"
-            (deFieldOwnerSameNameEnv (probeGraphCtx ())).deFieldOwnerIdents))),
+test "the same declared name from two modules stays two distinct identities" =
+  let both = fieldXOwners (deFieldOwnerSameNameEnv (probeGraphCtx ()))
+  expectAll [
+    expectEqual ["Pt", "Pt"] (map snd both),
+    expectEqual 2 (listLen (nub (map fst both))),
   ]
 
--- #2147's order half, on `deRecordIdents` rather than `deFieldOwnerIdents`:
+-- The order half, on `deRecordIdents` rather than `deFieldOwnerIdents`:
 -- DECLARATION order within the bucket, "P1" (module ordinal 0) before "P2"
 -- (ordinal 1).  Remove `deRecordIdents`' `omMapValues reverseL` in
--- `buildDataEnv` and this reads `["P2", "P1"]`; the length assertion beside it
--- does not move, which is precisely why a length was never enough.
+-- `buildDataEnv` and this reads `["P2", "P1"]`; a length would not move.
 test "record idents keep declaration order within a bucket" = expectAll [
   expectEqual
     ["P1", "P2"]
     (deRecordIdentTyNames
-      (optionOr
-        []
-        (omLookup "Pt" (deRecordOrderEnv (probeGraphCtx ())).deRecordIdents))),
-  expectEqual
-    2
-    (listLen
       (optionOr
         []
         (omLookup "Pt" (deRecordOrderEnv (probeGraphCtx ())).deRecordIdents))),
@@ -788,26 +748,19 @@ test "record idents keep declaration order within a bucket" = expectAll [
 -- Fixtures for the tests above.  `deKindRow1` is the SAME decls at ordinal 1,
 -- which is how the later-row arm is exercised without a second decl set.
 deKindAbstractFixture : Decl
-deKindAbstractFixture = DData {
-  dataVis = VisAbstract,
-  dataName = "Opq",
-  dataParams = [],
-  dataParamKinds = [],
-  dataCtors = [Variant "MkOpq" (ConPos [tyConBuiltin "Int" None])],
-  dataCtorBinders = [],
-  dataDerives = [],
-  dataOrigin = OriginModule "m",
-  dataExtern = False,
-  dataNameLoc = None,
-}
+deKindAbstractFixture = deKindDataFixture VisAbstract "Opq" "MkOpq"
 
 deKindPrivateFixture : Decl
-deKindPrivateFixture = DData {
-  dataVis = VisPrivate,
-  dataName = "Priv",
+deKindPrivateFixture = deKindDataFixture VisPrivate "Priv" "MkPriv"
+
+-- A one-constructor `Int` data declaration of module "m" at visibility `vis`.
+deKindDataFixture : DataVis -> String -> String -> Decl
+deKindDataFixture vis name ctor = DData {
+  dataVis = vis,
+  dataName = name,
   dataParams = [],
   dataParamKinds = [],
-  dataCtors = [Variant "MkPriv" (ConPos [tyConBuiltin "Int" None])],
+  dataCtors = [Variant ctor (ConPos [tyConBuiltin "Int" None])],
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "m",
@@ -836,6 +789,10 @@ deKindFixtureDecls = [
   deKindPrivateFixture,
   deKindNewtypeFixture,
 ]
+
+-- The sorted data names of a row's kind entries.
+kindRowNames : List (TabKey, a) -> List String
+kindRowNames es = sort (map (e => tabKeyName (fst e)) es)
 
 deKindRow0 : GraphCtx -> DeclEnvModule
 deKindRow0 gctx = declEnvModule gctx 0 "m" deKindFixtureDecls
@@ -875,12 +832,12 @@ deSeedChainOwners gctx = (deSeedChainProbe gctx).dsOwners
 deSeedChainNames : GraphCtx -> OrdMap (OrdMap Unit)
 deSeedChainNames gctx = (deSeedChainProbe gctx).dsNames
 
--- The accumulated name set for [mid] vs. the retired rebuild, computed here off
+-- The accumulated name set for [mid] paired with the rebuilt one, computed here off
 -- the SAME row's kind seed.  `omKeys` is sorted ascending, so this compares KEY
 -- SETS and is blind to tree shape and to insertion order — which is exactly the
 -- equivalence class the only reader (`noImplHintFor`'s `omHasKey`) can observe.
-deSeedNameParity : String -> Bool
-deSeedNameParity mid =
+deSeedNameSets : String -> (List String, List String)
+deSeedNameSets mid =
   let gctx = probeGraphCtx ()
   let accumulated =
     omKeys (optionOr omEmpty (omLookup mid (deSeedChainNames gctx)))
@@ -891,7 +848,7 @@ deSeedNameParity mid =
           (p => tabKeyName (fst p))
           (optionOr [] (omLookup mid (deSeedChainKinds gctx))))
         omEmpty)
-  accumulated == rebuilt
+  (accumulated, rebuilt)
 
 -- ── #2158 F7: the name index as A PROGRAM-GLOBAL TABLE (T-GLOBAL-TABLE) ──────
 -- `deNameIndexBefore` is a new whole-graph table, so `compiler/AGENTS.md`'s
@@ -1136,7 +1093,7 @@ deFieldOwnerFixtureB = DData {
 -- append the SAME bare string "Pt" to field "x"'s owner list, so a reader of
 -- that list cannot tell "Pt" declared twice from one declaration counted
 -- twice.  The identity table keeps them as two DISTINCT `Ident`s (different
--- `OriginModule`), which `distinctIdentsIn2` below asserts on directly.
+-- `OriginModule`), which the distinct-identities test below asserts on directly.
 deFieldOwnerFixtureC : Decl
 deFieldOwnerFixtureC = DData {
   dataVis = VisPublic,
@@ -1170,9 +1127,9 @@ deFieldOwnerSameNameEnv gctx = buildDataEnv [
 -- `deFieldOwnerIdents` has an ORDERED assertion (the `["Pt",
 -- "Vec"]` test below states a list, not a length).  `deRecordIdents` — its
 -- sibling under the same `omMapValues reverseL` finalisation in `buildDataEnv`,
--- rewritten from `++ [x]` to cons-and-reverse by #2147 — had only its VALUES
--- covered, never its ORDER.  So the one property #2147 had to preserve was the
--- one nothing asserted: drop `deRecordIdents`' half of that `omMapValues
+-- built by cons-and-reverse rather than `++ [x]` — had only its VALUES
+-- covered, never its ORDER.  So the one property that build had to preserve was
+-- the one nothing asserted: drop `deRecordIdents`' half of that `omMapValues
 -- reverseL` and every existing assertion in this file still passes.
 --
 -- The fixture needs 2+ entries under ONE key, and `deRecordIdents` is keyed by
@@ -1220,10 +1177,3 @@ deRecordIdentTyNames : List (Ident, String, List Field) -> List String
 deRecordIdentTyNames [] = []
 deRecordIdentTyNames ((_, tyName, _) :: rest) =
   tyName :: deRecordIdentTyNames rest
-
--- Two-element owner list, DISTINCT `Ident`s (never a fixed answer): the
--- property a bare-name multimap cannot state, since two `String`s "Pt"/"Pt"
--- carry no way to tell them apart.
-distinctIdentsIn2 : List (Ident, String) -> Bool
-distinctIdentsIn2 [(i1, _), (i2, _)] = i1 /= i2
-distinctIdentsIn2 _ = False

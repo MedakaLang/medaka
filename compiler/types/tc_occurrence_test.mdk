@@ -860,28 +860,45 @@ writtenBody _ = None
 -- ── the ordinary-return probes ────────────────────────────────────────────
 
 test "ordinary return validation rejects wrong selected instance" =
-  let (_, rejected, _, _) = methodReturnResolutionMutationProbe ()
-  expectTrue rejected
+  expectFalse (methodReturnResolutionMutationProbe ()).rvWrongSelection
 
 test "ordinary return validation rejects wrong prerequisites" =
-  let (_, _, rejected, _) = methodReturnResolutionMutationProbe ()
-  expectTrue rejected
+  expectFalse (methodReturnResolutionMutationProbe ()).rvWrongPrerequisites
 
 test "ordinary return validation rejects checker evidence disagreement" =
-  let (_, _, _, rejected) = methodReturnResolutionMutationProbe ()
-  expectTrue rejected
+  expectFalse (methodReturnResolutionMutationProbe ()).rvDisagreement
 
 test "ordinary return validation accepts the resolution it was built from" =
-  let (accepted, _, _, _) = methodReturnResolutionMutationProbe ()
-  expectTrue accepted
+  expectTrue (methodReturnResolutionMutationProbe ()).rvOriginal
 
 test "ordinary return template records present and absent interface formals" =
-  expectEqual
-    ([True, True], [True, False])
-    (methodReturnTemplatePresenceProbe ())
+  let seen = methodReturnTemplatePresenceProbe ()
+  expectAll [
+    expectEqual [True, True] seen.tpPresent,
+    expectEqual [True, False] seen.tpAbsent,
+  ]
+
+-- `methodReturnResolutionValid`'s verdict on the resolution the checker built and
+-- on three corruptions of it.
+data ResolutionVerdicts = ResolutionVerdicts {
+  rvOriginal : Bool,
+  rvWrongSelection : Bool,
+  rvWrongPrerequisites : Bool,
+  rvDisagreement : Bool,
+}
+
+-- Which formals of a two-parameter interface the method template mentions.
+data TemplatePresence = TemplatePresence {
+  tpPresent : List Bool,
+  tpAbsent : List Bool,
+}
 
 export
-methodReturnResolutionMutationProbe : Unit -> (Bool, Bool, Bool, Bool)
+-- The scheme row of the one method of the interface declared by `decl`.
+methodRowOf : ModuleCtx -> Decl -> MethodSchemeRow
+methodRowOf ctx decl = firstMethodRow (ifaceMethodSchemeRows ctx [decl])
+
+methodReturnResolutionMutationProbe : Unit -> ResolutionVerdicts
 methodReturnResolutionMutationProbe _ =
   let gctx = probeGraphCtx ()
   let mctx = initialModuleCtx gctx
@@ -891,7 +908,7 @@ methodReturnResolutionMutationProbe _ =
       "return-owner"
       "Owner"
       (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
-  let ownedRow = firstMethodRow (ifaceMethodSchemeRows mctx [ownedDecl])
+  let ownedRow = methodRowOf mctx ownedDecl
   let ownedImpl = methodReturnProbeImpl "return-owner" "Owner"
   mctx.mcCells.bodyImplEnvRef := buildFlatImplEnv [ownedImpl]
   let request = methodReturnProbeRequest mctx ownedRow
@@ -941,56 +958,51 @@ methodReturnResolutionMutationProbe _ =
     mrrOutcome = resolution.mrrOutcome,
     mrrSelectedRow = resolution.mrrSelectedRow,
   }
-  let observed = (
-    valid,
-    not (methodReturnResolutionValid mctx request wrongSelection),
-    not (methodReturnResolutionValid mctx request wrongPrerequisites),
-    not (methodReturnResolutionValid mctx request disagreement),
-  )
-  observed
+  ResolutionVerdicts {
+    rvOriginal = valid,
+    rvWrongSelection = methodReturnResolutionValid mctx request wrongSelection,
+    rvWrongPrerequisites =
+      methodReturnResolutionValid mctx request wrongPrerequisites,
+    rvDisagreement = methodReturnResolutionValid mctx request disagreement,
+  }
 
 export
-methodReturnTemplatePresenceProbe : Unit -> (List Bool, List Bool)
+methodReturnTemplatePresenceProbe : Unit -> TemplatePresence
 methodReturnTemplatePresenceProbe _ =
   let gctx = probeGraphCtx ()
   let mctx = initialModuleCtx gctx
   let present =
-    firstMethodRow
-      (ifaceMethodSchemeRows mctx [
-        methodRowTestIface
-          "return-template-present"
-          "Present"
-          ["a", "b"]
-          [
-            IfaceMethod
-              "make"
-              (TyFun
-                (tyConBuiltin "Unit" None)
-                (TyTuple [TyVar "a", TyVar "b"]))
-              None
-              None,
-          ],
-      ])
+    methodRowOf
+      mctx
+      (methodRowTestIface
+        "return-template-present"
+        "Present"
+        ["a", "b"]
+        [
+          IfaceMethod
+            "make"
+            (TyFun (tyConBuiltin "Unit" None) (TyTuple [TyVar "a", TyVar "b"]))
+            None
+            None,
+        ])
   let absent =
-    firstMethodRow
-      (ifaceMethodSchemeRows mctx [
-        methodRowTestIface
-          "return-template-absent"
-          "Absent"
-          ["a", "b"]
-          [
-            IfaceMethod
-              "make"
-              (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
-              None
-              None,
-          ],
-      ])
-  let observed = (
-    map isSome present.msrPredicateTemplate.mptArguments,
-    map isSome absent.msrPredicateTemplate.mptArguments,
-  )
-  observed
+    methodRowOf
+      mctx
+      (methodRowTestIface
+        "return-template-absent"
+        "Absent"
+        ["a", "b"]
+        [
+          IfaceMethod
+            "make"
+            (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
+            None
+            None,
+        ])
+  TemplatePresence {
+    tpPresent = map isSome present.msrPredicateTemplate.mptArguments,
+    tpAbsent = map isSome absent.msrPredicateTemplate.mptArguments,
+  }
 
 -- Test visibility (`tc_occurrence_test.mdk`): why [gctx]'s site and method cell stores
 -- hold no cell for [ev], each "" where one does.
@@ -1010,8 +1022,7 @@ observeMethodSchemeRowsForTest _ =
   let graph1 = probeGraphCtx ()
 
   let rows1 = initialModuleCtx graph1
-  let constrainedRow =
-    firstMethodRow (ifaceMethodSchemeRows rows1 [methodRowTestFoldMapDecl])
+  let constrainedRow = methodRowOf rows1 methodRowTestFoldMapDecl
   let constrainedIds = schemeIds constrainedRow.msrScheme
   let constrainedSlots = constrainedRow.msrMethodSlots
   let constrainedBoundIds = methodSlotBoundIds constrainedSlots
@@ -1023,11 +1034,9 @@ observeMethodSchemeRowsForTest _ =
   let graph2 = freshSubRecordsOf graph1
   let rows2 = carryModuleCtx graph2 rows1
   let counterBefore = graph2.graphRun.tyvarCounter.value
-  let firstRow =
-    firstMethodRow (ifaceMethodSchemeRows rows2 [methodRowTestFoldMapDecl])
+  let firstRow = methodRowOf rows2 methodRowTestFoldMapDecl
   let counterAfterFirst = graph2.graphRun.tyvarCounter.value
-  let secondRow =
-    firstMethodRow (ifaceMethodSchemeRows rows2 [methodRowTestFoldMapDecl])
+  let secondRow = methodRowOf rows2 methodRowTestFoldMapDecl
   let counterAfterSecond = graph2.graphRun.tyvarCounter.value
   let firstSchemeIds = schemeIds firstRow.msrScheme
   let secondSchemeIds = schemeIds secondRow.msrScheme
@@ -1166,21 +1175,6 @@ methodRowFreshnessProbe _ =
     ),
   )
 
-methodRowDeclarationProbe : Unit ->
-  (List (String, String, Int, Int), List (String, String, Int, Int), (Int, Int, Bool, Int))
-methodRowDeclarationProbe _ =
-  let observed = observeMethodSchemeRowsForTest ()
-  (
-    observed.mrtoSameNameForward,
-    observed.mrtoSameNameReverse,
-    (
-      observed.mrtoConstantRowCount,
-      observed.mrtoConstantSchemeIdCount,
-      observed.mrtoConstantBodyIsFunction,
-      observed.mrtoConstantSlotCount,
-    ),
-  )
-
 methodRowNumericAnchorProbe : Unit ->
   (Int, String, List String, List (String, Bool, Bool, String, String))
 methodRowNumericAnchorProbe _ =
@@ -1192,38 +1186,45 @@ methodRowNumericAnchorProbe _ =
     map numAnchorObservationView observed.mrtoNumAnchors,
   )
 
-methodReturnVectorCompletenessProbe : Unit ->
-  (Option (List String), Option (List String), Bool, Bool)
+-- The return vector of a method whose interface has a parameter the method type
+-- never mentions, beside a method that mentions every parameter, and whether each
+-- type mentions all its interface's parameters.
+data VectorCompleteness = VectorCompleteness {
+  vcZeroArgs : Option (List String),
+  vcPartialArgs : Option (List String),
+  vcZeroMentioned : Bool,
+  vcPartialMentioned : Bool,
+}
+
+methodReturnVectorCompletenessProbe : Unit -> VectorCompleteness
 methodReturnVectorCompletenessProbe _ =
   let gctx = probeGraphCtx ()
   let mctx = initialModuleCtx gctx
   let _ = methodReturnProbeScope mctx "return-vector"
   let zeroRow =
-    firstMethodRow
-      (ifaceMethodSchemeRows mctx [
-        methodRowTestIface "return-zero" "Zero" [] [
-          IfaceMethod
-            "make"
-            (TyFun (tyConBuiltin "Unit" None) (tyConBuiltin "Int" None))
-            None
-            None,
-        ],
+    methodRowOf
+      mctx
+      (methodRowTestIface "return-zero" "Zero" [] [
+        IfaceMethod
+          "make"
+          (TyFun (tyConBuiltin "Unit" None) (tyConBuiltin "Int" None))
+          None
+          None,
       ])
   let partialRow =
-    firstMethodRow
-      (ifaceMethodSchemeRows mctx [
-        methodRowTestIface
-          "return-partial"
-          "Partial"
-          ["a", "b"]
-          [
-            IfaceMethod
-              "make"
-              (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
-              None
-              None,
-          ],
-      ])
+    methodRowOf
+      mctx
+      (methodRowTestIface
+        "return-partial"
+        "Partial"
+        ["a", "b"]
+        [
+          IfaceMethod
+            "make"
+            (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
+            None
+            None,
+        ])
   let zeroArgs =
     map
       (map ppMono)
@@ -1232,13 +1233,14 @@ methodReturnVectorCompletenessProbe _ =
     map
       (map ppMono)
       (methodReturnArgs gctx (methodReturnProbeRequest mctx partialRow))
-  let observed = (
-    zeroArgs,
-    partialArgs,
-    allMethodParamsMentioned zeroRow.msrTyparams zeroRow.msrType,
-    allMethodParamsMentioned partialRow.msrTyparams partialRow.msrType,
-  )
-  observed
+  VectorCompleteness {
+    vcZeroArgs = zeroArgs,
+    vcPartialArgs = partialArgs,
+    vcZeroMentioned =
+      allMethodParamsMentioned zeroRow.msrTyparams zeroRow.msrType,
+    vcPartialMentioned =
+      allMethodParamsMentioned partialRow.msrTyparams partialRow.msrType,
+  }
 
 -- Runs in a carry of [prev], the caller's record, in its graph record with a fresh
 -- graph run, and returns it beside the observation: it is the record left current.
@@ -1293,37 +1295,34 @@ methodReturnSlotOwnershipProbe _ =
   let ownedGraph = probeGraphCtx ()
   let ownedCtx = initialModuleCtx ownedGraph
   let ownedRow =
-    firstMethodRow
-      (ifaceMethodSchemeRows ownedCtx [
-        methodReturnProbeIface
-          "return-owner-slots"
-          "OwnedSlots"
-          (TyConstrained
-            [methodRowTestConstraint "return-seed" "Seed" [TyVar "b"]]
-            (TyFun (tyConBuiltin "Unit" None) (TyTuple [TyVar "b", TyVar "a"]))),
-      ])
+    methodRowOf
+      ownedCtx
+      (methodReturnProbeIface
+        "return-owner-slots"
+        "OwnedSlots"
+        (TyConstrained
+          [methodRowTestConstraint "return-seed" "Seed" [TyVar "b"]]
+          (TyFun (tyConBuiltin "Unit" None) (TyTuple [TyVar "b", TyVar "a"]))))
   let emptyGraph = GraphCtx { ownedGraph | graphRun = freshGraphRun () }
   let emptyCtx = carryModuleCtx emptyGraph ownedCtx
   let emptyRow =
-    firstMethodRow
-      (ifaceMethodSchemeRows emptyCtx [
-        methodReturnProbeIface
-          "return-empty-slots"
-          "EmptySlots"
-          (TyFun (tyConBuiltin "Unit" None) (TyVar "a")),
-      ])
+    methodRowOf
+      emptyCtx
+      (methodReturnProbeIface
+        "return-empty-slots"
+        "EmptySlots"
+        (TyFun (tyConBuiltin "Unit" None) (TyVar "a")))
   let foreignGraph = GraphCtx { ownedGraph | graphRun = freshGraphRun () }
   let foreignCtx = carryModuleCtx foreignGraph emptyCtx
   let foreignRow =
-    firstMethodRow
-      (ifaceMethodSchemeRows foreignCtx [
-        methodReturnProbeIface
-          "return-foreign-slots"
-          "ForeignSlots"
-          (TyConstrained
-            [methodRowTestConstraint "return-decoy" "Decoy" [TyVar "b"]]
-            (TyFun (tyConBuiltin "Unit" None) (TyTuple [TyVar "b", TyVar "a"]))),
-      ])
+    methodRowOf
+      foreignCtx
+      (methodReturnProbeIface
+        "return-foreign-slots"
+        "ForeignSlots"
+        (TyConstrained
+          [methodRowTestConstraint "return-decoy" "Decoy" [TyVar "b"]]
+          (TyFun (tyConBuiltin "Unit" None) (TyTuple [TyVar "b", TyVar "a"]))))
   let (retained, retainedCtx) =
     methodReturnProbeSlotCase foreignCtx ownedRow foreignRow True
   let (emptied, emptiedCtx) =
@@ -1344,13 +1343,19 @@ test "each method row elaboration allocates fresh ids and keeps its own slots" =
     (methodRowFreshnessProbe ())
 
 test "method rows keep declaration order per interface and constants own no slots" =
-  expectEqual
-    (
-      [("A", "same", 0, 0), ("A", "extra", 0, 0), ("B", "same", 1, 1)],
-      [("B", "same", 1, 1), ("A", "same", 0, 0), ("A", "extra", 0, 0)],
-      (1, 0, False, 0),
-    )
-    (methodRowDeclarationProbe ())
+  let seen = observeMethodSchemeRowsForTest ()
+  expectAll [
+    expectEqual
+      [("A", "same", 0, 0), ("A", "extra", 0, 0), ("B", "same", 1, 1)]
+      seen.mrtoSameNameForward,
+    expectEqual
+      [("B", "same", 1, 1), ("A", "same", 0, 0), ("A", "extra", 0, 0)]
+      seen.mrtoSameNameReverse,
+    expectEqual 1 seen.mrtoConstantRowCount,
+    expectEqual 0 seen.mrtoConstantSchemeIdCount,
+    expectFalse seen.mrtoConstantBodyIsFunction,
+    expectEqual 0 seen.mrtoConstantSlotCount,
+  ]
 
 test "numeric anchors read the first direct or builtin method" =
   expectEqual
@@ -1370,9 +1375,13 @@ test "numeric anchors read the first direct or builtin method" =
     (methodRowNumericAnchorProbe ())
 
 test "the absent b of Partial reads the occurrence's own unbound variable" =
-  expectEqual
-    (Some [], Some ["Int", "a"], True, False)
-    (methodReturnVectorCompletenessProbe ())
+  let seen = methodReturnVectorCompletenessProbe ()
+  expectAll [
+    expectEqual (Some []) seen.vcZeroArgs,
+    expectEqual (Some ["Int", "a"]) seen.vcPartialArgs,
+    expectTrue seen.vcZeroMentioned,
+    expectFalse seen.vcPartialMentioned,
+  ]
 
 test "retained method slots own Seed, an empty row answers empty, a missing row falls back to Decoy" =
   expectEqual
