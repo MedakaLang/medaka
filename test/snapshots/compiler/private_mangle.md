@@ -1,5 +1,5 @@
 # META
-source_lines=1928
+source_lines=2023
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.runtime_constructors.{namedRuntimeCtor}
@@ -150,7 +150,10 @@ import frontend.visibility.{
   coreExports,
   buildExportsWith,
   pubIfaceMethodSets,
-  directIn,
+  ExportView(..),
+  viewOf,
+  fullExportsOf,
+  directUnder,
   filterInSet,
   nsValues,
   valueDeclsOf,
@@ -248,7 +251,7 @@ renameUnits externName implicit coreDecls modules =
     withPreludeDefs
       (dedup (unitDefNames ("", coreDecls)))
       implicit
-      (fnExportsFrom allUnits surfaces)
+      (fnExportsFrom (_ => ExportedView) allUnits surfaces)
   let ctorExportsPerUnit = ctorExportsFrom surfaces
   let externExports = externExportsFrom externName allUnits surfaces
   let coreOut = mangleUnitU
@@ -292,27 +295,36 @@ mangleUnitsEv : EvTable ->
   List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl), EvTable, SymbolOrigins)
-mangleUnitsEv table coreDecls modules =
+mangleUnitsEv = mangleUnitsEvFor None
+
+-- `mangleUnitsEv` for a drive whose (test sibling, subject) pair is [sibling]:
+-- the sibling's unit reads the subject's full view, every other unit its
+-- exported one.
+export
+mangleUnitsEvFor : Option (String, String) ->
+  EvTable ->
+  List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl), EvTable, SymbolOrigins)
+mangleUnitsEvFor sibling table coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
   let entryMid = entryUnitMid allUnits
   let surfaces = unitSurfaces allUnits
   let exportsPerUnit =
-    withPreludeDefs
-      (dedup (unitDefNames ("", coreDecls)))
-      []
-      (fnExportsFrom allUnits surfaces)
+    exportsPerUnitOf (_ => ExportedView) coreDecls allUnits surfaces
   let ctorExportsPerUnit = ctorExportsFrom surfaces
   let externExports = externExportsFrom externSymbolName allUnits surfaces
+  let siblingMaps = siblingUnitMaps sibling coreDecls allUnits surfaces
   -- ONE map per unit, threaded to both readers: the decl rename and the evidence
   -- remap name the same symbols, and building the map twice was measured at +0.99%
   -- Ir on the emitter child over the compiler's own graph.
   let units =
     map
-      (unitRenameMapEntry
-        entryMid
-        exportsPerUnit
-        ctorExportsPerUnit
-        externExports)
+      (unitEntryFor entryMid siblingMaps (
+        exportsPerUnit,
+        ctorExportsPerUnit,
+        externExports,
+      ))
       allUnits
   let renamed = map renameUnitEntry units
   let coreOut = match renamed
@@ -337,6 +349,86 @@ mangleUnitsWithOrigins : List Decl ->
 mangleUnitsWithOrigins coreDecls modules =
   let (coreOut, modsOut, _, origins) = mangleUnitsEv [] coreDecls modules
   (coreOut, modsOut, origins)
+
+-- The three export maps, in the order `unitRenameMapEntry` takes them.
+type ExportMaps = (List (String, List (String, String)), List (String, List (String, String, List String)), OrdMap (OrdMap String))
+
+-- Each unit's exported function symbols, the prelude's definitions ahead of them.
+exportsPerUnitOf : (String -> ExportView) ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, ModuleExports) ->
+  List (String, List (String, String))
+exportsPerUnitOf viewOfUnit coreDecls allUnits surfaces =
+  withPreludeDefs
+    (dedup (unitDefNames ("", coreDecls)))
+    []
+    (fnExportsFrom viewOfUnit allUnits surfaces)
+
+-- The export maps the sibling's unit imports against, with its subject's
+-- surface replaced by the full view; `None` when the drive has no sibling.
+siblingUnitMaps : Option (String, String) ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, ModuleExports) ->
+  Option (String, ExportMaps)
+siblingUnitMaps None _ _ _ = None
+siblingUnitMaps (Some (sib, subj)) coreDecls allUnits surfaces =
+  let full = fullSurfaces subj allUnits surfaces
+  Some (
+    sib,
+    (
+      exportsPerUnitOf (viewOf (Some subj)) coreDecls allUnits full,
+      ctorExportsFrom full,
+      externExportsFrom externSymbolName allUnits full,
+    ),
+  )
+
+-- [surfaces] with module [subj]'s entry rebuilt as its full view.  The rest
+-- keep their exported surfaces, so no other unit's `export import` of the
+-- subject carries a private name.
+fullSurfaces : String ->
+  List (String, List Decl) ->
+  List (String, ModuleExports) ->
+  List (String, ModuleExports)
+fullSurfaces subj allUnits surfaces =
+  let coreExp = match lookupAssoc "core" allUnits
+    Some coreDecls => coreExports coreDecls
+    None => coreExports []
+  let known = omFromPairs (reverseL surfaces) omEmpty
+  map (fullSurfaceOf subj coreExp known allUnits) surfaces
+
+fullSurfaceOf : String ->
+  ModuleExports ->
+  OrdMap ModuleExports ->
+  List (String, List Decl) ->
+  (String, ModuleExports) ->
+  (String, ModuleExports)
+fullSurfaceOf subj coreExp known allUnits (mid, exp) =
+  if mid == subj then
+    (
+      mid,
+      optionOr
+        exp
+        (map
+          (decls => fullExportsOf coreExp known mid decls)
+          (lookupAssoc mid allUnits)),
+    )
+  else
+    (mid, exp)
+
+unitEntryFor : String ->
+  Option (String, ExportMaps) ->
+  ExportMaps ->
+  (String, List Decl) ->
+  (String, (OrdMap String, Bool, List Decl))
+unitEntryFor entryMid None (fns, ctors, externs) (mid, decls) =
+  unitRenameMapEntry entryMid fns ctors externs (mid, decls)
+unitEntryFor entryMid (Some (sib, (sibFns, sibCtors, sibExterns))) (fns, ctors, externs) (mid, decls) =
+  if mid == sib then
+    unitRenameMapEntry entryMid sibFns sibCtors sibExterns (mid, decls)
+  else
+    unitRenameMapEntry entryMid fns ctors externs (mid, decls)
 
 -- one unit's rename map, keyed by its module id, beside the decls it applies to.  The
 -- SAME two builders and the same first-entry-wins fold `mangleUnitU` applies, so a
@@ -588,11 +680,12 @@ surfacesGo coreExp known ((mid, decls) :: rest)
 -- therefore mangles its reference to `<definer>__<name>`, never
 -- `<reExporter>__<name>`, which has no backing definition.  An interface method,
 -- a body-less signature and an extern are values but not function symbols.
-fnExportsFrom : List (String, List Decl) ->
+fnExportsFrom : (String -> ExportView) ->
+  List (String, List Decl) ->
   List (String, ModuleExports) ->
   List (String, List (String, String))
-fnExportsFrom units surfaces =
-  let fnSyms = omFromPairs (map unitFnSyms units) omEmpty
+fnExportsFrom viewOfUnit units surfaces =
+  let fnSyms = omFromPairs (map (unitFnSyms viewOfUnit) units) omEmpty
   let methods = omFromPairs (map surfaceMethods surfaces) omEmpty
   map (unitFnExports fnSyms methods) (zip units surfaces)
 
@@ -605,10 +698,12 @@ surfaceMethods (mid, exp) =
 -- beside a public interface method of the same name is not offered
 -- (`test/llvm_fixtures_modules/method_private_standalone_visibility`).  It keeps
 -- core to what core marks exported, too: core's surface is every binding (#2640).
-unitFnSyms : (String, List Decl) -> (String, OrdMap Unit)
-unitFnSyms (mid, decls) =
+unitFnSyms : (String -> ExportView) ->
+  (String, List Decl) ->
+  (String, OrdMap Unit)
+unitFnSyms viewOfUnit (mid, decls) =
   let defined = omFromNames (unitDefNames (mid, decls)) omEmpty
-  let exported = directIn nsValues decls
+  let exported = directUnder (viewOfUnit mid) nsValues decls
   (mid, omFromNames (filterInSet defined exported) omEmpty)
 
 -- The first row per name wins: a module's own values precede what it re-exports.
@@ -1936,7 +2031,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false) (mem "emptyOrigins" false) (mem "unitOrigins" false) (mem "mergeOrigins" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "sourceExternSymbol" false) (mem "externDisplayName" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "declBinderNames" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvTable" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" true) (mem "useModId" false) (mem "coreExports" false) (mem "buildExportsWith" false) (mem "pubIfaceMethodSets" false) (mem "directIn" false) (mem "filterInSet" false) (mem "nsValues" false) (mem "valueDeclsOf" false) (mem "valueDeclOf" false) (mem "typeOfCtor" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" true) (mem "useModId" false) (mem "coreExports" false) (mem "buildExportsWith" false) (mem "pubIfaceMethodSets" false) (mem "ExportView" true) (mem "viewOf" false) (mem "fullExportsOf" false) (mem "directUnder" false) (mem "filterInSet" false) (mem "nsValues" false) (mem "valueDeclsOf" false) (mem "valueDeclOf" false) (mem "typeOfCtor" false))))
 (DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "zip" false))))
 (DUse false (UseGroup ("map") ((mem "insertWith" false))))
@@ -1952,13 +2047,28 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DTypeSig false "externDeclNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "externDeclNames" ((PVar "decls")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "externDeclEntries") (ELam ((PVar "ed")) (EFieldAccess (EVar "ed") "edName"))) (EVar "decls"))))
 (DTypeSig false "renameUnits" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "ExternDecl") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
-(DFunDef false "renameUnits" ((PVar "externName") (PVar "implicit") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "entryMid") (EApp (EVar "entryUnitMid") (EVar "allUnits"))) (DoLet false false (PVar "surfaces") (EApp (EVar "unitSurfaces") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EApp (EVar "withPreludeDefs") (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "coreDecls"))))) (EVar "implicit")) (EApp (EApp (EVar "fnExportsFrom") (EVar "allUnits")) (EVar "surfaces")))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EVar "ctorExportsFrom") (EVar "surfaces"))) (DoLet false false (PVar "externExports") (EApp (EApp (EApp (EVar "externExportsFrom") (EVar "externName")) (EVar "allUnits")) (EVar "surfaces"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "entryMid")) (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (EVar "externName")) (EVar "externExports")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EApp (EVar "mangleModule") (EVar "entryMid")) (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (EVar "externName")) (EVar "externExports"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
+(DFunDef false "renameUnits" ((PVar "externName") (PVar "implicit") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "entryMid") (EApp (EVar "entryUnitMid") (EVar "allUnits"))) (DoLet false false (PVar "surfaces") (EApp (EVar "unitSurfaces") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EApp (EVar "withPreludeDefs") (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "coreDecls"))))) (EVar "implicit")) (EApp (EApp (EApp (EVar "fnExportsFrom") (ELam (PWild) (EVar "ExportedView"))) (EVar "allUnits")) (EVar "surfaces")))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EVar "ctorExportsFrom") (EVar "surfaces"))) (DoLet false false (PVar "externExports") (EApp (EApp (EApp (EVar "externExportsFrom") (EVar "externName")) (EVar "allUnits")) (EVar "surfaces"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "entryMid")) (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (EVar "externName")) (EVar "externExports")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EApp (EVar "mangleModule") (EVar "entryMid")) (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (EVar "externName")) (EVar "externExports"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
 (DTypeSig false "entryUnitMid" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))
 (DFunDef false "entryUnitMid" ((PVar "units")) (EMatch (EApp (EVar "last") (EVar "units")) (arm (PCon "Some" (PTuple (PVar "mid") PWild)) () (EVar "mid")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig true "mangleUnitsEv" (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "EvTable") (TyCon "SymbolOrigins"))))))
-(DFunDef false "mangleUnitsEv" ((PVar "table") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "entryMid") (EApp (EVar "entryUnitMid") (EVar "allUnits"))) (DoLet false false (PVar "surfaces") (EApp (EVar "unitSurfaces") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EApp (EVar "withPreludeDefs") (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "coreDecls"))))) (EListLit)) (EApp (EApp (EVar "fnExportsFrom") (EVar "allUnits")) (EVar "surfaces")))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EVar "ctorExportsFrom") (EVar "surfaces"))) (DoLet false false (PVar "externExports") (EApp (EApp (EApp (EVar "externExportsFrom") (EVar "externSymbolName")) (EVar "allUnits")) (EVar "surfaces"))) (DoLet false false (PVar "units") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "unitRenameMapEntry") (EVar "entryMid")) (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (EVar "externExports"))) (EVar "allUnits"))) (DoLet false false (PVar "renamed") (EApp (EApp (EVar "map") (EVar "renameUnitEntry")) (EVar "units"))) (DoLet false false (PVar "coreOut") (EMatch (EVar "renamed") (arm (PList) () (EVar "coreDecls")) (arm (PCons (PTuple PWild (PVar "ds")) PWild) () (EVar "ds")))) (DoLet false false (PVar "modsOut") (EMatch (EVar "renamed") (arm (PList) () (EVar "modules")) (arm (PCons PWild (PVar "rest")) () (EVar "rest")))) (DoLet false false (PVar "remap") (EApp (EVar "mangleEvEntry") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "dropUnitDecls")) (EVar "units")))) (EVar "omEmpty")))) (DoLet false false (PVar "origins") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple (PVar "mid") (PTuple (PVar "rm") PWild (PVar "decls")))) (EApp (EApp (EVar "mergeOrigins") (EVar "acc")) (EApp (EApp (EApp (EVar "unitOrigins") (EVar "mid")) (EVar "rm")) (EVar "decls"))))) (EVar "emptyOrigins")) (EVar "units"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut") (EApp (EApp (EVar "map") (EVar "remap")) (EVar "table")) (EVar "origins")))))
+(DFunDef false "mangleUnitsEv" () (EApp (EVar "mangleUnitsEvFor") (EVar "None")))
+(DTypeSig true "mangleUnitsEvFor" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "EvTable") (TyCon "SymbolOrigins")))))))
+(DFunDef false "mangleUnitsEvFor" ((PVar "sibling") (PVar "table") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "entryMid") (EApp (EVar "entryUnitMid") (EVar "allUnits"))) (DoLet false false (PVar "surfaces") (EApp (EVar "unitSurfaces") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EApp (EApp (EVar "exportsPerUnitOf") (ELam (PWild) (EVar "ExportedView"))) (EVar "coreDecls")) (EVar "allUnits")) (EVar "surfaces"))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EVar "ctorExportsFrom") (EVar "surfaces"))) (DoLet false false (PVar "externExports") (EApp (EApp (EApp (EVar "externExportsFrom") (EVar "externSymbolName")) (EVar "allUnits")) (EVar "surfaces"))) (DoLet false false (PVar "siblingMaps") (EApp (EApp (EApp (EApp (EVar "siblingUnitMaps") (EVar "sibling")) (EVar "coreDecls")) (EVar "allUnits")) (EVar "surfaces"))) (DoLet false false (PVar "units") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "unitEntryFor") (EVar "entryMid")) (EVar "siblingMaps")) (ETuple (EVar "exportsPerUnit") (EVar "ctorExportsPerUnit") (EVar "externExports")))) (EVar "allUnits"))) (DoLet false false (PVar "renamed") (EApp (EApp (EVar "map") (EVar "renameUnitEntry")) (EVar "units"))) (DoLet false false (PVar "coreOut") (EMatch (EVar "renamed") (arm (PList) () (EVar "coreDecls")) (arm (PCons (PTuple PWild (PVar "ds")) PWild) () (EVar "ds")))) (DoLet false false (PVar "modsOut") (EMatch (EVar "renamed") (arm (PList) () (EVar "modules")) (arm (PCons PWild (PVar "rest")) () (EVar "rest")))) (DoLet false false (PVar "remap") (EApp (EVar "mangleEvEntry") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "dropUnitDecls")) (EVar "units")))) (EVar "omEmpty")))) (DoLet false false (PVar "origins") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple (PVar "mid") (PTuple (PVar "rm") PWild (PVar "decls")))) (EApp (EApp (EVar "mergeOrigins") (EVar "acc")) (EApp (EApp (EApp (EVar "unitOrigins") (EVar "mid")) (EVar "rm")) (EVar "decls"))))) (EVar "emptyOrigins")) (EVar "units"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut") (EApp (EApp (EVar "map") (EVar "remap")) (EVar "table")) (EVar "origins")))))
 (DTypeSig true "mangleUnitsWithOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "SymbolOrigins")))))
 (DFunDef false "mangleUnitsWithOrigins" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "coreOut") (PVar "modsOut") PWild (PVar "origins")) (EApp (EApp (EApp (EVar "mangleUnitsEv") (EListLit)) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut") (EVar "origins")))))
+(DTypeAlias false "ExportMaps" () (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))))
+(DTypeSig false "exportsPerUnitOf" (TyFun (TyFun (TyCon "String") (TyCon "ExportView")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))))
+(DFunDef false "exportsPerUnitOf" ((PVar "viewOfUnit") (PVar "coreDecls") (PVar "allUnits") (PVar "surfaces")) (EApp (EApp (EApp (EVar "withPreludeDefs") (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "coreDecls"))))) (EListLit)) (EApp (EApp (EApp (EVar "fnExportsFrom") (EVar "viewOfUnit")) (EVar "allUnits")) (EVar "surfaces"))))
+(DTypeSig false "siblingUnitMaps" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "ExportMaps"))))))))
+(DFunDef false "siblingUnitMaps" ((PCon "None") PWild PWild PWild) (EVar "None"))
+(DFunDef false "siblingUnitMaps" ((PCon "Some" (PTuple (PVar "sib") (PVar "subj"))) (PVar "coreDecls") (PVar "allUnits") (PVar "surfaces")) (EBlock (DoLet false false (PVar "full") (EApp (EApp (EApp (EVar "fullSurfaces") (EVar "subj")) (EVar "allUnits")) (EVar "surfaces"))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "sib") (ETuple (EApp (EApp (EApp (EApp (EVar "exportsPerUnitOf") (EApp (EVar "viewOf") (EApp (EVar "Some") (EVar "subj")))) (EVar "coreDecls")) (EVar "allUnits")) (EVar "full")) (EApp (EVar "ctorExportsFrom") (EVar "full")) (EApp (EApp (EApp (EVar "externExportsFrom") (EVar "externSymbolName")) (EVar "allUnits")) (EVar "full"))))))))
+(DTypeSig false "fullSurfaces" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports")))))))
+(DFunDef false "fullSurfaces" ((PVar "subj") (PVar "allUnits") (PVar "surfaces")) (EBlock (DoLet false false (PVar "coreExp") (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "core"))) (EVar "allUnits")) (arm (PCon "Some" (PVar "coreDecls")) () (EApp (EVar "coreExports") (EVar "coreDecls"))) (arm (PCon "None") () (EApp (EVar "coreExports") (EListLit))))) (DoLet false false (PVar "known") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "surfaces"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "fullSurfaceOf") (EVar "subj")) (EVar "coreExp")) (EVar "known")) (EVar "allUnits"))) (EVar "surfaces")))))
+(DTypeSig false "fullSurfaceOf" (TyFun (TyCon "String") (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyTuple (TyCon "String") (TyCon "ModuleExports")) (TyTuple (TyCon "String") (TyCon "ModuleExports"))))))))
+(DFunDef false "fullSurfaceOf" ((PVar "subj") (PVar "coreExp") (PVar "known") (PVar "allUnits") (PTuple (PVar "mid") (PVar "exp"))) (EIf (EBinOp "==" (EVar "mid") (EVar "subj")) (ETuple (EVar "mid") (EApp (EApp (EVar "optionOr") (EVar "exp")) (EApp (EApp (EVar "map") (ELam ((PVar "decls")) (EApp (EApp (EApp (EApp (EVar "fullExportsOf") (EVar "coreExp")) (EVar "known")) (EVar "mid")) (EVar "decls")))) (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "allUnits"))))) (ETuple (EVar "mid") (EVar "exp"))))
+(DTypeSig false "unitEntryFor" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "ExportMaps"))) (TyFun (TyCon "ExportMaps") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "OrdMap") (TyCon "String")) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Decl")))))))))
+(DFunDef false "unitEntryFor" ((PVar "entryMid") (PCon "None") (PTuple (PVar "fns") (PVar "ctors") (PVar "externs")) (PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EApp (EApp (EApp (EVar "unitRenameMapEntry") (EVar "entryMid")) (EVar "fns")) (EVar "ctors")) (EVar "externs")) (ETuple (EVar "mid") (EVar "decls"))))
+(DFunDef false "unitEntryFor" ((PVar "entryMid") (PCon "Some" (PTuple (PVar "sib") (PTuple (PVar "sibFns") (PVar "sibCtors") (PVar "sibExterns")))) (PTuple (PVar "fns") (PVar "ctors") (PVar "externs")) (PTuple (PVar "mid") (PVar "decls"))) (EIf (EBinOp "==" (EVar "mid") (EVar "sib")) (EApp (EApp (EApp (EApp (EApp (EVar "unitRenameMapEntry") (EVar "entryMid")) (EVar "sibFns")) (EVar "sibCtors")) (EVar "sibExterns")) (ETuple (EVar "mid") (EVar "decls"))) (EApp (EApp (EApp (EApp (EApp (EVar "unitRenameMapEntry") (EVar "entryMid")) (EVar "fns")) (EVar "ctors")) (EVar "externs")) (ETuple (EVar "mid") (EVar "decls")))))
 (DTypeSig false "unitRenameMapEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "OrdMap") (TyCon "String")) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
 (DFunDef false "unitRenameMapEntry" ((PVar "entryMid") (PVar "exportsPerUnit") (PVar "ctorExportsPerUnit") (PVar "externExports") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "rmList") (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildUnitRenameMap") (EVar "entryMid")) (EVar "mid")) (EVar "exportsPerUnit")) (EVar "externSymbolName")) (EVar "externExports")) (EVar "decls")) (EApp (EApp (EApp (EVar "buildUnitCtorRenameMap") (EVar "mid")) (EVar "ctorExportsPerUnit")) (EVar "decls")))) (DoExpr (ETuple (EVar "mid") (ETuple (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "rmList"))) (EVar "omEmpty")) (EApp (EVar "isEmptyL") (EVar "rmList")) (EVar "decls"))))))
 (DTypeSig false "renameUnitEntry" (TyFun (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "OrdMap") (TyCon "String")) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -2011,12 +2121,12 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DTypeSig false "surfacesGo" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports")))))))
 (DFunDef false "surfacesGo" (PWild PWild (PList)) (EListLit))
 (DFunDef false "surfacesGo" ((PVar "coreExp") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EBinOp "::" (ETuple (EVar "mid") (EVar "coreExp")) (EApp (EApp (EApp (EVar "surfacesGo") (EVar "coreExp")) (EVar "known")) (EVar "rest"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "exp") (EApp (EApp (EApp (EApp (EApp (EVar "buildExportsWith") (EVar "coreExp")) (EVar "known")) (EVar "mid")) (EVar "decls")) (EApp (EApp (EVar "flatMap") (EVar "identity")) (EApp (EVar "pubIfaceMethodSets") (EVar "decls"))))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (EVar "exp")) (EApp (EApp (EApp (EVar "surfacesGo") (EVar "coreExp")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "exp")) (EVar "known"))) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "fnExportsFrom" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
-(DFunDef false "fnExportsFrom" ((PVar "units") (PVar "surfaces")) (EBlock (DoLet false false (PVar "fnSyms") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "unitFnSyms")) (EVar "units"))) (EVar "omEmpty"))) (DoLet false false (PVar "methods") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "surfaceMethods")) (EVar "surfaces"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EVar "unitFnExports") (EVar "fnSyms")) (EVar "methods"))) (EApp (EApp (EVar "zip") (EVar "units")) (EVar "surfaces"))))))
+(DTypeSig false "fnExportsFrom" (TyFun (TyFun (TyCon "String") (TyCon "ExportView")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))))
+(DFunDef false "fnExportsFrom" ((PVar "viewOfUnit") (PVar "units") (PVar "surfaces")) (EBlock (DoLet false false (PVar "fnSyms") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EApp (EVar "unitFnSyms") (EVar "viewOfUnit"))) (EVar "units"))) (EVar "omEmpty"))) (DoLet false false (PVar "methods") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "surfaceMethods")) (EVar "surfaces"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EVar "unitFnExports") (EVar "fnSyms")) (EVar "methods"))) (EApp (EApp (EVar "zip") (EVar "units")) (EVar "surfaces"))))))
 (DTypeSig false "surfaceMethods" (TyFun (TyTuple (TyCon "String") (TyCon "ModuleExports")) (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "surfaceMethods" ((PTuple (PVar "mid") (PVar "exp"))) (ETuple (EVar "mid") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EFieldAccess (EVar "exp") "expIfaceMethods"))) (EVar "omEmpty"))))
-(DTypeSig false "unitFnSyms" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "unitFnSyms" ((PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "omFromNames") (EApp (EVar "unitDefNames") (ETuple (EVar "mid") (EVar "decls")))) (EVar "omEmpty"))) (DoLet false false (PVar "exported") (EApp (EApp (EVar "directIn") (EVar "nsValues")) (EVar "decls"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterInSet") (EVar "defined")) (EVar "exported"))) (EVar "omEmpty"))))))
+(DTypeSig false "unitFnSyms" (TyFun (TyFun (TyCon "String") (TyCon "ExportView")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "unitFnSyms" ((PVar "viewOfUnit") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "omFromNames") (EApp (EVar "unitDefNames") (ETuple (EVar "mid") (EVar "decls")))) (EVar "omEmpty"))) (DoLet false false (PVar "exported") (EApp (EApp (EApp (EVar "directUnder") (EApp (EVar "viewOfUnit") (EVar "mid"))) (EVar "nsValues")) (EVar "decls"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterInSet") (EVar "defined")) (EVar "exported"))) (EVar "omEmpty"))))))
 (DTypeSig false "unitFnExports" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyTuple (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "unitFnExports" ((PVar "fnSyms") (PVar "methods") (PTuple (PTuple (PVar "mid") PWild) (PTuple PWild (PVar "exp")))) (EBlock (DoLet false false (PVar "origins") (EApp (EVar "multiMapOf") (EFieldAccess (EVar "exp") "expValueOrigins"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "fnExport") (EVar "fnSyms")) (EVar "methods")) (EVar "exp")) (EVar "origins"))) (EFieldAccess (EVar "exp") "expValues")))))))
 (DTypeSig false "fnExport" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))))
@@ -2354,7 +2464,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false) (mem "emptyOrigins" false) (mem "unitOrigins" false) (mem "mergeOrigins" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "sourceExternSymbol" false) (mem "externDisplayName" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "declBinderNames" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvTable" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" true) (mem "useModId" false) (mem "coreExports" false) (mem "buildExportsWith" false) (mem "pubIfaceMethodSets" false) (mem "directIn" false) (mem "filterInSet" false) (mem "nsValues" false) (mem "valueDeclsOf" false) (mem "valueDeclOf" false) (mem "typeOfCtor" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" true) (mem "useModId" false) (mem "coreExports" false) (mem "buildExportsWith" false) (mem "pubIfaceMethodSets" false) (mem "ExportView" true) (mem "viewOf" false) (mem "fullExportsOf" false) (mem "directUnder" false) (mem "filterInSet" false) (mem "nsValues" false) (mem "valueDeclsOf" false) (mem "valueDeclOf" false) (mem "typeOfCtor" false))))
 (DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "zip" false))))
 (DUse false (UseGroup ("map") ((mem "insertWith" false))))
@@ -2370,13 +2480,28 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DTypeSig false "externDeclNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "externDeclNames" ((PVar "decls")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "externDeclEntries") (ELam ((PVar "ed")) (EFieldAccess (EVar "ed") "edName"))) (EVar "decls"))))
 (DTypeSig false "renameUnits" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "ExternDecl") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
-(DFunDef false "renameUnits" ((PVar "externName") (PVar "implicit") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "entryMid") (EApp (EVar "entryUnitMid") (EVar "allUnits"))) (DoLet false false (PVar "surfaces") (EApp (EVar "unitSurfaces") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EApp (EVar "withPreludeDefs") (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "coreDecls"))))) (EVar "implicit")) (EApp (EApp (EVar "fnExportsFrom") (EVar "allUnits")) (EVar "surfaces")))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EVar "ctorExportsFrom") (EVar "surfaces"))) (DoLet false false (PVar "externExports") (EApp (EApp (EApp (EVar "externExportsFrom") (EVar "externName")) (EVar "allUnits")) (EVar "surfaces"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "entryMid")) (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (EVar "externName")) (EVar "externExports")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EApp (EVar "mangleModule") (EVar "entryMid")) (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (EVar "externName")) (EVar "externExports"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
+(DFunDef false "renameUnits" ((PVar "externName") (PVar "implicit") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "entryMid") (EApp (EVar "entryUnitMid") (EVar "allUnits"))) (DoLet false false (PVar "surfaces") (EApp (EVar "unitSurfaces") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EApp (EVar "withPreludeDefs") (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "coreDecls"))))) (EVar "implicit")) (EApp (EApp (EApp (EVar "fnExportsFrom") (ELam (PWild) (EVar "ExportedView"))) (EVar "allUnits")) (EVar "surfaces")))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EVar "ctorExportsFrom") (EVar "surfaces"))) (DoLet false false (PVar "externExports") (EApp (EApp (EApp (EVar "externExportsFrom") (EVar "externName")) (EVar "allUnits")) (EVar "surfaces"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "entryMid")) (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (EVar "externName")) (EVar "externExports")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EApp (EVar "mangleModule") (EVar "entryMid")) (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (EVar "externName")) (EVar "externExports"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
 (DTypeSig false "entryUnitMid" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))
 (DFunDef false "entryUnitMid" ((PVar "units")) (EMatch (EApp (EVar "last") (EVar "units")) (arm (PCon "Some" (PTuple (PVar "mid") PWild)) () (EVar "mid")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig true "mangleUnitsEv" (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "EvTable") (TyCon "SymbolOrigins"))))))
-(DFunDef false "mangleUnitsEv" ((PVar "table") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "entryMid") (EApp (EVar "entryUnitMid") (EVar "allUnits"))) (DoLet false false (PVar "surfaces") (EApp (EVar "unitSurfaces") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EApp (EVar "withPreludeDefs") (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "coreDecls"))))) (EListLit)) (EApp (EApp (EVar "fnExportsFrom") (EVar "allUnits")) (EVar "surfaces")))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EVar "ctorExportsFrom") (EVar "surfaces"))) (DoLet false false (PVar "externExports") (EApp (EApp (EApp (EVar "externExportsFrom") (EVar "externSymbolName")) (EVar "allUnits")) (EVar "surfaces"))) (DoLet false false (PVar "units") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "unitRenameMapEntry") (EVar "entryMid")) (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (EVar "externExports"))) (EVar "allUnits"))) (DoLet false false (PVar "renamed") (EApp (EApp (EMethodRef "map") (EVar "renameUnitEntry")) (EVar "units"))) (DoLet false false (PVar "coreOut") (EMatch (EVar "renamed") (arm (PList) () (EVar "coreDecls")) (arm (PCons (PTuple PWild (PVar "ds")) PWild) () (EVar "ds")))) (DoLet false false (PVar "modsOut") (EMatch (EVar "renamed") (arm (PList) () (EVar "modules")) (arm (PCons PWild (PVar "rest")) () (EVar "rest")))) (DoLet false false (PVar "remap") (EApp (EVar "mangleEvEntry") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "dropUnitDecls")) (EVar "units")))) (EVar "omEmpty")))) (DoLet false false (PVar "origins") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple (PVar "mid") (PTuple (PVar "rm") PWild (PVar "decls")))) (EApp (EApp (EVar "mergeOrigins") (EVar "acc")) (EApp (EApp (EApp (EVar "unitOrigins") (EVar "mid")) (EVar "rm")) (EVar "decls"))))) (EVar "emptyOrigins")) (EVar "units"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut") (EApp (EApp (EMethodRef "map") (EVar "remap")) (EVar "table")) (EVar "origins")))))
+(DFunDef false "mangleUnitsEv" () (EApp (EVar "mangleUnitsEvFor") (EVar "None")))
+(DTypeSig true "mangleUnitsEvFor" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "EvTable") (TyCon "SymbolOrigins")))))))
+(DFunDef false "mangleUnitsEvFor" ((PVar "sibling") (PVar "table") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "entryMid") (EApp (EVar "entryUnitMid") (EVar "allUnits"))) (DoLet false false (PVar "surfaces") (EApp (EVar "unitSurfaces") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EApp (EApp (EVar "exportsPerUnitOf") (ELam (PWild) (EVar "ExportedView"))) (EVar "coreDecls")) (EVar "allUnits")) (EVar "surfaces"))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EVar "ctorExportsFrom") (EVar "surfaces"))) (DoLet false false (PVar "externExports") (EApp (EApp (EApp (EVar "externExportsFrom") (EVar "externSymbolName")) (EVar "allUnits")) (EVar "surfaces"))) (DoLet false false (PVar "siblingMaps") (EApp (EApp (EApp (EApp (EVar "siblingUnitMaps") (EVar "sibling")) (EVar "coreDecls")) (EVar "allUnits")) (EVar "surfaces"))) (DoLet false false (PVar "units") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "unitEntryFor") (EVar "entryMid")) (EVar "siblingMaps")) (ETuple (EVar "exportsPerUnit") (EVar "ctorExportsPerUnit") (EVar "externExports")))) (EVar "allUnits"))) (DoLet false false (PVar "renamed") (EApp (EApp (EMethodRef "map") (EVar "renameUnitEntry")) (EVar "units"))) (DoLet false false (PVar "coreOut") (EMatch (EVar "renamed") (arm (PList) () (EVar "coreDecls")) (arm (PCons (PTuple PWild (PVar "ds")) PWild) () (EVar "ds")))) (DoLet false false (PVar "modsOut") (EMatch (EVar "renamed") (arm (PList) () (EVar "modules")) (arm (PCons PWild (PVar "rest")) () (EVar "rest")))) (DoLet false false (PVar "remap") (EApp (EVar "mangleEvEntry") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "dropUnitDecls")) (EVar "units")))) (EVar "omEmpty")))) (DoLet false false (PVar "origins") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple (PVar "mid") (PTuple (PVar "rm") PWild (PVar "decls")))) (EApp (EApp (EVar "mergeOrigins") (EVar "acc")) (EApp (EApp (EApp (EVar "unitOrigins") (EVar "mid")) (EVar "rm")) (EVar "decls"))))) (EVar "emptyOrigins")) (EVar "units"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut") (EApp (EApp (EMethodRef "map") (EVar "remap")) (EVar "table")) (EVar "origins")))))
 (DTypeSig true "mangleUnitsWithOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "SymbolOrigins")))))
 (DFunDef false "mangleUnitsWithOrigins" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "coreOut") (PVar "modsOut") PWild (PVar "origins")) (EApp (EApp (EApp (EVar "mangleUnitsEv") (EListLit)) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut") (EVar "origins")))))
+(DTypeAlias false "ExportMaps" () (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))))
+(DTypeSig false "exportsPerUnitOf" (TyFun (TyFun (TyCon "String") (TyCon "ExportView")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))))
+(DFunDef false "exportsPerUnitOf" ((PVar "viewOfUnit") (PVar "coreDecls") (PVar "allUnits") (PVar "surfaces")) (EApp (EApp (EApp (EVar "withPreludeDefs") (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "coreDecls"))))) (EListLit)) (EApp (EApp (EApp (EVar "fnExportsFrom") (EVar "viewOfUnit")) (EVar "allUnits")) (EVar "surfaces"))))
+(DTypeSig false "siblingUnitMaps" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "ExportMaps"))))))))
+(DFunDef false "siblingUnitMaps" ((PCon "None") PWild PWild PWild) (EVar "None"))
+(DFunDef false "siblingUnitMaps" ((PCon "Some" (PTuple (PVar "sib") (PVar "subj"))) (PVar "coreDecls") (PVar "allUnits") (PVar "surfaces")) (EBlock (DoLet false false (PVar "full") (EApp (EApp (EApp (EVar "fullSurfaces") (EVar "subj")) (EVar "allUnits")) (EVar "surfaces"))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "sib") (ETuple (EApp (EApp (EApp (EApp (EVar "exportsPerUnitOf") (EApp (EVar "viewOf") (EApp (EVar "Some") (EVar "subj")))) (EVar "coreDecls")) (EVar "allUnits")) (EVar "full")) (EApp (EVar "ctorExportsFrom") (EVar "full")) (EApp (EApp (EApp (EVar "externExportsFrom") (EVar "externSymbolName")) (EVar "allUnits")) (EVar "full"))))))))
+(DTypeSig false "fullSurfaces" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports")))))))
+(DFunDef false "fullSurfaces" ((PVar "subj") (PVar "allUnits") (PVar "surfaces")) (EBlock (DoLet false false (PVar "coreExp") (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "core"))) (EVar "allUnits")) (arm (PCon "Some" (PVar "coreDecls")) () (EApp (EVar "coreExports") (EVar "coreDecls"))) (arm (PCon "None") () (EApp (EVar "coreExports") (EListLit))))) (DoLet false false (PVar "known") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "surfaces"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "fullSurfaceOf") (EVar "subj")) (EVar "coreExp")) (EVar "known")) (EVar "allUnits"))) (EVar "surfaces")))))
+(DTypeSig false "fullSurfaceOf" (TyFun (TyCon "String") (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyTuple (TyCon "String") (TyCon "ModuleExports")) (TyTuple (TyCon "String") (TyCon "ModuleExports"))))))))
+(DFunDef false "fullSurfaceOf" ((PVar "subj") (PVar "coreExp") (PVar "known") (PVar "allUnits") (PTuple (PVar "mid") (PVar "exp"))) (EIf (EBinOp "==" (EVar "mid") (EVar "subj")) (ETuple (EVar "mid") (EApp (EApp (EVar "optionOr") (EVar "exp")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "decls")) (EApp (EApp (EApp (EApp (EVar "fullExportsOf") (EVar "coreExp")) (EVar "known")) (EVar "mid")) (EVar "decls")))) (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "allUnits"))))) (ETuple (EVar "mid") (EVar "exp"))))
+(DTypeSig false "unitEntryFor" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "ExportMaps"))) (TyFun (TyCon "ExportMaps") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "OrdMap") (TyCon "String")) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Decl")))))))))
+(DFunDef false "unitEntryFor" ((PVar "entryMid") (PCon "None") (PTuple (PVar "fns") (PVar "ctors") (PVar "externs")) (PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EApp (EApp (EApp (EVar "unitRenameMapEntry") (EVar "entryMid")) (EVar "fns")) (EVar "ctors")) (EVar "externs")) (ETuple (EVar "mid") (EVar "decls"))))
+(DFunDef false "unitEntryFor" ((PVar "entryMid") (PCon "Some" (PTuple (PVar "sib") (PTuple (PVar "sibFns") (PVar "sibCtors") (PVar "sibExterns")))) (PTuple (PVar "fns") (PVar "ctors") (PVar "externs")) (PTuple (PVar "mid") (PVar "decls"))) (EIf (EBinOp "==" (EVar "mid") (EVar "sib")) (EApp (EApp (EApp (EApp (EApp (EVar "unitRenameMapEntry") (EVar "entryMid")) (EVar "sibFns")) (EVar "sibCtors")) (EVar "sibExterns")) (ETuple (EVar "mid") (EVar "decls"))) (EApp (EApp (EApp (EApp (EApp (EVar "unitRenameMapEntry") (EVar "entryMid")) (EVar "fns")) (EVar "ctors")) (EVar "externs")) (ETuple (EVar "mid") (EVar "decls")))))
 (DTypeSig false "unitRenameMapEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "OrdMap") (TyCon "String")) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
 (DFunDef false "unitRenameMapEntry" ((PVar "entryMid") (PVar "exportsPerUnit") (PVar "ctorExportsPerUnit") (PVar "externExports") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "rmList") (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildUnitRenameMap") (EVar "entryMid")) (EVar "mid")) (EVar "exportsPerUnit")) (EVar "externSymbolName")) (EVar "externExports")) (EVar "decls")) (EApp (EApp (EApp (EVar "buildUnitCtorRenameMap") (EVar "mid")) (EVar "ctorExportsPerUnit")) (EVar "decls")))) (DoExpr (ETuple (EVar "mid") (ETuple (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "rmList"))) (EVar "omEmpty")) (EApp (EVar "isEmptyL") (EVar "rmList")) (EVar "decls"))))))
 (DTypeSig false "renameUnitEntry" (TyFun (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "OrdMap") (TyCon "String")) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -2429,12 +2554,12 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DTypeSig false "surfacesGo" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports")))))))
 (DFunDef false "surfacesGo" (PWild PWild (PList)) (EListLit))
 (DFunDef false "surfacesGo" ((PVar "coreExp") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EBinOp "::" (ETuple (EVar "mid") (EVar "coreExp")) (EApp (EApp (EApp (EVar "surfacesGo") (EVar "coreExp")) (EVar "known")) (EVar "rest"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "exp") (EApp (EApp (EApp (EApp (EApp (EVar "buildExportsWith") (EVar "coreExp")) (EVar "known")) (EVar "mid")) (EVar "decls")) (EApp (EApp (EDictApp "flatMap") (EVar "identity")) (EApp (EVar "pubIfaceMethodSets") (EVar "decls"))))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (EVar "exp")) (EApp (EApp (EApp (EVar "surfacesGo") (EVar "coreExp")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "exp")) (EVar "known"))) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "fnExportsFrom" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
-(DFunDef false "fnExportsFrom" ((PVar "units") (PVar "surfaces")) (EBlock (DoLet false false (PVar "fnSyms") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "unitFnSyms")) (EVar "units"))) (EVar "omEmpty"))) (DoLet false false (PVar "methods") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "surfaceMethods")) (EVar "surfaces"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "unitFnExports") (EVar "fnSyms")) (EVar "methods"))) (EApp (EApp (EVar "zip") (EVar "units")) (EVar "surfaces"))))))
+(DTypeSig false "fnExportsFrom" (TyFun (TyFun (TyCon "String") (TyCon "ExportView")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))))
+(DFunDef false "fnExportsFrom" ((PVar "viewOfUnit") (PVar "units") (PVar "surfaces")) (EBlock (DoLet false false (PVar "fnSyms") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EApp (EVar "unitFnSyms") (EVar "viewOfUnit"))) (EVar "units"))) (EVar "omEmpty"))) (DoLet false false (PVar "methods") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "surfaceMethods")) (EVar "surfaces"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "unitFnExports") (EVar "fnSyms")) (EVar "methods"))) (EApp (EApp (EVar "zip") (EVar "units")) (EVar "surfaces"))))))
 (DTypeSig false "surfaceMethods" (TyFun (TyTuple (TyCon "String") (TyCon "ModuleExports")) (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "surfaceMethods" ((PTuple (PVar "mid") (PVar "exp"))) (ETuple (EVar "mid") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EFieldAccess (EVar "exp") "expIfaceMethods"))) (EVar "omEmpty"))))
-(DTypeSig false "unitFnSyms" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "unitFnSyms" ((PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "omFromNames") (EApp (EVar "unitDefNames") (ETuple (EVar "mid") (EVar "decls")))) (EVar "omEmpty"))) (DoLet false false (PVar "exported") (EApp (EApp (EVar "directIn") (EVar "nsValues")) (EVar "decls"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterInSet") (EVar "defined")) (EVar "exported"))) (EVar "omEmpty"))))))
+(DTypeSig false "unitFnSyms" (TyFun (TyFun (TyCon "String") (TyCon "ExportView")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "unitFnSyms" ((PVar "viewOfUnit") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "omFromNames") (EApp (EVar "unitDefNames") (ETuple (EVar "mid") (EVar "decls")))) (EVar "omEmpty"))) (DoLet false false (PVar "exported") (EApp (EApp (EApp (EVar "directUnder") (EApp (EVar "viewOfUnit") (EVar "mid"))) (EVar "nsValues")) (EVar "decls"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterInSet") (EVar "defined")) (EVar "exported"))) (EVar "omEmpty"))))))
 (DTypeSig false "unitFnExports" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyTuple (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "unitFnExports" ((PVar "fnSyms") (PVar "methods") (PTuple (PTuple (PVar "mid") PWild) (PTuple PWild (PVar "exp")))) (EBlock (DoLet false false (PVar "origins") (EApp (EVar "multiMapOf") (EFieldAccess (EVar "exp") "expValueOrigins"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "fnExport") (EVar "fnSyms")) (EVar "methods")) (EVar "exp")) (EVar "origins"))) (EFieldAccess (EVar "exp") "expValues")))))))
 (DTypeSig false "fnExport" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))))

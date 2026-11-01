@@ -25,6 +25,7 @@
 -- values eval.mdk installs); `CMethod`/`CDict` arms consume the elaborated routes
 -- on the typed lowering path.
 
+import frontend.visibility.{ExportView(..)}
 import frontend.ast.{
   Lit(..), Pat(..), Addr(..), Route(..), Decl, Loc(..), noBinderId
 }
@@ -101,6 +102,8 @@ import eval.eval.{
   installDispatchTables,
   implMethodNames,
   moduleExports,
+  importsMapFor,
+  withSubjectFull,
   runtimeCellsOf,
   importFrameOf,
   narrowToIface,
@@ -733,6 +736,7 @@ cevalModules facts preludeDecls0 modules0 = withFacts
         runtimeFrame
         (coreImportExports privateCells globalCells preludeDecls)
         []
+        []
         modules
     let implEntries =
       flatMap (cImplEntryValues globalEnv) preludeImpls
@@ -759,10 +763,11 @@ cBuildModInfos : ProgramFacts ->
   EnvFrame (Value e) ->
   ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
+  List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
   List (CModInfo (Value e))
-cBuildModInfos _ _ _ _ _ _ _ _ [] = []
-cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports exportsMap ((mid, decls) :: rest) =
+cBuildModInfos _ _ _ _ _ _ _ _ _ [] = []
+cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports fulls exportsMap ((mid, decls) :: rest) =
   let cbinds = lowerGroupsWith facts decls
   let cimpls =
     lowerImplsWithFacts facts disp reqCounts arities facts.pfDispositions decls
@@ -777,7 +782,11 @@ cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports
   let modCtors = collectCtors decls
   let localCells =
     map (n => (n, Ref VUnit)) (map cBindName cbinds ++ map fst modCtors)
-  let imports = importFrameOf coreExports exportsMap decls
+  let imports =
+    importFrameOf
+      coreExports
+      (importsMapFor facts.pfSibling mid fulls exportsMap)
+      decls
   let menv = EvalEnv
     [
       indexedFrame localCells,
@@ -795,14 +804,16 @@ cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports
   -- the type→ctors index rides WITH the cells in one `ModExports` so an importing
   -- module's `import m.{T(..)}` binds m's own constructor cells instead of falling
   -- through to the bare-name global frame, which every module's ctors share.
-  let exports =
-    moduleExports
-      coreExports
-      exportsMap
-      globalFrame
-      runtimeFrame
-      localCells
-      decls
+  let exportsUnder =
+    v =>
+      moduleExports
+        v
+        coreExports
+        exportsMap
+        globalFrame
+        runtimeFrame
+        localCells
+        decls
   CModInfo mid decls cbinds cimpls localCells menv
     :: cBuildModInfos
       facts
@@ -812,7 +823,8 @@ cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports
       globalFrame
       runtimeFrame
       coreExports
-      ((mid, exports) :: exportsMap)
+      (withSubjectFull facts.pfSibling mid (exportsUnder FullView) fulls)
+      ((mid, exportsUnder ExportedView) :: exportsMap)
       rest
 
 -- a module's impl methods / interface defaults close over ITS env but coalesce

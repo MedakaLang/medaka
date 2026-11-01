@@ -32,7 +32,7 @@ boolSeeds : List (String, Value a)
 boolToInt : Bool -> Int
 buildCtorFieldOrders : List Decl -> List (String, List String)
 buildMethodReqCounts : Option DispositionTable -> List Decl -> List ((String, String), Int)
-buildModInfos : EnvFrame (Value a) -> EnvFrame (Value a) -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
+buildModInfos : EnvFrame (Value a) -> EnvFrame (Value a) -> ModExports (Value a) -> Option (String, String) -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
 buildRootModuleStateWith : ProgramFacts -> List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> (List (ModInfo (Value a)), List (String, Ref (Value a)))
 buildStampExterns : Unit -> List (String, Value a)
 buildWith : Value a -> Int -> Int -> <a> List (Value a)
@@ -81,6 +81,7 @@ ctorFieldOrdersRef : Ref (List (String, List String))
 ctorNamesOfDecl : Decl -> List (String, List String)
 ctorToTypeRef : Ref (List (String, String))
 ctorsByTypeOf : List Decl -> List (String, List String)
+ctorsByTypeUnder : ExportView -> List Decl -> List (String, List String)
 ctorsOfDecl : Decl -> List (String, Value a)
 currentEvalFile : Ref String
 currentEvalLoc : Ref Loc
@@ -195,6 +196,7 @@ implMethodReqCountEntry : String -> ImplMethod -> ((String, String), Int)
 implMethodReqCounts : Option DispositionTable -> Decl -> List ((String, String), Int)
 implMethodValue : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> Value a
 importFrameOf : ModExports (Value a) -> List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
+importsMapFor : Option (String, String) -> String -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a))
 inCharRange : String -> String -> String -> Bool -> Bool
 inIntRange : Int -> Int -> Int -> Bool -> Bool
 indexedFrame : List (String, Ref a) -> EnvFrame a
@@ -274,7 +276,7 @@ methodReqCountRef : Ref (Map String (Map String Int))
 mkGroup : List (String, (List Pat, Expr, Loc)) -> String -> (String, List (List Pat, Expr, Loc))
 modExportCells : ModExports a -> List (String, Ref a)
 modImplEntries : List ((String, String, String), List Int) -> ModInfo (Value a) -> List (String, (Int, Value a))
-moduleExports : ModExports (Value a) -> List (String, ModExports (Value a)) -> EnvFrame (Value a) -> EnvFrame (Value a) -> List (String, Ref (Value a)) -> List Decl -> ModExports (Value a)
+moduleExports : ExportView -> ModExports (Value a) -> List (String, ModExports (Value a)) -> EnvFrame (Value a) -> EnvFrame (Value a) -> List (String, Ref (Value a)) -> List Decl -> ModExports (Value a)
 moduleFileOf : String -> String
 moduleMethodNames : List Decl -> List String
 moduleMethodNamesOf : Decl -> List String
@@ -565,4 +567,5 @@ valueListEq : List (Value a) -> List (Value a) -> Bool
 valueTag : Value a -> Int
 variantFieldOrder : Variant -> List (String, List String)
 withCallFile : EvalEnv (Value a) -> (Unit -> <a> Value a) -> <a> Value a
+withSubjectFull : Option (String, String) -> String -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a))
 zipFieldOrder : List String -> List (Value a) -> List (String, Value a)

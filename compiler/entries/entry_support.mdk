@@ -67,6 +67,7 @@ import driver.diagnostics.{
   emitDiagExitCode,
   emitGateDiags,
   frontEnd,
+  siblingPairOf,
   noStdlibExports,
   residualOrGeneric,
 }
@@ -87,7 +88,7 @@ import driver.loader.{
   stdlibOwnership,
   unknownModuleIdOf,
 }
-import types.private_mangle.{mangleUnitsEv}
+import types.private_mangle.{mangleUnitsEvFor}
 import driver.main_autoprint.{
   valueMainCandidate,
   executedTrees,
@@ -217,6 +218,7 @@ public export data EmitAsk = EmitAsk {
   askPreludeSrcs : (String, String),
   askJson : Option (String, JsonFront),
   askOwnership : (Bool, List String),
+  askSibling : Option (String, String),
 }
 
 -- The inputs of an emit's drive under [profile], with the graph's stdlib ownership
@@ -225,6 +227,7 @@ emitDriveInputs : Option TargetProfile -> EmitAsk -> DriveInputs
 emitDriveInputs profile ask = match (ask.askOwnership, ask.askPreludeSrcs)
   ((flatEntry, owned), (rsrc, csrc)) => { driveInputsFor profile flatEntry owned |
     diPreludeKey = Some (preludeGeneration rsrc csrc),
+    diSibling = ask.askSibling,
   }
 
 -- The prelude's interface and elaborated trees beside `core.mdk` in [stdlibDir],
@@ -372,6 +375,7 @@ emitLoaded runEmit srcs json coreP entry roots mods runtimeD coreD modsD =
     askPreludeSrcs = srcs,
     askJson = json,
     askOwnership = ownership,
+    askSibling = siblingPairOf roots (dirOf coreP) mods,
   }
   runEmit ask mods runtimeD coreD modsD
 
@@ -684,6 +688,7 @@ runEmitAsked ask requirement asyncDriver emitTail modsWithPath runtimeDecls core
       let _ =
         emitTargetGate modsWithPath runtimeDecls kept.ekProfile kept.ekRefusal
       emitElaborated
+        ask.askSibling
         out.foOutputs
         requirement
         asyncDriver
@@ -705,6 +710,7 @@ runEmitAsked ask requirement asyncDriver emitTail modsWithPath runtimeDecls core
           kept.ekRefusal
       let _ =
         emitElaborated
+          ask.askSibling
           out.foOutputs
           requirement
           asyncDriver
@@ -726,7 +732,8 @@ runEmitAsked ask requirement asyncDriver emitTail modsWithPath runtimeDecls core
 -- (`report`, whose checked trees are run): the driver's wrap is applied to
 -- them (`executedFromReport`), and the result is mangled once.  The backend
 -- lowers against the facts of the checked program with the mangled table.
-emitElaborated : DriveOutputs ->
+emitElaborated : Option (String, String) ->
+  DriveOutputs ->
   ManifestRequirement ->
   EntryKey ->
   (ManifestRequirement -> DriveOutputs -> ProgramFacts -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
@@ -735,7 +742,7 @@ emitElaborated : DriveOutputs ->
   List (String, List Decl) ->
   TcReport ->
   <IO> Unit
-emitElaborated outputs requirement asyncDriver emitTail runtimeDecls coreDecls modules report =
+emitElaborated sibling outputs requirement asyncDriver emitTail runtimeDecls coreDecls modules report =
   match asyncMainShapeError outputs.doEntryOutcome modules
     Some msg => failWith msg
     None =>
@@ -752,7 +759,7 @@ emitElaborated outputs requirement asyncDriver emitTail runtimeDecls coreDecls m
                 modulesW
                 (factsOfChecked checked)
             let (coreD, modules2, table, origins) =
-              mangleUnitsEv checked.cpEvidence coreW modulesW
+              mangleUnitsEvFor sibling checked.cpEvidence coreW modulesW
             emitTail
               requirement
               outputs
