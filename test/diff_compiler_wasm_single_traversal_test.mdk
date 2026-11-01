@@ -702,7 +702,7 @@ manifestProbe = join "\n" [
   "  let (plan, _) = prepareWasmPlan PreludeFreeRuntime omEmpty cp",
   "  let physical = optionOrPanic \"missing plan\" plan.wasmPhysical",
   "  match helperManifest physical \"notAHelper\"",
-  "    HelperManifest defs _ => length defs",
+  "    HelperManifest defs _ _ => length defs",
 ]
 
 test "unknown helper manifests refuse by name" = withScratchDir

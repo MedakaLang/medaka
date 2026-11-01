@@ -3803,11 +3803,24 @@ helperSymbolSteps : WasmDemandPlan ->
   List (SymbolRegistry -> Result SymbolDefect SymbolRegistry)
 helperSymbolSteps plan name =
   let origin = SymbolOrigin "runtime helper \{name}" "" 0 0
-  let (HelperManifest defines calls) = helperManifest plan name
+  let (HelperManifest defines calls _) = helperManifest plan name
   map
       ((f, params) => defineSymbol (WasmFunc f) (FuncParams params) origin)
       defines
     ++ map (f => checkRef (WasmFunc f) origin) calls
+
+-- Complete output materializes these blocks. The census declares their function
+-- domain only; it does not emit helper bodies, types or globals.
+export
+checkPlannedHelperUses : WasmDemandPlan ->
+  List (SymbolRegistry -> Result SymbolDefect SymbolRegistry)
+checkPlannedHelperUses plan =
+  flatMap
+    (name =>
+      let (HelperManifest _ _ uses) = helperManifest plan name
+      let origin = SymbolOrigin "runtime helper \{name}" "" 0 0
+      map ((sym, _) => checkRef sym origin) uses)
+    (plannedHelpers plan)
 
 -- The text of helper block [name] as [plan] selects it.  `helperManifest`
 -- (wasm_demand.mdk) states what this text defines and calls.

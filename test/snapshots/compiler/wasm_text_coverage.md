@@ -1,5 +1,5 @@
 # META
-source_lines=716
+source_lines=747
 stages=DESUGAR,MARK
 # SOURCE
 -- This audits named identities and checked descriptors. It does not reconstruct
@@ -612,6 +612,37 @@ usesGo ((Token op covered origin) :: rest) seen gaps acc = match rest
       _ => []
     usesGo rest seen gaps (reverseL (uncovered ++ absent ++ extra) ++ acc)
 
+-- Count code dependencies for manifest drift checks; comments and literals are
+-- inert, and namespaces keep a global and a type with the same name distinct.
+export
+namedUses : String -> Result SymbolDefect (List (WasmSymbol, Int))
+namedUses text = do
+  tokens <- rawTokens text
+  let counts = namedUseCounts tokens omEmpty
+  Ok
+    (map
+      (sym => (sym, optionOr 0 (symbolLookup sym counts)))
+      (symbolKeys counts))
+
+namedUseCounts : List Token -> SymbolIndex Int -> SymbolIndex Int
+namedUseCounts [] counts = counts
+namedUseCounts ((Token op _ _) :: rest) counts = match rest
+  (Token name _ _) :: after =>
+    let first = if named name then useOf op (bare name) else []
+    let second = match after
+      (Token name2 _ _) :: _ if op == "array.copy" && named name2 =>
+        [WasmType (bare name2)]
+      _ => []
+    namedUseCounts rest (fold countNamedUse counts (first ++ second))
+  [] => counts
+
+countNamedUse : SymbolIndex Int -> WasmSymbol -> SymbolIndex Int
+countNamedUse counts (sym@(WasmType _)) =
+  symbolInsert sym (optionOr 0 (symbolLookup sym counts) + 1) counts
+countNamedUse counts (sym@(WasmGlobal _)) =
+  symbolInsert sym (optionOr 0 (symbolLookup sym counts) + 1) counts
+countNamedUse counts _ = counts
+
 attributeOrigins : List Token ->
   SymbolIndex Expected ->
   SymbolOrigin ->
@@ -869,6 +900,15 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DTypeSig false "usesGo" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Materialized")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyCon "SymbolDefect")))))))
 (DFunDef false "usesGo" ((PList) PWild PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "usesGo" ((PCons (PCon "Token" (PVar "op") (PVar "covered") (PVar "origin")) (PVar "rest")) (PVar "seen") (PVar "gaps") (PVar "acc")) (EMatch (EVar "rest") (arm (PList) () (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "call"))) (EBinOp "==" (EVar "op") (ELit (LString "return_call")))) (EApp (EVar "not") (EVar "covered"))) (EBinOp "::" (EApp (EApp (EVar "UncheckedText") (ELit (LString "uncovered direct call"))) (EVar "origin")) (EVar "acc")) (EVar "acc"))) (arm (PCons (PCon "Token" (PVar "name") PWild PWild) (PVar "after")) () (EBlock (DoLet false false (PVar "uncovered") (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "call"))) (EBinOp "==" (EVar "op") (ELit (LString "return_call")))) (EApp (EVar "not") (EVar "covered"))) (EListLit (EApp (EApp (EVar "UncheckedText") (ELit (LString "uncovered direct call"))) (EVar "origin"))) (EListLit))) (DoLet false false (PVar "absent") (EIf (EApp (EVar "named") (EVar "name")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin"))) (EApp (EApp (EVar "useOf") (EVar "op")) (EApp (EVar "bare") (EVar "name")))) (EListLit))) (DoLet false false (PVar "extra") (EMatch (EVar "after") (arm (PCons (PCon "Token" (PVar "second") PWild PWild) PWild) ((GBool (EBinOp "&&" (EApp (EVar "named") (EVar "second")) (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "array.new_data"))) (EBinOp "==" (EVar "op") (ELit (LString "array.init_data"))))))) (EApp (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin")) (EApp (EVar "WasmData") (EApp (EVar "bare") (EVar "second"))))) (arm (PCons (PCon "Token" (PVar "second") PWild PWild) PWild) ((GBool (EBinOp "&&" (EApp (EVar "named") (EVar "second")) (EBinOp "==" (EVar "op") (ELit (LString "array.copy")))))) (EApp (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin")) (EApp (EVar "WasmType") (EApp (EVar "bare") (EVar "second"))))) (arm PWild () (EListLit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "usesGo") (EVar "rest")) (EVar "seen")) (EVar "gaps")) (EBinOp "++" (EApp (EVar "reverseL") (EBinOp "++" (EBinOp "++" (EVar "uncovered") (EVar "absent")) (EVar "extra"))) (EVar "acc"))))))))
+(DTypeSig true "namedUses" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyTuple (TyCon "WasmSymbol") (TyCon "Int"))))))
+(DFunDef false "namedUses" ((PVar "text")) (EApp (EApp (EVar "andThen") (EApp (EVar "rawTokens") (EVar "text"))) (ELam ((PVar "tokens")) (ELet false (PVar "counts") (EApp (EApp (EVar "namedUseCounts") (EVar "tokens")) (EVar "omEmpty")) (EApp (EVar "Ok") (EApp (EApp (EVar "map") (ELam ((PVar "sym")) (ETuple (EVar "sym") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "symbolLookup") (EVar "sym")) (EVar "counts")))))) (EApp (EVar "symbolKeys") (EVar "counts"))))))))
+(DTypeSig false "namedUseCounts" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Int")) (TyApp (TyCon "SymbolIndex") (TyCon "Int")))))
+(DFunDef false "namedUseCounts" ((PList) (PVar "counts")) (EVar "counts"))
+(DFunDef false "namedUseCounts" ((PCons (PCon "Token" (PVar "op") PWild PWild) (PVar "rest")) (PVar "counts")) (EMatch (EVar "rest") (arm (PCons (PCon "Token" (PVar "name") PWild PWild) (PVar "after")) () (EBlock (DoLet false false (PVar "first") (EIf (EApp (EVar "named") (EVar "name")) (EApp (EApp (EVar "useOf") (EVar "op")) (EApp (EVar "bare") (EVar "name"))) (EListLit))) (DoLet false false (PVar "second") (EMatch (EVar "after") (arm (PCons (PCon "Token" (PVar "name2") PWild PWild) PWild) ((GBool (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "array.copy"))) (EApp (EVar "named") (EVar "name2"))))) (EListLit (EApp (EVar "WasmType") (EApp (EVar "bare") (EVar "name2"))))) (arm PWild () (EListLit)))) (DoExpr (EApp (EApp (EVar "namedUseCounts") (EVar "rest")) (EApp (EApp (EApp (EVar "fold") (EVar "countNamedUse")) (EVar "counts")) (EBinOp "++" (EVar "first") (EVar "second"))))))) (arm (PList) () (EVar "counts"))))
+(DTypeSig false "countNamedUse" (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Int")) (TyFun (TyCon "WasmSymbol") (TyApp (TyCon "SymbolIndex") (TyCon "Int")))))
+(DFunDef false "countNamedUse" ((PVar "counts") (PAs "sym" (PCon "WasmType" PWild))) (EApp (EApp (EApp (EVar "symbolInsert") (EVar "sym")) (EBinOp "+" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "symbolLookup") (EVar "sym")) (EVar "counts"))) (ELit (LInt 1)))) (EVar "counts")))
+(DFunDef false "countNamedUse" ((PVar "counts") (PAs "sym" (PCon "WasmGlobal" PWild))) (EApp (EApp (EApp (EVar "symbolInsert") (EVar "sym")) (EBinOp "+" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "symbolLookup") (EVar "sym")) (EVar "counts"))) (ELit (LInt 1)))) (EVar "counts")))
+(DFunDef false "countNamedUse" ((PVar "counts") PWild) (EVar "counts"))
 (DTypeSig false "attributeOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Expected")) (TyFun (TyCon "SymbolOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Token")))))))
 (DFunDef false "attributeOrigins" ((PList) PWild PWild (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
 (DFunDef false "attributeOrigins" ((PCons (PCon "Token" (PLit (LString "func")) (PVar "covered") (PVar "origin")) (PCons (PAs "target" (PCon "Token" (PVar "name") PWild PWild)) (PVar "rest"))) (PVar "expected") (PVar "current") (PVar "acc")) (EIf (EApp (EVar "named") (EVar "name")) (EBlock (DoLet false false (PVar "next") (EMatch (EApp (EApp (EVar "symbolLookup") (EApp (EVar "WasmFunc") (EApp (EVar "bare") (EVar "name")))) (EVar "expected")) (arm (PCon "Some" (PCon "Expected" PWild PWild (PVar "at"))) () (EVar "at")) (arm (PCon "None") () (EVar "current")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "attributeOrigins") (EBinOp "::" (EVar "target") (EVar "rest"))) (EVar "expected")) (EVar "next")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (ELit (LString "func"))) (EVar "covered")) (EIf (EVar "covered") (EVar "origin") (EVar "next"))) (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
@@ -1035,6 +1075,15 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DTypeSig false "usesGo" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Materialized")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyCon "SymbolDefect")))))))
 (DFunDef false "usesGo" ((PList) PWild PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "usesGo" ((PCons (PCon "Token" (PVar "op") (PVar "covered") (PVar "origin")) (PVar "rest")) (PVar "seen") (PVar "gaps") (PVar "acc")) (EMatch (EVar "rest") (arm (PList) () (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "call"))) (EBinOp "==" (EVar "op") (ELit (LString "return_call")))) (EApp (EVar "not") (EVar "covered"))) (EBinOp "::" (EApp (EApp (EVar "UncheckedText") (ELit (LString "uncovered direct call"))) (EVar "origin")) (EVar "acc")) (EVar "acc"))) (arm (PCons (PCon "Token" (PVar "name") PWild PWild) (PVar "after")) () (EBlock (DoLet false false (PVar "uncovered") (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "call"))) (EBinOp "==" (EVar "op") (ELit (LString "return_call")))) (EApp (EVar "not") (EVar "covered"))) (EListLit (EApp (EApp (EVar "UncheckedText") (ELit (LString "uncovered direct call"))) (EVar "origin"))) (EListLit))) (DoLet false false (PVar "absent") (EIf (EApp (EVar "named") (EVar "name")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin"))) (EApp (EApp (EVar "useOf") (EVar "op")) (EApp (EVar "bare") (EVar "name")))) (EListLit))) (DoLet false false (PVar "extra") (EMatch (EVar "after") (arm (PCons (PCon "Token" (PVar "second") PWild PWild) PWild) ((GBool (EBinOp "&&" (EApp (EVar "named") (EVar "second")) (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "array.new_data"))) (EBinOp "==" (EVar "op") (ELit (LString "array.init_data"))))))) (EApp (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin")) (EApp (EVar "WasmData") (EApp (EVar "bare") (EVar "second"))))) (arm (PCons (PCon "Token" (PVar "second") PWild PWild) PWild) ((GBool (EBinOp "&&" (EApp (EVar "named") (EVar "second")) (EBinOp "==" (EVar "op") (ELit (LString "array.copy")))))) (EApp (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin")) (EApp (EVar "WasmType") (EApp (EVar "bare") (EVar "second"))))) (arm PWild () (EListLit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "usesGo") (EVar "rest")) (EVar "seen")) (EVar "gaps")) (EBinOp "++" (EApp (EVar "reverseL") (EBinOp "++" (EBinOp "++" (EVar "uncovered") (EVar "absent")) (EVar "extra"))) (EVar "acc"))))))))
+(DTypeSig true "namedUses" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyTuple (TyCon "WasmSymbol") (TyCon "Int"))))))
+(DFunDef false "namedUses" ((PVar "text")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "rawTokens") (EVar "text"))) (ELam ((PVar "tokens")) (ELet false (PVar "counts") (EApp (EApp (EVar "namedUseCounts") (EVar "tokens")) (EVar "omEmpty")) (EApp (EVar "Ok") (EApp (EApp (EMethodRef "map") (ELam ((PVar "sym")) (ETuple (EVar "sym") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "symbolLookup") (EVar "sym")) (EVar "counts")))))) (EApp (EVar "symbolKeys") (EVar "counts"))))))))
+(DTypeSig false "namedUseCounts" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Int")) (TyApp (TyCon "SymbolIndex") (TyCon "Int")))))
+(DFunDef false "namedUseCounts" ((PList) (PVar "counts")) (EVar "counts"))
+(DFunDef false "namedUseCounts" ((PCons (PCon "Token" (PVar "op") PWild PWild) (PVar "rest")) (PVar "counts")) (EMatch (EVar "rest") (arm (PCons (PCon "Token" (PVar "name") PWild PWild) (PVar "after")) () (EBlock (DoLet false false (PVar "first") (EIf (EApp (EVar "named") (EVar "name")) (EApp (EApp (EVar "useOf") (EVar "op")) (EApp (EVar "bare") (EVar "name"))) (EListLit))) (DoLet false false (PVar "second") (EMatch (EVar "after") (arm (PCons (PCon "Token" (PVar "name2") PWild PWild) PWild) ((GBool (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "array.copy"))) (EApp (EVar "named") (EVar "name2"))))) (EListLit (EApp (EVar "WasmType") (EApp (EVar "bare") (EVar "name2"))))) (arm PWild () (EListLit)))) (DoExpr (EApp (EApp (EVar "namedUseCounts") (EVar "rest")) (EApp (EApp (EApp (EMethodRef "fold") (EVar "countNamedUse")) (EVar "counts")) (EBinOp "++" (EVar "first") (EVar "second"))))))) (arm (PList) () (EVar "counts"))))
+(DTypeSig false "countNamedUse" (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Int")) (TyFun (TyCon "WasmSymbol") (TyApp (TyCon "SymbolIndex") (TyCon "Int")))))
+(DFunDef false "countNamedUse" ((PVar "counts") (PAs "sym" (PCon "WasmType" PWild))) (EApp (EApp (EApp (EVar "symbolInsert") (EVar "sym")) (EBinOp "+" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "symbolLookup") (EVar "sym")) (EVar "counts"))) (ELit (LInt 1)))) (EVar "counts")))
+(DFunDef false "countNamedUse" ((PVar "counts") (PAs "sym" (PCon "WasmGlobal" PWild))) (EApp (EApp (EApp (EVar "symbolInsert") (EVar "sym")) (EBinOp "+" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "symbolLookup") (EVar "sym")) (EVar "counts"))) (ELit (LInt 1)))) (EVar "counts")))
+(DFunDef false "countNamedUse" ((PVar "counts") PWild) (EVar "counts"))
 (DTypeSig false "attributeOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Expected")) (TyFun (TyCon "SymbolOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Token")))))))
 (DFunDef false "attributeOrigins" ((PList) PWild PWild (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
 (DFunDef false "attributeOrigins" ((PCons (PCon "Token" (PLit (LString "func")) (PVar "covered") (PVar "origin")) (PCons (PAs "target" (PCon "Token" (PVar "name") PWild PWild)) (PVar "rest"))) (PVar "expected") (PVar "current") (PVar "acc")) (EIf (EApp (EVar "named") (EVar "name")) (EBlock (DoLet false false (PVar "next") (EMatch (EApp (EApp (EVar "symbolLookup") (EApp (EVar "WasmFunc") (EApp (EVar "bare") (EVar "name")))) (EVar "expected")) (arm (PCon "Some" (PCon "Expected" PWild PWild (PVar "at"))) () (EVar "at")) (arm (PCon "None") () (EVar "current")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "attributeOrigins") (EBinOp "::" (EVar "target") (EVar "rest"))) (EVar "expected")) (EVar "next")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (ELit (LString "func"))) (EVar "covered")) (EIf (EVar "covered") (EVar "origin") (EVar "next"))) (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))

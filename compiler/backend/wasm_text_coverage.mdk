@@ -608,6 +608,37 @@ usesGo ((Token op covered origin) :: rest) seen gaps acc = match rest
       _ => []
     usesGo rest seen gaps (reverseL (uncovered ++ absent ++ extra) ++ acc)
 
+-- Count code dependencies for manifest drift checks; comments and literals are
+-- inert, and namespaces keep a global and a type with the same name distinct.
+export
+namedUses : String -> Result SymbolDefect (List (WasmSymbol, Int))
+namedUses text = do
+  tokens <- rawTokens text
+  let counts = namedUseCounts tokens omEmpty
+  Ok
+    (map
+      (sym => (sym, optionOr 0 (symbolLookup sym counts)))
+      (symbolKeys counts))
+
+namedUseCounts : List Token -> SymbolIndex Int -> SymbolIndex Int
+namedUseCounts [] counts = counts
+namedUseCounts ((Token op _ _) :: rest) counts = match rest
+  (Token name _ _) :: after =>
+    let first = if named name then useOf op (bare name) else []
+    let second = match after
+      (Token name2 _ _) :: _ if op == "array.copy" && named name2 =>
+        [WasmType (bare name2)]
+      _ => []
+    namedUseCounts rest (fold countNamedUse counts (first ++ second))
+  [] => counts
+
+countNamedUse : SymbolIndex Int -> WasmSymbol -> SymbolIndex Int
+countNamedUse counts (sym@(WasmType _)) =
+  symbolInsert sym (optionOr 0 (symbolLookup sym counts) + 1) counts
+countNamedUse counts (sym@(WasmGlobal _)) =
+  symbolInsert sym (optionOr 0 (symbolLookup sym counts) + 1) counts
+countNamedUse counts _ = counts
+
 attributeOrigins : List Token ->
   SymbolIndex Expected ->
   SymbolOrigin ->

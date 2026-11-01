@@ -345,15 +345,11 @@ test "llvm_emit writes a named call only through directCall or after checkWordCa
   "llvm_emit.mdk"
   (code => expectEqual [] (uncheckedLlvmCalls [] code))
 
--- Lines naming a direct Wasm call (`call $f`, `return_call $f`) outside
--- `callInstrW` and the closure check's own needle.
+-- This source ratchet supplements the final receipt and materialization audit.
 uncheckedWasmCalls : List String -> List String
 uncheckedWasmCalls ls =
   filter
-    (l =>
-      contains "call $" l
-        && not (startsWith "callInstrW " (trimLeft l))
-        && not (contains "identsAfterAllRevW" l))
+    (l => contains "call $" l && not (startsWith "callInstrW " (trimLeft l)))
     ls
 
 test "wasm_emit writes a direct call only through callInstrW" = withBackendCode

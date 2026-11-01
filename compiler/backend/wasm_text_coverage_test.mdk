@@ -658,3 +658,34 @@ importShapeCounts (Err ds) =
       ShapeMismatch "host" expected actual _ _ => [(expected, actual)]
       _ => [])
     ds
+
+-- The previous closure judge rejected these named callees whether flat, folded,
+-- nested on one line or tail-called. Receipts must not let a missing body pass.
+test "Wasm finalizer retains every named-call form the legacy closure judge rejected" =
+  expectStep
+    ((reg, coverage, direct) =>
+      expectStep
+        ((reg2, coverage2, tail) =>
+          expectEach
+            (map
+              (body => (
+                body,
+                expectErrContains
+                  "E-PHYS-UNDEFINED"
+                  (codes
+                    (finishCheckedText
+                      ClosedOutput
+                      reg2
+                      coverage2
+                      ("(module (func $caller " ++ body ++ "))"))),
+              ))
+              [
+                direct,
+                tail,
+                "(" ++ direct ++ " (i64.const 1))",
+                "(\{direct} (\{direct} (i64.const 1)))",
+              ]))
+        (checkedCall reg True "absent" 1 at coverage))
+    (do
+      reg <- defineSymbol (WasmFunc "caller") (FuncParams 0) at emptyRegistry
+      checkedCall reg False "absent" 1 at emptyCoverage)

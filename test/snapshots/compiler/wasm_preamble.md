@@ -1,5 +1,5 @@
 # META
-source_lines=3993
+source_lines=4006
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_symbol_names as WN
@@ -3807,11 +3807,24 @@ helperSymbolSteps : WasmDemandPlan ->
   List (SymbolRegistry -> Result SymbolDefect SymbolRegistry)
 helperSymbolSteps plan name =
   let origin = SymbolOrigin "runtime helper \{name}" "" 0 0
-  let (HelperManifest defines calls) = helperManifest plan name
+  let (HelperManifest defines calls _) = helperManifest plan name
   map
       ((f, params) => defineSymbol (WasmFunc f) (FuncParams params) origin)
       defines
     ++ map (f => checkRef (WasmFunc f) origin) calls
+
+-- Complete output materializes these blocks. The census declares their function
+-- domain only; it does not emit helper bodies, types or globals.
+export
+checkPlannedHelperUses : WasmDemandPlan ->
+  List (SymbolRegistry -> Result SymbolDefect SymbolRegistry)
+checkPlannedHelperUses plan =
+  flatMap
+    (name =>
+      let (HelperManifest _ _ uses) = helperManifest plan name
+      let origin = SymbolOrigin "runtime helper \{name}" "" 0 0
+      map ((sym, _) => checkRef sym origin) uses)
+    (plannedHelpers plan)
 
 -- The text of helper block [name] as [plan] selects it.  `helperManifest`
 -- (wasm_demand.mdk) states what this text defines and calls.
@@ -4377,7 +4390,9 @@ plannedHelperBlock callW tailW _ _ name =
 (DTypeSig true "declarePlannedHelpers" (TyFun (TyCon "WasmDemandPlan") (TyApp (TyCon "List") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
 (DFunDef false "declarePlannedHelpers" ((PVar "plan")) (EApp (EApp (EVar "flatMap") (EApp (EVar "helperSymbolSteps") (EVar "plan"))) (EApp (EVar "plannedHelpers") (EVar "plan"))))
 (DTypeSig false "helperSymbolSteps" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
-(DFunDef false "helperSymbolSteps" ((PVar "plan") (PVar "name")) (EBlock (DoLet false false (PVar "origin") (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EBinOp "++" (EBinOp "++" (ELit (LString "runtime helper ")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))) (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0)))) (DoLet false false (PCon "HelperManifest" (PVar "defines") (PVar "calls")) (EApp (EApp (EVar "helperManifest") (EVar "plan")) (EVar "name"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "f") (PVar "params"))) (EApp (EApp (EApp (EVar "defineSymbol") (EApp (EVar "WasmFunc") (EVar "f"))) (EApp (EVar "FuncParams") (EVar "params"))) (EVar "origin")))) (EVar "defines")) (EApp (EApp (EVar "map") (ELam ((PVar "f")) (EApp (EApp (EVar "checkRef") (EApp (EVar "WasmFunc") (EVar "f"))) (EVar "origin")))) (EVar "calls"))))))
+(DFunDef false "helperSymbolSteps" ((PVar "plan") (PVar "name")) (EBlock (DoLet false false (PVar "origin") (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EBinOp "++" (EBinOp "++" (ELit (LString "runtime helper ")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))) (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0)))) (DoLet false false (PCon "HelperManifest" (PVar "defines") (PVar "calls") PWild) (EApp (EApp (EVar "helperManifest") (EVar "plan")) (EVar "name"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "f") (PVar "params"))) (EApp (EApp (EApp (EVar "defineSymbol") (EApp (EVar "WasmFunc") (EVar "f"))) (EApp (EVar "FuncParams") (EVar "params"))) (EVar "origin")))) (EVar "defines")) (EApp (EApp (EVar "map") (ELam ((PVar "f")) (EApp (EApp (EVar "checkRef") (EApp (EVar "WasmFunc") (EVar "f"))) (EVar "origin")))) (EVar "calls"))))))
+(DTypeSig true "checkPlannedHelperUses" (TyFun (TyCon "WasmDemandPlan") (TyApp (TyCon "List") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
+(DFunDef false "checkPlannedHelperUses" ((PVar "plan")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "name")) (EBlock (DoLet false false (PCon "HelperManifest" PWild PWild (PVar "uses")) (EApp (EApp (EVar "helperManifest") (EVar "plan")) (EVar "name"))) (DoLet false false (PVar "origin") (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EBinOp "++" (EBinOp "++" (ELit (LString "runtime helper ")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))) (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "sym") PWild)) (EApp (EApp (EVar "checkRef") (EVar "sym")) (EVar "origin")))) (EVar "uses")))))) (EApp (EVar "plannedHelpers") (EVar "plan"))))
 (DTypeSig true "plannedHelperBlock" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))) (TyFun (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "plannedHelperBlock" ((PVar "callW") (PVar "tailW") (PVar "plan") (PVar "files") (PLit (LString "closApplyLines"))) (EApp (EApp (EVar "closApplyLines") (EVar "callW")) (EVar "tailW")))
 (DFunDef false "plannedHelperBlock" ((PVar "callW") (PVar "tailW") (PVar "plan") (PVar "files") (PLit (LString "ioRuntimeLines"))) (EApp (EApp (EVar "ioRuntimeLines") (EVar "callW")) (EVar "tailW")))
@@ -4831,7 +4846,9 @@ plannedHelperBlock callW tailW _ _ name =
 (DTypeSig true "declarePlannedHelpers" (TyFun (TyCon "WasmDemandPlan") (TyApp (TyCon "List") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
 (DFunDef false "declarePlannedHelpers" ((PVar "plan")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "helperSymbolSteps") (EVar "plan"))) (EApp (EVar "plannedHelpers") (EVar "plan"))))
 (DTypeSig false "helperSymbolSteps" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
-(DFunDef false "helperSymbolSteps" ((PVar "plan") (PVar "name")) (EBlock (DoLet false false (PVar "origin") (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EBinOp "++" (EBinOp "++" (ELit (LString "runtime helper ")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))) (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0)))) (DoLet false false (PCon "HelperManifest" (PVar "defines") (PVar "calls")) (EApp (EApp (EVar "helperManifest") (EVar "plan")) (EVar "name"))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "f") (PVar "params"))) (EApp (EApp (EApp (EVar "defineSymbol") (EApp (EVar "WasmFunc") (EVar "f"))) (EApp (EVar "FuncParams") (EVar "params"))) (EVar "origin")))) (EVar "defines")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "f")) (EApp (EApp (EVar "checkRef") (EApp (EVar "WasmFunc") (EVar "f"))) (EVar "origin")))) (EVar "calls"))))))
+(DFunDef false "helperSymbolSteps" ((PVar "plan") (PVar "name")) (EBlock (DoLet false false (PVar "origin") (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EBinOp "++" (EBinOp "++" (ELit (LString "runtime helper ")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))) (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0)))) (DoLet false false (PCon "HelperManifest" (PVar "defines") (PVar "calls") PWild) (EApp (EApp (EVar "helperManifest") (EVar "plan")) (EVar "name"))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "f") (PVar "params"))) (EApp (EApp (EApp (EVar "defineSymbol") (EApp (EVar "WasmFunc") (EVar "f"))) (EApp (EVar "FuncParams") (EVar "params"))) (EVar "origin")))) (EVar "defines")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "f")) (EApp (EApp (EVar "checkRef") (EApp (EVar "WasmFunc") (EVar "f"))) (EVar "origin")))) (EVar "calls"))))))
+(DTypeSig true "checkPlannedHelperUses" (TyFun (TyCon "WasmDemandPlan") (TyApp (TyCon "List") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
+(DFunDef false "checkPlannedHelperUses" ((PVar "plan")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "name")) (EBlock (DoLet false false (PCon "HelperManifest" PWild PWild (PVar "uses")) (EApp (EApp (EVar "helperManifest") (EVar "plan")) (EVar "name"))) (DoLet false false (PVar "origin") (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EBinOp "++" (EBinOp "++" (ELit (LString "runtime helper ")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))) (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "sym") PWild)) (EApp (EApp (EVar "checkRef") (EVar "sym")) (EVar "origin")))) (EVar "uses")))))) (EApp (EVar "plannedHelpers") (EVar "plan"))))
 (DTypeSig true "plannedHelperBlock" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))) (TyFun (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "plannedHelperBlock" ((PVar "callW") (PVar "tailW") (PVar "plan") (PVar "files") (PLit (LString "closApplyLines"))) (EApp (EApp (EVar "closApplyLines") (EVar "callW")) (EVar "tailW")))
 (DFunDef false "plannedHelperBlock" ((PVar "callW") (PVar "tailW") (PVar "plan") (PVar "files") (PLit (LString "ioRuntimeLines"))) (EApp (EApp (EVar "ioRuntimeLines") (EVar "callW")) (EVar "tailW")))
