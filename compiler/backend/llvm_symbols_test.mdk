@@ -6,6 +6,10 @@
 -- `emitProgramRecord`, as `compiler/entries/llvm_emit_main.mdk` does.
 
 import support.diag_codes.{codeText}
+import string.{replace, contains}
+import test_process.{
+  withScratchDir, boundedVerbSeconds, expectSpawnOkLine, underRoot, medakaBin
+}
 import backend.extern_catalog.{RuntimeExternDomain(..)}
 import backend.emit_target.{Backend(..)}
 import types.capability_manifest.{ManifestRequirement(..)}
@@ -509,3 +513,68 @@ main = viaCapture
   match withLowered emitProgramGaps src
     Ok events => expectEqual [] events
     Err defects => expectEqual [] (map defectFacts defects)
+
+gapGuardProbe : String
+gapGuardProbe =
+  """
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import backend.emit_target.{Backend(..)}
+import types.capability_manifest.{ManifestRequirement(..)}
+import backend.emit_plan.{buildEmitPlan}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.tc_elab.{grantWholeDomain}
+import types.program_facts.{emptyFacts}
+import ir.core_ir_lower.{lowerProgramEmitWith}
+import backend.llvm_emit.{emitProgramGaps, makeEmitInput}
+import backend.llvm_symbols.{defectCode}
+import support.diag_codes.{codeText}
+import test.{expectEqual, fail}
+
+test "gap rejects injected raw direct call" =
+  let src = "f : Int -> Int\\nf x = x + 1\\nmain : Int\\nmain = f 2\\n"
+  let decls = annotateProgram (grantWholeDomain (desugar (parse src)))
+  let cp = lowerProgramEmitWith emptyFacts decls
+  let input = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
+  match emitProgramGaps input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
+    Err defects => expectEqual ["E-PHYS-UNCHECKED"] (map (d => codeText (defectCode d)) defects)
+    Ok _ => fail "gap census accepted a raw call"
+"""
+
+test "gap census rejects an injected raw call in a compiled child" = withScratchDir
+  (dir =>
+    let copy = boundedVerbSeconds 30 "cp" [
+      "-R",
+      underRoot "compiler",
+      dir ++ "/compiler",
+    ]
+    match copy
+      Err e => fail e
+      Ok (0, _, _) =>
+        let emitter = dir ++ "/compiler/backend/llvm_emit.mdk"
+        let probe = dir ++ "/compiler/backend/gap_guard_probe_test.mdk"
+        let hole = "  emit e \"\\{head} \\{prototypeText sym proto} {\""
+        let insert =
+          "  let _ = emit e \"\\{head} \\{prototypeText sym proto} {\"\n  if sym == LN.llvmName (LN.LUserFunction \"f\") then\n    emit e \"  call void @mdk_print_int(i64 0)\""
+        match readFile emitter
+          Err e => fail e
+          Ok source =>
+            if not (contains hole source) then
+              fail "LLVM define-header mutation point missing"
+            else match (
+              writeFile emitter (replace hole insert source),
+              writeFile probe gapGuardProbe,
+            )
+              (Ok _, Ok _) =>
+                expectSpawnOkLine
+                  "perl"
+                  [
+                    "-e", "alarm 120; exec @ARGV or die qq(exec: $!)", "env",
+                    "-u", "MEDAKA_STRICT", medakaBin, "test", probe
+                  ]
+                  (probe ++ ": 1/1 passed")
+              (Err e, _) => fail e
+              (_, Err e) => fail e
+      Ok (code, _, err) =>
+        fail "copying compiler exited \{intToString code}: \{err}")
