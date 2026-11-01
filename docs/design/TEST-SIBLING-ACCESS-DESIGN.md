@@ -246,8 +246,8 @@ each of them one producer to read, rather than one more derivation to reconcile.
 view in `evalModules` and `cevalModules` is behaviour-preserving except where eval exported names
 the module does not export. The slice-2 census found those (#4710: a `run` that bound a private
 or impl-method name through a wildcard import ahead of an explicit one), and the same change that
-reads the exported view fixes them. Slices 1 and 2 are landed (F1 #4314, F2 #4703); slice 3 is
-not started.
+reads the exported view fixes them. Slices 1 and 2 are landed (F1 #4314, F2 #4703), and so is
+slice 3 (F3 #4717).
 
 ## 7. Out of scope
 
