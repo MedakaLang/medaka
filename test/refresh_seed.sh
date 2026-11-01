@@ -13,7 +13,7 @@
 #      there is no emitter yet).  This is what makes the mint reflect current source.
 #   2. ./medaka_emitter <runtime> <core> <build-driver> <compiler> <stdlib>  ->  IR
 #      (the native emitter emitting the build driver's own graph; trim trailing ()).
-#   3. gzip -> compiler/seed/emitter.ll.gz   (committed; ~1.7 MB vs ~11.5 MB raw).
+#   3. gzip -> compiler/seed/emitter.ll.gz   (committed; ~4.5 MB gz vs ~44.5 MB raw, measured 4554167 / 44542257 bytes).
 #
 # Run on-demand (per-release / deliberate refresh), NOT per-PR.
 #
