@@ -1,6 +1,6 @@
 # backend/ — Core IR to LLVM text and WAT, plus the checks that gate emission
 
-**Status:** CURRENT — re-derived from source at 1901e7111267f00b65670cd8779cbb2c9d886f29 on 2026-10-30. When it drifts, re-derive; do not patch.
+**Status:** CURRENT — re-derived from source at the P5.15 documentation cut. When it drifts, re-derive; do not patch.
 
 ## What this directory is
 The last stage (`ARCHITECTURE.md` section 1), layer `backend` in A1: above `ir/`. It consumes
@@ -59,6 +59,19 @@ The Core gateway (`core_validate.mdk`) judges names that exist before lowering. 
 ## Fact ledger
 
 Each fact has one producer; a carrier moves it; a validator or fixture fails when it is wrong.
+
+Phase 5's B1–B5 evidence is bounded by these producer/carrier/consumer checks. The listed
+fixtures are judges; historical P5 reports are evidence of their execution on their recorded
+heads, not a claim that this documentation slice reran them. Final phase exit still requires
+the integrated head's standing checks and review.
+
+| Rule | Producer / carrier | Consumers | Validator | Independent fixture / deletion |
+|---|---|---|---|---|
+| B1 Plan | `buildEmitPlan*` in `emit_plan.mdk`; `EmitPlan` carries target, extern requirements, global init, constructor facts and impl groups | LLVM and Wasm renderers; ten `entries/*_main.mdk` routes | `validateForEmission` in `core_validate.mdk` | `emit_plan_test.mdk` route roster and plan construction; P5.5, P5.10–12 evidence records |
+| B2 checked capabilities and extern demand | checked request publishes `CapabilityManifest`; `externRequirements` derives reachable extern requirements into `EmitPlan` | policy/manifest consumers and both backend demand paths; playground compiler | `validateForEmission` validates requirements and physical demand; `validateWasmDemand` checks Wasm imports against Core | `core_validate_test.mdk` paired extern/projection and import/signature mutations; P5.15 `F-product-observe` compares the same validated invocation's import projection to actual shipping artifacts |
+| B3 shared facts / twin retirement | `planGlobals` in `global_plan.mdk` and other fact producers listed below; immutable fields in `EmitPlan` | both backend emitters | `core_validate` plan validators | global order and corruption cases in `emit_plan_test.mdk` / `core_validate_test.mdk`; P5.10–12 recorded twin retirement. Physical instructions/layouts remain target-owned; zero twins is not a target |
+| B4 route validation | `validateForEmission` in `core_validate.mdk` | all public strict, record, unchecked, census/gap, stats and playground routes; ten emitter entry routes | signature-derived public renderer roster in `core_validate_test.mdk`, entry roster in `emit_plan_test.mdk` | `core_validate_test.mdk` renderer corruption matrix and valid neighbors; P5.15 product route execution is Node shipping-artifact evidence only |
+| B5 physical identity / materialized output | per-emission LLVM/Wasm symbol registries; typed Core and plan facts | physical emitters and final text audits | registries plus `llvm_text_coverage` / `wasm_text_coverage` and gateway validators | registry/gateway mutation tests and `test/wasm/assemble_check_main.sh`; deleted text-derived declarations, private dict counters, duplicate group/value-use builders, and recursive `scan*ValueUses` (see P5.8–12 reports). No independent Wasm operand-stack reconstruction claim |
 
 | Fact | Producer | Carrier | Validator | Fixture | Deleted duplicate |
 |---|---|---|---|---|---|

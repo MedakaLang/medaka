@@ -237,8 +237,8 @@ warn-first policy, which governs user-program type errors reaching
 | X-G | #1404 | Re-scoped to F4 plus the globals and TRMC fields of R5. |
 | X-L | #1405 | X-L.H landed (injectivity guards). Abstract `LinkId` retired; the linkage field of R5 and the validator arms in R6 are what remains. |
 | X-N | #1406 | X-N.H complete. X-N.C (validated LLVM plan plus pure renderer) retired; the prototype check and duplicate-define refusal it promised live in the per-emission physical registries (`compiler/backend/llvm_symbols.mdk`, `compiler/backend/wasm_symbols.mdk`), because the names they judge exist only after physical lowering; R6 keeps the Core-level checks. |
-| X-W | #1407 | X-W.H complete. X-W.C retired. Residual scope: the scalar-mode decision (section 8.1, unchanged), host-ABI requirement derivation from R5's extern field, and product-input parity with `playground_main` (R9). |
-| X-X | #1408 | Kept, with the deletion set reduced to what R4 rows delete plus the two consumer-or-delete modules; the ratchet requirement is unchanged. |
+| X-W | #1407 | X-W.H complete. X-W.C retired. The scalar-mode decision in section 8.1 remains unchanged. P5.15's `F-product-observe` report records same-invocation comparison of validated `wasmPhysical.imports` against shipping artifact imports for the hand-derived Float and Int controls, plus persistent playground P-U-P and independent CLI/modules P-U-P controls. This supplies product-route evidence for the current host requirement projection; it does not claim a general browser or deployment qualification. Final review/CI and issue readback still gate closure. |
+| X-X | #1408 | Kept, with the deletion set reduced to R4 rows plus the two consumer-or-delete modules; the ratchet requirement is unchanged. R-GROUP and R-VALUSE source/fixture evidence is recorded in the P5.11/P5.12 reports and current backend fact ledger. Final review/CI and issue readback still gate closure. |
 
 ### R8. Reconciliation with the revised typechecker plan
 
