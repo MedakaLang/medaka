@@ -1,0 +1,59 @@
+aboveCounter : Int -> EvidenceFault -> Bool
+binderBase : List BinderRow -> Int
+binderLine : List BinderRow -> String
+binderRunIs : BinderRun -> List Decl -> Bool
+binderSpan : List Decl -> Option BinderRun
+checkedElab : (InterfaceKey -> Option String) -> String -> Result InterfaceFault (InterfaceKey, String)
+countersNode : PreludeElab -> SExp
+countersOf : SExp -> Result SexpError Counters
+countersProblem : PreludeElab -> Option (String, String)
+coveredText : PreludeElab -> String
+decodeBody : InterfaceKey -> Counters -> String -> Result InterfaceFault (InterfaceKey, PreludeElab)
+decodeCovered : InterfaceKey -> String -> Result InterfaceFault (InterfaceKey, PreludeElab)
+elabKeyOf : InterfaceKey -> InterfaceKey
+encodeElabFile : InterfaceKey -> PreludeElab -> String
+evidenceHighWater : List EvEntry -> Int
+evidenceRowsProblem : Int -> List EvEntry -> Option String
+formatVersion : Int
+framedDigestOf : String -> String
+heldPreludeEvCounter : Unit -> Option Int
+isMarked : Array Bool -> EvEntry -> Bool
+localHighWater : SExp -> Int
+localSuffix : String -> Int
+mapBinders : (BinderId -> BinderId) -> List Decl -> List Decl
+markReferenced : Array Bool -> List EvidenceFault -> Unit
+maxBinderRun : Int
+maxEvidenceCounter : Int
+preludeElabCacheRef : Ref (Option ((Int, Int), PreludeElab, Bool))
+preludeElabFor : (Int, Int) -> List Decl -> Option PreludeElab
+preludeElabOf : List Decl -> List EvEntry -> List BinderRow -> PreludeElab
+readBinder : SexpCursor -> BinderRow
+readElabFile : String -> Result InterfaceFault (InterfaceKey, PreludeElab)
+readElabFileGated : (InterfaceKey -> Option String) -> String -> Result InterfaceFault (InterfaceKey, PreludeElab)
+readElabKey : String -> Result InterfaceFault InterfaceKey
+readElabKeyGated : (InterfaceKey -> Option String) -> String -> Result InterfaceFault InterfaceKey
+readRuntimeType : SexpCursor -> RuntimeType
+referencedRows : List Decl -> List EvEntry -> List EvEntry
+relocArm : (BinderId -> BinderId) -> Arm -> Arm
+relocAssign : (BinderId -> BinderId) -> FieldAssign -> FieldAssign
+relocBind : (BinderId -> BinderId) -> LetBind -> LetBind
+relocClause : (BinderId -> BinderId) -> FunClause -> FunClause
+relocDecl : (BinderId -> BinderId) -> Decl -> Decl
+relocDecls : Int -> List Decl -> List Decl
+relocExpr : (BinderId -> BinderId) -> Expr -> Expr
+relocField : (BinderId -> BinderId) -> RecPatField -> RecPatField
+relocGuard : (BinderId -> BinderId) -> Guard -> Guard
+relocGuardArm : (BinderId -> BinderId) -> GuardArm -> GuardArm
+relocId : Int -> BinderId -> BinderId
+relocIfaceMethod : (BinderId -> BinderId) -> IfaceMethod -> IfaceMethod
+relocImplMethod : (BinderId -> BinderId) -> ImplMethod -> ImplMethod
+relocInterp : (BinderId -> BinderId) -> InterpPart -> InterpPart
+relocPat : (BinderId -> BinderId) -> Pat -> Pat
+relocStmt : (BinderId -> BinderId) -> DoStmt -> DoStmt
+relocated : Int -> PreludeElab -> PreludeElab
+renderElabFault : InterfaceFault -> String
+rowsProblem : Array Bool -> Int -> List EvEntry -> Option String
+seedPreludeElab : (Int, Int) -> PreludeElab -> Unit
+sexpBinder : BinderRow -> SExp
+treeSitesProblem : PreludeElab -> Option (String, String)
+withShippedRows : Option PreludeElab -> List EvEntry -> Map Int BinderRow -> (List EvEntry, Map Int BinderRow)
