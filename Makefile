@@ -261,6 +261,12 @@ inlang-tools-engine-table-test:
 inlang-guide-scripts-test:
 	./medaka test --native test/guide_scripts_test.mdk
 
+## `MEDAKA_PERF=1 medaka run`'s eval row carries a deterministic op count; the
+## test runs a regex-census program through the binary and grades the count.
+## Native: it spawns `medaka`.
+inlang-run-opcount-test:
+	./medaka test --native test/run_opcount_test.mdk
+
 ## No entry imports a `_test.mdk` sibling, so the extern check's own tests
 ## run only from here.
 inlang-backend-core-validate-test:

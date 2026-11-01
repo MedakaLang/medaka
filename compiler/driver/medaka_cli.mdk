@@ -71,6 +71,7 @@ import support.util.{
   stringTrim,
   lookupAssoc,
 }
+import support.opcount.{setOpCounting, opSnap}
 import support.stage_count.{stageCountInit, stageDump, stageExit}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omFromNames}
 import support.path.{baseOf, chopExt, joinPath}
@@ -78,6 +79,8 @@ import support.timer.{
   perfEnabled,
   now,
   emitPhase,
+  emitPhaseAO,
+  allocSnap,
   emitTotal,
   perfArm,
   emitAbortTotal,
@@ -2830,15 +2833,30 @@ runArgSpec = spec "run" [
 -- deeply-indented `finishRunEval` call sites stay one flat line.  `finishRunEval`
 -- runs this itself, immediately before flushing the envelope — see its `postPerf`
 -- note for why the caller must not run it afterwards.
-runEvalPerf : Bool -> String -> Float -> Float -> Unit -> <IO> Unit
-runEvalPerf perfOn target perfT0 perfTCheck _ =
+runEvalPerf : Bool ->
+  String ->
+  Float ->
+  Float ->
+  Float ->
+  Int ->
+  Unit ->
+  <IO> Unit
+runEvalPerf perfOn target perfT0 perfTCheck allocCheck opCheck _ =
   let perfTEval = now ()
-  let _ = emitPhase perfOn "eval" (perfTEval - perfTCheck) target
+  let _ =
+    emitPhaseAO
+      perfOn
+      "eval"
+      (perfTEval - perfTCheck)
+      (allocSnap () - allocCheck)
+      target
+      (opSnap () - opCheck)
   emitTotal perfOn (perfTEval - perfT0)
 
 runRunCmd : List String -> <IO> Unit
 runRunCmd argv =
   let perfOn = perfEnabled ()
+  let _ = setOpCounting perfOn
   let perfT0 = now ()
   let jsonMode = runFlagGiven "--json" argv
   -- C4: under `--json` stderr is this verb's MACHINE channel, so `MEDAKA_PERF`'s
@@ -3002,6 +3020,8 @@ runRunCmd argv =
                   let _ =
                     runTargetGate jsonMode (t => t) target pathMap mods analysis
                   let perfTCheck = now ()
+                  let allocCheck = allocSnap ()
+                  let opCheck = opSnap ()
                   let _ =
                     emitPhase perfOn "check" (perfTCheck - perfTLoad) target
                   -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
@@ -3024,7 +3044,13 @@ runRunCmd argv =
                         trees
                         mods
                         (allWarnTriples tsrc target diags)
-                        (runEvalPerf perfOn target perfT0 perfTCheck)
+                        (runEvalPerf
+                          perfOn
+                          target
+                          perfT0
+                          perfTCheck
+                          allocCheck
+                          opCheck)
             (errs, _) => match jsonMode
               -- #2798 review S2: `diags` (the WHOLE list, errors and warnings)
               -- for JSON, matching `check --json`'s per-file diagnostics array
@@ -3091,6 +3117,8 @@ runRunCmd argv =
                       mods
                       analysis
                   let perfTCheck = now ()
+                  let allocCheck = allocSnap ()
+                  let opCheck = opSnap ()
                   let _ =
                     emitPhase perfOn "check" (perfTCheck - perfTLoad) target
                   let executed =
@@ -3105,7 +3133,13 @@ runRunCmd argv =
                         trees
                         mods
                         projWarns
-                        (runEvalPerf perfOn target perfT0 perfTCheck)
+                        (runEvalPerf
+                          perfOn
+                          target
+                          perfT0
+                          perfTCheck
+                          allocCheck
+                          opCheck)
 -- G1 (SOUNDNESS): typecheck the WHOLE module graph and abort before
 -- eval unless the drive's report carries a checked program (`trChecked`).  A
 -- type error makes evalModulesOutput miscompile (the G1 bug), so we never
