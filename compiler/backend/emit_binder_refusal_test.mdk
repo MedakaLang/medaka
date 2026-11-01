@@ -351,7 +351,8 @@ main = 6.0
               True
               False
               False
-              BuildProbe)
+              BuildProbe
+              None)
               Err report =>
                 fail ("playground probe build failed: " ++ ppBuildReport report)
               Ok _ =>

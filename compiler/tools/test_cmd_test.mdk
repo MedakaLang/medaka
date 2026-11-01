@@ -349,3 +349,64 @@ test "medaka test runs a target against the core.mdk beside runtime.mdk" = withS
         expectTrue (contains "(no doctests found)" out),
       ]
       Err e => fail e)
+
+siblingFixtureRun : String ->
+  String ->
+  <Exec, IO> Result String (Int, String, String)
+siblingFixtureRun engine file = runVerb medakaBin [
+  "test",
+  "--engines",
+  engine,
+  underRoot "test/sibling_view_fixtures/\{file}",
+]
+
+-- A test sibling reaches its subject's private names under `medaka test`: the
+-- interpreter through `diSibling` and the facts, the native engine through the
+-- real target the scratch build hands its emitter child.  The `test "…"` decls,
+-- the prop and the doctest are different runners over different scratch builds.
+test "a test sibling's private names resolve under medaka test on both engines" =
+  expectAll
+    (flatMap
+      (engine => [
+        match siblingFixtureRun engine "counter_test.mdk"
+          Ok (code, out, _) =>
+            labelFail
+              "\{engine} counter_test"
+              (expectAll [
+                expectEqual 0 code,
+                expectTrue (contains "2/2 passed" out),
+              ])
+          Err e => fail e,
+        match siblingFixtureRun engine "runners_test.mdk"
+          Ok (code, out, _) =>
+            labelFail
+              "\{engine} runners_test"
+              (expectAll [
+                expectEqual 0 code,
+                expectTrue (contains "runners_test.mdk:8: step 1" out),
+                expectTrue (contains "\"bump is step\" [\{engine}] ... OK" out),
+                expectTrue
+                  (contains "runners_test.mdk:11: bump goes through step" out),
+              ])
+          Err e => fail e,
+      ])
+      ["eval", "native"])
+
+-- The front-end gate judges an entry by its own path, so naming a real sibling
+-- in the environment does not make `other.mdk` buildable.
+test "a forged real-target variable grants nothing to an unrelated entry" = withScratchDir
+  (dir => match runVerb "env" [
+    "MEDAKA_SIBLING_TARGET=\{underRoot "test/sibling_view_fixtures/counter_test.mdk"}",
+    medakaBin,
+    "build",
+    underRoot "test/sibling_view_fixtures/other.mdk",
+    "-o",
+    "\{dir}/other",
+  ]
+    Ok (code, _, errOut) => expectAll [
+      expectEqual 1 code,
+      expectTrue
+        (contains "R-PRIVATE-NAME" errOut
+          || contains "exports no constructors" errOut),
+    ]
+    Err e => fail e)

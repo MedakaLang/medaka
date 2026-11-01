@@ -3425,12 +3425,32 @@ siblingPairOf : List String ->
   <IO> Option (String, String)
 siblingPairOf roots stdlibDir mods = match last mods
   None => None
-  Some (entry, path, _) =>
+  Some (_, path, _) => siblingPairAt path roots stdlibDir mods
+
+-- `siblingPairOf` with the sibling relation read off `path` rather than off the
+-- entry's own file: a scratch build (`medaka test`'s native runners) names the
+-- real target there, and the pair keeps the scratch entry's module id.  Location
+-- stays the one grant: a `path` that is no test sibling answers `None`.
+export
+siblingPairAt : String ->
+  List String ->
+  String ->
+  List (String, String, List Decl) ->
+  <IO> Option (String, String)
+siblingPairAt path roots stdlibDir mods = match last mods
+  None => None
+  Some (entry, _, _) =>
     let deps = readDeps (findProjectRootOrSelf (dirOf path))
     match siblingSubjectId deps roots stdlibDir path
       Some subject if anyList ((m, _, _) => m == subject) mods =>
         Some (entry, subject)
       _ => None
+
+-- The environment variable that hands an emitter child the real target path of a
+-- scratch build (see `siblingPairAt`).
+export
+siblingTargetEnv : String
+siblingTargetEnv = "MEDAKA_SIBLING_TARGET"
 
 -- An entry the loader could not load: its own parse error if it has one, else
 -- the loader's error.  An unparsable entry is reported against the spelling the
