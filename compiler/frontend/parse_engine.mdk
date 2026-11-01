@@ -2,7 +2,7 @@ import frontend.lex_token.{Token(..), describeToken, peekTok as tokenPeekTok}
 import frontend.ast.{Loc(..)}
 import frontend.parse_diagnostic.{ParseDiagnosticKind(..), renderParseProblem}
 import frontend.parse_positions.{locOfSpanWith}
-import support.source_index.{lineStartsOf, offsetToLineColFast}
+import support.source_index.{lineStartsOf}
 import support.util.{reverseL}
 
 public export data PR a = POk a Int | PErr PFail Int | PFatal PFail Int

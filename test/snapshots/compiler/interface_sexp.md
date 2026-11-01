@@ -120,7 +120,7 @@ import types.interface_frame.{
 import types.prelude_interface.{PreludeInterface(..), InterfaceKey(..)}
 import types.publish.{
   PubScheme(..), ZState(..), LiveCell(..), emptyZonk, zonkMono, zonkRow,
-  zonkAuthority, zonkVecObl, zonkScheme, freezePub, liveCells
+  zonkAuthority, zonkVecObl, freezePub, liveCells
 }
 import types.registry.{
   SpellingPop, spRows, spFloor, spCollided, spFromProjections
@@ -1666,7 +1666,7 @@ decodeParsed _ _ top =
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "renderSExp" false) (mem "parseSExp" false) (mem "expectAtom" false) (mem "atomInt" false) (mem "atomBool" false))))
 (DUse false (UseGroup ("types" "interface_frame") ((mem "InterfaceFault" true) (mem "KeyGate" false) (mem "bodyOf" false) (mem "declaredVersion" false) (mem "framedFile" false) (mem "gated" false) (mem "headerOf" false) (mem "keyFields" false) (mem "noGate" false) (mem "readKeyFields" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" true) (mem "InterfaceKey" true))))
-(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "ZState" true) (mem "LiveCell" true) (mem "emptyZonk" false) (mem "zonkMono" false) (mem "zonkRow" false) (mem "zonkAuthority" false) (mem "zonkVecObl" false) (mem "zonkScheme" false) (mem "freezePub" false) (mem "liveCells" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "ZState" true) (mem "LiveCell" true) (mem "emptyZonk" false) (mem "zonkMono" false) (mem "zonkRow" false) (mem "zonkAuthority" false) (mem "zonkVecObl" false) (mem "freezePub" false) (mem "liveCells" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "SpellingPop" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spFromProjections" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "Tyvar" true) (mem "Scheme" true) (mem "AuthResidual" true) (mem "VecObl" true) (mem "IfaceRef" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "RecordInfo" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "MethodPredicateSlot" true) (mem "CDeclaredPrefix" true) (mem "BuiltinClasses" true) (mem "PublishedInvocationView" true) (mem "Kind" true) (mem "Polarity" true))))
@@ -2221,7 +2221,7 @@ decodeParsed _ _ top =
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "renderSExp" false) (mem "parseSExp" false) (mem "expectAtom" false) (mem "atomInt" false) (mem "atomBool" false))))
 (DUse false (UseGroup ("types" "interface_frame") ((mem "InterfaceFault" true) (mem "KeyGate" false) (mem "bodyOf" false) (mem "declaredVersion" false) (mem "framedFile" false) (mem "gated" false) (mem "headerOf" false) (mem "keyFields" false) (mem "noGate" false) (mem "readKeyFields" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" true) (mem "InterfaceKey" true))))
-(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "ZState" true) (mem "LiveCell" true) (mem "emptyZonk" false) (mem "zonkMono" false) (mem "zonkRow" false) (mem "zonkAuthority" false) (mem "zonkVecObl" false) (mem "zonkScheme" false) (mem "freezePub" false) (mem "liveCells" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "ZState" true) (mem "LiveCell" true) (mem "emptyZonk" false) (mem "zonkMono" false) (mem "zonkRow" false) (mem "zonkAuthority" false) (mem "zonkVecObl" false) (mem "freezePub" false) (mem "liveCells" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "SpellingPop" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spFromProjections" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "Tyvar" true) (mem "Scheme" true) (mem "AuthResidual" true) (mem "VecObl" true) (mem "IfaceRef" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "RecordInfo" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "MethodPredicateSlot" true) (mem "CDeclaredPrefix" true) (mem "BuiltinClasses" true) (mem "PublishedInvocationView" true) (mem "Kind" true) (mem "Polarity" true))))

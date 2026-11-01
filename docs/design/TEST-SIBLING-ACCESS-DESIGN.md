@@ -1,6 +1,6 @@
 # Test siblings see their subject's private names
 
-**Status:** DECIDED 2026-10-18 — semantics ruled (follow Rust unless there is a good reason not to); implemented: F1 #4314, F2 #4703, F3 #4717, migration #4616 (PR #4724).
+**Status:** DECIDED 2026-10-18 — semantics ruled (follow Rust unless there is a good reason not to); implemented except the items listed in §8 (stdlib siblings under `medaka test`; the typecheck D8 sinks stay exported; 33 of 34 M3 rows deferred): F1 #4314, F2 #4703, F3 #4717, migration #4616 (PR #4724).
 
 A `foo_test.mdk` beside `foo.mdk` may import any of `foo`'s top-level names, exported or not,
 the way a Rust `#[cfg(test)] mod tests` sees its parent's private items. This document records
@@ -257,11 +257,15 @@ slice 3 (F3 #4717).
 
 ## 8. Known limits
 
-Four cautions measured during the migration (#4616). A private type alias imported by name
+Cautions measured during the migration (#4616). A private type alias imported by name
 into a sibling does not expand, so leave an alias exported when a sibling uses it in a
 signature. A sibling sees the names its subject imports, so removing an "unused" import from
-a subject can break its sibling; import the name from its defining module instead. A sibling
-cannot read the record fields of an abstractly exported type: `Regex` is exported abstractly,
-so its field `prog` is not accessible. And `medaka test` on a stdlib sibling copies the file
-to a scratch directory with no manifest, which loses the sibling view (`unbound variable
-parseGetInt` for `stdlib/toml_test.mdk`, while `medaka check` passes).
+a subject can break its sibling; import the name from its defining module instead. Under `medaka test`, a
+stdlib sibling (`stdlib/regex_test.mdk`, `stdlib/toml_test.mdk`) loses its whole sibling
+view, names and record fields alike (`unbound variable parseGetInt` for
+`stdlib/toml_test.mdk`), while `medaka check` accepts the same file. The cause is not
+established; `siblingSubjectId` (`compiler/driver/loader.mdk`) not matching the stdlib
+module id is the suspect.
+
+Two migration items are not done: the typecheck D8 sinks stay exported, and 33 of the 34 M3
+rows are deferred.

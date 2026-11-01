@@ -14,7 +14,7 @@ import frontend.parse_diagnostic.{ParseDiagnostic}
 import frontend.parse_recovery.{RecoveryLimits(..), recoverSourcePairsWithIndex}
 import frontend.recovery_result.{RecoveredSource}
 import frontend.ast.{Loc(..), Decl}
-import support.source_index.{SourceIndex, indexSource, sourcePositionToOffset}
+import support.source_index.{SourceIndex, indexSource}
 
 public export data SourceSpan = SourceSpan Int Int
 public export data TriviaKind = LineComment | BlockComment
@@ -170,7 +170,7 @@ syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural
 (DUse false (UseGroup ("frontend" "parse_recovery") ((mem "RecoveryLimits" true) (mem "recoverSourcePairsWithIndex" false))))
 (DUse false (UseGroup ("frontend" "recovery_result") ((mem "RecoveredSource" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" false))))
-(DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false))))
+(DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false))))
 (DData Public "SourceSpan" () ((variant "SourceSpan" (ConPos (TyCon "Int") (TyCon "Int")))) ())
 (DData Public "TriviaKind" () ((variant "LineComment" (ConPos)) (variant "BlockComment" (ConPos))) ())
 (DData Abstract "Trivia" () ((variant "Trivia" (ConPos (TyCon "TriviaKind") (TyCon "SourceSpan")))) ())
@@ -225,7 +225,7 @@ syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural
 (DUse false (UseGroup ("frontend" "parse_recovery") ((mem "RecoveryLimits" true) (mem "recoverSourcePairsWithIndex" false))))
 (DUse false (UseGroup ("frontend" "recovery_result") ((mem "RecoveredSource" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" false))))
-(DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false))))
+(DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false))))
 (DData Public "SourceSpan" () ((variant "SourceSpan" (ConPos (TyCon "Int") (TyCon "Int")))) ())
 (DData Public "TriviaKind" () ((variant "LineComment" (ConPos)) (variant "BlockComment" (ConPos))) ())
 (DData Abstract "Trivia" () ((variant "Trivia" (ConPos (TyCon "TriviaKind") (TyCon "SourceSpan")))) ())

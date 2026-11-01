@@ -15,12 +15,11 @@
 -- private to it; this file reads them through the sibling's view of its subject
 -- instead of redeclaring them, so a fixture has one definition.
 --
--- ⚠️ THREE ASSERTIONS COULD NOT COME WITH THE REST and are still doctests in
--- `registry.mdk`: the ones naming `OriginUnresolved` in the expression.
--- `test/typecheck_compiler_source.sh`'s #1110 producer ratchet pins the SET OF
--- TRACKED FILES carrying a non-comment `OriginUnresolved` mention, and a
--- `test` block is live code — moving them here adds this file to that set and
--- reds the ratchet.
+-- Three assertions stay doctests in `registry.mdk`: the ones naming
+-- `OriginUnresolved` in the expression. `test/typecheck_compiler_source.sh`'s
+-- #1110 producer ratchet pins the set of tracked files carrying a non-comment
+-- `OriginUnresolved` mention, and `registry_test.mdk` is not in that set; a
+-- `test` block is live code, so moving them here would red the ratchet.
 
 import test.{expectEqual, expectNotEqual, expectTrue}
 import types.registry.{
@@ -29,7 +28,6 @@ import types.registry.{
   regInsertCheckedK,
   headU,
   headZ,
-  identBuiltinFixture,
   identIfaceFooM,
   identIfaceIxM,
   identIn,
@@ -39,9 +37,6 @@ import types.registry.{
   identTypeBarM,
   identTypeFooBuiltin,
   identTypeFooM,
-  identTypeIntM,
-  ifaceP,
-  ifaceU,
   keyIxIntUndet,
   keyIxUndetInt,
   mregOrderA,
@@ -49,10 +44,8 @@ import types.registry.{
   regBothNs,
   slotPA,
   slotUA,
-  tabA,
   tabTable,
   tabU,
-  tabZ,
   lenKey,
   ordKey,
   MultiRegistry,

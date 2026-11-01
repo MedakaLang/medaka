@@ -1,7 +1,6 @@
 import list.{reverse}
 import array.{sliceClamped}
 import frontend.parser as P
-import frontend.lexer.{tokenizeWithOffsetPairs}
 import frontend.lex_token.{Token(..), isNoiseTok, isEofTok}
 import frontend.parse_engine.{
   ParseContext, PR(..), newParseContext, contextTokens, contextOffsets,
@@ -15,7 +14,7 @@ import frontend.parse_diagnostic.{
   ParseDiagnostic, ParseDiagnosticKind(..), makeParseDiagnostic
 }
 import frontend.ast.{Decl, Loc(..)}
-import support.source_index.{SourceIndex, indexSource, offsetToLineColFast}
+import support.source_index.{SourceIndex, offsetToLineColFast}
 import support.util.{isEmptyL, isNonEmptyL}
 
 import frontend.recovery_result.{

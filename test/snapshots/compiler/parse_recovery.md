@@ -1,11 +1,10 @@
 # META
-source_lines=402
+source_lines=401
 stages=DESUGAR,MARK
 # SOURCE
 import list.{reverse}
 import array.{sliceClamped}
 import frontend.parser as P
-import frontend.lexer.{tokenizeWithOffsetPairs}
 import frontend.lex_token.{Token(..), isNoiseTok, isEofTok}
 import frontend.parse_engine.{
   ParseContext, PR(..), newParseContext, contextTokens, contextOffsets,
@@ -19,7 +18,7 @@ import frontend.parse_diagnostic.{
   ParseDiagnostic, ParseDiagnosticKind(..), makeParseDiagnostic
 }
 import frontend.ast.{Decl, Loc(..)}
-import support.source_index.{SourceIndex, indexSource, offsetToLineColFast}
+import support.source_index.{SourceIndex, offsetToLineColFast}
 import support.util.{isEmptyL, isNonEmptyL}
 
 import frontend.recovery_result.{
@@ -408,14 +407,13 @@ ensureDiagnostic (RecoveryLimits _ _ _ maxDiagnostics) diagnostic result =
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("array") ((mem "sliceClamped" false))))
 (DUse false (UseAlias ("frontend" "parser") "P"))
-(DUse false (UseGroup ("frontend" "lexer") ((mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "lex_token") ((mem "Token" true) (mem "isNoiseTok" false) (mem "isEofTok" false))))
 (DUse false (UseGroup ("frontend" "parse_engine") ((mem "ParseContext" false) (mem "PR" true) (mem "newParseContext" false) (mem "contextTokens" false) (mem "contextOffsets" false) (mem "contextLineStarts" false) (mem "peekTok" false) (mem "mark" false) (mem "rewind" false) (mem "failProblem" false) (mem "locOfSpan" false))))
 (DUse false (UseGroup ("frontend" "parse_result") ((mem "ParsedSource" false) (mem "parsedDecls" false) (mem "parsedPositions" false) (mem "parseErrorDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "parse_positions") ((mem "Positions" true) (mem "positionsFromSpans" false))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnostic" false) (mem "ParseDiagnosticKind" true) (mem "makeParseDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
-(DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "offsetToLineColFast" false))))
+(DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "offsetToLineColFast" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("frontend" "recovery_result") ((mem "RecoveredSource" false) (mem "SourceExtent" true) (mem "InvalidReason" true) (mem "RecoveryStop" true) (mem "RecoveryCompleteness" true) (mem "RecoveryStats" true) (mem "makeInvalidRegion" false) (mem "makeRecoveredSource" false) (mem "recoveredDecls" false) (mem "recoveredPositions" false) (mem "recoveredDiagnostics" false) (mem "invalidRegions" false) (mem "recoveredCompleteness" false) (mem "recoveredStats" false))))
 (DData Public "RecoveryLimits" () ((variant "RecoveryLimits" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
@@ -478,14 +476,13 @@ ensureDiagnostic (RecoveryLimits _ _ _ maxDiagnostics) diagnostic result =
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("array") ((mem "sliceClamped" false))))
 (DUse false (UseAlias ("frontend" "parser") "P"))
-(DUse false (UseGroup ("frontend" "lexer") ((mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "lex_token") ((mem "Token" true) (mem "isNoiseTok" false) (mem "isEofTok" false))))
 (DUse false (UseGroup ("frontend" "parse_engine") ((mem "ParseContext" false) (mem "PR" true) (mem "newParseContext" false) (mem "contextTokens" false) (mem "contextOffsets" false) (mem "contextLineStarts" false) (mem "peekTok" false) (mem "mark" false) (mem "rewind" false) (mem "failProblem" false) (mem "locOfSpan" false))))
 (DUse false (UseGroup ("frontend" "parse_result") ((mem "ParsedSource" false) (mem "parsedDecls" false) (mem "parsedPositions" false) (mem "parseErrorDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "parse_positions") ((mem "Positions" true) (mem "positionsFromSpans" false))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnostic" false) (mem "ParseDiagnosticKind" true) (mem "makeParseDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
-(DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "offsetToLineColFast" false))))
+(DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "offsetToLineColFast" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("frontend" "recovery_result") ((mem "RecoveredSource" false) (mem "SourceExtent" true) (mem "InvalidReason" true) (mem "RecoveryStop" true) (mem "RecoveryCompleteness" true) (mem "RecoveryStats" true) (mem "makeInvalidRegion" false) (mem "makeRecoveredSource" false) (mem "recoveredDecls" false) (mem "recoveredPositions" false) (mem "recoveredDiagnostics" false) (mem "invalidRegions" false) (mem "recoveredCompleteness" false) (mem "recoveredStats" false))))
 (DData Public "RecoveryLimits" () ((variant "RecoveryLimits" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
