@@ -26,6 +26,24 @@ check_wat() {
   [ ! -s "$WORK/$label.err" ] || { bad "$label Wasm wrote stderr"; return; }
   cmp -s "$WORK/expected" "$WORK/$label.out" || bad "$label stdout differed"
 }
+check_cli() {
+  label="$1"; wasm="$WORK/$label.wasm"; checks=$((checks + 1))
+  [ -s "$wasm" ] || { bad "$label emitted empty Wasm"; return; }
+  wasm-tools validate --features=all "$wasm" >"$WORK/$label.validate.out" 2>"$WORK/$label.validate.err" || { bad "$label Wasm did not validate"; return; }
+  node "$ROOT/test/wasm/run.js" "$wasm" >"$WORK/$label.out" 2>"$WORK/$label.err" || { bad "$label Wasm run exited nonzero"; return; }
+  [ ! -s "$WORK/$label.err" ] || { bad "$label Wasm wrote stderr"; return; }
+  cmp -s "$WORK/expected" "$WORK/$label.out" || bad "$label stdout differed"
+}
+check_product_imports() {
+  checks=$((checks + 1))
+  node - "$@" <<'JS' || bad "product static import sets differ"
+const fs = require('node:fs');
+const imports = (file) => WebAssembly.Module.imports(new WebAssembly.Module(fs.readFileSync(file)))
+  .map(({ module, name, kind }) => JSON.stringify([module, name, kind])).sort();
+const sets = process.argv.slice(2).map(imports);
+if (sets.some((set) => !set.length || JSON.stringify(set) !== JSON.stringify(sets[0]))) process.exit(1);
+JS
+}
 command -v wasm-tools >/dev/null 2>&1 || bad "wasm-tools unavailable"
 command -v node >/dev/null 2>&1 || bad "node unavailable"
 bash "$ROOT/playground/build_playground_wasm.sh" >"$WORK/build.out" 2>"$WORK/build.err" || bad "fresh playground build failed"
@@ -67,6 +85,8 @@ check_playground_sibling graphics_test
 check_playground_sibling animation_test
 if [ -x "$MODULES" ] && "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules.wat" 2>"$WORK/modules.emit.err"; then check_wat modules "$WORK/modules.wat"; else bad "modules emitter failed"; cat "$WORK/modules.emit.err"; fi
 if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground.wat" 2>"$WORK/playground.emit.err"; then check_wat playground "$WORK/playground.wat"; else bad "playground compiler failed"; cat "$WORK/playground.emit.err"; fi
+if MEDAKA_STRICT=1 MEDAKA_WASM_EMITTER="$MODULES" "$ROOT/medaka" build --target wasm --keep-ir "$WORK/input.mdk" -o "$WORK/cli.wasm" >"$WORK/cli.build.out" 2>"$WORK/cli.build.err"; then check_wat cli-text "$WORK/cli.wasm.wat"; check_cli cli; else bad "CLI Float compiler failed"; cat "$WORK/cli.build.err"; fi
+check_product_imports "$WORK/modules.wasm" "$WORK/playground.wasm" "$WORK/cli.wasm"
 cat > "$WORK/input.mdk" <<'EOF'
 data Box = Box Float
 
@@ -115,6 +135,8 @@ EOF
 printf '%s\n' 42 > "$WORK/expected"
 if [ -x "$MODULES" ] && "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-int-control.wat" 2>"$WORK/modules-int-control.emit.err"; then check_wat modules-int-control "$WORK/modules-int-control.wat"; else bad "Int-control modules emitter failed"; cat "$WORK/modules-int-control.emit.err"; fi
 if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-int-control.wat" 2>"$WORK/playground-int-control.emit.err"; then check_wat playground-int-control "$WORK/playground-int-control.wat"; else bad "Int-control playground compiler failed"; cat "$WORK/playground-int-control.emit.err"; fi
+if MEDAKA_STRICT=1 MEDAKA_WASM_EMITTER="$MODULES" "$ROOT/medaka" build --target wasm --keep-ir "$WORK/input.mdk" -o "$WORK/cli-int-control.wasm" >"$WORK/cli-int-control.build.out" 2>"$WORK/cli-int-control.build.err"; then check_wat cli-int-text "$WORK/cli-int-control.wasm.wat"; check_cli cli-int-control; else bad "CLI Int-control compiler failed"; cat "$WORK/cli-int-control.build.err"; fi
+check_product_imports "$WORK/modules-int-control.wasm" "$WORK/playground-int-control.wasm" "$WORK/cli-int-control.wasm"
 cp "$RUNTIME" "$WORK/runtime-missing-row.mdk"
 printf '\nextern zzPlaygroundMissingRow : Int\n' >> "$WORK/runtime-missing-row.mdk"
 checks=$((checks + 1))
