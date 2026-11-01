@@ -1,0 +1,4 @@
+-- A subject whose sibling reads only its exported names, so the sibling is
+-- accepted whether or not it is classified as one.
+export tick : Int -> Int
+tick n = n + 1

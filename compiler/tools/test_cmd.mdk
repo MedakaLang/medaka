@@ -68,6 +68,7 @@ import driver.loader.{
   loadProgramFilesLocatedCachedSourcesE,
   modIdToPath,
   loadErrorMessage,
+  loadErrorSite,
   LoadError(..),
   entrySearchRoots,
   canonicalPathId,
@@ -711,22 +712,19 @@ loadGate True _ _ = None
 loadGate False target le =
   let sources = match le
     LoadParseFailed path src _ => omInsert path src omEmpty
-    LoadCycle _ path (Some (src, _)) => omInsert path src omEmpty
-    LoadTestImport _ path (Some (src, _)) => omInsert path src omEmpty
-    _ => omEmpty
+    _ => match loadErrorSite target le
+      Some (_, _, file, Some src, _) => omInsert file src omEmpty
+      _ => omEmpty
   diagnosticGate sources (loadErrorDiags target le)
 
 loadErrorDiags : String -> LoadError -> List (String, List Diag)
 loadErrorDiags _ (LoadParseFailed mpath _ pe) =
   [(mpath, [parseErrDiag mpath pe])]
-loadErrorDiags target (LoadCycle e cpath csite) = match csite
-  Some (_, loc) => [(cpath, [mkDiag SevError RModuleLoad e (Some loc)])]
-  None => [(target, [mkDiag SevError RModuleLoad e None])]
-loadErrorDiags target (LoadTestImport e cpath csite) = match csite
-  Some (_, loc) => [(cpath, [mkDiag SevError RTestModuleImport e (Some loc)])]
-  None => [(target, [mkDiag SevError RTestModuleImport e None])]
 loadErrorDiags target (LoadMsg e) =
   [(target, [mkDiag SevError RModuleLoad e None])]
+loadErrorDiags target le = match loadErrorSite target le
+  Some (code, e, file, _, loc) => [(file, [mkDiag SevError code e loc])]
+  None => []
 
 diagnosticGate : OrdMap String ->
   List (String, List Diag) ->
@@ -961,12 +959,12 @@ elaborateFor : String ->
   List Decl ->
   <IO> (Option TestReportError, Prepared)
 elaborateFor stdlibDir rsrc csrc _ roots _ mods True False _ =
-  let sibling = siblingPairsOf roots stdlibDir mods
+  let sibling = siblingPairsOf roots mods
   let rawModules = desugaredModPairs mods
   let (elaborated, _, _) = oneShotElab sibling rsrc csrc rawModules
   (None, PreparedPair (pairOfElab sibling rsrc csrc rawModules elaborated))
 elaborateFor stdlibDir rsrc csrc target roots sources mods False False _ =
-  let sibling = siblingPairsOf roots stdlibDir mods
+  let sibling = siblingPairsOf roots mods
   let rawModules = desugaredModPairs mods
   let (gate, elaborated) =
     gatedDrive
@@ -986,7 +984,7 @@ elaborateFor stdlibDir rsrc csrc target roots sources mods False False _ =
         elaborated),
   )
 elaborateFor stdlibDir rsrc csrc target roots sources mods exempt True synthDecls =
-  let sibling = siblingPairsOf roots stdlibDir mods
+  let sibling = siblingPairsOf roots mods
   (
     gateOfVerbatim
       sibling

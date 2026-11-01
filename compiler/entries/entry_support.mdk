@@ -44,7 +44,7 @@ import driver.front_gate.{
   writeDiagJson,
 }
 export import support.util.{rootsOrDefault}
-import support.util.{splitLast, startsWith, joinNl}
+import support.util.{anyList, splitLast, startsWith, joinNl}
 import types.tc_types.{ElabResult, DriveInputs(..), DriveOutputs(..)}
 import types.typecheck.{
   defaultDriveInputs,
@@ -52,7 +52,7 @@ import types.typecheck.{
   elaborateOneFacts,
   elaborateModulesWithReport,
 }
-import support.path.{dirOf, joinPath}
+import support.path.{baseOf, dirOf, joinPath}
 import support.stage_count.{stageExit}
 import support.ordmap.{OrdMap, omFromPairs, omLookup, omEmpty}
 import driver.diagnostics.{
@@ -378,8 +378,17 @@ emitLoaded runEmit srcs json coreP entry roots mods runtimeD coreD modsD =
     askJson = json,
     askOwnership = ownership,
     askSibling = match getEnv siblingTargetEnv
-      Some real => siblingPairsAt real roots (dirOf coreP) mods
-      None => siblingPairsOf roots (dirOf coreP) mods,
+      Some real =>
+        -- Only a `medaka test` scratch entry stands for another file: the
+        -- `scratchEntryName` prefixes of native_test_decls, native_props and
+        -- native_doctest.
+        if anyList
+          (p => startsWith p (baseOf entry))
+          ["ts_", "prop_", "dt_"] then
+          siblingPairsAt real roots mods
+        else
+          siblingPairsOf roots mods
+      None => siblingPairsOf roots mods,
   }
   runEmit ask mods runtimeD coreD modsD
 

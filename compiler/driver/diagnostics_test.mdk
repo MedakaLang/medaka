@@ -19,7 +19,8 @@ import driver.diagnostics.{
   analyzeProjectKeyedSources, noStdlibExports, graphCheckDrive, CheckDrive(..),
   CheckDump(..), analyzeFrom, frontEnd, checkFrontDrive, FrontInput(..),
   FrontPolicy(..), FrontProgram(..), FrontOutput(..), Diag(..), diagIdText,
-  foldCachedIdentity, resolveCachedIdentity, checkJsonFileParts, ppCheckJson
+  foldCachedIdentity, resolveCachedIdentity, checkJsonFileParts, ppCheckJson,
+  stdlibExportsReader, desugaredModPairs, ChainSteps(..)
 }
 import driver.loader.{loadProgramFilesLocatedCachedSourcesE}
 import support.source_index.{indexSource, offsetToUtf16Position}
@@ -28,7 +29,7 @@ import types.module_interface.{
   ModuleInterface(..), ModuleKey(..), currentModuleInterfaces
 }
 import frontend.ast.{Decl}
-import types.tc_types.{DriveOutputs(..), emptyDriveOutputs}
+import types.tc_types.{DriveInputs(..), DriveOutputs(..), emptyDriveOutputs}
 import frontend.parser.{parseLocated}
 import fs.{fixtureFiles}
 import list.{drop, head, sort}
@@ -43,6 +44,7 @@ import types.publish.{
 }
 import types.repr.{ppSchemeCon}
 import test_process.{withScratchDir}
+import io.{runVerb}
 
 sortedLines : String -> String
 sortedLines text = trim (unlines (sort (lines text)))
@@ -1245,4 +1247,160 @@ test "a sibling cannot hand a privileged name on" = expectEach [
     "a non-test module importing the sibling's forge",
     expectEqual (True, ["R-TEST-MODULE-IMPORT"]) (siblingFixture "leak.mdk"),
   ),
+  (
+    "one error per named private name",
+    expectEqual
+      (True, ["R-PRIVILEGED-REEXPORT", "R-PRIVILEGED-REEXPORT"])
+      (siblingFixture "rx2_test.mdk"),
+  ),
 ]
+
+test "a glob re-export of the subject carries the exported view and raises no error" = expectEach
+  [
+    (
+      "the glob re-export itself",
+      expectEqual accepted (siblingFixture "rxg_test.mdk"),
+    ),
+    (
+      "an importer reads the exported name",
+      expectEqual accepted (siblingFixture "rxguse_test.mdk"),
+    ),
+    (
+      "an importer cannot read the private name",
+      expectEqual (True, ["R-UNBOUND"]) (siblingFixture "rxgleak_test.mdk"),
+    ),
+  ]
+
+-- The codes `analyzeProjectKeyed` buckets for one fixture: the drive the LSP and
+-- the playground run.  It must agree with `siblingFixture`'s `check --json`.
+siblingBuckets : String -> <IO> List String
+siblingBuckets file = match (
+  readFile "stdlib/runtime.mdk",
+  readFile "stdlib/core.mdk",
+)
+  (Ok rsrc, Ok csrc) =>
+    let (_, buckets) =
+      analyzeProjectKeyed
+        (stdlibExportsReader "stdlib")
+        True
+        []
+        (Ref [])
+        (Ref omEmpty)
+        (_ => None)
+        "test/sibling_view_fixtures/\{file}"
+        ["test/sibling_view_fixtures", "stdlib"]
+        rsrc
+        csrc
+    sort (flatMap (b => map (d => diagCodeText d) (snd b)) buckets)
+  _ => ["the prelude pair could not be read"]
+
+diagCodeText : Diag -> String
+diagCodeText (Diag _ code _ _ _ _) = diagIdText code
+
+test "the keyed drive gives a test sibling its subject's view, as check does" = expectEach
+  [
+    (
+      "the sibling is accepted",
+      expectEqual [] (siblingBuckets "counter_test.mdk"),
+    ),
+    (
+      "a module beside the subject gets check's rejection",
+      expectEqual
+        (snd (siblingFixture "other.mdk"))
+        (siblingBuckets "other.mdk"),
+    ),
+  ]
+
+-- The fold entry of `bit_test` after one drive over its graph that was given
+-- [pairs] as the (sibling, subject) set.
+siblingFoldId : String -> String -> List (String, String) -> <IO> Option Int
+siblingFoldId rsrc csrc pairs =
+  let target = "test/sibling_view_fixtures/bit_test.mdk"
+  let roots = ["test/sibling_view_fixtures", "stdlib"]
+  match (loadProgramFilesLocatedCachedSourcesE
+    (Ref omEmpty)
+    (_ => None)
+    target
+    roots)
+    (Ok mods, _) =>
+      let front = frontEnd (stdlibExportsReader "stdlib") (checkFrontDrive
+        "k"
+        []) FrontInput {
+        fiInputs = { defaultDriveInputs | diSibling = pairs },
+        fiAllowInternal = True,
+        fiTrusted = [],
+        fiRuntimeSrc = rsrc,
+        fiCoreSrc = csrc,
+        fiPolicy = DriveUnblocked "k" RecordSteps,
+        fiProgram = FrontGraph mods (desugaredModPairs mods),
+      }
+      let _ = front.foDiags
+      foldCachedIdentity "bit_test"
+    _ => None
+
+test "the fold pass does not share a module's verdict between a sibling drive and a plain one" =
+  match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+    (Ok rsrc, Ok csrc) =>
+      let pairs = [("bit_test", "bit")]
+      let first = siblingFoldId rsrc csrc pairs
+      let again = siblingFoldId rsrc csrc pairs
+      let plain = siblingFoldId rsrc csrc []
+      expectEach [
+        ("the same drive is served", expectEqual first again),
+        ("a drive with another sibling set refolds", expectNotEqual again plain),
+      ]
+    _ => fail "could not read the prelude pair"
+
+-- `check --json`'s message text for one fixture.
+siblingMessages : String -> <IO> String
+siblingMessages target = match (
+  readFile "stdlib/runtime.mdk",
+  readFile "stdlib/core.mdk",
+)
+  (Ok rsrc, Ok csrc) =>
+    let (cj, _, _) = checkJsonFileParts False rsrc csrc target "stdlib"
+    ppCheckJson cj
+  _ => "the prelude pair could not be read"
+
+test "a name private to the subject is not reported as a public ambiguity" =
+  let text = siblingMessages "test/sibling_view_fixtures/ambp_test.mdk"
+  expectEach [
+    (
+      "names the subject's privacy",
+      expectTrue (contains "private to `ambp`" text),
+    ),
+    ("names the other module", expectTrue (contains "`ambp_b`" text)),
+    (
+      "does not say both export it",
+      expectFalse (contains "is exported by both" text),
+    ),
+  ]
+
+-- A scratch project holding `thing_test.mdk` and `alias.mdk`, a link to it.
+aliasedTestImport : String -> <Exec, IO, FileRead, FileWrite> Expectation
+aliasedTestImport dir = match (
+  writeFile "\{dir}/medaka.toml" "[project]\nname = \"scratch\"\n",
+  writeFile "\{dir}/thing_test.mdk" "export forge = 1\n",
+  writeFile "\{dir}/user.mdk" "import alias.{forge}\n\nmain = println forge\n",
+  runVerb "ln" ["-s", "\{dir}/thing_test.mdk", "\{dir}/alias.mdk"],
+)
+  (Ok _, Ok _, Ok _, Ok _) =>
+    let text = siblingMessages "\{dir}/user.mdk"
+    expectEach [
+      (
+        "rejected as a test import",
+        expectTrue (contains "R-TEST-MODULE-IMPORT" text),
+      ),
+      (
+        "names the spelling the user wrote",
+        expectTrue (contains "import `alias` in" text),
+      ),
+      (
+        "not the canonical id",
+        expectFalse (contains "import `thing_test` in" text),
+      ),
+    ]
+  _ => fail "could not write the scratch project"
+
+test "the import ban names the module as the importer wrote it" =
+  withScratchDir aliasedTestImport

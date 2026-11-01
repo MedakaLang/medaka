@@ -304,9 +304,15 @@ bindsNonCtorExport exp name =
 
 export
 pubUsePaths : List Decl -> List UsePath
-pubUsePaths [] = []
-pubUsePaths ((DUse True path _) :: rest) = path :: pubUsePaths rest
-pubUsePaths (_ :: rest) = pubUsePaths rest
+pubUsePaths decls = map fst (pubUsesLocated decls)
+
+-- The `export import` decls of a module with their locs.
+export
+pubUsesLocated : List Decl -> List (UsePath, Loc)
+pubUsesLocated [] = []
+pubUsesLocated ((DUse True path loc) :: rest) =
+  (path, loc) :: pubUsesLocated rest
+pubUsesLocated (_ :: rest) = pubUsesLocated rest
 
 -- The paths of a module's plain imports, the complement of `pubUsePaths`: what
 -- its full view carries beyond its exported one.  The full view carries a plain

@@ -63,6 +63,7 @@ preludeValueNames : List Decl -> List String
 privilegedCarry : ModuleExports -> ModuleExports -> UsePath -> List String
 pubIfaceMethodSets : List Decl -> List (List String)
 pubUsePaths : List Decl -> List UsePath
+pubUsesLocated : List Decl -> List (UsePath, Loc)
 recordFieldOwner : String -> Field -> (String, String)
 reexportBindings : UsePath -> ModuleExports -> List (String, String)
 reexportOrigins : UsePath -> ModuleExports -> List String

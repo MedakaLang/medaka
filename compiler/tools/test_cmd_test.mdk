@@ -411,6 +411,27 @@ test "a forged real-target variable grants nothing to an unrelated entry" = with
     ]
     Err e => fail e)
 
+-- An inherited real-target variable reaches a plain build's emitter child only if
+-- the parent hands it on: the entry stays a non-sibling, so the subject's private
+-- `helper` does not collide with the exported one and the program builds.
+test "a forged real-target variable does not reach the emitter child of a plain build" = withScratchDir
+  (dir => match runVerb "env" [
+    "MEDAKA_SIBLING_TARGET=\{underRoot "test/sibling_view_fixtures/ambp_test.mdk"}",
+    medakaBin,
+    "build",
+    underRoot "test/sibling_view_fixtures/ambp_other.mdk",
+    "-o",
+    "\{dir}/other",
+  ]
+    Ok (code, _, errOut) => match runVerb "\{dir}/other" []
+      Ok (runCode, out, _) => expectAll [
+        labelFail "build: \{errOut}" (expectEqual 0 code),
+        expectEqual 0 runCode,
+        expectEqual "3\n" out,
+      ]
+      Err e => fail e
+    Err e => fail e)
+
 -- The privilege, case by case, on every engine that can run a sibling.  Each
 -- subject's private name is read by its sibling's `main`; the value is fixed
 -- by the design (TEST-SIBLING-ACCESS-DESIGN.md §3.1), not by an engine run.
@@ -429,6 +450,7 @@ siblingCases = [
   ("palias", "2\n4\n2\n"),
   ("pchain", "2\n"),
   ("pduo", "200\n"),
+  ("pshadow", "5\n"),
 ]
 
 siblingVerb : String -> String -> <Exec, IO> Result String (Int, String, String)

@@ -16,7 +16,7 @@ proj = "test/loader_sibling_fixtures/proj"
 
 -- Resolution roots of a user project plus the stdlib tree, as an entry in `proj` sees them.
 sibling : String -> <IO> Option String
-sibling path = siblingSubjectId [] [proj, "stdlib"] "stdlib" path
+sibling path = siblingSubjectId [] [proj, "stdlib"] path
 
 test "sibling in the same directory answers the subject's id" =
   expectEqual (Some "a") (sibling "\{proj}/a_test.mdk")

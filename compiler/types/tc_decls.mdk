@@ -47,7 +47,6 @@ import types.tc_types.{
   RecordInfo,
   TcEnv,
 }
-import types.tc_foreign.{directExternSigs, externDecls}
 import types.tc_mono.{
   applyParams,
   authvarIdOf,
@@ -166,6 +165,7 @@ import frontend.ast.{
   DataVis(..),
   Decl(..),
   EffAtomTy(..),
+  ExternDecl(..),
   Field(..),
   Ident(..),
   IfaceMethod(..),
@@ -176,6 +176,7 @@ import frontend.ast.{
   TyConOrigin(..),
   UseMember(..),
   Variant(..),
+  externDecls,
   firstTyLoc,
   firstTyLocList,
   identOriginFold,
@@ -2761,8 +2762,7 @@ moduleBindingsUnder view fns prog bindings =
           None => [])
         fns)
       omEmpty
-  let externs =
-    omFromNames (map fst (directExternSigs (externDecls prog))) omEmpty
+  let externs = omFromNames (map (e => e.edName) (externDecls prog)) omEmpty
   map
     ((name, binding) => (
       name,
