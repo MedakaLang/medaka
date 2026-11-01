@@ -34,7 +34,7 @@ import types.tc_types.{
 import types.tc_unify.{freshVar, unify}
 import list.{drop, lookup}
 import support.ordmap.{omEmpty, omLookup}
-import types.tc_mono.{firstOrZero, monoTyvarIds, peelQual, tyvarId}
+import types.tc_mono.{monoTyvarIds, peelQual, tyvarId}
 import types.tc_solve.{ifaceRefBare}
 import types.tc_solve_check.{inferredPredicateSlots}
 import types.tc_state.{initialModuleCtx, probeGraphCtx}
@@ -339,14 +339,14 @@ test "when the interface parameter occurs at two positions the first one's mono 
 -- predicate's non-lead survives, and a trace-only id retains PSArgsUnknown.
 inferredPredicateSlotsProbe : ModuleCtx ->
   Unit ->
-  List (String, List String, List String)
+  List (String, Option (List String), List String)
 inferredPredicateSlotsProbe mctx _ =
   let a = freshVar mctx ()
   let b = freshVar mctx ()
   let c = freshVar mctx ()
-  let aid = firstOrZero (monoTyvarIds a)
-  let bid = firstOrZero (monoTyvarIds b)
-  let cid = firstOrZero (monoTyvarIds c)
+  let aid = freshVarId a
+  let bid = freshVarId b
+  let cid = freshVarId c
   let tweak = ifaceRefBare "Tweak"
   let slots =
     inferredPredicateSlots
@@ -362,16 +362,23 @@ inferredPredicateSlotsProbe mctx _ =
       ]
   map (inferredPredicateSlotProbeRow aid bid cid) slots
 
+-- The id of the one type variable a fresh variable mono holds.
+freshVarId : Mono -> Int
+freshVarId mono = match monoTyvarIds mono
+  [id] => id
+  _ => panic "freshVar did not yield exactly one type variable"
+
 inferredPredicateSlotProbeRow : Int ->
   Int ->
   Int ->
   PredicateSlot ->
-  (String, List String, List String)
+  (String, Option (List String), List String)
 inferredPredicateSlotProbeRow aid bid cid slot = (
   slot.psIface.irName,
   match slot.psArgs
-    PSArgsUnknown => ["?"]
-    PSArgsKnown args => map (inferredPredicateSlotMonoTag aid bid cid) args,
+    PSArgsUnknown => None
+    PSArgsKnown args =>
+      Some (map (inferredPredicateSlotMonoTag aid bid cid) args),
   map (inferredPredicateSlotIdTag aid bid cid) slot.psBoundIds,
 )
 
@@ -391,10 +398,10 @@ inferredPredicateSlotIdTag aid bid cid id
 test "inferred predicate slots keep same-lead predicates distinct and collapse an exact duplicate" =
   expectEqual
     [
-      ("Tweak", ["a", "Int"], ["a"]),
-      ("Tweak", ["a", "Bool"], ["a"]),
-      ("Ix", ["a", "b"], ["a", "b"]),
-      ("Num", ["b"], ["b"]),
-      ("", ["?"], ["c"]),
+      ("Tweak", Some ["a", "Int"], ["a"]),
+      ("Tweak", Some ["a", "Bool"], ["a"]),
+      ("Ix", Some ["a", "b"], ["a", "b"]),
+      ("Num", Some ["b"], ["b"]),
+      ("", None, ["c"]),
     ]
     (inferredPredicateSlotsProbe (initialModuleCtx (probeGraphCtx ())) ())

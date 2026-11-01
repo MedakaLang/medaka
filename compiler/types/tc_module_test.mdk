@@ -563,7 +563,7 @@ methodReturnProbeStamp : ModuleCtx ->
   MethodSchemeRow ->
   MethodSchemeRow ->
   List Decl ->
-  (String, String, String)
+  (String, Option String, Option String)
 methodReturnProbeStamp prev ownedRow foreignRow impls =
   let gctx = GraphCtx { prev.mcGraph | graphRun = freshGraphRun () }
   let mctx = carryModuleCtx gctx prev
@@ -588,19 +588,30 @@ methodReturnProbeStamp prev ownedRow foreignRow impls =
     scope
   let goals = optionOr [] (methodReturnArgs gctx request)
   let ownedKey =
-    match ieSelectRowByIface (siteFor mctx) env ownedRow.msrIface goals
-      Some selected => rowRouteKey selected
-      None => ""
+    map
+      rowRouteKey
+      (ieSelectRowByIface (siteFor mctx) env ownedRow.msrIface goals)
   let foreignKey =
-    match ieSelectRowByIface (siteFor mctx) env foreignRow.msrIface goals
-      Some selected => rowRouteKey selected
-      None => ""
+    map
+      rowRouteKey
+      (ieSelectRowByIface (siteFor mctx) env foreignRow.msrIface goals)
   (methodReturnProbeRouteKey tagRef.value, ownedKey, foreignKey)
 
 -- The request is created before the spelling table is pointed at Foreign.  The checker
 -- must still reject a graph containing only Foreign's impl, its positive control must
 -- accept Owner's impl, and the stamper must select Owner's distinct route.
-methodReturnOwnershipProbe : Unit -> (List String, List String, Bool, Bool)
+-- What the ownership probe saw: the checker's error codes with only Foreign's impl
+-- and with both impls, the route key the stamper wrote, and the keys of the rows
+-- the owner's and the foreign interface select.
+data ReturnOwnership = ReturnOwnership {
+  roRejected : List String,
+  roAccepted : List String,
+  roStamped : String,
+  roOwnedKey : Option String,
+  roForeignKey : Option String,
+}
+
+methodReturnOwnershipProbe : Unit -> ReturnOwnership
 methodReturnOwnershipProbe _ =
   let ownedGraph = probeGraphCtx ()
   let ownedDecl =
@@ -630,13 +641,19 @@ methodReturnOwnershipProbe _ =
     ownedRow
     foreignRow
     [foreignImpl, ownedImpl]
-  let observed = (
-    rejected,
-    accepted,
-    actualKey == ownedKey,
-    actualKey /= foreignKey,
-  )
-  observed
+  ReturnOwnership {
+    roRejected = rejected,
+    roAccepted = accepted,
+    roStamped = actualKey,
+    roOwnedKey = ownedKey,
+    roForeignKey = foreignKey,
+  }
 
 test "a return-owner request selects the owner's impl and rejects the foreign one" =
-  expectEqual (["T-NO-IMPL"], [], True, True) (methodReturnOwnershipProbe ())
+  let seen = methodReturnOwnershipProbe ()
+  expectAll [
+    expectEqual ["T-NO-IMPL"] seen.roRejected,
+    expectEqual [] seen.roAccepted,
+    expectEqual (Some seen.roStamped) seen.roOwnedKey,
+    expectNotEqual (Some seen.roStamped) seen.roForeignKey,
+  ]

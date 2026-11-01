@@ -1,4 +1,4 @@
--- Sibling test module for `compiler/types/disposition.mdk` (#1112 A-3). See
+-- Sibling test module for `compiler/types/disposition.mdk`. See
 -- `registry_test.mdk`'s own header for why a `*_test.mdk` sibling exists at
 -- all: excluded from both build fingerprints and the snapshot corpus, so this
 -- file never makes `./medaka` warn stale and never owes a golden.
@@ -87,7 +87,7 @@ test "buildDispositionTable answers a supplied row by exact key" =
   expectTrue
     (isSuppliedFor dogInst "speak" (dispositionLookup dogInst "speak" table))
 
--- #1265's shape: the SAME method spelling, inherited on the SAME underlying
+-- The shape: the SAME method spelling, inherited on the SAME underlying
 -- type, but under two impls of two differently-named interfaces — two
 -- separate instance identities (separate `impl` declarations), so the table
 -- must keep both rows distinct rather than collapsing them onto one
