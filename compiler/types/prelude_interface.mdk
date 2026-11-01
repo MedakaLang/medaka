@@ -154,7 +154,6 @@ freezeInterface cross run externs core standalone invocation = PreludeInterface 
 -- The first published row per standalone name, as the drive's own
 -- `omFromPairs (reverseL topSchemes)` keeps it: inserting the reversed rows
 -- lets the earliest one win.
-export
 standaloneRows : OrdMap Unit -> List (String, Scheme) -> OrdMap Scheme
 standaloneRows names rows =
   omFromPairs (reverseL (filter (row => omHasKey (fst row) names) rows)) omEmpty

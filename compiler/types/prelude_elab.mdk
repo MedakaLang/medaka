@@ -132,7 +132,6 @@ localSuffix s
 
 -- ── the file ────────────────────────────────────────────────────────────────
 
-export
 formatVersion : Int
 formatVersion = 3
 
@@ -636,12 +635,6 @@ seedPreludeElab generation pe =
     None =>
       setPreludeEvidence pe.peEvCounter pe.peEvidence
       preludeElabCacheRef := Some (generation, pe, False)
-
-export
-preludeElabHit : (Int, Int) -> Option PreludeElab
-preludeElabHit generation = match !preludeElabCacheRef
-  Some (seen, pe, _) if seen == generation => Some pe
-  _ => None
 
 -- The value of [generation] with its binders moved onto [core]'s, the process's
 -- own desugar of that generation's core; `None` when nothing is held for it or

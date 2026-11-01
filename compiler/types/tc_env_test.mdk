@@ -74,6 +74,17 @@ import types.tc_types.{
   ModuleCells(..),
 }
 import support.ordmap.{omEmpty, omInsert}
+import types.tc_types.{CeRow(..), ImplUniverse(..), Kind(..)}
+import types.registry.{HeadKey(..), MultiRegistry, mregLookupK, regKeyNTab}
+import types.tc_env.{
+  buildFlatImplEnv, ceRowIface, ceRowMethodNames, ceRowMethods, ceRowParamKinds,
+  ceRowSupers, ceRowTyparams, dispHeadTab, emptyImplAcc, ieUniverseAt,
+  instRefSeq, oblIfaceKey
+}
+import frontend.ast.{KindAnn(..), Ns(..), Require(..), Super(..), TabKey(..)}
+import types.tc_diag_text.{kindName}
+import support.util.{listLen}
+import types.repr.{ppTy}
 
 blobTy : Ty
 blobTy = TyCon {
@@ -346,3 +357,695 @@ test "a name is an import definer once the module records the module it comes fr
     expectTrue (hasImportDefiner m "size"),
     expectFalse (hasImportDefiner m "walk"),
   ]
+
+-- 1. the interface half is A SCOPE.  Two same-spelled interfaces in two modules
+--    land in DIFFERENT buckets: each identity key resolves to exactly ONE row.
+--
+-- 1b. and the bare leg still collapses them — asserted, not just admitted in
+--     the header above, because an assertion is fail-capable and prose is not.
+--     The SAME two rows also sit together under the bare-spelling key, which is
+--     the compatibility leg `oblIfaceKeys` mints for goals that cannot carry an
+--     identity.  Two rows, one bucket: that is #1438's shape, inherited on
+--     purpose, and #1482's to drain.  If this ever reads `1`, the leg was dropped
+--     and #1438's pin must have flipped with it.
+--
+-- 2. ROW IDENTITY.  The two same-spelled impls get DISTINCT `InstRef`s — the
+--    property `bucketKeyEntriesFrom`'s restart-at-0 numbering lacks, and the one
+--    A-3.7 and B-2 are waiting on.  Distinct in BOTH components, so neither the
+--    module scope nor the sequence is carrying it alone.
+--    OWED — this pair CANNOT discriminate an `ord`/`seq` swap: in a corpus of
+--    one impl per module `ord == seq == [0, 1]`, so a builder that wrote the two
+--    components the wrong way round would pass.  A discriminating corpus needs a
+--    module contributing TWO impls (then `ord = [0,0,1]` while `seq = [0,1,2]`).
+--    Not added here because it would also move the ordinal-filter counts in
+--    assertion 3, and this round is comment-only.
+--
+-- 3. TABLE SCOPE — candidacy goes through `ieCandidacyVisibleAt` (A-3.6, #1558), so
+--    what is asserted is the C4/I2 property itself: **the selected universe is
+--    invariant in the reading ordinal.**  Every
+--    impl declared anywhere in the graph is a candidate everywhere, which is what
+--    *"import scoping never decides which instances exist"* means operationally.
+--    The pairs that grade the invariance are `zmod` at ordinal 0 (reads 1) and `amod`
+--    at the `-1` miss (reads 1).  If the prefix filter is ever re-instated on this
+--    path — by re-pointing `ieSnapAt` at `declEnvVisibleAt`, or by giving
+--    `ieCandidacyVisibleAt` an ordinal body — both of those fall back to 0 and this
+--    block goes red.  The other lines (`amod` at 0 and 1, `zmod` at 1) grade nothing
+--    about the invariance on their own and are kept only as the monotonicity floor:
+--    they are what a candidacy predicate that is accidentally too NARROW breaks.
+--    The `-1` line is not a fail-CLOSED assertion on this axis: an unknown module id
+--    sees the WHOLE graph instead of nothing, so the miss sentinel is VACUOUS here.
+--    The sentinel is still live and still fail-CLOSED for
+--    the NAME axis — see `declEnvsOrdOf`, and the `declEnvVisibleTo` tests far
+--    above, which assert the ordinal conjunct is still doing work there.
+--
+-- 4. the projection is the obligation channel'S OWN UNIVERSE, built by the SAME
+--    writer — so A-3.4 PR2's flip could not drift in key minting, only in
+--    population and order, which is what both shadow instruments measured.  Since
+--    that flip this is no longer a claim about a table nobody reads: it exercises the
+--    projection the compiler actually dispatches on.
+--    `zmod` at ordinals 1 and 0 reads `1` both times, which by item 3's own rule grades
+--    nothing, so it is asserted once.  That line still discriminates key minting: a row
+--    indexed under a mis-minted concrete key answers `0` here at every ordinal.
+test "the impl environment holds every row in build order, with distinct identities, invariant in the reading ordinal" = expectAll
+  [
+    expectEqual
+      1
+      (listLen
+        (mregLookupK
+          (ieProbeKey "amod")
+          (ieProbeEnv (probeGraphCtx ())).ieConcrete)),
+    expectEqual
+      1
+      (listLen
+        (mregLookupK
+          (ieProbeKey "zmod")
+          (ieProbeEnv (probeGraphCtx ())).ieConcrete)),
+    expectEqual
+      2
+      (listLen
+        (mregLookupK
+          ieProbeBareKey
+          (ieProbeEnv (probeGraphCtx ())).ieConcrete)),
+    expectEqual
+      ["amod", "zmod"]
+      (map
+        (r => instRefMid (ieRowInst r))
+        (ieProbeEnv (probeGraphCtx ())).ieRows),
+    expectEqual
+      [0, 1]
+      (map
+        (r => instRefSeq (ieRowInst r))
+        (ieProbeEnv (probeGraphCtx ())).ieRows),
+    expectEqual 2 (listLen (ieProbeEnv (probeGraphCtx ())).ieUnivSnaps),
+    expectEqual
+      1
+      (listLen
+        (mregLookupK
+          (ieProbeKey "amod")
+          (ieUnivConcreteOf (ieUniverseAt 0 (ieProbeEnv (probeGraphCtx ())))))),
+    expectEqual
+      1
+      (listLen
+        (mregLookupK
+          (ieProbeKey "amod")
+          (ieUnivConcreteOf (ieUniverseAt 1 (ieProbeEnv (probeGraphCtx ())))))),
+    expectEqual
+      1
+      (listLen
+        (mregLookupK
+          (ieProbeKey "zmod")
+          (ieUnivConcreteOf (ieUniverseAt 0 (ieProbeEnv (probeGraphCtx ())))))),
+    expectEqual
+      1
+      (listLen
+        (mregLookupK
+          (ieProbeKey "zmod")
+          (ieUnivConcreteOf (ieUniverseAt 1 (ieProbeEnv (probeGraphCtx ())))))),
+    expectEqual
+      1
+      (listLen
+        (mregLookupK
+          (ieProbeKey "amod")
+          (ieUnivConcreteOf
+            (ieUniverseAt (0 - 1) (ieProbeEnv (probeGraphCtx ())))))),
+    expectEqual
+      1
+      (listLen
+        (mregLookupK
+          (ieProbeKey "zmod")
+          (ieUnivConcreteOf (ieUniverseAt 1 (ieProbeEnv (probeGraphCtx ())))))),
+  ]
+
+-- 5. the positive control: the corpus is populated and numbered as claimed.  Read
+--    this first — every assertion below is a projection of it, so if this line is
+--    wrong they are all measuring the wrong thing.
+--
+-- 6. `ieByHead` — four properties, one line, each independently fail-capable:
+--    6a. exactly once per row.  Filed in `ieFileRow` (once per row), NOT in
+--        `ieInsertRowAt` (once per `oblIfaceKeys` element).  Move the filing there
+--        and this reads `[0, 0, 1, 1, 2, 2, 4]` — the inflated bucket that would
+--        corrupt every count and `min⊑` taken over it.  Note seq 4 appears ONCE
+--        even then: its interface is `OriginUnresolved`, so it mints one key.  A
+--        double-file audit that only looked at ONE row could pick that one and see
+--        nothing.
+--    6b. INTERFACE-blind, across modules.  `Same`@amod, `Other`@amod, `Same`@zmod
+--        and `Loose` share the bucket: this is `KeyBuckets`' head partition, not
+--        `ieConcrete`'s `[iface, head]` one.  An index keyed on the interface reads
+--        `[0]` or `[0, 2]`, never `[0, 1, 2, 4]`.
+--    6c. ASCENDING BY `instRefSeq` — `mergeByDeclIdx`'s precondition (RUN-B-007's
+--        declaration-index ruling).  `mregAddK` in place of `mregAppendK` reads
+--        `[4, 2, 1, 0]`.
+--    6d. immune to the arm-KEYING ASYMMETRY (RUN-B-025 F1).  Seq 4's interface mints
+--        ONE `oblIfaceKeys` leg where 0/1/2 mint two, and it is in the bucket all the
+--        same — because this key has no interface component.  An index that grew one
+--        drops seq 4 here.  (The head itself carries the TYPE's module, `amod`'s
+--        `Blob` for every row, #1397; an interface's origin never enters it.)
+--
+-- 7. the headless row is in the headless bucket and nowhere else.  `impl Gen a` is
+--    seq 3, and item 6 shows it is absent from the concrete bucket — so the two
+--    arms of `headBucketKey` are not collapsing into one.
+--
+-- 8. the control for 6b, and it is what proves that line tests something: the
+--    INTERFACE-keyed bucket over the SAME env answers with ONE row where the head
+--    bucket answers with three.  If `ieByHead` were a re-spelling of `ieConcrete`,
+--    item 6 would read this value instead.
+--
+-- ITEM 9'S last expectation line is followed directly by A DECLARATION
+--    (`ieProbeBlobHead`), and it has to be.  `medaka test` absorbs an ADJACENT
+--    COMMENT into a test's expected output, so a comment there — the block-end
+--    banner, where this block first ended — makes the last assertion FAIL with
+--    `expected: [3]` / `actual: [3]` and the banner spliced between them: a real
+--    failure that reads like a tooling bug.  Measured on this binary while writing
+--    these tests.  A decl terminates the block; do not move it or interpose a
+--    comment.
+--
+-- 9. BOTH ONCE-PER-row arms file it.  `buildImplEnv` (Module, via `ieAddRows` →
+--    `ieInsertRow`) and `buildFlatImplEnv` (Flat, via `ieIndexRows`) are the two
+--    paths B-2.1-a2 left in parallel, and the failure shape for a parallel pair in
+--    this tree is a fix landing in one and not the other (`evalModulesWith` /
+--    `cevalModules`, `AGENTS.md`).  The same five decls through the FLAT builder must
+--    give the same buckets.  A future index added to only one arm leaves every line
+--    above green and reddens this one.
+--    This is ALSO the arm-symmetry assertion F1 does not have for the interface
+--    keying: identical head buckets on both arms, over a corpus that deliberately
+--    mixes origin-bearing and identity-less interfaces.  It says nothing about
+--    `ieConcrete`/`ieHeadless`, which is where F1 lives and which stays open.
+test "head rows split into the blob-head rows and the headless row" = expectAll
+  [
+    expectEqual
+      [0, 1, 2, 3, 4]
+      (map
+        (r => instRefSeq (ieRowInst r))
+        (ieHeadProbeEnv (probeGraphCtx ())).ieRows),
+    expectEqual
+      [0, 1, 2, 4]
+      (map
+        (r => instRefSeq (ieRowInst r))
+        (ieHeadRows
+          (Some ieProbeBlobHead)
+          (ieHeadProbeEnv (probeGraphCtx ())))),
+    expectEqual
+      [3]
+      (map
+        (r => instRefSeq (ieRowInst r))
+        (ieHeadRows None (ieHeadProbeEnv (probeGraphCtx ())))),
+    expectEqual
+      1
+      (listLen
+        (mregLookupK
+          (ieProbeKey "amod")
+          (ieHeadProbeEnv (probeGraphCtx ())).ieConcrete)),
+    expectEqual
+      [0, 1, 2, 4]
+      (map
+        (r => instRefSeq (ieRowInst r))
+        (ieHeadRows
+          (Some ieProbeBlobHead)
+          (buildFlatImplEnv ieHeadProbeDecls))),
+    expectEqual
+      [3]
+      (map
+        (r => instRefSeq (ieRowInst r))
+        (ieHeadRows None (buildFlatImplEnv ieHeadProbeDecls))),
+  ]
+
+-- 1. WHOLE-GRAPH POPULATION: two rows, build order.
+test "the class environment holds both rows" =
+  expectEqual 2 (listLen (ceProbeEnv (probeGraphCtx ())).ceRows)
+
+-- 1b. ROW ORDER, asserted directly — not merely implied by the identity-keyed
+--     lookups below.  Mirrors `IE`'s own row-order test
+--     (`map (r => instRefMid (ieRowInst r)) ieProbeEnv.ieRows`), which this
+--     unit's corpus otherwise mirrors everywhere except here.  Deleting
+--     `classEnvFinish`'s `reverseL` leaves every OTHER test in this block
+--     green (they all look up by identity, never by position) and is caught
+--     ONLY by this one.
+test "class environment rows keep module order" =
+  expectEqual
+    ["amod", "zmod"]
+    (map ceRowOriginTag (ceProbeEnv (probeGraphCtx ())).ceRows)
+
+-- 2. the interface half is A SCOPE — amod's identity-keyed lookup returns
+--    amod's OWN row (method "foo"), never zmod's (method "bar").  Under a
+--    bare-name key this would read ["bar"] for BOTH modules, since zmod is
+--    registered last.
+test "the interface half of the class environment is a scope per module" = expectAll
+  [
+    expectEqual
+      ["foo"]
+      (ceRowMethodNamesAt "amod" 1 (ceProbeEnv (probeGraphCtx ()))),
+    expectEqual
+      ["bar"]
+      (ceRowMethodNamesAt "zmod" 1 (ceProbeEnv (probeGraphCtx ()))),
+  ]
+
+-- 2b. THE RAW `Ty` ITSELF, not just the method's name — the content Step 0
+--     is about.  `foo : a -> Int`, `bar : a -> String`; a mutation that
+--     replaced either with a bogus constant type is caught here, not by the
+--     name-only assertions above.
+test "class environment rows carry each method's raw type" = expectAll [
+  expectEqual
+    ["a -> Int"]
+    (ceRowMethodTysAt "amod" 1 (ceProbeEnv (probeGraphCtx ()))),
+  expectEqual
+    ["a -> String"]
+    (ceRowMethodTysAt "zmod" 1 (ceProbeEnv (probeGraphCtx ()))),
+]
+
+-- 3. TABLE SCOPE — the ordinal, applied through `declEnvVisibleAt` and
+--    nothing else.  At ordinal 0 only amod is visible; zmod's row (declared
+--    at ordinal 1) is not yet in scope.  This said "the filter A-3.6 deletes".
+--    A-3.6 (#1558) did not delete it: `CE` kept its ordinal filter when the
+--    predicate split, so these two lines are a LIVE assertion of a live rule, not
+--    a countdown.  The `IE` block's item 3 asserts the OPPOSITE property for the
+--    same shape — that is the split, visible as two tests that disagree on
+--    purpose.
+test "class environment rows are filtered by the reading ordinal" = expectAll [
+  expectEqual [] (ceRowMethodNamesAt "zmod" 0 (ceProbeEnv (probeGraphCtx ()))),
+  expectEqual
+    ["bar"]
+    (ceRowMethodNamesAt "zmod" 1 (ceProbeEnv (probeGraphCtx ()))),
+]
+
+-- 4. TYPARAMS and SUPERS are carried unelaborated, per-row, per-module (not
+--    shared or collapsed either) — `superParams`/`superOrigin` too, not only
+--    `superHead`: `ceSuperEq`'s params are `["a"]` and its origin is the
+--    PRELUDE (`OriginModule "core"`), both distinct from the enclosing
+--    interface's own module — a mutation that garbled either would not be
+--    caught by `ceRowSuperHeadsAt` alone.
+test "class environment rows carry typarams and supers per row" = expectAll [
+  expectEqual ["a"] (ceRowTyparamsAt "amod" 1 (ceProbeEnv (probeGraphCtx ()))),
+  expectEqual
+    ["Eq"]
+    (ceRowSuperHeadsAt "zmod" 1 (ceProbeEnv (probeGraphCtx ()))),
+  expectEqual
+    ["a"]
+    (ceRowSuperParamsAt "zmod" 1 (ceProbeEnv (probeGraphCtx ()))),
+  expectEqual
+    "core"
+    (ceRowSuperOriginAt "zmod" 1 (ceProbeEnv (probeGraphCtx ()))),
+  expectEqual "Same" (ceRowIfaceNameAt "zmod" 1 (ceProbeEnv (probeGraphCtx ()))),
+]
+
+-- 5. graded kind inference, positional with `ceTyparams` (here `["f"]`):
+--    slot 0 (f's first argument, `e`) is `KRow`; slot 1 (`a`) is `KType`.
+test "graded kind inference is positional with the typarams" =
+  expectEqual
+    [["Effect", "Type"]]
+    (ceRowParamKindNamesAt ceGradedKey 0 (ceGradedEnv (probeGraphCtx ())))
+
+-- 6. ungraded kind inference: `f`'s one applied slot is `KType`, present and
+--    correct — not dropped, not defaulted to empty.
+test "ungraded kind inference keeps the one applied slot" =
+  expectEqual
+    [["Type"]]
+    (ceRowParamKindNamesAt ceFunctorKey 0 (ceFunctorEnv (probeGraphCtx ())))
+
+-- ── §9.7's scoping proofs, as ASSERTIONS rather than sentences ────────────────
+--
+-- read this before the assertions, or they will tell you something false.
+-- These doctests look ONLY at the IDENTITY leg, which is the leg that does not
+-- collapse.  **`IE` does still collapse same-spelled interfaces on its other
+-- LEG, DELIBERATELY.**  `ieInsertRow` indexes every row under `oblIfaceKeys`,
+-- which is TWO keys — the identity key AND the bare-spelling compatibility leg —
+-- so `amod.Same` and `zmod.Same` below share the bare bucket, exactly as the
+-- obligation channel does today.  That is inherited on purpose (see
+-- `insertUnivImplKeys` for the `ifaceRefBare` goal producers that require it —
+-- U1b (#1482) retired two of the three; the METHOD-OCCURRENCE one is #1507's, and
+-- removing the leg is that unit's drain, not this one's), which is why #1438's
+-- pin still reproduces after A-3.4 and after U1b.
+--
+-- So do not read the assertions below as "IE has no collapse".  They assert the
+-- narrower true thing: the identity key is a SCOPE — it resolves to exactly one
+-- row where a bare key would answer with two — which is what A-3 is building
+-- toward and what `InstRef` and A-3.7 will consume.
+--
+-- `AGENTS.md` names the program-global table as this tree's most expensive shape
+-- and demands the key's scope be PROVEN.  The corpus below is the adversarial
+-- case: two unrelated modules that declare the same-spelled interface `Same` and
+-- each impl it at ONE type, `amod`'s `Blob`.  Under a bare-name key the two
+-- collapse into one bucket and one index — which is exactly the collapse A-3 is
+-- removing — so every assertion here is fail-capable in the direction that
+-- matters.  The type is shared on purpose: a head's key carries the TYPE's
+-- module (`headKeyTag`, #1397), so two modules' own `Blob`s are two heads and
+-- would test nothing about the interface half.
+ieTyBlob : Ty
+ieTyBlob = TyCon {
+  tyConName = "Blob",
+  tyConLoc = None,
+  tyConOrigin = OriginModule "amod",
+}
+
+ieSameImplIn : String -> Decl
+ieSameImplIn m = DImpl {
+  pub = True,
+  iface = "Same",
+  tys = [ieTyBlob],
+  reqs = [],
+  methods = [],
+  implOrigin = OriginModule m,
+  implIfaceLoc = None,
+}
+
+-- the concrete-bucket key module [m]'s own `impl Same Blob` is indexed under.
+-- Minted by the SAME calls `ieInsertRowAt` makes, so the assertions below test
+-- the real key rather than a re-spelling of it.
+ieProbeKey : String -> RegKey
+ieProbeKey m = regKeyNTab [
+  oblIfaceKey IfaceRef { irName = "Same", irOrigin = OriginModule m },
+  dispHeadTab (headKeyOfCon (OriginModule "amod") "Blob"),
+]
+
+-- The COMPATIBILITY leg's key: bare interface spelling over the one shared head,
+-- so it is the SAME key for both modules — which is exactly why both rows land
+-- in it.
+ieProbeBareKey : RegKey
+ieProbeBareKey = regKeyNTab [
+  TkBare NsIface "Same",
+  dispHeadTab (headKeyOfCon (OriginModule "amod") "Blob"),
+]
+
+-- ordinal 0 = `amod`, ordinal 1 = `zmod`; no import edge between them is needed
+-- or expressible here — that is the point of the shape.
+ieProbeEnv : GraphCtx -> ImplEnv
+ieProbeEnv gctx = buildImplEnv [
+  declEnvModule gctx 0 "amod" [ieSameImplIn "amod"],
+  declEnvModule gctx 1 "zmod" [ieSameImplIn "zmod"],
+]
+
+ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
+ieUnivConcreteOf (ImplUniverse conc _) = conc
+
+-- ── ARCH B-2.1-a3: the HEAD-keyed index's corpus, built to DISCRIMINATE ────────
+-- `ieProbeEnv` above cannot grade `ieByHead`: one impl per module means "exactly
+-- once", "ascending" and "interface-blind" all read the same value, so an index that
+-- double-filed, prepended, or was keyed on the interface would pass it.  This corpus
+-- separates the three.  Four of its five impls carry an ORIGIN-BEARING interface, so
+-- `oblIfaceKeys` mints TWO keys for each — which is what makes the double-file
+-- hazard reachable at all (an all-`OriginUnresolved` corpus would mint one apiece and
+-- grade nothing about the placement).
+--
+--   `amod` (ordinal 0): `impl Same Blob`, `impl Other Blob` — two DIFFERENT
+--                       interfaces at the SAME head, which is the case `ieConcrete`
+--                       separates and `ieByHead` must not.
+--   `zmod` (ordinal 1): `impl Same Blob` (its own same-spelled head — `dispHeadTab`
+--                       is spelling-keyed, #1317 T1, so it shares the bucket); a
+--                       fully-general `impl Gen a`, which has no head tycon and must
+--                       land in the HEADLESS bucket instead; and one impl whose
+--                       interface is `OriginUnresolved` (below).
+--
+-- THE `OriginUnresolved` row is the `ieByHead`-IS-IMMUNE-TO-F1 PROBE, and it is
+-- the reason this corpus has a fifth member.  RUN-B-025's review finding F1: the
+-- interface keying of `a2`'s shared ref is ARM-ASYMMETRIC — `oblIfaceKeys` branches
+-- on `irOrigin`, and a user-declared interface has no `flatTyOriginScope` entry on
+-- Flat, so its impls file under ONE key there and TWO on Module.  `ieByHead` cannot
+-- inherit that, because its key has no interface component AT ALL: it is
+-- `headBucketKey (univReceiverTag tys)`, and `dispHeadTab hk = TkBare NsType
+-- (headKeyName hk)` — bare spelling, origin-blind (#1317 T1).  This row asserts that
+-- rather than arguing it: it lands in the SAME head bucket as its origin-bearing
+-- siblings while minting half as many interface keys.
+ieOtherImplIn : String -> Decl
+ieOtherImplIn m = DImpl {
+  pub = True,
+  iface = "Other",
+  tys = [ieTyBlob],
+  reqs = [],
+  methods = [],
+  implOrigin = OriginModule m,
+  implIfaceLoc = None,
+}
+
+-- a fully-general `impl Gen a`: `univReceiverTag` answers `None` for a `TyVar` head,
+-- so this row is the headless-bucket case (#1128's shape).
+ieGenImplIn : String -> Decl
+ieGenImplIn m = DImpl {
+  pub = True,
+  iface = "Gen",
+  tys = [TyVar "a"],
+  reqs = [],
+  methods = [],
+  implOrigin = OriginModule m,
+  implIfaceLoc = None,
+}
+
+-- `impl Loose Blob` with an IDENTITY-LESS interface: `oblIfaceKeys` mints ONE key for
+-- it (the bare leg) where every sibling above gets two.  Its HEAD is an ordinary
+-- concrete `Blob`, so a head-keyed index must file it beside them regardless — see the
+-- F1 paragraph above.
+ieLooseImplIn : String -> Decl
+ieLooseImplIn m = DImpl {
+  pub = True,
+  iface = "Loose",
+  tys = [ieTyBlob],
+  reqs = [],
+  methods = [],
+  implOrigin = OriginUnresolved,
+  implIfaceLoc = None,
+}
+
+ieHeadProbeAmod : List Decl
+ieHeadProbeAmod = [ieSameImplIn "amod", ieOtherImplIn "amod"]
+
+ieHeadProbeZmod : List Decl
+ieHeadProbeZmod =
+  [ieSameImplIn "zmod", ieGenImplIn "zmod", ieLooseImplIn "zmod"]
+
+-- the SAME four decls as one standalone program, so both once-per-row
+-- filing paths are graded over one corpus and a drift between them is visible.
+ieHeadProbeDecls : List Decl
+ieHeadProbeDecls = ieHeadProbeAmod ++ ieHeadProbeZmod
+
+ieHeadProbeEnv : GraphCtx -> ImplEnv
+ieHeadProbeEnv gctx = buildImplEnv [
+  declEnvModule gctx 0 "amod" ieHeadProbeAmod,
+  declEnvModule gctx 1 "zmod" ieHeadProbeZmod,
+]
+
+ieProbeBlobHead : HeadKey
+ieProbeBlobHead = headKeyOfCon (OriginModule "amod") "Blob"
+
+-- ── doctests — a discriminating two-module, same-spelled-interface corpus ───
+-- Mirrors `IE`'s `ieProbeEnv` shape deliberately: `AGENTS.md` demands a program
+-- -global table's key be PROVEN scoped, and the proof is the adversarial case —
+-- two unrelated modules declaring the SAME-SPELLED interface `Same`, each with
+-- DIFFERENT content, so a bare-name (last-write-wins) construction would
+-- collapse them and every assertion below would read the WRONG module's
+-- content.  Every assertion here is fail-capable in that direction.
+ceMethodFoo : IfaceMethod
+ceMethodFoo =
+  IfaceMethod "foo" (TyFun (TyVar "a") (tyConBuiltin "Int" None)) None None
+
+ceMethodBar : IfaceMethod
+ceMethodBar =
+  IfaceMethod "bar" (TyFun (TyVar "a") (tyConBuiltin "String" None)) None None
+
+ceSuperEq : Super
+ceSuperEq = Super {
+  superHead = "Eq",
+  superParams = ["a"],
+  superOrigin = OriginModule "core",
+}
+
+ceSameDeclIn : String -> List IfaceMethod -> Decl
+ceSameDeclIn m methods = DInterface {
+  pub = True,
+  def = False,
+  name = "Same",
+  typarams = ["a"],
+  typaramKinds = [None],
+  supers = [ceSuperEq],
+  methods = methods,
+  ifaceOrigin = OriginModule m,
+  ifaceNameLoc = None,
+}
+
+-- ordinal 0 = amod, ordinal 1 = zmod; no import edge between them, exactly as
+-- `ieProbeEnv` needs none — the point of the shape is that identity alone,
+-- not any resolve-level relationship, keeps the two rows apart.
+ceProbeEnv : GraphCtx -> ClassEnv
+ceProbeEnv gctx = buildClassEnv gctx [
+  declEnvModule gctx 0 "amod" [ceSameDeclIn "amod" [ceMethodFoo]],
+  declEnvModule gctx 1 "zmod" [ceSameDeclIn "zmod" [ceMethodBar]],
+]
+
+ceProbeKey : String -> RegKey
+ceProbeKey m = regKeyOfTab (ifaceTabKey (OriginModule m) "Same")
+
+-- Observes the raw `Ty` itself, via the existing renderer (`ppTy`) rather than
+-- a bespoke one — this is what the WHOLE Step 0 ruling is about: a mutation
+-- that replaced every method's `Ty` with a bogus constant while leaving names
+-- correct would be invisible to `ceRowMethodNames` alone and must not be
+-- invisible here too.
+ceMethodTyStr : (String, Ty, List (String, List Kind)) -> String
+ceMethodTyStr (_, ty, _) = ppTy ty
+
+ceSuperHead : Super -> String
+ceSuperHead (Super { superHead = h, ... }) = h
+
+-- The module id, for a ROW rather than a lookup result — the row-ORDER
+-- assertion below needs the identity of EACH row in `ceRows`, not a
+-- single keyed lookup, exactly as `instRefMid`/`ieRowInst` give `IE`'s
+-- doctests the same thing.  The non-module arms never occur on a `CeRow`
+-- built from a real `DInterface` (its `ifaceOrigin` is threaded straight
+-- from the decl, and this doctest corpus stamps every fixture
+-- `OriginModule _`).
+--
+-- NAMED, NOT A WILDCARD — this tree's documented convention for a closed
+-- sum like `TyConOrigin`, not a style preference of this block's.
+-- `resolve.mdk:3783/3894/4087` and `originPhrase` (`typecheck.mdk`, pinned in
+-- `tc_originun_allowed` below) all enumerate `TyConOrigin`'s three
+-- inhabitants explicitly *"so a fourth inhabitant is made to show up"* at
+-- every match, rather than being silently absorbed by a wildcard — a
+-- wildcard here would still be TOTAL, but totality is not what the
+-- convention is protecting; DISCOVERABILITY of a future fourth constructor
+-- is.  The tree already answers the wildcard question the other way in five
+-- places, so a wildcard here would settle it unilaterally.  Per the
+-- documented remedy those five sites use, these two eliminator arms are
+-- listed in `test/typecheck_compiler_source.sh`'s `tc_originun_allowed`
+-- rather than the ratchet's grep being widened.
+ceRowOriginTag : CeRow -> String
+ceRowOriginTag r = match (ceRowIface r).irOrigin
+  OriginModule m => m
+  OriginBuiltin => "<builtin>"
+  OriginUnresolved => "<unresolved>"
+
+-- lookup-and-project in one call, so the doctest lines below stay one
+-- expression each (this file's doctest extraction is single-line-per-`>`).
+ceRowMethodNamesAt : String -> Int -> ClassEnv -> List String
+ceRowMethodNamesAt m cur env = match ceLookupAt (ceProbeKey m) cur env
+  None => []
+  Some r => ceRowMethodNames r
+
+ceRowMethodTysAt : String -> Int -> ClassEnv -> List String
+ceRowMethodTysAt m cur env = match ceLookupAt (ceProbeKey m) cur env
+  None => []
+  Some r => map ceMethodTyStr (ceRowMethods r)
+
+ceRowTyparamsAt : String -> Int -> ClassEnv -> List String
+ceRowTyparamsAt m cur env = match ceLookupAt (ceProbeKey m) cur env
+  None => []
+  Some r => ceRowTyparams r
+
+ceRowSuperHeadsAt : String -> Int -> ClassEnv -> List String
+ceRowSuperHeadsAt m cur env = match ceLookupAt (ceProbeKey m) cur env
+  None => []
+  Some r => map ceSuperHead (ceRowSupers r)
+
+-- `superParams`/`superOrigin` are asserted SEPARATELY from `superHead` above
+-- (rather than folded into one combined string) so a mutation to any one of
+-- the three `Super` fields fails a doctest naming that field, not a
+-- catch-all — same discipline as the per-field `ceRow*At` accessors.
+ceSuperParams : Super -> List String
+ceSuperParams (Super { superParams = ps, ... }) = ps
+
+-- NAMED, NOT A WILDCARD — same convention, same reason, as `ceRowOriginTag`
+-- above; see its comment. Both eliminator arms are pinned in
+-- `tc_originun_allowed` alongside `ceRowOriginTag`'s.
+ceSuperOrigin : Super -> String
+ceSuperOrigin (Super { superOrigin = (OriginModule m), ... }) = m
+ceSuperOrigin (Super { superOrigin = OriginBuiltin, ... }) = "<builtin>"
+ceSuperOrigin (Super { superOrigin = OriginUnresolved, ... }) = "<unresolved>"
+
+ceRowSuperParamsAt : String -> Int -> ClassEnv -> List String
+ceRowSuperParamsAt m cur env = match ceLookupAt (ceProbeKey m) cur env
+  None => []
+  Some r => flatMap ceSuperParams (ceRowSupers r)
+
+ceRowSuperOriginAt : String -> Int -> ClassEnv -> String
+ceRowSuperOriginAt m cur env = match ceLookupAt (ceProbeKey m) cur env
+  None => ""
+  Some r => match ceRowSupers r
+    [] => ""
+    s :: _ => ceSuperOrigin s
+
+ceRowIfaceNameAt : String -> Int -> ClassEnv -> String
+ceRowIfaceNameAt m cur env = match ceLookupAt (ceProbeKey m) cur env
+  None => ""
+  Some r => (ceRowIface r).irName
+
+-- One row's param-kind signature, rendered through `kindName` (the EXISTING
+-- `Kind -> String` total function, `:1904` — reused rather than shadowed by a
+-- doctest-only shortener) — takes a bare `RegKey` + ordinal rather than a
+-- module id, so it serves both the `ceProbeEnv` corpus below (via `ceProbeKey`)
+-- and the graded/ungraded fixtures further down, whose identities are minted
+-- directly rather than through `ceProbeKey`.
+ceRowParamKindNamesAt : RegKey -> Int -> ClassEnv -> List (List String)
+ceRowParamKindNamesAt key cur env = match ceLookupAt key cur env
+  None => []
+  Some r => map (ks => map kindName ks) (ceRowParamKinds r)
+
+-- ── a graded fixture: KRow inference must match `ifaceParamKindsOf` ──────────
+-- `run : f e a -> <e> a` — typaram `f`'s slot-0 argument is the bare tyvar
+-- `e`, which the SAME signature's return type also uses in an effect-tail
+-- position (`<e> a`), so slot 0 must infer `KRow` and slot 1 (`a`, never a
+-- tail) must infer `KType`.  Until #1557 A-3.5c this asserted agreement with the
+-- live `universeIfaceParamKinds` table; that table is retired and `ceParamKinds` IS
+-- the answer now, so these doctests grade the production computation directly.
+ceGradedMethod : IfaceMethod
+ceGradedMethod =
+  IfaceMethod
+    "run"
+    (TyFun
+      (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a"))
+      (TyEffect [] ["e"] (TyVar "a")))
+    None
+    None
+
+ceGradedIface : Decl
+ceGradedIface = DInterface {
+  pub = True,
+  def = False,
+  name = "Async",
+  typarams = ["f"],
+  typaramKinds = [Some (KindArrow KindEffect (KindArrow KindType KindType))],
+  supers = [],
+  methods = [ceGradedMethod],
+  ifaceOrigin = OriginModule "gmod",
+  ifaceNameLoc = None,
+}
+
+ceGradedEnv : GraphCtx -> ClassEnv
+ceGradedEnv gctx =
+  buildClassEnv gctx [declEnvModule gctx 0 "gmod" [ceGradedIface]]
+
+ceGradedKey : RegKey
+ceGradedKey = regKeyOfTab (ifaceTabKey (OriginModule "gmod") "Async")
+
+-- ── an UNGRADED fixture: every slot is still RECORDED ("EVERY slot is recorded,
+-- graded or not" — the retired writer's rule, which `ceParamKinds` keeps because
+-- `checkGradedImplTys`' `anyKRow` guard, not the table, is what filters).  #1557
+-- A-3.5c makes this fixture LOAD-BEARING rather than descriptive: `ceParamKinds` is
+-- now the production answer, so dropping non-`KRow` rows would shift every later
+-- slot's index and mis-judge a graded impl head.  `fmap : f a -> f a` applies `f` but never puts its argument in an
+-- effect-tail position anywhere in the signature, so slot 0 must infer
+-- `KType`, not be DROPPED from the row.  This is the fixture the reviewer's
+-- mutation (b) — deleting non-`KRow` rows from `ceParamKinds` — needs to be
+-- caught by: that mutation leaves the graded doctest above untouched (its one
+-- slot IS `KRow`) and is invisible without a fixture whose only slot is NOT.
+ceFunctorMethod : IfaceMethod
+ceFunctorMethod =
+  IfaceMethod
+    "fmap"
+    (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyApp (TyVar "f") (TyVar "a")))
+    None
+    None
+
+ceFunctorIface : Decl
+ceFunctorIface = DInterface {
+  pub = True,
+  def = False,
+  name = "Functor",
+  typarams = ["f"],
+  typaramKinds = [None],
+  supers = [],
+  methods = [ceFunctorMethod],
+  ifaceOrigin = OriginModule "fmod",
+  ifaceNameLoc = None,
+}
+
+ceFunctorEnv : GraphCtx -> ClassEnv
+ceFunctorEnv gctx =
+  buildClassEnv gctx [declEnvModule gctx 0 "fmod" [ceFunctorIface]]
+
+ceFunctorKey : RegKey
+ceFunctorKey = regKeyOfTab (ifaceTabKey (OriginModule "fmod") "Functor")

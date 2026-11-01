@@ -17,10 +17,12 @@
 import test.{expectTrue, expectEqual, expectAll}
 import frontend.ast.{TyConOrigin(..)}
 import types.repr.{IfaceRef(..)}
+import support.ordmap.{omEmpty}
 import types.disposition.{
+  DispositionTable(..),
   InstId(..),
   MethodDisposition(..),
-  buildDispositionTable,
+  insertDispositions,
   dispositionKey,
   dispositionLookup,
   dispositionRows,
@@ -28,6 +30,18 @@ import types.disposition.{
   instIdMid,
   instIdSeq,
   dispositionProblems,
+}
+
+-- Fold [rows] into the table's map index, panicking on the first duplicate
+-- (instance, method) key: two rows publishing the same slot is a producer bug,
+-- never a case with a policy, so `dispositionLookup` must answer with exactly
+-- one row or none.
+buildDispositionTable : List MethodDisposition -> DispositionTable
+buildDispositionTable rows = DispositionTable {
+  dtRows = rows,
+  dtIndex = insertDispositions rows omEmpty,
+  dtInheritors = omEmpty,
+  dtIfaceSuperCounts = omEmpty,
 }
 
 speakIface : IfaceRef

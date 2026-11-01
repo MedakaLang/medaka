@@ -79,14 +79,7 @@ methodLevelConstraintSlots : List String -> Ty -> List Constraint
 methodOmittedVars : ModuleCtx -> String -> List (String, Mono)
 methodReturnProbeCodes : ModuleCtx -> MethodSchemeRow -> List Decl -> (List String, ModuleCtx)
 methodReturnProbeRequest : ModuleCtx -> MethodSchemeRow -> MethodReturnRequest
-methodReturnProbeSlotCase : ModuleCtx -> MethodSchemeRow -> MethodSchemeRow -> Bool -> ((List String, List String), ModuleCtx)
 methodReturnRequest : ModuleCtx -> MethodSchemeRow -> Mono -> MethodInstantiationSubst -> Option EvId -> MethodReturnRequest
-methodReturnSlotOwnershipProbe : Unit -> ((List String, List String), (List String, List String), (List String, List String))
-methodReturnVectorCompletenessProbe : Unit -> (Option (List String), Option (List String), Bool, Bool)
-methodRowDeclarationProbe : Unit -> (List (String, String, Int, Int), List (String, String, Int, Int), (Int, Int, Bool, Int))
-methodRowFreshnessProbe : Unit -> ((Int, Int, Int, List Int, List Int), (List (List Int), List (List Int), List (List Int)))
-methodRowNumericAnchorProbe : Unit -> (Int, String, List String, List (String, Bool, Bool, String, String))
-methodRowSlotAllocationProbe : Unit -> (List Int, List (List Int), List (List Int), List (List Int), List (List Int))
 methodSlotSubst : List Int -> List Int -> List (Int, Mono) -> Option (List (Int, Mono))
 mintDictAt : ModuleCtx -> (String -> EvId -> Unit) -> String -> Expr
 mintGrantOnly : ModuleCtx -> String -> Expr
@@ -102,7 +95,6 @@ moduleDictNames : List String -> List (String, List Decl) -> List String
 noDictHook : String -> EvId -> Unit
 notAnOpSite : EvId -> a
 nthMethodMono : Int -> List Mono -> Mono
-observeMethodSchemeRowsForTest : Unit -> MethodRowTestObservation
 omittedParamVars : ModuleCtx -> List String -> Ty -> List (String, Mono)
 onlyCell : List EvCell -> Option EvCell
 pinUnboundIds : ModuleCtx -> List Int -> List (Int, Mono) -> List (Int, Mono)

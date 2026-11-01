@@ -1,5 +1,5 @@
 # META
-source_lines=4465
+source_lines=4379
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_module: the per-module check in one order: declarations, top-level groups, test and prop
@@ -4381,92 +4381,6 @@ stampTailDecl _ (d@(DFunDef _ _ _ _ _ _)) = d
 stampTailDecl _ (d@(DLetGroup _ _)) = d
 stampTailDecl top (DAttrib attrs d) = DAttrib attrs (stampTailDecl top d)
 stampTailDecl top d = stampDeclWith top d
-
--- test-only observation: declarations whose only callers are tests and probes.
-
--- Runs in a carry of [prev], the caller's record, in its graph record with a fresh
--- graph run.
-methodReturnProbeStamp : ModuleCtx ->
-  MethodSchemeRow ->
-  MethodSchemeRow ->
-  List Decl ->
-  (String, String, String)
-methodReturnProbeStamp prev ownedRow foreignRow impls =
-  let gctx = GraphCtx { prev.mcGraph | graphRun = freshGraphRun () }
-  let mctx = carryModuleCtx gctx prev
-  let scope = methodReturnProbeScope mctx "return-owner-stamper"
-  let request = methodReturnProbeRequest mctx ownedRow
-  methodReturnProbeSpelling mctx foreignRow
-  let env = buildFlatImplEnv impls
-  mctx.mcCells.bodyImplEnvRef := env
-  let tagRef = Ref RNone
-  let implRef = Ref []
-  let resultMono = stripArrows request.mrrOccurrence
-  resolveExactReturnSite
-    (siteFor mctx)
-    omEmpty
-    "make"
-    tagRef
-    implRef
-    resultMono
-    request
-    ""
-    None
-    scope
-  let goals = optionOr [] (methodReturnArgs gctx request)
-  let ownedKey =
-    match ieSelectRowByIface (siteFor mctx) env ownedRow.msrIface goals
-      Some selected => rowRouteKey selected
-      None => ""
-  let foreignKey =
-    match ieSelectRowByIface (siteFor mctx) env foreignRow.msrIface goals
-      Some selected => rowRouteKey selected
-      None => ""
-  (methodReturnProbeRouteKey tagRef.value, ownedKey, foreignKey)
-
--- The request is created before the spelling table is pointed at Foreign.  The checker
--- must still reject a graph containing only Foreign's impl, its positive control must
--- accept Owner's impl, and the stamper must select Owner's distinct route.
-methodReturnOwnershipProbe : Unit -> (List String, List String, Bool, Bool)
-methodReturnOwnershipProbe _ =
-  let ownedGraph = probeGraphCtx ()
-  let ownedDecl =
-    methodReturnProbeIface
-      "return-owner"
-      "Owner"
-      (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
-  let foreignDecl =
-    methodReturnProbeIface
-      "return-foreign"
-      "Foreign"
-      (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
-  let ownedCtx = initialModuleCtx ownedGraph
-  let ownedRow = firstMethodRow (ifaceMethodSchemeRows ownedCtx [ownedDecl])
-  let foreignGraph = GraphCtx { ownedGraph | graphRun = freshGraphRun () }
-  let foreignCtx = carryModuleCtx foreignGraph ownedCtx
-  let foreignRow =
-    firstMethodRow (ifaceMethodSchemeRows foreignCtx [foreignDecl])
-  let ownedImpl = methodReturnProbeImpl "return-owner" "Owner"
-  let foreignImpl = methodReturnProbeImpl "return-foreign" "Foreign"
-  let (rejected, rejectedCtx) =
-    methodReturnProbeCodes foreignCtx ownedRow [foreignImpl]
-  let (accepted, acceptedCtx) =
-    methodReturnProbeCodes rejectedCtx ownedRow [foreignImpl, ownedImpl]
-  let (actualKey, ownedKey, foreignKey) = methodReturnProbeStamp
-    acceptedCtx
-    ownedRow
-    foreignRow
-    [foreignImpl, ownedImpl]
-  let observed = (
-    rejected,
-    accepted,
-    actualKey == ownedKey,
-    actualKey /= foreignKey,
-  )
-  observed
-
--- > methodReturnOwnershipProbe ()
--- (["T-NO-IMPL"], [], True, True)
 # DESUGAR
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "ConPayload" true) (mem "Decl" true) (mem "EvEntry" true) (mem "EvVal" true) (mem "Expr" true) (mem "ExternDecl" true) (mem "FunClause" true) (mem "Ident" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "PropParam" true) (mem "Route" true) (mem "Super" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "EvTable" false) (mem "identOriginFold" false) (mem "mkIdent" false) (mem "tyConBuiltin" false))))
@@ -4928,10 +4842,6 @@ methodReturnOwnershipProbe _ =
 (DFunDef false "stampTailDecl" (PWild (PAs "d" (PCon "DLetGroup" PWild PWild))) (EVar "d"))
 (DFunDef false "stampTailDecl" ((PVar "top") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampTailDecl") (EVar "top")) (EVar "d"))))
 (DFunDef false "stampTailDecl" ((PVar "top") (PVar "d")) (EApp (EApp (EVar "stampDeclWith") (EVar "top")) (EVar "d")))
-(DTypeSig false "methodReturnProbeStamp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "MethodSchemeRow") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))))
-(DFunDef false "methodReturnProbeStamp" ((PVar "prev") (PVar "ownedRow") (PVar "foreignRow") (PVar "impls")) (EBlock (DoLet false false (PVar "gctx") (EVariantUpdate "GraphCtx" (EFieldAccess (EVar "prev") "mcGraph") ((fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit)))))) (DoLet false false (PVar "mctx") (EApp (EApp (EVar "carryModuleCtx") (EVar "gctx")) (EVar "prev"))) (DoLet false false (PVar "scope") (EApp (EApp (EVar "methodReturnProbeScope") (EVar "mctx")) (ELit (LString "return-owner-stamper")))) (DoLet false false (PVar "request") (EApp (EApp (EVar "methodReturnProbeRequest") (EVar "mctx")) (EVar "ownedRow"))) (DoExpr (EApp (EApp (EVar "methodReturnProbeSpelling") (EVar "mctx")) (EVar "foreignRow"))) (DoLet false false (PVar "env") (EApp (EVar "buildFlatImplEnv") (EVar "impls"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "bodyImplEnvRef")) (EVar "env"))) (DoLet false false (PVar "tagRef") (EApp (EVar "Ref") (EVar "RNone"))) (DoLet false false (PVar "implRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "resultMono") (EApp (EVar "stripArrows") (EFieldAccess (EVar "request") "mrrOccurrence"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveExactReturnSite") (EApp (EVar "siteFor") (EVar "mctx"))) (EVar "omEmpty")) (ELit (LString "make"))) (EVar "tagRef")) (EVar "implRef")) (EVar "resultMono")) (EVar "request")) (ELit (LString ""))) (EVar "None")) (EVar "scope"))) (DoLet false false (PVar "goals") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "methodReturnArgs") (EVar "gctx")) (EVar "request")))) (DoLet false false (PVar "ownedKey") (EMatch (EApp (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EApp (EVar "siteFor") (EVar "mctx"))) (EVar "env")) (EFieldAccess (EVar "ownedRow") "msrIface")) (EVar "goals")) (arm (PCon "Some" (PVar "selected")) () (EApp (EVar "rowRouteKey") (EVar "selected"))) (arm (PCon "None") () (ELit (LString ""))))) (DoLet false false (PVar "foreignKey") (EMatch (EApp (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EApp (EVar "siteFor") (EVar "mctx"))) (EVar "env")) (EFieldAccess (EVar "foreignRow") "msrIface")) (EVar "goals")) (arm (PCon "Some" (PVar "selected")) () (EApp (EVar "rowRouteKey") (EVar "selected"))) (arm (PCon "None") () (ELit (LString ""))))) (DoExpr (ETuple (EApp (EVar "methodReturnProbeRouteKey") (EFieldAccess (EVar "tagRef") "value")) (EVar "ownedKey") (EVar "foreignKey")))))
-(DTypeSig false "methodReturnOwnershipProbe" (TyFun (TyCon "Unit") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool") (TyCon "Bool"))))
-(DFunDef false "methodReturnOwnershipProbe" (PWild) (EBlock (DoLet false false (PVar "ownedGraph") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "ownedDecl") (EApp (EApp (EApp (EVar "methodReturnProbeIface") (ELit (LString "return-owner"))) (ELit (LString "Owner"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (DoLet false false (PVar "foreignDecl") (EApp (EApp (EApp (EVar "methodReturnProbeIface") (ELit (LString "return-foreign"))) (ELit (LString "Foreign"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (DoLet false false (PVar "ownedCtx") (EApp (EVar "initialModuleCtx") (EVar "ownedGraph"))) (DoLet false false (PVar "ownedRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "ownedCtx")) (EListLit (EVar "ownedDecl"))))) (DoLet false false (PVar "foreignGraph") (EVariantUpdate "GraphCtx" (EVar "ownedGraph") ((fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit)))))) (DoLet false false (PVar "foreignCtx") (EApp (EApp (EVar "carryModuleCtx") (EVar "foreignGraph")) (EVar "ownedCtx"))) (DoLet false false (PVar "foreignRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "foreignCtx")) (EListLit (EVar "foreignDecl"))))) (DoLet false false (PVar "ownedImpl") (EApp (EApp (EVar "methodReturnProbeImpl") (ELit (LString "return-owner"))) (ELit (LString "Owner")))) (DoLet false false (PVar "foreignImpl") (EApp (EApp (EVar "methodReturnProbeImpl") (ELit (LString "return-foreign"))) (ELit (LString "Foreign")))) (DoLet false false (PTuple (PVar "rejected") (PVar "rejectedCtx")) (EApp (EApp (EApp (EVar "methodReturnProbeCodes") (EVar "foreignCtx")) (EVar "ownedRow")) (EListLit (EVar "foreignImpl")))) (DoLet false false (PTuple (PVar "accepted") (PVar "acceptedCtx")) (EApp (EApp (EApp (EVar "methodReturnProbeCodes") (EVar "rejectedCtx")) (EVar "ownedRow")) (EListLit (EVar "foreignImpl") (EVar "ownedImpl")))) (DoLet false false (PTuple (PVar "actualKey") (PVar "ownedKey") (PVar "foreignKey")) (EApp (EApp (EApp (EApp (EVar "methodReturnProbeStamp") (EVar "acceptedCtx")) (EVar "ownedRow")) (EVar "foreignRow")) (EListLit (EVar "foreignImpl") (EVar "ownedImpl")))) (DoLet false false (PVar "observed") (ETuple (EVar "rejected") (EVar "accepted") (EBinOp "==" (EVar "actualKey") (EVar "ownedKey")) (EBinOp "/=" (EVar "actualKey") (EVar "foreignKey")))) (DoExpr (EVar "observed"))))
 # MARK
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "ConPayload" true) (mem "Decl" true) (mem "EvEntry" true) (mem "EvVal" true) (mem "Expr" true) (mem "ExternDecl" true) (mem "FunClause" true) (mem "Ident" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "PropParam" true) (mem "Route" true) (mem "Super" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "EvTable" false) (mem "identOriginFold" false) (mem "mkIdent" false) (mem "tyConBuiltin" false))))
@@ -5393,7 +5303,3 @@ methodReturnOwnershipProbe _ =
 (DFunDef false "stampTailDecl" (PWild (PAs "d" (PCon "DLetGroup" PWild PWild))) (EVar "d"))
 (DFunDef false "stampTailDecl" ((PVar "top") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampTailDecl") (EVar "top")) (EVar "d"))))
 (DFunDef false "stampTailDecl" ((PVar "top") (PVar "d")) (EApp (EApp (EVar "stampDeclWith") (EVar "top")) (EVar "d")))
-(DTypeSig false "methodReturnProbeStamp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "MethodSchemeRow") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))))
-(DFunDef false "methodReturnProbeStamp" ((PVar "prev") (PVar "ownedRow") (PVar "foreignRow") (PVar "impls")) (EBlock (DoLet false false (PVar "gctx") (EVariantUpdate "GraphCtx" (EFieldAccess (EVar "prev") "mcGraph") ((fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit)))))) (DoLet false false (PVar "mctx") (EApp (EApp (EVar "carryModuleCtx") (EVar "gctx")) (EVar "prev"))) (DoLet false false (PVar "scope") (EApp (EApp (EVar "methodReturnProbeScope") (EVar "mctx")) (ELit (LString "return-owner-stamper")))) (DoLet false false (PVar "request") (EApp (EApp (EVar "methodReturnProbeRequest") (EVar "mctx")) (EVar "ownedRow"))) (DoExpr (EApp (EApp (EVar "methodReturnProbeSpelling") (EVar "mctx")) (EVar "foreignRow"))) (DoLet false false (PVar "env") (EApp (EVar "buildFlatImplEnv") (EVar "impls"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "bodyImplEnvRef")) (EVar "env"))) (DoLet false false (PVar "tagRef") (EApp (EVar "Ref") (EVar "RNone"))) (DoLet false false (PVar "implRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "resultMono") (EApp (EVar "stripArrows") (EFieldAccess (EVar "request") "mrrOccurrence"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveExactReturnSite") (EApp (EVar "siteFor") (EVar "mctx"))) (EVar "omEmpty")) (ELit (LString "make"))) (EVar "tagRef")) (EVar "implRef")) (EVar "resultMono")) (EVar "request")) (ELit (LString ""))) (EVar "None")) (EVar "scope"))) (DoLet false false (PVar "goals") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "methodReturnArgs") (EVar "gctx")) (EVar "request")))) (DoLet false false (PVar "ownedKey") (EMatch (EApp (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EApp (EVar "siteFor") (EVar "mctx"))) (EVar "env")) (EFieldAccess (EVar "ownedRow") "msrIface")) (EVar "goals")) (arm (PCon "Some" (PVar "selected")) () (EApp (EVar "rowRouteKey") (EVar "selected"))) (arm (PCon "None") () (ELit (LString ""))))) (DoLet false false (PVar "foreignKey") (EMatch (EApp (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EApp (EVar "siteFor") (EVar "mctx"))) (EVar "env")) (EFieldAccess (EVar "foreignRow") "msrIface")) (EVar "goals")) (arm (PCon "Some" (PVar "selected")) () (EApp (EVar "rowRouteKey") (EVar "selected"))) (arm (PCon "None") () (ELit (LString ""))))) (DoExpr (ETuple (EApp (EVar "methodReturnProbeRouteKey") (EFieldAccess (EVar "tagRef") "value")) (EVar "ownedKey") (EVar "foreignKey")))))
-(DTypeSig false "methodReturnOwnershipProbe" (TyFun (TyCon "Unit") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool") (TyCon "Bool"))))
-(DFunDef false "methodReturnOwnershipProbe" (PWild) (EBlock (DoLet false false (PVar "ownedGraph") (EApp (EVar "probeGraphCtx") (ELit LUnit))) (DoLet false false (PVar "ownedDecl") (EApp (EApp (EApp (EVar "methodReturnProbeIface") (ELit (LString "return-owner"))) (ELit (LString "Owner"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (DoLet false false (PVar "foreignDecl") (EApp (EApp (EApp (EVar "methodReturnProbeIface") (ELit (LString "return-foreign"))) (ELit (LString "Foreign"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (DoLet false false (PVar "ownedCtx") (EApp (EVar "initialModuleCtx") (EVar "ownedGraph"))) (DoLet false false (PVar "ownedRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "ownedCtx")) (EListLit (EVar "ownedDecl"))))) (DoLet false false (PVar "foreignGraph") (EVariantUpdate "GraphCtx" (EVar "ownedGraph") ((fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit)))))) (DoLet false false (PVar "foreignCtx") (EApp (EApp (EVar "carryModuleCtx") (EVar "foreignGraph")) (EVar "ownedCtx"))) (DoLet false false (PVar "foreignRow") (EApp (EVar "firstMethodRow") (EApp (EApp (EVar "ifaceMethodSchemeRows") (EVar "foreignCtx")) (EListLit (EVar "foreignDecl"))))) (DoLet false false (PVar "ownedImpl") (EApp (EApp (EVar "methodReturnProbeImpl") (ELit (LString "return-owner"))) (ELit (LString "Owner")))) (DoLet false false (PVar "foreignImpl") (EApp (EApp (EVar "methodReturnProbeImpl") (ELit (LString "return-foreign"))) (ELit (LString "Foreign")))) (DoLet false false (PTuple (PVar "rejected") (PVar "rejectedCtx")) (EApp (EApp (EApp (EVar "methodReturnProbeCodes") (EVar "foreignCtx")) (EVar "ownedRow")) (EListLit (EVar "foreignImpl")))) (DoLet false false (PTuple (PVar "accepted") (PVar "acceptedCtx")) (EApp (EApp (EApp (EVar "methodReturnProbeCodes") (EVar "rejectedCtx")) (EVar "ownedRow")) (EListLit (EVar "foreignImpl") (EVar "ownedImpl")))) (DoLet false false (PTuple (PVar "actualKey") (PVar "ownedKey") (PVar "foreignKey")) (EApp (EApp (EApp (EApp (EVar "methodReturnProbeStamp") (EVar "acceptedCtx")) (EVar "ownedRow")) (EVar "foreignRow")) (EListLit (EVar "foreignImpl") (EVar "ownedImpl")))) (DoLet false false (PVar "observed") (ETuple (EVar "rejected") (EVar "accepted") (EBinOp "==" (EVar "actualKey") (EVar "ownedKey")) (EBinOp "/=" (EVar "actualKey") (EVar "foreignKey")))) (DoExpr (EVar "observed"))))
