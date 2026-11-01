@@ -14,7 +14,7 @@
    boundaries (every 26 bits, and the 26/22 seam at limb 9) are hit exactly
    rather than by hand-typed hex. -}
 
-import test.{expectEach, expectEqual, expectSatisfies, expectTrue, expectFalse}
+import test.{expectEach, expectSatisfies, expectTrue, expectFalse}
 import test.algebra_support.{allPairs, allTriples}
 import bytes.{Bytes, fromU8Array, length}
 import test.fixture_support.{bitBytes, decBytes}

@@ -521,7 +521,7 @@ rowCellsWithIpk : Option Int -> Row -> List Cell
 rowCellsWithIpk pkIdx row = substituteIpk pkIdx 0 (rowRowid row) (rowCells row)
 
 substituteIpk : Option Int -> Int -> Int -> List Cell -> List Cell
-substituteIpk pkIdx idx rowid [] = []
+substituteIpk _pkIdx _idx _rowid [] = []
 substituteIpk pkIdx idx rowid (c :: rest) =
   let cell = match pkIdx
     Some p => if p == idx then CInt rowid else c

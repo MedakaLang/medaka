@@ -65,7 +65,7 @@ import lib.sqlite.{
   pkColumnIndex,
   rowCellsWithIpk,
 }
-import lib.btree.{Row, rowRowid, rowCells}
+import lib.btree.{Row}
 import lib.recordfmt.{Cell(..), cellToString}
 import lib.sqlexec.{execSql, outRows}
 import lib.mutate.{isSchemaNotUtf8Refusal}
@@ -98,7 +98,7 @@ dumpTableRows db table entry = match scanTableRows db table
   Ok rows => printRows (pkColumnIndex (schemaSql entry)) rows
 
 printRows : Option Int -> List Row -> <IO> Unit
-printRows pkIdx [] = ()
+printRows _pkIdx [] = ()
 printRows pkIdx (r :: rest) =
   printCellLine (rowCellsWithIpk pkIdx r)
   printRows pkIdx rest

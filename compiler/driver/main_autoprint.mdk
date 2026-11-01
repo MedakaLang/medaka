@@ -32,7 +32,6 @@ import string.{split}
 import frontend.ast.{
   Decl(..),
   Expr(..),
-  EvId,
   Pat,
   Loc(..),
   UsePath(..),

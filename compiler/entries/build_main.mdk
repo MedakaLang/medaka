@@ -75,7 +75,7 @@ parseGo : List String ->
   Option String ->
   Result String (String, Option String)
 parseGo [] acc out = finishArgs (reverseL acc) out
-parseGo ("-o" :: v :: rest) acc out = parseGo rest acc (Some v)
+parseGo ("-o" :: v :: rest) acc _out = parseGo rest acc (Some v)
 parseGo ["-o"] _ _ = Err "error: -o requires an argument"
 parseGo (x :: rest) acc out = parseGo rest (x :: acc) out
 

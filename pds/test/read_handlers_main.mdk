@@ -36,10 +36,10 @@
 import bytes as B
 import bytes.{Bytes, decodeUtf8, encodeUtf8, fromU8Array}
 import crypto.sha256.{sha256}
-import json.{Json(..), jObject, get, parse, stringify}
+import json.{Json(..), get, parse, stringify}
 import hex.{decode, encode}
 import io.{readLines}
-import string.{join, split, startsWith, stripPrefix}
+import string.{join, split, stripPrefix}
 import lib.cid.{cidForDagCbor}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 import lib.handlers.{pdsServer, serverLinksEmpty}
@@ -71,7 +71,6 @@ import test.fixture_support.{
   meaningful,
   testKey,
   testNonce,
-  testSecret,
 }
 import test.request_support.{
   createBody,

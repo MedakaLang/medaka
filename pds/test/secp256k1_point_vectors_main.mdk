@@ -127,7 +127,7 @@ line c i s = match split " " (trim s)
   _ => bad c "row \{intToString i}"
 
 go : Array Int -> List String -> Int -> <IO> Unit
-go c [] i = ()
+go _c [] _i = ()
 go c (x :: xs) i =
   let () = line c i x
   go c xs (i + 1)

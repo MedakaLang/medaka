@@ -18,11 +18,10 @@
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
 
 import lib.dbwriter.{writeDatabase}
-import lib.sqlite.{Db, openDb, scanTableRows}
+import lib.sqlite.{openDb, scanTableRows}
 import lib.mutate.{delete, update, assign}
 import lib.select.{eColInt, eLitI, eEq, eGt}
 import lib.recordfmt.{Cell(..)}
-import lib.btree.{Row}
 import demo_support.{printRows}
 
 usersSql : String

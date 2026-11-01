@@ -199,7 +199,7 @@ checkMonte path maxBytes lns =
         (n, failed, 0)
 
 countMonteMismatches : String -> Int -> List String -> List String -> <IO> Int
-countMonteMismatches path i [] [] = 0
+countMonteMismatches _path _i [] [] = 0
 countMonteMismatches path i (e :: erest) (a :: arest) =
   let rest = countMonteMismatches path (i + 1) erest arest
   if e == a then
@@ -207,14 +207,14 @@ countMonteMismatches path i (e :: erest) (a :: arest) =
   else
     println "MISMATCH \{path} COUNT=\{intToString i} expected=\{e} actual=\{a}"
     rest + 1
-countMonteMismatches path i _ _ =
+countMonteMismatches _path _i _ _ =
   panic "sha256_vector_driver: Monte expected/actual count mismatch"
 
 -- ── Grading one file ─────────────────────────────────────────────────
 
 -- checked, failed, skipped — (-1) `maxBytes` means unlimited.
 checkRecords : String -> Int -> List Record -> <IO> (Int, Int, Int)
-checkRecords path maxBytes [] = (0, 0, 0)
+checkRecords _path _maxBytes [] = (0, 0, 0)
 checkRecords path maxBytes (r :: rest) =
   if maxBytes >= 0 && fullByteLength r > maxBytes then
     let (c, f, s) = checkRecords path maxBytes rest
@@ -245,7 +245,7 @@ printFileSummary path checked failed skipped =
 -- ── Driving all files, then the process exit code ───────────────────
 
 runAll : List String -> Int -> Int -> Int -> Int -> <IO, FileRead> Unit
-runAll [] maxBytes totalChecked totalFailed totalSkipped =
+runAll [] _maxBytes totalChecked totalFailed _totalSkipped =
   if totalFailed > 0 || totalChecked == 0 then exit 1 else exit 0
 runAll (f :: rest) maxBytes totalChecked totalFailed totalSkipped =
   match runFile f maxBytes

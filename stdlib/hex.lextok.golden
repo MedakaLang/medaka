@@ -41,8 +41,6 @@ IDENT "fromDigit"
 COMMA
 IDENT "toDigit"
 COMMA
-IDENT "toUtf8"
-COMMA
 IDENT "fromUtf8"
 COMMA
 IDENT "toChars"
@@ -66,22 +64,13 @@ IDENT "charAt"
 IDENT "i"
 IDENT "arr"
 EQUAL
-MATCH
+IDENT "optionOrPanic"
+STRING "hex: index out of bounds"
+LPAREN
 IDENT "arrGet"
 IDENT "i"
 IDENT "arr"
-INDENT
-UPPER "Some"
-IDENT "c"
-FAT_ARROW
-IDENT "c"
-NEWLINE
-UPPER "None"
-FAT_ARROW
-IDENT "panic"
-STRING "hex: index out of bounds"
-NEWLINE
-DEDENT
+RPAREN
 NEWLINE
 IDENT "digitChar"
 COLON
@@ -115,18 +104,13 @@ CHAR "?"
 NEWLINE
 DEDENT
 ELSE
-MATCH
+INDENT
+IDENT "optionOr"
+CHAR "?"
+LPAREN
 IDENT "toDigit"
 IDENT "n"
-INDENT
-UPPER "Some"
-IDENT "c"
-FAT_ARROW
-IDENT "c"
-NEWLINE
-UPPER "None"
-FAT_ARROW
-CHAR "?"
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE

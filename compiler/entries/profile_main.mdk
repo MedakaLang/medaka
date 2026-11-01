@@ -2,7 +2,6 @@ import types.program_facts.{withSymbolOrigins}
 import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{prepareWasmPlan}
 import backend.wasm_emit.{inputCtorFloatFieldsW}
-import types.extern_source.{externSourceHeadRows}
 import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- Single-file per-stage timing driver for the self-hosted front-end.
 -- Times each pipeline stage individually so the cost of each is visible
@@ -56,7 +55,6 @@ import types.typecheck.{
 }
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
-  declaredRecordFieldOrders,
   lowerProgramEmitWith,
   methodIfaceTable,
   ctorFieldTypeNames,
@@ -509,7 +507,7 @@ wasmStage : Bool ->
   String ->
   <IO> Unit
 wasmStage _ False _ _ _ _ _ = ()
-wasmStage on True outputs runtimeDecls live cprog declsOp =
+wasmStage on True _outputs runtimeDecls live cprog declsOp =
   let input =
     makeWasmEmitInput
       RawUnchecked

@@ -242,7 +242,7 @@ hunksGo : Int ->
   List (List Entry) ->
   List (List Entry)
 hunksGo _ [] _ cur acc = reverse (closeHunk cur acc)
-hunksGo ctx ((run@(entry :: _)) :: rest) prev cur acc
+hunksGo ctx ((run@(entry :: _)) :: rest) _prev cur acc
   | isKeep entry = keepRun ctx run rest cur acc
 hunksGo ctx (run :: rest) prev cur acc =
   hunksGo ctx rest prev (reverse run ++ opened ctx prev cur) acc
@@ -360,7 +360,7 @@ renderLine sign l =
 (DFunDef false "hunks" ((PVar "ctx") (PVar "rs")) (EApp (EApp (EApp (EApp (EApp (EVar "hunksGo") (EVar "ctx")) (EVar "rs")) (EListLit)) (EListLit)) (EListLit)))
 (DTypeSig false "hunksGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry"))) (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry")))))))))
 (DFunDef false "hunksGo" (PWild (PList) PWild (PVar "cur") (PVar "acc")) (EApp (EVar "reverse") (EApp (EApp (EVar "closeHunk") (EVar "cur")) (EVar "acc"))))
-(DFunDef false "hunksGo" ((PVar "ctx") (PCons (PAs "run" (PCons (PVar "entry") PWild)) (PVar "rest")) (PVar "prev") (PVar "cur") (PVar "acc")) (EIf (EApp (EVar "isKeep") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "keepRun") (EVar "ctx")) (EVar "run")) (EVar "rest")) (EVar "cur")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "hunksGo" ((PVar "ctx") (PCons (PAs "run" (PCons (PVar "entry") PWild)) (PVar "rest")) (PVar "_prev") (PVar "cur") (PVar "acc")) (EIf (EApp (EVar "isKeep") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "keepRun") (EVar "ctx")) (EVar "run")) (EVar "rest")) (EVar "cur")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "hunksGo" ((PVar "ctx") (PCons (PVar "run") (PVar "rest")) (PVar "prev") (PVar "cur") (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "hunksGo") (EVar "ctx")) (EVar "rest")) (EVar "prev")) (EBinOp "++" (EApp (EVar "reverse") (EVar "run")) (EApp (EApp (EApp (EVar "opened") (EVar "ctx")) (EVar "prev")) (EVar "cur")))) (EVar "acc")))
 (DTypeSig false "opened" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyApp (TyCon "List") (TyCon "Entry"))))))
 (DFunDef false "opened" ((PVar "ctx") (PVar "prev") (PList)) (EApp (EApp (EVar "take") (EVar "ctx")) (EApp (EVar "reverse") (EVar "prev"))))
@@ -441,7 +441,7 @@ renderLine sign l =
 (DFunDef false "hunks" ((PVar "ctx") (PVar "rs")) (EApp (EApp (EApp (EApp (EApp (EVar "hunksGo") (EVar "ctx")) (EVar "rs")) (EListLit)) (EListLit)) (EListLit)))
 (DTypeSig false "hunksGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry"))) (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry")))))))))
 (DFunDef false "hunksGo" (PWild (PList) PWild (PVar "cur") (PVar "acc")) (EApp (EVar "reverse") (EApp (EApp (EVar "closeHunk") (EVar "cur")) (EVar "acc"))))
-(DFunDef false "hunksGo" ((PVar "ctx") (PCons (PAs "run" (PCons (PVar "entry") PWild)) (PVar "rest")) (PVar "prev") (PVar "cur") (PVar "acc")) (EIf (EApp (EVar "isKeep") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "keepRun") (EVar "ctx")) (EVar "run")) (EVar "rest")) (EVar "cur")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "hunksGo" ((PVar "ctx") (PCons (PAs "run" (PCons (PVar "entry") PWild)) (PVar "rest")) (PVar "_prev") (PVar "cur") (PVar "acc")) (EIf (EApp (EVar "isKeep") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "keepRun") (EVar "ctx")) (EVar "run")) (EVar "rest")) (EVar "cur")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "hunksGo" ((PVar "ctx") (PCons (PVar "run") (PVar "rest")) (PVar "prev") (PVar "cur") (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "hunksGo") (EVar "ctx")) (EVar "rest")) (EVar "prev")) (EBinOp "++" (EApp (EVar "reverse") (EVar "run")) (EApp (EApp (EApp (EVar "opened") (EVar "ctx")) (EVar "prev")) (EVar "cur")))) (EVar "acc")))
 (DTypeSig false "opened" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyApp (TyCon "List") (TyCon "Entry"))))))
 (DFunDef false "opened" ((PVar "ctx") (PVar "prev") (PList)) (EApp (EApp (EVar "take") (EVar "ctx")) (EApp (EVar "reverse") (EVar "prev"))))

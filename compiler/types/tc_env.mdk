@@ -60,7 +60,6 @@ import frontend.ast.{
   UsePath(..),
   Variant(..),
   identOriginOf,
-  ifaceIdentity,
   mkIdent,
   orElseLoc,
   sameTyConHead,
@@ -118,9 +117,7 @@ import support.ordmap.{
   omEmpty, omFromNames, omHasKey, omInsert, omLookup, omSize, OrdMap
 }
 import list.{
-  drop,
   findMap,
-  indexed,
   last,
 }
 import support.util.{
@@ -129,9 +126,7 @@ import support.util.{
   dedup,
   filterList,
   isEmptyL,
-  isSome,
   listLen,
-  lookupAssoc,
   reverseL,
   selfBinding,
 }
@@ -452,11 +447,11 @@ ifaceParamKindsFor : GraphCtx ->
   List IfaceMethod ->
   String ->
   List Kind
-ifaceParamKindsFor gctx [] _ _ _ = []
+ifaceParamKindsFor _gctx [] _ _ _ = []
 ifaceParamKindsFor gctx (q :: qs) (a :: anns) methods p
   | q == p = ifaceParamKindsDecl gctx a p methods
   | otherwise = ifaceParamKindsFor gctx qs anns methods p
-ifaceParamKindsFor gctx _ [] _ _ = []
+ifaceParamKindsFor _gctx _ [] _ _ = []
 
 -- ── #1111 A-2.3: the TYPE-namespace table key, and the MISS POLICY ────────
 -- The ONE place a key for `aliasTableRef` / `dataParamKindsRef` is minted, on
@@ -831,7 +826,7 @@ declEnvRowVisible cur m
 -- #1228/#1586, and it is deliberately NOT touched here.
 export
 declEnvKindEntries : GraphCtx -> List Decl -> List (TabKey, List Kind)
-declEnvKindEntries gctx [] = []
+declEnvKindEntries _gctx [] = []
 declEnvKindEntries gctx ((DAttrib _ d) :: rest) =
   declEnvKindEntries gctx (d :: rest)
 declEnvKindEntries gctx ((DData { dataName = n, dataParams = ps, dataParamKinds = ks, dataOrigin = o }) :: rest) =
@@ -1368,7 +1363,7 @@ classEnvFinish env = ClassEnv { env | ceRows = reverseL env.ceRows }
 
 export
 buildClassEnvGo : GraphCtx -> List DeclEnvModule -> ClassEnv -> ClassEnv
-buildClassEnvGo gctx [] env = env
+buildClassEnvGo _gctx [] env = env
 buildClassEnvGo gctx (m :: rest) env =
   let rows = classEnvRowsOf gctx m.demOrd (classEnvDeclFacts m.demDecls)
   buildClassEnvGo gctx rest (ceAddRows rows env)
@@ -1389,7 +1384,7 @@ classEnvRowsOf : GraphCtx ->
   Int ->
   List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc) ->
   List CeRow
-classEnvRowsOf gctx _ [] = []
+classEnvRowsOf _gctx _ [] = []
 classEnvRowsOf gctx ord ((name, typarams, kinds, methods, supers, o, loc) :: rest) =
   let scope = declGradedScope gctx typarams kinds methods
   let row =
@@ -1415,7 +1410,7 @@ ifaceParamKindsDeclAll : GraphCtx ->
   List (Option KindAnn) ->
   List IfaceMethod ->
   List (List Kind)
-ifaceParamKindsDeclAll gctx [] _ _ = []
+ifaceParamKindsDeclAll _gctx [] _ _ = []
 ifaceParamKindsDeclAll gctx (p :: ps) [] methods =
   ifaceParamKindsDeclAll gctx (p :: ps) [None] methods
 ifaceParamKindsDeclAll gctx (p :: ps) (a :: anns) methods =
@@ -1548,7 +1543,7 @@ ceMethodName (n, _, _) = n
 -- dependency rows already folded, so it may resume from the prelude prefix.
 export
 methodEnvGo : GraphCtx -> List DeclEnvModule -> MethodEnv -> MethodEnv
-methodEnvGo gctx [] env = env
+methodEnvGo _gctx [] env = env
 methodEnvGo gctx (m :: rest) env = methodEnvGo gctx rest MethodEnv {
   meByName = methodRowsInto gctx m.demOrd m.demDecls env.meByName,
   meExports =
@@ -1570,7 +1565,7 @@ methodRowsInto : GraphCtx ->
   List Decl ->
   OrdMap (List MethodRow) ->
   OrdMap (List MethodRow)
-methodRowsInto gctx _ [] acc = acc
+methodRowsInto _gctx _ [] acc = acc
 methodRowsInto gctx ord ((DAttrib _ d) :: rest) acc =
   methodRowsInto gctx ord rest (methodRowsInto gctx ord [d] acc)
 methodRowsInto gctx ord ((DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... }) :: rest) acc =
@@ -1936,10 +1931,10 @@ padAnns (_ :: ps) (a :: rest) = a :: padAnns ps rest
 padAnns (_ :: ps) [] = None :: padAnns ps []
 
 kindOfAnn : GraphCtx -> Option KindAnn -> Kind
-kindOfAnn gctx (Some KindEffect) = KRow
+kindOfAnn _gctx (Some KindEffect) = KRow
 kindOfAnn gctx (Some (KindAuthority l o pat _)) =
   KAuth (EffLabel l o) (rangedOver gctx (EffLabel l o) pat)
-kindOfAnn gctx _ = KType
+kindOfAnn _gctx _ = KType
 
 -- an INTERFACE parameter's slot kinds from its declared arrow kind: `Effect ->
 -- Type -> Type` is `[KRow, KType]` (the final `Type` is the result, not a
@@ -1947,13 +1942,13 @@ kindOfAnn gctx _ = KType
 export
 kindAnnSlots : GraphCtx -> KindAnn -> List Kind
 kindAnnSlots gctx (KindArrow a b) = kindAnnAtom gctx a :: kindAnnSlots gctx b
-kindAnnSlots gctx _ = []
+kindAnnSlots _gctx _ = []
 
 kindAnnAtom : GraphCtx -> KindAnn -> Kind
-kindAnnAtom gctx KindEffect = KRow
+kindAnnAtom _gctx KindEffect = KRow
 kindAnnAtom gctx (KindAuthority l o pat _) =
   KAuth (EffLabel l o) (rangedOver gctx (EffLabel l o) pat)
-kindAnnAtom gctx _ = KType
+kindAnnAtom _gctx _ = KType
 
 -- ── #822: interface type-parameter kinds (graded interfaces) ──────────────
 -- EFFECTS-SEMANTICS §6 "Graded interfaces": an interface may abstract over a
@@ -2036,7 +2031,7 @@ declGradedScope : GraphCtx ->
   List (Option KindAnn) ->
   List IfaceMethod ->
   List (String, List Kind)
-declGradedScope gctx [] _ _ = []
+declGradedScope _gctx [] _ _ = []
 declGradedScope gctx (p :: ps) [] methods =
   declGradedScope gctx (p :: ps) [None] methods
 declGradedScope gctx (p :: ps) (a :: anns) methods =
@@ -2055,7 +2050,7 @@ ifaceParamKindsDecl : GraphCtx ->
   List Kind
 ifaceParamKindsDecl gctx (Some (KindArrow a b)) _ _ =
   kindAnnSlots gctx (KindArrow a b)
-ifaceParamKindsDecl gctx _ p methods =
+ifaceParamKindsDecl _gctx _ p methods =
   map (_ => KType) (ifaceParamKindsOf p methods)
 
 declGradedScopeAdd : String ->
@@ -2289,7 +2284,7 @@ ieImplExistsForHeadGo : GraphCtx ->
   TabKey ->
   Option (List IfaceRef) ->
   Bool
-ieImplExistsForHeadGo gctx [] _ _ _ = False
+ieImplExistsForHeadGo _gctx [] _ _ _ = False
 ieImplExistsForHeadGo gctx ((r@(ImplRow _ _ ir tys _ ms _)) :: rest) name goal admitted
   | headTabIs (univReceiverTag tys) goal
     && ieRowAdmittedBy ir admitted
@@ -2648,7 +2643,7 @@ ieEntriesForMethod : GraphCtx ->
   Option (List IfaceRef) ->
   List Mono ->
   List KeyEntry
-ieEntriesForMethod gctx [] _ _ _ = []
+ieEntriesForMethod _gctx [] _ _ _ = []
 ieEntriesForMethod gctx ((r@(ImplRow _ _ ir tys _ ms _)) :: rest) name admitted goals
   | ieRowAdmittedBy ir admitted
     && ieRowHeadMatches tys goals
@@ -2671,7 +2666,7 @@ ieRowAnswersMethod : GraphCtx ->
   String ->
   Option (List IfaceRef) ->
   Bool
-ieRowAnswersMethod gctx _ ms name None = contains name ms
+ieRowAnswersMethod _gctx _ ms name None = contains name ms
 ieRowAnswersMethod gctx r ms name (Some _) =
   contains name ms || ieRowInheritsDefault gctx r name
 
@@ -3928,7 +3923,7 @@ ieGenImplIn m = DImpl {
 -- concrete `Blob`, so a head-keyed index must file it beside them regardless — see the
 -- F1 paragraph above.
 ieLooseImplIn : String -> Decl
-ieLooseImplIn m = DImpl {
+ieLooseImplIn _m = DImpl {
   pub = True,
   iface = "Loose",
   tys = [ieTyBlob],

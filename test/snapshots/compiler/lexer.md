@@ -1,5 +1,5 @@
 # META
-source_lines=180
+source_lines=179
 stages=DESUGAR,MARK
 # SOURCE
 -- Tokenize Medaka source and apply indentation-sensitive layout.
@@ -22,12 +22,12 @@ import frontend.lex_layout.{
 }
 
 layoutWithOffsets : Array Char -> Int -> List (Token, Int)
-layoutWithOffsets src len =
+layoutWithOffsets src _len =
   let _ = stageBump "lex.offsets"
   applyLayoutStarts (scanRawChars src)
 
 layoutWithOffsetPairs : Array Char -> Int -> List (Token, Int, Int)
-layoutWithOffsetPairs src len =
+layoutWithOffsetPairs src _len =
   let _ = stageBump "lex.pairs"
   applyLayoutRanges (scanRawChars src)
 
@@ -100,7 +100,7 @@ offsetsToLines : Array Char -> List Int -> List Int
 offsetsToLines src offs = offsetsToLinesGo src offs 0 1
 
 offsetsToLinesGo : Array Char -> List Int -> Int -> Int -> List Int
-offsetsToLinesGo src [] p line = []
+offsetsToLinesGo _src [] _p _line = []
 offsetsToLinesGo src (off :: rest) p line = match advanceLine src off p line
   (line2, p2) => line2 :: offsetsToLinesGo src rest p2 line2
 
@@ -180,7 +180,6 @@ collectComments s =
   -- Valid only while lint is the single caller; a second caller must move this bump.
   let _ = stageBump "lint.comments"
   let src = stringToChars s
-  let len = arrayLength src
   rawToComments src (scanRawUndedentedChars src)
 # DESUGAR
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
@@ -192,9 +191,9 @@ collectComments s =
 (DUse true (UseGroup ("frontend" "lex_layout") ((mem "BracketFrame" true))))
 (DUse false (UseGroup ("frontend" "lex_layout") ((mem "applyLayoutTokens" false) (mem "applyLayoutStarts" false) (mem "applyLayoutRanges" false))))
 (DTypeSig false "layoutWithOffsets" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int"))))))
-(DFunDef false "layoutWithOffsets" ((PVar "src") (PVar "len")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lex.offsets")))) (DoExpr (EApp (EVar "applyLayoutStarts") (EApp (EVar "scanRawChars") (EVar "src"))))))
+(DFunDef false "layoutWithOffsets" ((PVar "src") (PVar "_len")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lex.offsets")))) (DoExpr (EApp (EVar "applyLayoutStarts") (EApp (EVar "scanRawChars") (EVar "src"))))))
 (DTypeSig false "layoutWithOffsetPairs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "layoutWithOffsetPairs" ((PVar "src") (PVar "len")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lex.pairs")))) (DoExpr (EApp (EVar "applyLayoutRanges") (EApp (EVar "scanRawChars") (EVar "src"))))))
+(DFunDef false "layoutWithOffsetPairs" ((PVar "src") (PVar "_len")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lex.pairs")))) (DoExpr (EApp (EVar "applyLayoutRanges") (EApp (EVar "scanRawChars") (EVar "src"))))))
 (DTypeSig true "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Token"))))
 (DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lex.tokenize")))) (DoExpr (EApp (EVar "applyLayoutTokens") (EApp (EVar "scanRawChars") (EApp (EVar "stringToChars") (EVar "s")))))))
 (DTypeSig true "tokenizeWithLines" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Int")))))
@@ -208,7 +207,7 @@ collectComments s =
 (DTypeSig true "offsetsToLines" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "offsetsToLines" ((PVar "src") (PVar "offs")) (EApp (EApp (EApp (EApp (EVar "offsetsToLinesGo") (EVar "src")) (EVar "offs")) (ELit (LInt 0))) (ELit (LInt 1))))
 (DTypeSig false "offsetsToLinesGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))))
-(DFunDef false "offsetsToLinesGo" ((PVar "src") (PList) (PVar "p") (PVar "line")) (EListLit))
+(DFunDef false "offsetsToLinesGo" ((PVar "_src") (PList) (PVar "_p") (PVar "_line")) (EListLit))
 (DFunDef false "offsetsToLinesGo" ((PVar "src") (PCons (PVar "off") (PVar "rest")) (PVar "p") (PVar "line")) (EMatch (EApp (EApp (EApp (EApp (EVar "advanceLine") (EVar "src")) (EVar "off")) (EVar "p")) (EVar "line")) (arm (PTuple (PVar "line2") (PVar "p2")) () (EBinOp "::" (EVar "line2") (EApp (EApp (EApp (EApp (EVar "offsetsToLinesGo") (EVar "src")) (EVar "rest")) (EVar "p2")) (EVar "line2"))))))
 (DTypeSig false "isLineBreakAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "isLineBreakAt" ((PVar "src") (PVar "p")) (EBinOp "&&" (EBinOp "<" (EVar "p") (EApp (EVar "arrayLength") (EVar "src"))) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "p")) (EVar "src")) (ELit (LChar "\n"))) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "p")) (EVar "src")) (ELit (LChar "\r"))) (EBinOp "||" (EBinOp ">=" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EApp (EVar "arrayLength") (EVar "src"))) (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "src")) (ELit (LChar "\n"))))))))
@@ -230,7 +229,7 @@ collectComments s =
 (DFunDef false "rawToCommentsGo" ((PVar "src") (PCons (PCon "RComment" (PVar "startPos") (PVar "endPos")) (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "posLineColFrom") (EVar "src")) (EVar "startPos")) (EVar "p")) (EVar "line")) (EVar "lineStart")) (arm (PTuple (PVar "line2") (PVar "col")) () (EBinOp "::" (EApp (EApp (EApp (EVar "Comment") (EVar "line2")) (EVar "col")) (EApp (EApp (EApp (EVar "copyCharRange") (EVar "src")) (EVar "startPos")) (EVar "endPos"))) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "startPos")) (EVar "line2")) (EBinOp "-" (EVar "startPos") (EVar "col")))))))
 (DFunDef false "rawToCommentsGo" ((PVar "src") (PCons PWild (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "p")) (EVar "line")) (EVar "lineStart")))
 (DTypeSig true "collectComments" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment"))))
-(DFunDef false "collectComments" ((PVar "s")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lint.comments")))) (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EApp (EVar "rawToComments") (EVar "src")) (EApp (EVar "scanRawUndedentedChars") (EVar "src"))))))
+(DFunDef false "collectComments" ((PVar "s")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lint.comments")))) (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EVar "rawToComments") (EVar "src")) (EApp (EVar "scanRawUndedentedChars") (EVar "src"))))))
 # MARK
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse true (UseGroup ("frontend" "lex_token") ((mem "Token" true) (mem "tokenToString" false) (mem "describeToken" false) (mem "isCommaTok" false) (mem "isThenTok" false) (mem "isElseTok" false))))
@@ -241,9 +240,9 @@ collectComments s =
 (DUse true (UseGroup ("frontend" "lex_layout") ((mem "BracketFrame" true))))
 (DUse false (UseGroup ("frontend" "lex_layout") ((mem "applyLayoutTokens" false) (mem "applyLayoutStarts" false) (mem "applyLayoutRanges" false))))
 (DTypeSig false "layoutWithOffsets" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int"))))))
-(DFunDef false "layoutWithOffsets" ((PVar "src") (PVar "len")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lex.offsets")))) (DoExpr (EApp (EVar "applyLayoutStarts") (EApp (EVar "scanRawChars") (EVar "src"))))))
+(DFunDef false "layoutWithOffsets" ((PVar "src") (PVar "_len")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lex.offsets")))) (DoExpr (EApp (EVar "applyLayoutStarts") (EApp (EVar "scanRawChars") (EVar "src"))))))
 (DTypeSig false "layoutWithOffsetPairs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "layoutWithOffsetPairs" ((PVar "src") (PVar "len")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lex.pairs")))) (DoExpr (EApp (EVar "applyLayoutRanges") (EApp (EVar "scanRawChars") (EVar "src"))))))
+(DFunDef false "layoutWithOffsetPairs" ((PVar "src") (PVar "_len")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lex.pairs")))) (DoExpr (EApp (EVar "applyLayoutRanges") (EApp (EVar "scanRawChars") (EVar "src"))))))
 (DTypeSig true "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Token"))))
 (DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lex.tokenize")))) (DoExpr (EApp (EVar "applyLayoutTokens") (EApp (EVar "scanRawChars") (EApp (EVar "stringToChars") (EVar "s")))))))
 (DTypeSig true "tokenizeWithLines" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Int")))))
@@ -257,7 +256,7 @@ collectComments s =
 (DTypeSig true "offsetsToLines" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "offsetsToLines" ((PVar "src") (PVar "offs")) (EApp (EApp (EApp (EApp (EVar "offsetsToLinesGo") (EVar "src")) (EVar "offs")) (ELit (LInt 0))) (ELit (LInt 1))))
 (DTypeSig false "offsetsToLinesGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))))
-(DFunDef false "offsetsToLinesGo" ((PVar "src") (PList) (PVar "p") (PVar "line")) (EListLit))
+(DFunDef false "offsetsToLinesGo" ((PVar "_src") (PList) (PVar "_p") (PVar "_line")) (EListLit))
 (DFunDef false "offsetsToLinesGo" ((PVar "src") (PCons (PVar "off") (PVar "rest")) (PVar "p") (PVar "line")) (EMatch (EApp (EApp (EApp (EApp (EVar "advanceLine") (EVar "src")) (EVar "off")) (EVar "p")) (EVar "line")) (arm (PTuple (PVar "line2") (PVar "p2")) () (EBinOp "::" (EVar "line2") (EApp (EApp (EApp (EApp (EVar "offsetsToLinesGo") (EVar "src")) (EVar "rest")) (EVar "p2")) (EVar "line2"))))))
 (DTypeSig false "isLineBreakAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "isLineBreakAt" ((PVar "src") (PVar "p")) (EBinOp "&&" (EBinOp "<" (EVar "p") (EApp (EVar "arrayLength") (EVar "src"))) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "p")) (EVar "src")) (ELit (LChar "\n"))) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "p")) (EVar "src")) (ELit (LChar "\r"))) (EBinOp "||" (EBinOp ">=" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EApp (EVar "arrayLength") (EVar "src"))) (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "src")) (ELit (LChar "\n"))))))))
@@ -279,4 +278,4 @@ collectComments s =
 (DFunDef false "rawToCommentsGo" ((PVar "src") (PCons (PCon "RComment" (PVar "startPos") (PVar "endPos")) (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "posLineColFrom") (EVar "src")) (EVar "startPos")) (EVar "p")) (EVar "line")) (EVar "lineStart")) (arm (PTuple (PVar "line2") (PVar "col")) () (EBinOp "::" (EApp (EApp (EApp (EVar "Comment") (EVar "line2")) (EVar "col")) (EApp (EApp (EApp (EVar "copyCharRange") (EVar "src")) (EVar "startPos")) (EVar "endPos"))) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "startPos")) (EVar "line2")) (EBinOp "-" (EVar "startPos") (EVar "col")))))))
 (DFunDef false "rawToCommentsGo" ((PVar "src") (PCons PWild (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "p")) (EVar "line")) (EVar "lineStart")))
 (DTypeSig true "collectComments" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment"))))
-(DFunDef false "collectComments" ((PVar "s")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lint.comments")))) (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EApp (EVar "rawToComments") (EVar "src")) (EApp (EVar "scanRawUndedentedChars") (EVar "src"))))))
+(DFunDef false "collectComments" ((PVar "s")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lint.comments")))) (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EVar "rawToComments") (EVar "src")) (EApp (EVar "scanRawUndedentedChars") (EVar "src"))))))

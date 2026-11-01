@@ -19,7 +19,6 @@
 -- Without MEDAKA_PERF set the driver exits silently.
 -- Use test/profile_compiler.sh [N] to collect min-of-N and print a table.
 
-import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveModulesToLines}

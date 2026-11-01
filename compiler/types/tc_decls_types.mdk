@@ -172,7 +172,6 @@ import support.util.{
   filterList,
   isEmptyL,
   isNonEmptyL,
-  isSome,
   listLen,
   lookupAssoc,
   reverseL,
@@ -266,7 +265,7 @@ checkDomainAxes mctx loc l (Some "Product") axes =
             "axis `\{fst a}` of `\{l}` names the domain `\{other}`; an axis is `Prefix` or `Set`"))
     ()
     axes
-checkDomainAxes mctx _ _ _ [] = ()
+checkDomainAxes _mctx _ _ _ [] = ()
 checkDomainAxes mctx loc l _ _ =
   pushTypeErrorAt
     mctx
@@ -305,13 +304,13 @@ populateEffectDomainsGraph gctx coreDecls modules =
   populateUnitsGo gctx modules
 
 populateUnitsGo : GraphCtx -> List (String, List Decl) -> Unit
-populateUnitsGo gctx [] = ()
+populateUnitsGo _gctx [] = ()
 populateUnitsGo gctx ((_, prog) :: rest) =
   populateGo gctx prog
   populateUnitsGo gctx rest
 
 populateGo : GraphCtx -> List Decl -> Unit
-populateGo gctx [] = ()
+populateGo _gctx [] = ()
 populateGo gctx ((DEffect _ name domain axes origin _) :: rest) =
   registerEffectDomain gctx (EffLabel name origin) domain axes
   populateGo gctx rest
@@ -367,7 +366,7 @@ atomsOfWrittenIn gctx sv ls = atomsNorm (map (atomOfWrittenIn gctx sv) ls)
 -- pushTypeError) — the OCaml side does this inline in atom_of_written.
 export
 checkEffectParams : ModuleCtx -> List Decl -> Unit
-checkEffectParams mctx [] = ()
+checkEffectParams _mctx [] = ()
 checkEffectParams mctx (d :: rest) =
   checkEffectParamsDecl mctx d
   checkEffectParams mctx rest
@@ -393,7 +392,7 @@ checkEffectParamsDecl mctx (DInterface { methods = ms }) =
       IfaceMethod _ t _ _ => checkEffectParamsTy mctx t)
     ()
     ms
-checkEffectParamsDecl mctx _ = ()
+checkEffectParamsDecl _mctx _ = ()
 
 -- A declaration's `Authority L` parameter, or a constructor's existential
 -- `(q : Authority L)` binder, has L's domain, so each use of it in the
@@ -428,7 +427,7 @@ checkDeclAuthorityUsesDecl mctx (DNewtype { newtypeParams = ps, newtypeParamKind
 -- No other declaration declares an `Authority` parameter: a signature's
 -- binders are checked with the signature (`reportBinderDomains`), and an
 -- interface parameter cannot be an authority.
-checkDeclAuthorityUsesDecl mctx _ = ()
+checkDeclAuthorityUsesDecl _mctx _ = ()
 
 -- The head's authorities and a constructor's own binders, then each use in
 -- [fields] against them. A binder never repeats a head parameter's name:
@@ -438,7 +437,7 @@ checkDeclAuthorityDomains : ModuleCtx ->
   List (String, KindAnn) ->
   List Ty ->
   Unit
-checkDeclAuthorityDomains mctx _ _ [] = ()
+checkDeclAuthorityDomains _mctx _ _ [] = ()
 checkDeclAuthorityDomains mctx heads bs (t :: ts) =
   let declared =
     heads
@@ -453,7 +452,7 @@ checkDeclAuthorityDomains mctx heads bs (t :: ts) =
 declaredAuthority : GraphCtx -> (String, Option KindAnn) -> List (String, Param)
 declaredAuthority gctx (p, Some (KindAuthority l o _ _)) =
   [(p, dtopFor gctx (EffLabel l o))]
-declaredAuthority gctx _ = []
+declaredAuthority _gctx _ = []
 
 -- Each constructor with its existential binders; a declaration without the
 -- binder list (every constructor binds none) pairs each with none.
@@ -494,7 +493,7 @@ checkDeclaredKinds : ModuleCtx -> List Decl -> Unit
 checkDeclaredKinds mctx prog = checkDeclaredKindsGo mctx prog prog
 
 checkDeclaredKindsGo : ModuleCtx -> List Decl -> List Decl -> Unit
-checkDeclaredKindsGo mctx _ [] = ()
+checkDeclaredKindsGo _mctx _ [] = ()
 checkDeclaredKindsGo mctx prog (d :: rest) =
   checkDeclaredKindsDecl mctx prog d
   checkDeclaredKindsGo mctx prog rest
@@ -534,7 +533,7 @@ checkDeclaredKindsDecl mctx prog (DInterface { name, typarams, typaramKinds, sup
     (padAnns typarams typaramKinds)
     methods
     supers
-checkDeclaredKindsDecl mctx _ _ = ()
+checkDeclaredKindsDecl _mctx _ _ = ()
 
 -- An alias parameter of an ordinary `Authority L` kind admits an exact
 -- element, which an `Authority L*` slot of the right-hand side refuses, so
@@ -591,7 +590,7 @@ checkAuthorityKindLabel mctx (KindAuthority l o pat loc) =
 checkAuthorityKindLabel mctx (KindArrow a b) =
   checkAuthorityKindLabel mctx a
   checkAuthorityKindLabel mctx b
-checkAuthorityKindLabel mctx _ = ()
+checkAuthorityKindLabel _mctx _ = ()
 
 -- A constructor CARRYING an `Authority` parameter in no field is a phantom
 -- index: applying it proves nothing, so it may invent any authority.  Its
@@ -623,7 +622,7 @@ checkPhantomAuthorityExport mctx VisPublic tyName (p :: ps) variants =
     ()
     variants
   checkPhantomAuthorityExport mctx VisPublic tyName ps variants
-checkPhantomAuthorityExport mctx _ _ _ _ = ()
+checkPhantomAuthorityExport _mctx _ _ _ _ = ()
 
 -- The head's `Authority`-kinded parameter names, positional with the kinds.
 authorityParamNames : List String -> List (Option KindAnn) -> List String
@@ -647,7 +646,7 @@ authorityParamNames params anns =
 -- assumes the head carries (the greatest fixpoint): a finite value bottoms
 -- out in a carrying constructor, or the type is empty.
 tyCarries : GraphCtx -> List TabKey -> String -> Ty -> Bool
-tyCarries gctx _ p (TyVar n) = n == p
+tyCarries _gctx _ p (TyVar n) = n == p
 tyCarries gctx seen p (TyQual t ps _) =
   isNonEmptyL ps && allList (q => authTermNames [q] == [p]) ps
     || tyCarries gctx seen p t
@@ -658,7 +657,7 @@ tyCarries gctx seen p (TyApp a b) = match tyAppSpine (TyApp a b)
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>
     argsCarry gctx seen p (tyTabKey o n) 0 args
   _ => False
-tyCarries gctx _ _ _ = False
+tyCarries _gctx _ _ _ = False
 
 -- Argument [i] of head [key] carries [p] when the head's parameter [i]
 -- carries and the argument is [p] itself or carries it.
@@ -669,7 +668,7 @@ argsCarry : GraphCtx ->
   Int ->
   List Ty ->
   Bool
-argsCarry gctx _ _ _ _ [] = False
+argsCarry _gctx _ _ _ _ [] = False
 argsCarry gctx seen p key i (arg :: rest) =
   paramCarries gctx seen key i && tyCarries gctx seen p arg
     || argsCarry gctx seen p key (i + 1) rest
@@ -710,7 +709,7 @@ checkHeadKindsGo : ModuleCtx ->
   List String ->
   List (Option KindAnn) ->
   Unit
-checkHeadKindsGo mctx _ _ _ [] _ = ()
+checkHeadKindsGo _mctx _ _ _ [] _ = ()
 checkHeadKindsGo mctx name rowNames fieldTys (p :: ps) (a :: anns) =
   let loc = firstTyLocList fieldTys
   match a
@@ -756,14 +755,14 @@ checkHeadKindsGo mctx name rowNames fieldTys (p :: ps) (a :: anns) =
           loc
           (authorityParamAsTypeMsg name p)
   checkHeadKindsGo mctx name rowNames fieldTys ps anns
-checkHeadKindsGo mctx _ _ _ _ [] = ()
+checkHeadKindsGo _mctx _ _ _ _ [] = ()
 
 -- does the type variable [p] occur in a TYPE position of [t] — anywhere but an
 -- effect tail or an `Effect`-kinded argument slot of a registered head?
 tyVarTypeOcc : ModuleCtx -> String -> Ty -> Bool
-tyVarTypeOcc mctx p (TyVar n) = n == p
+tyVarTypeOcc _mctx p (TyVar n) = n == p
 tyVarTypeOcc mctx p (TyEffect _ _ t) = tyVarTypeOcc mctx p t
-tyVarTypeOcc mctx _ (TyRow _ _ _) = False
+tyVarTypeOcc _mctx _ (TyRow _ _ _) = False
 tyVarTypeOcc mctx p (TyNamed _ t _) = tyVarTypeOcc mctx p t
 tyVarTypeOcc mctx p (TyQual t _ _) = tyVarTypeOcc mctx p t
 tyVarTypeOcc mctx p (TyFun a b) = tyVarTypeOcc mctx p a || tyVarTypeOcc mctx p b
@@ -776,7 +775,7 @@ tyVarTypeOcc mctx p (TyApp a b) = match tyAppSpine (TyApp a b)
         tyVarTypeOccSlots mctx p kinds args
       _ => anyList (tyVarTypeOcc mctx p) args
   (hd, args) => tyVarTypeOcc mctx p hd || anyList (tyVarTypeOcc mctx p) args
-tyVarTypeOcc mctx _ _ = False
+tyVarTypeOcc _mctx _ _ = False
 
 -- per slot: a bare `p` at a KRow slot is a ROW occurrence (skipped); anything
 -- else is walked as a type.
@@ -787,7 +786,7 @@ tyVarTypeOccSlots mctx p ((KAuth _ _) :: ks) ((TyVar _) :: ts) =
   tyVarTypeOccSlots mctx p ks ts
 tyVarTypeOccSlots mctx p (_ :: ks) (t :: ts) =
   tyVarTypeOcc mctx p t || tyVarTypeOccSlots mctx p ks ts
-tyVarTypeOccSlots mctx _ _ _ = False
+tyVarTypeOccSlots _mctx _ _ _ = False
 
 -- interface heads (c): the retired co-occurrence inference is the EVIDENCE.
 checkIfaceHeadKinds : ModuleCtx ->
@@ -796,7 +795,7 @@ checkIfaceHeadKinds : ModuleCtx ->
   List (Option KindAnn) ->
   List IfaceMethod ->
   Unit
-checkIfaceHeadKinds mctx _ [] _ _ = ()
+checkIfaceHeadKinds _mctx _ [] _ _ = ()
 checkIfaceHeadKinds mctx name (p :: ps) (a :: anns) methods =
   let inferred = ifaceParamKindsOf p methods
   let loc = firstIfaceMethodLoc methods
@@ -831,7 +830,7 @@ checkIfaceHeadKinds mctx name (p :: ps) (a :: anns) methods =
           loc
           (unannotatedGradedParamMsg name p inferred)
   checkIfaceHeadKinds mctx name ps anns methods
-checkIfaceHeadKinds mctx _ _ [] _ = ()
+checkIfaceHeadKinds _mctx _ _ [] _ = ()
 
 -- a slot the methods use as an effect row that the annotation declares `Type`
 anyRowDeclaredType : List Kind -> List Kind -> Bool
@@ -854,7 +853,7 @@ checkSuperKinds : ModuleCtx ->
   List IfaceMethod ->
   List Super ->
   Unit
-checkSuperKinds mctx _ _ _ _ _ [] = ()
+checkSuperKinds _mctx _ _ _ _ _ [] = ()
 checkSuperKinds mctx prog name typarams anns methods ((Super { superHead = sh, superParams = sps }) :: rest) =
   match findIfaceDecl prog sh
     Some (stps, sanns, smethods) =>
@@ -903,7 +902,7 @@ checkEffectParamsTy mctx (TyFun a b) =
 checkEffectParamsTy mctx (TyApp a b) =
   checkEffectParamsTy mctx a
   checkEffectParamsTy mctx b
-checkEffectParamsTy mctx (TyAuth _ _) = ()
+checkEffectParamsTy _mctx (TyAuth _ _) = ()
 checkEffectParamsTy mctx (TyTuple ts) = checkEffectParamsTys mctx ts
 checkEffectParamsTy mctx (TyEffect labels _ t) =
   checkEffectAtoms mctx labels
@@ -916,10 +915,10 @@ checkEffectParamsTy mctx (TyEffect labels _ t) =
 -- no other spelling admits).
 checkEffectParamsTy mctx (TyRow labels _ _) = checkEffectAtoms mctx labels
 checkEffectParamsTy mctx (TyConstrained _ t) = checkEffectParamsTy mctx t
-checkEffectParamsTy mctx _ = ()
+checkEffectParamsTy _mctx _ = ()
 
 checkEffectParamsTys : ModuleCtx -> List Ty -> Unit
-checkEffectParamsTys mctx [] = ()
+checkEffectParamsTys _mctx [] = ()
 checkEffectParamsTys mctx (t :: ts) =
   checkEffectParamsTy mctx t
   checkEffectParamsTys mctx ts
@@ -930,7 +929,7 @@ checkEffectAtoms mctx atoms =
   checkWrittenElementCap mctx atoms
 
 checkEachEffectAtom : ModuleCtx -> List EffAtomTy -> Unit
-checkEachEffectAtom mctx [] = ()
+checkEachEffectAtom _mctx [] = ()
 checkEachEffectAtom mctx (a :: rest) =
   match a.eatParam
     EPTop => ()
@@ -949,7 +948,7 @@ checkEachEffectAtom mctx (a :: rest) =
 -- so a written bound would admit more than it says; it is refused at the
 -- label's first atom instead (`writtenSetProblem`).
 checkWrittenElementCap : ModuleCtx -> List EffAtomTy -> Unit
-checkWrittenElementCap mctx [] = ()
+checkWrittenElementCap _mctx [] = ()
 checkWrittenElementCap mctx (a :: rest) =
   let l = EffLabel a.eatLabel a.eatOrigin
   let onLabel b = labelKey (EffLabel b.eatLabel b.eatOrigin) == labelKey l
@@ -1003,7 +1002,7 @@ checkAuthorityBinder mctx n a rest =
 -- A written binder domain, `(n : String @L)`, names a label whose domain has
 -- elements, for a binder of a type the domain can abstract.
 checkBinderDomain : ModuleCtx -> String -> Ty -> Option EffAtomTy -> Unit
-checkBinderDomain mctx _ _ None = ()
+checkBinderDomain _mctx _ _ None = ()
 checkBinderDomain outer n a (Some l) =
   let mctx = mctxAtIfSome l.eatLoc outer
   if isStringTy
@@ -1183,7 +1182,7 @@ authorityNamesWritten gctx (TyTuple ts) =
   flatMap (authorityNamesWritten gctx) ts
 authorityNamesWritten gctx (TyConstrained _ t) = authorityNamesWritten gctx t
 authorityNamesWritten gctx (TyNamed _ t _) = authorityNamesWritten gctx t
-authorityNamesWritten gctx _ = []
+authorityNamesWritten _gctx _ = []
 
 atomAuthorityName : GraphCtx -> EffAtomTy -> List (String, Option Loc)
 atomAuthorityName gctx a = map (b => (fst b, a.eatLoc)) (namedAtomBinder gctx a)
@@ -1226,7 +1225,7 @@ binderDomainsIn gctx (TyTuple ts) = flatMap (binderDomainsIn gctx) ts
 binderDomainsIn gctx (TyEffect _ _ t) = binderDomainsIn gctx t
 binderDomainsIn gctx (TyConstrained _ t) = binderDomainsIn gctx t
 binderDomainsIn gctx (TyQual t _ _) = binderDomainsIn gctx t
-binderDomainsIn gctx _ = []
+binderDomainsIn _gctx _ = []
 
 -- The bare names sitting in `Authority`-kinded argument slots of registered
 -- heads, with the slot's domain: the twin of `rowArgNamesIn` for authorities.
@@ -1260,7 +1259,7 @@ kauthArgVarNames gctx ((KAuth l _) :: ks) ((TyAuth ps _) :: as2) =
 kauthArgVarNames gctx ((KAuth l _) :: ks) ((TyRow [] names _) :: as2) =
   map (n => (n, dtopFor gctx l)) names ++ kauthArgVarNames gctx ks as2
 kauthArgVarNames gctx (_ :: ks) (_ :: as2) = kauthArgVarNames gctx ks as2
-kauthArgVarNames gctx _ _ = []
+kauthArgVarNames _gctx _ _ = []
 
 export
 namedAtomBinders : GraphCtx -> Ty -> List (String, Param)
@@ -1292,7 +1291,7 @@ axisAtomBinders gctx a = match (
 astEffrowE : GraphCtx -> SigVars -> Ty -> EffRow
 astEffrowE gctx etbl (TyEffect labels tail _) =
   EffRow (atomsOfWrittenIn gctx etbl labels) (tailCell gctx etbl tail)
-astEffrowE gctx _ _ = pureRow
+astEffrowE _gctx _ _ = pureRow
 
 -- Only a leading row describes forcing a binding. Rows reached through an
 -- arrow remain that arrow's latent effects, even for a function-valued binding.
@@ -1338,8 +1337,8 @@ returnRowE mctx etbl tvs ty = match aliasScopeE mctx etbl tvs ty
 -- name the table does not know contributes nothing, which is what the
 -- single-name case has always done by yielding `None`.
 tailCell : GraphCtx -> SigVars -> List String -> Option (Ref Effvar)
-tailCell gctx _ [] = None
-tailCell gctx etbl [n] = lookupAssoc n etbl.svRows
+tailCell _gctx _ [] = None
+tailCell _gctx etbl [n] = lookupAssoc n etbl.svRows
 tailCell gctx etbl ns = match tailCellsOf etbl ns
   [] => None
   [cell] => Some cell
@@ -1421,7 +1420,7 @@ fromAstTypeE mctx etbl tvs (TyQual t ps loc) =
 -- `data Holder = Holder <Stdout>`) into a silent mistype (`List Unit`).  Push
 -- a real diagnostic; `TCon "Unit"` is POST-error recovery only, so inference
 -- can keep going, not a value anything should rely on.
-fromAstTypeE mctx etbl tvs (TyRow labels tail loc) =
+fromAstTypeE mctx _etbl _tvs (TyRow labels tail loc) =
   pushTypeErrorOncePerSite
     mctx
     TEffectKindMismatch
@@ -1561,7 +1560,7 @@ appFallback : ModuleCtx ->
   String ->
   List Ty ->
   Mono
-appFallback mctx _ _ o n [] = tconFrom o n
+appFallback _mctx _ _ o n [] = tconFrom o n
 appFallback mctx etbl tvs o n (a :: as2) =
   foldAppFallback
     mctx
@@ -1576,7 +1575,7 @@ foldAppFallback : ModuleCtx ->
   Mono ->
   List Ty ->
   Mono
-foldAppFallback mctx _ _ acc [] = acc
+foldAppFallback _mctx _ _ acc [] = acc
 foldAppFallback mctx etbl tvs acc (a :: as2) =
   foldAppFallback mctx etbl tvs (TApp acc (fromAstTypeE mctx etbl tvs a)) as2
 
@@ -1697,7 +1696,7 @@ aliasArgBindings mctx etbl tvs (p :: ps) ((KAuth l pat) :: ks) (arg :: args) =
 aliasArgBindings mctx etbl tvs (p :: ps) (_ :: ks) (arg :: args) =
   let rest = aliasArgBindings mctx etbl tvs ps ks args
   (fst rest, (p, fromAstTypeE mctx etbl tvs arg) :: snd rest)
-aliasArgBindings mctx _ _ _ _ _ = (emptySigVars, [])
+aliasArgBindings _mctx _ _ _ _ _ = (emptySigVars, [])
 
 -- The effect-table cell an `Effect` alias parameter reads as.  A bare row
 -- variable argument (`S e Int`) is the caller's own cell for `e`, the one the
@@ -1705,7 +1704,7 @@ aliasArgBindings mctx _ _ _ _ _ = (emptySigVars, [])
 -- is a cell already solved to that row, the indirection every solved row
 -- variable already is.
 aliasRowParamCell : GraphCtx -> EffRow -> Ref Effvar
-aliasRowParamCell gctx (EffRow [] (Some cell)) = cell
+aliasRowParamCell _gctx (EffRow [] (Some cell)) = cell
 aliasRowParamCell gctx row = Ref (ELink (newEffvarId gctx ()) row)
 
 -- #822: a spine headed by an interface typaram of GRADED kind — `f e b` must yield
@@ -1782,7 +1781,7 @@ foldRowSlotArgs : ModuleCtx ->
   Mono ->
   List Ty ->
   Mono
-foldRowSlotArgs mctx _ _ acc [] = acc
+foldRowSlotArgs _mctx _ _ acc [] = acc
 foldRowSlotArgs mctx etbl tvs acc (arg :: rest) =
   foldRowSlotArgs
     mctx
@@ -1805,14 +1804,14 @@ foldAppKinds : ModuleCtx ->
   List Kind ->
   List Ty ->
   Mono
-foldAppKinds mctx _ _ acc [] [] = acc
+foldAppKinds _mctx _ _ acc [] [] = acc
 foldAppKinds mctx etbl tvs acc (k :: ks) (a :: as2) =
   foldAppKinds mctx etbl tvs (TApp acc (kindArgMono mctx etbl tvs k a)) ks as2
-foldAppKinds mctx _ _ acc _ _ = acc
+foldAppKinds _mctx _ _ acc _ _ = acc
 
 kindArgMono : ModuleCtx -> SigVars -> List (String, Mono) -> Kind -> Ty -> Mono
 kindArgMono mctx etbl tvs KType arg = fromAstTypeE mctx etbl tvs arg
-kindArgMono mctx etbl tvs KRow arg = TEff (rowArgOf mctx etbl arg)
+kindArgMono mctx etbl _tvs KRow arg = TEff (rowArgOf mctx etbl arg)
 -- A pattern slot holds a pattern whatever was written in it: a term outside
 -- the range is reported (`authArgOf`) and read as the least pattern above it,
 -- so the report is not repeated at every use of the type.
@@ -1925,7 +1924,7 @@ authTermOf mctx _ _ l _ p = AConst (writtenParam (dtopFor mctx.mcGraph l) p)
 -- etbl (seeded by the caller so the cell aliases the field/sig tail); an explicit
 -- `<…>` builds directly; anything else is the pure closed row.
 rowArgOf : ModuleCtx -> SigVars -> Ty -> EffRow
-rowArgOf mctx etbl (TyVar n) = match lookupAssoc n etbl.svRows
+rowArgOf _mctx etbl (TyVar n) = match lookupAssoc n etbl.svRows
   Some cell => EffRow [] (Some cell)
   None => pureRow
 rowArgOf mctx etbl (TyEffect labels tail _) =
@@ -1980,7 +1979,7 @@ qualifiedConstraintKinds : ModuleCtx ->
   List (String, List Kind) ->
   List Constraint ->
   List (String, List Kind)
-qualifiedConstraintKinds mctx _ scope [] = scope
+qualifiedConstraintKinds _mctx _ scope [] = scope
 qualifiedConstraintKinds mctx loc scope ((Constraint { constraintHead, constraintOrigin, constraintArgs }) :: rest) =
   let envs = mctx.mcGraph.declEnvsRef.value
   let cur = declEnvsOrdOf mctx.mcCells.currentModuleRef.value envs
@@ -2013,7 +2012,7 @@ qualifiedArgumentKinds mctx loc scope (kinds :: restKinds) ((TyVar name) :: rest
   qualifiedArgumentKinds mctx loc next restKinds restArgs
 qualifiedArgumentKinds mctx loc scope (_ :: restKinds) (_ :: restArgs) =
   qualifiedArgumentKinds mctx loc scope restKinds restArgs
-qualifiedArgumentKinds mctx _ scope _ _ = scope
+qualifiedArgumentKinds _mctx _ scope _ _ = scope
 
 -- [scope] comes from the enclosing interface or the signature's own predicates.
 -- Abstract heads have no ambient name-keyed kind lookup.
@@ -2039,7 +2038,7 @@ rowArgNamesIn mctx scope (TyFun a b) =
 rowArgNamesIn mctx scope (TyTuple ts) = flatMap (rowArgNamesIn mctx scope) ts
 rowArgNamesIn mctx scope (TyEffect _ _ t) = rowArgNamesIn mctx scope t
 rowArgNamesIn mctx scope (TyConstrained _ t) = rowArgNamesIn mctx scope t
-rowArgNamesIn mctx _ _ = []
+rowArgNamesIn _mctx _ _ = []
 
 rowArgNamesApp : ModuleCtx ->
   List (String, List Kind) ->
@@ -2135,7 +2134,7 @@ export
 reqTyToMono : ModuleCtx -> List (String, Mono) -> Ty -> Mono
 reqTyToMono mctx sub (TyVar n) =
   optionOrElse (_ => freshVar mctx ()) (lookupAssoc n sub)
-reqTyToMono mctx _ (TyCon { tyConName = n, tyConOrigin = o }) = tconFrom o n
+reqTyToMono _mctx _ (TyCon { tyConName = n, tyConOrigin = o }) = tconFrom o n
 reqTyToMono mctx sub (TyApp a b) =
   TApp (reqTyToMono mctx sub a) (reqTyToMono mctx sub b)
 reqTyToMono mctx sub (TyFun a b) =

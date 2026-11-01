@@ -53,7 +53,7 @@ import test.vector_runner.{
 }
 import list.{replicate, zip, zipWith}
 import string.{contains, lines, startsWith, toInt, words}
-import test.{Expectation, expectNoFindings}
+import test.{expectNoFindings}
 import test.mst_vectors_support.{mstCorpora, routeNeeds}
 import test_process.{medakaRoot}
 import time.{elapsedSince, monotonic}

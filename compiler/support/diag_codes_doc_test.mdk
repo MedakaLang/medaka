@@ -10,9 +10,7 @@
    `runtime error [E-...]` banner in `runtime/medaka_rt.c` is a `runtime` or
    `live` row. -}
 import list.{drop, dropWhile, filter, filterMap, nub, sort, takeWhile}
-import string.{
-  contains, lines, split, startsWith, stripPrefix, stripSuffix, trim
-}
+import string.{lines, split, startsWith, stripPrefix, stripSuffix, trim}
 import support.diag_codes.{allDiagCodes, codeText}
 import test.{expectAll, expectEqual, fail}
 import test_process.{underRoot}

@@ -1,5 +1,5 @@
 # META
-source_lines=1277
+source_lines=1276
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_infer_records: the helpers the record arms call: field-owner resolution, field-shape
@@ -87,7 +87,6 @@ import support.util.{
   editDistance,
   filterList,
   isEmptyL,
-  isSome,
   listLen,
   orElseOpt,
   sortUniqS,
@@ -114,7 +113,7 @@ assignedFieldNames fields = map (fa => fst (fieldAssignNamePair fa)) fields
 -- in order, so the missing-field errors are pushed in exactly the old order.
 export
 checkMissingFields : ModuleCtx -> String -> List String -> OrdMap Unit -> Unit
-checkMissingFields mctx _ [] _ = ()
+checkMissingFields _mctx _ [] _ = ()
 checkMissingFields mctx rname (fname :: rest) supplied
   | omHasKey fname supplied = checkMissingFields mctx rname rest supplied
   | otherwise =
@@ -320,7 +319,7 @@ firstTypeDisagreement : GraphCtx ->
   String ->
   List (String, Int, RecordInfo) ->
   Option CtorFieldConflict
-firstTypeDisagreement gctx _ [] = None
+firstTypeDisagreement _gctx _ [] = None
 firstTypeDisagreement gctx fname ((a, _, ra) :: rest) =
   match omLookup fname (recordFieldMap ra)
     None => None
@@ -333,7 +332,7 @@ typeOtherThan : GraphCtx ->
   Mono ->
   List (String, Int, RecordInfo) ->
   Option CtorFieldConflict
-typeOtherThan gctx _ _ _ _ [] = None
+typeOtherThan _gctx _ _ _ _ [] = None
 typeOtherThan gctx fname a ra ta ((b, _, rb) :: rest) =
   match omLookup fname (recordFieldMap rb)
     Some tb =>
@@ -485,7 +484,7 @@ fieldOwnerReachable mctx key =
     Some mids => fieldOwnerAnyReachable mctx mids
 
 fieldOwnerAnyReachable : ModuleCtx -> List String -> Bool
-fieldOwnerAnyReachable mctx [] = False
+fieldOwnerAnyReachable _mctx [] = False
 fieldOwnerAnyReachable mctx (m :: rest) =
   omHasKey m mctx.mcCells.fieldOwnerReachRef.value
     || fieldOwnerAnyReachable mctx rest
@@ -859,7 +858,7 @@ ownerDeclOfReceiver : ModuleCtx ->
   String ->
   List String ->
   Option (String, RecordInfo)
-ownerDeclOfReceiver mctx _ _ [] = None
+ownerDeclOfReceiver _mctx _ _ [] = None
 ownerDeclOfReceiver mctx te fname owners = match receiverTypeIdent te
   None => None
   Some ident =>
@@ -874,7 +873,7 @@ ownerDeclOfReceiver mctx te fname owners = match receiverTypeIdent te
 -- Every owner key whose companion rows hold the declaration `ident` names, with
 -- that row's `RecordInfo`.
 ownerDeclMatches : GraphCtx -> Ident -> List String -> List (String, RecordInfo)
-ownerDeclMatches gctx _ [] = []
+ownerDeclMatches _gctx _ [] = []
 ownerDeclMatches gctx ident (k :: rest) =
   match omLookup k (spRows gctx.crossRun.universeRecordPop.value)
     None => ownerDeclMatches gctx ident rest
@@ -1024,7 +1023,7 @@ ctorSiblingWithholdingName : ModuleCtx ->
   String ->
   String ->
   Option String
-ctorSiblingWithholdingName mctx None _ _ = None
+ctorSiblingWithholdingName _mctx None _ _ = None
 ctorSiblingWithholdingName mctx (Some hk) fname survivorKey =
   match ctorsOfHead mctx hk
     None => None
@@ -1060,7 +1059,7 @@ firstCtorSiblingWithholding : ModuleCtx ->
   String ->
   List String ->
   Option String
-firstCtorSiblingWithholding mctx _ _ _ [] = None
+firstCtorSiblingWithholding _mctx _ _ _ [] = None
 firstCtorSiblingWithholding mctx hk fname skey (k :: rest)
   | k == skey = firstCtorSiblingWithholding mctx hk fname skey rest
   | ctorSiblingWithholds mctx hk fname k = Some k
@@ -1099,7 +1098,7 @@ ctorRecordFromCompanion gctx hk k = match headKeyIdent hk
 -- Each owner key paired with its `RecordInfo`; a key with no entry is dropped
 -- rather than defaulted, so the filter above only ever sees real declarations.
 ownerCandidates : ModuleCtx -> List String -> List (String, RecordInfo)
-ownerCandidates mctx [] = []
+ownerCandidates _mctx [] = []
 ownerCandidates mctx (key :: rest) = match lookupRecordByName mctx key
   Some ri => (key, ri) :: ownerCandidates mctx rest
   None => ownerCandidates mctx rest
@@ -1295,7 +1294,7 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedupBy" false) (mem "editDistance" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "orElseOpt" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedupBy" false) (mem "editDistance" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "listLen" false) (mem "orElseOpt" false) (mem "sortUniqS" false))))
 (DUse false (UseGroup ("list") ((mem "elemIndex" false) (mem "head" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "isReservedCtor" false) (mem "mangledName" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "oGetCtors" false))))
@@ -1305,7 +1304,7 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DTypeSig true "assignedFieldNames" (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "assignedFieldNames" ((PVar "fields")) (EApp (EApp (EVar "map") (ELam ((PVar "fa")) (EApp (EVar "fst") (EApp (EVar "fieldAssignNamePair") (EVar "fa"))))) (EVar "fields")))
 (DTypeSig true "checkMissingFields" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Unit"))))))
-(DFunDef false "checkMissingFields" ((PVar "mctx") PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "checkMissingFields" ((PVar "_mctx") PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkMissingFields" ((PVar "mctx") (PVar "rname") (PCons (PVar "fname") (PVar "rest")) (PVar "supplied")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "fname")) (EVar "supplied")) (EApp (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "mctx")) (EVar "rname")) (EVar "rest")) (EVar "supplied")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TMissingField")) (EApp (EApp (EVar "missingFieldMsg") (EVar "fname")) (EVar "rname")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "mctx")) (EVar "rname")) (EVar "rest")) (EVar "supplied")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "stampedRecordHead" (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyCon "String"))))
 (DFunDef false "stampedRecordHead" ((PVar "rname") (PVar "ri")) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "None") () (EVar "rname")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "ownerQualifiedHead") (EVar "mid")) (EVar "rname")))))
@@ -1332,10 +1331,10 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DFunDef false "slotOtherThan" (PWild (PList)) (EVar "None"))
 (DFunDef false "slotOtherThan" ((PVar "i") (PCons (PTuple (PVar "b") (PVar "j") PWild) (PVar "rest"))) (EIf (EBinOp "/=" (EVar "j") (EVar "i")) (EApp (EVar "Some") (ETuple (EVar "b") (EVar "j"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "slotOtherThan") (EVar "i")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "firstTypeDisagreement" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))))
-(DFunDef false "firstTypeDisagreement" ((PVar "gctx") PWild (PList)) (EVar "None"))
+(DFunDef false "firstTypeDisagreement" ((PVar "_gctx") PWild (PList)) (EVar "None"))
 (DFunDef false "firstTypeDisagreement" ((PVar "gctx") (PVar "fname") (PCons (PTuple (PVar "a") PWild (PVar "ra")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ra"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ta")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "gctx")) (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")))))
 (DTypeSig false "typeOtherThan" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict")))))))))
-(DFunDef false "typeOtherThan" ((PVar "gctx") PWild PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "typeOtherThan" ((PVar "_gctx") PWild PWild PWild PWild (PList)) (EVar "None"))
 (DFunDef false "typeOtherThan" ((PVar "gctx") (PVar "fname") (PVar "a") (PVar "ra") (PVar "ta") (PCons (PTuple (PVar "b") PWild (PVar "rb")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "rb"))) (arm (PCon "Some" (PVar "tb")) () (EBlock (DoLet false false (PTuple (PVar "tsub") (PVar "esub") (PVar "asub")) (EApp (EApp (EApp (EVar "paramRenaming") (EApp (EVar "recordResultMono") (EVar "rb"))) (EApp (EVar "recordResultMono") (EVar "ra"))) (ETuple (EListLit) (EListLit) (EListLit)))) (DoLet false false (PVar "tbOverA") (EApp (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "gctx")) (EVar "tsub")) (EVar "esub")) (EVar "asub")) (EVar "tb"))) (DoExpr (EIf (EApp (EApp (EVar "fieldTypeSame") (EVar "ta")) (EVar "tbOverA")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "gctx")) (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "CtorTypesDiffer") (EVar "a")) (EVar "ta")) (EVar "b")) (EVar "tbOverA"))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "gctx")) (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")))))
 (DTypeSig false "paramRenaming" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))))
 (DFunDef false "paramRenaming" ((PVar "from") (PVar "to") (PVar "acc")) (EMatch (EApp (EVar "normalize") (EVar "from")) (arm (PCon "TApp" (PVar "f1") (PVar "a1")) () (EMatch (EApp (EVar "normalize") (EVar "to")) (arm (PCon "TApp" (PVar "f2") (PVar "a2")) () (EApp (EApp (EApp (EVar "paramRenaming") (EVar "f1")) (EVar "f2")) (EApp (EApp (EApp (EVar "renameParam") (EApp (EVar "normalize") (EVar "a1"))) (EVar "a2")) (EVar "acc")))) (arm PWild () (EVar "acc")))) (arm PWild () (EVar "acc"))))
@@ -1359,7 +1358,7 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DTypeSig false "fieldOwnerReachable" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "fieldOwnerReachable" ((PVar "mctx") (PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fieldOwnerModulesRef") "value")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "mids")) () (EApp (EApp (EVar "fieldOwnerAnyReachable") (EVar "mctx")) (EVar "mids")))))
 (DTypeSig false "fieldOwnerAnyReachable" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "fieldOwnerAnyReachable" ((PVar "mctx") (PList)) (EVar "False"))
+(DFunDef false "fieldOwnerAnyReachable" ((PVar "_mctx") (PList)) (EVar "False"))
 (DFunDef false "fieldOwnerAnyReachable" ((PVar "mctx") (PCons (PVar "m") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fieldOwnerReachRef") "value")) (EApp (EApp (EVar "fieldOwnerAnyReachable") (EVar "mctx")) (EVar "rest"))))
 (DTypeSig true "resolveFieldRecord" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "resolveFieldRecord" ((PVar "mctx") (PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "mctx")) (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "receiverTypeWord") (EVar "te")) (EVar "r"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "abstractRecordTypesRef") "value")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TAbstractField")) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EApp (EVar "resolveFieldByOwners") (EVar "mctx")) (EVar "te")) (EVar "fname")))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "resolveFieldByOwners") (EVar "mctx")) (EVar "te")) (EVar "fname")))))
@@ -1395,10 +1394,10 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DTypeSig false "fieldDeclTypeKey" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
 (DFunDef false "fieldDeclTypeKey" ((PTuple (PVar "k") (PVar "ri"))) (EMatch (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri"))) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyTag") (EVar "hk"))) (arm (PCon "None") () (EVar "k"))))
 (DTypeSig false "ownerDeclOfReceiver" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))))
-(DFunDef false "ownerDeclOfReceiver" ((PVar "mctx") PWild PWild (PList)) (EVar "None"))
+(DFunDef false "ownerDeclOfReceiver" ((PVar "_mctx") PWild PWild (PList)) (EVar "None"))
 (DFunDef false "ownerDeclOfReceiver" ((PVar "mctx") (PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "dedupBy") (EVar "fieldDeclTypeKey")) (EApp (EApp (EApp (EVar "ownerDeclMatches") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "ident")) (EVar "owners"))) (arm (PList (PTuple (PVar "k") (PVar "ri"))) () (EIf (EApp (EApp (EApp (EApp (EVar "narrowingBlockedByCtorSibling") (EVar "mctx")) (EApp (EVar "headTyconMono") (EVar "te"))) (EVar "fname")) (EVar "k")) (EVar "None") (EApp (EVar "Some") (ETuple (EVar "k") (EVar "ri"))))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "ownerDeclMatches" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
-(DFunDef false "ownerDeclMatches" ((PVar "gctx") PWild (PList)) (EListLit))
+(DFunDef false "ownerDeclMatches" ((PVar "_gctx") PWild (PList)) (EListLit))
 (DFunDef false "ownerDeclMatches" ((PVar "gctx") (PVar "ident") (PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "universeRecordPop") "value"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ownerDeclMatches") (EVar "gctx")) (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ownerDeclMatches") (EVar "gctx")) (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "k") (EVar "ri")) (EApp (EApp (EApp (EVar "ownerDeclMatches") (EVar "gctx")) (EVar "ident")) (EVar "rest"))))))))
 (DTypeSig false "resolveFieldAmbiguous" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))))
 (DFunDef false "resolveFieldAmbiguous" ((PVar "mctx") PWild PWild (PList (PVar "r"))) (EApp (EApp (EVar "pairRecordByName") (EVar "mctx")) (EVar "r")))
@@ -1411,13 +1410,13 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DTypeSig false "narrowingBlockedByCtorSibling" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "narrowingBlockedByCtorSibling" ((PVar "mctx") (PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EVar "mctx")) (EVar "rk")) (EVar "fname")) (EVar "survivorKey"))))
 (DTypeSig false "ctorSiblingWithholdingName" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "ctorSiblingWithholdingName" ((PVar "mctx") (PCon "None") PWild PWild) (EVar "None"))
+(DFunDef false "ctorSiblingWithholdingName" ((PVar "_mctx") (PCon "None") PWild PWild) (EVar "None"))
 (DFunDef false "ctorSiblingWithholdingName" ((PVar "mctx") (PCon "Some" (PVar "hk")) (PVar "fname") (PVar "survivorKey")) (EMatch (EApp (EApp (EVar "ctorsOfHead") (EVar "mctx")) (EVar "hk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ctors")) () (EApp (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "mctx")) (EVar "hk")) (EVar "fname")) (EVar "survivorKey")) (EVar "ctors")))))
 (DTypeSig false "ctorOracleKeyOf" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyApp (TyCon "Option") (TyCon "TabKey"))))
 (DFunDef false "ctorOracleKeyOf" ((PCon "None")) (EVar "None"))
 (DFunDef false "ctorOracleKeyOf" ((PCon "Some" (PVar "hk"))) (EApp (EVar "headKeyDecl") (EVar "hk")))
 (DTypeSig false "firstCtorSiblingWithholding" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))))
-(DFunDef false "firstCtorSiblingWithholding" ((PVar "mctx") PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstCtorSiblingWithholding" ((PVar "_mctx") PWild PWild PWild (PList)) (EVar "None"))
 (DFunDef false "firstCtorSiblingWithholding" ((PVar "mctx") (PVar "hk") (PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "mctx")) (EVar "hk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "mctx")) (EVar "hk")) (EVar "fname")) (EVar "k")) (EApp (EVar "Some") (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "mctx")) (EVar "hk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "ctorSiblingWithholds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "ctorSiblingWithholds" ((PVar "mctx") (PVar "hk") (PVar "fname") (PVar "k")) (EMatch (EApp (EApp (EApp (EVar "ctorRecordOfType") (EVar "mctx")) (EVar "hk")) (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "isNone") (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))))) (arm (PCon "None") () (EVar "True"))))
@@ -1426,7 +1425,7 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DTypeSig false "ctorRecordFromCompanion" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo"))))))
 (DFunDef false "ctorRecordFromCompanion" ((PVar "gctx") (PVar "hk") (PVar "k")) (EMatch (EApp (EVar "headKeyIdent") (EVar "hk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "universeRecordPop") "value"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "cs")) () (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")))))))
 (DTypeSig false "ownerCandidates" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "ownerCandidates" ((PVar "mctx") (PList)) (EListLit))
+(DFunDef false "ownerCandidates" ((PVar "_mctx") (PList)) (EListLit))
 (DFunDef false "ownerCandidates" ((PVar "mctx") (PCons (PVar "key") (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupRecordByName") (EVar "mctx")) (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EApp (EVar "ownerCandidates") (EVar "mctx")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "ownerCandidates") (EVar "mctx")) (EVar "rest")))))
 (DTypeSig false "pairRecordByName" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
 (DFunDef false "pairRecordByName" ((PVar "mctx") (PVar "r")) (EApp (EApp (EVar "map") (ELam ((PVar "ri")) (ETuple (EVar "r") (EVar "ri")))) (EApp (EApp (EVar "lookupRecordByName") (EVar "mctx")) (EVar "r"))))
@@ -1479,7 +1478,7 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedupBy" false) (mem "editDistance" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "orElseOpt" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedupBy" false) (mem "editDistance" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "listLen" false) (mem "orElseOpt" false) (mem "sortUniqS" false))))
 (DUse false (UseGroup ("list") ((mem "elemIndex" false) (mem "head" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "isReservedCtor" false) (mem "mangledName" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "oGetCtors" false))))
@@ -1489,7 +1488,7 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DTypeSig true "assignedFieldNames" (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "assignedFieldNames" ((PVar "fields")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "fa")) (EApp (EVar "fst") (EApp (EVar "fieldAssignNamePair") (EVar "fa"))))) (EVar "fields")))
 (DTypeSig true "checkMissingFields" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Unit"))))))
-(DFunDef false "checkMissingFields" ((PVar "mctx") PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "checkMissingFields" ((PVar "_mctx") PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkMissingFields" ((PVar "mctx") (PVar "rname") (PCons (PVar "fname") (PVar "rest")) (PVar "supplied")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "fname")) (EVar "supplied")) (EApp (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "mctx")) (EVar "rname")) (EVar "rest")) (EVar "supplied")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TMissingField")) (EApp (EApp (EVar "missingFieldMsg") (EVar "fname")) (EVar "rname")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "mctx")) (EVar "rname")) (EVar "rest")) (EVar "supplied")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "stampedRecordHead" (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyCon "String"))))
 (DFunDef false "stampedRecordHead" ((PVar "rname") (PVar "ri")) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "None") () (EVar "rname")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "ownerQualifiedHead") (EVar "mid")) (EVar "rname")))))
@@ -1516,10 +1515,10 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DFunDef false "slotOtherThan" (PWild (PList)) (EVar "None"))
 (DFunDef false "slotOtherThan" ((PVar "i") (PCons (PTuple (PVar "b") (PVar "j") PWild) (PVar "rest"))) (EIf (EBinOp "/=" (EVar "j") (EVar "i")) (EApp (EVar "Some") (ETuple (EVar "b") (EVar "j"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "slotOtherThan") (EVar "i")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "firstTypeDisagreement" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))))
-(DFunDef false "firstTypeDisagreement" ((PVar "gctx") PWild (PList)) (EVar "None"))
+(DFunDef false "firstTypeDisagreement" ((PVar "_gctx") PWild (PList)) (EVar "None"))
 (DFunDef false "firstTypeDisagreement" ((PVar "gctx") (PVar "fname") (PCons (PTuple (PVar "a") PWild (PVar "ra")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ra"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ta")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "gctx")) (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")))))
 (DTypeSig false "typeOtherThan" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict")))))))))
-(DFunDef false "typeOtherThan" ((PVar "gctx") PWild PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "typeOtherThan" ((PVar "_gctx") PWild PWild PWild PWild (PList)) (EVar "None"))
 (DFunDef false "typeOtherThan" ((PVar "gctx") (PVar "fname") (PVar "a") (PVar "ra") (PVar "ta") (PCons (PTuple (PVar "b") PWild (PVar "rb")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "rb"))) (arm (PCon "Some" (PVar "tb")) () (EBlock (DoLet false false (PTuple (PVar "tsub") (PVar "esub") (PVar "asub")) (EApp (EApp (EApp (EVar "paramRenaming") (EApp (EVar "recordResultMono") (EVar "rb"))) (EApp (EVar "recordResultMono") (EVar "ra"))) (ETuple (EListLit) (EListLit) (EListLit)))) (DoLet false false (PVar "tbOverA") (EApp (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "gctx")) (EVar "tsub")) (EVar "esub")) (EVar "asub")) (EVar "tb"))) (DoExpr (EIf (EApp (EApp (EVar "fieldTypeSame") (EVar "ta")) (EVar "tbOverA")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "gctx")) (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "CtorTypesDiffer") (EVar "a")) (EVar "ta")) (EVar "b")) (EVar "tbOverA"))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "gctx")) (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")))))
 (DTypeSig false "paramRenaming" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))))
 (DFunDef false "paramRenaming" ((PVar "from") (PVar "to") (PVar "acc")) (EMatch (EApp (EVar "normalize") (EVar "from")) (arm (PCon "TApp" (PVar "f1") (PVar "a1")) () (EMatch (EApp (EVar "normalize") (EVar "to")) (arm (PCon "TApp" (PVar "f2") (PVar "a2")) () (EApp (EApp (EApp (EVar "paramRenaming") (EVar "f1")) (EVar "f2")) (EApp (EApp (EApp (EVar "renameParam") (EApp (EVar "normalize") (EVar "a1"))) (EVar "a2")) (EVar "acc")))) (arm PWild () (EVar "acc")))) (arm PWild () (EVar "acc"))))
@@ -1543,7 +1542,7 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DTypeSig false "fieldOwnerReachable" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "fieldOwnerReachable" ((PVar "mctx") (PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fieldOwnerModulesRef") "value")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "mids")) () (EApp (EApp (EVar "fieldOwnerAnyReachable") (EVar "mctx")) (EVar "mids")))))
 (DTypeSig false "fieldOwnerAnyReachable" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "fieldOwnerAnyReachable" ((PVar "mctx") (PList)) (EVar "False"))
+(DFunDef false "fieldOwnerAnyReachable" ((PVar "_mctx") (PList)) (EVar "False"))
 (DFunDef false "fieldOwnerAnyReachable" ((PVar "mctx") (PCons (PVar "m") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "fieldOwnerReachRef") "value")) (EApp (EApp (EVar "fieldOwnerAnyReachable") (EVar "mctx")) (EVar "rest"))))
 (DTypeSig true "resolveFieldRecord" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "resolveFieldRecord" ((PVar "mctx") (PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "mctx")) (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "receiverTypeWord") (EVar "te")) (EVar "r"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "abstractRecordTypesRef") "value")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TAbstractField")) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EApp (EVar "resolveFieldByOwners") (EVar "mctx")) (EVar "te")) (EVar "fname")))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "resolveFieldByOwners") (EVar "mctx")) (EVar "te")) (EVar "fname")))))
@@ -1579,10 +1578,10 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DTypeSig false "fieldDeclTypeKey" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
 (DFunDef false "fieldDeclTypeKey" ((PTuple (PVar "k") (PVar "ri"))) (EMatch (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri"))) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyTag") (EVar "hk"))) (arm (PCon "None") () (EVar "k"))))
 (DTypeSig false "ownerDeclOfReceiver" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))))
-(DFunDef false "ownerDeclOfReceiver" ((PVar "mctx") PWild PWild (PList)) (EVar "None"))
+(DFunDef false "ownerDeclOfReceiver" ((PVar "_mctx") PWild PWild (PList)) (EVar "None"))
 (DFunDef false "ownerDeclOfReceiver" ((PVar "mctx") (PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "dedupBy") (EVar "fieldDeclTypeKey")) (EApp (EApp (EApp (EVar "ownerDeclMatches") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "ident")) (EVar "owners"))) (arm (PList (PTuple (PVar "k") (PVar "ri"))) () (EIf (EApp (EApp (EApp (EApp (EVar "narrowingBlockedByCtorSibling") (EVar "mctx")) (EApp (EVar "headTyconMono") (EVar "te"))) (EVar "fname")) (EVar "k")) (EVar "None") (EApp (EVar "Some") (ETuple (EVar "k") (EVar "ri"))))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "ownerDeclMatches" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
-(DFunDef false "ownerDeclMatches" ((PVar "gctx") PWild (PList)) (EListLit))
+(DFunDef false "ownerDeclMatches" ((PVar "_gctx") PWild (PList)) (EListLit))
 (DFunDef false "ownerDeclMatches" ((PVar "gctx") (PVar "ident") (PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "universeRecordPop") "value"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ownerDeclMatches") (EVar "gctx")) (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ownerDeclMatches") (EVar "gctx")) (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "k") (EVar "ri")) (EApp (EApp (EApp (EVar "ownerDeclMatches") (EVar "gctx")) (EVar "ident")) (EVar "rest"))))))))
 (DTypeSig false "resolveFieldAmbiguous" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))))
 (DFunDef false "resolveFieldAmbiguous" ((PVar "mctx") PWild PWild (PList (PVar "r"))) (EApp (EApp (EVar "pairRecordByName") (EVar "mctx")) (EVar "r")))
@@ -1595,13 +1594,13 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DTypeSig false "narrowingBlockedByCtorSibling" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "narrowingBlockedByCtorSibling" ((PVar "mctx") (PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EVar "mctx")) (EVar "rk")) (EVar "fname")) (EVar "survivorKey"))))
 (DTypeSig false "ctorSiblingWithholdingName" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "ctorSiblingWithholdingName" ((PVar "mctx") (PCon "None") PWild PWild) (EVar "None"))
+(DFunDef false "ctorSiblingWithholdingName" ((PVar "_mctx") (PCon "None") PWild PWild) (EVar "None"))
 (DFunDef false "ctorSiblingWithholdingName" ((PVar "mctx") (PCon "Some" (PVar "hk")) (PVar "fname") (PVar "survivorKey")) (EMatch (EApp (EApp (EVar "ctorsOfHead") (EVar "mctx")) (EVar "hk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ctors")) () (EApp (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "mctx")) (EVar "hk")) (EVar "fname")) (EVar "survivorKey")) (EVar "ctors")))))
 (DTypeSig false "ctorOracleKeyOf" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyApp (TyCon "Option") (TyCon "TabKey"))))
 (DFunDef false "ctorOracleKeyOf" ((PCon "None")) (EVar "None"))
 (DFunDef false "ctorOracleKeyOf" ((PCon "Some" (PVar "hk"))) (EApp (EVar "headKeyDecl") (EVar "hk")))
 (DTypeSig false "firstCtorSiblingWithholding" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))))
-(DFunDef false "firstCtorSiblingWithholding" ((PVar "mctx") PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstCtorSiblingWithholding" ((PVar "_mctx") PWild PWild PWild (PList)) (EVar "None"))
 (DFunDef false "firstCtorSiblingWithholding" ((PVar "mctx") (PVar "hk") (PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "mctx")) (EVar "hk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "mctx")) (EVar "hk")) (EVar "fname")) (EVar "k")) (EApp (EVar "Some") (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "mctx")) (EVar "hk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "ctorSiblingWithholds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "ctorSiblingWithholds" ((PVar "mctx") (PVar "hk") (PVar "fname") (PVar "k")) (EMatch (EApp (EApp (EApp (EVar "ctorRecordOfType") (EVar "mctx")) (EVar "hk")) (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "isNone") (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))))) (arm (PCon "None") () (EVar "True"))))
@@ -1610,7 +1609,7 @@ recordFieldNames (RecordInfo _ _ _ fields _) = map fst fields
 (DTypeSig false "ctorRecordFromCompanion" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo"))))))
 (DFunDef false "ctorRecordFromCompanion" ((PVar "gctx") (PVar "hk") (PVar "k")) (EMatch (EApp (EVar "headKeyIdent") (EVar "hk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "universeRecordPop") "value"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "cs")) () (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")))))))
 (DTypeSig false "ownerCandidates" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "ownerCandidates" ((PVar "mctx") (PList)) (EListLit))
+(DFunDef false "ownerCandidates" ((PVar "_mctx") (PList)) (EListLit))
 (DFunDef false "ownerCandidates" ((PVar "mctx") (PCons (PVar "key") (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupRecordByName") (EVar "mctx")) (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EApp (EVar "ownerCandidates") (EVar "mctx")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "ownerCandidates") (EVar "mctx")) (EVar "rest")))))
 (DTypeSig false "pairRecordByName" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
 (DFunDef false "pairRecordByName" ((PVar "mctx") (PVar "r")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ri")) (ETuple (EVar "r") (EVar "ri")))) (EApp (EApp (EVar "lookupRecordByName") (EVar "mctx")) (EVar "r"))))

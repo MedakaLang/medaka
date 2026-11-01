@@ -110,7 +110,7 @@ export
 closApplyLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-closApplyLines callW tailW = [
+closApplyLines _callW tailW = [
   "  ;; ── §4 universal apply runtime (exact / under-PAP / over-saturate) ──",
   "  (func $mdk_pap (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))",
   "    (local $c (ref $clos)) (local $env (ref $argarr)) (local $orig (ref eq))",
@@ -237,7 +237,7 @@ export
 ioRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioRuntimeLines callW tailW = [
+ioRuntimeLines callW _tailW = [
   "  ;; ── §2.1 Int representation seam: i31 fast path / $boxint i64 box ──",
   "  ;; layer-17 SOUNDNESS: Ints in [-2^30, 2^30) are i31ref immediates; outside that",
   "  ;; range they box into (struct (field i64)) ($boxint).  ALL Int arithmetic unboxes",
@@ -302,7 +302,7 @@ export
 ioStrRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioStrRuntimeLines callW tailW = [
+ioStrRuntimeLines callW _tailW = [
   "  ;; ── §6 string byte-write runtime ($str-dependent) ──",
   "  (func $mdk_print_str (param $s (ref $str))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
@@ -358,7 +358,7 @@ export
 stderrByteImportLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-stderrByteImportLines callW tailW = [
+stderrByteImportLines _callW _tailW = [
   "  (import \"env\" \"mdk_write_err_byte\" (func $mdk_write_err_byte (param i32)))",
 ]
 
@@ -378,7 +378,7 @@ export
 trapIntRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-trapIntRuntimeLines callW tailW = [
+trapIntRuntimeLines callW _tailW = [
   "  ;; -- #1787 numbered-trap decimal runtime (stderr, no newline) --",
   "  ;; write the decimal digits of a NON-NEGATIVE i64 (most-significant first).",
   "  (func $mdk_write_err_digits (param $n i64)",
@@ -449,7 +449,7 @@ siteFileArmW : (String -> Int -> String) ->
   (String -> Int -> String) ->
   (Int, List Int) ->
   List String
-siteFileArmW callW tailW (n, bytes) =
+siteFileArmW callW _tailW (n, bytes) =
   [
       "        (if (i32.eq (local.get $f) (i32.const \{intToString n}))",
       "          (then",
@@ -561,14 +561,14 @@ overflowCallW : (String -> Int -> String) ->
   (String -> Int -> String) ->
   String ->
   String
-overflowCallW callW tailW code =
+overflowCallW callW _tailW code =
   "(\{callW "mdk_int_overflow" 4} (i32.const \{code}) (local.get $a) (local.get $b) (local.get $s))"
 
 checkedIntOpW : (String -> Int -> String) ->
   (String -> Int -> String) ->
   String ->
   List String
-checkedIntOpW callW tailW "neg" = [
+checkedIntOpW callW _tailW "neg" = [
   "  (func $mdk_int_neg (param $a i64) (result i64)",
   "    (local $r i64)",
   "    (local.set $r (i64.sub (i64.const 0) (local.get $a)))",
@@ -593,7 +593,7 @@ checkedIntOpW callW tailW "sub" =
   checkedBinOpLinesW callW tailW "sub" "i64.sub" "45"
 checkedIntOpW callW tailW "div" =
   checkedBinOpLinesW callW tailW "div" "i64.div_s" "47"
-checkedIntOpW callW tailW op =
+checkedIntOpW _callW _tailW op =
   panic ("wasm: no checked Int operator '" ++ op ++ "'")
 
 -- a checked operator whose i64 instruction is exact on 63-bit operands, so the
@@ -628,7 +628,7 @@ intShiftW callW tailW "right" =
       "    (i64.shr_s (local.get $x)",
       "      (select (local.get $k) (i64.const 63) (i64.lt_s (local.get $k) (i64.const 63)))))",
     ]
-intShiftW callW tailW dir = panic ("wasm: no Int shift '" ++ dir ++ "'")
+intShiftW _callW _tailW dir = panic ("wasm: no Int shift '" ++ dir ++ "'")
 
 -- a shift helper's signature and its negative-amount panic.
 intShiftHeadW : (String -> Int -> String) ->
@@ -659,7 +659,7 @@ export
 stderrRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-stderrRuntimeLines callW tailW = [
+stderrRuntimeLines callW _tailW = [
   "  ;; ── W8 stderr byte-write runtime (ePutStr / ePutStrLn) ──",
   "  (func $mdk_eprint_str (param $s (ref $str))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
@@ -693,7 +693,7 @@ export
 strLeafRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-strLeafRuntimeLines callW tailW = [
+strLeafRuntimeLines callW _tailW = [
   "  ;; ── W8 string LEAF ops (byte-identical to medaka_rt.c) ──",
   "  ;; count UTF-8 codepoints in a $u8arr over [0,n): every non-continuation byte.",
   "  (func $mdk_cp_count (param $b (ref $u8arr)) (param $n i32) (result i32)",
@@ -992,7 +992,7 @@ export
 strToIntRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-strToIntRuntimeLines callW tailW = [
+strToIntRuntimeLines callW _tailW = [
   "  ;; ── W8d stringToInt (decimal, optional sign; None on any other byte) ──",
   "  (func $mdk_str_to_int (param $s (ref $str)) (result (ref eq))",
   "    (local $b (ref $u8arr)) (local $n i32) (local $i i32) (local $c i32)",
@@ -1122,7 +1122,7 @@ export
 appendRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-appendRuntimeLines callW tailW = [
+appendRuntimeLines callW _tailW = [
   "  ;; ── W13 runtime-dispatched `++` (String concat OR List append) ──",
   "  ;; List append is ITERATIVE (destination-passing over the mut $C_Cons tail),",
   "  ;; mirroring the native mdk_list_append: walk `a` head-first, struct.new each",
@@ -1315,7 +1315,7 @@ valueEqRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   Wide64W ->
   List String
-valueEqRuntimeLines callW tailW w =
+valueEqRuntimeLines callW _tailW w =
   [
       "  ;; -- layer-9 runtime-shape-dispatched `==`/`/=` (String byte-equal OR immediate identity) --",
       "  (func $mdk_value_eq (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
@@ -1476,7 +1476,7 @@ valueAddRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   Wide64W ->
   List String
-valueAddRuntimeLines callW tailW w =
+valueAddRuntimeLines callW _tailW w =
   [
       "  ;; -- A0 runtime value-tag-dispatched arithmetic (poly-`Num`: Int i31/$boxint OR $float) --",
       "  (func $mdk_value_add (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
@@ -1495,7 +1495,7 @@ valueSubRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   Wide64W ->
   List String
-valueSubRuntimeLines callW tailW w =
+valueSubRuntimeLines callW _tailW w =
   [
       "  (func $mdk_value_sub (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
     ]
@@ -1513,7 +1513,7 @@ valueMulRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   Wide64W ->
   List String
-valueMulRuntimeLines callW tailW w =
+valueMulRuntimeLines callW _tailW w =
   [
       "  (func $mdk_value_mul (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
     ]
@@ -1597,7 +1597,7 @@ valueCmpNumRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   Wide64W ->
   List String
-valueCmpNumRuntimeLines callW tailW w =
+valueCmpNumRuntimeLines callW _tailW w =
   [
       "  ;; -- A1 poly-`Ord`/`Eq`-on-Float, NUM-ONLY (no $str): $float f64-eq/cmp else i64 --",
       "  (func $mdk_value_eq_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
@@ -1674,7 +1674,7 @@ export
 rngRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-rngRuntimeLines callW tailW = [
+rngRuntimeLines callW _tailW = [
   "  ;; ── W8 SplitMix64 RNG (byte-identical to medaka_rt.c) ──",
   "  (func $mdk_rng_ensure",
   "    (if (i32.eqz (global.get $mdk_rng_seeded))",
@@ -1715,7 +1715,7 @@ export
 hashRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-hashRuntimeLines callW tailW = [
+hashRuntimeLines callW _tailW = [
   "  ;; ── W8 per-type hashers (byte-identical to medaka_rt.c) ──",
   "  ;; SplitMix64 finalizer as a pure mixer (no state update).",
   "  (func $mdk_hash_mix64 (param $x i64) (result i64)",
@@ -1984,7 +1984,7 @@ floatStrRuntimeLines callW tailW keys =
 floatStrLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-floatStrLines callW tailW = [
+floatStrLines callW _tailW = [
   "  ;; stringToFloat : $str -> Option Float (ref eq).",
   "  (func $mdk_string_to_float (param $s (ref $str)) (result (ref eq))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32) (local $d f64)",
@@ -2013,7 +2013,7 @@ floatStrLines callW tailW = [
 floatFixedLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-floatFixedLines callW tailW = [
+floatFixedLines callW _tailW = [
   "  ;; floatToFixed : the host formats exactly (ties to even) into a cache; copy the bytes.",
   "  (func $mdk_float_to_fixed (param $k i32) (param $d f64) (result (ref $str))",
   "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))",
@@ -2081,7 +2081,7 @@ export
 floatRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-floatRuntimeLines callW tailW = [
+floatRuntimeLines callW _tailW = [
   "  ;; -- W8b Float runtime (byte-identical to medaka_rt.c) --",
   "  ;; intToFloat : i64 (full-width unboxed Int) -> boxed (struct $float).  #199: reads",
   "  ;; the arg through the $mdk_unbox_int seam so Ints outside +-2^30 no longer trap the",
@@ -2145,7 +2145,7 @@ export
 hashFloatRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-hashFloatRuntimeLines callW tailW = [
+hashFloatRuntimeLines callW _tailW = [
   "  ;; hashFloat (#758): normalise -0.0 -> +0.0 and every NaN -> one qNaN bit",
   "  ;; pattern, then reinterpret bits as i64 -> mix64 -> mask [0,2^30).  Matches",
   "  ;; mdk_hash_float (native) and pHashFloat (eval), or run /= build reappears.",
@@ -2168,7 +2168,7 @@ export
 randomFloatRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-randomFloatRuntimeLines callW tailW = [
+randomFloatRuntimeLines callW _tailW = [
   "  ;; randomFloat : SplitMix64 -> f64 in [-1,1) (NOTE the -1 offset — see medaka_rt.c).",
   "  (func $mdk_random_float (result (ref $float))",
   "    (struct.new $float",
@@ -2285,7 +2285,7 @@ gatedOn key keys block = if contains key keys then block else []
 ioPushPathLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioPushPathLines callW tailW = [
+ioPushPathLines callW _tailW = [
   "  ;; push a $str's bytes to the host path buffer (reset first).",
   "  (func $mdk_push_path (param $s (ref $str))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
@@ -2304,7 +2304,7 @@ ioPushPathLines callW tailW = [
 ioPushPathMoreLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioPushPathMoreLines callW tailW = [
+ioPushPathMoreLines callW _tailW = [
   "  ;; append a $str's bytes to the host path buffer (rename's second path).",
   "  (func $mdk_push_path_more (param $s (ref $str))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
@@ -2322,7 +2322,7 @@ ioPushPathMoreLines callW tailW = [
 ioPushGrantLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioPushGrantLines callW tailW = [
+ioPushGrantLines callW _tailW = [
   "  ;; push a grant (List String) to the host grant buffer (reset first).",
   "  (func $mdk_push_grant (param $g (ref eq))",
   "    (local $cell (ref $C_Cons)) (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
@@ -2346,7 +2346,7 @@ ioPushGrantLines callW tailW = [
 ioPushGrantMoreLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioPushGrantMoreLines callW tailW = [
+ioPushGrantMoreLines callW _tailW = [
   "  ;; append a grant to the host grant buffer (rename's second grant).",
   "  (func $mdk_push_grant_more (param $g (ref eq))",
   "    (local $cell (ref $C_Cons)) (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
@@ -2370,7 +2370,7 @@ ioPushGrantMoreLines callW tailW = [
 ioRefusedPanicLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioRefusedPanicLines callW tailW = [
+ioRefusedPanicLines callW _tailW = [
   "  ;; the host's refusal message (result channel) as an E-PANIC line, then trap.",
   "  (func $mdk_refused_panic",
   "    (\{callW "mdk_err_u8arr" 1} \{panicBannerWat})",
@@ -2394,7 +2394,7 @@ panicBannerWat = asciiU8arrWat "runtime error [\{EPanic}]: "
 ioResultLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioResultLines callW tailW = [
+ioResultLines callW _tailW = [
   "  ;; copy the host result buffer (length + byte-at-index) into a fresh $u8arr.",
   "  (func $mdk_io_result_bytes (result (ref $u8arr))",
   "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))",
@@ -2506,20 +2506,20 @@ jsPushArg : (String -> Int -> String) ->
   (String -> Int -> String) ->
   (String, Int) ->
   List String
-jsPushArg callW tailW ("String", i) = [
+jsPushArg callW _tailW ("String", i) = [
   "    (\{callW "mdk_push_path_more" 1} (ref.cast (ref $str) (local.get $p\{intToString i})))",
 ]
-jsPushArg callW tailW ("Array", i) = [
+jsPushArg callW _tailW ("Array", i) = [
   "    (\{callW "mdk_jsffi_push_ints" 1} (ref.cast (ref $arr) (local.get $p\{intToString i})))",
 ]
-jsPushArg callW tailW _ = []
+jsPushArg _callW _tailW _ = []
 
 -- an argument's wasm value (`jsWireParam`)
 jsWireArg : (String -> Int -> String) ->
   (String -> Int -> String) ->
   (String, Int) ->
   List String
-jsWireArg callW tailW (head, i) =
+jsWireArg callW _tailW (head, i) =
   let p = "(local.get $p\{intToString i})"
   match head
     "Unit" => []
@@ -2540,14 +2540,14 @@ jsCopyBack : (String -> Int -> String) ->
   List String ->
   (String, Int) ->
   List String
-jsCopyBack callW tailW trap ("Array", i) =
+jsCopyBack callW _tailW trap ("Array", i) =
   [
       "    (local.set $off (\{callW "mdk_jsffi_copy_back" 2} (ref.cast (ref $arr) (local.get $p\{intToString i})) (local.get $off)))",
       "    (if (i32.lt_s (local.get $off) (i32.const 0)) (then",
     ]
     ++ map ("      " ++ _) trap
     ++ ["    ))"]
-jsCopyBack callW tailW _ _ = []
+jsCopyBack _callW _tailW _ _ = []
 
 -- the result as a Medaka value
 jsUnwire : (String -> Int -> String) ->
@@ -2556,37 +2556,37 @@ jsUnwire : (String -> Int -> String) ->
   List String ->
   List String ->
   List String
-jsUnwire callW tailW "Int" intTrap _ =
+jsUnwire callW _tailW "Int" intTrap _ =
   [
       "    (if (i64.ne (i64.shr_s (i64.shl (local.get $r) (i64.const 1)) (i64.const 1)) (local.get $r)) (then",
     ]
     ++ map ("      " ++ _) intTrap
     ++ ["    ))", "    (\{callW "mdk_box_int" 1} (local.get $r))"]
-jsUnwire callW tailW "Char" _ charTrap =
+jsUnwire _callW _tailW "Char" _ charTrap =
   [
       "    (if (i32.eqz (i32.and (i32.lt_u (local.get $r) (i32.const 1114112))",
       "        (i32.or (i32.lt_u (local.get $r) (i32.const 55296)) (i32.gt_u (local.get $r) (i32.const 57343))))) (then",
     ]
     ++ map ("      " ++ _) charTrap
     ++ ["    ))", "    (ref.i31 (local.get $r))"]
-jsUnwire callW tailW "Float" _ _ = ["    (struct.new $float (local.get $r))"]
-jsUnwire callW tailW "Bool" _ _ =
+jsUnwire _callW _tailW "Float" _ _ = ["    (struct.new $float (local.get $r))"]
+jsUnwire _callW _tailW "Bool" _ _ =
   ["    (ref.i31 (i32.ne (local.get $r) (i32.const 0)))"]
-jsUnwire callW tailW "U8" _ _ = [
+jsUnwire callW _tailW "U8" _ _ = [
   "    (\{callW "mdk_box_int" 1} (i64.extend_i32_u (i32.and (local.get $r) (i32.const 255))))",
 ]
-jsUnwire callW tailW "U16" _ _ = [
+jsUnwire callW _tailW "U16" _ _ = [
   "    (\{callW "mdk_box_int" 1} (i64.extend_i32_u (i32.and (local.get $r) (i32.const 65535))))",
 ]
-jsUnwire callW tailW "U32" _ _ =
+jsUnwire callW _tailW "U32" _ _ =
   ["    (\{callW "mdk_box_int" 1} (i64.extend_i32_u (local.get $r)))"]
-jsUnwire callW tailW "I32" _ _ =
+jsUnwire callW _tailW "I32" _ _ =
   ["    (\{callW "mdk_box_int" 1} (i64.extend_i32_s (local.get $r)))"]
-jsUnwire callW tailW "U64" _ _ = ["    (struct.new $u64 (local.get $r))"]
-jsUnwire callW tailW "I64" _ _ = ["    (struct.new $i64 (local.get $r))"]
-jsUnwire callW tailW "String" _ _ =
+jsUnwire _callW _tailW "U64" _ _ = ["    (struct.new $u64 (local.get $r))"]
+jsUnwire _callW _tailW "I64" _ _ = ["    (struct.new $i64 (local.get $r))"]
+jsUnwire callW _tailW "String" _ _ =
   ["    (\{callW "mdk_jsffi_result_str" 1} (local.get $off))"]
-jsUnwire callW tailW _ _ _ = ["    (ref.i31 (i32.const 0))"]
+jsUnwire _callW _tailW _ _ _ = ["    (ref.i31 (i32.const 0))"]
 
 -- The helpers the reached bindings' wrappers call, each emitted when one of
 -- them needs it.  `keys` are the plan's host keys: `rename` already emits
@@ -2619,7 +2619,7 @@ jsffiRuntimeLines callW tailW keys imps =
 jsffiArrayLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-jsffiArrayLines callW tailW = [
+jsffiArrayLines callW _tailW = [
   "  ;; push an Array Int's elements to the host path buffer, 8 LE bytes each.",
   "  (func $mdk_jsffi_push_ints (param $a (ref $arr))",
   "    (local $i i32) (local $n i32) (local $w i64) (local $k i32)",
@@ -2671,7 +2671,7 @@ jsffiArrayLines callW tailW = [
 jsffiResultStrLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-jsffiResultStrLines callW tailW = [
+jsffiResultStrLines callW _tailW = [
   "  ;; the host result buffer from $off to its end, as a $str.",
   "  (func $mdk_jsffi_result_str (param $off i32) (result (ref $str))",
   "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))",
@@ -2688,7 +2688,7 @@ jsffiResultStrLines callW tailW = [
 ioReadFileLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioReadFileLines callW tailW = [
+ioReadFileLines callW _tailW = [
   "  ;; readFile's Err for contents that are not UTF-8: the path, then a fixed ASCII",
   "  ;; suffix, byte-identical to medaka_rt.c mdk_read_file.",
   "  (func $mdk_str_not_utf8 (param $path (ref $str)) (result (ref $str))",
@@ -2719,7 +2719,7 @@ ioReadFileLines callW tailW = [
 ioFetchTextLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioFetchTextLines callW tailW = [
+ioFetchTextLines callW _tailW = [
   "  ;; fetchText : $str url -> Result String String.  1=Ok body / 0=Err message.",
   "  ;; The host import answers with a promise, so under JSPI the guest suspends in the call.",
   "  (func $mdk_fetch_text_io (param $url (ref $str)) (result (ref eq))",
@@ -2732,7 +2732,7 @@ ioFetchTextLines callW tailW = [
 ioFileExistsLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioFileExistsLines callW tailW = [
+ioFileExistsLines callW _tailW = [
   "  ;; fileExists : $str path -> Bool (i31 ordinal: False=0 / True=1); 2 = refused.",
   "  (func $mdk_file_exists_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (local $r i32)",
@@ -2746,7 +2746,7 @@ ioFileExistsLines callW tailW = [
 ioCanonicalizeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioCanonicalizeLines callW tailW = [
+ioCanonicalizeLines callW _tailW = [
   "  ;; canonicalizePath : $str path -> $str.  1=the host's answer / 0=refused.",
   "  (func $mdk_canonicalize_path_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (\{callW "mdk_push_grant" 1} (local.get $g))",
@@ -2758,7 +2758,7 @@ ioCanonicalizeLines callW tailW = [
 ioWriteFileLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioWriteFileLines callW tailW = [
+ioWriteFileLines callW _tailW = [
   "  ;; writeFile : $str path -> $str contents -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  ;; The contents' bytes stream to the host's write buffer, as writeFileBytes streams its array.",
   "  (func $mdk_write_file_io (param $path (ref $str)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))",
@@ -2781,7 +2781,7 @@ ioWriteFileLines callW tailW = [
 ioWriteFileModeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioWriteFileModeLines callW tailW = [
+ioWriteFileModeLines callW _tailW = [
   "  ;; writeFileMode : $str path -> Int mode -> $str contents -> Result String Unit.",
   "  ;; 1=Ok () / 0=Err msg.  The contents stream to the host's write buffer; the host sets",
   "  ;; the file's mode before the first byte is written.",
@@ -2805,7 +2805,7 @@ ioWriteFileModeLines callW tailW = [
 ioAppendFileLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioAppendFileLines callW tailW = [
+ioAppendFileLines callW _tailW = [
   "  ;; appendFile : $str path -> $str contents -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  ;; The contents' bytes stream to the host's write buffer; the host appends them.",
   "  (func $mdk_append_file_io (param $path (ref $str)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))",
@@ -2828,7 +2828,7 @@ ioAppendFileLines callW tailW = [
 ioRenameLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioRenameLines callW tailW = [
+ioRenameLines callW _tailW = [
   "  ;; rename : $str src -> $str dst -> src grant -> dst grant -> Result String Unit.",
   "  ;; The grants share the grant channel (-2 ends the first), the paths the path channel;",
   "  ;; the host splits the path buffer at the source's byte length.",
@@ -2846,7 +2846,7 @@ ioRenameLines callW tailW = [
 ioListDirLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioListDirLines callW tailW = [
+ioListDirLines callW _tailW = [
   "  ;; listDir : $str path -> Result String (List String).  The host answers each entry's",
   "  ;; name followed by a NUL byte; the list is built from the last entry back.",
   "  (func $mdk_list_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
@@ -2877,7 +2877,7 @@ ioListDirLines callW tailW = [
 ioStatFileLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioStatFileLines callW tailW = [
+ioStatFileLines callW _tailW = [
   "  ;; statFile : $str path -> Result String (Int, Bool, Bool, Float): size, isDir, isFile,",
   "  ;; mtime in seconds.  The host answers each field of the stat it took as an f64.",
   "  (func $mdk_stat_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
@@ -2896,7 +2896,7 @@ ioStatFileLines callW tailW = [
 ioMakeDirLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioMakeDirLines callW tailW = [
+ioMakeDirLines callW _tailW = [
   "  ;; makeDir : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  (func $mdk_make_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (\{callW "mdk_push_grant" 1} (local.get $g))",
@@ -2909,7 +2909,7 @@ ioMakeDirLines callW tailW = [
 ioRemoveFileLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioRemoveFileLines callW tailW = [
+ioRemoveFileLines callW _tailW = [
   "  ;; removeFile : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  (func $mdk_remove_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (\{callW "mdk_push_grant" 1} (local.get $g))",
@@ -2922,7 +2922,7 @@ ioRemoveFileLines callW tailW = [
 ioRemoveDirLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioRemoveDirLines callW tailW = [
+ioRemoveDirLines callW _tailW = [
   "  ;; removeDir : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  (func $mdk_remove_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (\{callW "mdk_push_grant" 1} (local.get $g))",
@@ -2935,7 +2935,7 @@ ioRemoveDirLines callW tailW = [
 ioFsyncLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioFsyncLines callW tailW = [
+ioFsyncLines callW _tailW = [
   "  ;; fsync : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  (func $mdk_fsync_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (\{callW "mdk_push_grant" 1} (local.get $g))",
@@ -2948,7 +2948,7 @@ ioFsyncLines callW tailW = [
 ioFileModeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioFileModeLines callW tailW = [
+ioFileModeLines callW _tailW = [
   "  ;; fileMode : $str path -> Result String Int: the permission bits, 0 to 4095.  The host",
   "  ;; takes the stat that statFile takes and answers its mode field, field 4.",
   "  (func $mdk_file_mode_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
@@ -2963,7 +2963,7 @@ ioFileModeLines callW tailW = [
 ioGetEnvLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioGetEnvLines callW tailW = [
+ioGetEnvLines callW _tailW = [
   "  ;; getEnv : $str name -> Option String.  1=Some value / 0=None.",
   "  (func $mdk_get_env_io (param $name (ref $str)) (result (ref eq))",
   "    (local $st i32)",
@@ -2977,7 +2977,7 @@ ioGetEnvLines callW tailW = [
 ioReadLineLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioReadLineLines callW tailW = [
+ioReadLineLines callW _tailW = [
   "  ;; readLine : Unit -> String.  The host answers 1 with a line (its newline",
   "  ;; stripped) on the result channel, or 0 at end of input, where the channel is empty.",
   "  (func $mdk_read_line_io (result (ref eq))",
@@ -2993,7 +2993,7 @@ ioReadLineLines callW tailW = [
 ioReadAllLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioReadAllLines callW tailW = [
+ioReadAllLines callW _tailW = [
   "  ;; readAll : Unit -> String.  The rest of the host's stdin buffer.",
   "  (func $mdk_read_all_io (result (ref eq))",
   "    (\{callW "mdk_read_all" 0})",
@@ -3003,7 +3003,7 @@ ioReadAllLines callW tailW = [
 ioReadExactlyLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioReadExactlyLines callW tailW = [
+ioReadExactlyLines callW _tailW = [
   "  ;; readExactly : Int -> Option String.  1=Some the n bytes / 0=None (end of input",
   "  ;; or a short read, whose bytes the host has consumed).",
   "  (func $mdk_read_exactly_io (param $n i64) (result (ref eq))",
@@ -3016,7 +3016,7 @@ ioReadExactlyLines callW tailW = [
 ioExecutablePathLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioExecutablePathLines callW tailW = [
+ioExecutablePathLines callW _tailW = [
   "  (func $mdk_executable_path_io (result (ref eq))",
   "    (drop (\{callW "mdk_executable_path" 0}))",
   "    (\{callW "mdk_io_result_to_str" 0}))",
@@ -3037,7 +3037,7 @@ ioArgsRuntimeLines callW tailW keys =
 ioArgsLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-ioArgsLines callW tailW = [
+ioArgsLines callW _tailW = [
   "  ;; build a $str from the i-th host arg (mdk_arg_len(i) + mdk_arg_byte(i,j)).",
   "  (func $mdk_arg_to_str (param $idx i32) (result (ref $str))",
   "    (local $n i32) (local $j i32) (local $buf (ref $u8arr))",
@@ -3090,7 +3090,7 @@ fileBytesRuntimeLines callW tailW readsBytes keys =
 readFileBytesLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-readFileBytesLines callW tailW = [
+readFileBytesLines callW _tailW = [
   "  ;; readFileBytes : $str path -> Result String (Array Int).  1=Ok bytes / 0=Err msg.",
   "  ;; Reuses the read byte-channel but rebuilds an $arr of i31 Int bytes (0..255).",
   "  (func $mdk_read_file_bytes_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
@@ -3117,7 +3117,7 @@ readFileBytesLines callW tailW = [
 osEntropyLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-osEntropyLines callW tailW = [
+osEntropyLines callW _tailW = [
   "  ;; osEntropyBytes : Int -> Array Int.  1=n random bytes / 0=a refusal (its text on the channel).",
   "  (func $mdk_os_entropy_io (param $n i64) (result (ref eq))",
   "    (local $len i32) (local $i i32) (local $out (ref $arr))",
@@ -3135,7 +3135,7 @@ osEntropyLines callW tailW = [
 writeFileBytesLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-writeFileBytesLines callW tailW = [
+writeFileBytesLines callW _tailW = [
   "  ;; writeFileBytes : $str path -> $arr bytes -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  ;; Stream each i31 byte (masked to 0..255) to the host, then commit fs.writeFileSync.",
   "  (func $mdk_write_file_bytes_io (param $path (ref $str)) (param $ba (ref $arr)) (param $g (ref eq)) (result (ref eq))",
@@ -3167,7 +3167,7 @@ export
 strSearchRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-strSearchRuntimeLines callW tailW = [
+strSearchRuntimeLines callW _tailW = [
   "  ;; -- W8b stringIndexOf / stringCompare (byte-identical to medaka_rt.c) --",
   "  (func $mdk_str_index_of (param $needle (ref $str)) (param $hay (ref $str)) (result (ref eq))",
   "    (local $nb (ref $u8arr)) (local $hb (ref $u8arr)) (local $nl i32) (local $hl i32)",
@@ -3278,7 +3278,7 @@ export
 utf8LossyRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-utf8LossyRuntimeLines callW tailW = [
+utf8LossyRuntimeLines callW _tailW = [
   "  ;; -- UTF-8 validation (byte-identical to medaka_rt.c mdk_str_lossy) --",
   "  (func $mdk_utf8_step (param $b (ref $u8arr)) (param $i i32) (param $n i32) (result i32)",
   "    (local $b0 i32) (local $b1 i32) (local $lo i32) (local $hi i32)",
@@ -3376,7 +3376,7 @@ export
 strCodecRuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-strCodecRuntimeLines callW tailW = [
+strCodecRuntimeLines callW _tailW = [
   "  ;; -- W11b UTF-8 codec (byte-identical to medaka_rt.c) --",
   "  ;; decode a $str's UTF-8 bytes into a fresh $arr of cp_count i31 Char codepoints.",
   "  (func $mdk_str_to_chars (param $s (ref $str)) (result (ref $arr))",
@@ -3619,7 +3619,7 @@ sha256KLines =
 sha256RuntimeLines : (String -> Int -> String) ->
   (String -> Int -> String) ->
   List String
-sha256RuntimeLines callW tailW =
+sha256RuntimeLines callW _tailW =
   [
       "  ;; -- sha256Native (peer of medaka_rt.c mdk_sha256) --",
       "  (func $mdk_sha_get (param $a (ref $u8arr)) (param $i i32) (result i32)",
@@ -3831,176 +3831,178 @@ plannedHelperBlock : (String -> Int -> String) ->
   List (List Int) ->
   String ->
   List String
-plannedHelperBlock callW tailW plan files "closApplyLines" =
+plannedHelperBlock callW tailW _plan _files "closApplyLines" =
   closApplyLines callW tailW
-plannedHelperBlock callW tailW plan files "ioRuntimeLines" =
+plannedHelperBlock callW tailW _plan _files "ioRuntimeLines" =
   ioRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "ioStrRuntimeLines" =
+plannedHelperBlock callW tailW _plan _files "ioStrRuntimeLines" =
   ioStrRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "strLeafRuntimeLines" =
+plannedHelperBlock callW tailW _plan _files "strLeafRuntimeLines" =
   strLeafRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "strConcatRuntimeLines" =
+plannedHelperBlock _callW _tailW _plan _files "strConcatRuntimeLines" =
   strConcatRuntimeLines
-plannedHelperBlock callW tailW plan files "appendRuntimeLines" =
+plannedHelperBlock callW tailW _plan _files "appendRuntimeLines" =
   appendRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "valueEqRuntimeLines" =
+plannedHelperBlock callW tailW plan _files "valueEqRuntimeLines" =
   valueEqRuntimeLines
     callW
     tailW
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock callW tailW plan files "valueAddRuntimeLines" =
+plannedHelperBlock callW tailW plan _files "valueAddRuntimeLines" =
   valueAddRuntimeLines
     callW
     tailW
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock callW tailW plan files "valueSubRuntimeLines" =
+plannedHelperBlock callW tailW plan _files "valueSubRuntimeLines" =
   valueSubRuntimeLines
     callW
     tailW
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock callW tailW plan files "valueMulRuntimeLines" =
+plannedHelperBlock callW tailW plan _files "valueMulRuntimeLines" =
   valueMulRuntimeLines
     callW
     tailW
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock callW tailW plan files "valueDivRuntimeLines" =
+plannedHelperBlock callW tailW plan _files "valueDivRuntimeLines" =
   valueDivRuntimeLines
     callW
     tailW
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock callW tailW plan files "valueModRuntimeLines" =
+plannedHelperBlock callW tailW plan _files "valueModRuntimeLines" =
   valueModRuntimeLines
     callW
     tailW
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock callW tailW plan files "valueCmpNumRuntimeLines" =
+plannedHelperBlock callW tailW plan _files "valueCmpNumRuntimeLines" =
   valueCmpNumRuntimeLines
     callW
     tailW
     (Wide64W
       (hasWasmHelper plan "u64RuntimeLines")
       (hasWasmHelper plan "i64RuntimeLines"))
-plannedHelperBlock callW tailW plan files "u64RuntimeLines" = u64RuntimeLines
-plannedHelperBlock callW tailW plan files "i64RuntimeLines" = i64RuntimeLines
-plannedHelperBlock callW tailW plan files "stderrRuntimeLines" =
+plannedHelperBlock _callW _tailW _plan _files "u64RuntimeLines" =
+  u64RuntimeLines
+plannedHelperBlock _callW _tailW _plan _files "i64RuntimeLines" =
+  i64RuntimeLines
+plannedHelperBlock callW tailW _plan _files "stderrRuntimeLines" =
   stderrRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "rngRuntimeLines" =
+plannedHelperBlock callW tailW _plan _files "rngRuntimeLines" =
   rngRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "hashRuntimeLines" =
+plannedHelperBlock callW tailW _plan _files "hashRuntimeLines" =
   hashRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "hashStringRuntimeLines" =
+plannedHelperBlock _callW _tailW _plan _files "hashStringRuntimeLines" =
   hashStringRuntimeLines
-plannedHelperBlock callW tailW plan files "floatRemRuntimeLines" =
+plannedHelperBlock _callW _tailW _plan _files "floatRemRuntimeLines" =
   floatRemRuntimeLines
-plannedHelperBlock callW tailW plan files "floatRuntimeLines" =
+plannedHelperBlock callW tailW _plan _files "floatRuntimeLines" =
   floatRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "hashFloatRuntimeLines" =
+plannedHelperBlock callW tailW _plan _files "hashFloatRuntimeLines" =
   hashFloatRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "randomFloatRuntimeLines" =
+plannedHelperBlock callW tailW _plan _files "randomFloatRuntimeLines" =
   randomFloatRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "floatStrLines" =
+plannedHelperBlock callW tailW _plan _files "floatStrLines" =
   floatStrLines callW tailW
-plannedHelperBlock callW tailW plan files "floatFixedLines" =
+plannedHelperBlock callW tailW _plan _files "floatFixedLines" =
   floatFixedLines callW tailW
-plannedHelperBlock callW tailW plan files "strSearchRuntimeLines" =
+plannedHelperBlock callW tailW _plan _files "strSearchRuntimeLines" =
   strSearchRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "strToIntRuntimeLines" =
+plannedHelperBlock callW tailW _plan _files "strToIntRuntimeLines" =
   strToIntRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "strReverseRuntimeLines" =
+plannedHelperBlock _callW _tailW _plan _files "strReverseRuntimeLines" =
   strReverseRuntimeLines
-plannedHelperBlock callW tailW plan files "strJoinRuntimeLines" =
+plannedHelperBlock _callW _tailW _plan _files "strJoinRuntimeLines" =
   strJoinRuntimeLines
-plannedHelperBlock callW tailW plan files "strCodecRuntimeLines" =
+plannedHelperBlock callW tailW _plan _files "strCodecRuntimeLines" =
   strCodecRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "byteBlockRuntimeLines" =
+plannedHelperBlock callW tailW _plan _files "byteBlockRuntimeLines" =
   byteBlockRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "charFromCodeRuntimeLines" =
+plannedHelperBlock _callW _tailW _plan _files "charFromCodeRuntimeLines" =
   charFromCodeRuntimeLines
-plannedHelperBlock callW tailW plan files "charClassRuntimeLines" =
+plannedHelperBlock _callW _tailW _plan _files "charClassRuntimeLines" =
   charClassRuntimeLines
-plannedHelperBlock callW tailW plan files "ioPushPathLines" =
+plannedHelperBlock callW tailW _plan _files "ioPushPathLines" =
   ioPushPathLines callW tailW
-plannedHelperBlock callW tailW plan files "ioPushPathMoreLines" =
+plannedHelperBlock callW tailW _plan _files "ioPushPathMoreLines" =
   ioPushPathMoreLines callW tailW
-plannedHelperBlock callW tailW plan files "ioPushGrantLines" =
+plannedHelperBlock callW tailW _plan _files "ioPushGrantLines" =
   ioPushGrantLines callW tailW
-plannedHelperBlock callW tailW plan files "ioPushGrantMoreLines" =
+plannedHelperBlock callW tailW _plan _files "ioPushGrantMoreLines" =
   ioPushGrantMoreLines callW tailW
-plannedHelperBlock callW tailW plan files "ioResultLines" =
+plannedHelperBlock callW tailW _plan _files "ioResultLines" =
   ioResultLines callW tailW
-plannedHelperBlock callW tailW plan files "ioRefusedPanicLines" =
+plannedHelperBlock callW tailW _plan _files "ioRefusedPanicLines" =
   ioRefusedPanicLines callW tailW
-plannedHelperBlock callW tailW plan files "ioReadFileLines" =
+plannedHelperBlock callW tailW _plan _files "ioReadFileLines" =
   ioReadFileLines callW tailW
-plannedHelperBlock callW tailW plan files "ioFetchTextLines" =
+plannedHelperBlock callW tailW _plan _files "ioFetchTextLines" =
   ioFetchTextLines callW tailW
-plannedHelperBlock callW tailW plan files "ioFileExistsLines" =
+plannedHelperBlock callW tailW _plan _files "ioFileExistsLines" =
   ioFileExistsLines callW tailW
-plannedHelperBlock callW tailW plan files "ioCanonicalizeLines" =
+plannedHelperBlock callW tailW _plan _files "ioCanonicalizeLines" =
   ioCanonicalizeLines callW tailW
-plannedHelperBlock callW tailW plan files "ioWriteFileLines" =
+plannedHelperBlock callW tailW _plan _files "ioWriteFileLines" =
   ioWriteFileLines callW tailW
-plannedHelperBlock callW tailW plan files "ioAppendFileLines" =
+plannedHelperBlock callW tailW _plan _files "ioAppendFileLines" =
   ioAppendFileLines callW tailW
-plannedHelperBlock callW tailW plan files "ioRenameLines" =
+plannedHelperBlock callW tailW _plan _files "ioRenameLines" =
   ioRenameLines callW tailW
-plannedHelperBlock callW tailW plan files "ioListDirLines" =
+plannedHelperBlock callW tailW _plan _files "ioListDirLines" =
   ioListDirLines callW tailW
-plannedHelperBlock callW tailW plan files "ioStatFileLines" =
+plannedHelperBlock callW tailW _plan _files "ioStatFileLines" =
   ioStatFileLines callW tailW
-plannedHelperBlock callW tailW plan files "ioMakeDirLines" =
+plannedHelperBlock callW tailW _plan _files "ioMakeDirLines" =
   ioMakeDirLines callW tailW
-plannedHelperBlock callW tailW plan files "ioRemoveFileLines" =
+plannedHelperBlock callW tailW _plan _files "ioRemoveFileLines" =
   ioRemoveFileLines callW tailW
-plannedHelperBlock callW tailW plan files "ioRemoveDirLines" =
+plannedHelperBlock callW tailW _plan _files "ioRemoveDirLines" =
   ioRemoveDirLines callW tailW
-plannedHelperBlock callW tailW plan files "ioFsyncLines" =
+plannedHelperBlock callW tailW _plan _files "ioFsyncLines" =
   ioFsyncLines callW tailW
-plannedHelperBlock callW tailW plan files "ioFileModeLines" =
+plannedHelperBlock callW tailW _plan _files "ioFileModeLines" =
   ioFileModeLines callW tailW
-plannedHelperBlock callW tailW plan files "ioWriteFileModeLines" =
+plannedHelperBlock callW tailW _plan _files "ioWriteFileModeLines" =
   ioWriteFileModeLines callW tailW
-plannedHelperBlock callW tailW plan files "ioGetEnvLines" =
+plannedHelperBlock callW tailW _plan _files "ioGetEnvLines" =
   ioGetEnvLines callW tailW
-plannedHelperBlock callW tailW plan files "ioReadLineLines" =
+plannedHelperBlock callW tailW _plan _files "ioReadLineLines" =
   ioReadLineLines callW tailW
-plannedHelperBlock callW tailW plan files "ioReadAllLines" =
+plannedHelperBlock callW tailW _plan _files "ioReadAllLines" =
   ioReadAllLines callW tailW
-plannedHelperBlock callW tailW plan files "ioReadExactlyLines" =
+plannedHelperBlock callW tailW _plan _files "ioReadExactlyLines" =
   ioReadExactlyLines callW tailW
-plannedHelperBlock callW tailW plan files "ioExecutablePathLines" =
+plannedHelperBlock callW tailW _plan _files "ioExecutablePathLines" =
   ioExecutablePathLines callW tailW
-plannedHelperBlock callW tailW plan files "jsffiArrayLines" =
+plannedHelperBlock callW tailW _plan _files "jsffiArrayLines" =
   jsffiArrayLines callW tailW
-plannedHelperBlock callW tailW plan files "jsffiResultStrLines" =
+plannedHelperBlock callW tailW _plan _files "jsffiResultStrLines" =
   jsffiResultStrLines callW tailW
-plannedHelperBlock callW tailW plan files "ioArgsLines" =
+plannedHelperBlock callW tailW _plan _files "ioArgsLines" =
   ioArgsLines callW tailW
-plannedHelperBlock callW tailW plan files "utf8LossyRuntimeLines" =
+plannedHelperBlock callW tailW _plan _files "utf8LossyRuntimeLines" =
   utf8LossyRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "writeFileBytesLines" =
+plannedHelperBlock callW tailW _plan _files "writeFileBytesLines" =
   writeFileBytesLines callW tailW
-plannedHelperBlock callW tailW plan files "osEntropyLines" =
+plannedHelperBlock callW tailW _plan _files "osEntropyLines" =
   osEntropyLines callW tailW
-plannedHelperBlock callW tailW plan files "readFileBytesLines" =
+plannedHelperBlock callW tailW _plan _files "readFileBytesLines" =
   readFileBytesLines callW tailW
-plannedHelperBlock callW tailW plan files "trapIntRuntimeLines" =
+plannedHelperBlock callW tailW _plan _files "trapIntRuntimeLines" =
   trapIntRuntimeLines callW tailW
-plannedHelperBlock callW tailW plan files "intRuntimeLines" =
+plannedHelperBlock callW tailW plan _files "intRuntimeLines" =
   intRuntimeLines callW tailW plan.intHelpers
 plannedHelperBlock callW tailW plan files "siteRuntimeLines" =
   siteRuntimeLines callW tailW files plan.nonexhaustiveRuntime
-plannedHelperBlock callW tailW _ _ name =
+plannedHelperBlock _callW _tailW _ _ name =
   panic ("internal error: unplanned-wasm-helper: " ++ name)

@@ -11,7 +11,6 @@
 import string.{stripPrefix}
 import tools.lint.{
   Applicability(..),
-  StdlibIndex,
   fixSource,
   indexForRules,
   runParts,

@@ -14,7 +14,7 @@
 import test.vector_runner.{
   Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
 }
-import test.{Expectation}
+import test
 
 row : Row
 row = Row {

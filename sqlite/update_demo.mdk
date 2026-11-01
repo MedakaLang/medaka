@@ -18,7 +18,7 @@ import string.{toInt}
 makeAssign : String -> String -> String -> Option Assign
 makeAssign col "int" val = map (n => assign col (eLitI n)) (toInt val)
 makeAssign col "text" val = Some (assign col (eLitT val))
-makeAssign col _ val = None
+makeAssign _col _ _val = None
 
 runUpdate : String ->
   String ->

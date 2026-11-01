@@ -81,7 +81,7 @@ import lib.sqlite.{
   rowCellsWithIpk,
   columnIndex,
 }
-import lib.btree.{Row, rowRowid}
+import lib.btree.{rowRowid}
 import lib.dbwriter.{buildDatabaseMultiExplicit}
 import lib.recordfmt.{Cell(..)}
 import lib.wideint as W

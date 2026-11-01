@@ -40,7 +40,6 @@ import frontend.ast.{
   qualifierSource,
   effAtomSurface,
   binderDomainSurface,
-  authTermSurface,
   ctorBindersSurface,
   DeriveRef(..),
   deriveRefName,
@@ -710,7 +709,7 @@ firstPieceCol [] = 0
 -- sequence's next unit takes it as its leading comment.
 pieceDocsGo : (Bool -> Doc) -> Int -> Int -> List Piece -> List PieceOut
 pieceDocsGo _ _ _ [] = []
-pieceDocsGo sepAfter dangCol prevEnd ((Piece s sc en ec mk) :: rest) =
+pieceDocsGo sepAfter dangCol prevEnd ((Piece s _sc en ec mk) :: rest) =
   let isLast = isEmptyL rest
   let bound = !commentBoundRef
   let nextStart = match rest
@@ -2166,7 +2165,7 @@ argPieceAt head isFirst arg = match exprSpan arg
 -- Piece a whole argument list, marking only the FIRST element — the one
 -- position where a bare constructor head can fuse with a following `{`.
 argPiecesIndexed : Expr -> List Expr -> List Piece
-argPiecesIndexed head [] = []
+argPiecesIndexed _head [] = []
 argPiecesIndexed head (a :: rest) =
   argPieceAt head True a :: map (argPieceAt head False) rest
 

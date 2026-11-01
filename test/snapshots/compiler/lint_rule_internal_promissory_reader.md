@@ -7,7 +7,7 @@ stages=DESUGAR,MARK
 import frontend.ast.{Loc(..), Decl(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
-import support.util.{listLen, anyList, splitNl, joinWith, startsWith, isSome}
+import support.util.{listLen, anyList, splitNl, joinWith, startsWith}
 import list.{last}
 import support.char.{isAlnum}
 import regex.{
@@ -346,7 +346,7 @@ assignFollows cs n i
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "anyList" false) (mem "splitNl" false) (mem "joinWith" false) (mem "startsWith" false) (mem "isSome" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "anyList" false) (mem "splitNl" false) (mem "joinWith" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false "reFind") (mem "findAll" false "reFindAll") (mem "replaceAll" false) (mem "escape" false))))
@@ -427,7 +427,7 @@ assignFollows cs n i
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "anyList" false) (mem "splitNl" false) (mem "joinWith" false) (mem "startsWith" false) (mem "isSome" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "anyList" false) (mem "splitNl" false) (mem "joinWith" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false "reFind") (mem "findAll" false "reFindAll") (mem "replaceAll" false) (mem "escape" false))))

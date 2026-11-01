@@ -50,7 +50,7 @@ import bytes.{Bytes, encodeUtf8, fromU8Array}
 import u8 as U8
 import http.{Request, parseRequest, serializeResponse}
 import io.{readLines}
-import json.{Json(..), jObject, get, parse}
+import json.{Json(..), get}
 import string.{contains, join, split, startsWith, toLower, trim}
 import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.jwt.{
@@ -72,7 +72,6 @@ import lib.proxy.{
 }
 import lib.server_core.{
   Account,
-  ProxyAdmission,
   ProxyDecision(..),
   RequestContext(..),
   Server,

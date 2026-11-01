@@ -30,13 +30,13 @@ omInsert k v m = set k v m
 -- Same visit order and same answer as `get`/`has` on `Map String`.
 export
 omLookup : String -> OrdMap a -> Option a
-omLookup k Tip = None
+omLookup _k Tip = None
 omLookup k (Bin _ k2 v l r) =
   if k < k2 then omLookup k l else if k > k2 then omLookup k r else Some v
 
 export
 omHasKey : String -> OrdMap a -> Bool
-omHasKey k Tip = False
+omHasKey _k Tip = False
 omHasKey k (Bin _ k2 _ l r) =
   if k < k2 then omHasKey k l else if k > k2 then omHasKey k r else True
 
@@ -96,10 +96,10 @@ restrictedPairs (k :: ks) m = match omLookup k m
 (DTypeSig true "omInsert" (TyFun (TyCon "String") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "OrdMap") (TyVar "a"))))))
 (DFunDef false "omInsert" ((PVar "k") (PVar "v") (PVar "m")) (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "v")) (EVar "m")))
 (DTypeSig true "omLookup" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
-(DFunDef false "omLookup" ((PVar "k") (PCon "Tip")) (EVar "None"))
+(DFunDef false "omLookup" ((PVar "_k") (PCon "Tip")) (EVar "None"))
 (DFunDef false "omLookup" ((PVar "k") (PCon "Bin" PWild (PVar "k2") (PVar "v") (PVar "l") (PVar "r"))) (EIf (EBinOp "<" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "l")) (EIf (EBinOp ">" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "r")) (EApp (EVar "Some") (EVar "v")))))
 (DTypeSig true "omHasKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyCon "Bool"))))
-(DFunDef false "omHasKey" ((PVar "k") (PCon "Tip")) (EVar "False"))
+(DFunDef false "omHasKey" ((PVar "_k") (PCon "Tip")) (EVar "False"))
 (DFunDef false "omHasKey" ((PVar "k") (PCon "Bin" PWild (PVar "k2") PWild (PVar "l") (PVar "r"))) (EIf (EBinOp "<" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "omHasKey") (EVar "k")) (EVar "l")) (EIf (EBinOp ">" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "omHasKey") (EVar "k")) (EVar "r")) (EVar "True"))))
 (DTypeSig true "omDelete" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "OrdMap") (TyVar "a")))))
 (DFunDef false "omDelete" ((PVar "k") (PVar "m")) (EApp (EApp (EVar "delete") (EVar "k")) (EVar "m")))
@@ -128,10 +128,10 @@ restrictedPairs (k :: ks) m = match omLookup k m
 (DTypeSig true "omInsert" (TyFun (TyCon "String") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "OrdMap") (TyVar "a"))))))
 (DFunDef false "omInsert" ((PVar "k") (PVar "v") (PVar "m")) (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "v")) (EVar "m")))
 (DTypeSig true "omLookup" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
-(DFunDef false "omLookup" ((PVar "k") (PCon "Tip")) (EVar "None"))
+(DFunDef false "omLookup" ((PVar "_k") (PCon "Tip")) (EVar "None"))
 (DFunDef false "omLookup" ((PVar "k") (PCon "Bin" PWild (PVar "k2") (PVar "v") (PVar "l") (PVar "r"))) (EIf (EBinOp "<" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "l")) (EIf (EBinOp ">" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "r")) (EApp (EVar "Some") (EVar "v")))))
 (DTypeSig true "omHasKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyCon "Bool"))))
-(DFunDef false "omHasKey" ((PVar "k") (PCon "Tip")) (EVar "False"))
+(DFunDef false "omHasKey" ((PVar "_k") (PCon "Tip")) (EVar "False"))
 (DFunDef false "omHasKey" ((PVar "k") (PCon "Bin" PWild (PVar "k2") PWild (PVar "l") (PVar "r"))) (EIf (EBinOp "<" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "omHasKey") (EVar "k")) (EVar "l")) (EIf (EBinOp ">" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "omHasKey") (EVar "k")) (EVar "r")) (EVar "True"))))
 (DTypeSig true "omDelete" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "OrdMap") (TyVar "a")))))
 (DFunDef false "omDelete" ((PVar "k") (PVar "m")) (EApp (EApp (EVar "delete") (EVar "k")) (EVar "m")))

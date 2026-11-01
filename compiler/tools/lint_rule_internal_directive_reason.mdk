@@ -9,7 +9,7 @@ import frontend.parser.{
   declPosEndLine,
 }
 import driver.diagnostics.{Severity(..)}
-import support.util.{contains, anyList, filterList, splitNl, isSome}
+import support.util.{contains, anyList, filterList, splitNl}
 import string.{toLower, words}
 import regex.{Regex, mustCompile, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText}

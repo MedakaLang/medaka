@@ -4,7 +4,7 @@
 -- names slugify identically get GitHub's `-1` suffix on the later heading, and
 -- every link (index, Instances line) names the anchor of the heading it means.
 
-import test.{Expectation, expectEqual, expectTextContainsAll}
+import test.{expectEqual, expectTextContainsAll}
 import tools.doc.{
   docParseError, DocEntry(..), DocKind(..), ModuleDoc(..), renderIndex,
   renderModulePage

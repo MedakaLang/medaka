@@ -238,7 +238,7 @@ hunksGo : Int ->
   List (List Entry) ->
   List (List Entry)
 hunksGo _ [] _ cur acc = reverse (closeHunk cur acc)
-hunksGo ctx ((run@(entry :: _)) :: rest) prev cur acc
+hunksGo ctx ((run@(entry :: _)) :: rest) _prev cur acc
   | isKeep entry = keepRun ctx run rest cur acc
 hunksGo ctx (run :: rest) prev cur acc =
   hunksGo ctx rest prev (reverse run ++ opened ctx prev cur) acc

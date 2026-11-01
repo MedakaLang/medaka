@@ -1,0 +1,77 @@
+-- Fixture for rule-unused-param.  The line below each `expect-next-line`
+-- marker holds a parameter that no use in its clause resolves to.  Every other
+-- parameter (or binder that is not a parameter) must not be reported.
+
+-- A parameter that is used, by each class of mention.
+usedPlain x = x + 1
+
+-- A shadowing binder makes the outer parameter unused.
+-- expect-next-line rule-unused-param
+shadowOuter _x = (x => x) 1
+
+-- A record pun in a parameter pattern is a binder of the field's name.
+punUsed (P { x }) = x
+
+-- expect-next-line rule-unused-param unfixed
+punUnused (P { x }) = 1
+
+interpUsed s = "a\{s}b"
+
+-- A `where` clause reads the parameter.
+whereUsed x = g
+  where
+    g = x + 1
+
+-- An or-pattern names the binder in every alternative; the fix renames both.
+orUsed (Left x | Right x) = x
+
+-- expect-next-line rule-unused-param
+orUnused (Left _x | Right _x) = 1
+
+-- An unused as-binder drops its `x@` and keeps the pattern.
+-- expect-next-line rule-unused-param
+asUnused (Some y) = y
+
+-- A `_e` bound in an unrelated function does not withhold the fix.
+unrelatedE _e = 0
+
+-- expect-next-line rule-unused-param
+unrelatedF _e = 1
+
+-- A leading underscore opts out.
+optOut _unused = 1
+
+nestedUnused y = h 1
+  where
+    -- expect-next-line rule-unused-param
+    h _z = y
+
+-- The name `_v` is already a use in this file, so the fix is only suggested.
+-- expect-next-line rule-unused-param unfixed
+collide v = _v + 1
+
+-- A lambda, a `let` and a match-arm binder are not parameters.
+lambdaUnused = (q => 1)
+
+letUnused = let w = 2 in 3
+
+armUnused v = match v
+  Some k => 1
+  None => 0
+
+-- An interface default method's parameters are checked.
+interface Scale a where
+  scale : a -> a -> Int
+  -- expect-next-line rule-unused-param x2
+  scale _a _b = 0
+
+-- An impl method's parameter is checked too.
+impl Shape Int where
+  -- expect-next-line rule-unused-param
+  area _n = 2
+
+-- A `prop` parameter is checked.
+-- expect-next-line rule-unused-param
+prop "a prop parameter" (_dead : Int) = 1 == 1
+
+prop "a used prop parameter" (live : Int) = live == live

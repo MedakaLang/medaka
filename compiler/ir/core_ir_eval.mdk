@@ -61,7 +61,6 @@ import eval.eval.{
   EvalEnv(..),
   EnvFrame,
   indexedFrame,
-  frameCells,
   lookupEnv,
   extendEnv,
   pushFrame,
@@ -92,7 +91,6 @@ import eval.eval.{
   evalRecordUpdate,
   evalValueField,
   evalField,
-  routeTag,
   applyDicts,
   applyMethodDicts,
   coalesceImpls,
@@ -106,7 +104,6 @@ import eval.eval.{
   importFrameOf,
   narrowToIface,
   ModExports(..),
-  ctorsByTypeOf,
   evalVariantUpdate,
   buildCtorFieldOrders,
   ctorFieldOrdersRef,
@@ -350,7 +347,7 @@ cevalSwitch : EvalEnv (Value e) ->
   List CTBranch ->
   CTree ->
   <e> Value e
-cevalSwitch env root arms [] branches dft = cevalTree env root arms [] dft
+cevalSwitch env root arms [] _branches dft = cevalTree env root arms [] dft
 cevalSwitch env root arms (v :: rest) branches dft =
   cevalSwitchOn env root arms v rest branches dft
 

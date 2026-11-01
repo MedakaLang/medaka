@@ -756,7 +756,7 @@ attributeOrigins ((Token "define" covered origin) :: rest) expected current acc 
     expected
     next
     (Token "define" covered (if covered then origin else next) :: acc)
-attributeOrigins ((Token name covered origin) :: (equals@(Token "=" _ _)) :: rest) expected current acc
+attributeOrigins ((Token name covered origin) :: (equals@(Token "=" _ _)) :: rest) expected _current acc
   | isGlobal name =
     let next = match omLookup name expected
       Some (Expected _ _ _ at) => at

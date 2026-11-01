@@ -72,7 +72,7 @@ import types.tc_test_support.{
   withFirstSig,
 }
 import support.ordmap.{omEmpty, omKeys, omLookup}
-import support.util.{contains, joinWith, listLen}
+import support.util.{contains, listLen}
 import list.{findIndex, range, sort, zip}
 
 -- ── fixtures ──────────────────────────────────────────────────────────────

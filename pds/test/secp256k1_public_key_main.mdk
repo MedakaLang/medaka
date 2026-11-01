@@ -28,7 +28,7 @@ import string.{lines, split, trim}
 -- Both corpora, named on the command line so this driver reads no path it
 -- invented and its gate decides which tree they come from.
 corpusPaths : Unit -> <Env> (String, String)
-corpusPaths u = match args ()
+corpusPaths _u = match args ()
   [pointCorpus, didCorpus] => (pointCorpus, didCorpus)
   _ =>
     panic

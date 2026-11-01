@@ -43,12 +43,9 @@ import types.target_profile.{
 }
 import ir.dce.{ReachRoots(..), reachedExternChains, reachedExternRoutes}
 import types.effect_policy.{
-  PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain
+  PolicyVerdict(..), buildCallGraph, fnEffectsTable, viaChain
 }
 import types.repr.{Scheme}
-import types.effect_rows.{
-  Atom, atomLabel, atomLabelOf, effLabelOrigin, renderAtom
-}
 import tools.check_policy.{TargetInputs(..)}
 import types.tc_types.{DriveOutputs(..)}
 import driver.diagnostics.{
@@ -151,7 +148,7 @@ foldTargetDiags entry entrySrc (d :: ds) triples =
 -- withholds.  The entry judged is the one the drivers run: a value `main` they
 -- print performs what the `println` applied to it performs.
 capabilityRefusal : TargetProfile -> TargetInputs -> Scheme -> Option Diag
-capabilityRefusal profile analysis sch =
+capabilityRefusal profile analysis _sch =
   let request = ManifestRequest {
     entry = mainEntryKey analysis.tiModules,
     protocol = ExecutedMain,

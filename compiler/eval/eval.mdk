@@ -98,7 +98,6 @@ import support.util.{
   dedup,
   startsWith,
   endsWith,
-  zipL,
 }
 import support.ordmap.{
   OrdMap, omEmpty, omFromNames, omFromPairs, omHasKey, omInsert, omLookup

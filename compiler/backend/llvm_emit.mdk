@@ -186,7 +186,6 @@ import types.extern_source.{ExternBindingKind(..)}
 import backend.extern_requirements.{ExternRequirements, requirementFacts}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{
-  hostRows,
   hostSymbol,
   isWildPat,
   Lit(..),
@@ -197,8 +196,6 @@ import frontend.ast.{
   BinderId(..),
   RecPatField(..),
   noDeclLoc,
-  ifaceIdMatches,
-  isFixedWidthHead,
   fixedWidthMask,
   isU64Head,
   isFixedIntHead,
@@ -322,7 +319,6 @@ import backend.trmc_analysis.{
   bindName,
   bindNames,
   patVars,
-  patVarsList,
   patVarNames,
   isCtorTail,
   isSelfSatApp,
@@ -330,9 +326,6 @@ import backend.trmc_analysis.{
   ctorTailName,
   ctorTailLeadFields,
   ctorTailSelfIdx,
-  splitLastF,
-  selfFree,
-  mentionsSelfMethod,
   DispGroup(..),
   dispRootOf,
   dispMembersOf,
@@ -342,7 +335,7 @@ import backend.trmc_analysis.{
   clauseArityOf,
   lastStmtExpr,
 }
-import types.private_mangle.{hashName, injectiveIdent}
+import types.private_mangle.{hashName}
 import types.route_key.{numIntWord}
 import backend.impl_groups.{ImplClauseGroup(..)}
 import backend.emit_plan.{
@@ -353,7 +346,6 @@ import backend.emit_plan.{
 }
 import list.{zip}
 import backend.emit_support.{
-  bindEagerReach,
   bindNameMap,
   guardVars,
   ftPrefix,
@@ -4183,7 +4175,7 @@ u64Escapes e x _ (CTuple es) = u64EscapesWords e x es
 u64Escapes e x _ (CList es) = u64EscapesWords e x es
 u64Escapes e x _ (CIndex a i) = u64EscapesWords e x [a, i]
 u64Escapes e x _ (CUnOp _ a) = u64Escapes e x False a
-u64Escapes e x raw ex = match flattenApp ex []
+u64Escapes e x _raw ex = match flattenApp ex []
   (CVar f _, args) =>
     if f == x then
       occurrencesOf x ex
@@ -5470,7 +5462,7 @@ bytesHexBE arr i =
 -- (matching emitArith's existing LTFloat branch, which already unboxes operands on
 -- the strength of the left's type).  Only called in statically-Float context.
 emitFloatD : Emit -> OrdMap (String, LTy) -> CExpr -> String
-emitFloatD e env (CLit (LFloat f)) = ensureFloatDot (floatToString f)
+emitFloatD _ _env (CLit (LFloat f)) = ensureFloatDot (floatToString f)
 emitFloatD e env (ex@(CBinPrim op l r _ _)) =
   if isArithOp op then match constNanFold op l r
     -- #672: a compile-time-constant NaN → the host's exact NaN bits (a valid
@@ -7410,14 +7402,14 @@ emitMethod e env name iface siteArity (route@(RKey tag _ _)) implRoutes methRout
         mode
         resTy
     None => gapE e "no impl of method '\{name}' for instance '\{tag}'"
-emitMethod e env name iface siteArity (RDict d) implRoutes methRoutes argOps _ =
+emitMethod e env name iface siteArity (RDict d) _implRoutes methRoutes argOps _ =
   emitMethodDispatch e env name iface siteArity (RDict d) methRoutes argOps
-emitMethod e env name iface siteArity (RDictFwd d) implRoutes methRoutes argOps _ =
+emitMethod e env name iface siteArity (RDictFwd d) _implRoutes methRoutes argOps _ =
   emitMethodDispatch e env name iface siteArity (RDictFwd d) methRoutes argOps
 -- a projected super dictionary dispatches exactly as a dictionary parameter does
-emitMethod e env name iface siteArity (RProj r path) implRoutes methRoutes argOps _ =
+emitMethod e env name iface siteArity (RProj r path) _implRoutes methRoutes argOps _ =
   emitMethodDispatch e env name iface siteArity (RProj r path) methRoutes argOps
-emitMethod e env name iface siteArity RNone implRoutes methRoutes argOps _ =
+emitMethod e _env name iface siteArity RNone _implRoutes _methRoutes argOps _ =
   emitMethodArgDispatch e name iface siteArity argOps
 -- S-1: a CONSTRAINED shadowing standalone was given leading dict PARAMS by
 -- dictPassDecl, so its call must supply the matching dict WORDS.  Delegate to
@@ -7428,7 +7420,7 @@ emitMethod e env name iface siteArity RNone implRoutes methRoutes argOps _ =
 -- `dicts == []` (every unconstrained standalone, the compiler's own definer shadows
 -- included) keeps the byte-identical pre-S1 direct call ⇒ the self-compile
 -- fixpoint cannot move.
-emitMethod e env name _ _ (RLocal sym dicts) implRoutes methRoutes argOps mode =
+emitMethod e env name _ _ (RLocal sym dicts) _implRoutes _methRoutes argOps mode =
   let target = if sym == "" then name else sym
   -- #1430 (S2, row 39): a RETURN-POSITION method (`zed : a`) shadowed by a module-local
   -- standalone routes RLocal to a NULLARY top-level binding, and a nullary binding is a
@@ -7766,7 +7758,7 @@ emitOverApp e sym argOps arity resTy =
 -- takes the runtime path.  Uses an alloca result slot (like emitIf) so no phi
 -- predecessor-label bookkeeping is needed.
 emitApplyAny : Emit -> String -> List String -> String
-emitApplyAny e cw [] = cw
+emitApplyAny _ cw [] = cw
 emitApplyAny e cw argOps =
   let n = lengthS argOps
   let hdr = loadHeader e cw
@@ -8670,7 +8662,7 @@ emitAmbiguousArm e =
 -- an arg-tag site whose interface has no impl groups at all for the method: nothing
 -- can be called, so the site is an honest gap rather than a guess.
 emitDefaultArgTag : Emit -> String -> List String -> (String, LTy)
-emitDefaultArgTag e method argOps =
+emitDefaultArgTag e method _argOps =
   gapE
     e
     ("arg-tag dispatch for method '"
@@ -9274,7 +9266,7 @@ emitGroupBody : Emit ->
   Unit
 emitGroupBody e fname _ _ 0 [([], body)] =
   emitFnBody e omEmpty (TailDefine fname 0 False) body
-emitGroupBody e fname _ _ 0 _ =
+emitGroupBody e _fname _ _ 0 _ =
   gapU e "nullary impl group with more than one clause"
 -- Fast path: single-clause all-PVar impl (e.g. `append xs ys = xs ++ ys`).
 -- Build a typed env directly from param names × receiver type so that `++`/`::`
@@ -11252,13 +11244,13 @@ emitSwitch : Emit ->
   String ->
   Ref LTy ->
   Unit
-emitSwitch e env roots arms [] branches dft slot endL ftL rty =
+emitSwitch e env roots arms [] _branches dft slot endL ftL rty =
   emitTree e env roots arms [] slot endL ftL rty dft
-emitSwitch e env roots arms (foc :: rest) [] dft slot endL ftL rty =
+emitSwitch e env roots arms (_foc :: rest) [] dft slot endL ftL rty =
   emitTree e env roots arms rest slot endL ftL rty dft
 emitSwitch e env roots arms (foc :: rest) (branches@((CTBranch (HLit _) _) :: _)) dft slot endL ftL rty =
   emitLitChain e env roots arms foc rest branches dft slot endL ftL rty
-emitSwitch e env roots arms (foc :: rest) ((CTBranch HUnit sub) :: _) dft slot endL ftL rty =
+emitSwitch e env roots arms (_foc :: rest) ((CTBranch HUnit sub) :: _) _dft slot endL ftL rty =
   emitTree e env roots arms rest slot endL ftL rty sub
 emitSwitch e env roots arms (foc :: rest) (branches@((CTBranch h _) :: _)) dft slot endL ftL rty =
   match conHeadInfo h
@@ -12145,7 +12137,7 @@ trmcBindNullaryGroup _ env [] = env
 trmcBindNullaryGroup e env ((CBind name [CClause [] rhs] _ bid) :: rest) =
   let vt = stampWord e bid (emitExpr e env rhs)
   trmcBindNullaryGroup e (omInsert name vt env) rest
-trmcBindNullaryGroup _ env (_ :: rest) = env
+trmcBindNullaryGroup _ env (_ :: _rest) = env
 
 -- a TRMC tail leaf: an eligible ctor-tail conses into the destination + loops; a
 -- bare plain-tail self-call (F3 — `None => self …`, no enclosing cons/ctor)
@@ -12675,7 +12667,7 @@ floatWorkerEligible e name pats ptys body =
 -- (no self-recursive / float-param requirement — return-unboxing alone is a win).
 -- Single-clause, all-PVar, non-dict, float return, body shape `emitFnBodyD` handles.
 floatFwEligible : Emit -> String -> List Pat -> List LTy -> CExpr -> Bool
-floatFwEligible e name pats ptys body =
+floatFwEligible e name pats _ptys body =
   let rty = match sigLookup e name
     Some (FnSig _ r) => r
     None => LTInt
@@ -12828,7 +12820,7 @@ emitFnBodyDBlock e env self worker fp arity ((CSLet _ (PVar x _ _) rhs) :: rest)
   else
     let (v, ty) = emitExpr e env rhs
     emitFnBodyDBlock e (omInsert x (v, ty) env) self worker fp arity rest
-emitFnBodyDBlock e env _ _ _ _ _ =
+emitFnBodyDBlock e _env _ _ _ _ _ =
   gapU
     e
     "float-worker block: unexpected statement shape (should be gated by floatWorkerBlockOk)"
@@ -13566,7 +13558,7 @@ fnBinds (b :: rest) = if isFnBind b then b :: fnBinds rest else fnBinds rest
 -- the nullary value bindings (non-`main`, no parameters), in source order.
 valBinds : List CBind -> List CBind
 valBinds [] = []
-valBinds ((CBind "main" cs _ _) :: rest) = valBinds rest
+valBinds ((CBind "main" _cs _ _) :: rest) = valBinds rest
 valBinds (b :: rest) = if isFnBind b then valBinds rest else b :: valBinds rest
 
 -- the value-global names a binding's rhs references EAGERLY (at init time) — i.e.
@@ -14041,7 +14033,7 @@ emitRefAlloc : Emit -> OrdMap (String, LTy) -> List CExpr -> (String, LTy)
 emitRefAlloc e env [x] =
   let (xw, _) = emitExpr e env x
   emitCtorAlloc e "$ref" [xw]
-emitRefAlloc e env _ = gapE e "Ref expects exactly 1 argument"
+emitRefAlloc e _env _ = gapE e "Ref expects exactly 1 argument"
 
 emitSetRef : Emit -> OrdMap (String, LTy) -> List CExpr -> (String, LTy)
 emitSetRef e env [r, x] =
@@ -14053,7 +14045,7 @@ emitSetRef e env [r, x] =
   let _ = emit e "  \{fp} = getelementptr i8, ptr \{p}, i64 8"
   let _ = emit e "  store i64 \{xw}, ptr \{fp}"
   ("1", LTInt)
-emitSetRef e env _ = gapE e "setRef expects exactly 2 arguments"
+emitSetRef e _env _ = gapE e "setRef expects exactly 2 arguments"
 
 emitFieldExprs : Emit -> OrdMap (String, LTy) -> List CField -> List String
 emitFieldExprs _ _ [] = []
@@ -14517,7 +14509,7 @@ emitArrayMakeWith e env [nExpr, fExpr] =
   let w = freshReg e
   let _ = emit e "  \{w} = ptrtoint ptr \{p} to i64"
   (w, LTCon)
-emitArrayMakeWith e env _ = gapE e "arrayMakeWith takes two arguments"
+emitArrayMakeWith e _env _ = gapE e "arrayMakeWith takes two arguments"
 
 -- ── lists ─────────────────────────────────────────────────────────
 -- VALUE REPRESENTATION: a list is a chain of boxed Cons cells (matching the

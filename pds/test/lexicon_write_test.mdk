@@ -12,12 +12,12 @@
    schema, are written and reported `"unknown"`. Every record key here is a
    TID, which is what `app.bsky.feed.post` requires. -}
 
-import bytes.{Bytes}
+import bytes
 import hex.{decode}
 import http.{parseRequest, responseStatus, serializeResponse}
 import json.{Json(..), get, jArray, jObject, parse, stringify}
 import string.{repeat, startsWith}
-import test.{Expectation, expectEach, expectEqual, expectTrue}
+import test.{expectEach, expectEqual, expectTrue}
 import lib.handlers.{pdsServer, recordServer, serverLinksEmpty}
 import lib.jwt.{Mint, mintAccessToken}
 import lib.repo.{repoInitFromKeyBytes}
@@ -42,7 +42,6 @@ import test.fixture_support.{
   storeFingerprint,
   testKey,
   testNonce,
-  testSecret,
 }
 import test.request_support.{postJson, procedureRequest}
 import test.response_support.{bodyText}

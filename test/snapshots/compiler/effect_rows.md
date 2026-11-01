@@ -13,8 +13,8 @@ import support.opcount.{opBump}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omKeys}
 import types.effect_domain.{Param}
 import types.effect_authority.{
-  Authority(..), Authvar, authJoin, authSub, authConst, renderAuthority,
-  authvarDefaultName, authNorm, renderAuthorityWith
+  Authority(..), Authvar, authJoin, authSub, authConst, authvarDefaultName,
+  authNorm, renderAuthorityWith
 }
 import frontend.ast.{TyConOrigin(..)}
 import map.{Map(..), has, set}
@@ -449,7 +449,7 @@ dedupCellsGo (cell :: cells) seen acc =
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omKeys" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" false))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" false) (mem "authJoin" false) (mem "authSub" false) (mem "authConst" false) (mem "renderAuthority" false) (mem "authvarDefaultName" false) (mem "authNorm" false) (mem "renderAuthorityWith" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" false) (mem "authJoin" false) (mem "authSub" false) (mem "authConst" false) (mem "authvarDefaultName" false) (mem "authNorm" false) (mem "renderAuthorityWith" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true) (mem "has" false) (mem "set" false))))
 (DData Public "EffLabel" () ((variant "EffLabel" (ConPos (TyCon "String") (TyCon "TyConOrigin")))) ())
@@ -608,7 +608,7 @@ dedupCellsGo (cell :: cells) seen acc =
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omKeys" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" false))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" false) (mem "authJoin" false) (mem "authSub" false) (mem "authConst" false) (mem "renderAuthority" false) (mem "authvarDefaultName" false) (mem "authNorm" false) (mem "renderAuthorityWith" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" false) (mem "authJoin" false) (mem "authSub" false) (mem "authConst" false) (mem "authvarDefaultName" false) (mem "authNorm" false) (mem "renderAuthorityWith" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true) (mem "has" false) (mem "set" false))))
 (DData Public "EffLabel" () ((variant "EffLabel" (ConPos (TyCon "String") (TyCon "TyConOrigin")))) ())

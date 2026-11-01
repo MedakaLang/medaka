@@ -4,9 +4,7 @@
 -- identical: only the signatures differ.
 
 import lib.handlers.{ServerLinks, pdsHandler}
-import lib.jwt.{Mint}
 import lib.server_core.{Account, Server, makeServer}
-import lib.sign.{Sign}
 import lib.xrpc.{Registry}
 
 export

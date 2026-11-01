@@ -11,8 +11,6 @@ import backend.wasm_emit_test_support_test.{watOf, funcBlock}
 import backend.emit_target.{Backend(..)}
 import test.{expectAll, expectFalse, expectTrue, labelFail}
 import string.{contains}
-import ir.core_ir_lower.{declaredRecordFieldOrders}
-import backend.emit_plan.{buildEmitPlan}
 
 -- does any line of `block` contain `needle`
 blockHas : String -> List String -> Bool

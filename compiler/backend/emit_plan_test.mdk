@@ -1,6 +1,6 @@
 import backend.impl_groups.{ImplClauseGroup}
 import backend.wasm_demand.{JsImport(..)}
-import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
+import backend.trmc_analysis.{isTrmcFn, isTrmcImpl}
 import backend.extern_catalog.{RuntimeExternDomain(..)}
 -- Sibling test for `compiler/backend/emit_plan.mdk` ([P-TEST-SIBLING]).
 --
@@ -42,10 +42,9 @@ import test.{
   fail,
 }
 import string.{
-  contains, endsWith, lines, split, trimLeft, startsWith, words, join,
-  sliceClamped
+  contains, endsWith, lines, split, trimLeft, startsWith, join, sliceClamped
 }
-import list.{drop, sort, take, mapWithIndex, reverse, head}
+import list.{sort, mapWithIndex, reverse, head}
 import frontend.ast.{
   Addr(..), Lit(..), Pat(..), Route(..), Decl(..), noDeclLoc, noBinderId,
   declBinderNames
@@ -758,7 +757,8 @@ test "no emitter counts leading dictionary parameters from their spelling" =
       ["llvm_emit.mdk", "wasm_emit.mdk", "trmc_analysis.mdk", "emit_plan.mdk"])
 
 -- Every entry that imports an emitter is a route a program reaches an artifact
--- through; each builds its plan with `buildEmitPlan*`, never by hand.
+-- through; each builds its plan with `buildEmitPlan*` or `prepareWasmPlan`,
+-- never by hand.
 emitRoutes : List String
 emitRoutes = [
   "llvm_bootstrap_lex_main.mdk", "llvm_emit_main.mdk",
@@ -795,7 +795,9 @@ test "the emit-route entries are exactly the pinned roster and each builds its p
               Ok text =>
                 labelFail
                   "\{n} builds no emission plan"
-                  (expectTrue (contains "buildEmitPlan" text))
+                  (expectTrue
+                    (contains "buildEmitPlan" text
+                      || contains "prepareWasmPlan" text))
               Err e => expectEqual "readable" "cannot read \{n}: \{e}")
             routes),
       ]

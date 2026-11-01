@@ -164,7 +164,7 @@ test "depth is restored for success, recoverable failure and fatal failure" =
     (map
       ((label, parser) =>
         let ctx = session ()
-        let r = runPWith ctx (withDepth 2 (FailMsg "limit") parser) 0
+        let _ = runPWith ctx (withDepth 2 (FailMsg "limit") parser) 0
         (label, expectEqual 0 (depthOf ctx)))
       [
         ("success", writeOk),

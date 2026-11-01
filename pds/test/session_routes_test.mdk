@@ -16,21 +16,18 @@
 
 import bytes.{Bytes, encodeUtf8, fromU8Array}
 import http.{parseRequestClassified}
-import json.{Json(..), asBool, get, jObject, parse, stringify}
+import json.{Json(..), asBool, get, jObject, stringify}
 import string.{contains}
 import u8 as U8
 import test.{
   expectAtLeast,
   expectEach,
   expectEqual,
-  expectFalse,
   expectNotEqual,
   expectSatisfies,
-  expectTrue,
 }
 import lib.credential.{
   CredentialRecord,
-  LoginCheck,
   LoginOutcome(..),
   LoginVerdict,
   credentialIterations,
@@ -63,7 +60,7 @@ import lib.store.{
 import test.fixture_support.{altTestKey, contextAt}
 import test.request_support.{authOf, loginJson, postJson}
 import test.response_support.{
-  jsonBody, outcome, responseText, settled, statusLineOf, stringField
+  jsonBody, outcome, responseText, settled, stringField
 }
 import lib.sign.{Sign}
 import lib.jwt.{Mint}

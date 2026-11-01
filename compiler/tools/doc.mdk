@@ -26,7 +26,6 @@ import frontend.parser.{
   parseErrorLine,
   parseErrorCol,
   parseErrorMessage,
-  Positions,
   DeclPos,
   positionsDecls,
   declPosLine,
@@ -40,7 +39,6 @@ import frontend.ast.{
   qualifierSource,
   effAtomSurface,
   binderDomainSurface,
-  authTermSurface,
   ctorBindersSource,
   tyParamSources,
   Constraint(..),
@@ -1839,7 +1837,7 @@ docSchemesFor : String ->
   List String ->
   List Decl ->
   <IO> List (String, Scheme)
-docSchemesFor runtimeSrc coreSrc filename roots rawUser =
+docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
   match (projectEntrySchemes
     (Ref [])
     (Ref omEmpty)

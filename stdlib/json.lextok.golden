@@ -15,8 +15,6 @@ UPPER "Option"
 COMMA
 UPPER "Result"
 COMMA
-UPPER "Thenable"
-COMMA
 IDENT "map"
 RBRACE
 NEWLINE
@@ -1589,9 +1587,9 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "parseUnicodeAt"
-IDENT "arr"
-IDENT "i"
-IDENT "acc"
+IDENT "_arr"
+IDENT "_i"
+IDENT "_acc"
 UPPER "None"
 EQUAL
 UPPER "Err"
@@ -1786,10 +1784,10 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "parseLowSurrogateAt"
-IDENT "arr"
-IDENT "i"
-IDENT "acc"
-IDENT "hi"
+IDENT "_arr"
+IDENT "_i"
+IDENT "_acc"
+IDENT "_hi"
 UNDERSCORE
 EQUAL
 UPPER "Err"

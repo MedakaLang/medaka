@@ -9,19 +9,7 @@ RPAREN
 COMMA
 UPPER "Ord"
 COMMA
-UPPER "Debug"
-COMMA
-UPPER "Display"
-COMMA
-UPPER "Foldable"
-COMMA
-UPPER "Mappable"
-COMMA
 UPPER "Filterable"
-COMMA
-UPPER "Semigroup"
-COMMA
-UPPER "Monoid"
 COMMA
 UPPER "Option"
 COMMA

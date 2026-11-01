@@ -31,9 +31,7 @@ import support.diag_codes.{DiagCode(..)}
 import string as Str
 import support.util.{
   contains,
-  listLen,
   reverseL,
-  initList,
   startsWith,
   endsWith,
   joinDot,
@@ -212,7 +210,7 @@ parentDir : String -> String
 parentDir path = parentGo path (stringLength path)
 
 parentGo : String -> Int -> String
-parentGo path 0 = "."
+parentGo _path 0 = "."
 parentGo path i =
   if stringSlice (i - 1) i path == "/" then
     stringSlice 0 (i - 1) path
@@ -283,7 +281,7 @@ valEqGo line i n =
 -- collect `name = "path"` entries until the next `[section]` header (or EOF).
 -- `inDeps` tracks whether we are currently inside the dependencies section.
 collectDeps : String -> List String -> List (String, String)
-collectDeps root [] = []
+collectDeps _root [] = []
 collectDeps root (line :: rest) =
   let t = stringTrim line
   if t == "[dependencies]" then
@@ -292,7 +290,7 @@ collectDeps root (line :: rest) =
     collectDeps root rest
 
 collectDepsIn : String -> List String -> List (String, String)
-collectDepsIn root [] = []
+collectDepsIn _root [] = []
 collectDepsIn root (line :: rest) =
   let t = stringTrim line
   if startsWith "[" t then
@@ -352,7 +350,7 @@ readDeps root =
 -- any `<FFI "lib">` effect parameter in the program: those are author-written
 -- row documentation, a separate fact (sprint decision F8/Q3).
 collectLibs : String -> List String -> List (String, String)
-collectLibs root [] = []
+collectLibs _root [] = []
 collectLibs root (line :: rest) =
   let t = stringTrim line
   if t == "[foreign-libraries]" then
@@ -361,7 +359,7 @@ collectLibs root (line :: rest) =
     collectLibs root rest
 
 collectLibsIn : String -> List String -> List (String, String)
-collectLibsIn root [] = []
+collectLibsIn _root [] = []
 collectLibsIn root (line :: rest) =
   let t = stringTrim line
   if t == "" || startsWith "#" t then
