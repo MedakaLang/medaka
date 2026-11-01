@@ -54,8 +54,8 @@ import test.{
   labelFail,
 }
 import test.oracle_support.{
-  Seed(..), buildBatch, buildFor, flatLines, outLines, rowScratch, seedDb,
-  spawnOut, spawnRaw
+  finishScratch, Seed(..), buildBatch, buildFor, flatLines, outLines,
+  rowScratch, seedDb, spawnOut, spawnRaw
 }
 import test_process.{underRoot}
 
@@ -188,8 +188,7 @@ deleteResult = match rowScratch "dml-delete"
   Ok prefix =>
     let db = "\{prefix}.db"
     let out = runDelete db
-    let _ = runVerb "rm" ["-rf", db]
-    out
+    finishScratch [db] out
 
 runDelete : String -> <Exec, IO> Result String DeleteRun
 runDelete db = do
@@ -272,8 +271,7 @@ negativeResult = match rowScratch "dml-delete-negative"
   Ok prefix =>
     let db = "\{prefix}.db"
     let out = runNegative db
-    let _ = runVerb "rm" ["-rf", db]
-    out
+    finishScratch [db] out
 
 runNegative : String -> <Exec, FileRead, IO> Result String NegativeRun
 runNegative db = do
@@ -386,8 +384,7 @@ updateResult = match rowScratch "dml-update"
     let db = "\{prefix}.db"
     let dbIpk = "\{prefix}-ipk.db"
     let out = runUpdate db dbIpk
-    let _ = runVerb "rm" ["-rf", db, dbIpk]
-    out
+    finishScratch [db, dbIpk] out
 
 runUpdate : String -> String -> <Exec, FileRead, IO> Result String UpdateRun
 runUpdate db dbIpk = do
@@ -479,8 +476,7 @@ updateExprResult = match rowScratch "dml-update-expr"
     let dbm = "\{prefix}-m.db"
     let dbs = "\{prefix}-s.db"
     let out = runUpdateExpr dbm dbs
-    let _ = runVerb "rm" ["-rf", dbm, dbs]
-    out
+    finishScratch [dbm, dbs] out
 
 runUpdateExpr : String ->
   String ->
@@ -565,8 +561,7 @@ malformedResult = match rowScratch "dml-malformed"
   Ok prefix =>
     let db = "\{prefix}.db"
     let out = runMalformed db
-    let _ = runVerb "rm" ["-rf", db]
-    out
+    finishScratch [db] out
 
 runMalformed : String -> <Exec, IO> Result String (List String)
 runMalformed db = do
@@ -620,8 +615,7 @@ schemaNotUtf8Result = match rowScratch "dml-schema-not-utf8"
     let db = "\{prefix}.db"
     let clean = "\{prefix}-clean.db"
     let out = runSchemaNotUtf8 db clean
-    let _ = runVerb "rm" ["-rf", db, clean]
-    out
+    finishScratch [db, clean] out
 
 runSchemaNotUtf8 : String ->
   String ->

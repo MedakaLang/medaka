@@ -294,7 +294,9 @@ withConnection host port body = match connect host port
   Err e => Err e
   Ok conn =>
     let r = body conn
-    let _ = close conn
+    bestEffort
+      "the connection is being torn down and `body`'s result is what the caller needs; a failed close has no recovery"
+      (close conn)
     r
 
 {- | Listens on `addr` and `port`, runs `body` on the listener, and closes
@@ -310,7 +312,9 @@ withListener addr port body = match listen addr port
   Err e => Err e
   Ok lis =>
     let r = body lis
-    let _ = closeListener lis
+    bestEffort
+      "the listener is being torn down and `body`'s result is what the caller needs; a failed close has no recovery"
+      (closeListener lis)
     r
 
 {- | Accepts connections forever, running `handle` on each and closing it
@@ -327,5 +331,7 @@ serveLoop lis handle = match accept lis
   Err e => Err e
   Ok conn =>
     let _ = handle conn
-    let _ = close conn
+    bestEffort
+      "the connection is finished whether or not `handle` succeeded and the loop must go on to the next one; a failed close has no recovery"
+      (close conn)
     serveLoop lis handle

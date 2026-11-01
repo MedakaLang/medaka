@@ -1,5 +1,5 @@
 # META
-source_lines=1740
+source_lines=1742
 stages=DESUGAR,MARK
 # SOURCE
 {- | Regular expressions, matched in linear time.
@@ -1119,8 +1119,10 @@ shiftSlots lo slots = arrayMakeWith (arrayLength slots) (i =>
 findSteps : Regex -> String -> Int
 findSteps re s =
   let steps = Ref 0
-  let _ = searchFrom re (codesOf s) 0 False False steps
-  !steps
+  match searchFrom re (codesOf s) 0 False False steps
+    -- Only the count threaded through `steps` matters, found or not.
+    None => !steps
+    Some _ => !steps
 
 -- `textOf lo hi` renders one span: a String subject slices itself, a byte
 -- subject decodes the span, and the span walk is written once either way.
@@ -1990,7 +1992,7 @@ spansOrdered (m :: rest) floor =
 (DTypeSig false "shiftSlots" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int")))))
 (DFunDef false "shiftSlots" ((PVar "lo") (PVar "slots")) (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "arrayLength") (EVar "slots"))) (ELam ((PVar "i")) (EBlock (DoLet false false (PVar "slot") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "slots"))) (DoExpr (EIf (EBinOp "<" (EVar "slot") (ELit (LInt 0))) (EVar "slot") (EBinOp "+" (EVar "slot") (EVar "lo"))))))))
 (DTypeSig false "findSteps" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "findSteps" ((PVar "re") (PVar "s")) (EBlock (DoLet false false (PVar "steps") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchFrom") (EVar "re")) (EApp (EVar "codesOf") (EVar "s"))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EVar "steps"))) (DoExpr (EUnOp "!" (EVar "steps")))))
+(DFunDef false "findSteps" ((PVar "re") (PVar "s")) (EBlock (DoLet false false (PVar "steps") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchFrom") (EVar "re")) (EApp (EVar "codesOf") (EVar "s"))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EVar "steps")) (arm (PCon "None") () (EUnOp "!" (EVar "steps"))) (arm (PCon "Some" PWild) () (EUnOp "!" (EVar "steps")))))))
 (DTypeSig false "mkMatchWith" (TyFun (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Match")))))
 (DFunDef false "mkMatchWith" ((PVar "textOf") (PVar "re") (PVar "slots")) (EBlock (DoLet false false (PVar "lo") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "slots"))) (DoLet false false (PVar "hi") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 1))) (EVar "slots"))) (DoExpr (ERecordCreate "Match" ((fa "start" (EVar "lo")) (fa "end" (EVar "hi")) (fa "text" (EApp (EApp (EVar "textOf") (EVar "lo")) (EVar "hi"))) (fa "groups" (EApp (EApp (EApp (EApp (EVar "groupsOfWith") (EVar "textOf")) (EVar "re")) (EVar "slots")) (ELit (LInt 1)))))))))
 (DTypeSig false "groupsOfWith" (TyFun (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Group"))))))))
@@ -2312,7 +2314,7 @@ spansOrdered (m :: rest) floor =
 (DTypeSig false "shiftSlots" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int")))))
 (DFunDef false "shiftSlots" ((PVar "lo") (PVar "slots")) (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "arrayLength") (EVar "slots"))) (ELam ((PVar "i")) (EBlock (DoLet false false (PVar "slot") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "slots"))) (DoExpr (EIf (EBinOp "<" (EVar "slot") (ELit (LInt 0))) (EVar "slot") (EBinOp "+" (EVar "slot") (EVar "lo"))))))))
 (DTypeSig false "findSteps" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "findSteps" ((PVar "re") (PVar "s")) (EBlock (DoLet false false (PVar "steps") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchFrom") (EVar "re")) (EApp (EVar "codesOf") (EVar "s"))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EVar "steps"))) (DoExpr (EUnOp "!" (EVar "steps")))))
+(DFunDef false "findSteps" ((PVar "re") (PVar "s")) (EBlock (DoLet false false (PVar "steps") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchFrom") (EVar "re")) (EApp (EVar "codesOf") (EVar "s"))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EVar "steps")) (arm (PCon "None") () (EUnOp "!" (EVar "steps"))) (arm (PCon "Some" PWild) () (EUnOp "!" (EVar "steps")))))))
 (DTypeSig false "mkMatchWith" (TyFun (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Match")))))
 (DFunDef false "mkMatchWith" ((PVar "textOf") (PVar "re") (PVar "slots")) (EBlock (DoLet false false (PVar "lo") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "slots"))) (DoLet false false (PVar "hi") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 1))) (EVar "slots"))) (DoExpr (ERecordCreate "Match" ((fa "start" (EVar "lo")) (fa "end" (EVar "hi")) (fa "text" (EApp (EApp (EVar "textOf") (EVar "lo")) (EVar "hi"))) (fa "groups" (EApp (EApp (EApp (EApp (EVar "groupsOfWith") (EVar "textOf")) (EVar "re")) (EVar "slots")) (ELit (LInt 1)))))))))
 (DTypeSig false "groupsOfWith" (TyFun (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Group"))))))))
