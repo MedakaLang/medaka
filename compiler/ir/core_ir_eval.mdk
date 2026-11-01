@@ -500,8 +500,8 @@ cClauseClosure env (CClause pats body) = VClosureF env pats (e => ceval e body)
 -- Not exported: it installs no dispatch tables, so a caller would silently run
 -- without the method reqCounts.  `cevalMainOf`, `cevalOutputOf` and `cevalModules`
 -- are the ways in.
-cevalProgram : CProgram -> <e> List (String, Value e)
-cevalProgram (CProgram groups ctorArs ctorToType implEntries _ _) =
+cevalProgram : ProgramFacts -> CProgram -> <e> List (String, Value e)
+cevalProgram facts (CProgram groups ctorArs ctorToType implEntries _ _) =
   ctorToTypeRef := ctorToType
   let ctors = map ctorBinding ctorArs
   let allNames =
@@ -511,7 +511,7 @@ cevalProgram (CProgram groups ctorArs ctorToType implEntries _ _) =
       ++ map cBindName groups
       ++ cImplMethodNames implEntries
   let cells = map (n => (n, Ref VUnit)) allNames
-  let env = EvalEnv [indexedFrame cells]
+  let env = EvalEnv facts [indexedFrame cells]
   let _ = installConsts cells boolSeeds
   let _ = installConsts cells (externBindings ())
   let _ = installConsts cells ctors
@@ -594,8 +594,8 @@ cTopGroupValue env [CClause pats body]
 cTopGroupValue env clauses = VMulti (map (cClauseClosure env) clauses)
 
 -- ── entry point (pure-value path, diffed via pp_value of `main`) ───────────
-cevalMain : CProgram -> String
-cevalMain prog = match lookupBinding "main" (cevalProgram prog)
+cevalMain : ProgramFacts -> CProgram -> String
+cevalMain facts prog = match lookupBinding "main" (cevalProgram facts prog)
   Some v => ppValue (force v)
   None => panic "core_ir eval: no `main` binding"
 
@@ -603,10 +603,10 @@ cevalMain prog = match lookupBinding "main" (cevalProgram prog)
 -- append to eval.mdk's outputChunks) and return the captured stdout — the Core-IR
 -- analog of eval.mdk's evalOutput, for the typed / run corpora that diff stdout
 -- (=== EVAL === goldens) rather than pp_value of `main`.
-cevalOutput : CProgram -> String
-cevalOutput prog =
+cevalOutput : ProgramFacts -> CProgram -> String
+cevalOutput facts prog =
   resetOutput ()
-  let binds = cevalProgram prog
+  let binds = cevalProgram facts prog
   let _ = cRunMainForEffect binds
   readOutput ()
 
@@ -633,14 +633,14 @@ cevalMainOf : ProgramFacts -> List Decl -> CProgram -> String
 cevalMainOf facts decls prog =
   ctorFieldOrdersRef := buildCtorFieldOrders decls
   installMethodTables facts decls
-  cevalMain prog
+  cevalMain facts prog
 
 export
 cevalOutputOf : ProgramFacts -> List Decl -> CProgram -> String
 cevalOutputOf facts decls prog =
   ctorFieldOrdersRef := buildCtorFieldOrders decls
   installMethodTables facts decls
-  cevalOutput prog
+  cevalOutput facts prog
 
 installMethodTables : ProgramFacts -> List Decl -> Unit
 installMethodTables facts decls =
@@ -721,7 +721,9 @@ cevalModules facts preludeDecls0 modules0 = withFacts
     let runtimeFrame = indexedFrame (runtimeCellsOf externs)
     let privateCells = map (cBindName >> (n => (n, Ref VUnit))) preludePrivate
     let globalEnv =
-      EvalEnv (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
+      EvalEnv
+        facts
+        (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
     let mods =
       cBuildModInfos
         facts
@@ -784,6 +786,7 @@ cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports
       (importsMapFor facts.pfSibling mid fulls exportsMap)
       decls
   let menv = EvalEnv
+    facts
     [
       indexedFrame localCells,
       indexedFrame imports,
