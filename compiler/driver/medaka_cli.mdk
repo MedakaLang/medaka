@@ -3759,6 +3759,7 @@ analyzeLoaded prelude target roots stdlibDir fn modsWithPath =
           modsD)
       FrontInput {
         fiInputs = { driveInputsFor !selectedProfile False [] |
+          diSibling = siblingPairsOf roots modsWithPath,
           diManifestRequests = [EntryOverPrelude fn HostInvocation],
           diPreludeKey = Some (preludeGeneration rsrc csrc),
         },

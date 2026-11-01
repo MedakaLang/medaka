@@ -36,6 +36,8 @@
    | `kept-resolve-error-single` | didOpen a single file with a resolve error, hover | `level6 : Int` and `bad : Int`, as a drive answers them |
    | `kept-cold` | didOpen a buffer whose publish kept nothing, then completion and inlayHint | both drive and answer: the buffer's own `level6` completes, `bad` earns its hint |
    | `kept-stale-edit` | didOpen, didChange to a resolve-erroring text, hover | the NEW text's type, never the analysis the first publish kept |
+   | `sibling-view-sibling` | hover, completion, definition and references on a private name of the subject, in its test sibling | each verb sees `step` as `check` does: the type, the candidate, and the definition in the subject |
+   | `sibling-view-other` | the same four requests in a module that is not the sibling | none of them sees the private `step`, as `check` rejects the import |
    | `kept-inlay-project` | inlayHint over an import-bearing buffer | `: Int` on `k = plain 3`, the type the project analysis gives (`check --types`), not the buffer typechecked alone |
 
    Each row is its own `medaka lsp` process, exactly as the retired scripts
@@ -427,6 +429,69 @@ projectFiles = [
   ("main_app.mdk", mainAppSrc),
 ]
 
+-- # The test sibling's view of its subject
+
+-- | A private helper beside an abstract type, the shape of
+-- `test/sibling_view_fixtures/counter.mdk`.
+sibSubjectSrc : String
+sibSubjectSrc =
+  "export data Counter = Counter Int\n\nexport tick : Counter -> Counter\ntick (Counter n) = Counter (step n)\n\nstep : Int -> Int\nstep n = n + 1\n"
+
+-- | Imports the private `step`; the last binding is a completion prefix.
+sibUserSrc : String
+sibUserSrc =
+  "import sub.{Counter(..), step}\n\nuse1 = step 1\nuse2 = ste\n\nmain = println use1\n"
+
+-- | One session over `sibUserSrc` as the file `file`: hover, completion,
+-- definition and references at the use `step 1` / the prefix `ste`.
+sibRequests : String -> String -> List Json
+sibRequests dir file =
+  let uri = "file://\{dir}/\{file}"
+  [
+    initCaps,
+    didOpenMsg uri sibUserSrc,
+    rpc 2 "textDocument/hover" (posParams uri 2 8),
+    rpc 3 "textDocument/completion" (posParams uri 3 10),
+    rpc 4 "textDocument/definition" (posParams uri 2 8),
+    rpc 5 "textDocument/references" (posParams uri 2 8),
+    bye,
+  ]
+
+-- | Whether the reply to `id` names a location in the file `file`.
+locatesIn : String -> Int -> Seen -> Bool
+locatesIn file idn s =
+  elem
+    file
+    (map (l => basename (strField "uri" l)) (elems (resultTo idn s.objs)))
+
+completesStep : Seen -> Bool
+completesStep s =
+  elem "step" (map (it => strField "label" it) (itemsOf (resultTo 3 s.objs)))
+
+gradeSiblingView : Seen -> List String
+gradeSiblingView s = somes [
+  hoverIs s 2 "step : Int -> Int",
+  unless
+    (completesStep s)
+    "completing `ste` did not offer the subject's private `step`",
+  unless (locatesIn "sub.mdk" 4 s) "definition of `step` did not reach sub.mdk",
+  unless (locatesIn "sub.mdk" 5 s) "references of `step` did not reach sub.mdk",
+]
+
+gradeNonSiblingView : Seen -> List String
+gradeNonSiblingView s = somes [
+  hoverIs s 2 "",
+  unless
+    (not (completesStep s))
+    "completing `ste` offered the private `step` to a non-sibling",
+  unless
+    (not (locatesIn "sub.mdk" 4 s))
+    "definition of `step` reached sub.mdk from a non-sibling",
+  unless
+    (not (locatesIn "sub.mdk" 5 s))
+    "references of `step` reached sub.mdk from a non-sibling",
+]
+
 -- # The sessions that reach an analysis a publish kept
 
 manifest : (String, String)
@@ -804,6 +869,30 @@ probes = [
       ],
     oracle = NoOracle,
     grade = s => somes [hoverIs s 2 "double : Semigroup a => a -> a"],
+  },
+  Probe {
+    name = "sibling-view-sibling",
+    files = [
+      manifest,
+      ("sub.mdk", sibSubjectSrc),
+      ("sub_test.mdk", sibUserSrc),
+      ("other.mdk", sibUserSrc),
+    ],
+    requests = dir => sibRequests dir "sub_test.mdk",
+    oracle = NoOracle,
+    grade = gradeSiblingView,
+  },
+  Probe {
+    name = "sibling-view-other",
+    files = [
+      manifest,
+      ("sub.mdk", sibSubjectSrc),
+      ("sub_test.mdk", sibUserSrc),
+      ("other.mdk", sibUserSrc),
+    ],
+    requests = dir => sibRequests dir "other.mdk",
+    oracle = NoOracle,
+    grade = gradeNonSiblingView,
   },
   Probe {
     name = "kept-inlay-project",
