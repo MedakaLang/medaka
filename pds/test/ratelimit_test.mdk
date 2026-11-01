@@ -470,6 +470,15 @@ test "a last hop that is not UTF-8 is charged to direct, not to the address it r
     (labelOf (identifyClient (TrustedProxy True) (parsedXffHeaderBytes value)))
     "direct"
 
+{- A last hop that is valid UTF-8 and ends in a no-break space is not the
+   plain address either: trimming it as whitespace would key it into the
+   address's bucket. -}
+test "a last hop with a trailing no-break space does not alias the plain address" =
+  let value = encodeUtf8 (lastHopAddress ++ " ")
+  expectEqual
+    (labelOf (identifyClient (TrustedProxy True) (parsedXffHeaderBytes value)))
+    "direct"
+
 {- The token ceiling counts commas in the raw bytes, before any decode. 64
    tokens of one 0xFF byte each, then an address, is 65 tokens whatever the
    bytes decode to. A count taken after a lenient decode, which can read a

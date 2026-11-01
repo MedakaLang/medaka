@@ -78,6 +78,48 @@ When you write **Medaka** code (e.g. wrappers in `core.mdk`/`list.mdk`), use
    MEDAKA_STRICT=1 ./medaka test compiler/backend/extern_catalog_test.mdk
    ```
 
+## New extern checklist
+
+Each item is a condition and the command that proves it. Run the command against
+the tree before you act on the item.
+
+1. **LLVM preamble goldens.** An extern whose LLVM lowering calls a C runtime
+   function adds an `fn` row to `runtimeDecls` in `compiler/backend/llvm_preamble.mdk`,
+   so every typed golden gains that `declare` line. Proof:
+   `ls test/llvm_fixtures_typed/*.ll.golden | wc -l`.
+2. **Two seed re-mints, catalog row first.** The cold seed emitter panics on a
+   `runtime.mdk` extern with no catalog row: `internal error: runtime extern '<name>'
+   has no row in the extern catalog`. Add the `compiler/backend/extern_catalog.mdk` row
+   and the emitter rows first, then `make medaka`, then `test/refresh_seed.sh`. Then add
+   the `runtime.mdk` extern and the rest, `make medaka`, and `test/refresh_seed.sh` again.
+   Finally `test/bootstrap_from_seed.sh` must print `C3a PASS`. Proof:
+   `grep -n "has no row in the extern catalog" compiler/backend/core_validate.mdk` and
+   `grep -n "C3a PASS" test/bootstrap_from_seed.sh`.
+3. **The domain ledger.** A pure extern needs a row in `test/EXTERN-DOMAIN-LEDGER.txt`,
+   or `compiler/backend/extern_catalog_gate_test.mdk` fails with `pure extern ... has no
+   row`. An effectful extern (a return type carrying an effect row, such as `hashFile`)
+   gets no row. Proof: `grep -n "hashStringHex\|floatToFixed\|hashFile"
+   test/EXTERN-DOMAIN-LEDGER.txt` and `grep -n "extern hashFile" stdlib/runtime.mdk`.
+4. **The ABI row and count.** An extern gets a `CallableShape` row in
+   `compiler/types/runtime_abi_data.mdk`, and the count pin in
+   `compiler/types/runtime_abi_test.mdk` moves with it. Read the number from the
+   `expectEqual <N> (listLen projected)` line; do not copy a figure. Proof:
+   `grep -n "listLen projected" compiler/types/runtime_abi_test.mdk`.
+5. **The grants row.** An extern taking a path gets a `runtimePathCount` row in
+   `compiler/types/runtime_grants.mdk`. The default arm is `runtimePathCount _ = 0`.
+   Proof: `grep -n "runtimePathCount \"hashFile\"" compiler/types/runtime_grants.mdk`.
+6. **The engine fixture.** An extern that runs on all engines gets a fixture in
+   `test/engine_fixtures/`. Its engine part is derived from the sorted fixture key, so
+   there is no list to enrol it in. Build the `eval_autoprint_main` oracle before the
+   engines gates (the `test/gates.toml` entries carry `oracles = ["eval_autoprint_main"]`).
+   Proof: `sed -n 13,15p test/lib_engines_differential.sh`.
+7. **The rest that moves.** The LEG A golden `test/selfproc_goldens/legA/eval.eval.golden`
+   (one line per eval binding), `stdlib/runtime.lextok.golden`, `docs/stdlib/index.md`,
+   `docs/stdlib/runtime.md`, `docs/stdlib/inventory.json`, and the snapshots of every
+   touched compiler file. A new wasm function can trip the function ceiling in
+   `test/wasm/diff_wasm_emitted_size.sh`, so check it whenever a wasm lowering is added.
+   Proof: `grep -n "ceiling" test/wasm/diff_wasm_emitted_size.sh`.
+
 ## Verify
 
 ```sh

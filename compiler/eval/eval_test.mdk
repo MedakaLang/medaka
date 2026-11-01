@@ -1,6 +1,6 @@
 -- Sibling tests for the evaluator's method-dispatch tables.
 
-import test.{expectAll, expectEqual}
+import test.{expectAll, expectEqual, expectNotEqual}
 import frontend.ast.{
   noBinderId,
   Lit(..),
@@ -22,6 +22,8 @@ import eval.eval.{
   ppValue,
   externBindings,
   ioExternBindings,
+  testCapableExterns,
+  seedRunRng,
 }
 import list.{lookup}
 import ir.core_ir_eval.{cevalModulesOutput, cevalModulesOutputFacts}
@@ -166,6 +168,33 @@ test "run's random externs use a stream separate from the oracle's" =
     expectEqual "0" (ppValue oracleState),
     expectEqual (ppValue fromRun) (ppValue fromOracle),
     expectEqual "75817894" (ppValue fromOracle),
+  ]
+
+-- `medaka test` and `medaka repl` draw from the same seeded program stream as
+-- `medaka run`: one seed gives one draw sequence, another seed another, and the
+-- oracle table's state does not move. The prop runner's custom draws call
+-- `randomState` on this stream, which is already seeded by then, so they do not
+-- reach OS entropy.
+test "test and repl random externs draw from the seeded program stream" =
+  let oracle = externBindings ()
+  let oracleBefore = ppValue (applyPrim (bindingOf "randomState" oracle) VUnit)
+  let capable = testCapableExterns ()
+  let draw =
+    binds =>
+      applyPrim
+        (applyPrim (bindingOf "randomInt" binds) (VInt 0))
+        (VInt 1000000000)
+  let drawSeeded =
+    binds n =>
+      let _ = seedRunRng n
+      ppValue (draw binds)
+  expectAll [
+    expectEqual (drawSeeded capable 7) (drawSeeded capable 7),
+    expectEqual (drawSeeded capable 7) (drawSeeded (ioExternBindings ()) 7),
+    expectNotEqual (drawSeeded capable 7) (drawSeeded capable 8),
+    expectEqual
+      oracleBefore
+      (ppValue (applyPrim (bindingOf "randomState" oracle) VUnit)),
   ]
 
 siblingSubjectSrc : String

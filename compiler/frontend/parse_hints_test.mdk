@@ -1,6 +1,8 @@
-import frontend.lex_token.{Token(..)}
+import frontend.lex_token.{Token(..), peekTok}
 import frontend.lexer.{tokenizeWithOffsetPairs}
-import frontend.parse_hints.{prescanDiagnostic, matchContinuationHint}
+import frontend.parse_hints.{
+  prescanDiagnostic, matchContinuationHint, rawLiteralAfterDot
+}
 import frontend.parse_diagnostic.{
   ParseDiagnosticKind(..), diagnosticCode, renderParseDiagnostic
 }
@@ -87,3 +89,29 @@ test "match evidence keeps delimiter matching and stop tokens" =
       ((expected, tokens) =>
         ("delimiter", expectEqual expected (hintTokens tokens)))
       rows)
+
+rawAfterDot : String -> Option Int
+rawAfterDot src =
+  let (tokens, pairs) = tokenizeWithOffsetPairs src
+  let toks = arrayFromList tokens
+  let offs = arrayFromList (map fst pairs)
+  let dots = filter (i => peekTok toks i == TDot) [0..arrayLength toks - 1]
+  match dots
+    [] => None
+    d :: _ => rawLiteralAfterDot src toks offs d
+
+test "a dot glued to a raw literal reports the literal for each receiver shape" = expectEach
+  [
+    ("field", expectEqual (Some 4) (rawAfterDot "x = p.r\"x\"")),
+    ("qualified", expectEqual (Some 4) (rawAfterDot "x = M.r\"x\"")),
+    ("parenthesised", expectEqual (Some 6) (rawAfterDot "x = (e).r\"x\"")),
+  ]
+
+test "spaced, plain and longer-named literals are not glued raw literals" = expectEach
+  [
+    ("space", expectNone (rawAfterDot "x = p.r \"x\"")),
+    ("plain string", expectNone (rawAfterDot "x = p.\"x\"")),
+    ("longer field", expectNone (rawAfterDot "x = p.rx\"y\"")),
+    ("no dot", expectNone (rawAfterDot "x = r\"x\"")),
+    ("range", expectNone (rawAfterDot "x = [a..r\"x\"]")),
+  ]

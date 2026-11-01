@@ -16,11 +16,14 @@ import eval.eval.{Value(..), evalOneFacts, force}
 import types.program_facts.{factsOfElab, withFacts}
 import support.util.{lookupAssoc}
 import io.{runVerb}
-import string.{contains, indexOf, toInt, trim}
+import string.{contains, indexOf, toInt, trim, lines, words, startsWith, join}
+import list.{reverse, take}
 import test.{
   Expectation, expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue,
   fail, labelFail
 }
+import json.{Json(..)}
+import json as J
 import test_process.{medakaBin, underRoot, withScratchDir}
 
 noProps : List Decl
@@ -349,6 +352,249 @@ test "medaka test runs a target against the core.mdk beside runtime.mdk" = withS
         expectTrue (contains "(no doctests found)" out),
       ]
       Err e => fail e)
+
+-- The run seed: one `medaka test` invocation picks it (MEDAKA_SEED, else
+-- entropy), every engine draws from it, and a run whose tests ran and failed
+-- prints `seed: N (rerun with MEDAKA_SEED=N)` once, after the summary.
+
+-- `medaka test` with MEDAKA_SEED set to `seed`, or removed from the
+-- environment when it is None.
+seededTest : Option Int ->
+  List String ->
+  <Exec, IO> Result String (Int, String, String)
+seededTest seed args =
+  runVerb "env" (seedAssignment seed ++ [medakaBin, "test"] ++ args)
+
+seedAssignment : Option Int -> List String
+seedAssignment (Some n) = ["MEDAKA_SEED=\{intToString n}"]
+seedAssignment None = ["-u", "MEDAKA_SEED"]
+
+-- Runs `check` on a spawn's result, or fails the row when it did not start.
+withSpawn : Result String (Int, String, String) ->
+  ((Int, String, String) -> <Exec, IO> Expectation) ->
+  <Exec, IO> Expectation
+withSpawn (Ok r) check = check r
+withSpawn (Err e) _ = fail "could not spawn medaka: \{e}"
+
+seedLines : List String -> List String
+seedLines = filter (startsWith "seed: ")
+
+-- A top-level member of the one JSON document `out` holds; None when `out` does
+-- not parse or the member is absent.
+jsonMember : String -> String -> Option Json
+jsonMember key out = match J.parse (trim out)
+  Ok doc => J.get key doc
+  Err _ => None
+
+lastWord : String -> String
+lastWord line = match reverse (words line)
+  w :: _ => w
+  [] => ""
+
+-- The value a failing `expectEqual` reports ("expected -1 but got V").
+gotValues : String -> List String
+gotValues out = map lastWord (filter (contains "but got ") (lines out))
+
+lastNonEmpty : String -> String
+lastNonEmpty out = match reverse (filter (l => trim l /= "") (lines out))
+  l :: _ => l
+  [] => ""
+
+-- The N of a `seed: N (rerun with MEDAKA_SEED=N)` line.
+seedOfLine : String -> Option Int
+seedOfLine line = match words line
+  _ :: n :: _ => toInt n
+  _ => None
+
+seedLineFor : Int -> String
+seedLineFor n = join "" [
+  "seed: ",
+  intToString n,
+  " (rerun with MEDAKA_SEED=",
+  intToString n,
+  ")",
+]
+
+drawTestSrc : String
+drawTestSrc =
+  "import test.{expectEqual}\n\ntest \"draws\" = expectEqual (-1) (randomInt 0 1000000000)\n"
+
+-- The same draw as `drawTestSrc`, as a program whose only output is the value.
+drawMainSrc : String
+drawMainSrc = "main = println (intToString (randomInt 0 1000000000))\n"
+
+passTestSrc : String
+passTestSrc = "import test.{expectEqual}\n\ntest \"fine\" = expectEqual 1 1\n"
+
+-- A type error beside a doctest, so the file is type-checked and refused before
+-- any test runs.
+illTypedSrc : String
+illTypedSrc = "-- > f 1\n-- 1\nf : Int -> Int\nf x = \"a\"\n"
+
+writeFiles : String -> List (String, String) -> <FileWrite> Result String Unit
+writeFiles _ [] = Ok ()
+writeFiles dir ((name, src) :: rest) = match writeFile "\{dir}/\{name}" src
+  Ok _ => writeFiles dir rest
+  Err e => Err e
+
+withFixtures : List (String, String) ->
+  (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withFixtures files body = withScratchDir (dir => match writeFiles dir files
+  Ok _ => body dir
+  Err e => fail e)
+
+-- The value `medaka run` draws under MEDAKA_SEED=n.
+runDraw : Int -> String -> <Exec, IO> String
+runDraw n mainPath = match runVerb "env" [
+  "MEDAKA_SEED=\{intToString n}",
+  medakaBin,
+  "run",
+  mainPath,
+]
+  Ok (_, out, _) => trim out
+  Err e => "spawn failed: \{e}"
+
+test "a failing test prints one seed line after the summary, and that seed replays the failure" =
+  withFixtures
+    [("draw_test.mdk", drawTestSrc), ("draw.mdk", drawMainSrc)]
+    (dir =>
+      let target = "\{dir}/draw_test.mdk"
+      withSpawn (seededTest None [
+        target,
+      ]) ((code, out, _) => match seedLines (lines out)
+        [line] => match seedOfLine line
+          Some n => expectAll [
+            expectNotEqual 0 code,
+            expectEqual (seedLineFor n) line,
+            expectEqual line (lastNonEmpty out),
+            expectTrue (contains "0/1 passed" out),
+            withSpawn (seededTest (Some n) [
+              target,
+            ]) ((_, replay, _) => expectAll [
+              expectEqual out replay,
+              expectEqual (gotValues out) [runDraw n "\{dir}/draw.mdk"],
+            ]),
+          ]
+          None => fail "unreadable seed line: \{line}"
+        found => fail "want exactly one seed line, got \{debug found}"))
+
+test "MEDAKA_SEED=7 gives the same draw on the eval engine, the native engine and run" =
+  withFixtures
+    [("draw_test.mdk", drawTestSrc), ("draw.mdk", drawMainSrc)]
+    (dir =>
+      let target = "\{dir}/draw_test.mdk"
+      let expected = [runDraw 7 "\{dir}/draw.mdk"]
+      expectAll [
+        withSpawn (seededTest (Some 7) [
+          "--engines", "eval", target
+        ]) ((_, out, _) => expectAll [
+          expectEqual expected (gotValues out),
+          expectEqual [seedLineFor 7] (seedLines (lines out)),
+        ]),
+        withSpawn (seededTest (Some 7) [
+          "--engines", "native", target
+        ]) ((_, out, _) => expectAll [
+          expectEqual expected (gotValues out),
+          expectEqual [seedLineFor 7] (seedLines (lines out)),
+        ]),
+      ])
+
+test "a green run prints no seed line, seeded or not" =
+  withFixtures
+    [("ok_test.mdk", passTestSrc)]
+    (dir =>
+      let target = "\{dir}/ok_test.mdk"
+      expectAll [
+        withSpawn (seededTest None [target]) ((code, out, _) => expectAll [
+          expectEqual 0 code,
+          expectEqual [] (seedLines (lines out)),
+        ]),
+        withSpawn (seededTest (Some 7) [target]) ((code, out, _) => expectAll [
+          expectEqual 0 code,
+          expectEqual [] (seedLines (lines out)),
+        ]),
+      ])
+
+test "a directory with two failing files prints exactly one seed line, last" =
+  withFixtures
+    [("a_test.mdk", drawTestSrc), ("b_test.mdk", drawTestSrc)]
+    (dir => withSpawn (seededTest None [dir]) ((code, out, _) => expectAll [
+      expectNotEqual 0 code,
+      expectEqual 2 (count (contains "0/1 passed") (lines out)),
+      expectEqual 1 (length (seedLines (lines out))),
+      expectEqual (take 1 (seedLines (lines out))) [lastNonEmpty out],
+    ]))
+
+test "a refusal before any test runs prints no seed line" =
+  withFixtures
+    [("ill.mdk", illTypedSrc)]
+    (dir =>
+      let target = "\{dir}/ill.mdk"
+      expectAll [
+        withSpawn (seededTest (Some 7) [
+          "--engines", "eval", target
+        ]) ((code, out, err) => expectAll [
+          expectNotEqual 0 code,
+          expectEqual [] (seedLines (lines out)),
+          expectTrue (contains "type error in" err),
+        ]),
+        withSpawn (seededTest (Some 7) [
+          target,
+        ]) ((code, out, err) => expectAll [
+          expectNotEqual 0 code,
+          expectEqual [] (seedLines (lines out)),
+          expectTrue (contains "type error in" err),
+        ]),
+      ])
+
+test "a malformed MEDAKA_SEED is a usage error" =
+  withFixtures
+    [("ok_test.mdk", passTestSrc)]
+    (dir => withSpawn (runVerb "env" [
+      "MEDAKA_SEED=abc",
+      medakaBin,
+      "test",
+      "\{dir}/ok_test.mdk",
+    ]) ((code, out, err) => expectAll [
+      expectEqual 1 code,
+      expectTrue (contains "must be a decimal integer" err),
+      expectEqual [] (seedLines (lines out)),
+    ]))
+
+test "--json carries the seed only when the run failed, and leaves stderr empty" =
+  withFixtures
+    [("draw_test.mdk", drawTestSrc), ("ok_test.mdk", passTestSrc)]
+    (dir => expectAll [
+      withSpawn (seededTest (Some 7) [
+        "--json",
+        "\{dir}/draw_test.mdk",
+      ]) ((code, out, err) => expectAll [
+        expectEqual 1 code,
+        expectEqual [] (seedLines (lines out)),
+        expectEqual (Some (JInt 7)) (jsonMember "seed" out),
+        expectEqual "" err,
+      ]),
+      withSpawn (seededTest (Some 7) [
+        "--json",
+        "\{dir}/ok_test.mdk",
+      ]) ((code, out, err) => expectAll [
+        expectEqual 0 code,
+        expectEqual None (jsonMember "seed" out),
+        expectEqual "" err,
+      ]),
+    ])
+
+test "a --json type-error refusal carries no seed" =
+  withFixtures
+    [("ill.mdk", illTypedSrc)]
+    (dir => withSpawn (seededTest (Some 7) [
+      "--json",
+      "\{dir}/ill.mdk",
+    ]) ((code, out, _) => expectAll [
+      expectEqual 1 code,
+      expectEqual None (jsonMember "seed" out),
+    ]))
 
 siblingFixtureRun : String ->
   String ->

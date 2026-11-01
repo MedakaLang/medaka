@@ -235,6 +235,14 @@ cannot be read is an `Err` naming it, unlike Python's `glob`, which returns
 `[]`. Unless the pattern has a `**` segment the walk goes no deeper than
 the pattern's segments, so entries below that depth are never examined.
 
+A pattern ending in `/` finds directories instead of files, each reported
+with a trailing `/` as Python does, and the prefix directory itself is
+included when the pattern matches it, so `src/**/` finds `src/`. `*`
+and `?` match dot names, but `**` does not pass through a dot directory
+and the walk does not enter one the pattern cannot reach; a literal
+segment such as `.git` does. The result is what `path.matchGlob` accepts
+among all the files (or directories) under the prefix.
+
 ```medaka
 > glob "stdlib/no-such-glob-doctest-dir/*.mdk"
 Err "stdlib/no-such-glob-doctest-dir: No such file or directory"

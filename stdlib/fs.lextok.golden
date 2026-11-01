@@ -25,6 +25,8 @@ IDENT "path"
 DOT_LBRACE
 IDENT "dirname"
 COMMA
+IDENT "globReaches"
+COMMA
 IDENT "joinPath"
 COMMA
 IDENT "matchGlob"
@@ -36,6 +38,8 @@ IMPORT
 IDENT "string"
 DOT_LBRACE
 IDENT "contains"
+COMMA
+IDENT "endsWith"
 COMMA
 IDENT "indexOf"
 COMMA
@@ -848,6 +852,7 @@ IDENT "skip"
 IDENT "root"
 EQUAL
 IDENT "walkFilesTo"
+UPPER "FilesOnly"
 LPAREN
 MINUS
 INT 1
@@ -855,11 +860,37 @@ RPAREN
 IDENT "skip"
 IDENT "root"
 NEWLINE
+DATA
+UPPER "WalkKind"
+EQUAL
+UPPER "FilesOnly"
+PIPE
+UPPER "FilesAndDirs"
+NEWLINE
+IDENT "listsDirs"
+COLON
+UPPER "WalkKind"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "listsDirs"
+UPPER "FilesOnly"
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "listsDirs"
+UPPER "FilesAndDirs"
+EQUAL
+UPPER "True"
+NEWLINE
 IDENT "walkFilesTo"
 COLON
-UPPER "Int"
+UPPER "WalkKind"
 ARROW
 INDENT
+UPPER "Int"
+ARROW
+NEWLINE
 LPAREN
 UPPER "String"
 ARROW
@@ -882,6 +913,7 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "walkFilesTo"
+IDENT "kind"
 IDENT "levels"
 IDENT "skip"
 IDENT "root"
@@ -904,6 +936,7 @@ UPPER "Ok"
 IDENT "names"
 FAT_ARROW
 IDENT "walkDirSorted"
+IDENT "kind"
 IDENT "levels"
 IDENT "skip"
 IDENT "root"
@@ -924,9 +957,12 @@ RPAREN
 NEWLINE
 IDENT "collectEntries"
 COLON
-UPPER "Int"
+UPPER "WalkKind"
 ARROW
 INDENT
+UPPER "Int"
+ARROW
+NEWLINE
 LPAREN
 UPPER "String"
 ARROW
@@ -956,6 +992,7 @@ IDENT "collectEntries"
 UNDERSCORE
 UNDERSCORE
 UNDERSCORE
+UNDERSCORE
 LBRACKET
 RBRACKET
 EQUAL
@@ -964,6 +1001,7 @@ LBRACKET
 RBRACKET
 NEWLINE
 IDENT "collectEntries"
+IDENT "kind"
 IDENT "levels"
 IDENT "skip"
 IDENT "root"
@@ -1006,15 +1044,22 @@ IDENT "isDir"
 THEN
 INDENT
 IF
+IDENT "skip"
+IDENT "full"
+OR
 IDENT "levels"
 EQ_EQ
 INT 1
-OR
-IDENT "skip"
-IDENT "full"
+AND
+IDENT "not"
+LPAREN
+IDENT "listsDirs"
+IDENT "kind"
+RPAREN
 THEN
 INDENT
 IDENT "collectEntries"
+IDENT "kind"
 IDENT "levels"
 IDENT "skip"
 IDENT "root"
@@ -1039,6 +1084,7 @@ UNDERSCORE
 RPAREN
 LPAREN
 IDENT "collectEntries"
+IDENT "kind"
 IDENT "levels"
 IDENT "skip"
 IDENT "root"
@@ -1069,6 +1115,7 @@ UNDERSCORE
 RPAREN
 LPAREN
 IDENT "collectEntries"
+IDENT "kind"
 IDENT "levels"
 IDENT "skip"
 IDENT "root"
@@ -1079,6 +1126,7 @@ DEDENT
 ELSE
 INDENT
 IDENT "collectEntries"
+IDENT "kind"
 IDENT "levels"
 IDENT "skip"
 IDENT "root"
@@ -1094,9 +1142,12 @@ DEDENT
 NEWLINE
 IDENT "walkDirSorted"
 COLON
-UPPER "Int"
+UPPER "WalkKind"
 ARROW
 INDENT
+UPPER "Int"
+ARROW
+NEWLINE
 LPAREN
 UPPER "String"
 ARROW
@@ -1123,6 +1174,7 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "walkDirSorted"
+IDENT "kind"
 IDENT "levels"
 IDENT "skip"
 IDENT "root"
@@ -1131,6 +1183,7 @@ EQUAL
 INDENT
 MATCH
 IDENT "collectEntries"
+IDENT "kind"
 IDENT "levels"
 IDENT "skip"
 IDENT "root"
@@ -1145,7 +1198,9 @@ NEWLINE
 UPPER "Ok"
 IDENT "entries"
 FAT_ARROW
+INDENT
 IDENT "walkSorted"
+IDENT "kind"
 IDENT "levels"
 IDENT "skip"
 LPAREN
@@ -1168,11 +1223,16 @@ DEDENT
 NEWLINE
 DEDENT
 NEWLINE
+DEDENT
+NEWLINE
 IDENT "walkSorted"
 COLON
-UPPER "Int"
+UPPER "WalkKind"
 ARROW
 INDENT
+UPPER "Int"
+ARROW
+NEWLINE
 LPAREN
 UPPER "String"
 ARROW
@@ -1198,6 +1258,7 @@ NEWLINE
 IDENT "walkSorted"
 UNDERSCORE
 UNDERSCORE
+UNDERSCORE
 LBRACKET
 RBRACKET
 EQUAL
@@ -1206,6 +1267,7 @@ LBRACKET
 RBRACKET
 NEWLINE
 IDENT "walkSorted"
+IDENT "kind"
 IDENT "levels"
 IDENT "skip"
 LPAREN
@@ -1224,6 +1286,34 @@ INDENT
 IF
 IDENT "isDirectory"
 THEN
+INDENT
+IF
+IDENT "listsDirs"
+IDENT "kind"
+AND
+IDENT "levels"
+EQ_EQ
+INT 1
+THEN
+INDENT
+IDENT "map"
+LPAREN
+INTERP_OPEN ""
+IDENT "full"
+INTERP_END "/"
+CONS
+UNDERSCORE
+RPAREN
+LPAREN
+IDENT "walkSorted"
+IDENT "kind"
+IDENT "levels"
+IDENT "skip"
+IDENT "rest"
+RPAREN
+NEWLINE
+DEDENT
+ELSE
 MATCH
 IDENT "listDir"
 IDENT "full"
@@ -1243,6 +1333,7 @@ IDENT "subs"
 FAT_ARROW
 MATCH
 IDENT "walkDirSorted"
+IDENT "kind"
 LPAREN
 IDENT "belowLevel"
 IDENT "levels"
@@ -1260,20 +1351,54 @@ NEWLINE
 UPPER "Ok"
 IDENT "inner"
 FAT_ARROW
+INDENT
+LET
+IDENT "here"
+EQUAL
+IF
+IDENT "listsDirs"
+IDENT "kind"
+THEN
+INTERP_OPEN ""
+IDENT "full"
+INTERP_END "/"
+CONS
+IDENT "inner"
+ELSE
+IDENT "inner"
+NEWLINE
 IDENT "map"
 LPAREN
-IDENT "inner"
+IDENT "here"
 PLUSPLUS
 UNDERSCORE
 RPAREN
 LPAREN
 IDENT "walkSorted"
+IDENT "kind"
 IDENT "levels"
 IDENT "skip"
 IDENT "rest"
 RPAREN
 NEWLINE
 DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+ELSE
+IF
+IDENT "listsDirs"
+IDENT "kind"
+THEN
+INDENT
+IDENT "walkSorted"
+IDENT "kind"
+IDENT "levels"
+IDENT "skip"
+IDENT "rest"
 NEWLINE
 DEDENT
 ELSE
@@ -1286,6 +1411,7 @@ UNDERSCORE
 RPAREN
 LPAREN
 IDENT "walkSorted"
+IDENT "kind"
 IDENT "levels"
 IDENT "skip"
 IDENT "rest"
@@ -1334,6 +1460,14 @@ NEWLINE
 IDENT "glob"
 IDENT "pattern"
 EQUAL
+INDENT
+LET
+IDENT "dirs"
+EQUAL
+IDENT "endsWith"
+STRING "/"
+IDENT "pattern"
+NEWLINE
 MATCH
 IDENT "wildcardIndex"
 IDENT "pattern"
@@ -1347,12 +1481,22 @@ INDENT
 UPPER "Ok"
 IDENT "st"
 FAT_ARROW
+INDENT
 UPPER "Ok"
 LPAREN
 IF
+LPAREN
+IF
+IDENT "dirs"
+THEN
+IDENT "st"
+DOT
+IDENT "isDir"
+ELSE
 IDENT "st"
 DOT
 IDENT "isFile"
+RPAREN
 THEN
 LBRACKET
 IDENT "pattern"
@@ -1361,6 +1505,8 @@ ELSE
 LBRACKET
 RBRACKET
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 UPPER "Err"
 UNDERSCORE
@@ -1386,10 +1532,57 @@ IDENT "i"
 IDENT "pattern"
 RPAREN
 NEWLINE
+LET
+IDENT "prefixDir"
+EQUAL
+IF
+IDENT "prefix"
+EQ_EQ
+STRING "/"
+THEN
+STRING "/"
+ELSE
+INTERP_OPEN ""
+IDENT "prefix"
+INTERP_END "/"
+NEWLINE
+LET
+IDENT "own"
+EQUAL
+INDENT
+IF
+IDENT "dirs"
+AND
+IDENT "prefix"
+NEQ
+STRING ""
+AND
+IDENT "matchGlob"
+IDENT "pattern"
+IDENT "prefixDir"
+THEN
+INDENT
+LBRACKET
+IDENT "prefixDir"
+RBRACKET
+NEWLINE
+DEDENT
+ELSE
+INDENT
+LBRACKET
+RBRACKET
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
 IDENT "map"
 LPAREN
 IDENT "paths"
 FAT_ARROW
+INDENT
+IDENT "own"
+PLUSPLUS
 IDENT "filter"
 LPAREN
 IDENT "matchGlob"
@@ -1403,18 +1596,29 @@ IDENT "prefix"
 RPAREN
 IDENT "paths"
 RPAREN
+NEWLINE
+DEDENT
 RPAREN
 LPAREN
 IDENT "walkFilesTo"
+LPAREN
+IF
+IDENT "dirs"
+THEN
+UPPER "FilesAndDirs"
+ELSE
+UPPER "FilesOnly"
+RPAREN
 LPAREN
 IDENT "globLevels"
 IDENT "prefix"
 IDENT "pattern"
 RPAREN
 LPAREN
-UNDERSCORE
-FAT_ARROW
-UPPER "False"
+IDENT "globSkip"
+IDENT "dirs"
+IDENT "prefix"
+IDENT "pattern"
 RPAREN
 LPAREN
 IF
@@ -1427,6 +1631,8 @@ ELSE
 IDENT "prefix"
 RPAREN
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -1478,6 +1684,90 @@ NEWLINE
 DEDENT
 NEWLINE
 DEDENT
+NEWLINE
+IDENT "globSkip"
+COLON
+UPPER "Bool"
+ARROW
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "globSkip"
+IDENT "dirs"
+IDENT "prefix"
+IDENT "pattern"
+IDENT "full"
+EQUAL
+INDENT
+LET
+IDENT "rel"
+EQUAL
+IDENT "dropDotSlash"
+IDENT "prefix"
+IDENT "full"
+NEWLINE
+IDENT "isDotName"
+LPAREN
+IDENT "segments"
+IDENT "rel"
+RPAREN
+AND
+IDENT "not"
+LPAREN
+IDENT "globReaches"
+IDENT "pattern"
+IDENT "rel"
+RPAREN
+AND
+IDENT "not"
+LPAREN
+IDENT "dirs"
+AND
+IDENT "matchGlob"
+IDENT "pattern"
+INTERP_OPEN ""
+IDENT "rel"
+INTERP_END "/"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "isDotName"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isDotName"
+LBRACKET
+RBRACKET
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "isDotName"
+LBRACKET
+IDENT "s"
+RBRACKET
+EQUAL
+IDENT "startsWith"
+STRING "."
+IDENT "s"
+NEWLINE
+IDENT "isDotName"
+LPAREN
+UNDERSCORE
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+IDENT "isDotName"
+IDENT "rest"
 NEWLINE
 IDENT "wildcardIndex"
 COLON

@@ -10,6 +10,7 @@ import json.{
   parse,
   parseLines,
   pretty,
+  stringify,
   stringifyLines,
 }
 import string.{join}
@@ -170,6 +171,15 @@ test "parse reads back what pretty writes" = withDoc (j => expectAll [
   expectEqual (Ok j) (parse (pretty 0 j)),
   expectEqual (Ok j) (parse (pretty 8 j)),
 ])
+
+test "stringify and pretty write non-finite floats as null, and parse reads them back" =
+  let doc =
+    jArray [JFloat (1.0 / 0.0), JFloat (0.0 - 1.0 / 0.0), JFloat (0.0 / 0.0)]
+  expectAll [
+    expectEqual "[null,null,null]" (stringify doc),
+    expectEqual "[\n  null,\n  null,\n  null\n]" (pretty 2 doc),
+    expectEqual (Ok (jArray [JNull, JNull, JNull])) (parse (stringify doc)),
+  ]
 
 test "parseLines numbers lines over the input, blank lines included" =
   expectEqual

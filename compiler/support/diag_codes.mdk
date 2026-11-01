@@ -81,6 +81,7 @@ public export data DiagCode =
   | PNoPowOperator
   | POcamlMatchWith
   | PParse
+  | PRawStringAfterDot
   | PReservedKeyword
   | PUnexpectedEof
   | PWhereBodySameLine
@@ -284,6 +285,7 @@ codeText PMissingWhere = "P-MISSING-WHERE"
 codeText PNoPowOperator = "P-NO-POW-OPERATOR"
 codeText POcamlMatchWith = "P-OCAML-MATCH-WITH"
 codeText PParse = "P-PARSE"
+codeText PRawStringAfterDot = "P-RAW-STRING-AFTER-DOT"
 codeText PReservedKeyword = "P-RESERVED-KEYWORD"
 codeText PUnexpectedEof = "P-UNEXPECTED-EOF"
 codeText PWhereBodySameLine = "P-WHERE-BODY-SAME-LINE"
@@ -469,9 +471,9 @@ allDiagCodes = [
   LSemicolon, LUnterminatedComment, LUnterminatedString, PBadNeq, PBraceBlock,
   PDefKeyword, PDoEndsInBinding, PForWhile, PGuardBarInMatch,
   PGuardIfInEquation, PHsCase, PHsSig, PMissingWhere, PNoPowOperator,
-  POcamlMatchWith, PParse, PReservedKeyword, PUnexpectedEof, PWhereBodySameLine,
-  RAbstractCtorImport, RAbstractField, RAmbiguousCtor, RAmbiguousEffect,
-  RAmbiguousInterface, RAmbiguousOccurrence, RAmbiguousType,
+  POcamlMatchWith, PParse, PRawStringAfterDot, PReservedKeyword, PUnexpectedEof,
+  PWhereBodySameLine, RAbstractCtorImport, RAbstractField, RAmbiguousCtor,
+  RAmbiguousEffect, RAmbiguousInterface, RAmbiguousOccurrence, RAmbiguousType,
   RAsPatternMisplaced, RBareCtorImport, RBuildFailed, RCannotDerive, RDupBinder,
   RDupBinding, RDuplicateBinding, RDuplicateDef, RDuplicateIfaceMethod,
   RDuplicateSignature, REffectLabelNoMembers, RExternWithBody,

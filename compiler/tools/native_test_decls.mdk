@@ -56,6 +56,7 @@ import support.path.{joinPath, baseOf, dirOf}
 import support.util.{joinNl, splitNl}
 import tools.doctest.{ExResult(..)}
 import tools.probe_transcript.{
+  runUnderSeed,
   Chunk(..),
   Section(..),
   chunksOf,
@@ -217,7 +218,7 @@ buildAndRun target entryPath outPath tmpDir tests nonce =
     Err rep =>
       Err
         "native test runner: could not build \{target} natively\n\{ppBuildReport rep}"
-    Ok _ => match runCommand "env" [
+    Ok _ => match runUnderSeed [
       "MEDAKA_ROOT=" ++ root,
       "MEDAKA=" ++ medaka,
       "MEDAKA_EMITTER=" ++ emitter,

@@ -1,5 +1,5 @@
 # META
-source_lines=393
+source_lines=413
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/probe_transcript.mdk — the sentinel-delimited stdout format
@@ -81,6 +81,26 @@ public export data Section = Section {
   secDecls : List String,
   secEntry : List String,
 }
+
+-- The seed `medaka test` chose for this invocation. A spawned probe or worker
+-- inherits the parent's environment and `runCommand` takes no environment of
+-- its own, so every spawn site prefixes `env` with these assignments and the
+-- whole run shares one MEDAKA_SEED.
+export
+testSeedRef : Ref (Option Int)
+testSeedRef = Ref None
+
+export
+seedEnvArgs : Unit -> List String
+seedEnvArgs _ = match !testSeedRef
+  Some n => ["MEDAKA_SEED=\{intToString n}"]
+  None => []
+
+-- `env` run with the run's seed assignment ahead of [assignmentsAndCommand].
+export
+runUnderSeed : List String -> <IO> Result String (Int, String, String)
+runUnderSeed assignmentsAndCommand =
+  runCommand "env" (seedEnvArgs () ++ assignmentsAndCommand)
 
 -- The tag of a sentinel line under `prefix`, or None for an ordinary output
 -- line.
@@ -401,6 +421,12 @@ renameHeads n (h :: hs) (l :: ls)
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("string") ((mem "replaceAll" false) (mem "toInt" false))))
 (DData Public "Section" () ((variant "Section" (ConNamed (field "secPrefix" (TyCon "String")) (field "secImports" (TyApp (TyCon "List") (TyCon "String"))) (field "secDecls" (TyApp (TyCon "List") (TyCon "String"))) (field "secEntry" (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DTypeSig true "testSeedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "testSeedRef" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig true "seedEnvArgs" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "seedEnvArgs" (PWild) (EMatch (EUnOp "!" (EVar "testSeedRef")) (arm (PCon "Some" (PVar "n")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_SEED=")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))))) (arm (PCon "None") () (EListLit))))
+(DTypeSig true "runUnderSeed" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "runUnderSeed" ((PVar "assignmentsAndCommand")) (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EBinOp "++" (EApp (EVar "seedEnvArgs") (ELit LUnit)) (EVar "assignmentsAndCommand"))))
 (DTypeSig true "sentTagOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sentTagOf" ((PVar "prefix") (PVar "line")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "line")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sentinelLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -500,6 +526,12 @@ renameHeads n (h :: hs) (l :: ls)
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("string") ((mem "replaceAll" false) (mem "toInt" false))))
 (DData Public "Section" () ((variant "Section" (ConNamed (field "secPrefix" (TyCon "String")) (field "secImports" (TyApp (TyCon "List") (TyCon "String"))) (field "secDecls" (TyApp (TyCon "List") (TyCon "String"))) (field "secEntry" (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DTypeSig true "testSeedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "testSeedRef" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig true "seedEnvArgs" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "seedEnvArgs" (PWild) (EMatch (EUnOp "!" (EVar "testSeedRef")) (arm (PCon "Some" (PVar "n")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_SEED=")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))))) (arm (PCon "None") () (EListLit))))
+(DTypeSig true "runUnderSeed" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "runUnderSeed" ((PVar "assignmentsAndCommand")) (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EBinOp "++" (EApp (EVar "seedEnvArgs") (ELit LUnit)) (EVar "assignmentsAndCommand"))))
 (DTypeSig true "sentTagOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sentTagOf" ((PVar "prefix") (PVar "line")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "line")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sentinelLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))

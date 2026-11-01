@@ -38,6 +38,7 @@ import support.path.{joinPath, baseOf, dirOf}
 import support.util.{anyList, joinNl, splitNl, startsWith, listLen}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert}
 import tools.probe_transcript.{
+  runUnderSeed,
   Section(..),
   freshProbeNonce,
   mintNonce,
@@ -328,7 +329,7 @@ runSection : String ->
   <IO> ArmOut
 runSection target tsrc userDecls nonce outPath k arm prefix =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  match runCommand "env" [
+  match runUnderSeed [
     "MEDAKA_ROOT=" ++ root,
     "MEDAKA=" ++ envOr "MEDAKA" (joinPath root "medaka"),
     "MEDAKA_EMITTER="

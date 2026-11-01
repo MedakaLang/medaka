@@ -69,6 +69,7 @@ import support.util.{
   stringTrim,
   lookupAssoc,
 }
+import support.opcount.{setOpCounting, opSnap}
 import support.stage_count.{stageCountInit, stageDump, stageExit}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omFromNames}
 import support.path.{baseOf, chopExt, joinPath}
@@ -76,6 +77,8 @@ import support.timer.{
   perfEnabled,
   now,
   emitPhase,
+  emitPhaseAO,
+  allocSnap,
   emitTotal,
   perfArm,
   emitAbortTotal,
@@ -231,8 +234,11 @@ import tools.test_cmd.{
   parseTestCasesFlag,
   parseTestIntFlag,
   runTestOne,
+  initTestSeed,
+  printTestSeedLine,
   cliGradedTestReportOk,
   cliGradedTestReportJson,
+  cliSeedOnFailure,
   checkTestMdkRoster,
   testFilesGo,
   runEvalPropsWorker,
@@ -2795,19 +2801,35 @@ runArgSpec = spec "run" [
   value ["--target"] "NAME" "target profile `main` must also fit",
 ]
 
+-- The clock, allocation and op-count readings taken when `run`'s check phase
+-- ends, plus the verb's start time.
+data PerfMarks = PerfMarks {
+  marksStart : Float,
+  marksCheck : Float,
+  marksAlloc : Float,
+  marksOps : Int,
+}
+
 -- The `eval` + `total` phase lines, as a named partially-applied function so the
 -- deeply-indented `finishRunEval` call sites stay one flat line.  `finishRunEval`
 -- runs this itself, immediately before flushing the envelope — see its `postPerf`
 -- note for why the caller must not run it afterwards.
-runEvalPerf : Bool -> String -> Float -> Float -> Unit -> <IO> Unit
-runEvalPerf perfOn target perfT0 perfTCheck _ =
+runEvalPerf : Bool -> String -> PerfMarks -> Unit -> <IO> Unit
+runEvalPerf perfOn target marks _ =
   let perfTEval = now ()
-  let _ = emitPhase perfOn "eval" (perfTEval - perfTCheck) target
-  emitTotal perfOn (perfTEval - perfT0)
+  emitPhaseAO
+    perfOn
+    "eval"
+    (perfTEval - marks.marksCheck)
+    (allocSnap () - marks.marksAlloc)
+    target
+    (opSnap () - marks.marksOps)
+  emitTotal perfOn (perfTEval - marks.marksStart)
 
 runRunCmd : List String -> <IO> Unit
 runRunCmd argv =
   let perfOn = perfEnabled ()
+  let _ = setOpCounting perfOn
   let perfT0 = now ()
   let jsonMode = runFlagGiven "--json" argv
   -- C4: under `--json` stderr is this verb's MACHINE channel, so `MEDAKA_PERF`'s
@@ -2972,6 +2994,8 @@ runRunCmd argv =
                   let _ =
                     runTargetGate jsonMode (t => t) target pathMap mods analysis
                   let perfTCheck = now ()
+                  let allocCheck = allocSnap ()
+                  let opCheck = opSnap ()
                   let _ =
                     emitPhase perfOn "check" (perfTCheck - perfTLoad) target
                   -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
@@ -2994,7 +3018,10 @@ runRunCmd argv =
                         trees
                         mods
                         (allWarnTriples tsrc target diags)
-                        (runEvalPerf perfOn target perfT0 perfTCheck)
+                        (runEvalPerf
+                          perfOn
+                          target
+                          (PerfMarks perfT0 perfTCheck allocCheck opCheck))
             (errs, _) => match jsonMode
               -- #2798 review S2: `diags` (the WHOLE list, errors and warnings)
               -- for JSON, matching `check --json`'s per-file diagnostics array
@@ -3061,6 +3088,8 @@ runRunCmd argv =
                       mods
                       analysis
                   let perfTCheck = now ()
+                  let allocCheck = allocSnap ()
+                  let opCheck = opSnap ()
                   let _ =
                     emitPhase perfOn "check" (perfTCheck - perfTLoad) target
                   let executed =
@@ -3075,7 +3104,10 @@ runRunCmd argv =
                         trees
                         mods
                         projWarns
-                        (runEvalPerf perfOn target perfT0 perfTCheck)
+                        (runEvalPerf
+                          perfOn
+                          target
+                          (PerfMarks perfT0 perfTCheck allocCheck opCheck))
 -- G1 (SOUNDNESS): typecheck the WHOLE module graph and abort before
 -- eval unless the drive's report carries a checked program (`trChecked`).  A
 -- type error makes evalModulesOutputRunFacts miscompile (the G1 bug), so we never
@@ -3175,37 +3207,47 @@ runTestCmd argv0 =
           let cases = optionOr 100 casesOpt
           let filterOpt = flagValue "--filter" a
           let jsonMode = flag "--json" a
-          match a.positionals
-            [] =>
-              if jsonMode then
-                let _ =
-                  ePutStrLn
-                    "medaka test --json: needs a single file.mdk target; with no target, medaka test runs the whole enclosing project"
-                stageExit 1
-              else
-                runTestProjectCmd engines cases filterOpt seedOpt
-            [target] => match listDir target
-              Err _ =>
-                if jsonMode then
-                  runTestJsonCmd engines cases filterOpt target
-                else
-                  runTestOne engines cases filterOpt target
-              Ok _ =>
-                if jsonMode then
-                  let _ =
-                    ePutStrLn
-                      "medaka test --json: directory targets are not supported; pass a single file.mdk target"
-                  stageExit 1
-                else
-                  runTestManyTargets engines cases filterOpt seedOpt [target]
-            targets =>
-              if jsonMode then
-                let _ =
-                  ePutStrLn
-                    "medaka test --json: exactly one file.mdk target is supported"
-                stageExit 1
-              else
-                runTestManyTargets engines cases filterOpt seedOpt targets
+          match initTestSeed ()
+            Err msg => dieMsg "medaka test: \{msg}"
+            Ok _ => runTestTargets engines cases filterOpt seedOpt jsonMode a
+
+runTestTargets : List Engine ->
+  Int ->
+  Option String ->
+  Option Int ->
+  Bool ->
+  Args ->
+  <IO> Unit
+runTestTargets engines cases filterOpt seedOpt jsonMode a = match a.positionals
+  [] =>
+    if jsonMode then
+      let _ =
+        ePutStrLn
+          "medaka test --json: needs a single file.mdk target; with no target, medaka test runs the whole enclosing project"
+      stageExit 1
+    else
+      runTestProjectCmd engines cases filterOpt seedOpt
+  [target] => match listDir target
+    Err _ =>
+      if jsonMode then
+        runTestJsonCmd engines cases filterOpt target
+      else
+        runTestOne engines cases filterOpt target
+    Ok _ =>
+      if jsonMode then
+        let _ =
+          ePutStrLn
+            "medaka test --json: directory targets are not supported; pass a single file.mdk target"
+        stageExit 1
+      else
+        runTestManyTargets engines cases filterOpt seedOpt [target]
+  targets =>
+    if jsonMode then
+      let _ =
+        ePutStrLn "medaka test --json: exactly one file.mdk target is supported"
+      stageExit 1
+    else
+      runTestManyTargets engines cases filterOpt seedOpt targets
 
 -- The supervisor sends a target followed by JSON-string encoded exact `(name,
 -- seed, cases)` triples. These are internal replay requests, so they do not share
@@ -3317,18 +3359,18 @@ runTestJsonCmd engines cases filterOpt target =
           cases
           filterOpt
           True
-      let _ =
-        putStrLn
-          (stringify
-            (cliGradedTestReportJson
-              target
-              typeError
-              engines
-              runs
-              props
-              tests
-              typecheckSkipped))
-      Ok (cliGradedTestReportOk typeError runs props tests)
+      let ok = cliGradedTestReportOk typeError runs props tests
+      let report =
+        cliGradedTestReportJson
+          target
+          typeError
+          engines
+          runs
+          props
+          tests
+          typecheckSkipped
+      let _ = putStrLn (stringify (cliSeedOnFailure typeError ok report))
+      Ok ok
   match r
     Err e => dieMsg e
     Ok ok => if ok then () else stageExit 1
@@ -3359,18 +3401,19 @@ runTestManyTargets engines cases filterOpt seedOpt targets =
       let stdlibDir = root ++ "/stdlib"
       let rosterOk = checkTestMdkRoster root targets files
       let _ = reportSupervisedTrees stdlibDir rtPath corePath
-      let anyFailed =
-        testFilesGo
-          engines
-          rtPath
-          corePath
-          stdlibDir
-          cases
-          filterOpt
-          seedOpt
-          files
-          False
-      if anyFailed || not rosterOk then stageExit 1
+      let (anyFailed, seedSeen) = testFilesGo
+        engines
+        rtPath
+        corePath
+        stdlibDir
+        cases
+        filterOpt
+        seedOpt
+        files
+        (False, False)
+      if anyFailed || not rosterOk then
+        if seedSeen then printTestSeedLine ()
+        stageExit 1
 
 -- The trees' verdict for a `test` run that hands every file to a child process:
 -- the children hold the trees and a passing child's stderr is not shown, so this
