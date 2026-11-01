@@ -34,8 +34,8 @@ import types.module_interface.{
 import types.publish.{ModDiags, PubScheme, TcDiag, freezeRows}
 import types.repr.{Mono}
 import types.tc_types.{
-  ExportBinding, GraphCtx(..), GraphRun(..), InvocationView, LiveGoal(..),
-  ModuleCtx(..), ModuleServe(..), ServeStep(..)
+  ExportBinding, GraphCtx(..), InvocationView, ModuleCtx(..), ModuleServe(..),
+  ServeStep(..)
 }
 import frontend.ast.{Decl}
 
@@ -389,7 +389,7 @@ withMarked ((mid, (marked, _, _, _, view)), (_, (schemes, errs, warns))) =
 (DUse false (UseGroup ("types" "module_interface") ((mem "ModuleKey" true) (mem "ModuleInterface" false) (mem "ModuleRows" false) (mem "applyModuleInterface" false) (mem "applyModuleTrees" false) (mem "captureModuleRows" false) (mem "freezeModuleInterface" false) (mem "freezeModuleTrees" false) (mem "freshModuleSerial" false) (mem "moduleCacheHit" false) (mem "moduleInterfaceIdentity" false) (mem "privateBindingsOf" false) (mem "recordModuleInterface" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "ModDiags" false) (mem "PubScheme" false) (mem "TcDiag" false) (mem "freezeRows" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "ExportBinding" false) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "InvocationView" false) (mem "LiveGoal" true) (mem "ModuleCtx" true) (mem "ModuleServe" true) (mem "ServeStep" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "ExportBinding" false) (mem "GraphCtx" true) (mem "InvocationView" false) (mem "ModuleCtx" true) (mem "ModuleServe" true) (mem "ServeStep" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DData Public "ServeOps" () ((variant "ServeOps" (ConNamed (field "soDrain" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyCon "ModDiags"))))) (field "soUnboundIds" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Int"))))))) ())
 (DTypeAlias true "DiagsPayload" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "Option") (TyCon "InvocationView"))))
@@ -449,7 +449,7 @@ withMarked ((mid, (marked, _, _, _, view)), (_, (schemes, errs, warns))) =
 (DUse false (UseGroup ("types" "module_interface") ((mem "ModuleKey" true) (mem "ModuleInterface" false) (mem "ModuleRows" false) (mem "applyModuleInterface" false) (mem "applyModuleTrees" false) (mem "captureModuleRows" false) (mem "freezeModuleInterface" false) (mem "freezeModuleTrees" false) (mem "freshModuleSerial" false) (mem "moduleCacheHit" false) (mem "moduleInterfaceIdentity" false) (mem "privateBindingsOf" false) (mem "recordModuleInterface" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "ModDiags" false) (mem "PubScheme" false) (mem "TcDiag" false) (mem "freezeRows" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "ExportBinding" false) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "InvocationView" false) (mem "LiveGoal" true) (mem "ModuleCtx" true) (mem "ModuleServe" true) (mem "ServeStep" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "ExportBinding" false) (mem "GraphCtx" true) (mem "InvocationView" false) (mem "ModuleCtx" true) (mem "ModuleServe" true) (mem "ServeStep" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DData Public "ServeOps" () ((variant "ServeOps" (ConNamed (field "soDrain" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyCon "ModDiags"))))) (field "soUnboundIds" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Int"))))))) ())
 (DTypeAlias true "DiagsPayload" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "Option") (TyCon "InvocationView"))))

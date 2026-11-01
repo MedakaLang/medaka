@@ -97,7 +97,6 @@ stdinEntry : String
 stdinReadOverride : String -> String -> Option String
 stdlibOwnedMods : String -> List String -> String -> List (String, List Decl) -> <IO> List String
 stdlibOwnership : String -> List String -> String -> List (String, List Decl) -> <IO> (Bool, List String)
-stripSuffixStr : String -> String -> String
 takeTo : String -> List String -> List String
 testImportViolation : List (String, String) -> List String -> String -> String -> String -> <IO> Option LoadError
 trustedModsGo : List (String, String) -> List String -> String -> List String -> List String -> <IO> List String

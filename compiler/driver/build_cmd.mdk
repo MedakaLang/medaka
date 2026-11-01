@@ -1501,7 +1501,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
         -- on stderr, before clang runs and before the `built <in> -> <out>` line
         -- — the order `check` uses and a build log reads in.  Not on the `--json`
         -- route, where the envelope already carries them; see `quietEmitStderr`.
-        let _ = forwardEmitterStderr quietEmitStderr emitErr
+        forwardEmitterStderr quietEmitStderr emitErr
         let ir = stripTrailingUnit irRaw
         if stringLength ir == 0 then
           buildErr
@@ -1669,7 +1669,7 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr fro
             buildErr
               "error: wasm emitter failed compiling \{inputAbs}\n\{emitErr}"
           else
-            let _ = forwardEmitterStderr quietEmitStderr emitErr
+            forwardEmitterStderr quietEmitStderr emitErr
             let wat = stripTrailingUnit watRaw
             if stringLength wat == 0 then
               buildErr
@@ -1680,11 +1680,12 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr fro
                 -- Same --keep-ir handling as the native path (.wat instead of
                 -- .ll), including the AFTER-assemble ordering — see the comment
                 -- on the native path's runBuildNativeIn for why.
-                let res = match wasmAssemble watPath outPath inputAbs
-                  Ok r => match writeEdgeLoader root outPath
-                    Some e => buildErr e
-                    None => Ok r
-                  Err r => Err r
+                let res =
+                  flatMap
+                    (r => match writeEdgeLoader root outPath
+                      Some e => buildErr e
+                      None => Ok r)
+                    (wasmAssemble watPath outPath inputAbs)
                 let (keptIr, keepNotes) =
                   if effectiveKeepIr keepIrCli then
                     keepIrOutcome (outPath ++ ".wat") wat

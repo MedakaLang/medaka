@@ -1,5 +1,5 @@
 # META
-source_lines=210
+source_lines=211
 stages=DESUGAR,MARK
 # SOURCE
 -- Composed self-hosted front-end LOGIC — wires the stage ports into one
@@ -28,6 +28,7 @@ stages=DESUGAR,MARK
 -- batch/modules harnesses.
 
 import frontend.ast.{Decl}
+import frontend.ast.{SiblingPair}
 import frontend.parser.{parse}
 import frontend.parse_cache.{parsePrelude}
 import frontend.desugar.{desugar}
@@ -196,7 +197,7 @@ checkModulesReport exWarns perMod =
 export
 entryExhaust : List Decl ->
   List Decl ->
-  List (String, String) ->
+  List SiblingPair ->
   List (String, List Decl) ->
   String
 entryExhaust rtD coreD sibling mods =
@@ -214,6 +215,7 @@ entryExhaustGo preludeDecls (_ :: scopes) (_ :: rest) =
 entryExhaustGo _ [] (_ :: _) = ""
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "parsePrelude" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
@@ -242,7 +244,7 @@ entryExhaustGo _ [] (_ :: _) = ""
 (DFunDef false "checkHasErrors" ((PVar "rsrc") (PVar "csrc") (PVar "tsrc")) (EBlock (DoLet false false (PVar "raw") (EApp (EVar "parse") (EVar "tsrc"))) (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "parsePrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "parsePrelude") (EVar "csrc"))) (DoLet false false (PVar "importErrs") (EApp (EVar "singleFileImportErrors") (EVar "desugared"))) (DoExpr (EMatch (EVar "importErrs") (arm (PCons PWild PWild) () (EVar "True")) (arm (PList) () (EBlock (DoLet false false (PVar "resDiags") (EApp (EApp (EApp (EVar "resolveToLines") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EApp (EApp (EApp (EApp (EVar "checkOneErrorsWithRuntime") (EVar "defaultDriveInputs")) (EApp (EVar "desugar") (EVar "runtimeP"))) (EApp (EVar "desugar") (EVar "coreP"))) (EVar "desugared"))) (arm PWild () (EVar "True"))))))))))
 (DTypeSig true "checkModulesReport" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyCon "String"))))
 (DFunDef false "checkModulesReport" ((PVar "exWarns") (PVar "perMod")) (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EApp (EVar "entryReportFromDiags") (EVar "perMod"))))
-(DTypeSig true "entryExhaust" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))))
+(DTypeSig true "entryExhaust" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))))
 (DFunDef false "entryExhaust" ((PVar "rtD") (PVar "coreD") (PVar "sibling") (PVar "mods")) (EApp (EApp (EApp (EVar "entryExhaustGo") (EBinOp "++" (EVar "rtD") (EVar "coreD"))) (EApp (EApp (EApp (EApp (EVar "importedCtorDecls") (EVar "coreD")) (EVar "sibling")) (EVar "mods")) (EVar "mods"))) (EVar "mods")))
 (DTypeSig false "entryExhaustGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "entryExhaustGo" (PWild PWild (PList)) (ELit (LString "")))
@@ -251,6 +253,7 @@ entryExhaustGo _ [] (_ :: _) = ""
 (DFunDef false "entryExhaustGo" (PWild (PList) (PCons PWild PWild)) (ELit (LString "")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "parsePrelude" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
@@ -279,7 +282,7 @@ entryExhaustGo _ [] (_ :: _) = ""
 (DFunDef false "checkHasErrors" ((PVar "rsrc") (PVar "csrc") (PVar "tsrc")) (EBlock (DoLet false false (PVar "raw") (EApp (EVar "parse") (EVar "tsrc"))) (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "parsePrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "parsePrelude") (EVar "csrc"))) (DoLet false false (PVar "importErrs") (EApp (EVar "singleFileImportErrors") (EVar "desugared"))) (DoExpr (EMatch (EVar "importErrs") (arm (PCons PWild PWild) () (EVar "True")) (arm (PList) () (EBlock (DoLet false false (PVar "resDiags") (EApp (EApp (EApp (EVar "resolveToLines") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EApp (EApp (EApp (EApp (EVar "checkOneErrorsWithRuntime") (EVar "defaultDriveInputs")) (EApp (EVar "desugar") (EVar "runtimeP"))) (EApp (EVar "desugar") (EVar "coreP"))) (EVar "desugared"))) (arm PWild () (EVar "True"))))))))))
 (DTypeSig true "checkModulesReport" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyCon "String"))))
 (DFunDef false "checkModulesReport" ((PVar "exWarns") (PVar "perMod")) (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EApp (EVar "entryReportFromDiags") (EVar "perMod"))))
-(DTypeSig true "entryExhaust" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))))
+(DTypeSig true "entryExhaust" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))))
 (DFunDef false "entryExhaust" ((PVar "rtD") (PVar "coreD") (PVar "sibling") (PVar "mods")) (EApp (EApp (EApp (EVar "entryExhaustGo") (EBinOp "++" (EVar "rtD") (EVar "coreD"))) (EApp (EApp (EApp (EApp (EVar "importedCtorDecls") (EVar "coreD")) (EVar "sibling")) (EVar "mods")) (EVar "mods"))) (EVar "mods")))
 (DTypeSig false "entryExhaustGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "entryExhaustGo" (PWild PWild (PList)) (ELit (LString "")))

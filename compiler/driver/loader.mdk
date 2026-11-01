@@ -42,6 +42,7 @@ import support.util.{
   splitNl,
   stringTrim,
   sortUniqS,
+  testFileSuffix,
 }
 
 -- ── small list helpers (no stdlib import — compiler is single-root) ──
@@ -83,13 +84,6 @@ slashToDot s = joinDot (splitOnChar "/" s)
 dropPrefix : Int -> String -> String
 dropPrefix k s = stringSlice k (stringLength s) s
 
-stripSuffixStr : String -> String -> String
-stripSuffixStr suf s =
-  if endsWith suf s then
-    stringSlice 0 (stringLength s - stringLength suf) s
-  else
-    s
-
 -- the file path a module ID maps to under a single root (no existence check).
 -- A dotted module ID maps to a nested path: split on `.`, join with `/`, append
 -- `.mdk` (mirrors loader.ml file_of_module_id).  A flat bare name (no `.`) →
@@ -120,7 +114,8 @@ relUnderRoots (r :: rs) path =
 export
 moduleIdOfPath : List String -> String -> String
 moduleIdOfPath roots path =
-  slashToDot (stripSuffixStr ".mdk" (relUnderRoots roots path))
+  let rel = relUnderRoots roots path
+  slashToDot (optionOr rel (Str.stripSuffix ".mdk" rel))
 
 -- The text of a Medaka source file, or why it could not be read: `Err None`
 -- for a file that is not valid UTF-8, `Err (Some msg)` with `readFile`'s own
@@ -1013,9 +1008,8 @@ siblingSubjectId : List (String, String) ->
 siblingSubjectId deps roots path =
   let cPath = canonicalizePath path
   let cDir = parentDir cPath
-  match siblingSubjectName (dropPrefix (stringLength cDir + 1) cPath)
-    None => None
-    Some subject =>
+  flatMap
+    (subject =>
       let subjectPath = stringConcat [cDir, "/", subject]
       if not (fileExists subjectPath) then
         None
@@ -1024,20 +1018,19 @@ siblingSubjectId deps roots path =
         if parentDir cSubject == cDir then
           Some (canonicalPathId deps roots cSubject)
         else
-          None
+          None)
+    (siblingSubjectName (dropPrefix (stringLength cDir + 1) cPath))
 
 -- `foo_test.mdk` → `foo.mdk`; a name without the `_test.mdk` suffix, or whose
 -- subject would itself be a test file, has no subject.
 siblingSubjectName : String -> Option String
 siblingSubjectName file =
-  if endsWith "_test.mdk" file then
-    let stem = stripSuffixStr "_test.mdk" file
-    if endsWith "_test" stem || stringLength stem == 0 then
-      None
-    else
-      Some (stringConcat [stem, ".mdk"])
-  else
-    None
+  Str.stripSuffix testFileSuffix file
+    |> flatMap (stem =>
+      if endsWith "_test" stem || stringLength stem == 0 then
+        None
+      else
+        Some "\{stem}.mdk")
 
 -- rewrite a UsePath so its `useModId` yields the canonical id `c`, preserving
 -- the imported member list / wildcard / alias / single name.  (For UseName the
@@ -1526,23 +1519,15 @@ testImportViolation : List (String, String) ->
   String ->
   <IO> Option LoadError
 testImportViolation deps roots importer entry modId =
-  if importer == "" || endsWith "_test.mdk" importer then
+  if importer == "" || endsWith testFileSuffix importer then
     None
   else match findModuleOrEntryFile deps roots entry modId
     Some (path, _) =>
-      if endsWith "_test.mdk" path then
+      if endsWith testFileSuffix path then
         let (written, site) = importSite deps roots importer modId
         Some
           (LoadTestImport
-            (stringConcat [
-              "import `",
-              written,
-              "` in ",
-              importer,
-              ": `",
-              written,
-              "` is a test module; only `*_test.mdk` files may import one. Move the shared code out of the test file.",
-            ])
+            "import `\{written}` in \{importer}: `\{written}` is a test module; only `*_test.mdk` files may import one. Move the shared code out of the test file."
             importer
             site)
       else

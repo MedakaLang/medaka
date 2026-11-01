@@ -29,6 +29,7 @@ import ir.core_ir_eval.{cevalModulesOutput, cevalModulesOutputFacts}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.program_facts.{ProgramFacts, emptyFacts, withSibling}
+import frontend.ast.{SiblingPair(..)}
 
 testLoc : Loc
 testLoc = Loc "" 1 0 1 0
@@ -170,11 +171,28 @@ test "run's random externs use a stream separate from the oracle's" =
 
 siblingSubjectSrc : String
 siblingSubjectSrc =
-  "export data Counter = Counter Int\n\nexport tick : Counter -> Counter\ntick (Counter n) = Counter (step n)\n\nstep : Int -> Int\nstep n = n + 1\n"
+  """export data Counter = Counter Int
+
+export tick : Counter -> Counter
+tick (Counter n) = Counter (step n)
+
+step : Int -> Int
+step n = n + 1
+"""
 
 siblingTestSrc : String
 siblingTestSrc =
-  "import counter.{Counter(..), step, tick}\n\nbump : Int -> Int\nbump n = match tick (Counter n)\n  Counter m => step m\n\nmain = putStrLn (intToString (bump 1))\n"
+  """import counter.{Counter(..), step, tick}
+
+bump : Int -> Int
+bump n = match tick (Counter n)
+  Counter m => step m
+
+main = putStrLn (intToString (bump 1))
+"""
+
+pairOf : String -> String -> SiblingPair
+pairOf sib subj = SiblingPair { spSibling = sib, spSubject = subj }
 
 siblingModules : List (String, List Decl)
 siblingModules = [
@@ -183,7 +201,7 @@ siblingModules = [
 ]
 
 siblingFacts : ProgramFacts
-siblingFacts = withSibling [("counter_test", "counter")] emptyFacts
+siblingFacts = withSibling [pairOf "counter_test" "counter"] emptyFacts
 
 -- The sibling's own import of the subject's private `step` and abstract
 -- `Counter(..)` resolves in both interpreters; `step (tick (Counter 1))` is 3.
@@ -195,11 +213,27 @@ test "a test sibling reads its subject's private names in both evaluators" = exp
 
 clashSubjectSrc : String
 clashSubjectSrc =
-  "data Color = Red Int | Blue\n\ncolorVal : Color -> Int\ncolorVal c = match c\n  Red n => n + 100\n  Blue => 7\n\nexport tick : Int -> Int\ntick n = colorVal (Red n)\n"
+  """data Color = Red Int | Blue
+
+colorVal : Color -> Int
+colorVal c = match c
+  Red n => n + 100
+  Blue => 7
+
+export tick : Int -> Int
+tick n = colorVal (Red n)
+"""
 
 clashTestSrc : String
 clashTestSrc =
-  "import clash.{Color(..), colorVal}\nimport light.{Light}\nimport counter_test.{probe}\n\nmain = match Red probe\n  Red n => putStrLn (intToString (colorVal (Red n)))\n  Blue => putStrLn \"blue\"\n"
+  """import clash.{Color(..), colorVal}
+import light.{Light}
+import counter_test.{probe}
+
+main = match Red probe
+  Red n => putStrLn (intToString (colorVal (Red n)))
+  Blue => putStrLn "blue"
+"""
 
 -- Two subjects and their siblings in one program, one sibling imported by the
 -- other, and a subject's private `Red` spelled like `light`'s public one.
@@ -210,7 +244,11 @@ twoSiblingModules = [
   (
     "counter_test",
     desugar
-      (parse "import counter.{step}\n\nexport probe : Int\nprobe = step 1\n"),
+      (parse """import counter.{step}
+
+export probe : Int
+probe = step 1
+"""),
   ),
   ("clash", desugar (parse clashSubjectSrc)),
   ("clash_test", desugar (parse clashTestSrc)),
@@ -218,7 +256,9 @@ twoSiblingModules = [
 
 twoSiblingFacts : ProgramFacts
 twoSiblingFacts =
-  withSibling [("counter_test", "counter"), ("clash_test", "clash")] emptyFacts
+  withSibling
+    [pairOf "counter_test" "counter", pairOf "clash_test" "clash"]
+    emptyFacts
 
 -- Each sibling reads its own subject's names, and the colliding private
 -- constructor keeps its own declaration: `colorVal (Red (step 1))` is 102.

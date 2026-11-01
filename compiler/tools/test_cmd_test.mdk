@@ -457,6 +457,42 @@ siblingVerb : String -> String -> <Exec, IO> Result String (Int, String, String)
 siblingVerb verb file =
   runVerb medakaBin [verb, underRoot "test/sibling_view_fixtures/\{file}"]
 
+-- What a verb gave, as an expectation under [label]: it exited 0, and for
+-- `expectPrints` printed [expected].
+expectSucceeds : String -> Result String (Int, String, String) -> Expectation
+expectSucceeds label (Ok (code, _, _)) = labelFail label (expectEqual 0 code)
+expectSucceeds _ (Err e) = fail e
+
+expectPrints : String ->
+  String ->
+  Result String (Int, String, String) ->
+  Expectation
+expectPrints label expected (Ok (code, out, _)) =
+  labelFail label (expectAll [expectEqual 0 code, expectEqual expected out])
+expectPrints _ _ (Err e) = fail e
+
+-- The verb refused with exit 1 and its stderr names [needle].
+expectRefuses : String ->
+  String ->
+  Result String (Int, String, String) ->
+  Expectation
+expectRefuses label needle (Ok (code, _, errOut)) =
+  labelFail
+    label
+    (expectAll [expectEqual 1 code, expectTrue (contains needle errOut)])
+expectRefuses _ _ (Err e) = fail e
+
+-- `medaka build` of the fixture [file] into [out].
+siblingBuild : String ->
+  String ->
+  <Exec, IO> Result String (Int, String, String)
+siblingBuild file out = runVerb medakaBin [
+  "build",
+  underRoot "test/sibling_view_fixtures/\{file}",
+  "-o",
+  out,
+]
+
 test "a test sibling's main computes the spec value under check, run and build" = withScratchDir
   (dir =>
     expectAll
@@ -465,31 +501,15 @@ test "a test sibling's main computes the spec value under check, run and build" 
           (subject, expected) =>
             let file = "\{subject}_test.mdk"
             [
-              match siblingVerb "check" file
-                Ok (code, _, _) =>
-                  labelFail "check \{subject}" (expectEqual 0 code)
-                Err e => fail e,
-              match siblingVerb "run" file
-                Ok (code, out, _) =>
-                  labelFail
-                    "run \{subject}"
-                    (expectAll [expectEqual 0 code, expectEqual expected out])
-                Err e => fail e,
-              match runVerb medakaBin [
-                "build",
-                underRoot "test/sibling_view_fixtures/\{file}",
-                "-o",
-                "\{dir}/\{subject}",
-              ]
-                Ok (code, _, _) =>
-                  labelFail "build \{subject}" (expectEqual 0 code)
-                Err e => fail e,
-              match runVerb "\{dir}/\{subject}" []
-                Ok (code, out, _) =>
-                  labelFail
-                    "native \{subject}"
-                    (expectAll [expectEqual 0 code, expectEqual expected out])
-                Err e => fail e,
+              expectSucceeds "check \{subject}" (siblingVerb "check" file),
+              expectPrints "run \{subject}" expected (siblingVerb "run" file),
+              expectSucceeds
+                "build \{subject}"
+                (siblingBuild file "\{dir}/\{subject}"),
+              expectPrints
+                "native \{subject}"
+                expected
+                (runVerb "\{dir}/\{subject}" []),
             ])
         siblingCases))
 
@@ -540,38 +560,12 @@ test "the non-sibling twin of each case is rejected alike by check, run and buil
           (stem, needle) =>
             let file = "\{stem}.mdk"
             [
-              match siblingVerb "check" file
-                Ok (code, _, errOut) =>
-                  labelFail
-                    "check \{stem}"
-                    (expectAll [
-                      expectEqual 1 code,
-                      expectTrue (contains needle errOut),
-                    ])
-                Err e => fail e,
-              match siblingVerb "run" file
-                Ok (code, _, errOut) =>
-                  labelFail
-                    "run \{stem}"
-                    (expectAll [
-                      expectEqual 1 code,
-                      expectTrue (contains needle errOut),
-                    ])
-                Err e => fail e,
-              match runVerb medakaBin [
-                "build",
-                underRoot "test/sibling_view_fixtures/\{file}",
-                "-o",
-                "\{dir}/\{stem}",
-              ]
-                Ok (code, _, errOut) =>
-                  labelFail
-                    "build \{stem}"
-                    (expectAll [
-                      expectEqual 1 code,
-                      expectTrue (contains needle errOut),
-                    ])
-                Err e => fail e,
+              expectRefuses "check \{stem}" needle (siblingVerb "check" file),
+              expectRefuses "run \{stem}" needle (siblingVerb "run" file),
+              expectRefuses
+                "build \{stem}"
+                needle
+                (siblingBuild file "\{dir}/\{stem}"),
             ])
         siblingTwins))
 

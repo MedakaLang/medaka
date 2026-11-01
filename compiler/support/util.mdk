@@ -369,6 +369,11 @@ export
 startsWith : String -> String -> Bool
 startsWith pre s = stdStartsWith pre s
 
+-- The file-name suffix of a module's test sibling.
+export
+testFileSuffix : String
+testFileSuffix = "_test.mdk"
+
 export
 endsWith : String -> String -> Bool
 endsWith suf s =

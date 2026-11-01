@@ -55,6 +55,7 @@ import types.typecheck.{
 import support.path.{baseOf, dirOf, joinPath}
 import support.stage_count.{stageExit}
 import support.ordmap.{OrdMap, omFromPairs, omLookup, omEmpty}
+import frontend.ast.{SiblingPair}
 import driver.diagnostics.{
   CheckJson,
   Diag,
@@ -220,7 +221,7 @@ public export data EmitAsk = EmitAsk {
   askPreludeSrcs : (String, String),
   askJson : Option (String, JsonFront),
   askOwnership : (Bool, List String),
-  askSibling : List (String, String),
+  askSibling : List SiblingPair,
 }
 
 -- The inputs of an emit's drive under [profile], with the graph's stdlib ownership
@@ -629,14 +630,14 @@ runEmitAsked : EmitAsk ->
   List (String, List Decl) ->
   <IO> Unit
 runEmitAsked ask requirement asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
-  -- #2809: ELABORATE THE PROGRAM THE USER WROTE, then mangle its elaborated trees.
-  -- Elaboration reads the import structure (`DUse` member spellings, alias locals) and
-  -- groups denotations by name, and the mangler rewrites definitions and references but
-  -- never a `DUse` — so elaborating a mangled graph made every import-keyed table miss
-  -- and gave two mangled denotations two distinct names.  This order makes the child's
-  -- verdict equal `check`'s by construction; `mangleUnitsEv` then renames the elaborated
-  -- trees AND the evidence table's `RLocal` routes.  `emitElaborated` mangles exactly
-  -- once, after the one elaboration and the driver's wrap.
+  -- Elaborate the program the user wrote, then mangle its elaborated trees.
+  -- Elaboration reads the import structure (`DUse` member spellings, alias
+  -- locals) and groups denotations by name, and the mangler never rewrites a
+  -- `DUse`, so elaborating a mangled graph would miss every import-keyed table
+  -- and give two mangled denotations two names.  This order makes the child's
+  -- verdict equal `check`'s; `emitElaborated` then mangles once, after the
+  -- driver's wrap, renaming the elaborated trees and the evidence table's
+  -- `RLocal` routes (`mangleUnitsEv`).
   let paths = map modIdToPath modsWithPath
   let reported = match ask.askJson
     None => paths
@@ -695,11 +696,8 @@ runEmitAsked ask requirement asyncDriver emitTail modsWithPath runtimeDecls core
   -- Both halves of the fold read the trees the loader parsed: the elaboration
   -- is the user's own program, so a diagnostic names the constructors and
   -- imports the user wrote (#2809).
-  match (ask.askJson, out.foDriven)
-    (None, Some kept) =>
-      let _ = emitFullGate modsWithPath out.foDiags out.foReport
-      let _ =
-        emitTargetGate modsWithPath runtimeDecls kept.ekProfile kept.ekRefusal
+  let emitAsked =
+    _ =>
       emitElaborated
         ask.askSibling
         out.foOutputs
@@ -710,6 +708,12 @@ runEmitAsked ask requirement asyncDriver emitTail modsWithPath runtimeDecls core
         coreDecls
         modules
         out.foReport
+  match (ask.askJson, out.foDriven)
+    (None, Some kept) =>
+      let _ = emitFullGate modsWithPath out.foDiags out.foReport
+      let _ =
+        emitTargetGate modsWithPath runtimeDecls kept.ekProfile kept.ekRefusal
+      emitAsked ()
     (Some (path, front), Some kept) =>
       let cj =
         emitJsonGate
@@ -721,17 +725,7 @@ runEmitAsked ask requirement asyncDriver emitTail modsWithPath runtimeDecls core
           out.foReport
           kept.ekProfile
           kept.ekRefusal
-      let _ =
-        emitElaborated
-          ask.askSibling
-          out.foOutputs
-          requirement
-          asyncDriver
-          emitTail
-          runtimeDecls
-          coreDecls
-          modules
-          out.foReport
+      let _ = emitAsked ()
       writeDiagJson path cj
     -- Resolve rejected the graph, so nothing was elaborated: the envelope holds
     -- its resolve errors and what the unblocked modules' check drive reported.
@@ -745,7 +739,7 @@ runEmitAsked ask requirement asyncDriver emitTail modsWithPath runtimeDecls core
 -- (`report`, whose checked trees are run): the driver's wrap is applied to
 -- them (`executedFromReport`), and the result is mangled once.  The backend
 -- lowers against the facts of the checked program with the mangled table.
-emitElaborated : List (String, String) ->
+emitElaborated : List SiblingPair ->
   DriveOutputs ->
   ManifestRequirement ->
   EntryKey ->

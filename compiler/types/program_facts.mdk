@@ -8,6 +8,7 @@ import types.symbol_origins.{SymbolOrigins}
 -- representation modules only, never `types.typecheck`.
 
 import frontend.ast.{Decl, EvTable}
+import frontend.ast.{SiblingPair}
 import types.extern_source.{
   ExternSource, ExternHeadRows, ExternProvenance(..), sourceExterns
 }
@@ -28,7 +29,7 @@ public export data ProgramFacts = ProgramFacts {
   pfBinders : Option BinderTypeTable,
   pfEntryOutcome : Option EntryOutcome,
   pfExternSources : Option (List ExternSource),
-  pfSibling : List (String, String),
+  pfSibling : List SiblingPair,
 }
 
 -- No evidence, no dispositions, no binders: untyped lowering and eval.
@@ -139,9 +140,9 @@ export
 withSymbolOrigins : SymbolOrigins -> ProgramFacts -> ProgramFacts
 withSymbolOrigins origins facts = { facts | pfSymbolOrigins = Some origins }
 
--- [facts] for the drive whose (test sibling, subject) module-id pair is
--- [sibling] (`DriveInputs.diSibling`): the engines give the sibling the
--- subject's full view of its names, as `check` did.
+-- [facts] for the drive whose test sibling pairs are [sibling]
+-- (`DriveInputs.diSibling`): the engines give each sibling its subject's full
+-- view of its names.
 export
-withSibling : List (String, String) -> ProgramFacts -> ProgramFacts
+withSibling : List SiblingPair -> ProgramFacts -> ProgramFacts
 withSibling sibling facts = { facts | pfSibling = sibling }

@@ -2905,3 +2905,12 @@ mapKvsB f ((k, v) :: rest) =
   let (v2, c2) = mapTyInExpr f v
   let (rest2, c3) = mapKvsB f rest
   ((k2, v2) :: rest2, c1 || c2 || c3)
+
+-- One test sibling and the subject whose full view it gets: both are module ids.
+-- A graph's pairs hold one per `*_test.mdk` module whose subject the graph
+-- loaded; the loader classifies each by location.  A subject has at most one
+-- sibling, so either id finds its pair (`frontend.visibility.subjectOf`).
+public export data SiblingPair = SiblingPair {
+  spSibling : String,
+  spSubject : String,
+}

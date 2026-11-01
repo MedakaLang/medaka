@@ -30,8 +30,8 @@ import types.module_interface.{
 import types.publish.{ModDiags, PubScheme, TcDiag, freezeRows}
 import types.repr.{Mono}
 import types.tc_types.{
-  ExportBinding, GraphCtx(..), GraphRun(..), InvocationView, LiveGoal(..),
-  ModuleCtx(..), ModuleServe(..), ServeStep(..)
+  ExportBinding, GraphCtx(..), InvocationView, ModuleCtx(..), ModuleServe(..),
+  ServeStep(..)
 }
 import frontend.ast.{Decl}
 

@@ -26,9 +26,7 @@
 -- on the typed lowering path.
 
 import frontend.visibility.{ExportView(..)}
-import frontend.ast.{
-  Lit(..), Pat(..), Addr(..), Route(..), Decl, Loc(..), noBinderId
-}
+import frontend.ast.{Lit(..), Pat(..), Addr(..), Decl, Loc(..), noBinderId}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),

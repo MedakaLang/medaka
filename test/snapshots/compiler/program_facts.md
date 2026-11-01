@@ -1,5 +1,5 @@
 # META
-source_lines=147
+source_lines=148
 stages=DESUGAR,MARK
 # SOURCE
 import types.symbol_origins.{SymbolOrigins}
@@ -12,6 +12,7 @@ import types.symbol_origins.{SymbolOrigins}
 -- representation modules only, never `types.typecheck`.
 
 import frontend.ast.{Decl, EvTable}
+import frontend.ast.{SiblingPair}
 import types.extern_source.{
   ExternSource, ExternHeadRows, ExternProvenance(..), sourceExterns
 }
@@ -32,7 +33,7 @@ public export data ProgramFacts = ProgramFacts {
   pfBinders : Option BinderTypeTable,
   pfEntryOutcome : Option EntryOutcome,
   pfExternSources : Option (List ExternSource),
-  pfSibling : List (String, String),
+  pfSibling : List SiblingPair,
 }
 
 -- No evidence, no dispositions, no binders: untyped lowering and eval.
@@ -143,15 +144,16 @@ export
 withSymbolOrigins : SymbolOrigins -> ProgramFacts -> ProgramFacts
 withSymbolOrigins origins facts = { facts | pfSymbolOrigins = Some origins }
 
--- [facts] for the drive whose (test sibling, subject) module-id pair is
--- [sibling] (`DriveInputs.diSibling`): the engines give the sibling the
--- subject's full view of its names, as `check` did.
+-- [facts] for the drive whose test sibling pairs are [sibling]
+-- (`DriveInputs.diSibling`): the engines give each sibling its subject's full
+-- view of its names.
 export
-withSibling : List (String, String) -> ProgramFacts -> ProgramFacts
+withSibling : List SiblingPair -> ProgramFacts -> ProgramFacts
 withSibling sibling facts = { facts | pfSibling = sibling }
 # DESUGAR
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "EvTable" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternSource" false) (mem "ExternHeadRows" false) (mem "ExternProvenance" true) (mem "sourceExterns" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false) (mem "evIndexOf" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false))))
@@ -159,7 +161,7 @@ withSibling sibling facts = { facts | pfSibling = sibling }
 (DUse false (UseGroup ("types" "publish") ((mem "CheckedProgram" true) (mem "EntryOutcome" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false) (mem "ElabResult" true) (mem "ElabFacts" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "CapabilityManifest" false))))
-(DData Public "ProgramFacts" () ((variant "ProgramFacts" (ConNamed (field "pfSymbolOrigins" (TyApp (TyCon "Option") (TyCon "SymbolOrigins"))) (field "pfManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "pfEvidence" (TyCon "EvIndex")) (field "pfDispositions" (TyApp (TyCon "Option") (TyCon "DispositionTable"))) (field "pfBinders" (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))) (field "pfEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryOutcome"))) (field "pfExternSources" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExternSource")))) (field "pfSibling" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))) ())
+(DData Public "ProgramFacts" () ((variant "ProgramFacts" (ConNamed (field "pfSymbolOrigins" (TyApp (TyCon "Option") (TyCon "SymbolOrigins"))) (field "pfManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "pfEvidence" (TyCon "EvIndex")) (field "pfDispositions" (TyApp (TyCon "Option") (TyCon "DispositionTable"))) (field "pfBinders" (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))) (field "pfEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryOutcome"))) (field "pfExternSources" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExternSource")))) (field "pfSibling" (TyApp (TyCon "List") (TyCon "SiblingPair")))))) ())
 (DTypeSig true "emptyFacts" (TyCon "ProgramFacts"))
 (DFunDef false "emptyFacts" () (ERecordCreate "ProgramFacts" ((fa "pfSymbolOrigins" (EVar "None")) (fa "pfManifests" (EListLit)) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EListLit))) (fa "pfDispositions" (EVar "None")) (fa "pfBinders" (EVar "None")) (fa "pfEntryOutcome" (EVar "None")) (fa "pfExternSources" (EVar "None")) (fa "pfSibling" (EListLit)))))
 (DTypeSig true "factsOfChecked" (TyFun (TyCon "CheckedProgram") (TyCon "ProgramFacts")))
@@ -182,11 +184,12 @@ withSibling sibling facts = { facts | pfSibling = sibling }
 (DFunDef false "factsNow" (PWild) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "program facts: read outside any withFacts bracket"))) (EUnOp "!" (EVar "currentFacts"))))
 (DTypeSig true "withSymbolOrigins" (TyFun (TyCon "SymbolOrigins") (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
 (DFunDef false "withSymbolOrigins" ((PVar "origins") (PVar "facts")) (ERecordUpdate (EVar "facts") ((fa "pfSymbolOrigins" (EApp (EVar "Some") (EVar "origins"))))))
-(DTypeSig true "withSibling" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
+(DTypeSig true "withSibling" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
 (DFunDef false "withSibling" ((PVar "sibling") (PVar "facts")) (ERecordUpdate (EVar "facts") ((fa "pfSibling" (EVar "sibling")))))
 # MARK
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "EvTable" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternSource" false) (mem "ExternHeadRows" false) (mem "ExternProvenance" true) (mem "sourceExterns" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false) (mem "evIndexOf" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false))))
@@ -194,7 +197,7 @@ withSibling sibling facts = { facts | pfSibling = sibling }
 (DUse false (UseGroup ("types" "publish") ((mem "CheckedProgram" true) (mem "EntryOutcome" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false) (mem "ElabResult" true) (mem "ElabFacts" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "CapabilityManifest" false))))
-(DData Public "ProgramFacts" () ((variant "ProgramFacts" (ConNamed (field "pfSymbolOrigins" (TyApp (TyCon "Option") (TyCon "SymbolOrigins"))) (field "pfManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "pfEvidence" (TyCon "EvIndex")) (field "pfDispositions" (TyApp (TyCon "Option") (TyCon "DispositionTable"))) (field "pfBinders" (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))) (field "pfEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryOutcome"))) (field "pfExternSources" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExternSource")))) (field "pfSibling" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))) ())
+(DData Public "ProgramFacts" () ((variant "ProgramFacts" (ConNamed (field "pfSymbolOrigins" (TyApp (TyCon "Option") (TyCon "SymbolOrigins"))) (field "pfManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "pfEvidence" (TyCon "EvIndex")) (field "pfDispositions" (TyApp (TyCon "Option") (TyCon "DispositionTable"))) (field "pfBinders" (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))) (field "pfEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryOutcome"))) (field "pfExternSources" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExternSource")))) (field "pfSibling" (TyApp (TyCon "List") (TyCon "SiblingPair")))))) ())
 (DTypeSig true "emptyFacts" (TyCon "ProgramFacts"))
 (DFunDef false "emptyFacts" () (ERecordCreate "ProgramFacts" ((fa "pfSymbolOrigins" (EVar "None")) (fa "pfManifests" (EListLit)) (fa "pfEvidence" (EApp (EVar "evIndexOf") (EListLit))) (fa "pfDispositions" (EVar "None")) (fa "pfBinders" (EVar "None")) (fa "pfEntryOutcome" (EVar "None")) (fa "pfExternSources" (EVar "None")) (fa "pfSibling" (EListLit)))))
 (DTypeSig true "factsOfChecked" (TyFun (TyCon "CheckedProgram") (TyCon "ProgramFacts")))
@@ -217,5 +220,5 @@ withSibling sibling facts = { facts | pfSibling = sibling }
 (DFunDef false "factsNow" (PWild) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "program facts: read outside any withFacts bracket"))) (EUnOp "!" (EVar "currentFacts"))))
 (DTypeSig true "withSymbolOrigins" (TyFun (TyCon "SymbolOrigins") (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
 (DFunDef false "withSymbolOrigins" ((PVar "origins") (PVar "facts")) (ERecordUpdate (EVar "facts") ((fa "pfSymbolOrigins" (EApp (EVar "Some") (EVar "origins"))))))
-(DTypeSig true "withSibling" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
+(DTypeSig true "withSibling" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
 (DFunDef false "withSibling" ((PVar "sibling") (PVar "facts")) (ERecordUpdate (EVar "facts") ((fa "pfSibling" (EVar "sibling")))))
