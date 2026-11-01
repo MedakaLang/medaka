@@ -116,7 +116,7 @@ import types.interface_frame.{
 import types.prelude_interface.{PreludeInterface(..), InterfaceKey(..)}
 import types.publish.{
   PubScheme(..), ZState(..), LiveCell(..), emptyZonk, zonkMono, zonkRow,
-  zonkAuthority, zonkVecObl, zonkScheme, freezePub, liveCells
+  zonkAuthority, zonkVecObl, freezePub, liveCells
 }
 import types.registry.{
   SpellingPop, spRows, spFloor, spCollided, spFromProjections

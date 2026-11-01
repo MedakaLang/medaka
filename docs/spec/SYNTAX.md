@@ -1329,7 +1329,7 @@ A `foo_test.mdk` beside `foo.mdk` is the test sibling of `foo`: same directory, 
 name with `.mdk` replaced by `_test.mdk`, one level only. A sibling may import any top-level
 name of `foo`, exported or not: private values and types, the constructors of `export data`
 types, private interfaces, and the names `foo` itself imports. It sees only its own subject's
-names. Two errors guard that privilege.
+names. A private type alias imported by name does not expand in the sibling (`type mismatch: (Int, Int) vs Pair`), so keep an alias exported when a sibling uses it. Two errors guard that privilege.
 
 A file whose name does not end in `_test.mdk` cannot import a `*_test.mdk` module. The
 import is rejected with `R-TEST-MODULE-IMPORT`, located at the `import`:

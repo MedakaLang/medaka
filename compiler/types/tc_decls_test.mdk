@@ -543,7 +543,7 @@ test "only a ConNamed variant votes as a field owner, under its constructor name
         (omLookup "x" (declEnvDeclFieldOwners [deKindNewtypeFixture] omEmpty))),
   ]
 
--- ── A-3.6 bite C-1: THE OWN-row exclusion, asserted rather than incidental ────
+-- ── THE OWN-row exclusion, asserted rather than incidental ────
 -- `declEnvSeedChain` stamps row [m]'s id with the accumulators as they stand
 -- BEFORE [m] is folded in, so [m]'s seed is "every row strictly earlier than
 -- [m]" and never [m] itself.  That is a STRUCTURAL property of the fold order —
@@ -695,7 +695,7 @@ test "a reader at ordinal 1 sees the prelude's public aliases" =
   expectEqual ["AttribCore", "PubCore"] (aliasNamesAt 1)
 
 -- A reader at ordinal 2 sees every public alias, DESCENDING by ordinal — the
--- order the retired accumulator produced, which `lookupTab`'s first-match and
+-- order `lookupTab`'s first-match depends on, which `lookupTab`'s first-match and
 -- `emitCyclicAliasErrors`' render order both observe.
 test "a reader at ordinal 2 sees every public alias in descending ordinal order" =
   expectEqual ["PubM", "AttribCore", "PubCore"] (aliasNamesAt 2)
@@ -785,7 +785,7 @@ test "record idents keep declaration order within a bucket" = expectAll [
         (omLookup "Pt" (deRecordOrderEnv (probeGraphCtx ())).deRecordIdents))),
 ]
 
--- Fixtures for the doctests above.  `deKindRow1` is the SAME decls at ordinal 1,
+-- Fixtures for the tests above.  `deKindRow1` is the SAME decls at ordinal 1,
 -- which is how the later-row arm is exercised without a second decl set.
 deKindAbstractFixture : Decl
 deKindAbstractFixture = DData {
@@ -1023,13 +1023,13 @@ deNameIdxAt nm mid = omKeys (optionOr omEmpty (omLookup mid nm))
 -- concatenated in ordinal order), so nothing about the four bare-name-free
 -- tables below moves by taking rows instead of the flat list.
 --
--- A-3.2b residual (#1512) took the rows for one reason: `deAliases` now carries
+-- `buildDataEnv` takes the rows for one reason: `deAliases` carries
 -- the declaring module's ORDINAL, and the flattened list has no ordinal in it —
 -- the same reason `buildImplEnv` has always read rows (see `buildDeclEnvs`).
 buildDataEnv : List DeclEnvModule -> DataEnv
 buildDataEnv rows = dataEnvFinish (dataEnvFromRowsGo rows emptyDataEnv)
 
--- Fixture for the doctests below: a PUBLIC alias in the prelude row (ordinal 0),
+-- Fixture for the tests below: a PUBLIC alias in the prelude row (ordinal 0),
 -- a PRIVATE one beside it, and a public one in a later module (ordinal 1).
 aliasFixturePubCore : Decl
 aliasFixturePubCore = DTypeAlias {
@@ -1096,7 +1096,7 @@ aliasNamesAt cur =
     (e => tabKeyName (fst e))
     (aliasUniverseAt cur (aliasFixtureEnv (probeGraphCtx ())).deAliases)
 
--- Fixture for the doctests below: two DIFFERENT modules ("m", "n") each
+-- Fixture for the tests below: two DIFFERENT modules ("m", "n") each
 -- declaring a record named-field variant with field "x".
 deFieldOwnerFixtureA : Decl
 deFieldOwnerFixtureA = DData {
@@ -1166,9 +1166,9 @@ deFieldOwnerSameNameEnv gctx = buildDataEnv [
   declEnvModule gctx 0 "m" [deFieldOwnerFixtureA, deFieldOwnerFixtureC],
 ]
 
--- ── #2147 residual: `deRecordIdents`' bucket order, now pinned ───────────────
--- `deFieldOwnerIdents` has had an ORDERED assertion since A-3.2a (the `["Pt",
--- "Vec"]` doctest below states a list, not a length).  `deRecordIdents` — its
+-- ── `deRecordIdents`' bucket order ───────────────
+-- `deFieldOwnerIdents` has an ORDERED assertion (the `["Pt",
+-- "Vec"]` test below states a list, not a length).  `deRecordIdents` — its
 -- sibling under the same `omMapValues reverseL` finalisation in `buildDataEnv`,
 -- rewritten from `++ [x]` to cons-and-reverse by #2147 — had only its VALUES
 -- covered, never its ORDER.  So the one property #2147 had to preserve was the

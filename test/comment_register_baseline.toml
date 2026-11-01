@@ -527,12 +527,12 @@ count = 33
 [[entry]]
 file = "compiler/types/registry_test.mdk"
 class = "emoji"
-count = 2
+count = 1
 
 [[entry]]
 file = "compiler/types/registry_test.mdk"
 class = "shout"
-count = 3
+count = 2
 
 [[entry]]
 file = "compiler/types/repr.mdk"

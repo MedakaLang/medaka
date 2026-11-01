@@ -1,5 +1,5 @@
 # META
-source_lines=1561
+source_lines=1560
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -295,8 +295,7 @@ ordKey n = lenKey "\{n}"
 -- a declaration and must not be assigned an identity, and A-2.2's whole reason
 -- for splitting `HkRigid` out of `TabKey` was that folding it in would destroy
 -- A-1's greppability. A dispatch key whose positions can be rigid therefore
--- carries the rigid positions OUTSIDE this type — see `dispKeyRender` in
--- `compiler/types/registry_test.mdk`.
+-- carries the rigid positions OUTSIDE this type.
 public export data RegKey =
   RegKey (List TabKey) (List Int)
   deriving (Eq, Ord, Debug)

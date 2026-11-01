@@ -2669,7 +2669,7 @@ finishBuildArgs _ _ _ = Err "error: medaka build takes exactly one input file"
 -- typecheck, mainSchemeRef populated), force `main`.  Only reached AFTER the
 -- check-strength gate below (both arms: the front end's diagnostics, then its
 -- drive's report, which must carry `trChecked`), so a genuinely ill-typed
--- program never reaches evalModulesOutput (G1 soundness invariant).
+-- program never reaches evalModulesOutputRunFacts (G1 soundness invariant).
 -- [cohWarns] are the warnings the caller's own gate already computed, as (path,
 -- src, diags) triples: the single-file arm's whole warning set
 -- (`allWarnTriples`), the multi-module arm's `runBuildWarnCodes` only
@@ -3082,7 +3082,7 @@ runRunCmd argv =
                         (runEvalPerf perfOn target perfT0 perfTCheck)
 -- G1 (SOUNDNESS): typecheck the WHOLE module graph and abort before
 -- eval unless the drive's report carries a checked program (`trChecked`).  A
--- type error makes evalModulesOutput miscompile (the G1 bug), so we never
+-- type error makes evalModulesOutputRunFacts miscompile (the G1 bug), so we never
 -- reach it.  Resolve-phase errors (e.g. PrivateNameAccess) ride a SEPARATE
 -- channel the report does not cover, so resolveModulesErrorsByFile is
 -- consulted FIRST (mirroring `check`/`build`) and run aborts with the same
@@ -3114,7 +3114,7 @@ elaborateRun inputs executionDriver rtD coreD modsD =
     None => ()
   (analysis, report, outputs)
 
--- B2 (RUN-EFFECTS): evalModulesOutputRunFacts is evalModulesOutput plus the real-I/O
+-- B2 (RUN-EFFECTS): evalModulesOutputRunFacts runs the program with the real-I/O
 -- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main
 -- reaches here already rewritten by `executedTrees`.
 runProgramOutput : ProgramFacts ->

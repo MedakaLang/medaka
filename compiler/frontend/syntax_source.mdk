@@ -10,7 +10,7 @@ import frontend.parse_diagnostic.{ParseDiagnostic}
 import frontend.parse_recovery.{RecoveryLimits(..), recoverSourcePairsWithIndex}
 import frontend.recovery_result.{RecoveredSource}
 import frontend.ast.{Loc(..), Decl}
-import support.source_index.{SourceIndex, indexSource, sourcePositionToOffset}
+import support.source_index.{SourceIndex, indexSource}
 
 public export data SourceSpan = SourceSpan Int Int
 public export data TriviaKind = LineComment | BlockComment

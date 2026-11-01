@@ -428,7 +428,7 @@ after = 2
         ),
         (
           "real-edit-0",
-          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+          """-- Child-name span guard: MIXED multi-child decls of every
 -- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
 -- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
 -- name-column. Columns are 0-based; hand-verified in child_spans.golden.
@@ -451,7 +451,7 @@ impl Shape Color where
 
 let rec spin n = spin n
 
--- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- Regression guard: a PARENTHESIZED impl head must
 -- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
 -- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
 -- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
@@ -479,7 +479,7 @@ impl Access (Box a) Int where
         ),
         (
           "real-edit-1",
-          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+          """-- Child-name span guard: MIXED multi-child decls of every
 -- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
 -- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
 -- name-column. Columns are 0-based; hand-verified in child_spans.golden.
@@ -502,7 +502,7 @@ impl Shape Color where
 
 let rec spin n = spin n
 
--- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- Regression guard: a PARENTHESIZED impl head must
 -- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
 -- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
 -- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
@@ -529,7 +529,7 @@ impl Access (Box a) Int where
         ),
         (
           "real-edit-2",
-          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+          """-- Child-name span guard: MIXED multi-child decls of every
 -- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
 -- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
 -- name-column. Columns are 0-based; hand-verified in child_spans.golden.
@@ -552,7 +552,7 @@ impl Shape Color where
 
 let rec spin n = spin n
 
--- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- Regression guard: a PARENTHESIZED impl head must
 -- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
 -- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
 -- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
@@ -576,7 +576,7 @@ impl Access (Box a) Int where
         ),
         (
           "real-edit-3",
-          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+          """-- Child-name span guard: MIXED multi-child decls of every
 -- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
 -- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
 -- name-column. Columns are 0-based; hand-verified in child_spans.golden.
@@ -599,7 +599,7 @@ impl Shape Color where
 
 let rec spin n = spin n
 
--- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- Regression guard: a PARENTHESIZED impl head must
 -- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
 -- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
 -- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
@@ -626,7 +626,7 @@ impl Access (Box a) Int where
         ),
         (
           "real-edit-4",
-          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+          """-- Child-name span guard: MIXED multi-child decls of every
 -- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
 -- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
 -- name-column. Columns are 0-based; hand-verified in child_spans.golden.
@@ -649,7 +649,7 @@ impl Shape Color where
 
 let rec spin n = spin n
 
--- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- Regression guard: a PARENTHESIZED impl head must
 -- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
 -- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
 -- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
@@ -676,7 +676,7 @@ impl Access (Box a) Int where
         ),
         (
           "real-edit-5",
-          """-- #331 increment 2 (child-name spans) guard: MIXED multi-child decls of every
+          """-- Child-name span guard: MIXED multi-child decls of every
 -- outline-child kind, with children at DISTINCT columns/lines so a parser↔lsp
 -- child-order DESYNC (a Loc attaching to the wrong child) shows as a wrong
 -- name-column. Columns are 0-based; hand-verified in child_spans.golden.
@@ -699,7 +699,7 @@ impl Shape Color where
 
 let rec spin n = spin n
 
--- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
+-- Regression guard: a PARENTHESIZED impl head must
 -- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
 -- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
 -- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,

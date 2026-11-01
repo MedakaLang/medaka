@@ -1,7 +1,7 @@
 -- Tests of `types.tc_env`'s own API: insertion into and lookup in `ImplEnv` and `ClassEnv`,
 -- the ordinal visibility predicates, and the term environment (`extendVar`, standalone
--- lookup, shadowing).  The envelope fixtures (`ieProbeEnv`, `ceProbeEnv` and the rest) stay
--- beside the module because its doctests call them; these tests build their own small
+-- lookup, shadowing).  The envelope fixtures (`ieProbeEnv`, `ceProbeEnv` and the rest) are
+-- defined here; these tests build their own small
 -- corpora so each states what it relies on.
 
 import list.{sort}
@@ -364,13 +364,12 @@ test "a name is an import definer once the module records the module it comes fr
 --     the header above, because an assertion is fail-capable and prose is not.
 --     The SAME two rows also sit together under the bare-spelling key, which is
 --     the compatibility leg `oblIfaceKeys` mints for goals that cannot carry an
---     identity.  Two rows, one bucket: that is #1438's shape, inherited on
---     purpose, and #1482's to drain.  If this ever reads `1`, the leg was dropped
---     and #1438's pin must have flipped with it.
+--     identity.  Two rows, one bucket: that shape is inherited on
+--     purpose.  If this ever reads `1`, the leg was dropped
+--     and the pin that reproduces it must have flipped with it.
 --
 -- 2. ROW IDENTITY.  The two same-spelled impls get DISTINCT `InstRef`s — the
---    property `bucketKeyEntriesFrom`'s restart-at-0 numbering lacks, and the one
---    A-3.7 and B-2 are waiting on.  Distinct in BOTH components, so neither the
+--    property a per-module restart-at-0 numbering lacks.  Distinct in BOTH components, so neither the
 --    module scope nor the sequence is carrying it alone.
 --    OWED — this pair CANNOT discriminate an `ord`/`seq` swap: in a corpus of
 --    one impl per module `ord == seq == [0, 1]`, so a builder that wrote the two
@@ -379,7 +378,7 @@ test "a name is an import definer once the module records the module it comes fr
 --    Not added here because it would also move the ordinal-filter counts in
 --    assertion 3, and this round is comment-only.
 --
--- 3. TABLE SCOPE — candidacy goes through `ieCandidacyVisibleAt` (A-3.6, #1558), so
+-- 3. TABLE SCOPE — candidacy goes through `ieCandidacyVisibleAt`, so
 --    what is asserted is the C4/I2 property itself: **the selected universe is
 --    invariant in the reading ordinal.**  Every
 --    impl declared anywhere in the graph is a candidate everywhere, which is what
@@ -398,9 +397,8 @@ test "a name is an import definer once the module records the module it comes fr
 --    above, which assert the ordinal conjunct is still doing work there.
 --
 -- 4. the projection is the obligation channel'S OWN UNIVERSE, built by the SAME
---    writer — so A-3.4 PR2's flip could not drift in key minting, only in
---    population and order, which is what both shadow instruments measured.  Since
---    that flip this is no longer a claim about a table nobody reads: it exercises the
+--    writer — so it cannot drift in key minting, only in
+--    population and order.  This is no longer a claim about a table nobody reads: it exercises the
 --    projection the compiler actually dispatches on.
 --    `zmod` at ordinals 1 and 0 reads `1` both times, which by item 3's own rule grades
 --    nothing, so it is asserted once.  That line still discriminates key minting: a row
@@ -613,10 +611,7 @@ test "class environment rows carry each method's raw type" = expectAll [
 
 -- 3. TABLE SCOPE — the ordinal, applied through `declEnvVisibleAt` and
 --    nothing else.  At ordinal 0 only amod is visible; zmod's row (declared
---    at ordinal 1) is not yet in scope.  This said "the filter A-3.6 deletes".
---    A-3.6 (#1558) did not delete it: `CE` kept its ordinal filter when the
---    predicate split, so these two lines are a LIVE assertion of a live rule, not
---    a countdown.  The `IE` block's item 3 asserts the OPPOSITE property for the
+--    at ordinal 1) is not yet in scope.  `CE` keeps its ordinal filter, so these two lines are a LIVE assertion of a live rule.  The `IE` block's item 3 asserts the OPPOSITE property for the
 --    same shape — that is the split, visible as two tests that disagree on
 --    purpose.
 test "class environment rows are filtered by the reading ordinal" = expectAll [
@@ -663,21 +658,19 @@ test "ungraded kind inference keeps the one applied slot" =
 -- ── §9.7's scoping proofs, as ASSERTIONS rather than sentences ────────────────
 --
 -- read this before the assertions, or they will tell you something false.
--- These doctests look ONLY at the IDENTITY leg, which is the leg that does not
+-- These tests look ONLY at the IDENTITY leg, which is the leg that does not
 -- collapse.  **`IE` does still collapse same-spelled interfaces on its other
 -- LEG, DELIBERATELY.**  `ieInsertRow` indexes every row under `oblIfaceKeys`,
 -- which is TWO keys — the identity key AND the bare-spelling compatibility leg —
 -- so `amod.Same` and `zmod.Same` below share the bare bucket, exactly as the
 -- obligation channel does today.  That is inherited on purpose (see
--- `insertUnivImplKeys` for the `ifaceRefBare` goal producers that require it —
--- U1b (#1482) retired two of the three; the METHOD-OCCURRENCE one is #1507's, and
--- removing the leg is that unit's drain, not this one's), which is why #1438's
--- pin still reproduces after A-3.4 and after U1b.
+-- `insertUnivImplKeys` for the `ifaceRefBare` goal producers that require it; the
+-- METHOD-OCCURRENCE producer still does), which is why the bare-key pin still
+-- reproduces.
 --
 -- So do not read the assertions below as "IE has no collapse".  They assert the
 -- narrower true thing: the identity key is a SCOPE — it resolves to exactly one
--- row where a bare key would answer with two — which is what A-3 is building
--- toward and what `InstRef` and A-3.7 will consume.
+-- row where a bare key would answer with two — which is what `InstRef` consumes.
 --
 -- `AGENTS.md` names the program-global table as this tree's most expensive shape
 -- and demands the key's scope be PROVEN.  The corpus below is the adversarial
@@ -823,7 +816,7 @@ ieHeadProbeEnv gctx = buildImplEnv [
 ieProbeBlobHead : HeadKey
 ieProbeBlobHead = headKeyOfCon (OriginModule "amod") "Blob"
 
--- ── doctests — a discriminating two-module, same-spelled-interface corpus ───
+-- ── tests — a discriminating two-module, same-spelled-interface corpus ───
 -- Mirrors `IE`'s `ieProbeEnv` shape deliberately: `AGENTS.md` demands a program
 -- -global table's key be PROVEN scoped, and the proof is the adversarial case —
 -- two unrelated modules declaring the SAME-SPELLED interface `Same`, each with
@@ -884,9 +877,9 @@ ceSuperHead (Super { superHead = h, ... }) = h
 -- The module id, for a ROW rather than a lookup result — the row-ORDER
 -- assertion below needs the identity of EACH row in `ceRows`, not a
 -- single keyed lookup, exactly as `instRefMid`/`ieRowInst` give `IE`'s
--- doctests the same thing.  The non-module arms never occur on a `CeRow`
+-- tests the same thing.  The non-module arms never occur on a `CeRow`
 -- built from a real `DInterface` (its `ifaceOrigin` is threaded straight
--- from the decl, and this doctest corpus stamps every fixture
+-- from the decl, and this corpus stamps every fixture
 -- `OriginModule _`).
 --
 -- NAMED, NOT A WILDCARD — this tree's documented convention for a closed
@@ -908,8 +901,8 @@ ceRowOriginTag r = match (ceRowIface r).irOrigin
   OriginBuiltin => "<builtin>"
   OriginUnresolved => "<unresolved>"
 
--- lookup-and-project in one call, so the doctest lines below stay one
--- expression each (this file's doctest extraction is single-line-per-`>`).
+-- lookup-and-project in one call, so each assertion below stays one
+-- expression.
 ceRowMethodNamesAt : String -> Int -> ClassEnv -> List String
 ceRowMethodNamesAt m cur env = match ceLookupAt (ceProbeKey m) cur env
   None => []
@@ -932,7 +925,7 @@ ceRowSuperHeadsAt m cur env = match ceLookupAt (ceProbeKey m) cur env
 
 -- `superParams`/`superOrigin` are asserted SEPARATELY from `superHead` above
 -- (rather than folded into one combined string) so a mutation to any one of
--- the three `Super` fields fails a doctest naming that field, not a
+-- the three `Super` fields fails a test naming that field, not a
 -- catch-all — same discipline as the per-field `ceRow*At` accessors.
 ceSuperParams : Super -> List String
 ceSuperParams (Super { superParams = ps, ... }) = ps
@@ -964,7 +957,7 @@ ceRowIfaceNameAt m cur env = match ceLookupAt (ceProbeKey m) cur env
 
 -- One row's param-kind signature, rendered through `kindName` (the EXISTING
 -- `Kind -> String` total function, `:1904` — reused rather than shadowed by a
--- doctest-only shortener) — takes a bare `RegKey` + ordinal rather than a
+-- test-only shortener) — takes a bare `RegKey` + ordinal rather than a
 -- module id, so it serves both the `ceProbeEnv` corpus below (via `ceProbeKey`)
 -- and the graded/ungraded fixtures further down, whose identities are minted
 -- directly rather than through `ceProbeKey`.
@@ -977,9 +970,8 @@ ceRowParamKindNamesAt key cur env = match ceLookupAt key cur env
 -- `run : f e a -> <e> a` — typaram `f`'s slot-0 argument is the bare tyvar
 -- `e`, which the SAME signature's return type also uses in an effect-tail
 -- position (`<e> a`), so slot 0 must infer `KRow` and slot 1 (`a`, never a
--- tail) must infer `KType`.  Until #1557 A-3.5c this asserted agreement with the
--- live `universeIfaceParamKinds` table; that table is retired and `ceParamKinds` IS
--- the answer now, so these doctests grade the production computation directly.
+-- tail) must infer `KType`.  The class env's kind rows are the production answer, so these tests grade
+-- that computation directly.
 ceGradedMethod : IfaceMethod
 ceGradedMethod =
   IfaceMethod
@@ -1011,16 +1003,14 @@ ceGradedKey : RegKey
 ceGradedKey = regKeyOfTab (ifaceTabKey (OriginModule "gmod") "Async")
 
 -- ── an UNGRADED fixture: every slot is still RECORDED ("EVERY slot is recorded,
--- graded or not" — the retired writer's rule, which `ceParamKinds` keeps because
--- `checkGradedImplTys`' `anyKRow` guard, not the table, is what filters).  #1557
--- A-3.5c makes this fixture LOAD-BEARING rather than descriptive: `ceParamKinds` is
--- now the production answer, so dropping non-`KRow` rows would shift every later
--- slot's index and mis-judge a graded impl head.  `fmap : f a -> f a` applies `f` but never puts its argument in an
+-- graded or not"; `checkGradedImplTys`' `anyKRow` guard, not the table, is what
+-- filters).  The class env's kind rows are the production answer, so dropping
+-- non-`KRow` rows would shift every later slot's index and mis-judge a graded impl
+-- head.  `fmap : f a -> f a` applies `f` but never puts its argument in an
 -- effect-tail position anywhere in the signature, so slot 0 must infer
--- `KType`, not be DROPPED from the row.  This is the fixture the reviewer's
--- mutation (b) — deleting non-`KRow` rows from `ceParamKinds` — needs to be
--- caught by: that mutation leaves the graded doctest above untouched (its one
--- slot IS `KRow`) and is invisible without a fixture whose only slot is NOT.
+-- `KType`, not be DROPPED from the row.  A mutation deleting non-`KRow` rows
+-- leaves the graded test above untouched (its one slot IS `KRow`) and is
+-- invisible without a fixture whose only slot is NOT.
 ceFunctorMethod : IfaceMethod
 ceFunctorMethod =
   IfaceMethod

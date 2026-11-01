@@ -557,7 +557,7 @@ check_origin_observers compiler/types/capability_manifest.mdk \
 # no identity a `stampTyHead` immunity rule could make permanent — the value is never
 # compared for identity, only for `irName == ""`.
 # ⚠️ #1519 (ARCH A-3.3) ADDED TWO LINES, BOTH ELIMINATOR ARMS, SAME SHAPE AS
-# `originPhrase`'s ABOVE. `ceRowOriginTag`/`ceSuperOrigin` (`CE`'s doctest-only
+# `originPhrase`'s ABOVE. `ceRowOriginTag`/`ceSuperOrigin` (`CE`'s test-only
 # projections of `IfaceRef.irOrigin`/`Super.superOrigin`) enumerate all three
 # `TyConOrigin` inhabitants rather than closing the match with a wildcard — a
 # wildcard would still be TOTAL (an earlier revision of that code argued
@@ -572,7 +572,7 @@ check_origin_observers compiler/types/capability_manifest.mdk \
 # ⚠️ ARCH B-2.1-a3 (Stage B sprint) ADDED ONE LINE, AND IT IS THE FIRST ENTRY ON THIS
 # LIST THAT *CONSTRUCTS* — stated plainly because that is a stronger claim than every
 # entry above it. `implOrigin = OriginUnresolved,` is inside `ieLooseImplIn`, a
-# DOCTEST FIXTURE in the `IE` doctest block (grep `ieLooseImplIn`), not a production
+# TEST FIXTURE in `compiler/types/tc_env_test.mdk` (grep `ieLooseImplIn`), not a production
 # mint: the #1519 entries above have `OriginUnresolved` on the LEFT of an eliminator
 # arm, whereas this one puts it on the right.
 #

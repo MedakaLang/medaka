@@ -6,7 +6,7 @@ import frontend.lex_token.{Token(..), describeToken, peekTok as tokenPeekTok}
 import frontend.ast.{Loc(..)}
 import frontend.parse_diagnostic.{ParseDiagnosticKind(..), renderParseProblem}
 import frontend.parse_positions.{locOfSpanWith}
-import support.source_index.{lineStartsOf, offsetToLineColFast}
+import support.source_index.{lineStartsOf}
 import support.util.{reverseL}
 
 public export data PR a = POk a Int | PErr PFail Int | PFatal PFail Int
@@ -355,7 +355,7 @@ expectedTokenMsg t = describeToken t
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnosticKind" true) (mem "renderParseProblem" false))))
 (DUse false (UseGroup ("frontend" "parse_positions") ((mem "locOfSpanWith" false))))
-(DUse false (UseGroup ("support" "source_index") ((mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
+(DUse false (UseGroup ("support" "source_index") ((mem "lineStartsOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "PR" ("a") ((variant "POk" (ConPos (TyVar "a") (TyCon "Int"))) (variant "PErr" (ConPos (TyCon "PFail") (TyCon "Int"))) (variant "PFatal" (ConPos (TyCon "PFail") (TyCon "Int")))) ())
 (DData Public "PFail" () ((variant "FailMsg" (ConPos (TyCon "String"))) (variant "FailExpect" (ConPos (TyCon "Token") (TyCon "Token"))) (variant "FailProblem" (ConPos (TyCon "ParseDiagnosticKind")))) ())
@@ -480,7 +480,7 @@ expectedTokenMsg t = describeToken t
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnosticKind" true) (mem "renderParseProblem" false))))
 (DUse false (UseGroup ("frontend" "parse_positions") ((mem "locOfSpanWith" false))))
-(DUse false (UseGroup ("support" "source_index") ((mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
+(DUse false (UseGroup ("support" "source_index") ((mem "lineStartsOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "PR" ("a") ((variant "POk" (ConPos (TyVar "a") (TyCon "Int"))) (variant "PErr" (ConPos (TyCon "PFail") (TyCon "Int"))) (variant "PFatal" (ConPos (TyCon "PFail") (TyCon "Int")))) ())
 (DData Public "PFail" () ((variant "FailMsg" (ConPos (TyCon "String"))) (variant "FailExpect" (ConPos (TyCon "Token") (TyCon "Token"))) (variant "FailProblem" (ConPos (TyCon "ParseDiagnosticKind")))) ())
