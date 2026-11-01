@@ -67,7 +67,6 @@ import types.tc_occurrence.{
   firstMethodRow,
   freshEvId,
   ifaceMethodSchemeRows,
-  initialModuleCtx,
   inferNumLit,
   instantiateVarTrackedId,
   isGrantOnlyEv,
@@ -75,11 +74,8 @@ import types.tc_occurrence.{
   markDictNames,
   methodConstraintNames,
   methodReturnProbeIface,
-  methodReturnProbeImpl,
   methodReturnProbeRequest,
   methodReturnProbeScope,
-  methodReturnResolutionValid,
-  methodReturnSelectedIdentity,
   markGroupClauses,
   mintMethodCellRaw,
   mkMethodOccObl,
@@ -91,16 +87,17 @@ import types.tc_occurrence.{
   rebuildGroupDecls,
   recordUnopSite,
   siteCellLookup,
-  siteFor,
   siteHeadCell,
-  solveExactReturnOnce,
   standaloneSchemeFor,
   siteRouteCell,
   unopMethod,
 }
 import types.tc_shadow.{methodCellLookup}
-import types.tc_solve.{goalKindName}
-import types.tc_state.{probeGraphCtx, wAll}
+import types.tc_solve.{
+  goalKindName, methodReturnProbeImpl, methodReturnResolutionValid,
+  methodReturnSelectedIdentity, solveExactReturnOnce
+}
+import types.tc_state.{initialModuleCtx, probeGraphCtx, wAll}
 import types.tc_test_support.{
   at,
   sizeScheme,
@@ -132,6 +129,7 @@ import types.tc_types.{
   StandaloneOrigin(..),
   TcEnv(..),
   ValueScheme(..),
+  siteFor,
 }
 import types.tc_effects.{clausesOf}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
